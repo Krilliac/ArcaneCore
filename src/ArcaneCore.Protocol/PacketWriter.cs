@@ -36,6 +36,20 @@ public sealed class PacketWriter
         _length += 4;
     }
 
+    public void WriteUInt64(ulong value)
+    {
+        EnsureCapacity(8);
+        BinaryPrimitives.WriteUInt64LittleEndian(_buffer.AsSpan(_length), value);
+        _length += 8;
+    }
+
+    public void WriteSingle(float value)
+    {
+        EnsureCapacity(4);
+        BinaryPrimitives.WriteSingleLittleEndian(_buffer.AsSpan(_length), value);
+        _length += 4;
+    }
+
     public void WriteBytes(ReadOnlySpan<byte> value)
     {
         EnsureCapacity(value.Length);

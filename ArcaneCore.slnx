@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/ArcaneCore.Cryptography/ArcaneCore.Cryptography.csproj" />
     <Project Path="src/ArcaneCore.Data/ArcaneCore.Data.csproj" />
+    <Project Path="src/ArcaneCore.Game/ArcaneCore.Game.csproj" />
     <Project Path="src/ArcaneCore.Kernel/ArcaneCore.Kernel.csproj" />
     <Project Path="src/ArcaneCore.Protocol/ArcaneCore.Protocol.csproj" />
     <Project Path="src/ArcaneCore.Realm/ArcaneCore.Realm.csproj" />

@@ -20,6 +20,13 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
         return value;
     }
 
+    public ulong ReadUInt64()
+    {
+        ulong value = BinaryPrimitives.ReadUInt64LittleEndian(_data.Slice(_position, 8));
+        _position += 8;
+        return value;
+    }
+
     public ReadOnlySpan<byte> ReadBytes(int count)
     {
         ReadOnlySpan<byte> slice = _data.Slice(_position, count);

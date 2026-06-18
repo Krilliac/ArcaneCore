@@ -4,8 +4,9 @@ A from-scratch World of Warcraft **1.12.1 (build 5875)** server emulator in **C#
 .NET 10**. See [`ARCANECORE_CHARTER.md`](ARCANECORE_CHARTER.md) for the binding design
 charter and prime directives.
 
-> Status: **M1 (Logon + SRP6)** and **M2 (World handshake)** implemented and automatically
-> verified; awaiting real-client acceptance. Milestones are strictly gated.
+> Status: **M1 (Logon + SRP6)**, **M2 (World handshake)** and **M3 (Character lifecycle)**
+> implemented and automatically verified; awaiting real-client acceptance. Milestones are
+> strictly gated.
 
 ## Layout
 
@@ -14,7 +15,8 @@ src/
   ArcaneCore.Kernel         domain models + data seams (clustering boundary)
   ArcaneCore.Cryptography   WoW-flavor SRP6 (verified against KAT vectors)
   ArcaneCore.Protocol       world opcodes, header read/write, vanilla header cipher
-  ArcaneCore.Data           EF Core stores; MariaDB / MySQL / PostgreSQL
+  ArcaneCore.Game           entities, object GUIDs, UpdateFields, object updates
+  ArcaneCore.Data           EF Core stores + DB-driven world data; MariaDB / MySQL / PostgreSQL
   ArcaneCore.Realm          logon/realm daemon (TCP 3724)
   ArcaneCore.World          world daemon (TCP 8085)
 tools/
@@ -22,8 +24,15 @@ tools/
 tests/
   ArcaneCore.Cryptography.Tests   SRP6 known-answer + round-trip tests
   ArcaneCore.Realm.Tests          logon loopback handshake tests
-  ArcaneCore.World.Tests          world handshake + header-cipher tests
+  ArcaneCore.World.Tests          world handshake, header-cipher, character lifecycle tests
 ```
+
+## World data is loaded from the database
+
+Per design, the DBC-equivalent data (start positions, race appearance/faction, class base
+stats) lives in seeded, tunable DB tables — `player_create_info`, `race_info`,
+`class_info` — with **no client extraction required**. The world daemon seeds defaults on
+first run and reads everything from these tables; tune them in SQL.
 
 ## Build & test
 

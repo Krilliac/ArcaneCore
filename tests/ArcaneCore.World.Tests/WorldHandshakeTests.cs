@@ -109,7 +109,9 @@ public sealed class WorldHandshakeTests
             using TcpClient server = await listener.AcceptTcpClientAsync();
             listener.Stop();
             await using NetworkStream stream = server.GetStream();
-            var session = new WorldSession(stream, accounts, NullLogger.Instance, "test");
+            var session = new WorldSession(
+                stream, accounts, new InMemoryCharacterStore(), new InMemoryWorldDataStore(),
+                NullLogger.Instance, "test");
             await session.RunAsync(CancellationToken.None);
         });
 

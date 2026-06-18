@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ArcaneCore.Game</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ArcaneCore.Protocol\ArcaneCore.Protocol.csproj" />
+  </ItemGroup>
+
+</Project>

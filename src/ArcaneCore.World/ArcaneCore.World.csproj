@@ -15,6 +15,7 @@
     <ProjectReference Include="..\ArcaneCore.Cryptography\ArcaneCore.Cryptography.csproj" />
     <ProjectReference Include="..\ArcaneCore.Data\ArcaneCore.Data.csproj" />
     <ProjectReference Include="..\ArcaneCore.Protocol\ArcaneCore.Protocol.csproj" />
+    <ProjectReference Include="..\ArcaneCore.Game\ArcaneCore.Game.csproj" />
   </ItemGroup>
 
   <ItemGroup>

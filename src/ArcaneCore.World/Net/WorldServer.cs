@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Sockets;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.WorldData;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -57,8 +59,11 @@ public sealed class WorldServer(
             await using (AsyncServiceScope scope = scopeFactory.CreateAsyncScope())
             {
                 IAccountStore accountStore = scope.ServiceProvider.GetRequiredService<IAccountStore>();
+                ICharacterStore characterStore = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
+                IWorldDataStore worldDataStore = scope.ServiceProvider.GetRequiredService<IWorldDataStore>();
                 var session = new WorldSession(
-                    stream, accountStore, loggerFactory.CreateLogger<WorldSession>(), endpoint);
+                    stream, accountStore, characterStore, worldDataStore,
+                    loggerFactory.CreateLogger<WorldSession>(), endpoint);
                 await session.RunAsync(stoppingToken).ConfigureAwait(false);
             }
         }
