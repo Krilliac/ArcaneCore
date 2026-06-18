@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ArcaneCore.Protocol</RootNamespace>
+  </PropertyGroup>
+
+  <!-- World protocol: opcodes, SMSG/CMSG header read/write, the vanilla header cipher,
+       and packet (de)serialization. No external dependencies. -->
+
+</Project>

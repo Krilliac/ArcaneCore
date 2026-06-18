@@ -3,11 +3,14 @@
     <Project Path="src/ArcaneCore.Cryptography/ArcaneCore.Cryptography.csproj" />
     <Project Path="src/ArcaneCore.Data/ArcaneCore.Data.csproj" />
     <Project Path="src/ArcaneCore.Kernel/ArcaneCore.Kernel.csproj" />
+    <Project Path="src/ArcaneCore.Protocol/ArcaneCore.Protocol.csproj" />
     <Project Path="src/ArcaneCore.Realm/ArcaneCore.Realm.csproj" />
+    <Project Path="src/ArcaneCore.World/ArcaneCore.World.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/ArcaneCore.Cryptography.Tests/ArcaneCore.Cryptography.Tests.csproj" />
     <Project Path="tests/ArcaneCore.Realm.Tests/ArcaneCore.Realm.Tests.csproj" />
+    <Project Path="tests/ArcaneCore.World.Tests/ArcaneCore.World.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/ArcaneCore.AccountTool/ArcaneCore.AccountTool.csproj" />

@@ -4,8 +4,8 @@ A from-scratch World of Warcraft **1.12.1 (build 5875)** server emulator in **C#
 .NET 10**. See [`ARCANECORE_CHARTER.md`](ARCANECORE_CHARTER.md) for the binding design
 charter and prime directives.
 
-> Status: **M1 (Logon + SRP6)** implemented and automatically verified; awaiting
-> real-client acceptance. Nothing past M1 exists yet — milestones are strictly gated.
+> Status: **M1 (Logon + SRP6)** and **M2 (World handshake)** implemented and automatically
+> verified; awaiting real-client acceptance. Milestones are strictly gated.
 
 ## Layout
 
@@ -13,13 +13,16 @@ charter and prime directives.
 src/
   ArcaneCore.Kernel         domain models + data seams (clustering boundary)
   ArcaneCore.Cryptography   WoW-flavor SRP6 (verified against KAT vectors)
+  ArcaneCore.Protocol       world opcodes, header read/write, vanilla header cipher
   ArcaneCore.Data           EF Core stores; MariaDB / MySQL / PostgreSQL
   ArcaneCore.Realm          logon/realm daemon (TCP 3724)
+  ArcaneCore.World          world daemon (TCP 8085)
 tools/
   ArcaneCore.AccountTool    account create / set-password / list CLI
 tests/
   ArcaneCore.Cryptography.Tests   SRP6 known-answer + round-trip tests
-  ArcaneCore.Realm.Tests          loopback handshake integration tests
+  ArcaneCore.Realm.Tests          logon loopback handshake tests
+  ArcaneCore.World.Tests          world handshake + header-cipher tests
 ```
 
 ## Build & test
@@ -53,6 +56,20 @@ With `Auth:AutocreateAccounts` enabled, an unknown account is created on the fir
 login **when the password equals the username** — the only password the server can
 confirm for a brand-new account under SRP6. Change it afterward with
 `arcane-account set-password`.
+
+## Running M2 (world daemon)
+
+The world daemon shares the auth database with the realm daemon (it reads the session
+key produced at logon). Configure `src/ArcaneCore.World/appsettings.json` against the
+same database, then:
+
+```bash
+dotnet run --project src/ArcaneCore.World
+```
+
+After logging in (M1) and selecting the realm, the client performs the world handshake
+and reaches the (empty) character-select screen. See
+[`docs/M2_ACCEPTANCE.md`](docs/M2_ACCEPTANCE.md).
 
 ## References
 
