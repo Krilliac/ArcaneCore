@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>ArcaneCore.Cryptography</RootNamespace>
+  </PropertyGroup>
+
+  <!-- Pure crypto: System.Security.Cryptography + System.Numerics.BigInteger only. -->
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ArcaneCore.Cryptography.Tests" />
+    <InternalsVisibleTo Include="ArcaneCore.Realm.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,19 @@
+<Project>
+
+  <!-- Repo-wide build settings (Charter §2: nullable enabled, warnings-as-errors). -->
+  <PropertyGroup>
+    <!-- net10.0 runtime + C# 14 (LangVersion latest). EF Core/Extensions packages
+         stay on 9.0.0 because the Pomelo MySQL/MariaDB provider (primary engine)
+         has no .NET 10 release yet; EF 9 is runtime-compatible with net10.0. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+</Project>

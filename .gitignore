@@ -1,0 +1,27 @@
+# Build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+
+# .NET
+project.lock.json
+artifacts/
+.vs/
+
+# Rider / VS Code
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local secrets / overrides
+appsettings.*.Local.json
+*.local.json
+
+# Reference cores are cloned outside the repo (/home/user/refs); never tracked.
+refs/
