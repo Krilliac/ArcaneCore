@@ -11,6 +11,7 @@ HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
 builder.Services.Configure<WorldOptions>(builder.Configuration.GetSection(WorldOptions.SectionName));
 builder.Services.AddArcaneCoreData(builder.Configuration);
 builder.Services.AddArcaneCoreCharacterData(builder.Configuration);
+builder.Services.AddSingleton<ArcaneCore.Game.WorldState>();
 builder.Services.AddHostedService<WorldServer>();
 
 IHost host = builder.Build();

@@ -25,6 +25,13 @@ public static class ObjectUpdateBuilder
 
     /// <summary>Build the SMSG_UPDATE_OBJECT payload for the player viewing itself.</summary>
     public static byte[] BuildSelfCreate(PlayerObject player, uint serverTimeMs)
+        => BuildCreate(player, serverTimeMs, self: true);
+
+    /// <summary>Build the SMSG_UPDATE_OBJECT payload that shows this player to a different viewer.</summary>
+    public static byte[] BuildOtherCreate(PlayerObject player, uint serverTimeMs)
+        => BuildCreate(player, serverTimeMs, self: false);
+
+    private static byte[] BuildCreate(PlayerObject player, uint serverTimeMs, bool self)
     {
         (uint[] values, UpdateMask mask) = BuildValues(player);
 
@@ -37,8 +44,13 @@ public static class ObjectUpdateBuilder
         writer.WriteBytes(player.ObjectGuid.ToPacked());
         writer.WriteByte(TypeId.Player);
 
-        // --- movement block (self, living) ---
-        const byte updateFlags = UpdateFlagSelf | UpdateFlagAll | UpdateFlagLiving | UpdateFlagHasPosition;
+        // --- movement block (living) ---
+        byte updateFlags = UpdateFlagAll | UpdateFlagLiving | UpdateFlagHasPosition;
+        if (self)
+        {
+            updateFlags |= UpdateFlagSelf;
+        }
+
         writer.WriteByte(updateFlags);
 
         writer.WriteUInt32(0);            // move flags (standing)

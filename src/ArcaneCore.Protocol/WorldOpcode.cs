@@ -16,6 +16,31 @@ public enum WorldOpcode : ushort
     CmsgPlayerLogin = 61,     // 0x03D
     SmsgLoginSetTimeSpeed = 66,   // 0x042
     SmsgUpdateObject = 169,   // 0x0A9
+    SmsgDestroyObject = 170,  // 0x0AA
+
+    // Movement (MSG_MOVE_*, build 5875 — same value both directions).
+    MsgMoveStartForward = 181,
+    MsgMoveStartBackward = 182,
+    MsgMoveStop = 183,
+    MsgMoveStartStrafeLeft = 184,
+    MsgMoveStartStrafeRight = 185,
+    MsgMoveStopStrafe = 186,
+    MsgMoveJump = 187,
+    MsgMoveStartTurnLeft = 188,
+    MsgMoveStartTurnRight = 189,
+    MsgMoveStopTurn = 190,
+    MsgMoveStartPitchUp = 191,
+    MsgMoveStartPitchDown = 192,
+    MsgMoveStopPitch = 193,
+    MsgMoveSetRunMode = 194,
+    MsgMoveSetWalkMode = 195,
+    MsgMoveFallLand = 201,
+    MsgMoveStartSwim = 202,
+    MsgMoveStopSwim = 203,
+    MsgMoveSetFacing = 218,
+    MsgMoveSetPitch = 219,
+    MsgMoveHeartbeat = 238,
+
     SmsgTutorialFlags = 253,  // 0x0FD
     SmsgInitialSpells = 298,  // 0x12A
     CmsgPing = 476,           // 0x1DC

@@ -111,7 +111,7 @@ public sealed class WorldHandshakeTests
             await using NetworkStream stream = server.GetStream();
             var session = new WorldSession(
                 stream, accounts, new InMemoryCharacterStore(), new InMemoryWorldDataStore(),
-                NullLogger.Instance, "test");
+                new ArcaneCore.Game.WorldState(), NullLogger.Instance, "test");
             await session.RunAsync(CancellationToken.None);
         });
 

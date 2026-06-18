@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using ArcaneCore.Game;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Configuration;
@@ -18,6 +19,7 @@ namespace ArcaneCore.World.Net;
 public sealed class WorldServer(
     IServiceScopeFactory scopeFactory,
     IOptions<WorldOptions> options,
+    WorldState worldState,
     ILoggerFactory loggerFactory,
     ILogger<WorldServer> logger) : BackgroundService
 {
@@ -62,7 +64,7 @@ public sealed class WorldServer(
                 ICharacterStore characterStore = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
                 IWorldDataStore worldDataStore = scope.ServiceProvider.GetRequiredService<IWorldDataStore>();
                 var session = new WorldSession(
-                    stream, accountStore, characterStore, worldDataStore,
+                    stream, accountStore, characterStore, worldDataStore, worldState,
                     loggerFactory.CreateLogger<WorldSession>(), endpoint);
                 await session.RunAsync(stoppingToken).ConfigureAwait(false);
             }

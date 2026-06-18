@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using ArcaneCore.Cryptography;
+using ArcaneCore.Game;
 using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
@@ -33,8 +34,9 @@ internal sealed class WorldTestClient : IAsyncDisposable
     }
 
     public static async Task<WorldTestClient> StartAsync(
-        IAccountStore accounts, ICharacterStore characters, IWorldDataStore worldData)
+        IAccountStore accounts, ICharacterStore characters, IWorldDataStore worldData, WorldState? worldState = null)
     {
+        WorldState state = worldState ?? new WorldState();
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
@@ -44,7 +46,7 @@ internal sealed class WorldTestClient : IAsyncDisposable
             using TcpClient server = await listener.AcceptTcpClientAsync();
             listener.Stop();
             await using NetworkStream stream = server.GetStream();
-            var session = new WorldSession(stream, accounts, characters, worldData, NullLogger.Instance, "test");
+            var session = new WorldSession(stream, accounts, characters, worldData, state, NullLogger.Instance, "test");
             await session.RunAsync(CancellationToken.None);
         });
 

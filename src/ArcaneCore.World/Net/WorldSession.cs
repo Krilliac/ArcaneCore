@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using ArcaneCore.Cryptography;
+using ArcaneCore.Game;
 using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
@@ -13,24 +14,30 @@ using Microsoft.Extensions.Logging;
 namespace ArcaneCore.World.Net;
 
 /// <summary>
-/// Handles one world connection: the M2 handshake and the M3 character lifecycle
-/// (enumerate / create / delete) plus world entry (player login → object update so the
-/// character stands in the world). Verified against vmangos WorldSocket.cpp and
-/// CharacterHandler.cpp.
+/// Handles one world connection: the M2 handshake, the M3 character lifecycle, and M4
+/// movement + visibility (the session is a world participant — see <see cref="IWorldPlayer"/>).
+/// Verified against vmangos WorldSocket.cpp, CharacterHandler.cpp and MovementHandler.cpp.
 /// </summary>
 public sealed class WorldSession(
     NetworkStream stream,
     IAccountStore accountStore,
     ICharacterStore characterStore,
     IWorldDataStore worldDataStore,
+    WorldState worldState,
     ILogger logger,
-    string remoteEndpoint)
+    string remoteEndpoint) : IWorldPlayer
 {
     private readonly WorldHeaderCrypt _crypt = new();
+    private readonly SemaphoreSlim _sendLock = new(1, 1);
     private uint _serverSeed;
     private bool _authenticated;
     private int _accountId;
     private string _username = string.Empty;
+    private PlayerObject? _player;
+    private Map? _map;
+
+    /// <summary>The in-world player (valid only after player login). See <see cref="IWorldPlayer"/>.</summary>
+    public PlayerObject Player => _player ?? throw new InvalidOperationException("player not in world");
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -41,30 +48,40 @@ public sealed class WorldSession(
         await SendAsync(WorldOpcode.SmsgAuthChallenge, challenge.AsMemory(), cancellationToken).ConfigureAwait(false);
 
         byte[] header = new byte[WorldHeaderCrypt.IncomingHeaderLength];
-        while (!cancellationToken.IsCancellationRequested)
+        try
         {
-            int read = await stream.ReadAsync(header.AsMemory(0, 1), cancellationToken).ConfigureAwait(false);
-            if (read == 0)
+            while (!cancellationToken.IsCancellationRequested)
             {
-                break;
+                int read = await stream.ReadAsync(header.AsMemory(0, 1), cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                await stream.ReadExactlyAsync(header.AsMemory(1), cancellationToken).ConfigureAwait(false);
+                _crypt.DecryptHeader(header);
+
+                ushort size = BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(0, 2));
+                var opcode = (WorldOpcode)BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(2, 4));
+                int payloadLength = size - 4;
+
+                byte[] payload = payloadLength > 0 ? new byte[payloadLength] : [];
+                if (payloadLength > 0)
+                {
+                    await stream.ReadExactlyAsync(payload, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (!await DispatchAsync(opcode, payload, cancellationToken).ConfigureAwait(false))
+                {
+                    break;
+                }
             }
-
-            await stream.ReadExactlyAsync(header.AsMemory(1), cancellationToken).ConfigureAwait(false);
-            _crypt.DecryptHeader(header);
-
-            ushort size = BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(0, 2));
-            var opcode = (WorldOpcode)BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(2, 4));
-            int payloadLength = size - 4;
-
-            byte[] payload = payloadLength > 0 ? new byte[payloadLength] : [];
-            if (payloadLength > 0)
+        }
+        finally
+        {
+            if (_map is not null && _player is not null)
             {
-                await stream.ReadExactlyAsync(payload, cancellationToken).ConfigureAwait(false);
-            }
-
-            if (!await DispatchAsync(opcode, payload, cancellationToken).ConfigureAwait(false))
-            {
-                break;
+                await _map.LeaveAsync(this).ConfigureAwait(false);
             }
         }
     }
@@ -94,6 +111,10 @@ public sealed class WorldSession(
 
             case WorldOpcode.CmsgPlayerLogin when _authenticated:
                 await HandlePlayerLoginAsync(payload, cancellationToken).ConfigureAwait(false);
+                return true;
+
+            case WorldOpcode opc when _player is not null && MovementOpcodes.IsRelayable(opc):
+                await HandleMovementAsync(opc, payload).ConfigureAwait(false);
                 return true;
 
             default:
@@ -270,13 +291,42 @@ public sealed class WorldSession(
         await SendAsync(WorldOpcode.SmsgLoginSetTimeSpeed, CharacterPackets.BuildTimeSpeed(DateTime.UtcNow), cancellationToken).ConfigureAwait(false);
         await SendAsync(WorldOpcode.SmsgInitialSpells, CharacterPackets.BuildInitialSpells(), cancellationToken).ConfigureAwait(false);
 
-        Game.PlayerObject player = CharacterPackets.BuildPlayerObject(character, raceInfo, classInfo);
-        byte[] update = Game.ObjectUpdateBuilder.BuildSelfCreate(player, (uint)Environment.TickCount);
+        var time = (uint)Environment.TickCount;
+        _player = CharacterPackets.BuildPlayerObject(character, raceInfo, classInfo);
+        byte[] update = ObjectUpdateBuilder.BuildSelfCreate(_player, time);
         await SendAsync(WorldOpcode.SmsgUpdateObject, update, cancellationToken).ConfigureAwait(false);
+
+        // Join the map: exchange create-updates with players already in view.
+        _map = worldState.GetMap(_player.MapId);
+        await _map.EnterAsync(this, time).ConfigureAwait(false);
 
         logger.LogInformation("[{Endpoint}] '{Account}' entered the world as '{Name}'",
             remoteEndpoint, _username, character.Name);
     }
+
+    private async Task HandleMovementAsync(WorldOpcode opcode, byte[] movementInfo)
+    {
+        // Vanilla client→server movement is just MovementInfo: flags(4) time(4) x(4) y(4) z(4) o(4) ...
+        if (_player is null || _map is null || movementInfo.Length < 24)
+        {
+            return;
+        }
+
+        _player.X = BinaryPrimitives.ReadSingleLittleEndian(movementInfo.AsSpan(8, 4));
+        _player.Y = BinaryPrimitives.ReadSingleLittleEndian(movementInfo.AsSpan(12, 4));
+        _player.Z = BinaryPrimitives.ReadSingleLittleEndian(movementInfo.AsSpan(16, 4));
+        _player.Orientation = BinaryPrimitives.ReadSingleLittleEndian(movementInfo.AsSpan(20, 4));
+
+        // Relay to nearby players as packGUID(mover) + the original MovementInfo (vmangos relay format).
+        var relay = new PacketWriter(movementInfo.Length + 9);
+        relay.WriteBytes(_player.ObjectGuid.ToPacked());
+        relay.WriteBytes(movementInfo);
+        await _map.RelayMovementAsync(this, opcode, relay.AsMemory()).ConfigureAwait(false);
+    }
+
+    /// <summary>Thread-safe push of a server packet to this client (used by the map for broadcasts).</summary>
+    public ValueTask SendToClientAsync(WorldOpcode opcode, ReadOnlyMemory<byte> payload)
+        => new(SendAsync(opcode, payload, CancellationToken.None));
 
     // --- digest + framing --------------------------------------------------------
 
@@ -301,8 +351,19 @@ public sealed class WorldSession(
         byte[] frame = new byte[WorldHeaderCrypt.OutgoingHeaderLength + payload.Length];
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(0, 2), (ushort)(payload.Length + 2));
         BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(2, 2), (ushort)opcode);
-        _crypt.EncryptHeader(frame.AsSpan(0, WorldHeaderCrypt.OutgoingHeaderLength));
         payload.Span.CopyTo(frame.AsSpan(WorldHeaderCrypt.OutgoingHeaderLength));
-        await stream.WriteAsync(frame, cancellationToken).ConfigureAwait(false);
+
+        // Header encryption mutates rolling cipher state, so encrypt + write must be atomic
+        // per packet — other sessions broadcast onto this stream concurrently.
+        await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            _crypt.EncryptHeader(frame.AsSpan(0, WorldHeaderCrypt.OutgoingHeaderLength));
+            await stream.WriteAsync(frame, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _sendLock.Release();
+        }
     }
 }

@@ -4,9 +4,9 @@ A from-scratch World of Warcraft **1.12.1 (build 5875)** server emulator in **C#
 .NET 10**. See [`ARCANECORE_CHARTER.md`](ARCANECORE_CHARTER.md) for the binding design
 charter and prime directives.
 
-> Status: **M1 (Logon + SRP6)**, **M2 (World handshake)** and **M3 (Character lifecycle)**
-> implemented and automatically verified; awaiting real-client acceptance. Milestones are
-> strictly gated.
+> Status: **M1 (Logon + SRP6)**, **M2 (World handshake)**, **M3 (Character lifecycle)** and
+> **M4 (Movement + visibility)** implemented and automatically verified; awaiting
+> real-client acceptance. Milestones are strictly gated.
 
 ## Layout
 
@@ -15,7 +15,7 @@ src/
   ArcaneCore.Kernel         domain models + data seams (clustering boundary)
   ArcaneCore.Cryptography   WoW-flavor SRP6 (verified against KAT vectors)
   ArcaneCore.Protocol       world opcodes, header read/write, vanilla header cipher
-  ArcaneCore.Game           entities, object GUIDs, UpdateFields, object updates
+  ArcaneCore.Game           entities, UpdateFields, object updates, maps + visibility
   ArcaneCore.Data           EF Core stores + DB-driven world data; MariaDB / MySQL / PostgreSQL
   ArcaneCore.Realm          logon/realm daemon (TCP 3724)
   ArcaneCore.World          world daemon (TCP 8085)

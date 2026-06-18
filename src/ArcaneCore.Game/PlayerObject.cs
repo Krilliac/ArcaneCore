@@ -29,11 +29,13 @@ public sealed class PlayerObject
     public uint Power { get; init; }
     public uint MaxPower { get; init; }
 
-    public uint MapId { get; init; }
-    public float X { get; init; }
-    public float Y { get; init; }
-    public float Z { get; init; }
-    public float Orientation { get; init; }
+    public uint MapId { get; set; }
+
+    // Position is mutable: it is updated as the player moves (M4 visibility/relay).
+    public float X { get; set; }
+    public float Y { get; set; }
+    public float Z { get; set; }
+    public float Orientation { get; set; }
 
     public float Scale { get; init; } = 1.0f;
     public float BoundingRadius { get; init; } = 0.382f;
