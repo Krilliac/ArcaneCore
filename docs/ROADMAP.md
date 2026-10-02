@@ -141,6 +141,7 @@ Each milestone ships: code + automated loopback tests + `docs/Mx_ACCEPTANCE.md` 
 | TrinityCore (3.3.5 branch) | 3.3.5a | GPL-2 | Architecture only (map update, grids, movement splines, AI design) |
 | arcemu/arcemu (Ascent lineage) | 3.3.5a | AGPL-3 | Architecture only |
 | Krilliac/Worldforge | 1.12.1 client side | (developer's) | Client file formats (ADT/WDT/DBC/MPQ) for future terrain/height work |
+| wowdev/noggit3, Noggit Red (gitlab prophecy-rp) | 1.12–3.3.5 map editors | GPL-3 | ADT/WDT terrain + liquid layout for height and terrain tooling |
 | wowdev.wiki | all | CC | Neutral format and protocol documentation |
 
 **WotLK-era references (TrinityCore, ArcEmu) never supply 1.12.1 wire values** — opcodes,
