@@ -48,4 +48,26 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         return true;
     }
+
+    public async Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default)
+    {
+        CharacterRecord? character = await db.Characters
+            .FirstOrDefaultAsync(c => c.Id == state.Id, cancellationToken)
+            .ConfigureAwait(false);
+        if (character is null)
+        {
+            return; // deleted while the save was queued
+        }
+
+        character.MapId = state.MapId;
+        character.ZoneId = state.ZoneId;
+        character.X = state.X;
+        character.Y = state.Y;
+        character.Z = state.Z;
+        character.Orientation = state.Orientation;
+        character.Level = state.Level;
+        character.PlayedTime = state.PlayedTime;
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        db.ChangeTracker.Clear();
+    }
 }

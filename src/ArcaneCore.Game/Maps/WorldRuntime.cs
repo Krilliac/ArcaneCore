@@ -1,0 +1,222 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using ArcaneCore.Game.Entities;
+using Microsoft.Extensions.Logging;
+
+namespace ArcaneCore.Game.Maps;
+
+/// <summary>
+/// The authoritative world simulation: one dedicated thread runs a fixed-rate tick that
+/// executes posted commands, then updates every map (vmangos World::Update → Map::Update).
+/// All in-world state is owned by that thread; other threads interact only through
+/// <see cref="Post"/> / <see cref="InvokeAsync{T}"/> and the thread-safe online registry.
+/// </summary>
+public sealed class WorldRuntime : IDisposable
+{
+    private readonly ILogger _logger;
+    private readonly ICharacterSaveQueue _saveQueue;
+    private readonly ConcurrentQueue<Action> _commands = new();
+    private readonly Dictionary<uint, Map> _maps = [];
+    private readonly ConcurrentDictionary<ObjectGuid, Player> _online = new();
+    private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private readonly ManualResetEventSlim _stopSignal = new(false);
+    private Thread? _thread;
+    private int _worldThreadId = -1;
+    private uint _sinceAutosaveMs;
+
+    public WorldRuntime(WorldRuntimeOptions options, ICharacterSaveQueue saveQueue, ILogger<WorldRuntime> logger)
+    {
+        Options = options;
+        _saveQueue = saveQueue;
+        _logger = logger;
+    }
+
+    public WorldRuntimeOptions Options { get; }
+
+    /// <summary>
+    /// Milliseconds since the world started, wrapping like vmangos WorldTimer::getMSTime.
+    /// This is the clock movement timestamps and create blocks carry.
+    /// </summary>
+    public uint NowMs => unchecked((uint)_clock.ElapsedMilliseconds);
+
+    public int OnlinePlayerCount => _online.Count;
+
+    /// <summary>True when the caller is the world thread (or no world thread is running).</summary>
+    public bool IsWorldThread => _worldThreadId == -1 || Environment.CurrentManagedThreadId == _worldThreadId;
+
+    /// <summary>Whether a character is currently in the world. Thread-safe.</summary>
+    public bool IsOnline(ObjectGuid guid) => _online.ContainsKey(guid);
+
+    /// <summary>Start the world thread.</summary>
+    public void Start()
+    {
+        if (_thread is not null)
+        {
+            throw new InvalidOperationException("world already started");
+        }
+
+        _thread = new Thread(Run) { IsBackground = true, Name = "world" };
+        _thread.Start();
+    }
+
+    /// <summary>
+    /// Stop the world thread, then save every online character. After this returns the world
+    /// thread is gone, so this method may touch world state itself.
+    /// </summary>
+    public void Stop()
+    {
+        if (_thread is null)
+        {
+            return;
+        }
+
+        _stopSignal.Set();
+        _thread.Join();
+        _thread = null;
+        _worldThreadId = -1;
+
+        // Commands posted before shutdown (e.g. a disconnect's save) still run.
+        RunCommands();
+        SaveAll();
+    }
+
+    /// <summary>Queue work for the start of the next tick. Thread-safe.</summary>
+    public void Post(Action command) => _commands.Enqueue(command);
+
+    /// <summary>Run <paramref name="func"/> on the world thread and return its result.</summary>
+    public Task<T> InvokeAsync<T>(Func<T> func)
+    {
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Post(() =>
+        {
+            try
+            {
+                completion.SetResult(func());
+            }
+            catch (Exception ex)
+            {
+                completion.SetException(ex);
+            }
+        });
+        return completion.Task;
+    }
+
+    /// <summary>The map with the given id, created on first use (world thread).</summary>
+    public Map GetMap(uint mapId)
+    {
+        if (!_maps.TryGetValue(mapId, out Map? map))
+        {
+            map = new Map(mapId, this, _logger);
+            _maps[mapId] = map;
+        }
+
+        return map;
+    }
+
+    /// <summary>Put a loaded player into its map and the online registry (world thread).</summary>
+    public void AddPlayer(Player player)
+    {
+        if (!_online.TryAdd(player.Guid, player))
+        {
+            throw new InvalidOperationException($"{player.Name} ({player.Guid}) is already online");
+        }
+
+        player.StartPlayedTime(NowMs);
+        GetMap(player.MapId).AddPlayer(player);
+    }
+
+    /// <summary>Take a player out of the world and queue its state for saving (world thread).</summary>
+    public void RemovePlayer(Player player)
+    {
+        if (!_online.TryRemove(player.Guid, out _))
+        {
+            return;
+        }
+
+        player.Map?.RemovePlayer(player);
+        _saveQueue.Enqueue(player.CreateSnapshot(NowMs));
+    }
+
+    /// <summary>One tick: posted commands, then every map (world thread; tests call it directly).</summary>
+    public void RunTick(uint diffMs)
+    {
+        RunCommands();
+
+        foreach (Map map in _maps.Values)
+        {
+            try
+            {
+                map.Update(diffMs);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "map {MapId} update failed", map.MapId);
+            }
+        }
+
+        if (Options.AutosaveIntervalMs > 0)
+        {
+            _sinceAutosaveMs += diffMs;
+            if (_sinceAutosaveMs >= Options.AutosaveIntervalMs)
+            {
+                _sinceAutosaveMs = 0;
+                SaveAll();
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        Stop();
+        _stopSignal.Dispose();
+    }
+
+    private void RunCommands()
+    {
+        while (_commands.TryDequeue(out Action? command))
+        {
+            try
+            {
+                command();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "world command failed");
+            }
+        }
+    }
+
+    private void SaveAll()
+    {
+        uint now = NowMs;
+        foreach (Player player in _online.Values)
+        {
+            _saveQueue.Enqueue(player.CreateSnapshot(now));
+        }
+    }
+
+    private void Run()
+    {
+        _worldThreadId = Environment.CurrentManagedThreadId;
+        int interval = Math.Max(1, Options.TickIntervalMs);
+        long last = _clock.ElapsedMilliseconds;
+        _logger.LogInformation("World thread started ({Interval} ms tick)", interval);
+
+        while (!_stopSignal.IsSet)
+        {
+            long tickStart = _clock.ElapsedMilliseconds;
+            uint diff = (uint)Math.Clamp(tickStart - last, 0, uint.MaxValue);
+            last = tickStart;
+
+            RunTick(diff);
+
+            long elapsed = _clock.ElapsedMilliseconds - tickStart;
+            if (elapsed < interval)
+            {
+                _stopSignal.Wait((int)(interval - elapsed));
+            }
+        }
+
+        _logger.LogInformation("World thread stopped");
+    }
+}

@@ -1,10 +1,8 @@
 using System.Net;
 using System.Net.Sockets;
-using ArcaneCore.Game;
-using ArcaneCore.Kernel.Accounts;
-using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Configuration;
-using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.World.Handlers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -13,13 +11,16 @@ using Microsoft.Extensions.Options;
 namespace ArcaneCore.World.Net;
 
 /// <summary>
-/// TCP listener for the world daemon (default port 8085, Charter §3). Accepts connections
-/// and runs each through a <see cref="WorldSession"/> on its own DI scope.
+/// TCP listener for the world daemon (default port 8085, charter §3). Each connection gets
+/// its own DI scope and a <see cref="WorldSession"/>.
 /// </summary>
 public sealed class WorldServer(
     IServiceScopeFactory scopeFactory,
     IOptions<WorldOptions> options,
-    WorldState worldState,
+    IOptions<WorldSessionOptions> sessionOptions,
+    OpcodeTable opcodes,
+    WorldRuntime world,
+    SessionRegistry registry,
     ILoggerFactory loggerFactory,
     ILogger<WorldServer> logger) : BackgroundService
 {
@@ -28,7 +29,8 @@ public sealed class WorldServer(
         WorldOptions config = options.Value;
         var listener = new TcpListener(IPAddress.Parse(config.BindAddress), config.Port);
         listener.Start();
-        logger.LogInformation("World daemon listening on {Address}:{Port}", config.BindAddress, config.Port);
+        logger.LogInformation("World daemon listening on {Address}:{Port} ({Handlers} opcode handlers)",
+            config.BindAddress, config.Port, opcodes.Count);
 
         try
         {
@@ -45,7 +47,7 @@ public sealed class WorldServer(
         finally
         {
             listener.Stop();
-            logger.LogInformation("World daemon stopped");
+            logger.LogInformation("World daemon stopped listening");
         }
     }
 
@@ -56,38 +58,20 @@ public sealed class WorldServer(
 
         try
         {
+            client.NoDelay = true;
             using (client)
             await using (NetworkStream stream = client.GetStream())
             await using (AsyncServiceScope scope = scopeFactory.CreateAsyncScope())
             {
-                IAccountStore accountStore = scope.ServiceProvider.GetRequiredService<IAccountStore>();
-                ICharacterStore characterStore = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
-                IWorldDataStore worldDataStore = scope.ServiceProvider.GetRequiredService<IWorldDataStore>();
                 var session = new WorldSession(
-                    stream, accountStore, characterStore, worldDataStore, worldState,
-                    loggerFactory.CreateLogger<WorldSession>(), endpoint);
+                    stream, endpoint, scope.ServiceProvider, opcodes, world, registry,
+                    sessionOptions.Value, loggerFactory.CreateLogger<WorldSession>());
                 await session.RunAsync(stoppingToken).ConfigureAwait(false);
             }
-        }
-        catch (OperationCanceledException)
-        {
-            // server stopping
-        }
-        catch (EndOfStreamException)
-        {
-            // client disconnected mid-packet
-        }
-        catch (IOException)
-        {
-            // connection reset
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "[{Endpoint}] session error", endpoint);
-        }
-        finally
-        {
-            logger.LogInformation("[{Endpoint}] disconnected", endpoint);
         }
     }
 }

@@ -1,4 +1,6 @@
+using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
@@ -11,47 +13,56 @@ using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.Data;
 
-/// <summary>DI wiring for the data layer. This is the composition-root seam: only the host
-/// references the concrete EF stores; the daemons depend on the Kernel interfaces.</summary>
+/// <summary>
+/// DI wiring for the data layer. This is the composition-root seam: only the hosts reference
+/// the concrete EF stores; the daemons depend on the Kernel interfaces.
+/// </summary>
 public static class DataServiceCollectionExtensions
 {
-    public static IServiceCollection AddArcaneCoreData(this IServiceCollection services, IConfiguration configuration)
+    /// <summary>Accounts and realm list (realm daemon, world daemon, account tool).</summary>
+    public static IServiceCollection AddAuthDatabase(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<DatabaseOptions>(configuration.GetSection(DatabaseOptions.SectionName));
-
-        services.AddDbContext<ArcaneCoreDbContext>((provider, builder) =>
-            ConfigureProvider(builder, provider.GetRequiredService<IOptions<DatabaseOptions>>().Value));
+        services.AddDbContext<AuthDbContext>((provider, builder) =>
+            ConfigureProvider(builder, provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.Resolve(DatabaseComponent.Auth)));
 
         services.AddScoped<IAccountStore, EfAccountStore>();
         services.AddScoped<IRealmStore, EfRealmStore>();
-
+        services.AddSingleton<AuthDbInitializer>();
         return services;
     }
 
-    /// <summary>
-    /// Registers the character context and the DB-driven world data (characters,
-    /// player_create_info, race_info, class_info) on the same configured database.
-    /// </summary>
-    public static IServiceCollection AddArcaneCoreCharacterData(
-        this IServiceCollection services, IConfiguration configuration)
+    /// <summary>Player characters (world daemon).</summary>
+    public static IServiceCollection AddCharacterDatabase(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<DatabaseOptions>(configuration.GetSection(DatabaseOptions.SectionName));
-
         services.AddDbContext<CharacterDbContext>((provider, builder) =>
-            ConfigureProvider(builder, provider.GetRequiredService<IOptions<DatabaseOptions>>().Value));
+            ConfigureProvider(builder, provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.Resolve(DatabaseComponent.Characters)));
 
         services.AddScoped<ICharacterStore, EfCharacterStore>();
-        services.AddScoped<IWorldDataStore, EfWorldDataStore>();
         services.AddSingleton<CharacterDbInitializer>();
-
         return services;
     }
 
-    private static void ConfigureProvider(DbContextOptionsBuilder builder, DatabaseOptions options)
+    /// <summary>Static world content (world daemon, content importer).</summary>
+    public static IServiceCollection AddWorldDatabase(this IServiceCollection services, IConfiguration configuration)
+    {
+        services.Configure<DatabaseOptions>(configuration.GetSection(DatabaseOptions.SectionName));
+        services.AddDbContext<WorldDbContext>((provider, builder) =>
+            ConfigureProvider(builder, provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.Resolve(DatabaseComponent.World)));
+
+        services.AddScoped<IWorldDataStore, EfWorldDataStore>();
+        services.AddSingleton<WorldDbInitializer>();
+        return services;
+    }
+
+    /// <summary>Point a context at its configured engine.</summary>
+    public static void ConfigureProvider(DbContextOptionsBuilder builder, DatabaseConnectionOptions options)
     {
         if (string.IsNullOrWhiteSpace(options.ConnectionString))
         {
-            throw new InvalidOperationException("Database:ConnectionString is not configured.");
+            throw new InvalidOperationException(
+                "No database connection string configured (Database:ConnectionString, or Database:<Auth|Characters|World>:ConnectionString).");
         }
 
         switch (options.Provider)
@@ -65,6 +76,10 @@ public static class DataServiceCollectionExtensions
 
             case DatabaseProvider.PostgreSql:
                 builder.UseNpgsql(options.ConnectionString);
+                break;
+
+            case DatabaseProvider.Sqlite:
+                builder.UseSqlite(options.ConnectionString);
                 break;
 
             default:

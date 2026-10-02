@@ -1,25 +1,17 @@
 using System.Buffers.Binary;
-using System.Net;
+using System.IO.Compression;
 using System.Net.Sockets;
-using System.Security.Cryptography;
 using System.Text;
 using ArcaneCore.Cryptography;
-using ArcaneCore.Game;
 using ArcaneCore.Kernel;
-using ArcaneCore.Kernel.Accounts;
-using ArcaneCore.Kernel.Characters;
-using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
-using ArcaneCore.World.Net;
-using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ArcaneCore.World.Tests;
 
 /// <summary>
 /// A simulated 1.12.1 world client over a loopback socket: performs the auth handshake and
-/// then sends/receives encrypted world packets, so character-lifecycle flows can be driven
-/// against a real <see cref="WorldSession"/>.
+/// then sends/receives header-encrypted world packets.
 /// </summary>
 internal sealed class WorldTestClient : IAsyncDisposable
 {
@@ -29,35 +21,16 @@ internal sealed class WorldTestClient : IAsyncDisposable
     private readonly NetworkStream _stream;
     private readonly WorldHeaderCrypt _crypt = new();
 
-    private WorldTestClient(TcpClient client, NetworkStream stream)
+    public WorldTestClient(TcpClient client)
     {
         _client = client;
-        _stream = stream;
+        _stream = client.GetStream();
     }
 
-    public static async Task<WorldTestClient> StartAsync(
-        IAccountStore accounts, ICharacterStore characters, IWorldDataStore worldData, WorldState? worldState = null)
-    {
-        WorldState state = worldState ?? new WorldState();
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+    /// <summary>Bytes received but not yet read.</summary>
+    public int Available => _client.Available;
 
-        _ = Task.Run(async () =>
-        {
-            using TcpClient server = await listener.AcceptTcpClientAsync();
-            listener.Stop();
-            await using NetworkStream stream = server.GetStream();
-            var session = new WorldSession(stream, accounts, characters, worldData, state, NullLogger.Instance, "test");
-            await session.RunAsync(CancellationToken.None);
-        });
-
-        var client = new TcpClient();
-        await client.ConnectAsync(IPAddress.Loopback, port);
-        return new WorldTestClient(client, client.GetStream());
-    }
-
-    /// <summary>Run the auth handshake and assert it succeeds; leaves the client ready for world traffic.</summary>
+    /// <summary>Run the auth handshake and assert it succeeds; leaves the client at character select.</summary>
     public async Task AuthenticateAsync(string account, byte[] sessionKey)
     {
         (WorldOpcode op, byte[] payload) = await ReadAsync();
@@ -76,7 +49,7 @@ internal sealed class WorldTestClient : IAsyncDisposable
         session.WriteUInt32(clientSeed);
         session.WriteBytes(digest);
         session.WriteUInt32(0); // empty addon block (decompresses to nothing; server tolerates it)
-        await SendAsync(WorldOpcode.CmsgAuthSession, session.AsMemory().ToArray());
+        await SendAsync(WorldOpcode.CmsgAuthSession, session.ToArray());
         _crypt.Initialize(sessionKey);
 
         (op, payload) = await ReadAsync();
@@ -85,6 +58,42 @@ internal sealed class WorldTestClient : IAsyncDisposable
 
         (op, _) = await ReadAsync(); // SMSG_ADDON_INFO
         Assert.Equal(WorldOpcode.SmsgAddonInfo, op);
+    }
+
+    /// <summary>Create a character (human warrior by default) and assert success.</summary>
+    public async Task CreateCharacterAsync(string name, byte race = 1, byte cls = 1, byte gender = 0)
+    {
+        var create = new PacketWriter(32);
+        create.WriteCString(name);
+        create.WriteByte(race);
+        create.WriteByte(cls);
+        create.WriteByte(gender);
+        for (int i = 0; i < 6; i++)
+        {
+            create.WriteByte(0); // skin, face, hair style, hair color, facial hair, outfit
+        }
+
+        await SendAsync(WorldOpcode.CmsgCharCreate, create.ToArray());
+        (WorldOpcode op, byte[] payload) = await ReadAsync();
+        Assert.Equal(WorldOpcode.SmsgCharCreate, op);
+        Assert.Equal((byte)CharResult.CharCreateSuccess, payload[0]);
+    }
+
+    /// <summary>
+    /// Log a character in and consume the login sequence (vmangos order: verify world,
+    /// tutorials, initial spells, time speed, self create). Returns the self-create body.
+    /// </summary>
+    public async Task<byte[]> LoginAsync(ulong guid)
+    {
+        var login = new PacketWriter(8);
+        login.WriteUInt64(guid);
+        await SendAsync(WorldOpcode.CmsgPlayerLogin, login.ToArray());
+
+        Assert.Equal(WorldOpcode.SmsgLoginVerifyWorld, (await ReadAsync()).Opcode);
+        Assert.Equal(WorldOpcode.SmsgTutorialFlags, (await ReadAsync()).Opcode);
+        Assert.Equal(WorldOpcode.SmsgInitialSpells, (await ReadAsync()).Opcode);
+        Assert.Equal(WorldOpcode.SmsgLoginSettimespeed, (await ReadAsync()).Opcode);
+        return await ReadUpdateAsync();
     }
 
     public async Task SendAsync(WorldOpcode opcode, byte[] payload)
@@ -116,6 +125,58 @@ internal sealed class WorldTestClient : IAsyncDisposable
         }
 
         return (opcode, payload);
+    }
+
+    /// <summary>Read an update packet, plain or compressed, and return its uncompressed body.</summary>
+    public async Task<byte[]> ReadUpdateAsync()
+    {
+        (WorldOpcode op, byte[] payload) = await ReadAsync();
+        return op switch
+        {
+            WorldOpcode.SmsgUpdateObject => payload,
+            WorldOpcode.SmsgCompressedUpdateObject => Inflate(payload),
+            _ => throw new Xunit.Sdk.XunitException($"expected an update packet, got {WorldOpcodeNames.GetName(op)}"),
+        };
+    }
+
+    /// <summary>SMSG_COMPRESSED_UPDATE_OBJECT body: u32 uncompressed size + zlib stream.</summary>
+    public static byte[] Inflate(byte[] payload)
+    {
+        int size = (int)BinaryPrimitives.ReadUInt32LittleEndian(payload);
+        using var input = new MemoryStream(payload, 4, payload.Length - 4);
+        using var zlib = new ZLibStream(input, CompressionMode.Decompress);
+        byte[] body = new byte[size];
+        zlib.ReadExactly(body);
+        return body;
+    }
+
+    /// <summary>Assert the server sends nothing more within <paramref name="window"/>.</summary>
+    public async Task AssertSilentAsync(TimeSpan window)
+    {
+        await Task.Delay(window);
+        Assert.Equal(0, _client.Available);
+    }
+
+    /// <summary>True once the server has closed the connection.</summary>
+    public async Task<bool> IsClosedByServerAsync()
+    {
+        using var timeout = new CancellationTokenSource(ReadTimeout);
+        byte[] one = new byte[1];
+        try
+        {
+            while (true)
+            {
+                int read = await _stream.ReadAsync(one, timeout.Token);
+                if (read == 0)
+                {
+                    return true;
+                }
+            }
+        }
+        catch (IOException)
+        {
+            return true;
+        }
     }
 
     public async ValueTask DisposeAsync()

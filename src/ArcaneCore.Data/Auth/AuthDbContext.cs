@@ -1,22 +1,32 @@
+using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Realms;
 using Microsoft.EntityFrameworkCore;
 
-namespace ArcaneCore.Data;
+namespace ArcaneCore.Data.Auth;
 
 /// <summary>
-/// EF Core context for the logon database. M1 scope: accounts and the realm list.
-/// The Kernel domain types double as the persistence entities — there is no separate
-/// data model at this size (Charter §1.4: complete within scope, nothing speculative).
+/// EF Core context for the auth database: accounts and the realm list. The Kernel domain
+/// types double as the persistence entities.
 /// </summary>
-public sealed class ArcaneCoreDbContext(DbContextOptions<ArcaneCoreDbContext> options) : DbContext(options)
+public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbContext(options)
 {
+    /// <summary>Schema history of the auth database.</summary>
+    public static readonly SchemaDefinition Schema = new()
+    {
+        Component = "auth",
+        CurrentVersion = 1,
+        Version1Tables = ["account", "realmlist"],
+    };
+
     public DbSet<Account> Accounts => Set<Account>();
 
     public DbSet<RealmEntry> Realms => Set<RealmEntry>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        SchemaBootstrapper.MapVersionTable(modelBuilder, Schema);
+
         modelBuilder.Entity<Account>(entity =>
         {
             entity.ToTable("account");

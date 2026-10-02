@@ -1,11 +1,11 @@
-using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Content;
 using ArcaneCore.Kernel.WorldData;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArcaneCore.Data.Stores;
 
 /// <summary>EF Core implementation of <see cref="IWorldDataStore"/> over the seeded DB tables.</summary>
-public sealed class EfWorldDataStore(CharacterDbContext db) : IWorldDataStore
+public sealed class EfWorldDataStore(WorldDbContext db) : IWorldDataStore
 {
     public async Task<StartPosition?> GetStartPositionAsync(byte race, byte cls, CancellationToken cancellationToken = default)
     {

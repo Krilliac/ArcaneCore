@@ -1,10 +1,11 @@
+using ArcaneCore.Data.Auth;
 using ArcaneCore.Kernel.Accounts;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArcaneCore.Data.Stores;
 
 /// <summary>EF Core implementation of <see cref="IAccountStore"/>.</summary>
-public sealed class EfAccountStore(ArcaneCoreDbContext db) : IAccountStore
+public sealed class EfAccountStore(AuthDbContext db) : IAccountStore
 {
     public async Task<Account?> FindByUsernameAsync(string username, CancellationToken cancellationToken = default)
     {

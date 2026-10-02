@@ -2,20 +2,16 @@ using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Sockets;
-using System.Security.Cryptography;
 using System.Text;
 using ArcaneCore.Cryptography;
 using ArcaneCore.Kernel;
-using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
-using ArcaneCore.World.Net;
-using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ArcaneCore.World.Tests;
 
 /// <summary>
-/// Drives a real <see cref="WorldSession"/> over a loopback socket with a simulated client,
+/// Drives a real world session over a loopback socket with a simulated client,
 /// exercising the full M2 handshake: SMSG_AUTH_CHALLENGE → CMSG_AUTH_SESSION (digest
 /// validated), header encryption engaging, and reaching the empty character list.
 /// </summary>
@@ -26,17 +22,12 @@ public sealed class WorldHandshakeTests
     [Fact]
     public async Task ValidSession_CompletesHandshakeAndReachesCharacterList()
     {
-        byte[] sessionKey = RandomNumberGenerator.GetBytes(WowSrp6.SessionKeyLength);
-        var accounts = new InMemoryAccountStore();
-        await accounts.CreateAsync(new Account
-        {
-            Username = Username,
-            Salt = new byte[32],
-            Verifier = new byte[32],
-            SessionKey = sessionKey,
-        });
+        await using var host = WorldTestHost.Start();
+        byte[] sessionKey = await host.AddAccountAsync(Username);
 
-        await using NetworkStream client = await StartSessionAsync(accounts);
+        using var tcp = new TcpClient();
+        await tcp.ConnectAsync(IPAddress.Loopback, host.Port);
+        await using NetworkStream client = tcp.GetStream();
         var crypt = new WorldHeaderCrypt();
 
         // 1. SMSG_AUTH_CHALLENGE (plaintext header) carries the server seed.
@@ -70,17 +61,12 @@ public sealed class WorldHandshakeTests
     [Fact]
     public async Task WrongDigest_IsRejected()
     {
-        byte[] sessionKey = RandomNumberGenerator.GetBytes(WowSrp6.SessionKeyLength);
-        var accounts = new InMemoryAccountStore();
-        await accounts.CreateAsync(new Account
-        {
-            Username = Username,
-            Salt = new byte[32],
-            Verifier = new byte[32],
-            SessionKey = sessionKey,
-        });
+        await using var host = WorldTestHost.Start();
+        await host.AddAccountAsync(Username);
 
-        await using NetworkStream client = await StartSessionAsync(accounts);
+        using var tcp = new TcpClient();
+        await tcp.ConnectAsync(IPAddress.Loopback, host.Port);
+        await using NetworkStream client = tcp.GetStream();
         var crypt = new WorldHeaderCrypt();
 
         (_, byte[] payload) = await ReadServerPacketAsync(client, crypt);
@@ -94,30 +80,6 @@ public sealed class WorldHandshakeTests
         (WorldOpcode op, byte[] resp) = await ReadServerPacketAsync(client, crypt);
         Assert.Equal(WorldOpcode.SmsgAuthResponse, op);
         Assert.Equal((byte)AuthResponseCode.Failed, resp[0]);
-    }
-
-    // --- session host ------------------------------------------------------------
-
-    private static async Task<NetworkStream> StartSessionAsync(IAccountStore accounts)
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-
-        _ = Task.Run(async () =>
-        {
-            using TcpClient server = await listener.AcceptTcpClientAsync();
-            listener.Stop();
-            await using NetworkStream stream = server.GetStream();
-            var session = new WorldSession(
-                stream, accounts, new InMemoryCharacterStore(), new InMemoryWorldDataStore(),
-                new ArcaneCore.Game.WorldState(), NullLogger.Instance, "test");
-            await session.RunAsync(CancellationToken.None);
-        });
-
-        var client = new TcpClient();
-        await client.ConnectAsync(IPAddress.Loopback, port);
-        return client.GetStream();
     }
 
     // --- digest + packet construction --------------------------------------------

@@ -15,4 +15,7 @@ public interface ICharacterStore
 
     /// <summary>Delete a character owned by the given account. Returns true if a row was removed.</summary>
     Task<bool> DeleteAsync(int id, int accountId, CancellationToken cancellationToken = default);
+
+    /// <summary>Persist in-world state captured by the world thread. A missing row is ignored (deleted meanwhile).</summary>
+    Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default);
 }

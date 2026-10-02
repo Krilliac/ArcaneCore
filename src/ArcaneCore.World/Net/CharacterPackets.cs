@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -12,6 +13,9 @@ namespace ArcaneCore.World.Net;
 public static class CharacterPackets
 {
     private const int EquipmentSlots = 20; // 19 equipment slots + first bag (INVENTORY_SLOT_BAG_START + 1)
+
+    /// <summary>Experience needed to leave level 1 (player_xp_for_level, level 1 = 400) until M8 imports the table.</summary>
+    private const uint Level1NextLevelXp = 400;
 
     /// <summary>SMSG_CHAR_ENUM: count followed by one block per character.</summary>
     public static byte[] BuildCharEnum(IReadOnlyList<CharacterRecord> characters)
@@ -51,7 +55,7 @@ public static class CharacterPackets
             }
         }
 
-        return writer.AsMemory().ToArray();
+        return writer.ToArray();
     }
 
     /// <summary>SMSG_LOGIN_VERIFY_WORLD: the map and position the client should load.</summary>
@@ -63,7 +67,7 @@ public static class CharacterPackets
         writer.WriteSingle(c.Y);
         writer.WriteSingle(c.Z);
         writer.WriteSingle(c.Orientation);
-        return writer.AsMemory().ToArray();
+        return writer.ToArray();
     }
 
     /// <summary>SMSG_TUTORIAL_FLAGS: eight masks; all-ones marks every tutorial as seen.</summary>
@@ -75,16 +79,19 @@ public static class CharacterPackets
             writer.WriteUInt32(0xFFFFFFFF);
         }
 
-        return writer.AsMemory().ToArray();
+        return writer.ToArray();
     }
 
-    /// <summary>SMSG_LOGIN_SETTIMESPEED: packed game time + the per-millisecond game-time rate.</summary>
+    /// <summary>
+    /// SMSG_LOGIN_SETTIMESPEED: packed game time + game minutes per real second
+    /// (vmangos Player::SendInitialPacketsBeforeAddToMap: 1.0f / 60.0f).
+    /// </summary>
     public static byte[] BuildTimeSpeed(DateTime utcNow)
     {
         var writer = new PacketWriter(8);
         writer.WriteUInt32(PackGameTime(utcNow));
-        writer.WriteSingle(0.01666667f); // game seconds per real second
-        return writer.AsMemory().ToArray();
+        writer.WriteSingle(1.0f / 60.0f);
+        return writer.ToArray();
     }
 
     /// <summary>SMSG_INITIAL_SPELLS: empty spell + cooldown lists.</summary>
@@ -94,46 +101,34 @@ public static class CharacterPackets
         writer.WriteByte(0);   // unknown
         writer.WriteUInt16(0); // spell count
         writer.WriteUInt16(0); // cooldown count
-        return writer.AsMemory().ToArray();
+        return writer.ToArray();
     }
 
-    /// <summary>Build the in-world player object from the character row and DB-driven world data.</summary>
-    public static PlayerObject BuildPlayerObject(CharacterRecord c, RaceInfo raceInfo, ClassInfo classInfo)
+    /// <summary>SMSG_CHARACTER_LOGIN_FAILED: one result byte (gtker smsg_character_login_failed).</summary>
+    public static byte[] BuildLoginFailed(CharResult result) => [(byte)result];
+
+    /// <summary>Race/class-derived creation values for a player object.</summary>
+    public static PlayerAppearance BuildAppearance(RaceInfo raceInfo, ClassInfo classInfo)
     {
         var powerType = (PowerType)classInfo.PowerType;
-        (uint power, uint maxPower) = powerType switch
+        (uint maxPower, uint startPower) = powerType switch
         {
-            PowerType.Rage => (0u, 1000u),
+            PowerType.Rage => (1000u, 0u),     // rage is stored ×10; 100 rage, starts empty
             PowerType.Energy => (100u, 100u),
             PowerType.Focus => (100u, 100u),
             _ => (classInfo.BaseMana, classInfo.BaseMana),
         };
 
-        return new PlayerObject
-        {
-            Guid = (uint)c.Id,
-            Race = (Race)c.Race,
-            Class = (Class)c.Class,
-            Gender = (Gender)c.Gender,
-            PowerType = powerType,
-            Skin = c.Skin,
-            Face = c.Face,
-            HairStyle = c.HairStyle,
-            HairColor = c.HairColor,
-            FacialHair = c.FacialHair,
-            Level = c.Level,
-            FactionTemplate = raceInfo.FactionTemplate,
-            DisplayId = raceInfo.DisplayId,
-            Health = classInfo.BaseHealth,
-            MaxHealth = classInfo.BaseHealth,
-            Power = power,
-            MaxPower = maxPower,
-            MapId = c.MapId,
-            X = c.X,
-            Y = c.Y,
-            Z = c.Z,
-            Orientation = c.Orientation,
-        };
+        return new PlayerAppearance(
+            raceInfo.DisplayId,
+            raceInfo.FactionTemplate,
+            powerType,
+            classInfo.BaseHealth,
+            classInfo.BaseMana,
+            MaxHealth: classInfo.BaseHealth,
+            MaxPower: maxPower,
+            StartPower: startPower,
+            NextLevelXp: Level1NextLevelXp);
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Cryptography;
 using ArcaneCore.Data;
+using ArcaneCore.Data.Auth;
 using ArcaneCore.Kernel.Accounts;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -14,15 +15,14 @@ if (args.Length == 0)
 }
 
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
-builder.Services.AddArcaneCoreData(builder.Configuration);
-builder.Services.AddSingleton<ArcaneCoreDbInitializer>();
+builder.Services.AddAuthDatabase(builder.Configuration);
 using IHost host = builder.Build();
 
-await host.Services.GetRequiredService<ArcaneCoreDbInitializer>().InitializeAsync().ConfigureAwait(false);
+await host.Services.GetRequiredService<AuthDbInitializer>().InitializeAsync().ConfigureAwait(false);
 
 using IServiceScope scope = host.Services.CreateScope();
 IAccountStore accounts = scope.ServiceProvider.GetRequiredService<IAccountStore>();
-ArcaneCoreDbContext db = scope.ServiceProvider.GetRequiredService<ArcaneCoreDbContext>();
+AuthDbContext db = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
 
 string command = args[0].ToLowerInvariant();
 switch (command)

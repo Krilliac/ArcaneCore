@@ -8,6 +8,32 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+
+    # The data-layer tests run against every supported engine (charter §2 + ROADMAP):
+    # SQLite in-process, MariaDB and PostgreSQL as service containers.
+    services:
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_ROOT_PASSWORD: arcane
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: arcane
+          POSTGRES_PASSWORD: arcane
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd="pg_isready -U arcane"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+
+    env:
+      ARCANECORE_TEST_MARIADB: "Server=127.0.0.1;Port=3306;User=root;Password=arcane;"
+      ARCANECORE_TEST_POSTGRES: "Host=127.0.0.1;Port=5432;Username=arcane;Password=arcane;"
+
     steps:
       - uses: actions/checkout@v4
 

@@ -1,130 +1,355 @@
 using System.Buffers.Binary;
-using System.Net.Sockets;
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading.Channels;
 using ArcaneCore.Cryptography;
-using ArcaneCore.Game;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Accounts;
-using ArcaneCore.Kernel.Characters;
-using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Handlers;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Net;
 
-/// <summary>
-/// Handles one world connection: the M2 handshake, the M3 character lifecycle, and M4
-/// movement + visibility (the session is a world participant — see <see cref="IWorldPlayer"/>).
-/// Verified against vmangos WorldSocket.cpp, CharacterHandler.cpp and MovementHandler.cpp.
-/// </summary>
-public sealed class WorldSession(
-    NetworkStream stream,
-    IAccountStore accountStore,
-    ICharacterStore characterStore,
-    IWorldDataStore worldDataStore,
-    WorldState worldState,
-    ILogger logger,
-    string remoteEndpoint) : IWorldPlayer
+/// <summary>Per-connection limits.</summary>
+public sealed class WorldSessionOptions
 {
+    /// <summary>Disconnect a client whose unsent data exceeds this many bytes (it stopped reading).</summary>
+    public long MaxOutboundBytes { get; set; } = 8 * 1024 * 1024;
+
+    /// <summary>In-world packets handled per session per tick; the rest wait for the next tick.</summary>
+    public int MaxWorldPacketsPerTick { get; set; } = 150;
+}
+
+/// <summary>
+/// One world connection: framing, header encryption, the M2 handshake, and dispatch through
+/// the <see cref="OpcodeTable"/>. Character-screen packets are handled on this session's own
+/// task; in-world packets are queued and handled on the world thread during the map update.
+/// <para>
+/// Sends never touch the socket: frames are header-encrypted under a lock (keeping cipher
+/// order equal to queue order) and handed to a single writer task through a channel, so the
+/// world thread cannot be stalled by a slow client.
+/// </para>
+/// Verified against vmangos WorldSocket.cpp / WorldSession.cpp.
+/// </summary>
+public sealed class WorldSession : IPlayerSession
+{
+    /// <summary>vmangos WorldSocket::handle_input_header rejects sizes outside [4, 0x2800].</summary>
+    public const int MaxClientPacketSize = 0x2800;
+
+    /// <summary>The SMSG size field is 16 bits and counts the 2 opcode bytes.</summary>
+    public const int MaxServerPayload = ushort.MaxValue - 2;
+
+    private readonly Stream _stream;
+    private readonly OpcodeTable _opcodes;
+    private readonly SessionRegistry _registry;
+    private readonly WorldSessionOptions _options;
+    private readonly ILogger _logger;
     private readonly WorldHeaderCrypt _crypt = new();
-    private readonly SemaphoreSlim _sendLock = new(1, 1);
+    private readonly object _sendLock = new();
+    private readonly Channel<byte[]> _outbound = Channel.CreateUnbounded<byte[]>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+    private readonly ConcurrentQueue<QueuedPacket> _worldQueue = new();
+    private readonly CancellationTokenSource _kick = new();
+    private long _outboundBytes;
+    private volatile SessionState _state = SessionState.Connected;
     private uint _serverSeed;
-    private bool _authenticated;
-    private int _accountId;
-    private string _username = string.Empty;
-    private PlayerObject? _player;
-    private Map? _map;
 
-    /// <summary>The in-world player (valid only after player login). See <see cref="IWorldPlayer"/>.</summary>
-    public PlayerObject Player => _player ?? throw new InvalidOperationException("player not in world");
+    public WorldSession(
+        Stream stream,
+        string remoteEndpoint,
+        IServiceProvider services,
+        OpcodeTable opcodes,
+        WorldRuntime world,
+        SessionRegistry registry,
+        WorldSessionOptions options,
+        ILogger logger)
+    {
+        _stream = stream;
+        RemoteEndpoint = remoteEndpoint;
+        Services = services;
+        _opcodes = opcodes;
+        World = world;
+        _registry = registry;
+        _options = options;
+        _logger = logger;
+    }
 
+    public string RemoteEndpoint { get; }
+
+    /// <summary>This connection's DI scope (stores are scoped per connection).</summary>
+    public IServiceProvider Services { get; }
+
+    public WorldRuntime World { get; }
+
+    public SessionState State => _state;
+
+    public int AccountId { get; private set; }
+
+    public string AccountName { get; private set; } = string.Empty;
+
+    /// <summary>The in-world player. Written on the world thread only.</summary>
+    public Player? Player { get; private set; }
+
+    public ILogger Logger => _logger;
+
+    /// <summary>Run the connection until the client disconnects, is kicked, or the server stops.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        _serverSeed = BinaryPrimitives.ReadUInt32LittleEndian(RandomNumberGenerator.GetBytes(4));
-
-        var challenge = new PacketWriter(4);
-        challenge.WriteUInt32(_serverSeed);
-        await SendAsync(WorldOpcode.SmsgAuthChallenge, challenge.AsMemory(), cancellationToken).ConfigureAwait(false);
-
-        byte[] header = new byte[WorldHeaderCrypt.IncomingHeaderLength];
+        Task writer = Task.Run(RunWriterAsync, CancellationToken.None);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _kick.Token);
         try
         {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                int read = await stream.ReadAsync(header.AsMemory(0, 1), cancellationToken).ConfigureAwait(false);
-                if (read == 0)
-                {
-                    break;
-                }
+            _serverSeed = BinaryPrimitives.ReadUInt32LittleEndian(RandomNumberGenerator.GetBytes(4));
+            Span<byte> challenge = stackalloc byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(challenge, _serverSeed);
+            Send(WorldOpcode.SmsgAuthChallenge, challenge);
 
-                await stream.ReadExactlyAsync(header.AsMemory(1), cancellationToken).ConfigureAwait(false);
-                _crypt.DecryptHeader(header);
-
-                ushort size = BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(0, 2));
-                var opcode = (WorldOpcode)BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(2, 4));
-                int payloadLength = size - 4;
-
-                byte[] payload = payloadLength > 0 ? new byte[payloadLength] : [];
-                if (payloadLength > 0)
-                {
-                    await stream.ReadExactlyAsync(payload, cancellationToken).ConfigureAwait(false);
-                }
-
-                if (!await DispatchAsync(opcode, payload, cancellationToken).ConfigureAwait(false))
-                {
-                    break;
-                }
-            }
+            await ReadLoopAsync(linked.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or EndOfStreamException or IOException or ObjectDisposedException)
+        {
+            // disconnect, kick or shutdown
         }
         finally
         {
-            if (_map is not null && _player is not null)
+            Close();
+            await writer.ConfigureAwait(false);
+        }
+    }
+
+    // --- IPlayerSession -----------------------------------------------------------
+
+    /// <summary>Queue a packet. Thread-safe; drops silently once the session is closed.</summary>
+    public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length > MaxServerPayload)
+        {
+            throw new ArgumentException($"{WorldOpcodeNames.GetName(opcode)} payload of {payload.Length} bytes exceeds the SMSG size field");
+        }
+
+        byte[] frame = new byte[WorldHeaderCrypt.OutgoingHeaderLength + payload.Length];
+        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(0, 2), (ushort)(payload.Length + 2));
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(2, 2), (ushort)opcode);
+        payload.CopyTo(frame.AsSpan(WorldHeaderCrypt.OutgoingHeaderLength));
+
+        lock (_sendLock)
+        {
+            if (_state == SessionState.Closed)
             {
-                await _map.LeaveAsync(this).ConfigureAwait(false);
+                return;
+            }
+
+            _crypt.EncryptHeader(frame.AsSpan(0, WorldHeaderCrypt.OutgoingHeaderLength));
+            if (!_outbound.Writer.TryWrite(frame))
+            {
+                return;
+            }
+        }
+
+        if (Interlocked.Add(ref _outboundBytes, frame.Length) > _options.MaxOutboundBytes)
+        {
+            _logger.LogWarning("[{Endpoint}] outbound queue over {Limit} bytes; disconnecting", RemoteEndpoint, _options.MaxOutboundBytes);
+            Kick();
+        }
+    }
+
+    public void Send(WorldOpcode opcode, PacketWriter payload) => Send(opcode, payload.AsSpan());
+
+    /// <summary>Handle queued in-world packets (world thread, from the player's map update).</summary>
+    public void ProcessWorldPackets(Player player)
+    {
+        for (int budget = _options.MaxWorldPacketsPerTick; budget > 0 && _worldQueue.TryDequeue(out QueuedPacket packet); budget--)
+        {
+            if (_state != SessionState.InWorld || !ReferenceEquals(Player, player))
+            {
+                continue;
+            }
+
+            try
+            {
+                packet.Handler.World!(this, player, packet.Payload);
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                _logger.LogWarning("[{Endpoint}] malformed {Opcode}; disconnecting",
+                    RemoteEndpoint, WorldOpcodeNames.GetName(packet.Handler.Opcode));
+                Kick();
+                return;
             }
         }
     }
 
-    private async Task<bool> DispatchAsync(WorldOpcode opcode, byte[] payload, CancellationToken cancellationToken)
+    public void Kick()
     {
-        switch (opcode)
+        try
         {
-            case WorldOpcode.CmsgAuthSession when !_authenticated:
-                return await HandleAuthSessionAsync(payload, cancellationToken).ConfigureAwait(false);
-
-            case WorldOpcode.CmsgPing:
-                await HandlePingAsync(payload, cancellationToken).ConfigureAwait(false);
-                return true;
-
-            case WorldOpcode.CmsgCharEnum when _authenticated:
-                await HandleCharEnumAsync(cancellationToken).ConfigureAwait(false);
-                return true;
-
-            case WorldOpcode.CmsgCharCreate when _authenticated:
-                await HandleCharCreateAsync(payload, cancellationToken).ConfigureAwait(false);
-                return true;
-
-            case WorldOpcode.CmsgCharDelete when _authenticated:
-                await HandleCharDeleteAsync(payload, cancellationToken).ConfigureAwait(false);
-                return true;
-
-            case WorldOpcode.CmsgPlayerLogin when _authenticated:
-                await HandlePlayerLoginAsync(payload, cancellationToken).ConfigureAwait(false);
-                return true;
-
-            case WorldOpcode opc when _player is not null && MovementOpcodes.IsRelayable(opc):
-                await HandleMovementAsync(opc, payload).ConfigureAwait(false);
-                return true;
-
-            default:
-                logger.LogDebug("[{Endpoint}] ignoring opcode 0x{Opcode:X3}", remoteEndpoint, (ushort)opcode);
-                return true;
+            _kick.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // already torn down
         }
     }
 
-    private async Task<bool> HandleAuthSessionAsync(byte[] payload, CancellationToken cancellationToken)
+    // --- world-thread state transitions (called by handlers) ------------------------
+
+    /// <summary>Character screen → loading. Fails if the session is no longer at the character screen.</summary>
+    public bool TryBeginLogin()
     {
+        lock (_sendLock)
+        {
+            if (_state != SessionState.CharacterSelect)
+            {
+                return false;
+            }
+
+            _state = SessionState.LoggingIn;
+            return true;
+        }
+    }
+
+    /// <summary>Loading → in world (world thread). False if the client went away meanwhile.</summary>
+    public bool TryEnterWorld(Player player)
+    {
+        lock (_sendLock)
+        {
+            if (_state != SessionState.LoggingIn)
+            {
+                return false;
+            }
+
+            Player = player;
+            _state = SessionState.InWorld;
+            return true;
+        }
+    }
+
+    /// <summary>Loading failed: back to the character screen.</summary>
+    public void AbortLogin()
+    {
+        lock (_sendLock)
+        {
+            if (_state == SessionState.LoggingIn)
+            {
+                _state = SessionState.CharacterSelect;
+            }
+        }
+    }
+
+    // --- read path -----------------------------------------------------------------
+
+    private async Task ReadLoopAsync(CancellationToken token)
+    {
+        byte[] header = new byte[WorldHeaderCrypt.IncomingHeaderLength];
+        while (true)
+        {
+            int read = await _stream.ReadAsync(header.AsMemory(0, 1), token).ConfigureAwait(false);
+            if (read == 0)
+            {
+                return;
+            }
+
+            await _stream.ReadExactlyAsync(header.AsMemory(1), token).ConfigureAwait(false);
+            _crypt.DecryptHeader(header);
+
+            ushort size = BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(0, 2));
+            uint rawOpcode = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(2, 4));
+            if (size < 4 || size > MaxClientPacketSize || rawOpcode > ushort.MaxValue)
+            {
+                _logger.LogWarning("[{Endpoint}] bad packet header (size {Size}, opcode 0x{Opcode:X}); disconnecting",
+                    RemoteEndpoint, size, rawOpcode);
+                return;
+            }
+
+            int payloadLength = size - 4;
+            byte[] payload = payloadLength > 0 ? new byte[payloadLength] : [];
+            if (payloadLength > 0)
+            {
+                await _stream.ReadExactlyAsync(payload, token).ConfigureAwait(false);
+            }
+
+            if (!await DispatchAsync((WorldOpcode)rawOpcode, payload).ConfigureAwait(false))
+            {
+                return;
+            }
+        }
+    }
+
+    private async Task<bool> DispatchAsync(WorldOpcode opcode, byte[] payload)
+    {
+        try
+        {
+            if (opcode == WorldOpcode.CmsgPing)
+            {
+                HandlePing(payload); // vmangos answers pings in WorldSocket, in any state
+                return true;
+            }
+
+            if (_state == SessionState.Connected)
+            {
+                if (opcode == WorldOpcode.CmsgAuthSession)
+                {
+                    return await HandleAuthSessionAsync(payload).ConfigureAwait(false);
+                }
+
+                _logger.LogWarning("[{Endpoint}] {Opcode} before authentication; disconnecting",
+                    RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
+                return false;
+            }
+
+            if (!_opcodes.TryGet(opcode, out OpcodeHandler handler))
+            {
+                _logger.LogDebug("[{Endpoint}] unhandled {Opcode} ({Length} bytes)",
+                    RemoteEndpoint, WorldOpcodeNames.GetName(opcode), payload.Length);
+                return true;
+            }
+
+            if (handler.World is not null)
+            {
+                if (_state is SessionState.LoggingIn or SessionState.InWorld)
+                {
+                    _worldQueue.Enqueue(new QueuedPacket(handler, payload));
+                }
+
+                return true;
+            }
+
+            if (_state != handler.RequiredState)
+            {
+                _logger.LogDebug("[{Endpoint}] {Opcode} ignored in state {State}",
+                    RemoteEndpoint, WorldOpcodeNames.GetName(opcode), _state);
+                return true;
+            }
+
+            await handler.Session!(this, payload).ConfigureAwait(false);
+            return true;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            _logger.LogWarning("[{Endpoint}] malformed {Opcode}; disconnecting", RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
+            return false;
+        }
+    }
+
+    private void HandlePing(byte[] payload)
+    {
+        // CMSG_PING: u32 sequence, u32 latency → SMSG_PONG: u32 sequence (vmangos WorldSocket::HandlePing).
+        var reader = new PacketReader(payload);
+        uint sequence = reader.ReadUInt32();
+        Span<byte> pong = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(pong, sequence);
+        Send(WorldOpcode.SmsgPong, pong);
+    }
+
+    private async Task<bool> HandleAuthSessionAsync(byte[] payload)
+    {
+        // CMSG_AUTH_SESSION (vmangos WorldSocket::HandleAuthSession, build 5875 layout):
+        // u32 build, u32 server id, CString account, u32 client seed, u8[20] digest, addon block.
         var reader = new PacketReader(payload);
         uint build = reader.ReadUInt32();
         _ = reader.ReadUInt32();
@@ -135,237 +360,124 @@ public sealed class WorldSession(
 
         if (build != ClientBuild.Vanilla1121)
         {
-            await SendAuthResponseAsync(AuthResponseCode.VersionMismatch, cancellationToken).ConfigureAwait(false);
+            SendAuthResponse(AuthResponseCode.VersionMismatch);
             return false;
         }
 
-        Account? stored = await accountStore.FindByUsernameAsync(account, cancellationToken).ConfigureAwait(false);
+        IAccountStore accounts = Services.GetRequiredService<IAccountStore>();
+        Account? stored = await accounts.FindByUsernameAsync(account).ConfigureAwait(false);
         if (stored?.SessionKey is null)
         {
-            await SendAuthResponseAsync(AuthResponseCode.UnknownAccount, cancellationToken).ConfigureAwait(false);
+            SendAuthResponse(AuthResponseCode.UnknownAccount);
             return false;
         }
 
-        byte[] expected = ComputeAuthDigest(account, clientSeed, _serverSeed, stored.SessionKey);
+        // digest = SHA1(account, u32 0, clientSeed, serverSeed, K) (vmangos WorldSocket::HandleAuthSession)
+        byte[] expected = Sha1.Hash(Encoding.ASCII.GetBytes(account), new byte[4], Le(clientSeed), Le(_serverSeed), stored.SessionKey);
         if (!CryptographicOperations.FixedTimeEquals(expected, clientDigest))
         {
-            await SendAuthResponseAsync(AuthResponseCode.Failed, cancellationToken).ConfigureAwait(false);
+            SendAuthResponse(AuthResponseCode.Failed);
             return false;
         }
 
-        _crypt.Initialize(stored.SessionKey);
-        _authenticated = true;
-        _accountId = stored.Id;
-        _username = account;
-        logger.LogInformation("[{Endpoint}] '{Account}' entered the world handshake", remoteEndpoint, account);
+        lock (_sendLock)
+        {
+            _crypt.Initialize(stored.SessionKey);
+            AccountId = stored.Id;
+            AccountName = account;
+            _state = SessionState.CharacterSelect;
+        }
 
-        await SendAuthResponseAsync(AuthResponseCode.Ok, cancellationToken).ConfigureAwait(false);
-        await SendAsync(WorldOpcode.SmsgAddonInfo, AddonInfo.BuildResponse(addonBlock), cancellationToken)
-            .ConfigureAwait(false);
+        // One world session per account: a reconnect replaces (and disconnects) the old one,
+        // as vmangos World::AddSession_ does.
+        _registry.Register(this);
+        _logger.LogInformation("[{Endpoint}] '{Account}' authenticated", RemoteEndpoint, account);
+
+        SendAuthResponse(AuthResponseCode.Ok);
+        Send(WorldOpcode.SmsgAddonInfo, AddonInfo.BuildResponse(addonBlock));
         return true;
     }
 
-    private async Task HandlePingAsync(byte[] payload, CancellationToken cancellationToken)
-    {
-        var reader = new PacketReader(payload);
-        uint ping = reader.ReadUInt32();
+    private void SendAuthResponse(AuthResponseCode code) => Send(WorldOpcode.SmsgAuthResponse, [(byte)code]);
 
-        var pong = new PacketWriter(4);
-        pong.WriteUInt32(ping);
-        await SendAsync(WorldOpcode.SmsgPong, pong.AsMemory(), cancellationToken).ConfigureAwait(false);
+    // --- teardown ------------------------------------------------------------------
+
+    private void Close()
+    {
+        lock (_sendLock)
+        {
+            if (_state == SessionState.Closed)
+            {
+                return;
+            }
+
+            _state = SessionState.Closed;
+            _outbound.Writer.TryComplete();
+        }
+
+        _registry.Unregister(this);
+
+        // Remove the player on the world thread; queued after any pending login command, which
+        // sees the Closed state and backs out.
+        World.Post(() =>
+        {
+            if (Player is { } player)
+            {
+                World.RemovePlayer(player);
+                Player = null;
+            }
+        });
+        _logger.LogInformation("[{Endpoint}] session closed", RemoteEndpoint);
     }
 
-    private async Task HandleCharEnumAsync(CancellationToken cancellationToken)
+    private async Task RunWriterAsync()
     {
-        IReadOnlyList<CharacterRecord> characters =
-            await characterStore.GetByAccountAsync(_accountId, cancellationToken).ConfigureAwait(false);
-        await SendAsync(WorldOpcode.SmsgCharEnum, CharacterPackets.BuildCharEnum(characters), cancellationToken)
-            .ConfigureAwait(false);
-        logger.LogInformation("[{Endpoint}] sent {Count} character(s) to '{Account}'",
-            remoteEndpoint, characters.Count, _username);
+        byte[] buffer = new byte[64 * 1024];
+        try
+        {
+            while (await _outbound.Reader.WaitToReadAsync().ConfigureAwait(false))
+            {
+                int used = 0;
+                while (_outbound.Reader.TryRead(out byte[]? frame))
+                {
+                    Interlocked.Add(ref _outboundBytes, -frame.Length);
+                    if (used + frame.Length > buffer.Length)
+                    {
+                        if (used > 0)
+                        {
+                            await _stream.WriteAsync(buffer.AsMemory(0, used)).ConfigureAwait(false);
+                            used = 0;
+                        }
+
+                        if (frame.Length > buffer.Length)
+                        {
+                            await _stream.WriteAsync(frame).ConfigureAwait(false);
+                            continue;
+                        }
+                    }
+
+                    frame.CopyTo(buffer, used);
+                    used += frame.Length;
+                }
+
+                if (used > 0)
+                {
+                    await _stream.WriteAsync(buffer.AsMemory(0, used)).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
+        {
+            Kick(); // the socket is gone; stop reading too
+        }
     }
 
-    private async Task HandleCharCreateAsync(byte[] payload, CancellationToken cancellationToken)
-    {
-        var reader = new PacketReader(payload);
-        string name = reader.ReadCString().Trim();
-        byte race = reader.ReadByte();
-        byte cls = reader.ReadByte();
-        byte gender = reader.ReadByte();
-        byte skin = reader.ReadByte();
-        byte face = reader.ReadByte();
-        byte hairStyle = reader.ReadByte();
-        byte hairColor = reader.ReadByte();
-        byte facialHair = reader.ReadByte();
-
-        if (name.Length is < 1 or > 12)
-        {
-            await SendCharResultAsync(WorldOpcode.SmsgCharCreate, CharResult.CharNameNoName, cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
-
-        if (!await worldDataStore.IsValidRaceClassAsync(race, cls, cancellationToken).ConfigureAwait(false))
-        {
-            await SendCharResultAsync(WorldOpcode.SmsgCharCreate, CharResult.CharCreateFailed, cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
-
-        if (await characterStore.IsNameTakenAsync(name, cancellationToken).ConfigureAwait(false))
-        {
-            await SendCharResultAsync(WorldOpcode.SmsgCharCreate, CharResult.CharCreateNameInUse, cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
-
-        StartPosition? start = await worldDataStore.GetStartPositionAsync(race, cls, cancellationToken)
-            .ConfigureAwait(false);
-        if (start is null)
-        {
-            await SendCharResultAsync(WorldOpcode.SmsgCharCreate, CharResult.CharCreateError, cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
-
-        await characterStore.CreateAsync(new CharacterRecord
-        {
-            AccountId = _accountId,
-            Name = name,
-            Race = race,
-            Class = cls,
-            Gender = gender,
-            Skin = skin,
-            Face = face,
-            HairStyle = hairStyle,
-            HairColor = hairColor,
-            FacialHair = facialHair,
-            MapId = start.MapId,
-            ZoneId = start.ZoneId,
-            X = start.X,
-            Y = start.Y,
-            Z = start.Z,
-            Orientation = start.Orientation,
-        }, cancellationToken).ConfigureAwait(false);
-
-        logger.LogInformation("[{Endpoint}] '{Account}' created character '{Name}'", remoteEndpoint, _username, name);
-        await SendCharResultAsync(WorldOpcode.SmsgCharCreate, CharResult.CharCreateSuccess, cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    private async Task HandleCharDeleteAsync(byte[] payload, CancellationToken cancellationToken)
-    {
-        var reader = new PacketReader(payload);
-        var guid = (int)reader.ReadUInt64();
-
-        bool deleted = await characterStore.DeleteAsync(guid, _accountId, cancellationToken).ConfigureAwait(false);
-        CharResult result = deleted ? CharResult.CharDeleteSuccess : CharResult.CharDeleteFailed;
-        await SendCharResultAsync(WorldOpcode.SmsgCharDelete, result, cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task HandlePlayerLoginAsync(byte[] payload, CancellationToken cancellationToken)
-    {
-        var reader = new PacketReader(payload);
-        var guid = (int)reader.ReadUInt64();
-
-        CharacterRecord? character = await characterStore.GetByIdAsync(guid, cancellationToken).ConfigureAwait(false);
-        if (character is null || character.AccountId != _accountId)
-        {
-            logger.LogWarning("[{Endpoint}] login for character {Guid} not owned by '{Account}'",
-                remoteEndpoint, guid, _username);
-            return;
-        }
-
-        RaceInfo? raceInfo = await worldDataStore.GetRaceInfoAsync(character.Race, character.Gender, cancellationToken)
-            .ConfigureAwait(false);
-        ClassInfo? classInfo = await worldDataStore.GetClassInfoAsync(character.Class, cancellationToken)
-            .ConfigureAwait(false);
-        if (raceInfo is null || classInfo is null)
-        {
-            logger.LogError("[{Endpoint}] missing world data for character {Guid}", remoteEndpoint, guid);
-            return;
-        }
-
-        await SendAsync(WorldOpcode.SmsgLoginVerifyWorld, CharacterPackets.BuildLoginVerifyWorld(character), cancellationToken).ConfigureAwait(false);
-        await SendAsync(WorldOpcode.SmsgTutorialFlags, CharacterPackets.BuildTutorialFlags(), cancellationToken).ConfigureAwait(false);
-        await SendAsync(WorldOpcode.SmsgLoginSetTimeSpeed, CharacterPackets.BuildTimeSpeed(DateTime.UtcNow), cancellationToken).ConfigureAwait(false);
-        await SendAsync(WorldOpcode.SmsgInitialSpells, CharacterPackets.BuildInitialSpells(), cancellationToken).ConfigureAwait(false);
-
-        var time = (uint)Environment.TickCount;
-        _player = CharacterPackets.BuildPlayerObject(character, raceInfo, classInfo);
-        byte[] update = ObjectUpdateBuilder.BuildSelfCreate(_player, time);
-        await SendAsync(WorldOpcode.SmsgUpdateObject, update, cancellationToken).ConfigureAwait(false);
-
-        // Join the map: exchange create-updates with players already in view.
-        _map = worldState.GetMap(_player.MapId);
-        await _map.EnterAsync(this, time).ConfigureAwait(false);
-
-        logger.LogInformation("[{Endpoint}] '{Account}' entered the world as '{Name}'",
-            remoteEndpoint, _username, character.Name);
-    }
-
-    private async Task HandleMovementAsync(WorldOpcode opcode, byte[] movementInfo)
-    {
-        // Vanilla client→server movement is just MovementInfo: flags(4) time(4) x(4) y(4) z(4) o(4) ...
-        if (_player is null || _map is null || movementInfo.Length < 24)
-        {
-            return;
-        }
-
-        float x = BinaryPrimitives.ReadSingleLittleEndian(movementInfo.AsSpan(8, 4));
-        float y = BinaryPrimitives.ReadSingleLittleEndian(movementInfo.AsSpan(12, 4));
-        float z = BinaryPrimitives.ReadSingleLittleEndian(movementInfo.AsSpan(16, 4));
-        float o = BinaryPrimitives.ReadSingleLittleEndian(movementInfo.AsSpan(20, 4));
-
-        // Relay to players that see us as packGUID(mover) + the original MovementInfo (vmangos
-        // relay format). The map stores the position, updates visibility, then relays.
-        var relay = new PacketWriter(movementInfo.Length + 9);
-        relay.WriteBytes(_player.ObjectGuid.ToPacked());
-        relay.WriteBytes(movementInfo);
-        await _map.MoveAsync(this, x, y, z, o, opcode, relay.AsMemory(), (uint)Environment.TickCount)
-            .ConfigureAwait(false);
-    }
-
-    /// <summary>Thread-safe push of a server packet to this client (used by the map for broadcasts).</summary>
-    public ValueTask SendToClientAsync(WorldOpcode opcode, ReadOnlyMemory<byte> payload)
-        => new(SendAsync(opcode, payload, CancellationToken.None));
-
-    // --- digest + framing --------------------------------------------------------
-
-    private static byte[] ComputeAuthDigest(string account, uint clientSeed, uint serverSeed, byte[] sessionKey)
-        => Sha1.Hash(Encoding.ASCII.GetBytes(account), new byte[4], ToLittleEndian(clientSeed), ToLittleEndian(serverSeed), sessionKey);
-
-    private static byte[] ToLittleEndian(uint value)
+    private static byte[] Le(uint value)
     {
         byte[] bytes = new byte[4];
         BinaryPrimitives.WriteUInt32LittleEndian(bytes, value);
         return bytes;
     }
 
-    private Task SendAuthResponseAsync(AuthResponseCode code, CancellationToken cancellationToken)
-        => SendAsync(WorldOpcode.SmsgAuthResponse, new[] { (byte)code }, cancellationToken);
-
-    private Task SendCharResultAsync(WorldOpcode opcode, CharResult result, CancellationToken cancellationToken)
-        => SendAsync(opcode, new[] { (byte)result }, cancellationToken);
-
-    private async Task SendAsync(WorldOpcode opcode, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
-    {
-        byte[] frame = new byte[WorldHeaderCrypt.OutgoingHeaderLength + payload.Length];
-        BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(0, 2), (ushort)(payload.Length + 2));
-        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(2, 2), (ushort)opcode);
-        payload.Span.CopyTo(frame.AsSpan(WorldHeaderCrypt.OutgoingHeaderLength));
-
-        // Header encryption mutates rolling cipher state, so encrypt + write must be atomic
-        // per packet — other sessions broadcast onto this stream concurrently.
-        await _sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            _crypt.EncryptHeader(frame.AsSpan(0, WorldHeaderCrypt.OutgoingHeaderLength));
-            await stream.WriteAsync(frame, cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            _sendLock.Release();
-        }
-    }
+    private readonly record struct QueuedPacket(OpcodeHandler Handler, byte[] Payload);
 }

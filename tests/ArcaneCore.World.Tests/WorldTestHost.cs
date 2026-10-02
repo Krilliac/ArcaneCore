@@ -1,0 +1,195 @@
+using System.Net;
+using System.Net.Sockets;
+using System.Security.Cryptography;
+using ArcaneCore.Cryptography;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.World.Handlers;
+using ArcaneCore.World.Net;
+using ArcaneCore.World.Persistence;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace ArcaneCore.World.Tests;
+
+/// <summary>
+/// An in-process world daemon for end-to-end tests: real world thread, real sessions over
+/// loopback sockets, in-memory stores. Mirrors <see cref="WorldServiceCollectionExtensions.AddWorldDaemon"/>.
+/// </summary>
+internal sealed class WorldTestHost : IAsyncDisposable
+{
+    private readonly ServiceProvider _services;
+    private readonly TcpListener _listener;
+    private readonly CancellationTokenSource _stop = new();
+    private readonly List<Task> _sessions = [];
+    private readonly Task _acceptLoop;
+
+    private WorldTestHost(int compressionThreshold)
+    {
+        var collection = new ServiceCollection();
+        collection.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
+        collection.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        collection.AddSingleton<IAccountStore>(Accounts);
+        collection.AddSingleton<ICharacterStore>(Characters);
+        collection.AddSingleton<IWorldDataStore>(WorldData);
+        collection.AddSingleton<CharacterSaveQueue>();
+        collection.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());
+        _services = collection.BuildServiceProvider();
+
+        SaveQueue = _services.GetRequiredService<CharacterSaveQueue>();
+        World = new WorldRuntime(
+            new WorldRuntimeOptions { TickIntervalMs = 5, UpdateCompressionThreshold = compressionThreshold, AutosaveIntervalMs = 0 },
+            SaveQueue,
+            NullLogger<WorldRuntime>.Instance);
+        Opcodes = WorldServiceCollectionExtensions.BuildOpcodeTable();
+
+        SaveQueue.Start();
+        World.Start();
+
+        _listener = new TcpListener(IPAddress.Loopback, 0);
+        _listener.Start();
+        Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+        _acceptLoop = Task.Run(AcceptLoopAsync);
+    }
+
+    public InMemoryAccountStore Accounts { get; } = new();
+
+    public InMemoryCharacterStore Characters { get; } = new();
+
+    public InMemoryWorldDataStore WorldData { get; } = new();
+
+    public WorldRuntime World { get; }
+
+    public CharacterSaveQueue SaveQueue { get; }
+
+    public SessionRegistry Registry { get; } = new();
+
+    public OpcodeTable Opcodes { get; }
+
+    public int Port { get; }
+
+    /// <summary>Start a host. Compression is off by default so tests can read update blocks directly.</summary>
+    public static WorldTestHost Start(int compressionThreshold = 0) => new(compressionThreshold);
+
+    /// <summary>Create an account with a fresh session key (as if it had just logged in at the realm).</summary>
+    public async Task<byte[]> AddAccountAsync(string name)
+    {
+        byte[] key = RandomNumberGenerator.GetBytes(WowSrp6.SessionKeyLength);
+        await Accounts.CreateAsync(new Account { Username = name, Salt = new byte[32], Verifier = new byte[32], SessionKey = key });
+        return key;
+    }
+
+    public async Task<WorldTestClient> ConnectAsync()
+    {
+        var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, Port);
+        return new WorldTestClient(client);
+    }
+
+    /// <summary>Connect, authenticate, create a human warrior and enter the world (consuming the login sequence).</summary>
+    public async Task<WorldTestClient> EnterWorldAsync(string account, string character)
+    {
+        byte[] key = await AddAccountAsync(account);
+        WorldTestClient client = await ConnectAsync();
+        await client.AuthenticateAsync(account, key);
+        await client.CreateCharacterAsync(character);
+        Account stored = (await Accounts.FindByUsernameAsync(account))!;
+        CharacterRecord record = (await Characters.GetByAccountAsync(stored.Id)).Single(c => c.Name == character);
+        await client.LoginAsync((ulong)record.Id);
+        return client;
+    }
+
+    /// <summary>Run <paramref name="action"/> on the world thread and wait for it.</summary>
+    public Task<T> OnWorldAsync<T>(Func<T> action) => World.InvokeAsync(action);
+
+    public Task OnWorldAsync(Action action) => World.InvokeAsync(() =>
+    {
+        action();
+        return true;
+    });
+
+    /// <summary>Wait until <paramref name="condition"/> holds (polling), or fail after 10 s.</summary>
+    public static async Task WaitForAsync(Func<bool> condition, string what)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            if (DateTime.UtcNow > deadline)
+            {
+                throw new TimeoutException($"timed out waiting for: {what}");
+            }
+
+            await Task.Delay(10);
+        }
+    }
+
+    /// <summary>Wait until <paramref name="condition"/>, evaluated on the world thread, holds.</summary>
+    public async Task WaitForWorldAsync(Func<bool> condition, string what)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!await World.InvokeAsync(condition))
+        {
+            if (DateTime.UtcNow > deadline)
+            {
+                throw new TimeoutException($"timed out waiting for: {what}");
+            }
+
+            await Task.Delay(10);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _stop.Cancel();
+        _listener.Stop();
+        try
+        {
+            await _acceptLoop;
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or SocketException or ObjectDisposedException)
+        {
+            // listener stopped
+        }
+
+        Task[] sessions;
+        lock (_sessions)
+        {
+            sessions = [.. _sessions];
+        }
+
+        await Task.WhenAll(sessions).WaitAsync(TimeSpan.FromSeconds(10));
+        World.Stop();
+        await SaveQueue.StopAsync();
+        World.Dispose();
+        await _services.DisposeAsync();
+        _stop.Dispose();
+    }
+
+    private async Task AcceptLoopAsync()
+    {
+        while (!_stop.IsCancellationRequested)
+        {
+            TcpClient client = await _listener.AcceptTcpClientAsync(_stop.Token);
+            Task session = Task.Run(async () =>
+            {
+                using (client)
+                await using (NetworkStream stream = client.GetStream())
+                await using (AsyncServiceScope scope = _services.CreateAsyncScope())
+                {
+                    var worldSession = new WorldSession(
+                        stream, "test", scope.ServiceProvider, Opcodes, World, Registry,
+                        new WorldSessionOptions(), NullLogger.Instance);
+                    await worldSession.RunAsync(_stop.Token);
+                }
+            });
+
+            lock (_sessions)
+            {
+                _sessions.Add(session);
+            }
+        }
+    }
+}

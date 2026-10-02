@@ -5,6 +5,15 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ArcaneCore.Game.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ArcaneCore.Kernel\ArcaneCore.Kernel.csproj" />
     <ProjectReference Include="..\ArcaneCore.Protocol\ArcaneCore.Protocol.csproj" />
   </ItemGroup>
 

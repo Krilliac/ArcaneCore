@@ -11,7 +11,7 @@ public sealed class PacketWriter
 
     public PacketWriter(int capacity = 64)
     {
-        _buffer = new byte[capacity];
+        _buffer = new byte[Math.Max(capacity, 1)];
     }
 
     public int Length => _length;
@@ -36,6 +36,8 @@ public sealed class PacketWriter
         _length += 4;
     }
 
+    public void WriteInt32(int value) => WriteUInt32(unchecked((uint)value));
+
     public void WriteUInt64(ulong value)
     {
         EnsureCapacity(8);
@@ -50,6 +52,28 @@ public sealed class PacketWriter
         _length += 4;
     }
 
+    /// <summary>
+    /// Write a packed GUID: a mask byte with bit i set when byte i of the GUID is non-zero,
+    /// followed by those bytes low to high (vmangos ByteBuffer::appendPackGUID).
+    /// </summary>
+    public void WritePackedGuid(ulong guid)
+    {
+        EnsureCapacity(9);
+        int maskPosition = _length++;
+        byte mask = 0;
+        for (int i = 0; i < 8; i++)
+        {
+            byte b = (byte)(guid >> (i * 8));
+            if (b != 0)
+            {
+                mask |= (byte)(1 << i);
+                _buffer[_length++] = b;
+            }
+        }
+
+        _buffer[maskPosition] = mask;
+    }
+
     public void WriteBytes(ReadOnlySpan<byte> value)
     {
         EnsureCapacity(value.Length);
@@ -57,17 +81,35 @@ public sealed class PacketWriter
         _length += value.Length;
     }
 
-    /// <summary>Write an ASCII string followed by a null terminator.</summary>
+    /// <summary>Write a UTF-8 string followed by a null terminator.</summary>
     public void WriteCString(string value)
     {
-        int byteCount = Encoding.ASCII.GetByteCount(value);
+        int byteCount = Encoding.UTF8.GetByteCount(value);
         EnsureCapacity(byteCount + 1);
-        Encoding.ASCII.GetBytes(value, _buffer.AsSpan(_length));
+        Encoding.UTF8.GetBytes(value, _buffer.AsSpan(_length));
         _length += byteCount;
         _buffer[_length++] = 0;
     }
 
+    /// <summary>Overwrite a previously written little-endian uint32 (e.g. a count known only later).</summary>
+    public void PatchUInt32(int position, uint value)
+    {
+        if (position < 0 || position + 4 > _length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(position));
+        }
+
+        BinaryPrimitives.WriteUInt32LittleEndian(_buffer.AsSpan(position), value);
+    }
+
+    /// <summary>Discard the contents, keeping the buffer for reuse.</summary>
+    public void Reset() => _length = 0;
+
     public ReadOnlyMemory<byte> AsMemory() => _buffer.AsMemory(0, _length);
+
+    public ReadOnlySpan<byte> AsSpan() => _buffer.AsSpan(0, _length);
+
+    public byte[] ToArray() => _buffer.AsSpan(0, _length).ToArray();
 
     private void EnsureCapacity(int additional)
     {
