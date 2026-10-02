@@ -189,3 +189,7 @@ how and why"). Effects:
 - Scope, order and design decisions for M5+ live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - §1.1, §1.4 (inside the milestone being built), §1.5, §3 and §4 are unchanged: every
   protocol detail is still verified against a reference and cited.
+- §4 reference set extended with mangoszero/server, AscEmu (1.12.1 support), MangosSharp,
+  mangosvb, TrinityCore 3.3.5, ArcEmu/Ascent and Krilliac/Worldforge — roles and licenses
+  in `docs/ROADMAP.md`. WotLK-era references inform architecture only, never 1.12.1 wire
+  values.

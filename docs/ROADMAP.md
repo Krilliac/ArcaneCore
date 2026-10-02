@@ -123,6 +123,25 @@ Each milestone ships: code + automated loopback tests + `docs/Mx_ACCEPTANCE.md` 
 ## Verification policy
 
 * Every protocol fact (opcode, field, layout, constant) cites the reference that confirmed
-  it: vmangos, cmangos-classic, gtker/wow_messages, or wowdev.wiki.
-* Where references disagree, the comment says so and which one was chosen.
-* No GPL code is copied; behaviour and wire formats are reimplemented (charter §4).
+  it. Where references disagree, the comment says so and which one was chosen.
+* No GPL/AGPL code is copied; behaviour and wire formats are reimplemented (charter §4).
+
+### Reference set (extended 2026-10-02 at the developer's request)
+
+| Reference | Client | License | Used for |
+|---|---|---|---|
+| vmangos/core | 1.12.1 (+older) | GPL-2 | Primary protocol + behaviour reference |
+| cmangos/mangos-classic | 1.12.1 | GPL-2 | Protocol + behaviour cross-check |
+| cmangos/classic-db | 1.12.1 | GPL-3 | World content source for the importer (never committed) |
+| mangoszero/server | 1.12.x | GPL-2 | Vanilla cross-check |
+| gtker/wow_messages | 1.12 (+TBC/WotLK) | MIT/Apache-2 | Machine-readable packet layouts, opcodes, update fields — permissive, so it is the source for generated tables |
+| AscEmu/AscEmu | 1.12.1 … 5.4.8 | AGPL-3 / MIT (per file) | Third 1.12.1 cross-check; MIT-headed files only for anything beyond facts |
+| MangosServer/MangosSharp | 1.12.x | GPL-3 | .NET idioms and the cluster split (lineage, charter §0) |
+| mangosvb/serverZero | 1.12.x | GPL-2 | .NET lineage cross-check |
+| TrinityCore (3.3.5 branch) | 3.3.5a | GPL-2 | Architecture only (map update, grids, movement splines, AI design) |
+| arcemu/arcemu (Ascent lineage) | 3.3.5a | AGPL-3 | Architecture only |
+| Krilliac/Worldforge | 1.12.1 client side | (developer's) | Client file formats (ADT/WDT/DBC/MPQ) for future terrain/height work |
+| wowdev.wiki | all | CC | Neutral format and protocol documentation |
+
+**WotLK-era references (TrinityCore, ArcEmu) never supply 1.12.1 wire values** — opcodes,
+update fields and packet layouts differ by build (charter §2). They inform design only.
