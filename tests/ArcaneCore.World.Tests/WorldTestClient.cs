@@ -23,6 +23,8 @@ namespace ArcaneCore.World.Tests;
 /// </summary>
 internal sealed class WorldTestClient : IAsyncDisposable
 {
+    private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(10);
+
     private readonly TcpClient _client;
     private readonly NetworkStream _stream;
     private readonly WorldHeaderCrypt _crypt = new();
@@ -97,8 +99,10 @@ internal sealed class WorldTestClient : IAsyncDisposable
 
     public async Task<(WorldOpcode Opcode, byte[] Payload)> ReadAsync()
     {
+        // Bounded so a test expecting a packet the server never sends fails instead of hanging.
+        using var timeout = new CancellationTokenSource(ReadTimeout);
         byte[] header = new byte[WorldHeaderCrypt.OutgoingHeaderLength];
-        await _stream.ReadExactlyAsync(header);
+        await _stream.ReadExactlyAsync(header, timeout.Token);
         _crypt.DecryptHeader(header);
 
         ushort size = BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(0, 2));
@@ -108,7 +112,7 @@ internal sealed class WorldTestClient : IAsyncDisposable
         byte[] payload = payloadLength > 0 ? new byte[payloadLength] : [];
         if (payloadLength > 0)
         {
-            await _stream.ReadExactlyAsync(payload);
+            await _stream.ReadExactlyAsync(payload, timeout.Token);
         }
 
         return (opcode, payload);

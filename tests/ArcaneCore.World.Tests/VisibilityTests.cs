@@ -82,6 +82,95 @@ public sealed class VisibilityTests
         Assert.Equal(2u, BinaryPrimitives.ReadUInt64LittleEndian(payload)); // B's guid
     }
 
+    [Fact]
+    public async Task WalkingOutOfRange_RemovesAndWalkingBack_RecreatesBothWays()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var worldData = new InMemoryWorldDataStore();
+        var world = new WorldState();
+
+        byte[] keyA = await AddAccount(accounts, "PLAYERA");
+        byte[] keyB = await AddAccount(accounts, "PLAYERB");
+
+        await using var clientA = await WorldTestClient.StartAsync(accounts, characters, worldData, world);
+        await clientA.AuthenticateAsync("PLAYERA", keyA);
+        await CreateAndLoginAsync(clientA, "Aaa", guid: 1);
+
+        await using var clientB = await WorldTestClient.StartAsync(accounts, characters, worldData, world);
+        await clientB.AuthenticateAsync("PLAYERB", keyB);
+        await CreateAndLoginAsync(clientB, "Bbb", guid: 2);
+
+        await clientA.ReadAsync(); // B's create-update to A
+        await clientB.ReadAsync(); // A's create-update to B
+
+        // Both start at (-8949.95, -132.493). A walks 200 yards east: out of range.
+        await clientA.SendAsync(WorldOpcode.MsgMoveHeartbeat, BuildMovement(-8949.95f, 67.5f, 83.5f, 0f));
+
+        (WorldOpcode op, byte[] payload) = await clientA.ReadAsync();
+        Assert.Equal(WorldOpcode.SmsgUpdateObject, op);
+        Assert.Equal(Map.BuildOutOfRange(ObjectGuid.Player(2)), payload);
+
+        // B gets A's out-of-range block and no relayed heartbeat (it no longer sees A).
+        (op, payload) = await clientB.ReadAsync();
+        Assert.Equal(WorldOpcode.SmsgUpdateObject, op);
+        Assert.Equal(Map.BuildOutOfRange(ObjectGuid.Player(1)), payload);
+
+        // A keeps moving while out of range: nothing reaches B. A then walks back into range.
+        await clientA.SendAsync(WorldOpcode.MsgMoveHeartbeat, BuildMovement(-8949.95f, 60f, 83.5f, 0f));
+        await clientA.SendAsync(WorldOpcode.MsgMoveHeartbeat, BuildMovement(-8949.95f, -120f, 83.5f, 0f));
+
+        // A is re-created for B (create block, type 3), then B receives the relayed heartbeat.
+        (op, payload) = await clientB.ReadAsync();
+        Assert.Equal(WorldOpcode.SmsgUpdateObject, op);
+        Assert.Equal(3, payload[5]);                 // UPDATETYPE_CREATE_OBJECT2
+        Assert.Equal([0x01, 0x01], payload[6..8]);   // packed GUID of A
+        (op, payload) = await clientB.ReadAsync();
+        Assert.Equal(WorldOpcode.MsgMoveHeartbeat, op);
+        Assert.Equal([0x01, 0x01], payload[..2]);
+
+        // ...and B is re-created for A.
+        (op, payload) = await clientA.ReadAsync();
+        Assert.Equal(WorldOpcode.SmsgUpdateObject, op);
+        Assert.Equal(3, payload[5]);
+        Assert.Equal([0x01, 0x02], payload[6..8]);   // packed GUID of B
+    }
+
+    [Fact]
+    public void VisibilityDistance_IsTwoDimensional_WithGreyHysteresis()
+    {
+        // Range for two default players: 100 + 0.382 * 2 = 100.764 yards (+1 grey once visible).
+        PlayerObject viewer = MakePlayer(1, 0f, 0f, 0f);
+
+        Assert.True(Map.IsWithinVisibilityDistance(viewer, MakePlayer(2, 100.5f, 0f, 0f), alreadyVisible: false));
+        Assert.False(Map.IsWithinVisibilityDistance(viewer, MakePlayer(2, 101.0f, 0f, 0f), alreadyVisible: false));
+        Assert.True(Map.IsWithinVisibilityDistance(viewer, MakePlayer(2, 101.0f, 0f, 0f), alreadyVisible: true));
+        Assert.False(Map.IsWithinVisibilityDistance(viewer, MakePlayer(2, 102.0f, 0f, 0f), alreadyVisible: true));
+
+        // Height difference is ignored (vmangos IsWithinDistInMap(..., is3D = false)).
+        Assert.True(Map.IsWithinVisibilityDistance(viewer, MakePlayer(2, 50f, 0f, 500f), alreadyVisible: false));
+    }
+
+    [Fact]
+    public void OutOfRangeBlock_MatchesVanillaLayout()
+    {
+        // blockCount=1, hasTransport=0, UPDATETYPE_OUT_OF_RANGE_OBJECTS=4, count=1, packed guid 0x0102.
+        byte[] expected = [1, 0, 0, 0, 0, 4, 1, 0, 0, 0, 0x03, 0x02, 0x01];
+        Assert.Equal(expected, Map.BuildOutOfRange(ObjectGuid.Player(0x0102)));
+    }
+
+    private static PlayerObject MakePlayer(uint guid, float x, float y, float z) => new()
+    {
+        Guid = guid,
+        Race = Race.Human,
+        Class = Class.Warrior,
+        Gender = Gender.Male,
+        PowerType = PowerType.Rage,
+        X = x,
+        Y = y,
+        Z = z,
+    };
+
     private static async Task<byte[]> AddAccount(InMemoryAccountStore accounts, string name)
     {
         byte[] key = RandomNumberGenerator.GetBytes(WowSrp6.SessionKeyLength);

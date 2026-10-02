@@ -312,16 +312,18 @@ public sealed class WorldSession(
             return;
         }
 
-        _player.X = BinaryPrimitives.ReadSingleLittleEndian(movementInfo.AsSpan(8, 4));
-        _player.Y = BinaryPrimitives.ReadSingleLittleEndian(movementInfo.AsSpan(12, 4));
-        _player.Z = BinaryPrimitives.ReadSingleLittleEndian(movementInfo.AsSpan(16, 4));
-        _player.Orientation = BinaryPrimitives.ReadSingleLittleEndian(movementInfo.AsSpan(20, 4));
+        float x = BinaryPrimitives.ReadSingleLittleEndian(movementInfo.AsSpan(8, 4));
+        float y = BinaryPrimitives.ReadSingleLittleEndian(movementInfo.AsSpan(12, 4));
+        float z = BinaryPrimitives.ReadSingleLittleEndian(movementInfo.AsSpan(16, 4));
+        float o = BinaryPrimitives.ReadSingleLittleEndian(movementInfo.AsSpan(20, 4));
 
-        // Relay to nearby players as packGUID(mover) + the original MovementInfo (vmangos relay format).
+        // Relay to players that see us as packGUID(mover) + the original MovementInfo (vmangos
+        // relay format). The map stores the position, updates visibility, then relays.
         var relay = new PacketWriter(movementInfo.Length + 9);
         relay.WriteBytes(_player.ObjectGuid.ToPacked());
         relay.WriteBytes(movementInfo);
-        await _map.RelayMovementAsync(this, opcode, relay.AsMemory()).ConfigureAwait(false);
+        await _map.MoveAsync(this, x, y, z, o, opcode, relay.AsMemory(), (uint)Environment.TickCount)
+            .ConfigureAwait(false);
     }
 
     /// <summary>Thread-safe push of a server packet to this client (used by the map for broadcasts).</summary>
