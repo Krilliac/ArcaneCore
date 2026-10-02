@@ -62,6 +62,10 @@ internal sealed class WorldTestClient : IAsyncDisposable
 
     /// <summary>Create a character (human warrior by default) and assert success.</summary>
     public async Task CreateCharacterAsync(string name, byte race = 1, byte cls = 1, byte gender = 0)
+        => Assert.Equal((byte)CharResult.CharCreateSuccess, await TryCreateCharacterAsync(name, race, cls, gender));
+
+    /// <summary>Send CMSG_CHAR_CREATE and return the SMSG_CHAR_CREATE result code.</summary>
+    public async Task<byte> TryCreateCharacterAsync(string name, byte race = 1, byte cls = 1, byte gender = 0)
     {
         var create = new PacketWriter(32);
         create.WriteCString(name);
@@ -76,24 +80,108 @@ internal sealed class WorldTestClient : IAsyncDisposable
         await SendAsync(WorldOpcode.CmsgCharCreate, create.ToArray());
         (WorldOpcode op, byte[] payload) = await ReadAsync();
         Assert.Equal(WorldOpcode.SmsgCharCreate, op);
-        Assert.Equal((byte)CharResult.CharCreateSuccess, payload[0]);
+        return payload[0];
     }
 
+    /// <summary>Every packet of the last <see cref="LoginAsync"/>, in arrival order.</summary>
+    public List<(WorldOpcode Opcode, byte[] Payload)> LastLoginPackets { get; } = [];
+
     /// <summary>
-    /// Log a character in and consume the login sequence (vmangos order: verify world,
-    /// tutorials, initial spells, time speed, self create). Returns the self-create body.
+    /// Log a character in and consume the login sequence, asserting the vmangos order: verify
+    /// world, account data hashes, friend and ignore lists, MOTD lines, rest start, bind point,
+    /// tutorials, initial spells, action buttons, reputations, time speed, self create, world
+    /// states. Returns the self-create body; every packet is kept in <see cref="LastLoginPackets"/>.
     /// </summary>
     public async Task<byte[]> LoginAsync(ulong guid)
     {
         var login = new PacketWriter(8);
         login.WriteUInt64(guid);
         await SendAsync(WorldOpcode.CmsgPlayerLogin, login.ToArray());
+        LastLoginPackets.Clear();
 
-        Assert.Equal(WorldOpcode.SmsgLoginVerifyWorld, (await ReadAsync()).Opcode);
-        Assert.Equal(WorldOpcode.SmsgTutorialFlags, (await ReadAsync()).Opcode);
-        Assert.Equal(WorldOpcode.SmsgInitialSpells, (await ReadAsync()).Opcode);
-        Assert.Equal(WorldOpcode.SmsgLoginSettimespeed, (await ReadAsync()).Opcode);
-        return await ReadUpdateAsync();
+        await ExpectLoginPacketAsync(WorldOpcode.SmsgLoginVerifyWorld);
+        await ExpectLoginPacketAsync(WorldOpcode.SmsgAccountDataMd5);
+        await ExpectLoginPacketAsync(WorldOpcode.SmsgFriendList);
+        await ExpectLoginPacketAsync(WorldOpcode.SmsgIgnoreList);
+
+        (WorldOpcode op, byte[] payload) = await ReadAsync();
+        while (op == WorldOpcode.SmsgMessagechat) // MOTD lines
+        {
+            LastLoginPackets.Add((op, payload));
+            (op, payload) = await ReadAsync();
+        }
+
+        Assert.Equal(WorldOpcode.SmsgSetRestStart, op);
+        LastLoginPackets.Add((op, payload));
+        await ExpectLoginPacketAsync(WorldOpcode.SmsgBindpointupdate);
+        await ExpectLoginPacketAsync(WorldOpcode.SmsgTutorialFlags);
+        await ExpectLoginPacketAsync(WorldOpcode.SmsgInitialSpells);
+        await ExpectLoginPacketAsync(WorldOpcode.SmsgActionButtons);
+        await ExpectLoginPacketAsync(WorldOpcode.SmsgInitializeFactions);
+        await ExpectLoginPacketAsync(WorldOpcode.SmsgLoginSettimespeed);
+        byte[] self = await ReadUpdateAsync();
+        LastLoginPackets.Add((WorldOpcode.SmsgUpdateObject, self));
+        await ExpectLoginPacketAsync(WorldOpcode.SmsgInitWorldStates);
+        return self;
+    }
+
+    /// <summary>The payload of the login packet with this opcode (after <see cref="LoginAsync"/>).</summary>
+    public byte[] LoginPacket(WorldOpcode opcode) => LastLoginPackets.First(p => p.Opcode == opcode).Payload;
+
+    /// <summary>
+    /// Read every packet that arrives until none has arrived for <paramref name="quiet"/>
+    /// (default 150 ms). Frames are only read once data is waiting, so no read is ever cut off.
+    /// </summary>
+    public async Task<List<(WorldOpcode Opcode, byte[] Payload)>> CollectAsync(TimeSpan? quiet = null)
+    {
+        TimeSpan window = quiet ?? TimeSpan.FromMilliseconds(150);
+        var packets = new List<(WorldOpcode, byte[])>();
+        while (true)
+        {
+            DateTime deadline = DateTime.UtcNow + window;
+            while (_client.Available == 0 && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(5);
+            }
+
+            if (_client.Available == 0)
+            {
+                return packets;
+            }
+
+            packets.Add(await ReadAsync());
+        }
+    }
+
+    /// <summary>CMSG_MESSAGECHAT: u32 type, u32 language, [target], message.</summary>
+    public Task SendChatAsync(ChatType type, Language language, string message, string? target = null)
+    {
+        var chat = new PacketWriter(16 + message.Length);
+        chat.WriteUInt32((uint)type);
+        chat.WriteUInt32((uint)language);
+        if (type is ChatType.Whisper or ChatType.Channel)
+        {
+            chat.WriteCString(target ?? string.Empty);
+        }
+
+        chat.WriteCString(message);
+        return SendAsync(WorldOpcode.CmsgMessagechat, chat.ToArray());
+    }
+
+    /// <summary>Read until the next SMSG_MESSAGECHAT and decode it.</summary>
+    public async Task<ChatMessage> ReadChatAsync() => ChatMessage.Parse(await ReadUntilAsync(WorldOpcode.SmsgMessagechat));
+
+    /// <summary>Read packets until one with <paramref name="opcode"/> arrives; fails on timeout.</summary>
+    public async Task<byte[]> ReadUntilAsync(WorldOpcode opcode)
+    {
+        while (true)
+        {
+            (WorldOpcode op, byte[] payload) = await ReadAsync();
+            if (op == opcode)
+            {
+                return payload;
+            }
+        }
     }
 
     public async Task SendAsync(WorldOpcode opcode, byte[] payload)
@@ -185,10 +273,36 @@ internal sealed class WorldTestClient : IAsyncDisposable
         _client.Dispose();
     }
 
+    private async Task ExpectLoginPacketAsync(WorldOpcode expected)
+    {
+        (WorldOpcode op, byte[] payload) = await ReadAsync();
+        Assert.Equal(expected, op);
+        LastLoginPackets.Add((op, payload));
+    }
+
     private static byte[] Le(uint value)
     {
         byte[] b = new byte[4];
         BinaryPrimitives.WriteUInt32LittleEndian(b, value);
         return b;
+    }
+}
+
+/// <summary>A decoded player/system SMSG_MESSAGECHAT (vmangos ChatHandler::BuildChatPacket layout).</summary>
+internal sealed record ChatMessage(ChatType Type, Language Language, ulong Sender, ulong? Sender2, string Text, ChatTag Tag)
+{
+    public static ChatMessage Parse(byte[] payload)
+    {
+        var reader = new PacketReader(payload);
+        var type = (ChatType)reader.ReadByte();
+        var language = (Language)reader.ReadUInt32();
+        ulong sender = reader.ReadUInt64();
+        ulong? sender2 = type is ChatType.Say or ChatType.Party or ChatType.Yell ? reader.ReadUInt64() : null;
+        uint length = reader.ReadUInt32();
+        string text = reader.ReadCString();
+        Assert.Equal((uint)Encoding.UTF8.GetByteCount(text) + 1, length);
+        var tag = (ChatTag)reader.ReadByte();
+        Assert.Equal(0, reader.Remaining);
+        return new ChatMessage(type, language, sender, sender2, text, tag);
     }
 }

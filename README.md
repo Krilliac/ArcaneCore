@@ -4,9 +4,10 @@ A from-scratch World of Warcraft **1.12.1 (build 5875)** server emulator in **C#
 .NET 10**. See [`ARCANECORE_CHARTER.md`](ARCANECORE_CHARTER.md) for the binding design
 charter and prime directives.
 
-> Status: **M1–M5** implemented and automatically verified (M5: world-thread runtime,
-> generated protocol tables, persistence, multi-engine schema management); awaiting
-> real-client acceptance. Scope and order of the next milestones: [`docs/ROADMAP.md`](docs/ROADMAP.md).
+> Status: **M1–M6** implemented and automatically verified (M5: world-thread runtime,
+> generated protocol tables, persistence, multi-engine schema management; M6: logout,
+> chat, /who, account settings, action bars, GM commands); awaiting real-client
+> acceptance. Scope and order of the next milestones: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Layout
 
@@ -18,9 +19,9 @@ src/
   ArcaneCore.Game           world thread (WorldRuntime), maps, objects, generated update fields
   ArcaneCore.Data           EF Core stores, schema bootstrapper; MariaDB / MySQL / PostgreSQL / SQLite
   ArcaneCore.Realm          logon/realm daemon (TCP 3724)
-  ArcaneCore.World          world daemon (TCP 8085): sessions, opcode table, handlers, save queue
+  ArcaneCore.World          world daemon (TCP 8085): sessions, opcode table, handlers, chat commands, save queue
 tools/
-  ArcaneCore.AccountTool    account create / set-password / list CLI
+  ArcaneCore.AccountTool    account create / set-password / set-gmlevel / list CLI
   codegen/                  generates WorldOpcode.g.cs + UpdateFields.g.cs from the references
 tests/
   ArcaneCore.Cryptography.Tests   SRP6 known-answer + round-trip tests
@@ -97,10 +98,41 @@ dotnet run --project src/ArcaneCore.World
 
 After logging in and selecting the realm, the client reaches character select, can create
 characters and enter the world. Acceptance procedures: `docs/M2_ACCEPTANCE.md` …
-`docs/M5_ACCEPTANCE.md`.
+`docs/M6_ACCEPTANCE.md`.
 
-World tuning lives in the `World` section: `TickIntervalMs` (50), `UpdateCompressionThreshold`
-(128 bytes), `AutosaveIntervalMs` (900000), `MaxOutboundBytes` (8 MiB per client).
+World tuning lives in the `World` section (defaults follow vmangos/cmangos):
+
+| Option | Default | Meaning |
+|---|---|---|
+| `TickIntervalMs` | 50 | world tick |
+| `UpdateCompressionThreshold` | 128 | update packets above this many bytes are zlib-compressed |
+| `AutosaveIntervalMs` | 900000 | periodic save of online characters (0 = off) |
+| `MaxOutboundBytes` | 8 MiB | a client that stops reading is disconnected |
+| `CharactersPerRealm` | 10 | characters per account on this realm |
+| `Motd` | `Welcome to ArcaneCore.` | message of the day; `@` separates lines |
+| `ListenRangeSay` / `ListenRangeYell` / `ListenRangeTextEmote` | 25 / 300 / 25 | chat ranges in yards (0 = whole map) |
+| `AllowTwoSideChat` / `AllowTwoSideWhoList` | false | cross-faction whispers/emotes, and /who of the other faction |
+| `LogoutDelayMs` | 20000 | logout countdown |
+| `InstantLogoutSecurity` | `Moderator` | lowest account level that logs out instantly |
+| `GmLevelInWhoList` | `Administrator` | highest staff level ordinary players see in /who |
+| `PlayerCommands` | true | whether plain players may use `.help`, `.save`, … |
+
+### GM levels and commands
+
+Account levels are `Player` (0), `Moderator` (1), `GameMaster` (2) and `Administrator` (3):
+
+```bash
+dotnet run --project tools/ArcaneCore.AccountTool -- set-gmlevel MYUSER gamemaster
+```
+
+The level is read when the account enters the world. Commands are typed in chat with a `.`
+or `!` prefix and may be abbreviated (`.serv i`); `.help` lists what the account may use.
+
+| Command | Level |
+|---|---|
+| `.help [command]`, `.commands`, `.save`, `.server info`, `.server motd` | Player |
+| `.gps`, `.announce <text>`, `.notify <text>`, `.gm [on\|off]`, `.gm chat [on\|off]`, `.saveall`, `.modify money <copper>` | Moderator |
+| `.kick <name>` | GameMaster |
 
 ## Regenerating protocol tables
 

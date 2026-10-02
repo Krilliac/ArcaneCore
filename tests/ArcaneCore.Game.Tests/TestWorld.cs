@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -8,13 +9,17 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace ArcaneCore.Game.Tests;
 
 /// <summary>A session that records what the world sends it.</summary>
-internal sealed class FakeSession(int accountId = 1) : IPlayerSession
+internal sealed class FakeSession(int accountId = 1, AccountSecurity security = AccountSecurity.Player) : IPlayerSession
 {
     public ConcurrentQueue<(WorldOpcode Opcode, byte[] Payload)> Sent { get; } = new();
 
     public bool Kicked { get; private set; }
 
+    public int LoggedOutCount { get; private set; }
+
     public int AccountId { get; } = accountId;
+
+    public AccountSecurity Security { get; } = security;
 
     public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload) => Sent.Enqueue((opcode, payload.ToArray()));
 
@@ -23,6 +28,8 @@ internal sealed class FakeSession(int accountId = 1) : IPlayerSession
     }
 
     public void Kick() => Kicked = true;
+
+    public void OnLoggedOut() => LoggedOutCount++;
 
     public (WorldOpcode Opcode, byte[] Payload) Next()
         => Sent.TryDequeue(out var packet) ? packet : throw new InvalidOperationException("no packet sent");
@@ -46,14 +53,14 @@ internal static class TestWorld
             saves ?? new RecordingSaveQueue(),
             NullLogger<WorldRuntime>.Instance);
 
-    public static Player CreatePlayer(uint guid, float x, float y, IPlayerSession session, uint mapId = 0)
+    public static Player CreatePlayer(uint guid, float x, float y, IPlayerSession session, uint mapId = 0, Race race = Race.Human)
     {
         var character = new CharacterRecord
         {
             Id = (int)guid,
             AccountId = session.AccountId,
             Name = $"P{guid}",
-            Race = (byte)Race.Human,
+            Race = (byte)race,
             Class = (byte)Class.Warrior,
             Gender = (byte)Gender.Male,
             Level = 1,

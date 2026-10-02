@@ -107,7 +107,7 @@ session outbound channel ◄───────────────┘
 | # | Milestone | Scope | Status |
 |---|---|---|---|
 | M5 | Runtime core | Opcode registry + session states, outbound queues, world tick, generated update fields + values updates, persistence of position, DB split + schema versioning, SQLite | **implemented** — [MILESTONE_M5.md](../MILESTONE_M5.md) |
-| M6 | Session essentials | Name query, logout, time/played, stand state, selection, account data, action buttons, tutorials, chat (say/yell/emote/whisper), text emotes, /who, GM commands | planned |
+| M6 | Session essentials | Name query, logout, time/played, stand state, selection, account data, action buttons, tutorials, chat (say/yell/emote/whisper), text emotes, /who, GM commands | **implemented** — [MILESTONE_M6.md](../MILESTONE_M6.md) |
 | M7 | Teleports | Near/far teleport, world-port ack, area triggers, `.tele` | planned |
 | M8 | Content platform | World schema, dump importer, in-memory stores, WDBC reader | planned |
 | M9 | Items | Item/bag objects, inventory, equipment visuals, starting outfit, item query, equip/swap/split/destroy, persistence | planned |

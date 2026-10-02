@@ -28,6 +28,8 @@ public enum CharResult : byte
     CharNameNoName = 0x45,
     CharNameTooShort = 0x46,
     CharNameTooLong = 0x47,
+    CharNameInvalidCharacter = 0x48, // gtker CHAR_NAME_ONLY_LETTERS
+    CharNameMixedLanguages = 0x49,
     CharNameSuccess = 0x50,
     CharNameFailure = 0x51,
 }

@@ -2,10 +2,13 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using ArcaneCore.Cryptography;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.World.Characters;
+using ArcaneCore.World.Commands;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
@@ -27,23 +30,25 @@ internal sealed class WorldTestHost : IAsyncDisposable
     private readonly List<Task> _sessions = [];
     private readonly Task _acceptLoop;
 
-    private WorldTestHost(int compressionThreshold)
+    private WorldTestHost(int compressionThreshold, Action<WorldRuntimeOptions>? configure)
     {
         var collection = new ServiceCollection();
         collection.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         collection.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
         collection.AddSingleton<IAccountStore>(Accounts);
         collection.AddSingleton<ICharacterStore>(Characters);
+        collection.AddSingleton<IAccountDataStore>(AccountData);
         collection.AddSingleton<IWorldDataStore>(WorldData);
+        collection.AddSingleton(Directory);
+        collection.AddSingleton(_ => BuiltinCommands.Create());
         collection.AddSingleton<CharacterSaveQueue>();
         collection.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());
         _services = collection.BuildServiceProvider();
 
+        var options = new WorldRuntimeOptions { TickIntervalMs = 5, UpdateCompressionThreshold = compressionThreshold, AutosaveIntervalMs = 0 };
+        configure?.Invoke(options);
         SaveQueue = _services.GetRequiredService<CharacterSaveQueue>();
-        World = new WorldRuntime(
-            new WorldRuntimeOptions { TickIntervalMs = 5, UpdateCompressionThreshold = compressionThreshold, AutosaveIntervalMs = 0 },
-            SaveQueue,
-            NullLogger<WorldRuntime>.Instance);
+        World = new WorldRuntime(options, SaveQueue, NullLogger<WorldRuntime>.Instance);
         Opcodes = WorldServiceCollectionExtensions.BuildOpcodeTable();
 
         SaveQueue.Start();
@@ -59,6 +64,10 @@ internal sealed class WorldTestHost : IAsyncDisposable
 
     public InMemoryCharacterStore Characters { get; } = new();
 
+    public InMemoryAccountDataStore AccountData { get; } = new();
+
+    public CharacterDirectory Directory { get; } = new();
+
     public InMemoryWorldDataStore WorldData { get; } = new();
 
     public WorldRuntime World { get; }
@@ -72,13 +81,17 @@ internal sealed class WorldTestHost : IAsyncDisposable
     public int Port { get; }
 
     /// <summary>Start a host. Compression is off by default so tests can read update blocks directly.</summary>
-    public static WorldTestHost Start(int compressionThreshold = 0) => new(compressionThreshold);
+    public static WorldTestHost Start(int compressionThreshold = 0, Action<WorldRuntimeOptions>? configure = null)
+        => new(compressionThreshold, configure);
 
     /// <summary>Create an account with a fresh session key (as if it had just logged in at the realm).</summary>
-    public async Task<byte[]> AddAccountAsync(string name)
+    public async Task<byte[]> AddAccountAsync(string name, AccountSecurity security = AccountSecurity.Player)
     {
         byte[] key = RandomNumberGenerator.GetBytes(WowSrp6.SessionKeyLength);
-        await Accounts.CreateAsync(new Account { Username = name, Salt = new byte[32], Verifier = new byte[32], SessionKey = key });
+        await Accounts.CreateAsync(new Account
+        {
+            Username = name, Salt = new byte[32], Verifier = new byte[32], SessionKey = key, Security = security,
+        });
         return key;
     }
 
@@ -89,18 +102,35 @@ internal sealed class WorldTestHost : IAsyncDisposable
         return new WorldTestClient(client);
     }
 
-    /// <summary>Connect, authenticate, create a human warrior and enter the world (consuming the login sequence).</summary>
-    public async Task<WorldTestClient> EnterWorldAsync(string account, string character)
+    /// <summary>Connect, authenticate, create a warrior (human unless <paramref name="race"/> says otherwise) and enter the world.</summary>
+    public async Task<WorldTestClient> EnterWorldAsync(
+        string account, string character, AccountSecurity security = AccountSecurity.Player, byte race = 1)
     {
-        byte[] key = await AddAccountAsync(account);
+        byte[] key = await AddAccountAsync(account, security);
         WorldTestClient client = await ConnectAsync();
         await client.AuthenticateAsync(account, key);
-        await client.CreateCharacterAsync(character);
+        await client.CreateCharacterAsync(character, race);
         Account stored = (await Accounts.FindByUsernameAsync(account))!;
-        CharacterRecord record = (await Characters.GetByAccountAsync(stored.Id)).Single(c => c.Name == character);
+        CharacterRecord record = (await Characters.GetByAccountAsync(stored.Id)).Single(c => string.Equals(c.Name, character, StringComparison.OrdinalIgnoreCase));
         await client.LoginAsync((ulong)record.Id);
         return client;
     }
+
+    /// <summary>The online player with this name (world thread).</summary>
+    public Task<Player> PlayerAsync(string name) => World.InvokeAsync(() => World.FindOnlinePlayer(name)
+        ?? throw new InvalidOperationException($"{name} is not online"));
+
+    /// <summary>Read an online player's state on the world thread.</summary>
+    public Task<T> PlayerStateAsync<T>(string name, Func<Player, T> read) => World.InvokeAsync(() =>
+        read(World.FindOnlinePlayer(name) ?? throw new InvalidOperationException($"{name} is not online")));
+
+    /// <summary>Move an online player without a visibility pass, so no update packets result.</summary>
+    public Task PlaceAsync(string name, float x, float y, float z) => World.InvokeAsync(() =>
+    {
+        Player player = World.FindOnlinePlayer(name) ?? throw new InvalidOperationException($"{name} is not online");
+        player.Relocate(x, y, z, player.Orientation, World.NowMs);
+        return true;
+    });
 
     /// <summary>Run <paramref name="action"/> on the world thread and wait for it.</summary>
     public Task<T> OnWorldAsync<T>(Func<T> action) => World.InvokeAsync(action);

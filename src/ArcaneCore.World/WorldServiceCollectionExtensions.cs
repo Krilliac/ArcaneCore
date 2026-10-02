@@ -1,5 +1,7 @@
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.World.Characters;
+using ArcaneCore.World.Commands;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
@@ -17,7 +19,12 @@ public static class WorldServiceCollectionExtensions
     public static IReadOnlyList<IOpcodeHandlerGroup> HandlerGroups { get; } =
     [
         new CharacterHandlers(),
+        new AccountDataHandlers(),
+        new QueryHandlers(),
         new MovementHandlers(),
+        new PlayerHandlers(),
+        new LogoutHandlers(),
+        new ChatHandlers(),
     ];
 
     public static OpcodeTable BuildOpcodeTable()
@@ -38,6 +45,8 @@ public static class WorldServiceCollectionExtensions
         services.Configure<WorldSessionOptions>(configuration.GetSection(WorldOptions.SectionName));
 
         services.AddSingleton(_ => BuildOpcodeTable());
+        services.AddSingleton(_ => BuiltinCommands.Create());
+        services.AddSingleton<CharacterDirectory>();
         services.AddSingleton<SessionRegistry>();
         services.AddSingleton<CharacterSaveQueue>();
         services.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());

@@ -50,4 +50,21 @@ public sealed class EfAccountStore(AuthDbContext db) : IAccountStore
         account.SessionKey = sessionKey;
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    public async Task<bool> UpdateSecurityAsync(
+        string username, AccountSecurity security, CancellationToken cancellationToken = default)
+    {
+        string normalized = username.ToUpperInvariant();
+        Account? account = await db.Accounts
+            .FirstOrDefaultAsync(a => a.Username == normalized, cancellationToken)
+            .ConfigureAwait(false);
+        if (account is null)
+        {
+            return false;
+        }
+
+        account.Security = security;
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
 }

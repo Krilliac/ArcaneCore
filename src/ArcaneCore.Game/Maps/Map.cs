@@ -138,6 +138,49 @@ public sealed class Map
         }
     }
 
+    /// <summary>
+    /// Send a packet to every player within <paramref name="range"/> of <paramref name="source"/>,
+    /// as vmangos Map::MessageDistBroadcast → MessageDistDeliverer does: a 3D distance check
+    /// plus both bounding radii (WorldObject::IsWithinDist defaults), an optional same-team
+    /// filter (no exemptions), and a range of 0 meaning the whole map.
+    /// </summary>
+    public void BroadcastInRange(
+        WorldObject source, float range, WorldOpcode opcode, ReadOnlySpan<byte> payload,
+        bool includeSelf, Team? onlyTeam = null)
+    {
+        foreach (Player player in _players.Values)
+        {
+            if (ReferenceEquals(player, source))
+            {
+                if (includeSelf)
+                {
+                    player.Session.Send(opcode, payload);
+                }
+
+                continue;
+            }
+
+            if (onlyTeam is { } team && player.Team != team)
+            {
+                continue;
+            }
+
+            if (range > 0)
+            {
+                float dx = player.X - source.X;
+                float dy = player.Y - source.Y;
+                float dz = player.Z - source.Z;
+                float max = range + player.BoundingRadius + source.BoundingRadius;
+                if ((dx * dx) + (dy * dy) + (dz * dz) >= max * max)
+                {
+                    continue;
+                }
+            }
+
+            player.Session.Send(opcode, payload);
+        }
+    }
+
     /// <summary>One simulation step (world thread).</summary>
     public void Update(uint diffMs)
     {
@@ -157,6 +200,16 @@ public sealed class Map
             {
                 _logger.LogError(ex, "packet handling failed for {Player}; disconnecting", player.Name);
                 player.Session.Kick();
+            }
+        }
+
+        // (1b) timers: logouts whose countdown is over (vmangos WorldSession::Update → LogoutPlayer)
+        uint now = _world.NowMs;
+        foreach (Player player in _players.Values.ToArray())
+        {
+            if (player.Map == this && player.IsLogoutDue(now, _world.Options.LogoutDelayMs))
+            {
+                _world.LogoutPlayer(player);
             }
         }
 

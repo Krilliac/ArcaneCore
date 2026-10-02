@@ -4,7 +4,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 
-namespace ArcaneCore.World.Net;
+namespace ArcaneCore.World.Packets;
 
 /// <summary>
 /// Builders for the character-screen and login packets. Formats verified against vmangos
@@ -67,18 +67,6 @@ public static class CharacterPackets
         writer.WriteSingle(c.Y);
         writer.WriteSingle(c.Z);
         writer.WriteSingle(c.Orientation);
-        return writer.ToArray();
-    }
-
-    /// <summary>SMSG_TUTORIAL_FLAGS: eight masks; all-ones marks every tutorial as seen.</summary>
-    public static byte[] BuildTutorialFlags()
-    {
-        var writer = new PacketWriter(32);
-        for (int i = 0; i < 8; i++)
-        {
-            writer.WriteUInt32(0xFFFFFFFF);
-        }
-
         return writer.ToArray();
     }
 

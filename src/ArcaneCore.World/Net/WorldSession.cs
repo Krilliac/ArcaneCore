@@ -92,6 +92,15 @@ public sealed class WorldSession : IPlayerSession
 
     public string AccountName { get; private set; } = string.Empty;
 
+    /// <summary>The account's GM level, read at authentication.</summary>
+    public AccountSecurity Security { get; private set; }
+
+    /// <summary>
+    /// The account's stored client settings and tutorial flags, loaded at authentication.
+    /// Mutated only by session handlers (this session's task); the world thread receives copies.
+    /// </summary>
+    public AccountSettings Settings { get; private set; } = new();
+
     /// <summary>The in-world player. Written on the world thread only.</summary>
     public Player? Player { get; private set; }
 
@@ -208,9 +217,31 @@ public sealed class WorldSession : IPlayerSession
                 return false;
             }
 
+            _worldQueue.Clear(); // nothing from a previous stay in the world may leak into this one
             _state = SessionState.LoggingIn;
             return true;
         }
+    }
+
+    /// <summary>
+    /// World thread, after the player left the world through a logout: back to the character
+    /// screen (vmangos WorldSession::LogoutPlayer sends SMSG_LOGOUT_COMPLETE).
+    /// </summary>
+    public void OnLoggedOut()
+    {
+        lock (_sendLock)
+        {
+            if (_state != SessionState.InWorld)
+            {
+                return;
+            }
+
+            Player = null;
+            _worldQueue.Clear();
+            _state = SessionState.CharacterSelect;
+        }
+
+        Send(WorldOpcode.SmsgLogoutComplete, []);
     }
 
     /// <summary>Loading → in world (world thread). False if the client went away meanwhile.</summary>
@@ -319,7 +350,7 @@ public sealed class WorldSession : IPlayerSession
                 return true;
             }
 
-            if (_state != handler.RequiredState)
+            if (!handler.AllowsState(_state))
             {
                 _logger.LogDebug("[{Endpoint}] {Opcode} ignored in state {State}",
                     RemoteEndpoint, WorldOpcodeNames.GetName(opcode), _state);
@@ -380,11 +411,16 @@ public sealed class WorldSession : IPlayerSession
             return false;
         }
 
+        AccountSettings settings = await Services.GetRequiredService<IAccountDataStore>()
+            .GetAsync(stored.Id).ConfigureAwait(false);
+
         lock (_sendLock)
         {
             _crypt.Initialize(stored.SessionKey);
             AccountId = stored.Id;
             AccountName = account;
+            Security = stored.Security;
+            Settings = settings;
             _state = SessionState.CharacterSelect;
         }
 

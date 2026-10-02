@@ -15,8 +15,13 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
     public static readonly SchemaDefinition Schema = new()
     {
         Component = "auth",
-        CurrentVersion = 1,
+        CurrentVersion = 2,
         Version1Tables = ["account", "realmlist"],
+        Steps =
+        [
+            // M6: account GM level.
+            new SchemaStep(2, [new AddColumnChange("account", "Security")]),
+        ],
     };
 
     public DbSet<Account> Accounts => Set<Account>();
@@ -38,6 +43,7 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
             entity.Property(a => a.Verifier).HasMaxLength(32).IsRequired();
             entity.Property(a => a.SessionKey).HasMaxLength(40);
             entity.Property(a => a.Status).HasConversion<int>();
+            entity.Property(a => a.Security).HasConversion<byte>();
         });
 
         modelBuilder.Entity<RealmEntry>(entity =>

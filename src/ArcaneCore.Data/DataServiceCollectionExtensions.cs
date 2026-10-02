@@ -40,6 +40,7 @@ public static class DataServiceCollectionExtensions
             ConfigureProvider(builder, provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.Resolve(DatabaseComponent.Characters)));
 
         services.AddScoped<ICharacterStore, EfCharacterStore>();
+        services.AddScoped<IAccountDataStore, EfAccountDataStore>();
         services.AddSingleton<CharacterDbInitializer>();
         return services;
     }

@@ -99,10 +99,7 @@ public sealed class VisibilityTests
         var login = new PacketWriter(8);
         login.WriteUInt64(1);
         await client.SendAsync(WorldOpcode.CmsgPlayerLogin, login.ToArray());
-        for (int i = 0; i < 4; i++)
-        {
-            await client.ReadAsync(); // verify world, tutorials, spells, time speed
-        }
+        await client.ReadUntilAsync(WorldOpcode.SmsgLoginSettimespeed); // the self create follows the time speed
 
         (WorldOpcode op, byte[] payload) = await client.ReadAsync();
         Assert.Equal(WorldOpcode.SmsgCompressedUpdateObject, op);

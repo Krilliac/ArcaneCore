@@ -20,4 +20,8 @@ public interface IAccountStore
     /// <summary>Store the session key produced by a successful logon proof.</summary>
     Task UpdateSessionKeyAsync(
         string username, byte[] sessionKey, CancellationToken cancellationToken = default);
+
+    /// <summary>Change an account's GM level. Returns false if the account does not exist.</summary>
+    Task<bool> UpdateSecurityAsync(
+        string username, AccountSecurity security, CancellationToken cancellationToken = default);
 }

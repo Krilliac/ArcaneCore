@@ -54,6 +54,9 @@ public abstract class Unit : WorldObject
         set => SetUInt32(UpdateFields.UnitFieldHealth, value);
     }
 
+    /// <summary>Alive while it has health (death states arrive with combat, M11).</summary>
+    public bool IsAlive => Health > 0;
+
     public uint MaxHealth
     {
         get => GetUInt32(UpdateFields.UnitFieldMaxhealth);

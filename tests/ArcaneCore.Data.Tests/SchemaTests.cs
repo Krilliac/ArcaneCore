@@ -49,7 +49,7 @@ public sealed class SchemaTests : IAsyncLifetime
         await using (CharacterDbContext chars = Context<CharacterDbContext>(cs))
         {
             Assert.Equal(0, await chars.Characters.CountAsync());
-            Assert.Equal(1, (await chars.Set<SchemaVersionRow>().SingleAsync()).Version);
+            Assert.Equal(CharacterDbContext.Schema.CurrentVersion, (await chars.Set<SchemaVersionRow>().SingleAsync()).Version);
         }
 
         await using (WorldDbContext world = Context<WorldDbContext>(cs))
@@ -67,24 +67,26 @@ public sealed class SchemaTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
-    public async Task PreM5Database_IsAdoptedAsVersion1(DatabaseProvider provider)
+    public async Task PreM5Database_IsAdoptedAsVersion1ThenUpgraded(DatabaseProvider provider)
     {
         DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
-        await using (CharacterDbContext chars = Context<CharacterDbContext>(cs))
+        await using (CharactersPreM5Context legacy = Context<CharactersPreM5Context>(cs))
         {
-            // What M3's EnsureCreated produced: the tables, no version table.
-            await chars.GetService<IRelationalDatabaseCreator>().CreateAsync();
-            await chars.GetService<IRelationalDatabaseCreator>().CreateTablesAsync();
-            await chars.Database.ExecuteSqlRawAsync("DROP TABLE " + Quote(chars, "characters_schema"));
-            chars.Characters.Add(new CharacterRecord { AccountId = 1, Name = "Old" });
-            await chars.SaveChangesAsync();
+            // What M3's EnsureCreated produced: the version-1 tables, no version table.
+            await TestContexts.CreateTablesAsync(legacy);
+            legacy.Characters.Add(new CharacterV1Row { AccountId = 1, Name = "Old", PlayedTime = 77 });
+            await legacy.SaveChangesAsync();
         }
 
         await using (CharacterDbContext chars = Context<CharacterDbContext>(cs))
         {
+            // Adopted as version 1, then taken through every later step.
             await SchemaBootstrapper.EnsureAsync(chars, CharacterDbContext.Schema);
-            Assert.Equal(1, (await chars.Set<SchemaVersionRow>().SingleAsync()).Version);
-            Assert.Equal("Old", (await chars.Characters.SingleAsync()).Name); // data kept
+            Assert.Equal(CharacterDbContext.Schema.CurrentVersion, (await chars.Set<SchemaVersionRow>().SingleAsync()).Version);
+            CharacterRecord old = await chars.Characters.SingleAsync();
+            Assert.Equal("Old", old.Name); // data kept
+            Assert.Equal(77u, old.PlayedTime);
+            Assert.Equal(0u, old.Money); // added columns default for existing rows
         }
     }
 

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.Maps;
@@ -18,6 +19,7 @@ public sealed class WorldRuntime : IDisposable
     private readonly ConcurrentQueue<Action> _commands = new();
     private readonly Dictionary<uint, Map> _maps = [];
     private readonly ConcurrentDictionary<ObjectGuid, Player> _online = new();
+    private readonly ConcurrentDictionary<string, Player> _onlineByName = new(StringComparer.OrdinalIgnoreCase);
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly ManualResetEventSlim _stopSignal = new(false);
     private Thread? _thread;
@@ -39,6 +41,9 @@ public sealed class WorldRuntime : IDisposable
     /// </summary>
     public uint NowMs => unchecked((uint)_clock.ElapsedMilliseconds);
 
+    /// <summary>Time since the world was created (does not wrap, unlike <see cref="NowMs"/>).</summary>
+    public TimeSpan Uptime => _clock.Elapsed;
+
     public int OnlinePlayerCount => _online.Count;
 
     /// <summary>True when the caller is the world thread (or no world thread is running).</summary>
@@ -46,6 +51,27 @@ public sealed class WorldRuntime : IDisposable
 
     /// <summary>Whether a character is currently in the world. Thread-safe.</summary>
     public bool IsOnline(ObjectGuid guid) => _online.ContainsKey(guid);
+
+    /// <summary>The online player with this name (case-insensitive), or null (world thread).</summary>
+    public Player? FindOnlinePlayer(string name) => _onlineByName.GetValueOrDefault(name);
+
+    /// <summary>The online player with this GUID, or null (world thread).</summary>
+    public Player? FindOnlinePlayer(ObjectGuid guid) => _online.GetValueOrDefault(guid);
+
+    /// <summary>Every player in the world (world thread).</summary>
+    public IEnumerable<Player> OnlinePlayers => _online.Values;
+
+    /// <summary>Queue one player's current state for saving (world thread).</summary>
+    public void SavePlayer(Player player) => _saveQueue.Enqueue(player.CreateSnapshot(NowMs));
+
+    /// <summary>Send a packet to every player in the world (world thread).</summary>
+    public void BroadcastToAll(WorldOpcode opcode, ReadOnlySpan<byte> payload)
+    {
+        foreach (Player player in _online.Values)
+        {
+            player.Session.Send(opcode, payload);
+        }
+    }
 
     /// <summary>Start the world thread.</summary>
     public void Start()
@@ -121,6 +147,7 @@ public sealed class WorldRuntime : IDisposable
             throw new InvalidOperationException($"{player.Name} ({player.Guid}) is already online");
         }
 
+        _onlineByName[player.Name] = player;
         player.StartPlayedTime(NowMs);
         GetMap(player.MapId).AddPlayer(player);
     }
@@ -133,8 +160,24 @@ public sealed class WorldRuntime : IDisposable
             return;
         }
 
+        _onlineByName.TryRemove(new KeyValuePair<string, Player>(player.Name, player));
         player.Map?.RemovePlayer(player);
         _saveQueue.Enqueue(player.CreateSnapshot(NowMs));
+    }
+
+    /// <summary>
+    /// Complete a logout (world thread): save and remove the player, then return its client to
+    /// the character screen (vmangos WorldSession::LogoutPlayer → SMSG_LOGOUT_COMPLETE).
+    /// </summary>
+    public void LogoutPlayer(Player player)
+    {
+        if (!_online.ContainsKey(player.Guid))
+        {
+            return;
+        }
+
+        RemovePlayer(player);
+        player.Session.OnLoggedOut();
     }
 
     /// <summary>One tick: posted commands, then every map (world thread; tests call it directly).</summary>
@@ -186,7 +229,8 @@ public sealed class WorldRuntime : IDisposable
         }
     }
 
-    private void SaveAll()
+    /// <summary>Queue every online character for saving (world thread, or after <see cref="Stop"/>).</summary>
+    public void SaveAll()
     {
         uint now = NowMs;
         foreach (Player player in _online.Values)

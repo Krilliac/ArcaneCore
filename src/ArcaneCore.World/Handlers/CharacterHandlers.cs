@@ -4,7 +4,9 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Characters;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Packets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -21,10 +23,10 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
 
     public void Register(OpcodeTable table)
     {
-        table.OnSession(WorldOpcode.CmsgCharEnum, SessionState.CharacterSelect, HandleCharEnumAsync);
-        table.OnSession(WorldOpcode.CmsgCharCreate, SessionState.CharacterSelect, HandleCharCreateAsync);
-        table.OnSession(WorldOpcode.CmsgCharDelete, SessionState.CharacterSelect, HandleCharDeleteAsync);
-        table.OnSession(WorldOpcode.CmsgPlayerLogin, SessionState.CharacterSelect, HandlePlayerLoginAsync);
+        table.OnSession(WorldOpcode.CmsgCharEnum, SessionStates.CharacterSelect, HandleCharEnumAsync);
+        table.OnSession(WorldOpcode.CmsgCharCreate, SessionStates.CharacterSelect, HandleCharCreateAsync);
+        table.OnSession(WorldOpcode.CmsgCharDelete, SessionStates.CharacterSelect, HandleCharDeleteAsync);
+        table.OnSession(WorldOpcode.CmsgPlayerLogin, SessionStates.CharacterSelect, HandlePlayerLoginAsync);
     }
 
     private static async Task HandleCharEnumAsync(WorldSession session, byte[] payload)
@@ -39,7 +41,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         // CMSG_CHAR_CREATE: CString name, u8 race, class, gender, skin, face, hair style,
         // hair color, facial hair, outfit id (vmangos WorldSession::HandleCharCreateOpcode).
         var reader = new PacketReader(payload);
-        string name = reader.ReadCString().Trim();
+        string rawName = reader.ReadCString();
         byte race = reader.ReadByte();
         byte cls = reader.ReadByte();
         byte gender = reader.ReadByte();
@@ -52,21 +54,29 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         ICharacterStore characters = session.Services.GetRequiredService<ICharacterStore>();
         IWorldDataStore worldData = session.Services.GetRequiredService<IWorldDataStore>();
 
-        if (name.Length is < 1 or > 12)
-        {
-            SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharNameNoName);
-            return;
-        }
-
+        // Checks in vmangos order: race/class, name rules, name in use, characters per realm.
         if (!await worldData.IsValidRaceClassAsync(race, cls).ConfigureAwait(false) || gender > 1)
         {
             SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharCreateFailed);
             return;
         }
 
+        string name = CharacterNames.Normalize(rawName);
+        if (CharacterNames.Validate(name) is { } nameError)
+        {
+            SendResult(session, WorldOpcode.SmsgCharCreate, nameError);
+            return;
+        }
+
         if (await characters.IsNameTakenAsync(name).ConfigureAwait(false))
         {
             SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharCreateNameInUse);
+            return;
+        }
+
+        if (await characters.CountByAccountAsync(session.AccountId).ConfigureAwait(false) >= session.World.Options.CharactersPerRealm)
+        {
+            SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharCreateServerLimit);
             return;
         }
 
@@ -77,7 +87,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        await characters.CreateAsync(new CharacterRecord
+        CharacterRecord created = await characters.CreateAsync(new CharacterRecord
         {
             AccountId = session.AccountId,
             Name = name,
@@ -95,8 +105,17 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             Y = start.Y,
             Z = start.Z,
             Orientation = start.Orientation,
+
+            // A new character is bound where it starts (vmangos Player::Create → SetHomebindToLocation).
+            HomeMapId = start.MapId,
+            HomeZoneId = start.ZoneId,
+            HomeX = start.X,
+            HomeY = start.Y,
+            HomeZ = start.Z,
         }).ConfigureAwait(false);
 
+        session.Services.GetRequiredService<CharacterDirectory>().Add(
+            new CharacterIdentity(created.Id, created.AccountId, created.Name, created.Race, created.Gender, created.Class));
         session.Logger.LogInformation("[{Endpoint}] '{Account}' created character '{Name}'",
             session.RemoteEndpoint, session.AccountName, name);
         SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharCreateSuccess);
@@ -112,6 +131,11 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             && !session.World.IsOnline(ObjectGuid.Player((uint)guid))
             && await session.Services.GetRequiredService<ICharacterStore>()
                 .DeleteAsync((int)guid, session.AccountId).ConfigureAwait(false);
+        if (deleted)
+        {
+            session.Services.GetRequiredService<CharacterDirectory>().Remove((int)guid);
+        }
+
         SendResult(session, WorldOpcode.SmsgCharDelete, deleted ? CharResult.CharDeleteSuccess : CharResult.CharDeleteFailed);
     }
 
@@ -143,25 +167,36 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
 
         RaceInfo? raceInfo = await worldData.GetRaceInfoAsync(character.Race, character.Gender).ConfigureAwait(false);
         ClassInfo? classInfo = await worldData.GetClassInfoAsync(character.Class).ConfigureAwait(false);
-        if (raceInfo is null || classInfo is null)
+        var home = new HomeBind(character.HomeMapId, character.HomeZoneId, character.HomeX, character.HomeY, character.HomeZ);
+        if (home.IsUnset && await worldData.GetStartPositionAsync(character.Race, character.Class).ConfigureAwait(false) is { } start)
+        {
+            home = new HomeBind(start.MapId, start.ZoneId, start.X, start.Y, start.Z);
+        }
+
+        if (raceInfo is null || classInfo is null || home.IsUnset)
         {
             session.Logger.LogError("[{Endpoint}] missing world data for character {Guid}", session.RemoteEndpoint, character.Id);
             session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
             return;
         }
 
+        IReadOnlyList<ActionButton> buttons = await characters.GetActionButtonsAsync(character.Id).ConfigureAwait(false);
         if (!session.TryBeginLogin())
         {
             return;
         }
 
-        var player = new Player(character, CharacterPackets.BuildAppearance(raceInfo, classInfo), session);
+        // Account settings belong to this session task; the world thread gets finished packets.
+        var account = new AccountLoginPackets(
+            LoginPackets.BuildAccountDataMd5(session.Settings),
+            LoginPackets.BuildTutorialFlags(session.Settings.Tutorials));
+        var player = new Player(character, CharacterPackets.BuildAppearance(raceInfo, classInfo), session, buttons) { Home = home };
         WorldRuntime world = session.World;
-        world.Post(() => EnterWorld(session, world, character, player));
+        world.Post(() => EnterWorld(session, world, character, player, account));
     }
 
     /// <summary>World thread: send the login sequence and put the player into its map.</summary>
-    private static void EnterWorld(WorldSession session, WorldRuntime world, CharacterRecord character, Player player)
+    private static void EnterWorld(WorldSession session, WorldRuntime world, CharacterRecord character, Player player, AccountLoginPackets account)
     {
         if (world.IsOnline(player.Guid))
         {
@@ -175,12 +210,26 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return; // the client disconnected while the character loaded
         }
 
-        // Login order per vmangos HandlePlayerLogin / Player::SendInitialPacketsBeforeAddToMap:
-        // verify world, tutorials, spells, time speed, then the map add sends the self create.
+        // Login order per vmangos WorldSession::HandlePlayerLogin and
+        // Player::SendInitialPacketsBeforeAddToMap: verify world, account data hashes,
+        // social lists, MOTD, rest/bind point, tutorials, spells, action bar, reputations,
+        // time speed; then the map add sends the self create, then the zone's world states.
         player.Relocate(character.X, character.Y, character.Z, character.Orientation, world.NowMs);
         session.Send(WorldOpcode.SmsgLoginVerifyWorld, CharacterPackets.BuildLoginVerifyWorld(character));
-        session.Send(WorldOpcode.SmsgTutorialFlags, CharacterPackets.BuildTutorialFlags());
+        session.Send(WorldOpcode.SmsgAccountDataMd5, account.DataMd5);
+        session.Send(WorldOpcode.SmsgFriendList, LoginPackets.BuildEmptyFriendList());
+        session.Send(WorldOpcode.SmsgIgnoreList, LoginPackets.BuildEmptyIgnoreList());
+        foreach (string line in world.Options.Motd.Split('@', StringSplitOptions.RemoveEmptyEntries))
+        {
+            session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(line));
+        }
+
+        session.Send(WorldOpcode.SmsgSetRestStart, LoginPackets.BuildSetRestStart());
+        session.Send(WorldOpcode.SmsgBindpointupdate, LoginPackets.BuildBindPointUpdate(player.Home));
+        session.Send(WorldOpcode.SmsgTutorialFlags, account.TutorialFlags);
         session.Send(WorldOpcode.SmsgInitialSpells, CharacterPackets.BuildInitialSpells());
+        session.Send(WorldOpcode.SmsgActionButtons, LoginPackets.BuildActionButtons(player.ActionButtons));
+        session.Send(WorldOpcode.SmsgInitializeFactions, LoginPackets.BuildInitializeFactions());
         session.Send(WorldOpcode.SmsgLoginSettimespeed, CharacterPackets.BuildTimeSpeed(DateTime.UtcNow));
 
         try
@@ -195,6 +244,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        session.Send(WorldOpcode.SmsgInitWorldStates, LoginPackets.BuildInitWorldStates(player.MapId, player.ZoneId));
         session.Logger.LogInformation("[{Endpoint}] '{Account}' entered the world as '{Name}'",
             session.RemoteEndpoint, session.AccountName, player.Name);
     }
@@ -217,4 +267,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
 
     private static void SendResult(WorldSession session, WorldOpcode opcode, CharResult result)
         => session.Send(opcode, [(byte)result]);
+
+    /// <summary>Account-level login packets, built on the session task from its own settings.</summary>
+    private sealed record AccountLoginPackets(byte[] DataMd5, byte[] TutorialFlags);
 }

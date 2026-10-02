@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
 
@@ -7,6 +8,7 @@ namespace ArcaneCore.World.Tests;
 internal sealed class InMemoryCharacterStore : ICharacterStore
 {
     private readonly ConcurrentDictionary<int, CharacterRecord> _characters = new();
+    private readonly ConcurrentDictionary<int, IReadOnlyList<ActionButton>> _buttons = new();
     private int _nextId;
     private int _saves;
 
@@ -34,6 +36,7 @@ internal sealed class InMemoryCharacterStore : ICharacterStore
     {
         if (_characters.TryGetValue(id, out CharacterRecord? c) && c.AccountId == accountId)
         {
+            _buttons.TryRemove(id, out _);
             return Task.FromResult(_characters.TryRemove(id, out _));
         }
 
@@ -54,12 +57,31 @@ internal sealed class InMemoryCharacterStore : ICharacterStore
                 c.Orientation = state.Orientation;
                 c.Level = state.Level;
                 c.PlayedTime = state.PlayedTime;
+                c.LevelPlayedTime = state.LevelPlayedTime;
+                c.Money = state.Money;
+                c.ActionBarToggles = state.ActionBarToggles;
+                if (state.Home is { } home)
+                {
+                    (c.HomeMapId, c.HomeZoneId, c.HomeX, c.HomeY, c.HomeZ) = (home.MapId, home.ZoneId, home.X, home.Y, home.Z);
+                }
+            }
+
+            if (state.ActionButtons is { } buttons)
+            {
+                _buttons[state.Id] = buttons.ToList();
             }
         }
 
         Interlocked.Increment(ref _saves);
         return Task.CompletedTask;
     }
+
+    public Task<IReadOnlyList<ActionButton>> GetActionButtonsAsync(int characterId, CancellationToken cancellationToken = default)
+        => Task.FromResult(_buttons.GetValueOrDefault(characterId) ?? []);
+
+    public Task<IReadOnlyList<CharacterIdentity>> GetAllIdentitiesAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<CharacterIdentity>>(
+            _characters.Values.Select(c => new CharacterIdentity(c.Id, c.AccountId, c.Name, c.Race, c.Gender, c.Class)).ToList());
 
     /// <summary>Number of state saves received.</summary>
     public int SaveCount => Volatile.Read(ref _saves);
@@ -71,7 +93,9 @@ internal sealed class InMemoryWorldDataStore : IWorldDataStore
         => Task.FromResult<StartPosition?>(IsValid(race, cls) ? new StartPosition(0, 12, -8949.95f, -132.493f, 83.5312f, 0f) : null);
 
     public Task<RaceInfo?> GetRaceInfoAsync(byte race, byte gender, CancellationToken cancellationToken = default)
-        => Task.FromResult<RaceInfo?>(new RaceInfo(gender == 0 ? 49u : 50u, 1));
+        => Task.FromResult<RaceInfo?>(race == 2
+            ? new RaceInfo(gender == 0 ? 51u : 52u, 2)   // orc: Orgrimmar faction template
+            : new RaceInfo(gender == 0 ? 49u : 50u, 1)); // human: Stormwind
 
     public Task<ClassInfo?> GetClassInfoAsync(byte cls, CancellationToken cancellationToken = default)
         => Task.FromResult<ClassInfo?>(new ClassInfo(60, 0, 1)); // warrior-ish defaults
@@ -79,5 +103,53 @@ internal sealed class InMemoryWorldDataStore : IWorldDataStore
     public Task<bool> IsValidRaceClassAsync(byte race, byte cls, CancellationToken cancellationToken = default)
         => Task.FromResult(IsValid(race, cls));
 
-    private static bool IsValid(byte race, byte cls) => race == 1 && cls == 1; // human warrior for tests
+    // Human and orc warriors (one per faction), both starting at the same spot so tests can
+    // put the factions side by side.
+    private static bool IsValid(byte race, byte cls) => race is 1 or 2 && cls == 1;
+}
+
+internal sealed class InMemoryAccountDataStore : IAccountDataStore
+{
+    private readonly ConcurrentDictionary<int, AccountSettings> _settings = new();
+
+    public Task<AccountSettings> GetAsync(int accountId, CancellationToken cancellationToken = default)
+    {
+        // A copy, like a database read: sessions must not share one mutable instance.
+        var copy = new AccountSettings();
+        if (_settings.TryGetValue(accountId, out AccountSettings? stored))
+        {
+            lock (stored)
+            {
+                Array.Copy(stored.Data, copy.Data, AccountSettings.DataTypeCount);
+                Array.Copy(stored.Tutorials, copy.Tutorials, AccountSettings.TutorialWordCount);
+            }
+        }
+
+        return Task.FromResult(copy);
+    }
+
+    public Task SaveDataAsync(int accountId, int type, AccountDataEntry entry, CancellationToken cancellationToken = default)
+    {
+        AccountSettings stored = _settings.GetOrAdd(accountId, _ => new AccountSettings());
+        lock (stored)
+        {
+            stored.Data[type] = entry.Data.Length == 0 ? null : entry;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task SaveTutorialsAsync(int accountId, IReadOnlyList<uint> tutorials, CancellationToken cancellationToken = default)
+    {
+        AccountSettings stored = _settings.GetOrAdd(accountId, _ => new AccountSettings());
+        lock (stored)
+        {
+            for (int i = 0; i < AccountSettings.TutorialWordCount; i++)
+            {
+                stored.Tutorials[i] = tutorials[i];
+            }
+        }
+
+        return Task.CompletedTask;
+    }
 }

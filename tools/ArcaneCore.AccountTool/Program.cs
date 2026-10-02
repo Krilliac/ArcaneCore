@@ -31,6 +31,8 @@ switch (command)
         return await CreateAsync();
     case "set-password":
         return await SetPasswordAsync();
+    case "set-gmlevel":
+        return await SetGmLevelAsync();
     case "list":
         return await ListAsync();
     default:
@@ -92,6 +94,25 @@ async Task<int> SetPasswordAsync()
     return 0;
 }
 
+async Task<int> SetGmLevelAsync()
+{
+    if (args.Length != 3 || !TryParseSecurity(args[2], out AccountSecurity security))
+    {
+        Console.Error.WriteLine("usage: arcane-account set-gmlevel <username> <0-3|player|moderator|gamemaster|administrator>");
+        return 1;
+    }
+
+    string username = args[1].ToUpperInvariant();
+    if (!await accounts.UpdateSecurityAsync(username, security).ConfigureAwait(false))
+    {
+        Console.Error.WriteLine($"account '{username}' does not exist");
+        return 1;
+    }
+
+    Console.WriteLine($"'{username}' is now {security} ({(byte)security}); it applies from the account's next world login");
+    return 0;
+}
+
 async Task<int> ListAsync()
 {
     List<Account> all = await db.Accounts.AsNoTracking().OrderBy(a => a.Id).ToListAsync().ConfigureAwait(false);
@@ -103,7 +124,7 @@ async Task<int> ListAsync()
 
     foreach (Account account in all)
     {
-        Console.WriteLine($"{account.Id,6}  {account.Username,-16}  {account.Status}");
+        Console.WriteLine($"{account.Id,6}  {account.Username,-16}  {account.Status,-9}  {account.Security}");
     }
 
     return 0;
@@ -116,11 +137,23 @@ static (byte[] Salt, byte[] Verifier) MakeCredentials(string username, string pa
     return (salt, WowSrp6.ToFixedLittleEndian(verifier, WowSrp6.KeyLength));
 }
 
+static bool TryParseSecurity(string text, out AccountSecurity security)
+{
+    if (byte.TryParse(text, out byte level) && Enum.IsDefined((AccountSecurity)level))
+    {
+        security = (AccountSecurity)level;
+        return true;
+    }
+
+    return Enum.TryParse(text, ignoreCase: true, out security) && Enum.IsDefined(security);
+}
+
 static void PrintUsage()
 {
     Console.Error.WriteLine("ArcaneCore account tool");
     Console.Error.WriteLine("usage:");
     Console.Error.WriteLine("  arcane-account create <username> <password>");
     Console.Error.WriteLine("  arcane-account set-password <username> <password>");
+    Console.Error.WriteLine("  arcane-account set-gmlevel <username> <0-3|player|moderator|gamemaster|administrator>");
     Console.Error.WriteLine("  arcane-account list");
 }

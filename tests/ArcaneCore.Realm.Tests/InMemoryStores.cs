@@ -33,6 +33,18 @@ internal sealed class InMemoryAccountStore : IAccountStore
         _accounts[username.ToUpperInvariant()].SessionKey = sessionKey;
         return Task.CompletedTask;
     }
+
+    public Task<bool> UpdateSecurityAsync(
+        string username, AccountSecurity security, CancellationToken cancellationToken = default)
+    {
+        if (!_accounts.TryGetValue(username.ToUpperInvariant(), out Account? account))
+        {
+            return Task.FromResult(false);
+        }
+
+        account.Security = security;
+        return Task.FromResult(true);
+    }
 }
 
 internal sealed class InMemoryRealmStore(IReadOnlyList<RealmEntry> realms) : IRealmStore

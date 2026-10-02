@@ -1,5 +1,18 @@
 namespace ArcaneCore.Kernel.Accounts;
 
+/// <summary>
+/// Account security levels — the cmangos-classic / TrinityCore AccountTypes scale
+/// (SEC_PLAYER 0 … SEC_ADMINISTRATOR 3; vmangos splits the staff levels further into 0–7).
+/// Gates GM commands, instant logout and /who visibility.
+/// </summary>
+public enum AccountSecurity : byte
+{
+    Player = 0,
+    Moderator = 1,
+    GameMaster = 2,
+    Administrator = 3,
+}
+
 /// <summary>Login state of an account, surfaced to the client as a logon result code.</summary>
 public enum AccountStatus
 {
@@ -32,4 +45,7 @@ public sealed class Account
     public byte[]? SessionKey { get; set; }
 
     public AccountStatus Status { get; set; } = AccountStatus.Active;
+
+    /// <summary>GM level (auth schema v2).</summary>
+    public AccountSecurity Security { get; set; } = AccountSecurity.Player;
 }

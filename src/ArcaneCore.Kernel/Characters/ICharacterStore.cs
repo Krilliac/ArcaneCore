@@ -18,4 +18,9 @@ public interface ICharacterStore
 
     /// <summary>Persist in-world state captured by the world thread. A missing row is ignored (deleted meanwhile).</summary>
     Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<ActionButton>> GetActionButtonsAsync(int characterId, CancellationToken cancellationToken = default);
+
+    /// <summary>Every character's identity, to fill the name cache at startup.</summary>
+    Task<IReadOnlyList<CharacterIdentity>> GetAllIdentitiesAsync(CancellationToken cancellationToken = default);
 }
