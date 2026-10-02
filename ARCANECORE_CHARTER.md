@@ -171,3 +171,21 @@ defined against the real client**, approved before any code is written.
 4. CI green (build + warnings-as-errors + any unit tests).
 5. A short `MILESTONE_Mx.md` noting what was verified, against which client build,
    and any reference discrepancies found.
+
+---
+
+## §9 — Amendments
+
+### 2026-10-02 — Blanket go-ahead after M4
+
+The developer authorized continuous work past M4 ("work through everything including
+anything outside the charter … I'll let you pick and decide what goes in the emulator,
+how and why"). Effects:
+
+- §1.2 / §6 gating: milestones no longer wait for an explicit "go" or for an approved
+  acceptance test before code. Each milestone still ships its acceptance document; real-
+  client runs are batched by the developer. A milestone is *implemented* when CI and its
+  automated tests pass, and *accepted* once the developer has run it against build 5875.
+- Scope, order and design decisions for M5+ live in [`docs/ROADMAP.md`](docs/ROADMAP.md).
+- §1.1, §1.4 (inside the milestone being built), §1.5, §3 and §4 are unchanged: every
+  protocol detail is still verified against a reference and cited.

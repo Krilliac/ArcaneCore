@@ -1,0 +1,128 @@
+# ArcaneCore Roadmap (M5 onward)
+
+> Status: living document. Updated at the end of every milestone.
+> Decided 2026-10-02 after the developer's go-ahead: "work through everything … I'll let
+> you pick and decide what goes in the emulator, how and why."
+
+This file records **what** goes into ArcaneCore after M4, **in which order**, **how** each
+piece is built, and **why** — including the alternatives that lost. The prime directives
+of the charter (§1: ground truth over generation, no invented API surface, complete
+within scope) are unchanged. What changed is the gating: see [§ Gating](#gating).
+
+---
+
+## Gating
+
+| Before (charter §1.2, §6) | Now |
+|---|---|
+| One milestone at a time, explicit "go" between each | Milestones proceed back to back without waiting for approval |
+| Acceptance test approved before code | Acceptance doc written with the milestone, run by the developer later (batched) |
+| "Done" only after a real 1.12.1 client passes | "Implemented" when automated loopback tests + CI pass; "Accepted" when the developer runs the doc against build 5875 |
+
+Each `MILESTONE_Mx.md` therefore has two status lines: **implemented** (CI) and
+**client-accepted** (developer). A failure found during client acceptance is fixed in
+place, before the next milestone that depends on it is built further.
+
+---
+
+## Scope decisions — what goes in
+
+| System | Decision | Why |
+|---|---|---|
+| Client build | 1.12.1 (5875) only | Multi-build support (vmangos does 1.2–1.12) multiplies every packet/field table for no player-facing value. |
+| World content source | Import from the **CMaNGOS classic-db** full dump | Git-obtainable, 1.12.1-targeted, complete (creatures, items, quests, loot, `spell_template`, `playercreateinfo*`, level stats). The importer maps columns **by name**, so a vmangos dump can be added as a second source later. The data is GPL-3 — it is never committed here; the developer supplies the dump. |
+| Content storage | ArcaneCore's own world schema, loaded into immutable in-memory stores at startup | Keeps the provider abstraction (MariaDB/MySQL/Postgres/SQLite); O(1) lookups on the world thread; no per-request DB reads in game logic. |
+| DBC files | Reader for the WDBC format + only the tables content does not cover | The classic-db dump already carries the DBC-derived data the server needs (spells as `spell_template`). Client DBCs stay optional. |
+| Terrain heights | Optional reader for CMaNGOS/vmangos-extracted `.map` files (later) | Needed for believable creature movement; extraction requires the developer's client. vmaps (line of sight) and mmaps (pathfinding) are out of scope for now. |
+| Scripting | DB-driven only (gossip, EventAI-style creature scripts later) | Hard-coded C++-style boss scripts are a content project, not an emulator core. |
+| Warden | **Out** | The 1.12 Warden needs Blizzard module binaries, and it does not stop modern cheats. |
+| Battlegrounds, honor, auction house, mail, LFG | Out of this plan | Large systems with no dependents; revisit after quests/social. |
+| Clustering (gRPC) | Seam kept, transport deferred | Charter §5. A single-process server comes first; `WorldState`, `IAccountStore`, etc. stay interfaces. |
+| Plugin host / event bus | Introduced with its first real consumer (GM commands → scripts) | A plugin API without callers would be invented surface. |
+| SQLite provider | **Added** (dev + tests) | Zero-setup local runs and end-to-end tests of the real EF stores in CI. MariaDB stays primary. |
+
+---
+
+## Architecture decisions — how
+
+### 1. Threading: authoritative world tick
+
+```
+socket reader task ──decode──► session inbound queue ─┐
+                                                       │ (world thread, fixed tick)
+                         WorldRuntime.Tick(diff) ◄─────┘
+                           ├─ sessions not in world: handled in session context (async DB)
+                           └─ for each Map: Map.Update(diff)
+                                 ├─ process in-world packets of its players
+                                 ├─ update objects (movement, AI, timers, spells)
+                                 └─ flush visibility + values updates
+                                         │
+session outbound channel ◄───────────────┘
+   └─ single writer task: header encrypt + socket write (ordered, lock-free)
+```
+
+* **Why:** game logic (combat, spells, AI, regeneration) is timer-driven and touches many
+  objects at once. A single writer per map makes that logic lock-free and deterministic.
+  This is the vmangos/cmangos model (`World::Update` → `Map::Update` →
+  `WorldSession::Update`).
+* **Lost:** keeping the M4 lock-per-map design (every gameplay feature would add lock
+  fan-out and ordering bugs); actor-per-object (cross-object interactions everywhere make
+  messaging the hot path).
+* **Out-of-world work** (character screen, login load, saves) runs async off the world
+  thread; results are posted to the world as commands.
+* **Slow clients** never stall a map: outbound queues are per session, and a session
+  whose queue grows past a limit is disconnected.
+
+### 2. Object model and update fields
+
+* One field table for 1.12.1 **generated** from gtker/wow_messages (MIT/Apache) and
+  cross-checked against vmangos `UpdateFields_1_12_1.cpp` (offsets, sizes, visibility
+  flags). The generator lives in `tools/codegen`.
+* Objects hold `uint[]` values plus a changed-field mask. Each tick, changed fields are
+  sent as `UPDATETYPE_VALUES` blocks to every observer; private/owner-only fields go to
+  the owner only (vmangos `UF_FLAG_*`).
+
+### 3. Persistence
+
+* Three logical databases: **auth**, **characters**, **world** (content). Each has its
+  own provider + connection string; all may point at one server or one database.
+* Schema: created per component with a version row (`auth_schema`, `characters_schema`,
+  `world_schema`). A version mismatch **fails closed** at startup with a clear message.
+  EF migrations come at 1.0, when there is deployed data to migrate. (This also fixes an
+  M1–M4 bug: `EnsureCreated` skips a context entirely when another context already has
+  tables in the same database.)
+* Character state is loaded async before entering the world and saved from snapshots
+  taken on the world thread (logout, disconnect, periodic autosave).
+
+### 4. Content
+
+* `tools/ArcaneCore.ContentImporter` streams the MySQL dump (`CREATE TABLE` + `INSERT`)
+  and maps the columns ArcaneCore uses into its world schema.
+* The world daemon loads the content into in-memory stores at startup.
+
+---
+
+## Milestones
+
+| # | Milestone | Scope | Status |
+|---|---|---|---|
+| M5 | Runtime core | Opcode registry + session states, outbound queues, world tick, generated update fields + values updates, persistence of position, DB split + schema versioning, SQLite | planned |
+| M6 | Session essentials | Name query, logout, time/played, stand state, selection, account data, action buttons, tutorials, chat (say/yell/emote/whisper), text emotes, /who, GM commands | planned |
+| M7 | Teleports | Near/far teleport, world-port ack, area triggers, `.tele` | planned |
+| M8 | Content platform | World schema, dump importer, in-memory stores, WDBC reader | planned |
+| M9 | Items | Item/bag objects, inventory, equipment visuals, starting outfit, item query, equip/swap/split/destroy, persistence | planned |
+| M10 | Creatures | Grid/cell index, creature/gameobject spawns, queries, waypoints, respawn | planned |
+| M11 | Combat | Melee, hit table, creature AI, death/ghost/resurrect, regen, XP/levels, loot/money | planned |
+| M12 | Spells | Cast pipeline, cooldowns, costs, core effects, auras, spellbook, trainers | planned |
+| M13 | Quests & NPC services | Gossip, quest flow, objectives, rewards, vendors | planned |
+| M14 | Social | Groups, channels, friends/ignore, guilds | planned |
+
+Each milestone ships: code + automated loopback tests + `docs/Mx_ACCEPTANCE.md` +
+`MILESTONE_Mx.md` (verified-against table, decisions, limitations).
+
+## Verification policy
+
+* Every protocol fact (opcode, field, layout, constant) cites the reference that confirmed
+  it: vmangos, cmangos-classic, gtker/wow_messages, or wowdev.wiki.
+* Where references disagree, the comment says so and which one was chosen.
+* No GPL code is copied; behaviour and wire formats are reimplemented (charter §4).
