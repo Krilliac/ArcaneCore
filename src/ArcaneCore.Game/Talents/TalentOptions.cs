@@ -20,6 +20,32 @@ public sealed class TalentOptions
 {
     public const string Section = "Talents";
 
+    /// <summary>
+    /// Path of the developer-supplied build-5875 Talent.dbc (never committed or downloaded). Unset together with
+    /// <see cref="TalentTabDbcPath"/>: the talent system is inert (no points, the unlearn option stays hidden,
+    /// CMSG_LEARN_TALENT is ignored) and a warning is logged. One set without the other, or an unreadable or
+    /// invalid file, fails startup.
+    /// </summary>
+    public string? TalentDbcPath { get; set; }
+
+    /// <summary>Path of the developer-supplied TalentTab.dbc (see <see cref="TalentDbcPath"/>).</summary>
+    public string? TalentTabDbcPath { get; set; }
+
+    /// <summary>
+    /// Whether the wipe confirmation requires a class trainer of the player's own class (mangos-classic SkillHandler.cpp:51).
+    /// vmangos checks only that the NPC is a reachable trainer (SkillHandler.cpp:37-56); the gossip offer, which both
+    /// references share, already enforces the class, so a genuine client never notices. Default true (fail closed); false
+    /// matches vmangos exactly.
+    /// </summary>
+    public bool RequireClassTrainerForWipe { get; set; } = true;
+
+    /// <summary>
+    /// After a refused reset (nothing spent, or not enough money) also send the empty confirmation that means "you have not
+    /// spent any talent points" (vmangos SkillHandler.cpp:50-53). Not verified against a real client; false sends only the
+    /// SMSG_BUY_FAILED of the money case.
+    /// </summary>
+    public bool WipeRefusalAlsoSendsEmptyConfirm { get; set; } = true;
+
     /// <summary>Multiplier on the talent points a level grants (vmangos Rate.Talent, default 1).</summary>
     public double PointsRate { get; set; } = 1.0;
 
