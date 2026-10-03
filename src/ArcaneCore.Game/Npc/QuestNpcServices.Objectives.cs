@@ -39,17 +39,21 @@ public sealed partial class QuestNpcServices
         }
     }
 
-    private void CreditCreature(PlayerNpcState state, uint entry, ObjectGuid guid, bool isCreature, uint spellId, bool talking)
+    private void CreditCreature(PlayerNpcState state, uint entry, ObjectGuid guid, bool isCreature, uint spellId, bool talking,
+        bool inRaidGroup = false, bool originalCaster = true)
     {
         if (entry == 0)
         {
             return;
         }
 
+        bool kill = isCreature && spellId == 0 && !talking;
         foreach ((Quest quest, QuestStatusData data, int slot) in LoggedQuests(state))
         {
             if (data.Status != QuestStatus.Incomplete || !quest.HasSpecialFlag(QuestSpecialFlags.KillOrCast)
-                || (talking && !quest.HasSpecialFlag(QuestSpecialFlags.ExplorationOrEvent)))
+                || (talking && !quest.HasSpecialFlag(QuestSpecialFlags.ExplorationOrEvent))
+                || (kill && inRaidGroup && quest.Template.Type != QuestTypeRaid)
+                || (!originalCaster && !quest.HasFlag(QuestFlags.Sharable)))
             {
                 continue;
             }
@@ -134,7 +138,7 @@ public sealed partial class QuestNpcServices
 
         foreach ((Quest quest, QuestStatusData data, int slot) in LoggedQuests(state))
         {
-            if (data.Status is not (QuestStatus.Incomplete or QuestStatus.Complete) || data.Rewarded)
+            if (!Pending(quest, data))
             {
                 continue;
             }
@@ -146,9 +150,10 @@ public sealed partial class QuestNpcServices
                     continue;
                 }
 
-                // IItemService raises this after removal, so its count is already the remaining inventory.
-                uint remaining = Deps.Items?.GetItemCount(player, entry, false)
-                    ?? (data.ItemCount[i] > count ? data.ItemCount[i] - count : 0);
+                // Raised after removal, so the inventory count is already the remaining amount.
+                uint remaining = Deps.Items is not null || player.Inventory.IsLoaded
+                    ? InventoryCount(player, entry)
+                    : (data.ItemCount[i] > count ? data.ItemCount[i] - count : 0);
                 uint value = Math.Min(remaining, quest.ReqItemCount[i]);
                 if (value != data.ItemCount[i])
                 {
@@ -241,7 +246,7 @@ public sealed partial class QuestNpcServices
     private void FailQuest(PlayerNpcState state, uint questId)
     {
         if (Quests.Get(questId) is not { } quest || state.Quests.Get(questId) is not { } data
-            || data.Status is not (QuestStatus.Incomplete or QuestStatus.Complete) || data.Rewarded)
+            || !Pending(quest, data))
         {
             return;
         }
@@ -282,7 +287,7 @@ public sealed partial class QuestNpcServices
 
     private void RefreshCompletion(PlayerNpcState state, Quest quest, QuestStatusData data, int slot)
     {
-        if (data.Rewarded || data.Status is not (QuestStatus.Incomplete or QuestStatus.Complete))
+        if (!Pending(quest, data))
         {
             return;
         }
