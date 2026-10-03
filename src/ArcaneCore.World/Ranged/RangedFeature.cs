@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Ranged;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
@@ -40,7 +41,9 @@ public sealed class RangedFeature : IWorldFeature
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
-        _services.GetRequiredService<SpellFeature>().System.RangedOptions = Options;
+        SpellSystem spells = _services.GetRequiredService<SpellFeature>().System;
+        spells.RangedOptions = Options;
+        RangedAuras.Register(spells);
         if (Options.Ammo.Mode != AmmoMode.Retail || Options.Range.Leeway != RangeLeewayMode.Retail)
         {
             _logger.LogWarning("Ranged settings deviate from retail: Ammo.Mode={Ammo}, Range.Leeway={Leeway}", Options.Ammo.Mode, Options.Range.Leeway);

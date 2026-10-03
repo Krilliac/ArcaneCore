@@ -539,6 +539,13 @@ public sealed partial class SpellSystem
             return rangedItems;
         }
 
+        // ranged (hunter lane): Hunter's Mark needs an attackable unit (Spell.cpp:6436-6447).
+        SpellCastResult stalked = CheckStalkedTarget(caster, spell, targets, unitTarget);
+        if (stalked != SpellCastResult.CastOk)
+        {
+            return stalked;
+        }
+
         if (NeedsUnitTarget(spell))
         {
             Unit? target = unitTarget ?? (targets.Mask == SpellCastTargetFlags.Self ? caster : null);

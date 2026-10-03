@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Ranged;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Ranged;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
@@ -44,5 +45,7 @@ public sealed class RangedFeatureTests
 
         Assert.Same(feature.Options, spells.System.RangedOptions);
         Assert.Equal(AmmoMode.Retail, spells.System.RangedOptions.Ammo.Mode);
+        Assert.True(spells.System.HasAuraHandler(AuraType.TrackCreatures));
+        Assert.True(spells.System.HasAuraHandler(AuraType.ModStalked));
     }
 }
