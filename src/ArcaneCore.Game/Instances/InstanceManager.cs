@@ -25,7 +25,7 @@ namespace ArcaneCore.Game.Instances;
 /// <para>Install with <see cref="Install"/> (sets <see cref="WorldRuntime.MapResolver"/>).</para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class InstanceManager : IMapResolver
+public sealed partial class InstanceManager : IMapResolver
 {
     /// <summary>vmangos <c>CREATURE_FLAG_EXTRA_INSTANCE_BIND</c>: killing the creature binds everyone inside permanently.</summary>
     public const uint CreatureFlagExtraInstanceBind = 0x1;
@@ -50,6 +50,7 @@ public sealed class InstanceManager : IMapResolver
     private readonly Dictionary<ObjectGuid, PlayerState> _players = [];
     private readonly Dictionary<ObjectGuid, (uint MapId, uint InstanceId)> _lastInstance = [];
     private readonly Dictionary<uint, RaidSchedule> _raidSchedules = [];
+    private readonly Entry.InstanceEnterLimiter _enterLimiter = new();
     private uint _nextInstanceId = FirstInstanceId;
     private bool _installed;
 
@@ -181,6 +182,7 @@ public sealed class InstanceManager : IMapResolver
         }
 
         _logger.LogInformation("loaded {Saves} instance saves, {Binds} character binds", _saves.Count, _playerBinds.Values.Sum(b => b.Count));
+        Loaded?.Invoke();
     }
 
     public InstanceSave? FindSave(uint instanceId) => _saves.GetValueOrDefault(instanceId);
@@ -250,6 +252,7 @@ public sealed class InstanceManager : IMapResolver
         {
             Map map = GetOrCreateInstanceMap(save);
             BindPlayerOrGroupOnEnter(player, save, map);
+            _enterLimiter.Record(player.AccountId, save.InstanceId, Now);
             return map;
         }
 
@@ -288,6 +291,7 @@ public sealed class InstanceManager : IMapResolver
         save ??= CreateSave(template);
         Map map = GetOrCreateInstanceMap(save);
         BindPlayerOrGroupOnEnter(player, save, map);
+        _enterLimiter.Record(player.AccountId, save.InstanceId, Now); // vmangos DungeonMap::Add
         return map;
     }
 
@@ -295,6 +299,7 @@ public sealed class InstanceManager : IMapResolver
     public void OnEntered(Player player, Map map)
     {
         PlayerState state = StateFor(player);
+        SendSavedInstances(player); // every far teleport, instance or not (vmangos SendNewWorld)
         if (!_mapStates.TryGetValue(map, out InstanceMapState? mapState))
         {
             // vmangos HandleMoveWorldportAckOpcode: "reset instance validity, except if going
@@ -662,25 +667,38 @@ public sealed class InstanceManager : IMapResolver
             return TransferAbortReason.Silently;
         }
 
+        // vmangos MapManager::CanPlayerEnter (MapManager.cpp:209-214): the hourly per-account
+        // limit, keyed by the id of the save the player would enter (0 when it will be a new one).
+        // Checked on teleports only (sendErrors), not on the login re-entry.
+        if (sendErrors && _options.PerHourLimit > 0 && !player.IsGameMaster
+            && !_enterLimiter.CanEnter(player.AccountId, save?.InstanceId ?? 0, _options.PerHourLimit, Now))
+        {
+            player.Session.Send(WorldOpcode.SmsgTransferAborted, TeleportPackets.BuildTransferAborted(TransferAbortReason.TooManyInstances));
+            return TransferAbortReason.TooManyInstances;
+        }
+
         if (save is null)
         {
             return null;
         }
 
         Map? map = _world.FindMap(save.MapId, save.InstanceId);
-        if (map is null || player.IsGameMaster)
+        if (map is null)
         {
             return null;
         }
 
+        // vmangos DungeonMap::CanEnter (Map.cpp:2134-2146): the player cap first (GMs neither
+        // count nor are refused), then the pending reset, which also refuses GMs.
         TransferAbortReason? reason = null;
-        if (_mapStates.TryGetValue(map, out InstanceMapState? state) && state.ResetAfterUnload)
+        if (!player.IsGameMaster && template.PlayerLimit > 0
+            && map.Players.Count(p => !p.IsGameMaster && !ReferenceEquals(p, player)) >= template.PlayerLimit)
         {
-            reason = TransferAbortReason.NotFound; // vmangos DungeonMap::CanEnter: pending reset
+            reason = TransferAbortReason.MaxPlayers;
         }
-        else if (template.PlayerLimit > 0 && map.Players.Count(p => !p.IsGameMaster && !ReferenceEquals(p, player)) >= template.PlayerLimit)
+        else if (_mapStates.TryGetValue(map, out InstanceMapState? state) && state.ResetAfterUnload)
         {
-            reason = TransferAbortReason.MaxPlayers; // vmangos DungeonMap::CanEnter: GMs do not count
+            reason = TransferAbortReason.NotFound;
         }
 
         if (reason is { } abort && sendErrors)
@@ -704,6 +722,7 @@ public sealed class InstanceManager : IMapResolver
         _saves[id] = save;
         _persistence.InstanceSaved(save);
         _logger.LogDebug("created {Save}", save);
+        SaveCreated?.Invoke(save);
         return save;
     }
 
@@ -725,13 +744,6 @@ public sealed class InstanceManager : IMapResolver
         return map;
     }
 
-    private void OnUnitKilled(Map map, Unit? killer, Unit victim)
-    {
-        if (victim is Creature creature && (creature.Template.ExtraFlags & CreatureFlagExtraInstanceBind) != 0 && killer is Player player)
-        {
-            PermBindAllPlayers(map, player);
-        }
-    }
 
     // vmangos DungeonMap::BindPlayerOrGroupOnEnter.
     private void BindPlayerOrGroupOnEnter(Player player, InstanceSave save, Map map)
@@ -1180,17 +1192,7 @@ public sealed class InstanceManager : IMapResolver
     // map leading to its ghost entrance map, else the bind point.
     private void RelocateToEntrance(Player player, MapTemplate template)
     {
-        WorldMaps maps = WorldMaps.Of(_world);
-        AreaTriggerTeleport? exit = null;
-        if (template.GhostEntranceMap >= 0)
-        {
-            exit = maps.AreaTriggers
-                .Where(t => t.MapId == template.Entry)
-                .OrderBy(t => t.Id)
-                .Select(t => maps.FindAreaTriggerTeleport(t.Id))
-                .FirstOrDefault(t => t is not null && t.TargetMap == (uint)template.GhostEntranceMap);
-        }
-
+        AreaTriggerTeleport? exit = GetGoBackTrigger(template.Entry);
         if (exit is not null)
         {
             player.MapId = exit.TargetMap;
