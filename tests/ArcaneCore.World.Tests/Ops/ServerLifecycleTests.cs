@@ -93,7 +93,15 @@ public sealed class ServerLifecycleTests
             Assert.Equal(ExitCodes.Restart, await stopped.Task);
             Assert.Equal(ExitCodes.Restart, ExitCodes.Current);
 
-            List<byte[]> messages = [.. (await admin.CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgServerMessage).Select(p => p.Payload)];
+            // The stop is observed on the world thread; the last announcement may still be in flight to the client socket,
+            // so accumulate until both have arrived (or a generous deadline) rather than trusting one collect.
+            List<byte[]> messages = [];
+            DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+            while (messages.Count < 2 && DateTime.UtcNow < deadline)
+            {
+                messages.AddRange((await admin.CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgServerMessage).Select(p => p.Payload));
+            }
+
             Assert.Equal(
                 [Expected(ServerMessageType.RestartTime, "2 Seconds."), Expected(ServerMessageType.RestartTime, "1 Second.")],
                 messages);
