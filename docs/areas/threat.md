@@ -173,3 +173,15 @@ The line promised in docs/integration/rogue-creature-stealth.md is applied:
 Limits: the 5 s MoveDistract that follows the alert needs a movement generator this server does not have (the creature carries on moving); the turn is
 the orientation field, no facing spline packet is sent; the alert comes only from the relocation-driven scan (`Poll` mode calls `MoveInLineOfSight` directly and has no
 stealth awareness); detect-range auras and creature-versus-creature detection are not modelled; the Vanish 1 s window belongs to the rogue lane.
+
+### critters (Creatures/AI/CritterAI.cs)
+
+`CritterAI` (vmangos AI/CritterAI.cpp:16-60) is selected for a template of creature type 8 with no `AIName` (the vmangos selector picks it before the permit
+contest, AI/CreatureAISelector.cpp:78-79; a critter with EventAI rows keeps EventAI through `Creatures:ImplicitEventAi`; summoned mini pets keep their pet AI).
+A critter never attacks on sight and never fights back (`AttackStart` refuses); a non-lethal hit or a hostile spell without direct damage makes it run from the
+attacker for 30 s (`ESCAPE_TIMER`), each of them restarts a 30 s combat timer, and a critter still in combat when the timer runs out evades. A lethal hit does not
+make it flee (the reference tests `damage < health` before the hit; here the hook runs after a non-lethal hit). `CreatureAI.AttackStart` is now virtual.
+
+Not delivered: GuardAI (AI/GuardAI.cpp:25-84, the 30 yd radius against PvP-contested players and players attacking friendlies or taxi passengers). It needs
+`IsFriendlyTo` and `IsHostileToPlayers` on the hostility seam, which only answers "hostile"; that belongs with the reputation lane. Guard summoning (CALLS_GUARDS)
+has 0 classic-db rows.

@@ -117,7 +117,7 @@ public abstract class CreatureAI
     // --- helpers --------------------------------------------------------------------------
 
     /// <summary>Attack <paramref name="target"/>: melee, threat, combat state, chase and the assistance call.</summary>
-    public bool AttackStart(Unit target) => System?.AttackStart(Me, target) ?? false;
+    public virtual bool AttackStart(Unit target) => System?.AttackStart(Me, target) ?? false;
 
     /// <summary>Choose the victim from the threat list; evades and returns false when there is none (vmangos SelectHostileTarget).</summary>
     protected bool UpdateVictim() => System?.SelectHostileTarget(Me) ?? false;

@@ -99,12 +99,16 @@ public sealed class CreatureAiFactory
 {
     public const string EventAIName = "EventAI";
 
+    /// <summary>CreatureType.dbc id of a critter (CREATURE_TYPE_CRITTER).</summary>
+    public const uint CritterType = 8;
+
     private readonly Dictionary<string, Func<Creature, CreatureContent, CreatureAI>> _factories = new(StringComparer.OrdinalIgnoreCase)
     {
         ["NullAI"] = static (c, _) => new NullCreatureAI(c),
         ["ReactorAI"] = static (c, _) => new ReactorAI(c),
         ["PassiveAI"] = static (c, _) => new ReactorAI(c),
         ["AggressorAI"] = static (c, _) => new AggressorAI(c),
+        ["CritterAI"] = static (c, _) => new CritterAI(c),
         [EventAIName] = static (c, content) => new CreatureEventAI(c, content.Ai),
     };
 
@@ -149,6 +153,11 @@ public sealed class CreatureAiFactory
             && _factories.TryGetValue(EventAIName, out Func<Creature, CreatureContent, CreatureAI>? eventFactory))
         {
             return eventFactory(creature, content);
+        }
+
+        if (string.IsNullOrEmpty(name) && creature.Template.CreatureType == CritterType && creature.Summon is null)
+        {
+            return new CritterAI(creature); // vmangos selects CritterAI for type 8 before the permit contest (AI/CreatureAISelector.cpp:78-79)
         }
 
         return creature.Template.Civilian ? new ReactorAI(creature) : new AggressorAI(creature);
