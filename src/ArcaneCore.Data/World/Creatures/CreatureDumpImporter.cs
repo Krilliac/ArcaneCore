@@ -1,6 +1,7 @@
 using System.Globalization;
 using ArcaneCore.Data.Content;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace ArcaneCore.Data.World.Creatures;
 
@@ -95,33 +96,97 @@ public sealed class CreatureDumpImporter
         }
     }
 
-    /// <summary>Write everything read so far. With <paramref name="replace"/> the creature tables are emptied first.</summary>
+    /// <summary>
+    /// Write everything read so far atomically. With <paramref name="replace"/> the creature
+    /// tables are emptied first. The context must have an empty change tracker so batching
+    /// cannot save or detach unrelated caller state. An existing EF transaction is protected
+    /// by an import savepoint and remains owned by the caller; otherwise this method owns the
+    /// transaction. Ambient transactions without an EF transaction are not supported.
+    /// </summary>
     public async Task<CreatureImportReport> WriteAsync(WorldDbContext db, bool replace, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(db);
-        FinishTemplates();
-
-        if (replace)
+        if (db.ChangeTracker.Entries().Any())
         {
-            await db.Set<CreatureAddonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-            await db.Set<CreatureMovementRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-            await db.Set<CreatureSpawnRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-            await db.Set<CreatureModelInfoRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-            await db.Set<CreatureTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            throw new InvalidOperationException("Creature imports require an empty change tracker; save caller changes and clear tracking, or use a dedicated context.");
+        }
+
+        IDbContextTransaction? callerTransaction = db.Database.CurrentTransaction;
+        if (callerTransaction is null && System.Transactions.Transaction.Current is not null)
+        {
+            throw new InvalidOperationException("Creature imports require an explicit EF transaction when a caller owns the transaction; ambient transactions are not supported.");
+        }
+
+        if (callerTransaction is { SupportsSavepoints: false })
+        {
+            throw new InvalidOperationException("The caller's transaction does not support savepoints; creature import cannot protect its existing work.");
+        }
+
+        FinishTemplates();
+        await using IDbContextTransaction? ownedTransaction = callerTransaction is null
+            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            : null;
+        IDbContextTransaction transaction = callerTransaction ?? ownedTransaction!;
+        string? savepoint = callerTransaction is not null ? "ArcaneCreatureImport_" + Guid.NewGuid().ToString("N") : null;
+        if (savepoint is not null)
+        {
+            await transaction.CreateSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
         }
 
         bool detect = db.ChangeTracker.AutoDetectChangesEnabled;
         db.ChangeTracker.AutoDetectChangesEnabled = false;
         try
         {
+            if (replace)
+            {
+                await db.Set<CreatureAddonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<CreatureMovementRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<CreatureSpawnRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<CreatureModelInfoRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<CreatureTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             await InsertBatchedAsync(db, _templates.Values.Select(t => t.Row), cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _models.Values.Select(m => m.Row), cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _spawns.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _movement.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _addons.Values, cancellationToken).ConfigureAwait(false);
+
+            if (savepoint is not null)
+            {
+                await transaction.ReleaseSavepointAsync(savepoint, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (Exception importError)
+        {
+            try
+            {
+                // Cancellation interrupts the import, not the rollback that preserves the
+                // previous content. Never roll back a transaction owned by the caller.
+                if (savepoint is not null)
+                {
+                    await transaction.RollbackToSavepointAsync(savepoint, CancellationToken.None).ConfigureAwait(false);
+                    await transaction.ReleaseSavepointAsync(savepoint, CancellationToken.None).ConfigureAwait(false);
+                }
+                else
+                {
+                    await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+            }
+            catch (Exception rollbackError)
+            {
+                throw new AggregateException("Creature import and rollback failed; discard the context and transaction.", importError, rollbackError);
+            }
+
+            throw;
         }
         finally
         {
+            db.ChangeTracker.Clear();
             db.ChangeTracker.AutoDetectChangesEnabled = detect;
         }
 
