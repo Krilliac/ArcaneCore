@@ -28,6 +28,12 @@ public sealed class EconomyMailSendParityTests
     private const string SenderAccount = "MAILSENDER";
     private const string ReceiverAccount = "MAILRECEIVER";
     private const string Password = "PASSWORD";
+    /// <summary>The synthetic world has a game object system but no mailbox spawn; the real check is covered by MailboxAccessTests.</summary>
+    internal sealed class AnyMailbox : IMailboxAccess
+    {
+        public bool CanUseMailbox(Player player, ObjectGuid mailbox) => player.IsInWorld && mailbox.High == HighGuid.GameObject;
+    }
+
     internal static readonly ObjectGuid Mailbox = ObjectGuid.WithEntry(HighGuid.GameObject, 900081, 1);
 
     [Theory]
@@ -165,7 +171,11 @@ public sealed class EconomyMailSendParityTests
             CancellationToken token = deadline.Token;
             var clock = new ManualClock(DateTimeOffset.UtcNow);
             SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(
-                services => services.AddSingleton<TimeProvider>(clock), token);
+                services =>
+                {
+                    services.AddSingleton<TimeProvider>(clock);
+                    services.AddSingleton<IMailboxAccess>(new AnyMailbox());
+                }, token);
             await server.AddAccountAsync(SenderAccount, Password, token);
             await server.AddAccountAsync(ReceiverAccount, Password, token);
 

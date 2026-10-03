@@ -163,6 +163,7 @@ public sealed class EconomyLifecycleTests
     private static Task<SyntheticArcaneServer> StartAsync(Control control, CancellationToken token, bool cashQuest = false)
         => SyntheticArcaneServer.StartAsync(services =>
         {
+            services.AddSingleton<IMailboxAccess>(new EconomyMailSendParityTests.AnyMailbox());
             services.AddScoped<IEconomyStore>(provider => new ControlledEconomyStore(
                 new EfEconomyStore(provider.GetRequiredService<CharacterDbContext>()), control));
             services.AddScoped<ICharacterStore>(provider => new ObservedCharacterStore(
