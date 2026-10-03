@@ -300,6 +300,57 @@ public sealed class EnchantEngineTests
         Assert.Equal(before, rig.Stat(0));
     }
 
+    private static (PlayerEnchantments Enchantments, Player Player, Item Ring, Rig Rig) OfflineRingOwner()
+    {
+        var rig = new Rig();
+        Player offline = TestWorld.CreatePlayer(2, 1, 0, new FakeSession(2));   // not in the world: login loads its equipment on the session task
+        offline.Inventory.Templates = rig.Inventory.Templates;
+        offline.Inventory.GuidAllocator = new ItemGuidAllocator();
+        offline.Inventory.Load([]);
+        var enchantments = new PlayerEnchantments(offline, Catalog(), rig.Kit.System);
+        offline.AttachEnchantments(enchantments);
+        offline.Inventory.StatsApplier = new EnchantStatsApplier(offline.Inventory.StatsApplier);
+        Assert.Equal(InventoryResult.Ok, offline.Inventory.AddItem(Ring, 1, out Item? ring));
+        ItemEnchantments.Set(ring!, EnchantSlots.Permanent, EquipSpellEnchant, 0, 0);
+        offline.Inventory.SwapItem(ring!.BagSlot, ring.Slot, InventorySlots.Bag0, InventorySlots.Finger1);
+        return (enchantments, offline, ring, rig);
+    }
+
+    [Fact]
+    public void AnEquipSpell_OfAPlayerNotInTheWorld_IsDeferred_AndCastOnTheFirstWorldTick()
+    {
+        (PlayerEnchantments enchantments, Player offline, Item ring, Rig rig) = OfflineRingOwner();
+        using (rig)
+        {
+            Assert.Empty(rig.Kit.System.GetAuras(offline));   // the spell system was not touched off the world thread
+
+            rig.Kit.Kit.World.AddPlayer(offline);
+            enchantments.Update(100);
+
+            SpellAuraHolder holder = Assert.Single(rig.Kit.System.GetAuras(offline), h => h.Spell.Id == AuraSpell);
+            Assert.Equal(ring.Guid, holder.CastItemGuid);
+        }
+    }
+
+    [Fact]
+    public void ARestoredEquipAura_IsAdoptedByTheItem_NotCastTwice()
+    {
+        (PlayerEnchantments enchantments, Player offline, Item ring, Rig rig) = OfflineRingOwner();
+        using (rig)
+        {
+            rig.Kit.Kit.World.AddPlayer(offline);
+            rig.Kit.System.CastSpell(offline, AuraSpell, SpellCastTargets.ForSelf(), triggered: true);   // what the aura restore on login does: no item
+            Assert.True(Assert.Single(rig.Kit.System.GetAuras(offline), h => h.Spell.Id == AuraSpell).CastItemGuid.IsEmpty);
+
+            enchantments.Update(100);
+
+            SpellAuraHolder holder = Assert.Single(rig.Kit.System.GetAuras(offline), h => h.Spell.Id == AuraSpell);
+            Assert.Equal(ring.Guid, holder.CastItemGuid);
+            offline.Inventory.SwapItem(InventorySlots.Bag0, InventorySlots.Finger1, InventorySlots.Bag0, InventorySlots.ItemStart + 5);
+            Assert.Empty(rig.Kit.System.GetAuras(offline));   // and it ends with the item
+        }
+    }
+
     [Fact]
     public void ACombatSpellEnchantment_IsInert_OnApply()
     {

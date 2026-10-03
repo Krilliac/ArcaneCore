@@ -47,6 +47,7 @@ public sealed class PlayerEnchantments
     private readonly SpellSystem? _spells;
     private readonly Dictionary<(Item Item, int Slot), AppliedEnchant> _applied = [];
     private readonly List<Tracked> _durations = [];
+    private readonly List<(Item Item, uint SpellId)> _pendingSpells = [];
     private uint _sinceSweepMs = SweepIntervalMs;
     private bool _loginSent;
 
@@ -165,14 +166,7 @@ public sealed class PlayerEnchantments
                 case EnchantEffectType.EquipSpell:
                     if (arg != 0 && _spells is not null)
                     {
-                        if (sign > 0)
-                        {
-                            _spells.CastItemSpell(_player, item, arg, SpellCastTargets.ForSelf(), triggered: true);
-                        }
-                        else
-                        {
-                            _spells.RemoveAurasDueToItemSpell(_player, item, arg);
-                        }
+                        EquipSpell(item, arg, sign > 0);
                     }
 
                     break;
@@ -196,6 +190,63 @@ public sealed class PlayerEnchantments
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// The spell of an EQUIP_SPELL enchantment. The spell system belongs to the world thread: while the player is not in the world (login loads the
+    /// equipment on the session task) the cast waits in a list and the first world tick settles it (<see cref="SettleEquipSpells"/>).
+    /// </summary>
+    private void EquipSpell(Item item, uint spellId, bool apply)
+    {
+        if (!_player.IsInWorld)
+        {
+            if (apply)
+            {
+                _pendingSpells.Add((item, spellId));
+            }
+            else
+            {
+                _pendingSpells.RemoveAll(p => ReferenceEquals(p.Item, item) && p.SpellId == spellId);
+            }
+
+            return;
+        }
+
+        if (apply)
+        {
+            _spells!.CastItemSpell(_player, item, spellId, SpellCastTargets.ForSelf(), triggered: true);
+        }
+        else
+        {
+            _spells!.RemoveAurasDueToItemSpell(_player, item, spellId);
+        }
+    }
+
+    /// <summary>
+    /// The first world tick after login: every deferred equip spell either already exists as a restored aura of the player (the character's saved auras are put
+    /// back on login, and an equip aura is permanent so it was saved): that aura is adopted by the item, so it ends with the item; or it is cast now.
+    /// </summary>
+    private void SettleEquipSpells()
+    {
+        if (_spells is null || _pendingSpells.Count == 0)
+        {
+            return;
+        }
+
+        foreach ((Item item, uint spellId) in _pendingSpells.ToArray())
+        {
+            SpellAuraHolder? existing = _spells.GetAuras(_player).FirstOrDefault(h => !h.IsRemoved && h.Spell.Id == spellId && h.CasterGuid == _player.Guid);
+            if (existing is not null)
+            {
+                existing.CastItemGuid = item.Guid;
+            }
+            else
+            {
+                _spells.CastItemSpell(_player, item, spellId, SpellCastTargets.ForSelf(), triggered: true);
+            }
+        }
+
+        _pendingSpells.Clear();
     }
 
     private const int PlayerResistanceCount = 7;
@@ -311,6 +362,7 @@ public sealed class PlayerEnchantments
         if (!_loginSent && _player.IsInWorld)
         {
             _loginSent = true;
+            SettleEquipSpells();
             SendDurations();
         }
 

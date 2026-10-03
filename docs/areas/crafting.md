@@ -80,6 +80,8 @@ not be used) and no enchantment engine. All 1,159 tradeskill crafts reported "no
   EQUIP_SPELL casts the enchant's spell triggered at the owner with the item as cast item and removes the item's aura again (`SpellAuraHolder.CastItemGuid`,
   `SpellSystem.RemoveAurasDueToItemSpell`); RESISTANCE and STAT move the update fields as deltas; TOTEM adds the Rockbiter damage `amount * delay / 1000` for shamans;
   COMBAT_SPELL is inert (see Limits). What was applied is remembered per (item, slot) so a removal undoes exactly that; apply and remove are idempotent.
+  An equip spell of a player who is not in the world yet (login loads the equipment on the session task, and the spell system belongs to the world thread) is deferred to the first
+  world tick: a restored aura of that spell (equip auras are permanent, so they are saved) is adopted by the item instead of being cast twice.
   The visible-item field mirrors the id for the two inspected slots. `EnchantStatsApplier` keeps the pair on the existing equip hook (apply: the item's bonuses, then
   the enchantments; remove: the reverse), through equip, unequip, swap, break and repair, and refreshes the derived stats.
 - *Slots and logs* (`ItemEnchantments`, `Item::SetEnchantment` and friends, `Item.cpp:1028-1090`): permanent slot 0, temporary slot 1 and the property slots; `Set` with a
