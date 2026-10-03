@@ -47,7 +47,9 @@ public sealed class DbcFile
         uint fields = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(8));
         uint recordSize = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(12));
         uint strings = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(16));
-        if (fields == 0 || recordSize != fields * 4)
+        // 64-bit: `fields * 4` wrapped in uint for fields >= 2^30, letting a header that declares
+        // ~1G fields in 4-byte records pass and every field offset overflow later.
+        if (fields == 0 || recordSize != (ulong)fields * 4 || fields > int.MaxValue / 4)
         {
             throw new InvalidDataException($"unsupported DBC layout: {fields} fields in {recordSize}-byte records");
         }
