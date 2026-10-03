@@ -270,3 +270,28 @@ shared reader without a count, so un-applied classic-db `Updates` are visible on
   vmangos names 0x100 `UNK2` (repeatable dialog) and no reference proves the cmangos meaning for retail data. The
   allowlist replacement ("computed reward support"), Method 0 turn-ins and the reward-slot rule of design NQ4 are not
   delivered.
+
+## Slice NQ5a: which quest items a player wants (`HasQuestForItem`)
+
+### Delivered
+
+* `QuestNpcServices.HasQuestForItem(player, itemId, inRaidGroup)` ports vmangos `Player::HasQuestForItem`
+  (`Player.cpp:14267-14320`) and `QuestJournalAdapter.NeedsQuestItem` (the loot and game object seam) now calls it instead of
+  its own approximation:
+  * a required item (`ReqItem`) is wanted while the quest's own **counter** is below the requirement (the old rule
+    compared against the bags, so a counter and the bags could disagree);
+  * a source item (`ReqSource`) is wanted while the player, **bank included**, holds fewer than the item's `maxcount`
+    (unique items), then fewer than `ReqSourceCount` when set, **else fewer than one stack** (`Stackable`), the rule the old
+    code lacked;
+  * a **raid group** member does not want items of a quest that is not allowed in raids (`Quest::IsAllowedInRaid`,
+    `QuestDef.cpp:227-235`: quest type 62, flag `0x40`, or `Quests:IgnoreRaid`); the same rule now gates kill credit.
+* **`Quests:IgnoreRaid`** (vmangos `Quests.IgnoreRaid`, default 0, `mangosd.conf.dist.in:1168-1172`) is a config switch
+  that defaults to the retail/vmangos behaviour.
+* The social feature supplies the raid-group fact in the daemon (the same groups the loot code uses).
+
+### Limits
+
+* Battlegrounds exempt raid hiding in vmangos (`!InBattleGround()`); there is no battleground system, so the exemption is
+  not modelled.
+* The rest of design NQ5 (quest-slot item counters with 63-batched `SMSG_QUESTUPDATE_ADD_ITEM`, `ReqSource` / `SrcSpell`
+  accept support and removing those `AcceptableQuest` refusals) is not delivered; such quests are still refused at accept.

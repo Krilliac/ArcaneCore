@@ -21,7 +21,7 @@ internal sealed class QuestFlowKit : IDisposable
 
     public QuestFlowKit(IReadOnlyList<QuestTemplate> templates, IReadOnlyList<CharacterQuestStatus>? rows = null,
         IReadOnlyList<uint>? starters = null, IReadOnlyList<uint>? enders = null, IReadOnlyList<uint>? rewardable = null,
-        Race race = Race.Human, byte level = 5, Class cls = Class.Warrior)
+        Race race = Race.Human, byte level = 5, Class cls = Class.Warrior, Action<QuestNpcOptions>? configure = null)
     {
         Player = TestWorld.CreatePlayer(1, 0, 0, Session, race: race);
         Player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)cls);
@@ -41,10 +41,16 @@ internal sealed class QuestFlowKit : IDisposable
         var factions = new FactionTemplateCatalog([new(1, 1, 0, 1, 0, 0), new(2, 0, 0, 8, 0, 0), new(3, 0, 0, 8, 0, 1)]);
         Services = new QuestNpcServices(new QuestStore(content), NpcStore.Empty,
             new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions)),
-            new QuestNpcOptions { OrdinaryRewardQuestIds = (rewardable ?? []).ToArray() }, Sink, () => 100, NullLogger.Instance);
+            Configure(new QuestNpcOptions { OrdinaryRewardQuestIds = (rewardable ?? []).ToArray() }, configure), Sink, () => 100, NullLogger.Instance);
         State = Services.Track(Player);
         Services.CompleteLoad(State, new CharacterQuestData(rows ?? [], []));
         Session.Clear();
+    }
+
+    private static QuestNpcOptions Configure(QuestNpcOptions options, Action<QuestNpcOptions>? configure)
+    {
+        configure?.Invoke(options);
+        return options;
     }
 
     public WorldRuntime World { get; } = TestWorld.CreateRuntime();
@@ -78,18 +84,18 @@ internal sealed class QuestFlowKit : IDisposable
 
     public static QuestTemplate Task(uint id, byte minLevel = 1, uint races = 0, uint classes = 0, int previous = 0, uint limitTime = 0,
         byte special = 0, int exclusiveGroup = 0, uint nextInChain = 0, uint srcItem = 0, byte srcCount = 0, uint reqItem = 0,
-        uint reqItemCount = 0, byte maxLevel = 0, byte method = 2) => new()
+        uint reqItemCount = 0, byte maxLevel = 0, byte method = 2, uint reqSource = 0, byte reqSourceCount = 0, uint type = 0, uint flags = 0) => new()
     {
         Entry = id, Method = method, MinLevel = minLevel, MaxLevel = maxLevel, QuestLevel = 1, Title = $"Quest {id}",
         RequiredRaces = races, RequiredClasses = classes, PrevQuestId = previous, LimitTime = limitTime, SpecialFlags = special,
         ExclusiveGroup = exclusiveGroup, NextQuestInChain = nextInChain, SrcItemId = srcItem, SrcItemCount = srcCount,
-        ReqItemId1 = reqItem, ReqItemCount1 = reqItemCount,
+        ReqItemId1 = reqItem, ReqItemCount1 = reqItemCount, ReqSourceId1 = reqSource, ReqSourceCount1 = reqSourceCount, Type = type, QuestFlags = flags,
         ReqCreatureOrGOId1 = reqItem == 0 ? 90 : 0, ReqCreatureOrGOCount1 = reqItem == 0 ? 2u : 0,
         RequestItemsText = "Bring it.", Details = "Do it.", Objectives = "Done?",
     };
 
-    public static CharacterQuestStatus Row(uint id, QuestStatus status, bool rewarded = false, long timer = 0, uint kills = 0)
-        => new(1, id, (byte)status, rewarded, false, timer, kills, 0, 0, 0, 0, 0, 0, 0, 0);
+    public static CharacterQuestStatus Row(uint id, QuestStatus status, bool rewarded = false, long timer = 0, uint kills = 0, uint items = 0)
+        => new(1, id, (byte)status, rewarded, false, timer, kills, 0, 0, 0, items, 0, 0, 0, 0);
 
     public sealed class RecordingSink : IQuestNpcSink
     {

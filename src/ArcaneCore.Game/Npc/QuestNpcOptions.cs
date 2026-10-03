@@ -41,6 +41,12 @@ public sealed class QuestNpcOptions
     /// </summary>
     public QuestXpSource XpSource { get; set; } = QuestXpSource.Auto;
 
+    /// <summary>
+    /// Quests.IgnoreRaid (vmangos CONFIG_BOOL_QUEST_IGNORE_RAID, default off): every quest counts as allowed in raid groups
+    /// (<c>Quest::IsAllowedInRaid</c>); otherwise raid group members get no kill credit and no quest drops for ordinary quests.
+    /// </summary>
+    public bool IgnoreRaid { get; set; }
+
     /// <summary>Rate.XP.Quest.</summary>
     public float RateXpQuest { get; set; } = 1.0f;
 

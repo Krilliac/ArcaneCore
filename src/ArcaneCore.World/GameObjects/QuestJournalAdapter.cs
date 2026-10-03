@@ -6,6 +6,7 @@ using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.World.Npc;
+using ArcaneCore.World.Social;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.GameObjects;
@@ -20,35 +21,25 @@ internal sealed class QuestJournalAdapter(IServiceProvider services, WorldRuntim
 {
     private QuestNpcServices? Quests => services.GetService<QuestNpcFeature>()?.Services;
 
+    /// <summary>vmangos Player::HasQuestForItem over the quest feature's journal (the raid-group rule needs the groups).</summary>
     public bool NeedsQuestItem(Player player, uint itemId)
+        => Quests?.HasQuestForItem(player, itemId, InRaidGroup(player)) ?? false;
+
+    private bool InRaidGroup(Player player)
     {
-        if (Quests is not { } quests || quests.StateOf(player) is not { Loaded: true } state)
+        if (services.GetService<SocialFeature>() is not { } social)
         {
             return false;
         }
 
-        foreach ((uint questId, QuestStatusData data) in state.Quests.Statuses)
+        try
         {
-            if (data.Status != QuestStatus.Incomplete || quests.Quests.Get(questId) is not { } quest)
-            {
-                continue;
-            }
-
-            for (int i = 0; i < QuestConstants.ObjectivesCount; i++)
-            {
-                if (quest.ReqItemId[i] == itemId && quest.ReqItemCount[i] > player.Inventory.GetItemCount(itemId, inBankAlso: true))
-                {
-                    return true;
-                }
-
-                if (quest.ReqSourceId[i] == itemId && quest.ReqSourceCount[i] > player.Inventory.GetItemCount(itemId, inBankAlso: true))
-                {
-                    return true;
-                }
-            }
+            return social.Context.Groups.GetGroup(player.Guid)?.IsRaid == true;
         }
-
-        return false;
+        catch (InvalidOperationException)
+        {
+            return false; // social feature not attached
+        }
     }
 
     public bool IsQuestIncomplete(Player player, uint questId)
