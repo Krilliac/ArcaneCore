@@ -253,9 +253,9 @@ public static class SpellPackets
     /// <summary>
     /// SMSG_SPELLNONMELEEDAMAGELOG (vmangos Unit::SendSpellNonMeleeDamageLog, 1.12 branch): packed
     /// target, packed caster, u32 spell, u32 damage, u8 school, u32 absorbed, u32 resisted, u8
-    /// periodic log (0), u8 unused, u32 blocked, u32 hit info, u8 extend flag (0).
+    /// periodic log (1 for a DoT tick that reports through it, e.g. a leech), u8 unused, u32 blocked, u32 hit info, u8 extend flag (0).
     /// </summary>
-    public static byte[] BuildSpellNonMeleeDamageLog(ObjectGuid target, ObjectGuid caster, uint spellId, uint damage, SpellSchool school, uint absorbed = 0, uint resisted = 0, uint blocked = 0, uint hitInfo = 0)
+    public static byte[] BuildSpellNonMeleeDamageLog(ObjectGuid target, ObjectGuid caster, uint spellId, uint damage, SpellSchool school, uint absorbed = 0, uint resisted = 0, uint blocked = 0, uint hitInfo = 0, bool periodic = false)
     {
         var writer = new PacketWriter(42);
         writer.WritePackedGuid(target.Value);
@@ -265,7 +265,7 @@ public static class SpellPackets
         writer.WriteByte((byte)school);
         writer.WriteUInt32(absorbed);
         writer.WriteUInt32(resisted);
-        writer.WriteByte(0);
+        writer.WriteByte(periodic ? (byte)1 : (byte)0);
         writer.WriteByte(0);
         writer.WriteUInt32(blocked);
         writer.WriteUInt32(hitInfo);

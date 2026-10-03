@@ -428,7 +428,7 @@ public sealed partial class MapCombat
         }
 
         uint damage = Dither(CalculateDamage(attacker, attackType));
-        uint afterArmor = Dither(MeleeHitTable.ApplyArmor(damage, victim.GetUInt32(UpdateFields.UnitFieldResistances), attacker.Level));
+        uint afterArmor = Dither(MeleeHitTable.ApplyArmor(damage, victim.GetInt32(UpdateFields.UnitFieldResistances), attacker.Level));
         uint clean = damage > afterArmor ? damage - afterArmor : 0;
         damage = afterArmor;
 

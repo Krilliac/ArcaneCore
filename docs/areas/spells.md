@@ -107,6 +107,72 @@ Deliberate limits:
   is loading).
 - A death-only spell aimed at a living target is not rejected by the cast check (vmangos returns BAD_TARGETS).
 
+## Handler modules and spell breadth
+
+Effect and aura handlers are added as `ISpellHandlerModule` types (`src/ArcaneCore.Game/Spells/SpellHandlerModules.cs`)
+instead of by editing `SpellSystem.Effects.cs` / `SpellSystem.Auras.cs`:
+
+- A module is a concrete class with a parameterless constructor (public or internal) that registers handlers with
+  `RegisterEffect` / `RegisterAura` from `Register(SpellSystem)`.
+- `SpellHandlerModules.BuiltIn` finds every module of the Game assembly by reflection, ordered by full type name
+  (ordinal). The `SpellSystem` constructor applies them after the built-in tables. Another assembly (or a test) uses
+  `SpellSystem.RegisterModules(Assembly)` / `RegisterModules(IEnumerable<Type>)`; `SpellSystem.Modules` lists what ran.
+- Fail closed: a module that replaces a handler installed before it ran (built-in, an earlier module, or a seam
+  registration), is applied twice, is abstract or lacks the constructor makes startup throw naming the module and the
+  effect or aura. Nothing is skipped silently. `RegisterEffect` / `RegisterAura` called directly still replace, as before.
+
+Delivered handlers (reference: vmangos `src/game/Spells`; only the 1.12.1 branch of its `#if` blocks counts, build 5875):
+
+| Module (`Spells/Effects`, `Spells/Auras`) | Handlers | vmangos source | Behaviour and limits |
+|---|---|---|---|
+| `DirectCombatEffects` | `INSTAKILL` | `SpellEffects.cpp:268` | SMSG_SPELLINSTAKILLLOG (victim guid, spell; wow_messages `smsg_spellinstakilllog.wowm` 1.12), then the target's whole health as direct damage through `IDamageSink`. |
+| | `HEAL_MAX_HEALTH` | `:3516` | Heal = the caster's maximum health times the caster's `MOD_HEALING_DONE_PERCENT` auras and the target's strongest negative and positive `MOD_HEALING_PCT`; dithered; shares the crit/heal/log tail of `HEAL` (`SpellSystem.DeliverHeal`). |
+| | `THREAT` | `:3503`, `Unit.cpp:7409-7432`, `ThreatManager.cpp:391-447` | Creatures only (no pet or totem model yet); both units alive and in one map; scaled by the caster's `MOD_THREAT` auras of the spell's school; `EX4_NO_HARMFUL_THREAT` adds nothing, `EX_NO_THREAT` never creates an entry. No `SPELLMOD_THREAT` (talents). |
+| | `DISPEL_MECHANIC` | `:5507`, `SpellAuras.cpp:7435` | Removes every holder whose spell, or an aura-carrying effect, has the mechanic in `EffectMiscValue`, whatever its polarity or caster. |
+| `StatAuras` | `MOD_STAT`, `MOD_RESISTANCE`, `MOD_ATTACK_POWER`, `MOD_RANGED_ATTACK_POWER` | `SpellAuras.cpp:4641`, `:4551`, `:5169`, `:5181` | Flat amounts applied as deltas to the same update fields items and level-ups write (stats + `PLAYER_FIELD_POS/NEGSTAT`, resistances + the resistance buff fields, the two int16 halves of the attack power mods; the polarity of the spell picks the half). Stamina and intellect move max health and mana by the difference of the stat bonus curve (`StatSystem.cpp:134-190`). Wand users take no ranged AP. The applied amount is remembered per aura. |
+| `VisualAuras` | `MOD_SCALE`, `TRACK_CREATURES`, `TRACK_RESOURCES` | `SpellAuras.cpp:2948`, `:2909`, `:2923` | Scale, bounding radius and combat reach by the same factor; track bit `misc - 1`; a tracking spell (`EX_NO_AUTOCAST_AI` or `ALLOW_WHILE_MOUNTED`) removes other trackers (`SPELL_TRACKER`, `SpellEntry.cpp:152-157`). |
+| `LeechAuras` (+ `SpellSystem.Leech.cs`) | `PERIODIC_LEECH`, `PERIODIC_MANA_LEECH` | `SpellAuras.cpp:5927-6014`, `:6116-6190` | Drain Life, Siphon Life, Drain Mana: damage log with the periodic flag, heal by damage times `EffectMultipleValue`, channel stops when the target dies; mana drain with the periodic aura log (power, amount, float multiplier), caster gain, half the gain as threat, damage-cancel auras removed. No spell power, absorbs, immunities, procs, Mark of Kazzak or Improved Drain Mana. |
+
+Shared-file changes made for these handlers (all small and additive, each with a test):
+
+- `SpellSystem.cs`: the constructor applies `SpellHandlerModules.BuiltIn`.
+- `SpellSystem.Effects.cs`: `EffectHeal` delegates its tail to the new internal `DeliverHeal`.
+- `SpellSystem.Auras.cs`: when a stack count changes an aura's amount, the handler is un-applied with the old amount and
+  applied with the new one (`SpellAuraHolder::SetStackAmount`, `SpellAuras.cpp:6987-6991`). Without it a stacking stat
+  aura (Sunder Armor shape) would leave its old contribution behind.
+- `SpellCombatRules.ApplyArmor`, `MapCombat.Melee.cs` (`CalculateMeleeDamage`) and `SpellSystem.Combat.WeaponDamageRoll`:
+  armor is read as signed (`MeleeHitTable.ApplyArmor` already clamps negative armor to zero, but the unsigned read turned
+  a negative armor into about 4.29e9) and the negative attack power half is added, not subtracted
+  (`Unit::GetTotalAttackPowerValue`, `Unit.cpp:8037`). These were latent: nothing wrote negative values before.
+- `SpellPackets.BuildSpellNonMeleeDamageLog`: optional `periodic` flag.
+
+Data-driven ranking (classic-db `ClassicDB_1_12_1_z2815`, read-only, parsed with a local script; nothing copied into
+the repo): player spells = `playercreateinfo_spell` plus trainer spells (`npc_trainer`, `npc_trainer_template`) with a
+required level up to 20, with learn wrappers and trigger chains resolved (943 spells; the profession-heavy closure is
+larger than a class-only view). The share whose every effect and aura type has a handler, by handler presence only (not
+by correctness), went from 152 to 204 of 943. After this work the biggest remaining gaps by distinct spells, over the
+player set plus creature spell lists, are: `CREATE_ITEM` (376, mostly tradeskills, unsafe without reagent and skill
+checks, which would make crafting free), `ENCHANT_ITEM`, `KNOCK_BACK` (51), `SKILL_STEP`/`SKILL`/`PROFICIENCY`/`WEAPON`/
+`LANGUAGE`/`TRADE_SKILL` (skills area), `PERSISTENT_AREA_AURA` (38, Blizzard and Flamestrike), summons, `ADD_COMBO_POINTS`,
+`OPEN_LOCK`, and the auras `MOD_DECREASE_SPEED` (116), `MOD_MELEE_HASTE` (94), `PROC_TRIGGER_SPELL` (61), `MOD_DAMAGE_DONE`
+(43), `MOD_DAMAGE_TAKEN` (35), `MOD_FEAR` (29), `MOD_INCREASE_SPEED` (23), `MOD_SILENCE` (20), `DAMAGE_SHIELD` (20),
+`SCHOOL_ABSORB` (18).
+
+Why those were not done here (each needs a system that is another area's or a design decision):
+
+- Speed auras need the pending-movement-change and ack flow (`MovementPacketSender`, `HandleForceSpeedChangeAck`) and the
+  creature spline speed (`Creature.CreatureRunSpeed` is template-only).
+- Melee haste needs a base attack time that weapon changes also respect.
+- Proc auras need the proc system; damage, absorb, reflect and immunity auras need the damage and hit-result
+  pipeline to read them; silence, pacify, disarm, fear and confuse need the cast and movement gates.
+- Spell power and healing bonuses do not exist, so `MOD_DAMAGE_DONE` and friends would be write-only.
+- `POWER_DRAIN` stays unregistered: `QuestRewardEffectCapabilityTests` uses it as the "no handler" sentinel.
+
+Conflicts to resolve at integration: the stats area (`stats-combat-formulas`) may introduce a modifier ledger that owns
+the stat and resistance fields; `StatAuras` then moves onto it (it is the only writer of those fields from auras here).
+The skills area owns `PROFICIENCY`, `WEAPON`, `LANGUAGE` and the passive skill effects; `SpellInfo` carries no
+equipped-item class fields yet, which `PROFICIENCY` needs.
+
 ## What's left
 
 - Area, chain and cone target selection are implemented (`SpellSystem.Targeting.cs`, with a line-of-sight filter on area lists); only the remaining TargetB-based selections are missing.
@@ -117,4 +183,4 @@ Deliberate limits:
 - Non-player far teleports. Player far teleports and shared creature lookup are connected in
   the integration candidate; non-player transfers remain unsupported.
 - Trainers and the trainer spell list (the NPC area, through `SpellSystem.LearnSpell`).
-- The remaining effect and aura types, which are logged once as unsupported.
+- The remaining effect and aura types, which are logged once as unsupported (see the ranking in "Handler modules and spell breadth").

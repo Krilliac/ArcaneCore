@@ -88,7 +88,16 @@ public sealed partial class SpellSystem
                 {
                     if (existing.Auras[i] is { } aura && holder.Auras[i] is { } fresh)
                     {
-                        aura.Amount = fresh.Amount * existing.StackAmount;
+                        // vmangos SpellAuraHolder::SetStackAmount (SpellAuras.cpp:6987-6991): an amount that
+                        // changes is un-applied with the old value and applied with the new one.
+                        int amount = fresh.Amount * existing.StackAmount;
+                        if (amount != aura.Amount)
+                        {
+                            AuraHandler? handler = AuraHandlers.GetValueOrDefault(aura.Type);
+                            handler?.Apply?.Invoke(this, existing, aura, false);
+                            aura.Amount = amount;
+                            handler?.Apply?.Invoke(this, existing, aura, true);
+                        }
                     }
                 }
 
