@@ -65,7 +65,8 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         // CMSG_CHAR_CREATE: CString name, u8 race, class, gender, skin, face, hair style,
         // hair color, facial hair, outfit id (vmangos WorldSession::HandleCharCreateOpcode).
         var reader = new PacketReader(payload);
-        string rawName = reader.ReadCString();
+        // Raw bytes: vmangos normalizePlayerName fails on invalid UTF-8 (CHAR_NAME_NO_NAME).
+        byte[] rawName = reader.ReadCStringBytes().ToArray();
         byte race = reader.ReadByte();
         byte cls = reader.ReadByte();
         byte gender = reader.ReadByte();
@@ -85,13 +86,13 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        string name = CharacterNames.Normalize(rawName);
-        if (CharacterNames.Validate(name) is { } nameError)
+        if (CharacterNames.ValidateUtf8(rawName, out string? normalizedName) is { } nameError)
         {
             SendResult(session, WorldOpcode.SmsgCharCreate, nameError);
             return;
         }
 
+        string name = normalizedName!;
         if (await characters.IsNameTakenAsync(name).ConfigureAwait(false))
         {
             SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharCreateNameInUse);

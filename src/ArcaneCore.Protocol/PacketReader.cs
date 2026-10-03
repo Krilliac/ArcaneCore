@@ -102,6 +102,27 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
         return value;
     }
 
+    /// <summary>
+    /// The raw bytes of a null-terminated string (terminator consumed; a missing terminator reads to
+    /// the end). For text that must be validated as UTF-8 itself, such as a character name.
+    /// </summary>
+    public ReadOnlySpan<byte> ReadCStringBytes()
+    {
+        int start = _position;
+        while (_position < _data.Length && _data[_position] != 0)
+        {
+            _position++;
+        }
+
+        ReadOnlySpan<byte> value = _data.Slice(start, _position - start);
+        if (_position < _data.Length)
+        {
+            _position++;
+        }
+
+        return value;
+    }
+
     public ReadOnlySpan<byte> ReadToEnd()
     {
         ReadOnlySpan<byte> slice = _data.Slice(_position);
