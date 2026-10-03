@@ -39,6 +39,17 @@ public interface ICharacterHooks
     Task OnPlayerLoadingAsync(WorldSession session, CharacterRecord character, Player player) => Task.CompletedTask;
 
     /// <summary>
+    /// Every <see cref="OnPlayerLoadingAsync"/> hook has finished and <paramref name="player"/> is
+    /// still not visible to the world thread. For state that must be applied on top of what the
+    /// other features loaded: vmangos Player::LoadFromDB sets the stored health and power only
+    /// after the inventory, spells and auras are loaded and UpdateAllStats has run (so the
+    /// maximums are final; Player.cpp:15057-15075). Same rules as
+    /// <see cref="OnPlayerLoadingAsync"/>: session task, databases allowed, no world state, and
+    /// an exception fails the login (fail closed).
+    /// </summary>
+    Task OnPlayerLoadedAsync(WorldSession session, CharacterRecord character, Player player) => Task.CompletedTask;
+
+    /// <summary>
     /// The visible equipment of <paramref name="characters"/> for SMSG_CHAR_ENUM, keyed by
     /// character id (up to 20 entries: the 19 equipment slots, then the first bag). Null or a
     /// missing id means an empty slot list. The first hook that answers for a character wins.

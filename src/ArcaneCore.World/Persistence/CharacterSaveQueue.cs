@@ -334,6 +334,7 @@ public sealed class CharacterSaveQueue(IServiceScopeFactory scopes, ILogger<Char
         ActionButtons = newer.ActionButtons ?? failed.ActionButtons,
         Home = newer.Home ?? failed.Home,
         Inventory = newer.Inventory ?? failed.Inventory,
+        Life = newer.Life ?? failed.Life, // always complete when present, so the newest one wins
     };
 
     private static CharacterState Copy(CharacterState state) => state with

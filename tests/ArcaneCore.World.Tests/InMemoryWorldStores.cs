@@ -5,8 +5,9 @@ using ArcaneCore.Kernel.WorldData;
 
 namespace ArcaneCore.World.Tests;
 
-internal sealed class InMemoryCharacterStore : ICharacterStore
+internal sealed class InMemoryCharacterStore : ICharacterStore, ICharacterLifeStore
 {
+    private readonly ConcurrentDictionary<int, CharacterLife> _life = new();
     private readonly ConcurrentDictionary<int, CharacterRecord> _characters = new();
     private readonly ConcurrentDictionary<int, IReadOnlyList<ActionButton>> _buttons = new();
     private int _nextId;
@@ -70,11 +71,25 @@ internal sealed class InMemoryCharacterStore : ICharacterStore
             {
                 _buttons[state.Id] = buttons.ToList();
             }
+
+            if (state.Life is { } life)
+            {
+                _life[state.Id] = life;
+            }
         }
 
         Interlocked.Increment(ref _saves);
         return Task.CompletedTask;
     }
+
+    public Task<CharacterLife?> LoadAsync(int characterId, CancellationToken cancellationToken = default)
+        => Task.FromResult(_life.GetValueOrDefault(characterId));
+
+    /// <summary>The stored life of a character (what a previous save left), or null.</summary>
+    public CharacterLife? Life(int characterId) => _life.GetValueOrDefault(characterId);
+
+    /// <summary>Put a stored life in place, as a previous session's save would have.</summary>
+    public void SetLife(int characterId, CharacterLife life) => _life[characterId] = life;
 
     public Task<IReadOnlyList<ActionButton>> GetActionButtonsAsync(int characterId, CancellationToken cancellationToken = default)
         => Task.FromResult(_buttons.GetValueOrDefault(characterId) ?? []);

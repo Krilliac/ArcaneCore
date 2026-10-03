@@ -64,10 +64,10 @@ public sealed class UnitCombat
     /// <summary>Time left before an unreleased corpse is auto-released (vmangos m_deathTimer).</summary>
     public uint DeathTimer { get; internal set; }
 
-    /// <summary>World-uptime second until which recent deaths count (vmangos m_deathExpireTime).</summary>
+    /// <summary>Unix second until which recent deaths count (vmangos m_deathExpireTime, a time_t).</summary>
     internal long DeathExpireTime { get; set; }
 
-    /// <summary>World-uptime second the corpse was last reset (vmangos Corpse::m_time / GetGhostTime).</summary>
+    /// <summary>Unix second the corpse was last reset (vmangos Corpse::m_time / GetGhostTime, a time_t).</summary>
     internal long GhostTime { get; set; }
 
     /// <summary>Killed by a player (vmangos Player::m_pvpDeath).</summary>

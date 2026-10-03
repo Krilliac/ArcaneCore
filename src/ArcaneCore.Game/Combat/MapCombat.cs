@@ -28,7 +28,6 @@ public sealed partial class MapCombat : IMapUpdater
     private readonly List<Corpse> _corpses = [];
     private readonly Dictionary<Corpse, MapGrid> _corpseGrids = [];
     private CombatHooks? _hooks;
-    private long _elapsedMs;
 
     internal MapCombat(Map map, WorldRuntime world)
     {
@@ -114,8 +113,12 @@ public sealed partial class MapCombat : IMapUpdater
     /// <summary>Non-player units currently updated by combat.</summary>
     public IReadOnlyCollection<Unit> TrackedUnits => _units;
 
-    /// <summary>Combat time of this map in seconds (drives the recent-death window).</summary>
-    internal long NowSeconds => _elapsedMs / 1000;
+    /// <summary>
+    /// Unix seconds from the world's <see cref="Death.DeathClock"/> (vmangos <c>time(nullptr)</c>):
+    /// the recent-death window and the ghost time are wall-clock timestamps shared by every map,
+    /// not this map's uptime, so they stay consistent when a ghost changes map or logs out.
+    /// </summary>
+    internal long NowSeconds => Death.DeathHooks.For(_world).Clock.UnixSeconds;
 
     /// <summary>Start updating a non-player unit (swing timers, regeneration, combat timer).</summary>
     public void Track(Unit unit)
@@ -163,8 +166,6 @@ public sealed partial class MapCombat : IMapUpdater
     /// <summary>One combat step (run by <see cref="Map.Update"/> through <see cref="IMapUpdater"/>).</summary>
     public void Update(uint diffMs)
     {
-        _elapsedMs += diffMs;
-
         foreach (Player player in _map.Players.ToArray())
         {
             if (ReferenceEquals(player.Map, _map))
@@ -270,16 +271,27 @@ public sealed partial class MapCombat : IMapUpdater
 
     /// <summary>
     /// A player is leaving the world (logout or disconnect; vmangos WorldSession::LogoutPlayer →
-    /// CombatStop / RemoveFromWorld): stop its fights, drop it from every threat list and take
-    /// its corpse out of the map (corpses are not persisted yet).
+    /// CombatStop / RemoveFromWorld): stop its fights, drop it from every threat list, release a
+    /// spirit that logs out still waiting at its body ("If the player just died before logging
+    /// out, make him appear as a ghost": BuildPlayerRepop + RepopAtGraveyard,
+    /// WorldSession.cpp:694-701, taken when the death timer is running), and take the corpse out
+    /// of the map. The body is persisted with the character (the logout snapshot is captured
+    /// after this and reads <see cref="UnitCombat.Corpse"/>, which stays set for that reason) and
+    /// is put back by <see cref="RestoreGhost"/> at the next login; it is not kept in the world
+    /// while its owner is offline (docs/integration/death-persistence.md, limits).
     /// </summary>
     internal void OnPlayerLeaving(Player player)
     {
         DetachRelations(player);
-        if (player.Combat.Corpse is { } corpse)
+        UnitCombat c = player.Combat;
+        if (c.DeathTimer > 0 && !IsAliveState(player) && (player.Flags & PlayerFlags.Ghost) == 0)
+        {
+            RepopPlayer(player);
+        }
+
+        if (c.Corpse is { } corpse)
         {
             RemoveCorpse(corpse);
-            player.Combat.Corpse = null;
         }
     }
 
