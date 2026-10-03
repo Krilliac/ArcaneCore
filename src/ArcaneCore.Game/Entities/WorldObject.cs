@@ -196,6 +196,23 @@ public abstract class WorldObject
 
     public void RemoveFlag(int index, uint flag) => SetUInt32(index, _values[index] & ~flag);
 
+    /// <summary>
+    /// Optional per-viewer field values (vmangos Object::BuildValuesUpdate special cases such as
+    /// UNIT_DYNFLAG_LOOTABLE for allowed looters and GAMEOBJECT_DYN_FLAGS for quest objects).
+    /// Null sends the stored values to everyone. World thread.
+    /// </summary>
+    public Updates.IViewerFieldFilter? ViewerFieldFilter { get; set; }
+
+    /// <summary>The value <paramref name="viewer"/> receives for field <paramref name="index"/>.</summary>
+    public uint GetValueFor(int index, Player viewer)
+        => ViewerFieldFilter is { } filter ? filter.Filter(this, index, _values[index], viewer) : _values[index];
+
+    /// <summary>
+    /// Queue a values update of <paramref name="index"/> although its stored value did not change,
+    /// because a <see cref="ViewerFieldFilter"/> answer changed (vmangos ForceValuesUpdateAtIndex).
+    /// </summary>
+    public void ForceFieldUpdate(int index) => MarkChanged(index);
+
     /// <summary>Forget pending changes (after a values flush, or for values a create block already carried).</summary>
     internal void ClearChangedFields() => _changed.Clear();
 
