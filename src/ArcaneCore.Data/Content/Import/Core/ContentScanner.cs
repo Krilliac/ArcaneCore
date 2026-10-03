@@ -32,24 +32,31 @@ public static class ContentScanner
         {
             using TextReader text = input.Open();
             var reader = new MySqlDumpReader(text, registry);
-            foreach (object item in reader.Read())
+            try
             {
-                switch (item)
+                foreach (object item in reader.Read())
                 {
-                    case DumpTable table:
-                        State(tables, table.Name).AddColumns(table.Columns);
-                        break;
-                    case DumpRow row:
-                        TableState state = State(tables, row.Table);
-                        state.Add(row);
-                        if (dbVersion is null && string.Equals(row.Table, "db_version", StringComparison.OrdinalIgnoreCase)
-                            && row.TryGet(out string? version, "version"))
-                        {
-                            dbVersion = version;
-                        }
+                    switch (item)
+                    {
+                        case DumpTable table:
+                            State(tables, table.Name).AddColumns(table.Columns);
+                            break;
+                        case DumpRow row:
+                            TableState state = State(tables, row.Table);
+                            state.Add(row);
+                            if (dbVersion is null && string.Equals(row.Table, "db_version", StringComparison.OrdinalIgnoreCase)
+                                && row.TryGet(out string? version, "version"))
+                            {
+                                dbVersion = version;
+                            }
 
-                        break;
+                            break;
+                    }
                 }
+            }
+            catch (FormatException ex)
+            {
+                throw new InvalidDataException($"{input.Name}: {ex.Message}", ex);
             }
 
             foreach ((string key, int count) in reader.UnappliedStatements)

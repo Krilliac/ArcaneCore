@@ -50,6 +50,9 @@ public sealed record ContentImportReport
     /// <summary>Rows written per target table by an import (empty for a plan or dry run).</summary>
     public IReadOnlyDictionary<string, long> Imported { get; init; } = new Dictionary<string, long>();
 
+    /// <summary>Source rows an importer read but did not write, per table (patch filters, out-of-range ids).</summary>
+    public IReadOnlyDictionary<string, long> Skipped { get; init; } = new Dictionary<string, long>();
+
     public IReadOnlyList<string> Warnings { get; init; } = [];
 
     public string LicenseNotice => License;

@@ -12,8 +12,8 @@ namespace ArcaneCore.Data.Content.Import;
 /// <para>
 /// Dialect signatures cite the loader that fixes each name: vmangos
 /// <c>ObjectMgr::LoadCreatureTemplates</c> (src/game/ObjectMgr.cpp:1190: <c>level_min</c>,
-/// <c>display_id1</c>), <c>LoadCreatures</c> (:2315-2325: <c>wander_distance</c>,
-/// <c>patch_min</c>), <c>LoadGameObjects</c> (:2529-2533: <c>patch_min</c>) and
+/// <c>display_id1</c>), <c>LoadCreatures</c> (:2319-2330: <c>wander_distance</c>,
+/// <c>patch_min</c>), <c>LoadGameobjects</c> (:2527-2537: <c>patch_min</c>) and
 /// <c>LootStore::LoadLootTable</c> (src/game/LootMgr.cpp:105: <c>patch_min</c>, <c>patch_max</c>);
 /// cmangos mangos-classic <c>sql/base/mangos.sql</c> (<c>creature.spawnMask</c> :722,
 /// <c>DisplayIdProbability1</c> added by sql/updates/mangos/z2823_01) and the z2815 classic-db
