@@ -30,6 +30,7 @@ public static class BuiltinCommands
         [
             new ChatCommand("info", AccountSecurity.Player, "Syntax: .server info — version, players online and uptime.", ServerInfo),
             new ChatCommand("motd", AccountSecurity.Player, "Syntax: .server motd — the message of the day.", ServerMotd),
+            .. Ops.Lifecycle.ServerLifecycleCommands.Children, // shutdown/restart/idle* (docs/areas/ops-perf.md)
         ]),
         new ChatCommand("gps", AccountSecurity.Moderator, "Syntax: .gps — position of the selected player, or yours.", Gps),
         new ChatCommand("announce", AccountSecurity.Moderator, "Syntax: .announce $text — a system message to every player.", Announce),
