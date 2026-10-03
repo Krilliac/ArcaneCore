@@ -167,6 +167,44 @@ public sealed class ServerProbeTests : IAsyncLifetime
         Assert.Equal(AuthDbContext.Schema.CurrentVersion, await UpgradeTestSupport.ReadVersionAsync(upgrader, "auth"));
     }
 
+    [Fact]
+    public async Task Upgrader_NeverProbesSessionsOfADatabaseThatDoesNotExistYet()
+    {
+        // On a server the session query would fail (Unknown database / 3D000) and the fresh-install path
+        // could never create the database; the probe must not run for a Missing plan.
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(DatabaseProvider.Sqlite);
+        int probed = 0;
+        var options = new SchemaUpgradeOptions
+        {
+            RefuseActiveSessions = true,
+            SessionProbe = (_, _) =>
+            {
+                probed++;
+                throw new InvalidOperationException("the session probe ran against a database that does not exist");
+            },
+        };
+
+        await using AuthDbContext db = TestContexts.Create<AuthDbContext>(connection);
+        SchemaPlan plan = await SchemaUpgrader.ApplyAsync(db, AuthDbContext.Schema, options);
+
+        Assert.Equal(SchemaState.Missing, plan.State);
+        Assert.Equal(0, probed);
+        Assert.Equal(AuthDbContext.Schema.CurrentVersion, await UpgradeTestSupport.ReadVersionAsync(db, "auth"));
+    }
+
+    [Fact]
+    public async Task Upgrader_UsesTheSessionProbeForAnExistingDatabaseThatNeedsChanges()
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(DatabaseProvider.Sqlite);
+        await SchemaProbe.EnsureCurrentAsync("auth", connection);
+        await using AuthDbContext db = TestContexts.Create<AuthDbContext>(connection);
+        await UpgradeTestSupport.SetVersionAsync(db, "auth", AuthDbContext.Schema.CurrentVersion - 1);
+
+        SchemaActiveSessionsException ex = await Assert.ThrowsAsync<SchemaActiveSessionsException>(
+            () => SchemaUpgrader.ApplyAsync(db, AuthDbContext.Schema, new SchemaUpgradeOptions { RefuseActiveSessions = true, SessionProbe = (_, _) => Task.FromResult<int?>(2) }));
+        Assert.Equal(2, ex.Sessions);
+    }
+
     public Task InitializeAsync() => Task.CompletedTask;
 
     public Task DisposeAsync() => _databases.DisposeAsync().AsTask();

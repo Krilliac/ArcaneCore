@@ -42,9 +42,13 @@ public static class SchemaUpgrader
             throw new SchemaBlockedException(message, plan);
         }
 
-        if (options.RefuseActiveSessions && plan.NeedsApply)
+        // A database that does not exist yet has no sessions, and on a server the probe itself would fail
+        // (Unknown database / 3D000), so a fresh install must never reach it (SchemaPlan Missing).
+        if (options.RefuseActiveSessions && plan.NeedsApply && plan.State != SchemaState.Missing)
         {
-            int? others = await ServerProbe.CountOtherSessionsAsync(db, cancellationToken).ConfigureAwait(false);
+            int? others = await (options.SessionProbe is { } probe
+                ? probe(db, cancellationToken)
+                : ServerProbe.CountOtherSessionsAsync(db, cancellationToken)).ConfigureAwait(false);
             if (others is > 0)
             {
                 throw new SchemaActiveSessionsException(

@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore;
+
 namespace ArcaneCore.Data.Schema.Upgrade;
 
 /// <summary>
@@ -37,6 +39,12 @@ public sealed class SchemaUpgradeOptions
     /// arcane-db tool turns it on unless told <c>--allow-active-sessions</c>, because the references expect the server to be stopped.
     /// </summary>
     public bool RefuseActiveSessions { get; init; }
+
+    /// <summary>
+    /// How <see cref="RefuseActiveSessions"/> counts the other sessions; null uses <see cref="ServerProbe.CountOtherSessionsAsync"/>.
+    /// A seam so the policy can be exercised without a database server. Never called for a database that does not exist yet.
+    /// </summary>
+    public Func<DbContext, CancellationToken, Task<int?>>? SessionProbe { get; init; }
 
     /// <summary>Called once per version row written, in order.</summary>
     public IProgress<SchemaStepProgress>? Progress { get; init; }
