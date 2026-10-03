@@ -199,12 +199,18 @@ public abstract class WorldObject
     /// <summary>Forget pending changes (after a values flush, or for values a create block already carried).</summary>
     internal void ClearChangedFields() => _changed.Clear();
 
+    /// <summary>
+    /// The map whose values queue carries this object's field changes: its own map, or for an
+    /// object that lives outside maps (an item) the map of the player whose client has it.
+    /// </summary>
+    internal virtual Map? ValuesUpdateMap => Map;
+
     private void MarkChanged(int index)
     {
         _changed.SetBit(index);
-        if (!IsQueuedForUpdate && Map is not null)
+        if (!IsQueuedForUpdate && ValuesUpdateMap is { } map)
         {
-            Map.QueueValuesUpdate(this);
+            map.QueueValuesUpdate(this);
         }
     }
 }

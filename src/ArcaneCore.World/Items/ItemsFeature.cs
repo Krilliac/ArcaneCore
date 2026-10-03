@@ -1,0 +1,140 @@
+using ArcaneCore.Game;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Items;
+using ArcaneCore.World.Characters;
+using ArcaneCore.World.Features;
+using ArcaneCore.World.Net;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+
+namespace ArcaneCore.World.Items;
+
+/// <summary>
+/// The items world feature: item content (item_template, playercreateinfo_item) cached in memory
+/// on first use (vmangos ObjectMgr::LoadItemPrototypes at startup), the item GUID allocator
+/// (vmangos ObjectMgr::m_ItemGuids, seeded from MAX(item_instance.guid)), and the character
+/// hooks: starting outfit on creation, equipment on the character list, inventory on login.
+/// <para>
+/// Without a registered <see cref="IItemStore"/> (a host without the characters database) the
+/// hooks do nothing and inventories are never saved. A failed content load is not cached: the
+/// next request retries, and the failing request fails (login is refused) instead of running
+/// with no items (fails closed).
+/// </para>
+/// </summary>
+public sealed class ItemsFeature(IServiceScopeFactory scopes, ILogger<ItemsFeature> logger) : IWorldFeature, ICharacterHooks
+{
+    private readonly SemaphoreSlim _loadLock = new(1, 1);
+    private volatile IItemTemplateStore? _templates;
+
+    /// <summary>Item content (empty until <see cref="EnsureLoadedAsync"/> succeeds).</summary>
+    public IItemTemplateStore Templates => _templates ?? ItemTemplateStore.Empty;
+
+    /// <summary>The process-wide item GUID source.</summary>
+    public ItemGuidAllocator GuidAllocator { get; } = new();
+
+    /// <summary>The world, once attached.</summary>
+    public WorldRuntime? World { get; private set; }
+
+    public void Attach(WorldRuntime world) => World = world;
+
+    /// <summary>Load item content and seed the GUID allocator once (thread-safe).</summary>
+    public async Task<IItemTemplateStore> EnsureLoadedAsync(CancellationToken cancellationToken = default)
+    {
+        if (_templates is { } loaded)
+        {
+            return loaded;
+        }
+
+        await _loadLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_templates is { } raced)
+            {
+                return raced;
+            }
+
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            IItemTemplateStore store = ItemTemplateStore.Empty;
+            if (scope.ServiceProvider.GetService<IItemTemplateSource>() is { } source)
+            {
+                IReadOnlyList<ItemTemplate> templates = await source.LoadTemplatesAsync(cancellationToken).ConfigureAwait(false);
+                IReadOnlyList<StartingItem> starting = await source.LoadStartingItemsAsync(cancellationToken).ConfigureAwait(false);
+                store = new ItemTemplateStore(templates, starting);
+            }
+
+            if (scope.ServiceProvider.GetService<IItemStore>() is { } items)
+            {
+                GuidAllocator.Seed(await items.GetMaxItemGuidAsync(cancellationToken).ConfigureAwait(false));
+            }
+
+            logger.LogInformation("Loaded {Count} item templates", store.Count);
+            _templates = store;
+            return store;
+        }
+        finally
+        {
+            _loadLock.Release();
+        }
+    }
+
+    /// <summary>vmangos Player::Create → AddStartingItems, saved with the new character.</summary>
+    public async Task OnCharacterCreatedAsync(WorldSession session, CharacterRecord character)
+    {
+        if (session.Services.GetService<IItemStore>() is not { } store)
+        {
+            return;
+        }
+
+        var inventory = new PlayerInventory(ObjectGuid.Player((uint)character.Id), (Race)character.Race, (Class)character.Class, character.Level)
+        {
+            Templates = await EnsureLoadedAsync().ConfigureAwait(false),
+            GuidAllocator = GuidAllocator,
+        };
+        inventory.AddStartingItems();
+        await store.SaveInventoryAsync(character.Id, inventory.CreateSnapshot()).ConfigureAwait(false);
+    }
+
+    /// <summary>vmangos Player::BuildEnumData: display id and inventory type of the 20 visible slots.</summary>
+    public async Task<IReadOnlyDictionary<int, CharEnumItem[]>?> GetCharEnumEquipmentAsync(WorldSession session, IReadOnlyList<CharacterRecord> characters)
+    {
+        if (characters.Count == 0 || session.Services.GetService<IItemStore>() is not { } store)
+        {
+            return null;
+        }
+
+        IItemTemplateStore templates = await EnsureLoadedAsync().ConfigureAwait(false);
+        IReadOnlyDictionary<int, IReadOnlyDictionary<byte, uint>> equipped =
+            await store.GetEquippedEntriesAsync(characters.Select(c => c.Id).ToList()).ConfigureAwait(false);
+        var result = new Dictionary<int, CharEnumItem[]>();
+        foreach ((int id, IReadOnlyDictionary<byte, uint> slots) in equipped)
+        {
+            var items = new CharEnumItem[InventorySlots.CharEnumSlots];
+            foreach ((byte slot, uint entry) in slots)
+            {
+                if (slot < items.Length && templates.Find(entry) is { } template)
+                {
+                    items[slot] = new CharEnumItem(template.DisplayId, (byte)template.InventoryType);
+                }
+            }
+
+            result[id] = items;
+        }
+
+        return result;
+    }
+
+    /// <summary>vmangos Player::LoadFromDB → _LoadInventory, before the player enters the world.</summary>
+    public async Task OnPlayerLoadingAsync(WorldSession session, CharacterRecord character, Player player)
+    {
+        IItemTemplateStore templates = await EnsureLoadedAsync().ConfigureAwait(false);
+        player.Inventory.Templates = templates;
+        player.Inventory.GuidAllocator = GuidAllocator;
+        if (session.Services.GetService<IItemStore>() is { } store)
+        {
+            player.Inventory.Load(await store.GetInventoryAsync(character.Id).ConfigureAwait(false));
+        }
+    }
+}

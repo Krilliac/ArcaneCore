@@ -5,6 +5,7 @@ namespace ArcaneCore.Kernel.Characters;
 /// thread and persisted asynchronously (logout, disconnect, autosave, shutdown).
 /// <see cref="ActionButtons"/> is null when the action bar did not change since the last save;
 /// <see cref="Home"/> is null when the bind point is not to be written.
+/// <see cref="Inventory"/> is null when no item changed since the last save (items area).
 /// </summary>
 public sealed record CharacterState(
     int Id,
@@ -20,7 +21,8 @@ public sealed record CharacterState(
     uint Money = 0,
     byte ActionBarToggles = 0,
     IReadOnlyList<ActionButton>? ActionButtons = null,
-    HomeBind? Home = null);
+    HomeBind? Home = null,
+    Items.InventorySnapshot? Inventory = null);
 
 /// <summary>A hearthstone bind point (vmangos character_homebind; sent in SMSG_BINDPOINTUPDATE).</summary>
 public readonly record struct HomeBind(uint MapId, uint ZoneId, float X, float Y, float Z)
