@@ -58,13 +58,13 @@ public sealed partial class PlayerSkills
 
     public SkillCatalog Catalog => _catalog;
 
-    /// <summary>A skill gained its first value (after its bonus word was reset): the owner of MOD_SKILL auras re-applies them here (Player.cpp:5629-5645).</summary>
+    /// <summary>A skill gained its first value (after its bonus word was reset): the owner of MOD_SKILL auras re-applies them here (Player.cpp:5627-5645).</summary>
     public event Action<uint>? SkillAdded;
 
-    /// <summary>A skill is about to be removed, its fields still set: MOD_SKILL auras unapply their bonuses here (Player.cpp:5547-5560).</summary>
+    /// <summary>A skill is about to be removed, its fields still set: MOD_SKILL auras unapply their bonuses here (Player.cpp:5549-5560).</summary>
     public event Action<uint>? SkillRemoving;
 
-    /// <summary>A skill was removed: quests that require it leave the log here (Player.cpp:5575-5599).</summary>
+    /// <summary>A skill was removed: quests that require it leave the log here (Player.cpp:5576-5599).</summary>
     public event Action<uint>? SkillRemoved;
 
     /// <summary>The value, maximum, step or bonus of a skill changed (derived stats such as crit and defence recompute from it).</summary>
@@ -73,10 +73,10 @@ public sealed partial class PlayerSkills
     /// <summary>vmangos Player::HasSpell, answered by the spellbook owner (the equip gates ask through <see cref="PlayerItemRequirements"/>).</summary>
     public bool HasSpell(uint spellId) => _spells.HasSpell(spellId);
 
-    /// <summary>vmangos Player::HasSkill (Player.cpp:5658-5666).</summary>
+    /// <summary>vmangos Player::HasSkill (Player.cpp:5650-5657).</summary>
     public bool Has(uint skillId) => TryGetSlot(skillId, out _);
 
-    /// <summary>vmangos GetSkill (Player.cpp:5668-5701): the pure value (or maximum) plus the requested bonuses, never below zero.</summary>
+    /// <summary>vmangos GetSkill (Player.cpp:5659-5688): the pure value (or maximum) plus the requested bonuses, never below zero.</summary>
     public ushort Get(uint skillId, bool bonusPerm, bool bonusTemp, bool max = false)
     {
         if (!TryGetSlot(skillId, out Slot? slot))
@@ -122,7 +122,7 @@ public sealed partial class PlayerSkills
     public ushort GetStep(uint skillId)
         => TryGetSlot(skillId, out Slot? slot) ? (ushort)(_player.GetUInt32(InfoIndex(slot.Pos)) >> 16) : (ushort)0;
 
-    /// <summary>vmangos GetSkillBonus (Player.cpp:5743-5760).</summary>
+    /// <summary>vmangos GetSkillBonus (Player.cpp:5712-5726).</summary>
     public short GetBonus(uint skillId, bool permanent = false)
     {
         if (!TryGetSlot(skillId, out Slot? slot))
@@ -135,7 +135,7 @@ public sealed partial class PlayerSkills
     }
 
     /// <summary>
-    /// vmangos ModifySkillBonus (Player.cpp:5719-5742): add <paramref name="diff"/> to the permanent (high half) or
+    /// vmangos ModifySkillBonus (Player.cpp:5690-5710): add <paramref name="diff"/> to the permanent (high half) or
     /// temporary/item (low half) bonus. False for an unknown skill or a zero difference.
     /// </summary>
     public bool ModifyBonus(uint skillId, short diff, bool permanent = false)
@@ -163,7 +163,7 @@ public sealed partial class PlayerSkills
     }
 
     /// <summary>
-    /// vmangos SetSkill (Player.cpp:5504-5648): set a skill line's value and maximum, adding it in the first free
+    /// vmangos SetSkill (Player.cpp:5525-5648): set a skill line's value and maximum, adding it in the first free
     /// slot when new, and remove it when <paramref name="currentValue"/> is zero. A non-zero
     /// <paramref name="step"/> replaces the stored step. Returns false when nothing could be applied (id 0, an
     /// unknown skill line, or no free slot).

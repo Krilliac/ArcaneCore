@@ -29,8 +29,8 @@ public sealed class TaxiPathNodeCatalog
 }
 
 /// <summary>
-/// One SkillLineAbility.dbc row (build 5875, fourteen fields; the two "not" masks and the
-/// character points are unused: vmangos DBCStructure.h SkillLineAbilityEntry, fmt "niiiixxiiiiixx").
+/// One SkillLineAbility.dbc row (build 5875, fifteen fields, a fourteen-field image is read too; the two "not" masks and
+/// the character points are unused: vmangos DBCStructure.h SkillLineAbilityEntry, fmt "niiiixxiiiiixxi").
 /// </summary>
 public sealed record SkillLineAbilityRecord(
     uint Id, uint SkillId, uint SpellId, uint RaceMask, uint ClassMask,

@@ -11,7 +11,7 @@ public interface ISkillSpellHost
     bool HasSpell(uint spellId);
 
     /// <summary>
-    /// Teach a spell a skill grants (vmangos UpdateSkillTrainedSpells, Player.cpp:5761-5764): while the player is
+    /// Teach a spell a skill grants (vmangos UpdateSkillTrainedSpells, Player.cpp:5761-5765): while the player is
     /// not yet in the world it is added silently (<c>AddSpell(spell, true, true, true, false)</c>), otherwise it is
     /// learned with the client messages (<c>LearnSpell(spell, true)</c>). Knowing it already is not an error.
     /// </summary>

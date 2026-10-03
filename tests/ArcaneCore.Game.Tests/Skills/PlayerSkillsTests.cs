@@ -49,7 +49,7 @@ public sealed class PlayerSkillsTests
         Assert.Equal((short)10, skills.GetBonus(SkillIds.Swords));
         Assert.Equal((short)5, skills.GetBonus(SkillIds.Swords, permanent: true));
 
-        // GetSkill: pure value, + permanent, + both (Player.cpp:5668-5701).
+        // GetSkill: pure value, + permanent, + both (Player.cpp:5659-5688).
         Assert.Equal((ushort)100, skills.GetValuePure(SkillIds.Swords));
         Assert.Equal((ushort)105, skills.GetValueBase(SkillIds.Swords));
         Assert.Equal((ushort)115, skills.GetValue(SkillIds.Swords));

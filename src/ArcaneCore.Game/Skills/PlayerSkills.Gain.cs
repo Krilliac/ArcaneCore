@@ -30,7 +30,7 @@ public readonly record struct CombatSkillContext(
 
 public sealed partial class PlayerSkills
 {
-    /// <summary>vmangos UpdateSkill (Player.cpp:5162-5201): add <paramref name="step"/> to a known skill, capped at its maximum. False for an unknown skill or one at its maximum.</summary>
+    /// <summary>vmangos UpdateSkill (Player.cpp:5175-5201): add <paramref name="step"/> to a known skill, capped at its maximum. False for an unknown skill or one at its maximum.</summary>
     public bool Update(uint skillId, uint step)
     {
         if (!TryGetSlot(skillId, out Slot? slot))
@@ -54,7 +54,7 @@ public sealed partial class PlayerSkills
     }
 
     /// <summary>
-    /// vmangos UpdateSkillPro (Player.cpp:5291-5339): roll <c>irand(1, 1000)</c> against
+    /// vmangos UpdateSkillPro (Player.cpp:5298-5339): roll <c>irand(1, 1000)</c> against
     /// <paramref name="chance"/> (per mille) and add <paramref name="step"/> on success. Like the reference it
     /// returns true when the skill could have risen (a known skill below its maximum) whether or not the roll
     /// succeeded, and false for a non-positive chance, an unknown skill, a zero value or maximum, or a skill at
@@ -88,7 +88,7 @@ public sealed partial class PlayerSkills
 
     /// <summary>
     /// vmangos UpdateCraftSkill (Player.cpp:5214-5243): the first SkillLineAbility row of the spell with a
-    /// skill decides (its trivial high/low rank set the colour). Account trial restrictions (Player.cpp:5224-5232)
+    /// skill decides (its trivial high/low rank set the colour). Account trial restrictions (Player.cpp:5227, 5251)
     /// are not modelled.
     /// </summary>
     public bool UpdateCraft(uint spellId)
@@ -111,7 +111,7 @@ public sealed partial class PlayerSkills
     }
 
     /// <summary>
-    /// vmangos UpdateGatherSkill (Player.cpp:5245-5275). Only Herbalism, Lockpicking, Skinning and Mining are
+    /// vmangos UpdateGatherSkill (Player.cpp:5247-5281). Only Herbalism, Lockpicking, Skinning and Mining are
     /// gathering skills; any other id returns false. Account trial restrictions are not modelled.
     /// </summary>
     public bool UpdateGather(uint skillId, uint skillValue, uint redLevel, uint multiplicator = 1)
@@ -120,7 +120,7 @@ public sealed partial class PlayerSkills
         return chance is { } value && UpdatePro(skillId, value, Options.GainGathering);
     }
 
-    /// <summary>vmangos UpdateFishingSkill (Player.cpp:5277-5289).</summary>
+    /// <summary>vmangos UpdateFishingSkill (Player.cpp:5283-5296).</summary>
     public bool UpdateFishing()
         => UpdatePro(SkillIds.Fishing, SkillRules.FishingChance(GetValuePure(SkillIds.Fishing)), Options.GainGathering);
 
@@ -159,7 +159,7 @@ public sealed partial class PlayerSkills
     }
 
     /// <summary>
-    /// vmangos UpdateSkillsForLevel (Player.cpp:5438-5496): skills of range type "level" whose maximum is not 1 take
+    /// vmangos UpdateSkillsForLevel (Player.cpp:5445-5493): skills of range type "level" whose maximum is not 1 take
     /// the new level's maximum (or sit at it with AlwaysMaxSkillForLevel or the skill's ALWAYS_MAX flag); a
     /// maximum already at the configured world maximum is left alone.
     /// </summary>
@@ -206,7 +206,7 @@ public sealed partial class PlayerSkills
     }
 
     /// <summary>
-    /// vmangos UpdateSkillsToMaxSkillsForLevel (Player.cpp:5498-5527), the GM ".maxskill": every non-profession,
+    /// vmangos UpdateSkillsToMaxSkillsForLevel (Player.cpp:5495-5523), the GM ".maxskill": every non-profession,
     /// non-riding skill with a maximum above 1 is set to that maximum.
     /// </summary>
     public void UpdateSkillsToMax()

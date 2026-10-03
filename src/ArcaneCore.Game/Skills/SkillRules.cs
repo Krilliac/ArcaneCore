@@ -50,7 +50,7 @@ public static class SkillRules
         => GainChance(skillValue, maxValue, (maxValue + minValue) / 2, minValue, options);
 
     /// <summary>
-    /// The chance of UpdateGatherSkill (Player.cpp:5245-5275), or null for a skill the function does not
+    /// The chance of UpdateGatherSkill (Player.cpp:5247-5281), or null for a skill the function does not
     /// handle (it returns false for those). Herbalism and Lockpicking use the plain chance; Skinning and Mining
     /// halve it every <c>steps</c> skill points (<c>&gt;&gt; (skillValue / steps)</c>) unless the step option is 0.
     /// </summary>
@@ -87,7 +87,7 @@ public static class SkillRules
         }
     }
 
-    /// <summary>vmangos UpdateFishingSkill (Player.cpp:5277-5289): <c>skill &lt; 75 ? 100 : 2500 / (skill - 50)</c> percent, times ten.</summary>
+    /// <summary>vmangos UpdateFishingSkill (Player.cpp:5283-5296): <c>skill &lt; 75 ? 100 : 2500 / (skill - 50)</c> percent, times ten.</summary>
     public static int FishingChance(uint skillValue) => (skillValue < 75 ? 100 : (int)(2500 / (skillValue - 50))) * 10;
 
     /// <summary>

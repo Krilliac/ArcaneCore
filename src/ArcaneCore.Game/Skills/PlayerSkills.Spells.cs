@@ -58,7 +58,7 @@ public sealed partial class PlayerSkills
     }
 
     /// <summary>
-    /// vmangos UpdateSkillTrainedSpells (Player.cpp:5710-5768): teach (or take) the spells a skill grants.
+    /// vmangos UpdateSkillTrainedSpells (Player.cpp:5728-5768): teach (or take) the spells a skill grants.
     /// With a value of zero every spell of the skill is removed whatever taught it; otherwise a spell flagged
     /// "learn on get skill" fitting the race and class is removed while the value is below its requirement
     /// and learned from there on.

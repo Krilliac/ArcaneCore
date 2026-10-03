@@ -5,7 +5,7 @@ namespace ArcaneCore.Game.Skills;
 /// mangosd.conf.dist.in:1319, 1340): the shipped sample configuration also lists
 /// <c>SkillChance.MiningSteps = 0</c> / <c>SkinningSteps = 0</c> (:2842-2843) which switches the retail
 /// decay of mining and skinning skill-ups off; the code default 75 reproduces the retail behaviour its own
-/// comment describes (Player.cpp:5262: "1-74 - no decrease, 75-149 - 2 times, 225-299 - 8 times").
+/// comment describes (Player.cpp:5263: "1-74 - no decrease, 75-149 - 2 times, 225-299 - 8 times").
 /// </summary>
 public sealed record SkillOptions
 {
