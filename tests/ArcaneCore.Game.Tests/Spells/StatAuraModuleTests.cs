@@ -1,6 +1,5 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
-using ArcaneCore.Kernel.Characters;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
@@ -316,31 +315,8 @@ public sealed class StatAuraModuleTests
         return ((short)(value & 0xFFFF), (short)(value >> 16));
     }
 
-    /// <summary>A player of another class (TestWorld makes warriors).</summary>
     private static Player AddCaster(SpellTestKit kit, uint guid, Class cls, PowerType power)
-    {
-        var session = new FakeSession((int)guid);
-        var character = new CharacterRecord
-        {
-            Id = (int)guid,
-            AccountId = session.AccountId,
-            Name = $"P{guid}",
-            Race = (byte)Race.Human,
-            Class = (byte)cls,
-            Gender = (byte)Gender.Male,
-            Level = 1,
-            MapId = 0,
-            ZoneId = 12,
-            X = guid,
-            Y = guid,
-            Z = 83.5f,
-        };
-        var appearance = new PlayerAppearance(49, 1, power, 60, 100, 60, 100, 100, 400);
-        var player = new Player(character, appearance, session);
-        kit.World.AddPlayer(player);
-        kit.World.RunTick(0);
-        return player;
-    }
+        => TestPlayers.Add(kit, guid, cls, power);
 
     private static SpellTestKit Kit()
     {

@@ -1,4 +1,3 @@
-using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
 
@@ -12,12 +11,6 @@ namespace ArcaneCore.Game.Spells;
 /// </summary>
 public sealed class DirectCombatEffects : ISpellHandlerModule
 {
-    /// <summary>vmangos SPELL_ATTR_EX_NO_THREAT (SpellDefines.h:880): the threat effect never creates a new reference.</summary>
-    private const uint AttributeExNoThreat = 0x00000400;
-
-    /// <summary>vmangos SPELL_ATTR_EX4_NO_HARMFUL_THREAT (SpellDefines.h:990): Unit::AddThreat ignores the spell.</summary>
-    private const uint AttributeEx4NoHarmfulThreat = 0x00000010;
-
     public void Register(SpellSystem system)
     {
         ArgumentNullException.ThrowIfNull(system);
@@ -89,49 +82,17 @@ public sealed class DirectCombatEffects : ISpellHandlerModule
     }
 
     /// <summary>
-    /// vmangos Spell::EffectThreat → Unit::AddThreat → ThreatManager::addThreat: only a living creature
-    /// has a threat list and both units must be alive and in one map; the amount is scaled by the caster's
-    /// SPELL_AURA_MOD_THREAT auras that cover the spell's school (Unit::ApplyTotalThreatModifier,
-    /// Unit.cpp:7409; a school-less spell is not scaled). EX4_NO_HARMFUL_THREAT spells add nothing and
-    /// EX_NO_THREAT spells only raise an existing entry (ThreatManager.cpp:424).
-    /// Limit: pets and totems cannot be told apart from creatures here (no pet or totem model yet), and
-    /// the SPELLMOD_THREAT talent modifier (ThreatCalcHelper::CalcThreat :43) needs the spell-mod system.
+    /// vmangos Spell::EffectThreat -> Unit::AddThreat: both units must be alive; the rules of the threat list
+    /// are in <see cref="SpellThreat"/>.
     /// </summary>
     private static void EffectThreat(SpellEffectContext context)
     {
-        Unit caster = context.Caster;
-        if (context.Target is not Creature target || !target.IsAlive || !caster.IsAlive
-            || target.Map is null || !ReferenceEquals(target.Map, caster.Map))
+        if (!context.Target.IsAlive || !context.Caster.IsAlive)
         {
             return;
         }
 
-        SpellInfo spell = context.Spell;
-        if ((spell.AttributesEx4 & AttributeEx4NoHarmfulThreat) != 0)
-        {
-            return;
-        }
-
-        float threat = context.Value;
-        if (threat != 0f)
-        {
-            uint firstSchoolBit = 1u << (int)spell.School;
-            foreach (SpellAura aura in context.System.AurasOfType(caster, AuraType.ModThreat))
-            {
-                if (((uint)aura.MiscValue & firstSchoolBit) != 0)
-                {
-                    threat *= (100.0f + aura.Amount) / 100.0f;
-                }
-            }
-        }
-
-        bool known = target.Combat.Threat.Entries.Any(entry => ReferenceEquals(entry.Target, caster));
-        if (!known && ((uint)spell.AttributesEx & AttributeExNoThreat) != 0)
-        {
-            return;
-        }
-
-        target.Combat.Threat.AddThreat(caster, threat);
+        SpellThreat.Add(context.System, context.Caster, context.Target, context.Spell, context.Value);
     }
 
     /// <summary>
