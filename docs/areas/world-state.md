@@ -226,6 +226,26 @@ operator-supplied JSON file `[[state, value], ...]` (parsed strictly: numbers on
 duplicates; a missing or malformed file stops startup). Without a file the list is provider-only, like
 mangos-classic. Documented limit, not a stub.
 
+### PvP-enforced areas (`pvp-area-state`)
+
+`PvpAreaRules.IsEnforced` is the `Player::UpdateZone` switch (`Player.cpp:6612-6629`): an Alliance- or Horde-owned
+zone (`AreaTeams` 2 / 4) is enforced on players of the other team on a PvP realm or in its capital (`AreaFlags.Capital`
+0x100); an unowned zone on a PvP realm or in a battleground; any other team value (6) never. `PvpAreaTracker` (registered
+by `PvpAreaFeature`) applies it on a real zone change: the per-player enforced flag (`PvpAreaState.IsInEnforcedArea`),
+`UpdatePvP(true)` when enforced, and on `FfaPvp` realms FFA toggled with the PvP flag (not for GMs, not while
+resting; `:6631-6633`). On an area change an arena area (`AreaFlags.Arena` 0x80) sets FFA for non-GMs, and any other
+area clears it unless the realm is `FfaPvp` (`UpdateArea`, `:6566-6580`). The PvP flag timer freezes while the
+player is in an enforced area (the one additive term in `MapCombat.Death.cs`, `Player.cpp:17199-17207`), so
+the flag outlasts the 300 s timer inside a hostile capital and the countdown starts on leaving.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `World:Zones:PvpRealmMode` | `Normal` | `Normal`, `Pvp` (vmangos PVP / RPPVP) or `FfaPvp`. The world daemon has no realm type of its own, so it is configured here. |
+
+Not delivered (limits): battlegrounds (`inBattleground` is false), taxi flights (the `!IsTaxiFlying()` guard), capture points
+and flag carriers (the other two terms of the vmangos timer freeze), and the capital rest type, which the rest lane
+takes from `OnZoneChanged`'s zone entry and `PvpAreaState` (`CAPITAL && !enforced`, `:6639`).
+
 ## Deviations from retail (all documented, none silent)
 
 - `ClientZoneTrust=Auto` is a development-world allowance, not retail. Retail is `Never`.

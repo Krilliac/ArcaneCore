@@ -35,6 +35,11 @@ public sealed class ZoneOptions
     /// explore check runs this many ms after a position change instead of at once (Player.cpp:5975-5985).
     /// </summary>
     public uint RelocationCheckDelayMs { get; set; }
+
+    /// <summary>
+    /// The realm kind for PvP rules (vmangos <c>IsPvPRealm</c> / <c>IsFFAPvPRealm</c>): Normal (default), Pvp or FfaPvp.
+    /// </summary>
+    public Zones.PvpRealmMode PvpRealmMode { get; set; }
 }
 
 /// <summary>Game-time options (configuration section <c>World:Time</c>).</summary>

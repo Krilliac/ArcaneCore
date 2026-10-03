@@ -47,3 +47,9 @@ one extra `SMSG_WEATHER` after `SMSG_INIT_WORLD_STATES`; that is retail behaviou
 | File | Change | Why |
 |---|---|---|
 | `src/ArcaneCore.World/Packets/LoginPackets.cs` | `BuildInitWorldStates(map, zone)` delegates to `WorldStatePackets.BuildInit` (same bytes). | One builder for the list. |
+
+## pvp-area-state slice
+
+| File | Change | Why |
+|---|---|---|
+| `src/ArcaneCore.Game/Combat/MapCombat.Death.cs` | `UpdatePvpFlagTimer`: one extra term, `!WorldState.Zones.PvpAreaState.IsInEnforcedArea(player)`, in the existing freeze condition. | vmangos `Player.cpp:17199-17207`. The combat-cc-spell-rules lane may rewrite this function: keep their version and add this term. |
