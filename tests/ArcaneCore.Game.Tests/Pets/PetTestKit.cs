@@ -24,6 +24,7 @@ internal sealed class PetTestKit : IDisposable
     public const uint WildEntry = 5005;
     public const uint NpcCasterEntry = 5006;
     public const uint MiniPetEntry2 = 5007;
+    public const uint ImpEntry = 416;
 
     public const uint FireTotemSpell = 910001;
     public const uint EarthTotemSpell = 910002;
@@ -46,6 +47,7 @@ internal sealed class PetTestKit : IDisposable
     public const uint PetBiteSpell = 910040;
     public const uint PetShieldSpell = 910041;
     public const uint PetPassiveSpell = 910042;
+    public const uint ImpSpell = 910043;
 
     public const int TotemDurationMs = 30_000;
 
@@ -55,7 +57,7 @@ internal sealed class PetTestKit : IDisposable
         Map = Spells.World.GetMap(0);
         Content = CreatureTestSupport.Content(
             [
-                .. new[] { TotemEntry, PetEntry, GuardianEntry, MiniPetEntry, WildEntry, MiniPetEntry2 }.Select(entry => CreatureTestSupport.Template(entry, b =>
+                .. new[] { TotemEntry, PetEntry, GuardianEntry, MiniPetEntry, WildEntry, MiniPetEntry2, ImpEntry }.Select(entry => CreatureTestSupport.Template(entry, b =>
                 {
                     b.Name = $"Summon {entry}";
                     b.Faction = 14;
@@ -165,6 +167,7 @@ internal sealed class PetTestKit : IDisposable
             Range = new SpellRange(0, 30),
         },
         Spell(PetShieldSpell, Effect(SpellEffectName.Heal, 5, SpellImplicitTarget.UnitFriend)),
+        Spell(ImpSpell, Effect(SpellEffectName.Summon, 0, misc: (int)ImpEntry)),
         Spell(PetPassiveSpell, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy)) with
         {
             Attributes = SpellAttributes.Passive,

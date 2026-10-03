@@ -193,7 +193,14 @@ public sealed class PetController
         charm.IsFollowing = false;
         charm.IsCommandFollow = false;
         charm.IsReturning = false;
-        pet.AI?.AttackStart(target);
+        if (pet.AI is PetAI petAi)
+        {
+            petAi.AttackTarget(target);
+        }
+        else
+        {
+            pet.AI?.AttackStart(target);
+        }
 
         // 10% chance to play special pet attack talk, else growl
         if (pet.Summon?.Kind == SummonKind.Pet && !ReferenceEquals(pet, target) && _random.Next(0, 101) < 10)

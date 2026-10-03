@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
@@ -27,14 +28,17 @@ public static class MapPetsExtensions
 [DefaultMapUpdater(Order = 150)]
 public sealed class PetMapSystem : IMapUpdater
 {
+    private readonly Map _map;
     private readonly List<Creature> _summons = [];
     private readonly Dictionary<ObjectGuid, ObjectGuid[]> _totemSlots = [];
     private SummonService? _service;
+    private bool _combatSubscribed;
 
     internal PetMapSystem(Map map, WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(map);
         ArgumentNullException.ThrowIfNull(world);
+        _map = map;
     }
 
     /// <summary>Tuning (retail defaults); the world feature replaces it from configuration.</summary>
@@ -82,6 +86,7 @@ public sealed class PetMapSystem : IMapUpdater
     internal void Register(Creature creature, SummonService service)
     {
         _service = service;
+        SubscribeCombat();
         _summons.Add(creature);
         if (creature.Summon is { Kind: SummonKind.Totem, Slot: < TotemSlots.Count } links)
         {
@@ -91,6 +96,45 @@ public sealed class PetMapSystem : IMapUpdater
             }
 
             slots[links.Slot] = creature.Guid;
+        }
+    }
+
+    private void SubscribeCombat()
+    {
+        if (!_combatSubscribed && _map.FindUpdater<MapCombat>() is { } combat)
+        {
+            combat.DamageDealt += OnDamageDealt;
+            _combatSubscribed = true;
+        }
+    }
+
+    /// <summary>
+    /// vmangos Unit::AttackedBy and the spell/melee damage path (Unit.cpp:4541, 4563, 6080): the pets and
+    /// guardians of a unit that was hit hear <c>OwnerAttackedBy</c>; those of a unit that dealt damage hear
+    /// <c>OwnerAttacked</c>.
+    /// </summary>
+    private void OnDamageDealt(Unit attacker, Unit victim, uint damage, bool direct, bool meleeDamage)
+    {
+        if (_summons.Count == 0)
+        {
+            return;
+        }
+
+        foreach (Creature pet in _summons.ToArray())
+        {
+            if (pet.AI is not PetAI ai || !pet.IsAlive || pet.Summon is not { Kind: SummonKind.Pet or SummonKind.Guardian })
+            {
+                continue;
+            }
+
+            if (pet.OwnerGuid == victim.Guid)
+            {
+                ai.OwnerAttackedBy(attacker);
+            }
+            else if (pet.OwnerGuid == attacker.Guid)
+            {
+                ai.OwnerAttacked(victim);
+            }
         }
     }
 

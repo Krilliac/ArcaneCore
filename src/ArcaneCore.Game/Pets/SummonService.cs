@@ -313,6 +313,7 @@ public sealed partial class SummonService : ISpellSummonSink
 
         pets.Options = _options;
         pets.Register(pet, this);
+        AttachPetAi(pet);
         caster.SetPetGuid(pet.Guid);
 
         // Player::PetSpellInitialize (SpellEffects.cpp:2417-2420)
@@ -344,6 +345,9 @@ public sealed partial class SummonService : ISpellSummonSink
         creature.SetUInt32(UpdateFields.UnitFieldPetNameTimestamp, 0);
         creature.SetUInt32(UpdateFields.UnitCreatedBySpell, spellId);
     }
+
+    /// <summary>vmangos CreatureAISelector: a pet (every Pet object) gets PetAI instead of the creature's AIName AI.</summary>
+    internal void AttachPetAi(Creature pet) => pet.AI = new PetAI(pet, () => _spells, _random);
 
     /// <summary>vmangos ObjectMgr::GeneratePetNumber: the pet number a summoned pet is named by (the GUID carries it).</summary>
     internal uint NextPetNumber() => Interlocked.Increment(ref _petNumbers);

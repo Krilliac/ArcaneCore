@@ -115,6 +115,24 @@ dead with the pet out of combat, or when the spell duration ends.
   negative spell on itself, face the target, then the cast; failures answer `SMSG_PET_CAST_FAILED`.
   The caster of a pet spell is the pet itself.
 
+### P5 PetAI
+
+`Game/Pets/PetAI.cs`; every pet, guardian and mini pet gets it instead of the creature's own AI
+(vmangos `CreatureAISelector`, `PetAI::Permissible` = every `IsPet()`); totems get `NullCreatureAI`.
+Ported from `AI/PetAI.cpp`: `UpdateAI` (a valid victim is kept, otherwise the pet returns), `_needToStop`
+(disabled pet, creature owner evading or out of the threat area, target no longer attackable),
+`_stopAttack`, `HandleReturnMovement` (to the stay point, or follow at the stored angle), `MovementInform`
+(arrival at the stay point; arrival at the follow point is detected by the pet standing still on its follow
+generator), `DoAttack` (chase, or hold position while staying), `AttackStart` (as `AttackTarget`: the base
+`CreatureAI.AttackStart` is not virtual), `CanAttack` in vmangos' order (passive, PvP-flagged targets,
+returning, stay, switching targets, follow), `SelectNextTarget` and `KilledUnit` (the pet's own attackers,
+then the owner's victim and attackers), `AttackedBy`, `OwnerAttackedBy`, `OwnerAttacked` and the imp's
+missing melee attack (entry 416). `PetMapSystem` feeds the owner hooks from the map's damage event
+(vmangos `Unit::AttackedBy`, `Unit::Attack`, `SetInCombatWithVictim`: `Unit.cpp:4541`, `4563`, `6080`);
+`CMSG_PET_ACTION` attack goes through `AttackTarget`. Autocast: while the pet fights, a harmful, ready
+spell with autocast on goes at the victim, chosen at random among those that qualify, with the aggro growl
+(10%: the special-spell talk) for the owner (the harmful half of `PetAI.cpp:226-330`).
+
 ## Configuration (`Pets`, every default is the retail value)
 
 | Key | Default | Meaning |
@@ -166,12 +184,13 @@ dead with the pet out of combat, or when the spell duration ends.
   rank takes its own bar slot. `CMSG_PET_RENAME`, `CMSG_PET_UNLEARN` and the stable opcodes are hunter pet
   features (class-hunter lane); `CMSG_PET_CAST_SPELL` has no `CheckPetCast` range-facing refinements beyond
   what the spell system checks; `PetBroken` and the tame-failure packet belong to taming.
-* **No pet AI yet.** Pets, guardians and mini pets run the creature-ai default AI for their template
-  (AggressorAI fights back when attacked; creature-versus-creature aggro is not modelled there
-  either). vmangos `PetAI` (follow at the stored angle, defend, assist the owner, the commands and
-  react states) is tied to `CharmInfo` and the pet wire protocol and is a later slice that also waits
-  for the creature-ai leash and aggro work. The first consequence: nothing follows its owner, and an
-  attacked guardian runs the generic assistance call.
+* **PetAI gaps.** Not ported: positive and ally autocast (`Spell::CanAutoCast`, `UpdateAllies`: Blood Pact,
+  Fire Shield, Devour Magic and the like never autocast), taunt targets, the threat-list retarget of
+  creature-owned pets, crowd-control checks (`HasAuraPetShouldAvoidBreaking`), possession, the caster
+  chase distance of a spell-only pet (`SetCasterChaseDistance`), and aggro on sight: the creature area does
+  not model creature-versus-creature aggro, so an aggressive pet reacts to attacks on itself and on its
+  owner, not to a hostile that merely stands nearby. Also from the creature area: a same-faction creature
+  asking for assistance can recruit a pet (the assistance filter only excludes `NullCreatureAI`).
 * **Guardian level scaling.** The engineering-trinket level (`SpellEffects.cpp:2824-2832`) needs the
   skills lane's skill values; a guardian's stats follow its template, not `InitStatsForLevel`.
 * **Random points** use a uniform disc at the terrain height (or the centre's Z), as the creature

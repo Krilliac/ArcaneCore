@@ -119,6 +119,7 @@ public sealed partial class SummonService
 
             pets.Options = _options;
             pets.Register(guardian, this);
+            AttachPetAi(guardian);
         }
     }
 
@@ -263,6 +264,7 @@ public sealed partial class SummonService
 
         pets.Options = _options;
         pets.Register(critter, this);
+        AttachPetAi(critter);
     }
 
     // --- helpers --------------------------------------------------------------------------------------
