@@ -86,6 +86,7 @@ public sealed class SocialContext
         Friends = new FriendsService(this);
         Groups = new Groups.GroupManager(this);
         Guilds = new Guilds.GuildManager(this);
+        Petitions = new Guilds.PetitionManager(this);
         Channels = new Channels.ChannelManager(this);
     }
 
@@ -102,6 +103,9 @@ public sealed class SocialContext
     public Groups.GroupManager Groups { get; }
 
     public Guilds.GuildManager Guilds { get; }
+
+    /// <summary>Guild charters (petitions); stored through <see cref="Guilds.IPetitionPersistence"/> when <see cref="Persistence"/> implements it.</summary>
+    public Guilds.PetitionManager Petitions { get; }
 
     public Channels.ChannelManager Channels { get; }
 
