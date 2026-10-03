@@ -7,6 +7,7 @@ using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Npc;
+using ArcaneCore.Data.Quests;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Game.Maps;
