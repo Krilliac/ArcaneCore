@@ -182,6 +182,9 @@ public sealed partial class QuestNpcServices
 
         Send(player, WorldOpcode.SmsgQuestgiverQuestComplete,
             QuestPackets.Complete(quest, plan.Experience, plan.SummaryMoney));
+
+        // vmangos HandleQuestgiverChooseRewardOpcode sends the next quest of the chain right after RewardQuest.
+        OfferNextQuest(player, plan.QuestGiver, quest);
     }
 
     /// <summary>

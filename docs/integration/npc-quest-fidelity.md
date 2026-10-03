@@ -127,3 +127,46 @@ Needs the real client: the Llane Beshere (Northshire) class-variant gossip once 
 * BUY_BANK_SLOT result packets, AUTOBANK / AUTOSTORE_BANK handlers and the price-rounding switch
   (rest of design slice NQ11) are not part of this slice.
 * Needs the real client: dragging a vendor item to a bag slot / worn slot.
+
+## Slice NQ3: quest refusals, source items, abandon, cancel, swap, chain offer
+
+### Delivered
+
+* **Refusal packets.** `CanTakeQuest` is now `RefuseTakeQuest`, which returns the first failing check in
+  vmangos's order (`Player.cpp:12565-12577`): status (ALREADY_ON 13), exclusive group, class, race
+  (WRONG_RACE 6), level, skill, condition, reputation, previous quest, timed (ONLY_ONE_TIMED 12), next chain,
+  previous chain, breadcrumb, dependent breadcrumbs, `IsActive`. MaxLevel and `IsActive` refuse without a
+  message. Accepting a refused quest sends `SMSG_QUESTGIVER_QUEST_INVALID` (u32 reason; gtker/wow_messages
+  `smsg_questgiver_quest_invalid.wowm`, vmangos `SendCanTakeQuestResponse` `Player.cpp:14400-14405`) and then
+  closes the gossip, as `HandleQuestgiverAcceptQuestOpcode` does (`QuestHandler.cpp:108-196`). Level, class,
+  quest-line, exclusive-group, skill, condition, reputation and breadcrumb failures all answer
+  DONT_HAVE_REQ (0), exactly as vmangos does (not LOW_LEVEL).
+* **Source items** (`CanGiveQuestSourceItemIfNeed`, `Player.cpp:13643-13676`): what the player already owns,
+  bank included, counts towards `SrcItemCount`; only the missing part must fit and is given. A full bag sends
+  `SMSG_QUESTGIVER_QUEST_FAILED` (u32 quest, u32 reason 4), a unique item already carried reason 17, anything
+  else the item's `SMSG_INVENTORY_CHANGE_FAILURE`. `SrcItemCount` 0 counts as 1 (`ObjectMgr.cpp:5769-5773`).
+* **Abandon** (`RemoveQuestAtSlot`, `Player.cpp:13033-13066`): the source item is taken back first
+  (`TakeOrReplaceQuestStartItems`, `13696-13759`): left alone when it is the quest's own start item, refused
+  with the equip error when a worn copy cannot come off (`CanUnequipItems`, `8326-8397`, new
+  `PlayerInventory.CanUnequipItems`), otherwise `SrcItemCount` is destroyed when owned (bank included, no
+  "also required" exception) and replaced by the quest's starting item
+  (`ObjectMgr::GetQuestStartingItemID`, `ObjectMgr.cpp:4224-4225, 6248-6256`; new
+  `IItemTemplateStore.QuestStartingItem`). Then every required item with `BIND_QUEST_ITEM` (4) or
+  `BIND_QUEST_ITEM1` (5) is destroyed, bank included (1.12.1 behaviour, `Player.cpp:13046-13062`).
+  The old rule ("keep the source item when the quest also requires it") was not in vmangos and is gone.
+* **`CMSG_QUESTGIVER_CANCEL`** (no body) closes the gossip; **`CMSG_QUESTLOG_SWAP_QUEST`** (u8, u8) swaps the
+  three slot fields, ignoring equal or out-of-range slots (`QuestHandler.cpp:314-325`).
+* **Next quest in chain**: after a turn-in, when the finished quest has `NextQuestInChain` and the same
+  creature starts it, `SMSG_QUESTGIVER_QUEST_DETAILS` follows `SMSG_QUESTGIVER_QUEST_COMPLETE`
+  (`QuestHandler.cpp:275-277`, `Player::GetNextQuest` `Player.cpp:12514-12541`; `OfferNextQuest`). vmangos does
+  not check `CanTakeQuest` for the offer; accepting is where a refusal is reported.
+
+### Limits
+
+* The quest list greeting and emote from `questgiver_greeting` (design NQ3) need the content import (NQ0);
+  `SMSG_QUESTGIVER_QUEST_LIST` still carries an empty greeting.
+* The unsupported-objective gate (`AcceptableQuest`: source spells, party accept, auto-rewarded, stay-alive,
+  reqsource items, exploration without a trigger row) still refuses silently at accept. That is a temporary
+  fail-closed deviation from retail, not a switch yet; NQ5 removes the cases it implements. Quests refused
+  that way never send the invalid packet.
+* `GameObject` quest givers are not covered (slice NQ7).

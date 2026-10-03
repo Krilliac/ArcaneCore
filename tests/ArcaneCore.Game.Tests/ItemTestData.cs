@@ -31,6 +31,12 @@ internal static class ItemTestData
     public const uint IndestructibleRock = 90006;
     public const uint SoulPouch = 90007;
     public const uint UniqueTrinket = 90008;
+    public const uint QuestPelt = 90009;
+    public const uint QuestNote = 90010;
+    public const uint QuestNoteQuest = 7010;
+    public const uint QuestLetter = 90011;
+    public const uint QuestLetterQuest = 7020;
+    public const uint QuestLetterCopy = 90012;
 
     public static IReadOnlyList<ItemTemplate> Templates { get; } =
     [
@@ -53,6 +59,10 @@ internal static class ItemTestData
         new() { Entry = IndestructibleRock, Class = 12, SubClass = 0, Name = "Test Rock", DisplayId = 105, Flags = 0x20 },
         new() { Entry = SoulPouch, Class = 1, SubClass = 1, Name = "Test Soul Pouch", DisplayId = 106, InventoryType = 18, ContainerSlots = 4, BagFamily = 3 },
         new() { Entry = UniqueTrinket, Class = 4, SubClass = 0, Name = "Test Trinket", DisplayId = 107, InventoryType = 12, Flags = 0x80000 },
+        new() { Entry = QuestPelt, Class = 12, SubClass = 0, Name = "Test Pelt", DisplayId = 108, Stackable = 10, Bonding = 4 },
+        new() { Entry = QuestNote, Class = 12, SubClass = 0, Name = "Test Note", DisplayId = 109, StartQuest = QuestNoteQuest },
+        new() { Entry = QuestLetterCopy, Class = 12, SubClass = 0, Name = "Test Letter Copy", DisplayId = 111, StartQuest = QuestLetterQuest },
+        new() { Entry = QuestLetter, Class = 12, SubClass = 0, Name = "Test Letter", DisplayId = 110, StartQuest = QuestLetterQuest },
     ];
 
     /// <summary>vmangos playercreateinfo_item for race 1 (human), class 1 (warrior).</summary>
