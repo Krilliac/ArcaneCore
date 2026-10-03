@@ -1,6 +1,8 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Skills;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.Skills;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Items;
 
@@ -34,6 +36,19 @@ internal sealed class CraftingTestKit : IDisposable
         Player.Inventory.Templates = Templates;
         Player.Inventory.GuidAllocator = new ItemGuidAllocator();
         Player.Inventory.Load([]);
+    }
+
+    /// <summary>The scripted skill roll source (valid after <see cref="AttachSkills"/>).</summary>
+    public ScriptedSkillRandom SkillRandom { get; } = new();
+
+    public PlayerSkills? Skills { get; private set; }
+
+    /// <summary>Give the player skills over the fixture catalog (Smelt Copper 2657: Blacksmithing, trivial 25 / 62 / 100).</summary>
+    public PlayerSkills AttachSkills()
+    {
+        Skills = new PlayerSkills(Player, SkillTestKit.Catalog(), new SkillOptions(), new FakeSkillSpellHost { Cascade = Player }, SkillRandom);
+        Player.AttachSkills(Skills);
+        return Skills;
     }
 
     public SpellTestKit Kit { get; }

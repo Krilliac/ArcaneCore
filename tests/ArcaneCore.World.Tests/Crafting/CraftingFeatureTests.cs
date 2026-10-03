@@ -29,6 +29,7 @@ public sealed class CraftingFeatureTests
 
         Assert.Equal(1, checks);
         Assert.Equal(1, takers);
+        Assert.True(await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.HasEffectHandler(ArcaneCore.Game.Spells.SpellEffectName.CreateItem)));
     }
 
     [Fact]
@@ -39,6 +40,7 @@ public sealed class CraftingFeatureTests
         bool installed = await host.OnWorldAsync(() => ReagentRules.IsInstalled(host.WorldServices.GetRequiredService<SpellFeature>().System));
 
         Assert.False(installed);
+        Assert.False(await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.HasEffectHandler(ArcaneCore.Game.Spells.SpellEffectName.CreateItem)));
     }
 
     [Theory]
