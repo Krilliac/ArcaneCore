@@ -25,8 +25,10 @@ public sealed class LogonSession(
     IRealmStore realmStore,
     AuthOptions options,
     ILogger logger,
-    string remoteEndpoint)
+    string remoteEndpoint,
+    IBanStore? banStore = null)
 {
+    private readonly IBanStore? _banStore = banStore; // optional: null keeps every pre-ban call site unchanged
     private string _username = string.Empty;
     private Srp6Server? _srp;
     private bool _isAutocreate;
@@ -156,6 +158,19 @@ public sealed class LogonSession(
             return;
         }
 
+        // IP ban: FAIL_NOACCESS before the account is even looked up and before any SRP state exists
+        // (vmangos AuthSocket.cpp:338-352). A store error propagates and closes the connection (fail closed).
+        // ArcaneCore validates the build and name above first, so a wrong-build client sees VersionInvalid.
+        string? address = AccountBanEvaluator.AddressOfEndpoint(remoteEndpoint);
+        if (_banStore is not null && address is not null
+            && await _banStore.GetActiveIpBanAsync(address, cancellationToken).ConfigureAwait(false) is not null)
+        {
+            logger.LogInformation("[{Endpoint}] banned address tried to log in as '{Account}'",
+                remoteEndpoint, LogSafe.Escape(username));
+            await SendChallengeFailureAsync(AuthResult.FailNoAccess, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         Account? account = await accountStore.FindByUsernameAsync(username, cancellationToken).ConfigureAwait(false);
 
         if (account is null)
@@ -187,6 +202,18 @@ public sealed class LogonSession(
                 case AccountStatus.Suspended:
                     await SendChallengeFailureAsync(AuthResult.Suspended, cancellationToken).ConfigureAwait(false);
                     return;
+            }
+
+            // Ban rows: a permanent one answers FAIL_BANNED, a temporary one FAIL_SUSPENDED
+            // (AuthSocket.cpp:464-476). The status column above stays an always-honoured override.
+            if (_banStore is not null
+                && await _banStore.GetActiveAccountBanAsync(account.Id, cancellationToken).ConfigureAwait(false) is { } ban)
+            {
+                logger.LogInformation("[{Endpoint}] banned account '{Account}' tried to log in ({Kind})",
+                    remoteEndpoint, LogSafe.Escape(username), ban.IsPermanent ? "permanent" : "temporary");
+                await SendChallengeFailureAsync(
+                    ban.IsPermanent ? AuthResult.Banned : AuthResult.Suspended, cancellationToken).ConfigureAwait(false);
+                return;
             }
 
             // A zero or degenerate salt/verifier would let anyone forge the proof (vmangos
