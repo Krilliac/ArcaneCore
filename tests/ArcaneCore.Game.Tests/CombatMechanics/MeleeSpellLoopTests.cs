@@ -219,7 +219,7 @@ public sealed class MeleeSpellLoopTests
         rig.Combat.Attack(rig.Caster, rig.Target);
 
         rig.Tick(50);
-        Assert.NotNull(rig.Kit.System.GetState(rig.Caster.Guid)!.MeleeCast);   // Unit.cpp:2239 returns before the melee-spell branch
+        Assert.NotNull(rig.Kit.System.GetState(rig.Caster.Guid)!.MeleeCast);   // Unit.cpp:2240-2241 returns before the melee-spell branch
         Assert.Equal(60u, rig.Target.Health);
     }
 

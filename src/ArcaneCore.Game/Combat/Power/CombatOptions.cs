@@ -35,7 +35,7 @@ public sealed class CombatOptions
     public bool StanceShiftKeepsSelfBuffs { get; set; }
 
     /// <summary>
-    /// Whether a unit casting a non-melee spell loses its melee swing (vmangos Unit::AttackerStateUpdate, Unit.cpp:2239-2240:
+    /// Whether a unit casting a non-melee spell loses its melee swing (vmangos Unit::AttackerStateUpdate, Unit.cpp:2240-2241:
     /// <c>if (!extra &amp;&amp; IsNonMeleeSpellCasted(false)) return</c>). Default true, the retail behaviour; the swing timer
     /// still restarts, so the swing is lost, not delayed.
     /// </summary>

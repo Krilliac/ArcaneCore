@@ -64,8 +64,8 @@ public sealed class CreatureAiSummonRow
 /// <c>Detection</c>, <c>CallForHelp</c>, <c>Pursuit</c>, <c>Leash</c>, <c>Timeout</c>,
 /// <c>StaticFlags1/2</c> and the <c>ExtraFlags</c> dialect tag.
 /// <para>
-/// <b>World version 11</b>: the next free number after the integrated tip (the quest reputation reward
-/// step, world 10). It is named once here; tests read <see cref="Version"/> or
+/// <b>World version 12</b>: the number this step has after the lanes were renumbered in merge order (it was allocated
+/// as 11, the next free number after the quest reputation reward step, world 10). It is named once here; tests read <see cref="Version"/> or
 /// <c>WorldDbContext.Schema.CurrentVersion</c>, never a literal, and the integration lead renumbers
 /// in merge order (docs/integration/seams.md).
 /// </para>

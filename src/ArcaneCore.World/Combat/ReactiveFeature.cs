@@ -25,7 +25,7 @@ public sealed class ReactiveFeature(IServiceProvider services) : IWorldFeature
         var states = new AuraStateService(spells.System, player => spells.Spellbook.GetSpells(player));
         AuraStateCastChecks.Install(spells.System, states);
         var reactives = new ReactiveService(states, () => services.GetRequiredService<ComboFeature>().Service
-            ?? throw new InvalidOperationException("the combo point feature has not been attached"));
+            ?? throw new InvalidOperationException("the combo point service is not available yet (ComboFeature.Service is null: it is attached after the reactive feature needed it)"));
         spells.System.RegisterObserver(new ReactiveSpellObserver(reactives));
         AuraStates = states;
         Reactives = reactives;
