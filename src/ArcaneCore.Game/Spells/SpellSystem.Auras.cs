@@ -62,6 +62,11 @@ public sealed partial class SpellSystem
             context.Spell, context.Target, context.Caster,
             _auraCasterOwners.GetValue(context.Caster, static caster => new AuraCasterOwner(caster)),
             context.Cast.State == SpellCastState.Casting ? context.Cast.Timer : context.Spell.GetDuration());
+        if (context.Cast.State == SpellCastState.Casting && context.PendingHolder.ChannelTarget == default)
+        {
+            context.PendingHolder.ChannelTarget = new ObjectGuid(context.Caster.GetUInt64(UpdateFields.UnitFieldChannelObject));
+        }
+
         context.PendingHolder.SetAura(new SpellAura(context.EffectIndex, effect.AuraType, context.Value, effect.Amplitude, effect.MiscValue));
     }
 
@@ -416,9 +421,20 @@ public sealed partial class SpellSystem
     {
         uint triggerSpell = holder.Spell.Effects[aura.EffectIndex].TriggerSpell;
         Unit caster = ResolveAuraCaster(holder) ?? holder.Target;
+        Unit triggerTarget = holder.Target;
+
+        // vmangos Aura::TriggerSpell (SpellAuras.cpp:1519-1536): a channelled spell whose trigger aura sits on its
+        // own caster (Arcane Missiles: TARGET_UNIT_CASTER) casts the triggered spell at the CHANNEL TARGET. A trigger
+        // aura on the channel target casts from the caster at that target, which is the default below.
+        if (holder.Spell.IsChanneled && ReferenceEquals(holder.Target, caster)
+            && holder.ChannelTarget.Value != 0 && Units.Find(caster, holder.ChannelTarget) is { } channelTarget)
+        {
+            triggerTarget = channelTarget;
+        }
+
         if (Store.Get(triggerSpell) is not null)
         {
-            CastSpell(caster, triggerSpell, SpellCastTargets.ForUnit(holder.Target.Guid), triggered: true);
+            CastSpell(caster, triggerSpell, SpellCastTargets.ForUnit(triggerTarget.Guid), triggered: true);
         }
     }
 
