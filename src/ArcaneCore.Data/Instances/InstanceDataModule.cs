@@ -39,10 +39,9 @@ public sealed class CharacterLastInstanceRow
 
 /// <summary>
 /// Instance tables of the characters database (docs/integration/instances.md). The fleet plan
-/// reserves characters schema v9 for this module (<see cref="ReservedSchemaVersion"/>); the
-/// schema composer refuses version gaps and the integration base ends at v6, so on this branch
-/// the module claims the next free version. The integration lead renumbers it to 9 once v7
-/// and v8 are merged. The tables are new; nothing existing changes.
+/// reserved characters schema v9 for this module (<see cref="ReservedSchemaVersion"/>), but the
+/// schema composer refuses version gaps, so it takes the next version in merge order: v8,
+/// directly after reputation (v7). The tables are new; nothing existing changes.
 /// <para>Character deletion (<see cref="ICharacterDataCleanup"/>) removes the character's binds and
 /// last-instance row; an instance nobody is bound to any more is dropped at the next load.</para>
 /// </summary>
@@ -51,8 +50,8 @@ public sealed class InstanceDataModule : IDataModule, ICharacterDataCleanup
     /// <summary>The characters schema version reserved for instances in the fleet plan.</summary>
     public const int ReservedSchemaVersion = 9;
 
-    /// <summary>The version claimed on this branch: the next free one after the integration base (v6).</summary>
-    public const int BranchSchemaVersion = 7;
+    /// <summary>The version this module takes in merge order: v8, after reputation (v7).</summary>
+    public const int BranchSchemaVersion = 8;
 
     public DatabaseComponent Component => DatabaseComponent.Characters;
 
