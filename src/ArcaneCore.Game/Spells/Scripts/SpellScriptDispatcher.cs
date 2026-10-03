@@ -47,6 +47,14 @@ public sealed class SpellScriptDispatcher : ISpellCastCheck, ISpellCastObserver
         system.RegisterObserver(dispatcher);
         Chain(system, SpellEffectName.Dummy, registry);
         Chain(system, SpellEffectName.ScriptEffect, registry);
+        foreach (SpellEffectName effect in registry.ExecuteEffects)
+        {
+            // Only an effect the world handles is chained (an unhandled one must keep being reported as not implemented); Dispel has its own wrapper below.
+            if (effect is not (SpellEffectName.Dummy or SpellEffectName.ScriptEffect or SpellEffectName.Dispel) && system.HasEffectHandler(effect))
+            {
+                Chain(system, effect, registry);
+            }
+        }
 
         SpellEffectHandler? dispel = system.GetEffectHandler(SpellEffectName.Dispel);
         system.RegisterEffect(SpellEffectName.Dispel, context =>

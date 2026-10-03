@@ -167,3 +167,34 @@ stealth removal handler. The aura values in the test are the classic-db z2815 ro
 
 Tests: `tests/ArcaneCore.Game.Tests/Rogue/InvisibilityTests.cs` (12 tests; RED first against a rule that sees everything and no handlers: 7 failed, the
 5 cases that expect "seen" or no rule passed by design).
+
+## wlm-08 (reduced) Warlock demons and Demonic Sacrifice (`Pets/SummonService.Demons.cs`, `Spells/Warlock/DemonicSacrificeScript.cs`)
+
+`SPELL_EFFECT_SUMMON_PET` (56) was unregistered (docs/integration/pets.md), so Summon Imp, Voidwalker, Succubus and Felhunter did nothing.
+`SummonService.InstallDemons(SpellSystem)` (a new partial of the pets lane's service; `WarlockDemonFeature` calls it at world start, and a second
+claim of the effect throws) registers vmangos `Spell::EffectSummonPet` / `Unit::EffectSummonPet` (SpellEffects.cpp:3171-3327), the part that does not need
+a database:
+
+* level: the caster's; for a non-player the caster's plus `EffectMultipleValue` (at least 1);
+* `UnsummonOldPetBeforeNewSummon` (Unit.cpp:5116-5145): a player's old pet (alive or dead) is dismissed first, even when the new entry then turns out unknown;
+  a non-player keeps a living pet and the summon is refused, a dead pet of the same entry is replaced;
+* the pet appears at the owner's close point 2 yards at pi/2 (`PET_FOLLOW_DIST`, `PET_FOLLOW_ANGLE`; the spell's own target 32 destination is not used, as in
+  vmangos), facing minus the owner's orientation, with the owner's faction, the spell as `UNIT_CREATED_BY_SPELL`, defensive react state for a player owner,
+  aggressive otherwise, `pet_levelstats` stats, the `petcreateinfo_spell` spells and SMSG_PET_SPELLS (the existing pet initialisation);
+* the Demonic Sacrifice buffs of the owner (`SPELL_AURA_OVERRIDE_CLASS_SCRIPTS` misc 2228: Burning Wish, Fel Stamina, Touch of Shadow, Fel Energy) end when a
+  new pet appears.
+
+Demonic Sacrifice (18788, vmangos spell_warlock.cpp:19-56): the INSTAKILL on the pet is preceded by a script (`DemonicSacrificeScript`) that casts the buff of the
+pet's entry on the caster: Imp 416 -> 18789, Felhunter 417 -> 18792, Voidwalker 1860 -> 18790, Succubus 1863 -> 18791; any other entry only dies. Doing that needed a small
+extension of the wlm-02 dispatcher: `[SpellScript(ids, ExecuteEffects = new[] { SpellEffectName.X })]` makes the dispatcher chain the installed handler of
+that effect so the script's `OnEffectExecute` runs before it (vmangos raises it before every effect). Declared effects the world does not handle are not
+chained, so they stay "not implemented".
+
+Limits, recorded: (1) no persistence: the design's `IWarlockPetStore` and the `character_pet` table (wlm-10) are not delivered, so a demon is a fresh pet of the
+caster's level each time (vmangos reloads the saved demon, with its name, from `character_pet`); (2) the random demon name (`pet_name_generation`, wlm-11) is not
+generated, the pet keeps its creature name; (3) the Soul Shard reagent of Summon Voidwalker/Succubus/Felhunter and every other reagent is a cross-lane
+primitive owned by crafting-professions and is not charged here; (4) entry 0 (hunter Call Pet) is not served; (5) Enslave Demon (charm) and the Inferno /
+Ritual of Doom summons (SUMMON_DEMON) are not built.
+
+Tests: `tests/ArcaneCore.Game.Tests/Pets/WarlockDemonTests.cs` (13 tests; RED first with an empty `InstallDemons` and no script: 12 failed, the "without the install"
+control passed) and two dispatcher tests for `ExecuteEffects` in `SpellScriptTests.cs`.

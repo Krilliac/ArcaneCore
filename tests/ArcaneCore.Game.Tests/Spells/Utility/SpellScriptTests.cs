@@ -19,6 +19,8 @@ public sealed class SpellScriptTests
     private const uint DispelSpell = 960_004;
     private const uint MagicDebuff = 960_005;
     private const uint UnclaimedDummy = 960_006;
+    private const uint HealSpell = 960_007;
+    private const uint SummonDemonSpell = 960_008;
 
     internal static readonly List<string> Log = [];
 
@@ -28,6 +30,8 @@ public sealed class SpellScriptTests
     private static SpellTestKit Kit() => new(
         Instant(DummySpell, SpellTestKit.Effect(SpellEffectName.Dummy, 5)),
         Instant(UnclaimedDummy, SpellTestKit.Effect(SpellEffectName.Dummy, 5)),
+        Instant(HealSpell, SpellTestKit.Effect(SpellEffectName.Heal, 20)),
+        Instant(SummonDemonSpell, SpellTestKit.Effect(SpellEffectName.SummonDemon, 1)),
         Instant(CostSpell, SpellTestKit.Effect(SpellEffectName.Dummy, 1)) with { PowerType = (int)PowerType.Rage, ManaCost = 10 },
         // The mage Teleport shape: a TELEPORT_UNITS-less first effect and a SCRIPT_EFFECT tail (spell_template carries one on all six ranks).
         Instant(TeleportShape, SpellTestKit.Effect(SpellEffectName.ScriptEffect, 0)),
@@ -48,6 +52,15 @@ public sealed class SpellScriptTests
     {
         public void OnEffectExecute(SpellEffectContext context) => Log.Add($"effect:{context.Value}");
     }
+
+    [SpellScript(HealSpell, ExecuteEffects = new[] { SpellEffectName.Heal })]
+    private sealed class HealScript : ISpellScript
+    {
+        public void OnEffectExecute(SpellEffectContext context) => Log.Add($"before-heal:{context.Target.Health}");
+    }
+
+    [SpellScript(SummonDemonSpell, ExecuteEffects = new[] { SpellEffectName.SummonDemon })]
+    private sealed class UnhandledEffectScript : ISpellScript;
 
     [SpellScript(CostSpell)]
     private sealed class CostScript : ISpellScript
@@ -246,6 +259,33 @@ public sealed class SpellScriptTests
         Install(kit);
 
         Assert.Throws<InvalidOperationException>(() => Install(kit));
+    }
+
+    [Fact]
+    public void ADeclaredEffect_SeesTheTargetBeforeTheEffectRuns_AndOnlyForTheClaimingSpell()
+    {
+        Reset();
+        using SpellTestKit kit = Kit();
+        Install(kit, new HealScript());
+        (Player player, _) = kit.AddPlayer(1);
+        player.MaxHealth = 100;
+        player.Health = 50;
+
+        kit.System.CastSpell(player, HealSpell, SpellCastTargets.ForSelf(), triggered: true);
+
+        Assert.Equal(["before-heal:50"], Log); // the script ran first, then the built-in heal
+        Assert.Equal(70u, player.Health);
+    }
+
+    [Fact]
+    public void ADeclaredEffectTheWorldDoesNotHandle_IsNotChained_SoItStaysReportedAsNotImplemented()
+    {
+        using SpellTestKit kit = Kit();
+        Assert.False(kit.System.HasEffectHandler(SpellEffectName.SummonDemon));
+
+        Install(kit, new UnhandledEffectScript());
+
+        Assert.False(kit.System.HasEffectHandler(SpellEffectName.SummonDemon));
     }
 
     [Fact]

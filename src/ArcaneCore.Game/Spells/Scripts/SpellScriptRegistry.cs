@@ -9,6 +9,7 @@ namespace ArcaneCore.Game.Spells.Scripts;
 public sealed class SpellScriptRegistry
 {
     private readonly Dictionary<uint, ISpellScript> _byId = [];
+    private readonly HashSet<SpellEffectName> _executeEffects = [];
 
     public SpellScriptRegistry(IEnumerable<ISpellScript> scripts)
     {
@@ -23,6 +24,7 @@ public sealed class SpellScriptRegistry
                 throw new InvalidOperationException($"spell script {type.FullName} names no spell id");
             }
 
+            _executeEffects.UnionWith(attribute.ExecuteEffects);
             foreach (uint id in attribute.SpellIds)
             {
                 if (_byId.TryGetValue(id, out ISpellScript? existing))
@@ -56,6 +58,9 @@ public sealed class SpellScriptRegistry
     public int Count => _byId.Count;
 
     public IEnumerable<uint> SpellIds => _byId.Keys;
+
+    /// <summary>The effects (beyond DUMMY and SCRIPT_EFFECT) some script asked to see executed (<see cref="SpellScriptAttribute.ExecuteEffects"/>).</summary>
+    public IReadOnlyCollection<SpellEffectName> ExecuteEffects => _executeEffects;
 
     public ISpellScript? Find(uint spellId) => _byId.GetValueOrDefault(spellId);
 }
