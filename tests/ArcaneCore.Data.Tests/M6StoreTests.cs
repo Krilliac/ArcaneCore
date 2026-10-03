@@ -39,7 +39,7 @@ public sealed class M6StoreTests : IAsyncLifetime
 
         await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs);
         await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
-        Assert.Equal(2, (await db.Set<SchemaVersionRow>().SingleAsync()).Version);
+        Assert.Equal(CharacterDbContext.Schema.CurrentVersion, (await db.Set<SchemaVersionRow>().SingleAsync()).Version);
 
         CharacterRecord veteran = await db.Characters.AsNoTracking().SingleAsync();
         Assert.Equal(("Veteran", (byte)12, 5.5f, 3600u), (veteran.Name, veteran.Level, veteran.X, veteran.PlayedTime));
