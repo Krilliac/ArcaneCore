@@ -82,10 +82,24 @@ public static class EconomyCharacterCleanup
             row.Cod = 0;
         }
 
-        foreach (AuctionRow row in await db.Set<AuctionRow>().Where(r => r.SellerId == characterId && r.BidderId == 0)
+        foreach (AuctionRow row in await db.Set<AuctionRow>().AsNoTracking().Where(r => r.SellerId == characterId && r.BidderId == 0)
             .ToListAsync(cancellationToken).ConfigureAwait(false))
         {
-            db.Remove(row);
+            // A bidder is a different settlement participant from the seller. Recheck the
+            // complete auction atomically when removing it, even in a caller's read-committed
+            // transaction. The successful delete keeps its write lock until that transaction
+            // ends; a bid that won after our read instead refuses the entire character deletion.
+            int removed = await db.Set<AuctionRow>().Where(r =>
+                    r.Id == row.Id && r.HouseId == row.HouseId && r.ItemGuid == row.ItemGuid
+                    && r.ItemEntry == row.ItemEntry && r.ItemCount == row.ItemCount && r.SellerId == row.SellerId
+                    && r.StartBid == row.StartBid && r.Buyout == row.Buyout && r.ExpireTime == row.ExpireTime
+                    && r.BidderId == row.BidderId && r.Bid == row.Bid && r.Deposit == row.Deposit)
+                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            if (removed != 1)
+            {
+                throw new CharacterDeletionRefusedException("An auction changed during seller deletion.");
+            }
+
             removedItems.Add(row.ItemGuid);
         }
 
