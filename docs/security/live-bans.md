@@ -31,8 +31,9 @@ enforcement.
 
 Texts are `mangos_string` 408-428 and 499 (`D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`). The
 multi-line IP entry (423) follows `mangos-classic sql/base/mangos.sql:3776` because the classic-db dump lost
-its newlines. Security: every ban/unban/baninfo/banlist row of the classic-db `command` table is level 3, i.e.
-`Administrator` on ArcaneCore's four-level scale.
+its newlines. Security follows vmangos `Chat.cpp:170-191, 1022-1024, 1263-1266`: Moderator (ticketmaster) for
+`baninfo`/`banlist` account and character, GameMaster for `ban account`/`character` and `baninfo`/`banlist ip`,
+Administrator for `ban ip` and every `unban`.
 
 ## Configuration (`Bans:` section)
 
@@ -78,10 +79,10 @@ author is not kicked by their own ban) has no switch.
   async holder fails silently).
 * `.baninfo account`/`character` and `.banlist` of characters read the account name through `IAccountAdmin`; the
   `<hidden>` reason branch of vmangos is not implemented (it reads a `gmlevel` column no vmangos INSERT ever writes).
-* `Bans:RequireNotHigherSecurityTarget` was designed and **not delivered**: every ban command is Administrator, the
-  top tier, so no target can outrank the invoker and the option could never fire.
-* Command security follows classic-db (level 3). vmangos' own `Chat.cpp` splits ban account/character (GM tier)
-  from ban ip and unban (administrator tier) on its 0-7 scale; ArcaneCore's four levels do not.
+* `Bans:RequireNotHigherSecurityTarget` was designed and **not delivered**; retail has no hierarchy check on
+  `.ban`, so (as retail) a GameMaster can ban an Administrator's account.
+* Command security is vmangos' (see above), mapped from its 0-7 scale onto ArcaneCore's four levels; classic-db's
+  all-level-3 `command` rows are not used.
 
 ## Operator guidance
 

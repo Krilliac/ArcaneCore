@@ -244,19 +244,31 @@ public sealed class BanCommandTests
     }
 
     [Fact]
-    public async Task SecurityTiers_OnlyAdministratorsSeeTheBanCommands()
+    public async Task SecurityTiers_FollowVmangosChatCpp()
     {
+        // vmangos Chat.cpp:170-191, 1022-1024, 1263-1266 mapped onto ArcaneCore's levels: ban account/character and
+        // baninfo/banlist ip are GAMEMASTER, baninfo/banlist account/character are TICKETMASTER (Moderator), and
+        // ban ip, ban allip and unban are ADMINISTRATOR.
         await using var host = WorldTestHost.Start();
+        await using WorldTestClient mod = await host.EnterWorldAsync("MOD", "Moderator", AccountSecurity.Moderator);
         await using WorldTestClient gm = await host.EnterWorldAsync("GM", "Gamemaster", AccountSecurity.GameMaster);
         await host.AddAccountAsync("TARGET");
-        await Drain(gm);
+        await Drain(mod, gm);
 
-        // classic-db 'command' table: every ban/unban/baninfo/banlist row is level 3 (Administrator).
-        Assert.Equal("There is no such command.", await CommandAsync(gm, ".ban account target 1d x"));
-        Assert.Equal("There is no such command.", await CommandAsync(gm, ".unban account target x"));
-        Assert.Equal("There is no such command.", await CommandAsync(gm, ".baninfo account target"));
-        Assert.Equal("There is no such command.", await CommandAsync(gm, ".banlist account"));
-        Assert.Null(await host.Bans.GetActiveAccountBanAsync((await host.Accounts.FindByUsernameAsync("TARGET"))!.Id));
+        // A visible parent with only hidden children answers with the subcommand list; either way the verb did not run.
+        static bool Refused(string reply) => reply.StartsWith("There is no such command", StringComparison.Ordinal) || reply.StartsWith("There is no such subcommand", StringComparison.Ordinal);
+        Assert.True(Refused(await CommandAsync(mod, ".ban account target 1d x")));
+        Assert.True(Refused(await CommandAsync(mod, ".baninfo ip 1.2.3.4")));
+        Assert.True(Refused(await CommandAsync(mod, ".banlist ip")));
+        Assert.True(Refused(await CommandAsync(mod, ".unban account target x")));
+        Assert.False(Refused(await CommandAsync(mod, ".baninfo account target")));
+        Assert.False(Refused(await CommandAsync(mod, ".banlist account")));
+
+        Assert.True(Refused(await CommandAsync(gm, ".unban account target x")));
+        Assert.True(Refused(await CommandAsync(gm, ".ban ip 1.2.3.4 1d x")));
+        Assert.False(Refused(await CommandAsync(gm, ".baninfo ip 1.2.3.4")));
+        Assert.False(Refused(await CommandAsync(gm, ".banlist ip")));
+        Assert.Equal("TARGET is banned for 1d. Reason: x.", await CommandAsync(gm, ".ban account target 1d x"));
     }
 
     [Fact]

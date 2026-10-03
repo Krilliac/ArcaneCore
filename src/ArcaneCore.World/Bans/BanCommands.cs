@@ -18,8 +18,10 @@ namespace ArcaneCore.World.Bans;
 /// ban, and the database work runs asynchronously with the reply sent when it completes (vmangos BanQueryHolder).
 /// The kick itself happens through <see cref="AccountStatusEvents"/>, shared with every other ban writer.
 /// <para>
-/// Security: every row of the classic-db <c>command</c> table for ban/unban/baninfo/banlist is level 3, which is
-/// <see cref="AccountSecurity.Administrator"/> on ArcaneCore's four-level scale. Without a last_ip column
+/// Security follows vmangos Chat.cpp:170-191, 1022-1024, 1263-1266 (SEC_TICKETMASTER 2, SEC_GAMEMASTER 3,
+/// SEC_ADMINISTRATOR 6) mapped onto ArcaneCore's four levels: Moderator for the ban/baninfo/banlist parents and
+/// baninfo/banlist account/character, GameMaster for ban account/character and baninfo/banlist ip, Administrator for
+/// ban ip and every unban. Without a last_ip column
 /// <c>.ban ip</c> kicks the live sessions from that address and always reports success (retail kicks accounts whose
 /// last_ip matches and prints "ip X not found" when none do).
 /// </para>
@@ -31,10 +33,10 @@ public sealed class BanCommands : ICommandGroup
 
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
-        new ChatCommand("ban", AccountSecurity.Administrator, "Ban an account, character or IP address.", Children:
+        new ChatCommand("ban", AccountSecurity.Moderator, "Ban an account, character or IP address.", Children:
         [
-            new ChatCommand("account", AccountSecurity.Administrator, "Syntax: .ban account $Name $bantime $reason — $bantime is like 1d2h3m4s, 0 or an unknown format is permanent; the reason is one word or quoted.", BanAccount),
-            new ChatCommand("character", AccountSecurity.Administrator, "Syntax: .ban character $Name $bantime $reason — bans the character's account.", BanCharacter),
+            new ChatCommand("account", AccountSecurity.GameMaster, "Syntax: .ban account $Name $bantime $reason — $bantime is like 1d2h3m4s, 0 or an unknown format is permanent; the reason is one word or quoted.", BanAccount),
+            new ChatCommand("character", AccountSecurity.GameMaster, "Syntax: .ban character $Name $bantime $reason — bans the character's account.", BanCharacter),
             new ChatCommand("ip", AccountSecurity.Administrator, "Syntax: .ban ip $Ip $bantime $reason", BanIp),
         ]),
         new ChatCommand("unban", AccountSecurity.Administrator, "Lift a ban.", Children:
@@ -43,17 +45,17 @@ public sealed class BanCommands : ICommandGroup
             new ChatCommand("character", AccountSecurity.Administrator, "Syntax: .unban character $Name $message", UnbanCharacter),
             new ChatCommand("ip", AccountSecurity.Administrator, "Syntax: .unban ip $Ip $message", UnbanIp),
         ]),
-        new ChatCommand("baninfo", AccountSecurity.Administrator, "Show ban history.", Children:
+        new ChatCommand("baninfo", AccountSecurity.Moderator, "Show ban history.", Children:
         [
-            new ChatCommand("account", AccountSecurity.Administrator, "Syntax: .baninfo account $accountid|$name", BanInfoAccount),
-            new ChatCommand("character", AccountSecurity.Administrator, "Syntax: .baninfo character $Name", BanInfoCharacter),
-            new ChatCommand("ip", AccountSecurity.Administrator, "Syntax: .baninfo ip $Ip", BanInfoIp),
+            new ChatCommand("account", AccountSecurity.Moderator, "Syntax: .baninfo account $accountid|$name", BanInfoAccount),
+            new ChatCommand("character", AccountSecurity.Moderator, "Syntax: .baninfo character $Name", BanInfoCharacter),
+            new ChatCommand("ip", AccountSecurity.GameMaster, "Syntax: .baninfo ip $Ip", BanInfoIp),
         ]),
-        new ChatCommand("banlist", AccountSecurity.Administrator, "List bans.", Children:
+        new ChatCommand("banlist", AccountSecurity.Moderator, "List bans.", Children:
         [
-            new ChatCommand("account", AccountSecurity.Administrator, "Syntax: .banlist account [$Name] — accounts with a ban whose name starts with $Name.", BanListAccount),
-            new ChatCommand("character", AccountSecurity.Administrator, "Syntax: .banlist character $Name — banned accounts owning a character whose name starts with $Name.", BanListCharacter),
-            new ChatCommand("ip", AccountSecurity.Administrator, "Syntax: .banlist ip [$Ip] — banned addresses starting with $Ip.", BanListIp),
+            new ChatCommand("account", AccountSecurity.Moderator, "Syntax: .banlist account [$Name] — accounts with a ban whose name starts with $Name.", BanListAccount),
+            new ChatCommand("character", AccountSecurity.Moderator, "Syntax: .banlist character $Name — banned accounts owning a character whose name starts with $Name.", BanListCharacter),
+            new ChatCommand("ip", AccountSecurity.GameMaster, "Syntax: .banlist ip [$Ip] — banned addresses starting with $Ip.", BanListIp),
         ]),
     ];
 
