@@ -112,6 +112,26 @@ and all_gossips (`ServerCommands.cpp:925-933`, `985-994`); `npc_text` is in neit
   keeps them (as for `item_template`).
 - vmangos also reloads `npc_trainer_template` with `npc_trainer` and `npc_vendor_template` with `npc_vendor`
   (`ServerCommands.cpp:1282-1301`); ArcaneCore has no template tables (an entry's list is one list), so there is nothing more to read.
+**Loot tables** (`LootContentReloadables`: `all_loot`, the eight per-table `*_loot_template` reloadables and
+`skill_fishing_base_level`; `LootContent.Rows` and friends, `GameObjectLootFeature.ReplaceLootContent`, `LootService.ReplaceContent`):
+the whole `LootContent` is read through `ILootDataStore` off the world thread and the next immutable content is composed from it and
+the live one (one table's rows replaced, or everything), still off the world thread; the commit swaps it into the loot module and into the
+`LootService` of every map already attached (maps created later take it from the feature), so a chest or corpse filled from then on
+rolls from the new rows. vmangos: `HandleReloadAllLootCommand` `ServerCommands.cpp:916-923` -> `LoadLootTables` (`LootMgr.h:431`), the per-table
+commands `:1174-1254`, `LootStore::LoadLootTable` `LootMgr.cpp:94-189`; table entries `Chat.cpp:801`, `825`, `831`, `834`, `841`, `853`, `874`, `885`,
+`889`, `890`.
+- Loot already generated keeps what it rolled, like vmangos (it rolls when the corpse or chest is filled, `Loot::FillLoot`): a chest whose
+  window is open when the table changes still hands out the old item (a test pins it).
+- `LoadLootTable` clears its store before it looks at the query result (`LootMgr.cpp:100`) and an empty table leaves it empty (`:184-188`), so an empty
+  table empties its rows; `HotReload:EmptyTables = KeepLoaded` keeps them. `skill_fishing_base_level` clears first as well (`ObjectMgr.cpp:10409`).
+- `all_loot` is a superset of vmangos' command: the loot module reads the creature loot ids and gold (`creature_loot_info`), the pickpocket loot ids
+  and the fishing base levels together with its tables (in vmangos they belong to `creature_template` and `skill_fishing_base_level`), and `all_loot`
+  replaces all of it. The per-table commands replace only their table's rows, and `skill_fishing_base_level` only the base levels. `reload all`
+  reaches `all_loot` only (vmangos' `all` calls `skill_fishing_base_level` too, `:887`; its content is already in `all_loot`, and a second load of the same
+  database tables would add nothing).
+- `mail_loot_template` has no counterpart (mail loot is not a table here). A change to a creature's loot id in `creature_template` reaches the
+  loot module with `all_loot` (or `reload all`), not with `creature_template` alone, because the loot module reads that column from its own table.
+
 **`game_tele`, `areatrigger_teleport`** (`MapContentReloadables`, `WorldMaps.ReplaceGameTeles` /
 `BuildAreaTriggerTables` / `ReplaceAreaTriggerTables`): the `.tele` locations, and the area triggers with
 their teleports, are read via `IMapDataStore` off the world thread and swapped on it (vmangos
@@ -177,9 +197,9 @@ table or catalog from the database).
 | `npc_gossip` (867), `npc_trainer` (869), `npc_vendor` (870), `points_of_interest` (880) | yes, via all_npc (:928-931) | `npc_gossip`, `npc_trainer`, `npc_vendor`, `points_of_interest` | delivered |
 | `gossip_menu` (847), `gossip_menu_option` (848) | yes, via all_gossips (:987-988) | `gossip_menu`, `gossip_menu_option` | delivered |
 | `npc_text` (868) | no | `npc_text` | delivered |
-| `creature_loot_template` (825), `gameobject_loot_template` (841), `item_loot_template` (853), `skinning_loot_template` (890), `reference_loot_template` (885), `fishing_loot_template` (834), `pickpocketing_loot_template` (874), `disenchant_loot_template` (831) | yes, all at once via all_loot (:891, :916-922) | none yet | planned |
+| `creature_loot_template` (825), `gameobject_loot_template` (841), `item_loot_template` (853), `skinning_loot_template` (890), `reference_loot_template` (885), `fishing_loot_template` (834), `pickpocketing_loot_template` (874), `disenchant_loot_template` (831) | yes, all at once via all_loot (:891, :916-922) | the eight `*_loot_template` reloadables, and `all_loot` (the one `all` reaches) | delivered |
 | `mail_loot_template` (863) | yes, via all_loot | none | no store |
-| `skill_fishing_base_level` (889) | yes (:887) | none yet; the base levels live in the loot content object | planned |
+| `skill_fishing_base_level` (889) | yes (:887) | `skill_fishing_base_level` (the base levels live in the loot content object, so `all` reaches them through `all_loot`, not on their own) | delivered |
 | `item_enchantment_template` (852), `page_text` (871), `item_required_target` (854) | yes, via all_item (:996-1002) | none | no store |
 | `gameobject_template` (845) | no | none yet | planned |
 | `gameobject` (838), `gameobject_requirement` (843) | no | none | owner lane (gameobject-types) |

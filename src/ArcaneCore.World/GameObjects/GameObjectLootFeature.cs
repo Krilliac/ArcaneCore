@@ -54,6 +54,26 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
     /// <summary>The loaded game object content (immutable; safe to read from any thread).</summary>
     public GameObjectContent Content => Volatile.Read(ref _content);
 
+    /// <summary>The loaded loot tables (immutable; replaced as a whole by the live reload, world thread).</summary>
+    public LootContent LootContent => Volatile.Read(ref _lootContent);
+
+    /// <summary>
+    /// Replace the loot tables (live reload, world thread; vmangos <c>LootStore::LoadLootTable</c> clears and refills its
+    /// stores in place, LootMgr.cpp:94-189): every map's loot service and every map created later use the new tables for
+    /// the loot they generate from now on. Loot that was already generated keeps what it rolled. Returns the content it replaced.
+    /// </summary>
+    public LootContent ReplaceLootContent(LootContent content)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        LootContent previous = Interlocked.Exchange(ref _lootContent, content);
+        foreach (GameObjectMapSystem system in _systems.Values)
+        {
+            system.Loot?.ReplaceContent(content);
+        }
+
+        return previous;
+    }
+
     public LootOptions Options { get; } = new();
 
     /// <summary>Behaviour switches of the game objects (configuration section <see cref="GameObjectOptions.SectionName"/>); defaults are retail.</summary>
@@ -94,7 +114,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
 
         Volatile.Write(ref _content, content);
         Quests = new QuestJournalAdapter(services, world);
-        _lootContent = loot;
+        Volatile.Write(ref _lootContent, loot);
 
         logger.LogInformation(
             "Loaded {Templates} game object templates, {Spawns} spawns, {Locks} locks, {LootRows} loot rows, {CreatureLoot} creature loot entries",
@@ -159,7 +179,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             return;
         }
 
-        var loot = new LootService(_lootContent, Options, new Random(), logger)
+        var loot = new LootService(LootContent, Options, new Random(), logger)
         {
             Items = new DeferredItemTemplates(services),
             Quests = Quests,

@@ -132,7 +132,7 @@ public sealed class GameObjectWorldTests
     }
 
     /// <summary>Read until an update packet carries the create block of a game object.</summary>
-    private static async Task ReadUntilGameObjectCreateAsync(WorldTestClient client, ulong guid)
+    internal static async Task ReadUntilGameObjectCreateAsync(WorldTestClient client, ulong guid)
     {
         while (true)
         {
@@ -185,9 +185,12 @@ internal sealed class GameObjectTestContext(GameObjectContent content, LootConte
 {
     public GameObjectContent Content { get; } = content;
 
-    public LootContent Loot { get; } = loot;
+    public LootContent Loot { get; set; } = loot;
 
     public GameObjectLootFeature? Feature { get; set; }
+
+    /// <summary>When set, the loot store throws it at every later load (a database that went away; the reload tests use it).</summary>
+    public Exception? LootFailure { get; set; }
 }
 
 /// <summary>Game object and loot stores whose content the starting test sets (async-local, so tests stay isolated).</summary>
@@ -201,7 +204,7 @@ internal sealed class GameObjectTestStore : IGameObjectDataStore, ILootDataStore
         => Task.FromResult(_context?.Content ?? GameObjectContent.Empty);
 
     Task<LootContent> ILootDataStore.LoadAsync(CancellationToken cancellationToken)
-        => Task.FromResult(_context?.Loot ?? LootContent.Empty);
+        => _context?.LootFailure is { } failure ? Task.FromException<LootContent>(failure) : Task.FromResult(_context?.Loot ?? LootContent.Empty);
 }
 
 /// <summary>Registers <see cref="GameObjectTestStore"/> in every test host (empty unless a game object test set content).</summary>

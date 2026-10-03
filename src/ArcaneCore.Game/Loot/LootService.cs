@@ -51,18 +51,33 @@ public sealed partial class LootService : IViewerFieldFilter
     public LootService(LootContent content, LootOptions? options = null, Random? random = null, ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(content);
-        Content = content;
+        _content = content;
         Options = options ?? new LootOptions();
         _random = random ?? new Random();
-        Generator = new LootGenerator(content, _random);
+        _generator = new LootGenerator(content, _random);
         _logger = logger ?? NullLogger.Instance;
     }
 
-    public LootContent Content { get; }
+    // The content is immutable; the live reload (.reload all_loot, creature_loot_template, ...) swaps the whole of it on the
+    // world thread, between ticks. Loot already generated keeps the items it rolled (vmangos rolls at corpse generation too).
+    private LootContent _content;
+    private LootGenerator _generator;
+
+    public LootContent Content => _content;
 
     public LootOptions Options { get; }
 
-    public LootGenerator Generator { get; }
+    public LootGenerator Generator => _generator;
+
+    /// <summary>Replace the loot tables (live reload, world thread); returns the content it replaced.</summary>
+    public LootContent ReplaceContent(LootContent content)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        LootContent previous = _content;
+        _generator = new LootGenerator(content, _random);
+        _content = content;
+        return previous;
+    }
 
     /// <summary>Item templates (display ids, party-loot and lootable flags). Unknown items are not generated.</summary>
     public IItemTemplateStore? Items { get; set; }

@@ -83,6 +83,24 @@ public sealed class LootContent
 
     public int RowCount { get; }
 
+    /// <summary>
+    /// Every row with its table, and the other loot columns, as the constructor took them: the live reload
+    /// (<c>.reload creature_loot_template</c>, ...) rebuilds the content with one part replaced and the rest as it is.
+    /// </summary>
+    public IEnumerable<(LootTableKind Kind, LootStoreRow Row)> Rows => _rows.SelectMany(p => p.Value.Select(r => (p.Key.Item1, r)));
+
+    /// <summary>The <c>creature_loot_info</c> rows (creature entry to loot ids and gold).</summary>
+    public IEnumerable<CreatureLootInfo> CreatureInfos => _creatures.Values;
+
+    /// <summary>The <c>skill_fishing_base_level</c> rows.</summary>
+    public IEnumerable<KeyValuePair<uint, int>> FishingBaseSkills => _fishingBase;
+
+    /// <summary>The pickpocket loot id of each creature entry.</summary>
+    public IEnumerable<KeyValuePair<uint, uint>> PickpocketLootIds => _pickpocket;
+
+    /// <summary>How many rows <paramref name="kind"/> has.</summary>
+    public int RowCountOf(LootTableKind kind) => _rows.Where(p => p.Key.Item1 == kind).Sum(p => p.Value.Count);
+
     public int CreatureInfoCount => _creatures.Count;
 
     /// <summary>Rows of one table entry, ordered by group then item (deterministic processing order).</summary>
