@@ -47,6 +47,10 @@ public sealed class RangedFeature : IWorldFeature
         RangedHandlers.Register(spells);
         _spells = spells;
 
+        // Quivers and ammo pouches: follow each player's bag slots from login on, and apply the one already worn (world thread).
+        var quivers = new QuiverHaste(spells);
+        world.PlayerLoggedIn += quivers.Attach;
+
         // Map updaters are attached on the world thread (as the game object feature does).
         world.Post(() =>
         {

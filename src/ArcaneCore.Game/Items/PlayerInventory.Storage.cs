@@ -40,6 +40,26 @@ public sealed partial class PlayerInventory
         return stored;
     }
 
+    /// <summary>
+    /// Raised when an item enters or leaves one of the four equipped bag slots (19-22): item, slot, equipped. Bags are outside the
+    /// stat hook (<see cref="StatsApplier"/> only sees the equipment slots), but vmangos applies an item's ON_EQUIP spell for them too
+    /// (Player::_ApplyItemMods runs for slots below BAG_END, Player.cpp:6828-6833), which is what makes quivers and ammo pouches
+    /// speed up ranged weapons. Ranged (autorepeat lane); not raised while the inventory loads (see <see cref="ReplayBagEquips"/>).
+    /// </summary>
+    public event Action<Item, byte, bool>? BagEquipChanged;
+
+    /// <summary>Raise <see cref="BagEquipChanged"/> (equipped) for every bag already worn, in slot order: for login, after the equipment is loaded.</summary>
+    public void ReplayBagEquips()
+    {
+        for (byte slot = InventorySlots.BagStart; slot < InventorySlots.BagEnd; slot++)
+        {
+            if (_items[slot] is { } item)
+            {
+                BagEquipChanged?.Invoke(item, slot, true);
+            }
+        }
+    }
+
     /// <summary>vmangos Player::EquipItem: wear <paramref name="item"/> in own slot <paramref name="slot"/> (merging into a worn stack of the same item).</summary>
     public Item EquipItem(byte slot, Item item)
     {
@@ -56,6 +76,10 @@ public sealed partial class PlayerInventory
         if (slot < InventorySlots.EquipmentEnd)
         {
             ApplyMods(item, slot, apply: true);
+        }
+        else if (slot < InventorySlots.BagEnd)
+        {
+            BagEquipChanged?.Invoke(item, slot, true); // ranged (autorepeat lane): quivers and ammo pouches (vmangos ApplyEquipSpell for bag slots)
         }
 
         SendCreateIfNeeded(item);
@@ -80,6 +104,10 @@ public sealed partial class PlayerInventory
             {
                 ApplyMods(item, slot, apply: false);
                 SetVisibleItemSlot(slot, null);
+            }
+            else if (slot >= InventorySlots.BagStart && slot < InventorySlots.BagEnd)
+            {
+                BagEquipChanged?.Invoke(item, slot, false);
             }
 
             _items[slot] = null;
