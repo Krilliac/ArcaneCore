@@ -53,4 +53,10 @@ public sealed class SpellModOptions
     /// effects that then have no mask at all). A missing or malformed file fails startup.
     /// </summary>
     public string? ClassMaskFile { get; set; }
+
+    /// <summary>
+    /// A pet or a totem reads the modifiers of the player that owns it (vmangos Unit::GetSpellModOwner, Unit.cpp:9008-9023): its
+    /// spell cooldowns, costs and ranges follow the owner's talents. Retail is true.
+    /// </summary>
+    public bool OwnerModsForPetsAndTotems { get; set; } = true;
 }

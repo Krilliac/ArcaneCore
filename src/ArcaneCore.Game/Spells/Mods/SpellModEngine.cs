@@ -21,9 +21,11 @@ public sealed class SpellModEngine : ISpellModEngine
         or SpellModOp.Threat or SpellModOp.Charges or SpellModOp.ActivationTime or SpellModOp.ChanceOfSuccess or SpellModOp.Haste
         or SpellModOp.AttackPower;
 
+    public SpellModEngine() => OwnerResolver = new PetTotemModOwnerResolver(Options);
+
     public SpellModOptions Options { get; } = new();
 
-    public ISpellModOwnerResolver OwnerResolver { get; set; } = new SelfModOwnerResolver();
+    public ISpellModOwnerResolver OwnerResolver { get; set; }
 
     public IClassMaskSource? MaskSource { get; set; }
 
@@ -67,7 +69,9 @@ public sealed class SpellModEngine : ISpellModEngine
     {
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(spell);
-        return Options.Enabled && OwnerResolver.GetModOwner(caster) is { } owner ? new SpellModScope(owner, spell) : null;
+        // Only a player's own casts spend and restore charges (vmangos guards RestoreSpellMods/RemoveSpellMods with m_caster->IsPlayer());
+        // a pet's or totem's spell reads its owner's mods but never spends the owner's charges, which vmangos would leave stuck at -1.
+        return Options.Enabled && caster is Player owner ? new SpellModScope(owner, spell) : null;
     }
 
     public SpellModWindow Begin(SpellModScope scope)
