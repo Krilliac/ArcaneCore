@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Maps.Collision.VMaps;
 using Microsoft.Extensions.Logging;
 
@@ -51,7 +52,19 @@ public static class CollisionServices
         ArgumentNullException.ThrowIfNull(logger);
 
         string? directory = options.ResolveMMapDirectory(dataDirectory);
-        logger.LogInformation("Collision: no navmesh reader yet (mmaps: {Directory}); paths are straight lines", directory ?? "<not configured>");
-        return null;
+        if (!options.EnablePathfinding)
+        {
+            logger.LogInformation("Collision: pathfinding disabled (World:Collision:EnablePathfinding is false); paths are straight lines");
+            return null;
+        }
+
+        if (directory is null || !Directory.Exists(directory))
+        {
+            logger.LogInformation("Collision: no mmap directory ({Directory}); paths are straight lines", directory ?? "<not configured>");
+            return null;
+        }
+
+        logger.LogInformation("Collision: navmeshes from {Directory}", directory);
+        return new NavMeshPathfinder(directory, logger);
     }
 }
