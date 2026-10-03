@@ -101,9 +101,11 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
     /// <summary>
     /// Replace the running service with one built from <paramref name="content"/>; it initialises on the next world tick, with
     /// <paramref name="activeAtShutdown"/> as the events that were running before (they resume). Used at start-up, by the
-    /// reload, and by tests. Call on the world thread (or before it starts).
+    /// reload, and by tests. Call on the world thread (or before it starts). With <paramref name="continueRunning"/> (a reload) the
+    /// new service starts from the running set of its predecessor and initialises at once instead of on the next tick, so what is
+    /// running neither flickers nor waits for its objects.
     /// </summary>
-    public void UseContent(GameEventContent content, IReadOnlySet<ushort> activeAtShutdown, IGameEventStatusSink? status = null)
+    public void UseContent(GameEventContent content, IReadOnlySet<ushort> activeAtShutdown, IGameEventStatusSink? status = null, bool continueRunning = false)
     {
         ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(activeAtShutdown);
@@ -120,12 +122,56 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
             "loaded {Events} game events ({Dialect} dialect, {Boundary} start boundary)",
             load.Definitions.Count, load.Dialect, load.Boundary);
         var announcer = new WorldAnnouncer(_world ?? throw new InvalidOperationException("the game event feature is not attached"));
-        _service = new GameEventService(load, options, () => hooks.Time.UtcNow, zone, logger, status, announcer, PersistDisabled);
+        _content = content;
+        var service = new GameEventService(load, options, () => hooks.Time.UtcNow, zone, logger, status ?? _writer, announcer, PersistDisabled);
+        foreach (IGameEventListener listener in _listeners)
+        {
+            service.AddListener(listener);
+        }
+
+        _service = service;
         _initialiseWith = options.Enabled ? activeAtShutdown : null;
-        ServiceCreated?.Invoke(_service);
         _elapsedMs = 0;
         _delayMs = 0;
+        if (continueRunning && options.Enabled)
+        {
+            service.SeedRunning(activeAtShutdown);
+        }
+
+        ServiceCreated?.Invoke(service);
+        if (continueRunning && options.Enabled)
+        {
+            _initialiseWith = null;
+            _delayMs = service.Initialize(activeAtShutdown, keepRunning: true);
+        }
     }
+
+    /// <summary>
+    /// Register a listener that outlives service replacement (a reload builds a new <see cref="GameEventService"/>; a listener
+    /// added to the service itself would be lost with it). It is told after every start and stop, like
+    /// <see cref="GameEventService.AddListener"/>.
+    /// </summary>
+    public void AddListener(IGameEventListener listener)
+    {
+        ArgumentNullException.ThrowIfNull(listener);
+        _listeners.Add(listener);
+        _service?.AddListener(listener);
+    }
+
+    private readonly List<IGameEventListener> _listeners = [];
+
+    /// <summary>What loading <paramref name="content"/> now would give (dialect, definitions, the issues found), without touching the running service.</summary>
+    public GameEventLoadResult Preview(GameEventContent content)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        WorldStateHooks hooks = _hooks ?? throw new InvalidOperationException("the game event feature is not attached");
+        return GameEventLoader.Load(content, hooks.GameEventSettings, hooks.Time.UtcNow, hooks.LocalZone);
+    }
+
+    /// <summary>The tables the running service was built from (what a reload compares with and rolls back to).</summary>
+    public GameEventContent Content => _content;
+
+    private GameEventContent _content = GameEventContent.Empty;
 
     private void OnTick(uint diffMs)
     {

@@ -104,6 +104,23 @@ public sealed class GameEventService : IGameEventState
         return false;
     }
 
+    /// <summary>
+    /// Mark events as already running without running any effect: a replacement service (a reload) starts from the set its predecessor had,
+    /// so the spawn gate and the quest gate it is wired to see the right state at once (no flicker), and <see cref="Initialize"/> then
+    /// resumes them. Only valid before <see cref="Initialize"/>.
+    /// </summary>
+    public void SeedRunning(IEnumerable<ushort> eventIds)
+    {
+        ArgumentNullException.ThrowIfNull(eventIds);
+        foreach (ushort id in eventIds)
+        {
+            if (IsValidEvent(id))
+            {
+                _active.Add(id);
+            }
+        }
+    }
+
     /// <summary>Register what a start or stop does for one kind of object (spawns, creature data, quests).</summary>
     public void AddEffects(IGameEventEffects effects)
     {
@@ -133,14 +150,32 @@ public sealed class GameEventService : IGameEventState
     /// <summary>
     /// <c>GameEventMgr::Initialize</c> (cpp:673-696): forget every running event, then run the first <see cref="Update"/> with the
     /// events that were running at shutdown (they resume instead of starting: no mail, no announcement difference in vmangos'
-    /// code). Returns the delay in milliseconds until the next update is due.
+    /// code). With <paramref name="keepRunning"/> (a reload, after <see cref="SeedRunning"/>) the running set is kept instead of forgotten.
+    /// Returns the delay in milliseconds until the next update is due.
     /// </summary>
-    public uint Initialize(IReadOnlySet<ushort> activeAtShutdown)
+    public uint Initialize(IReadOnlySet<ushort> activeAtShutdown, bool keepRunning = false)
     {
         ArgumentNullException.ThrowIfNull(activeAtShutdown);
-        _active.Clear();
-        _status?.Changed([]); // vmangos TRUNCATEs game_event_status once it has read it
-        if (_options.RestoreServersideEvents && _load.Dialect == GameEventDialect.CMangos)
+        if (keepRunning)
+        {
+            // A reload: the events seeded with SeedRunning keep running (no restart, no resume, nothing stored again); the first pass
+            // stops the ones whose window closed in the new tables. A serverside event (started by a script or command) is not the
+            // schedule's to stop, so it is kept out of that pass like a restored one.
+            foreach (ushort id in _active.ToArray())
+            {
+                if (_definitions[id].ScheduleType == GameEventScheduleType.Serverside)
+                {
+                    _restoredServerside.Add(id);
+                }
+            }
+        }
+        else
+        {
+            _active.Clear();
+            _status?.Changed([]); // vmangos TRUNCATEs game_event_status once it has read it
+        }
+
+        if (!keepRunning && _options.RestoreServersideEvents && _load.Dialect == GameEventDialect.CMangos)
         {
             // Serverside events are never started by the schedule (their start is the far future), so a stored one is re-applied
             // here, with resume, and kept out of the first pass below that would stop it.

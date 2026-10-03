@@ -24,6 +24,9 @@ Every edit to a shared file is listed here so the integrator can resolve conflic
 
 New files (no conflicts): `Creatures/CreatureMapSystem.EventSpawns.cs`, `GameObjects/GameObjectMapSystem.EventSpawns.cs`.
 
+New seam (shared file): `src/ArcaneCore.World/Reload/ReloadFeature.cs` skips a reloadable that implements the new `Game/Reload/IOptionalReloadable` with
+`IsEnabled == false` (four lines). The new reload name is `game_event` (only with `World:GameEvents:AllowReload`).
+
 ## Schema (renumber at merge)
 
 | Component | Constant | Value here | Tables |

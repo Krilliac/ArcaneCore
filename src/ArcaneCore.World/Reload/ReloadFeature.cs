@@ -59,7 +59,13 @@ public sealed class ReloadFeature : IWorldFeature
         Coordinator.Attach(world);
         foreach (Type type in AssemblyDiscovery.FindTypes<IContentReloadable>())
         {
-            Coordinator.Register((IContentReloadable)ActivatorUtilities.CreateInstance(_services, type));
+            var reloadable = (IContentReloadable)ActivatorUtilities.CreateInstance(_services, type);
+            if (reloadable is IOptionalReloadable { IsEnabled: false })
+            {
+                continue; // a reload behind its own switch (e.g. World:GameEvents:AllowReload) that is off: its name does not exist
+            }
+
+            Coordinator.Register(reloadable);
         }
 
         _logger.LogInformation("Live reload ready: {Names} (commands enabled)", string.Join(", ", Coordinator.Names));

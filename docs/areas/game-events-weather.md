@@ -227,6 +227,21 @@ Pure maths in `Game/WorldState/Events`, every function taking the time and the z
   in classic-db: 61 rows over 14 events, every quest id exists.
 - Shared-file edit: `Quests/Quest.cs` (`IsActive` computed, `SetEventState`).
 
+### `.reload game_event` (`game-event-reload`)
+
+ArcaneCore-only (vmangos reads its events once at start-up), shipped off: the name exists only with `World:GameEvents:AllowReload=true`
+and `HotReload:Commands=true` (`IOptionalReloadable`: the reload feature leaves a reloadable whose switch is off out of the coordinator,
+so the name is unknown like any other), and `.reload all` does not include it. The tables are read off the world thread and loaded as
+start-up loads them; a candidate with a row-level problem (event 0 or out of range, a `linkedTo` naming no valid event, an
+unreadable date, a duplicate id) is rejected naming the rows and the live state is untouched. The swap runs on the world thread:
+running events that are gone from the table are stopped (spawns, quests and creature changes undone through the effects), then a new
+service takes over that STARTS FROM the running set (`SeedRunning` + `Initialize(keepRunning: true)`), so what still runs is neither
+restarted, re-announced, nor re-stored, its objects do not flicker, and events whose window closed in the new tables stop in the
+first pass. Notes list the events added, removed, changed (rescheduled) and stopped. Effects and the spawn/quest gates re-wire
+through `GameEventFeature.ServiceCreated`; a listener must be added with `GameEventFeature.AddListener` to survive a reload (one added
+to the old service dies with it). The roll-back of a failing commit rebuilds the previous service from the previous tables.
+Limit: a manual `.event start` / `.event stop` schedule override does not survive a reload (the table decides again).
+
 ## Not delivered (limits)
 
 Recorded as slices are completed; see the final section.

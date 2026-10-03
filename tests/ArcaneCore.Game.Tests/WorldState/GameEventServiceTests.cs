@@ -299,6 +299,26 @@ public sealed class GameEventServiceTests
     }
 
     [Fact]
+    public void KeepRunning_ASeededEventStaysWithoutARestart_OneWhoseWindowClosedIsStopped_AndAServersideOneIsLeftAlone()
+    {
+        // a reload: the new service starts from the old running set
+        GameEventContent content = Content(
+            [Event(1, 1, 1440, 120), Event(2, 1, 1440, 60), Event(17, 0, 525600, 1)],
+            [new GameEventTimeRecord(1, "2026-10-03 12:00:00", "2030-12-31 22:59:59"), new GameEventTimeRecord(2, "2026-10-03 09:00:00", "2030-12-31 22:59:59")]);
+        (GameEventService service, Recorder rec, _) = Make(content, Utc(2026, 10, 3, 12, 30));
+        service.SeedRunning([1, 2, 17, 99]);   // 99 is not an event of the new tables: ignored
+
+        service.Initialize(new HashSet<ushort> { 1, 2, 17 }, keepRunning: true);
+
+        Assert.Equal<ushort>([1, 17], service.ActiveEvents.Order());              // 2's window (09:00-10:00) is closed: stopped; 1 stays; the serverside event is not the schedule's to stop
+        Assert.DoesNotContain(rec.Calls, c => c.StartsWith("changed 1 ", StringComparison.Ordinal)); // never stopped, never re-announced
+        Assert.Contains("changed 2 False resume=False", rec.Calls);
+        Assert.Contains("unspawn 2", rec.Calls);
+        Assert.DoesNotContain(rec.StatusWrites, w => w.Count == 0);                // the stored set is not truncated by a reload
+        Assert.Equal<ushort>([1, 17], rec.StatusWrites[^1].Order());
+    }
+
+    [Fact]
     public void Announce_SendsTheDescription_OnlyWhenTheOptionIsOn()
     {
         (GameEventService quiet, Recorder quietRec, _) = Make(OneEventAt(Utc(2026, 10, 3, 12)), Utc(2026, 10, 3, 12, 30));
