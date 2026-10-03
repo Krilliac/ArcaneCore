@@ -1,6 +1,16 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 
 namespace ArcaneCore.Game.Loot;
+
+/// <summary>
+/// Opens a container item (CMSG_OPEN_ITEM → vmangos Player::SendLoot for an item). Implemented by <see cref="ItemLootSource"/>;
+/// <see cref="LootService.OpenItem"/> asks it once the item is known to be lootable and its owner alive.
+/// </summary>
+public interface IItemLootSource
+{
+    LootResult Open(Player player, Item item);
+}
 
 /// <summary>
 /// What happens when a player closes the window of a special loot source (a fishing bobber or hole, a pickpocketed

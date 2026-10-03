@@ -141,6 +141,9 @@ public sealed class LootBag
     /// <summary>What happens when the last viewer's window closes; null keeps the corpse / chest / item behaviour.</summary>
     public ILootReleaseHandler? ReleaseHandler { get; set; }
 
+    /// <summary>Called after an item or the money was taken from this bag (a container item keeps its remaining loot in step with it).</summary>
+    public Action<LootBag>? Changed { get; set; }
+
     /// <summary>
     /// Replaces the source validity test of item and money takes (the default checks the source type and the loot distance).
     /// Special sources (a pickpocketed creature, a fishing bobber) answer for themselves.

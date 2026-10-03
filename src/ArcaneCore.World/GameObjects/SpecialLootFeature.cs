@@ -78,6 +78,11 @@ public sealed class SpecialLootFeature(IServiceProvider services, ILogger<Specia
 
         if (objects.Loot is { } loot)
         {
+            loot.ItemLoot = new ItemLootSource(loot, Options.Items)
+            {
+                Locks = objects.FindLock,
+                InterruptSpells = player => spells.System.CancelCast(player, 0),
+            };
             var pockets = new PickpocketLoot(loot);
             map.Combat.UnitKilled += pockets.OnCreatureKilled;
             _pickpockets.Add(map, pockets);

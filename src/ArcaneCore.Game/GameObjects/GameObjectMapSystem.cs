@@ -236,6 +236,9 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
     public void RegisterUseHandler(GameObjectType type, Func<Player, GameObject, GameObjectUseResult> handler)
         => _useHandlers[type] = handler ?? throw new ArgumentNullException(nameof(handler));
 
+    /// <summary>The Lock.dbc entry <paramref name="lockId"/>, or null (lockable items ask the object system, which owns the lock content).</summary>
+    public LockEntry? FindLock(uint lockId) => _content.FindLock(lockId);
+
     /// <summary>The template of <paramref name="entry"/>, or null (runtime summons of spell effects check the object type with it).</summary>
     public GameObjectTemplate? FindTemplate(uint entry) => _content.FindTemplate(entry);
 

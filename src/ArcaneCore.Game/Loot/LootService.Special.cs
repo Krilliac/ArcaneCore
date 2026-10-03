@@ -9,6 +9,9 @@ namespace ArcaneCore.Game.Loot;
 // its own loot window (vmangos Player::SendLoot / DoLootRelease branch on the source type, LootHandler.cpp).
 public sealed partial class LootService
 {
+    /// <summary>The container item loot (lockboxes, clams): opens a lootable item into its saved loot. Null keeps <see cref="OpenItem"/> fail-closed.</summary>
+    public IItemLootSource? ItemLoot { get; set; }
+
     /// <summary>
     /// Register <paramref name="bag"/> as the loot of <paramref name="source"/> and open its window for
     /// <paramref name="player"/>. An older bag of the same source is closed for its viewers first. The caller sets

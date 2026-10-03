@@ -697,9 +697,9 @@ public sealed partial class LootService : IViewerFieldFilter
     // --- items -----------------------------------------------------------------------------
 
     /// <summary>
-    /// CMSG_OPEN_ITEM (vmangos HandleOpenItemOpcode): an ITEM_FLAG_LOOTABLE item that is not
-    /// locked is refused until item loot has a durable consumed/remaining-state collaborator.
-    /// Ordinary inventory snapshots cannot preserve generated loot across a fresh login.
+    /// CMSG_OPEN_ITEM (vmangos HandleOpenItemOpcode): with an <see cref="ItemLoot"/> collaborator (the item loot area, whose generated loot is saved
+    /// with the inventory) the item opens into its loot window; without one an ITEM_FLAG_LOOTABLE item is refused (fail closed), because loot that
+    /// cannot be kept across a login would be rerolled.
     /// </summary>
     public LootResult OpenItem(Player player, Item item)
     {
@@ -713,6 +713,11 @@ public sealed partial class LootService : IViewerFieldFilter
         if ((item.Template.Flags & ItemFlagLootable) == 0)
         {
             return LootResult.NotLootable;
+        }
+
+        if (ItemLoot is { } source)
+        {
+            return source.Open(player, item);
         }
 
         if (item.Template.LockId != 0)
@@ -846,6 +851,7 @@ public sealed partial class LootService : IViewerFieldFilter
 
         Quests?.ItemLooted(player, item.ItemId, item.Count);
         RefreshLootable(bag);
+        bag.Changed?.Invoke(bag);
         return InventoryResult.Ok;
     }
 
@@ -917,6 +923,7 @@ public sealed partial class LootService : IViewerFieldFilter
         }
 
         RefreshLootable(bag);
+        bag.Changed?.Invoke(bag);
         return true;
     }
 
