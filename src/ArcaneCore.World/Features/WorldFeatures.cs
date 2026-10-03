@@ -29,7 +29,7 @@ public interface IWorldFeature
 public static class WorldFeatures
 {
     /// <summary>Seam interfaces a feature is additionally registered as, when it implements them.</summary>
-    private static readonly Type[] SeamInterfaces = [typeof(IWorldFeature), typeof(IChatMessageHandler), typeof(ICharacterHooks), typeof(ICharacterDeleteHook)];
+    private static readonly Type[] SeamInterfaces = [typeof(IWorldFeature), typeof(IChatMessageHandler), typeof(ICharacterHooks), typeof(ICharacterDeleteHook), typeof(ICharacterSettlementBarrier)];
 
     /// <summary>Every feature type in this assembly, ordered by full name (deterministic).</summary>
     public static IReadOnlyList<Type> FeatureTypes { get; } = AssemblyDiscovery.FindTypes<IWorldFeature>();
