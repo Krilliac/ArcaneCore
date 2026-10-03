@@ -262,4 +262,7 @@ public static class SpellConstants
 
     /// <summary>Spell.dbc PreventionType SPELL_PREVENTION_TYPE_SILENCE (interruptible by SPELL_EFFECT_INTERRUPT_CAST).</summary>
     public const uint PreventionTypeSilence = 1;
+
+    /// <summary>Spell.dbc PreventionType SPELL_PREVENTION_TYPE_PACIFY (vmangos SpellDefines.h:234-236): blocked while pacified.</summary>
+    public const uint PreventionTypePacify = 2;
 }

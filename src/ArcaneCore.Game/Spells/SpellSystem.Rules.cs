@@ -17,6 +17,8 @@ public sealed partial class SpellSystem
     /// </summary>
     public Action<Player>? ReleaseLoot { get; set; }
 
+    internal UnitSpellState StateOf(Unit unit) => GetOrCreateState(unit);
+
     /// <summary>
     /// Talent spell modifiers (vmangos Player::ApplySpellMod: crit chance and damage, resist-miss chance, dispel
     /// resistance, ...). The identity until the talents area installs the real storage.

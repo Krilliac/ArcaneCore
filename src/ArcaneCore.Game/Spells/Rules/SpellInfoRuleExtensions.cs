@@ -36,6 +36,13 @@ public static class SpellInfoRuleExtensions
         return effect != 0 ? effect : spell.Mechanic;
     }
 
+    /// <summary>The spell mechanic plus the mechanic of effect <paramref name="index"/> (vmangos GetSpellMechanicMask for one effect, SpellEntry.h:1192-1208).</summary>
+    public static uint EffectMechanicMask(this SpellInfo spell, int index)
+    {
+        ArgumentNullException.ThrowIfNull(spell);
+        return SpellMechanics.Mask(spell.Mechanic) | SpellMechanics.Mask(spell.Effects[index].Mechanic);
+    }
+
     public static bool HasMechanic(this SpellInfo spell, SpellMechanic mechanic) =>
         (spell.AllMechanicMask() & SpellMechanics.Mask(mechanic)) != 0;
 
