@@ -1,0 +1,155 @@
+using ArcaneCore.Data.Characters.Spells;
+using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Spells;
+using ArcaneCore.World.Features;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+
+namespace ArcaneCore.World.Spells;
+
+/// <summary>
+/// The spell system in the world daemon (discovered <see cref="IWorldFeature"/>). On attach it
+/// loads the spell tables and the spellbooks, builds the world-thread <see cref="SpellSystem"/>
+/// and starts its tick; handlers reach it through
+/// <c>session.Services.GetRequiredService&lt;SpellFeature&gt;()</c>.
+/// <para>
+/// The tick is a timer that posts <see cref="SpellSystem.Update"/> to the world thread every
+/// world tick interval, because a feature has no map-update hook yet (requested in
+/// docs/integration/spells.md). At most one update is queued at a time.
+/// </para>
+/// </summary>
+public sealed class SpellFeature : IWorldFeature, IAsyncDisposable
+{
+    private readonly IServiceScopeFactory _scopes;
+    private readonly ILogger<SpellFeature> _logger;
+    private WorldRuntime? _world;
+    private Timer? _timer;
+    private int _updateQueued;
+    private uint _lastUpdateMs;
+
+    public SpellFeature(IServiceScopeFactory scopes, ILogger<SpellFeature> logger)
+    {
+        _scopes = scopes ?? throw new ArgumentNullException(nameof(scopes));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        Spellbook = new SpellbookCache(scopes, logger);
+        System = new SpellSystem(SpellStore.Empty, () => _world?.NowMs ?? 0, spellbook: Spellbook, logger: logger);
+    }
+
+    /// <summary>The world-thread spell system.</summary>
+    public SpellSystem System { get; }
+
+    /// <summary>Known spells of every character.</summary>
+    public SpellbookCache Spellbook { get; }
+
+    public void Attach(WorldRuntime world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        _world = world;
+
+        // Attach runs once before the world thread starts, so blocking on the startup loads is
+        // safe (WorldHost loads the character name cache the same way, just before this).
+        using (IServiceScope scope = _scopes.CreateScope())
+        {
+            ISpellContentStore? content = scope.ServiceProvider.GetService<ISpellContentStore>();
+            System.Store = content is null
+                ? SpellStore.Empty
+                : SpellStoreFactory.Build(content.LoadAsync().GetAwaiter().GetResult(), _logger);
+
+            ICharacterSpellStore? spellbooks = scope.ServiceProvider.GetService<ICharacterSpellStore>();
+            if (spellbooks is not null)
+            {
+                Spellbook.Load(spellbooks.GetAllAsync().GetAwaiter().GetResult());
+            }
+        }
+
+        _logger.LogInformation("Loaded {Spells} spells and {Books} spellbooks", System.Store.Count, Spellbook.CharacterCount);
+        System.MapUpdateIntervalMs = (uint)Math.Max(0, world.Options.TickIntervalMs);
+        Spellbook.Start();
+
+        world.PlayerLoggedIn += OnPlayerLoggedIn;
+        world.PlayerLoggingOut += OnPlayerLoggingOut;
+
+        int interval = Math.Max(1, world.Options.TickIntervalMs);
+        _lastUpdateMs = world.NowMs;
+        _timer = new Timer(_ => QueueUpdate(), null, interval, interval);
+    }
+
+    /// <summary>
+    /// SMSG_INITIAL_SPELLS for a character entering the world (vmangos Player::SendInitialSpells:
+    /// the known spells and the cooldowns still running). A character without a spellbook first
+    /// gets its playercreateinfo_spell defaults. World thread.
+    /// </summary>
+    public byte[] BuildInitialSpells(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        Spellbook.EnsureDefaults(player, System.Store.GetCreateSpells((byte)player.Race, (byte)player.Class));
+        return SpellPackets.BuildInitialSpells([.. Spellbook.GetSpells(player)], [.. System.GetActiveCooldowns(player)]);
+    }
+
+    /// <summary>Run one spell update now (world thread; tests).</summary>
+    public void Update()
+    {
+        uint now = System.NowMs;
+        uint diff = unchecked(now - _lastUpdateMs);
+        _lastUpdateMs = now;
+        System.Update(diff);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_timer is not null)
+        {
+            await _timer.DisposeAsync().ConfigureAwait(false);
+        }
+
+        if (_world is not null)
+        {
+            _world.PlayerLoggedIn -= OnPlayerLoggedIn;
+            _world.PlayerLoggingOut -= OnPlayerLoggingOut;
+        }
+
+        await Spellbook.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private void QueueUpdate()
+    {
+        WorldRuntime? world = _world;
+        if (world is null || Interlocked.Exchange(ref _updateQueued, 1) == 1)
+        {
+            return;
+        }
+
+        world.Post(() =>
+        {
+            Volatile.Write(ref _updateQueued, 0);
+            try
+            {
+                Update();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "spell update failed");
+            }
+        });
+    }
+
+    /// <summary>
+    /// Passive spells apply on login (cmangos-classic Player::_LoadSpells → addSpell casts
+    /// passives with TRIGGERED_OLD_TRIGGERED once the player is in the world).
+    /// </summary>
+    private void OnPlayerLoggedIn(Player player)
+    {
+        foreach (uint spellId in Spellbook.GetSpells(player))
+        {
+            SpellInfo? spell = System.Store.Get(spellId);
+            if (spell is { IsPassive: true } && !System.HasAura(player, spellId))
+            {
+                System.CastSpell(player, spellId, SpellCastTargets.ForSelf(), triggered: true);
+            }
+        }
+    }
+
+    private void OnPlayerLoggingOut(Player player) => System.RemoveUnit(player);
+}
