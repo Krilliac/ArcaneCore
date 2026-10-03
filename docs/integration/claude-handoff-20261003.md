@@ -171,7 +171,7 @@ otherwise. This wave has no real-client evidence; do not read it as client-accep
 Integrated on `claude/vw2-integration` on top of `claude/vw-integration` (wave 1, head `41babaf`), in this order: security hardening,
 codex findings, inbound queue cap, game-logic security, code hot reload, GM commands, combat/CC/spell rules, rogue, druid,
 hunter, casters, shaman/paladin, pets, talents, item mechanics, group loot/XP, instances/bosses, world state, pathfinding/collision,
-ops/perf. `claude/vw3-live-dev-runner` was not merged (its branch had no commits of its own when the integration ran).
+ops/perf, then `claude/vw3-live-dev-runner` (the one-command dev runner, `arcane-mock live`, module hash allowlist; it came in last, once its worktree was committed and clean; the account tool keeps the codex-findings password source).
 `claude/ci-fix-providers` is deliberately left to the coordinator. Same standing rule as wave 1: retail 1.12.1 behaviour by
 default, deviations behind options that default to retail. **Nothing here has been run against a real 1.12.1 client, and
 MariaDB/PostgreSQL provider tests only run on hosted CI: this wave is verified locally on SQLite only.**
@@ -230,8 +230,8 @@ were renumbered contiguously; the hunter lane's `character_ammo` module no longe
 Everything in the limits column above, plus: druid forms (aura 36) and the cat/bear kit; the spell-modifier engine behind talents
 and `ISpellModifiers`; auto-repeat shots; ranged haste wiring (`RangedAttackSpeedPct`); `spell_bonus` data for casters; creature
 immunity data; items' `CMSG_USE_ITEM`; GM commands that need other lanes; group loot master-give and tap lists. Local verification
-only; hosted CI pending, including every MariaDB/PostgreSQL provider theory. The `claude/vw3-live-dev-runner` branch is not part of
-this wave.
+only; hosted CI pending, including every MariaDB/PostgreSQL provider theory. The live dev runner has no real-client or
+hosted-CI evidence either.
 
 ## Remaining work, in priority order
 
