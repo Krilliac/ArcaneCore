@@ -2,6 +2,17 @@ using ArcaneCore.Game.Entities;
 
 namespace ArcaneCore.Game.Spells;
 
+/// <summary>One exact caster's aura ownership lifetime, without retaining the unit or its session.</summary>
+internal sealed class AuraCasterOwner(Unit caster)
+{
+    private readonly WeakReference<Unit> _caster = new(caster);
+    private bool _revoked;
+
+    internal Unit? Caster => !_revoked && _caster.TryGetTarget(out Unit? caster) ? caster : null;
+
+    internal void Revoke() => _revoked = true;
+}
+
 /// <summary>One effect's aura inside a holder (vmangos Aura / Modifier).</summary>
 public sealed class SpellAura
 {
@@ -48,12 +59,13 @@ public sealed class SpellAuraHolder
 
     private readonly SpellAura?[] _auras = new SpellAura?[SpellConstants.MaxEffects];
 
-    internal SpellAuraHolder(SpellInfo spell, Unit target, ObjectGuid casterGuid, byte casterLevel, int duration)
+    internal SpellAuraHolder(SpellInfo spell, Unit target, Unit caster, AuraCasterOwner casterOwner, int duration)
     {
         Spell = spell;
         Target = target;
-        CasterGuid = casterGuid;
-        CasterLevel = casterLevel;
+        CasterGuid = caster.Guid;
+        CasterLevel = caster.Level;
+        CasterOwner = casterOwner;
         IsPositive = spell.IsPositive;
 
         // vmangos SpellAuraHolder ctor: permanent for -1 durations and passive spells; durations
@@ -75,6 +87,8 @@ public sealed class SpellAuraHolder
     public ObjectGuid CasterGuid { get; }
 
     public byte CasterLevel { get; }
+
+    internal AuraCasterOwner CasterOwner { get; }
 
     public bool IsPositive { get; }
 
