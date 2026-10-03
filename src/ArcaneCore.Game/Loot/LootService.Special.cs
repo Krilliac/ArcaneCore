@@ -33,6 +33,15 @@ public sealed partial class LootService
         ForgetLoot(source);
     }
 
+    /// <summary>Forget the loot registered under <paramref name="source"/> whose object may already be gone (a disenchanted item).</summary>
+    public void RemoveSpecial(ObjectGuid source)
+    {
+        if (_bags.Remove(source, out var entry))
+        {
+            CloseForViewers(entry.Bag);
+        }
+    }
+
     /// <summary>A new bag takes over the registration of <paramref name="source"/>: the windows of the older, different bag close (a pickpocketed creature dying).</summary>
     private void CloseReplacedBag(ObjectGuid source, LootBag next)
     {
