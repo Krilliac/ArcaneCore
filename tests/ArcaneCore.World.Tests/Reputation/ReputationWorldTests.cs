@@ -280,6 +280,9 @@ internal sealed class ReputationTestServices : IWorldTestServices
     /// <summary>A FactionTemplate catalog for the combat and creature features (null: none registered).</summary>
     public static readonly AsyncLocal<FactionTemplateCatalog?> Templates = new();
 
+    /// <summary>A mutable content source (spillover, reward rates, kill rows) so reload tests can change the tables between loads.</summary>
+    public static readonly AsyncLocal<MutableReputationContent?> Mutable = new();
+
     public void Register(IServiceCollection services)
     {
         if (Templates.Value is { } templates)
@@ -302,6 +305,12 @@ internal sealed class ReputationTestServices : IWorldTestServices
         if (ContentRows.Value is { } rows)
         {
             services.AddSingleton<IReputationContentSource>(new FixedContentSource(rows));
+        }
+
+        if (Mutable.Value is { } mutable)
+        {
+            services.AddSingleton<IReputationContentSource>(mutable);
+            services.AddSingleton<IReputationOnKillSource>(mutable);
         }
     }
 
@@ -407,4 +416,17 @@ internal sealed class MemoryReputationStore : ICharacterReputationStore
     /// <summary>This in-memory store has no characters table, so a deleted character's id never has a live row.</summary>
     public Task DeleteDeletedCharacterAsync(int characterId, CancellationToken cancellationToken = default)
         => DeleteCharacterAsync(characterId, cancellationToken);
+}
+
+/// <summary>Both reputation world-table sources over a holder a test edits between loads.</summary>
+internal sealed class MutableReputationContent : IReputationContentSource, IReputationOnKillSource
+{
+    public ReputationContentRows Rows { get; set; } = ReputationContentRows.Empty;
+
+    public List<ReputationOnKillEntry> OnKill { get; } = [];
+
+    public Task<ReputationContentRows> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(Rows);
+
+    Task<IReadOnlyList<ReputationOnKillEntry>> IReputationOnKillSource.LoadAsync(CancellationToken cancellationToken)
+        => Task.FromResult<IReadOnlyList<ReputationOnKillEntry>>([.. OnKill]);
 }

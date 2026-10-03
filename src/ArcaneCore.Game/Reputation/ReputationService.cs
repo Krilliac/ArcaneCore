@@ -16,7 +16,7 @@ namespace ArcaneCore.Game.Reputation;
 public sealed partial class ReputationService : IReputationService, IPlayerReputation, IQuestReputationSettlement
 {
     private readonly ConditionalWeakTable<Player, PlayerReputation> _players = new();
-    private readonly Dictionary<uint, ReputationOnKillEntry> _onKill;
+    private Dictionary<uint, ReputationOnKillEntry> _onKill;
     private readonly IReputationSink? _sink;
     private readonly Func<double> _roll;
 
@@ -25,14 +25,7 @@ public sealed partial class ReputationService : IReputationService, IPlayerReput
     {
         ArgumentNullException.ThrowIfNull(factions);
         Factions = factions;
-        _onKill = [];
-        foreach (ReputationOnKillEntry entry in onKill ?? [])
-        {
-            if (!_onKill.TryAdd(entry.CreatureEntry, entry))
-            {
-                throw new ArgumentException($"duplicate kill reputation for creature {entry.CreatureEntry}", nameof(onKill));
-            }
-        }
+        _onKill = BuildOnKill(onKill ?? []);
 
         Rates = rates ?? new ReputationRates();
         _sink = sink;
@@ -55,7 +48,31 @@ public sealed partial class ReputationService : IReputationService, IPlayerReput
     /// <summary>Option <c>Reputation:SpilloverEnabled</c> (retail true): false suppresses every spillover.</summary>
     public bool SpilloverEnabled { get; init; } = true;
 
-    public int OnKillCount => _onKill.Count;
+    public int OnKillCount => Volatile.Read(ref _onKill).Count;
+
+    /// <summary>The creature_onkill_reputation rows now in effect.</summary>
+    public IReadOnlyCollection<ReputationOnKillEntry> OnKillEntries => Volatile.Read(ref _onKill).Values;
+
+    /// <summary>Swap the creature_onkill_reputation rows as a whole (reload, <c>.reload creature_onkill_reputation</c>); throws on a duplicate creature.</summary>
+    public void ReplaceOnKill(IEnumerable<ReputationOnKillEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        Volatile.Write(ref _onKill, BuildOnKill(entries));
+    }
+
+    private static Dictionary<uint, ReputationOnKillEntry> BuildOnKill(IEnumerable<ReputationOnKillEntry> entries)
+    {
+        var map = new Dictionary<uint, ReputationOnKillEntry>();
+        foreach (ReputationOnKillEntry entry in entries)
+        {
+            if (!map.TryAdd(entry.CreatureEntry, entry))
+            {
+                throw new ArgumentException($"duplicate kill reputation for creature {entry.CreatureEntry}", nameof(entries));
+            }
+        }
+
+        return map;
+    }
 
     /// <summary>
     /// Percentage points added to positive gains (SPELL_AURA_MOD_REPUTATION_GAIN, plus the
@@ -123,7 +140,7 @@ public sealed partial class ReputationService : IReputationService, IPlayerReput
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(victim);
-        if (!_onKill.TryGetValue(victim.Entry, out ReputationOnKillEntry? entry) || For(player) is null)
+        if (!Volatile.Read(ref _onKill).TryGetValue(victim.Entry, out ReputationOnKillEntry? entry) || For(player) is null)
         {
             return;
         }

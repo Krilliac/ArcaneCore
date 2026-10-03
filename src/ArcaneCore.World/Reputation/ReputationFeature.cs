@@ -24,7 +24,7 @@ namespace ArcaneCore.World.Reputation;
 /// direct creature-kill rewards and the reaction source the NPC adapter uses. Other features
 /// reach <see cref="Reputation"/> with <c>GetService&lt;ReputationFeature&gt;()</c>.
 /// </summary>
-public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers)
+public sealed partial class ReputationFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers)
     : IWorldFeature, ICharacterHooks, IAsyncDisposable
 {
     private readonly ILogger _logger = loggers.CreateLogger<ReputationFeature>();
@@ -71,6 +71,7 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
         service.ReputationChanged += OnReputationChanged;
         _logger.LogInformation("Loaded {Factions} factions, {OnKill} kill reputation entries, {Spillovers} spillover templates and {Rates} reward rates",
             service.Factions.Count, service.OnKillCount, service.Content.SpilloverCount, service.Content.RateCount);
+        ReportStatus(service);
     }
 
     /// <summary>Clear rows left by a deleted character whose id was reused (after older writes drain).</summary>
@@ -236,6 +237,17 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
                 contentRows = scope.ServiceProvider.GetService<IReputationContentSource>() is { } contentSource
                     ? contentSource.LoadAsync().GetAwaiter().GetResult()
                     : ReputationContentRows.Empty;
+            }
+
+            if (factions.Count > 0)
+            {
+                // ObjectMgr::LoadReputationOnKill skips a row whose faction does not exist (ObjectMgr.cpp:8935-8957): once, loudly, here.
+                ReputationOnKillValidation valid = ReputationContentValidator.FilterOnKill(onKill, factions);
+                onKill = valid.Entries;
+                foreach (string warning in valid.Warnings)
+                {
+                    _logger.LogWarning("Reputation content: {Warning}", warning);
+                }
             }
 
             ReputationContent content = ReputationContent.Create(contentRows, factions);
