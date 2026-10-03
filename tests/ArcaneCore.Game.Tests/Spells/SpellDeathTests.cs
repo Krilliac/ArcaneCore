@@ -97,11 +97,124 @@ public sealed class SpellDeathTests
         Assert.Single(kit.System.GetAuras(player));
     }
 
+    [Fact]
+    public void Death_KeepsDeathPersistentAuras_ButRemovesTheOrdinaryOnes()
+    {
+        using var kit = Kit();
+        (Player victim, _) = kit.AddPlayer(1);
+        (Player enemy, _) = kit.AddPlayer(2, 2);
+        kit.System.CastSpell(victim, Persistent, SpellCastTargets.ForSelf(), triggered: true);
+        kit.System.CastSpell(victim, Buff, SpellCastTargets.ForSelf(), triggered: true);
+        Assert.Equal(2, kit.System.GetAuras(victim).Count);
+
+        victim.Map!.FindUpdater<MapCombat>()!.Kill(enemy, victim);
+        kit.System.OnUnitDied(victim);
+
+        Assert.Equal(Persistent, Assert.Single(kit.System.GetAuras(victim)).Spell.Id);
+    }
+
+    [Theory]
+    [InlineData(SlowBuff, false)]
+    [InlineData(SlowDeadTargetOk, true)]
+    public void ApplyAura_LandingOnATargetThatDiedMidCast_NeedsADeadTargetSpell(uint spellId, bool applied)
+    {
+        using var kit = Kit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 10, 0);
+        (Player killer, _) = kit.AddPlayer(3, 2);
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, spellId, SpellCastTargets.ForUnit(target.Guid), triggered: false));
+        target.Map!.FindUpdater<MapCombat>()!.Kill(killer, target);
+        kit.System.OnUnitDied(target);
+
+        kit.Advance(1500);
+
+        Assert.Equal(applied, kit.System.GetAuras(target).Any(h => h.Spell.Id == spellId));
+    }
+
+    [Theory]
+    [InlineData(GhostBuff, false)]
+    [InlineData(GhostPersistent, true)]
+    public void ApplyAura_OnADeadCaster_NeedsAPersistentSpell(uint spellId, bool applied)
+    {
+        using var kit = Kit();
+        (Player ghost, _) = kit.AddPlayer(1);
+        (Player killer, _) = kit.AddPlayer(2, 2);
+        ghost.Map!.FindUpdater<MapCombat>()!.Kill(killer, ghost);
+        kit.System.OnUnitDied(ghost);
+
+        kit.System.CastSpell(ghost, spellId, SpellCastTargets.ForSelf(), triggered: true);
+
+        Assert.Equal(applied, kit.System.GetAuras(ghost).Any(h => h.Spell.Id == spellId));
+    }
+
+    [Fact]
+    public void Death_InterruptsTheCastInProgress_SoItNeverCompletes()
+    {
+        using var kit = new SpellTestKit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 10, 0);
+        (Player killer, _) = kit.AddPlayer(3, 2);
+        kit.Spellbook.Teach(caster, CastBolt);
+        SpellSystem.SetPower(caster, PowerType.Rage, 100);
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, CastBolt, SpellCastTargets.ForUnit(target.Guid)));
+        uint health = target.Health;
+
+        caster.Map!.FindUpdater<MapCombat>()!.Kill(killer, caster);
+        kit.System.OnUnitDied(caster);
+
+        Assert.Null(kit.System.GetState(caster.Guid)?.CurrentCast); // interrupted at death, not left to time out
+        kit.Advance(2500);
+        Assert.Equal(health, target.Health);
+    }
+
+    [Fact]
+    public void Death_EndsTheChannel_AndItsAura()
+    {
+        using var kit = new SpellTestKit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player killer, _) = kit.AddPlayer(2, 2);
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, ChannelSpell, SpellCastTargets.ForSelf(), triggered: false));
+        Assert.Equal(SpellCastState.Casting, kit.System.GetState(caster.Guid)!.CurrentCast!.State);
+
+        caster.Map!.FindUpdater<MapCombat>()!.Kill(killer, caster);
+        kit.System.OnUnitDied(caster);
+
+        Assert.Null(kit.System.GetState(caster.Guid)?.CurrentCast);
+        Assert.Empty(kit.System.GetAuras(caster));
+        Assert.Equal(0u, caster.GetUInt32(UpdateFields.UnitChannelSpell));
+    }
+
+    private const uint Persistent = 900602;
+    private const uint GhostBuff = 900607;
+    private const uint GhostPersistent = 900608;
+    private const uint SlowBuff = 900604;
+    private const uint SlowDeadTargetOk = 900606;
+
     private const int MaxAuraSlots = SpellSystem.MaxAuras;
+
+    private static SpellInfo Slow(uint id, uint ex3, SpellAttributesEx2 ex2) => Spell(id, Effect(SpellEffectName.ApplyAura, 15, SpellImplicitTarget.UnitEnemy, AuraType.Dummy)) with
+    {
+        Duration = new SpellDuration(30_000, 0, 30_000),
+        SpellVisual = 1,
+        StartRecoveryCategory = 0,
+        CastTime = new SpellCastTime(1000, 0, 0),
+        RangeIndex = 4,
+        Range = new SpellRange(0, 30),
+        AttributesEx3 = ex3,
+        AttributesEx2 = ex2,
+    };
 
     private static SpellTestKit Kit() => new(
         Spell(Root, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.ModRoot))
             with { Duration = new SpellDuration(10_000, 0, 10_000), SpellVisual = 1, StartRecoveryCategory = 0 },
         Spell(Buff, Effect(SpellEffectName.ApplyAura, 15, aura: AuraType.Dummy))
-            with { Duration = new SpellDuration(30_000, 0, 30_000), SpellVisual = 1, StartRecoveryCategory = 0 });
+            with { Duration = new SpellDuration(30_000, 0, 30_000), SpellVisual = 1, StartRecoveryCategory = 0 },
+        Spell(Persistent, Effect(SpellEffectName.ApplyAura, 15, aura: AuraType.Dummy))
+            with { Duration = new SpellDuration(30_000, 0, 30_000), SpellVisual = 1, StartRecoveryCategory = 0, AttributesEx3 = 0x00100000 },
+        Spell(GhostBuff, Effect(SpellEffectName.ApplyAura, 15, aura: AuraType.Dummy))
+            with { Duration = new SpellDuration(30_000, 0, 30_000), SpellVisual = 1, StartRecoveryCategory = 0, Attributes = SpellAttributes.AllowCastWhileDead },
+        Spell(GhostPersistent, Effect(SpellEffectName.ApplyAura, 15, aura: AuraType.Dummy))
+            with { Duration = new SpellDuration(30_000, 0, 30_000), SpellVisual = 1, StartRecoveryCategory = 0, Attributes = SpellAttributes.AllowCastWhileDead, AttributesEx3 = 0x00100000 },
+        Slow(SlowBuff, 0, 0),
+        Slow(SlowDeadTargetOk, 0, SpellAttributesEx2.AllowDeadTarget));
 }

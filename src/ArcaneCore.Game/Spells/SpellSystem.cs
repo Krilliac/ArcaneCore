@@ -539,7 +539,9 @@ public sealed partial class SpellSystem
                 return SpellCastResult.BadTargets;
             }
 
-            if (!target.IsAlive)
+            // vmangos Spell::CheckCast (Spell.cpp:5572) asks SpellEntry::CanTargetAliveState (SpellEntry.h:944-950):
+            // a dead explicit target is fine for a spell that can target the dead.
+            if (!target.IsAlive && !spell.CanTargetDead)
             {
                 return SpellCastResult.TargetsDead;
             }

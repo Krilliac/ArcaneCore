@@ -115,6 +115,9 @@ public enum SpellAttributesEx2 : uint
 {
     None = 0,
 
+    /// <summary>vmangos SPELL_ATTR_EX2_ALLOW_DEAD_TARGET (SpellDefines.h:906): can target a dead unit or corpse.</summary>
+    AllowDeadTarget = 0x00000001,
+
     /// <summary>vmangos SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT.</summary>
     IgnoreLineOfSight = 0x00000004,
     DoNotReportSpellFailure = 0x00000080,

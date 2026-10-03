@@ -189,6 +189,27 @@ public sealed record SpellInfo
 
     public bool IsPassive => HasAttribute(SpellAttributes.Passive);
 
+    /// <summary>vmangos SPELL_ATTR_EX3_ONLY_ON_GHOSTS (SpellDefines.h, AttributesEx3 bit 12).</summary>
+    private const uint Ex3OnlyOnGhosts = 0x00001000;
+
+    /// <summary>vmangos SPELL_ATTR_EX3_ALLOW_AURA_WHILE_DEAD (SpellDefines.h:967, AttributesEx3 bit 20).</summary>
+    private const uint Ex3AllowAuraWhileDead = 0x00100000;
+
+    /// <summary>
+    /// vmangos SpellEntry::IsDeathPersistentSpell (SpellEntry.h:952-959): for a 1.12.1 build
+    /// (SUPPORTED_CLIENT_BUILD &gt; CLIENT_BUILD_1_8_4) that is AttributesEx3 ALLOW_AURA_WHILE_DEAD; the
+    /// aura survives its holder dying.
+    /// </summary>
+    public bool IsDeathPersistent => (AttributesEx3 & Ex3AllowAuraWhileDead) != 0;
+
+    /// <summary>vmangos SpellEntry::IsDeathOnlySpell (SpellEntry.h:931-936), including its hard-coded spell id 2584.</summary>
+    public bool IsDeathOnly => (AttributesEx3 & Ex3OnlyOnGhosts) != 0
+        || (Targets & (uint)(SpellCastTargetFlags.CorpseEnemy | SpellCastTargetFlags.UnitDead | SpellCastTargetFlags.CorpseAlly)) != 0
+        || Id == 2584;
+
+    /// <summary>vmangos SpellEntry::CanTargetDeadTarget (SpellEntry.h:938-942).</summary>
+    public bool CanTargetDead => HasAttribute(SpellAttributesEx2.AllowDeadTarget) || IsDeathOnly;
+
     /// <summary>vmangos SpellEntry::IsChanneledSpell: AttributesEx IS_CHANNELED or IS_SELF_CHANNELED.</summary>
     public bool IsChanneled => HasAttribute(SpellAttributesEx.IsChanneled | SpellAttributesEx.IsSelfChanneled);
 

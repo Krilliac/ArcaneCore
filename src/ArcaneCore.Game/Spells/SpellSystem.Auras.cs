@@ -47,7 +47,7 @@ public sealed partial class SpellSystem
     /// <summary>vmangos Spell::EffectApplyAura: add this effect's aura to the target's pending holder.</summary>
     private void EffectApplyAura(SpellEffectContext context)
     {
-        if (!context.Target.IsAlive && !context.Spell.IsPassive)
+        if (!context.Target.IsAlive && !context.Spell.IsPassive && !context.Spell.IsDeathPersistent && !context.Spell.CanTargetDead)
         {
             return;
         }
