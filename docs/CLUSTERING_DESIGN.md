@@ -5,7 +5,12 @@ module/process direction approved by the developer on 2026-10-03.
 Implementation tracking belongs to the single [roadmap worklist](ROADMAP.md#m15-clustering-worklist).
 This tranche changes documentation; no cluster processes or transport are shipped.
 The inventory below was checked against integration source
-`e06d4e468118454d906c1d4be8914a3522106d1b`.
+`e06d4e468118454d906c1d4be8914a3522106d1b`. The constraint bullets on sessions,
+maps and instances, ID allocators, write queues and far transfer were re-read
+against `c3dea16292756e146df0ddd0783f97fee734dd5c` for M15.0 (see the
+[M15.0 scope record](integration/cluster-m15-0.md) and the
+[transfer-state inventory](integration/cluster-transfer-state.md)); the rest remain at
+the older pin.
 
 ## Decision and reference comparison
 
@@ -77,25 +82,33 @@ Important current constraints:
   Duplicate-account replacement in `SessionRegistry` and character online checks
   are process-local. The world-auth server-ID field is currently discarded;
   it cannot be trusted as a new routing authority.
-- Maps are keyed by map ID and all run on one `WorldRuntime` thread. Mutable
-  visibility, grids, objects and queues contain direct references. The current
-  `WorldRuntime` keys maps by `(mapId, instanceId)` and `InstanceManager` creates a
-  separate `Map` per instance; binds persist through the instance write queue, but instance ids and
-  lockout state have no cross-process authority. That authority must exist before instances are placed
-  on different workers.
+- Maps are keyed by `(map ID, instance ID)` (`WorldRuntime._maps`,
+  `WorldRuntime.cs:20,191-201`) and all run on one `WorldRuntime` thread. Mutable
+  visibility, grids, objects and queues contain direct references. `InstanceRegistry`
+  no longer exists: `InstanceManager` gives each instance its own Map. Instance IDs
+  come from a process-local counter, group binds and instance contents (deaths,
+  respawns, boss state) are memory-only, and only instance saves and character binds
+  are durable ([instances.md](integration/instances.md)). Durable instance IDs and
+  binds must be implemented before placing instances on other workers.
 - Auth storage is shared across realms; characters storage is explicitly one
   database per realm; world content is read-only during runtime. Character and
   social rows have no realm discriminator. Keep per-realm characters databases
   initially and carry an explicit realm identity in configuration and contracts.
 - Item GUIDs are seeded from database maximum then allocated locally; guild
-  IDs use local maximum-plus-one and group IDs a local increment. Concurrent
-  allocators require durable authority or reserved disjoint ranges.
-- Core state/inventory save together, but quest, spell and social queues have
-  separate barriers. Local revisions and FIFO ordering provide no distributed
-  fencing. The core `CharacterSaveQueue` retains the failed snapshot after three
-  attempts and surfaces the failure on flush and stop, but the reputation, instance and social
-  write queues log and drop a write after three attempts. Recoverable
-  acknowledgements and a complete handoff barrier are prerequisites.
+  IDs use local maximum-plus-one, group IDs a local counter from 1, instance IDs a
+  local counter from 101, and mail/auction/item-text IDs are seeded from stored
+  maxima at attach. Concurrent allocators require durable authority or reserved
+  disjoint ranges.
+- Core state/inventory save together, but quest, spellbook, spell-state, social,
+  reputation and instance writes each use a separate queue or barrier. Local
+  revisions and FIFO ordering provide no distributed fencing. The core and quest
+  queues retain a snapshot that fails three attempts and report it at flush, login or
+  stop, but the caller of an ordinary enqueue is never told. The reputation queue now
+  retains a failed write per character and retries it at the next write, login barrier
+  or logout ([reputation.md](integration/reputation.md)); the social and instance
+  queues still drop a write after three failed attempts
+  ([table](integration/cluster-transfer-state.md#1-what-reaches-storage-and-when)).
+  Recoverable acknowledgements and a complete handoff barrier are prerequisites.
 - Social context, name cache, groups, guilds and channels refer to local players.
   A fleet must have one realm-wide social authority and routed presence.
 - Far transfer retains direct source-map references and has no distributed
