@@ -127,6 +127,9 @@ public sealed class SpellAuraHolder
 
     public int MaxDuration { get; internal set; }
 
+    /// <summary>ms to the next per-second power cost (vmangos SpellAuraHolder::m_timeCla, 1000 at construction); see <c>SpellSystem.ChargePerSecondCost</c>.</summary>
+    internal int PerSecondTimer { get; set; } = 1000;
+
     /// <summary>
     /// When this holder was put on its target, in whole Unix seconds (vmangos SpellAuraHolder::m_applyTime, set when the
     /// holder is constructed: SpellAuras.cpp:6665, getter SpellAuras.h:473). A stack refresh keeps the original value; a

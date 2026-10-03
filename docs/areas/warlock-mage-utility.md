@@ -96,3 +96,25 @@ base-bonus helpers). Existing limits of the module stay (equipped-item restricte
 
 Tests: `tests/ArcaneCore.Game.Tests/Spells/Utility/AbsorbShieldTests.cs` (10 tests; RED first: 7 failed, 3 characterization tests pass today:
 unchanged non-ward shield, module not installed, other-school shield). The absorb path itself (shield break, school mask) is exercised as acceptance.
+
+## wlm-04 Pet power spells (`PowerDrainEffect`, `SpellSystem.PerSecondCosts.cs`, `LifeTapScript`)
+
+* **POWER_DRAIN (8)** (`Game/Spells/Utility/PowerDrainEffect.cs`, discovered module), vmangos `EffectPowerDrain` (SpellEffects.cpp:1696-1760): Dark Pact
+  and Viper Sting. The value goes through the direct damage bonus (`AmountModifier`, truncated), is capped at the target's current power, a target
+  that does not use the drained power type is left alone (happiness only hits pets), and for mana the caster gains the drained amount times
+  `EffectMultipleValue` (0 counts as 1), dithered; a self drain gives nothing back. Limits: the SPELLMOD_MULTIPLE_VALUE talent modifier (spell-modifier
+  lane) and the SMSG_SPELLLOGEXECUTE power-drain entry are missing.
+* **Per-second power cost** (`Spells/SpellSystem.PerSecondCosts.cs`, hook in `UpdateAuras`, `SpellAuraHolder.PerSecondTimer`): `ManaPerSecond` was carried
+  and never charged. After the duration step of a running holder, once a second the caster pays `manaPerSecond + perLevel * level` of the spell's
+  power type (health for Health Funnel); the "no target per second costs" attribute (0x800) restricts it to a caster that targets itself; a caster that
+  cannot pay loses the aura and the channel and a player gets FIZZLE (vmangos SpellAuras.cpp:7296-7330). Deliberate limit: for a health cost at or below
+  the amount vmangos falls into `GetPower(POWER_HEALTH)` (an unrelated update field); the evident intent, a fizzle, is implemented. The Health Funnel heal
+  tick needs no exception here: the base periodic heal never damages the caster (the vmangos damage-the-caster branch for visual 163 is not ported).
+* **Life Tap** (`Game/Spells/Warlock/LifeTapScript.cs`, a wlm-02 script for 1454, 1455, 1456, 11687, 11688, 11689, vmangos spell_warlock.cpp:112-159):
+  the check fizzles at health at or below the rounded-up bonus amount of the first effect's base points; the effect trades the rolled value (bonus,
+  dithered) of health for as much mana, scaled by each Improved Life Tap aura (warlock family, icon 208: `(amount + 100) * mana / 100`), no combat log, and
+  fizzles after the cast result when health is not above the value. The mana is added with an energize log of spell 31818 (vmangos casts it with custom
+  points; the spell itself is not cast). Limit: the SPELLMOD_COST talent modifier belongs to the spell-modifier engine lane.
+
+Tests: `tests/ArcaneCore.Game.Tests/Spells/Utility/PetPowerTests.cs` (14 tests; RED first with the effect and the script moved away and no per-second hook:
+12 failed, the two "does nothing" cases passed by design). Targets 5 and 27 (wlm-03) and the script dispatcher (wlm-02) are exercised end to end.
