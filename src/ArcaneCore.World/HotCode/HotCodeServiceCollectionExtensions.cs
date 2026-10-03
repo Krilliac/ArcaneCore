@@ -55,7 +55,24 @@ public static class HotCodeServiceCollectionExtensions
             sp.GetRequiredService<CommandTableSource>(),
             sp.GetRequiredService<IHotCodeCatalog>(),
             sp.GetRequiredService<HotCodeAudit>(),
-            sp.GetRequiredService<ILoggerFactory>().CreateLogger("ArcaneCore.HotCode")));
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger("ArcaneCore.HotCode"),
+            onCodeEdited: () =>
+            {
+                foreach (Map map in sp.GetRequiredService<WorldRuntime>().Maps)
+                {
+                    map.ClearUpdaterFaults();
+                }
+            }));
+
+        // The fault breaker is part of the dev runner: a hot-patched updater that throws every tick
+        // is skipped after N ticks instead of flooding the log. An explicit World value wins.
+        services.AddOptions<WorldRuntimeOptions>().PostConfigure<IOptions<HotCodeOptions>>((runtime, hot) =>
+        {
+            if (runtime.MaxConsecutiveUpdaterFaults == 0)
+            {
+                runtime.MaxConsecutiveUpdaterFaults = Math.Max(0, hot.Value.MaxConsecutiveFaults);
+            }
+        });
         services.AddHostedService<HotCodeHost>();
         return services;
     }

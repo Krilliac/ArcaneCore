@@ -74,6 +74,7 @@ public sealed class HotCodeRefresh
     private readonly TimeSpan _commitTimeout;
     private readonly Func<DateTimeOffset> _clock;
     private readonly SemaphoreSlim _serial = new(1, 1);
+    private readonly Action? _onCodeEdited;
 
     public HotCodeRefresh(
         HotCodeState state,
@@ -84,8 +85,10 @@ public sealed class HotCodeRefresh
         HotCodeAudit audit,
         ILogger logger,
         TimeSpan? commitTimeout = null,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        Action? onCodeEdited = null)
     {
+        _onCodeEdited = onCodeEdited;
         _state = state;
         _world = world;
         _opcodes = opcodes;
@@ -102,11 +105,28 @@ public sealed class HotCodeRefresh
     /// <summary>
     /// The runtime applied a code edit (<c>MetadataUpdateHandler.UpdateApplication</c>, on a thread-pool
     /// thread as measured by tools/hotcode-spike, never assumed to be the world thread). Records it
-    /// and refreshes in the background; never throws into the runtime.
+    /// and refreshes in the background; never throws into the runtime. The <c>onCodeEdited</c>
+    /// callback (the fault breaker's reset: the edit may be the fix) runs on the world thread
+    /// first, whether or not the refresh finds anything.
     /// </summary>
     public void OnMetadataUpdate(Type[]? updatedTypes)
     {
         _state.RecordMetadataUpdate();
+        if (_onCodeEdited is { } onCodeEdited)
+        {
+            _world.Post(() =>
+            {
+                try
+                {
+                    onCodeEdited();
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogError(ex, "the code-edited callback failed");
+                }
+            });
+        }
+
         long generation = _state.NextGeneration();
         string reason = updatedTypes is null ? "metadata update (types unknown)" : $"metadata update ({updatedTypes.Length} types)";
         _ = RunInBackgroundAsync(generation, reason);

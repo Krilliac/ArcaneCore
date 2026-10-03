@@ -21,4 +21,12 @@ public sealed class HotCodeOptions
     /// start refused, refresh applied or rejected). Empty means no file. Not tamper-proof.
     /// </summary>
     public string AuditLogPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// With hot code enabled, a map updater that throws in this many consecutive ticks is skipped
+    /// until the next applied code edit (the edit may be the fix) instead of failing and logging
+    /// every tick. 0 disables the breaker. Ignored when <see cref="Enabled"/> is false, and an
+    /// explicit <c>World:MaxConsecutiveUpdaterFaults</c> takes precedence.
+    /// </summary>
+    public int MaxConsecutiveFaults { get; set; } = 50;
 }

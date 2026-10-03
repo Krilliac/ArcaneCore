@@ -61,6 +61,7 @@ the process still runs the edited bodies until restart.
 |---|---|---|
 | `Enabled` | `false` | Opt in. Accepted only when the host environment is Development or Staging. |
 | `AuditLogPath` | empty | Append-only file, one tab-separated line per decision (`start-allowed`, `start-refused`). Not tamper-proof: it is written by the same account the server runs as. |
+| `MaxConsecutiveFaults` | `50` | Fault breaker, effective only while `Enabled`: a map updater that throws in this many consecutive ticks is skipped (and logged once at error level) until the next applied code edit, or a restart, instead of failing every tick. `0` disables it. An explicit `World:MaxConsecutiveUpdaterFaults` wins. The vanilla default of that setting is `0`: unchanged behavior. |
 
 When enabled, startup logs a warning: `Code hot reload is ENABLED (World:HotCode:Enabled, environment ...)`.
 
@@ -113,6 +114,8 @@ Subtleties to know before trusting a patched process:
   run some call sites on the old body and some on the new one.
 * There is **no rollback** of an applied edit. To undo it, revert the source (that is a forward
   edit) or restart.
+* A hot-patched map updater that throws every tick is skipped by the fault breaker (see `MaxConsecutiveFaults`); the next applied edit gives it another chance. Chat commands that throw are already contained per invocation (the invoker is told the command failed).
+* **Debug tick cost is unmeasured.** Hot reload needs a Debug (unoptimized) build. How much slower a busy map ticks against the 50 ms budget has not been measured here; do not assume it fits, and do not run a realistic load test on the hot runner and read it as Release performance.
 * Registries built once at startup (opcode table, chat command table, default map updaters) are
   refreshed for *added* handlers, commands and updaters; see "Refreshing registries".
 
