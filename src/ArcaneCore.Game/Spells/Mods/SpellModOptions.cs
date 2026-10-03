@@ -33,4 +33,11 @@ public sealed class SpellModOptions
     /// that read a modifier is recomputed (vmangos Aura::ReapplyAffectedPassiveAuras, SpellAuras.cpp:1005-1075). Retail is true.
     /// </summary>
     public bool ReapplyPassives { get; set; } = true;
+
+    /// <summary>
+    /// Patch 1.11: a flat CASTING_TIME mod (Nature's Grace) is not spent by a spell an instant-cast percent mod (Nature's
+    /// Swiftness) already made instant (vmangos Player::ApplySpellMod, Player.cpp:22444-22453, builds after 1.10.2). Retail is true;
+    /// false spends it anyway.
+    /// </summary>
+    public bool InstantCastKeepsFlatCastTimeCharge { get; set; } = true;
 }

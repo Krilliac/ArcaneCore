@@ -8,10 +8,10 @@ namespace ArcaneCore.Game.Spells.Mods;
 /// modifier, an operation at or above <see cref="SpellModOp.Max"/> is ignored, applying creates the mod and removing takes
 /// the same one away, then the affected passive auras are refreshed.
 /// <para>
-/// Charges: a spell with StackAmount above 1 never carries charges, Shadow Trance and Netherwind Focus get one
-/// (<see cref="SpellModOptions.CustomCharges"/>). A mod that would carry charges is NOT registered yet: charges are consumed by the
-/// cast that uses the mod, and until that consumption exists a registered charged mod would apply to every cast forever
-/// (a permanent free-cast). <see cref="SpellModEngine.InertChargedMods"/> counts them.
+/// Charges (:1100-1105): a spell with StackAmount above 1 never carries charges ("all this spell expected expire not at use but at
+/// spell proc event check"), Shadow Trance and Netherwind Focus get one (<see cref="SpellModOptions.CustomCharges"/>), anything else
+/// starts with the holder's charges (Spell.dbc procCharges, 0 = unlimited). The casts that use the mod spend them
+/// (<see cref="SpellModScope"/>); the holder's own charge count is not touched, exactly as in vmangos.
 /// </para>
 /// </summary>
 internal sealed class SpellModAuraHandlers(SpellSystem system, SpellModEngine engine)
@@ -38,14 +38,8 @@ internal sealed class SpellModAuraHandlers(SpellSystem system, SpellModEngine en
             }
 
             int charges = holder.Spell.StackAmount > 1 ? 0 : holder.Charges;
-            if (charges > 0)
-            {
-                engine.InertChargedMods++;
-                return;
-            }
-
             var mod = new SpellMod((SpellModOp)aura.MiscValue, (SpellModType)(int)aura.Type, aura.Amount,
-                engine.ClassMask(holder.Spell, aura.EffectIndex), holder.Spell.SpellFamilyName, holder.Spell.Id, aura.EffectIndex);
+                engine.ClassMask(holder.Spell, aura.EffectIndex), holder.Spell.SpellFamilyName, holder.Spell.Id, aura.EffectIndex, charges);
             _live.Add(aura, mod);
             engine.Add(player, mod);
             PassiveReapply.Run(system, engine, player, mod, holder.Spell);

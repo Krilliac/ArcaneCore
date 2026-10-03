@@ -18,7 +18,7 @@ public enum SpellModType
 /// </summary>
 public sealed class SpellMod
 {
-    internal SpellMod(SpellModOp op, SpellModType type, int value, ulong mask, uint familyName, uint spellId, int effectIndex)
+    internal SpellMod(SpellModOp op, SpellModType type, int value, ulong mask, uint familyName, uint spellId, int effectIndex, int charges = 0)
     {
         Op = op;
         Type = type;
@@ -27,6 +27,7 @@ public sealed class SpellMod
         FamilyName = familyName;
         SpellId = spellId;
         EffectIndex = effectIndex;
+        Charges = charges;
     }
 
     public SpellModOp Op { get; }
@@ -46,6 +47,13 @@ public sealed class SpellMod
     public uint SpellId { get; }
 
     public int EffectIndex { get; }
+
+    /// <summary>
+    /// Remaining charges (vmangos SpellModifier::charges): 0 is unlimited, above 0 is the number of casts left, and -1 means spent
+    /// but still pinned to the cast that spent it until that cast ends (then the aura is removed, or the charge comes back if the
+    /// cast fails).
+    /// </summary>
+    public int Charges { get; internal set; }
 
     /// <summary>vmangos SpellModifier::IsAffectedOnSpell (SpellModifier.cpp:34-41) with SpellEntry::IsFitToFamilyMask (SpellEntry.h:698-701).</summary>
     public bool IsAffectedOnSpell(SpellInfo spell)

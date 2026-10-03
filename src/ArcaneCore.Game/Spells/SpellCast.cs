@@ -50,7 +50,14 @@ public sealed class SpellCast
     /// <summary>Time left in the current state (cast bar, then channel).</summary>
     public int Timer { get; internal set; }
 
-    public uint PowerCost { get; }
+    /// <summary>
+    /// The power cost: computed at prepare without spending mod charges, and again at the end of the cast bar with them (vmangos
+    /// Spell.cpp:3395 and :3646-3658, "in case of mana reduction buff proc while casting").
+    /// </summary>
+    public uint PowerCost { get; internal set; }
+
+    /// <summary>The charged spell mods this cast spent (vmangos Spell::m_appliedMods); null when the caster holds no modifiers.</summary>
+    internal Mods.SpellModScope? ModScope { get; set; }
 
     /// <summary>The aura/channel duration in ms, computed once at prepare (vmangos Spell::m_duration; -1 = permanent).</summary>
     public int Duration { get; }

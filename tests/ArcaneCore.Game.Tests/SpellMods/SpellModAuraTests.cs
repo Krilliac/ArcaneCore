@@ -144,18 +144,6 @@ public sealed class SpellModAuraTests
     }
 
     [Fact]
-    public void AModAuraWithChargesIsNotRegisteredYet_AndIsCounted()
-    {
-        using SpellTestKit kit = Kit();
-        (Player player, _) = kit.AddPlayer(1);
-
-        kit.System.LearnSpell(player, Charged);
-
-        Assert.Empty(kit.System.Mods.ModsOf(player, SpellModOp.Cost));
-        Assert.Equal(1, ((SpellModEngine)kit.System.Mods).InertChargedMods);
-    }
-
-    [Fact]
     public void AStackableSpell_NeverCarriesCharges_SoItRegisters()
     {
         using SpellTestKit kit = Kit();
@@ -163,12 +151,11 @@ public sealed class SpellModAuraTests
 
         kit.System.LearnSpell(player, Stacking);
 
-        Assert.Single(kit.System.Mods.ModsOf(player, SpellModOp.Damage));
-        Assert.Equal(0, ((SpellModEngine)kit.System.Mods).InertChargedMods);
+        Assert.Equal(0, Assert.Single(kit.System.Mods.ModsOf(player, SpellModOp.Damage)).Charges);
     }
 
     [Fact]
-    public void ShadowTrance_GetsItsCustomCharge_AndSoStaysInert_UntilConsumptionExists()
+    public void ShadowTrance_GetsItsCustomCharge_OnTheHolderAndTheMod()
     {
         using SpellTestKit kit = Kit();
         (Player player, _) = kit.AddPlayer(1);
@@ -176,7 +163,7 @@ public sealed class SpellModAuraTests
         kit.System.LearnSpell(player, ShadowTrance);
 
         Assert.Equal(1, kit.System.GetAuras(player).Single(h => h.Spell.Id == ShadowTrance).Charges);
-        Assert.Empty(kit.System.Mods.ModsOf(player, SpellModOp.CastingTime));
+        Assert.Equal(1, Assert.Single(kit.System.Mods.ModsOf(player, SpellModOp.CastingTime)).Charges);
     }
 
     [Fact]

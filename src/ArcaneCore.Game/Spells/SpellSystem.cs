@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Ranged;
+using ArcaneCore.Game.Spells.Mods;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -299,8 +300,16 @@ public sealed partial class SpellSystem
             return result;
         }
 
-        int castTime = triggered ? 0 : CastTimeFor(caster, spell);
-        var cast = new SpellCast(spell, caster, targets, triggered, castTime, PowerCostFor(caster, spell), DurationFor(caster, spell));
+        // vmangos Spell::prepare (Spell.cpp:3395, :3436): the cost is read without spending mod charges, the cast time after the
+        // first CheckCast with them ("to prevent charge counting for first CheckCast fail"), the duration never.
+        SpellModScope? modScope = ModEngine?.CreateScope(caster, spell);
+        int castTime;
+        using (BeginModWindow(modScope))
+        {
+            castTime = triggered ? 0 : CastTimeFor(caster, spell);
+        }
+
+        var cast = new SpellCast(spell, caster, targets, triggered, castTime, PowerCostFor(caster, spell), DurationFor(caster, spell)) { ModScope = modScope };
         if (!triggered)
         {
             state.CurrentCast = cast;
@@ -345,6 +354,14 @@ public sealed partial class SpellSystem
             return result;
         }
 
+        // vmangos Spell::cast (Spell.cpp:3646-3658): the cost is read again, now spending mod charges, and everything the cast
+        // reads from here until it returns (effects, crit rolls) spends the charges of the mods it uses.
+        using SpellModWindow modWindow = BeginModWindow(cast.ModScope);
+        if (cast.ModScope is not null && !cast.IsTriggered)
+        {
+            cast.PowerCost = PowerCostFor(caster, spell);
+        }
+
         InterruptAtCastCompletion(cast); // rogue lane: ACTION_LATE / ATTACKING half (vmangos Spell.cpp:3697-3714), docs/integration/rogue-aura-interrupt.md
         AddCooldown(state, spell, cast.IsTriggered);
         TakePower(caster, spell, cast.PowerCost, cast.IsTriggered);
@@ -379,6 +396,7 @@ public sealed partial class SpellSystem
         {
             cast.State = SpellCastState.Casting;
             cast.Timer = duration;
+            SealModScope(cast); // vmangos Spell.cpp:3834: a channel ends its mods when it starts, not when it ends
             cast.CastX = caster.X;
             cast.CastY = caster.Y;
             cast.CastZ = caster.Z;

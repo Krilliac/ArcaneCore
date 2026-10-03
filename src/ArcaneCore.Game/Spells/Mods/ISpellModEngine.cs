@@ -36,6 +36,32 @@ public interface ISpellModEngine : ISpellModifiers
     /// <summary>Remove a mod from a player (vmangos Player::AddSpellMod(mod, false)); false if it was not held.</summary>
     bool Remove(Player owner, SpellMod mod);
 
+    /// <summary>
+    /// A new charge scope for a cast of <paramref name="spell"/> by <paramref name="caster"/> (vmangos Spell::m_appliedMods), or
+    /// null when nobody holds modifiers for that caster.
+    /// </summary>
+    SpellModScope? CreateScope(Unit caster, SpellInfo spell);
+
+    /// <summary>
+    /// Open a consume window: while it is open, every <see cref="ISpellModifiers.Apply"/> for the scope's caster and spell spends
+    /// the charges of the mods it uses, except for the operations vmangos reads without a spell (duration, cooldowns, threat,
+    /// charges, activation time, chance of success, haste, attack power). Outside a window the engine only reads (the
+    /// first CheckCast, power checks): a pinned mod (-1 charges) still applies there. Windows nest; dispose to close.
+    /// </summary>
+    SpellModWindow Begin(SpellModScope scope);
+
+    /// <summary>
+    /// The cast succeeded (or its channel started): forget the scope and remove the aura of every mod that is out of charges
+    /// (vmangos Player::RemoveSpellMods, Player.cpp:17731-17763). Does nothing if the scope is already closed.
+    /// </summary>
+    void Seal(SpellModScope scope);
+
+    /// <summary>
+    /// The cast was cancelled or failed: give every spent charge back (-1 becomes 1, otherwise +1; vmangos
+    /// Player::RestoreSpellMods, Player.cpp:17684-17722). Does nothing if the scope is already closed.
+    /// </summary>
+    void Restore(SpellModScope scope);
+
     /// <summary>Raised after a mod was added (true) or removed (false), before passives are reapplied.</summary>
     event Action<Player, SpellMod, bool>? Changed;
 }

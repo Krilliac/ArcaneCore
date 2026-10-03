@@ -19,5 +19,20 @@ public sealed partial class SpellSystem
         return result == value ? value : (int)result;
     }
 
+    /// <summary>The spell-modifier engine installed on the seam, or null when another implementation (or none) is.</summary>
+    private Mods.ISpellModEngine? ModEngine => SpellModifiers as Mods.ISpellModEngine;
+
+    /// <summary>Open a consume window for a cast's mod scope (null scope: nothing to spend, the default window does nothing).</summary>
+    private Mods.SpellModWindow BeginModWindow(Mods.SpellModScope? scope) => scope is null || ModEngine is null ? default : ModEngine.Begin(scope);
+
+    /// <summary>A channel starts (or any cast ends): remove the auras of the mods this cast spent the last charge of.</summary>
+    private void SealModScope(SpellCast cast)
+    {
+        if (cast.ModScope is { } scope)
+        {
+            ModEngine?.Seal(scope);
+        }
+    }
+
     internal float ModFloat(Unit caster, SpellInfo spell, SpellModOp op, float value) => SpellModifiers.Apply(caster, spell, op, value);
 }

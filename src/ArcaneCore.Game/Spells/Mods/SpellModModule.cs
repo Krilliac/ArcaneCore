@@ -27,6 +27,8 @@ public sealed class SpellModModule : ISpellHandlerModule
         }
 
         system.RegisterValueModifier(new SpellModValueAdapter(engine));
+        engine.RemoveAura = (player, spellId) => system.RemoveAuras(player, spellId);
+        system.RegisterObserver(new SpellModCastObserver(engine));
         new HardcodedMods(system, engine).Attach();
     }
 }

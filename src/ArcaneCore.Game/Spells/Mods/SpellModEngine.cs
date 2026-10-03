@@ -7,6 +7,19 @@ namespace ArcaneCore.Game.Spells.Mods;
 public sealed class SpellModEngine : ISpellModEngine
 {
     private readonly ConditionalWeakTable<Unit, PlayerMods> _mods = new();
+    private readonly List<SpellModScope> _windows = [];
+
+    /// <summary>Removes the aura of a mod that ran out of charges; set by <see cref="SpellModModule"/>.</summary>
+    internal Action<Player, uint>? RemoveAura { get; set; }
+
+    /// <summary>
+    /// The operations vmangos reads with no spell (so no charge is touched): Player::AddGCD, AddCooldown, CalcThreat,
+    /// SpellEntry::CalculateDuration, the aura constructors (charges, activation time, speed/haste/attack power amounts) and the
+    /// proc chance (SpellAuras.cpp, ThreatManager.cpp:44, UnitAuraProcHandler.cpp:490).
+    /// </summary>
+    private static bool ReadsWithoutSpell(SpellModOp op) => op is SpellModOp.Duration or SpellModOp.GlobalCooldown or SpellModOp.Cooldown
+        or SpellModOp.Threat or SpellModOp.Charges or SpellModOp.ActivationTime or SpellModOp.ChanceOfSuccess or SpellModOp.Haste
+        or SpellModOp.AttackPower;
 
     public SpellModOptions Options { get; } = new();
 
@@ -26,7 +39,93 @@ public sealed class SpellModEngine : ISpellModEngine
         }
 
         List<SpellMod>? list = held.Of(op);
-        return list is { Count: > 0 } ? SpellModMath.Evaluate(list, spell, op, value) : value;
+        return list is { Count: > 0 } ? SpellModMath.Evaluate(list, spell, op, value, ConsumingScope(owner, spell, op),
+            Options.InstantCastKeepsFlatCastTimeCharge) : value;
+    }
+
+    /// <summary>The open window of this player's cast of <paramref name="spell"/>, if the operation is one that spends charges.</summary>
+    private SpellModScope? ConsumingScope(Player owner, SpellInfo spell, SpellModOp op)
+    {
+        if (_windows.Count == 0 || ReadsWithoutSpell(op))
+        {
+            return null;
+        }
+
+        for (int i = _windows.Count - 1; i >= 0; i--)
+        {
+            SpellModScope scope = _windows[i];
+            if (ReferenceEquals(scope.Owner, owner) && scope.Spell.Id == spell.Id && !scope.IsClosed)
+            {
+                return scope;
+            }
+        }
+
+        return null;
+    }
+
+    public SpellModScope? CreateScope(Unit caster, SpellInfo spell)
+    {
+        ArgumentNullException.ThrowIfNull(caster);
+        ArgumentNullException.ThrowIfNull(spell);
+        return Options.Enabled && OwnerResolver.GetModOwner(caster) is { } owner ? new SpellModScope(owner, spell) : null;
+    }
+
+    public SpellModWindow Begin(SpellModScope scope)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        _windows.Add(scope);
+        return new SpellModWindow(this, scope);
+    }
+
+    internal void End(SpellModScope scope)
+    {
+        int index = _windows.LastIndexOf(scope);
+        if (index >= 0)
+        {
+            _windows.RemoveAt(index);
+        }
+    }
+
+    public void Seal(SpellModScope scope)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        if (scope.IsClosed)
+        {
+            return;
+        }
+
+        scope.IsClosed = true;
+        var spent = new SortedSet<uint>();
+        foreach (SpellMod mod in scope.Applied)
+        {
+            if (mod.Charges == -1)
+            {
+                spent.Add(mod.SpellId);
+            }
+        }
+
+        scope.Clear();
+        foreach (uint spellId in spent)
+        {
+            RemoveAura?.Invoke(scope.Owner, spellId);
+        }
+    }
+
+    public void Restore(SpellModScope scope)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        if (scope.IsClosed)
+        {
+            return;
+        }
+
+        scope.IsClosed = true;
+        foreach (SpellMod mod in scope.Applied)
+        {
+            mod.Charges = mod.Charges == -1 ? 1 : mod.Charges + 1;
+        }
+
+        scope.Clear();
     }
 
     public int Apply(Unit caster, SpellInfo spell, SpellModOp op, int value) => (int)Apply(caster, spell, op, (float)value);
@@ -36,12 +135,6 @@ public sealed class SpellModEngine : ISpellModEngine
         ArgumentNullException.ThrowIfNull(spell);
         return MaskSource?.TryGetMask(spell.Id, effectIndex) ?? spell.Effects[effectIndex].ItemType;
     }
-
-    /// <summary>
-    /// How many modifier auras with proc charges were left unregistered (their consumption path does not exist yet, so applying
-    /// them would make a Clearcasting-shaped mod permanent).
-    /// </summary>
-    public int InertChargedMods { get; internal set; }
 
     public IReadOnlyList<SpellMod> ModsOf(Unit owner, SpellModOp op)
     {
