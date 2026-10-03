@@ -187,15 +187,17 @@ public sealed partial class QuestNpcServices
     /// <summary>The adapters this quest still lacks (empty when every need is provided).</summary>
     public QuestAdapter MissingAdapters(Quest quest)
     {
+        QuestAdapter needs = QuestNeeds.Of(quest);
         QuestAdapter provided = ProvidedAdapters;
         // Read per query, never cached: a module's coverage may depend on content that loads after this service is built
-        // (the spell store attaches after the quest feature).
-        if (HasAreaTrigger(quest.Id) || s_adapterModules.Value.Any(module => module.EventQuestsCovered(this).Contains(quest.Id)))
+        // (the spell store attaches after the quest feature). Only event quests ask.
+        if ((needs & QuestAdapter.EventCredit) != 0
+            && (HasAreaTrigger(quest.Id) || s_adapterModules.Value.Any(module => module.EventQuestsCovered(this).Contains(quest.Id))))
         {
             provided |= QuestAdapter.EventCredit;
         }
 
-        return QuestNeeds.Of(quest) & ~provided;
+        return needs & ~provided;
     }
 
     /// <summary>Every behaviour the quest needs is delivered, so it may be accepted and abandoned.</summary>
