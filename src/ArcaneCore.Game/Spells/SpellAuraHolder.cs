@@ -203,7 +203,32 @@ public sealed class SpellAuraHolder
     internal Dictionary<ObjectGuid, SpellAuraHolder> AreaChildren { get; } = [];
 
     /// <summary>Whether <c>character_aura</c> keeps this holder across logout (see SpellSystem.CaptureState).</summary>
-    public bool IsSaveable => !IsRemoved && !Spell.IsPassive && !Spell.IsChanneled && AreaParent is null && !IsEmpty;
+    public bool IsSaveable => !IsRemoved && !Spell.IsPassive && !Spell.IsChanneled && AreaParent is null && !IsEmpty
+        && !IsNeverSaved(Spell);
+
+    /// <summary>
+    /// vmangos Player::SaveAura (Player.cpp:16618-16660): an aura whose spell is cancelled by leaving or entering the world, or that
+    /// carries bind sight, possess, charm, far sight or AoE charm on any effect, is not saved.
+    /// </summary>
+    internal static bool IsNeverSaved(SpellInfo spell)
+    {
+        const uint enterWorldCancels = 0x00400000; // AURA_INTERRUPT_ENTER_WORLD_CANCELS (SpellDefines.h:599)
+        if (((uint)spell.AuraInterruptFlags & ((uint)SpellAuraInterruptFlags.LeaveWorld | enterWorldCancels)) != 0)
+        {
+            return true;
+        }
+
+        foreach (SpellEffectInfo effect in spell.Effects)
+        {
+            if (effect.Effect == SpellEffectName.ApplyAura
+                && effect.AuraType is AuraType.BindSight or AuraType.ModPossess or AuraType.ModCharm or AuraType.FarSight or AuraType.AoeCharm)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     public IReadOnlyList<SpellAura?> Auras => _auras;
 

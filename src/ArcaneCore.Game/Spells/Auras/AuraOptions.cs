@@ -14,4 +14,11 @@ public sealed class AuraOptions
     /// instead of bursting them. Default false.
     /// </summary>
     public bool PeriodicCatchUp { get; set; }
+
+    /// <summary>
+    /// Harmful auras keep counting down while their owner is offline (the cmangos rule this engine used before). Retail
+    /// (vmangos Player::LoadAura, Player.cpp:15363-15372) subtracts the offline time only from spells with
+    /// SPELL_ATTR_EX4_AURA_EXPIRES_OFFLINE (Deserter), so every other aura resumes with the time it had at logout. Default false.
+    /// </summary>
+    public bool HarmfulAurasExpireOffline { get; set; }
 }
