@@ -27,6 +27,9 @@ public sealed class SpellEffectContext
 
     public int EffectIndex { get; }
 
+    /// <summary>Effects selected for this exact target (bit i = effect i).</summary>
+    public int EffectMask { get; internal set; } = (1 << SpellConstants.MaxEffects) - 1;
+
     public SpellEffectInfo Effect => Spell.Effects[EffectIndex];
 
     /// <summary>The effect value (vmangos Spell::CalculateDamage → damage).</summary>
@@ -111,7 +114,7 @@ public sealed partial class SpellSystem
             {
                 value = (int)(value * multipliers[i]);
             }
-            var context = new SpellEffectContext(this, cast, target, i, value) { PendingHolder = holder };
+            var context = new SpellEffectContext(this, cast, target, i, value) { EffectMask = effectMask, PendingHolder = holder };
             handler(context);
             holder = context.PendingHolder;
         }

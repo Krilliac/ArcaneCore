@@ -236,12 +236,15 @@ public sealed partial class SpellSystem
 
         foreach (SpellAuraHolder areaChild in holder.AreaChildren.Values.ToArray())
         {
-            if (GetState(areaChild.Target.Guid) is { } childState && ReferenceEquals(childState.Unit, areaChild.Target))
+            if (!IsQuestSettlementPending(areaChild.Target)
+                && GetState(areaChild.Target.Guid) is { } childState && ReferenceEquals(childState.Unit, areaChild.Target))
             {
                 RemoveHolder(childState, areaChild);
             }
         }
 
+        // Held children still reference this removed parent. Their first update after the
+        // settlement ends removes them through UpdateAuras without mutating the held player.
         holder.AreaChildren.Clear();
     }
 

@@ -100,8 +100,11 @@ public sealed partial class SpellSystem
                 {
                     source.AreaChildren.Remove(guid);
                 }
-                else if (!inRange.Contains(guid) && GetState(child.Target.Guid) is { } childState && ReferenceEquals(childState.Unit, child.Target))
+                else if (!inRange.Contains(guid) && !IsQuestSettlementPending(child.Target)
+                    && GetState(child.Target.Guid) is { } childState && ReferenceEquals(childState.Unit, child.Target))
                 {
+                    // A held member retains its exact child until a later unheld update can
+                    // evaluate its current party, range and source without changing staged state.
                     RemoveHolder(childState, child);
                 }
             }

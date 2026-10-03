@@ -179,12 +179,14 @@ public sealed partial class SpellSystem
         Unit? target = ResolveUnitTarget(cast.Caster, cast.Targets);
         foreach (Unit unit in target is null || ReferenceEquals(target, cast.Caster) ? [cast.Caster] : new[] { cast.Caster, target })
         {
-            if (GetState(unit.Guid) is not { } state)
+            if (IsQuestSettlementPending(unit) || GetState(unit.Guid) is not { } state
+                || !ReferenceEquals(state.Unit, unit))
             {
                 continue;
             }
 
-            foreach (SpellAuraHolder holder in state.Auras.Where(h => h.Spell.Id == cast.Spell.Id && h.CasterGuid == cast.Caster.Guid && !h.IsPermanent))
+            foreach (SpellAuraHolder holder in state.Auras.Where(h => h.Spell.Id == cast.Spell.Id
+                && h.CasterGuid == cast.Caster.Guid && ReferenceEquals(ResolveAuraCaster(h), cast.Caster) && !h.IsPermanent))
             {
                 holder.Duration = Math.Max(0, holder.Duration - delay);
                 SendAuraDuration(holder);
@@ -237,7 +239,7 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// The weapon damage family (vmangos Spell::EffectWeaponDmg, re-implemented): all weapon
-    /// effects of the spell combine once per target, handled by the first of them. Flat bonuses of
+    /// effects selected for the target combine once, handled by the first selected one. Flat bonuses of
     /// WEAPON_DAMAGE / WEAPON_DAMAGE_NOSCHOOL / NORMALIZED_WEAPON_DMG add to the weapon roll, then
     /// WEAPON_PERCENT_DAMAGE scales the total; any normalized effect normalizes the roll's attack
     /// power part to <see cref="NormalizedWeaponSpeed"/>. Armor, crit (×2) and the damage log follow.
@@ -247,9 +249,9 @@ public sealed partial class SpellSystem
         IReadOnlyList<SpellEffectInfo> effects = context.Spell.Effects;
         for (int i = 0; i < context.EffectIndex; i++)
         {
-            if (IsWeaponEffect(effects[i].Effect))
+            if ((context.EffectMask & (1 << i)) != 0 && IsWeaponEffect(effects[i].Effect))
             {
-                return; // the first weapon effect handled the whole family
+                return; // the first selected weapon effect handled this target's family
             }
         }
 
@@ -264,7 +266,7 @@ public sealed partial class SpellSystem
         for (int i = context.EffectIndex; i < effects.Count; i++)
         {
             SpellEffectInfo effect = effects[i];
-            if (!IsWeaponEffect(effect.Effect))
+            if ((context.EffectMask & (1 << i)) == 0 || !IsWeaponEffect(effect.Effect))
             {
                 continue;
             }
