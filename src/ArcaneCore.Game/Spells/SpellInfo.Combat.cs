@@ -35,6 +35,22 @@ public sealed partial record SpellInfo
         && !HasAttribute(SpellAttributesCombat.NotShapeshift);
 
     /// <summary>
+    /// vmangos SpellEntry::IsNeedCastSpellAtFormApply (SpellEntry.h:1141-1150): a passive (or hidden) spell bound to the form
+    /// by its Stances mask is cast again when the form is applied, unless it also works outside any shapeshift
+    /// (ALLOW_WHILE_NOT_SHAPESHIFTED). Includes the hard-coded spell 24864 in cat form (form 1).
+    /// </summary>
+    public bool IsNeedCastSpellAtFormApply(uint form)
+    {
+        if (((uint)Attributes & ((uint)SpellAttributes.Passive | (uint)SpellAttributes.DoNotDisplay)) == 0 || form == 0)
+        {
+            return false;
+        }
+
+        return ((Stances & (1u << (int)(form - 1))) != 0 || (Id == 24864 && form == (uint)ShapeshiftForm.Cat))
+            && !HasAttribute(SpellAttributesEx2Combat.AllowWhileNotShapeshifted);
+    }
+
+    /// <summary>
     /// vmangos SpellEntry::GetErrorAtShapeshiftedCast (SpellEntry.cpp:1032-1074). <paramref name="form"/> is the
     /// caster's current <see cref="ShapeshiftForm"/> (0 = none). <paramref name="formFlags"/> is that form's
     /// SpellShapeshiftForm.dbc flags1 (<see cref="ShapeshiftFlags"/>), or null when the form has no row: vmangos

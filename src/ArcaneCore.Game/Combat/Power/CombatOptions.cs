@@ -26,6 +26,18 @@ public sealed class CombatOptions
     public float RateMana { get; set; } = 1.0f;
 
     /// <summary>
+    /// Whether switching between warrior stances keeps the stance-bound buffs the unit cast on itself (Retaliation,
+    /// Recklessness, Shield Wall). Default false: vmangos removes them with the old stance (SpellAuras.cpp:5565-5575,
+    /// SpellAuraHolder::m_isRemovedOnShapeLost). Patch 1.7.0 is quoted by vmangos as saying they are no longer cancelled
+    /// (SpellAuras.cpp:5537-5539), but its code for that sits in a block excluded from the 1.12.1 build, so the code
+    /// is followed.
+    /// </summary>
+    public bool StanceShiftKeepsSelfBuffs { get; set; }
+
+    /// <summary>Path of the client's SpellShapeshiftForm.dbc (build 5875). Empty = only the three warrior stances are known.</summary>
+    public string ShapeshiftFormDbcPath { get; set; } = string.Empty;
+
+    /// <summary>
     /// vmangos World::setConfigPos (World.cpp:2959-2967): Rate.Mana and Rate.Rage.Loss cannot be negative and fall
     /// back to the default 1. Returns the names of the values that were replaced.
     /// </summary>

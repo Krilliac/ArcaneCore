@@ -19,6 +19,16 @@ public sealed partial class SpellSystem
     /// <summary>The registered value modifiers in registration order.</summary>
     public IReadOnlyList<ISpellValueModifier> ValueModifiers => _valueModifiers;
 
+    /// <summary>
+    /// Interrupt a cast of the unit (vmangos InterruptSpell(type, false)): a preparing cast or a queued next-swing spell
+    /// reports INTERRUPTED, a channel ends. A finished cast is ignored.
+    /// </summary>
+    public void Interrupt(SpellCast cast)
+    {
+        ArgumentNullException.ThrowIfNull(cast);
+        Cancel(cast);
+    }
+
     /// <summary>The target outcome being built by <see cref="ApplyEffects"/> (re-entrant: nested triggered casts save and restore it).</summary>
     private OutcomeBuilder? _outcome;
 

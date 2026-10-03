@@ -162,10 +162,44 @@ the melee slot in `SpellSystem.NextSwing.cs`.
 - Limits: no swing loop calls `CastQueuedMeleeSpell` yet (the melee slice does); the queued spell is not cancelled
   automatically when the unit stops attacking; the SMSG_ATTACKERSTATEUPDATE a swing spell sends is the melee slice's.
 
+## Warrior stances (warrior-mechanics S06)
+
+`ShapeshiftService` (`Spells/Stances/`), installed by the world's `StanceFeature`, follows vmangos
+`HandleAuraModShapeshift` (`SpellAuras.cpp:2420-2575`) and `HandleShapeshiftBoosts` (`:5433-5597`) at the 1.12.1 build.
+
+- **Handler** for `SPELL_AURA_MOD_SHAPESHIFT` with forms 17-19 (Battle, Defensive, Berserker): the previous
+  shapeshift aura is removed first; non-stance forms would also end `SHAPESHIFTING_CANCELS` auras; rage becomes
+  the Tactical Mastery cap (class-script auras 831-835 = 50/100/150/200/250 raw, else 0; creatures 0,
+  `:2528-2569`); `UNIT_FIELD_BYTES_1` byte 2 takes the form; the boost passive is added (21156 / 7376 / 7381,
+  `:5468-5476`) and every known passive bound to the form is cast again (`SpellInfo.IsNeedCastSpellAtFormApply`,
+  `SpellEntry.h:1141-1150`). Losing the form clears the byte, drops the boost, removes the self-cast auras bound
+  to a form (`SpellAuraHolder::m_isRemovedOnShapeLost`, `SpellAuras.cpp:6672`: caster is the target and
+  `IsRemovedOnShapeLost`) and interrupts a queued next-swing, preparing or channelled spell that is bound to it.
+- **Gate**: `StanceCastCheck` (phase Caster, order Shapeshift) runs `GetErrorAtShapeshiftedCast` for the caster's
+  form on the strict check of non-triggered casts only (`Spell.cpp:5340-5343`); the landing re-check and triggered
+  casts skip it.
+- **Persistence**: the stance aura is a normal permanent aura, so `character_aura` saves it and the restore
+  re-runs the handler (form byte, boost). Passives are not saved and come back from the handler.
+- **Death**: the real stance spells carry `ALLOW_AURA_WHILE_DEAD` (AttributesEx3 0x100000), and vmangos
+  `RemoveAuraTypeOnDeath(MOD_SHAPESHIFT)` (`Player.cpp:1525`, `Unit.cpp:3955-3967`) spares death-persistent holders,
+  so the stance outlives death; a stance without the bit is removed and the form cleared (both tested).
+- **Form table**: `ShapeshiftFormCatalog`. `Combat:ShapeshiftFormDbcPath` points at the client's
+  SpellShapeshiftForm.dbc (`ShapeshiftFormDbcReader`, 14 fields; a missing or malformed file stops the daemon).
+  Without it only forms 17-19 are known, with `flags1 = 1` inferred from vmangos' definition of the stance flag
+  (`SharedDefines.h:1471`), not read from a DBC; the result of the gate for warrior spells does not depend on it.
+- **Config** (`Combat:StanceShiftKeepsSelfBuffs`, default false): vmangos removes Retaliation, Recklessness and Shield
+  Wall with the old stance (the code above). vmangos also quotes patch 1.7.0 as saying they are no longer cancelled
+  (`SpellAuras.cpp:5537-5539`), but the code under that comment is compiled only for builds up to 1.6.1, so the code
+  is followed. With the option on, switching stances keeps them; cancelling a stance still removes them.
+- **Limits**: forms other than 17-19 (druid, priest, shaman) are logged and left unhandled; no model/display, speed or
+  rage/energy swap; the "talent that learns a spell" exemption of the gate needs the talent tree (not loaded);
+  Tactical Mastery only matters once talents exist (the aura is read, nothing grants it yet); the stance-change
+  cooldown and the quest-granted stance spells are spell data / quest rewards, not code.
+
 ## What's left
 
 - Area, chain and cone target selection are implemented (`SpellSystem.Targeting.cs`, with a line-of-sight filter on area lists); only the remaining TargetB-based selections are missing.
-- Reagents, item casts, totems, spell focus, shapeshift and stance checks (no shapeshift or stance data is read at cast time), facing, area restrictions.
+- Reagents, item casts, totems, spell focus, non-warrior shapeshift forms, facing, area restrictions.
 - Talents, ranks, spell modifiers, proc system (aura holders carry `procCharges`, but nothing consumes them), diminishing returns, immunities. Hit, crit and resist rules (`SpellCombatRules`) and the dispel effect exist.
 - Complete spell combat modifiers. Integrated spell damage now uses map combat death/threat,
   and effective healing adds base distributed threat and enters combat.
