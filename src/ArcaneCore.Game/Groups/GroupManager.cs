@@ -19,6 +19,18 @@ public sealed class GroupManager(SocialContext context)
     private readonly Dictionary<ObjectGuid, MemberStats> _sentStats = [];
     private uint _nextId = 1;
 
+    /// <summary>A member was added; the first is the leader when the group is created (world thread; instance binds follow it).</summary>
+    public event Action<Group, ObjectGuid>? MemberAdded;
+
+    /// <summary>A member left or was removed without disbanding the group (world thread).</summary>
+    public event Action<Group, ObjectGuid>? MemberRemoved;
+
+    /// <summary>The group is about to be disbanded; members are still listed. The GUID is the leaving member, or empty (world thread).</summary>
+    public event Action<Group, ObjectGuid>? Disbanding;
+
+    /// <summary>The leader changed; the GUID is the previous leader (world thread).</summary>
+    public event Action<Group, ObjectGuid>? LeaderChanged;
+
     /// <summary>The group <paramref name="guid"/> is a member of (online or not).</summary>
     public Group? GetGroup(ObjectGuid guid) => _memberOf.GetValueOrDefault(guid);
 
@@ -618,6 +630,7 @@ public sealed class GroupManager(SocialContext context)
             _sentStats.Remove(guid);
         }
 
+        MemberAdded?.Invoke(group, guid);
         return true;
     }
 
@@ -630,7 +643,7 @@ public sealed class GroupManager(SocialContext context)
     {
         if (group.MemberCount <= Group.MinMemberCount)
         {
-            Disband(group, hideDestroy: true);
+            Disband(group, hideDestroy: true, initiator: guid);
             return;
         }
 
@@ -661,11 +674,13 @@ public sealed class GroupManager(SocialContext context)
         }
 
         SendUpdate(group);
+        MemberRemoved?.Invoke(group, guid);
     }
 
     /// <summary>vmangos Group::Disband: SMSG_GROUP_DESTROYED (unless hidden) and an empty group list for each online member.</summary>
-    private void Disband(Group group, bool hideDestroy)
+    private void Disband(Group group, bool hideDestroy, ObjectGuid initiator = default)
     {
+        Disbanding?.Invoke(group, initiator);
         var members = group.Members.Select(m => m.Guid).ToArray();
         foreach (ObjectGuid invitee in group.Invitees.ToArray())
         {
@@ -733,6 +748,11 @@ public sealed class GroupManager(SocialContext context)
         if (context.World.FindOnlinePlayer(slot.Guid) is { } newLeader)
         {
             UpdateLeaderFlag(newLeader);
+        }
+
+        if (old != slot.Guid)
+        {
+            LeaderChanged?.Invoke(group, old);
         }
     }
 
