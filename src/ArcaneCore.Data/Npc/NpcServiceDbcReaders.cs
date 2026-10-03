@@ -6,11 +6,18 @@ namespace ArcaneCore.Data.Npc;
 /// <summary>
 /// Decoders for the developer-supplied build-5875 DBC files the NPC services use (never
 /// downloaded by the daemon). Field counts follow vmangos/core Database/DBCfmt.h:
-/// TaxiPathNodeEntryfmt "diiifffii", SkillLineAbilityfmt "niiiixxiiiiixx",
+/// TaxiPathNodeEntryfmt "diiifffii", SkillLineAbilityfmt "niiiixxiiiiixxi" (fifteen fields, the last is reqtrainpoints:
+/// vmangos Database/DBCfmt.h:68, DBCStructure.h:540-556; mangos-classic Server/DBCfmt.h:70; a fourteen-field image is still read),
 /// DurabilityCostsfmt (id + 29 multipliers), DurabilityQualityfmt "nf", BankBagSlotPricesEntryfmt "ni".
 /// </summary>
 public static class NpcServiceDbcReaders
 {
+    /// <summary>Canonical SkillLineAbility.dbc width (vmangos DBCfmt.h:68 "niiiixxiiiiixxi").</summary>
+    public const int SkillLineAbilityFields = 15;
+
+    /// <summary>The narrower layout without reqtrainpoints this reader has always accepted (the columns read are identical).</summary>
+    public const int SkillLineAbilityFieldsWithoutTrainPoints = 14;
+
     public static TaxiPathNodeCatalog LoadTaxiPathNodes(string path) => ReadTaxiPathNodes(DbcFile.Load(path));
 
     public static TaxiPathNodeCatalog ReadTaxiPathNodes(DbcFile file)
@@ -30,9 +37,12 @@ public static class NpcServiceDbcReaders
 
     public static SkillLineAbilityCatalog LoadSkillLineAbilities(string path) => ReadSkillLineAbilities(DbcFile.Load(path));
 
-    public static SkillLineAbilityCatalog ReadSkillLineAbilities(DbcFile file)
+    public static SkillLineAbilityCatalog ReadSkillLineAbilities(DbcFile file) => new(ReadSkillLineAbilityRecords(file));
+
+    /// <summary>The raw SkillLineAbility.dbc rows in file order (the skill catalog needs them by skill as well as by spell).</summary>
+    public static IReadOnlyList<SkillLineAbilityRecord> ReadSkillLineAbilityRecords(DbcFile file)
     {
-        Require(file, 14, "SkillLineAbility.dbc");
+        RequireOneOf(file, "SkillLineAbility.dbc", SkillLineAbilityFields, SkillLineAbilityFieldsWithoutTrainPoints);
         var rows = new List<SkillLineAbilityRecord>(file.RecordCount);
         for (int row = 0; row < file.RecordCount; row++)
         {
@@ -41,7 +51,7 @@ public static class NpcServiceDbcReaders
                 file.GetUInt32(row, 7), file.GetUInt32(row, 8), file.GetUInt32(row, 9), file.GetUInt32(row, 10), file.GetUInt32(row, 11)));
         }
 
-        return new SkillLineAbilityCatalog(rows);
+        return rows;
     }
 
     public static RepairCostTable LoadRepairCosts(string costsPath, string qualityPath)
@@ -103,6 +113,15 @@ public static class NpcServiceDbcReaders
         catch (ArgumentException error)
         {
             throw new InvalidDataException("duplicate BankBagSlotPrices.dbc id", error);
+        }
+    }
+
+    private static void RequireOneOf(DbcFile file, string name, int first, int second)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+        if ((file.FieldCount != first && file.FieldCount != second) || file.RecordSize != file.FieldCount * 4)
+        {
+            throw new InvalidDataException($"build-5875 {name} requires {first} (or {second}) four-byte fields");
         }
     }
 

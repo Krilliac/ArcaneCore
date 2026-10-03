@@ -52,6 +52,20 @@ public sealed class NpcServiceDbcTests
     }
 
     [Fact]
+    public void SkillLineAbility_AcceptsTheCanonical15FieldLayout()
+    {
+        // vmangos DBCfmt.h:68 SkillLineAbilityfmt "niiiixxiiiiixxi" and mangos-classic Server/DBCfmt.h:70 are
+        // fifteen fields wide (the last is reqtrainpoints, DBCStructure.h:555); a 14-field image is still read.
+        SkillLineAbilityCatalog catalog = NpcServiceDbcReaders.ReadSkillLineAbilities(DbcFile.Parse(Image(15,
+            [1, 26, 100, 0, 1, 99, 99, 0, 102, 0, 0, 0, 99, 99, 0],
+            [2, 26, 102, 0, 1, 0, 0, 5, 0, 1, 300, 150, 0, 0, 7])));
+        Assert.Equal(2, catalog.Count);
+        Assert.Equal(new SkillLineAbilityRecord(2, 26, 102, 0, 1, 5, 0, 1, 300, 150), Assert.Single(catalog.Abilities(102)));
+        Assert.Equal(100u, catalog.PreviousRank(102));
+        Assert.Throws<InvalidDataException>(() => NpcServiceDbcReaders.ReadSkillLineAbilities(DbcFile.Parse(Image(16, new uint[16]))));
+    }
+
+    [Fact]
     public void DurabilityCostsAndQuality_PriceRepairs()
     {
         uint[] costRow = new uint[30];
