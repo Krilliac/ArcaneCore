@@ -26,9 +26,9 @@ public sealed class ItemMaintenanceTests
             new ItemTemplate { Entry = MapKey, Class = 13, Name = "Map Key", DisplayId = 1, MapBound = 429 },
         ], []);
 
-    private static (Player Player, FakeSession Session) Make(uint zone = 12, uint map = 0)
+    private static (Player Player, FakeSession Session) Make(uint zone = 12, uint map = 0, uint guid = 1)
     {
-        (Player player, FakeSession session) = CreatePlayer();
+        (Player player, FakeSession session) = CreatePlayer(guid);
         player.Inventory.Templates = Store;
         player.Inventory.Load([]);
         player.ZoneId = zone;
@@ -172,6 +172,124 @@ public sealed class ItemMaintenanceTests
         clock.Seconds = 1007;
         updater.Update(map, 1000);
         Assert.Equal(1798u, stone.Duration);
+    }
+
+    [Fact]
+    public void PendingSettlement_FreezesDurations_UntilItEnds_ThenAppliesTheElapsedTime()
+    {
+        (Player player, _) = Make();
+        Item stone = Give(player.Inventory, TimedStone);
+        ItemMaintenance.Tick(player, 1000);
+
+        Guid operation = Guid.NewGuid();
+        Assert.True(player.BeginQuestSettlement(operation));
+        ItemMaintenance.Tick(player, 1010);
+        ItemMaintenance.Tick(player, 1020);
+        Assert.Equal(1800u, stone.Duration);
+
+        Assert.True(player.EndQuestSettlement(operation));
+        ItemMaintenance.Tick(player, 1030);
+        Assert.Equal(1770u, stone.Duration); // the held seconds are not lost
+    }
+
+    [Fact]
+    public void TickBetweenStageAndPublish_DoesNotInvalidateTheEconomyStage()
+    {
+        (Player player, _) = Make();
+        PlayerInventory inv = player.Inventory;
+        Item stone = Give(inv, TimedStone);
+        Item shirt = Give(inv, RecruitsShirt);
+        ItemMaintenance.Tick(player, 1000);
+
+        Assert.Equal(InventoryResult.Ok, inv.TryStageEconomyTransfer([shirt.Guid], [], out EconomyInventoryStage? stage, trade: true));
+        Guid operation = Guid.NewGuid();
+        Assert.True(player.BeginQuestSettlement(operation)); // what EconomySettlements.TryStart does
+        ItemMaintenance.Tick(player, 1005); // lands while the DB commit is in flight
+
+        using (player.BeginQuestSettlementPublication(operation))
+        {
+            inv.ApplyEconomyTransfer(stage!);
+        }
+
+        Assert.Null(inv.GetItemByGuid(shirt.Guid));
+        Assert.Equal(1800u, stone.Duration);
+    }
+
+    [Fact]
+    public void PendingSettlement_DoesNotThrow_DoesNotDestroy_AndDoesNotStarveOtherPlayers()
+    {
+        (Player held, _) = Make(guid: 1);
+        (Player other, _) = Make(guid: 2);
+        var timedShort = new ItemTemplateStore(
+            [.. Templates, new ItemTemplate { Entry = 94011, Class = 12, Name = "Short Timer", DisplayId = 1, Duration = 5 },
+                new ItemTemplate { Entry = TimedStone, Class = 12, Name = "Timed Stone", DisplayId = 1, Duration = 1800 }], []);
+        held.Inventory.Templates = timedShort;
+        other.Inventory.Templates = timedShort;
+        Item expiring = Give(held.Inventory, 94011);
+        Item stone = Give(other.Inventory, TimedStone);
+        var clock = new FixedClock(1000);
+        var updater = new ItemMaintenanceUpdater(new ItemMechanicsOptions { ZoneLimitCheckMs = 1000 }, clock);
+        WorldRuntime world = TestWorld.CreateRuntime();
+        Map map = world.GetMap(0);
+        world.AddPlayer(held);
+        world.AddPlayer(other);
+        updater.Update(map, 1000); // tracks
+
+        Assert.True(held.BeginQuestSettlement(Guid.NewGuid()));
+        clock.Seconds = 1010;
+        updater.Update(map, 1000);
+
+        Assert.Same(expiring, held.Inventory.GetItemByGuid(expiring.Guid)); // held: untouched, no exception
+        Assert.Equal(1790u, stone.Duration); // the other player still ticked
+    }
+
+    [Fact]
+    public void StaleZoneAfterTeleport_NeverDestroysAnAreaBoundItem_UntilTheZoneIsRefreshed()
+    {
+        (Player player, _) = Make(zone: 12, map: 0);
+        PlayerInventory inv = player.Inventory;
+        var updater = new ItemMaintenanceUpdater(new ItemMechanicsOptions(), new FixedClock(1000));
+        ItemMaintenance.Tick(player, 10);
+        Item key = Give(inv, GordokKey); // carried across the teleport
+        Assert.Same(key, inv.GetItemByGuid(key.Guid));
+
+        updater.OnPlayerRemoved(null!, player); // Map.RemovePlayer during the far teleport
+        player.MapId = 429; // arrival; no terrain, so ZoneId is still the old map's value
+        ItemMaintenance.Tick(player, 11);
+        Assert.Same(key, inv.GetItemByGuid(key.Guid)); // stale zone 12 must not destroy it
+
+        player.ZoneId = 2557; // CMSG_ZONEUPDATE: inside its area
+        ItemMaintenance.Tick(player, 12);
+        Assert.Same(key, inv.GetItemByGuid(key.Guid));
+    }
+
+    [Fact]
+    public void RefreshedZoneAfterTeleport_OutsideTheArea_DestroysTheItem_EvenWhenTheZoneIdIsUnchanged()
+    {
+        (Player player, _) = Make(zone: 12, map: 0);
+        PlayerInventory inv = player.Inventory;
+        var updater = new ItemMaintenanceUpdater(new ItemMechanicsOptions(), new FixedClock(1000));
+        ItemMaintenance.Tick(player, 10);
+        Item key = Give(inv, GordokKey);
+
+        updater.OnPlayerRemoved(null!, player);
+        player.MapId = 1;
+        ItemMaintenance.Tick(player, 11);
+        Assert.Same(key, inv.GetItemByGuid(key.Guid));
+
+        player.ZoneId = 12; // the client confirms the same zone value
+        ItemMaintenance.Tick(player, 12);
+        Assert.Null(inv.GetItemByGuid(key.Guid));
+    }
+
+    [Fact]
+    public void ZoneId_EveryAssignmentIsARefresh_EvenOfTheSameValue()
+    {
+        (Player player, _) = Make(zone: 12);
+        uint before = player.ZoneRevision;
+        player.ZoneId = 12;
+        Assert.Equal(before + 1, player.ZoneRevision);
+        Assert.Equal(12u, player.ZoneId);
     }
 
     private sealed class FixedClock(long seconds) : TimeProvider

@@ -19,7 +19,18 @@ namespace ArcaneCore.Game.Items;
 /// Limits: an item whose template names another map or area is destroyed when the player is
 /// alive and the map/zone changed (Player.cpp:6643-6656, DestroyZoneLimitedItem 10881-10909) and
 /// when the player becomes alive again (the resurrect path). A dead player keeps them (patch 1.7.0).
-/// The first observation counts as a change, which covers the login load rule (Player.cpp:15497-15503).
+/// The first observation counts as a change, which covers the login load rule (Player.cpp:15524-15529).
+/// After leaving a map the next observation waits until <see cref="Player.ZoneId"/> has been
+/// assigned again (terrain lookup or the client's CMSG_ZONEUPDATE): vmangos computes the zone
+/// inside UpdateZone, so a zone carried over from the previous map must never destroy an item.
+/// Until terrain data exists (M8) the refreshed zone is the client's word; that trust is the
+/// existing CMSG_ZONEUPDATE limit, not new here.
+/// </para>
+/// <para>
+/// A player whose character state is held by a pending quest or economy settlement
+/// (<see cref="Player.CanMutateQuestSettlementState"/>) is skipped entirely: ticking Duration or
+/// destroying items would invalidate the staged inventory snapshots. The elapsed seconds are
+/// applied by the first pass after the hold ends (LastTick is not advanced meanwhile).
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
@@ -33,6 +44,8 @@ public static class ItemMaintenance
         public bool WasAlive;
         public uint MapId;
         public uint ZoneId;
+        public bool AwaitingZone;
+        public uint ZoneRevision;
     }
 
     private static readonly ConditionalWeakTable<PlayerInventory, State> States = new();
@@ -41,7 +54,7 @@ public static class ItemMaintenance
     public static void Tick(Player player, long nowSeconds)
     {
         PlayerInventory inventory = player.Inventory;
-        if (!inventory.IsLoaded)
+        if (!inventory.IsLoaded || !player.CanMutateQuestSettlementState)
         {
             return;
         }
@@ -51,8 +64,20 @@ public static class ItemMaintenance
         Durations(player, inventory, state, nowSeconds);
     }
 
-    /// <summary>Forget a player's tracking (leaving the map or the world).</summary>
+    /// <summary>Forget a player's tracking entirely.</summary>
     public static void Forget(Player player) => States.Remove(player.Inventory);
+
+    /// <summary>
+    /// The player left its map (teleport or logout). Duration tracking is kept (the next pass
+    /// re-baselines the clock so transit time is not charged); limit checks wait for a refreshed zone.
+    /// </summary>
+    public static void Departed(Player player)
+    {
+        State state = States.GetOrCreateValue(player.Inventory);
+        state.LastTick = 0;
+        state.AwaitingZone = true;
+        state.ZoneRevision = player.ZoneRevision;
+    }
 
     /// <summary>vmangos Item::IsLimitedToAnotherMapOrZone.</summary>
     public static bool IsLimitedToAnotherMapOrZone(Item item, uint mapId, uint zoneId)
@@ -62,6 +87,19 @@ public static class ItemMaintenance
     private static void LimitedItems(Player player, PlayerInventory inventory, State state)
     {
         bool alive = player.IsAlive;
+        if (state.AwaitingZone)
+        {
+            if (player.ZoneRevision == state.ZoneRevision)
+            {
+                state.WasAlive = alive;
+                return;
+            }
+
+            // The zone was refreshed on the new map: judge it as a first observation.
+            state.AwaitingZone = false;
+            state.Seen = false;
+        }
+
         bool changed = !state.Seen || state.MapId != player.MapId || state.ZoneId != player.ZoneId;
         bool resurrected = alive && !state.WasAlive;
         state.Seen = true;
@@ -149,11 +187,25 @@ public sealed class ItemMaintenanceUpdater(ItemMechanicsOptions options, TimePro
 
         _elapsedMs = 0;
         long now = clock.GetUtcNow().ToUnixTimeSeconds();
+        List<Exception>? failures = null;
         foreach (Player player in map.Players.ToList())
         {
-            ItemMaintenance.Tick(player, now);
+            try
+            {
+                ItemMaintenance.Tick(player, now);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // One player's failure must not starve the rest of the map; Map.Update logs the aggregate.
+                (failures ??= []).Add(ex);
+            }
+        }
+
+        if (failures is not null)
+        {
+            throw new AggregateException("item maintenance failed for some players", failures);
         }
     }
 
-    public void OnPlayerRemoved(Map map, Player player) => ItemMaintenance.Forget(player);
+    public void OnPlayerRemoved(Map map, Player player) => ItemMaintenance.Departed(player);
 }
