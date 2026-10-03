@@ -19,6 +19,7 @@ Every edit to a shared file is listed here so the integrator can resolve conflic
 | `src/ArcaneCore.Game/Creatures/CreatureMapSystem.Lifecycle.cs` | `LoadGrid` split: the loop that creates the creatures is `LoadSpawns(grid, spawns)`; one gate check as its first statement | Event spawns. Conflicts with the creature-movement-spawns lane are likely in this function: keep the gate check in whatever loop creates creatures at grid load. |
 | `src/ArcaneCore.Game/GameObjects/GameObjectMapSystem.cs` | class made `partial`; `LoadGrid` split the same way (`LoadSpawns(list, spawns)`) plus the gate check | Same. |
 | `src/ArcaneCore.World/Npc/ConditionFeature.cs` | `IsGameEventActive` / `IsHolidayActive` read the live `GameEventFeature` (union with the configured arrays, which stay as an override) | Retail conditions. |
+| `src/ArcaneCore.Game/Quests/Quest.cs` | `IsActive` is computed (`Method` bit, or the event state set with `SetEventState`) instead of a constructor-set property | Event quests. Conflicts with the quests-advanced lane are likely here: keep `IsActive` readable as before. |
 | `src/ArcaneCore.Game/WorldState/WorldStateHooks.cs` | `LocalZone` property (and `LocalNow` uses it) | The zone game events are computed in. |
 
 New files (no conflicts): `Creatures/CreatureMapSystem.EventSpawns.cs`, `GameObjects/GameObjectMapSystem.EventSpawns.cs`.

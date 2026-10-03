@@ -211,6 +211,22 @@ Pure maths in `Game/WorldState/Events`, every function taking the time and the z
 - `.lookup event <name>` (`LookupEventCommand`, an `ICommandExtension` on `.lookup`; LookupCommands.cpp:1480-1526; retail level 2).
 - Not delivered: the event lines of `.npc info` and `.gobject info` (they need the creature and gameobject info commands' owners).
 
+### Event quests (`game-event-quests`)
+
+- A quest listed in `game_event_quest` is inactive from load and active only while its event runs (vmangos GameEventMgr.cpp:578 and
+  :1023-1036, `SetQuestActiveState`, QuestDef.h:278). `Quest.IsActive` is now `Method` not disabled, unless the event system owns the
+  quest (`Quest.SetEventState(true|false|null)`): then the event decides, as in vmangos, where an event start also activates a quest
+  whose `Method` is disabled. An inactive quest is neither offered, listed in its NPC's quest menu nor acceptable (the existing
+  `IsActive` checks of the quest services); a quest already in a player's log keeps its state when the event ends (only the flag
+  changes). Rewarded-quest and repeatable rules are untouched.
+- `GameEventQuests` (an effect phase) derives each listed quest's state from the running set, so a quest listed under several events is
+  active while ANY of them runs (vmangos toggles per event, so the first event to stop would switch it off while another still runs;
+  the data has no such quest). `GameEventQuestFeature` joins it to the quest feature's store, which is built at its own pace, from
+  `ServiceCreated` and the world tick. A listed quest with no `quest_template` is skipped and reported once (vmangos: error and skip).
+- Limit: a quest-template reload builds new `Quest` objects; event quests are active until the next event change. Event quest data
+  in classic-db: 61 rows over 14 events, every quest id exists.
+- Shared-file edit: `Quests/Quest.cs` (`IsActive` computed, `SetEventState`).
+
 ## Not delivered (limits)
 
 Recorded as slices are completed; see the final section.
