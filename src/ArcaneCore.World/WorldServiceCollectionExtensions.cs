@@ -44,6 +44,7 @@ public static class WorldServiceCollectionExtensions
 
         services.AddSingleton(_ => BuildOpcodeTable());
         services.AddSingleton(_ => ChatCommands.CreateTable());
+        services.AddSingleton(sp => new CommandTableSource(sp.GetRequiredService<CommandTable>()));
         services.AddWorldFeatures();
         services.AddSingleton<CharacterDirectory>();
         services.AddSingleton<CharacterDeletionReconciler>();
