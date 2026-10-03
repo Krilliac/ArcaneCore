@@ -658,6 +658,9 @@ public sealed partial class MapCombat
             return 0;
         }
 
+        // Duels end at 1 hp (MapCombat.Duel.cs; vmangos Unit.cpp:762-779).
+        bool duelEnded = ApplyDuelClamp(attacker, victim, ref damage);
+
         if (enterCombat)
         {
             SetInCombatWithAggressor(victim, attacker);
@@ -672,6 +675,11 @@ public sealed partial class MapCombat
         if (victim.Health <= damage)
         {
             Kill(attacker, victim);
+            if (duelEnded)
+            {
+                AfterLethalDuelDamage((Player)victim); // Unit.cpp:825-843
+            }
+
             return damage;
         }
 
@@ -699,6 +707,11 @@ public sealed partial class MapCombat
 
         DamageDealt?.Invoke(attacker, victim, damage, direct, meleeDamage);
         AttackedBy(victim, attacker);
+        if (duelEnded)
+        {
+            AfterClampedDuelDamage((Player)victim); // Unit.cpp:954-969
+        }
+
         return damage;
     }
 
