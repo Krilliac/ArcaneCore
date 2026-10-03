@@ -15,7 +15,8 @@ public sealed record QuestNpcDependencies(
     IPlayerReputation? Reputation = null,
     IConditionEvaluator? Conditions = null,
     ITaxiFlights? Flights = null,
-    IMapInfo? Maps = null);
+    IMapInfo? Maps = null,
+    Progression.IQuestRewardEffects? RewardEffects = null);
 
 /// <summary>Where quest/NPC state changes go (the world daemon's save queue). World thread.</summary>
 public interface IQuestNpcSink

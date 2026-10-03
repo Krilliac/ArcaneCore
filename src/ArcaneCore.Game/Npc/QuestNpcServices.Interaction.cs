@@ -7,8 +7,9 @@ namespace ArcaneCore.Game.Npc;
 /// <summary>
 /// Creature quest status, details, acceptance and abandonment. Reimplemented from vmangos/core
 /// 4b3d241cffe245a1f68da11380bce96c23db48c0 Handlers/QuestHandler.cpp and Objects/Player.cpp
-/// CanSeeStartQuest, AddQuest, RemoveQuestAtSlot. Item/source-spell/party/PvP side effects require
-/// their real adapters, so this tranche accepts only ordinary quests without those dependencies.
+/// CanSeeStartQuest, CanAddQuest, AddQuest, RemoveQuestAtSlot and TakeQuestSourceItem. Source items,
+/// delivery counters, exploration triggers, repeatable and timed quests have adapters; source spells,
+/// party confirmation, PvP activation and auto rewards still fail closed.
 /// </summary>
 public sealed partial class QuestNpcServices
 {
@@ -93,15 +94,14 @@ public sealed partial class QuestNpcServices
         bool accepted = false;
         if (InteractableNpc(player, guid, NpcFlags.QuestGiver) is { } npc && Quests.Get(questId) is { } quest
             && Quests.StartersOf(npc.Entry).Contains(questId) && CanTakeQuest(state, quest, [])
-            && state.Quests.Get(questId)?.Rewarded != true
-            && JournalOnlyQuest(quest))
+            && (state.Quests.Get(questId)?.Rewarded != true || quest.IsRepeatable) && AcceptableQuest(quest))
         {
             int slot = state.Quests.FindSlot(0);
             if (slot == QuestConstants.MaxQuestLogSize)
             {
                 player.Session.Send(WorldOpcode.SmsgQuestlogFull, []);
             }
-            else
+            else if (CanReceiveSourceItem(player, quest))
             {
                 QuestStatusData data = state.Quests.GetOrAdd(questId);
                 data.Status = QuestStatus.Incomplete;
@@ -116,6 +116,8 @@ public sealed partial class QuestNpcServices
 
                 state.Quests.SetSlot(slot, questId, (uint)Math.Clamp(data.TimerEndUnix, 0, uint.MaxValue));
                 state.Quests.MarkChanged(questId);
+                GiveSourceItem(player, quest);
+                AdjustRequiredItemCounts(state, quest, data);
                 RefreshCompletion(state, quest, data, slot);
                 Flush(state);
                 accepted = true;
@@ -129,7 +131,7 @@ public sealed partial class QuestNpcServices
     public bool AbandonQuest(Player player, byte slot)
     {
         if (Ready(player) is not { } state || slot >= QuestConstants.MaxQuestLogSize
-            || Quests.Get(state.Quests.SlotQuestId(slot)) is not { } quest || !JournalOnlyQuest(quest)
+            || Quests.Get(state.Quests.SlotQuestId(slot)) is not { } quest || !AcceptableQuest(quest)
             || state.Quests.Get(quest.Id) is not { } data)
         {
             return false;
@@ -141,13 +143,16 @@ public sealed partial class QuestNpcServices
         state.Quests.SetSlot(slot, 0);
         state.Quests.MarkChanged(quest.Id);
         Flush(state);
+        TakeSourceItem(player, quest);
         return true;
     }
 
-    // Start-item grants/removal, deliver counters, reputation visibility, party confirmation,
-    // PvP activation and auto rewards cannot be reproduced by a journal mutation alone.
-    private static bool JournalOnlyQuest(Quest quest) => quest.Template.Type == 0 && !quest.IsRepeatable
-        && quest.Template.SrcItemId == 0 && quest.Template.SrcSpell == 0 && quest.Template.RepObjectiveFaction == 0
-        && quest.ReqItemId.All(id => id == 0) && quest.ReqSourceId.All(id => id == 0)
-        && !quest.HasFlag(QuestFlags.PartyAccept | QuestFlags.AutoRewarded);
+    // Source spells, loot-source counters, party confirmation, PvP activation and auto rewards
+    // still lack adapters; reputation objectives need a reputation owner (docs/integration/quest-progression.md).
+    private bool AcceptableQuest(Quest quest) => quest.Template.Type is 0 or 1 or 21 or 62 or 81
+        && quest.Template.SrcSpell == 0 && (quest.Template.RepObjectiveFaction == 0 || Deps.Reputation is not null)
+        && quest.ReqSourceId.All(id => id == 0) && quest.ReqSourceCount.All(count => count == 0)
+        && !quest.HasFlag(QuestFlags.PartyAccept | QuestFlags.AutoRewarded | QuestFlags.StayAlive)
+        && (!(quest.HasSpecialFlag(QuestSpecialFlags.ExplorationOrEvent) || quest.HasFlag(QuestFlags.Exploration))
+            || HasAreaTrigger(quest.Id));
 }

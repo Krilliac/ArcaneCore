@@ -18,6 +18,12 @@ public sealed class QuestNpcOptions
     /// </summary>
     public uint[] OrdinaryRewardQuestIds { get; set; } = [];
 
+    /// <summary>
+    /// areatrigger_involvedrelation rows (trigger id → exploration quest). Exploration/event
+    /// quests without a relation stay unavailable: nothing else could complete them.
+    /// </summary>
+    public QuestAreaTrigger[] AreaTriggerQuests { get; set; } = [];
+
     /// <summary>Quests.LowLevelHideDiff (negative = never grey out).</summary>
     public int LowLevelHideDiff { get; set; } = 4;
 
