@@ -110,11 +110,13 @@ public sealed class QuestJournalWorldTests
 
             Assert.Equal(Timed, BinaryPrimitives.ReadUInt32LittleEndian(
                 await initial.ReadUntilAsync(WorldOpcode.SmsgQuestupdateFailedtimer)));
+            // The socket can deliver FailQuest's packet before CheckTimers queues its save.
+            // This world-thread read runs after the expiry tick finishes, before the save barrier.
+            Assert.Equal(QuestStatus.Failed, await host.PlayerStateAsync("Expire", p => feature.Services.StateOf(p)!.Quests.GetStatus(Timed)));
             await feature.Persistence.FlushCharacterAsync(character.Id);
             Assert.Equal((byte)QuestStatus.Failed, fixture.Characters.Stored(character.Id, Timed).Status);
             Assert.Equal(0, fixture.Characters.Stored(character.Id, Timed).Timer);
             Assert.Equal(2u, fixture.Characters.Stored(character.Id, Ordinary).MobCount1);
-            Assert.Equal(QuestStatus.Failed, await host.PlayerStateAsync("Expire", p => feature.Services.StateOf(p)!.Quests.GetStatus(Timed)));
             await initial.CollectAsync();
             fixture.Clock.Advance(TimeSpan.FromMinutes(1));
             Assert.DoesNotContain(await initial.CollectAsync(TimeSpan.FromMilliseconds(75)),
