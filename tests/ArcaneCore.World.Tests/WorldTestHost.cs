@@ -38,6 +38,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
         collection.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
         collection.AddSingleton<IAccountStore>(Accounts);
         collection.AddSingleton<ICharacterStore>(Characters);
+        collection.AddSingleton<ICharacterLifeStore>(Characters);
         collection.AddSingleton<IAccountDataStore>(AccountData);
         collection.AddSingleton<IWorldDataStore>(WorldData);
         collection.AddSingleton(Directory);

@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
+using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -257,6 +258,12 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
         if (state.Inventory is { } inventory)
         {
             await ItemPersistence.StageReplaceAsync(db, state.Id, inventory, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (state.Life is { } life)
+        {
+            // Same transaction as the rest of the snapshot: a ghost flag and its corpse row commit together.
+            await CharacterLifePersistence.StageAsync(db, state.Id, life, cancellationToken).ConfigureAwait(false);
         }
 
         return true;

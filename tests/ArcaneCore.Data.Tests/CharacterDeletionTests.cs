@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
+using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Data.Quests;
 using ArcaneCore.Data.Schema;
@@ -35,6 +36,7 @@ public sealed class CharacterDeletionTests : IAsyncLifetime
         Assert.Contains(CharacterDataCleanups.All, c => c is CharacterSpellDataModule);
         Assert.Contains(CharacterDataCleanups.All, c => c is QuestNpcCharactersModule);
         Assert.Contains(CharacterDataCleanups.All, c => c is ItemCharacterDataModule);
+        Assert.Contains(CharacterDataCleanups.All, c => c is CharacterLifeDataModule);
     }
 
     [Theory]

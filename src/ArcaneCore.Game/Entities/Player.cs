@@ -416,7 +416,8 @@ public sealed partial class Player : Unit
         return new CharacterState(
             (int)Guid.Low, MapId, ZoneId, X, Y, Z, Orientation, Level,
             Math.Max(PlayedTimeAt(nowMs), 1u), LevelPlayedTimeAt(nowMs), Money, ActionBarToggles, buttons, Home,
-            Inventory.TakeSnapshotIfChanged());
+            Inventory.TakeSnapshotIfChanged(),
+            Death.PlayerLife.Capture(this));
     }
 
     private static uint Pack(uint action, byte type) => (action & 0x00FFFFFF) | ((uint)type << 24);

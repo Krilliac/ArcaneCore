@@ -137,15 +137,24 @@ public sealed partial class MapCombat
 
         if (restorePercent > 0f)
         {
-            player.Health = Math.Max(1u, (uint)(player.MaxHealth * restorePercent));
-            SetPower(player, PowerType.Mana, (uint)(GetMaxPower(player, PowerType.Mana) * restorePercent));
-            SetPower(player, PowerType.Rage, 0);
-            SetPower(player, PowerType.Energy, (uint)(GetMaxPower(player, PowerType.Energy) * restorePercent));
+            RestoreFraction(player, restorePercent);
         }
 
         player.Combat.DeathTimer = 0;
         player.NeedsVisibilityUpdate = true;
         Hooks.OnResurrected(player, applySickness);
+    }
+
+    /// <summary>
+    /// The health and power part of vmangos Player::ResurrectPlayer: health, mana and energy to
+    /// <paramref name="percent"/> of their maximums (at least 1 health), rage emptied.
+    /// </summary>
+    internal static void RestoreFraction(Player player, float percent)
+    {
+        player.Health = Math.Max(1u, (uint)(player.MaxHealth * percent));
+        SetPower(player, PowerType.Mana, (uint)(GetMaxPower(player, PowerType.Mana) * percent));
+        SetPower(player, PowerType.Rage, 0);
+        SetPower(player, PowerType.Energy, (uint)(GetMaxPower(player, PowerType.Energy) * percent));
     }
 
     /// <summary>MSG_CORPSE_QUERY reply body (vmangos HandleCorpseQueryOpcode; dungeon ghost entrances need Map.dbc).</summary>
