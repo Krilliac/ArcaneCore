@@ -96,8 +96,47 @@ Subtleties to know before trusting a patched process:
   run some call sites on the old body and some on the new one.
 * There is **no rollback** of an applied edit. To undo it, revert the source (that is a forward
   edit) or restart.
-* Registries built once at startup do not learn about *added* handler or command types on their
-  own. See "Refreshing registries" if that slice is present in your build.
+* Registries built once at startup (opcode table, chat command table, default map updaters) are
+  refreshed for *added* handlers, commands and updaters; see "Refreshing registries".
+
+## Refreshing registries (what the server adds on top of the runtime)
+
+The runtime patches method bodies in place, so a handler whose body you edited simply runs the
+new code. What it cannot do is tell the tables the server built once at startup about
+**new** things. With `World:HotCode:Enabled=true`, `HotCodeMetadataHandler` (the runtime calls
+its `UpdateApplication` after every applied edit; measured by the spike: once per edit, on a
+thread-pool thread, never the main thread) triggers `HotCodeRefresh`, which:
+
+1. rescans for `IOpcodeHandlerGroup`, `ICommandGroup` and `[DefaultMapUpdater]` types (off the
+   world thread, so a bad edit cannot stall a tick);
+2. builds a candidate and checks it: two groups claiming one opcode, a chat root that equals an
+   existing one or is a proper prefix of one (it would change how an abbreviation resolves), or an
+   invalid marked updater **rejects the whole refresh**;
+3. commits through `WorldRuntime.Post`, i.e. at the start of a tick before any map update, as
+   pointer flips: `OpcodeTable.Replace` (atomic, readers never see a half-filled table),
+   `CommandTableSource.TryAdd` (immutable table, whole-reference swap), `DefaultMapUpdaters.Commit`.
+   A failed commit restores the previous opcode table.
+
+Rules of the refresh:
+
+* **Additive only.** Handlers, roots and updaters that already exist are kept; nothing is removed
+  (a removed type needs a restart anyway). Editing a group so it registers one more opcode or
+  command is picked up, because the rescan creates fresh group instances.
+* **All or nothing, old state kept.** A rejected refresh is logged at error level, audited as
+  `refresh-rejected`, and leaves every registry as it was; the state is marked degraded until a
+  later refresh succeeds.
+* **Idempotent by generation.** A generation at or below the last applied one does nothing.
+* **Existing maps keep their updaters.** A new default map updater is attached to maps created
+  after the commit; maps that already exist never get it (restart, or it only appears in new
+  instances).
+* A commit the world thread does not run within 10 seconds is abandoned (and can no longer
+  apply), reported as rejected.
+
+Verified for real: with the daemon running under `dotnet watch` (Debug, SQLite databases), adding
+a file with a new `ICommandGroup` produced `Code hot reload applied (generation 1): ... 1 command
+roots (.zzhote2e)` and an audit line, with the process not restarted. That was a manual run
+(not a committed test); the committed tests drive the same classes with a fake catalog and the
+in-process test host.
 
 ## Security model
 
@@ -113,13 +152,14 @@ Code edited into a running server runs with the server's full trust. Therefore:
 
 ## Proving the claims yourself
 
-`tools/hotcode-spike/run-spike.ps1` is a throwaway process plus a driver. It runs four
+`tools/hotcode-spike/run-spike.ps1` is a throwaway process plus a driver. It runs five
 scenarios and prints `RESULT <name> PASS|FAIL`, ending in `SPIKE SUMMARY`:
 
 | Scenario | Proves |
 |---|---|
 | `plain-run` | Without watch, `IsSupported=False` and the gate would not fire. |
-| `debug-body-edit` | Same pid, new value, `IsSupported=True`. |
+| `debug-body-edit` | Same pid, new value, `IsSupported=True`, and the assembly's `[MetadataUpdateHandler]` was called. |
+| `debug-new-type` | A class added by an edit appears in `Assembly.GetTypes()` of the same process and the handler is called again (what the registry refresh relies on). |
 | `debug-sig-edit` | A signature edit restarts the process (new pid). |
 | `release-body-edit` | Release is never hot-applied (new pid). |
 

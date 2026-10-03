@@ -8,10 +8,13 @@
   Scenarios (each prints `RESULT <name> PASS|FAIL <detail>`):
     plain-run         no watch: MetadataUpdater.IsSupported is False, DOTNET_WATCH unset.
     debug-body-edit   dotnet watch -c Debug: a method-body edit is applied in the SAME process
-                      (same pid, new value); the runtime reports IsSupported=True.
+                      (same pid, new value); IsSupported=True; the assembly's
+                      [MetadataUpdateHandler] ClearCache and UpdateApplication were called.
+    debug-new-type    a class added by an edit appears in Assembly.GetTypes() of the SAME process
+                      and the handler was called again. (What the server's refresh relies on.)
     debug-sig-edit    a signature edit (rude edit) restarts the process: NEW pid (non-interactive).
     release-body-edit dotnet watch -c Release: a body edit is NOT hot-applied: the process is
-                      restarted (new pid) or never sees the new value in the same pid.
+                      restarted (new pid).
 
   Exit codes: 0 all scenarios passed, 1 a scenario failed, 77 skipped (no dotnet SDK on PATH).
   A skipped run proves nothing: look for the final `SPIKE SUMMARY` line.
@@ -22,8 +25,8 @@
   Per-wait timeout (default 90). A first build can take a while on a busy machine.
 #>
 param(
-    [ValidateSet('plain-run', 'debug-body-edit', 'debug-sig-edit', 'release-body-edit')]
-    [string[]]$Scenario = @('plain-run', 'debug-body-edit', 'debug-sig-edit', 'release-body-edit'),
+    [ValidateSet('plain-run', 'debug-body-edit', 'debug-new-type', 'debug-sig-edit', 'release-body-edit')]
+    [string[]]$Scenario = @('plain-run', 'debug-body-edit', 'debug-new-type', 'debug-sig-edit', 'release-body-edit'),
     [int]$TimeoutSeconds = 90
 )
 
@@ -36,12 +39,11 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
 
 $source = $PSScriptRoot
 $results = New-Object System.Collections.Generic.List[object]
-$tickPattern = 'TICK pid=(?<pid>\d+) value=(?<value>\S+) supported=(?<supported>\w+) watch=(?<watch>\S+) modifiable=(?<modifiable>\S+) applier=(?<applier>\w+) hooks=(?<hooks>\S*) vars=(?<vars>\S*)'
 
 function New-Workspace {
     $dir = Join-Path ([IO.Path]::GetTempPath()) ('hotcode-spike-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     New-Item -ItemType Directory -Path $dir | Out-Null
-    foreach ($name in 'HotCodeSpike.csproj', 'Directory.Build.props', 'Program.cs', 'Probe.cs') {
+    foreach ($name in 'HotCodeSpike.csproj', 'Directory.Build.props', 'Program.cs', 'Probe.cs', 'UpdateProbe.cs') {
         Copy-Item (Join-Path $source $name) $dir
     }
     return $dir
@@ -79,17 +81,16 @@ function Read-Lines([string]$path) {
     return $text -split "`r?`n"
 }
 
+# Every TICK line as an object whose properties are its key=value pairs (numbers as [int]).
 function Get-Ticks($spike) {
     foreach ($line in Read-Lines $spike.Out) {
-        $m = [regex]::Match($line, $tickPattern)
-        if ($m.Success) {
-            [pscustomobject]@{
-                Pid = [int]$m.Groups['pid'].Value; Value = $m.Groups['value'].Value
-                Supported = $m.Groups['supported'].Value; Watch = $m.Groups['watch'].Value
-                Modifiable = $m.Groups['modifiable'].Value; Applier = $m.Groups['applier'].Value
-                Hooks = $m.Groups['hooks'].Value; Vars = $m.Groups['vars'].Value
-            }
+        if (-not $line.StartsWith('TICK ')) { continue }
+        $tick = [ordered]@{}
+        foreach ($m in [regex]::Matches($line, '(\w+)=(\S*)')) {
+            $value = $m.Groups[2].Value
+            $tick[$m.Groups[1].Value] = if ($value -match '^-?\d+$') { [int]$value } else { $value }
         }
+        if ($tick.Contains('pid') -and $tick.Contains('updates')) { [pscustomobject]$tick }
     }
 }
 
@@ -114,7 +115,7 @@ function Edit-Probe([string]$dir, [string]$from, [string]$to) {
 }
 
 function Edit-ProbeSignature([string]$dir) {
-    $path = Join-Path $dir "Probe.cs"
+    $path = Join-Path $dir 'Probe.cs'
     $text = [IO.File]::ReadAllText($path)
     $text = $text.Replace('Value()', 'Value(int unused = 0)')
     $text = [regex]::Replace($text, '=> "v\d"', '=> "v3"')
@@ -146,27 +147,37 @@ if ($Scenario -contains 'plain-run') {
         param($dir, $ref)
         $ref.Value = Start-Spike $dir @('run', '--project', $project, '-c', 'Debug', '--no-launch-profile')
         $t = Wait-Tick $ref.Value { $true } 'first tick'
-        $ok = ($t.Supported -eq 'False') -and ($t.Watch -eq '-')
-        Add-Result 'plain-run' $ok "supported=$($t.Supported) watch=$($t.Watch) applier=$($t.Applier)"
+        $ok = ($t.supported -eq 'False') -and ($t.watch -eq '-') -and ($t.updates -eq 0)
+        Add-Result 'plain-run' $ok "supported=$($t.supported) watch=$($t.watch) updates=$($t.updates)"
     }
 }
 
-if ($Scenario -contains 'debug-body-edit' -or $Scenario -contains 'debug-sig-edit') {
+$debugScenarios = @('debug-body-edit', 'debug-new-type', 'debug-sig-edit')
+if ($Scenario | Where-Object { $debugScenarios -contains $_ }) {
     Invoke-Scenario 'debug-watch' {
         param($dir, $ref)
         $ref.Value = Start-Spike $dir @('watch', '--project', $project, '--non-interactive', '-c', 'Debug', '--no-launch-profile')
-        $first = Wait-Tick $ref.Value { $_.Value -eq 'v1' } 'first v1 tick'
+        $first = Wait-Tick $ref.Value { $_.value -eq 'v1' } 'first v1 tick'
         if ($Scenario -contains 'debug-body-edit') {
             Edit-Probe $dir '"v1"' '"v2"'
-            $second = Wait-Tick $ref.Value { $_.Value -eq 'v2' } 'v2 tick after a body edit'
-            $ok = ($second.Pid -eq $first.Pid) -and ($first.Supported -eq 'True') -and ($first.Watch -eq '1')
-            Add-Result 'debug-body-edit' $ok "pid $($first.Pid) -> $($second.Pid); supported=$($first.Supported) watch=$($first.Watch) modifiable=$($first.Modifiable) applier=$($first.Applier) hooks=$($first.Hooks) vars=$($first.Vars)"
+            $second = Wait-Tick $ref.Value { $_.value -eq 'v2' -and $_.updates -ge 1 } 'v2 tick after a body edit, with the update handler called'
+            $ok = ($second.pid -eq $first.pid) -and ($first.supported -eq 'True') -and ($first.watch -eq '1') `
+                -and ($first.modifiable -eq 'debug') -and ($second.clears -ge 1) -and ($second.updates -ge 1)
+            Add-Result 'debug-body-edit' $ok ("pid $($first.pid) -> $($second.pid); supported=$($first.supported) watch=$($first.watch) modifiable=$($first.modifiable)" `
+                + " startupHooks=$($first.hooks) clears=$($second.clears) updates=$($second.updates) updateThread=$($second.updateThread)")
+        }
+        if ($Scenario -contains 'debug-new-type') {
+            $before = @(Get-Ticks $ref.Value)[-1]
+            Edit-Probe $dir '//ADDED-HERE' "internal sealed class Added : IMarker { }`n//ADDED-HERE"
+            $after = Wait-Tick $ref.Value { $_.markers -ge 2 -and $_.updates -gt $before.updates } 'a second IMarker class and a further handler call'
+            $ok = ($after.pid -eq $before.pid) -and ($before.markers -eq 1) -and ($after.markers -eq 2)
+            Add-Result 'debug-new-type' $ok "pid $($before.pid) -> $($after.pid); markers $($before.markers) -> $($after.markers); updates $($before.updates) -> $($after.updates); updateTypes=$($after.updateTypes)"
         }
         if ($Scenario -contains 'debug-sig-edit') {
             $before = @(Get-Ticks $ref.Value)[-1]
             Edit-ProbeSignature $dir
-            $third = Wait-Tick $ref.Value { $_.Value -eq 'v3' } 'v3 tick after a signature edit'
-            Add-Result 'debug-sig-edit' ($third.Pid -ne $before.Pid) "pid $($before.Pid) -> $($third.Pid) (a rude edit restarts the process)"
+            $third = Wait-Tick $ref.Value { $_.value -eq 'v3' } 'v3 tick after a signature edit'
+            Add-Result 'debug-sig-edit' ($third.pid -ne $before.pid) "pid $($before.pid) -> $($third.pid) (a rude edit restarts the process)"
         }
     }
 }
@@ -175,11 +186,11 @@ if ($Scenario -contains 'release-body-edit') {
     Invoke-Scenario 'release-body-edit' {
         param($dir, $ref)
         $ref.Value = Start-Spike $dir @('watch', '--project', $project, '--non-interactive', '-c', 'Release', '--no-launch-profile')
-        $first = Wait-Tick $ref.Value { $_.Value -eq 'v1' } 'first v1 tick'
+        $first = Wait-Tick $ref.Value { $_.value -eq 'v1' } 'first v1 tick'
         Edit-Probe $dir '"v1"' '"v2"'
-        $second = Wait-Tick $ref.Value { $_.Value -eq 'v2' } 'v2 tick after a body edit'
+        $second = Wait-Tick $ref.Value { $_.value -eq 'v2' } 'v2 tick after a body edit'
         # In Release the delta is refused, so the only way to see v2 is a restart (new pid).
-        Add-Result 'release-body-edit' ($second.Pid -ne $first.Pid) "pid $($first.Pid) -> $($second.Pid) (Release is never hot-applied)"
+        Add-Result 'release-body-edit' ($second.pid -ne $first.pid) "pid $($first.pid) -> $($second.pid) (Release is never hot-applied)"
     }
 }
 

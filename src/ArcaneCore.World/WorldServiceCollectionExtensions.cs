@@ -4,6 +4,7 @@ using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
+using ArcaneCore.World.HotCode;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.Configuration;
@@ -59,6 +60,13 @@ public static class WorldServiceCollectionExtensions
         // Order matters: the world starts before the listener and stops after it.
         services.AddHostedService<WorldHost>();
         services.AddHostedService<WorldServer>();
+
+        // Off by default: with World:HotCode:Enabled unset no hot-code object is registered at all.
+        if (configuration.IsHotCodeEnabled())
+        {
+            services.AddHotCode();
+        }
+
         return services;
     }
 }

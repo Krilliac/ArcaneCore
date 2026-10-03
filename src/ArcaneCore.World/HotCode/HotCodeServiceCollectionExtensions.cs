@@ -1,0 +1,56 @@
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.World.Commands;
+using ArcaneCore.World.Handlers;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+namespace ArcaneCore.World.HotCode;
+
+/// <summary>Connects the metadata-update handler to the refresh for the life of the host.</summary>
+internal sealed class HotCodeHost(HotCodeRefresh refresh, ILogger<HotCodeHost> logger) : IHostedService
+{
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        HotCodeMetadataHandler.Activate(refresh);
+        logger.LogWarning("Code hot reload refresh is active: new opcode handlers, chat commands and default map updaters are picked up after a code edit.");
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        HotCodeMetadataHandler.Deactivate(refresh);
+        return Task.CompletedTask;
+    }
+}
+
+public static class HotCodeServiceCollectionExtensions
+{
+    /// <summary>
+    /// Whether <c>World:HotCode:Enabled</c> is set. Everything in <see cref="AddHotCode"/> is
+    /// registered only then: with it off no hot-code object exists in the container.
+    /// </summary>
+    public static bool IsHotCodeEnabled(this IConfiguration configuration)
+        => configuration.GetSection(HotCodeOptions.SectionName).Get<HotCodeOptions>()?.Enabled == true;
+
+    public static IServiceCollection AddHotCode(this IServiceCollection services)
+    {
+        services.AddSingleton<HotCodeState>();
+        services.AddSingleton(sp => new HotCodeAudit(sp.GetRequiredService<IOptions<HotCodeOptions>>().Value.AuditLogPath));
+        services.AddSingleton<IHotCodeCatalog, AssemblyHotCodeCatalog>();
+        services.AddSingleton<IHotCodeWorld>(sp => new WorldRuntimeHotCodeWorld(sp.GetRequiredService<WorldRuntime>()));
+        services.AddSingleton(sp => new HotCodeRefresh(
+            sp.GetRequiredService<HotCodeState>(),
+            sp.GetRequiredService<IHotCodeWorld>(),
+            sp.GetRequiredService<OpcodeTable>(),
+            sp.GetRequiredService<CommandTableSource>(),
+            sp.GetRequiredService<IHotCodeCatalog>(),
+            sp.GetRequiredService<HotCodeAudit>(),
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger("ArcaneCore.HotCode")));
+        services.AddHostedService<HotCodeHost>();
+        return services;
+    }
+}

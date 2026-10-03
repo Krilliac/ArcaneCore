@@ -57,7 +57,12 @@ public sealed record OpcodeHandler(WorldOpcode Opcode, SessionStates AllowedStat
 /// </summary>
 public sealed class OpcodeTable
 {
-    private readonly Dictionary<WorldOpcode, OpcodeHandler> _handlers = [];
+    // Filled on one thread while the daemon starts, then only read (by every session task and the
+    // world thread). Nothing mutates a dictionary that readers can reach: a code hot reload builds
+    // a new table (WithGroups) and swaps the whole reference (Replace), so a reader sees the old
+    // handlers or the new ones, never a half-filled table.
+    private volatile Dictionary<WorldOpcode, OpcodeHandler> _handlers = [];
+    private volatile bool _sealed;
 
     /// <summary>Register a handler that runs on the session task in the given states.</summary>
     public void OnSession(WorldOpcode opcode, SessionStates allowedStates, SessionHandler handler)
@@ -72,8 +77,51 @@ public sealed class OpcodeTable
 
     public int Count => _handlers.Count;
 
+    /// <summary>
+    /// A new, unpublished table holding this table's handlers plus the handlers of
+    /// <paramref name="fresh"/> for opcodes this table does not have (code hot reload: a group
+    /// that only exists after an edit, or an opcode an edited group now registers). Handlers this
+    /// table already has are kept as they are. This table is not modified.
+    /// </summary>
+    public OpcodeTable WithNewHandlersFrom(OpcodeTable fresh, out IReadOnlyList<WorldOpcode> added)
+    {
+        var merged = new Dictionary<WorldOpcode, OpcodeHandler>(_handlers);
+        var addedOpcodes = new List<WorldOpcode>();
+        foreach ((WorldOpcode opcode, OpcodeHandler handler) in fresh._handlers)
+        {
+            if (merged.TryAdd(opcode, handler))
+            {
+                addedOpcodes.Add(opcode);
+            }
+        }
+
+        added = addedOpcodes;
+        return new OpcodeTable { _handlers = merged };
+    }
+
+    /// <summary>An unpublished copy of this table (the state to restore if a swap has to be undone).</summary>
+    public OpcodeTable Copy() => new() { _handlers = new Dictionary<WorldOpcode, OpcodeHandler>(_handlers) };
+
+    /// <summary>
+    /// Make this table serve <paramref name="candidate"/>'s handlers from now on (an atomic
+    /// reference swap; safe against concurrent <see cref="TryGet"/>). The candidate is sealed:
+    /// it, and this table, must not be registered into afterwards, because readers can now reach
+    /// the dictionary.
+    /// </summary>
+    public void Replace(OpcodeTable candidate)
+    {
+        candidate._sealed = true;
+        _sealed = true;
+        _handlers = candidate._handlers;
+    }
+
     private void Add(OpcodeHandler handler)
     {
+        if (_sealed)
+        {
+            throw new InvalidOperationException("the opcode table was swapped in and is read-only");
+        }
+
         if (!_handlers.TryAdd(handler.Opcode, handler))
         {
             throw new InvalidOperationException($"{WorldOpcodeNames.GetName(handler.Opcode)} registered twice");
