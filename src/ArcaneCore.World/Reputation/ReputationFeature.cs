@@ -104,8 +104,11 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
     }
 
     /// <summary>
-    /// Remove a deleted character's reputation (called by <see cref="ReputationCharacterDeleteHook"/>
-    /// after the deletion). Discards anything the queue retained for the character.
+    /// Queue the removal of a deleted character's reputation, run by
+    /// <see cref="ReputationCharacterDeleteHook"/> after the deletion committed (docs/integration/reputation.md,
+    /// docs/integration/character-delete.md). The queued removal applies only while the id has no
+    /// character row, so it cannot wipe a character recreated with the same id. Discards anything
+    /// the queue retained for the character.
     /// </summary>
     public void DeleteCharacter(int characterId) => _writes?.DeleteCharacter(characterId);
 

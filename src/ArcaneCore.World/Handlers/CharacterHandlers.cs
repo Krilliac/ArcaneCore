@@ -33,6 +33,10 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
 
     private static async Task HandleCharEnumAsync(WorldSession session, byte[] payload)
     {
+        // Finish any deletion whose acknowledgement was lost before listing, so recovery does not
+        // depend on the client retrying the delete (it no longer sees the character).
+        await CharacterDeletion.ReconcilePendingAsync(session).ConfigureAwait(false);
+
         ICharacterStore characters = session.Services.GetRequiredService<ICharacterStore>();
         IReadOnlyList<CharacterRecord> list = await characters.GetByAccountAsync(session.AccountId).ConfigureAwait(false);
 
@@ -107,7 +111,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        CharacterRecord created = await characters.CreateAsync(new CharacterRecord
+        var record = new CharacterRecord
         {
             AccountId = session.AccountId,
             Name = name,
@@ -132,7 +136,21 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             HomeX = start.X,
             HomeY = start.Y,
             HomeZ = start.Z,
-        }).ConfigureAwait(false);
+        };
+
+        // A store failure (or a refused id) must answer the client, never escape to the dispatcher,
+        // which would drop the whole session without any SMSG_CHAR_CREATE.
+        CharacterRecord created;
+        try
+        {
+            created = await characters.CreateAsync(record).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            session.Logger.LogError(ex, "[{Endpoint}] could not create character '{Name}'", session.RemoteEndpoint, name);
+            SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharCreateError);
+            return;
+        }
 
         session.Services.GetRequiredService<CharacterDirectory>().Add(
             new CharacterIdentity(created.Id, created.AccountId, created.Name, created.Race, created.Gender, created.Class));

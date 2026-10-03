@@ -39,6 +39,9 @@ public interface ISocialPersistence
     void PurgeCharacter(int characterId)
     {
     }
+
+    /// <summary>Completes once every write queued before the call was attempted. Default: nothing is queued.</summary>
+    Task FlushAsync() => Task.CompletedTask;
 }
 
 /// <summary>

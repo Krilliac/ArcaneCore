@@ -168,6 +168,16 @@ public sealed class EfCharacterReputationStore(CharacterDbContext db) : ICharact
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task DeleteDeletedCharacterAsync(int characterId, CancellationToken cancellationToken = default)
+    {
+        await db.Set<CharacterReputationEntity>()
+            .Where(r => r.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<CharacterReputationWatchEntity>()
+            .Where(r => r.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private Task<bool> CharacterExistsAsync(int characterId, CancellationToken cancellationToken)
         => db.Characters.AnyAsync(c => c.Id == characterId, cancellationToken);
 }

@@ -63,7 +63,7 @@ v6 social. Auth remains v2. See [fleet accounting](fleet-20261003.md) for the
 exact source heads, schema lineage, and validation. These assignments apply to
 this candidate; the original feature branches retain their draft allocations.
 
-Current allocation after later integration: Auth 2, **Characters 3-10 modules then 11 (index repair)**, **World 2-8 modules then 9 (index repair)**. The repair steps are inline in `CharacterDbContext` / `WorldDbContext` (`IndexRepairVersion`); a new module takes the next free number *after* them and the lead moves the repair constant up, since it must stay the last step. Details, operator guidance and limits: [schema index repair](schema-index-repair.md).
+Current allocation after later integration: Auth 2, **Characters 3-10 modules, 11 (index repair), 12 (deletion outcome recovery)**, **World 2-8 modules then 9 (index repair)**. The repair steps are inline in `CharacterDbContext` / `WorldDbContext` (`IndexRepairVersion`). Modules may take numbers after the repair because their tables create their own indexes. Details, operator guidance and limits: [schema index repair](schema-index-repair.md), [character deletion](character-delete.md).
 
 ## Local build and test (box)
 

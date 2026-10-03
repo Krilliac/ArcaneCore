@@ -141,5 +141,5 @@ public sealed class EfSocialStore(CharacterDbContext db) : ISocialStore
     }
 
     public Task PurgeCharacterAsync(int characterId, CancellationToken cancellationToken = default)
-        => SocialDataModule.DeleteReferencesAsync(db, characterId, cancellationToken);
+        => SocialDataModule.DeleteReferencesOfDeletedCharacterAsync(db, characterId, cancellationToken);
 }

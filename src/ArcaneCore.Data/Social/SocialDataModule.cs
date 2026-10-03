@@ -132,4 +132,20 @@ public sealed class SocialDataModule : IDataModule, ICharacterDataCleanup
         await db.Set<GuildMemberRow>().Where(r => r.CharacterId == characterId)
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// The same removal for a character id that has no <c>characters</c> row, in one conditional
+    /// statement per table: the queued purge after a deletion must not wipe the friends or guild
+    /// membership of a character recreated with the same id (docs/integration/character-delete.md).
+    /// </summary>
+    internal static async Task DeleteReferencesOfDeletedCharacterAsync(
+        CharacterDbContext db, int characterId, CancellationToken cancellationToken)
+    {
+        await db.Set<CharacterSocialRow>()
+            .Where(r => (r.CharacterId == characterId || r.OtherId == characterId) && !db.Characters.Any(c => c.Id == characterId))
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<GuildMemberRow>()
+            .Where(r => r.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+    }
 }

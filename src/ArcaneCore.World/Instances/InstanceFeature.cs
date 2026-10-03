@@ -49,6 +49,9 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
 
     public InstanceOptions Options { get; } = new();
 
+    /// <summary>How long the post-delete drain waits for the queued removal (tests shorten it).</summary>
+    public TimeSpan DrainTimeout { get; init; } = DeleteTimeout;
+
     /// <summary>Writes queued or in progress.</summary>
     public int PendingWrites => _writes?.Pending ?? 0;
 
@@ -123,6 +126,13 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
             _writes?.CharacterDeleted(character.Id);
             return true;
         }).WaitAsync(DeleteTimeout).ConfigureAwait(false);
+
+        // The deletion completes only after the queued removal was attempted (it is conditional on
+        // the id still having no character row, so a recreated character keeps its binds).
+        if (_writes is { } writes)
+        {
+            await writes.FlushAsync().WaitAsync(DrainTimeout).ConfigureAwait(false);
+        }
     }
 
     public Task StopAsync()

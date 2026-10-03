@@ -15,7 +15,7 @@ public sealed class SocialWriteQueue(IServiceScopeFactory scopes, ILogger logger
 {
     private const int MaxAttempts = 3;
 
-    private readonly Channel<Func<ISocialStore, Task>> _channel = Channel.CreateUnbounded<Func<ISocialStore, Task>>(
+    private readonly Channel<Work> _channel = Channel.CreateUnbounded<Work>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private Task? _consumer;
     private int _pending;
@@ -34,6 +34,18 @@ public sealed class SocialWriteQueue(IServiceScopeFactory scopes, ILogger logger
 
     public void PurgeCharacter(int characterId) => Enqueue(store => store.PurgeCharacterAsync(characterId));
 
+    /// <summary>Completes once every write queued before the call has been attempted (failures were logged and dropped).</summary>
+    public Task FlushAsync()
+    {
+        if (_consumer is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return _channel.Writer.TryWrite(new Work(null, done)) ? done.Task : Task.CompletedTask;
+    }
+
     /// <summary>Stop accepting writes and wait until every queued one is done.</summary>
     public async Task StopAsync()
     {
@@ -47,7 +59,7 @@ public sealed class SocialWriteQueue(IServiceScopeFactory scopes, ILogger logger
     private void Enqueue(Func<ISocialStore, Task> write)
     {
         Interlocked.Increment(ref _pending);
-        if (!_channel.Writer.TryWrite(write))
+        if (!_channel.Writer.TryWrite(new Work(write, null)))
         {
             Interlocked.Decrement(ref _pending);
             logger.LogError("social write queue closed; write lost");
@@ -56,8 +68,14 @@ public sealed class SocialWriteQueue(IServiceScopeFactory scopes, ILogger logger
 
     private async Task ConsumeAsync()
     {
-        await foreach (Func<ISocialStore, Task> write in _channel.Reader.ReadAllAsync().ConfigureAwait(false))
+        await foreach (Work work in _channel.Reader.ReadAllAsync().ConfigureAwait(false))
         {
+            if (work.Write is not { } write)
+            {
+                work.Done?.TrySetResult();
+                continue;
+            }
+
             for (int attempt = 1; attempt <= MaxAttempts; attempt++)
             {
                 try
@@ -85,4 +103,6 @@ public sealed class SocialWriteQueue(IServiceScopeFactory scopes, ILogger logger
             Interlocked.Decrement(ref _pending);
         }
     }
+
+    private sealed record Work(Func<ISocialStore, Task>? Write, TaskCompletionSource? Done);
 }

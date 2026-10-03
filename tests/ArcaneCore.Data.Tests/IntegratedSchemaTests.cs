@@ -54,6 +54,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(InstanceDataModule), DatabaseComponent.Characters, 8),
             (typeof(CharacterSpellStateDataModule), DatabaseComponent.Characters, 9),
             (typeof(EconomyDataModule), DatabaseComponent.Characters, EconomyDataModule.Version),
+            (typeof(CharacterDeletionDataModule), DatabaseComponent.Characters, CharacterDeletionDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
@@ -61,12 +62,17 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
                 .Select(m => (m.GetType(), m.Component, m.SchemaVersion)));
         // The forward index repair is the top step of characters and world (the constants are what an integrator renumbers).
         Assert.Equal(2, AuthDbContext.Schema.CurrentVersion);
-        Assert.Equal(CharacterDbContext.IndexRepairVersion, CharacterDbContext.Schema.CurrentVersion);
-        Assert.Equal(WorldDbContext.IndexRepairVersion, WorldDbContext.Schema.CurrentVersion);
-        Assert.Equal(Enumerable.Range(2, CharacterDbContext.IndexRepairVersion - 1), CharacterDbContext.Schema.Steps.Select(s => s.Version));
-        Assert.Equal(Enumerable.Range(2, WorldDbContext.IndexRepairVersion - 1), WorldDbContext.Schema.Steps.Select(s => s.Version));
-        Assert.All(DataModules.For(DatabaseComponent.Characters), m => Assert.True(m.SchemaVersion < CharacterDbContext.IndexRepairVersion));
-        Assert.All(DataModules.For(DatabaseComponent.World), m => Assert.True(m.SchemaVersion < WorldDbContext.IndexRepairVersion));
+        // The current version is the highest of the modules and the inline repair; versions are contiguous (Compose throws on gaps).
+        Assert.Equal(
+            Math.Max(CharacterDbContext.IndexRepairVersion, DataModules.For(DatabaseComponent.Characters).Max(m => m.SchemaVersion)),
+            CharacterDbContext.Schema.CurrentVersion);
+        Assert.Equal(
+            Math.Max(WorldDbContext.IndexRepairVersion, DataModules.For(DatabaseComponent.World).Max(m => m.SchemaVersion)),
+            WorldDbContext.Schema.CurrentVersion);
+        Assert.Equal(Enumerable.Range(2, CharacterDbContext.Schema.CurrentVersion - 1), CharacterDbContext.Schema.Steps.Select(s => s.Version));
+        Assert.Equal(Enumerable.Range(2, WorldDbContext.Schema.CurrentVersion - 1), WorldDbContext.Schema.Steps.Select(s => s.Version));
+        Assert.DoesNotContain(CharacterDbContext.IndexRepairVersion, DataModules.For(DatabaseComponent.Characters).Select(m => m.SchemaVersion));
+        Assert.DoesNotContain(WorldDbContext.IndexRepairVersion, DataModules.For(DatabaseComponent.World).Select(m => m.SchemaVersion));
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })
         {

@@ -89,7 +89,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     }
 
     /// <summary>
-    /// Queue removal of a deleted character's rows. Anything retained for the character is
+    /// Queue removal of a deleted character's rows (conditional on the id still having no character row). Anything retained for the character is
     /// discarded first, so a failed older write can never bring a row back.
     /// </summary>
     public void DeleteCharacter(int characterId)
@@ -422,7 +422,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
                 // Every call is an idempotent upsert or delete, so a retry after a commit whose acknowledgement was lost is safe.
                 if (snapshot.DeleteGeneration is not null)
                 {
-                    await store.DeleteCharacterAsync(characterId).ConfigureAwait(false);
+                    await store.DeleteDeletedCharacterAsync(characterId).ConfigureAwait(false); // conditional: skipped while the id has a character row again
                 }
 
                 if (snapshot.Rows.Length > 0)
