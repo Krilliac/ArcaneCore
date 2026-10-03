@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Updates;
+using ArcaneCore.Kernel.Loot;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Protocol;
@@ -38,6 +39,7 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
     private readonly Dictionary<uint, uint[]> _questLootItems = [];
     private readonly HashSet<uint> _warnedMissingTemplates = [];
     private readonly Dictionary<ObjectGuid, long> _despawnAt = [];
+    private readonly Dictionary<uint, uint> _spawnEntries = [];
     private long _clockMs;
     private long _nextQuestRefreshMs;
     private uint _nextTemporaryCounter;
@@ -63,9 +65,15 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
 
             list.Add(spawn);
             maxGuid = Math.Max(maxGuid, spawn.Guid);
+            _spawnEntries[spawn.Guid] = spawn.Entry;
         }
 
         _nextTemporaryCounter = maxGuid + 1;
+        if (loot is not null)
+        {
+            loot.Objects = this;
+        }
+
         Map.Grids.GridLoaded += grid => LoadGrid(new GridCoord(grid.Coord.X, grid.Coord.Y));
         Map.Grids.GridUnloading += grid => UnloadGrid(new GridCoord(grid.Coord.X, grid.Coord.Y));
         foreach (MapGrid grid in Map.Grids.LoadedGrids.ToArray())
@@ -349,9 +357,16 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
 
     private GameObjectUseResult OpenChest(Player player, GameObject go)
     {
-        // Ordinary instance unload can preserve its bind while recreating the whole map.
-        // Until consumed chest state follows that logical save, opening would reroll awards.
-        if (Map.InstanceId != 0 || Loot is null)
+        if (Loot is null)
+        {
+            return GameObjectUseResult.Unsupported;
+        }
+
+        // Ordinary instance unload can preserve its bind while recreating the whole map. A chest
+        // there is only usable when its consumed and remaining loot is stored with the logical
+        // save (otherwise opening would reroll awards); a runtime chest has no spawn to key on.
+        LootStateKey? key = DurableKeyOf(go);
+        if (Map.InstanceId != 0 && key is null)
         {
             return GameObjectUseResult.Unsupported;
         }
@@ -361,12 +376,39 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
             return GameObjectUseResult.InUse;
         }
 
-        return Loot.OpenGameObject(player, go, go.Template.GetData(1)) switch
+        LootResult opened = key is { } durable
+            ? Loot.OpenDurableGameObject(player, go, go.Template.GetData(1), durable)
+            : Loot.OpenGameObject(player, go, go.Template.GetData(1));
+        return opened switch
         {
             LootResult.Ok => GameObjectUseResult.Ok,
             LootResult.NotAllowed => GameObjectUseResult.InUse,
+            LootResult.Unsupported => GameObjectUseResult.Unsupported,
             _ => GameObjectUseResult.NotUsable,
         };
+    }
+
+    /// <summary>The durable key of an instance chest whose loot can be stored now, or null (shared-copy map, runtime object, no live save or store).</summary>
+    private LootStateKey? DurableKeyOf(GameObject go)
+        => Map.InstanceId != 0 && go.Spawn is { } spawn && go.Type == GameObjectType.Chest && Loot?.Durable?.CanPersist(Map) == true
+            ? new LootStateKey(Map.InstanceId, spawn.Guid) : null;
+
+    /// <summary>The object currently tracking a database spawn (spawned or waiting to respawn), or null while its grid is unloaded.</summary>
+    internal GameObject? FindBySpawn(uint spawnGuid)
+        => _spawnEntries.TryGetValue(spawnGuid, out uint entry)
+            ? _objects.GetValueOrDefault(ObjectGuid.WithEntry(HighGuid.GameObject, entry, spawnGuid)) : null;
+
+    /// <summary>
+    /// A durable take committed while no live bag represented the chest (its grid was unloaded or
+    /// reloaded meanwhile): a chest that ended up consumed despawns now, like a looted-out one.
+    /// </summary>
+    internal void OnDurableRecordCommitted(LootStateRecord record)
+    {
+        if (record.Consumed && FindBySpawn(record.Key.SpawnGuid) is { IsSpawned: true } go && Tracks(go)
+            && go.Loot is not { IsEmpty: false })
+        {
+            Despawn(go);
+        }
     }
 
     /// <summary>
@@ -588,6 +630,31 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
             _objects[go.Guid] = go;
             list.Add(go);
             ConfigureQuestFlags(go);
+            if (DurableKeyOf(go) is { } durableKey)
+            {
+                // The stored chest decides: a consumed one stays despawned until its stored respawn
+                // time; contents are rebuilt lazily when it is opened (never while an operation is in flight).
+                _unloadedLoot.Remove(spawn.Guid);
+                _respawnAt.Remove(spawn.Guid);
+                if (Loot!.Durable!.Find(durableKey) is { Consumed: true } consumed && consumed.RespawnAtUnix > Loot.Durable.UnixNow)
+                {
+                    go.LootState = GameObjectLootState.JustDeactivated;
+                    go.RespawnAtMs = consumed.RespawnAtUnix == long.MaxValue
+                        ? 0 : _clockMs + Math.Max(1L, consumed.RespawnAtUnix - Loot.Durable.UnixNow) * 1000L;
+                    continue;
+                }
+
+                if (spawn.SpawnTimeSeconds < 0 && Loot.Durable.Find(durableKey) is null)
+                {
+                    go.LootState = GameObjectLootState.JustDeactivated; // spawned by events/scripts only
+                    continue;
+                }
+
+                go.ClearChangedFields();
+                Map.AddObject(go);
+                continue;
+            }
+
             if (_unloadedLoot.Remove(spawn.Guid, out LootBag? remaining))
             {
                 Loot!.RestoreGameObjectLoot(go, remaining);
@@ -621,12 +688,13 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
 
         foreach (GameObject go in list)
         {
-            if (go.Spawn is { } spawn && go.IsSpawned && go.Loot is { IsEmpty: false } remaining)
+            bool durable = go.Loot?.DurableKey is not null || DurableKeyOf(go) is not null;
+            if (go.Spawn is { } spawn && go.IsSpawned && go.Loot is { IsEmpty: false } remaining && !durable)
             {
                 _unloadedLoot[spawn.Guid] = remaining;
             }
 
-            if (go.Spawn is not null && !go.IsSpawned && go.RespawnAtMs > 0)
+            if (go.Spawn is not null && !go.IsSpawned && go.RespawnAtMs > 0 && !durable)
             {
                 _respawnAt[go.Spawn.Guid] = go.RespawnAtMs;
             }

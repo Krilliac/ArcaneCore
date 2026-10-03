@@ -6,6 +6,7 @@ using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.Loot;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
@@ -73,6 +74,15 @@ public sealed class LootService : IViewerFieldFilter
 
     /// <summary>Evaluates a loot row's condition_id; null (no conditions area) skips conditioned rows.</summary>
     public Func<Player, uint, bool>? Conditions { get; set; }
+
+    /// <summary>
+    /// The durable store of chest loot in dungeon instances. Without it (or without a live logical
+    /// save for the map) such chests stay refused: opening them would reroll awards after the map is recreated.
+    /// </summary>
+    public ILootStateCoordinator? Durable { get; set; }
+
+    /// <summary>The object system of this service's map (set by <see cref="GameObjectMapSystem"/>).</summary>
+    internal GameObjectMapSystem? Objects { get; set; }
 
     /// <summary>The loot <paramref name="player"/> has open, or null.</summary>
     public LootBag? OpenLootOf(Player player) => _open.GetValueOrDefault(player);
@@ -188,9 +198,22 @@ public sealed class LootService : IViewerFieldFilter
     /// </summary>
     private static void AssignOwner(LootBag bag, Group? group, IReadOnlyList<Player> recipients)
     {
+        if (PickOwner(group, recipients, bag.Recipients) is { } candidate)
+        {
+            bag.Owner = candidate;
+            group!.LooterGuid = candidate;
+        }
+    }
+
+    /// <summary>
+    /// The round-robin pick of <see cref="AssignOwner"/> without any side effect: the next member
+    /// after the group's last looter who is a recipient, or null when the loot stays open.
+    /// </summary>
+    private static ObjectGuid? PickOwner(Group? group, IReadOnlyList<Player> recipients, HashSet<ObjectGuid> bagRecipients)
+    {
         if (group is null || recipients.Count <= 1 || group.LootMethod == LootMethod.FreeForAll)
         {
-            return;
+            return null;
         }
 
         IReadOnlyList<GroupMemberSlot> members = group.Members;
@@ -207,13 +230,13 @@ public sealed class LootService : IViewerFieldFilter
         for (int n = 0; n < members.Count; n++)
         {
             ObjectGuid candidate = members[(start + n) % members.Count].Guid;
-            if (bag.Recipients.Contains(candidate))
+            if (bagRecipients.Contains(candidate))
             {
-                bag.Owner = candidate;
-                group.LooterGuid = candidate;
-                return;
+                return candidate;
             }
         }
+
+        return null;
     }
 
     // --- creature corpses -----------------------------------------------------------------
@@ -337,7 +360,11 @@ public sealed class LootService : IViewerFieldFilter
             _bags[go.Guid] = (go, fresh);
         }
 
-        LootBag bag = go.Loot;
+        return ShowChest(player, go, go.Loot);
+    }
+
+    private LootResult ShowChest(Player player, GameObject go, LootBag bag)
+    {
         if (!bag.IsRecipient(player) && bag.Owner.IsEmpty)
         {
             // vmangos lets anyone open a chest someone else left unfinished; they share what is left.
@@ -351,6 +378,271 @@ public sealed class LootService : IViewerFieldFilter
 
         go.LootState = GameObjectLootState.Activated;
         return Show(player, bag);
+    }
+
+    // --- durable chests (dungeon instances) ---------------------------------------------------
+
+    /// <summary>
+    /// Open a chest of a dungeon instance whose consumed and remaining loot is stored with the
+    /// logical instance save. The window of a freshly generated chest appears when the generation
+    /// committed (<see cref="LootResult.Ok"/> means "accepted"); a stored chest restores its exact
+    /// remaining contents. <see cref="LootResult.Unsupported"/> when nothing can be persisted for
+    /// the key, the stored chest does not match the object or an item template is missing;
+    /// <see cref="LootResult.NotAllowed"/> while an operation for the chest is in flight.
+    /// </summary>
+    internal LootResult OpenDurableGameObject(Player player, GameObject go, uint lootId, LootStateKey key)
+    {
+        if (Durable is not { } durable || go.Spawn is null || Items is null)
+        {
+            return LootResult.Unsupported;
+        }
+
+        if (durable.IsBlocked(key))
+        {
+            return durable.IsPending(key) ? LootResult.NotAllowed : LootResult.Unsupported;
+        }
+
+        LootStateRecord? record = durable.Find(key);
+        if (LiveBagOf(go) is { } live)
+        {
+            return ShowChest(player, go, live);
+        }
+
+        if (record is { Consumed: false })
+        {
+            // The stored contents are authoritative; they are never rebuilt while an operation is in flight (blocked above).
+            IItemTemplateStore items = Items;
+            LootBag? restored = record.SourceEntry == go.Entry
+                ? LootBag.FromRecord(go.Guid, LootType.Corpse, record, item => items.Find(item)?.DisplayId) : null;
+            if (restored is null)
+            {
+                return LootResult.Unsupported;
+            }
+
+            go.Loot = restored;
+            _bags[go.Guid] = (go, restored);
+            return ShowChest(player, go, restored);
+        }
+
+        // Nothing stored yet, or the chest was consumed and has respawned: a new generation. The
+        // group's round-robin position only moves when the generation committed.
+        List<Player> recipients = RecipientsFor(player, go, out Group? group);
+        LootBag fresh = Generate(go.Guid, LootSourceKind.GameObject, LootType.Corpse, LootTableKind.GameObject, lootId, recipients);
+        fresh.DurableKey = key;
+        ObjectGuid? pick = PickOwner(group, recipients, fresh.Recipients);
+        if (pick is { } owner)
+        {
+            fresh.Owner = owner;
+        }
+
+        LootStateRecord updated = fresh.ToRecord(key, go.Entry, (record?.Generation ?? 0) + 1, RespawnAtUnix(go, durable.UnixNow));
+        var operation = new LootOperation
+        {
+            Key = key,
+            Expected = record,
+            Updated = updated,
+            Finished = (outcome, live, _) => FinishGeneration(outcome, live, player, key, fresh, group, pick),
+        };
+        return durable.TryStart(operation) ? LootResult.Ok : LootResult.NotAllowed;
+    }
+
+    /// <summary>The bag currently registered for the object (not a stale reference left on it), or null.</summary>
+    private LootBag? LiveBagOf(GameObject go)
+        => go.Loot is { } bag && _bags.TryGetValue(go.Guid, out var entry) && ReferenceEquals(entry.Bag, bag) ? bag : null;
+
+    /// <summary>When a consumed chest is available again: Despawn's rule (a negative spawntimesecs never respawns by itself).</summary>
+    private static long RespawnAtUnix(GameObject go, long now)
+        => go.Spawn!.SpawnTimeSeconds >= 0 ? now + Math.Max(1L, go.Spawn.SpawnTimeSeconds) : long.MaxValue;
+
+    private void FinishGeneration(LootOutcome outcome, bool live, Player opener, LootStateKey key, LootBag fresh, Group? group, ObjectGuid? pick)
+    {
+        if (!live)
+        {
+            return;
+        }
+
+        if (outcome != LootOutcome.After)
+        {
+            if (outcome != LootOutcome.Unknown && opener.IsInWorld)
+            {
+                Refuse(opener, fresh.Source);
+            }
+
+            return;
+        }
+
+        if (pick is { } owner && group is not null)
+        {
+            group.LooterGuid = owner;
+        }
+
+        // The object that tracks the spawn now may be a new one (its grid reloaded meanwhile).
+        if (Objects?.FindBySpawn(key.SpawnGuid) is not { IsSpawned: true } go || LiveBagOf(go) is not null)
+        {
+            return;
+        }
+
+        go.Loot = fresh;
+        _bags[go.Guid] = (go, fresh);
+        if (opener.IsInWorld && CheckLooter(opener, go) == LootResult.Ok)
+        {
+            ShowChest(opener, go, fresh);
+        }
+
+        if (fresh.Viewers.Count == 0)
+        {
+            go.System?.OnLootReleased(go, fresh);
+        }
+    }
+
+    /// <summary>Plan an item take of a durable chest: the committed successor record and its award, computed from the committed record.</summary>
+    private static bool TryPlanTake(LootBag live, LootStateRecord record, Player player, LootItem item, long respawnAt,
+        out LootStateRecord updated, out LootAward award)
+    {
+        int id = LootBag.CharacterIdOf(player.Guid);
+        int owner = LootBag.CharacterIdOf(live.Owner);
+        award = new LootAward(id, item.Slot, item.ItemId, item.Count);
+        updated = record;
+        if (owner != 0 && owner != record.LootOwnerCharacterId)
+        {
+            return false; // the live round-robin owner can only have been released, never reassigned
+        }
+
+        // Like ShowChest, a late opener of an ownerless chest joins its recipients when taking.
+        List<int> recipients = [.. record.Recipients];
+        if (recipients.Count != 0 && !recipients.Contains(id) && owner == 0)
+        {
+            recipients.Add(id);
+        }
+
+        LootStateRecord? replayed = LootStateRules.Replay(record, recipients, owner, [award], respawnAt);
+        if (replayed is null)
+        {
+            return false;
+        }
+
+        updated = replayed;
+        return true;
+    }
+
+    private InventoryResult TakeDurableItem(Player player, LootBag bag, LootItem item, LootStateKey key, ILootStateCoordinator durable)
+    {
+        if (!_bags.TryGetValue(bag.Source, out var entry) || entry.Source is not GameObject { Spawn: not null } go
+            || durable.IsBlocked(key) || !player.CanMutateQuestSettlementState || durable.Find(key) is not { } record
+            || !TryPlanTake(bag, record, player, item, RespawnAtUnix(go, durable.UnixNow), out LootStateRecord updated, out LootAward award))
+        {
+            return RefuseTake(player, item);
+        }
+
+        InventoryResult staged = player.Inventory.TryStageQuestRewards([new InventoryRewardGrant(item.ItemId, item.Count)],
+            out InventoryRewardStage? stage, out _);
+        if (staged != InventoryResult.Ok || stage is null)
+        {
+            player.Inventory.SendEquipError(staged, null, null, 0, item.ItemId);
+            return staged;
+        }
+
+        if (durable.CreateActor(player, stage.Before, stage.After) is not { } actor)
+        {
+            return RefuseTake(player, item);
+        }
+
+        var operation = new LootOperation
+        {
+            Key = key,
+            Expected = record,
+            Updated = updated,
+            Awards = [award],
+            Actor = actor,
+            PublishActor = () => player.Inventory.ApplyQuestRewardInventory(stage),
+            Finished = (outcome, live, current) => FinishTake(outcome, live, current, player, key, item, updated, stage),
+        };
+        return durable.TryStart(operation) ? InventoryResult.Ok : RefuseTake(player, item);
+    }
+
+    private static InventoryResult RefuseTake(Player player, LootItem item)
+    {
+        InventoryResult refused = item.IsLooted ? InventoryResult.AlreadyLooted : InventoryResult.LootCantLootThatNow;
+        player.Inventory.SendEquipError(refused, null, null);
+        return refused;
+    }
+
+    private void FinishTake(LootOutcome outcome, bool live, bool actorCurrent, Player player, LootStateKey key, LootItem item,
+        LootStateRecord updated, InventoryRewardStage stage)
+    {
+        if (!live)
+        {
+            return;
+        }
+
+        GameObject? go = Objects?.FindBySpawn(key.SpawnGuid);
+        LootBag? bag = go is not null && LiveBagOf(go) is { } registered && registered.DurableKey == key ? registered : null;
+        if (outcome == LootOutcome.After)
+        {
+            if (actorCurrent)
+            {
+                player.Inventory.NotifyLootInventory(stage);
+            }
+
+            if (bag is not null)
+            {
+                // The registered bag, not the one captured when the take began: it may have been replaced meanwhile.
+                bag.ApplyRecord(updated);
+                PersistOwnerRelease(bag); // released while the take was in flight: store it now
+                byte[] removed = LootPackets.Removed(item.Slot);
+                if (item.IsQuestItem || item.IsPerPlayer)
+                {
+                    if (actorCurrent)
+                    {
+                        player.Session.Send(WorldOpcode.SmsgLootRemoved, removed);
+                    }
+                }
+                else
+                {
+                    foreach (Player viewer in bag.Viewers)
+                    {
+                        viewer.Session.Send(WorldOpcode.SmsgLootRemoved, removed);
+                    }
+                }
+            }
+            else
+            {
+                Objects?.OnDurableRecordCommitted(updated);
+            }
+
+            if (actorCurrent)
+            {
+                Quests?.ItemLooted(player, item.ItemId, item.Count);
+            }
+        }
+        else if (actorCurrent && outcome != LootOutcome.Unknown)
+        {
+            player.Inventory.SendEquipError(InventoryResult.LootCantLootThatNow, null, null);
+        }
+
+        if (bag is not null && go is not null && bag.Viewers.Count == 0)
+        {
+            go.System?.OnLootReleased(go, bag);
+        }
+    }
+
+    /// <summary>
+    /// A round-robin owner released leftovers: everybody may loot them now. Stored best effort
+    /// (without an actor); a take that follows closely carries the cleared owner itself.
+    /// </summary>
+    private void PersistOwnerRelease(LootBag bag)
+    {
+        if (bag.DurableKey is not { } key || Durable is not { } durable || durable.IsBlocked(key) || durable.Find(key) is not { } record
+            || record.Consumed || record.LootOwnerCharacterId == 0 || !bag.Owner.IsEmpty)
+        {
+            return;
+        }
+
+        LootStateRecord? released = LootStateRules.Replay(record, record.Recipients, 0, [], 0);
+        if (released is not null)
+        {
+            durable.TryStart(new LootOperation { Key = key, Expected = record, Updated = released, Finished = static (_, _, _) => { } });
+        }
     }
 
     /// <summary>Forget a despawned object's loot (vmangos clears it on respawn).</summary>
@@ -497,6 +789,11 @@ public sealed class LootService : IViewerFieldFilter
             InventoryResult refused = item is { IsLooted: true } ? InventoryResult.AlreadyLooted : InventoryResult.LootCantLootThatNow;
             player.Inventory.SendEquipError(refused, null, null);
             return refused;
+        }
+
+        if (bag.DurableKey is { } durableKey && Durable is { } durable)
+        {
+            return TakeDurableItem(player, bag, item, durableKey, durable);
         }
 
         InventoryResult result = player.Inventory.AddItem(item.ItemId, item.Count, out _, received: false, created: false, showInChat: true);
@@ -654,9 +951,11 @@ public sealed class LootService : IViewerFieldFilter
                 if (bag.Owner == player.Guid && !bag.IsEmpty)
                 {
                     bag.Owner = default;
+                    PersistOwnerRelease(bag);
                 }
 
-                if (bag.Viewers.Count == 0)
+                // A durable take in flight decides the chest's fate (empty or not) when it finishes.
+                if (bag.Viewers.Count == 0 && !(bag.DurableKey is { } pending && Durable?.IsPending(pending) == true))
                 {
                     go.System?.OnLootReleased(go, bag);
                 }

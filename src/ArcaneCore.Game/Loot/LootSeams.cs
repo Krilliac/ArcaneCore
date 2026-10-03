@@ -59,4 +59,7 @@ public enum LootResult
     NothingToLoot,
     NotLootable,
     Locked,
+
+    /// <summary>Nothing can be stored for this chest, so opening it would reroll awards after its map is recreated.</summary>
+    Unsupported,
 }

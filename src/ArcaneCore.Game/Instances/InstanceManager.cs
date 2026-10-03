@@ -73,6 +73,13 @@ public sealed class InstanceManager : IMapResolver
 
     public InstanceOptions Options => _options;
 
+    /// <summary>
+    /// Raised on the world thread when a logical save is deleted for good (a real reset, a
+    /// delete after nobody is bound, or the startup drop of an unbound or expired save), after
+    /// its storage delete was queued. The state kept per save (chest loot) follows it.
+    /// </summary>
+    public event Action<uint>? InstanceDeleted;
+
     /// <summary>All live saves (loaded or not).</summary>
     public IReadOnlyCollection<InstanceSave> Saves => _saves.Values;
 
@@ -1056,6 +1063,7 @@ public sealed class InstanceManager : IMapResolver
         _saves.Remove(save.InstanceId);
         _persistence.InstanceDeleted(save.InstanceId);
         _logger.LogDebug("deleted {Save}", save);
+        InstanceDeleted?.Invoke(save.InstanceId);
     }
 
     private void OnMapUnloading(Map map)

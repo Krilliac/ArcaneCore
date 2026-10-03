@@ -53,6 +53,9 @@ merged. **The lead assigns the final number at merge time, in merge order.**
 
 - Keep your module's version in one constant and start with the next free number at your
   base. Note it in `docs/integration/<area>.md`.
+- Durable chest loot (handoff item 4) takes **characters 11** in its worktree
+  (`LootStateDataModule.Version`, `IntegratedSchemaTests` expects it through the constant); the integrator renumbers it
+  with the other pending characters modules. See [gameobjects-loot.md](gameobjects-loot.md).
 - When another branch lands that number first, the lead renumbers your constant in the merge
   (only once your PR is out of draft, so it never races your pushes). Any test that asserts
   a literal current version should use `<Context>.Schema.CurrentVersion` instead.

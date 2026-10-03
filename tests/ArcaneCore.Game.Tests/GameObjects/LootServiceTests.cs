@@ -411,7 +411,7 @@ public sealed class LootServiceTests
     }
 
     [Fact]
-    public void OpenItem_RefusesContainersUntilConsumedLootCanBePersisted()
+    public void OpenItem_RefusesContainers_UntilTheContainerSliceOfDurableLootIsDelivered()
     {
         Rig rig = CreateRig(rows:
         [

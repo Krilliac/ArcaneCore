@@ -74,6 +74,9 @@ internal sealed class WorldTestHost : IAsyncDisposable
 
     public InMemoryWorldDataStore WorldData { get; } = new();
 
+    /// <summary>The host's service provider (singletons registered by the features and by <see cref="IWorldTestServices"/>).</summary>
+    public IServiceProvider WorldServices => _services;
+
     public WorldRuntime World { get; }
 
     public CharacterSaveQueue SaveQueue { get; }

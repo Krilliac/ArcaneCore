@@ -145,6 +145,28 @@ Group binds are kept in memory only, because groups themselves are not persisted
 codebase. After a restart only character binds remain, so a dungeon only its group was bound
 to is dropped at load.
 
+## Durable chest loot (handoff item 4)
+
+The consumed and remaining loot of the chests of an instance is stored with the logical save
+([gameobjects-loot.md](gameobjects-loot.md)). The save is the scope: a chest commit needs the `instance` row, the
+rows are deleted with it, and nothing but a real reset or deletion clears them.
+- `EfInstanceStore.DeleteInstanceAsync` also deletes the instance's `loot_state*` rows inside its existing transaction.
+  This is hygiene: on engines whose default isolation does not serialize it against a concurrent loot commit an
+  orphan row can survive, and the startup purge in `EfLootStateStore.LoadInstanceStatesAsync` (rows of a missing
+  instance go) is what protects a reused id. The purge runs in `GameObjectLootFeature.Attach`, before the post that
+  loads the instance saves (features attach in type-name order, so the loot feature attaches first and its install
+  post runs before `InstanceManager.Load`).
+- `InstanceManager.InstanceDeleted` (new event, `Action<uint>`) is raised on the world thread from `DeleteSave`: a real
+  reset, a delete after nobody is bound, and the startup drop of an unbound or expired save. The loot feature drops
+  its cached chests of that instance.
+- `InstanceWriteQueue.Enqueued` and `WaitForAsync(watermark, token)` (and `InstanceFeature.WriteWatermark` /
+  `WaitForWritesAsync`): wait until the first N queued writes were attempted. `FlushAsync` polls until the queue is idle
+  and cannot be cancelled, so a busy queue could starve it; a loot commit uses the watermark so the queued
+  `InstanceSaved` of a new save lands before the commit looks for the `instance` row. A lost `InstanceSaved` write
+  (three attempts, then logged and dropped) leaves that instance's chests refused until restart.
+- Group-only binds are not persisted, so a chest of an instance only a group was bound to is dropped at restart with the
+  instance (existing semantics, not a loss).
+
 ## Shared-file edits
 
 All of these are minimal and additive unless stated otherwise.

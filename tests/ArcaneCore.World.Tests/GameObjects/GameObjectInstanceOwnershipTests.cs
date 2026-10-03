@@ -25,7 +25,7 @@ public sealed class GameObjectInstanceOwnershipTests
     private const uint Cloth = 2589;
 
     [Fact]
-    public async Task PairedInstances_OwnTheirLoot_AndRecreationCannotRerollAnUnsupportedChest()
+    public async Task PairedInstances_OwnTheirLoot_AndAChestWithoutALiveInstanceSaveStaysRefusedAcrossRecreation()
     {
         await using WorldTestHost host = Start(out GameObjectTestContext context);
         await using WorldTestClient aliceClient = await host.EnterWorldAsync("LOOTMAPA", "Lootmapa");

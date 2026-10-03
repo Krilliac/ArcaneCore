@@ -202,6 +202,24 @@ public sealed partial class PlayerInventory
         }
     }
 
+    /// <summary>
+    /// Notifications of a committed durable loot take: what <see cref="AddItem"/> raises and sends
+    /// for the live path (item-count change for quest objectives, then SMSG_ITEM_PUSH_RESULT as a
+    /// loot pickup: not received from a trade or mail, not created).
+    /// </summary>
+    internal void NotifyLootInventory(InventoryRewardStage stage)
+    {
+        foreach ((InventoryRewardGrant grant, Item result) in stage.Grants)
+        {
+            ItemCountChanged?.Invoke(grant.Entry, (int)grant.Count);
+            if (Player is { IsInWorld: true } player)
+            {
+                player.Session.Send(WorldOpcode.SmsgItemPushResult,
+                    ItemPackets.ItemPushResult(player.Guid, result, grant.Count, received: false, created: false, showInChat: true));
+            }
+        }
+    }
+
     private static InventorySnapshot FreezeRewardSnapshot(InventorySnapshot snapshot) => new(Array.AsReadOnly(snapshot.Items
         .Select(row => row with { Item = row.Item with
         {
