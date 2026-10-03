@@ -19,6 +19,11 @@ rendering or gameplay pass is claimed by this document.
 The user's current acceptance target remains the preceding pin. This separate UI
 follow-up is used only when the user chooses it in their selected file-access chat;
 publishing it does not switch that session or its baseline instructions.
+The [user-provided baseline run report](client-run-f8ae6e8-20261003.md) records
+reported authentication, creation, entry and movement passes at that original
+pin. Logout/relog and restart persistence remain pending. This coding task has
+not inspected the run artifacts or resumed client work; NPC quest UI remains
+unverified.
 
 ## Session inputs and bounds
 

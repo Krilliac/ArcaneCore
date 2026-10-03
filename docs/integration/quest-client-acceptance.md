@@ -5,6 +5,23 @@ world entry, a short walk and a fresh relog. It does not depend on clustering or
 quest rewards. A second, small milestone exercises one ordinary creature-kill quest with
 fixed/choice item and money rewards through the actual client UI.
 
+## Reported client-run status, 2026-10-03
+
+The user supplied a bounded real-client report at exact tested pin
+`f8ae6e8b5f805e94f145194a82f80e876fa2dec3`: authentication/realm list, Human male
+Warrior creation, Northshire entry, an 80.5-second stable interval and basic
+movement were reported successful. Standard logout/fresh login, saved-position
+restoration and world restart/relog were not tested because physical Escape
+stopped computer use before those steps. No client input followed that stop.
+
+[The run record](client-run-f8ae6e8-20261003.md) identifies the supplied provenance,
+reported cleanup, evidence filenames and remaining checks. This integration lane
+did not inspect the run artifacts or independently reproduce the client results.
+The tested **f8ae6e8** pin remains unchanged; this note preserves all existing setup
+commands and instructions. The 485572b automated results below are preceding
+historical qualification. The separate quest UI successor requires a future
+user-selected session and is not acceptance evidence from this run.
+
 ## Revision and evidence
 
 The qualified starting revision is

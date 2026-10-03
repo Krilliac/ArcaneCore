@@ -130,6 +130,10 @@ hashes, cancellation and normal world loading with its listener removed. The
 original f8ae6e8 acceptance target and reserves actual client work for their
 selected file-access chat; publishing this successor does not change that pin.
 
-Rendering, UI, client executable acceptance, terrain/content fidelity, animation,
-and broader playable quest/reward behaviour still require later work and real-client
-acceptance. No default branch merge, deployment or release is part of this tranche.
+The [user-provided f8ae6e8 baseline report](docs/integration/client-run-f8ae6e8-20261003.md)
+records single-client authentication, creation, visible world entry and movement
+passes. Its artifacts were not independently inspected by this coding task;
+logout/relog and restart persistence remain pending. NPC quest UI, models/icons,
+terrain/content fidelity, broader combat and playable quest/reward behavior still
+require their own real-client acceptance. No default branch merge, deployment or
+release is part of this tranche.
