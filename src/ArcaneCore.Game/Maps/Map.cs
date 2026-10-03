@@ -52,6 +52,7 @@ public sealed class Map
     // step by AddVisible / RemoveVisible.
     private readonly Dictionary<ObjectGuid, HashSet<Player>> _observers = [];
     private readonly HashSet<WorldObject> _movedObjects = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<ObjectGuid> _newObjects = [];
     private readonly List<Player> _transit = [];
     private readonly List<Action> _afterUpdate = [];
     private readonly List<WorldObject> _valuesQueue = [];
@@ -206,7 +207,7 @@ public sealed class Map
     /// an <paramref name="active"/> object also loads the grids around it, like a player), and
     /// every player in range gets its create block at the end of the tick.
     /// </summary>
-    public void AddObject(WorldObject obj, bool active = false)
+    public void AddObject(WorldObject obj, bool active = false, bool isNewObject = false)
     {
         EnsureWorldThread();
         EnsureNotInUpdatePhase();
@@ -233,6 +234,10 @@ public sealed class Map
         obj.ClearChangedFields();
         obj.IsQueuedForUpdate = false;
         _movedObjects.Add(obj);
+        if (isNewObject)
+        {
+            _newObjects.Add(obj.Guid);
+        }
     }
 
     /// <summary>Take a non-player object out of the map; clients that see it get SMSG_DESTROY_OBJECT.</summary>
@@ -403,6 +408,8 @@ public sealed class Map
 
                 _movedObjects.Clear();
             }
+
+            _newObjects.Clear();
 
             // (3) values updates
             foreach (WorldObject obj in _valuesQueue)
@@ -645,7 +652,7 @@ public sealed class Map
         {
             AddVisible(viewer, target.Guid);
             PacketWriter block = viewer.PendingUpdates.BeginBlock();
-            UpdateBlockWriter.WriteCreateBlock(block, target, viewer, isNewObject: false, _world.NowMs);
+            UpdateBlockWriter.WriteCreateBlock(block, target, viewer, _newObjects.Contains(target.Guid), _world.NowMs);
             viewer.PendingUpdates.EndBlock();
         }
     }
@@ -690,6 +697,7 @@ public sealed class Map
         _objects.Remove(obj.Guid);
         _grid.Remove(obj);
         _movedObjects.Remove(obj);
+        _newObjects.Remove(obj.Guid);
 
         if (_observers.Remove(obj.Guid, out HashSet<Player>? observers))
         {

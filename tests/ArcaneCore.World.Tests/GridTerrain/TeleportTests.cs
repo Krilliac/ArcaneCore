@@ -64,6 +64,16 @@ public sealed class TeleportTests
         Assert.Equal((-8900f, -130f, 90f), (info.X, info.Y, info.Z));
         Assert.Equal(-8949.95f, await host.PlayerStateAsync("Tpneargm", p => p.X)); // not before the ack
 
+        // A heartbeat sent before the teleport ack must not overwrite the pending position
+        // or be relayed to observers (vmangos HandleMovementOpcodes teleport semaphore).
+        MovementInfo stale = await host.PlayerStateAsync("Tpneargm", p => p.Movement);
+        stale.X = -8800;
+        var stalePacket = new PacketWriter();
+        stale.Write(stalePacket);
+        await gm.SendAsync(WorldOpcode.MsgMoveHeartbeat, stalePacket.ToArray());
+        Assert.DoesNotContain(await bob.CollectAsync(Quiet), p => p.Opcode == WorldOpcode.MsgMoveHeartbeat);
+        Assert.Equal(-8949.95f, await host.PlayerStateAsync("Tpneargm", p => p.X));
+
         await gm.SendAsync(WorldOpcode.MsgMoveTeleportAck, TeleportAck(guid, counter));
         byte[] observed = await bob.ReadUntilAsync(WorldOpcode.MsgMoveTeleport);
         var observedReader = new PacketReader(observed);

@@ -2,6 +2,8 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
+using ArcaneCore.World.Teleport;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Handlers;
 
@@ -37,6 +39,11 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
     /// </summary>
     private static void HandleRootAck(WorldSession session, Player player, byte[] payload, bool rooted)
     {
+        if (session.Services.GetRequiredService<TeleportFeature>().Teleports.IsBeingTeleported(player))
+        {
+            return;
+        }
+
         var reader = new PacketReader(payload);
         ulong guid = reader.ReadUInt64();
         _ = reader.ReadUInt32(); // movement counter
@@ -72,6 +79,12 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
 
     private static void HandleMovement(WorldSession session, Player player, WorldOpcode opcode, byte[] payload, bool relay)
     {
+        // vmangos HandleMovementOpcodes ignores movement while either teleport semaphore is set.
+        if (session.Services.GetRequiredService<TeleportFeature>().Teleports.IsBeingTeleported(player))
+        {
+            return;
+        }
+
         // Client→server movement is the MovementInfo alone (gtker MSG_MOVE_*_Client, 1.12).
         var reader = new PacketReader(payload);
         MovementInfo movement = MovementInfo.Read(ref reader);
