@@ -118,6 +118,9 @@ public sealed class ShapeshiftService
         _ => 0,
     };
 
+    /// <summary>Whether this service handles the form (the others leave their aura unhandled and are reported once).</summary>
+    public static bool HandlesForm(ShapeshiftForm form) => HandledForms.Contains((byte)form);
+
     public static bool IsWarriorStance(ShapeshiftForm form)
         => form is ShapeshiftForm.BattleStance or ShapeshiftForm.DefensiveStance or ShapeshiftForm.BerserkerStance;
 

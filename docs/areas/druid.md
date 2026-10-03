@@ -5,7 +5,7 @@ Branch `claude/vw2-class-druid`. Code: `src/ArcaneCore.Game/Spells/Druid/` (pure
 `src/ArcaneCore.World/Spells/LiquidInterruptFeature.cs` (world attachment). Tests:
 `tests/ArcaneCore.Game.Tests/Druid/`, plus two taxi cases in `Npc/NpcTravelServiceTests.cs`.
 
-Directive: as close to vanilla 1.12.1 as possible, verified against the references. Primary reference is
+**Superseded in part by docs/areas/druid-forms.md (wave 4): aura 36, the form engine, feral stats, the druid scripts and the mount gates are\nnow wired; the 'not wired' and 'not delivered' lists below describe the wave-2 state.**\n\nDirective: as close to vanilla 1.12.1 as possible, verified against the references. Primary reference is
 vmangos (`D:\refs\vmangos`); mangos-classic differs in several druid details (below) and is not followed.
 Nothing from the references was copied into the repository, only numeric constants and behaviour with a
 `file:line` citation in the source comment.
