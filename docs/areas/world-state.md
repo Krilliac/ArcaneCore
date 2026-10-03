@@ -246,6 +246,29 @@ Not delivered (limits): battlegrounds (`inBattleground` is false), taxi flights 
 and flag carriers (the other two terms of the vmangos timer freeze), and the capital rest type, which the rest lane
 takes from `OnZoneChanged`'s zone entry and `PvpAreaState` (`CAPITAL && !enforced`, `:6639`).
 
+### Game event schedule maths (`game-event-schedule-core`, pure)
+
+`GameEventSchedule` ports the pure maths of vmangos `GameEventMgr`: `IsActive` is `CheckOneGameEvent`
+(`GameEventMgr.cpp:38-44`: inside `[start, end)` and `(now - start - leapDays * DAY) % (occurence * 60) < length * 60`)
+and `NextCheckSeconds` is `NextCheck` (`:46-70`: one day when outdated, the delay to the start, the end of the
+running occurrence or the start of the next, clipped at the end). No clock: the time is an argument.
+`GameEventDefinition` carries the `game_event` columns (`GameEventMgr.h:43-60`); a length of 0 is invalid
+(`isValid`), and an occurence of 0, which vmangos would divide by, never runs here.
+
+Leap days (`LeapDays`, `:241-251`) apply only to events that recur every 365 days (525600 minutes) and last less. The
+vmangos loop adds one leap day per leap YEAR in `[start year, current year)`: it counts the start year's own Feb 29th even
+when that precedes the start, and never the current year's, so a yearly event that starts in a leap year begins one day
+late in 2021-2023, 2025-2027 and so on (a midsummer start of 2020-06-21 20:00Z is inactive at 2026-06-21 20:01Z; worked by
+hand from the C++ and pinned in `GameEventScheduleTests`). Retail holidays keep their calendar date, so
+`World:GameEvents:LeapDayMode` defaults to `DateStable` (count only the Feb 29ths in `[start, now)`); `VmangosLiteral`
+reproduces the vmangos loop. mangos-classic has no leap handling at all (a day early after every Feb 29th).
+
+Not delivered, and recorded as such: the event service (start/stop with overwrite, linked events, `Update`'s next delay,
+resume after restart), the `game_event_status` table, the `.event` and `.lookup event` commands, the listener contract for spawns,
+quests and mails, and the cmangos `schedule_type` dialect that classic-db uses (types 1, 11 yearly, 12 lunar new year,
+13 Easter, the Darkmoon types 2-9; the lunar type needs an unverified moon-phase port). They depend on
+content-import-full's `game_event*` tables and spawn gate, which that lane owns.
+
 ## Deviations from retail (all documented, none silent)
 
 - `ClientZoneTrust=Auto` is a development-world allowance, not retail. Retail is `Never`.

@@ -101,3 +101,16 @@ public sealed class WorldStatesOptions
     /// </summary>
     public string DefaultsPath { get; set; } = "";
 }
+
+/// <summary>Game-event options (configuration section <c>World:GameEvents</c>).</summary>
+public sealed class GameEventOptions
+{
+    public const string SectionName = "World:GameEvents";
+
+    /// <summary>
+    /// How yearly events count February 29th (<see cref="Events.LeapDayMode"/>). Default
+    /// <c>DateStable</c> (holidays keep their calendar date, as in retail); <c>VmangosLiteral</c> reproduces the
+    /// vmangos loop, whose yearly events start a day late in many years.
+    /// </summary>
+    public Events.LeapDayMode LeapDayMode { get; set; } = Events.LeapDayMode.DateStable;
+}

@@ -43,6 +43,7 @@ public sealed class ZoneAreaFeature(IServiceProvider services) : IWorldFeature, 
         }
 
         configuration?.GetSection(WorldStatesOptions.SectionName).Bind(hooks.WorldStateSettings);
+        configuration?.GetSection(GameEventOptions.SectionName).Bind(hooks.GameEventSettings);
         if (hooks.WorldStateSettings.DefaultsPath.Length > 0)
         {
             // Fail closed at startup: a missing or malformed defaults file stops the daemon.

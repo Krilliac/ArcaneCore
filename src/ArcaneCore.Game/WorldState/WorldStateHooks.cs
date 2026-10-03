@@ -34,6 +34,8 @@ public sealed class WorldStateHooks
 
     public WeatherOptions WeatherSettings { get; } = new();
 
+    public GameEventOptions GameEventSettings { get; } = new();
+
     public WorldStatesOptions WorldStateSettings { get; } = new();
 
     /// <summary>The default pairs and providers of SMSG_INIT_WORLD_STATES.</summary>
