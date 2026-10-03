@@ -143,7 +143,15 @@ public sealed partial class SpellSystem
         {
             AddAuraHolder(holder);
         }
+
+        SpellHitTarget?.Invoke(cast.Caster, target, cast.Spell.Id);
     }
+
+    /// <summary>
+    /// Raised after a cast's effects reached a unit (the vmangos Spell::DoAllEffectOnTarget hook
+    /// that calls RewardPlayerAndGroupAtCast for quest spell-cast objectives). World thread.
+    /// </summary>
+    public event Action<Unit, Unit, uint>? SpellHitTarget;
 
     /// <summary>
     /// vmangos Spell::EffectSchoolDMG + Unit::DealDamage path (damage handed to <see cref="IDamageSink"/>):
