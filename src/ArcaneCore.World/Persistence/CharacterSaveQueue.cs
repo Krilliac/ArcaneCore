@@ -140,6 +140,20 @@ public sealed class CharacterSaveQueue(IServiceScopeFactory scopes, ILogger<Char
         }
     }
 
+    /// <summary>
+    /// The character was deleted: forget its holds, quarantine and retained failed snapshot, so a
+    /// later character that reuses the id never inherits them. Call after its writes drained.
+    /// </summary>
+    public void ForgetCharacter(int characterId)
+    {
+        lock (_gate)
+        {
+            _held.Remove(characterId);
+            _quarantined.Remove(characterId);
+            _failed.Remove(characterId);
+        }
+    }
+
     public bool IsHeld(int characterId)
     {
         lock (_gate)

@@ -56,4 +56,10 @@ public interface ISocialStore
 
     /// <summary>Delete a guild, its ranks and its members.</summary>
     Task DeleteGuildAsync(int guildId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// A deleted character's leftovers: friend/ignore entries it owns or that point at it, and its
+    /// guild membership. Queued after earlier social writes so none of them can bring a row back.
+    /// </summary>
+    Task PurgeCharacterAsync(int characterId, CancellationToken cancellationToken = default) => Task.CompletedTask;
 }

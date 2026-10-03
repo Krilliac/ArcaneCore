@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.Social;
 using Microsoft.EntityFrameworkCore;
@@ -55,7 +56,7 @@ public sealed class GuildMemberRow
 /// Social tables of the characters database: friend/ignore lists and guilds. Characters schema
 /// v6 (allocated in docs/integration/social.md). The tables are new; nothing existing changes.
 /// </summary>
-public sealed class SocialDataModule : IDataModule
+public sealed class SocialDataModule : IDataModule, ICharacterDataCleanup
 {
     public DatabaseComponent Component => DatabaseComponent.Characters;
 
@@ -105,4 +106,30 @@ public sealed class SocialDataModule : IDataModule
     }
 
     public void AddServices(IServiceCollection services) => services.AddScoped<ISocialStore, EfSocialStore>();
+
+    /// <summary>
+    /// A guild leader cannot be deleted (vmangos HandleCharDeleteOpcode: GetGuildByLeader →
+    /// CHAR_DELETE_FAILED); otherwise the character leaves its guild and every friend/ignore
+    /// entry it owns or that points at it goes (vmangos DeleteFromDB: character_social guid/friend,
+    /// guild_member).
+    /// </summary>
+    public async Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        if (await db.Set<GuildRow>().AnyAsync(g => g.LeaderId == characterId, cancellationToken).ConfigureAwait(false))
+        {
+            throw new CharacterDeletionRefusedException($"character {characterId} leads a guild");
+        }
+
+        await DeleteReferencesAsync(db, characterId, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Friend/ignore entries owned by or pointing at the character, and its guild membership.</summary>
+    internal static async Task DeleteReferencesAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
+    {
+        await db.Set<CharacterSocialRow>().Where(r => r.CharacterId == characterId || r.OtherId == characterId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<GuildMemberRow>().Where(r => r.CharacterId == characterId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+    }
 }

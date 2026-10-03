@@ -176,6 +176,23 @@ public sealed class GroupManager(SocialContext context)
         }
     }
 
+    /// <summary>
+    /// A character was deleted (vmangos Player::DeleteFromDB → Player::RemoveFromGroup): its
+    /// pending invite goes and it leaves its group (offline members keep their membership until
+    /// then). A two-member group disbands. Returns whether it was a member.
+    /// </summary>
+    public bool OnCharacterDeleted(ObjectGuid guid)
+    {
+        UninviteFromGroup(guid);
+        if (GetGroup(guid) is not { } group)
+        {
+            return false;
+        }
+
+        RemoveFromGroup(group, guid, kicked: false);
+        return true;
+    }
+
     // --- removal and leadership -----------------------------------------------------------------
 
     /// <summary>
