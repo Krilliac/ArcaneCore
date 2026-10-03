@@ -86,7 +86,6 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         Guild,
         Purge,
         Petition,
-        PetitionComplete,
         PetitionPurge,
     }
 
@@ -174,7 +173,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         ArgumentNullException.ThrowIfNull(guild);
         lock (_gate)
         {
-            EnqueueWrite(new Key(KeyKind.Guild, guild.Id, 0), new Payload(SocialFlags.None, guild));
+            EnqueueGuildWrite(guild.Id, guild, null);
         }
     }
 
@@ -182,7 +181,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     {
         lock (_gate)
         {
-            EnqueueWrite(new Key(KeyKind.Guild, guildId, 0), new Payload(SocialFlags.None, null));
+            EnqueueGuildWrite(guildId, null, null);
         }
     }
 
@@ -203,13 +202,19 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         }
     }
 
-    /// <summary>The founded guild and the petition's deletion commit together; the guild snapshot rides in the payload.</summary>
+    /// <summary>
+    /// The founded guild and the petition's deletion commit together. The completion is queued under the
+    /// guild's own key (with the petition id in the payload), never under a key of its own: a later guild
+    /// change or disband then merges into it instead of running before a stale snapshot, and a retained
+    /// completion is superseded (its petition id carried over) by a newer guild write instead of being
+    /// replayed over it.
+    /// </summary>
     public void CompletePetition(GuildData guild, int petitionId)
     {
         ArgumentNullException.ThrowIfNull(guild);
         lock (_gate)
         {
-            EnqueueWrite(new Key(KeyKind.PetitionComplete, petitionId, 0), new Payload(SocialFlags.None, guild));
+            EnqueueGuildWrite(guild.Id, guild, petitionId);
         }
     }
 
@@ -227,6 +232,13 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             {
                 RemoveRetained(key);
                 ReleaseKey(key);
+            }
+
+            // A retained petition write of the deleted character must not bring the petition back (guild writes
+            // are keyed by guild, not character, and stay: the next guild write corrects the member list).
+            foreach (Key key in _retained.Where(r => r.Key.Kind == KeyKind.Petition && r.Value.Value.Petition?.OwnerId == characterId).Select(r => r.Key).ToArray())
+            {
+                RemoveRetained(key);
             }
 
             EnqueueWrite(new Key(KeyKind.Purge, characterId, 0), default);
@@ -354,7 +366,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                 {
                     KeyKind.Row => $"character {f.Key.A}",
                     KeyKind.Guild => $"guild {f.Key.A}",
-                    KeyKind.Petition or KeyKind.PetitionComplete => $"petition {f.Key.A}",
+                    KeyKind.Petition => $"petition {f.Key.A}",
                     KeyKind.PetitionPurge => $"petition purge of character {f.Key.A}",
                     _ => $"purge of character {f.Key.A}",
                 }).Distinct(),
@@ -373,6 +385,21 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     private bool OverLimit(int characterId)
         => (_options.MaxPendingPerCharacter > 0 && _rowsPerCharacter.GetValueOrDefault(characterId) >= _options.MaxPendingPerCharacter)
             || (_options.MaxPendingTotal > 0 && _rowsTotal >= _options.MaxPendingTotal);
+
+    /// <summary>
+    /// Queue a guild snapshot (null: deletion) with an optional petition to consume. Petitions already attached to
+    /// the write this one merges into (or to the retained failure it will supersede) are carried over, so the
+    /// completion of a petition is never lost when a newer guild write replaces its value.
+    /// </summary>
+    private void EnqueueGuildWrite(int guildId, GuildData? guild, int? petitionId)
+    {
+        var key = new Key(KeyKind.Guild, guildId, 0);
+        int[]? carried = _queued.TryGetValue(key, out Work? waiting) && !waiting.Started && waiting.Epoch == _epoch
+            ? waiting.Value.Petitions
+            : _retained.TryGetValue(key, out Retained? retained) ? retained.Value.Petitions : null;
+        int[]? petitions = petitionId is { } id ? [.. (carried ?? []).Append(id).Distinct()] : carried;
+        EnqueueWrite(key, new Payload(SocialFlags.None, guild, Petitions: petitions));
+    }
 
     /// <summary>Merge into the key's waiting write, or queue a new one. False (nothing queued) when the channel is closed.</summary>
     private bool EnqueueWrite(Key key, Payload value)
@@ -554,6 +581,13 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             }
             else
             {
+                if (work.Key.Kind == KeyKind.Guild && value.Petitions is { } pending
+                    && _queued.TryGetValue(work.Key, out Work? later) && !ReferenceEquals(later, work))
+                {
+                    // A newer guild write is already queued and will supersede this retained one: keep the petitions.
+                    later.Value = later.Value with { Petitions = [.. (later.Value.Petitions ?? []).Concat(pending).Distinct()] };
+                }
+
                 SetRetained(work.Key, value, failure);
                 _logger.LogError(failure, "social write for {Kind} {Id} failed; retained for retry", work.Key.Kind, work.Key.A);
             }
@@ -651,7 +685,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             try
             {
                 await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
-                if (key.Kind is KeyKind.Petition or KeyKind.PetitionComplete or KeyKind.PetitionPurge)
+                if (key.Kind is KeyKind.Petition or KeyKind.PetitionPurge)
                 {
                     if (scope.ServiceProvider.GetService<IPetitionStore>() is not { } petitions)
                     {
@@ -665,9 +699,6 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                             break;
                         case KeyKind.Petition:
                             await petitions.DeletePetitionAsync(key.A).ConfigureAwait(false);
-                            break;
-                        case KeyKind.PetitionComplete when value.Guild is { } founded:
-                            await petitions.CompletePetitionAsync(founded, key.A).ConfigureAwait(false);
                             break;
                         default:
                             await petitions.PurgeCharacterAsync(key.A).ConfigureAwait(false);
@@ -688,11 +719,8 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                     case KeyKind.Row:
                         await store.SetSocialAsync(key.A, key.B, value.Flags).ConfigureAwait(false);
                         break;
-                    case KeyKind.Guild when value.Guild is { } guild:
-                        await store.SaveGuildAsync(guild).ConfigureAwait(false);
-                        break;
                     case KeyKind.Guild:
-                        await store.DeleteGuildAsync(key.A).ConfigureAwait(false);
+                        await WriteGuildAsync(scope.ServiceProvider, store, key.A, value).ConfigureAwait(false);
                         break;
                     default:
                         await store.PurgeCharacterAsync(key.A).ConfigureAwait(false);
@@ -713,10 +741,47 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         }
     }
 
+    /// <summary>
+    /// A guild snapshot (or its deletion) and the petitions it consumes. A founded guild and its first petition
+    /// commit in one transaction; any further petition (a newer write merged in) is deleted after. A deletion
+    /// still deletes the petitions, never recreating the guild. All steps set absolute state, so a retry is safe.
+    /// </summary>
+    private static async Task WriteGuildAsync(IServiceProvider services, ISocialStore store, int guildId, Payload value)
+    {
+        int[] petitionIds = value.Petitions ?? [];
+        IPetitionStore? petitions = petitionIds.Length > 0 ? services.GetService<IPetitionStore>() : null;
+        if (value.Guild is { } guild)
+        {
+            if (petitions is null)
+            {
+                await store.SaveGuildAsync(guild).ConfigureAwait(false);
+                return;
+            }
+
+            await petitions.CompletePetitionAsync(guild, petitionIds[0]).ConfigureAwait(false);
+            petitionIds = petitionIds[1..];
+        }
+        else
+        {
+            await store.DeleteGuildAsync(guildId).ConfigureAwait(false);
+        }
+
+        foreach (int petitionId in petitionIds)
+        {
+            if (petitions is not null)
+            {
+                await petitions.DeletePetitionAsync(petitionId).ConfigureAwait(false);
+            }
+        }
+    }
+
     private readonly record struct Key(KeyKind Kind, int A, int B);
 
-    /// <summary>The absolute value a key is set to: row flags, or a guild snapshot (null: delete the guild).</summary>
-    private readonly record struct Payload(SocialFlags Flags, GuildData? Guild, PetitionData? Petition = null);
+    /// <summary>
+    /// The absolute value a key is set to: row flags, a guild snapshot (null: delete the guild) with the petitions
+    /// consumed by its founding, or a petition snapshot (null: delete the petition).
+    /// </summary>
+    private readonly record struct Payload(SocialFlags Flags, GuildData? Guild, PetitionData? Petition = null, int[]? Petitions = null);
 
     private sealed class Work(WorkKind kind, Key key, Payload value, long epoch, int characterId, TaskCompletionSource? done)
     {
