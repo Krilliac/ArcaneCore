@@ -63,9 +63,13 @@ public sealed class QuestRewardEffectCapabilityTests
     [Fact]
     public void CapabilityUsesTheActiveHandlerRegistryRatherThanAFixedEffectList()
     {
-        SpellSystem system = System(Spell(1, SpellEffectName.PowerDrain));
+        // An effect nobody handles: the first of these the stock spell system has no handler for (other lanes keep adding handlers; this test only needs one without).
+        SpellSystem probe = System();
+        SpellEffectName unhandled = new[] { SpellEffectName.Leap, SpellEffectName.Sanctuary, SpellEffectName.ForceCriticalHit }
+            .First(effect => !probe.HasEffectHandler(effect));
+        SpellSystem system = System(Spell(1, unhandled));
         Assert.False(Effects(system).CanCastRewardSpell(1));
-        system.RegisterEffect(SpellEffectName.PowerDrain, static _ => { });
+        system.RegisterEffect(unhandled, static _ => { });
         Assert.True(Effects(system).CanCastRewardSpell(1));
         Assert.False(Effects(system).CanCastRewardSpell(999));
     }

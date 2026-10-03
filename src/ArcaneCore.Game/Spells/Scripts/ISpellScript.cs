@@ -8,8 +8,8 @@ namespace ArcaneCore.Game.Spells.Scripts;
 /// <para>
 /// Hook order inside one cast follows vmangos: <see cref="OnCheckCast"/> runs after every other check (Spell.cpp:6480-6481), then
 /// power and ammo are taken, then <see cref="OnCast"/> (Spell.cpp:3716-3724, TakePower, TakeReagents, then m_spellScript->OnCast),
-/// then <see cref="OnEffectExecute"/> once per DUMMY or SCRIPT_EFFECT effect (Spell.cpp:5254-5257 calls it before every effect; the
-/// other effects need no script hook in this lane), and <see cref="OnSuccessfulDispel"/> after a DISPEL effect that removed at least
+/// then <see cref="OnEffectExecute"/> once per DUMMY, SCRIPT_EFFECT or declared (<see cref="SpellScriptAttribute.ExecuteEffects"/>) effect (Spell.cpp:5254-5257 calls it before every effect; the
+/// other effects have no script hook), and <see cref="OnSuccessfulDispel"/> after a DISPEL effect that removed at least
 /// one aura.
 /// </para>
 /// Not provided: vmangos <c>OnSummon</c>. Nothing in this code base raises it yet (the demon summon belongs to a later slice).
@@ -27,7 +27,7 @@ public interface ISpellScript
     {
     }
 
-    /// <summary>A DUMMY or SCRIPT_EFFECT effect of the spell is about to run on a target (vmangos OnEffectExecute).</summary>
+    /// <summary>A DUMMY, SCRIPT_EFFECT or declared effect of the spell is about to run on a target (vmangos OnEffectExecute).</summary>
     void OnEffectExecute(SpellEffectContext context)
     {
     }

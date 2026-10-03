@@ -25,7 +25,7 @@ no longer log "effect 77 is not implemented". Chaining keeps any handler another
 that replaces DUMMY, SCRIPT_EFFECT or DISPEL after it without chaining would drop the scripts (the world feature attaches after
 `SpellFeature`, alphabetically).
 
-Limits: `OnEffectExecute` is raised for DUMMY and SCRIPT_EFFECT only (vmangos raises it before every effect; no script of this lane
+Limits: `OnEffectExecute` is raised for DUMMY, SCRIPT_EFFECT and the effects a script declares with `ExecuteEffects` (see wlm-08; vmangos raises it before every effect; no script of this lane
 needs the others). vmangos `OnSummon` is not provided because nothing here raises it yet. When the crafting lane's cost hook
 (`ISpellCostTaker`) merges, script `OnCast` must stay after it (a reagent failure must never fire a script); the integrator checks
 the observer order. No script ships in this slice: the scripts of later slices register their ids with the attribute.
@@ -203,7 +203,7 @@ control passed) and two dispatcher tests for `ExecuteEffects` in `SpellScriptTes
 
 | Design slice | Reason |
 |---|---|
-| wlm-01 reagents and tools | already built by the crafting-professions lane (`SpellInfo.Items`, `ReagentCastCheck`, `ISpellCostTaker`); not duplicated. Review note for the integrator: that lane's check answers `ITEM_NOT_READY` (vmangos Spell.cpp:7279); retail and mangos-classic answer `SPELL_FAILED_REAGENTS` 0x5C (wow_messages smsg_cast_result.wowm:194) |
+| wlm-01 reagents and tools | already built by the crafting-professions lane (`SpellInfo.Items`, `ReagentCastCheck`, `ISpellCostTaker`); not duplicated. Review note for the integrator (from the design review, not re-read here): that lane check answers `ITEM_NOT_READY` (vmangos Spell.cpp:7279); retail and mangos-classic answer `SPELL_FAILED_REAGENTS` 0x5C (wow_messages smsg_cast_result.wowm:194) |
 | wlm-05 CREATE_ITEM and conjure, wlm-06 item use | owned by crafting-professions (CreateItem, `CastItem`); the lane brief marks both as cross-lane primitives. The Soul Shard code here already stores items through `PlayerInventory` directly |
 | wlm-09 SUMMON_DEMON, Curse of Doom | needs the demon summon with a ritual object and the Doomguard follow-up; not started |
 | wlm-10 pet store, wlm-11 pet names | schema slices (Characters 21 / World 21); not started, so no provider theories were written and no store was exercised on any provider. Everything delivered here is Game-layer code with no schema change |
