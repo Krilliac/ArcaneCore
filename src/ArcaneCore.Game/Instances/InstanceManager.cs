@@ -25,7 +25,7 @@ namespace ArcaneCore.Game.Instances;
 /// <para>Install with <see cref="Install"/> (sets <see cref="WorldRuntime.MapResolver"/>).</para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class InstanceManager : IMapResolver
+public sealed partial class InstanceManager : IMapResolver
 {
     /// <summary>vmangos <c>CREATURE_FLAG_EXTRA_INSTANCE_BIND</c>: killing the creature binds everyone inside permanently.</summary>
     public const uint CreatureFlagExtraInstanceBind = 0x1;
@@ -181,6 +181,7 @@ public sealed class InstanceManager : IMapResolver
         }
 
         _logger.LogInformation("loaded {Saves} instance saves, {Binds} character binds", _saves.Count, _playerBinds.Values.Sum(b => b.Count));
+        Loaded?.Invoke();
     }
 
     public InstanceSave? FindSave(uint instanceId) => _saves.GetValueOrDefault(instanceId);
@@ -704,6 +705,7 @@ public sealed class InstanceManager : IMapResolver
         _saves[id] = save;
         _persistence.InstanceSaved(save);
         _logger.LogDebug("created {Save}", save);
+        SaveCreated?.Invoke(save);
         return save;
     }
 
@@ -1180,17 +1182,7 @@ public sealed class InstanceManager : IMapResolver
     // map leading to its ghost entrance map, else the bind point.
     private void RelocateToEntrance(Player player, MapTemplate template)
     {
-        WorldMaps maps = WorldMaps.Of(_world);
-        AreaTriggerTeleport? exit = null;
-        if (template.GhostEntranceMap >= 0)
-        {
-            exit = maps.AreaTriggers
-                .Where(t => t.MapId == template.Entry)
-                .OrderBy(t => t.Id)
-                .Select(t => maps.FindAreaTriggerTeleport(t.Id))
-                .FirstOrDefault(t => t is not null && t.TargetMap == (uint)template.GhostEntranceMap);
-        }
-
+        AreaTriggerTeleport? exit = GetGoBackTrigger(template.Entry);
         if (exit is not null)
         {
             player.MapId = exit.TargetMap;
