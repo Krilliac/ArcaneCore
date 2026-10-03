@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 namespace ArcaneCore.Game.Maps.Templates;
 
 /// <summary>
-/// The map services of one world: the map registry, terrain, area table, instance bindings and
+/// The map services of one world: the map registry, terrain, area table and
 /// the area-trigger / teleport-location tables. Attached to the <see cref="WorldRuntime"/>
 /// without changing it (a weak side table), created with defaults on first use — continents
 /// only, terrain from <see cref="WorldRuntimeOptions.Maps"/> — and filled from the world
@@ -31,8 +31,6 @@ public sealed class WorldMaps
     public TerrainManager Terrain { get; }
 
     public AreaTable Areas => Terrain.Areas;
-
-    public InstanceRegistry Instances { get; } = new();
 
     public IReadOnlyCollection<AreaTriggerTemplate> AreaTriggers => _areaTriggers.Values;
 
