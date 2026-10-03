@@ -67,16 +67,18 @@ public sealed class EconomyOptions
     public bool MailOversizeAnswersError { get; set; }
 
     /// <summary>
-    /// Also return an expired money-only player letter to its sender. vmangos and mangos-classic delete it
-    /// (ObjectMgr.cpp:6995-7000: only letters with items are returned); default false.
+    /// Also return an expired money-only player letter to its sender (default true, the pre-lane behaviour; no retail source
+    /// shows otherwise). false matches the emulators: vmangos and mangos-classic delete it
+    /// (ObjectMgr.cpp:6995-7000: only letters with items are returned).
     /// </summary>
-    public bool ReturnExpiredMoneyOnlyMail { get; set; }
+    public bool ReturnExpiredMoneyOnlyMail { get; set; } = true;
 
     /// <summary>
-    /// Letters with an item or money may be deleted by the receiver, destroying the attachment (vmangos MailHandler.cpp:469-491
-    /// refuses only cash on delivery); false restores the earlier "emptied letters only" rule. Default true.
+    /// Letters with an item or money may be deleted by the receiver, destroying the attachment, as vmangos does
+    /// (MailHandler.cpp:469-491 refuses only cash on delivery). Default false: only emptied letters can be deleted, the
+    /// pre-lane behaviour, since no retail source shows attachments being destroyable.
     /// </summary>
-    public bool AllowDeleteWithAttachments { get; set; } = true;
+    public bool AllowDeleteWithAttachments { get; set; }
 
     /// <summary>Scam-prevention delay after a trade modification before an accept counts, ms (vmangos TradeHandler.cpp:657-658: 200; 0 = off).</summary>
     public uint TradeScamPreventionMs { get; set; } = 200;
@@ -384,10 +386,10 @@ public static class MailRules
         && (mail.Checked & MailCheckMask.Returned) == 0 && mail.SenderId != 0;
 
     /// <summary>
-    /// Whether an expired letter goes back to its sender rather than being deleted. vmangos ReturnOrDeleteOldMails
-    /// (ObjectMgr.cpp:6995-7002, 7029-7044): only letters with an item are returned, and only player letters that are not
-    /// already returned and not COD payments; everything else is deleted. <see cref="EconomyOptions.ReturnExpiredMoneyOnlyMail"/>
-    /// also returns an unreturned money-only player letter (not vmangos behavior).
+    /// Whether an expired letter goes back to its sender rather than being deleted. Only player letters that are not
+    /// already returned and not COD payments qualify (vmangos ReturnOrDeleteOldMails, ObjectMgr.cpp:6995-7002, 7029-7044).
+    /// vmangos returns only letters with an item; by default a money-only letter is returned too
+    /// (<see cref="EconomyOptions.ReturnExpiredMoneyOnlyMail"/> false restores the vmangos deletion).
     /// </summary>
     public static bool ReturnsOnExpiry(MailRecord mail, EconomyOptions options)
         => mail.MessageType == MailMessageType.Normal && mail.SenderId != 0

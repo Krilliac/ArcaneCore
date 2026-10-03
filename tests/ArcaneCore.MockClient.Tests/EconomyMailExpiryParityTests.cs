@@ -23,19 +23,19 @@ namespace ArcaneCore.MockClient.Tests;
 public sealed class EconomyMailExpiryParityTests
 {
     [Fact]
-    public async Task Expired_money_only_letter_is_deleted_not_returned()
+    public async Task Expired_money_only_letter_is_deleted_not_returned_when_the_vmangos_option_is_on()
     {
         await using Rig rig = await Rig.StartAsync();
+        rig.Server.Services.GetRequiredService<EconomyFeature>().Options.ReturnExpiredMoneyOnlyMail = false;
         await SeedAsync(rig, Letter(rig, 6001, money: 10));
         await SweepAsync(rig, () => rig.MailsOfAsync(rig.ReceiverGuid), mails => mails.Count == 0);
         Assert.Empty(await rig.MailsOfAsync(rig.SenderGuid));
     }
 
     [Fact]
-    public async Task Expired_money_only_letter_is_returned_when_the_option_is_on()
+    public async Task Expired_money_only_letter_is_returned_by_default()
     {
         await using Rig rig = await Rig.StartAsync();
-        rig.Server.Services.GetRequiredService<EconomyFeature>().Options.ReturnExpiredMoneyOnlyMail = true;
         long now = rig.Clock.GetUtcNow().ToUnixTimeSeconds();
         await SeedAsync(rig, Letter(rig, 6001, money: 10));
         await SweepAsync(rig, () => rig.MailsOfAsync(rig.SenderGuid), mails => mails.Count == 1);
@@ -46,10 +46,9 @@ public sealed class EconomyMailExpiryParityTests
     }
 
     [Fact]
-    public async Task Expired_cod_payment_and_system_letters_are_deleted_even_with_the_money_option()
+    public async Task Expired_cod_payment_and_system_letters_are_deleted_even_with_the_money_default()
     {
         await using Rig rig = await Rig.StartAsync();
-        rig.Server.Services.GetRequiredService<EconomyFeature>().Options.ReturnExpiredMoneyOnlyMail = true;
         await SeedAsync(rig,
             Letter(rig, 6001, money: 10) with { Checked = MailCheckMask.CodPayment },
             Letter(rig, 6002, money: 10) with { MessageType = MailMessageType.Auction, SenderId = 2 });
@@ -72,9 +71,38 @@ public sealed class EconomyMailExpiryParityTests
     }
 
     [Fact]
-    public async Task Delete_removes_letters_with_attachments_but_refuses_cash_on_delivery()
+    public async Task Delete_refuses_letters_with_attachments_by_default_but_removes_emptied_ones()
     {
         await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        await SeedAsync(rig,
+            Letter(rig, 6001, money: 10, expired: false),
+            Letter(rig, 6002, item: 7003, expired: false),
+            Letter(rig, 6003, item: 7004, expired: false) with { Cod = 5 },
+            Letter(rig, 6004, expired: false));
+        await rig.Receiver!.SendAsync(WorldOpcode.CmsgGetMailList, ScenarioWire.Guid(Mailbox.Value), rig.Token);
+        Assert.Equal(4, (await rig.Receiver.ReadUntilAsync(WorldOpcode.SmsgMailListResult, rig.Token))[0]);
+
+        foreach (uint id in new uint[] { 6001, 6002, 6003, 6004 })
+        {
+            await rig.Receiver.SendAsync(WorldOpcode.CmsgMailDelete, ScenarioWire.GuidQuest(Mailbox.Value, id), rig.Token);
+            var reader = new PacketReader(await rig.Receiver.ReadUntilAsync(WorldOpcode.SmsgSendMailResult, rig.Token));
+            Assert.Equal(id, reader.ReadUInt32());
+            Assert.Equal((uint)MailAction.Deleted, reader.ReadUInt32());
+            Assert.Equal(id == 6004 ? MailResult.Ok : MailResult.InternalError, (MailResult)reader.ReadUInt32());
+        }
+
+        Assert.Equal(new uint[] { 6001, 6002, 6003 }, (await rig.MailsOfAsync(rig.ReceiverGuid)).Select(m => m.Id).Order().ToArray());
+        await using AsyncServiceScope scope = rig.Server.Services.CreateAsyncScope();
+        CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        Assert.Equal(1, await db.Set<ItemInstanceRow>().CountAsync(i => i.Guid == 7003, rig.Token));
+        Assert.Equal(1, await db.Set<ItemInstanceRow>().CountAsync(i => i.Guid == 7004, rig.Token));
+    }
+
+    [Fact]
+    public async Task Delete_removes_letters_with_attachments_but_refuses_cash_on_delivery_when_the_vmangos_option_is_on()
+    {
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        rig.Server.Services.GetRequiredService<EconomyFeature>().Options.AllowDeleteWithAttachments = true;
         long now = rig.Clock.GetUtcNow().ToUnixTimeSeconds();
         await SeedAsync(rig,
             Letter(rig, 6001, money: 10, expired: false),

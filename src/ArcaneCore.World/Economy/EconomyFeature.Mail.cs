@@ -398,8 +398,8 @@ public sealed partial class EconomyFeature
     }
 
     /// <summary>
-    /// CMSG_MAIL_DELETE (vmangos MailHandler.cpp:469-491): any letter except a cash-on-delivery one; the attachment is
-    /// destroyed with it. <see cref="EconomyOptions.AllowDeleteWithAttachments"/> false keeps the earlier emptied-only rule.
+    /// CMSG_MAIL_DELETE: by default only an emptied, non-COD letter. <see cref="EconomyOptions.AllowDeleteWithAttachments"/>
+    /// true follows vmangos (MailHandler.cpp:469-491): any letter except a cash-on-delivery one, the attachment destroyed with it.
     /// </summary>
     public void DeleteMail(WorldSession session, Player player, ObjectGuid mailbox, uint mailId)
     {

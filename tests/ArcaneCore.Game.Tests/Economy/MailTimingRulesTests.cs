@@ -65,10 +65,12 @@ public sealed class MailTimingRulesTests
         Assert.False(MailRules.ReturnsOnExpiry(item with { Checked = MailCheckMask.CodPayment }, o));
         Assert.False(MailRules.ReturnsOnExpiry(item with { MessageType = MailMessageType.Auction }, o));
         var gold = new MailRecord { MessageType = MailMessageType.Normal, SenderId = 7, Money = 9 };
-        Assert.False(MailRules.ReturnsOnExpiry(gold, o));
-        Assert.True(MailRules.ReturnsOnExpiry(gold, new EconomyOptions { ReturnExpiredMoneyOnlyMail = true }));
-        Assert.False(MailRules.ReturnsOnExpiry(gold with { Checked = MailCheckMask.CodPayment }, new EconomyOptions { ReturnExpiredMoneyOnlyMail = true }));
-        Assert.True(o.AllowDeleteWithAttachments);
+        // Retail default: a money-only letter is returned too; the vmangos delete is the opt-in deviation.
+        Assert.True(o.ReturnExpiredMoneyOnlyMail);
+        Assert.True(MailRules.ReturnsOnExpiry(gold, o));
+        Assert.False(MailRules.ReturnsOnExpiry(gold, new EconomyOptions { ReturnExpiredMoneyOnlyMail = false }));
+        Assert.False(MailRules.ReturnsOnExpiry(gold with { Checked = MailCheckMask.CodPayment }, o));
+        Assert.False(o.AllowDeleteWithAttachments);
     }
 
     [Fact]
