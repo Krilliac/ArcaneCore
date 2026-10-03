@@ -29,14 +29,14 @@ public interface IWorldFeature
 public static class WorldFeatures
 {
     /// <summary>Seam interfaces a feature is additionally registered as, when it implements them.</summary>
-    private static readonly Type[] SeamInterfaces = [typeof(IWorldFeature), typeof(IChatMessageHandler), typeof(ICharacterHooks)];
+    private static readonly Type[] SeamInterfaces = [typeof(IWorldFeature), typeof(IChatMessageHandler), typeof(ICharacterHooks), typeof(ICharacterDeleteHook)];
 
     /// <summary>Every feature type in this assembly, ordered by full name (deterministic).</summary>
     public static IReadOnlyList<Type> FeatureTypes { get; } = AssemblyDiscovery.FindTypes<IWorldFeature>();
 
     /// <summary>
     /// Register every feature as a singleton (as itself and as each seam interface it implements).
-    /// An <see cref="IChatMessageHandler"/> or <see cref="ICharacterHooks"/> is only picked up when it is also an <see cref="IWorldFeature"/>.
+    /// An <see cref="IChatMessageHandler"/>, <see cref="ICharacterHooks"/> or <see cref="ICharacterDeleteHook"/> is only picked up when it is also an <see cref="IWorldFeature"/>.
     /// </summary>
     public static IServiceCollection AddWorldFeatures(this IServiceCollection services)
     {
