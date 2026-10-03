@@ -6,6 +6,7 @@ namespace ArcaneCore.Game.Spells.Rules;
 public enum SpellModOp
 {
     CriticalChance = 7,
+    NotLoseCastingTime = 9,
     CritDamageBonus = 15,
     ResistMissChance = 16,
     ResistDispelChance = 28,

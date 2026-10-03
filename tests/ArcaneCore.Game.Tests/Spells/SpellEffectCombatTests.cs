@@ -296,7 +296,7 @@ public sealed class SpellEffectCombatTests
     }
 
     [Fact]
-    public void DirectDamage_PushesBackACast_By500msCappedAtTheCastTime_AndPeriodicDamageDoesNot()
+    public void DirectDamage_PushesBackACast_ByTheDecayingDelay_CappedAtTheCastTime_AndPeriodicDamageDoesNot()
     {
         using var kit = Kit();
         (Player attacker, _) = kit.AddPlayer(1);
@@ -308,18 +308,17 @@ public sealed class SpellEffectCombatTests
         session.Clear();
 
         kit.System.OnDamageTaken(caster, attacker, 5, periodic: false);
-        Assert.Equal(1500, cast.Timer);
+        Assert.Equal(2000, cast.Timer); // first pushback 1000 ms (vmangos Spell::GetNextDelayAtDamageMsTime)
         Assert.Equal(1, cast.PushbackCount);
-        byte[] delayed = Assert.Single(Packets(session, WorldOpcode.SmsgSpellDelayed));
-        Assert.Equal(500u, BinaryPrimitives.ReadUInt32LittleEndian(delayed.AsSpan(delayed.Length - 4)));
 
         kit.System.OnDamageTaken(caster, attacker, 5, periodic: false);
-        Assert.Equal(2000, cast.Timer); // capped at the full cast time
+        Assert.Equal(2000, cast.Timer); // second would be 800 ms: capped at the full cast time
         kit.System.OnDamageTaken(caster, attacker, 5, periodic: true);
         kit.System.OnDamageTaken(caster, caster, 5, periodic: false); // self damage
         kit.System.OnDamageTaken(caster, attacker, 0, periodic: false);
         Assert.Equal(2000, cast.Timer);
-        Assert.Equal(2, Packets(session, WorldOpcode.SmsgSpellDelayed).Count);
+        List<byte[]> delayed = Packets(session, WorldOpcode.SmsgSpellDelayed);
+        Assert.Equal([1000u, 0u], delayed.Select(p => BinaryPrimitives.ReadUInt32LittleEndian(p.AsSpan(p.Length - 4))));
     }
 
     [Fact]
@@ -350,10 +349,16 @@ public sealed class SpellEffectCombatTests
         Assert.Equal(SpellCastState.Casting, channel.State);
         session.Clear();
 
-        kit.System.OnDamageTaken(caster, attacker, 5, periodic: true); // channels are delayed by DoTs too
-        Assert.Equal(6000, channel.Timer); // 8000 - 25%
-        Assert.Equal(6000, kit.System.GetAuras(caster).Single(h => h.Spell.Id == DelayChannel).Duration);
+        kit.System.OnDamageTaken(caster, attacker, 5, periodic: true); // DoTs never delay a channel (Unit.cpp:900-906)
+        Assert.Equal(8000, channel.Timer);
+        Assert.Empty(Packets(session, WorldOpcode.MsgChannelUpdate));
+
+        kit.System.OnDamageTaken(caster, attacker, 5, periodic: false);
+        Assert.Equal(7000, channel.Timer); // first pushback 1000 ms
+        Assert.Equal(7000, kit.System.GetAuras(caster).Single(h => h.Spell.Id == DelayChannel).Duration);
         Assert.Single(Packets(session, WorldOpcode.MsgChannelUpdate));
+        kit.System.OnDamageTaken(caster, attacker, 5, periodic: false);
+        Assert.Equal(6200, channel.Timer); // second pushback 800 ms
 
         kit.Advance(1500);
         kit.System.HandleCastRequest(caster, BreakChannel, SpellCastTargets.ForSelf());
@@ -464,7 +469,7 @@ public sealed class SpellEffectCombatTests
                 with { Dispel = 1, Duration = new SpellDuration(30_000, 0, 30_000), SpellVisual = 1 }),
             Ranged(Spell(Kick, Effect(SpellEffectName.InterruptCast, 0, SpellImplicitTarget.UnitEnemy)) with { Duration = new SpellDuration(4000, 0, 4000) }),
             Ranged(Spell(SilenceableBolt, Effect(SpellEffectName.SchoolDamage, 10, SpellImplicitTarget.UnitEnemy))
-                with { School = SpellSchool.Fire, CastTime = new SpellCastTime(3000, 0, 0), PreventionType = 1, DamageClass = SpellDamageClass.Magic }),
+                with { School = SpellSchool.Fire, CastTime = new SpellCastTime(3000, 0, 0), PreventionType = 1, DamageClass = SpellDamageClass.Magic, InterruptFlags = SpellInterruptFlags.DamagePushback }),
             Ranged(Spell(MagicBolt, Effect(SpellEffectName.SchoolDamage, 10, SpellImplicitTarget.UnitEnemy))
                 with { School = SpellSchool.Frost, CastTime = new SpellCastTime(3000, 0, 0), DamageClass = SpellDamageClass.Magic }),
             Spell(Summon, Effect(SpellEffectName.Summon, 0, misc: 416)) with { Duration = new SpellDuration(60_000, 0, 60_000) },

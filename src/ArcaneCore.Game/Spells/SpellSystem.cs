@@ -686,7 +686,7 @@ public sealed partial class SpellSystem
             return false;
         }
 
-        if (state.SchoolLockouts.TryGetValue(spell.School, out until) && until > now)
+        if (spell.PreventionType == SpellConstants.PreventionTypeSilence && state.SchoolLockouts.TryGetValue(spell.School, out until) && until > now)
         {
             return false;
         }

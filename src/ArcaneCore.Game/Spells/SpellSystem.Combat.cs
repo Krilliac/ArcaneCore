@@ -102,104 +102,8 @@ public sealed partial class SpellSystem
             RemoveHolder(state, holder);
         }
 
-        if (state.CurrentCast is not { } cast)
-        {
-            return;
-        }
-
-        if (cast.State == SpellCastState.Preparing)
-        {
-            if (periodic || cast.IsTriggered || cast.Timer <= 0)
-            {
-                return;
-            }
-
-            if (cast.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.DamageCancels))
-            {
-                Cancel(cast);
-            }
-            else if (cast.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.DamagePushback))
-            {
-                Delay(cast);
-            }
-        }
-        else if (cast.State == SpellCastState.Casting)
-        {
-            uint flags = (uint)cast.Spell.ChannelInterruptFlags;
-            if ((flags & SpellChannelInterruptFlags.Delay) != 0)
-            {
-                DelayChannel(cast);
-            }
-            else if ((flags & (SpellChannelInterruptFlags.Damage | SpellChannelInterruptFlags.Damage2)) != 0)
-            {
-                Cancel(cast);
-            }
-        }
-    }
-
-    /// <summary>
-    /// vmangos/cmangos-classic Spell::Delayed: push the cast bar back 500 ms, never beyond the full
-    /// cast time; SMSG_SPELL_DELAYED to the caster's set.
-    /// </summary>
-    private void Delay(SpellCast cast)
-    {
-        int delay = SpellConstants.PushbackMs;
-        if (cast.Timer + delay > cast.CastTime)
-        {
-            delay = cast.CastTime - cast.Timer;
-            cast.Timer = cast.CastTime;
-        }
-        else
-        {
-            cast.Timer += delay;
-        }
-
-        cast.PushbackCount++;
-        if (delay > 0)
-        {
-            SendToSet(cast.Caster, WorldOpcode.SmsgSpellDelayed, SpellPackets.BuildSpellDelayed(cast.Caster.Guid, (uint)delay), includeSelf: true);
-        }
-    }
-
-    /// <summary>
-    /// vmangos Spell::DelayedChannel: shorten the channel by 25% of its duration (at most what is
-    /// left), shorten its auras on the caster and target by the same amount, MSG_CHANNEL_UPDATE.
-    /// </summary>
-    private void DelayChannel(SpellCast cast)
-    {
-        int delay = Math.Max(0, cast.Spell.GetDuration()) * SpellConstants.ChannelPushbackPercent / 100;
-        if (cast.Timer <= delay)
-        {
-            delay = cast.Timer;
-            cast.Timer = 0;
-        }
-        else
-        {
-            cast.Timer -= delay;
-        }
-
-        cast.PushbackCount++;
-        Unit? target = ResolveUnitTarget(cast.Caster, cast.Targets);
-        foreach (Unit unit in target is null || ReferenceEquals(target, cast.Caster) ? [cast.Caster] : new[] { cast.Caster, target })
-        {
-            if (IsQuestSettlementPending(unit) || GetState(unit.Guid) is not { } state
-                || !ReferenceEquals(state.Unit, unit))
-            {
-                continue;
-            }
-
-            foreach (SpellAuraHolder holder in state.Auras.Where(h => h.Spell.Id == cast.Spell.Id
-                && h.CasterGuid == cast.Caster.Guid && ReferenceEquals(ResolveAuraCaster(h), cast.Caster) && !h.IsPermanent))
-            {
-                holder.Duration = Math.Max(0, holder.Duration - delay);
-                SendAuraDuration(holder);
-            }
-        }
-
-        if (cast.Caster is Player player)
-        {
-            player.Session.Send(WorldOpcode.MsgChannelUpdate, SpellPackets.BuildChannelUpdate((uint)cast.Timer));
-        }
+        // The cast or channel in progress: pushback, delay and damage cancels (retail rules in SpellSystem.Pushback.cs).
+        ApplyDamageToCurrentCast(victim, state, periodic);
     }
 
     /// <summary>
@@ -337,46 +241,6 @@ public sealed partial class SpellSystem
         float speed = unit.GetUInt32(timeIndex) / 1000.0f;
         float normalizedSpeed = NormalizedWeaponSpeed(unit, attack);
         return Math.Max(0f, roll + ((normalizedSpeed - speed) * attackPower / 14.0f));
-    }
-
-    /// <summary>
-    /// SPELL_EFFECT_INTERRUPT_CAST (vmangos Spell::EffectInterruptCast): a cast with a cast bar or a
-    /// channel whose PreventionType is SILENCE is interrupted, and the target cannot cast spells of
-    /// that school for this spell's duration (vmangos Unit::ProhibitSpellSchool); a player is told
-    /// with SMSG_SPELL_COOLDOWN for the interrupted spell.
-    /// </summary>
-    private void EffectInterruptCast(SpellEffectContext context)
-    {
-        Unit target = context.Target;
-        if (GetState(target.Guid) is not { CurrentCast: { } cast } state || !ReferenceEquals(state.Unit, target))
-        {
-            return;
-        }
-
-        bool interruptible = cast.State == SpellCastState.Casting || (cast.State == SpellCastState.Preparing && cast.CastTime > 0);
-        if (!interruptible || cast.Spell.PreventionType != SpellConstants.PreventionTypeSilence)
-        {
-            return;
-        }
-
-        int lockout = context.Spell.GetDuration();
-        if (lockout > 0)
-        {
-            state.SchoolLockouts[cast.Spell.School] = NowMs + (uint)lockout;
-            if (target is Player player)
-            {
-                player.Session.Send(WorldOpcode.SmsgSpellCooldown, SpellPackets.BuildSpellCooldown(player.Guid, [(cast.Spell.Id, (uint)lockout)]));
-            }
-        }
-
-        Cancel(cast);
-    }
-
-    /// <summary>Whether <paramref name="unit"/> is locked out of <paramref name="school"/> by an interrupt.</summary>
-    public bool IsSchoolLocked(Unit unit, SpellSchool school)
-    {
-        ArgumentNullException.ThrowIfNull(unit);
-        return GetState(unit.Guid) is { } state && state.SchoolLockouts.TryGetValue(school, out uint until) && until > NowMs;
     }
 
     /// <summary>
