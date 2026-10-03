@@ -88,7 +88,7 @@ public interface ICharacterSpellStateStore
 /// schema version 8 (after reputation's v7); this branch uses 7 until v7 lands because versions
 /// must be contiguous — the lead renumbers <see cref="Version"/> at merge (docs/integration/spells-persistence.md).
 /// </summary>
-public sealed class CharacterSpellStateDataModule : IDataModule
+public sealed class CharacterSpellStateDataModule : IDataModule, ICharacterDataCleanup
 {
     /// <summary>The single place the schema version is set.</summary>
     public const int Version = 7;
@@ -121,6 +121,20 @@ public sealed class CharacterSpellStateDataModule : IDataModule
     }
 
     public void AddServices(IServiceCollection services) => services.AddScoped<ICharacterSpellStateStore, EfCharacterSpellStateStore>();
+
+    /// <summary>
+    /// The saved cooldowns and auras (vmangos Player::DeleteFromDB: character_spell_cooldown and
+    /// character_aura by owner). Auras this character cast on others stay; their caster is simply
+    /// gone on restore (docs/integration/character-delete.md).
+    /// </summary>
+    public async Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        await db.Set<CharacterSpellCooldownRow>().Where(r => r.CharacterId == characterId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<CharacterAuraRow>().Where(r => r.CharacterId == characterId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+    }
 }
 
 /// <summary>EF Core implementation of <see cref="ICharacterSpellStateStore"/>.</summary>

@@ -90,6 +90,35 @@ public sealed class CharacterSpellStateStoreTests : IAsyncLifetime
         });
     }
 
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task CharacterDeletionCleanup_RemovesOnlyTheDeletedCharactersRows(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await CreateAsync(provider);
+        await WithStore(cs, async store =>
+        {
+            await store.SaveAsync(1, new CharacterSpellState([Cooldown(0, 133, 5), Cooldown(1, 76, 6)], [Aura(1, 2UL, 3), Aura(4, 5UL, 6)]));
+            await store.SaveAsync(2, new CharacterSpellState([Cooldown(0, 99, 1)], [Aura(7, 1UL, 8)]));
+        });
+
+        ICharacterDataCleanup cleanup = Assert.Single(CharacterDataCleanups.All.OfType<CharacterSpellStateDataModule>());
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            await cleanup.DeleteCharacterDataAsync(db, 1, CancellationToken.None);
+            await cleanup.DeleteCharacterDataAsync(db, 42, CancellationToken.None); // nothing to delete
+        }
+
+        await WithStore(cs, async store =>
+        {
+            CharacterSpellState deleted = await store.LoadAsync(1);
+            Assert.Empty(deleted.Cooldowns);
+            Assert.Empty(deleted.Auras);
+            CharacterSpellState other = await store.LoadAsync(2);
+            Assert.Equal(99u, Assert.Single(other.Cooldowns).Id);
+            Assert.Equal(1UL, Assert.Single(other.Auras).CasterGuid); // an aura cast by the deleted character stays
+        });
+    }
+
     public Task InitializeAsync() => Task.CompletedTask;
 
     public Task DisposeAsync() => _databases.DisposeAsync().AsTask();
