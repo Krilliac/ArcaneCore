@@ -107,6 +107,27 @@ Deliberate limits:
   is loading).
 - A death-only spell aimed at a living target is not rejected by the cast check (vmangos returns BAD_TARGETS).
 
+## Combat spell data model (warrior-mechanics S02a)
+
+Additive data only; nothing reads these fields at cast time yet (the cast-time consumers are the later
+warrior-mechanics slices). Reference rule: only the `SUPPORTED_CLIENT_BUILD = 1.12.1` branch of vmangos
+(`src/shared/Progression.h:36`) counts.
+
+- `SpellInfo` now carries `Stances`, `StancesNot`, `CasterAuraState`, `TargetAuraState`, `ProcFlags`,
+  `ProcChance` and `EquippedItemClass` / `SubClassMask` / `InventoryTypeMask` (`SpellStoreFactory` copies them from
+  `spell_template`; `ProcCharges` already existed). `EquippedItemClass` defaults to -1 (Spell.dbc "none").
+- `SpellEnums.Combat.cs`: `ShapeshiftForm` (vmangos `SharedDefines.h:1421-1441`), `ShapeshiftFlags` (`:1467-1476`),
+  `AuraState` (`SpellDefines.h:642-656`; 9-11 are vmangos custom states), `ProcFlags` (`:1043-1081`), `ProcFlagsEx`
+  (`:1099-1120`), `SpellModOp` (`:602-631`, no value 13), and the combat attribute bits as `SpellAttributes*Combat`
+  enums (`:830-975`). `SpellDefines.cs` is deliberately untouched, so the legacy enums keep their (partial) members.
+- `SpellInfo.Combat.cs` helpers: `IsNextMeleeSwing` (`SpellEntry.h:887-890`: bit 0x4 **or** 0x400 - Heroic Strike and
+  Cleave use 0x4, so the legacy `SpellAttributes.OnNextSwing` alone misses them), `NeedsComboPoints`
+  (`SpellEntry.h:1082-1085`), `IsRemovedOnShapeLost` (`:1180-1186`, including the hard-coded spell 24864) and
+  `GetErrorAtShapeshiftedCast` (`SpellEntry.cpp:1032-1074`).
+- Limits: `GetErrorAtShapeshiftedCast` takes the form's `SpellShapeshiftForm.dbc` flags1 and the "talent that learns a
+  spell" exemption (`GetTalentSpellCost`) from the caller, because neither the shapeshift-form table nor the talent
+  tree is loaded by this core yet; an unknown form returns `CastOk` like vmangos (`SpellEntry.cpp:1051-1055`).
+
 ## What's left
 
 - Area, chain and cone target selection are implemented (`SpellSystem.Targeting.cs`, with a line-of-sight filter on area lists); only the remaining TargetB-based selections are missing.
