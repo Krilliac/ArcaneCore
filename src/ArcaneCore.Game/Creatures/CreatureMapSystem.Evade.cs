@@ -61,6 +61,7 @@ public sealed partial class CreatureMapSystem
         creature.HasAggroed = false;
         creature.CalledAssistance = false;
         creature.CombatStart = null;
+        creature.LeashClock = null;
         _pendingAssists.RemoveAll(p => ReferenceEquals(p.Helper, creature) || ReferenceEquals(p.Caller, creature));
     }
 

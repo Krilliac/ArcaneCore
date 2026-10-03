@@ -99,7 +99,9 @@ when it inspects a prefix.
 | `AssistanceDelayMs` | 1500 | CreatureFamilyAssistanceDelay |
 | `FleeAssistanceRadius` | 30 | CreatureFamilyFleeAssistanceRadius |
 | `FleeDelayMs` | 7000 | CreatureFamilyFleeDelay |
-| `ThreatRadius` | 60 | ThreatRadius (leash) |
+| `ThreatRadius` | 50 | ThreatRadius (soft leash sphere around the fight start; the radius is max(1.5 x aggro radius, ThreatRadius)) |
+| `LeashCheckIntervalMs` | 3000 | How often a creature in combat runs the hard-leash check and refreshes its leash extension while crowd controlled (0 turns the template hard leash off) |
+| `LeashExtensionSeconds` | 12 | Whole seconds a victim outside the threat area is tolerated after the leash clock starts |
 | `FactionTemplateDbcPath` | — | FactionTemplate.dbc for the default hostility |
 
 ## Merge notes

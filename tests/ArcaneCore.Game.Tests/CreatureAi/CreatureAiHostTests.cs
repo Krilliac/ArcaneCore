@@ -209,9 +209,17 @@ public sealed class CreatureAiHostTests
         Assert.True(MapCombat.CanReachWithMeleeAutoAttack(wolf, player));
         Assert.True(wolf.Health < wolf.MaxHealth);
 
-        // 61 yd from where the fight began (default ThreatRadius 60, outside the 21 yd aggro radius).
-        player.Relocate(wolf.X - 61, wolf.Y, 83.5f, 0, 0);
+        // Creature and victim both beyond the 50 yd threat area around where the fight began (the creature alone leaving it, or the
+        // victim alone, does not leash: vmangos IsOutOfThreatArea, Objects/Creature.cpp:2796-2815), and the 12 s leash extension
+        // has run out since the first look outside it.
+        Assert.False(system.IsOutOfThreatArea(wolf, player));
+        wolf.Relocate(wolf.X - 80, wolf.Y, 83.5f, 0, 0);
+        player.Relocate(wolf.X - 1, wolf.Y, 83.5f, 0, 0);
         world.RunTick(100);
+        Assert.False(wolf.IsInEvadeMode);
+        Run(world, 9000);
+        Assert.False(wolf.IsInEvadeMode);
+        Run(world, 4000);
 
         Assert.True(wolf.IsInEvadeMode);
         Assert.Equal(wolf.MaxHealth, wolf.Health);
@@ -226,7 +234,7 @@ public sealed class CreatureAiHostTests
         wolf.OnAttackedBy(player);
         Assert.Null(wolf.Combat.Victim); // ignores attacks while running home
 
-        Run(world, 3000);
+        Run(world, 12000); // 80 yd home at run speed
         Assert.False(wolf.IsInEvadeMode);
         Assert.Equal(MovementGeneratorType.Idle, wolf.Motion.CurrentType);
         Assert.Equal(10f, wolf.X, 2);

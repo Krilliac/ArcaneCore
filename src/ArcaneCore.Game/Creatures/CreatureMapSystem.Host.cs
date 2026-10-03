@@ -171,6 +171,14 @@ public sealed partial class CreatureMapSystem
                 if (helper.AI is { } ai)
                 {
                     ai.AttackStart(assist.Enemy);
+
+                    // Creatures that joined through an assistance call share the caller's leash timer, so attacking one keeps the
+                    // rest from leashing (vmangos AssistDelayEvent::Execute, Objects/Creature.cpp:160-170).
+                    if (helper.Combat.Victim is not null)
+                    {
+                        helper.LeashClock = caller.LeashClock ??= new LeashExtensionClock { Seconds = _clockMs / 1000 };
+                    }
+
                 }
             }
         }

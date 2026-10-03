@@ -41,8 +41,11 @@ public sealed partial class CreatureOptions
     /// <summary>CreatureFamilyFleeDelay (ms): timed flight when no helper is found.</summary>
     public uint FleeDelayMs { get; set; } = 7000;
 
-    /// <summary>ThreatRadius (yd): a victim farther than this from where combat began is dropped (leash); none in instances.</summary>
-    public float ThreatRadius { get; set; } = 60.0f;
+    /// <summary>
+    /// ThreatRadius (yd): the soft leash sphere around where a fight began is <c>max(1.5 x aggro radius, ThreatRadius)</c>; none in instances
+    /// (vmangos World.cpp:564, mangosd.conf.dist.in:1526: 50).
+    /// </summary>
+    public float ThreatRadius { get; set; } = 50.0f;
 
     /// <summary>FactionTemplate.dbc for creature hostility when no catalog is registered (empty = nobody aggroes on sight).</summary>
     public string? FactionTemplateDbcPath { get; set; }

@@ -252,8 +252,7 @@ public sealed class CreatureMotionTests
 
         map.Combat.DealDamage(player, wolf, 1, direct: false);
         Run(world, 2000);
-        player.Relocate(startX + 70, 0, 83.5f, 0, 0);
-        world.RunTick(100);
+        wolf.AI!.EnterEvadeMode(); // the leash itself is covered by LeashTests; this test is about where an evading waypoint mover goes
         Assert.True(wolf.IsInEvadeMode);
 
         Run(world, 3000);

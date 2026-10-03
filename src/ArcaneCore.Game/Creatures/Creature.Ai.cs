@@ -42,6 +42,12 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// <summary>Whether the creature is temporarily pacified (vmangos IsTempPacified).</summary>
     public bool IsTempPacified => PacifiedMs > 0;
 
+    /// <summary>
+    /// The leash extension clock (vmangos <c>m_lastLeashExtensionTime</c>): null until the first leash check of a fight, shared with the
+    /// creatures that joined this one through its assistance call, cleared when combat stops.
+    /// </summary>
+    internal LeashExtensionClock? LeashClock { get; set; }
+
     /// <summary>The assistance call went out for the current fight (vmangos m_AlreadyCallAssistance).</summary>
     internal bool CalledAssistance { get; set; }
 
@@ -69,4 +75,10 @@ public sealed partial class Creature : Unit, ICombatCreature
 
     /// <summary>vmangos CreatureAI::JustDied: tell the AI, then begin the map system's corpse and respawn timers.</summary>
     public void OnJustDied(Unit? killer) => System?.OnCreatureDied(this, killer);
+}
+
+/// <summary>A shared whole-second timestamp (vmangos <c>shared_ptr&lt;time_t&gt;</c> leash extension time).</summary>
+internal sealed class LeashExtensionClock
+{
+    public long Seconds { get; set; }
 }

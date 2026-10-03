@@ -297,7 +297,11 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
                         creature.PacifiedMs = creature.PacifiedMs <= diffMs ? 0 : creature.PacifiedMs - diffMs; // vmangos Creature::Update
                     }
 
-                    UpdateAi(creature, diffMs);
+                    if (!CheckHardLeash(creature, diffMs))
+                    {
+                        UpdateAi(creature, diffMs);
+                    }
+
                     if (creature.DeathState != CreatureDeathState.Alive || !_creatures.ContainsKey(creature.Guid))
                     {
                         break; // the script killed or despawned it

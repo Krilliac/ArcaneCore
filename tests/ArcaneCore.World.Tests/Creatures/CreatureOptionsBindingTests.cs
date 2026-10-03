@@ -25,6 +25,9 @@ public sealed class CreatureOptionsBindingTests
             (AggroScanMode.Relocation, 1000u, 40f, 5000u, true, false),
             (defaults.AggroScanMode, defaults.AiRelocationNotifyDelayMs, defaults.MaxCreatureAttackRadius, defaults.RespawnPacifyMs, defaults.SendAiReaction, defaults.AggroUsesBoundingRadius));
 
+        // vmangos World.cpp:564 ThreatRadius 50; the leash check cadence and the 12 s extension (Objects/Creature.cpp:976, 2813).
+        Assert.Equal((50f, 3000u, 12u), (defaults.ThreatRadius, defaults.LeashCheckIntervalMs, defaults.LeashExtensionSeconds));
+
         IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Creatures:AggroScanMode"] = "Poll",

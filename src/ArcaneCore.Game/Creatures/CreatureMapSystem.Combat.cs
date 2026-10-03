@@ -117,7 +117,10 @@ public sealed partial class CreatureMapSystem
 
         UnitCombat combat = creature.Combat;
         Unit? victim = combat.HasThreatList
-            ? combat.Threat.SelectVictim(u => IsValidHostileTarget(creature, u), u => MapCombat.CanReachWithMeleeAutoAttack(creature, u))
+            ? combat.Threat.SelectVictim(
+                u => IsValidHostileTarget(creature, u),
+                u => MapCombat.CanReachWithMeleeAutoAttack(creature, u),
+                u => IsOutOfThreatArea(creature, u))
             : null;
         if (victim is null)
         {
@@ -139,22 +142,77 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>
-    /// vmangos Creature::IsOutOfThreatArea: a target farther than max(ThreatRadius, aggro radius)
-    /// from where the fight began is out of reach (no leash on instanceable maps).
+    /// vmangos Creature::IsOutOfThreatArea (Objects/Creature.cpp:2796-2815), the soft leash. Never with NO_LEASH_EVADE or in an
+    /// instanceable map; no target counts as out. Otherwise the threat area is a sphere around where the fight began with radius
+    /// <c>max(1.5 x aggro radius, ThreatRadius)</c>; the target is outside when neither the creature nor the target is inside it
+    /// and the leash extension clock is more than <see cref="CreatureOptions.LeashExtensionSeconds"/> whole seconds old. The clock
+    /// starts at the first check of a fight (so a fight cannot leash in its first 12 s), is refreshed while the creature is
+    /// crowd controlled, is shared with creatures that joined through its assistance call, and is cleared when combat stops.
     /// </summary>
-    public bool IsOutOfThreatArea(Creature creature, Unit target)
+    public bool IsOutOfThreatArea(Creature creature, Unit? target)
     {
         ArgumentNullException.ThrowIfNull(creature);
-        ArgumentNullException.ThrowIfNull(target);
-        if (Map.Combat.Hooks.IsInstanceable(Map.MapId))
+        if ((creature.Template.Behaviour & CreatureBehaviourFlags.NoLeashEvade) != 0 || Map.Combat.Hooks.IsInstanceable(Map.MapId))
+        {
+            return false;
+        }
+
+        if (target is null)
+        {
+            return true;
+        }
+
+        if (!ReferenceEquals(target.Map, creature.Map))
         {
             return false;
         }
 
         CreatureHome anchor = creature.CombatStart ?? creature.Home;
-        float radius = Math.Max(_options.ThreatRadius, GetAttackDistance(creature, target));
-        var delta = new Vector3(target.X - anchor.X, target.Y - anchor.Y, target.Z - anchor.Z);
-        return delta.LengthSquared() > radius * radius;
+        float radius = MathF.Max(GetAttackDistance(creature, target) * 1.5f, _options.ThreatRadius);
+        bool inThreatArea = WithinDistance3d(creature, anchor, radius) || WithinDistance3d(target, anchor, radius);
+        return !inThreatArea && LeashExtensionSeconds(creature) + _options.LeashExtensionSeconds < _clockMs / 1000;
+    }
+
+    private static bool WithinDistance3d(WorldObject obj, CreatureHome point, float distance)
+    {
+        float dx = obj.X - point.X;
+        float dy = obj.Y - point.Y;
+        float dz = obj.Z - point.Z;
+        return (dx * dx) + (dy * dy) + (dz * dz) < distance * distance;
+    }
+
+    /// <summary>The leash extension clock in whole seconds, started now when this is the first look (vmangos GetLastLeashExtensionTime).</summary>
+    private long LeashExtensionSeconds(Creature creature) => (creature.LeashClock ??= new LeashExtensionClock { Seconds = _clockMs / 1000 }).Seconds;
+
+    /// <summary>vmangos Creature::UpdateLeashExtensionTime: a crowd-controlled creature cannot leash.</summary>
+    private void RefreshLeashExtension(Creature creature) => (creature.LeashClock ??= new LeashExtensionClock()).Seconds = _clockMs / 1000;
+
+    /// <summary>
+    /// The creature's periodic combat checks (vmangos Creature::Update, Objects/Creature.cpp:976-993): every
+    /// <see cref="CreatureOptions.LeashCheckIntervalMs"/> of world time, a crowd-controlled creature refreshes its leash extension
+    /// clock and one with a template leash range farther than that from where the fight began evades (the hard leash). Returns
+    /// whether it evaded (the AI then skips its update).
+    /// </summary>
+    private bool CheckHardLeash(Creature creature, uint diffMs)
+    {
+        if (!creature.Combat.IsInCombat || _options.LeashCheckIntervalMs == 0 || _clockMs % _options.LeashCheckIntervalMs > diffMs)
+        {
+            return false;
+        }
+
+        if ((creature.UnitFlags & LostControl) != 0)
+        {
+            RefreshLeashExtension(creature);
+        }
+
+        float leash = creature.Template.Leash;
+        if (leash > 0 && !WithinDistance3d(creature, creature.CombatStart ?? creature.Home, leash))
+        {
+            EnterEvadeMode(creature);
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -204,6 +262,5 @@ public sealed partial class CreatureMapSystem
 
     private bool IsValidHostileTarget(Creature creature, Unit target)
         => target.IsAlive && ReferenceEquals(target.Map, Map)
-            && Map.Combat.Hooks.CanAttack(creature, target)
-            && !IsOutOfThreatArea(creature, target);
+            && Map.Combat.Hooks.CanAttack(creature, target);
 }

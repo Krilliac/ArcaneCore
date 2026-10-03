@@ -33,6 +33,18 @@ public sealed partial class CreatureOptions
     /// </summary>
     public uint RespawnPacifyMs { get; set; } = 5000;
 
+    /// <summary>
+    /// How often a creature in combat runs its periodic leash checks, in milliseconds of world time (vmangos
+    /// <c>tickTime() % 3000 &lt;= diff</c>, Objects/Creature.cpp:976). 0 turns the template hard leash off.
+    /// </summary>
+    public uint LeashCheckIntervalMs { get; set; } = 3000;
+
+    /// <summary>
+    /// Whole seconds after the leash extension clock was last set before a victim outside the threat area leashes the creature
+    /// (vmangos hard-coded 12, Objects/Creature.cpp:2813).
+    /// </summary>
+    public uint LeashExtensionSeconds { get; set; } = 12;
+
     /// <summary>Send SMSG_AI_REACTION(hostile) when a creature starts attacking (vmangos Creature::SendAIReaction from Unit::Attack); the client plays the aggro sound from it.</summary>
     public bool SendAiReaction { get; set; } = true;
 

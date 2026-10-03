@@ -92,9 +92,12 @@ public sealed class ThreatList
     /// <summary>
     /// Pick the victim (vmangos ThreatContainer::selectNextVictim): the current victim keeps
     /// aggro until another target exceeds 110% of its threat while in melee range of the owner
-    /// or 130% at any range. Targets failing <paramref name="isValid"/> are skipped.
+    /// or 130% at any range. Targets failing <paramref name="isValid"/> are skipped. When <paramref name="isOutOfArea"/> is
+    /// given and answers true for a target reached in list order before a victim is found, the selection is abandoned and null is
+    /// returned (vmangos ThreatContainer::selectNextVictim, Threat/ThreatManager.cpp:305-312: an out-of-threat-area target
+    /// makes the creature evade).
     /// </summary>
-    public Unit? SelectVictim(Func<Unit, bool> isValid, Func<Unit, bool> isInMeleeRange)
+    public Unit? SelectVictim(Func<Unit, bool> isValid, Func<Unit, bool> isInMeleeRange, Func<Unit, bool>? isOutOfArea = null)
     {
         ArgumentNullException.ThrowIfNull(isValid);
         ArgumentNullException.ThrowIfNull(isInMeleeRange);
@@ -108,6 +111,12 @@ public sealed class ThreatList
         ThreatEntry? result = null;
         foreach (ThreatEntry entry in _entries)
         {
+            if (isOutOfArea is not null && isOutOfArea(entry.Target))
+            {
+                _currentVictim = null;
+                return null;
+            }
+
             if (!isValid(entry.Target))
             {
                 continue;
