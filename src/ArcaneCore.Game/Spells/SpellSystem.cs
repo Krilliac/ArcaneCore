@@ -404,6 +404,13 @@ public sealed partial class SpellSystem
             }
         }
 
+        // ranged (hunter lane): a player's cast bar does not run while feigning death (Spell.cpp:4082-4090).
+        if (cast.State == SpellCastState.Preparing && cast.Timer != 0 && cast.Caster is Player && IsFeigningDeath(cast.Caster))
+        {
+            Cancel(cast);
+            return;
+        }
+
         cast.Timer = diffMs >= cast.Timer ? 0 : cast.Timer - (int)diffMs;
         if (cast.Timer > 0)
         {

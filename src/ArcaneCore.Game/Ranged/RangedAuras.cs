@@ -13,5 +13,6 @@ public static class RangedAuras
         system.RegisterAura(AuraType.TrackResources, tracking);
         system.RegisterAura(AuraType.TrackStealthed, tracking);
         system.RegisterAura(AuraType.ModStalked, tracking);
+        system.RegisterAura(AuraType.FeignDeath, new AuraHandler(static (s, h, a, apply) => s.ApplyFeignDeath(h, a, apply), null));
     }
 }
