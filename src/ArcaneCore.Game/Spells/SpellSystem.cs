@@ -487,7 +487,7 @@ public sealed partial class SpellSystem
     /// <summary>
     /// The subset of vmangos Spell::CheckCast this area owns: caster alive, cooldowns, stun,
     /// movement, explicit target presence and liveness, range (CheckRange) and power (CheckPower).
-    /// Reagents, items, shapeshift, facing, line of sight and area restrictions belong to other
+    /// Line of sight is delegated to the vmap-los seam. Reagents, items, shapeshift, facing and area restrictions belong to other
     /// areas (docs/areas/spells.md).
     /// </summary>
     private SpellCastResult CheckCast(UnitSpellState state, SpellInfo spell, SpellCastTargets targets, Unit? unitTarget, bool triggered, bool strict, bool skipCooldown = false)
@@ -542,6 +542,13 @@ public sealed partial class SpellSystem
             {
                 return range;
             }
+
+            // Line of sight (vmap-los seam, docs/integration/vmap-los.md).
+            SpellCastResult sight = Maps.Collision.SpellLineOfSight.Check(caster, spell, target, triggered);
+            if (sight != SpellCastResult.CastOk)
+            {
+                return sight;
+            }
         }
         else if (targets.HasDest)
         {
@@ -549,6 +556,12 @@ public sealed partial class SpellSystem
             if (range != SpellCastResult.CastOk)
             {
                 return range;
+            }
+
+            SpellCastResult sight = Maps.Collision.SpellLineOfSight.CheckDest(caster, spell, targets.Dest.X, targets.Dest.Y, targets.Dest.Z, triggered);
+            if (sight != SpellCastResult.CastOk)
+            {
+                return sight;
             }
         }
 

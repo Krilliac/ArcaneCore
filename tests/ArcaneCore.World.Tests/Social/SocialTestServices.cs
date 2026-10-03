@@ -64,6 +64,24 @@ internal sealed class InMemorySocialStore : ISocialStore
 
         return Task.CompletedTask;
     }
+
+    public Task PurgeCharacterAsync(int characterId, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            foreach ((int Character, int Other) key in _social.Keys.Where(k => k.Character == characterId || k.Other == characterId).ToArray())
+            {
+                _social.Remove(key);
+            }
+
+            foreach (GuildData guild in _guilds.Values.ToArray())
+            {
+                _guilds[guild.Id] = guild with { Members = [.. guild.Members.Where(m => m.CharacterId != characterId)] };
+            }
+        }
+
+        return Task.CompletedTask;
+    }
 }
 
 /// <summary>Registers <see cref="InMemorySocialStore"/> in every <see cref="WorldTestHost"/>.</summary>

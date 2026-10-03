@@ -32,6 +32,8 @@ public sealed class SocialWriteQueue(IServiceScopeFactory scopes, ILogger logger
 
     public void DeleteGuild(int guildId) => Enqueue(store => store.DeleteGuildAsync(guildId));
 
+    public void PurgeCharacter(int characterId) => Enqueue(store => store.PurgeCharacterAsync(characterId));
+
     /// <summary>Stop accepting writes and wait until every queued one is done.</summary>
     public async Task StopAsync()
     {
