@@ -2,8 +2,8 @@
 
 Standing directive: vanilla 1.12.1 behaviour, mechanics and data, verified against D:\refs
 (`vmangos` primary, `mangos-classic` = cmangos, `wow_messages`, `classic-db`). Nothing here copies
-reference code or data; every rule cites `file:line`. Any deliberate deviation is behind a config
-switch that defaults to retail and is listed in "Deviations" below.
+reference code or data; every rule cites `file:line`. A deliberate deviation is listed in "Deviations" at the end;
+each says whether it is behind a config switch (defaulting to retail) or is a stated limit with no switch.
 
 This file is the lane's delivered-scope record. The integrator owns `seams.md` and the handoff
 document; schema numbers, if any slice allocates one, are listed under "Schema".
@@ -184,7 +184,7 @@ Needs the real client: the Llane Beshere (Northshire) class-variant gossip once 
 * **Source.** `NpcInfo.IsGameObject` marks a game object source. `CreatureQuestLookup` resolves
   `HighGuid.GameObject` GUIDs the player can see, spawned in its map and not `NoInteract`
   (`CanInteractWithGameObject`, `Player.cpp:2540-2565`); the interaction distance is the object's centre within
-  `INTERACTION_DISTANCE`, the rule `GameObjectMapSystem` already uses. `NpcFlags` carries `QuestGiver` only for
+  the object type's own interaction distance, 5.55556 for quest givers, compared with `<=` (`GameObjectInfo::GetInteractionDistance`, `GameObjectDefines.h:759-785`; `GameObject::IsAtInteractDistance`, `GameObject.cpp:2584-2609`), shared with `GameObjectMapSystem.InteractionDistanceFor`. A dead or taxi-flying player is refused (`Player.cpp:2540-2565`). `NpcFlags` carries `QuestGiver` only for
   type-2 objects.
 * **Use.** `GameObjectQuestGiverFeature` fills the existing `GameObjectMapSystem.QuestGiver` seam on every map, so
   `CMSG_GAMEOBJ_USE` runs `QuestNpcServices.OpenGameObjectQuestMenu`: `PrepareGossipMenu(go, questgiver.gossipID)`
@@ -203,6 +203,9 @@ Needs the real client: the Llane Beshere (Northshire) class-variant gossip once 
 * Game object quest-giver status icons in the object's own update fields (dynamic flags / sparkle,
   `UpdateForQuestWorldObjects`) are not sent; the client asks `CMSG_QUESTGIVER_STATUS_QUERY` (answered) but the
   sparkle is the game object area's.
+* The display-bounds oriented box test of `IsAtInteractDistance` (`GameObjectDisplayInfoAddon.HasBounds`, padded
+  by the interaction distance and rotated by the object) is not implemented: model bounds are not loaded, so only the
+  no-bounds centre-distance branch runs. Large models with bounds can be reachable from further than the radius.
 * Objects with a lock (`questgiver.lockId`) go through `GameObjectMapSystem`'s existing checks only.
 * Needs the real client: clicking the Wanted poster (GO 68 -> quest 176) and Rolf's corpse (GO 56 ends 45 and
   starts 71) once the content import (NQ0) supplies the relations.
@@ -295,3 +298,19 @@ shared reader without a count, so un-applied classic-db `Updates` are visible on
   not modelled.
 * The rest of design NQ5 (quest-slot item counters with 63-batched `SMSG_QUESTUPDATE_ADD_ITEM`, `ReqSource` / `SrcSpell`
   accept support and removing those `AcceptableQuest` refusals) is not delivered; such quests are still refused at accept.
+
+## Deviations
+
+Single list of every place this lane differs from vmangos/retail. "Switch" means a config option defaulting to retail.
+
+* **Conditions type numbering is cmangos only; there is no switch.** The evaluator, `ConditionTable` and
+  `ConditionsDumpImporter` implement one numbering (cmangos, `Conditions.h:30-82`) because the classic-db
+  dataset is written in it. vmangos numbers 11, 13, 27, 35 and 51 differently, so a vmangos world database's
+  `conditions` rows (and `Quest.RequiredCondition` ids that point into them) are not evaluated; the importer
+  refuses the vmangos layout (no `value3/value4` columns) instead of misreading it. Choosing a numbering per
+  dataset (a `Conditions:Numbering` option) is not implemented; the default is therefore dataset-dependent: classic-db
+  works, vmangos data does not.
+* **Game object interaction ignores the display-bounds box**: no switch, see "Slice NQ7 / Limits".
+* **Honor-rank vendor restrictions fail closed**: pre-existing, no switch (see NQ11a limits).
+* **Battleground exemption from raid quest-item hiding** is not modelled (no battleground system).
+* `Quests:IgnoreRaid` is a switch, default 0 as in vmangos.

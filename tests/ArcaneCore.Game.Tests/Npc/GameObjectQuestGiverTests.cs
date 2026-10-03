@@ -223,6 +223,23 @@ public sealed class GameObjectQuestGiverTests
         Assert.Empty(rig.Drain());
     }
 
+    [Theory]
+    [InlineData(5.4f, true)]
+    [InlineData(5.55556f, true)]
+    [InlineData(5.6f, false)]
+    public void AQuestGiverObject_IsReachableWithinItsOwnInteractionDistance(float distance, bool reachable)
+    {
+        // vmangos GameObjectDefines.h:759-785 GetInteractionDistance(): QUESTGIVER is 5.55556, not INTERACTION_DISTANCE (5.0);
+        // GameObject.cpp:2584-2609 IsAtInteractDistance compares the centre distance with '<='.
+        using var rig = new Rig(goX: distance);
+        GameObjectUseResult result = rig.System.Use(rig.Player, rig.Guid(PosterEntry));
+        Assert.Equal(reachable, rig.Services.OpenGameObjectQuestMenu(rig.Player, rig.Guid(PosterEntry)));
+        Assert.Equal(reachable ? GameObjectUseResult.Ok : GameObjectUseResult.TooFar, result);
+        Assert.Equal(5.55556f, GameObjectMapSystem.InteractionDistanceFor(GameObjectType.QuestGiver));
+        Assert.Equal(5.0f, GameObjectMapSystem.InteractionDistanceFor(GameObjectType.Chest));
+        Assert.Equal(10.0f, GameObjectMapSystem.InteractionDistanceFor(GameObjectType.Binder));
+    }
+
     [Fact]
     public void TheCreatureHelloOpcodesIgnoreAGameObject()
     {

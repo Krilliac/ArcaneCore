@@ -43,7 +43,7 @@ public sealed class CreatureQuestLookup(FactionTemplateCatalog factions, INpcRea
     /// A quest-giving game object the player can see (vmangos GetObjectByTypeMask(TYPEMASK_CREATURE_OR_GAMEOBJECT) +
     /// CanInteractWithGameObject, Player.cpp:2540-2565): spawned in the player's map and interactable. A game object
     /// is never hostile, alive-checked or reputation-gated; the distance rule is applied by the caller (the object's
-    /// own interaction distance, <see cref="QuestNpcServices.InteractableNpc"/>).
+    /// own per-type interaction distance, <see cref="GameObjectMapSystem.InteractionDistanceFor"/>; Player.cpp:2540-2565 also rejects a dead or taxi-flying player, handled by InteractableNpc).
     /// </summary>
     private static NpcInfo? FindGameObject(Player player, ObjectGuid guid)
     {
@@ -57,7 +57,8 @@ public sealed class CreatureQuestLookup(FactionTemplateCatalog factions, INpcRea
         bool giver = go.Type == GameObjectType.QuestGiver;
         return new NpcInfo(go.Guid, go.Entry, go.Spawn?.Guid ?? go.Guid.Low, giver ? NpcFlags.QuestGiver : NpcFlags.None,
             go.MapId, go.X, go.Y, go.Z, go.BoundingRadius, true, false, false, false,
-            giver ? go.Template.GetData(QuestGiverGossipIdIndex) : 0, IsGameObject: true);
+            giver ? go.Template.GetData(QuestGiverGossipIdIndex) : 0, IsGameObject: true,
+            GameObjectInteractionDistance: GameObjectMapSystem.InteractionDistanceFor(go.Type));
     }
 
     /// <summary>questgiver.gossipID, data3 of GAMEOBJECT_TYPE_QUESTGIVER (vmangos GameObjectDefines.h:245-258).</summary>

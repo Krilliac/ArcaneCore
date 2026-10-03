@@ -33,8 +33,11 @@ internal sealed class QuestJournalFixture : IQuestContentStore, INpcContentStore
     public ManualQuestClock Clock { get; } = new();
     public MemoryQuestStore Characters { get; } = new();
 
+    /// <summary>Replaces the default two journal quests when set.</summary>
+    public IReadOnlyList<QuestTemplate>? Templates { get; init; }
+
     public Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default)
-        => Task.FromResult(new QuestContent(
+        => Task.FromResult(Templates is { } custom ? new QuestContent([.. custom], [], []) : new QuestContent(
         [
             new QuestTemplate
             {

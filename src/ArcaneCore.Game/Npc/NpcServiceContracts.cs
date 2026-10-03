@@ -72,7 +72,8 @@ public sealed record NpcInfo(
     byte TrainerRace = 0,
     uint TrainerSpell = 0,
     uint FactionId = 0,
-    bool IsGameObject = false);
+    bool IsGameObject = false,
+    float GameObjectInteractionDistance = 0);
 
 /// <summary>
 /// Finds a creature in the player's map (owned by the creatures area). Returns null when no

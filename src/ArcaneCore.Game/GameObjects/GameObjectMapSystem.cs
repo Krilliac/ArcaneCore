@@ -22,8 +22,24 @@ namespace ArcaneCore.Game.GameObjects;
 /// </summary>
 public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
 {
-    /// <summary>INTERACTION_DISTANCE between the player's and the object's bounding radii.</summary>
+    /// <summary>INTERACTION_DISTANCE (vmangos ObjectDefines.h), the default for types without their own distance.</summary>
     public const float InteractionDistance = 5.0f;
+
+    /// <summary>
+    /// The per-type interaction distance (vmangos GameObjectDefines.h:759-785 GameObjectInfo::GetInteractionDistance):
+    /// quest givers and text objects 5.55556, binders 10, chairs and fishing nodes 100, area damage 0, otherwise
+    /// <see cref="InteractionDistance"/>. GameObject.cpp:2584-2609 IsAtInteractDistance compares with '&lt;='.
+    /// Limit: the display-bounds oriented box test (GameObjectDisplayInfoAddon.HasBounds) needs model bounds this
+    /// codebase does not load, so only the no-bounds centre-distance branch is implemented.
+    /// </summary>
+    public static float InteractionDistanceFor(GameObjectType type) => type switch
+    {
+        GameObjectType.QuestGiver or GameObjectType.Text or GameObjectType.FlagStand => 5.55556f,
+        GameObjectType.Binder => 10.0f,
+        GameObjectType.Chair or GameObjectType.FishingNode => 100.0f,
+        GameObjectType.AreaDamage => 0.0f,
+        _ => InteractionDistance,
+    };
 
     /// <summary>How often quest dynamic flags are re-evaluated for viewers (the quest journal has no change events yet).</summary>
     public const uint QuestFlagRefreshMs = 1000;
@@ -299,7 +315,12 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
             return GameObjectUseResult.NotUsable;
         }
 
-        return go.DistanceTo(player) > InteractionDistance ? GameObjectUseResult.TooFar : GameObjectUseResult.Ok;
+        // GameObject::IsAtInteractDistance (GameObject.cpp:2584-2609): the centre-to-centre 3D distance, no bounding radii.
+        float dx = go.X - player.X;
+        float dy = go.Y - player.Y;
+        float dz = go.Z - player.Z;
+        float reach = InteractionDistanceFor(go.Type);
+        return (dx * dx) + (dy * dy) + (dz * dz) > reach * reach ? GameObjectUseResult.TooFar : GameObjectUseResult.Ok;
     }
 
     private GameObjectUseResult UseDoorOrButton(Player player, GameObject go)
