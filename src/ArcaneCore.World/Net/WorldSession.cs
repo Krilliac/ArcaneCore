@@ -53,6 +53,17 @@ public sealed class WorldSessionOptions
     public TimeSpan WriterDrainGrace { get; set; } = TimeSpan.Zero;
 
     /// <summary>
+    /// How long a world connection may stay unauthenticated (no valid CMSG_AUTH_SESSION yet),
+    /// counted from accept; the session is closed when it expires. This is the retail rule:
+    /// vmangos <c>Network.TimeoutSecsIfNoAuth = 10</c> (WorldSocket.cpp:621-628,
+    /// mangosd.conf.dist.in:3039) closes the socket the same way. It stops a client that withholds
+    /// the packet header (or trickles it) from holding a socket, a writer task and a DI scope
+    /// forever (Codex finding 2). <see cref="TimeSpan.Zero"/> disables it. Bound from
+    /// World:PreAuthTimeout (for example "00:00:10").
+    /// </summary>
+    public TimeSpan PreAuthTimeout { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
     /// Hardening beyond retail: also require pitch, jump speeds/angles and spline elevation to be
     /// finite before a movement block is stored and relayed. Retail (vmangos VerifyMovementInfo)
     /// does not check them, so the default is off. Bound from World:StrictMovementFiniteness.
@@ -158,6 +169,12 @@ public sealed class WorldSession : IPlayerSession
     {
         Task writer = Task.Run(RunWriterAsync, CancellationToken.None);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _kick.Token);
+
+        // vmangos WorldSocket::Start (WorldSocket.cpp:621-628): a connection that has not
+        // authenticated within the timeout is closed. The timer never touches an authenticated session.
+        using Timer? preAuth = _options.PreAuthTimeout > TimeSpan.Zero
+            ? new Timer(_ => ExpirePreAuth(), null, _options.PreAuthTimeout, Timeout.InfiniteTimeSpan)
+            : null;
         try
         {
             _serverSeed = BinaryPrimitives.ReadUInt32LittleEndian(RandomNumberGenerator.GetBytes(4));
@@ -175,6 +192,15 @@ public sealed class WorldSession : IPlayerSession
         {
             Close();
             await DrainWriterAsync(writer).ConfigureAwait(false);
+        }
+    }
+
+    private void ExpirePreAuth()
+    {
+        if (_state == SessionState.Connected)
+        {
+            _logger.LogInformation("[{Endpoint}] no authentication within {Timeout}; closing", RemoteEndpoint, _options.PreAuthTimeout);
+            Kick();
         }
     }
 
