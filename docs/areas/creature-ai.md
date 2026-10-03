@@ -69,7 +69,7 @@ docs/integration/creature-ai.md.
     `CreatureAiServicesBinder`; without a spell system nobody has auras or casts).
   - **Actions with a handler**: 1 text (the 1/2/3-way choice by `rnd % 3` / `rnd % 2`), 11 cast (aura-not-
     present, triggered and interrupt flags; a creature that is casting only casts again when the spell is
-    triggered or interrupts; success is the cast being accepted), 12 summon, 20 auto attack, 21 combat
+    triggered or interrupts; success is the cast being accepted), 12 summon, 13 threat single (direct add or percent) and 14 threat all percent (docs/areas/threat.md), 20 auto attack, 21 combat
     movement (no change or casting fails), 22 and 23 phases, 24 evade (with the combat-only parameter), 25
     flee for assistance, 37 die, 39 call for help.
   - **Targets**: 0-6, 7 (the invoker; there are no pets), 10, 12 and 15 (no unit). Others fail the action.

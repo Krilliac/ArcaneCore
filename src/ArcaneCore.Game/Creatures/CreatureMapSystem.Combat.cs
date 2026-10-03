@@ -129,7 +129,7 @@ public sealed partial class CreatureMapSystem
         UnitCombat combat = creature.Combat;
         bool noThreatList = (creature.Template.Behaviour & CreatureBehaviourFlags.NoThreatList) != 0;
 
-        Unit? target = combat.Threat.GetTauntTarget(u => IsValidHostileTarget(creature, u));
+        Unit? target = combat.Threat.GetTauntTarget(guid => Map.FindObject(guid) as Unit, u => IsValidHostileTarget(creature, u));
         if (target is null && combat.HasThreatList)
         {
             target = combat.Threat.SelectVictim(

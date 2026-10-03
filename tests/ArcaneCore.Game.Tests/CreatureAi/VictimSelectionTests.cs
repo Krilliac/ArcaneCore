@@ -67,7 +67,7 @@ public sealed class VictimSelectionTests
         using Fight f = Start();
         f.Wolf.Combat.Threat.AddThreat(f.First, 1000);
         f.Wolf.Combat.Threat.AddThreat(f.Second, 10);
-        f.Wolf.Combat.Threat.AddTauntCaster(f.Second);
+        f.Wolf.Combat.Threat.AddTauntCaster(f.Second.Guid);
 
         Assert.True(f.System.SelectHostileTarget(f.Wolf));
         Assert.Same(f.Second, f.Wolf.Combat.Victim);
@@ -115,7 +115,7 @@ public sealed class VictimSelectionTests
     {
         using Fight f = Start();
         f.Wolf.Combat.Threat.Clear();
-        f.Wolf.Combat.Threat.AddTauntCaster(f.Second);
+        f.Wolf.Combat.Threat.AddTauntCaster(f.Second.Guid);
         f.Second.Health = 0; // the taunter is no valid target: no taunt target, no threat list
         f.Wolf.Motion.MoveChase(f.First);
 

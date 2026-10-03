@@ -116,19 +116,27 @@ public sealed class ThreatListCoreTests
         var owner = new CombatTestUnit();
         var first = new CombatTestUnit();
         var second = new CombatTestUnit();
+        Unit? Resolve(ObjectGuid guid) => guid == first.Guid ? first : guid == second.Guid ? second : null;
         ThreatList list = owner.Combat.Threat;
         Assert.False(list.HasTauntCasters);
-        Assert.Null(list.GetTauntTarget(Valid));
+        Assert.Null(list.GetTauntTarget(Resolve, Valid));
 
-        list.AddTauntCaster(first);
-        list.AddTauntCaster(second);
+        list.AddTauntCaster(first.Guid);
+        list.AddTauntCaster(second.Guid);
         Assert.True(list.HasTauntCasters);
-        Assert.Same(second, list.GetTauntTarget(Valid));
-        Assert.Same(first, list.GetTauntTarget(u => !ReferenceEquals(u, second)));
+        Assert.Same(second, list.GetTauntTarget(Resolve, Valid));
+        Assert.Same(first, list.GetTauntTarget(Resolve, u => !ReferenceEquals(u, second)));
 
-        list.RemoveTauntCaster(second);
-        Assert.Same(first, list.GetTauntTarget(Valid));
-        list.RemoveTauntCaster(first);
+        list.RemoveTauntCaster(second.Guid);
+        Assert.Same(first, list.GetTauntTarget(Resolve, Valid));
+        // a taunter that left the world is skipped but still counts until its aura is removed
+        var gone = ObjectGuid.WithEntry(HighGuid.Unit, 9, 9);
+        list.AddTauntCaster(gone);
+        Assert.Same(first, list.GetTauntTarget(Resolve, Valid));
+        list.RemoveTauntCaster(first.Guid);
+        Assert.True(list.HasTauntCasters);
+        Assert.Null(list.GetTauntTarget(Resolve, Valid));
+        list.RemoveTauntCaster(gone);
         Assert.False(list.HasTauntCasters);
     }
 

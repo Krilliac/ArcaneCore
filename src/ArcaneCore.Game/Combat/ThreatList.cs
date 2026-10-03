@@ -38,7 +38,7 @@ public sealed class ThreatList
     private readonly Unit _owner;
     private readonly List<ThreatEntry> _entries = [];
     private readonly List<ThreatEntry> _offline = [];
-    private readonly List<Unit> _tauntCasters = [];
+    private readonly List<ObjectGuid> _tauntCasters = [];
     private Unit? _currentVictim;
     private bool _dirty;
 
@@ -350,27 +350,28 @@ public sealed class ThreatList
     /// <summary>True while any MOD_TAUNT aura of this creature is active (vmangos HasAuraType(SPELL_AURA_MOD_TAUNT) on the list).</summary>
     public bool HasTauntCasters => _tauntCasters.Count > 0;
 
-    /// <summary>vmangos Unit::m_tauntGuids.push_back: the latest taunter sits last and is preferred.</summary>
-    public void AddTauntCaster(Unit taunter)
-    {
-        ArgumentNullException.ThrowIfNull(taunter);
-        _tauntCasters.Add(taunter);
-    }
+    /// <summary>
+    /// vmangos Unit::AddTauntCaster (m_tauntGuids.push_back): the latest taunter sits last and is preferred. GUIDs, like
+    /// vmangos, so a taunter that left the world can still be taken out when its aura ends.
+    /// </summary>
+    public void AddTauntCaster(ObjectGuid taunter) => _tauntCasters.Add(taunter);
 
     /// <summary>vmangos Unit::RemoveTauntCaster: removes one occurrence, from the front.</summary>
-    public void RemoveTauntCaster(Unit taunter) => _tauntCasters.Remove(taunter);
+    public void RemoveTauntCaster(ObjectGuid taunter) => _tauntCasters.Remove(taunter);
 
     /// <summary>
-    /// vmangos Unit::GetTauntTarget (Objects/Unit.cpp:7529-7542): the latest taunter that still is a valid attack target.
+    /// vmangos Unit::GetTauntTarget (Objects/Unit.cpp:7529-7542): the latest taunter that can be found (<paramref name="resolve"/>
+    /// is the map's unit lookup) and still is a valid attack target.
     /// </summary>
-    public Unit? GetTauntTarget(Func<Unit, bool> isValidAttackTarget)
+    public Unit? GetTauntTarget(Func<ObjectGuid, Unit?> resolve, Func<Unit, bool> isValidAttackTarget)
     {
+        ArgumentNullException.ThrowIfNull(resolve);
         ArgumentNullException.ThrowIfNull(isValidAttackTarget);
         for (int i = _tauntCasters.Count - 1; i >= 0; i--)
         {
-            if (isValidAttackTarget(_tauntCasters[i]))
+            if (resolve(_tauntCasters[i]) is { } taunter && isValidAttackTarget(taunter))
             {
-                return _tauntCasters[i];
+                return taunter;
             }
         }
 

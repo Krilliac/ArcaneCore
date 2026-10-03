@@ -33,12 +33,10 @@ The list re-sorts lazily (only after a change), with a stable insertion sort, as
 - Assist threat zeroing for a stunned owner whose stun breaks on damage and for UNIT_STATE_ISOLATED needs aura-holder data
   that the spell lane does not publish; only confused and fleeing are applied.
 - "Taxi flying" targets going offline wait for a taxi primitive on `Player`; the GM case is real.
-- The second-choice selector predicate (`isLowPriority`) is supported by `SelectVictim`; the creature host does not pass one
-  yet (damage-immune and secondary-threat targets need the aura engine lane's holder data).
+- The second-choice selector predicate (`isLowPriority`) is supported by `SelectVictim`; the creature host passes feared and
+  confused targets only (damage-immune, breakable-CC and totem second choices need aura-holder data and a spell catalog).
 - `ThreatContext` carries only the list-side flags. School, crit and spell-threat scaling (vmangos `ThreatCalcHelper::CalcThreat`)
   are not implemented: damage threat stays raw damage, MOD_THREAT and spell_threat are unimplemented.
-- Taunt (SPELL_EFFECT_ATTACK_ME, SPELL_AURA_MOD_TAUNT), MOD_TOTAL_THREAT, MODIFY_THREAT_PERCENT have list primitives
-  (`TauntApply`, `ApplyTempThreatModifier`, `ModifyThreatPercent`) but no spell handler yet.
 
 ### victim-selection (Creatures/CreatureMapSystem.Combat.cs `SelectHostileTarget`)
 
@@ -57,3 +55,21 @@ not modelled, second-choice targets are only feared or confused units (damage-im
 `Unit::IsSecondaryThreatTarget`, Objects/Unit.cpp:9644-9676, need the aura engine and a spell catalog the host does not have).
 The unreachable-target timers (Creature.cpp:1017-1040) are not delivered: nothing in the repository reports a chase as
 unreachable (`TargetNotReachableEvent` has no producer), so there is nothing honest to time.
+
+### taunt and threat auras (Spells/Effects/ThreatEffects.cs, Spells/Auras/ThreatAuras.cs, Combat/Threat/Taunt.cs)
+
+| Piece | Behaviour | Reference |
+|---|---|---|
+| SPELL_EFFECT_ATTACK_ME (114) | Skipped when the (non-player) target already attacks the caster; otherwise the caster's threat is set to the current victim's and the caster becomes the current victim at once | SpellEffects.cpp:3356-3395 |
+| SPELL_AURA_MOD_TAUNT (11) | Caster joins the target's taunt list (GUID list, latest first); a living target that can hold a list attacks the caster (not while confused/fleeing) and lifts the taunter's threat via the temp-threat rule; removal fades the temp threat out, evades on an empty list | SpellAuras.cpp:3939-3967, Unit.cpp:7443-7509 |
+| SPELL_AURA_MOD_TOTAL_THREAT (103) | Fade: on a living player with a living caster the value is folded once into every list entry and taken out on removal | SpellAuras.cpp:3920-3937, HostileRefManager.cpp:39-55 |
+| SPELL_EFFECT_MODIFY_THREAT_PERCENT (125) | The caster's entry changes by the value percent (below -100 removes) | SpellEffects.cpp:5638-5646 |
+| EventAI 13 THREAT_SINGLE, 14 THREAT_ALL_PCT | Direct add or percent on the chosen target; percent on every entry | mangos-classic CreatureEventAI.cpp ProcessAction |
+
+Immunity: unit immunity auras (EffectImmunity ATTACK_ME, StateImmunity MOD_TAUNT) stop taunts through the existing immunity rules
+(vmangos applies exactly these two for CREATURE_IMMUNITY_TAUNT, Creature.cpp:444-448). The static creature taunt flag is not
+read: `ICreatureImmunityProvider` carries mechanic and school masks only, so a creature template with that flag still
+gets taunted until the creature data lane exposes it.
+
+Limits: SMSG_CAST_RESULT with DONT_REPORT for "already attacking you" is not sent; the taunted creature is not turned to face
+the taunter; after the taunt fades the victim is re-selected at the creature's next update (vmangos selects at once).
