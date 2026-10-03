@@ -163,6 +163,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         {
             Spellbook.EnsureDefaults(player, System.Store.GetCreateSpells(character.Race, character.Class));
             await StageStateAsync(session, character, player).ConfigureAwait(false);
+            await NotifySpellbookLoadedAsync(session, character, player).ConfigureAwait(false);
             return;
         }
 
@@ -180,6 +181,16 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
 
         Spellbook.LoadCharacter(character.Id, spells);
         await StageStateAsync(session, character, player).ConfigureAwait(false);
+        await NotifySpellbookLoadedAsync(session, character, player).ConfigureAwait(false);
+    }
+
+    /// <summary>The book is complete: let the features that derive state from it (skills) rebuild it, in feature order.</summary>
+    private static async Task NotifySpellbookLoadedAsync(WorldSession session, CharacterRecord character, Player player)
+    {
+        foreach (ISpellbookLoadObserver observer in session.Services.GetServices<IWorldFeature>().OfType<ISpellbookLoadObserver>())
+        {
+            await observer.OnSpellbookLoadedAsync(session, character, player).ConfigureAwait(false);
+        }
     }
 
     /// <summary>Run one spell update now (world thread; tests).</summary>

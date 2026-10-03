@@ -14,6 +14,23 @@ public sealed partial class PlayerSkills
     /// <summary>Armor sub-class bitmask the player may use (vmangos m_ArmorProficiency).</summary>
     public uint ArmorProficiency => _armorProficiency;
 
+    private ulong _knownLanguages;
+
+    /// <summary>
+    /// vmangos Player::LearnLanguage (Player.h:2154): the LANGUAGE spell effect sets the bit of its language id
+    /// (MiscValue). Ids at or above 64 cannot be represented and are ignored.
+    /// </summary>
+    public void LearnLanguage(uint language)
+    {
+        if (language < 64)
+        {
+            _knownLanguages |= 1UL << (int)language;
+        }
+    }
+
+    /// <summary>vmangos Player::KnowsLanguage (Player.h:2156).</summary>
+    public bool KnowsLanguage(uint language) => language < 64 && (_knownLanguages & (1UL << (int)language)) != 0;
+
     /// <summary>vmangos Player::CanDualWield, set by the DUAL_WIELD spell effect.</summary>
     public bool CanDualWield { get; set; }
 

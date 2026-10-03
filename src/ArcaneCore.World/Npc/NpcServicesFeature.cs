@@ -85,7 +85,8 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
                 ? new NpcTemplateMetadataLookup(creatures, Options.NpcTemplates)
                 : dependencies.Creatures,
             Items = items,
-            Spells = dependencies.Spells ?? new SpellSystemLearner(() => services.GetService<SpellFeature>()?.System, tables.Abilities),
+            Spells = dependencies.Spells ?? new SpellSystemLearner(() => services.GetService<SpellFeature>()?.System, tables.Abilities,
+                () => services.GetService<Skills.SkillsFeature>() is { IsActive: true } skills ? skills.Catalog : null),
             Reputation = dependencies.Reputation ?? services.GetService<IPlayerReputation>(),
             Flights = dependencies.Flights ?? Flights,
             Maps = dependencies.Maps ?? new WorldMapInfo(() => _world),

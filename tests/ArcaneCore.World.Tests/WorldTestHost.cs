@@ -31,7 +31,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
     private readonly List<Task> _sessions = [];
     private readonly Task _acceptLoop;
 
-    private WorldTestHost(int compressionThreshold, Action<WorldRuntimeOptions>? configure)
+    private WorldTestHost(int compressionThreshold, Action<WorldRuntimeOptions>? configure, Action<IServiceCollection>? configureServices)
     {
         var collection = new ServiceCollection();
         collection.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
@@ -46,6 +46,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
         collection.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());
         collection.AddWorldFeatures();
         WorldTestServices.RegisterAll(collection);
+        configureServices?.Invoke(collection);
         _services = collection.BuildServiceProvider();
 
         var options = new WorldRuntimeOptions { TickIntervalMs = 5, UpdateCompressionThreshold = compressionThreshold, AutosaveIntervalMs = 0 };
@@ -88,8 +89,8 @@ internal sealed class WorldTestHost : IAsyncDisposable
     public int Port { get; }
 
     /// <summary>Start a host. Compression is off by default so tests can read update blocks directly.</summary>
-    public static WorldTestHost Start(int compressionThreshold = 0, Action<WorldRuntimeOptions>? configure = null)
-        => new(compressionThreshold, configure);
+    public static WorldTestHost Start(int compressionThreshold = 0, Action<WorldRuntimeOptions>? configure = null, Action<IServiceCollection>? configureServices = null)
+        => new(compressionThreshold, configure, configureServices);
 
     /// <summary>Create an account with a fresh session key (as if it had just logged in at the realm).</summary>
     public async Task<byte[]> AddAccountAsync(string name, AccountSecurity security = AccountSecurity.Player)

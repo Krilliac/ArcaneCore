@@ -447,6 +447,30 @@ public sealed partial class PlayerInventory
     /// bags. vmangos mails it when nothing fits; there is no mail yet, so it stays worn (CanEquipItem
     /// already refuses a two-hander whose off hand would not fit, so that is not reached in practice).
     /// </summary>
+    /// <summary>
+    /// vmangos Player::AutoUnequipWeaponsIfNeed (Player.cpp:19697-19710): main hand, off hand and ranged items the
+    /// player can no longer use (a weapon skill was lost) go back to the bags. The reference mails an item that
+    /// finds no bag space (AutoUnequipItemFromSlot, Player.cpp:19720-19745); there is no mail system here, so such
+    /// an item stays equipped.
+    /// </summary>
+    public void AutoUnequipWeaponsIfNeeded()
+    {
+        foreach (byte slot in new[] { InventorySlots.MainHand, InventorySlots.OffHand, InventorySlots.Ranged })
+        {
+            if (_items[slot] is not { } item || CanUseItem(item, notLoading: false) == InventoryResult.Ok)
+            {
+                continue;
+            }
+
+            var dest = new List<ItemPosCount>();
+            if (CanStoreItem(InventorySlots.NullBag, InventorySlots.NullSlot, dest, item, swap: false, out _) == InventoryResult.Ok)
+            {
+                RemoveItem(InventorySlots.Bag0, slot);
+                StoreItem(dest, item);
+            }
+        }
+    }
+
     private void AutoUnequipOffhandIfNeeded()
     {
         if (!IsTwoHandUsed || _items[InventorySlots.OffHand] is not { } offHand)
