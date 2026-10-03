@@ -38,6 +38,12 @@ public sealed class SpellCast
 
     public SpellCastState State { get; internal set; } = SpellCastState.Preparing;
 
+    /// <summary>
+    /// The ShouldRemoveStealthAuras roll taken at cast start (vmangos Spell.cpp:3455), reused at completion unless
+    /// <see cref="SpellSystem.ImprovedSapRollPerPhase"/>; null until the start phase ran.
+    /// </summary>
+    internal bool? RemoveStealthRoll { get; set; }
+
     /// <summary>Full cast time in ms.</summary>
     public int CastTime { get; }
 

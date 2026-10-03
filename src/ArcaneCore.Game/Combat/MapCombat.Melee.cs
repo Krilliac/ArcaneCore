@@ -379,6 +379,7 @@ public sealed partial class MapCombat
 
         DealMeleeDamage(info);
         PlayerCombatSkills.OnMeleeResolved(attacker, victim, attackType, info.Outcome);
+        MeleeSwingFinished?.Invoke(attacker, victim); // vmangos Unit.cpp:2285: the swing cancels ATTACKING auras
         return info;
     }
 

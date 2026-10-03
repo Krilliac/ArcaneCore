@@ -10,4 +10,11 @@ public sealed partial class MapCombat
     /// interrupt casts and break damage-interruptible auras (docs/integration/spells-persistence.md).
     /// </summary>
     public event Action<Unit, Unit, uint, bool, bool>? DamageDealt;
+
+    /// <summary>
+    /// A white swing finished (attacker, victim; world thread): vmangos Unit::AttackerStateUpdate ends with
+    /// RemoveAurasWithInterruptFlags(AURA_INTERRUPT_ATTACKING_CANCELS) on the attacker (Unit.cpp:2285). The spells
+    /// area subscribes (docs/integration/rogue-aura-interrupt.md).
+    /// </summary>
+    public event Action<Unit, Unit>? MeleeSwingFinished;
 }

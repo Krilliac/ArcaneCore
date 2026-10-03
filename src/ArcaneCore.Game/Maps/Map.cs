@@ -61,6 +61,8 @@ public sealed class Map
     // Consecutive failure count per updater; -1 means the fault breaker is skipping it. Empty
     // unless an updater throws and World:MaxConsecutiveUpdaterFaults is set.
     private readonly Dictionary<IMapUpdater, int> _updaterFaults = new(ReferenceEqualityComparer.Instance);
+    private readonly List<IVisibilityRule> _visibilityRules = []; // rogue lane: stealth and other per-viewer visibility vetoes
+    private bool _detecting;
     private readonly GridContainer _grid;
     private readonly TerrainInfo _terrain;
     private long _nextSequence;
@@ -164,6 +166,61 @@ public sealed class Map
         _logger.LogError(
             "map {MapId} updater {Updater} failed {Limit} ticks in a row and is skipped until the next code edit is applied or the server restarts",
             MapId, updater.GetType().Name, limit);
+    }
+
+    /// <summary>
+    /// Attach a per-viewer visibility veto, consulted by every visibility evaluation after the range check
+    /// (vmangos <c>WorldObject::IsVisibleForInState</c>, the stealth/invisibility part). Docs: docs/integration/rogue-stealth-core.md.
+    /// </summary>
+    public void AddVisibilityRule(IVisibilityRule rule)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        EnsureWorldThread();
+        EnsureNotInUpdatePhase();
+        _visibilityRules.Add(rule);
+    }
+
+    /// <summary>
+    /// Re-evaluate visibility of <paramref name="obj"/> against everything near it at once (vmangos <c>WorldObject::UpdateObjectVisibility</c> /
+    /// <c>Unit::UpdateVisibilityAndView</c>, called when a unit's stealth state changes). A player is evaluated in both directions.
+    /// </summary>
+    public void RefreshVisibility(WorldObject obj)
+    {
+        ArgumentNullException.ThrowIfNull(obj);
+        EnsureWorldThread();
+        if (!ReferenceEquals(obj.Map, this))
+        {
+            return;
+        }
+
+        if (obj is Player player)
+        {
+            UpdateVisibility(player);
+        }
+        else
+        {
+            UpdateObjectVisibility(obj);
+        }
+    }
+
+    /// <summary>
+    /// One viewer/target visibility evaluation in detect mode (vmangos <c>IsVisibleForOrDetect(.., detect = true)</c> as run by
+    /// <c>Player::HandleStealthedUnitsDetection</c>): the rules may now reveal a unit the regular movement-driven updates keep hidden.
+    /// </summary>
+    public void UpdateVisibilityWithDetection(Player viewer, WorldObject target)
+    {
+        ArgumentNullException.ThrowIfNull(viewer);
+        ArgumentNullException.ThrowIfNull(target);
+        EnsureWorldThread();
+        _detecting = true;
+        try
+        {
+            UpdateVisibilityOf(viewer, target);
+        }
+        finally
+        {
+            _detecting = false;
+        }
     }
 
     /// <summary>The first attached system of type <typeparamref name="T"/>, if any.</summary>
@@ -733,19 +790,33 @@ public sealed class Map
     {
         bool inVisibleList = viewer.VisibleObjects.Contains(target.Guid);
         bool inRange = IsWithinVisibilityDistance(viewer, target, inVisibleList);
+        bool allowed = PassesVisibilityRules(viewer, target, inVisibleList);
 
-        if (inVisibleList && !inRange)
+        if (inVisibleList && (!inRange || !allowed))
         {
             RemoveVisible(viewer, target.Guid);
             viewer.PendingUpdates.AddOutOfRange(target.Guid);
         }
-        else if (!inVisibleList && inRange)
+        else if (!inVisibleList && inRange && allowed)
         {
             AddVisible(viewer, target.Guid);
             PacketWriter block = viewer.PendingUpdates.BeginBlock();
             UpdateBlockWriter.WriteCreateBlock(block, target, viewer, _newObjects.Contains(target.Guid), _world.NowMs);
             viewer.PendingUpdates.EndBlock();
         }
+    }
+
+    private bool PassesVisibilityRules(Player viewer, WorldObject target, bool inVisibleList)
+    {
+        foreach (IVisibilityRule rule in _visibilityRules)
+        {
+            if (!rule.CanSee(viewer, target, inVisibleList, _detecting))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void AddVisible(Player viewer, ObjectGuid target)

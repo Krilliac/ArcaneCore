@@ -261,12 +261,16 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             {
                 combat.DamageDealt += OnDamageDealt;
                 combat.UnitKilled += OnUnitKilled;
+                combat.MeleeSwingFinished += OnMeleeSwingFinished;
             }
         }
     }
 
     /// <summary>A unit died in combat: its non-passive auras go (<see cref="SpellSystem.OnUnitDied"/>).</summary>
     private void OnUnitKilled(Unit? killer, Unit victim) => System.OnUnitDied(victim);
+
+    /// <summary>A white swing ended: auras with AURA_INTERRUPT_ATTACKING_CANCELS go (vmangos Unit.cpp:2285).</summary>
+    private void OnMeleeSwingFinished(Unit attacker, Unit victim) => System.RemoveAurasWithInterruptFlags(attacker, AuraInterruptMask.Attacking);
 
     private void OnDamageDealt(Unit attacker, Unit victim, uint damage, bool direct, bool meleeDamage)
     {

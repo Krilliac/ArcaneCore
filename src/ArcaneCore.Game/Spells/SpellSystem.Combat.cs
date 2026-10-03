@@ -109,7 +109,7 @@ public sealed partial class SpellSystem
     /// AURA_INTERRUPT_FLAG_DAMAGE (and NON_PERIODIC_DAMAGE for direct hits) break; a cast in
     /// progress is interrupted (SPELL_INTERRUPT_FLAG_ABORT_ON_DMG) or pushed back
     /// (SPELL_INTERRUPT_FLAG_PUSH_BACK) by direct damage only ("DoTs can't interrupt or delay");
-    /// a channel is delayed (CHANNEL_FLAG_DELAY) or interrupted (CHANNEL_FLAG_DAMAGE). Self damage is ignored.
+    /// a channel is delayed (CHANNEL_FLAG_DELAY) or interrupted (CHANNEL_FLAG_DAMAGE). Self damage breaks auras (build 5875, vmangos Unit.cpp:660-670, SKIP_STEALTH is false above 1.6.1) but never pushes back or interrupts a cast.
     /// When nothing got through but <paramref name="absorbed"/> is positive, the damage == 0 branch applies
     /// (Unit.cpp:733-746): damage-cancels auras still break and a player's damage-cancels cast is interrupted
     /// (not by damage over time), but nothing is pushed back or delayed.
@@ -117,7 +117,7 @@ public sealed partial class SpellSystem
     public void OnDamageTaken(Unit victim, Unit? attacker, uint damage, bool periodic, uint absorbed = 0)
     {
         ArgumentNullException.ThrowIfNull(victim);
-        if ((damage == 0 && absorbed == 0) || ReferenceEquals(victim, attacker) || !victim.IsAlive || GetState(victim.Guid) is not { } state
+        if ((damage == 0 && absorbed == 0) || !victim.IsAlive || GetState(victim.Guid) is not { } state
             || !ReferenceEquals(state.Unit, victim))
         {
             return;
@@ -146,7 +146,11 @@ public sealed partial class SpellSystem
         }
 
         // The cast or channel in progress: pushback, delay and damage cancels (retail rules in SpellSystem.Pushback.cs).
-        ApplyDamageToCurrentCast(victim, state, periodic);
+        // Self damage never pushes back or interrupts.
+        if (!ReferenceEquals(victim, attacker))
+        {
+            ApplyDamageToCurrentCast(victim, state, periodic);
+        }
     }
 
     /// <summary>
