@@ -150,7 +150,7 @@ public static class SchemaCatalog
         return Convert.ToInt64(result, CultureInfo.InvariantCulture);
     }
 
-    private static async IAsyncEnumerable<object?[]> RowsAsync(
+    internal static async IAsyncEnumerable<object?[]> RowsAsync(
         DbContext db, string sql, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken,
         params (string Name, object Value)[] parameters)
     {
@@ -169,9 +169,9 @@ public static class SchemaCatalog
         }
     }
 
-    private static string Text(object? value) => Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
+    internal static string Text(object? value) => Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
 
-    private static NotSupportedException Unsupported(DbContext db)
+    internal static NotSupportedException Unsupported(DbContext db)
         => new($"no catalog query for provider {db.Database.ProviderName}");
 
     /// <summary>Opens the context's connection if it is closed, and joins the context's current transaction.</summary>
