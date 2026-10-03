@@ -167,13 +167,29 @@ public class Item : WorldObject
         SetUInt32(UpdateFields.ItemFieldStackCount, Math.Max(data.Count, 1u));
         SetUInt64(UpdateFields.ItemFieldCreator, data.Creator);
         SetUInt64(UpdateFields.ItemFieldGiftcreator, data.GiftCreator);
-        SetUInt32(UpdateFields.ItemFieldDuration, data.Duration);
+        // vmangos Item.cpp:403-410: a stored duration that disagrees with the template about
+        // "timed or not" is replaced by the template's (timed -> template, untimed -> 0).
+        SetUInt32(UpdateFields.ItemFieldDuration, (Template.Duration == 0) != (data.Duration == 0) ? Template.Duration : data.Duration);
         for (int i = 0; i < SpellChargeSlots && i < data.Charges.Count; i++)
         {
             SetInt32(UpdateFields.ItemFieldSpellCharges + i, data.Charges[i]);
         }
 
-        SetUInt32(UpdateFields.ItemFieldFlags, data.Flags);
+        // vmangos Item.cpp:430-435: no bound flag on a NO_BIND template.
+        // Item.cpp:462-476: a wrapped flag needs a wrapper template that is not stackable.
+        uint flags = data.Flags;
+        if ((flags & (uint)ItemDynFlags.Bound) != 0 && Template.Bonding == 0)
+        {
+            flags &= ~(uint)ItemDynFlags.Bound;
+        }
+
+        if ((flags & (uint)ItemDynFlags.Wrapped) != 0
+            && ((Template.Flags & (uint)ItemTemplateFlags.Wrapper) == 0 || Template.MaxStackSize() > 1))
+        {
+            flags &= ~(uint)ItemDynFlags.Wrapped;
+        }
+
+        SetUInt32(UpdateFields.ItemFieldFlags, flags);
         for (int i = 0; i < EnchantmentValues && i < data.Enchantments.Count; i++)
         {
             SetUInt32(UpdateFields.ItemFieldEnchantment + i, data.Enchantments[i]);

@@ -232,6 +232,11 @@ public sealed partial class PlayerInventory
     public void DurabilityPointsLoss(Item item, int points)
     {
         ArgumentNullException.ThrowIfNull(item);
+        if (!Options.DurabilityLossEnable)
+        {
+            return; // DurabilityLoss.Enable, the first statement of Player.cpp:4866.
+        }
+
         uint max = item.MaxDurability;
         uint before = item.Durability;
         long after = Math.Clamp((long)before - points, 0, max);

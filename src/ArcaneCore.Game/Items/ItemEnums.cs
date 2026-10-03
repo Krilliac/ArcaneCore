@@ -98,13 +98,29 @@ public enum ItemBonding : uint
     QuestItem = 4,
 }
 
-/// <summary>item_template.flags bits used here (vmangos ItemPrototype.h ItemPrototypeFlags).</summary>
+/// <summary>item_template.flags (vmangos ItemPrototype.h:64-84 ItemPrototypeFlags; UniqueEquipped is a vmangos server-side extension).</summary>
 [Flags]
 public enum ItemTemplateFlags : uint
 {
     None = 0,
+    NoPickup = 0x00000001,
     Conjured = 0x00000002,
+    Lootable = 0x00000004,
+    Exotic = 0x00000008,
+    Deprecated = 0x00000010,
     Indestructible = 0x00000020,
+    PlayerCast = 0x00000040,
+    NoEquipCooldown = 0x00000080,
+    IntBonusInstead = 0x00000100,
+    Wrapper = 0x00000200,
+    IgnoreBagSpace = 0x00000400,
+    PartyLoot = 0x00000800,
+    BriefSpellEffects = 0x00001000,
+    Charter = 0x00002000,
+    HasText = 0x00004000,
+    NoDisenchant = 0x00008000,
+    RealDuration = 0x00010000,
+    NoCreator = 0x00020000,
     UniqueEquipped = 0x00080000,
 }
 

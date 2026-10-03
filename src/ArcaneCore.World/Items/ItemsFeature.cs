@@ -7,6 +7,7 @@ using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -24,13 +25,26 @@ namespace ArcaneCore.World.Items;
 /// with no items (fails closed).
 /// </para>
 /// </summary>
-public sealed class ItemsFeature(IServiceScopeFactory scopes, ILogger<ItemsFeature> logger) : IWorldFeature, ICharacterHooks
+public sealed class ItemsFeature(IServiceScopeFactory scopes, ILogger<ItemsFeature> logger, IConfiguration? configuration = null) : IWorldFeature, ICharacterHooks
 {
     private readonly SemaphoreSlim _loadLock = new(1, 1);
     private volatile IItemTemplateStore? _templates;
 
     /// <summary>Item content (empty until <see cref="EnsureLoadedAsync"/> succeeds).</summary>
     public IItemTemplateStore Templates => _templates ?? ItemTemplateStore.Empty;
+
+    /// <summary>
+    /// Item-mechanics options bound from the <c>Items</c> section (retail defaults when the section
+    /// or the configuration is absent); handed to every inventory this feature creates or loads.
+    /// </summary>
+    public ItemMechanicsOptions Options { get; } = BindOptions(configuration);
+
+    private static ItemMechanicsOptions BindOptions(IConfiguration? configuration)
+    {
+        var options = new ItemMechanicsOptions();
+        configuration?.GetSection(ItemMechanicsOptions.SectionName).Bind(options);
+        return options;
+    }
 
     /// <summary>The process-wide item GUID source.</summary>
     public ItemGuidAllocator GuidAllocator { get; } = new();
@@ -92,6 +106,7 @@ public sealed class ItemsFeature(IServiceScopeFactory scopes, ILogger<ItemsFeatu
         {
             Templates = await EnsureLoadedAsync().ConfigureAwait(false),
             GuidAllocator = GuidAllocator,
+            Options = Options,
         };
         inventory.AddStartingItems();
         await store.SaveInventoryAsync(character.Id, inventory.CreateSnapshot()).ConfigureAwait(false);
@@ -132,6 +147,7 @@ public sealed class ItemsFeature(IServiceScopeFactory scopes, ILogger<ItemsFeatu
         IItemTemplateStore templates = await EnsureLoadedAsync().ConfigureAwait(false);
         player.Inventory.Templates = templates;
         player.Inventory.GuidAllocator = GuidAllocator;
+        player.Inventory.Options = Options;
         if (session.Services.GetService<IItemStore>() is { } store)
         {
             player.Inventory.Load(await store.GetInventoryAsync(character.Id).ConfigureAwait(false));

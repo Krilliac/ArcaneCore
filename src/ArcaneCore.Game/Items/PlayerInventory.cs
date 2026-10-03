@@ -68,6 +68,9 @@ public sealed partial class PlayerInventory
     /// <summary>Item content used to create items by entry.</summary>
     public IItemTemplateStore Templates { get; set; } = ItemTemplateStore.Empty;
 
+    /// <summary>Item-mechanics configuration (retail defaults until the items feature binds the <c>Items</c> section).</summary>
+    public ItemMechanicsOptions Options { get; set; } = new();
+
     /// <summary>Source of new item GUIDs; required to create items.</summary>
     public ItemGuidAllocator? GuidAllocator { get; set; }
 
