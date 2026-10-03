@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Maps.Collision.VMaps;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.Maps.Collision;
@@ -15,10 +16,42 @@ public static class CollisionServices
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
-        string? vmaps = options.ResolveVMapDirectory(dataDirectory);
-        string? mmaps = options.ResolveMMapDirectory(dataDirectory);
+        collision.Install(CreateLineOfSight(options, dataDirectory, logger), CreatePathfinder(options, dataDirectory, logger));
+    }
+
+    /// <summary>The vmap reader, or null (keep the open default) when disabled or the directory is missing.</summary>
+    public static ILineOfSight? CreateLineOfSight(CollisionOptions options, string? dataDirectory, ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        string? directory = options.ResolveVMapDirectory(dataDirectory);
+        if (!options.EnableLineOfSight && !options.EnableHeight)
+        {
+            logger.LogInformation("Collision: vmaps disabled (World:Collision:EnableLineOfSight and EnableHeight are false); line of sight is open");
+            return null;
+        }
+
+        if (directory is null || !Directory.Exists(directory))
+        {
+            logger.LogInformation("Collision: no vmap directory ({Directory}); line of sight is open and model heights are unknown", directory ?? "<not configured>");
+            return null;
+        }
+
         logger.LogInformation(
-            "Collision: no vmap reader installed yet (vmaps: {VMaps}, mmaps: {MMaps}); line of sight is open and paths are straight lines",
-            vmaps ?? "<not configured>", mmaps ?? "<not configured>");
+            "Collision: vmaps from {Directory} (line of sight {Los}, heights {Height})",
+            directory, options.EnableLineOfSight ? "on" : "off", options.EnableHeight ? "on" : "off");
+        return new VMapManager(directory, options.EnableLineOfSight, options.EnableHeight, logger);
+    }
+
+    /// <summary>The navmesh pathfinder, or null (keep straight-line paths) when disabled or the directory is missing.</summary>
+    public static IPathfinder? CreatePathfinder(CollisionOptions options, string? dataDirectory, ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        string? directory = options.ResolveMMapDirectory(dataDirectory);
+        logger.LogInformation("Collision: no navmesh reader yet (mmaps: {Directory}); paths are straight lines", directory ?? "<not configured>");
+        return null;
     }
 }
