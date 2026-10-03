@@ -46,4 +46,11 @@ public sealed class SpellModOptions
     /// mask bit): the client needs them to show modified costs and cast bars (vmangos Player::SendSpellMod). Retail is true.
     /// </summary>
     public bool SendClientModifiers { get; set; } = true;
+
+    /// <summary>
+    /// The class-mask overlay file (<c>arcane-content-importer class-masks</c>): 64-bit masks for the modifier auras, because the
+    /// spell DBC's EffectItemType is read as 32 bits. Unset means the DBC masks only (a warning at startup counts the modifier
+    /// effects that then have no mask at all). A missing or malformed file fails startup.
+    /// </summary>
+    public string? ClassMaskFile { get; set; }
 }

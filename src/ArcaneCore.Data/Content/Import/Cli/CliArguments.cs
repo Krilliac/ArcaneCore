@@ -10,7 +10,7 @@ internal sealed class UsageException(string message) : Exception(message);
 internal sealed class CliArguments
 {
     private static readonly string[] s_valueOptions =
-        ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir", "--quest-xp", "--level-stats-file"];
+        ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir", "--quest-xp", "--level-stats-file", "--class-mask-file"];
 
     private static readonly string[] s_flags = ["--replace", "--dry-run", "--verbose"];
 
@@ -20,6 +20,7 @@ internal sealed class CliArguments
         ["import"] = ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir", "--quest-xp", "--level-stats-file", "--replace", "--dry-run", "--verbose"],
         ["import-dbc"] = ["--database", "--provider", "--connection-string"],
         ["verify"] = ["--database", "--provider", "--connection-string"],
+        ["class-masks"] = ["--class-mask-file", "--dry-run"],
     };
 
     private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);
