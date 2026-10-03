@@ -118,9 +118,9 @@ All other files are new:
   - Creatures drop gold from `creature_loot_info`.
   - Round robin advances `Group.LooterGuid`.
   - UNIT_DYNFLAG_LOOTABLE is shown only to allowed looters.
-  - When a corpse is looted out it becomes skinnable if it has skinning loot. Otherwise its decay is shortened by `LootedCorpseDecayRate`.
+  - A corpse is skinnable from death when it has a skinning template and a recipient; when it is looted out its decay is shortened by `LootedCorpseDecayRate` unless it is still skinnable (a skinned and emptied one decays at once). Superseded by the fishing-and-special-loot lane ([area doc](../areas/fishing-special-loot.md)).
 - **Other loot sources and the loot window.**
-  - Skinning loot is exposed as a spell collaborator seam. Item container opening is refused until generated/consumed loot has durable storage; a locked item still answers ItemLocked.
+  - Skinning loot is exposed as a spell collaborator seam. Item container opening is refused until generated/consumed loot has durable storage; a locked item still answers ItemLocked. With `SpecialLootFeature` attached (`LootService.ItemLoot`) containers open and their loot is stored with the inventory. Superseded by the fishing-and-special-loot lane ([area doc](../areas/fishing-special-loot.md)).
   - Taking items and money. Money is split among group members in range, with SMSG_LOOT_MONEY_NOTIFY. A split is deferred while an eligible recipient has a pending quest settlement, without consuming or redistributing their share.
   - On release, a round robin owner's release opens the loot to everyone.
   - A late player may open a chest someone else left unfinished.
@@ -209,7 +209,7 @@ database refuses takes (never loses them); PostgreSQL serialization failures (40
 reconcile to Before.
 
 **Limits (explicit).**
-- **Slice B, item containers, is not delivered.** `CMSG_OPEN_ITEM` on a lootable item still answers
+- **Slice B, item containers, was not delivered here (delivered later: `ItemLootSource`, see the area doc).** Without the `ItemLoot` collaborator `CMSG_OPEN_ITEM` on a lootable item still answers
   LootCantLootThatNow (`LootService.OpenItem`, pinned by `LootServiceTests`). It needs the vmangos
   behaviour verified first (charter section 1.1/1.5: whether an item whose loot was generated may be traded,
   mailed, sold or destroyed, and whether the generated loot persists), which was not available in this
@@ -241,7 +241,7 @@ test hosts (`WorldTestHost.WorldServices`, `InMemoryInstanceStore.Live/Deleted/S
 
 - **Persistence.**
   - Game object respawn times of shared-copy maps (instance 0) are not persisted across a restart. Chests of dungeon instances persist theirs (above).
-  - Item container loot is not persisted (slice B above), so CMSG_OPEN_ITEM does not generate loot or consume containers.
+  - Item container loot is persisted by the item loot module (characters schema `ItemLootDataModule`) when `SpecialLootFeature` is attached; without it CMSG_OPEN_ITEM does not generate loot or consume containers.
   - The remainder of a money split (gold mod number of sharers) is dropped.
 - **Group loot.**
   - There is no master loot, need/greed or group-loot roll UI. Those methods fall back to round robin.
@@ -250,7 +250,7 @@ test hosts (`WorldTestHost.WorldServices`, `InMemoryInstanceStore.Live/Deleted/S
 - **Conditions.** `condition_id` rows are skipped: no conditions evaluator is wired into `LootService.Conditions` yet.
 - **Spell side.**
   - No cast time, skill-ups or spell-driven opening (`OpenLock` is the hook for the spells area).
-  - Fishing nodes, chairs, traps, rituals, spell casters, meeting stones, flag stands and transports are not usable.
+  - Chairs, traps, rituals, spell casters, meeting stones, flag stands and transports are not usable. Fishing nodes are used through the fishing area's use handler (`RegisterUseHandler`).
 - **Chest gold.** vmangos `gameobject_template` mingold/maxgold is not imported (so durable chest state has no money).
 - **Quest givers.** The quest-giver object type only calls the seam; the quest area must implement `IGameObjectQuestGiver`.
 - **Polling.**

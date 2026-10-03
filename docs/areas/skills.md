@@ -109,7 +109,7 @@ copied). Each piece of code cites file:line.
 - **Key items** (skeleton keys, lockboxes opened with a key) need the item-cast path (`CMSG_USE_ITEM` casting with a cast
   item); locks that name a key never open. The item branch of OPEN_LOCK (a locked item as the target) works.
 - **Veins** with several uses: the object system despawns an emptied chest, so a node is mined once per respawn
-  (the `OnLootReleased` change belongs to the durable-loot lane). Fishing skill-ups (`UpdateFishing` exists) have no caller.
+  (the `OnLootReleased` change belongs to the durable-loot lane). The fishing skill-up is called by the fishing catch (`FishingService`, see [fishing-special-loot](fishing-special-loot.md)).
 - Skill-ups from weapon-damage **spells** (`ProcSkillsAndReactives` with a `procSpell` requiring a weapon) need the
   spell item class, which `SpellInfo` does not carry.
 - **Shapeshift** forms: no weapon-skill override for a form without weapons (the form byte of `UNIT_FIELD_BYTES_1` is
