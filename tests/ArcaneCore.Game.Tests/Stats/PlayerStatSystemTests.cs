@@ -202,6 +202,26 @@ public sealed class PlayerStatSystemTests
     }
 
     [Fact]
+    public void DualWieldLearnedAfterAttach_RecomputesTheOffHandDamageWithTheAttackPowerTerm()
+    {
+        // Login order (SpellFeature.OnPlayerLoggedIn): the items are worn when the player is attached, the Dual Wield
+        // passive is cast afterwards. vmangos Player::UpdateAttackPowerAndDamage runs the off hand once CanDualWield is set.
+        (Player player, PlayerStatSystem system, _) = Create(attach: false);
+        player.Inventory.Requirements = new StatStateItemRequirements(DefaultItemRequirements.Instance);   // the equip rule an attached player has
+        player.StatState.SetCanDualWield(true);
+        Equip(player, Sword);
+        Equip(player, OffhandSword, InventorySlots.OffHand);
+        Assert.NotNull(player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.OffHand));
+        player.StatState.SetCanDualWield(false);
+
+        system.Attach(player);
+        player.StatState.SetCanDualWield(true);
+
+        Assert.Equal((2f + (400f / 14f * 1.5f)) * 0.5f, F(player, UpdateFields.UnitFieldMinoffhanddamage), Tol);
+        Assert.Equal((3f + (400f / 14f * 1.5f)) * 0.5f, F(player, UpdateFields.UnitFieldMaxoffhanddamage), Tol);
+    }
+
+    [Fact]
     public void ABrokenWeaponContributesNothing()
     {
         (Player player, _, _) = Create();

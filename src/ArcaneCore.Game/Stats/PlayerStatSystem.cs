@@ -221,7 +221,7 @@ public sealed class PlayerStatSystem : ICombatStatSource
     /// off-hand weapon, StatSystem.cpp:349-350). The positive and negative modifier halves and the multiplier
     /// field are owned by the aura code and are read, not written.
     /// </summary>
-    private void UpdateAttackPowerAndDamage(Player player, bool ranged)
+    public void UpdateAttackPowerAndDamage(Player player, bool ranged)
     {
         float baseAttackPower = StatFormulas.AttackPowerFromStrengthAndAgility(ranged, player.Class, player.Level, Stat(player, 0), Stat(player, 1));
         player.SetInt32(ranged ? UpdateFields.UnitFieldRangedAttackPower : UpdateFields.UnitFieldAttackPower, (int)baseAttackPower);

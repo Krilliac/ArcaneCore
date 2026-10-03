@@ -87,7 +87,7 @@ every playable race/class pair at maximum level 60 reports 0 problems.
 `PlayerStatSystem.Attach(player)` (done by `StatsFeature` at login, after the items and the level base
 values are loaded) routes the inventory's item hook and its dual wield rule through the system, rebuilds
 the weapon state from the equipment already worn and writes every derived value; afterwards every item
-equip/unequip, level-up and learned ability recomputes. Every update is a recompute from the stat fields
+equip/unequip, level-up and learned ability (Parry, Block and Dual Wield) recomputes. Every update is a recompute from the stat fields
 and the equipment, so calling it twice changes nothing.
 
 Written fields: `UNIT_FIELD_ATTACK_POWER`, `UNIT_FIELD_RANGED_ATTACK_POWER`, min/max damage of the main
@@ -118,6 +118,7 @@ Abilities: the Parry, Block and Dual Wield spell effects (SpellEffects.cpp:5280,
 `PlayerStatState.CanParry/CanBlock/CanDualWield`; learned passive spells are already cast on learn and at login
 (`SpellSystem.CastLearnedPassive`), so the abilities come back after every login. A player attached to the
 system can equip an off-hand weapon only with Dual Wield (`StatStateItemRequirements`).
+Unlike the reference, where `SetCanDualWield` is a plain flag, it recomputes the attack power and damage fields: the passive is cast after the items are attached at login, when the off-hand damage was written without attack power. Partial agility rate rows (a class missing level 1 or 60, a rate of 0) leave out the agility terms with one warning unless `Stats:RequireImportedData` is set, which refuses the login.
 
 Health from stamina and mana from intellect (`StatBonuses`, StatSystem.cpp:165-192) follow the **total** stat,
 items included: equipping +10 stamina raises the maximum health by 100 once the stamina is above 20, +10

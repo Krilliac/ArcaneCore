@@ -124,8 +124,24 @@ public sealed class StatsFeature : IWorldFeature, ICharacterHooks, IDisposable
                 throw new InvalidOperationException("Stats:RequireImportedData is set and the player base data is incomplete: " + string.Join("; ", problems.Take(5)));
             }
 
-            AgilityRates? rates = BuildRates(content);
-            if (rates is null)
+            AgilityRates? rates;
+            try
+            {
+                rates = BuildRates(content);
+            }
+            catch (ArgumentException ex) when (!options.RequireImportedData)
+            {
+                // Partial rows (a class without level 1 or 60, a rate of 0): a table with a missing class would answer
+                // rate 1 for it, so the whole agility term is left out instead.
+                _logger.LogWarning(ex, "Stats: the crit/dodge per agility rows are incomplete; crit and dodge get no agility term");
+                rates = null;
+            }
+            catch (ArgumentException ex)
+            {
+                throw new InvalidOperationException("Stats:RequireImportedData is set and the crit/dodge per agility rows are incomplete: " + ex.Message, ex);
+            }
+
+            if (rates is null && content.CritPerAgility.Count + content.DodgePerAgility.Count == 0)
             {
                 _logger.LogWarning("Stats: no crit/dodge per agility data is imported (player_crit_per_agility, player_dodge_per_agility); crit and dodge get no agility term");
             }

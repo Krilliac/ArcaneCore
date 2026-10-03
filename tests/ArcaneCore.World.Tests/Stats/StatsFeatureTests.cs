@@ -146,6 +146,21 @@ public sealed class StatsFeatureTests
         Assert.NotNull(await lenient.EnsureLoadedAsync());
     }
 
+    [Fact]
+    public async Task PartialRateRows_AreRefusedWhenRequired_AndLeaveOutTheAgilityTermsWhenLenient()
+    {
+        // Crit rows for level 1 only (no level 60), a zero rate in the dodge table.
+        PlayerStatsContent partial = new(
+            [new ClassLevelStats(1, 1, 20, 0)], [new LevelStats(1, 1, 1, 1, 1, 1, 1, 1)], Enumerable.Range(1, 59).Select(l => ((uint)l, 100u)),
+            [new AgilityRateRow(1, 1, 4f)], [new AgilityRateRow(1, 1, 2f), new AgilityRateRow(1, 60, 0f)]);
+
+        StatsFeature lenient = Feature(new StatsTestContent(partial), required: false);
+        Assert.NotNull(await lenient.EnsureLoadedAsync());
+        Assert.Same(lenient.System, await lenient.EnsureLoadedAsync());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Feature(new StatsTestContent(partial), required: true).EnsureLoadedAsync());
+    }
+
     private static StatsFeature Feature(StatsTestContent content, bool required)
     {
         var services = new ServiceCollection();

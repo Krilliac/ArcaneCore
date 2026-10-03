@@ -78,8 +78,21 @@ public sealed class PlayerStatState
         Maintainer?.UpdateBlockPercentage(Owner);
     }
 
-    /// <summary>Player::SetCanDualWield (Player.h:1503): a plain flag.</summary>
-    public void SetCanDualWield(bool value) => CanDualWield = value;
+    /// <summary>
+    /// Player::SetCanDualWield (Player.h:1503) is a plain flag in the reference. Here a change also recomputes the
+    /// attack power and damage fields: the Dual Wield passive is cast after the items were attached at login, and
+    /// the off hand damage written then had no attack power yet (StatSystem.cpp:349-350 writes it only with the ability).
+    /// </summary>
+    public void SetCanDualWield(bool value)
+    {
+        if (CanDualWield == value)
+        {
+            return;
+        }
+
+        CanDualWield = value;
+        Maintainer?.UpdateAttackPowerAndDamage(Owner, ranged: false);
+    }
 
     /// <summary>Unit::GetWeaponDamageCount.</summary>
     public int WeaponDamageCount(WeaponAttackType type) => _count[(int)type];
