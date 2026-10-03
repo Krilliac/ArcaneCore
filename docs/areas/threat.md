@@ -103,3 +103,21 @@ Limits: spell crit threat is applied for direct spell hits only (damage over tim
 hostile hit starts combat, the Pickpocket back-attack and the refusal of flat threat for spells that are partly positive are not modelled; a
 triggered cast stands in for "triggered by an aura"; druid bear-form and talent threat modifiers flow once the forms and talent lanes apply
 their auras and spell modifiers.
+
+### evade fidelity (Creatures/CreatureMapSystem.Evade.cs, Creatures/AI/CreatureAuraReset.cs)
+
+`EnterEvadeMode` follows vmangos `CreatureAI::EnterEvadeMode` (AI/CreatureAI.cpp:323-346):
+
+- No instant heal. Health and mana are left alone; once out of combat the creature regenerates a third of its maximum per 5 s tick
+  (`Creature::RegenerateAll`, Objects/Creature.cpp:1087-1161; map combat already does this). The old instant snap is the
+  development switch `Creatures:EvadeRestoresFullHealth` (default false). The earlier code and two test comments cited vmangos for the
+  snap; the citation was wrong.
+- `Creature::RemoveAurasAtReset` (:3611-3630) through the optional `ICreatureAuraReset` of the spell caster: every aura goes except a
+  non-permanent positive one cast by a player; KEEP_POSITIVE_AURAS_ON_EVADE removes only the negative ones (`Creatures:EvadeResetsAuras`,
+  default true). The per-spell "not removed on evade" custom flag of vmangos' spell_template is data this repository does not have.
+- A charmed creature keeps its auras and does not run home.
+- `CreatureMapSystem.Evaded` is raised once per evade (not for a dead creature, not for an evade already running).
+
+Not delivered: combo points other players hold on the creature are not cleared (no evade event reaches the combo service yet; the new
+event is the hook), a creature's pets and totems are not sent home (creatures have no controlled-unit links), the loot recipient is
+not cleared (no tapping primitive in Game).

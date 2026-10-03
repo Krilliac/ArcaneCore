@@ -11,7 +11,7 @@ namespace ArcaneCore.Game.Creatures;
 /// <see cref="SpellSystem.RemoveUnit"/>, which revokes the ownership token: a creature that
 /// respawns or is re-added never regains attribution for auras from its previous life.
 /// </summary>
-public sealed class SpellSystemCreatureCaster : ICreatureSpellCaster
+public sealed class SpellSystemCreatureCaster : ICreatureSpellCaster, ICreatureAuraReset
 {
     private readonly Func<SpellSystem> _spells;
     private SpellSystem? _subscribed;
@@ -88,6 +88,32 @@ public sealed class SpellSystemCreatureCaster : ICreatureSpellCaster
     }
 
     public void OnCreatureRemoved(Creature creature) => Spells.RemoveUnit(creature);
+
+    /// <summary>
+    /// vmangos Creature::RemoveAurasAtReset (Objects/Creature.cpp:3611-3630): KEEP_POSITIVE_AURAS_ON_EVADE removes only the negative auras;
+    /// otherwise every aura goes except a non-permanent positive one whose caster is a player. The per-spell "not removed on evade" custom flag
+    /// of vmangos' spell_template has no counterpart here, so every other aura goes.
+    /// </summary>
+    public void ResetAuras(Creature creature, bool keepPositive)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        SpellSystem spells = Spells;
+        foreach (SpellAuraHolder holder in spells.GetAuras(creature).ToArray())
+        {
+            if (holder.IsRemoved)
+            {
+                continue;
+            }
+
+            bool keep = keepPositive
+                ? holder.IsPositive
+                : holder.CasterGuid.IsPlayer && !holder.IsPermanent && holder.IsPositive;
+            if (!keep)
+            {
+                spells.RemoveAurasByCaster(creature, holder.Spell.Id, holder.CasterGuid);
+            }
+        }
+    }
 
     private void Subscribe()
     {

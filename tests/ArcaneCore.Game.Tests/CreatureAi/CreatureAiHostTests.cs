@@ -222,7 +222,7 @@ public sealed class CreatureAiHostTests
         Run(world, 4000);
 
         Assert.True(wolf.IsInEvadeMode);
-        Assert.Equal(wolf.MaxHealth, wolf.Health);
+        Assert.True(wolf.Health < wolf.MaxHealth); // vmangos CreatureAI::EnterEvadeMode (AI/CreatureAI.cpp:323-346) does not heal: the creature regenerates (EvadeFidelityTests); the old comment cited it for a full reset
         Assert.Empty(wolf.Combat.Threat.Entries);
         Assert.Null(wolf.Combat.Victim);
         Assert.False(wolf.Combat.IsInCombat);

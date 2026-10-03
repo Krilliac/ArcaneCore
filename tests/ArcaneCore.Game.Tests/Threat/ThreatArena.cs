@@ -55,23 +55,35 @@ internal sealed class ThreatArena : IDisposable
 
     public IReadOnlyList<Creature> Creatures => _creatures;
 
-    /// <summary>Spawn another creature (a very healthy wolf that stays where it is).</summary>
-    public Creature SpawnCreature(uint guid, float x)
+    /// <summary>
+    /// Spawn another creature (a very healthy wolf that stays where it is); <paramref name="tweak"/> adjusts its template and
+    /// <paramref name="options"/> the creature system. Its AI casts through the spell system, so it can be evaded and reset.
+    /// </summary>
+    public Creature SpawnCreature(uint guid, float x, Func<CreatureTemplate, CreatureTemplate>? tweak = null, CreatureOptions? options = null)
     {
         CreatureTemplate template = CreatureTestSupport.Template(CreatureTestSupport.WolfEntry, t =>
         {
             t.MinLevelHealth = 100000;
             t.MaxLevelHealth = 100000;
         });
+        if (tweak is not null)
+        {
+            template = tweak(template);
+        }
+
         var system = new CreatureMapSystem(Map, CreatureTestSupport.Content([template], [CreatureTestSupport.Spawn(guid, CreatureTestSupport.WolfEntry, x, 0)]),
-            null, random: new Random(1), aiServices: new CreatureAiServices { Hostility = new AlwaysHostile() });
+            options, random: new Random(1), aiServices: new CreatureAiServices { Hostility = new AlwaysHostile(), Spells = new SpellSystemCreatureCaster(Kit.System) });
         Map.AddUpdater(system);
         Kit.World.RunTick(50);
         Creature creature = Assert.Single(system.Creatures);
         creature.AI!.CombatMovement = false;
         _creatures.Add(creature);
+        Systems.Add(system);
         return creature;
     }
+
+    /// <summary>The creature system of every spawned creature, in spawn order.</summary>
+    public List<CreatureMapSystem> Systems { get; } = [];
 
     /// <summary>Cast <paramref name="spell"/> from <paramref name="caster"/> at <paramref name="target"/>.</summary>
     public SpellCastResult Cast(Unit caster, Unit target, uint spell, bool triggered = true)
