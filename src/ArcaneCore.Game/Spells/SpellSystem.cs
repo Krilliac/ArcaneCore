@@ -44,6 +44,7 @@ public sealed partial class SpellSystem
         EffectHandlers = CreateEffectHandlers();
         _builtInEffectHandlers = new Dictionary<SpellEffectName, SpellEffectHandler>(EffectHandlers);
         AuraHandlers = CreateAuraHandlers();
+        RegisterModules(SpellHandlerModules.BuiltIn);
     }
 
     /// <summary>The spell table (replaceable, e.g. after a reload).</summary>
