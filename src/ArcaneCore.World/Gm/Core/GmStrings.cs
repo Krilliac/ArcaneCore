@@ -95,4 +95,58 @@ public static class GmStrings
 
     /// <summary>LANG_UPTIME (13; mangos.sql:3435).</summary>
     public static string Uptime(string time) => $"Server uptime: {time}";
+
+    /// <summary>LANG_NO_CHAR_SELECTED (116; mangos.sql: "No character selected.").</summary>
+    public const string NoCharSelected = "No character selected.";
+
+    /// <summary>LANG_BAD_VALUE (115): "Incorrect values.".</summary>
+    public const string BadValue = "Incorrect values.";
+
+    /// <summary>LANG_YOU_TAKE_ALL_MONEY (153).</summary>
+    public static string YouTakeAllMoney(string link) => $"You take all copper of {link}.";
+
+    /// <summary>LANG_YOURS_ALL_MONEY_GONE (154).</summary>
+    public static string YoursAllMoneyGone(string link) => $"{link} took you all of your copper.";
+
+    /// <summary>LANG_YOU_TAKE_MONEY (155).</summary>
+    public static string YouTakeMoney(long copper, string link) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"You take {copper} copper from {link}.");
+
+    /// <summary>LANG_YOURS_MONEY_TAKEN (156).</summary>
+    public static string YoursMoneyTaken(string link, long copper) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{link} took {copper} copper from you.");
+
+    /// <summary>LANG_YOU_GIVE_MONEY (157).</summary>
+    public static string YouGiveMoney(long copper, string link) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"You give {copper} copper to {link}.");
+
+    /// <summary>LANG_YOURS_MONEY_GIVEN (158).</summary>
+    public static string YoursMoneyGiven(string link, long copper) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{link} gave you {copper} copper.");
+
+    /// <summary>LANG_YOU_CHANGE_HP (118): "You changed HP of %s to %i/%i.".</summary>
+    public static string YouChangeHp(string link, int hp, int max) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"You changed HP of {link} to {hp}/{max}.");
+
+    /// <summary>LANG_YOURS_HP_CHANGED (119).</summary>
+    public static string YoursHpChanged(string link, int hp, int max) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{link} changed your HP to {hp}/{max}.");
+
+    /// <summary>LANG_YOU_CHANGE_MANA (120).</summary>
+    public static string YouChangeMana(string link, int mana, int max) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"You changed MANA of {link} to {mana}/{max}.");
+
+    /// <summary>LANG_YOURS_MANA_CHANGED (121).</summary>
+    public static string YoursManaChanged(string link, int mana, int max) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{link} changed your MANA to {mana}/{max}.");
+
+    /// <summary>LANG_YOU_CHANGE_LVL (127): "You changed level of %s to %i.".</summary>
+    public static string YouChangeLevel(string link, int level) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"You changed level of {link} to {level}.");
+
+    /// <summary>LANG_YOURS_LEVEL_UP (557).</summary>
+    public static string YoursLevelUp(string link, int level) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{link} level up you to ({level})");
+
+    /// <summary>LANG_YOURS_LEVEL_DOWN (558).</summary>
+    public static string YoursLevelDown(string link, int level) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{link} level down you to ({level})");
+
+    /// <summary>LANG_YOURS_LEVEL_PROGRESS_RESET (559).</summary>
+    public static string YoursLevelProgressReset(string link) => $"{link} reset your level progress.";
+
+    /// <summary>LANG_SELECT_CHAR_OR_CREATURE (1): "You should select a character or a creature.".</summary>
+    public const string SelectCharOrCreature = "You should select a character or a creature.";
+
+    /// <summary>Not a vmangos text: this server does not level creatures with .levelup (vmangos does).</summary>
+    public const string LevelingCreaturesUnsupported = "Leveling creatures is not supported; select a player.";
 }

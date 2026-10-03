@@ -232,9 +232,16 @@ public static class BuiltinCommands
         return true;
     }
 
+    /// <summary>
+    /// vmangos HandleModifyMoneyCommand (CharacterCommands.cpp:4460-4523): a negative amount takes
+    /// copper (everything when it would reach zero), a positive one gives it, and an amount of
+    /// MAX_MONEY or more sets the purse to the maximum. The target is told unless it is the
+    /// invoker. The quest-settlement guard is an ArcaneCore addition: a purse mid-settlement is
+    /// not touched.
+    /// </summary>
     private static bool ModifyMoney(CommandContext context, string args)
     {
-        if (!int.TryParse(args, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int delta))
+        if (args.Length == 0)
         {
             return false;
         }
@@ -242,7 +249,7 @@ public static class BuiltinCommands
         Player? target = context.SelectedPlayerOrSelf();
         if (target is null)
         {
-            context.Reply("No player selected.");
+            context.Reply(GmStrings.NoCharSelected);
             return true;
         }
 
@@ -251,19 +258,54 @@ public static class BuiltinCommands
             return true;
         }
 
+        if (!new CommandArgs(args).ExtractInt32(out int add))
+        {
+            return false;
+        }
+
         if (target.IsQuestSettlementPending)
         {
             context.Reply("This player's quest reward is still settling.");
             return true;
         }
 
-        long updated = Math.Clamp((long)target.Money + delta, 0L, MaxMoney);
-        target.Money = (uint)updated;
-        context.Reply($"{target.Name} now has {updated} copper.");
-        if (!ReferenceEquals(target, context.Player))
+        string link = GmStrings.PlayerLink(target.Name);
+        string caller = GmStrings.PlayerLink(context.Player.Name);
+        bool report = !ReferenceEquals(target, context.Player);
+        long money = target.Money;
+        if (add < 0)
         {
-            target.Session.Send(WorldOpcode.SmsgMessagechat,
-                ChatPackets.BuildSystemMessage($"{context.Player.Name} changed your money by {delta} copper."));
+            long remaining = money + add;
+            if (remaining <= 0)
+            {
+                context.Reply(GmStrings.YouTakeAllMoney(link));
+                if (report)
+                {
+                    target.SendSystemMessage(GmStrings.YoursAllMoneyGone(caller));
+                }
+
+                target.Money = 0;
+            }
+            else
+            {
+                context.Reply(GmStrings.YouTakeMoney(-(long)add, link));
+                if (report)
+                {
+                    target.SendSystemMessage(GmStrings.YoursMoneyTaken(caller, -(long)add));
+                }
+
+                target.Money = (uint)Math.Min(remaining, MaxMoney);
+            }
+        }
+        else
+        {
+            context.Reply(GmStrings.YouGiveMoney(add, link));
+            if (report)
+            {
+                target.SendSystemMessage(GmStrings.YoursMoneyGiven(caller, add));
+            }
+
+            target.Money = add >= MaxMoney ? MaxMoney : (uint)Math.Min(money + add, MaxMoney);
         }
 
         return true;

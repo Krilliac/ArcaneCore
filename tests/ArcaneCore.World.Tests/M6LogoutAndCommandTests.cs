@@ -247,13 +247,15 @@ public sealed class M6LogoutAndCommandTests
         await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
         await Drain(gm, player, admin);
 
-        Assert.Equal("Staff now has 500 copper.", await CommandAsync(gm, ".modify money 500"));
-        Assert.Equal("Staff now has 0 copper.", await CommandAsync(gm, ".mod mon -1000")); // clamped at zero
+        const string staff = "|cffffffff|Hplayer:Staff|h[Staff]|h|r";
+        const string target = "|cffffffff|Hplayer:Player|h[Player]|h|r";
+        Assert.Equal($"You give 500 copper to {staff}.", await CommandAsync(gm, ".modify money 500"));
+        Assert.Equal($"You take all copper of {staff}.", await CommandAsync(gm, ".mod mon -1000")); // CharacterCommands.cpp:4482: taking more than held takes all
         Assert.StartsWith("Incorrect syntax.", await CommandAsync(gm, ".modify money lots"));
 
         await gm.SendAsync(WorldOpcode.CmsgSetSelection, U64(2));
-        Assert.Equal("Player now has 7 copper.", await CommandAsync(gm, ".modify money 7"));
-        Assert.Equal("Staff changed your money by 7 copper.", (await player.ReadChatAsync()).Text);
+        Assert.Equal($"You give 7 copper to {target}.", await CommandAsync(gm, ".modify money 7"));
+        Assert.Equal($"{staff} gave you 7 copper.", (await player.ReadChatAsync()).Text);
         Assert.Equal(7u, await host.PlayerStateAsync("Player", p => p.Money));
 
         await gm.SendAsync(WorldOpcode.CmsgSetSelection, U64(3));

@@ -28,7 +28,7 @@ public sealed class GmTeleportCommands : ICommandGroup
 
     private static bool Recall(CommandContext context, string text)
     {
-        if (!TryTarget(context, new CommandArgs(text), out Player? target) || !context.CanActOn(target))
+        if (!GmTargets.TryPlayer(context, new CommandArgs(text), out Player? target) || !context.CanActOn(target))
         {
             return true;
         }
@@ -52,7 +52,7 @@ public sealed class GmTeleportCommands : ICommandGroup
 
     private static bool Namego(CommandContext context, string text)
     {
-        if (!TryTarget(context, new CommandArgs(text), out Player? target))
+        if (!GmTargets.TryPlayer(context, new CommandArgs(text), out Player? target))
         {
             return true;
         }
@@ -91,7 +91,7 @@ public sealed class GmTeleportCommands : ICommandGroup
 
     private static bool Goname(CommandContext context, string text)
     {
-        if (!TryTarget(context, new CommandArgs(text), out Player? target))
+        if (!GmTargets.TryPlayer(context, new CommandArgs(text), out Player? target))
         {
             return true;
         }
@@ -121,21 +121,6 @@ public sealed class GmTeleportCommands : ICommandGroup
 
         return true;
     }
-
-    /// <summary>ExtractPlayerTarget for online players: a name or link, else the selection; "Player not found!" otherwise.</summary>
-    internal static bool TryTarget(CommandContext context, CommandArgs args, out Player target)
-    {
-        if (PlayerTargetResolver.TryExtract(args, name => context.World.FindOnlinePlayer(name), context.SelectedPlayerOrSelf, out Player? found, out _)
-            && found is not null)
-        {
-            target = found;
-            return true;
-        }
-
-        context.Reply(GmStrings.PlayerNotFound);
-        target = null!;
-        return false;
-    }
 }
 
 /// <summary>
@@ -156,7 +141,7 @@ public sealed class TeleNameExtension : ICommandExtension
     {
         var args = new CommandArgs(text);
         string? nameArg = args.ExtractOptNotLastArg();
-        if (!GmTeleportCommands.TryTarget(context, new CommandArgs(nameArg ?? string.Empty), out Player? target))
+        if (!GmTargets.TryPlayer(context, nameArg, out Player? target))
         {
             return true;
         }
