@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
 
@@ -10,6 +11,8 @@ public sealed record AuraHandler(Action<SpellSystem, SpellAuraHolder, SpellAura,
 
 public sealed partial class SpellSystem
 {
+    private readonly ConditionalWeakTable<Unit, AuraCasterOwner> _auraCasterOwners = new();
+
     /// <summary>Visible aura slots (vmangos MAX_AURAS); 0-31 positive, 32-47 negative (MAX_POSITIVE_AURAS).</summary>
     public const int MaxAuras = 48;
 
@@ -56,7 +59,8 @@ public sealed partial class SpellSystem
         }
 
         context.PendingHolder ??= new SpellAuraHolder(
-            context.Spell, context.Target, context.Caster.Guid, context.Caster.Level,
+            context.Spell, context.Target, context.Caster,
+            _auraCasterOwners.GetValue(context.Caster, static caster => new AuraCasterOwner(caster)),
             context.Cast.State == SpellCastState.Casting ? context.Cast.Timer : context.Spell.GetDuration());
         context.PendingHolder.SetAura(new SpellAura(context.EffectIndex, effect.AuraType, context.Value, effect.Amplitude, effect.MiscValue));
     }
@@ -75,7 +79,8 @@ public sealed partial class SpellSystem
             && (h.CasterGuid == holder.CasterGuid || holder.IsPositive));
         if (existing is not null)
         {
-            if (existing.CasterGuid == holder.CasterGuid && holder.Spell.StackAmount > 1)
+            if (existing.CasterGuid == holder.CasterGuid
+                && ReferenceEquals(existing.CasterOwner, holder.CasterOwner) && holder.Spell.StackAmount > 1)
             {
                 existing.StackAmount = (byte)Math.Min(existing.StackAmount + 1, holder.Spell.StackAmount);
                 existing.Duration = existing.MaxDuration = holder.MaxDuration;
@@ -164,7 +169,7 @@ public sealed partial class SpellSystem
             }
 
             if (IsQuestSettlementPending(holder.Target)
-                || IsQuestSettlementPending(Units.Find(holder.Target, holder.CasterGuid)))
+                || IsQuestSettlementPending(ResolveAuraCaster(holder)))
             {
                 continue;
             }
@@ -293,6 +298,25 @@ public sealed partial class SpellSystem
 
     // --- aura type handlers ---------------------------------------------------------------
 
+    private Unit? ResolveAuraCaster(SpellAuraHolder holder)
+    {
+        Unit? caster = holder.CasterOwner.Caster;
+        return caster is { IsInWorld: true }
+            && ReferenceEquals(caster.Map, holder.Target.Map)
+            && ReferenceEquals(Units.Find(holder.Target, holder.CasterGuid), caster)
+                ? caster
+                : null;
+    }
+
+    private void RevokeAuraCaster(Unit unit)
+    {
+        if (_auraCasterOwners.TryGetValue(unit, out AuraCasterOwner? owner))
+        {
+            owner.Revoke();
+            _auraCasterOwners.Remove(unit);
+        }
+    }
+
     /// <summary>
     /// vmangos Aura::PeriodicTick SPELL_AURA_PERIODIC_DAMAGE / _PERCENT: the amount (percent of the
     /// target's maximum health for _PERCENT) goes to <see cref="IDamageSink"/>; SMSG_PERIODICAURALOG to the target's set.
@@ -308,7 +332,7 @@ public sealed partial class SpellSystem
         uint amount = aura.Type == AuraType.PeriodicDamagePercent
             ? (uint)((ulong)target.MaxHealth * (uint)aura.Amount / 100)
             : (uint)aura.Amount;
-        Unit caster = Units.Find(target, holder.CasterGuid) ?? target;
+        Unit caster = ResolveAuraCaster(holder) ?? target;
         uint dealt = Damage.DealSpellDamage(caster, target, holder.Spell, amount, periodic: true);
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
             target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, dealt, (uint)holder.Spell.School)), includeSelf: true);
@@ -329,7 +353,7 @@ public sealed partial class SpellSystem
         uint amount = aura.Type == AuraType.ObsModHealth
             ? (uint)((ulong)target.MaxHealth * (uint)aura.Amount / 100)
             : (uint)aura.Amount;
-        Unit caster = Units.Find(target, holder.CasterGuid) ?? target;
+        Unit caster = ResolveAuraCaster(holder) ?? target;
         uint healed = Damage.Heal(caster, target, holder.Spell, amount);
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
             target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, healed, 0)), includeSelf: true);
@@ -361,7 +385,7 @@ public sealed partial class SpellSystem
     private void TickTriggerSpell(SpellAuraHolder holder, SpellAura aura)
     {
         uint triggerSpell = holder.Spell.Effects[aura.EffectIndex].TriggerSpell;
-        Unit caster = Units.Find(holder.Target, holder.CasterGuid) ?? holder.Target;
+        Unit caster = ResolveAuraCaster(holder) ?? holder.Target;
         if (Store.Get(triggerSpell) is not null)
         {
             CastSpell(caster, triggerSpell, SpellCastTargets.ForUnit(holder.Target.Guid), triggered: true);

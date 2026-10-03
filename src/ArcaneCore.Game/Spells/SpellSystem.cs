@@ -221,7 +221,8 @@ public sealed partial class SpellSystem
     public void RemoveUnit(Unit unit)
     {
         ArgumentNullException.ThrowIfNull(unit);
-        if (_states.TryGetValue(unit.Guid, out UnitSpellState? state))
+        RevokeAuraCaster(unit);
+        if (_states.TryGetValue(unit.Guid, out UnitSpellState? state) && ReferenceEquals(state.Unit, unit))
         {
             Forget(state);
         }
@@ -436,6 +437,7 @@ public sealed partial class SpellSystem
 
     private void Forget(UnitSpellState state)
     {
+        RevokeAuraCaster(state.Unit);
         if (state.CurrentCast is { } cast)
         {
             cast.State = SpellCastState.Finished;
