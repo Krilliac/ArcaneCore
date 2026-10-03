@@ -35,8 +35,8 @@ public sealed class TerrainTile
     /// <summary><c>INVALID_HEIGHT</c>: heights at or below this are "no data".</summary>
     public const float InvalidHeight = -100000.0f;
 
-    private const uint MapMagic = 0x5350414D;        // "MAPS"
-    private const uint MapVersionMagic = 0x342E317A; // "z1.4"
+    internal const uint MapMagic = 0x5350414D;        // "MAPS"
+    internal const uint MapVersionMagic = 0x342E317A; // "z1.4"
     private const uint AreaMagic = 0x41455241;       // "AREA"
     private const uint HeightMagic = 0x5447484D;     // "MHGT"
     private const uint LiquidMagic = 0x51494C4D;     // "MLIQ"
