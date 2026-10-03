@@ -1,0 +1,117 @@
+using System.Collections.Frozen;
+using ArcaneCore.Kernel.Quests;
+
+namespace ArcaneCore.Game.Quests;
+
+/// <summary>
+/// The immutable quest content (built once at startup, read on the world thread): quests by
+/// id, creature starter/ender relations by creature entry, and exclusive groups — the
+/// relevant parts of vmangos ObjectMgr::LoadQuests / LoadCreatureQuestRelations.
+/// </summary>
+public sealed class QuestStore
+{
+    private readonly FrozenDictionary<uint, Quest> _quests;
+    private readonly FrozenDictionary<uint, uint[]> _starters;
+    private readonly FrozenDictionary<uint, uint[]> _enders;
+    private readonly FrozenDictionary<int, uint[]> _exclusiveGroups;
+
+    public QuestStore(QuestContent content)
+    {
+        var quests = new Dictionary<uint, Quest>();
+        foreach (QuestTemplate t in content.Templates)
+        {
+            quests[t.Entry] = new Quest(t);
+        }
+
+        var exclusive = new Dictionary<int, List<uint>>();
+        foreach (Quest q in quests.Values.OrderBy(q => q.Id))
+        {
+            QuestTemplate t = q.Template;
+
+            // NextQuestInChain to a missing quest is cleared; otherwise the target learns its predecessor.
+            if (t.NextQuestInChain != 0 && quests.TryGetValue(t.NextQuestInChain, out Quest? next))
+            {
+                q.NextQuestInChain = t.NextQuestInChain;
+                next.AddPrevChainQuest(q.Id);
+            }
+
+            // PrevQuestId: kept unless missing or itself a breadcrumb (vmangos logs and skips both).
+            if (t.PrevQuestId != 0 && quests.TryGetValue((uint)Math.Abs(t.PrevQuestId), out Quest? prev)
+                && prev.Template.BreadcrumbForQuestId == 0)
+            {
+                q.AddPrevQuest(t.PrevQuestId);
+            }
+
+            // NextQuestId: the target gets this quest as a (signed) previous quest.
+            if (t.NextQuestId != 0 && quests.TryGetValue((uint)Math.Abs(t.NextQuestId), out Quest? nextQuest))
+            {
+                nextQuest.AddPrevQuest(t.NextQuestId < 0 ? -(int)q.Id : (int)q.Id);
+            }
+
+            if (t.ExclusiveGroup != 0)
+            {
+                if (!exclusive.TryGetValue(t.ExclusiveGroup, out List<uint>? members))
+                {
+                    exclusive[t.ExclusiveGroup] = members = [];
+                }
+
+                members.Add(q.Id);
+            }
+
+            q.BreadcrumbForQuestId = t.BreadcrumbForQuestId != 0 && quests.ContainsKey(t.BreadcrumbForQuestId)
+                ? t.BreadcrumbForQuestId
+                : 0;
+        }
+
+        // Breadcrumb loops are cut; every target learns the breadcrumbs that lead to it.
+        foreach (Quest q in quests.Values.OrderBy(q => q.Id))
+        {
+            var seen = new HashSet<uint>();
+            Quest current = q;
+            uint target = current.BreadcrumbForQuestId;
+            while (target != 0)
+            {
+                if (!seen.Add(current.Id))
+                {
+                    current.BreadcrumbForQuestId = 0;
+                    break;
+                }
+
+                current = quests[target];
+                current.AddDependentBreadcrumb(q.Id);
+                target = current.BreadcrumbForQuestId;
+            }
+        }
+
+        _quests = quests.ToFrozenDictionary();
+        _exclusiveGroups = exclusive.ToFrozenDictionary(p => p.Key, p => p.Value.ToArray());
+        _starters = Group(content.Starters, quests);
+        _enders = Group(content.Enders, quests);
+    }
+
+    public static QuestStore Empty { get; } = new(QuestContent.Empty);
+
+    public int Count => _quests.Count;
+
+    public Quest? Get(uint questId) => questId != 0 ? _quests.GetValueOrDefault(questId) : null;
+
+    /// <summary>Quests the creature entry starts (creature_questrelation), in table order.</summary>
+    public IReadOnlyList<uint> StartersOf(uint creatureEntry) => _starters.GetValueOrDefault(creatureEntry) ?? [];
+
+    /// <summary>Quests the creature entry ends (creature_involvedrelation), in table order.</summary>
+    public IReadOnlyList<uint> EndersOf(uint creatureEntry) => _enders.GetValueOrDefault(creatureEntry) ?? [];
+
+    /// <summary>vmangos Object::HasQuest for a creature.</summary>
+    public bool Starts(uint creatureEntry, uint questId) => StartersOf(creatureEntry).Contains(questId);
+
+    /// <summary>vmangos Object::HasInvolvedQuest for a creature.</summary>
+    public bool Ends(uint creatureEntry, uint questId) => EndersOf(creatureEntry).Contains(questId);
+
+    /// <summary>Members of an exclusive group (vmangos m_ExclusiveQuestGroups).</summary>
+    public IReadOnlyList<uint> ExclusiveGroup(int group) => _exclusiveGroups.GetValueOrDefault(group) ?? [];
+
+    private static FrozenDictionary<uint, uint[]> Group(IEnumerable<CreatureQuestRelation> relations, Dictionary<uint, Quest> quests)
+        => relations.Where(r => quests.ContainsKey(r.Quest))
+            .GroupBy(r => r.Id)
+            .ToFrozenDictionary(g => g.Key, g => g.Select(r => r.Quest).Distinct().ToArray());
+}
