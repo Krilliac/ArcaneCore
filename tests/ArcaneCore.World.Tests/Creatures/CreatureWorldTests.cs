@@ -102,6 +102,23 @@ public sealed class CreatureWorldTests
             "the wolf respawns");
     }
 
+    [Fact]
+    public async Task Feature_WiresAiServices_AndSpawnedCreaturesGetAnAi()
+    {
+        await using WorldTestHost host = StartWithWolf(out CreatureTestContext context);
+        CreatureWorldFeature feature = context.Feature!;
+
+        // The spell feature is registered by the host, so creature AI casts through its system.
+        Assert.IsType<Game.Creatures.SpellSystemCreatureCaster>(feature.AiServices.Spells);
+        Assert.IsType<Game.Creatures.FactionCreatureHostility>(feature.AiServices.Hostility);
+
+        await using WorldTestClient client = await host.EnterWorldAsync("CRWAI", "Crwai");
+        await ReadUntilCreateAsync(client, WolfGuid());
+        await host.WaitForWorldAsync(
+            () => feature.FindSystem(0)!.FindCreature(new Game.ObjectGuid(WolfGuid()))?.AI is not null,
+            "the wolf has an AI");
+    }
+
     private static ulong WolfGuid() => Game.ObjectGuid.WithEntry(Game.HighGuid.Unit, WolfEntry, SpawnGuid).Value;
 
     private static WorldTestHost StartWithWolf(out CreatureTestContext context)
