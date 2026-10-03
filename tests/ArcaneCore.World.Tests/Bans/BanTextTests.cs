@@ -25,11 +25,24 @@ public sealed class BanTextTests
         => Assert.Equal(expected, BanCommandText.TimeStringToSecs(text));
 
     [Fact]
-    public void TimeStringToSecs_WrapsAt32Bits_LikeTheOriginal()
+    public void TimeStringToSecs_NeverWraps_OverflowIsReportedAndSaturates()
     {
-        // 50000d = 4,320,000,000 s, above uint.MaxValue (4,294,967,295): the original wraps, so does the port.
-        Assert.Equal(unchecked((uint)(50000UL * 86400UL)), BanCommandText.TimeStringToSecs("50000d"));
+        // 50000d = 4,320,000,000 s, above uint.MaxValue (4,294,967,295): the original wraps to about 25,000 s.
+        Assert.False(BanCommandText.TryTimeStringToSecs("50000d", out uint secs));
+        Assert.Equal(0u, secs);
+        Assert.Equal(uint.MaxValue, BanCommandText.TimeStringToSecs("50000d"));
     }
+
+    [Theory]
+    [InlineData("49710d", true)]            // 4,294,944,000 s: fits
+    [InlineData("49710d6h28m15s", true)]    // exactly uint.MaxValue
+    [InlineData("49710d6h28m16s", false)]   // one past
+    [InlineData("49710d49710d", false)]     // the sum overflows
+    [InlineData("99999999999s", false)]     // the digit run overflows
+    [InlineData("4294967296s", false)]
+    [InlineData("1x", true)]                // a bad format is still the retail 0
+    public void TryTimeStringToSecs_ReportsOverflow(string text, bool fits)
+        => Assert.Equal(fits, BanCommandText.TryTimeStringToSecs(text, out _));
 
     [Theory]
     [InlineData("1d12h", true)]

@@ -197,7 +197,12 @@ async Task<int> BanAsync()
         return 1;
     }
 
-    uint seconds = BanTime.TimeStringToSecs(args[2]);
+    if (!BanTime.TryTimeStringToSecs(args[2], out uint seconds))
+    {
+        Console.Error.WriteLine($"duration '{args[2]}' is too long (more than {uint.MaxValue} seconds); refusing instead of wrapping");
+        return 1;
+    }
+
     int realm = int.TryParse(builder.Configuration["Bans:RealmId"], out int configured) ? configured : 1;
     IBanStore bans = scope.ServiceProvider.GetRequiredService<IBanStore>();
     await bans.BanAccountAsync(new BanRequest(account.Id, seconds, args[3], ConsoleAuthor, null, realm)).ConfigureAwait(false);

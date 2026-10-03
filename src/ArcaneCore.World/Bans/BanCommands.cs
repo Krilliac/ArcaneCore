@@ -86,7 +86,11 @@ public sealed class BanCommands : ICommandGroup
             return false;
         }
 
-        uint seconds = BanCommandText.TimeStringToSecs(duration);
+        if (!BanCommandText.TryTimeStringToSecs(duration, out uint seconds))
+        {
+            return false; // overflow: never wrap into a short or a permanent ban, whatever RejectUnparseableDuration says
+        }
+
         string display;
         switch (kind)
         {
@@ -130,6 +134,12 @@ public sealed class BanCommands : ICommandGroup
             if (owner is null)
             {
                 context.Reply(string.Format(BanCommandText.BanNotFound, kind == Kind.Account ? "account" : "character", display));
+                return;
+            }
+
+            if (options.ProtectHigherSecurity && owner.Value.AccountId != authorAccount && owner.Value.Security >= context.Security)
+            {
+                context.Reply(BanCommandText.TargetSecurityTooHigh);
                 return;
             }
 

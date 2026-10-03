@@ -36,8 +36,14 @@ public static class BanCommandText
     public const string BanListMatchingAccount = "The following accounts match your query:";     // 428
     public const string PlayerNotFound = "Player not found!";                                    // 499
 
+    /// <summary>ArcaneCore addition (Bans:ProtectHigherSecurity): vmangos has no such guard.</summary>
+    public const string TargetSecurityTooHigh = "You may not ban an account whose security level is equal to or higher than yours.";
+
     /// <summary>vmangos TimeStringToSecs (Util.cpp:252-275); the port lives in <see cref="BanTime"/>, shared with the account tool.</summary>
     public static uint TimeStringToSecs(string timeString) => BanTime.TimeStringToSecs(timeString);
+
+    /// <summary>The same with the 32-bit overflow reported (false): ban commands refuse it instead of wrapping.</summary>
+    public static bool TryTimeStringToSecs(string timeString, out uint seconds) => BanTime.TryTimeStringToSecs(timeString, out seconds);
 
     /// <summary>
     /// Whether the duration is a clean <c>1d2h3m4s</c> string. Retail does not ask: an operator typo becomes a

@@ -33,6 +33,16 @@ public sealed class BanOptions
     public bool RejectUnparseableDuration { get; set; }
 
     /// <summary>
+    /// Refuse <c>.ban account</c> / <c>.ban character</c> against an account whose security level is equal to or
+    /// higher than the invoker's (an account banning itself is still allowed, as in retail). vmangos has NO such
+    /// guard: a game master there can ban an administrator. The strict default closes the one path by which a
+    /// compromised low staff account locks out the highest account; set false for exact vmangos parity.
+    /// Does not apply to <c>.ban ip</c> (no per-address account list is kept) or to unbans. Bound from
+    /// Bans:ProtectHigherSecurity; default true (a deliberate deviation from retail, in the safe direction).
+    /// </summary>
+    public bool ProtectHigherSecurity { get; set; } = true;
+
+    /// <summary>
     /// The realm id written to <c>account_banned.realm</c> (vmangos <c>realmID</c>); recorded and shown by
     /// <c>.baninfo</c>, never filtered on, exactly as retail. Bound from Bans:RealmId; default 1.
     /// </summary>

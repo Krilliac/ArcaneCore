@@ -15,45 +15,68 @@ public static partial class BanTime
 
     /// <summary>
     /// vmangos TimeStringToSecs: digits accumulate, a unit letter d/h/m/s multiplies and adds, ANY other character
-    /// returns 0 (the ban commands treat 0 as a PERMANENT ban); digits without a unit contribute nothing. The
-    /// arithmetic is 32-bit unsigned and wraps, like the original.
+    /// returns 0 (the ban commands treat 0 as a PERMANENT ban); digits without a unit contribute nothing.
+    /// <para>
+    /// Unlike the original, whose 32-bit unsigned arithmetic silently wraps (<c>50000d</c> became a ban of about
+    /// 25,000 seconds, and a larger value could wrap to 0, i.e. permanent), the sum is computed with checked
+    /// arithmetic. A duration that does not fit in 32 bits is reported by <see cref="TryTimeStringToSecs"/> as
+    /// false so a caller can refuse it; this convenience form saturates to <see cref="uint.MaxValue"/> (about 136
+    /// years) and never wraps. Ban entry points must use <see cref="TryTimeStringToSecs"/> and refuse on false.
+    /// </para>
     /// </summary>
     public static uint TimeStringToSecs(string timeString)
+        => TryTimeStringToSecs(timeString, out uint secs) ? secs : uint.MaxValue;
+
+    /// <summary>
+    /// <see cref="TimeStringToSecs"/> with the overflow reported. False when the text names a duration that does
+    /// not fit in an unsigned 32-bit number of seconds (a digit run or the sum overflows); <paramref name="secs"/>
+    /// is then 0 and MUST NOT be used (0 means permanent). True otherwise, with the retail value (0 for a bad format).
+    /// </summary>
+    public static bool TryTimeStringToSecs(string timeString, out uint secs)
     {
         ArgumentNullException.ThrowIfNull(timeString);
-        uint secs = 0;
-        uint buffer = 0;
-        unchecked
+        ulong total = 0;
+        ulong buffer = 0;
+        foreach (char c in timeString)
         {
-            foreach (char c in timeString)
+            if (c is >= '0' and <= '9')
             {
-                if (c is >= '0' and <= '9')
+                buffer = (buffer * 10) + (uint)(c - '0'); // buffer <= uint.MaxValue before this, so no ulong overflow
+                if (buffer > uint.MaxValue)
                 {
-                    buffer *= 10;
-                    buffer += (uint)(c - '0');
-                    continue;
+                    secs = 0;
+                    return false;
                 }
 
-                uint multiplier = c switch
-                {
-                    'd' => 86400,
-                    'h' => 3600,
-                    'm' => 60,
-                    's' => 1,
-                    _ => 0,
-                };
-                if (multiplier == 0)
-                {
-                    return 0; // bad format
-                }
-
-                buffer *= multiplier;
-                secs += buffer;
-                buffer = 0;
+                continue;
             }
+
+            ulong multiplier = c switch
+            {
+                'd' => 86400,
+                'h' => 3600,
+                'm' => 60,
+                's' => 1,
+                _ => 0,
+            };
+            if (multiplier == 0)
+            {
+                secs = 0; // bad format: retail returns 0
+                return true;
+            }
+
+            total += buffer * multiplier; // <= 2^32 * 86400 + a sum we cap below: far from ulong overflow
+            if (total > uint.MaxValue)
+            {
+                secs = 0;
+                return false;
+            }
+
+            buffer = 0;
         }
 
-        return secs;
+        secs = (uint)total;
+        return true;
     }
 
     /// <summary>Whether the text is a clean <c>1d2h3m4s</c> string (every digit run has a unit); retail does not ask.</summary>

@@ -285,6 +285,62 @@ public sealed class BanCommandTests
         Assert.Equal("TARGET is banned for 1d. Reason: x.", await CommandAsync(admin, ".ban account target 1d x")); // the session survived
     }
 
+    [Fact]
+    public async Task BanAccount_RefusesATargetOfEqualOrHigherSecurity_ByDefault()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("GM", "Gm", AccountSecurity.GameMaster);
+        await host.AddAccountAsync("BOSS", AccountSecurity.Administrator);
+        await host.AddAccountAsync("PEER", AccountSecurity.GameMaster);
+        await host.AddAccountAsync("PLAIN");
+        await Drain(gm);
+
+        Assert.Equal(BanCommandText.TargetSecurityTooHigh, await CommandAsync(gm, ".ban account boss 1d x"));
+        Assert.Equal(BanCommandText.TargetSecurityTooHigh, await CommandAsync(gm, ".ban account peer 1d x"));
+        Assert.Equal("PLAIN is banned for 1d. Reason: x.", await CommandAsync(gm, ".ban account plain 1d x"));
+
+        Assert.Null(await host.Bans.GetActiveAccountBanAsync((await host.Accounts.FindByUsernameAsync("BOSS"))!.Id));
+        Assert.Null(await host.Bans.GetActiveAccountBanAsync((await host.Accounts.FindByUsernameAsync("PEER"))!.Id));
+    }
+
+    [Fact]
+    public async Task BanCharacter_RefusesATargetOfHigherSecurity_ByDefault()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("GM", "Gm", AccountSecurity.GameMaster);
+        await using WorldTestClient boss = await host.EnterWorldAsync("BOSS", "Boss", AccountSecurity.Administrator);
+        await Drain(gm, boss);
+
+        Assert.Equal(BanCommandText.TargetSecurityTooHigh, await CommandAsync(gm, ".ban character boss 1d x"));
+        Assert.Null(await host.Bans.GetActiveAccountBanAsync((await host.Accounts.FindByUsernameAsync("BOSS"))!.Id));
+    }
+
+    [Fact]
+    public async Task ProtectHigherSecurity_Off_AllowsTheVmangosBehaviour()
+    {
+        await using var host = WorldTestHost.Start(banOptions: new BanOptions { ProtectHigherSecurity = false });
+        await using WorldTestClient gm = await host.EnterWorldAsync("GM", "Gm", AccountSecurity.GameMaster);
+        await host.AddAccountAsync("BOSS", AccountSecurity.Administrator);
+        await Drain(gm);
+
+        Assert.Equal("BOSS is banned for 1d. Reason: x.", await CommandAsync(gm, ".ban account boss 1d x"));
+    }
+
+    [Theory]
+    [InlineData("50000d")]                 // 4.32e9 s: above uint.MaxValue, used to wrap to about 25,000 s
+    [InlineData("49710d49710d49710d")]     // sums past uint.MaxValue
+    [InlineData("99999999999999999999s")]  // digit run overflows
+    public async Task BanAccount_DurationOverflow_IsRefused_AndNeverWrapsToAShortOrPermanentBan(string duration)
+    {
+        await using var host = WorldTestHost.Start(); // RejectUnparseableDuration stays at its default (off)
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await host.AddAccountAsync("TARGET");
+        await Drain(admin);
+
+        Assert.StartsWith("Syntax: .ban account", await CommandAsync(admin, $".ban account target {duration} x"));
+        Assert.Null(await host.Bans.GetActiveAccountBanAsync((await host.Accounts.FindByUsernameAsync("TARGET"))!.Id));
+    }
+
     private static async Task Drain(params WorldTestClient[] clients)
     {
         foreach (WorldTestClient client in clients)
