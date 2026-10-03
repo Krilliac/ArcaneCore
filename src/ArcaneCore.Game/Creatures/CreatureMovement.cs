@@ -75,6 +75,21 @@ internal interface ICreatureMovementGenerator
 
     /// <summary>One tick; false when the generator is done and should be removed.</summary>
     bool Update(Creature creature, ICreatureMover mover, uint diffMs);
+
+    /// <summary>
+    /// Where evade sends the creature when this generator is the default one beneath the home move,
+    /// or null for the built-in rule (vmangos MovementGenerator::GetResetPosition, MovementGenerator.h:64;
+    /// random and waypoint movement override it, RandomMovementGenerator.cpp:131 and
+    /// WaypointMovementGenerator.cpp:292; HomeMovementGenerator.cpp:52 consumes it).
+    /// </summary>
+    CreatureHome? GetResetPosition(Creature creature) => null;
+
+    /// <summary>
+    /// False once the generator has found its target unreachable (vmangos MovementGenerator::IsReachable,
+    /// MovementGenerator.h:61, overridden by TargetedMovementGenerator.h:53; Creature.cpp:1016 uses it for
+    /// the unreachable-target evade).
+    /// </summary>
+    bool IsReachable => true;
 }
 
 /// <summary>vmangos IdleMovementGenerator: stays put.</summary>

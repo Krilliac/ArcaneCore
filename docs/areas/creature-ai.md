@@ -51,6 +51,26 @@ docs/integration/creature-ai.md.
   described in "Content model" below. A vmangos `creature_ai_events` table is reported and not
   imported.
 
+## Code layout
+
+The AI host is split by concern so parallel work does not share a file (a pure move: no behaviour
+changed, checked by identical test totals and a line-multiset comparison of the old and new sources):
+
+- `CreatureMapSystem` partials: `.cs` (construction, update loop, movement helpers),
+  `.Lifecycle.cs` (death, corpse, respawn, grid load/unload), `.Host.cs` (AI plumbing, spells seam,
+  hooks), `.Aggro.cs`, `.Combat.cs` (attack start, victim selection, leash), `.Evade.cs`,
+  `.Assist.cs`, `.Text.cs`, `.Summons.cs`.
+- `Creature` partials: `.cs`, `.Ai.cs`, `.Movement.cs`, `.Addon.cs`. `CreatureOptions` is a partial
+  class in its own file.
+- `CreatureAiServicesBinder` (World) builds the AI services: the built-in defaults, then every
+  settable property of `CreatureAiServices` is bound by reflection from the container, so a new
+  seam is a new property and never an edit of the creature feature. A registered
+  `ICreatureSpellCaster` now replaces the spell-system adapter.
+- `ICreatureMovementGenerator` gained default members `GetResetPosition` (evade runs to the default
+  generator's reset position when it supplies one; none do yet) and `IsReachable`
+  (`MotionMaster.IsReachable`); vmangos `MovementGenerator.h:61-64`,
+  `HomeMovementGenerator.cpp:52`. Both default to the previous behaviour.
+
 ## Content model (world schema step `CreatureBehaviourDataModule`)
 
 The world step that follows the first AI step (`CreatureBehaviourDataModule.Version`, 11 in this

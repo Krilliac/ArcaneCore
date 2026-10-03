@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.Creatures;
 /// health/mana columns (<c>Creature::SelectLevel</c>, "old style").
 /// <para>Thread affinity: world thread (owned by its map's <see cref="CreatureMapSystem"/>).</para>
 /// </summary>
-public sealed class Creature : Unit, ICombatCreature
+public sealed partial class Creature : Unit, ICombatCreature
 {
     /// <summary>OBJECT_FIELD_TYPE for creatures: TYPEMASK_OBJECT | TYPEMASK_UNIT (vmangos ObjectGuid.h).</summary>
     public const uint CreatureTypeMask = Game.TypeMask.Object | Game.TypeMask.Unit;
@@ -74,41 +74,10 @@ public sealed class Creature : Unit, ICombatCreature
 
     public uint Entry => GetUInt32(UpdateFields.ObjectFieldEntry);
 
-    /// <summary>Where the creature returns to (spawn point; vmangos GetRespawnCoord / home position).</summary>
-    public CreatureHome Home { get; private set; }
-
-    public CreatureMovementType MovementType { get; }
-
-    public float WanderDistance { get; }
-
     public CreatureDeathState DeathState { get; internal set; } = CreatureDeathState.Alive;
 
     /// <summary>The map system owns death, movement and respawn even while the spawn is hidden.</summary>
     internal CreatureMapSystem? System { get; set; }
-
-    /// <summary>
-    /// vmangos Creature::IsInEvadeMode: true from EnterEvadeMode until the creature is home.
-    /// Combat refuses new attacks on an evading creature (docs/integration/combat.md).
-    /// </summary>
-    public bool IsInEvadeMode => IsEvading;
-
-    /// <summary>Set by the map system while the creature runs home after leaving combat.</summary>
-    internal bool IsEvading { get; set; }
-
-    /// <summary>The script driving this creature (null outside a creature map system).</summary>
-    public CreatureAI? AI { get; internal set; }
-
-    /// <summary>The movement generator stack (vmangos MotionMaster).</summary>
-    public MotionMaster Motion { get; }
-
-    /// <summary>Where combat began (vmangos m_combatStartX/Y/Z): waypoint movers evade back here.</summary>
-    internal CreatureHome? CombatStart { get; set; }
-
-    /// <summary>The aggro hook ran for the current fight (reset by evade, death and respawn).</summary>
-    internal bool HasAggroed { get; set; }
-
-    /// <summary>The assistance call went out for the current fight (vmangos m_AlreadyCallAssistance).</summary>
-    internal bool CalledAssistance { get; set; }
 
     public bool CanParry => true;
 
@@ -120,41 +89,11 @@ public sealed class Creature : Unit, ICombatCreature
 
     public bool RegeneratesHealth => true;
 
-    /// <summary>vmangos CreatureAI::AttackedBy: an idle creature retaliates against its attacker.</summary>
-    public void OnAttackedBy(Unit attacker)
-    {
-        if (AI is { } ai)
-        {
-            if (IsAlive && !IsEvading && Map is not null)
-            {
-                ai.OnAttackedBy(attacker);
-            }
-
-            return;
-        }
-
-        if (Map is not { } map || Combat.Victim is not null || !IsAlive || !map.Combat.Hooks.CanAttack(this, attacker))
-        {
-            return;
-        }
-
-        System?.StopMoving(this);
-        map.Combat.Attack(this, attacker);
-    }
-
-    /// <summary>vmangos CreatureAI::JustDied: tell the AI, then begin the map system's corpse and respawn timers.</summary>
-    public void OnJustDied(Unit? killer) => System?.OnCreatureDied(this, killer);
-
     public uint NpcFlags
     {
         get => GetUInt32(UpdateFields.UnitNpcFlags);
         set => SetUInt32(UpdateFields.UnitNpcFlags, value);
     }
-
-    /// <summary>The active spline, or null when standing.</summary>
-    public CreatureSpline? Spline { get; private set; }
-
-    public bool IsMoving => Spline is not null;
 
     /// <summary>Corpse time left (ms) while <see cref="DeathState"/> is <see cref="CreatureDeathState.Corpse"/>.</summary>
     internal uint CorpseDecayMs { get; set; }
@@ -164,8 +103,6 @@ public sealed class Creature : Unit, ICombatCreature
 
     /// <summary>True only during the visibility pass of a runtime add (vmangos Map::Add → SetIsNewObject).</summary>
     internal bool IsNewObject { get; set; }
-
-    internal void SetHome(CreatureHome home) => Home = home;
 
     /// <summary>Corpse duration by rank (vmangos Creature::Create; cmangos CorpseDecay overrides when set).</summary>
     public uint CorpseDecaySeconds(CreatureOptions options)
@@ -322,20 +259,6 @@ public sealed class Creature : Unit, ICombatCreature
         SetUInt32(UpdateFields.UnitFieldResistances, t.Armor);
     }
 
-    /// <summary>creature_addon: mount, stand state, sheath state, emote state (vmangos Creature::LoadCreatureAddon).</summary>
-    private void ApplyAddon()
-    {
-        CreatureAddon? addon = Spawn is null ? null : Content.FindAddon(Spawn.Guid);
-        SetUInt32(UpdateFields.UnitFieldMountdisplayid, addon?.MountDisplayId ?? 0);
-        StandState = (StandState)(addon?.StandState ?? 0);
-        if (addon is not null)
-        {
-            SetByte(UpdateFields.UnitFieldBytes2, 0, addon.SheathState);
-        }
-
-        SetUInt32(UpdateFields.UnitNpcEmotestate, addon?.EmoteState ?? 0);
-    }
-
     /// <summary>
     /// vmangos Creature::ChooseDisplayId (template branch): weighted by the display
     /// probabilities when any is set, otherwise equal chance among the leading non-zero ids;
@@ -383,100 +306,6 @@ public sealed class Creature : Unit, ICombatCreature
         return count == 0 ? DisplayIdBox : ids[random.Next(count)];
     }
 
-    // --- movement --------------------------------------------------------------------------
-
-    /// <summary>Start a straight move to (x, y, z); returns the spline (world thread).</summary>
-    internal CreatureSpline StartSpline(float x, float y, float z, bool run, float? finalOrientation, uint splineId, long clockMs)
-        => StartSpline([new Vector3(x, y, z)], run, finalOrientation is { } angle ? SplineFacing.ToAngle(angle) : SplineFacing.None, splineId, clockMs);
-
-    /// <summary>
-    /// Start a linear move through <paramref name="path"/> (every point after the current
-    /// position, destination last). The duration is the path length over the walk or run speed
-    /// (vmangos MoveSpline::Initialize: computeDuration over a linear spline), at least 1 ms.
-    /// </summary>
-    internal CreatureSpline StartSpline(IReadOnlyList<Vector3> path, bool run, SplineFacing facing, uint splineId, long clockMs)
-    {
-        ArgumentNullException.ThrowIfNull(path);
-        if (path.Count == 0)
-        {
-            throw new ArgumentException("a spline needs at least one point", nameof(path));
-        }
-
-        float speed = run ? CreatureRunSpeed : CreatureWalkSpeed;
-        var start = new Vector3(X, Y, Z);
-        float length = 0;
-        Vector3 previous = start;
-        foreach (Vector3 point in path)
-        {
-            length += Vector3.Distance(previous, point);
-            previous = point;
-        }
-
-        uint duration = Math.Max(1u, (uint)MathF.Round(length / speed * 1000f));
-        Vector3 end = path[^1];
-        var spline = new CreatureSpline(splineId, X, Y, Z, end.X, end.Y, end.Z, run, facing.FinalAngle, clockMs, duration)
-        {
-            Path = path.Count > 1 ? [.. path] : [],
-            Facing = facing,
-        };
-        Spline = spline;
-
-        // While on a spline the unit faces its direction of travel.
-        Vector3 first = path[0];
-        float dx = first.X - X;
-        float dy = first.Y - Y;
-        if ((dx * dx) + (dy * dy) > 0.0001f)
-        {
-            Orientation = NormalizeOrientation(MathF.Atan2(dy, dx));
-        }
-
-        return spline;
-    }
-
-    /// <summary>Advance along the spline; returns true when it finished this step.</summary>
-    internal bool AdvanceSpline(long clockMs, uint serverTimeMs)
-    {
-        if (Spline is not { } spline)
-        {
-            return false;
-        }
-
-        (float x, float y, float z) = spline.PositionAt(clockMs);
-        if (spline.IsFinished(clockMs))
-        {
-            Spline = null;
-            Relocate(spline.EndX, spline.EndY, spline.EndZ, spline.FinalOrientation ?? Orientation, serverTimeMs);
-            return true;
-        }
-
-        // Keep the movement block in step so a create block shows the live position.
-        Relocate(x, y, z, Orientation, serverTimeMs);
-        return false;
-    }
-
-    /// <summary>Stop where the creature is (world thread).</summary>
-    internal void StopSpline(long clockMs, uint serverTimeMs)
-    {
-        if (Spline is { } spline)
-        {
-            (float x, float y, float z) = spline.PositionAt(clockMs);
-            Spline = null;
-            Relocate(x, y, z, Orientation, serverTimeMs);
-        }
-    }
-
-    internal void ResetToHome(uint serverTimeMs)
-    {
-        Spline = null;
-        Relocate(Home.X, Home.Y, Home.Z, Home.Orientation, serverTimeMs);
-    }
-
-    internal static float NormalizeOrientation(float o)
-    {
-        const float TwoPi = MathF.PI * 2f;
-        o %= TwoPi;
-        return o < 0 ? o + TwoPi : o;
-    }
 }
 
 /// <summary>A creature's home (spawn) position.</summary>
