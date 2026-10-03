@@ -84,8 +84,80 @@ internal sealed class InMemorySocialStore : ISocialStore
     }
 }
 
-/// <summary>Registers <see cref="InMemorySocialStore"/> in every <see cref="WorldTestHost"/>.</summary>
+/// <summary>
+/// An in-memory <see cref="IPetitionStore"/> (thread-safe). The turn-in write stores the guild in the
+/// shared <see cref="InMemorySocialStore"/> and drops the petition, like the one transaction of the real store.
+/// </summary>
+internal sealed class InMemoryPetitionStore(InMemorySocialStore guilds) : IPetitionStore
+{
+    private readonly Lock _lock = new();
+    private readonly Dictionary<int, PetitionData> _petitions = [];
+
+    public IReadOnlyList<PetitionData> Snapshot()
+    {
+        lock (_lock)
+        {
+            return [.. _petitions.Values.OrderBy(p => p.Id)];
+        }
+    }
+
+    public Task<IReadOnlyList<PetitionData>> GetPetitionsAsync(CancellationToken cancellationToken = default) => Task.FromResult(Snapshot());
+
+    public Task SavePetitionAsync(PetitionData petition, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            _petitions[petition.Id] = petition;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task DeletePetitionAsync(int petitionId, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            _petitions.Remove(petitionId);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public async Task CompletePetitionAsync(GuildData guild, int petitionId, CancellationToken cancellationToken = default)
+    {
+        await guilds.SaveGuildAsync(guild, cancellationToken);
+        await DeletePetitionAsync(petitionId, cancellationToken);
+    }
+
+    public Task PurgeCharacterAsync(int characterId, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            foreach (PetitionData petition in _petitions.Values.ToArray())
+            {
+                if (petition.OwnerId == characterId)
+                {
+                    _petitions.Remove(petition.Id);
+                }
+                else
+                {
+                    _petitions[petition.Id] = petition with { Signatures = [.. petition.Signatures.Where(s => s.PlayerId != characterId)] };
+                }
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>Registers <see cref="InMemorySocialStore"/> and <see cref="InMemoryPetitionStore"/> in every <see cref="WorldTestHost"/>.</summary>
 internal sealed class SocialTestServices : IWorldTestServices
 {
-    public void Register(IServiceCollection services) => services.AddSingleton<ISocialStore, InMemorySocialStore>();
+    public void Register(IServiceCollection services)
+    {
+        services.AddSingleton<InMemorySocialStore>();
+        services.AddSingleton<ISocialStore>(sp => sp.GetRequiredService<InMemorySocialStore>());
+        services.AddSingleton<InMemoryPetitionStore>();
+        services.AddSingleton<IPetitionStore>(sp => sp.GetRequiredService<InMemoryPetitionStore>());
+    }
 }

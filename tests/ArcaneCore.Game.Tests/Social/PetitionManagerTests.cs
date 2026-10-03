@@ -655,8 +655,8 @@ public sealed class PetitionManagerTests
         Assert.Empty(k.Guilds.All);
     }
 
-    [Fact] // :421-427
-    public void TurnIn_WhileGuilded_AnswersAlreadyInGuild()
+    [Fact] // :421-427 (ALREADY_IN_GUILD itself is only reachable with a stale petition: the join removes the owner's petition first)
+    public void TurnIn_AfterTheOwnerJoinedAGuild_IsSilent_BecauseThePetitionWentWithTheJoin()
     {
         using var k = new PetitionKit();
         (Player owner, Player[] signers) = Nine(k);
