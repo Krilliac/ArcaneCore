@@ -3,12 +3,14 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Progression;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -30,6 +32,7 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
     private ReputationWriteQueue? _writes;
     private WorldRuntime? _world;
     private ReputationService? _service;
+    private Func<Player, RewardGroup?>? _groups;
 
     public ReputationOptions Options { get; } = new();
 
@@ -182,17 +185,22 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
         }
     }
 
-    /// <summary>Player::RewardReputation(Unit*, 1.0) for a direct, live, same-map player kill.</summary>
+    /// <summary>
+    /// Player::RewardReputation(Unit*, 1.0) for a same-map creature kill by a player: every group member at reward distance
+    /// gets it, dead or alive, and a dead killer still counts (<see cref="ReputationKillCredit"/>).
+    /// </summary>
     private void OnUnitKilled(Unit? killer, Unit victim)
     {
-        if (killer is not Player { IsAlive: true, IsInWorld: true } player || victim is not Creature creature
+        if (killer is not Player { IsInWorld: true } player || victim is not Creature creature
             || player.Map is not { } map || !creature.IsInWorld || !ReferenceEquals(creature.Map, map)
             || !ReferenceEquals(map.FindPlayer(player.Guid), player))
         {
             return;
         }
 
-        Service.RewardKill(player, creature);
+        _groups ??= RewardGroups.Resolver(services);
+        float distance = (services.GetService<ProgressionFeature>()?.Progression.Options ?? new ProgressionOptions()).GroupXpDistance;
+        ReputationKillCredit.Award(Service, player, creature, _groups(player), distance);
     }
 
     /// <summary>Startup content failures (malformed Faction.dbc, duplicate kill rows) stop attachment.</summary>
