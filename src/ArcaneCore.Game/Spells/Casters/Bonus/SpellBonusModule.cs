@@ -38,8 +38,10 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
         ArgumentNullException.ThrowIfNull(spell);
         bool overTime = stage is not (SpellAmountStage.DirectDamage or SpellAmountStage.DirectHeal);
 
-        // Periodic damage of weapon based spells belongs to the melee formulas (Aura::CalculateDotDamage).
-        if (overTime && spell.DamageClass is SpellDamageClass.Melee or SpellDamageClass.Ranged)
+        // Weapon based (melee / ranged class) damage belongs to the melee formulas: direct hits route by DmgClass
+        // (SpellCaster.cpp:1243-1276, only NONE and MAGIC use SpellDamageBonusDone/Taken), periodic damage likewise
+        // (Aura::CalculateDotDamage). Direct healing is not routed by class.
+        if ((overTime || stage == SpellAmountStage.DirectDamage) && spell.DamageClass is SpellDamageClass.Melee or SpellDamageClass.Ranged)
         {
             return amount;
         }

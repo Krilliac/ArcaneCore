@@ -29,6 +29,7 @@ public sealed class SpellBonusWiringTests
     private const uint HealingTakenDown = 4108;
     private const uint SpiritHealing = 4109;
     private const uint MeleeDot = 4110;
+    private const uint RangedBolt = 4202;
     private const int FrostMask = 0x10;
     private const int FireMask = 0x04;
     private const int AllSchools = 0x7F;
@@ -86,6 +87,7 @@ public sealed class SpellBonusWiringTests
         var kit = new SpellTestKit(
             Damage(FrostBolt, 100, 3000, SpellSchool.Frost),
             Damage(SmallBolt, 8, 3000, SpellSchool.Frost),
+            Damage(RangedBolt, 100, 3000, SpellSchool.Frost) with { DamageClass = SpellDamageClass.Ranged },
             Heal(GreaterHeal, 100, 3000),
             Heal(FlashHeal, 100, 1500),
             SpellTestKit.Spell(RenewLike, SpellTestKit.Effect(SpellEffectName.ApplyAura, 40, SpellImplicitTarget.Unit, AuraType.PeriodicHeal, amplitude: 3000)) with
@@ -272,6 +274,19 @@ public sealed class SpellBonusWiringTests
 
         // +120 healing taken on a 1500 ms heal: 100 + 120 * 0.428571 = 151.4; then -50 percent: 50.
         Assert.Equal([151u, 50u], sink.Healing);
+    }
+
+    [Fact]
+    public void MeleeAndRangedClassDirectDamage_IsLeftToTheMeleeFormulas()
+    {
+        // vmangos SpellCaster.cpp:1243-1276: only DmgClass NONE and MAGIC use SpellDamageBonusDone / Taken.
+        using SpellTestKit kit = NewKit();
+        (Player caster, Player target, RecordingSink sink) = Setup(kit);
+        Cast(kit, caster, BonusDamageFrost, caster);
+
+        Cast(kit, caster, RangedBolt, target);
+
+        Assert.Equal([100u], sink.Damage);
     }
 
     [Fact]
