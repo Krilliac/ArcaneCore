@@ -124,6 +124,12 @@ public sealed class StatsFeature : IWorldFeature, ICharacterHooks, IDisposable
                 throw new InvalidOperationException("Stats:RequireImportedData is set and the player base data is incomplete: " + string.Join("; ", problems.Take(5)));
             }
 
+            if (problems.Count > 0)
+            {
+                // The one deliberate difference from retail (vmangos ObjectMgr.cpp:4876-4882 and the other loaders refuse to start without this data).
+                _logger.LogWarning("Stats: Stats:RequireImportedData is false (the default), so the server runs although the player base data is incomplete ({Count} problems, first: {First}); vmangos would refuse to start. Import the data and set Stats:RequireImportedData=true for retail behaviour", problems.Count, problems[0]);
+            }
+
             AgilityRates? rates;
             try
             {
