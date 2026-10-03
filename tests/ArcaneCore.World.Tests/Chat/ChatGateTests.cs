@@ -1,3 +1,4 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
@@ -108,6 +109,35 @@ public sealed class ChatGateTests
         clock.Advance(3);
         await spammer.SendChatAsync(ChatType.Say, Language.Common, "free again");
         Assert.Equal("free again", (await listener.ReadChatAsync()).Text);
+    }
+
+    [Fact]
+    public async Task FloodMute_SurvivesALogoutAndRelog_BecauseItBelongsToTheSession()
+    {
+        // vmangos keeps m_muteTime on the WorldSession (Player::CanSpeak, UpdateSpeakTime), and the
+        // session outlives the Player: logging out to the character screen does not clear the mute.
+        var clock = new OffsetClock();
+        await using WorldTestHost host = WorldTestHost.Start(configure: o => o.LogoutDelayMs = 50, configureServices: services => services.AddSingleton<TimeProvider>(clock));
+        await using WorldTestClient spammer = await host.EnterWorldAsync("SPAMMER", "Spammer");
+        await spammer.CollectAsync();
+        for (int i = 1; i <= 11; i++)
+        {
+            await spammer.SendChatAsync(ChatType.Say, Language.Common, $"m{i}");
+        }
+
+        await spammer.SendAsync(WorldOpcode.CmsgLogoutRequest, []);
+        await spammer.ReadUntilAsync(WorldOpcode.SmsgLogoutComplete);
+        await WorldTestHost.WaitForAsync(() => !host.World.IsOnline(ObjectGuid.Player(1)), "the logout");
+        await spammer.LoginAsync(1);
+        await spammer.CollectAsync();
+
+        await spammer.SendChatAsync(ChatType.Say, Language.Common, "after relog");
+        var notification = new PacketReader(await spammer.ReadUntilAsync(WorldOpcode.SmsgNotification));
+        Assert.StartsWith("You must wait", notification.ReadCString());
+
+        clock.Advance(10);
+        await spammer.SendChatAsync(ChatType.Say, Language.Common, "free");
+        Assert.DoesNotContain(await spammer.CollectAsync(), p => p.Opcode == WorldOpcode.SmsgNotification);
     }
 
     [Fact]

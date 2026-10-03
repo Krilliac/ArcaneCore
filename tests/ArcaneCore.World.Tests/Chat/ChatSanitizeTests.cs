@@ -60,12 +60,35 @@ public sealed class ChatSanitizeTests
     private static async Task<(WorldTestHost Host, WorldTestClient Speaker, WorldTestClient Listener)> StartAsync(Action<ChatOptions>? options = null)
     {
         WorldTestHost host = WorldTestHost.Start();
-        options?.Invoke(host.WorldServices.GetRequiredService<ChatFeature>().Options);
+        ChatOptions chat = host.WorldServices.GetRequiredService<ChatFeature>().Options;
+        chat.FakeMessagePreventing = true; // the vmangos opt-in values; the defaults are retail (off)
+        chat.StrictLinkSeverity = 2;
+        options?.Invoke(chat);
         WorldTestClient speaker = await host.EnterWorldAsync("SPEAKER", "Speaker");
         WorldTestClient listener = await host.EnterWorldAsync("LISTENER", "Listener");
         await speaker.CollectAsync();
         await listener.CollectAsync();
         return (host, speaker, listener);
+    }
+
+    [Fact]
+    public async Task Defaults_AreRetail_NothingIsSanitised()
+    {
+        var defaults = new ChatOptions();
+        Assert.False(defaults.FakeMessagePreventing); // mangos-classic World.cpp:681
+        Assert.Equal(0, defaults.StrictLinkSeverity); // mangos-classic World.cpp:683
+
+        WorldTestHost host = WorldTestHost.Start();
+        WorldTestClient speaker = await host.EnterWorldAsync("SPEAKER", "Speaker");
+        WorldTestClient listener = await host.EnterWorldAsync("LISTENER", "Listener");
+        await using (host) await using (speaker) await using (listener)
+        {
+            await speaker.CollectAsync();
+            await listener.CollectAsync();
+            string text = "a   b |TInterface/x|t" + new string('z', 260);
+            await speaker.SendChatAsync(ChatType.Say, Language.Common, text);
+            Assert.Equal(text, (await listener.ReadChatAsync()).Text);
+        }
     }
 
     [Fact]

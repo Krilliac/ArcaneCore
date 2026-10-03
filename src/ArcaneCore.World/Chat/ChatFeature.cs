@@ -11,10 +11,11 @@ namespace ArcaneCore.World.Chat;
 /// <summary>
 /// Per-speaker chat state and the gates that read it (docs/areas/chat.md): the flood mute
 /// (vmangos MasterPlayer::UpdateSpeakTime / Player::CanSpeak) and the whisper acceptance of game
-/// masters (vmangos MasterPlayer::AcceptsWhispersFrom). State is in memory only, as vmangos' flood
-/// state is: it ends with the session, so a relog clears a flood mute; account mutes come from
-/// <see cref="IChatMuteSource"/>s. World thread only; state is keyed by the <see cref="Player"/>
-/// object and goes away with it.
+/// masters (vmangos MasterPlayer::AcceptsWhispersFrom). State is in memory only. The flood mute is
+/// the session's (vmangos WorldSession::m_muteTime), so it is keyed by account id and survives a
+/// logout to the character screen and a relog; the flood counter and the whisper state are the
+/// player's (vmangos MasterPlayer) and are keyed by the <see cref="Player"/> object. Account mutes
+/// come from <see cref="IChatMuteSource"/>s. World thread only.
 /// </summary>
 public sealed class ChatFeature : IWorldFeature
 {
@@ -22,6 +23,7 @@ public sealed class ChatFeature : IWorldFeature
     private readonly IChatMuteSource[] _muteSources;
     private readonly TimeProvider _clock;
     private readonly ConditionalWeakTable<Player, ChatState> _states = [];
+    private readonly Dictionary<int, long> _sessionMutes = [];
 
     public ChatFeature(IConfiguration? configuration = null, IEnumerable<IChatMuteSource>? muteSources = null, TimeProvider? timeProvider = null)
     {
@@ -41,7 +43,7 @@ public sealed class ChatFeature : IWorldFeature
     /// <summary>The unix time until which <paramref name="player"/> cannot speak (vmangos WorldSession::m_muteTime): the latest of the flood mute and every source.</summary>
     public long MutedUntil(Player player)
     {
-        long until = State(player).MuteUntil;
+        long until = SessionMute(player.AccountId);
         foreach (IChatMuteSource source in _muteSources)
         {
             until = Math.Max(until, source.MutedUntilUnixSeconds(player));
@@ -70,8 +72,7 @@ public sealed class ChatFeature : IWorldFeature
     /// </summary>
     public void MuteUntil(Player player, long untilUnixSeconds)
     {
-        ChatState state = State(player);
-        state.MuteUntil = Math.Max(state.MuteUntil, untilUnixSeconds);
+        _sessionMutes[player.AccountId] = Math.Max(SessionMute(player.AccountId), untilUnixSeconds);
     }
 
     /// <summary>
@@ -145,11 +146,26 @@ public sealed class ChatFeature : IWorldFeature
     /// <summary>vmangos MasterPlayer::ClearAllowedWhisperers (<c>.whispers off</c>).</summary>
     public void ClearAllowedWhisperers(Player player) => State(player).AllowedWhisperers?.Clear();
 
+    private long SessionMute(int accountId)
+    {
+        if (!_sessionMutes.TryGetValue(accountId, out long until))
+        {
+            return 0;
+        }
+
+        if (until <= NowUnixSeconds)
+        {
+            _sessionMutes.Remove(accountId); // expired: nothing to remember (CanSpeak is m_muteTime <= now)
+            return 0;
+        }
+
+        return until;
+    }
+
     private ChatState State(Player player) => _states.GetValue(player, p => new ChatState(p.Security == AccountSecurity.Player || Options.GmWhisperingTo == 1));
 
     private sealed class ChatState(bool acceptsWhispers)
     {
-        internal long MuteUntil;
         internal long SpeakTime;
         internal uint SpeakCount;
         internal bool AcceptsWhispers = acceptsWhispers;

@@ -6,8 +6,9 @@ delivered by the social and M6 work (see [social.md](social.md)); this lane adde
 vmangos puts around them and removed the vmangos-only channel names from the default behaviour.
 
 Reference precedence: **vmangos (`D:\refs\vmangos\src\game`) > mangos-classic > wow_messages**.
-Retail first: every vmangos-only behaviour is behind an option that defaults to retail, and every
-option names the reference value it follows. No reference code or data is copied into the repository.
+Retail first: every vmangos-only behaviour is behind an option that defaults to retail (the two
+sanitising options, `FakeMessagePreventing` and `StrictLinkSeverity`, default off as in mangos-classic and
+are opt-in at vmangos' values), and every option names the reference value it follows. No reference code or data is copied into the repository.
 
 ## Delivered
 
@@ -45,8 +46,8 @@ option names the reference value it follows. No reference code or data is copied
 |---|---|---|
 | `World:Chat:AddonChannel` | true | vmangos / mangos-classic `AddonChannel = 1` |
 | `World:Chat:FloodMessageCount` / `FloodMessageDelaySeconds` / `FloodMuteSeconds` | 10 / 1 / 10 (0 count = off) | `ChatFlood.*`, both servers |
-| `World:Chat:FakeMessagePreventing` | true | vmangos `ChatFakeMessagePreventing = 1` (mangos-classic defaults it to 0, `World.cpp:681`) |
-| `World:Chat:StrictLinkSeverity` | 2 | vmangos `ChatStrictLinkChecking.Severity = 2` (mangos-classic 0, `World.cpp:683`); 3 behaves as 2 |
+| `World:Chat:FakeMessagePreventing` | false | mangos-classic `ChatFakeMessagePreventing = 0` (`World.cpp:681`, `mangosd.conf.dist.in:1155`); vmangos defaults to 1 (`World.cpp:756`), set true to match |
+| `World:Chat:StrictLinkSeverity` | 0 | mangos-classic `ChatStrictLinkChecking.Severity = 0` (`World.cpp:683`, `mangosd.conf.dist.in:1156`); vmangos defaults to 2 (`World.cpp:758`), set 2 to match; 3 behaves as 2 |
 | `World:Chat:StrictLinkKick` | false | `ChatStrictLinkChecking.Kick = 0` |
 | `World:Chat:GmWhisperingTo` | 0 | `GM.WhisperingTo` 0/1 (vmangos default 2 is a limit, below) |
 | `World:Social:VmangosChannelExtensions` | false | none: vmangos-only names, off = retail |
@@ -72,8 +73,9 @@ Say and TextEmote to 40 (`mangosd.conf.dist.in:1559-1561`).
   all locale patterns (`DBCStores.cpp:530-552`), so a non-English client's General/Trade channel
   would be created as a custom channel. Needs the client MPQ data.
 * **Persisted mute and `GM.WhisperingTo = 2`.** The flood mute and the whisper-acceptance state are in
-  memory and end with the session (vmangos' flood mute does too; its account mute and the saved GM state
-  are persisted). Persisting either is a Characters/Auth schema change that belongs to the live-ban lane.
+  memory. The flood mute is the session's (keyed by account id, vmangos `WorldSession::m_muteTime`), so it
+  survives a logout and relog but ends with the server process; the whisper state is the player's and
+  resets at login (vmangos' account mute and the saved GM state are persisted). Persisting either is a Characters/Auth schema change that belongs to the live-ban lane.
   No store was touched by this lane, so there are no provider theories.
 * **Link check level 3** (item, enchant and spell links against the catalogs, `Chat.cpp:2210-2535`)
   needs the item, enchant and spell catalogs inside the chat handlers; it is treated as level 2.

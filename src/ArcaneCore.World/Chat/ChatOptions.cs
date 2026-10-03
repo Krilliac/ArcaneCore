@@ -2,8 +2,9 @@ namespace ArcaneCore.World.Chat;
 
 /// <summary>
 /// Realm rules for the chat gates (docs/areas/chat.md), bound from <see cref="SectionName"/> by
-/// <see cref="ChatFeature"/>. Every default is the vmangos / mangos-classic default, i.e. retail
-/// 1.12 behaviour; anything that is not retail is off unless the operator turns it on. These
+/// <see cref="ChatFeature"/>. Every default is retail 1.12 behaviour. Two vmangos extras that
+/// the Blizzard realms never had, <see cref="FakeMessagePreventing"/> and <see cref="StrictLinkSeverity"/>,
+/// are off by default (mangos-classic defaults them off too) and are opt-in at vmangos' values. These
 /// options are read at each message, but they are not part of the <c>.reload config</c> registry
 /// (restart to change them).
 /// </summary>
@@ -33,22 +34,22 @@ public sealed class ChatOptions
     public uint FloodMuteSeconds { get; set; } = 10;
 
     /// <summary>
-    /// ChatFakeMessagePreventing (vmangos mangosd.conf.dist.in:1663, World.cpp:756, default on; mangos-classic
-    /// World.cpp:681 defaults it off): collapse every run of space, tab, bell and newline in a chat
+    /// ChatFakeMessagePreventing (vmangos mangosd.conf.dist.in:1663, World.cpp:756, vmangos default on, mangos-classic
+    /// World.cpp:681 and this option default off; opt in with true): collapse every run of space, tab, bell and newline in a chat
     /// message into one space (vmangos stripLineInvisibleChars, shared/Util.cpp:134). Addon messages
     /// are not touched.
     /// </summary>
-    public bool FakeMessagePreventing { get; set; } = true;
+    public bool FakeMessagePreventing { get; set; }
 
     /// <summary>
-    /// ChatStrictLinkChecking.Severity (vmangos mangosd.conf.dist.in:1664, World.cpp:758, default 2;
-    /// mangos-classic World.cpp:683 defaults it to 0): 0 off, 1 only the pipe commands c/H/h/r and
+    /// ChatStrictLinkChecking.Severity (vmangos mangosd.conf.dist.in:1664, World.cpp:758, vmangos default 2,
+    /// mangos-classic World.cpp:683 and this option default 0; opt in with 2): 0 off, 1 only the pipe commands c/H/h/r and
     /// escaped pipes are allowed, 2 they must also come in the order c, H, h, h, r (vmangos
     /// ChatHandler::isValidChatMessage, Chat.cpp:2165-2208). vmangos' level 3 also checks every item,
     /// enchant and spell link against the DBC and item catalogs; those are not available to the chat
     /// handlers, so 3 behaves as 2. A message over 255 bytes or with a bad link is dropped.
     /// </summary>
-    public int StrictLinkSeverity { get; set; } = 2;
+    public int StrictLinkSeverity { get; set; }
 
     /// <summary>ChatStrictLinkChecking.Kick (vmangos mangosd.conf.dist.in:1665, default off): disconnect a player whose message fails the link check instead of just dropping it.</summary>
     public bool StrictLinkKick { get; set; }
