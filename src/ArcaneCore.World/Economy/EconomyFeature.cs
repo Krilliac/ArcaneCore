@@ -7,6 +7,7 @@ using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Items;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
@@ -201,7 +202,15 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
 
     private uint NextTextId() => Interlocked.Increment(ref _lastTextId);
 
-    private IMailboxAccess MailboxAccess => _services.GetService<IMailboxAccess>() ?? new DefaultMailboxAccess();
+    private IMailboxAccess? _retailMailboxAccess;
+
+    /// <summary>Test seam: replaces the mailbox check on a running host (a registered <see cref="IMailboxAccess"/> is the production hook).</summary>
+    internal IMailboxAccess? MailboxAccessOverride { get; set; }
+
+    private IMailboxAccess MailboxAccess => MailboxAccessOverride ?? _services.GetService<IMailboxAccess>()
+        ?? (Options.MailboxAccess == MailboxAccessMode.Permissive
+            ? new PermissiveMailboxAccess()
+            : _retailMailboxAccess ??= new GameObjectMailboxAccess(() => _services.GetService<GameObjectLootFeature>()));
 
     private IAuctioneerAccess AuctioneerAccess => _services.GetService<IAuctioneerAccess>()
         ?? new DefaultAuctioneerAccess(_services.GetService<QuestNpcFeature>(), Options);

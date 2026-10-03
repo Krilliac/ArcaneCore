@@ -5,6 +5,22 @@ using ArcaneCore.Kernel.Items;
 
 namespace ArcaneCore.Game.Economy;
 
+/// <summary>How a mail opcode proves the player is at a mailbox (<see cref="EconomyOptions.MailboxAccess"/>).</summary>
+public enum MailboxAccessMode
+{
+    /// <summary>
+    /// vmangos WorldSession::CheckMailBox: the addressed GAMEOBJECT_TYPE_MAILBOX must exist in the
+    /// player's map, be spawned and within interaction distance of an alive, in-world player. Default.
+    /// </summary>
+    Retail,
+
+    /// <summary>
+    /// Any game object GUID is accepted. The only deviation from retail: for synthetic test hosts and
+    /// servers without game object content. It lets any player read, send and collect mail from anywhere.
+    /// </summary>
+    Permissive,
+}
+
 /// <summary>One auction house (AuctionHouse.dbc: id, deposit percent, cut percent).</summary>
 public sealed record AuctionHouseEntry(uint Id, uint DepositPercent, uint CutPercent);
 
@@ -17,6 +33,9 @@ public sealed class EconomyOptions
 {
     /// <summary>vmangos/cMaNGOS MAX_MONEY_AMOUNT.</summary>
     public const uint MaxMoney = 0x7FFFFFFF - 1;
+
+    /// <summary>Mailbox proof for every mail opcode; <see cref="MailboxAccessMode.Retail"/> (default) or <see cref="MailboxAccessMode.Permissive"/> (config key <c>Economy:MailboxAccess</c>).</summary>
+    public MailboxAccessMode MailboxAccess { get; set; } = MailboxAccessMode.Retail;
 
     /// <summary>Postage per letter in copper (vmangos HandleSendMail: 30).</summary>
     public uint MailPostage { get; set; } = 30;
