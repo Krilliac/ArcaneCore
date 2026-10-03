@@ -200,12 +200,17 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
                 await quests.WaitForSettlementAsync(character.Id).ConfigureAwait(false);
             }
 
+            foreach (ICharacterSettlementBarrier barrier in session.Services.GetServices<ICharacterSettlementBarrier>())
+            {
+                await barrier.WaitForSettlementAsync(character.Id).ConfigureAwait(false);
+            }
+
             if (session.Services.GetService<CharacterSaveQueue>() is { } saves)
             {
                 await saves.FlushCharacterAsync(character.Id).ConfigureAwait(false);
             }
 
-            // The previous session may have committed a reward while this login waited.
+            // The previous session may have committed a settlement while this login waited.
             // Its final snapshot precedes the barrier; never construct a player from the
             // record fetched before waiting for that session to leave the world.
             character = await characters.GetByIdAsync(character.Id).ConfigureAwait(false);

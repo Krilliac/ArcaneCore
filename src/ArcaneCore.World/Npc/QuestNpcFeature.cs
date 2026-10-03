@@ -219,6 +219,11 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
         _itemListeners[player] = listener;
         player.Inventory.ItemCountChanged += listener;
         Services.ReconcileItemCounts(player);
+        if (ReferenceEquals(_world?.FindOnlinePlayer(player.Guid), player))
+        {
+            // A disconnected settlement may have changed money without publishing a journal delta.
+            Services.MoneyChanged(player);
+        }
     }
 
     private void OnPlayerLoggingOut(Player player)

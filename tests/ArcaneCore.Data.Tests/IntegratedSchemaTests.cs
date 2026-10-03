@@ -8,6 +8,7 @@ using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Instances;
+using ArcaneCore.Data.Economy;
 using ArcaneCore.Data.Quests;
 using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Schema;
@@ -52,15 +53,16 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(CharacterReputationDataModule), DatabaseComponent.Characters, 7),
             (typeof(InstanceDataModule), DatabaseComponent.Characters, 8),
             (typeof(CharacterSpellStateDataModule), DatabaseComponent.Characters, 9),
+            (typeof(EconomyDataModule), DatabaseComponent.Characters, EconomyDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
             DataModules.All.OrderBy(m => m.Component).ThenBy(m => m.SchemaVersion)
                 .Select(m => (m.GetType(), m.Component, m.SchemaVersion)));
         Assert.Equal(2, AuthDbContext.Schema.CurrentVersion);
-        Assert.Equal(9, CharacterDbContext.Schema.CurrentVersion);
+        Assert.Equal(10, CharacterDbContext.Schema.CurrentVersion);
         Assert.Equal(8, WorldDbContext.Schema.CurrentVersion);
-        Assert.Equal([2, 3, 4, 5, 6, 7, 8, 9], CharacterDbContext.Schema.Steps.Select(s => s.Version));
+        Assert.Equal([2, 3, 4, 5, 6, 7, 8, 9, 10], CharacterDbContext.Schema.Steps.Select(s => s.Version));
         Assert.Equal([2, 3, 4, 5, 6, 7, 8], WorldDbContext.Schema.Steps.Select(s => s.Version));
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })
