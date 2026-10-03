@@ -33,6 +33,13 @@ public sealed class PlayerStatState
     /// <summary>The stat system that maintains this player (set when it attaches); ability changes are reported to it.</summary>
     public PlayerStatSystem? Maintainer { get; internal set; }
 
+    /// <summary>
+    /// The amount of the Predatory Strikes dummy aura (spell icon 1563) the player has, 0 when absent: the percent of the level
+    /// a cat or bear adds to its attack power (StatSystem.cpp:253-271). Kept by <see cref="FormStatListener"/> from the aura
+    /// events; read by <see cref="PlayerStatSystem"/> only while the player is in a form that uses it.
+    /// </summary>
+    public int PredatoryStrikesPercent { get; set; }
+
     /// <summary>Player::CanParry: the Parry ability (spell effect PARRY) is known.</summary>
     public bool CanParry { get; private set; }
 

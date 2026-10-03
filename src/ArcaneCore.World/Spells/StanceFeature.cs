@@ -24,6 +24,19 @@ public sealed class StanceFeature(IServiceProvider services, ILogger<StanceFeatu
 
     public ShapeshiftService? Service { get; private set; }
 
+    private readonly List<IFormChangeListener> _listeners = [];
+
+    /// <summary>
+    /// Be told after every form change (see <see cref="IFormChangeListener"/>). Safe to call before or after
+    /// <see cref="Attach"/>, so features do not depend on the order they attach in.
+    /// </summary>
+    public void AddFormChangeListener(IFormChangeListener listener)
+    {
+        ArgumentNullException.ThrowIfNull(listener);
+        _listeners.Add(listener);
+        Service?.AddListener(listener);
+    }
+
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
@@ -51,5 +64,9 @@ public sealed class StanceFeature(IServiceProvider services, ILogger<StanceFeatu
         SpellFeature spells = services.GetRequiredService<SpellFeature>();
         Service = new ShapeshiftService(spells.System, forms, Options, player => spells.Spellbook.GetSpells(player), logger);
         Service.Install();
+        foreach (IFormChangeListener listener in _listeners)
+        {
+            Service.AddListener(listener);
+        }
     }
 }

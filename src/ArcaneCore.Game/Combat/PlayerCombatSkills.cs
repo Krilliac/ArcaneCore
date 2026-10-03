@@ -30,9 +30,13 @@ public static class PlayerCombatSkills
     /// <summary>STAT_INTELLECT (vmangos SharedDefines.h Stats): the index of UNIT_FIELD_STAT0 + n.</summary>
     private const int IntellectStat = 3;
 
-    /// <summary>vmangos Unit::CanUseEquippedWeapon (Unit.h:964-977): a disarmed unit cannot use its main hand.</summary>
+    /// <summary>
+    /// vmangos Unit::CanUseEquippedWeapon (Unit.h:963-977): no hand uses its weapon in Cat, Bear or Dire Bear Form
+    /// (IsAttackSpeedOverridenShapeShift), and a disarmed unit cannot use its main hand.
+    /// </summary>
     public static bool CanUseEquippedWeapon(Unit unit, WeaponAttackType attackType)
-        => attackType != WeaponAttackType.BaseAttack || (unit.UnitFlags & UnitFlags.Disarmed) == 0;
+        => !FormQueries.IsAttackSpeedOverridden(FormQueries.GetForm(unit))
+            && (attackType != WeaponAttackType.BaseAttack || (unit.UnitFlags & UnitFlags.Disarmed) == 0);
 
     /// <summary>
     /// vmangos Player::GetWeaponForAttack (Player.cpp:8487-8516): the weapon (item class weapon) in the slot of the
