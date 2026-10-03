@@ -78,11 +78,11 @@ public sealed class NavMeshTests
         var steep = new CellTile(0, 0, 0, 0, 4, 4, Size: 5) { Flags = (i, j) => i == 2 && j < 3 ? NavTerrain.Ground | NavTerrain.SteepSlopes : NavTerrain.Ground };
         NavMeshPathfinder nav = Load(fixture, (31, 31, steep));
 
-        PathResult around = nav.FindPath(MapId, WallStart, WallEnd);
+        PathResult around = nav.FindPath(MapId, WallStart, WallEnd, new PathOptions { ExcludeFlags = NavTerrain.SteepSlopes }); // vmangos excludes steep slopes only on request
         Assert.Equal(4, around.Points.Count);
         Near(new Vector3(10, 15, 0), around.Points[1]);
 
-        PathResult straight = nav.FindPath(MapId, WallStart, WallEnd, new PathOptions { ExcludeFlags = NavTerrain.Empty });
+        PathResult straight = nav.FindPath(MapId, WallStart, WallEnd, new PathOptions());
         Assert.Equal(2, straight.Points.Count);
     }
 

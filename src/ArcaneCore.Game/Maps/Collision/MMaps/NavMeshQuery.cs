@@ -49,7 +49,7 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
         foreach (NavMeshTile tile in _tiles.Values)
         {
             if (tile.Overlaps(center, extents)
-                && tile.TryFindNearestPoly(center, extents, options.IncludeFlags, options.ExcludeFlags, out int index, out Vector3 point, out float d)
+                && tile.TryFindNearestPoly(center, extents, options.EffectiveIncludeFlags, options.ExcludeFlags, out int index, out Vector3 point, out float d)
                 && d < best)
             {
                 best = d;
@@ -193,7 +193,7 @@ public static class NavMeshQuery
 
             foreach ((NavPolyRef next, Vector3 left, Vector3 right) in mesh.Neighbours(node.Poly))
             {
-                if (!next.Tile.Passes(next.Poly, options.IncludeFlags, options.ExcludeFlags))
+                if (!next.Tile.Passes(next.Poly, options.EffectiveIncludeFlags, options.ExcludeFlags))
                 {
                     continue;
                 }
