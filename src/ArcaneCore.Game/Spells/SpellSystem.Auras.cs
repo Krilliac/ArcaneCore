@@ -67,7 +67,7 @@ public sealed partial class SpellSystem
             context.PendingHolder.ChannelTarget = new ObjectGuid(context.Caster.GetUInt64(UpdateFields.UnitFieldChannelObject));
         }
 
-        context.PendingHolder.SetAura(new SpellAura(context.EffectIndex, effect.AuraType, context.Value, effect.Amplitude, effect.MiscValue));
+        context.PendingHolder.SetAura(new SpellAura(context.EffectIndex, effect.AuraType, SnapshotAuraAmount(context), effect.Amplitude, effect.MiscValue));
     }
 
     /// <summary>
@@ -365,6 +365,7 @@ public sealed partial class SpellSystem
             ? (uint)((ulong)target.MaxHealth * (uint)aura.Amount / 100)
             : (uint)aura.Amount;
         Unit caster = ResolveAuraCaster(holder) ?? target;
+        amount = ModifyTick(SpellAmountStage.DamageOverTimeTick, holder, aura, caster, amount);
         uint resisted = Math.Min(amount, CombatRules.RollPartialResist(this, caster, target, holder.Spell, amount));
         amount -= resisted;
         uint dealt = Damage.DealSpellDamage(caster, target, holder.Spell, amount, periodic: true);
@@ -389,6 +390,7 @@ public sealed partial class SpellSystem
             ? (uint)((ulong)target.MaxHealth * (uint)aura.Amount / 100)
             : (uint)aura.Amount;
         Unit caster = ResolveAuraCaster(holder) ?? target;
+        amount = ModifyTick(SpellAmountStage.HealOverTimeTick, holder, aura, caster, amount);
         uint healed = Damage.Heal(caster, target, holder.Spell, amount);
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
             target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, healed, 0)), includeSelf: true);
