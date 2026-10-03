@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
@@ -40,9 +41,11 @@ internal sealed class WorldTestHost : IAsyncDisposable
         collection.AddSingleton<IAccountDataStore>(AccountData);
         collection.AddSingleton<IWorldDataStore>(WorldData);
         collection.AddSingleton(Directory);
-        collection.AddSingleton(_ => BuiltinCommands.Create());
+        collection.AddSingleton(_ => ChatCommands.CreateTable());
         collection.AddSingleton<CharacterSaveQueue>();
         collection.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());
+        collection.AddWorldFeatures();
+        WorldTestServices.RegisterAll(collection);
         _services = collection.BuildServiceProvider();
 
         var options = new WorldRuntimeOptions { TickIntervalMs = 5, UpdateCompressionThreshold = compressionThreshold, AutosaveIntervalMs = 0 };
@@ -51,6 +54,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
         World = new WorldRuntime(options, SaveQueue, NullLogger<WorldRuntime>.Instance);
         Opcodes = WorldServiceCollectionExtensions.BuildOpcodeTable();
 
+        _services.AttachWorldFeatures(World);
         SaveQueue.Start();
         World.Start();
 
