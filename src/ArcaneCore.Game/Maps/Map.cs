@@ -1,22 +1,31 @@
+using System.Buffers.Binary;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Grid;
+using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Updates;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.Maps;
 
 /// <summary>
-/// One map instance: its players, their visibility and the per-tick update pipeline.
+/// One map instance: its objects, their visibility and the per-tick update pipeline.
 /// <para>
 /// Thread affinity: world thread only. <see cref="Update"/> runs, in order:
-/// (1) each player's queued in-world packets, (2) visibility for players that moved,
-/// (3) values updates for objects whose fields changed, (4) a flush of every client's
-/// queued update blocks. Players are only added/removed in phases outside (2)–(4), so a
-/// client never receives blocks about an object it was just told to destroy.
+/// (1) each player's queued in-world packets (and those of players in transit from this map),
+/// (2) visibility for players and objects that moved, (3) values updates for objects whose
+/// fields changed, (4) a flush of every client's queued update blocks, (5) the grid and
+/// terrain lifecycles, (6) work deferred until after the update (far teleports). Objects are
+/// only added/removed outside (2)–(4), so a client never receives blocks about an object it
+/// was just told to destroy.
 /// </para>
 /// <para>
-/// Visibility is the distance form of vmangos' grid/cell visibility; a cell index can slot
-/// in behind <see cref="UpdateVisibility"/> without changing behaviour.
+/// Space is indexed by vmangos' grid/cell system (<see cref="GridContainer"/>): visibility,
+/// observer broadcasts and range broadcasts only look at the cells a query touches, and then
+/// apply exactly the distance rules the M4–M6 distance scan applied, so results are unchanged
+/// (docs/areas/grid-terrain.md).
 /// </para>
 /// </summary>
 public sealed class Map
@@ -37,7 +46,18 @@ public sealed class Map
     private readonly WorldRuntime _world;
     private readonly ILogger _logger;
     private readonly Dictionary<ObjectGuid, Player> _players = [];
+    private readonly Dictionary<ObjectGuid, WorldObject> _objects = [];
+
+    // Who has each object in its visible set: the inverse of Player.VisibleObjects, kept in
+    // step by AddVisible / RemoveVisible.
+    private readonly Dictionary<ObjectGuid, HashSet<Player>> _observers = [];
+    private readonly HashSet<WorldObject> _movedObjects = new(ReferenceEqualityComparer.Instance);
+    private readonly List<Player> _transit = [];
+    private readonly List<Action> _afterUpdate = [];
     private readonly List<WorldObject> _valuesQueue = [];
+    private readonly GridContainer _grid;
+    private readonly TerrainInfo _terrain;
+    private long _nextSequence;
     private bool _inUpdatePhase;
 
     internal Map(uint mapId, WorldRuntime world, ILogger logger)
@@ -45,6 +65,21 @@ public sealed class Map
         MapId = mapId;
         _world = world;
         _logger = logger;
+
+        _terrain = WorldMaps.Of(world).Terrain.For(mapId);
+        _grid = new GridContainer(world.Options.Maps, VisibilityRange) { EvictObject = EvictFromGrid };
+
+        // vmangos Map::EnsureGridCreated loads the grid's terrain tile; Map::UnloadGrid unrefs it.
+        _grid.GridCreated += grid =>
+        {
+            (int tx, int ty) = TerrainTile.TileOf(grid.Coord);
+            _terrain.Load(tx, ty);
+        };
+        _grid.GridUnloaded += coord =>
+        {
+            (int tx, int ty) = TerrainTile.TileOf(coord);
+            _terrain.Unload(tx, ty);
+        };
     }
 
     public uint MapId { get; }
@@ -53,11 +88,41 @@ public sealed class Map
 
     public IReadOnlyCollection<Player> Players => _players.Values;
 
+    /// <summary>Every object in the map, players included.</summary>
+    public int ObjectCount => _objects.Count;
+
+    /// <summary>The map's grids: the spatial index and the grid load/unload lifecycle.</summary>
+    public GridContainer Grids => _grid;
+
+    /// <summary>The map's terrain (heights, areas, liquids).</summary>
+    public TerrainInfo Terrain => _terrain;
+
+    /// <summary>The map's <c>map_template</c> row, or null when the map is not registered.</summary>
+    public MapTemplate? Template => WorldMaps.Of(_world).Registry.Find(MapId);
+
+    /// <summary>Players removed from this map by a far teleport whose client has not confirmed the new world yet.</summary>
+    public int TransitCount => _transit.Count;
+
     public Player? FindPlayer(ObjectGuid guid) => _players.GetValueOrDefault(guid);
 
+    /// <summary>Any object in the map (players included) by GUID.</summary>
+    public WorldObject? FindObject(ObjectGuid guid) => _objects.GetValueOrDefault(guid);
+
+    /// <summary>Ground height under a position (<see cref="TerrainInfo.GetHeight"/>).</summary>
+    public float GetHeight(float x, float y, float z) => _terrain.GetHeight(x, y, z);
+
+    /// <summary>Zone and area at a position (<see cref="TerrainInfo.GetZoneAndAreaId"/>); (0, 0) when unknown.</summary>
+    public (uint ZoneId, uint AreaId) GetZoneAndAreaId(float x, float y, float z) => _terrain.GetZoneAndAreaId(x, y, z);
+
+    /// <summary>Position relative to liquid (<see cref="TerrainInfo.GetLiquidStatus"/>).</summary>
+    public LiquidStatus GetLiquidStatus(float x, float y, float z, LiquidTypeFlags requiredType, out LiquidData data)
+        => _terrain.GetLiquidStatus(x, y, z, requiredType, out data);
+
     /// <summary>
-    /// Put a player into the map: its own create block goes out at once as its own packet
-    /// (vmangos Map::SendInitSelf), then it is exchanged with every player in range.
+    /// Put a player into the map: its grid and the grids around it are loaded (vmangos
+    /// Map::Add → EnsureGridLoadedAtEnter + LoadMapCellsAround), its own create block goes out
+    /// at once as its own packet (vmangos Map::SendInitSelf), then it is exchanged with every
+    /// object in range.
     /// </summary>
     public void AddPlayer(Player player)
     {
@@ -68,9 +133,17 @@ public sealed class Map
             throw new InvalidOperationException($"{player.Guid} is already in map {player.Map.MapId}");
         }
 
+        if (_objects.ContainsKey(player.Guid))
+        {
+            throw new InvalidOperationException($"an object with GUID {player.Guid} is already in map {MapId}");
+        }
+
         player.MapId = MapId;
         player.Map = this;
+        player.MapSequence = _nextSequence++;
         _players[player.Guid] = player;
+        _objects[player.Guid] = player;
+        _grid.Add(player, active: true);
 
         // The create block carries every current value, so pending changes are moot.
         player.ClearChangedFields();
@@ -93,33 +166,83 @@ public sealed class Map
     {
         EnsureWorldThread();
         EnsureNotInUpdatePhase();
-        if (!_players.Remove(player.Guid))
+        if (!_players.TryGetValue(player.Guid, out Player? stored) || !ReferenceEquals(stored, player))
         {
             return;
         }
 
-        // SMSG_DESTROY_OBJECT (vanilla): the full 8-byte object GUID.
-        Span<byte> destroy = stackalloc byte[8];
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(destroy, player.Guid.Value);
-        foreach (Player other in _players.Values)
-        {
-            if (other.VisibleObjects.Remove(player.Guid))
-            {
-                other.Session.Send(WorldOpcode.SmsgDestroyObject, destroy);
-            }
-        }
-
-        if (player.IsQueuedForUpdate)
-        {
-            _valuesQueue.Remove(player);
-            player.IsQueuedForUpdate = false;
-        }
-
-        player.ClearChangedFields();
-        player.VisibleObjects.Clear();
-        player.PendingUpdates.Clear();
+        _players.Remove(player.Guid);
+        RemoveFromWorld(player);
         player.NeedsVisibilityUpdate = false;
-        player.Map = null;
+    }
+
+    /// <summary>
+    /// Put a non-player object (creature, game object, …) into the map — the seam for content
+    /// that spawns into grids. Its grid is created (vmangos Map::Add&lt;T&gt; → EnsureGridCreated;
+    /// an <paramref name="active"/> object also loads the grids around it, like a player), and
+    /// every player in range gets its create block at the end of the tick.
+    /// </summary>
+    public void AddObject(WorldObject obj, bool active = false)
+    {
+        EnsureWorldThread();
+        EnsureNotInUpdatePhase();
+        if (obj is Player)
+        {
+            throw new ArgumentException("players enter through AddPlayer", nameof(obj));
+        }
+
+        if (obj.Map is not null)
+        {
+            throw new InvalidOperationException($"{obj.Guid} is already in map {obj.Map.MapId}");
+        }
+
+        if (_objects.ContainsKey(obj.Guid))
+        {
+            throw new InvalidOperationException($"an object with GUID {obj.Guid} is already in map {MapId}");
+        }
+
+        obj.MapId = MapId;
+        obj.Map = this;
+        obj.MapSequence = _nextSequence++;
+        _objects[obj.Guid] = obj;
+        _grid.Add(obj, active);
+        obj.ClearChangedFields();
+        obj.IsQueuedForUpdate = false;
+        _movedObjects.Add(obj);
+    }
+
+    /// <summary>Take a non-player object out of the map; clients that see it get SMSG_DESTROY_OBJECT.</summary>
+    public void RemoveObject(WorldObject obj)
+    {
+        EnsureWorldThread();
+        EnsureNotInUpdatePhase();
+        if (obj is Player player)
+        {
+            RemovePlayer(player);
+            return;
+        }
+
+        if (!_objects.TryGetValue(obj.Guid, out WorldObject? stored) || !ReferenceEquals(stored, obj))
+        {
+            return;
+        }
+
+        RemoveFromWorld(obj);
+    }
+
+    /// <summary>
+    /// Mark a non-player object active (vmangos Map::AddToActive): it keeps the grids around it
+    /// loaded, as players do.
+    /// </summary>
+    public void SetActive(WorldObject obj, bool active)
+    {
+        EnsureWorldThread();
+        if (obj is Player || !ReferenceEquals(obj.Map, this))
+        {
+            throw new InvalidOperationException($"{obj.Guid} is not a non-player object of map {MapId}");
+        }
+
+        _grid.SetActive(obj, active);
     }
 
     /// <summary>
@@ -129,9 +252,14 @@ public sealed class Map
     /// </summary>
     public void BroadcastToObservers(WorldObject source, WorldOpcode opcode, ReadOnlySpan<byte> payload)
     {
-        foreach (Player other in _players.Values)
+        if (!_observers.TryGetValue(source.Guid, out HashSet<Player>? observers))
         {
-            if (!ReferenceEquals(other, source) && other.VisibleObjects.Contains(source.Guid))
+            return;
+        }
+
+        foreach (Player other in observers)
+        {
+            if (!ReferenceEquals(other, source))
             {
                 other.Session.Send(opcode, payload);
             }
@@ -142,42 +270,30 @@ public sealed class Map
     /// Send a packet to every player within <paramref name="range"/> of <paramref name="source"/>,
     /// as vmangos Map::MessageDistBroadcast → MessageDistDeliverer does: a 3D distance check
     /// plus both bounding radii (WorldObject::IsWithinDist defaults), an optional same-team
-    /// filter (no exemptions), and a range of 0 meaning the whole map.
+    /// filter (no exemptions), and a range of 0 meaning the whole map. Only the cells within
+    /// range (plus the largest bounding radius in the map) are visited.
     /// </summary>
     public void BroadcastInRange(
         WorldObject source, float range, WorldOpcode opcode, ReadOnlySpan<byte> payload,
         bool includeSelf, Team? onlyTeam = null)
     {
-        foreach (Player player in _players.Values)
+        if (range <= 0)
         {
-            if (ReferenceEquals(player, source))
+            foreach (Player player in _players.Values)
             {
-                if (includeSelf)
-                {
-                    player.Session.Send(opcode, payload);
-                }
-
-                continue;
+                DeliverInRange(player, source, range, opcode, payload, includeSelf, onlyTeam);
             }
 
-            if (onlyTeam is { } team && player.Team != team)
-            {
-                continue;
-            }
+            return;
+        }
 
-            if (range > 0)
+        float searchRadius = range + source.BoundingRadius + _grid.MaxBoundingRadius;
+        foreach (WorldObject obj in Query(source.X, source.Y, searchRadius, extra: null))
+        {
+            if (obj is Player player && ReferenceEquals(player.Map, this))
             {
-                float dx = player.X - source.X;
-                float dy = player.Y - source.Y;
-                float dz = player.Z - source.Z;
-                float max = range + player.BoundingRadius + source.BoundingRadius;
-                if ((dx * dx) + (dy * dy) + (dz * dz) >= max * max)
-                {
-                    continue;
-                }
+                DeliverInRange(player, source, range, opcode, payload, includeSelf, onlyTeam);
             }
-
-            player.Session.Send(opcode, payload);
         }
     }
 
@@ -192,15 +308,20 @@ public sealed class Map
                 continue; // removed while processing an earlier player
             }
 
-            try
+            ProcessPackets(player);
+        }
+
+        // (1a) players in transit from this map: only their world-port ack is handled (the
+        // session drops everything else while the player is in no map — vmangos STATUS_TRANSFER).
+        foreach (Player player in _transit.ToArray())
+        {
+            if (player.Map is not null || !_world.IsOnline(player.Guid))
             {
-                player.Session.ProcessWorldPackets(player);
+                _transit.Remove(player);
+                continue;
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "packet handling failed for {Player}; disconnecting", player.Name);
-                player.Session.Kick();
-            }
+
+            ProcessPackets(player);
         }
 
         // (1b) timers: logouts whose countdown is over (vmangos WorldSession::Update → LogoutPlayer)
@@ -216,7 +337,14 @@ public sealed class Map
         _inUpdatePhase = true;
         try
         {
-            // (2) visibility
+            // Objects whose fields changed this tick may have a new bounding radius; the
+            // distance queries below must cover it.
+            foreach (WorldObject obj in _valuesQueue)
+            {
+                _grid.TrackRadius(obj);
+            }
+
+            // (2) visibility: players that moved, then other objects that moved or appeared
             foreach (Player player in _players.Values)
             {
                 if (player.NeedsVisibilityUpdate)
@@ -224,6 +352,19 @@ public sealed class Map
                     UpdateVisibility(player);
                     player.NeedsVisibilityUpdate = false;
                 }
+            }
+
+            if (_movedObjects.Count > 0)
+            {
+                foreach (WorldObject obj in _movedObjects.OrderBy(o => o.MapSequence).ToArray())
+                {
+                    if (ReferenceEquals(obj.Map, this))
+                    {
+                        UpdateObjectVisibility(obj);
+                    }
+                }
+
+                _movedObjects.Clear();
             }
 
             // (3) values updates
@@ -245,6 +386,28 @@ public sealed class Map
         finally
         {
             _inUpdatePhase = false;
+        }
+
+        // (5) grid and terrain lifecycles (vmangos Map::Update → grid states; TerrainInfo::CleanUpGrids)
+        _grid.Update(diffMs);
+        _terrain.CleanUp(diffMs);
+
+        // (6) work scheduled for after the update (vmangos MapManager::ScheduleFarTeleport)
+        if (_afterUpdate.Count > 0)
+        {
+            Action[] pending = [.. _afterUpdate];
+            _afterUpdate.Clear();
+            foreach (Action action in pending)
+            {
+                try
+                {
+                    action();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "deferred work on map {MapId} failed", MapId);
+                }
+            }
         }
     }
 
@@ -272,38 +435,277 @@ public sealed class Map
         _valuesQueue.Add(obj);
     }
 
-    /// <summary>Re-evaluate visibility between a player and everyone else, in both directions.</summary>
+    /// <summary>Re-file an object whose X/Y changed; non-player objects get a visibility pass this tick.</summary>
+    internal void OnObjectMoved(WorldObject obj)
+    {
+        if (!_grid.Relocate(obj) && !_grid.Contains(obj))
+        {
+            return;
+        }
+
+        if (obj is not Player)
+        {
+            _movedObjects.Add(obj);
+        }
+    }
+
+    /// <summary>Run <paramref name="action"/> after this map's next update phase (vmangos ScheduleFarTeleport).</summary>
+    internal void RunAfterUpdate(Action action) => _afterUpdate.Add(action);
+
+    /// <summary>Keep processing a far-teleported player's packets here until it reaches its new map.</summary>
+    internal void BeginTransit(Player player)
+    {
+        if (!_transit.Contains(player))
+        {
+            _transit.Add(player);
+        }
+    }
+
+    internal bool EndTransit(Player player) => _transit.Remove(player);
+
+    /// <summary>The players whose clients currently have <paramref name="obj"/> (the inverse of their visible sets).</summary>
+    internal IReadOnlyCollection<Player> ObserversOf(WorldObject obj) =>
+        _observers.TryGetValue(obj.Guid, out HashSet<Player>? observers) ? observers : [];
+
+    private void ProcessPackets(Player player)
+    {
+        try
+        {
+            player.Session.ProcessWorldPackets(player);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "packet handling failed for {Player}; disconnecting", player.Name);
+            player.Session.Kick();
+        }
+    }
+
+    private static void DeliverInRange(
+        Player player, WorldObject source, float range, WorldOpcode opcode, ReadOnlySpan<byte> payload,
+        bool includeSelf, Team? onlyTeam)
+    {
+        if (ReferenceEquals(player, source))
+        {
+            if (includeSelf)
+            {
+                player.Session.Send(opcode, payload);
+            }
+
+            return;
+        }
+
+        if (onlyTeam is { } team && player.Team != team)
+        {
+            return;
+        }
+
+        if (range > 0)
+        {
+            float dx = player.X - source.X;
+            float dy = player.Y - source.Y;
+            float dz = player.Z - source.Z;
+            float max = range + player.BoundingRadius + source.BoundingRadius;
+            if ((dx * dx) + (dy * dy) + (dz * dz) >= max * max)
+            {
+                return;
+            }
+        }
+
+        player.Session.Send(opcode, payload);
+    }
+
+    /// <summary>
+    /// The objects a query around (x, y) must consider: everything in the touched cells plus
+    /// <paramref name="extra"/>, without duplicates, in map-join order (so passes are
+    /// deterministic, like the insertion-ordered scan they replace).
+    /// </summary>
+    private List<WorldObject> Query(float x, float y, float radius, IEnumerable<WorldObject>? extra)
+    {
+        var found = new List<WorldObject>();
+        _grid.CollectObjects(x, y, radius, found);
+        if (extra is not null)
+        {
+            found.AddRange(extra);
+        }
+
+        var seen = new HashSet<WorldObject>(found.Count, ReferenceEqualityComparer.Instance);
+        found.RemoveAll(o => !seen.Add(o));
+        found.Sort(static (a, b) => a.MapSequence.CompareTo(b.MapSequence));
+        return found;
+    }
+
+    /// <summary>
+    /// Everything whose visibility relation with <paramref name="center"/> could change: objects
+    /// in the cells within visibility range (+ grey distance + both radii), whatever it sees,
+    /// and whoever sees it. Anything else is out of range in both directions and invisible in
+    /// both, so evaluating it would change nothing.
+    /// </summary>
+    private List<WorldObject> VisibilityCandidates(WorldObject center)
+    {
+        var extra = new List<WorldObject>();
+        if (center is Player player)
+        {
+            foreach (ObjectGuid guid in player.VisibleObjects)
+            {
+                if (_objects.TryGetValue(guid, out WorldObject? seen))
+                {
+                    extra.Add(seen);
+                }
+            }
+        }
+
+        if (_observers.TryGetValue(center.Guid, out HashSet<Player>? observers))
+        {
+            extra.AddRange(observers);
+        }
+
+        float radius = VisibilityRange + VisibilityGreyDistance + center.BoundingRadius + _grid.MaxBoundingRadius;
+        return Query(center.X, center.Y, radius, extra);
+    }
+
+    /// <summary>Re-evaluate visibility between a player and everything near it, in both directions.</summary>
     private void UpdateVisibility(Player player)
     {
-        foreach (Player other in _players.Values)
+        foreach (WorldObject other in VisibilityCandidates(player))
         {
-            if (ReferenceEquals(other, player))
+            if (ReferenceEquals(other, player) || !ReferenceEquals(other.Map, this))
             {
                 continue;
             }
 
             UpdateVisibilityOf(viewer: player, target: other);
-            UpdateVisibilityOf(viewer: other, target: player);
+            if (other is Player otherPlayer)
+            {
+                UpdateVisibilityOf(viewer: otherPlayer, target: player);
+            }
         }
     }
 
-    /// <summary>vmangos Player::UpdateVisibilityOf&lt;Player&gt;: create on entering range, out-of-range on leaving.</summary>
-    private void UpdateVisibilityOf(Player viewer, Player target)
+    /// <summary>Re-evaluate which players see a non-player object (vmangos WorldObject::UpdateObjectVisibility).</summary>
+    private void UpdateObjectVisibility(WorldObject obj)
+    {
+        foreach (WorldObject other in VisibilityCandidates(obj))
+        {
+            if (other is Player viewer && ReferenceEquals(viewer.Map, this))
+            {
+                UpdateVisibilityOf(viewer, obj);
+            }
+        }
+    }
+
+    /// <summary>vmangos Player::UpdateVisibilityOf: create on entering range, out-of-range on leaving.</summary>
+    private void UpdateVisibilityOf(Player viewer, WorldObject target)
     {
         bool inVisibleList = viewer.VisibleObjects.Contains(target.Guid);
         bool inRange = IsWithinVisibilityDistance(viewer, target, inVisibleList);
 
         if (inVisibleList && !inRange)
         {
-            viewer.VisibleObjects.Remove(target.Guid);
+            RemoveVisible(viewer, target.Guid);
             viewer.PendingUpdates.AddOutOfRange(target.Guid);
         }
         else if (!inVisibleList && inRange)
         {
-            viewer.VisibleObjects.Add(target.Guid);
+            AddVisible(viewer, target.Guid);
             PacketWriter block = viewer.PendingUpdates.BeginBlock();
             UpdateBlockWriter.WriteCreateBlock(block, target, viewer, isNewObject: false, _world.NowMs);
             viewer.PendingUpdates.EndBlock();
+        }
+    }
+
+    private void AddVisible(Player viewer, ObjectGuid target)
+    {
+        viewer.VisibleObjects.Add(target);
+        if (!_observers.TryGetValue(target, out HashSet<Player>? observers))
+        {
+            observers = new HashSet<Player>(ReferenceEqualityComparer.Instance);
+            _observers[target] = observers;
+        }
+
+        observers.Add(viewer);
+    }
+
+    private bool RemoveVisible(Player viewer, ObjectGuid target)
+    {
+        if (!viewer.VisibleObjects.Remove(target))
+        {
+            return false;
+        }
+
+        if (_observers.TryGetValue(target, out HashSet<Player>? observers))
+        {
+            observers.Remove(viewer);
+            if (observers.Count == 0)
+            {
+                _observers.Remove(target);
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Shared removal: out of the index, SMSG_DESTROY_OBJECT (vanilla: the full 8-byte GUID) to
+    /// every client that has it, and — for a player — out of every observer list it was on.
+    /// </summary>
+    private void RemoveFromWorld(WorldObject obj)
+    {
+        _objects.Remove(obj.Guid);
+        _grid.Remove(obj);
+        _movedObjects.Remove(obj);
+
+        if (_observers.Remove(obj.Guid, out HashSet<Player>? observers))
+        {
+            Span<byte> destroy = stackalloc byte[8];
+            BinaryPrimitives.WriteUInt64LittleEndian(destroy, obj.Guid.Value);
+            foreach (Player other in observers.OrderBy(p => p.MapSequence))
+            {
+                if (other.VisibleObjects.Remove(obj.Guid))
+                {
+                    other.Session.Send(WorldOpcode.SmsgDestroyObject, destroy);
+                }
+            }
+        }
+
+        if (obj is Player player)
+        {
+            foreach (ObjectGuid seen in player.VisibleObjects)
+            {
+                if (_observers.TryGetValue(seen, out HashSet<Player>? seenBy))
+                {
+                    seenBy.Remove(player);
+                    if (seenBy.Count == 0)
+                    {
+                        _observers.Remove(seen);
+                    }
+                }
+            }
+
+            player.VisibleObjects.Clear();
+            player.PendingUpdates.Clear();
+        }
+
+        if (obj.IsQueuedForUpdate)
+        {
+            _valuesQueue.Remove(obj);
+            obj.IsQueuedForUpdate = false;
+        }
+
+        obj.ClearChangedFields();
+        obj.Map = null;
+    }
+
+    /// <summary>An object left in a grid that is being unloaded (vmangos ObjectGridUnloader).</summary>
+    private void EvictFromGrid(WorldObject obj)
+    {
+        if (obj is Player)
+        {
+            return; // players keep their grids loaded; never evicted
+        }
+
+        if (_objects.TryGetValue(obj.Guid, out WorldObject? stored) && ReferenceEquals(stored, obj))
+        {
+            RemoveFromWorld(obj);
         }
     }
 
@@ -314,11 +716,14 @@ public sealed class Map
             AppendValues(obj, self);
         }
 
-        foreach (Player viewer in _players.Values)
+        if (_observers.TryGetValue(obj.Guid, out HashSet<Player>? observers))
         {
-            if (!ReferenceEquals(viewer, obj) && viewer.VisibleObjects.Contains(obj.Guid))
+            foreach (Player viewer in observers)
             {
-                AppendValues(obj, viewer);
+                if (!ReferenceEquals(viewer, obj))
+                {
+                    AppendValues(obj, viewer);
+                }
             }
         }
     }
@@ -354,7 +759,7 @@ public sealed class Map
     {
         if (_inUpdatePhase)
         {
-            throw new InvalidOperationException("players cannot be added or removed during the visibility/values/flush phases");
+            throw new InvalidOperationException("objects cannot be added or removed during the visibility/values/flush phases");
         }
     }
 }

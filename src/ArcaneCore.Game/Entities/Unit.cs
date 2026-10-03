@@ -125,19 +125,13 @@ public abstract class Unit : WorldObject
     {
         _movement = movement;
         _movement.Time = serverTimeMs;
-        X = movement.X;
-        Y = movement.Y;
-        Z = movement.Z;
-        Orientation = movement.Orientation;
+        SetPosition(movement.X, movement.Y, movement.Z, movement.Orientation);
     }
 
     /// <summary>Place the unit (teleport, spawn, login) with a fresh, stationary movement state.</summary>
     public void Relocate(float x, float y, float z, float orientation, uint serverTimeMs)
     {
-        X = x;
-        Y = y;
-        Z = z;
-        Orientation = orientation;
+        SetPosition(x, y, z, orientation);
         _movement = new MovementInfo
         {
             Flags = MovementFlags.None,
