@@ -102,6 +102,9 @@ public sealed class CreatureTemplateRow
     public uint CorpseDecaySeconds { get; set; }
 
     public uint ExtraFlags { get; set; }
+
+    /// <summary>cmangos-classic AIName (vmangos ai_name). Added by <see cref="CreatureAiDataModule"/>.</summary>
+    public string AIName { get; set; } = string.Empty;
 }
 
 /// <summary><c>creature_spawn</c>: one placed creature (cmangos/vmangos <c>creature</c>).</summary>
@@ -146,6 +149,9 @@ public sealed class CreatureMovementRow
     public float Orientation { get; set; }
 
     public uint WaitTimeMs { get; set; }
+
+    /// <summary>Run to this node. Added by <see cref="CreatureAiDataModule"/>.</summary>
+    public bool Run { get; set; }
 }
 
 /// <summary><c>creature_model_info</c> (cmangos name; vmangos <c>creature_display_info_addon</c>).</summary>
@@ -209,6 +215,9 @@ public sealed class CreatureDataModule : IDataModule
             // cmangos-classic: Name char(100) NOT NULL, SubName char(100).
             entity.Property(r => r.Name).HasMaxLength(100).IsRequired();
             entity.Property(r => r.SubName).HasMaxLength(100).IsRequired();
+
+            // cmangos-classic: AIName char(64) NOT NULL DEFAULT ''.
+            entity.Property(r => r.AIName).HasMaxLength(64).IsRequired();
         });
 
         modelBuilder.Entity<CreatureSpawnRow>(entity =>

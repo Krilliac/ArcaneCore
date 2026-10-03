@@ -44,6 +44,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(SpellWorldDataModule), DatabaseComponent.World, 5),
             (typeof(QuestNpcWorldModule), DatabaseComponent.World, 6),
             (typeof(GameObjectLootDataModule), DatabaseComponent.World, 7),
+            (typeof(CreatureAiDataModule), DatabaseComponent.World, 8),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -58,9 +59,9 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
                 .Select(m => (m.GetType(), m.Component, m.SchemaVersion)));
         Assert.Equal(2, AuthDbContext.Schema.CurrentVersion);
         Assert.Equal(9, CharacterDbContext.Schema.CurrentVersion);
-        Assert.Equal(7, WorldDbContext.Schema.CurrentVersion);
+        Assert.Equal(8, WorldDbContext.Schema.CurrentVersion);
         Assert.Equal([2, 3, 4, 5, 6, 7, 8, 9], CharacterDbContext.Schema.Steps.Select(s => s.Version));
-        Assert.Equal([2, 3, 4, 5, 6, 7], WorldDbContext.Schema.Steps.Select(s => s.Version));
+        Assert.Equal([2, 3, 4, 5, 6, 7, 8], WorldDbContext.Schema.Steps.Select(s => s.Version));
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })
         {
@@ -114,8 +115,8 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             // The database starts with the historical v1 model. Only this step's DDL runs;
             // using the current context merely supplies the exact provider model for it.
             SchemaDefinition prefix = ThroughVersion(CharacterDbContext.Schema, step.Version);
-            await EnsureAndInspectAsync(characters, prefix);
-            await EnsureAndInspectAsync(characters, prefix);
+            await EnsureAndInspectAsync(characters, prefix, CharacterDbContext.Schema);
+            await EnsureAndInspectAsync(characters, prefix, CharacterDbContext.Schema);
             Assert.Equal("Existing", (await characters.Characters.SingleAsync()).Name);
             Assert.Equal(123u, (await characters.Characters.SingleAsync()).PlayedTime);
         }
@@ -123,8 +124,8 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         foreach (SchemaStep step in WorldDbContext.Schema.Steps)
         {
             SchemaDefinition prefix = ThroughVersion(WorldDbContext.Schema, step.Version);
-            await EnsureAndInspectAsync(world, prefix);
-            await EnsureAndInspectAsync(world, prefix);
+            await EnsureAndInspectAsync(world, prefix, WorldDbContext.Schema);
+            await EnsureAndInspectAsync(world, prefix, WorldDbContext.Schema);
             Assert.Equal(60u, (await world.ClassInfo.SingleAsync()).BaseHealth);
         }
 
@@ -145,8 +146,14 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Steps = [.. schema.Steps.Where(s => s.Version <= version)],
     };
 
-    private static async Task EnsureAndInspectAsync(DbContext db, SchemaDefinition schema)
+    /// <summary>
+    /// Bootstrap <paramref name="schema"/> and read every model column of its tables. For a
+    /// prefix of <paramref name="full"/>, columns that later steps add are not there yet.
+    /// </summary>
+    private static async Task EnsureAndInspectAsync(DbContext db, SchemaDefinition schema, SchemaDefinition? full = null)
     {
+        HashSet<(string Table, string Column)> notYetAdded = [.. (full?.Steps ?? []).Where(s => s.Version > schema.CurrentVersion)
+            .SelectMany(s => s.Changes).OfType<AddColumnChange>().Select(c => (c.Table, c.Column))];
         await SchemaBootstrapper.EnsureAsync(db, schema);
         Assert.Equal(schema.CurrentVersion, (await db.Set<SchemaVersionRow>().AsNoTracking().SingleAsync()).Version);
 
@@ -160,11 +167,12 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             foreach (string name in expectedTables.Distinct(StringComparer.Ordinal))
             {
                 ITable table = Assert.Single(model.Tables, t => t.Name == name);
-                string columns = string.Join(", ", table.Columns.Select(c => sql.DelimitIdentifier(c.Name)));
+                IColumn[] present = [.. table.Columns.Where(c => !notYetAdded.Contains((table.Name, c.Name)))];
+                string columns = string.Join(", ", present.Select(c => sql.DelimitIdentifier(c.Name)));
                 await using DbCommand command = db.Database.GetDbConnection().CreateCommand();
                 command.CommandText = $"SELECT {columns} FROM {sql.DelimitIdentifier(table.Name, table.Schema)} WHERE 1 = 0";
                 await using DbDataReader reader = await command.ExecuteReaderAsync();
-                Assert.Equal(table.Columns.Count(), reader.FieldCount);
+                Assert.Equal(present.Length, reader.FieldCount);
             }
         }
         finally

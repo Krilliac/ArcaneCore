@@ -14,6 +14,8 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         List<CreatureMovementRow> movement = await db.Set<CreatureMovementRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureModelInfoRow> models = await db.Set<CreatureModelInfoRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureAddonRow> addons = await db.Set<CreatureAddonRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<CreatureAiScriptRow> scripts = await db.Set<CreatureAiScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<CreatureAiTextRow> texts = await db.Set<CreatureAiTextRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
 
         return new CreatureContent(
             templates.Select(ToTemplate),
@@ -31,9 +33,10 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
                 WanderDistance = s.WanderDistance,
                 MovementType = s.MovementType,
             }),
-            movement.Select(m => (m.SpawnGuid, new CreatureWaypoint(m.Point, m.X, m.Y, m.Z, m.Orientation, m.WaitTimeMs))),
+            movement.Select(m => (m.SpawnGuid, new CreatureWaypoint(m.Point, m.X, m.Y, m.Z, m.Orientation, m.WaitTimeMs) { Run = m.Run })),
             models.Select(m => new CreatureModelInfo(m.DisplayId, m.BoundingRadius, m.CombatReach, m.Gender, m.DisplayIdOtherGender)),
-            addons.Select(a => new CreatureAddon(a.Guid, a.MountDisplayId, a.StandState, a.SheathState, a.EmoteState)));
+            addons.Select(a => new CreatureAddon(a.Guid, a.MountDisplayId, a.StandState, a.SheathState, a.EmoteState)),
+            new CreatureAiContent(scripts.Select(CreatureAiDataModule.ToEvent), texts.Select(CreatureAiDataModule.ToText)));
     }
 
     internal static CreatureTemplate ToTemplate(CreatureTemplateRow r) => new()
@@ -78,5 +81,6 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         MovementType = r.MovementType,
         CorpseDecaySeconds = r.CorpseDecaySeconds,
         ExtraFlags = r.ExtraFlags,
+        AIName = r.AIName,
     };
 }

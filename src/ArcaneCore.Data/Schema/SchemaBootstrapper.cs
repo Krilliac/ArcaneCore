@@ -191,6 +191,13 @@ public static class SchemaBootstrapper
                         ?? throw new InvalidOperationException($"table {add.Table} is not in the model");
                     AddColumnOperation column = table.Columns.FirstOrDefault(c => c.Name == add.Column)
                         ?? throw new InvalidOperationException($"column {add.Table}.{add.Column} is not in the model");
+                    if (await ColumnExistsAsync(db, table.Name, add.Column, ct).ConfigureAwait(false))
+                    {
+                        // A table created by an earlier step from the current model already
+                        // has the column (an upgrade across both steps): nothing to add.
+                        break;
+                    }
+
                     column.Table = table.Name;
                     column.Schema = table.Schema;
                     if (!column.IsNullable && column.DefaultValue is null && column.DefaultValueSql is null)
@@ -249,6 +256,29 @@ public static class SchemaBootstrapper
             _ => throw new NotSupportedException($"no catalog query for provider {db.Database.ProviderName}"),
         };
 
+        return await CatalogCountAsync(db, sql, ("@name", table), ct).ConfigureAwait(false) > 0;
+    }
+
+    /// <summary>Whether a column exists, asked of the engine's catalog.</summary>
+    private static async Task<bool> ColumnExistsAsync(DbContext db, string table, string column, CancellationToken ct)
+    {
+        string sql = db.Database.ProviderName switch
+        {
+            "Microsoft.EntityFrameworkCore.Sqlite" =>
+                "SELECT COUNT(*) FROM pragma_table_info(@name) WHERE name = @column",
+            "Pomelo.EntityFrameworkCore.MySql" =>
+                "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = @name AND column_name = @column",
+            "Npgsql.EntityFrameworkCore.PostgreSQL" =>
+                "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = @name AND column_name = @column",
+            _ => throw new NotSupportedException($"no catalog query for provider {db.Database.ProviderName}"),
+        };
+
+        return await CatalogCountAsync(db, sql, ("@name", table), ct, ("@column", column)).ConfigureAwait(false) > 0;
+    }
+
+    private static async Task<long> CatalogCountAsync(
+        DbContext db, string sql, (string Name, string Value) first, CancellationToken ct, (string Name, string Value)? second = null)
+    {
         DbConnection connection = db.Database.GetDbConnection();
         bool opened = false;
         if (connection.State != System.Data.ConnectionState.Open)
@@ -261,12 +291,16 @@ public static class SchemaBootstrapper
         {
             await using DbCommand command = connection.CreateCommand();
             command.CommandText = sql;
-            DbParameter parameter = command.CreateParameter();
-            parameter.ParameterName = "@name";
-            parameter.Value = table;
-            command.Parameters.Add(parameter);
+            foreach ((string Name, string Value) p in second is { } extra ? new[] { first, extra } : new[] { first })
+            {
+                DbParameter parameter = command.CreateParameter();
+                parameter.ParameterName = p.Name;
+                parameter.Value = p.Value;
+                command.Parameters.Add(parameter);
+            }
+
             object? result = await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
-            return Convert.ToInt64(result, System.Globalization.CultureInfo.InvariantCulture) > 0;
+            return Convert.ToInt64(result, System.Globalization.CultureInfo.InvariantCulture);
         }
         finally
         {
