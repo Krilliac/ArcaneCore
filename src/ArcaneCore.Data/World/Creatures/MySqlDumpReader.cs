@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace ArcaneCore.Data.World.Creatures;
 
@@ -42,13 +43,38 @@ public sealed record DumpRow(string Table, IReadOnlyList<string> Columns, IReadO
 /// <c>INSERT</c>/<c>REPLACE</c> with or without a column list and with extended (multi-row)
 /// values, MySQL string escapes, and <c>NULL</c>. Other statements are skipped.
 /// </summary>
-public sealed class MySqlDumpReader(TextReader input)
+public sealed partial class MySqlDumpReader(TextReader input)
 {
-    private readonly Dictionary<string, IReadOnlyList<string>> _tables = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, IReadOnlyList<string>> _tables = NewTableRegistry();
+    private readonly Dictionary<string, int> _unapplied = new(StringComparer.Ordinal);
     private readonly StringBuilder _token = new();
+
+    /// <summary>
+    /// Read <paramref name="input"/> against a <see cref="NewTableRegistry"/> shared with other
+    /// readers, so a column-less <c>INSERT</c> in a later file finds the <c>CREATE TABLE</c> of
+    /// an earlier one (the real classic-db dumps use column-less INSERTs). Tables this reader
+    /// defines are added to the shared registry.
+    /// </summary>
+    public MySqlDumpReader(TextReader input, Dictionary<string, IReadOnlyList<string>> sharedTables)
+        : this(input)
+    {
+        ArgumentNullException.ThrowIfNull(sharedTables);
+        _tables = sharedTables;
+    }
+
+    /// <summary>An empty, case-insensitive table registry to share between readers.</summary>
+    public static Dictionary<string, IReadOnlyList<string>> NewTableRegistry() => new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Column order of every table defined so far.</summary>
     public IReadOnlyDictionary<string, IReadOnlyList<string>> Tables => _tables;
+
+    /// <summary>
+    /// Data-changing statements that are read past but not applied (a dump snapshot is only its
+    /// <c>INSERT</c>/<c>REPLACE</c> rows): count per <c>"VERB table"</c> for <c>UPDATE</c>,
+    /// <c>DELETE</c>, <c>ALTER</c> and <c>TRUNCATE</c>. Statements inside <c>/*! … */</c>
+    /// conditional comments (mysqldump's <c>DISABLE KEYS</c>) are comments and are not counted.
+    /// </summary>
+    public IReadOnlyDictionary<string, int> UnappliedStatements => _unapplied;
 
     /// <summary>Yield <see cref="DumpTable"/> and <see cref="DumpRow"/> items in file order.</summary>
     public IEnumerable<object> Read()
@@ -97,11 +123,27 @@ public sealed class MySqlDumpReader(TextReader input)
                     break;
 
                 default:
-                    ReadStatement();
+                    RecordUnapplied(keyword, ReadStatement());
                     break;
             }
         }
     }
+
+    private void RecordUnapplied(string verb, string statement)
+    {
+        if (verb is not ("UPDATE" or "DELETE" or "ALTER" or "TRUNCATE"))
+        {
+            return;
+        }
+
+        Match match = UnappliedTargetPattern().Match(statement);
+        string key = verb + " " + (match.Success ? (match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value) : "?");
+        _unapplied[key] = _unapplied.GetValueOrDefault(key) + 1;
+    }
+
+    // Statement text after the verb: [LOW_PRIORITY|IGNORE|ONLINE|QUICK|FROM|TABLE]… then the table.
+    [GeneratedRegex(@"^\s*(?:(?:LOW_PRIORITY|IGNORE|ONLINE|QUICK|FROM|TABLE)\s+)*(?:`([^`]+)`|([A-Za-z0-9_$.]+))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex UnappliedTargetPattern();
 
     private IEnumerable<DumpRow> ReadInsert()
     {
