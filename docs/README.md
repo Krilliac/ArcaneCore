@@ -28,6 +28,11 @@ unfinished parts documented as limits).
 [quest rewards](QUEST_REWARD_ACCEPTANCE.md) and the [mock client](MOCK_CLIENT_ACCEPTANCE.md). No area has a
 recorded real-client run unless its acceptance page says so.
 
+## For developers: how to contribute
+
+[Contributing](guide/contributing.md): the charter rules in practice, build and CI commands, the seams a feature plugs into, schema module rules, the
+hosted-CI database rule, the flake rule, repository hygiene, and how the generated documentation is regenerated.
+
 ## For developers: areas
 
 Each area page has a Delivered section, its limits, and the references it follows. This list is maintained by hand.
@@ -61,6 +66,7 @@ Each area page has a Delivered section, its limits, and the references it follow
 | Chat languages, gates and channels | [chat](areas/chat.md) |
 | Character creation and deletion rules | [character-creation](areas/character-creation.md) |
 | Content import | [content-import](areas/content-import.md) |
+| Documentation tooling (generated pages, fact checks) | [docs-wiki](areas/docs-wiki.md) |
 
 ## For developers: planning and integration records
 
