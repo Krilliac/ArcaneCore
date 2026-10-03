@@ -25,6 +25,9 @@ internal sealed class InMemoryBanStore(AccountStatusEvents? events = null, TimeP
     /// <summary>Runs after the first single-account lookup has been answered (the status-read/Register race window).</summary>
     public Action? AfterFirstAccountQuery { get; set; }
 
+    /// <summary>Runs after every single-account lookup with its 1-based ordinal (the post-Register window is the second).</summary>
+    public Action<int>? AfterAccountQuery { get; set; }
+
     /// <summary>How many times <see cref="FindBannedAccountsAsync"/> was called (one per chunk).</summary>
     public int FindBannedAccountsCalls => Volatile.Read(ref _chunkCalls);
 
@@ -69,10 +72,13 @@ internal sealed class InMemoryBanStore(AccountStatusEvents? events = null, TimeP
                 .OrderByDescending(r => r.IsPermanent).ThenByDescending(r => r.UnbanDate).FirstOrDefault();
         }
 
-        if (Interlocked.Increment(ref _accountQueries) == 1)
+        int ordinal = Interlocked.Increment(ref _accountQueries);
+        if (ordinal == 1)
         {
             AfterFirstAccountQuery?.Invoke();
         }
+
+        AfterAccountQuery?.Invoke(ordinal);
 
         return Task.FromResult(found);
     }

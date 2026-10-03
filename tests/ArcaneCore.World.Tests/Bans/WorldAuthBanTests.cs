@@ -105,6 +105,31 @@ public sealed class WorldAuthBanTests
     }
 
     [Fact]
+    public async Task KickedWhileRegisteredButNotYetAuthenticated_NeverGetsAuthOk()
+    {
+        await using var host = WorldTestHost.Start();
+        byte[] key = await host.AddAccountAsync("KICKED");
+        int id = (await host.Accounts.FindByUsernameAsync("KICKED"))!.Id;
+
+        // The second lookup is the post-Register re-check: a live-ban event (Kick) lands there, after Register,
+        // before the cipher is initialised. No ban row exists, so only the kick can stop the session.
+        host.Bans.AfterAccountQuery = ordinal =>
+        {
+            if (ordinal == 2)
+            {
+                host.Registry.Find(id)!.Kick();
+            }
+        };
+
+        using TcpClient tcp = await ConnectAsync(host);
+        await using NetworkStream stream = tcp.GetStream();
+        // The helper throws XunitException when the reply is header-encrypted, i.e. when the server answered AUTH_OK.
+        Exception closed = await Assert.ThrowsAnyAsync<Exception>(() => CodexNetAuthWorldTests.SendAuthSessionAsync(stream, "KICKED", key));
+        Assert.IsNotType<Xunit.Sdk.XunitException>(closed);
+        await WorldTestHost.WaitForAsync(() => host.Registry.Find(id) is null, "the kicked session to be unregistered");
+    }
+
+    [Fact]
     public async Task StatusColumnOverride_StillRefuses_WithoutAnyRow()
     {
         await using var host = WorldTestHost.Start();

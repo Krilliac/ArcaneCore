@@ -611,10 +611,11 @@ public sealed class WorldSession : IPlayerSession
         }
 
         // Only now does the session become usable: header encryption on and the character screen reachable.
-        // It may have been kicked (a live ban event) while it was registered but not yet authenticated.
+        // It may have been kicked (a live ban event) while it was registered but not yet authenticated: Kick() only
+        // cancels the kick token (the state becomes Closed later, in Close()), so the token is what must be tested.
         lock (_sendLock)
         {
-            if (_state == SessionState.Closed)
+            if (_state == SessionState.Closed || _kick.IsCancellationRequested)
             {
                 return false;
             }
