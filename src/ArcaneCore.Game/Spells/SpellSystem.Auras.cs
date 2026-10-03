@@ -163,6 +163,12 @@ public sealed partial class SpellSystem
                 continue;
             }
 
+            if (IsQuestSettlementPending(holder.Target)
+                || IsQuestSettlementPending(Units.Find(holder.Target, holder.CasterGuid)))
+            {
+                continue;
+            }
+
             if (!holder.IsPermanent)
             {
                 holder.Duration = Math.Max(0, holder.Duration - (int)diffMs);

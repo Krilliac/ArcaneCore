@@ -18,6 +18,39 @@ namespace ArcaneCore.Game.Tests;
 public sealed class QuestRewardTests
 {
     [Fact]
+    public void PendingSettlementRejectsGameplay_AndOnlyMatchingPublicationCanApplyThePreparedReward()
+    {
+        using var kit = new Kit();
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, QuestId, 0, out QuestRewardPlan? plan));
+        Guid operation = Guid.NewGuid();
+        Assert.True(kit.Player.BeginQuestSettlement(operation));
+        Assert.False(kit.Player.BeginQuestSettlement(Guid.NewGuid()));
+        Assert.False(kit.Player.EndQuestSettlement(Guid.NewGuid()));
+        Assert.False(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, QuestId, 0, out _));
+        Assert.Throws<InvalidOperationException>(() => kit.Services.ApplyReward(plan!));
+        Assert.Throws<InvalidOperationException>(() => kit.Player.Money++);
+        Assert.Equal(ArcaneCore.Game.Items.InventoryResult.CantDoRightNow, kit.Player.Inventory.AddItem(ItemTestData.ToughJerky, 1, out _));
+        Assert.Empty(kit.Player.Inventory.AllItems);
+        Assert.Throws<InvalidOperationException>(() => kit.Player.BeginQuestSettlementPublication(Guid.NewGuid()));
+
+        using (kit.Player.BeginQuestSettlementPublication(operation))
+        {
+            Assert.True(kit.Player.IsQuestSettlementPending);
+            kit.Services.ApplyReward(plan!);
+            Assert.Throws<InvalidOperationException>(() => kit.Player.EndQuestSettlement(operation));
+        }
+
+        Assert.True(kit.Player.IsQuestSettlementPending);
+        Assert.False(kit.Player.CanMutateQuestSettlementState);
+        Assert.Equal(80u, kit.Player.Money);
+        Assert.True(kit.State.Quests.Get(QuestId)!.Rewarded);
+        Assert.True(kit.Player.EndQuestSettlement(operation));
+        Assert.False(kit.Player.EndQuestSettlement(operation));
+        Assert.True(kit.Player.CanMutateQuestSettlementState);
+        Assert.Single(kit.Session.Sent, p => p.Opcode == WorldOpcode.SmsgQuestgiverQuestComplete);
+    }
+
+    [Fact]
     public void PreparationIsDetached_ApplicationPublishesOnce_AndPersistsChosenItemId()
     {
         using var kit = new Kit();

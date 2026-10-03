@@ -181,6 +181,7 @@ public sealed partial class PlayerInventory
     /// </summary>
     public void Load(IEnumerable<InventoryItemData> rows)
     {
+        Player?.EnsureQuestSettlementMutationAllowed();
         ArgumentNullException.ThrowIfNull(rows);
         var pending = rows.ToList();
         var bags = new Dictionary<uint, Container>();

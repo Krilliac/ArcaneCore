@@ -6,6 +6,7 @@ using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Packets;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
@@ -202,6 +203,11 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
 
         try
         {
+            if (session.Services.GetService<QuestNpcFeature>() is { } quests)
+            {
+                await quests.WaitForSettlementAsync(character.Id).ConfigureAwait(false);
+            }
+
             if (session.Services.GetService<CharacterSaveQueue>() is { } saves)
             {
                 await saves.FlushCharacterAsync(character.Id).ConfigureAwait(false);
@@ -309,6 +315,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         // Every loading hook and map insertion succeeded with fresh durable state.
         // Stale old-session callbacks cannot save or remove this player by GUID alone.
         session.Services.GetService<CharacterSaveQueue>()?.ResumeCharacter(character.Id);
+        session.Services.GetService<QuestNpcFeature>()?.Persistence.ResumeCharacter(character.Id);
         session.Logger.LogInformation("[{Endpoint}] '{Account}' entered the world as '{Name}'",
             session.RemoteEndpoint, session.AccountName, player.Name);
         world.NotifyLoggedIn(player);

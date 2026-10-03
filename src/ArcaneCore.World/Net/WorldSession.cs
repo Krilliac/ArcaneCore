@@ -183,6 +183,13 @@ public sealed class WorldSession : IPlayerSession
                 continue;
             }
 
+            // Settlement freezes this character, while the world continues updating others.
+            // Drop requests rather than replaying actions captured against pre-reward state.
+            if (player.IsQuestSettlementPending)
+            {
+                continue;
+            }
+
             // Between SMSG_NEW_WORLD and MSG_MOVE_WORLDPORT_ACK the player is in no map: only
             // the ack is handled, everything else is dropped (vmangos STATUS_TRANSFER /
             // WorldSession::Update skips STATUS_LOGGEDIN packets while !IsInWorld()).

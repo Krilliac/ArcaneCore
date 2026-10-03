@@ -84,7 +84,7 @@ the original 29 named checks and adds 12 reward checks, with the same
 pin the offer suffix and fixed-reward-only completion layout to vmangos/core
 `4b3d241cffe245a1f68da11380bce96c23db48c0`; the recorded gtker pin agrees on
 completion and differs semantically on the zero-valued offer flags/spell words.
-All 16 adverse reward cases passed, including rollback/retry, capacity, lost
+All 16 adverse reward cases passed, including precommit failure/retry, capacity, lost
 acknowledgement and unreadable-outcome quarantine/relog. Qualification fixed
 nearby-create timing, natural combat exit before logout and an existing delayed
 social-load overwrite race; four deterministic social regressions passed.
@@ -92,6 +92,21 @@ social-load overwrite race; four deterministic social regressions passed.
 Run the [implementation checks](docs/MOCK_CLIENT_ACCEPTANCE.md) and the full
 Release/provider suite. Record exact results and integrated source heads in
 [the integration ledger](docs/integration/fleet-20261003.md).
+
+The asynchronous settlement successor passed the full native Release build with
+zero warnings/errors and all **8,799 tests**, zero failures/skips: crypto 8,005,
+SQLite data 78, Game 416, mock-client 100, Realm 3 and World 197. The standalone
+scenario retains **41 checks / 122 frames**, passing in **4.935 seconds**. A real
+scoped reward operation held **744.517 ms** while **47 actual map ticks** ran;
+maximum gap **16.551 ms**, p95 **16.526 ms**, maximum world command **16.098 ms**,
+NPC status **16.591 ms**, and independent player quest acceptance **16.901 ms**.
+The fixture uses its configured 5 ms tick and 200 ms response budgets; these are
+observed Windows timings, not a claim that every tick meets 5 ms. Eight
+held operations retained eight distinct identities; the ninth player stayed
+active and retried successfully. Actual database rollback, uncertain commit,
+disconnect/relog, stale snapshot and retained dirty-field tests pass.
+See the [async contract](docs/integration/quest-settlement-async.md) and the
+[bounded real-client handoff](docs/integration/quest-client-acceptance.md).
 
 This demonstrates the implemented exchange against ArcaneCore's own listeners.
 Rendering, UI, client executable acceptance, terrain/content fidelity, animation,

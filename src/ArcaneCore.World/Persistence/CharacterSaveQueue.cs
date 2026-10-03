@@ -17,6 +17,7 @@ public sealed class CharacterSaveQueue(IServiceScopeFactory scopes, ILogger<Char
 
     private readonly Lock _gate = new();
     private readonly Dictionary<int, FailedSave> _failed = [];
+    private readonly HashSet<int> _held = [];
     private readonly HashSet<int> _quarantined = [];
     private readonly Channel<PendingWrite> _channel = Channel.CreateUnbounded<PendingWrite>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false, AllowSynchronousContinuations = false });
@@ -41,7 +42,7 @@ public sealed class CharacterSaveQueue(IServiceScopeFactory scopes, ILogger<Char
         ArgumentNullException.ThrowIfNull(state);
         lock (_gate)
         {
-            if (_quarantined.Contains(state.Id))
+            if (_held.Contains(state.Id) || _quarantined.Contains(state.Id))
             {
                 return;
             }
@@ -59,6 +60,45 @@ public sealed class CharacterSaveQueue(IServiceScopeFactory scopes, ILogger<Char
                 throw new InvalidOperationException("the character save queue is closed");
             }
         }
+    }
+
+    /// <summary>Suppress new ordinary snapshots; snapshots queued before the hold still drain.</summary>
+    public void HoldCharacter(int characterId)
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_stopped, this);
+            _held.Add(characterId);
+        }
+    }
+
+    /// <summary>
+    /// Save the captured pre-settlement snapshot after earlier writes, bypassing a hold.
+    /// The returned task observes the entire write, including cooperative cancellation.
+    /// Quarantine always refuses the snapshot.
+    /// </summary>
+    public Task SaveForSettlementAsync(CharacterState state, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_stopped, this);
+            if (_quarantined.Contains(state.Id))
+            {
+                throw new InvalidOperationException($"character {state.Id} is quarantined");
+            }
+
+            _consumer ??= Task.Run(ConsumeAsync);
+            Interlocked.Increment(ref _pending);
+            if (!_channel.Writer.TryWrite(new PendingWrite(state.Id, Copy(state), done, cancellationToken)))
+            {
+                Interlocked.Decrement(ref _pending);
+                throw new InvalidOperationException("the character save queue is closed");
+            }
+        }
+
+        return done.Task;
     }
 
     /// <summary>Drain earlier snapshots in order and retry this character's retained failure. Cancellation never removes retained state.</summary>
@@ -91,7 +131,20 @@ public sealed class CharacterSaveQueue(IServiceScopeFactory scopes, ILogger<Char
     {
         lock (_gate)
         {
-            _quarantined.Remove(characterId);
+            _held.Remove(characterId);
+            if (_quarantined.Remove(characterId))
+            {
+                // Authoritative publication/loading supersedes any retained old-session state.
+                _failed.Remove(characterId);
+            }
+        }
+    }
+
+    public bool IsHeld(int characterId)
+    {
+        lock (_gate)
+        {
+            return _held.Contains(characterId);
         }
     }
 
@@ -129,6 +182,7 @@ public sealed class CharacterSaveQueue(IServiceScopeFactory scopes, ILogger<Char
                     {
                         if (_quarantined.Contains(write.CharacterId))
                         {
+                            write.Done?.TrySetException(new InvalidOperationException($"character {write.CharacterId} is quarantined"));
                             continue;
                         }
 
@@ -138,7 +192,7 @@ public sealed class CharacterSaveQueue(IServiceScopeFactory scopes, ILogger<Char
                         }
                     }
 
-                    await SaveRetainingFailureAsync(state, default).ConfigureAwait(false);
+                    await SaveRetainingFailureAsync(state, write.CancellationToken, write.Done is not null).ConfigureAwait(false);
                 }
                 else
                 {
@@ -209,7 +263,7 @@ public sealed class CharacterSaveQueue(IServiceScopeFactory scopes, ILogger<Char
         }
     }
 
-    private async Task SaveRetainingFailureAsync(CharacterState state, CancellationToken cancellationToken)
+    private async Task SaveRetainingFailureAsync(CharacterState state, CancellationToken cancellationToken, bool trustedSettlement = false)
     {
         for (int attempt = 1; attempt <= MaxAttempts; attempt++)
         {
@@ -217,6 +271,11 @@ public sealed class CharacterSaveQueue(IServiceScopeFactory scopes, ILogger<Char
             {
                 if (_quarantined.Contains(state.Id))
                 {
+                    if (trustedSettlement)
+                    {
+                        throw new InvalidOperationException($"character {state.Id} is quarantined");
+                    }
+
                     return;
                 }
             }

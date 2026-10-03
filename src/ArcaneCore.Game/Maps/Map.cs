@@ -811,7 +811,7 @@ public sealed class Map
             (opcode, payload) => player.Session.Send(opcode, payload),
             _world.Options.UpdateCompressionThreshold);
 
-    private void EnsureWorldThread()
+    internal void EnsureWorldThread()
     {
         if (!_world.IsWorldThread)
         {

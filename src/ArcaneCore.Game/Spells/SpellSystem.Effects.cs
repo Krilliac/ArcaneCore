@@ -113,6 +113,11 @@ public sealed partial class SpellSystem
     /// <summary>vmangos Spell::DoAllEffectOnTarget → HandleEffects per effect, then the built aura holder is added.</summary>
     private void ApplyEffects(SpellCast cast, Unit target, int effectMask)
     {
+        if (IsQuestSettlementPending(cast.Caster) || IsQuestSettlementPending(target))
+        {
+            return;
+        }
+
         SpellAuraHolder? holder = null;
         for (int i = 0; i < SpellConstants.MaxEffects; i++)
         {
@@ -249,7 +254,7 @@ public sealed partial class SpellSystem
     public bool LearnSpell(Player player, uint spellId)
     {
         ArgumentNullException.ThrowIfNull(player);
-        if (Spellbook is null || !Spellbook.LearnSpell(player, spellId))
+        if (IsQuestSettlementPending(player) || Spellbook is null || !Spellbook.LearnSpell(player, spellId))
         {
             return false;
         }

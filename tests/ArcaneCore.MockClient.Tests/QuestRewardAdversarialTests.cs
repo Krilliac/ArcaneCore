@@ -11,6 +11,7 @@ using ArcaneCore.MockClient.Hosting;
 using ArcaneCore.MockClient.Protocol;
 using ArcaneCore.MockClient.Scenarios;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -171,6 +172,9 @@ public sealed class QuestRewardAdversarialTests
         await using OwnedCharacterClient owned = await CreateCompletedQuestAsync(server, token);
 
         await MockScenarios.ChooseRewardAsync(owned.Connection, 1, token);
+        await fault.StoreEntered.Task.WaitAsync(token);
+        await server.Services.GetRequiredService<QuestNpcFeature>()
+            .WaitForSettlementAsync(checked((int)owned.Guid), token);
         await AssertRejectedUntilPongAsync(owned.Connection, 0x90000340, token);
         Assert.Equal(1, fault.Attempts);
         RewardObservation rejected = await MockScenarios.ObserveRewardAsync(server, owned.Guid, token);
@@ -248,50 +252,56 @@ public sealed class QuestRewardAdversarialTests
         await using OwnedCharacterClient owned = await CreateCompletedQuestAsync(server, token);
         CharacterSaveQueue saves = server.Services.GetRequiredService<CharacterSaveQueue>();
         int id = checked((int)owned.Guid);
-        fault.BeforeReadFailure = () =>
+        try
         {
-            if (!server.World.IsWorldThread)
+            await MockScenarios.ChooseRewardAsync(owned.Connection, 1, token);
+            await fault.DurableCommit.Task.WaitAsync(token);
+            await server.World.InvokeAsync(() =>
             {
-                throw new InvalidOperationException("The reconciliation fault must run on the real world thread.");
-            }
+                var player = server.World.FindOnlinePlayer(new ObjectGuid(owned.Guid))
+                    ?? throw new InvalidOperationException("The committed reward player left before reconciliation.");
+                fault.StaleAutosave = player.CreateSnapshot(server.World.NowMs) with { Inventory = player.Inventory.CreateSnapshot() };
+                server.World.SaveAll(); // Pending live Before must not overwrite the durable After.
+                return true;
+            }).WaitAsync(token);
+            Assert.True(saves.IsQuarantined(id));
+            fault.AcknowledgementRelease.TrySetResult(true);
+            await fault.ReadFailure.Task.WaitAsync(token);
+            await server.Services.GetRequiredService<QuestNpcFeature>().WaitForSettlementAsync(id, token);
+            await AssertDisconnectedWithoutRewardAsync(owned.Client, token);
+            await WaitUntilOfflineAsync(server, token);
+            Assert.True(saves.IsQuarantined(id));
+            Assert.Equal(1, fault.Attempts);
+            Assert.Equal(1, fault.FailedReads);
+            CharacterState stale = Assert.IsType<CharacterState>(fault.StaleAutosave);
+            Assert.Equal(0u, stale.Money);
+            Assert.Empty(stale.Inventory!.Items);
+            saves.Enqueue(stale); // A delayed callback can still own the captured Before.
+            await AssertStoredAsync(server, owned.Guid, rewarded: true, kills: 2, token);
+            Assert.Equal(0, fault.PostCommitSaveCalls);
+            Assert.True(saves.IsQuarantined(id));
 
-            var player = server.World.FindOnlinePlayer(new ObjectGuid(owned.Guid))
-                ?? throw new InvalidOperationException("The committed reward player left before reconciliation.");
-            fault.StaleAutosave = player.CreateSnapshot(server.World.NowMs) with { Inventory = player.Inventory.CreateSnapshot() };
-            server.World.SaveAll(); // Real autosave attempts to publish the still-unreconciled Before state.
-        };
-
-        await MockScenarios.ChooseRewardAsync(owned.Connection, 1, token);
-        await fault.DurableCommit.Task.WaitAsync(token);
-        await fault.ReadFailure.Task.WaitAsync(token);
-        await AssertDisconnectedWithoutRewardAsync(owned.Client, token);
-        await WaitUntilOfflineAsync(server, token);
-        Assert.True(saves.IsQuarantined(id));
-        Assert.Equal(1, fault.Attempts);
-        Assert.Equal(1, fault.FailedReads);
-        CharacterState stale = Assert.IsType<CharacterState>(fault.StaleAutosave);
-        Assert.Equal(0u, stale.Money);
-        Assert.Empty(stale.Inventory!.Items);
-        await AssertStoredAsync(server, owned.Guid, rewarded: true, kills: 2, token);
-        Assert.Equal(0, fault.PostCommitSaveCalls);
-        Assert.True(saves.IsQuarantined(id));
-
-        await owned.Client.DisposeAsync();
-        await using OwnedCharacterClient reconnected = await ReconnectAsync(server, owned.Guid, token);
-        Assert.False(saves.IsQuarantined(id));
-        MockScenarios.ValidateRewardObservation(await MockScenarios.ObserveRewardAsync(server, owned.Guid, token), rewarded: true);
-        await server.World.InvokeAsync(() =>
+            await owned.Client.DisposeAsync();
+            await using OwnedCharacterClient reconnected = await ReconnectAsync(server, owned.Guid, token);
+            Assert.False(saves.IsQuarantined(id));
+            MockScenarios.ValidateRewardObservation(await MockScenarios.ObserveRewardAsync(server, owned.Guid, token), rewarded: true);
+            await server.World.InvokeAsync(() =>
+            {
+                server.World.SaveAll(); // The authoritative After state can now be saved normally.
+                return true;
+            }).WaitAsync(token);
+            await AssertStoredAsync(server, owned.Guid, rewarded: true, kills: 2, token);
+            Assert.True(fault.PostCommitSaveCalls > 0);
+            await MockScenarios.ChooseRewardAsync(reconnected.Connection, 1, token);
+            await AssertRejectedUntilPongAsync(reconnected.Connection, 0x90000360, token);
+            Assert.Equal(1, fault.Attempts);
+            Assert.Equal(1, fault.FailedReads);
+            await AssertStoredAsync(server, owned.Guid, rewarded: true, kills: 2, token);
+        }
+        finally
         {
-            server.World.SaveAll(); // The authoritative After state can now be saved normally.
-            return true;
-        }).WaitAsync(token);
-        await AssertStoredAsync(server, owned.Guid, rewarded: true, kills: 2, token);
-        Assert.True(fault.PostCommitSaveCalls > 0);
-        await MockScenarios.ChooseRewardAsync(reconnected.Connection, 1, token);
-        await AssertRejectedUntilPongAsync(reconnected.Connection, 0x90000360, token);
-        Assert.Equal(1, fault.Attempts);
-        Assert.Equal(1, fault.FailedReads);
-        await AssertStoredAsync(server, owned.Guid, rewarded: true, kills: 2, token);
+            fault.AcknowledgementRelease.TrySetResult(true);
+        }
     }
 
     private static async Task<OwnedCharacterClient> CreateAcceptedQuestAsync(SyntheticArcaneServer server, CancellationToken token)
@@ -508,6 +518,7 @@ public sealed class QuestRewardAdversarialTests
         public async Task<QuestRewardCommitResult> CommitAsync(CharacterQuestRewardRequest request, CancellationToken cancellationToken = default)
         {
             int attempt = Interlocked.Increment(ref fault.AttemptCount);
+            fault.StoreEntered.TrySetResult(true);
             if (attempt == 1 && !fault.AfterCommit)
             {
                 throw new IOException("Synthetic reward store failure before its transaction.");
@@ -517,12 +528,14 @@ public sealed class QuestRewardAdversarialTests
             if (attempt == 1 && fault.AfterCommit && result == QuestRewardCommitResult.Committed)
             {
                 Volatile.Write(ref fault.Committed, 1);
+                fault.DurableCommit.TrySetResult(true);
                 if (fault.FailReconciliationRead)
                 {
+                    // The test drives its real world autosave before allowing background reconciliation.
+                    await fault.AcknowledgementRelease.Task.WaitAsync(cancellationToken);
                     Interlocked.Exchange(ref fault.ArmedReadFailure, 1);
                 }
 
-                fault.DurableCommit.TrySetResult(true);
                 throw new IOException("Synthetic acknowledgement lost after the real SQLite commit.");
             }
 
@@ -537,7 +550,6 @@ public sealed class QuestRewardAdversarialTests
             if (Interlocked.Exchange(ref fault.ArmedReadFailure, 0) == 1)
             {
                 Interlocked.Increment(ref fault.ReadFailureCount);
-                fault.BeforeReadFailure?.Invoke();
                 fault.ReadFailure.TrySetResult(true);
                 throw new IOException("Synthetic first reconciliation read failed after the real SQLite commit.");
             }
@@ -583,9 +595,10 @@ public sealed class QuestRewardAdversarialTests
         internal int Attempts => Volatile.Read(ref AttemptCount);
         internal int FailedReads => Volatile.Read(ref ReadFailureCount);
         internal int PostCommitSaveCalls => Volatile.Read(ref PostCommitSaveCount);
-        internal Action? BeforeReadFailure { get; set; }
         internal CharacterState? StaleAutosave { get; set; }
+        internal TaskCompletionSource<bool> StoreEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource<bool> DurableCommit { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource<bool> AcknowledgementRelease { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource<bool> ReadFailure { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 

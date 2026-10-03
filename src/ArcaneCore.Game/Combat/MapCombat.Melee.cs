@@ -41,7 +41,8 @@ public sealed partial class MapCombat
     {
         ArgumentNullException.ThrowIfNull(attacker);
         ArgumentNullException.ThrowIfNull(victim);
-        if (ReferenceEquals(attacker, victim) || !IsAliveState(attacker) || !victim.IsInWorld || !IsAliveState(victim))
+        if (IsQuestSettlementPending(attacker) || IsQuestSettlementPending(victim)
+            || ReferenceEquals(attacker, victim) || !IsAliveState(attacker) || !victim.IsInWorld || !IsAliveState(victim))
         {
             return false;
         }
@@ -146,6 +147,11 @@ public sealed partial class MapCombat
     /// </summary>
     public AttackCheckResult CanAutoAttackTarget(Unit attacker, Unit victim)
     {
+        if (IsQuestSettlementPending(attacker) || IsQuestSettlementPending(victim))
+        {
+            return AttackCheckResult.CantAttack;
+        }
+
         if ((attacker.UnitFlags & (UnitFlags.Pacified | UnitFlags.Stunned | UnitFlags.Fleeing | UnitFlags.Confused)) != 0)
         {
             return AttackCheckResult.CantAttack; // UNIT_STATE_CAN_NOT_REACT | UNIT_FLAG_PACIFIED
@@ -218,6 +224,11 @@ public sealed partial class MapCombat
     {
         UnitCombat c = attacker.Combat;
         if (c.Victim is not { } victim)
+        {
+            return false;
+        }
+
+        if (IsQuestSettlementPending(attacker) || IsQuestSettlementPending(victim))
         {
             return false;
         }
@@ -330,7 +341,8 @@ public sealed partial class MapCombat
     /// </summary>
     public MeleeDamageInfo? AttackerStateUpdate(Unit attacker, Unit victim, WeaponAttackType attackType)
     {
-        if (!IsAliveState(victim) || attackType == WeaponAttackType.RangedAttack)
+        if (IsQuestSettlementPending(attacker) || IsQuestSettlementPending(victim)
+            || !IsAliveState(victim) || attackType == WeaponAttackType.RangedAttack)
         {
             return null;
         }
@@ -585,7 +597,7 @@ public sealed partial class MapCombat
     /// </summary>
     public uint DealDamage(Unit attacker, Unit victim, uint damage, MeleeHitOutcome outcome = MeleeHitOutcome.Normal, uint cleanDamage = 0, bool direct = true, bool meleeDamage = true)
     {
-        if (!IsAliveState(victim))
+        if (IsQuestSettlementPending(attacker) || IsQuestSettlementPending(victim) || !IsAliveState(victim))
         {
             return 0;
         }
@@ -679,6 +691,11 @@ public sealed partial class MapCombat
     /// </summary>
     public static void RewardRage(Player player, uint damage, bool attacker)
     {
+        if (IsQuestSettlementPending(player))
+        {
+            return;
+        }
+
         float level = player.Level;
         float conversion = (float)((0.0091107836 * level * level) + (3.225598133 * level)) + 4.2652911f;
         float add = attacker ? damage / conversion * 7.5f : damage / conversion * 2.5f;
@@ -692,7 +709,7 @@ public sealed partial class MapCombat
     /// </summary>
     public void Kill(Unit? killer, Unit victim)
     {
-        if (!IsAliveState(victim))
+        if (IsQuestSettlementPending(killer) || IsQuestSettlementPending(victim) || !IsAliveState(victim))
         {
             return;
         }
@@ -761,7 +778,7 @@ public sealed partial class MapCombat
     /// <summary>vmangos Unit::SetInCombatState: UNIT_FLAG_IN_COMBAT plus the PvP linger timer (rounded up to the 1.2 s check).</summary>
     public void SetInCombatState(Unit unit, uint combatTimer)
     {
-        if (!IsAliveState(unit))
+        if (IsQuestSettlementPending(unit) || !IsAliveState(unit))
         {
             return;
         }

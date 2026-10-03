@@ -160,6 +160,177 @@ public sealed class CharacterSaveQueueTests
         await kit.Queue.StopAsync();
     }
 
+    [Fact]
+    public async Task HoldDrainsEarlierSnapshotsAndTrustedSettlementBypassesOnlyTheHold()
+    {
+        await using var kit = new Kit();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Store.OnSave = async (state, token) =>
+        {
+            if (state.Money == 11)
+            {
+                entered.TrySetResult();
+                await release.Task.WaitAsync(token);
+            }
+        };
+        kit.Queue.Enqueue(State(1, 11));
+        kit.Queue.Start();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        kit.Queue.Enqueue(State(1, 12));
+        kit.Queue.HoldCharacter(1);
+        kit.Queue.Enqueue(State(1, 22));
+        Task trusted = kit.Queue.SaveForSettlementAsync(State(1, 33));
+        kit.Queue.Enqueue(State(1, 44));
+        Assert.False(trusted.IsCompleted);
+        release.TrySetResult();
+        await trusted.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(new uint[] { 11, 12, 33 }, kit.Store.Saved.Select(s => s.Money));
+        Assert.True(kit.Queue.IsHeld(1));
+        kit.Queue.ResumeCharacter(1);
+        kit.Queue.Enqueue(State(1, 55));
+        await kit.Queue.FlushCharacterAsync(1);
+        Assert.Equal(new uint[] { 11, 12, 33, 55 }, kit.Store.Saved.Select(s => s.Money));
+        Assert.False(kit.Queue.IsHeld(1));
+        await kit.Queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task TrustedSettlementFullyObservesAStoreThatIgnoresCancellation()
+    {
+        await using var kit = new Kit();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Store.OnSave = async (_, _) =>
+        {
+            entered.TrySetResult();
+            await release.Task;
+        };
+        using var canceled = new CancellationTokenSource();
+        kit.Queue.HoldCharacter(1);
+        Task trusted = kit.Queue.SaveForSettlementAsync(State(1, 77), canceled.Token);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        canceled.Cancel();
+        Assert.False(trusted.IsCompleted);
+        Assert.Empty(kit.Store.Saved);
+        Task shutdown = kit.Queue.StopAsync();
+        Assert.False(shutdown.IsCompleted);
+        release.TrySetResult();
+        await trusted.WaitAsync(TimeSpan.FromSeconds(5));
+        await shutdown.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(77u, Assert.Single(kit.Store.Saved).Money);
+        Assert.True(kit.Queue.IsHeld(1));
+        await kit.Queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task QuarantineRejectsTrustedQueuedSnapshotsWithoutStrandingTheirCompletion()
+    {
+        await using var kit = new Kit();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Store.OnSave = async (state, token) =>
+        {
+            if (state.Id == 2)
+            {
+                entered.TrySetResult();
+                await release.Task.WaitAsync(token);
+            }
+        };
+        kit.Queue.Enqueue(State(2, 10));
+        kit.Queue.Start();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        kit.Queue.HoldCharacter(1);
+        Task trusted = kit.Queue.SaveForSettlementAsync(State(1, 33));
+        kit.Queue.QuarantineCharacter(1);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Queue.SaveForSettlementAsync(State(1, 44)));
+        release.TrySetResult();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => trusted.WaitAsync(TimeSpan.FromSeconds(5)));
+        await kit.Queue.FlushCharacterAsync(1);
+        Assert.DoesNotContain(kit.Store.Attempts, state => state.Id == 1);
+        Assert.True(kit.Queue.IsHeld(1));
+        Assert.True(kit.Queue.IsQuarantined(1));
+        Assert.Equal(0, kit.Queue.Pending);
+        await kit.Queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task TrustedSettlementCarriesRetainedOptionalDataIntoItsOrderedSave()
+    {
+        await using var kit = new Kit();
+        kit.Store.OnSave = (_, _) => kit.Store.Attempts.Count <= 3
+            ? Task.FromException(new IOException("injected character failure")) : Task.CompletedTask;
+        CharacterState earlier = State(1, 11) with
+        {
+            ActionButtons = [new ActionButton(1, 123, 0)],
+            Home = new HomeBind(1, 2, 3, 4, 5),
+        };
+        kit.Queue.Enqueue(earlier);
+        kit.Queue.HoldCharacter(1);
+        await kit.Queue.SaveForSettlementAsync(State(1, 22)).WaitAsync(TimeSpan.FromSeconds(5));
+        CharacterState saved = Assert.Single(kit.Store.Saved);
+        Assert.Equal(22u, saved.Money);
+        Assert.Equal(earlier.ActionButtons, saved.ActionButtons);
+        Assert.Equal(earlier.Home, saved.Home);
+        Assert.True(kit.Queue.IsHeld(1));
+        await kit.Queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task FailedTrustedBeforeSnapshotRetainsConsumedDirtyFieldsWhileDisconnectSavesAreHeld()
+    {
+        await using var kit = new Kit();
+        kit.Store.OnSave = (_, _) => Task.FromException(new IOException("pre-settlement save failed"));
+        CharacterState captured = State(1, 11) with
+        {
+            ActionButtons = [new ActionButton(1, 123, 0)],
+            Home = new HomeBind(1, 2, 3, 4, 5),
+            Inventory = new InventorySnapshot([new InventoryItemData(0, 23,
+                new ItemInstanceData { Guid = 7, Entry = 117, Count = 4 })]),
+        };
+        kit.Queue.HoldCharacter(1);
+        await Assert.ThrowsAsync<IOException>(() => kit.Queue.SaveForSettlementAsync(captured));
+        // CreateSnapshot's dirty flags have been consumed. The disconnect snapshot must
+        // neither replace the trusted captured state nor lose its optional changes.
+        kit.Queue.Enqueue(State(1, 22));
+        Assert.Empty(kit.Store.Saved);
+        kit.Store.OnSave = null;
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(5));
+        CharacterState recovered = Assert.Single(kit.Store.Saved);
+        Assert.Equal(11u, recovered.Money);
+        Assert.Equal(captured.ActionButtons, recovered.ActionButtons);
+        Assert.Equal(captured.Home, recovered.Home);
+        Assert.Equal(4u, Assert.Single(recovered.Inventory!.Items).Item.Count);
+        Assert.True(kit.Queue.IsHeld(1));
+        await kit.Queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task AuthoritativeResumeDiscardsFailuresFromTheQuarantinedOldSession()
+    {
+        await using var kit = new Kit();
+        kit.Store.OnSave = (_, _) => Task.FromException(new IOException("old session failure"));
+        kit.Queue.Enqueue(State(1, 11) with
+        {
+            Inventory = new InventorySnapshot([new InventoryItemData(0, 23,
+                new ItemInstanceData { Guid = 7, Entry = 117, Count = 4 })]),
+        });
+        await Assert.ThrowsAsync<IOException>(() => kit.Queue.FlushCharacterAsync(1));
+        kit.Queue.HoldCharacter(1);
+        kit.Queue.QuarantineCharacter(1);
+        await kit.Queue.FlushCharacterAsync(1);
+        kit.Store.OnSave = null;
+        kit.Queue.ResumeCharacter(1);
+        kit.Queue.Enqueue(State(1, 99));
+        await kit.Queue.FlushCharacterAsync(1);
+        CharacterState saved = Assert.Single(kit.Store.Saved);
+        Assert.Equal(99u, saved.Money);
+        Assert.Null(saved.Inventory);
+        Assert.False(kit.Queue.IsHeld(1));
+        Assert.False(kit.Queue.IsQuarantined(1));
+        await kit.Queue.StopAsync();
+    }
+
     private static CharacterState State(int id, uint money) => new(id, 0, 12, 0, 0, 83.5f, 0, 1, 0, Money: money);
 
     private sealed class Kit : IAsyncDisposable

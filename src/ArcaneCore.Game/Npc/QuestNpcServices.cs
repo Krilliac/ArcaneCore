@@ -152,7 +152,8 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
 
     /// <summary>The loaded state of an online player, or null (requests are then ignored).</summary>
     private PlayerNpcState? Ready(Player player)
-        => _players.TryGetValue(player.Guid, out PlayerNpcState? s) && s.Loaded && ReferenceEquals(s.Quests.Player, player) ? s : null;
+        => player.CanMutateQuestSettlementState && _players.TryGetValue(player.Guid, out PlayerNpcState? s)
+            && s.Loaded && ReferenceEquals(s.Quests.Player, player) ? s : null;
 
     /// <summary>vmangos Player::GetClassMask/GetRaceMask: the bit for a one-based id.</summary>
     private static uint Mask(byte id) => id is > 0 and <= 32 ? 1u << (id - 1) : 0;

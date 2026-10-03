@@ -92,7 +92,7 @@ public sealed class WorldRuntime : IDisposable
     /// <summary>Queue one player's current state for saving (world thread).</summary>
     public void SavePlayer(Player player)
     {
-        if (_online.TryGetValue(player.Guid, out Player? current) && ReferenceEquals(current, player))
+        if (!player.IsQuestSettlementPending && _online.TryGetValue(player.Guid, out Player? current) && ReferenceEquals(current, player))
         {
             _saveQueue.Enqueue(player.CreateSnapshot(NowMs));
         }
@@ -201,7 +201,10 @@ public sealed class WorldRuntime : IDisposable
 
         Raise(PlayerLoggingOut, player, nameof(PlayerLoggingOut));
         player.Map?.RemovePlayer(player);
-        _saveQueue.Enqueue(player.CreateSnapshot(NowMs));
+        if (!player.IsQuestSettlementPending)
+        {
+            _saveQueue.Enqueue(player.CreateSnapshot(NowMs));
+        }
         // Publish offline only after the final snapshot is queued: login's save barrier
         // must never overtake this old session's last write.
         _onlineByName.TryRemove(new KeyValuePair<string, Player>(player.Name, player));
@@ -299,7 +302,10 @@ public sealed class WorldRuntime : IDisposable
         uint now = NowMs;
         foreach (Player player in _online.Values)
         {
-            _saveQueue.Enqueue(player.CreateSnapshot(now));
+            if (!player.IsQuestSettlementPending)
+            {
+                _saveQueue.Enqueue(player.CreateSnapshot(now));
+            }
         }
     }
 

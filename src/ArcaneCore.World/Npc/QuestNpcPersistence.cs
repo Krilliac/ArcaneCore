@@ -14,6 +14,7 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
 {
     private readonly Lock _gate = new();
     private readonly Dictionary<int, CharacterState> _characters = [];
+    private readonly HashSet<int> _quarantined = [];
     private readonly Channel<PendingWrite> _writes = Channel.CreateUnbounded<PendingWrite>(new UnboundedChannelOptions
     {
         SingleReader = true,
@@ -46,7 +47,7 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
                 return 0;
             }
 
-            if (state.Pending != 0 || state.Failure is not null)
+            if (state.Pending != 0 || (state.Failure is not null && !_quarantined.Contains(characterId)))
             {
                 throw new InvalidOperationException($"quest saves for character {characterId} have not reached storage");
             }
@@ -72,7 +73,8 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
                 throw new InvalidOperationException($"quest journal for character {characterId} changed while storage was loading");
             }
 
-            if (previous is not null && (previous.Pending != 0 || previous.Failure is not null))
+            if (previous is not null && (previous.Pending != 0
+                || (previous.Failure is not null && !_quarantined.Contains(characterId))))
             {
                 throw new InvalidOperationException($"quest saves for character {characterId} have not reached storage");
             }
@@ -93,6 +95,11 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
         CharacterQuestStatus[] copied = rows.Select(r => r with { CharacterId = characterId }).ToArray();
         lock (_gate)
         {
+            if (_quarantined.Contains(characterId))
+            {
+                return;
+            }
+
             CharacterState state = WritableCharacter(characterId);
             state.Revision = checked(state.Revision + 1);
             foreach (CharacterQuestStatus row in copied)
@@ -111,11 +118,42 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
         uint[] copied = mask.ToArray();
         lock (_gate)
         {
+            if (_quarantined.Contains(characterId))
+            {
+                return;
+            }
+
             CharacterState state = WritableCharacter(characterId);
             state.Revision = checked(state.Revision + 1);
             state.TaxiMask = copied;
             state.Pending++;
             Enqueue(new PendingWrite(characterId, null, copied, null, null));
+        }
+    }
+
+    /// <summary>Suppress cached deltas, retries and shutdown snapshots during an uncertain settlement.</summary>
+    public void QuarantineCharacter(int characterId)
+    {
+        lock (_gate)
+        {
+            _quarantined.Add(characterId);
+        }
+    }
+
+    /// <summary>Only authoritative live publication or a fully loaded fresh login may resume writes.</summary>
+    public void ResumeCharacter(int characterId)
+    {
+        lock (_gate)
+        {
+            _quarantined.Remove(characterId);
+        }
+    }
+
+    public bool IsQuarantined(int characterId)
+    {
+        lock (_gate)
+        {
+            return _quarantined.Contains(characterId);
         }
     }
 
@@ -172,7 +210,10 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
                 // Shutdown snapshots follow every queued delta, including writes not yet attempted.
                 foreach ((int characterId, CharacterState state) in _characters)
                 {
-                    Enqueue(new PendingWrite(characterId, null, null, state.Snapshot(), null));
+                    if (!_quarantined.Contains(characterId))
+                    {
+                        Enqueue(new PendingWrite(characterId, null, null, state.Snapshot(), null));
+                    }
                 }
 
                 _stopped = true;
@@ -185,7 +226,8 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
         await worker.ConfigureAwait(false);
         lock (_gate)
         {
-            int[] failed = _characters.Where(c => c.Value.Failure is not null).Select(c => c.Key).ToArray();
+            int[] failed = _characters.Where(c => c.Value.Failure is not null && !_quarantined.Contains(c.Key))
+                .Select(c => c.Key).ToArray();
             if (failed.Length > 0)
             {
                 throw new InvalidOperationException($"quest saves did not drain for characters {string.Join(", ", failed)}",
@@ -220,6 +262,15 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
         {
             try
             {
+                lock (_gate)
+                {
+                    if (_quarantined.Contains(pending.CharacterId))
+                    {
+                        pending.Done?.TrySetResult();
+                        continue;
+                    }
+                }
+
                 if (pending.Rows is not null || pending.TaxiMask is not null)
                 {
                     await using AsyncServiceScope scope = scopes.CreateAsyncScope();
@@ -270,7 +321,8 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
     {
         lock (_gate)
         {
-            if (!_characters.TryGetValue(characterId, out CharacterState? state) || state.Failure is null)
+            if (_quarantined.Contains(characterId)
+                || !_characters.TryGetValue(characterId, out CharacterState? state) || state.Failure is null)
             {
                 return;
             }
