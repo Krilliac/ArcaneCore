@@ -136,6 +136,9 @@ public sealed class FactionCatalog
 
     public int Count => _byId.Count;
 
+    /// <summary>Every faction in the catalog, ordered by id (the GM lookup walks them all).</summary>
+    public IEnumerable<FactionRecord> All => _byId.Values.OrderBy(f => f.Id);
+
     public FactionRecord? Find(uint id) => _byId.GetValueOrDefault(id);
 
     public FactionRecord? FindByListId(int reputationListId) => _byListId.GetValueOrDefault(reputationListId);
