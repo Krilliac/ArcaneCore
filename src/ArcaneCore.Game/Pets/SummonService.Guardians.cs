@@ -107,13 +107,15 @@ public sealed partial class SummonService
 
             (float spawnX, float spawnY, float spawnZ, float spawnO) = (x, y, z, orientation);
             int spellDuration = spell.GetDuration();
+            uint petNumber = NextPetNumber();
             Creature guardian = creatures.SpawnSummoned(template, HighGuid.Pet, creature =>
             {
                 creature.Summon = new SummonLinks(SummonKind.Guardian, caster.Guid, spell.Id, TotemSlots.None, spellDuration, followAngle);
                 ApplyOwner(creature, caster, spell.Id);
+                InitPet(creature, SummonKind.Guardian, caster, petNumber);
                 creature.Level = (byte)level; // InitStatsForLevel(level, owner): the stats are the stats lane's
                 return new CreatureHome(spawnX, spawnY, spawnZ, spawnO);
-            });
+            }, petNumber);
 
             pets.Options = _options;
             pets.Register(guardian, this);
@@ -238,10 +240,12 @@ public sealed partial class SummonService
 
         bool hasDest = context.Cast.Targets.HasDest;
         int duration = spell.GetDuration();
+        uint petNumber = NextPetNumber();
         Creature critter = creatures.SpawnSummoned(template, HighGuid.Pet, creature =>
         {
-            creature.Summon = new SummonLinks(SummonKind.MiniPet, player.Guid, spell.Id, TotemSlots.None, duration);
+            creature.Summon = new SummonLinks(SummonKind.MiniPet, player.Guid, spell.Id, TotemSlots.None, duration, PetConstants.MiniPetFollowAngle);
             ApplyOwner(creature, player, spell.Id);
+            InitPet(creature, SummonKind.MiniPet, player, petNumber);
 
             float x = player.X;
             float y = player.Y;
@@ -255,7 +259,7 @@ public sealed partial class SummonService
             // SetFacingToObject(player)
             float facing = Creature.NormalizeOrientation(MathF.Atan2(player.Y - y, player.X - x));
             return new CreatureHome(x, y, z, facing);
-        });
+        }, petNumber);
 
         pets.Options = _options;
         pets.Register(critter, this);

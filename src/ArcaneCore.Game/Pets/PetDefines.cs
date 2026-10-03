@@ -31,6 +31,9 @@ public static class PetConstants
     /// <summary>vmangos PET_FOLLOW_ANGLE (pi/2): the default follow angle.</summary>
     public const float FollowAngle = MathF.PI / 2.0f;
 
+    /// <summary>vmangos MINI_PET_FOLLOW_ANGLE (pi, Pet.h:136): the mini pet follows behind its owner.</summary>
+    public const float MiniPetFollowAngle = MathF.PI;
+
     /// <summary>vmangos MINI_PET_SUMMON_ANGLE (pi/4).</summary>
     public const float MiniPetSummonAngle = MathF.PI / 4.0f;
 

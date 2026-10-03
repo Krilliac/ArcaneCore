@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
@@ -48,6 +49,7 @@ public sealed partial class SummonService : ISpellSummonSink
     private readonly Random _random;
     private readonly HashSet<string> _warned = [];
     private SpellSystem? _spells;
+    private uint _petNumbers;
 
     /// <param name="options">Tuning (retail defaults when null); handed to every map's <see cref="PetMapSystem"/>.</param>
     /// <param name="systems">The creature system a summon spawns into; the default is the one attached to the map.</param>
@@ -206,6 +208,7 @@ public sealed partial class SummonService : ISpellSummonSink
 
         Unit? owner = creature.GetOwner();
         Map? map = creature.Map;
+        map?.Combat.CombatStop(creature);
         switch (links.Kind)
         {
             case SummonKind.Totem:
@@ -213,6 +216,12 @@ public sealed partial class SummonService : ISpellSummonSink
                 RemoveTotemSpellAuras(creature, owner);
                 break;
             case SummonKind.Pet:
+                // Player::RemovePetActionBar for a controlled pet (Pet.cpp:1085)
+                if (owner is Player player)
+                {
+                    player.Session.Send(WorldOpcode.SmsgPetSpells, PetPackets.BuildRemoveActionBar());
+                }
+
                 if (owner is not null && owner.PetGuid == creature.Guid)
                 {
                     owner.SetPetGuid(ObjectGuid.Empty);
@@ -283,10 +292,14 @@ public sealed partial class SummonService : ISpellSummonSink
         }
 
         SpellSummonRequest req = request;
+        uint petNumber = NextPetNumber();
         Creature pet = creatures.SpawnSummoned(template, HighGuid.Pet, creature =>
         {
             creature.Summon = new SummonLinks(SummonKind.Pet, caster.Guid, req.SpellId, TotemSlots.None, req.DurationMs);
             ApplyOwner(creature, caster, req.SpellId);
+            InitPet(creature, SummonKind.Pet, caster, petNumber);
+            creature.SetUInt32(UpdateFields.UnitFieldPetexperience, 0);
+            creature.SetUInt32(UpdateFields.UnitFieldPetnextlevelexp, 1000);
             creature.NpcFlags = 0;
             creature.Level = caster.Level; // InitStatsForLevel(caster level); the stats themselves are the stats lane's
             if ((caster.UnitFlags & UnitFlags.Pvp) != 0)
@@ -296,11 +309,18 @@ public sealed partial class SummonService : ISpellSummonSink
 
             // vmangos passes -caster orientation for the pet (SpellEffects.cpp:2372).
             return new CreatureHome(req.X, req.Y, req.Z, Creature.NormalizeOrientation(-caster.Orientation));
-        });
+        }, petNumber);
 
         pets.Options = _options;
         pets.Register(pet, this);
         caster.SetPetGuid(pet.Guid);
+
+        // Player::PetSpellInitialize (SpellEffects.cpp:2417-2420)
+        if (caster is Player owner)
+        {
+            owner.Session.Send(WorldOpcode.SmsgPetSpells, PetPackets.BuildPetSpells(pet, pet.Summon!.Charm!, listSpells: true));
+        }
+
         return pet;
     }
 
@@ -323,6 +343,34 @@ public sealed partial class SummonService : ISpellSummonSink
         creature.FactionTemplate = owner.FactionTemplate;
         creature.SetUInt32(UpdateFields.UnitFieldPetNameTimestamp, 0);
         creature.SetUInt32(UpdateFields.UnitCreatedBySpell, spellId);
+    }
+
+    /// <summary>vmangos ObjectMgr::GeneratePetNumber: the pet number a summoned pet is named by (the GUID carries it).</summary>
+    internal uint NextPetNumber() => Interlocked.Increment(ref _petNumbers);
+
+    /// <summary>
+    /// What vmangos <c>Pet::Pet</c> and <c>Pet::Create</c> give every pet, guardian and mini pet:
+    /// a charminfo (a mini pet is always passive, a guardian always aggressive, a summoned pet defensive
+    /// for a player owner and aggressive otherwise, SpellEffects.cpp:2400-2404), the pet number, the
+    /// pet's misc byte flags and, for a mini pet, immunity to players and creatures (always non-attackable,
+    /// Pet.cpp:2266-2268).
+    /// </summary>
+    internal static void InitPet(Creature creature, SummonKind kind, Unit owner, uint petNumber)
+    {
+        ReactState react = kind switch
+        {
+            SummonKind.MiniPet => ReactState.Passive,
+            SummonKind.Guardian => ReactState.Aggressive,
+            _ => owner is Player ? ReactState.Defensive : ReactState.Aggressive,
+        };
+        creature.Summon!.Charm = new CharmInfo(react) { PetNumber = petNumber };
+
+        // UNIT_BYTE2_FLAG_UNK3 | UNIT_BYTE2_FLAG_AURAS | UNIT_BYTE2_FLAG_UNK5 (Pet.cpp:2264)
+        creature.SetByte(UpdateFields.UnitFieldBytes2, 1, 0x08 | 0x10 | 0x20);
+        if (kind == SummonKind.MiniPet)
+        {
+            creature.UnitFlags |= UnitFlags.ImmuneToPlayer | UnitFlags.ImmuneToNpc;
+        }
     }
 
     /// <summary>

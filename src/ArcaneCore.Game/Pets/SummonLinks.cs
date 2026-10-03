@@ -38,6 +38,9 @@ public sealed class SummonLinks
     /// <summary>The summon was created with a positive duration (a wild summon without one only ends with its death).</summary>
     public bool HasTimer { get; }
 
+    /// <summary>The pet's command/react state and action bar (vmangos: "pets always have a charminfo"); null for totems and wild summons.</summary>
+    public CharmInfo? Charm { get; internal set; }
+
     /// <summary>vmangos Pet::SetFollowAngle: where, relative to the owner's facing, the summon stands while following.</summary>
     public float FollowAngle { get; }
 }

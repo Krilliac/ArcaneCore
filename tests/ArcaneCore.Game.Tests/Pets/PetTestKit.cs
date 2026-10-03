@@ -43,6 +43,9 @@ internal sealed class PetTestKit : IDisposable
     public const uint TimedWildSpell = 910023;
     public const uint CritterSpell = 910030;
     public const uint Critter2Spell = 910031;
+    public const uint PetBiteSpell = 910040;
+    public const uint PetShieldSpell = 910041;
+    public const uint PetPassiveSpell = 910042;
 
     public const int TotemDurationMs = 30_000;
 
@@ -76,7 +79,9 @@ internal sealed class PetTestKit : IDisposable
         Creatures = new CreatureMapSystem(Map, Content, random: new Random(1));
         Map.AddUpdater(Creatures);
         Service = new SummonService(systems: map => ReferenceEquals(map, Map) ? Creatures : null, random: new Random(3));
+        Spells.System.Units = new MapObjectResolver();
         Service.Install(Spells.System);
+        Controller = new PetController(Service, () => Spells.System, new Random(5));
         Spells.System.Summons = Service;
     }
 
@@ -89,6 +94,8 @@ internal sealed class PetTestKit : IDisposable
     public CreatureMapSystem Creatures { get; }
 
     public SummonService Service { get; }
+
+    public PetController Controller { get; }
 
     public (Player Player, FakeSession Session) AddPlayer(uint guid, float x = 0, float y = 0) => Spells.AddPlayer(guid, x, y);
 
@@ -152,5 +159,25 @@ internal sealed class PetTestKit : IDisposable
         },
         Spell(CritterSpell, Effect(SpellEffectName.SummonCritter, 1, misc: (int)MiniPetEntry)),
         Spell(Critter2Spell, Effect(SpellEffectName.SummonCritter, 1, misc: (int)MiniPetEntry2)),
+        Spell(PetBiteSpell, Effect(SpellEffectName.SchoolDamage, 8, SpellImplicitTarget.UnitEnemy)) with
+        {
+            RangeIndex = 4,
+            Range = new SpellRange(0, 30),
+        },
+        Spell(PetShieldSpell, Effect(SpellEffectName.Heal, 5, SpellImplicitTarget.UnitFriend)),
+        Spell(PetPassiveSpell, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy)) with
+        {
+            Attributes = SpellAttributes.Passive,
+            Duration = new SpellDuration(-1, 0, -1),
+            StartRecoveryCategory = 0,
+            StartRecoveryTime = 0,
+        },
     ];
+}
+
+/// <summary>The world daemon's unit resolver (creatures and players through the map's object registry), for the tests that cast at creatures.</summary>
+internal sealed class MapObjectResolver : ISpellUnitResolver
+{
+    public Unit? Find(Unit reference, ObjectGuid guid)
+        => guid.IsEmpty ? null : reference.Guid == guid ? reference : reference.Map?.FindObject(guid) as Unit;
 }

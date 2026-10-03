@@ -17,13 +17,14 @@ public sealed partial class CreatureMapSystem
     /// <paramref name="prepare"/> runs on the built creature before it is added, so the owner
     /// links, faction, level and position are in its create block (vmangos fills them before
     /// <c>Map::Add</c>). <paramref name="prepare"/> returns the position (it needs the creature's
-    /// own bounding radius). The creature does not respawn and is announced like a runtime spawn.
+    /// own bounding radius). <paramref name="guidEntry"/> replaces the template entry in the GUID
+    /// (a pet's pet number). The creature does not respawn and is announced like a runtime spawn.
     /// </summary>
-    internal Creature SpawnSummoned(CreatureTemplate template, HighGuid highGuid, Func<Creature, CreatureHome> prepare)
+    internal Creature SpawnSummoned(CreatureTemplate template, HighGuid highGuid, Func<Creature, CreatureHome> prepare, uint guidEntry = 0)
     {
         ArgumentNullException.ThrowIfNull(template);
         ArgumentNullException.ThrowIfNull(prepare);
-        var creature = new Creature(_nextTemporaryCounter++ & 0x00FFFFFF, template, spawn: null, _content, _random, highGuid);
+        var creature = new Creature(_nextTemporaryCounter++ & 0x00FFFFFF, template, spawn: null, _content, _random, highGuid, guidEntry);
         creature.MapId = Map.MapId;
         CreatureHome home = prepare(creature);
         creature.SetHome(home);

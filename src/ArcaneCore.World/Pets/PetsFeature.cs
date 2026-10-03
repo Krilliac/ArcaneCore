@@ -33,6 +33,7 @@ public sealed class PetsFeature : IWorldFeature, ISpellSummonSink
             Options,
             map => _services.GetService<CreatureWorldFeature>()?.GetOrCreateSystem(map),
             logger);
+        Controller = new PetController(Service, () => _services.GetService<SpellFeature>()?.System);
     }
 
     /// <summary>Tuning bound from the <c>Pets</c> section (retail defaults).</summary>
@@ -40,6 +41,9 @@ public sealed class PetsFeature : IWorldFeature, ISpellSummonSink
 
     /// <summary>The summon service every map uses.</summary>
     public SummonService Service { get; }
+
+    /// <summary>What the client can ask of its pets (the pet opcodes call it).</summary>
+    public PetController Controller { get; }
 
     public void Attach(WorldRuntime world)
     {
