@@ -3,6 +3,7 @@ using ArcaneCore.Game.Fishing;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
@@ -46,6 +47,8 @@ public sealed class SpecialLootFeature(IServiceProvider services, ILogger<Specia
             return;
         }
 
+        // Fishing needs the "fishing pole equipped" requirement; it is the generic equipped-item rule of every spell with one.
+        EquippedItemCastCheck.Install(spells.System);
         new FishingSpells(() => _fishing.Values).Register(spells.System);
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;

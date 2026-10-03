@@ -2,6 +2,7 @@ using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Fishing;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Skills;
@@ -30,6 +31,7 @@ public sealed class FishingWorldTests
     private const uint FishingCast = 9300;
     private const uint BobberEntry = 35591;
     private const uint RawSmallfish = 6291;
+    private const uint FishingPole = 6256;
 
     private sealed class StubWater(bool water) : IFishingTerrain
     {
@@ -58,6 +60,7 @@ public sealed class FishingWorldTests
         await using WorldTestClient client = await host.EnterWorldAsync("FISHER", "Fisher");
         Player player = await host.PlayerAsync("Fisher");
         await host.OnWorldAsync(() => player.Skills!.Set(SkillIds.Fishing, 150, 300, 1));
+        await EquipPoleAsync(host, player);
 
         await client.SendAsync(WorldOpcode.CmsgCastSpell, CastSelf(FishingCast));
         await client.ReadUntilAsync(WorldOpcode.MsgChannelStart);
@@ -92,6 +95,10 @@ public sealed class FishingWorldTests
     {
         await using WorldTestHost host = Start(out GameObjectTestContext context, water: false);
         await using WorldTestClient client = await host.EnterWorldAsync("LANDER", "Lander");
+        Player lander = await host.PlayerAsync("Lander");
+        await host.WaitForWorldAsync(() => lander.Skills is not null, "the skills of the login are attached");
+        await host.OnWorldAsync(() => lander.Skills!.Set(SkillIds.Fishing, 150, 300, 1)); // a fishing pole is only wielded with the skill
+        await EquipPoleAsync(host, lander);
 
         await client.SendAsync(WorldOpcode.CmsgCastSpell, CastSelf(FishingCast));
 
@@ -100,6 +107,30 @@ public sealed class FishingWorldTests
         byte[] result = await client.ReadUntilAsync(WorldOpcode.SmsgCastResult);
         Assert.Equal((FishingCast, (byte)SpellCastResultStatus.Failure, (byte)SpellCastResult.NotFishable), (BitConverter.ToUInt32(result, 0), result[4], result[5]));
         Assert.Null(await host.OnWorldAsync(() => Bobber(host, context)));
+    }
+
+    [Fact]
+    public async Task ACastWithoutAFishingPole_AnswersEquippedItemClass_AndNothingStarts()
+    {
+        await using WorldTestHost host = Start(out GameObjectTestContext context, water: true);
+        await using WorldTestClient client = await host.EnterWorldAsync("NOPOLE", "Nopole");
+
+        await client.SendAsync(WorldOpcode.CmsgCastSpell, CastSelf(FishingCast));
+
+        byte[] result = await client.ReadUntilAsync(WorldOpcode.SmsgCastResult);
+        Assert.Equal((FishingCast, (byte)SpellCastResultStatus.Failure, (byte)SpellCastResult.EquippedItemClass), (BitConverter.ToUInt32(result, 0), result[4], result[5]));
+        Assert.Null(await host.OnWorldAsync(() => Bobber(host, context)));
+    }
+
+    private static async Task EquipPoleAsync(WorldTestHost host, Player player)
+    {
+        await host.WaitForWorldAsync(() => player.Skills is not null, "the skills of the login are attached");
+        await host.OnWorldAsync(() =>
+        {
+            Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(FishingPole, 1, out Item? pole));
+            player.Inventory.SwapItem(pole!.BagSlot, pole.Slot, InventorySlots.Bag0, InventorySlots.MainHand);
+            Assert.NotNull(player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.MainHand));
+        });
     }
 
     private static WorldTestHost Start(out GameObjectTestContext context, bool water)
@@ -114,6 +145,7 @@ public sealed class FishingWorldTests
 
         var items = new ItemTestContent();
         items.Templates.Templates.Add(new ItemTemplate { Entry = RawSmallfish, Class = 7, Name = "Raw Smallfish", DisplayId = 6, Quality = 1, Stackable = 20 });
+        items.Templates.Templates.Add(new ItemTemplate { Entry = FishingPole, Class = 2, SubClass = 20, Name = "Fishing Pole", DisplayId = 7, Quality = 1, InventoryType = 17 });
         GameObjectTestStore.Current.Value = context;
         try
         {
@@ -141,6 +173,7 @@ public sealed class FishingWorldTests
                 new SpellTemplateRow
                 {
                     Id = FishingCast, SpellName = "Test Fishing", RangeIndex = 1, AttributesEx = 0x4, DurationIndex = 3, ChannelInterruptFlags = 0x8,
+                    EquippedItemClass = 2, EquippedItemSubClassMask = 1 << 20,
                     Effect1 = 50, EffectImplicitTargetA1 = 39, EffectMiscValue1 = (int)BobberEntry, EffectRadiusIndex1 = 7,
                 },
             ],
