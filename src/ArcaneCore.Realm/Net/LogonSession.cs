@@ -68,6 +68,11 @@ public sealed class LogonSession(
 
     private async Task HandleChallengeAsync(CancellationToken cancellationToken)
     {
+        // vmangos sets m_status = STATUS_INVALID on handler entry (AuthSocket.cpp:327): a new
+        // challenge discards every piece of the previous one, so a proof can never be mixed with
+        // another challenge's SRP state, username or auto-create flag.
+        ResetChallengeState();
+
         // header after the command byte: protocol_version(1) + size(2 LE), then size bytes of body.
         byte[] header = new byte[3];
         await stream.ReadExactlyAsync(header, cancellationToken).ConfigureAwait(false);
@@ -91,14 +96,14 @@ public sealed class LogonSession(
             return;
         }
 
-        _username = request.Username.ToUpperInvariant();
-        Account? account = await accountStore.FindByUsernameAsync(_username, cancellationToken).ConfigureAwait(false);
+        string username = request.Username.ToUpperInvariant();
+        Account? account = await accountStore.FindByUsernameAsync(username, cancellationToken).ConfigureAwait(false);
 
         if (account is null)
         {
             if (!options.AutocreateAccounts)
             {
-                logger.LogInformation("[{Endpoint}] unknown account '{Account}'", remoteEndpoint, _username);
+                logger.LogInformation("[{Endpoint}] unknown account '{Account}'", remoteEndpoint, username);
                 await SendChallengeFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
                 return;
             }
@@ -106,12 +111,12 @@ public sealed class LogonSession(
             // WCell-style auto-create: build the verifier as if password == username.
             // The account is only persisted later if the client's proof validates against it.
             byte[] salt = WowSrp6.GenerateSalt();
-            BigInteger verifier = WowSrp6.ComputeVerifier(salt, _username, _username);
+            BigInteger verifier = WowSrp6.ComputeVerifier(salt, username, username);
             _srp = new Srp6Server(salt, verifier);
             _isAutocreate = true;
             _autocreateVerifier = WowSrp6.ToFixedLittleEndian(verifier, WowSrp6.KeyLength);
             logger.LogInformation("[{Endpoint}] auto-create candidate '{Account}' (proof pending)",
-                remoteEndpoint, _username);
+                remoteEndpoint, username);
         }
         else
         {
@@ -125,9 +130,22 @@ public sealed class LogonSession(
                     return;
             }
 
-            _srp = new Srp6Server(account.Salt, WowSrp6.FromLittleEndian(account.Verifier));
+            // A zero or degenerate salt/verifier would let anyone forge the proof (vmangos
+            // SRP6.cpp:188-199 refuses them; answer FAIL_NOACCESS).
+            _srp = Srp6Server.TryCreate(account.Salt, WowSrp6.FromLittleEndian(account.Verifier));
+            if (_srp is null)
+            {
+                logger.LogWarning("[{Endpoint}] account '{Account}' has a degenerate SRP salt or verifier; refusing",
+                    remoteEndpoint, username);
+                await SendChallengeFailureAsync(AuthResult.FailNoAccess, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
             _isAutocreate = false;
         }
+
+        // Only now, after every early-out, does the connection commit to this account.
+        _username = username;
 
         await SendChallengeSuccessAsync(_srp, cancellationToken).ConfigureAwait(false);
     }
@@ -137,7 +155,15 @@ public sealed class LogonSession(
         byte[] body = new byte[LogonProofRequest.BodyLength];
         await stream.ReadExactlyAsync(body, cancellationToken).ConfigureAwait(false);
 
-        if (_srp is null
+        // One proof per challenge (vmangos STATUS_INVALID on entry, AuthSocket.cpp:555): the SRP
+        // state is consumed whether the proof succeeds or fails, so it cannot be retried or replayed.
+        Srp6Server? srp = _srp;
+        string username = _username;
+        bool isAutocreate = _isAutocreate;
+        byte[]? autocreateVerifier = _autocreateVerifier;
+        ResetChallengeState();
+
+        if (srp is null
             || !LogonProofRequest.TryParse(body, out LogonProofRequest? request)
             || request is null)
         {
@@ -155,37 +181,46 @@ public sealed class LogonSession(
             return;
         }
 
-        if (!_srp.TryAcceptProof(_username, request.ClientPublicKey, request.ClientProof)
-            || _srp.SessionKey is null || _srp.ServerProof is null)
+        if (!srp.TryAcceptProof(username, request.ClientPublicKey, request.ClientProof)
+            || srp.SessionKey is null || srp.ServerProof is null)
         {
-            logger.LogInformation("[{Endpoint}] invalid proof for '{Account}'", remoteEndpoint, _username);
+            logger.LogInformation("[{Endpoint}] invalid proof for '{Account}'", remoteEndpoint, username);
             await SendProofFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        if (_isAutocreate)
+        if (isAutocreate)
         {
             await accountStore.CreateAsync(
                 new Account
                 {
-                    Username = _username,
-                    Salt = _srp.Salt,
-                    Verifier = _autocreateVerifier!,
-                    SessionKey = _srp.SessionKey,
+                    Username = username,
+                    Salt = srp.Salt,
+                    Verifier = autocreateVerifier!,
+                    SessionKey = srp.SessionKey,
                     Status = AccountStatus.Active,
                 },
                 cancellationToken).ConfigureAwait(false);
-            logger.LogInformation("[{Endpoint}] auto-created account '{Account}'", remoteEndpoint, _username);
+            logger.LogInformation("[{Endpoint}] auto-created account '{Account}'", remoteEndpoint, username);
         }
         else
         {
-            await accountStore.UpdateSessionKeyAsync(_username, _srp.SessionKey, cancellationToken)
+            await accountStore.UpdateSessionKeyAsync(username, srp.SessionKey, cancellationToken)
                 .ConfigureAwait(false);
         }
 
         _authenticated = true;
-        logger.LogInformation("[{Endpoint}] '{Account}' authenticated", remoteEndpoint, _username);
-        await SendProofSuccessAsync(_srp.ServerProof, cancellationToken).ConfigureAwait(false);
+        logger.LogInformation("[{Endpoint}] '{Account}' authenticated", remoteEndpoint, username);
+        await SendProofSuccessAsync(srp.ServerProof, cancellationToken).ConfigureAwait(false);
+    }
+
+    private void ResetChallengeState()
+    {
+        _srp = null;
+        _isAutocreate = false;
+        _autocreateVerifier = null;
+        _username = string.Empty;
+        _authenticated = false; // a new challenge or proof always revokes the previous authentication
     }
 
     private async Task HandleRealmListAsync(CancellationToken cancellationToken)

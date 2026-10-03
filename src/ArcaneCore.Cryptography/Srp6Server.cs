@@ -20,6 +20,7 @@ public sealed class Srp6Server
     private readonly BigInteger _verifier;
     private readonly BigInteger _b;          // server private ephemeral
     private readonly BigInteger _bigB;       // server public ephemeral B
+    private readonly bool _usable;           // false for a degenerate verifier or salt (never accepts a proof)
 
     public Srp6Server(byte[] salt, BigInteger verifier)
         : this(salt, verifier, GenerateServerPrivateKey())
@@ -36,10 +37,21 @@ public sealed class Srp6Server
         }
 
         Salt = salt;
+        _usable = Srp6Validation.IsUsableVerifier(verifier) && Srp6Validation.IsUsableSalt(salt);
         _verifier = verifier;
         _b = privateB;
         _bigB = Srp6Math.ServerPublicKey(_verifier, _b);
     }
+
+    /// <summary>
+    /// Creates a server for one logon attempt, or returns null when the stored salt or verifier
+    /// is degenerate (zero, wrong length, or a verifier that makes the secret public).
+    /// Callers must treat null as "account unusable" (vmangos FAIL_NOACCESS).
+    /// </summary>
+    public static Srp6Server? TryCreate(byte[]? salt, BigInteger verifier)
+        => Srp6Validation.IsUsableSalt(salt) && Srp6Validation.IsUsableVerifier(verifier)
+            ? new Srp6Server(salt!, verifier)
+            : null;
 
     /// <summary>The account salt (32 bytes), sent in the challenge reply.</summary>
     public byte[] Salt { get; }
@@ -63,13 +75,16 @@ public sealed class Srp6Server
         ArgumentNullException.ThrowIfNull(clientPublicKey);
         ArgumentNullException.ThrowIfNull(clientProof);
 
-        BigInteger a = WowSrp6.FromLittleEndian(clientPublicKey);
-
-        // SRP safeguard: reject A == 0 or A % N == 0 (vmangos CalculateSessionKey).
-        if (a.IsZero || (a % WowSrp6.N).IsZero)
+        // A degenerate account can never authenticate; a malformed A (wrong length, 0, >= N)
+        // or M1 is rejected, not thrown (vmangos CalculateSessionKey rejects A == 0 and A % N == 0).
+        if (!_usable
+            || !Srp6Validation.IsUsableClientKey(clientPublicKey)
+            || clientProof.Length != Sha1.DigestLength)
         {
             return false;
         }
+
+        BigInteger a = WowSrp6.FromLittleEndian(clientPublicKey);
 
         BigInteger u = Srp6Math.Scrambler(a, _bigB);
         BigInteger s = Srp6Math.SessionImplicitKey(a, _verifier, u, _b);
