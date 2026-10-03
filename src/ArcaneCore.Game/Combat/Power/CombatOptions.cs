@@ -41,6 +41,21 @@ public sealed class CombatOptions
     /// </summary>
     public bool MeleeCastingBlocksSwing { get; set; } = true;
 
+    /// <summary>
+    /// How a blocked swing is handled while <see cref="MeleeCastingBlocksSwing"/> applies (ranged (autorepeat lane)). Default false,
+    /// retail: <c>Unit::UpdateMeleeAttackingState</c> returns before it looks at any swing timer while a non-melee spell is cast
+    /// (Unit.cpp:415-421; mangos-classic Unit.cpp:650-654 has the same order), so the swing happens as soon as the cast ends.
+    /// True is the deviation that predates this lane: the swing timer is consumed and restarted, the swing is lost, not delayed.
+    /// </summary>
+    public bool CastingConsumesSwing { get; set; }
+
+    /// <summary>
+    /// A non-triggered cast of a spell whose interrupt flags carry SPELL_INTERRUPT_FLAG_COMBAT (0x08), without Ex2 0x20000, restarts the
+    /// main-hand (and off-hand) swing timer when it is cast (vmangos Spell::cast, Spell.cpp:3805-3810). Default true, retail; false
+    /// is a deviation that leaves the timers alone.
+    /// </summary>
+    public bool CastResetsMeleeSwing { get; set; } = true;
+
     /// <summary>Path of the client's SpellShapeshiftForm.dbc (build 5875). Empty = only the three warrior stances are known.</summary>
     public string ShapeshiftFormDbcPath { get; set; } = string.Empty;
 

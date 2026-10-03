@@ -413,6 +413,12 @@ public sealed partial class SpellSystem
             }
         }
 
+        // ranged (autorepeat lane): a non-triggered cast with the combat interrupt bit restarts the melee swing (vmangos Spell.cpp:3805-3810).
+        if (!cast.IsTriggered && spell.InterruptFlags.HasFlag(SpellInterruptFlags.Combat) && !RangedSpellFacts.DoesNotResetCombatTimers(spell))
+        {
+            caster.Map?.FindUpdater<Combat.MapCombat>()?.ResetMeleeTimersAfterCast(caster);
+        }
+
         if (cast.State != SpellCastState.Casting)
         {
             Finish(cast);

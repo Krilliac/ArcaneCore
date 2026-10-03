@@ -182,7 +182,8 @@ public sealed class MeleeSpellLoopTests
     [Fact]
     public void CastingANonMeleeSpell_LosesTheSwing_ButTheTimerRestarts()
     {
-        using var rig = new Rig();
+        // The pre-wave-4 behaviour, now the deviation Combat:CastingConsumesSwing; the retail default is in CastingSwingTests.
+        using var rig = new Rig(options: new CombatOptions { CastingConsumesSwing = true });
         rig.Kit.System.HandleCastRequest(rig.Caster, CastBolt, SpellCastTargets.ForUnit(rig.Target.Guid));
         rig.Combat.Attack(rig.Caster, rig.Target);
         rig.CasterSession.Clear();
