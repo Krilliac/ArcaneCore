@@ -124,6 +124,34 @@ public sealed partial class MapCombat
         Hooks.RepopAtGraveyard(player);
     }
 
+    /// <summary>
+    /// vmangos Player::SpawnCorpseBones (ObjectAccessor::ConvertCorpseForPlayer): a resurrected player's corpse is no longer
+    /// resurrectable. Bones objects are not modelled, so the corpse simply leaves the world.
+    /// </summary>
+    internal void SpawnCorpseBones(Player player)
+    {
+        if (player.Combat.Corpse is { } corpse)
+        {
+            RemoveCorpse(corpse);
+            player.Combat.Corpse = null;
+        }
+    }
+
+    /// <summary>
+    /// The end of vmangos Player::ResurrectUsingRequestData (Player.cpp:20106-20127): <see cref="ResurrectPlayer"/> without a restore,
+    /// then health and mana set to what the resurrection offered (capped at the maximums), rage emptied, energy full, and the corpse
+    /// converted (<see cref="SpawnCorpseBones"/>).
+    /// </summary>
+    internal void CompleteResurrection(Player player, uint health, uint mana)
+    {
+        ResurrectPlayer(player, 0f, applySickness: false);
+        player.Health = Math.Min(player.MaxHealth, health);
+        SetPower(player, PowerType.Mana, Math.Min(GetMaxPower(player, PowerType.Mana), mana));
+        SetPower(player, PowerType.Rage, 0);
+        SetPower(player, PowerType.Energy, GetMaxPower(player, PowerType.Energy));
+        SpawnCorpseBones(player);
+    }
+
     /// <summary>The <see cref="Death.DeathOptions"/> of this world (<c>World:Death</c>).</summary>
     internal Death.DeathOptions DeathSettings => Death.DeathHooks.For(_world).Options;
 
