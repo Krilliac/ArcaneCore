@@ -9,7 +9,8 @@ namespace ArcaneCore.World.Tests.Social;
 
 /// <summary>
 /// <see cref="SocialWriteQueue.FlushAsync"/> is what the social delete hook awaits so a deletion
-/// completes only after the queued purge was attempted (docs/integration/character-delete.md).
+/// completes only after the queued purge was attempted (docs/integration/character-delete.md). A failed write
+/// is retained rather than dropped (SocialWriteQueueRetentionTests).
 /// </summary>
 public sealed class SocialWriteQueueFlushTests
 {
@@ -39,12 +40,15 @@ public sealed class SocialWriteQueueFlushTests
     {
         var store = new GatedStore { Fail = true };
         await using ServiceProvider services = new ServiceCollection().AddScoped<ISocialStore>(_ => store).BuildServiceProvider();
-        var queue = new SocialWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance);
+        var queue = new SocialWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, new SocialWriteQueueOptions { RetryDelayMs = 1 });
         queue.Start();
         queue.PurgeCharacter(6);
 
-        await queue.FlushAsync().WaitAsync(Wait); // three failed attempts are logged and dropped, then the marker completes
-        await queue.StopAsync();
+        await queue.FlushAsync().WaitAsync(Wait); // three failed attempts retain the purge, then the barrier completes (it never throws)
+
+        // Retained, not dropped: shutdown retries it and, the store still failing, says so.
+        InvalidOperationException stop = await Assert.ThrowsAsync<InvalidOperationException>(queue.StopAsync);
+        Assert.Contains("purge of character 6", stop.Message);
     }
 
     [Fact]

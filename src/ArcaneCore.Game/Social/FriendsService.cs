@@ -302,6 +302,15 @@ public sealed class FriendsService(SocialContext context)
         }
     }
 
+    /// <summary>
+    /// Queue the row write. A refusal (too many writes waiting for storage for this character or realm,
+    /// which a normal player cannot reach) disconnects the session; the change is not persisted.
+    /// </summary>
     private void Persist(Player player, uint other, SocialFlags flags)
-        => context.Persistence.SetSocial((int)player.Guid.Low, (int)other, flags);
+    {
+        if (!context.Persistence.TrySetSocial((int)player.Guid.Low, (int)other, flags))
+        {
+            player.Session.Kick();
+        }
+    }
 }

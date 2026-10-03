@@ -32,6 +32,32 @@ public sealed class FriendsServiceTests
         Assert.True(f.Context.Friends.Get(a).Has(2, SocialFlags.Friend));
     }
 
+    [Theory]
+    [InlineData("friend")]
+    [InlineData("ignore")]
+    [InlineData("unfriend")]
+    [InlineData("unignore")]
+    public void WriteQueueRefusal_DisconnectsThePlayer_AndPersistsNothing(string operation)
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2);
+        f.AddOffline(3);
+        f.Context.Friends.Get(a).Set(2, operation == "unignore" ? SocialFlags.Ignored : SocialFlags.Friend, true);
+        f.Persistence.RefuseSocial = true;
+
+        switch (operation)
+        {
+            case "friend": f.Context.Friends.AddFriend(a, "P3"); break;
+            case "ignore": f.Context.Friends.AddIgnore(a, "P3"); break;
+            case "unfriend": f.Context.Friends.RemoveFriend(a, b.Guid); break;
+            default: f.Context.Friends.RemoveIgnore(a, b.Guid); break;
+        }
+
+        Assert.True(f.Session(a).Kicked);
+        Assert.Empty(f.Persistence.Social);
+    }
+
     [Fact]
     public void AddFriend_Offline_RepliesAddedOffline_WithOnlyResultAndGuid()
     {

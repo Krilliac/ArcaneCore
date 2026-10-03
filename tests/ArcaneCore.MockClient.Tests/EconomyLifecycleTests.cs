@@ -163,6 +163,10 @@ public sealed class EconomyLifecycleTests
     private static Task<SyntheticArcaneServer> StartAsync(Control control, CancellationToken token, bool cashQuest = false)
         => SyntheticArcaneServer.StartAsync(services =>
         {
+            // The synthetic host has no mailbox game object; the fixture GUID is accepted explicitly
+            // (Economy:MailboxAccess=Permissive is the documented deviation, retail checks are in
+            // ArcaneCore.World.Tests MailboxAccessTests).
+            services.AddSingleton<IMailboxAccess, PermissiveMailboxAccess>();
             services.AddScoped<IEconomyStore>(provider => new ControlledEconomyStore(
                 new EfEconomyStore(provider.GetRequiredService<CharacterDbContext>()), control));
             services.AddScoped<ICharacterStore>(provider => new ObservedCharacterStore(

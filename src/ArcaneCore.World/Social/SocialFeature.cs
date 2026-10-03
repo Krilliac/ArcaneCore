@@ -55,6 +55,9 @@ public sealed class SocialFeature(
     /// <summary>Realm rules for cross-faction interaction (vmangos AllowTwoSide.*); off by default.</summary>
     public SocialOptions Options { get; } = socialOptions?.Value ?? new SocialOptions();
 
+    /// <summary>Bounds of the write queue (configuration section <c>World:Social:WriteQueue</c>).</summary>
+    public SocialWriteQueueOptions WriteQueueOptions { get; } = new();
+
     /// <summary>Completes when the stored guilds are installed (world thread).</summary>
     public Task GuildsLoaded => _guildsLoaded;
 
@@ -106,7 +109,8 @@ public sealed class SocialFeature(
     {
         _world = world;
         configuration?.GetSection(SocialOptions.SectionName).Bind(Options);
-        _writes = new SocialWriteQueue(scopes, loggers.CreateLogger<SocialWriteQueue>());
+        configuration?.GetSection(SocialOptions.SectionName + ":WriteQueue").Bind(WriteQueueOptions);
+        _writes = new SocialWriteQueue(scopes, loggers.CreateLogger<SocialWriteQueue>(), WriteQueueOptions);
         _context = new SocialContext(world, new CharacterLookup(directory), _writes, Options);
         _writes.Start();
         world.PlayerLoggedIn += OnLoggedIn;
@@ -184,11 +188,17 @@ public sealed class SocialFeature(
         }
         await Task.WhenAll(reads.Append(_guildsLoaded)).ConfigureAwait(false);
 
-        if (_writes is not null)
+        try
         {
-            await _writes.StopAsync().ConfigureAwait(false);
+            if (_writes is not null)
+            {
+                await _writes.StopAsync().ConfigureAwait(false); // throws, naming what is not durable, if storage is still failing
+            }
         }
-        _stop.Dispose();
+        finally
+        {
+            _stop.Dispose();
+        }
     }
 
     /// <summary>
@@ -225,10 +235,29 @@ public sealed class SocialFeature(
         {
             await _guildsLoaded.WaitAsync(_stop.Token).ConfigureAwait(false);
             _stop.Token.ThrowIfCancellationRequested();
+            if (_writes is { } writes)
+            {
+                // Earlier writes first; a change of this character that still cannot be stored is
+                // applied over the stored rows below, so storage never rolls the live list back.
+                try
+                {
+                    await writes.FlushCharacterAsync(characterId).WaitAsync(_stop.Token).ConfigureAwait(false);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    _logger.LogWarning(ex, "social writes of character {Id} are retained; its list is loaded with them applied", characterId);
+                }
+            }
+
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             if (scope.ServiceProvider.GetService<ISocialStore>() is { } store)
             {
                 entries = await store.GetSocialAsync(characterId, _stop.Token).ConfigureAwait(false);
+            }
+
+            if (_writes is not null)
+            {
+                entries = _writes.WithRetained(characterId, entries);
             }
         }
         catch (OperationCanceledException) when (_stopping)
@@ -318,6 +347,12 @@ public sealed class SocialFeature(
         context.Friends.BroadcastPresence(player, online: false);
 
         context.Friends.Unload(player);
+
+        int characterId = (int)player.Guid.Low;
+        if (_writes is { } writes && writes.HasRetainedFailure(characterId))
+        {
+            writes.RequestRetry(characterId); // an early retry; the login barrier and shutdown still retry
+        }
     }
 
     private async Task LoadGuildsAsync()
