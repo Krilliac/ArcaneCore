@@ -26,8 +26,10 @@ public sealed class WorldConfigKey
         string path,
         Func<WorldConfigView, object?> read,
         Action<WorldConfigView, object?>? apply,
-        Func<object?, string?>? check)
+        Func<object?, string?>? check,
+        bool negativeUsesDefault = false)
     {
+        NegativeUsesDefault = negativeUsesDefault;
         Path = path;
         Read = read;
         Apply = apply;
@@ -45,6 +47,9 @@ public sealed class WorldConfigKey
     internal Action<WorldConfigView, object?>? Apply { get; }
 
     internal Func<object?, string?>? Check { get; }
+
+    /// <summary>True when a negative value is replaced by the option default (retail) instead of rejecting the reload.</summary>
+    internal bool NegativeUsesDefault { get; }
 
     /// <summary>The value as shown in messages.</summary>
     internal static string Show(object? value) => Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
@@ -72,13 +77,13 @@ public static class WorldConfigKeys
         FixedListener("BindAddress", v => v.BindAddress),
 
         // Live: read from the shared options object at each use.
-        Live("UpdateCompressionThreshold", o => o.UpdateCompressionThreshold, (o, v) => o.UpdateCompressionThreshold = v, NonNegative),
-        Live("AutosaveIntervalMs", o => o.AutosaveIntervalMs, (o, v) => o.AutosaveIntervalMs = v, NonNegative),
-        Live("CharactersPerRealm", o => o.CharactersPerRealm, (o, v) => o.CharactersPerRealm = v, NonNegative),
+        LiveNonNegative("UpdateCompressionThreshold", o => o.UpdateCompressionThreshold, (o, v) => o.UpdateCompressionThreshold = v),
+        LiveNonNegative("AutosaveIntervalMs", o => o.AutosaveIntervalMs, (o, v) => o.AutosaveIntervalMs = v),
+        LiveNonNegative("CharactersPerRealm", o => o.CharactersPerRealm, (o, v) => o.CharactersPerRealm = v),
         Live("Motd", o => o.Motd, (o, v) => o.Motd = v),
-        Live("ListenRangeSay", o => o.ListenRangeSay, (o, v) => o.ListenRangeSay = v, NonNegative),
-        Live("ListenRangeYell", o => o.ListenRangeYell, (o, v) => o.ListenRangeYell = v, NonNegative),
-        Live("ListenRangeTextEmote", o => o.ListenRangeTextEmote, (o, v) => o.ListenRangeTextEmote = v, NonNegative),
+        LiveNonNegative("ListenRangeSay", o => o.ListenRangeSay, (o, v) => o.ListenRangeSay = v),
+        LiveNonNegative("ListenRangeYell", o => o.ListenRangeYell, (o, v) => o.ListenRangeYell = v),
+        LiveNonNegative("ListenRangeTextEmote", o => o.ListenRangeTextEmote, (o, v) => o.ListenRangeTextEmote = v),
         Live("AllowTwoSideChat", o => o.AllowTwoSideChat, (o, v) => o.AllowTwoSideChat = v),
         Live("AllowTwoSideWhoList", o => o.AllowTwoSideWhoList, (o, v) => o.AllowTwoSideWhoList = v),
         Live("LogoutDelayMs", o => o.LogoutDelayMs, (o, v) => o.LogoutDelayMs = v),
@@ -89,8 +94,8 @@ public static class WorldConfigKeys
         // GridContainer reads the shared MapOptions at each use; running grids keep the timer they have
         // until it is reset, as vmangos MapManager::SetGridCleanUpDelay does (World.cpp:588-590).
         Live("Maps:GridUnload", o => o.Maps.GridUnload, (o, v) => o.Maps.GridUnload = v),
-        Live("Maps:GridCleanUpDelayMs", o => o.Maps.GridCleanUpDelayMs, (o, v) => o.Maps.GridCleanUpDelayMs = v, NonNegative),
-        Live("Maps:GridActivationDistance", o => o.Maps.GridActivationDistance, (o, v) => o.Maps.GridActivationDistance = v, NonNegative),
+        LiveNonNegative("Maps:GridCleanUpDelayMs", o => o.Maps.GridCleanUpDelayMs, (o, v) => o.Maps.GridCleanUpDelayMs = v),
+        LiveNonNegative("Maps:GridActivationDistance", o => o.Maps.GridActivationDistance, (o, v) => o.Maps.GridActivationDistance = v),
 
         // The cross-faction rules, read from the shared SocialOptions at each use. Keys map to vmangos
         // AllowTwoSide.Interaction.Group / .Guild / .Channel (World.cpp:610-613) and AllowTwoSide.AddFriend (:618).
@@ -105,6 +110,15 @@ public static class WorldConfigKeys
 
     private static string? DefinedSecurity(AccountSecurity value)
         => Enum.IsDefined(value) ? null : "is not an account security level";
+
+    /// <summary>A numeric key vmangos reads with setConfigPos/setConfigMin: a negative value falls back to the default (World.cpp:2949-2977).</summary>
+    private static WorldConfigKey LiveNonNegative<T>(string path, Func<WorldRuntimeOptions, T> get, Action<WorldRuntimeOptions, T> set) where T : struct, IComparable<T>
+        => new(
+            $"{Root}:{path}",
+            v => get(v.Runtime),
+            (view, v) => set(view.Runtime, (T)v!),
+            v => NonNegative((T)v!),
+            negativeUsesDefault: true);
 
     private static WorldConfigKey Live<T>(string path, Func<WorldRuntimeOptions, T> get, Action<WorldRuntimeOptions, T> set, Func<T, string?>? check = null)
         => new(

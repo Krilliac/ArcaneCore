@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Reload;
 using ArcaneCore.World.Items;
@@ -87,10 +88,28 @@ public sealed class ItemReloadTests
     }
 
     [Fact]
-    public async Task AnEmptyTable_KeepsTheLoadedTemplates()
+    public async Task AnEmptyTable_EmptiesTheTemplates_AsVmangosDoes()
+    {
+        // ObjectMgr.cpp:3817: the prototype map is cleared before the empty result is noticed.
+        ItemTestContent content = Content();
+        await using WorldTestHost host = Start(content);
+        await using WorldTestClient client = await host.EnterWorldAsync("EMPTYR", "Emptyr");
+        ItemsFeature items = host.WorldServices.GetRequiredService<ItemsFeature>();
+        Assert.True(items.Templates.Count > 0);
+        content.Templates.Templates.Clear();
+
+        ReloadResult result = await Coordinator(host).ReloadAsync("item_template");
+
+        Assert.Equal(ReloadStatus.Applied, result.Status);
+        Assert.Equal(0, items.Templates.Count);
+    }
+
+    [Fact]
+    public async Task AnEmptyTable_KeepsTheLoadedTemplates_WhenTheOptionSaysKeepLoaded()
     {
         ItemTestContent content = Content();
         await using WorldTestHost host = Start(content);
+        host.WorldServices.GetRequiredService<ReloadFeature>().Options.EmptyTables = EmptyTablePolicy.KeepLoaded;
         await using WorldTestClient client = await host.EnterWorldAsync("EMPTY", "Empty");
         ItemsFeature items = host.WorldServices.GetRequiredService<ItemsFeature>();
         int before = items.Templates.Count;

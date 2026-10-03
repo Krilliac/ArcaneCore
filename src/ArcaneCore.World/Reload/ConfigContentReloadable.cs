@@ -15,7 +15,7 @@ namespace ArcaneCore.World.Reload;
 /// a throwaway configuration, the <c>World</c> section is bound to a candidate, and the live options
 /// are updated in place on the world thread. Options the process only reads at start keep their value
 /// and are reported (World.cpp:3044-3055). A source that cannot be read, a value of the wrong type or
-/// a nonsensical value rejects the whole reload; the running options are never touched.
+/// a nonsensical value rejects the whole reload (a negative number instead falls back to its default, as vmangos setConfigPos does, unless <c>HotReload:NegativeNumbers</c> is <c>Reject</c>); the running options are never touched.
 /// <para>
 /// The live configuration root is never reloaded: a broken file would empty it
 /// (<c>FileConfigurationProvider.Load(reload: true)</c> clears its data before it throws), so the
@@ -61,12 +61,31 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
             (snapshot as IDisposable)?.Dispose();
         }
 
+        // vmangos setConfigPos/setConfigMin: a negative value is logged and replaced by the default, and the reload
+        // goes on (World.cpp:2949-2977); HotReload:NegativeNumbers = Reject keeps the whole-reload rejection.
+        var substitutions = new List<string>();
+        var candidateView = new WorldConfigView(runtime, listener, social);
+        var defaults = new WorldConfigView(new WorldRuntimeOptions(), null);
+        if (ReloadPolicy.Resolve(services).NegativeNumbers == InvalidNumberPolicy.Retail)
+        {
+            foreach (WorldConfigKey key in WorldConfigKeys.All.Where(k => k.NegativeUsesDefault))
+            {
+                object? value = key.Read(candidateView);
+                if (key.Check!(value) is not null)
+                {
+                    object? fallback = key.Read(defaults);
+                    key.Apply!(candidateView, fallback);
+                    substitutions.Add($"{key.Path} ({WorldConfigKey.Show(value)}) can't be negative. Using {WorldConfigKey.Show(fallback)} instead.");
+                }
+            }
+        }
+
         WorldOptions? liveListener = services.GetService<IOptions<WorldOptions>>()?.Value;
         SocialOptions? liveSocial = services.GetService<SocialFeature>()?.Options;
-        return Task.FromResult<ContentCandidate>(new ConfigCandidate(new WorldConfigView(runtime, listener, social), liveListener, liveSocial));
+        return Task.FromResult<ContentCandidate>(new ConfigCandidate(candidateView, liveListener, liveSocial, substitutions));
     }
 
-    private sealed class ConfigCandidate(WorldConfigView candidate, WorldOptions? liveListener, SocialOptions? liveSocial) : ContentCandidate
+    private sealed class ConfigCandidate(WorldConfigView candidate, WorldOptions? liveListener, SocialOptions? liveSocial, IReadOnlyList<string> substitutions) : ContentCandidate
     {
         private string _summary = "configuration";
 
@@ -89,6 +108,11 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
         public override void Commit(WorldRuntime world, ReloadTransaction transaction)
         {
             var live = new WorldConfigView(world.Options, liveListener, liveSocial);
+            foreach (string substitution in substitutions)
+            {
+                transaction.Note(substitution);
+            }
+
             int changed = 0;
             foreach (WorldConfigKey key in WorldConfigKeys.All)
             {

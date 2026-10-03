@@ -27,8 +27,10 @@ root 1212), `src/game/Commands/ServerCommands.cpp` (config 1016, spell_template 
   `ReloadFeature`; a new one is a new class, no registry edit.
 
 **Commands** (`ReloadCommands`, Administrator, `HotReload:Commands` default on)
-- `.reload config`, `.reload spell_template`, `.reload all` (every content reloadable, not the config,
-  as vmangos `reload all`), `.reload status` (ArcaneCore addition), names matched exactly or by unique
+- `.reload config`, `.reload spell_template`, `.reload all` (the reloadables vmangos `reload all` reaches, ServerCommands.cpp:885-905:
+  `areatrigger_teleport` :907-914, `game_tele` :900, `spell_template` :969-971; not the config, and not
+  `item_template` or `creature_template`, which vmangos' `all_item` :996-1002 and `all_npc` :925-933 leave out
+  and which stay reachable by name, Chat.cpp:830, 855), `.reload status` (ArcaneCore addition), names matched exactly or by unique
   prefix (vmangos matches command words by abbreviation, `hasStringAbbr`).
 - The command returns at once and reports from the world thread when the reload ends, so the tick is
   never blocked by a database read.
@@ -48,7 +50,7 @@ stable `LiveItemTemplateStore` that forwards to the current immutable store, so 
 reference (each online `PlayerInventory.Templates`, the economy, vendors, loot) sees the reload on its
 next lookup by entry, without re-wiring. The first reload on a feature nobody has used yet performs the
 initial load first, so the item GUID allocator is still seeded.
-- Empty `item_template` keeps the loaded content. vmangos clears the map first and only then notices the
+- Empty `item_template` empties the content, as vmangos does (`HotReload:EmptyTables`, default `Retail`; `KeepLoaded` opts into the safe variant). vmangos clears the map first and only then notices the
   empty result (`ObjectMgr.cpp:3817`, `3822-3830`), leaving no items; the loaders for spells
   (`SpellMgr.cpp:3724-3732`) and creatures (`ObjectMgr.cpp:1192-1196`) return before touching anything,
   and that is the behaviour taken.
@@ -78,7 +80,7 @@ their teleports, are read via `IMapDataStore` off the world thread and swapped o
 loader rules as at startup (a trigger row, a known target map, a non-zero position); rejected rows are
 listed in the result. `WorldMaps.Load` now builds the trigger tables through the same function.
 - vmangos clears both tables before looking at the query result (`ObjectMgr.cpp:10468`, `7708`), so an empty
-  table empties them; here an empty (or, for triggers, unusable) table keeps the loaded rows.
+  table empties them; here an empty (or, for triggers, unusable) table empties them too (`HotReload:EmptyTables`, default `Retail`; `KeepLoaded` keeps the loaded rows).
 - The map registry, area table, terrain and collision data are not reloaded: they are read when the
   daemon starts (`DataDir` is restart-only in vmangos too, `World.cpp:932-935`).
 
@@ -103,22 +105,27 @@ on the world thread, so every reader sees the new value on its next read.
   (vmangos `configNoReload`, World.cpp:3044-3055): `TickIntervalMs`, `Maps:DataDirectory`, `Port`,
   `BindAddress` (the last two only when `IOptions<WorldOptions>` is registered, as in the daemon).
 - A key removed from the file returns to its default (vmangos `GetIntDefault`).
-- An unreadable or missing source, a value of the wrong type, or a negative interval/range rejects the
-  whole reload. A test fails if a new `WorldRuntimeOptions` / `MapOptions` / `WorldOptions` property is
+- An unreadable or missing source or a value of the wrong type rejects the whole reload. A negative
+  interval/range is replaced by the option default and noted, as vmangos `setConfigPos`/`setConfigMin`
+  do (World.cpp:2949-2977); `HotReload:NegativeNumbers = Reject` rejects the whole reload instead. A test fails if a new `WorldRuntimeOptions` / `MapOptions` / `WorldOptions` property is
   not classified in `WorldConfigKeys`.
 
-## Deviations from retail (all default to retail behaviour)
+## Deviations from retail
+
+Every row with a switch defaults to retail. Rows marked *structural* are behaviours the design cannot offer a
+retail variant of (no switch is possible); they are limits, not options.
 
 | Deviation | Switch |
 |---|---|
 | Reload builds off the world thread and swaps between ticks; vmangos reloads on the update thread and blocks it. Not observable to a client. | none (behaviour only) |
 | A running aura keeps the `SpellInfo` it started with; vmangos mutates its spell table in place. Not observable to a client. | none |
-| vmangos splits `reload` (`SEC_DEVELOPER`, Chat.cpp:1212) from `config`/`all` (`SEC_ADMINISTRATOR`, Chat.cpp:796,808); ArcaneCore's scale ends at Administrator so both are Administrator (cmangos-classic Chat.cpp:942). | none |
+| vmangos splits `reload` (`SEC_DEVELOPER`, Chat.cpp:1212) from `config`/`all` (`SEC_ADMINISTRATOR`, Chat.cpp:796,808); ArcaneCore's account scale ends at Administrator (no `SEC_DEVELOPER`) so every `.reload` is Administrator, as cmangos-classic Chat.cpp:942. | none, structural |
 | `.reload status` and prefix matching of reloadable names are ArcaneCore additions. | none |
-| `TickIntervalMs` is restart-only here; vmangos `MapUpdateInterval` is live (World.cpp:592-594). ArcaneCore's world thread captures its sleep once and `SpellFeature` its timer. | none |
+| `TickIntervalMs` is restart-only here; vmangos `MapUpdateInterval` is live (World.cpp:592-594). ArcaneCore's world thread captures its sleep once and `SpellFeature` its timer. | none, structural |
 | An `Item` a player already holds keeps the `ItemTemplate` it was created with until that character logs in again; vmangos resolves `Item::GetProto` by entry on every call (`Item.cpp:567-570`), so a changed sell price applies to held items at once there. True parity needs `Item.Template` late-bound, which edits `Item.cs` and `PlayerInventory.*` that the economy, loot and quest-reward work also changes. Left to a later slice. Lookups by entry (vendor lists, new items, starting outfit) are live. | none (unobservable difference is limited to held items) |
 | A live creature keeps the unit fields it copied from its template (faction, flags, health, speeds ...) until it respawns; what is read through `Creature.Template` (rank, corpse delay, AI name, speeds, loot ids ...) changes at once. vmangos behaves the same way: the reload replaces the table, `Creature::UpdateEntry` re-copies at respawn. | none |
-| Reloads never leave a table empty: an empty `spell_template`, `item_template`, `creature_template`, `game_tele` or unusable `areatrigger_teleport` result keeps what is loaded. vmangos is inconsistent: spells and creatures return early, items, `game_tele` and `areatrigger_teleport` clear first. | none |
+| Retail behaviour, switchable: an empty `item_template`, `game_tele` or unusable `areatrigger_teleport` empties the table (vmangos clears first); `spell_template` and `creature_template` keep what is loaded (vmangos returns early). | `HotReload:EmptyTables` (`Retail` default; `KeepLoaded` keeps the loaded rows for the three clearing tables) |
+| A negative interval/range in `.reload config` is replaced by its default and noted (vmangos `setConfigPos`/`setConfigMin`). | `HotReload:NegativeNumbers` (`Retail` default; `Reject` rejects the reload) |
 | `.reload spell_template` does not reload `spell_mod` (no such table here; vmangos ServerCommands.cpp:1414). | none |
 | The commands can be switched off. Retail has no such switch. | `HotReload:Commands` (default true = retail) |
 

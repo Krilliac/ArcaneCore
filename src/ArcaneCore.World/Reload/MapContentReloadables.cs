@@ -23,8 +23,8 @@ internal static class MapContentSource
 /// <c>.reload game_tele</c> (vmangos <c>HandleReloadGameTeleCommand</c>, ServerCommands.cpp:1638,
 /// Chat.cpp:836 → <c>ObjectMgr::LoadGameTele</c>, ObjectMgr.cpp:10466): the <c>.tele</c> locations are read
 /// off the world thread and replace the live list. vmangos clears its map before looking at the result,
-/// so an empty table leaves no locations at all (ObjectMgr.cpp:10468, 10473-10481); here an empty table
-/// keeps the loaded ones, like the other reloads.
+/// so an empty table leaves no locations at all (ObjectMgr.cpp:10468, 10473-10481); so does an empty table here, unless
+/// <c>HotReload:EmptyTables = KeepLoaded</c>.
 /// </summary>
 public sealed class GameTeleContentReloadable(IServiceProvider services) : IContentReloadable
 {
@@ -34,19 +34,19 @@ public sealed class GameTeleContentReloadable(IServiceProvider services) : ICont
     {
         TeleportFeature feature = services.GetRequiredService<TeleportFeature>();
         MapContent content = await MapContentSource.LoadAsync(services, cancellationToken).ConfigureAwait(false);
-        return new TeleCandidate(feature, [.. content.GameTeles]);
+        return new TeleCandidate(feature, [.. content.GameTeles], ReloadPolicy.KeepsEmptyTables(services));
     }
 
-    private sealed class TeleCandidate(TeleportFeature feature, IReadOnlyList<GameTele> teles) : ContentCandidate
+    private sealed class TeleCandidate(TeleportFeature feature, IReadOnlyList<GameTele> teles, bool keepEmpty) : ContentCandidate
     {
         public override string Summary => $"{teles.Count} teleport locations";
 
         public override bool TryKeepCurrent(WorldRuntime world, out string reason)
         {
             int loaded = feature.Maps.GameTeles.Count;
-            if (teles.Count == 0 && loaded > 0)
+            if (keepEmpty && teles.Count == 0 && loaded > 0)
             {
-                reason = $"game_tele is empty, {loaded} teleport locations stay loaded";
+                reason = $"game_tele is empty and HotReload:EmptyTables is KeepLoaded, {loaded} teleport locations stay loaded";
                 return true;
             }
 
@@ -69,8 +69,8 @@ public sealed class GameTeleContentReloadable(IServiceProvider services) : ICont
 /// the area triggers and their teleports are rebuilt with the loader's rules (a teleport needs a trigger
 /// row, a known target map and a non-zero position) against the maps already registered, then swapped in.
 /// Rejected rows are listed in the result. The map registry, area table and terrain are not reloaded
-/// (restart). As with <c>game_tele</c>, an empty table keeps the loaded teleports (vmangos clears first,
-/// ObjectMgr.cpp:7708).
+/// (restart). As with <c>game_tele</c>, an empty table empties the teleports (vmangos clears first,
+/// ObjectMgr.cpp:7708) unless <c>HotReload:EmptyTables = KeepLoaded</c>.
 /// </summary>
 public sealed class AreaTriggerTeleportContentReloadable(IServiceProvider services) : IContentReloadable
 {
@@ -80,19 +80,19 @@ public sealed class AreaTriggerTeleportContentReloadable(IServiceProvider servic
     {
         TeleportFeature feature = services.GetRequiredService<TeleportFeature>();
         MapContent content = await MapContentSource.LoadAsync(services, cancellationToken).ConfigureAwait(false);
-        return new TriggerCandidate(feature, feature.Maps.BuildAreaTriggerTables(content));
+        return new TriggerCandidate(feature, feature.Maps.BuildAreaTriggerTables(content), ReloadPolicy.KeepsEmptyTables(services));
     }
 
-    private sealed class TriggerCandidate(TeleportFeature feature, AreaTriggerTables tables) : ContentCandidate
+    private sealed class TriggerCandidate(TeleportFeature feature, AreaTriggerTables tables, bool keepEmpty) : ContentCandidate
     {
         public override string Summary => $"{tables.TeleportCount} area trigger teleports on {tables.TriggerCount} area triggers";
 
         public override bool TryKeepCurrent(WorldRuntime world, out string reason)
         {
             int loaded = feature.Maps.AreaTriggerTeleportCount;
-            if (tables.TeleportCount == 0 && loaded > 0)
+            if (keepEmpty && tables.TeleportCount == 0 && loaded > 0)
             {
-                reason = $"areatrigger_teleport has no usable rows, {loaded} area trigger teleports stay loaded";
+                reason = $"areatrigger_teleport has no usable rows and HotReload:EmptyTables is KeepLoaded, {loaded} area trigger teleports stay loaded";
                 return true;
             }
 

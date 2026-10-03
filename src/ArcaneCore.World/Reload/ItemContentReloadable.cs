@@ -13,9 +13,9 @@ namespace ArcaneCore.World.Reload;
 /// the world thread, then become the content every lookup by entry goes to
 /// (<see cref="ItemsFeature.ReplaceTemplates"/>).
 /// <list type="bullet">
-/// <item>An empty <c>item_template</c> keeps what is loaded. vmangos clears its map first and only then
-/// notices the empty result (ObjectMgr.cpp:3817, 3822-3830), leaving no items at all; the safe variant
-/// is the one vmangos' spell and creature loaders use (SpellMgr.cpp:3724-3732, ObjectMgr.cpp:1190-1196).</item>
+/// <item>An empty <c>item_template</c> empties the store: vmangos clears its map first and only then
+/// notices the empty result (ObjectMgr.cpp:3817, 3822-3830). <c>HotReload:EmptyTables = KeepLoaded</c> opts into the
+/// early-out vmangos' spell and creature loaders have (SpellMgr.cpp:3724-3732, ObjectMgr.cpp:1190-1196).</item>
 /// <item>Lookups by entry (the feature, vendors, the economy, every online inventory) see the new
 /// content at once. An <see cref="Item"/> already created keeps its creation-time template until its
 /// owner logs in again: vmangos resolves <c>Item::GetProto</c> by entry on every call
@@ -26,6 +26,9 @@ namespace ArcaneCore.World.Reload;
 public sealed class ItemContentReloadable(IServiceProvider services) : IContentReloadable
 {
     public string Name => "item_template";
+
+    /// <summary>vmangos reload all (ServerCommands.cpp:885-905) reaches no item_template: all_item reloads page texts, enchantments and item_required_target only (:996-1002).</summary>
+    public bool IncludedInAll => false;
 
     public async Task<ContentCandidate> BuildAsync(CancellationToken cancellationToken)
     {
@@ -47,10 +50,10 @@ public sealed class ItemContentReloadable(IServiceProvider services) : IContentR
                 .Select(g => $"item_template has {g.Count()} rows for item {g.Key}"),
         ];
         IItemTemplateStore built = duplicates.Length == 0 ? new ItemTemplateStore(templates, starting) : ItemTemplateStore.Empty;
-        return new ItemCandidate(feature, built, duplicates);
+        return new ItemCandidate(feature, built, duplicates, ReloadPolicy.KeepsEmptyTables(services));
     }
 
-    private sealed class ItemCandidate(ItemsFeature feature, IItemTemplateStore store, IReadOnlyList<string> problems) : ContentCandidate
+    private sealed class ItemCandidate(ItemsFeature feature, IItemTemplateStore store, IReadOnlyList<string> problems, bool keepEmpty) : ContentCandidate
     {
         public override string Summary => $"{store.Count} item templates";
 
@@ -59,9 +62,9 @@ public sealed class ItemContentReloadable(IServiceProvider services) : IContentR
         public override bool TryKeepCurrent(WorldRuntime world, out string reason)
         {
             int loaded = feature.LoadedStore.Count;
-            if (store.Count == 0 && loaded > 0)
+            if (keepEmpty && store.Count == 0 && loaded > 0)
             {
-                reason = $"item_template is empty, {loaded} item templates stay loaded";
+                reason = $"item_template is empty and HotReload:EmptyTables is KeepLoaded, {loaded} item templates stay loaded";
                 return true;
             }
 

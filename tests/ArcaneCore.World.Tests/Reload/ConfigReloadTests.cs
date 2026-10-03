@@ -49,9 +49,14 @@ public sealed class ConfigReloadTests : IDisposable
         return path;
     }
 
-    private ReloadCoordinator Reloader(IConfiguration configuration, WorldOptions? live = null, SocialFeature? social = null)
+    private ReloadCoordinator Reloader(IConfiguration configuration, WorldOptions? live = null, SocialFeature? social = null, HotReloadOptions? policy = null)
     {
         IServiceCollection services = new ServiceCollection().AddSingleton(configuration);
+        if (policy is not null)
+        {
+            services.AddSingleton(Options.Create(policy));
+        }
+
         if (live is not null)
         {
             services.AddSingleton(Options.Create(live));
@@ -181,10 +186,29 @@ public sealed class ConfigReloadTests : IDisposable
     }
 
     [Fact]
-    public async Task NegativeIntervalsAndRanges_AreRejected_ByName()
+    public async Task NegativeIntervalsAndRanges_FallBackToTheirDefaults_AsVmangosSetConfigPosDoes()
+    {
+        // World.cpp:2949-2977: a negative value is logged, replaced by the default, and the reload goes on.
+        string path = Write("""{ "World": { "Motd": "Changed", "AutosaveIntervalMs": -1, "ListenRangeYell": -5, "Maps": { "GridCleanUpDelayMs": -1 } } }""");
+        _options.AutosaveIntervalMs = 0;
+        _options.ListenRangeYell = 111;
+        ReloadCoordinator coordinator = Reloader(FromFile(path));
+
+        ReloadResult result = await coordinator.ReloadAsync("config");
+
+        Assert.Equal(ReloadStatus.Applied, result.Status);
+        Assert.Equal("Changed", _options.Motd);
+        Assert.Equal(new WorldRuntimeOptions().AutosaveIntervalMs, _options.AutosaveIntervalMs);
+        Assert.Equal(new WorldRuntimeOptions().ListenRangeYell, _options.ListenRangeYell);
+        Assert.Equal(new MapOptions().GridCleanUpDelayMs, _options.Maps.GridCleanUpDelayMs);
+        Assert.Contains(result.Notes, n => n.Contains("World:ListenRangeYell (-5) can't be negative. Using", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task NegativeIntervalsAndRanges_AreRejected_ByName_WhenTheOptionSaysReject()
     {
         string path = Write("""{ "World": { "Motd": "Changed", "AutosaveIntervalMs": -1, "ListenRangeYell": -5, "Maps": { "GridCleanUpDelayMs": -1 } } }""");
-        ReloadCoordinator coordinator = Reloader(FromFile(path));
+        ReloadCoordinator coordinator = Reloader(FromFile(path), policy: new HotReloadOptions { NegativeNumbers = InvalidNumberPolicy.Reject });
 
         ReloadResult result = await coordinator.ReloadAsync("config");
 

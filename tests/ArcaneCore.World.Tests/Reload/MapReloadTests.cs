@@ -1,10 +1,12 @@
 using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Reload;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Reload;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 using static ArcaneCore.World.Tests.GridTerrain.InMemoryMapDataStore;
 
@@ -17,10 +19,11 @@ namespace ArcaneCore.World.Tests.Reload;
 /// </summary>
 public sealed class MapReloadTests
 {
-    private static (ReloadCoordinator Coordinator, FixedMapStore Store, WorldMaps Maps) Reloader(WorldTestHost host, MapContent content)
+    private static (ReloadCoordinator Coordinator, FixedMapStore Store, WorldMaps Maps) Reloader(WorldTestHost host, MapContent content, EmptyTablePolicy empty = EmptyTablePolicy.Retail)
     {
         var store = new FixedMapStore(content);
         ServiceProvider services = new ServiceCollection()
+            .AddSingleton(Options.Create(new HotReloadOptions { EmptyTables = empty }))
             .AddSingleton(host.WorldServices.GetRequiredService<TeleportFeature>())
             .AddSingleton<IMapDataStore>(store)
             .BuildServiceProvider();
@@ -50,10 +53,23 @@ public sealed class MapReloadTests
     }
 
     [Fact]
-    public async Task GameTele_Empty_KeepsTheLoadedLocations()
+    public async Task GameTele_Empty_EmptiesTheLocations_AsVmangosDoes()
     {
+        // ObjectMgr.cpp:10468 clears the map before the result is looked at.
         await using var host = WorldTestHost.Start();
         (ReloadCoordinator coordinator, _, WorldMaps maps) = Reloader(host, Content with { GameTeles = [] });
+
+        ReloadResult result = await coordinator.ReloadAsync("game_tele");
+
+        Assert.Equal(ReloadStatus.Applied, result.Status);
+        Assert.Empty(maps.GameTeles);
+    }
+
+    [Fact]
+    public async Task GameTele_Empty_KeepsTheLoadedLocations_WhenTheOptionSaysKeepLoaded()
+    {
+        await using var host = WorldTestHost.Start();
+        (ReloadCoordinator coordinator, _, WorldMaps maps) = Reloader(host, Content with { GameTeles = [] }, EmptyTablePolicy.KeepLoaded);
 
         ReloadResult result = await coordinator.ReloadAsync("game_tele");
 
@@ -92,10 +108,24 @@ public sealed class MapReloadTests
     }
 
     [Fact]
-    public async Task AreaTriggerTeleport_WithNoUsableRows_KeepsTheLoadedOnes()
+    public async Task AreaTriggerTeleport_WithNoUsableRows_EmptiesTheTeleports_AsVmangosDoes()
     {
+        // ObjectMgr.cpp:7708 clears the map before the rows are read.
         await using var host = WorldTestHost.Start();
         (ReloadCoordinator coordinator, _, WorldMaps maps) = Reloader(host, Content with { AreaTriggerTeleports = [] });
+        Assert.True(maps.AreaTriggerTeleportCount > 0);
+
+        ReloadResult result = await coordinator.ReloadAsync("areatrigger_teleport");
+
+        Assert.Equal(ReloadStatus.Applied, result.Status);
+        Assert.Equal(0, maps.AreaTriggerTeleportCount);
+    }
+
+    [Fact]
+    public async Task AreaTriggerTeleport_WithNoUsableRows_KeepsTheLoadedOnes_WhenTheOptionSaysKeepLoaded()
+    {
+        await using var host = WorldTestHost.Start();
+        (ReloadCoordinator coordinator, _, WorldMaps maps) = Reloader(host, Content with { AreaTriggerTeleports = [] }, EmptyTablePolicy.KeepLoaded);
         int before = maps.AreaTriggerTeleportCount;
         Assert.True(before > 0);
 

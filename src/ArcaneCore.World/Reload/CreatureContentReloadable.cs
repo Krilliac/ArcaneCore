@@ -32,6 +32,9 @@ public sealed class CreatureContentReloadable(IServiceProvider services) : ICont
 {
     public string Name => "creature_template";
 
+    /// <summary>vmangos reload all (ServerCommands.cpp:885-905) reaches no creature_template: all_npc reloads gossip, trainer, vendor and POI only (:925-933).</summary>
+    public bool IncludedInAll => false;
+
     public async Task<ContentCandidate> BuildAsync(CancellationToken cancellationToken)
     {
         CreatureWorldFeature feature = services.GetRequiredService<CreatureWorldFeature>();

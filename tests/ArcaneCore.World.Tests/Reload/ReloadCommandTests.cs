@@ -112,7 +112,7 @@ public sealed class ReloadCommandTests
     }
 
     [Fact]
-    public async Task ReloadAll_ReloadsTheContent_ButNotTheConfig()
+    public async Task ReloadAll_FollowsVmangos_NoConfig_NoItemOrCreatureTemplates()
     {
         await using var host = WorldTestHost.Start();
         await using WorldTestClient admin = await AdministratorAsync(host);
@@ -121,9 +121,13 @@ public sealed class ReloadCommandTests
 
         Assert.Equal("Re-loading all...", (await admin.ReadChatAsync()).Text);
 
-        // Name order; this host has no item source, so item_template reports its failure on the way.
+        // vmangos reload all (ServerCommands.cpp:885-905) reaches areatrigger_teleport (:907-914), game_tele (:900) and spell_template (:969-971),
+        // but neither item_template (all_item :996-1002) nor creature_template (all_npc :925-933).
         List<string> lines = await ReadLinesUntilAsync(admin, l => l.StartsWith("spell_template reloaded:", StringComparison.Ordinal));
-        Assert.Contains(lines, l => l.StartsWith("item_template not reloaded (Failed):", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.StartsWith("areatrigger_teleport reloaded:", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.StartsWith("game_tele reloaded:", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.StartsWith("item_template", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.StartsWith("creature_template", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, l => l.StartsWith("config", StringComparison.Ordinal));
     }
 
