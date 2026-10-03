@@ -29,8 +29,14 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
     private uint _delayMs;
     private GameEventStatusWriter? _writer;
 
-    /// <summary>The running service, or null when the feature is off or no tables were loaded.</summary>
+    /// <summary>The running service (null before the feature is attached). With the feature off it exists but never starts an event.</summary>
     public GameEventService? Service => _service;
+
+    /// <summary>
+    /// Raised each time a service is built (start-up, reload, tests), before it initialises, so features that own one kind of
+    /// event effect (spawns, quests, creature data) can register on it. A feature attached later reads <see cref="Service"/>.
+    /// </summary>
+    public event Action<GameEventService>? ServiceCreated;
 
     public bool IsActiveEvent(ushort eventId) => _service?.IsActiveEvent(eventId) ?? false;
 
@@ -44,13 +50,18 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
         _world = world;
         _hooks = WorldStateHooks.For(world);
         services.GetService<IConfiguration>()?.GetSection(GameEventOptions.SectionName).Bind(_hooks.GameEventSettings);
-        if (!_hooks.GameEventSettings.Enabled)
+        // Disabled: the tables are still loaded (spawns listed in them stay out of the world, as in vmangos while no event runs),
+        // but the system never initialises or ticks, so no event ever starts.
+        bool enabled = _hooks.GameEventSettings.Enabled;
+        if (enabled)
         {
-            logger.LogInformation("game events are disabled (World:GameEvents:Enabled=false)");
-            return;
+            world.WorldTick += OnTick;
+        }
+        else
+        {
+            logger.LogInformation("game events are disabled (World:GameEvents:Enabled=false): no event will run");
         }
 
-        world.WorldTick += OnTick;
         GameEventContent content = GameEventContent.Empty;
         var active = new HashSet<ushort>();
         bool hasStatusStore;
@@ -108,7 +119,8 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
             load.Definitions.Count, load.Dialect, load.Boundary);
         var announcer = new WorldAnnouncer(_world ?? throw new InvalidOperationException("the game event feature is not attached"));
         _service = new GameEventService(load, options, () => hooks.Time.UtcNow, zone, logger, status, announcer);
-        _initialiseWith = activeAtShutdown;
+        _initialiseWith = options.Enabled ? activeAtShutdown : null;
+        ServiceCreated?.Invoke(_service);
         _elapsedMs = 0;
         _delayMs = 0;
     }

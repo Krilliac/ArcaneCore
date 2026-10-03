@@ -127,8 +127,20 @@ public sealed partial class CreatureMapSystem
             return grid;
         }
 
+        LoadSpawns(grid, spawns);
+        return grid;
+    }
+
+    /// <summary>Create the creatures of <paramref name="spawns"/> in an already registered grid (a grid load, or one event spawn coming back: <see cref="RefreshSpawns"/>).</summary>
+    private void LoadSpawns(LoadedGrid grid, IEnumerable<CreatureSpawn> spawns)
+    {
         foreach (CreatureSpawn spawn in spawns)
         {
+            if (_spawnGate is { } gate && !gate.AllowsCreature(spawn.Guid))
+            {
+                continue; // an event spawn whose event is not running (vmangos leaves game_event_creature guids out of the grid at load)
+            }
+
             CreatureTemplate? template = _content.FindTemplate(spawn.Entry);
             if (template is null)
             {
@@ -159,8 +171,6 @@ public sealed partial class CreatureMapSystem
 
             AddToWorld(creature, grid);
         }
-
-        return grid;
     }
 
     private void UnloadGrid(GridCoord coord)

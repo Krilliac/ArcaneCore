@@ -22,7 +22,7 @@ namespace ArcaneCore.Game.GameObjects;
 /// Behaviour re-implemented from vmangos GameObject::Update/Use and ObjectGridLoader (no code copied).
 /// Thread affinity: world thread only.
 /// </summary>
-public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
+public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
 {
     /// <summary>INTERACTION_DISTANCE (vmangos ObjectDefines.h), the default for types without their own distance.</summary>
     public const float InteractionDistance = 5.0f;
@@ -776,8 +776,19 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
             return;
         }
 
+        LoadSpawns(list, spawns);
+    }
+
+    /// <summary>Create the objects of <paramref name="spawns"/> in an already registered grid (a grid load, or one event spawn coming back: <see cref="RefreshSpawns"/>).</summary>
+    private void LoadSpawns(List<GameObject> list, IEnumerable<GameObjectSpawn> spawns)
+    {
         foreach (GameObjectSpawn spawn in spawns)
         {
+            if (_spawnGate is { } gate && !gate.AllowsGameObject(spawn.Guid))
+            {
+                continue; // an event spawn whose event is not running (vmangos leaves game_event_gameobject guids out of the grid at load)
+            }
+
             if ((spawn.SpawnFlags & 0x02) != 0)
             {
                 continue; // SPAWN_FLAG_DISABLED: GameObject::LoadFromDB refuses it (GameObject.cpp:969, ObjectDefines.h:128)

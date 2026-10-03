@@ -163,6 +163,34 @@ Pure maths in `Game/WorldState/Events`, every function taking the time and the z
   resume at start-up and kept out of the first pass that would stop them. Retail restores nothing.
 - Event mails (`SendEventMails`) are not delivered (see limits).
 
+### Event spawns (`game-event-spawn-gate`)
+
+- vmangos never puts a creature or gameobject that is listed in `game_event_creature` / `game_event_gameobject` (either sign) into
+  the grid at load (ObjectMgr.cpp:2330-2345, :2498); `GameEventSpawn` / `GameEventUnspawn` add and remove it (GameEventMgr.cpp:807-960).
+  `ISpawnGate` is the question the creature and gameobject map systems ask when a grid loads. `GameEventSpawns` answers it from the
+  set of running events: a spawn listed under positive events exists while at least one of them runs, and not at all while any event it
+  is listed under negatively runs (listed under both signs of different events it follows both: the end state of vmangos' spawn and
+  unspawn calls). Being a function of the running set, a grid that loads in the middle of an event, or after it stopped, needs no
+  per-grid bookkeeping, and with no event running (also with `World:GameEvents:Enabled=false`) positive-listed objects are absent and
+  negative-listed ones present, as in vmangos.
+- On an event change `GameEventSpawns` (an `IGameEventEffects`) calls `RefreshSpawns(guids)` on the creature and gameobject systems of
+  every map (instances included) for the guids listed under the changed event number only, so starting Midsummer (3313 rows in
+  classic-db) costs its own list, never a scan of the spawn tables (a counting-gate test pins that). An allowed spawn whose grid is
+  loaded is created (a gameobject with `spawntimesecs < 0`, "spawned by events and scripts only", is brought in at once); a refused
+  one is destroyed for every observer (SMSG_DESTROY_OBJECT), its pending respawn dropped (so a dead event creature comes back
+  alive at the next start), and a gameobject's loot forgotten. A guid that is not a spawn of the map is ignored.
+- Setting `SpawnGate` on a system that already loaded grids removes what the gate refuses (the systems attach at different times:
+  the creature feature at start, the gameobject feature on map creation), so `GameEventSpawnFeature` installs the gate from the
+  world tick as soon as a system exists. Event rows whose spawn is not in the content (classic-db: 33 creature and 1126
+  gameobject rows, 1095 of them Noblegarden) are ignored and reported once with their counts.
+- Shared-file edits (record them for the integrator): `CreatureMapSystem.Lifecycle.cs` (`LoadGrid` split so the creating loop is
+  `LoadSpawns`, plus the gate check), `GameObjectMapSystem.cs` (`partial`, the same split and check). Both new members live in new
+  partial files (`*.EventSpawns.cs`).
+- **Limit: pools.** classic-db puts 410 event gameobject rows into `pool_gameobject` (one of N spawns at a time). This tree has no
+  pool primitive and does not import `pool_*`, so those objects spawn together instead of one per pool while their event runs
+  (retail: one). When the creature-movement-spawns lane lands a pool primitive, the gate must also exclude pooled guids that are
+  not the pool's pick.
+
 ## Not delivered (limits)
 
 Recorded as slices are completed; see the final section.

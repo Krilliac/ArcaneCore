@@ -163,7 +163,8 @@ public sealed class GameEventWorldTests
 
         rig.World.RunTick(10_000);
 
-        Assert.Null(rig.Feature.Service);
+        Assert.NotNull(rig.Feature.Service); // the tables are loaded (their spawns stay out of the world) ...
+        Assert.False(rig.Feature.Service!.IsInitialised); // ... but the system never initialises
         Assert.False(rig.Feature.IsActiveEvent(1));
         Assert.Empty(rig.Feature.ActiveEvents);
     }
