@@ -17,13 +17,6 @@ public sealed partial class SpellSystem
     public RangedOptions RangedOptions { get; set; } = new();
 
     /// <summary>
-    /// vmangos Player::DurabilityPointLossForEquipSlot(EQUIPMENT_SLOT_RANGED): called once per
-    /// throw of a non-stackable thrown weapon (Spell::TakeAmmo). Durability loss belongs to the
-    /// item mechanics; until it installs a handler here such weapons do not wear.
-    /// </summary>
-    public Action<Player, byte>? EquipSlotDurabilityLoss { get; set; }
-
-    /// <summary>
     /// The unit's ranged attack speed modifier (vmangos Unit::m_modAttackSpeedPct[RANGED_ATTACK];
     /// 1.0 = none, 0.5 = twice as fast). It scales the cast time of ranged abilities such as
     /// Aimed Shot (SpellEntry::GetCastTime). The attack-speed auras own the real value and install
@@ -82,40 +75,20 @@ public sealed partial class SpellSystem
         return inventory.GetItemCount(ammoId) >= 1 ? SpellCastResult.CastOk : SpellCastResult.NoAmmo;
     }
 
-    /// <summary>vmangos Spell::TakeAmmo (Spell.cpp:5129-5171): one arrow or bullet, one thrown weapon, or durability for a non-stackable thrown weapon.</summary>
+    /// <summary>
+    /// vmangos Spell::TakeAmmo (Spell.cpp:5129-5171): one arrow or bullet, one thrown weapon, or durability for a
+    /// non-stackable thrown weapon. The consumption itself is the item-mechanics lane's
+    /// <see cref="PlayerInventory.ConsumeRangedAmmo"/> (the single implementation); this method keeps the cast-side guards
+    /// and the <c>Ranged:Ammo:Mode</c> option.
+    /// </summary>
     private void TakeAmmo(Unit caster, SpellInfo spell)
     {
-        if (caster is not Player player || AmmoRules.NoAmmoSpellIds.Contains(spell.Id) || !RangedSpellFacts.UsesRangedWeapon(spell)
-            || RangedOptions.Ammo.Mode == AmmoMode.Infinite)
+        if (caster is not Player player || !RangedSpellFacts.UsesRangedWeapon(spell) || RangedOptions.Ammo.Mode == AmmoMode.Infinite)
         {
             return;
         }
 
-        Item? weapon = PlayerAmmo.RangedWeapon(player, nonBroken: true);
-        if (weapon is null || AmmoRules.Classify(weapon.Template) == RangedWeaponKind.Wand)
-        {
-            return;
-        }
-
-        if (weapon.Template.GetInventoryType() == InventoryType.Thrown)
-        {
-            if (weapon.Template.Stackable == 1)
-            {
-                EquipSlotDurabilityLoss?.Invoke(player, InventorySlots.Ranged);
-            }
-            else
-            {
-                player.Inventory.DestroyItemCount(weapon, 1);
-            }
-        }
-        else
-        {
-            uint ammoId = PlayerAmmo.CurrentAmmoId(player);
-            if (ammoId != 0)
-            {
-                player.Inventory.DestroyItemCount(ammoId, 1);
-            }
-        }
+        player.Inventory.ConsumeRangedAmmo(spell.Id);
     }
 
     /// <summary>
@@ -124,25 +97,9 @@ public sealed partial class SpellSystem
     /// (a wand) reports its own inventory type with display 0. Non-player casters send zeros.
     /// </summary>
     internal static AmmoVisual GetAmmoVisual(Unit caster)
-    {
-        if (caster is not Player player || PlayerAmmo.RangedWeapon(player, nonBroken: false) is not { } weapon)
-        {
-            return default;
-        }
-
-        if (weapon.Template.GetInventoryType() == InventoryType.Thrown)
-        {
-            return new AmmoVisual(weapon.Template.DisplayId, weapon.Template.InventoryType);
-        }
-
-        uint ammoId = PlayerAmmo.CurrentAmmoId(player);
-        if (ammoId != 0 && player.Inventory.Templates.Find(ammoId) is { } ammo)
-        {
-            return new AmmoVisual(ammo.DisplayId, ammo.InventoryType);
-        }
-
-        return new AmmoVisual(0, weapon.Template.InventoryType);
-    }
+        => caster is Player player && player.Inventory.TryGetAmmoVisual(out uint displayId, out uint inventoryType)
+            ? new AmmoVisual(displayId, inventoryType)
+            : default;
 
     /// <summary>
     /// The ranged weapon speed added to the cooldown of a ranged-slot spell that restarts the swing

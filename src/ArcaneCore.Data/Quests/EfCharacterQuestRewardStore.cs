@@ -174,7 +174,7 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
                 ? new InventorySnapshot(inventory.Items.Select(i => i with
                 {
                     Item = i.Item with { Charges = i.Item.Charges.ToArray(), Enchantments = i.Item.Enchantments.ToArray() },
-                }).ToArray())
+                }).ToArray(), inventory.AmmoId)
                 : null,
         };
     }

@@ -112,7 +112,26 @@ public sealed partial class Player : Unit
 
     public AccountSecurity Security => Session.Security;
 
-    public uint ZoneId { get; set; }
+    private uint _zoneId;
+
+    /// <summary>
+    /// The zone the player is believed to be in. Every assignment (even of the same value) counts
+    /// as a refresh and advances <see cref="ZoneRevision"/>: the server derives it from terrain
+    /// when terrain is loaded and otherwise only learns it from the client's CMSG_ZONEUPDATE, so a
+    /// value carried over a map change is stale until it is assigned again.
+    /// </summary>
+    public uint ZoneId
+    {
+        get => _zoneId;
+        set
+        {
+            _zoneId = value;
+            ZoneRevision++;
+        }
+    }
+
+    /// <summary>Advances on every <see cref="ZoneId"/> assignment; lets consumers tell a refreshed zone from a carried-over one.</summary>
+    public uint ZoneRevision { get; private set; }
 
     public HomeBind Home { get; set; }
 

@@ -640,7 +640,7 @@ public static class EconomyRequestValidation
         {
             ActionButtons = state.ActionButtons?.ToArray(),
             Inventory = state.Inventory is { } inventory
-                ? new InventorySnapshot(inventory.Items.Select(i => i with { Item = CopyItem(i.Item) }).ToArray())
+                ? new InventorySnapshot(inventory.Items.Select(i => i with { Item = CopyItem(i.Item) }).ToArray(), inventory.AmmoId)
                 : null,
         };
     }

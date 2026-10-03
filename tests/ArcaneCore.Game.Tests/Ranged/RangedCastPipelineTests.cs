@@ -282,19 +282,17 @@ public sealed class RangedCastPipelineTests
     {
         using var kit = Kit();
         (Player player, _, Player target) = Shooter(kit);
-        var wear = new List<byte>();
-        kit.System.EquipSlotDurabilityLoss = (_, slot) => wear.Add(slot);
-
         Equip(player, ThrownStack, 5);
         Assert.Equal(SpellCastResult.CastOk, Fire(kit, player, target, Shot));
         Assert.Equal(4u, player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Ranged)!.Count);
-        Assert.Empty(wear);
 
         player.Inventory.RemoveItem(InventorySlots.Bag0, InventorySlots.Ranged);
         Equip(player, ThrownSingle);
+        uint before = player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Ranged)!.Durability;
         Assert.Equal(SpellCastResult.CastOk, Fire(kit, player, target, Shot));
-        Assert.Equal([InventorySlots.Ranged], wear);
-        Assert.NotNull(player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Ranged));
+        // Wave-2 integration: the wear is the item-mechanics lane's PlayerInventory.DurabilityPointLossForEquipSlot (one point).
+        Item single = Assert.IsType<Item>(player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Ranged));
+        Assert.Equal(before - 1, single.Durability);
     }
 
     // --- packets ---------------------------------------------------------------------------

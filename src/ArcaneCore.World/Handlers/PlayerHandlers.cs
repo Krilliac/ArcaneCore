@@ -89,12 +89,18 @@ public sealed class PlayerHandlers : IOpcodeHandlerGroup
     {
         var reader = new PacketReader(payload);
         uint zone = reader.ReadUInt32();
-        if (zone == 0 || zone == player.ZoneId)
+        if (zone == 0)
         {
             return;
         }
 
-        player.ZoneId = zone;
+        bool changed = zone != player.ZoneId;
+        player.ZoneId = zone; // also confirms an unchanged zone after a map change (item limit checks wait for it)
+        if (!changed)
+        {
+            return;
+        }
+
         session.Send(WorldOpcode.SmsgInitWorldStates, LoginPackets.BuildInitWorldStates(player.MapId, zone));
     }
 

@@ -175,17 +175,4 @@ public sealed class PlayerAmmoTests
         Assert.Equal(0u, player.Inventory.GetItemCount(Arrow));
         Assert.Equal(4.5f, PlayerAmmo.CurrentDps(player));
     }
-
-    [Fact]
-    public void StartingAmmo_IsTheLastUsableAmmoOfTheStartingOutfit()
-    {
-        var store = new ItemTemplateStore(
-            [.. ItemTestData.Templates, .. Templates],
-            [new StartingItem(1, 3, Bow, 1), new StartingItem(1, 3, Arrow, 100), new StartingItem(1, 3, Bullet, 50), new StartingItem(1, 3, HighLevelArrow, 5), new StartingItem(1, 1, Arrow, 5)]);
-
-        // Level 1 human hunter: the bullets come last among the usable ammo (the level 50 arrow is refused by CanUseItem).
-        Assert.Equal(Bullet, PlayerAmmo.SelectStartingAmmo(store, race: 1, cls: 3, level: 1));
-        Assert.Equal(Arrow, PlayerAmmo.SelectStartingAmmo(store, race: 1, cls: 1, level: 1));
-        Assert.Equal(0u, PlayerAmmo.SelectStartingAmmo(store, race: 2, cls: 3, level: 1));
-    }
 }

@@ -40,12 +40,13 @@ public sealed class EconomyInventoryStage
 public sealed partial class PlayerInventory
 {
     /// <summary>
-    /// Whether an item may leave this inventory by mail, auction or trade (vmangos Item::CanBeTraded
-    /// plus the handlers' bank/conjured/duration checks): loaded, carried in the backpack or a
-    /// carried bag (not equipped, not an equipped bag, not in the bank), not soulbound, not
-    /// conjured or timed, and an empty bag only.
+    /// Whether an item may be offered in a trade (vmangos Item::CanBeTraded, Item.cpp:932-952):
+    /// loaded, carried in the backpack or a carried bag (not equipped, not an equipped bag, not in
+    /// the bank; the carried rule is stricter than vmangos' CanUnequipItem and keeps client-supplied
+    /// positions honest), not soulbound, and an empty bag only. Conjured and timed items are
+    /// tradable (TradeHandler.cpp:313,322,702 check only CanBeTraded).
     /// </summary>
-    public InventoryResult CanTransferOut(Item item)
+    public InventoryResult CanBeTraded(Item item)
     {
         ArgumentNullException.ThrowIfNull(item);
         if (!ReferenceEquals(item.Inventory, this) || !ReferenceEquals(GetItemByGuid(item.Guid), item))
@@ -67,12 +68,25 @@ public sealed partial class PlayerInventory
             return InventoryResult.CantDropSoulbound;
         }
 
-        if ((item.Template.Flags & (uint)ItemTemplateFlags.Conjured) != 0 || item.ToData().Duration != 0)
+        return item is Container { IsEmpty: false } ? InventoryResult.CanOnlyDoWithEmptyBags : InventoryResult.Ok;
+    }
+
+    /// <summary>
+    /// Whether an item may leave this inventory by mail or auction: <see cref="CanBeTraded"/> plus the
+    /// handlers' extra rule that conjured or timed items are refused (MailHandler.cpp:301-307,
+    /// AuctionHouseHandler.cpp:332-342).
+    /// </summary>
+    public InventoryResult CanTransferOut(Item item)
+    {
+        InventoryResult tradable = CanBeTraded(item);
+        if (tradable != InventoryResult.Ok)
         {
-            return InventoryResult.ItemNotFound;
+            return tradable;
         }
 
-        return item is Container { IsEmpty: false } ? InventoryResult.CanOnlyDoWithEmptyBags : InventoryResult.Ok;
+        return (item.Template.Flags & (uint)ItemTemplateFlags.Conjured) != 0 || item.ToData().Duration != 0
+            ? InventoryResult.ItemNotFound
+            : InventoryResult.Ok;
     }
 
     /// <summary>
@@ -81,7 +95,7 @@ public sealed partial class PlayerInventory
     /// survive unchanged). The ordinary unique-count limits apply.
     /// </summary>
     public InventoryResult TryStageEconomyTransfer(IReadOnlyList<ObjectGuid> remove, IReadOnlyList<ItemInstanceData> add,
-        out EconomyInventoryStage? stage)
+        out EconomyInventoryStage? stage, bool trade = false)
     {
         ArgumentNullException.ThrowIfNull(remove);
         ArgumentNullException.ThrowIfNull(add);
@@ -104,7 +118,7 @@ public sealed partial class PlayerInventory
                 return InventoryResult.ItemNotFound;
             }
 
-            InventoryResult allowed = CanTransferOut(item);
+            InventoryResult allowed = trade ? CanBeTraded(item) : CanTransferOut(item);
             if (allowed != InventoryResult.Ok)
             {
                 return allowed;

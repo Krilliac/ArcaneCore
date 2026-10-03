@@ -121,7 +121,7 @@ public sealed partial class EconomyFeature
         Item? item = player.Inventory.GetItem(bag, slot);
         TradeSide mine = trade.SideOf(player);
         if (tradeSlot >= TradeRules.SlotCount || item is null || mine.SlotOf(item.Guid) >= 0
-            || (tradeSlot != TradeRules.NonTradedSlot && player.Inventory.CanTransferOut(item) != InventoryResult.Ok))
+            || (tradeSlot != TradeRules.NonTradedSlot && player.Inventory.CanBeTraded(item) != InventoryResult.Ok))
         {
             CancelTrade(player, TradeStatus.TradeCanceled);
             return;
@@ -231,8 +231,8 @@ public sealed partial class EconomyFeature
         TradeSide b = trade.Target;
         List<ItemInstanceData> aGives = [.. a.TradedItems.Select(g => a.Player.Inventory.GetItemByGuid(g)!.ToData())];
         List<ItemInstanceData> bGives = [.. b.TradedItems.Select(g => b.Player.Inventory.GetItemByGuid(g)!.ToData())];
-        InventoryResult aResult = a.Player.Inventory.TryStageEconomyTransfer([.. a.TradedItems], bGives, out EconomyInventoryStage? aStage);
-        InventoryResult bResult = b.Player.Inventory.TryStageEconomyTransfer([.. b.TradedItems], aGives, out EconomyInventoryStage? bStage);
+        InventoryResult aResult = a.Player.Inventory.TryStageEconomyTransfer([.. a.TradedItems], bGives, out EconomyInventoryStage? aStage, trade: true);
+        InventoryResult bResult = b.Player.Inventory.TryStageEconomyTransfer([.. b.TradedItems], aGives, out EconomyInventoryStage? bStage, trade: true);
         if (aResult != InventoryResult.Ok || bResult != InventoryResult.Ok)
         {
             // Not enough room on one side (vmangos LANG_NOT_FREE_TRADE_SLOTS): nothing moves; the window
@@ -309,7 +309,7 @@ public sealed partial class EconomyFeature
             }
 
             if (side.Player.Inventory.GetItemByGuid(guid) is not { } item
-                || (slot != TradeRules.NonTradedSlot && side.Player.Inventory.CanTransferOut(item) != InventoryResult.Ok))
+                || (slot != TradeRules.NonTradedSlot && side.Player.Inventory.CanBeTraded(item) != InventoryResult.Ok))
             {
                 return false;
             }
