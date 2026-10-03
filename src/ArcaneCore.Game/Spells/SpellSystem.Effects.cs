@@ -272,13 +272,16 @@ public sealed partial class SpellSystem
     public bool LearnSpell(Player player, uint spellId)
     {
         ArgumentNullException.ThrowIfNull(player);
-        if (IsQuestSettlementPending(player) || Spellbook is null || !Spellbook.LearnSpell(player, spellId))
+        // Observers (SpellSystem.Unlearn.cs: talent rank replacement, profession points) see the learn before the book add
+        // and after the packet, as vmangos Player::AddSpell does its talent and profession bookkeeping.
+        if (IsQuestSettlementPending(player) || Spellbook is null || !NotifyBeforeLearn(player, spellId) || !Spellbook.LearnSpell(player, spellId))
         {
             return false;
         }
 
         AnnounceLearnedSpell(player, spellId);
         CastLearnedPassive(player, spellId);
+        NotifyAfterLearn(player, spellId);
         return true;
     }
 

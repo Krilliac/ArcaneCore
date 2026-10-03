@@ -169,6 +169,8 @@ internal sealed class MemorySpellbook : ISpellbook
         return book.Add(spellId);
     }
 
+    public bool ForgetSpell(Player player, uint spellId) => Spells.TryGetValue(player.Guid, out HashSet<uint>? book) && book.Remove(spellId);
+
     public void Teach(Player player, params uint[] spells)
     {
         foreach (uint spell in spells)
