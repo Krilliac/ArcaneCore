@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.Quests;
 using Microsoft.EntityFrameworkCore;
@@ -9,7 +10,7 @@ namespace ArcaneCore.Data.Quests;
 /// Characters schema version 5 (quests and NPC services, docs/integration/quests-npc.md):
 /// per-character quest progress (vmangos character_queststatus) and known flight paths.
 /// </summary>
-public sealed class QuestNpcCharactersModule : IDataModule
+public sealed class QuestNpcCharactersModule : IDataModule, ICharacterDataCleanup
 {
     public DatabaseComponent Component => DatabaseComponent.Characters;
 
@@ -66,5 +67,15 @@ public sealed class QuestNpcCharactersModule : IDataModule
     {
         services.AddScoped<ICharacterQuestStore, EfCharacterQuestStore>();
         services.AddScoped<ICharacterQuestRewardStore, EfCharacterQuestRewardStore>();
+    }
+
+    /// <summary>Quest log, rewarded history and known flight paths (vmangos DeleteFromDB: character_queststatus; taxi mask).</summary>
+    public async Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        await db.Set<CharacterQuestStatusRow>().Where(r => r.CharacterId == characterId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<CharacterTaxiRow>().Where(r => r.CharacterId == characterId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
     }
 }
