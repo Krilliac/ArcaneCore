@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Version 2 of the HotFixture module: the same source as V1 with the V2 symbol, so the
+       tests can replace a loaded module with a genuinely different assembly. -->
+  <PropertyGroup>
+    <AssemblyName>HotFixture</AssemblyName>
+    <RootNamespace>HotFixture</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <DefineConstants>$(DefineConstants);V2</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\HotFixtureV1\*.cs" Link="%(Filename)%(Extension)" />
+    <ProjectReference Include="..\..\..\src\ArcaneCore.World\ArcaneCore.World.csproj" />
+  </ItemGroup>
+
+</Project>

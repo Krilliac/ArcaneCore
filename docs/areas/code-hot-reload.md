@@ -1,9 +1,15 @@
-# Code hot reload (development runner)
+# Code hot reload
 
-Edit C# while the world daemon is running and have the edit take effect without a restart.
-This is a **development / staging tool**, off by default, and it is not part of the retail
-server. It has nothing to do with the *content* reload lane (database rows); this page is only
-about code.
+Change C# while the world daemon is running and have the change take effect without a restart.
+Two independent lanes, both **off by default** and neither part of the retail server. Neither has
+anything to do with the *content* reload lane (database rows); this page is only about code.
+
+| Lane | For | Needs | Switch |
+|---|---|---|---|
+| **Development runner** (`dotnet watch`) | editing the server's own source and seeing it live | SDK, Debug build, Development or Staging | `World:HotCode:Enabled` |
+| **Module lane** (collectible load contexts) | loading, replacing and unloading extension assemblies in a running server, including a Release build on a machine without the SDK | the compiled module dll | `World:HotCode:Modules:Enabled` |
+
+The module lane is described in "Module lane" below; everything before it is the development runner.
 
 Vanilla fidelity: with `World:HotCode:Enabled=false` (the default) and a normal launch, the
 server behaves exactly as before. Nothing is loaded, nothing is patched and no command is added.
@@ -14,7 +20,7 @@ server behaves exactly as before. Nothing is loaded, nothing is patched and no c
 `dotnet watch` hands every saved edit to the .NET runtime's metadata-update support
 (`System.Reflection.Metadata.MetadataUpdater`), which swaps method bodies inside the live
 process. The server itself contributes only the safety gate (below). The runtime and the SDK do
-the patching; ArcaneCore does not implement a code loader.
+the patching; this lane has no code loader of its own (the module lane below is the loader).
 
 ## Using it
 
@@ -168,7 +174,117 @@ Code edited into a running server runs with the server's full trust. Therefore:
   who can edit a `.cs` file in a watched checkout, or reach the watch agent on the machine, can
   run code as the server. Use it on your own machine.
 * The audit log records start decisions; a compromised process can rewrite it.
-* Nothing in this feature adds an in-game or network command that loads code.
+* The development runner adds no in-game or network command that loads code. The module lane does (`.hotmodule`, Administrator only, only when enabled; see its section).
+
+## Module lane (load, replace and unload code in a running server)
+
+Works in a **Release** build on a machine **without the SDK**: it needs only the compiled module.
+Independent of the development runner (`World:HotCode:Enabled` may stay false).
+
+### What a module is
+
+A folder `<Directory>/<name>/` holding `<name>.dll` (the assembly must be named `<name>`) and any
+private dependencies. It may contain public, non-abstract classes with a public parameterless
+constructor implementing `IOpcodeHandlerGroup` and/or `ICommandGroup`: the same two interfaces the
+server's own features use, so a module is written like a built-in feature. Nothing else in the assembly
+is looked at. Build it against the server's `ArcaneCore.World` (and `ArcaneCore.Protocol`,
+`ArcaneCore.Kernel`, ...); those, the framework and anything the server already has loaded are always
+resolved to the server's copy, so the interfaces are the same types on both sides. A module and the
+server must be built from compatible versions: a module compiled against a different `ArcaneCore.World`
+fails when a type does not load or when its code runs; that is not detected up front.
+
+### Using it
+
+```
+.hotmodule list
+.hotmodule load <name>      # <Directory>/<name>/<name>.dll
+.hotmodule reload <name>    # build the new version, then swap it for the loaded one
+.hotmodule unload <name>
+```
+
+Administrator only; the root exists only with `World:HotCode:Modules:Enabled=true` and is appended last
+(tested: it cannot change how any existing abbreviation resolves). The answer arrives from the next
+tick. The commands take a module **name**, never a path and never code; the operator puts the dll in the
+module directory, so the trust boundary is who can write that directory.
+
+### Configuration (`World:HotCode:Modules`)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `Enabled` | `false` | Opt in. With it off no module object, command or hosted service exists. |
+| `Directory` | empty | Required when enabled; the server refuses to start without it (exit 78). |
+| `AllowAnyEnvironment` | `false` | Modules are accepted in Development and Staging only. Set this to allow them in a deployed (Production) instance: the operator saying that code may be loaded there. Has no effect on the dotnet-watch lane, which stays Development / Staging only. |
+| `LoadOnStart` | `[]` | Module names loaded once the world is running (a failure is logged, not fatal). |
+
+`World:HotCode:AuditLogPath` is shared with the other lane. Startup logs a warning when modules are enabled.
+
+### What happens on `load`, `reload` and `unload`
+
+1. **Name and path checks**, before any file is read: a plain name only (letters, digits, `_`, `-`, dot
+   separators, starting with a letter); it must resolve to a folder directly under `Directory`; a module
+   folder or dll that is a link (symlink or junction) is refused; the dll is at most 64 MB; at most 32
+   modules are loaded.
+2. **Load into a fresh collectible `AssemblyLoadContext`, off the world thread.** Assemblies are read
+   into memory and loaded from bytes, so no file is locked and the dll can be replaced on disk while
+   the previous version is still loaded (that is what `reload` is for). The module's group constructors
+   and `Register` run here, on a thread-pool thread, with full server trust.
+3. **Candidate checks.** Nothing to contribute, a missing parameterless constructor, a type that does
+   not load, a root name that is empty, has whitespace or repeats inside the module: rejected.
+4. **Commit on the world thread at the start of a tick** (`WorldRuntime.Post`, the same path as the
+   registry refresh): the opcode table and chat command table are swapped as whole references, and a
+   module's old handlers and roots leave in the same step its new ones arrive. An opcode or root the
+   module does not own (built-in, another module's, the registry refresh's, a root that would shadow
+   an existing abbreviation) rejects the whole module. Both checks run before either table is touched,
+   so a rejection changes nothing. A commit the world thread does not run within 10 seconds is
+   abandoned and can no longer apply.
+5. **Failure keeps the old version.** A bad `reload` (unreadable file, not a managed assembly, clash,
+   timeout) leaves the running version in force and unchanged; the rejected candidate's context is
+   released. Every decision is audited (`module-load`, `module-reload`, `module-unload`,
+   `module-rejected`) with the dll's SHA-256, and logged (a rejection at error level).
+
+### Unload: what is proven and what is not
+
+Proven by a committed test (`ModuleHostTests`): after `unload` or a replacing `reload`, with nothing
+holding a module object, the runtime frees the load context (a `WeakReference` to it goes dead after
+a GC), and `.hotmodule list` shows the count of unloaded modules not yet freed
+(`RetiredStillReferenced`). The same test also proves the detector works: when a test deliberately keeps
+a module's handler delegate alive, the count stays at 1 until it is released.
+
+Not guaranteed, because it depends on module code the host cannot see: a thread or timer the module
+started, a task still running its code, an event subscribed on a server object, a static reference from
+the server to a module type, or a module object stored in a server collection keeps the context alive.
+That is a leak, and `Unloaded modules not yet freed` stays above 0 after the runtime has had time to
+collect. The host never forces a garbage collection itself. A module should create nothing that outlives
+its handlers. A handler that is executing when its module is unloaded finishes normally.
+
+Also true: module code is not tick-atomic (a call that started on the old version finishes on it),
+the old and new handler delegates are different objects, and a reload does not migrate module state;
+the new version starts from nothing.
+
+### Security
+
+Code in a module runs with the server's full trust: it can read the database credentials in the
+process, open files and sockets. Therefore: off by default and independent of every other switch;
+refused without a directory; refused outside Development / Staging unless the operator sets
+`AllowAnyEnvironment`; Administrator-only command with no path or code argument; link and size checks;
+SHA-256 in every audit line. The directory must be writable only by the account that runs the server
+(and the operator who deploys): anyone who can write there and has an Administrator in-game account can
+run code as the server. The audit log is written by the same account and is not tamper-proof. There is
+no signature check: do not point this at a directory other people can write to.
+
+### Tests
+
+`ModuleHostTests` loads two real assemblies built from `tests/hotmodule-fixtures` (version 1 and a
+different version 2 of the same module, built from the same source with a symbol) into the real
+host and checks: the handlers come from a collectible context; unload removes exactly what the module
+added; reload swaps old for new, including removing what the new version dropped; a bad reload, a
+clash with a handler the module does not own, a command that shadows an existing root, a missing or
+non-managed file, an assembly named wrongly, a junction, a name that is a path, and a commit the world
+thread never reaches all change nothing; readers never see a window where a handler present in both
+versions is missing during twelve reloads; every decision is audited; and the unload is collected.
+`ModuleLaneConfigTests` proves it is off by default (no service registered) and fails closed. Not covered
+by a test: the `.hotmodule` handlers themselves (they need a logged-in session) and a real `WorldRuntime`
+tick loop; the swap is exercised through the same `IHotCodeWorld` seam the registry refresh tests use.
 
 ## Proving the claims yourself
 
@@ -185,15 +301,22 @@ scenarios and prints `RESULT <name> PASS|FAIL`, ending in `SPIKE SUMMARY`:
 
 Exit code 77 means "skipped, no SDK": a skip proves nothing.
 
-## Not built (design scope that is deliberately absent)
+## Not built (limits that are deliberately absent)
 
 Be precise about what this page does not offer:
 
-* **Loading new code into a deployed server (no SDK, Release).** The design for this is a
-  collectible `AssemblyLoadContext` module host with proven unload and a tick-boundary swap. It
-  is **not implemented**: the plugin-host rows in the roadmap say it arrives with its first real
-  consumer, and no consumer has been named. Until then nothing can be hot loaded into a
-  Release / deployed instance; existing code there changes only by restart.
+* **Hot-replacing the server's own code on a Release build.** The module lane loads *extension
+  assemblies*; the server assembly itself (a built-in handler, formula or feature) changes live only
+  through the development runner (Debug, SDK), otherwise by restart. A module cannot replace a
+  built-in handler or command (it is rejected), by design.
+* **Module contributions beyond opcode handler groups and chat command groups.** Map updaters,
+  `IWorldFeature`s, `IDataModule`s (tables), DI services and spell or aura registrations are not
+  module extension points yet. A module that needs one needs a new, reviewed seam in the server first.
+* **Automatic reload on file change** (a `FileSystemWatcher`). A reload is an explicit, audited
+  Administrator command.
+* **A module that outlives a restart on its own.** `LoadOnStart` names modules to load again at start;
+  nothing else is persisted.
+* **Guaranteed unload.** The host releases a module and the runtime frees it once nothing references
+  it; it cannot stop a thread, timer or event subscription the module created (see below).
 * A home-grown in-process delta endpoint. Rejected: it would re-implement part of the compiler
   service for a gain (tick-atomic apply) a development runner does not need.
-* Any claim that unload is safe: no module host exists, so there is nothing to unload.

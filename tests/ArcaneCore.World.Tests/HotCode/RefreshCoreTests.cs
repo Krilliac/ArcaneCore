@@ -126,9 +126,13 @@ internal sealed class ThreadedWorld : IHotCodeWorld, IDisposable
     {
         _thread = new Thread(() =>
         {
-            foreach (Action command in _queue.GetConsumingEnumerable())
+            // No iterator and no stale local: the last command (a closure over what it swapped) must not
+            // stay reachable while this thread waits, or a test that proves a module is collected measures this loop.
+            Action? command;
+            while (_queue.TryTake(out command, Timeout.Infinite))
             {
                 command();
+                command = null;
             }
         })
         { IsBackground = true, Name = "test-world" };

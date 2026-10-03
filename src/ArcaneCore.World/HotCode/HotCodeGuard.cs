@@ -71,6 +71,22 @@ public static class HotCodeGuard
                 + $"but it is '{probe.EnvironmentName}'. Set DOTNET_ENVIRONMENT=Development, or turn code hot reload off.");
         }
 
+        if (options.Modules.Enabled)
+        {
+            if (string.IsNullOrWhiteSpace(options.Modules.Directory))
+            {
+                refusals.Add($"{HotCodeOptions.SectionName}:Modules:Enabled=true needs {HotCodeOptions.SectionName}:Modules:Directory (the folder that holds the module subfolders).");
+            }
+
+            if (!options.Modules.AllowAnyEnvironment && !IsDevelopmentLike(probe.EnvironmentName))
+            {
+                refusals.Add(
+                    $"{HotCodeOptions.SectionName}:Modules:Enabled=true is only accepted when the host environment is Development or Staging, "
+                    + $"but it is '{probe.EnvironmentName}'. Set DOTNET_ENVIRONMENT=Development, or set {HotCodeOptions.SectionName}:Modules:AllowAnyEnvironment=true "
+                    + "to allow code to be loaded into this instance.");
+            }
+        }
+
         return new HotCodeVerdict(refusals, active.Count > 0);
     }
 
@@ -96,9 +112,11 @@ public static class HotCodeGuard
             throw new HotCodeRefusedException(message);
         }
 
-        if (options.Enabled)
+        if (options.Enabled || options.Modules.Enabled)
         {
-            audit.Record("start-allowed", $"environment={probe.EnvironmentName}; hotReloadActive={verdict.HotReloadActive}");
+            audit.Record(
+                "start-allowed",
+                $"environment={probe.EnvironmentName}; hotReloadActive={verdict.HotReloadActive}; modules={(options.Modules.Enabled ? "enabled" : "off")}");
         }
 
         return verdict;

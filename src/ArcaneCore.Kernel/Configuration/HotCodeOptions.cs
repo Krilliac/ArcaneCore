@@ -29,4 +29,36 @@ public sealed class HotCodeOptions
     /// explicit <c>World:MaxConsecutiveUpdaterFaults</c> takes precedence.
     /// </summary>
     public int MaxConsecutiveFaults { get; set; } = 50;
+
+    /// <summary>
+    /// The module lane: load, replace and unload code (opt-in extension assemblies) in the running
+    /// process without the SDK and without a Debug build. Independent of <see cref="Enabled"/>.
+    /// </summary>
+    public HotModuleOptions Modules { get; set; } = new();
+}
+
+/// <summary>
+/// Bound from "World:HotCode:Modules". OFF by default. A module is an assembly the operator drops
+/// into <see cref="Directory"/> and loads on demand with <c>.hotmodule</c>; it runs with the
+/// server's full trust, so the directory must be writable by the server operator only.
+/// </summary>
+public sealed class HotModuleOptions
+{
+    /// <summary>Allow modules to be loaded. When false no module host exists at all.</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>
+    /// Folder holding one subfolder per module: <c>&lt;Directory&gt;/&lt;name&gt;/&lt;name&gt;.dll</c>
+    /// plus any private dependencies. Required when <see cref="Enabled"/> (the server refuses to start without it).
+    /// </summary>
+    public string Directory { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Modules are accepted in the Development and Staging environments only, unless this is set.
+    /// Setting it is the operator saying that code may be loaded into this (deployed) instance.
+    /// </summary>
+    public bool AllowAnyEnvironment { get; set; }
+
+    /// <summary>Module names to load once the world is running (asynchronously; a failure is logged, not fatal).</summary>
+    public List<string> LoadOnStart { get; set; } = [];
 }

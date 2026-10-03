@@ -279,34 +279,7 @@ public sealed class HotCodeRefresh
         => Activator.CreateInstance(type) ?? throw new InvalidOperationException($"could not create {type.FullName}");
 
     /// <summary>Post the commit to the world thread and wait for it. Null on success, else the reason it did not apply.</summary>
-    private async Task<string?> CommitAsync(Candidate candidate)
-    {
-        const int Pending = 0;
-        const int Running = 1;
-        const int Abandoned = 2;
-        int phase = Pending;
-        var done = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        _world.Post(() =>
-        {
-            // A commit that arrives after the caller gave up must not apply behind its back.
-            if (Interlocked.CompareExchange(ref phase, Running, Pending) != Pending)
-            {
-                return;
-            }
-
-            done.SetResult(Apply(candidate));
-        });
-
-        Task finished = await Task.WhenAny(done.Task, Task.Delay(_commitTimeout)).ConfigureAwait(false);
-        if (finished != done.Task && Interlocked.CompareExchange(ref phase, Abandoned, Pending) == Pending)
-        {
-            return $"the world thread did not run the commit within {_commitTimeout.TotalSeconds:0.#}s; nothing was applied";
-        }
-
-        return await done.Task.ConfigureAwait(false);
-    }
-
+    private Task<string?> CommitAsync(Candidate candidate) => WorldCommit.RunAsync(_world, _commitTimeout, () => Apply(candidate));
     /// <summary>World thread, start of a tick. Pointer flips only; on a failure the previous registries are restored.</summary>
     private string? Apply(Candidate candidate)
     {

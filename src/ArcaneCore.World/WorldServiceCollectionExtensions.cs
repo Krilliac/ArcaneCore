@@ -5,6 +5,7 @@ using ArcaneCore.World.Commands;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.HotCode;
+using ArcaneCore.World.HotCode.Modules;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.Configuration;
@@ -65,6 +66,12 @@ public static class WorldServiceCollectionExtensions
         if (configuration.IsHotCodeEnabled())
         {
             services.AddHotCode();
+        }
+
+        // Separately opt-in: the module lane (load, replace, unload code) works without the dotnet-watch runner.
+        if (configuration.IsHotModulesEnabled())
+        {
+            services.AddHotModules();
         }
 
         return services;
