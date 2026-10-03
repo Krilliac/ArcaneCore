@@ -37,11 +37,11 @@ with unusable credentials gets `FAIL_NOACCESS` (0x0D, `AuthCodes.h`).
 (banned or suspended) after the digest check. vmangos has exactly one ban reply, `AUTH_BANNED`
 (`WorldSocket.cpp:333-345`), for a banned account or an IP ban, temporary or permanent;
 `AUTH_SUSPENDED` does not occur in that file (the only other nearby reply is `AUTH_UNAVAILABLE`
-at `:355`). The IP-ban half of that check is not implemented.
+at `:355`). The IP-ban half is delivered by the live-ban lane (`docs/security/live-bans.md`).
 `AuthResponseCode` gained `Unavailable 0x10`, `AlreadyOnline 0x1D`, `DbBusy 0x1F`, `Banned`,
 `Suspended`, confirmed against `wow_messages world/enums/world_result.wowm:35,57,59,63,65`.
-Not delivered: the `account_banned` / `ip_banned` tables, IP bans and session-key age (see
-below).
+Ban tables, IP bans and live enforcement: delivered by the live-ban lane (`docs/security/live-bans.md`).
+Not delivered here: session-key age (see below).
 
 ### Stalled-writer teardown (F5)
 
@@ -110,10 +110,9 @@ Every non-retail behaviour is opt-in and defaults to retail.
 
 ## Not delivered (limits)
 
-* `account_banned` / `ip_banned` tables, IP bans, ban expiry and reasons, `AccountTool`
-  ban commands, and the wrong-password throttle (vmangos `LoginThrottle.cpp`,
-  `WrongPass.MaxAttempts = 10` / 60 s). These need an Auth schema module and an `IBanStore`
-  that the gm-commands lane may also want; the status enum is honoured at both daemons today.
+* The wrong-password throttle (vmangos `LoginThrottle.cpp`, `WrongPass.MaxAttempts = 10` / 60 s). The ban tables,
+  IP bans, expiry, reasons, `IBanStore` and `AccountTool` ban verbs were delivered by the live-ban lane
+  (`docs/security/live-bans.md`).
 * World session-key age (vmangos `WorldSocket.cpp:287-290`), pre-auth deadline
   (`Network.TimeoutSecsIfNoAuth = 10`), char-screen idle kick (900 s), overspeed-ping kick,
   inbound world-queue cap, malformed-packet strike policy, `AddonInfo` response cap (F11),

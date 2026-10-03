@@ -102,9 +102,8 @@ Banned or Suspended, a fresh connection sends a correct `CMSG_AUTH_SESSION`.
   `CodexNetAuthStatusTests` adds the exact order of events (key issued while Active, working login,
   then the status flip, stored key untouched). RED on main (the account is admitted: the reply
   header is already encrypted), GREEN on the branch, for both `Banned` and `Suspended`.
-* Not closed, and not claimed by the hardening doc: disconnecting an already-connected world session
-  when the status changes, and revoking the stored key. `IAccountStore` has no status mutation and
-  nothing raises a status-change event, so in this code base the status can only change through the
-  database or an external tool, and a world session that is already connected keeps running until it
-  disconnects. This needs a design decision (ban store plus a kick path through `SessionRegistry`) and
-  belongs with the `IBanStore` work listed in `hardening.md`; it was not implemented here.
+* Closed afterwards by the live-ban lane (`docs/security/live-bans.md`): `IAccountAdmin` is the status mutation,
+  `AccountStatusEvents` the status-change event, and `BanEnforcementFeature` kicks the live world session through
+  `SessionRegistry` (the normal close path, which saves the character). The stored key is revoked only with
+  `Bans:RevokeSessionKeyOnBan` (default off, retail keeps it). Events are in-process; a ban written by another
+  process is enforced only with `Bans:RecheckIntervalSeconds` > 0.

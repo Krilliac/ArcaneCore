@@ -24,6 +24,11 @@ using IServiceScope scope = host.Services.CreateScope();
 IAccountStore accounts = scope.ServiceProvider.GetRequiredService<IAccountStore>();
 AuthDbContext db = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
 
+const string ConsoleAuthor = "CONSOLE";
+const string RecheckWarning =
+    "note: a running world daemon disconnects the account only if it enforces bans written by other processes " +
+    "(Bans:RecheckIntervalSeconds > 0); otherwise the ban applies at the account's next login.";
+
 string command = args[0].ToLowerInvariant();
 switch (command)
 {
@@ -35,6 +40,14 @@ switch (command)
         return await SetGmLevelAsync();
     case "list":
         return await ListAsync();
+    case "ban":
+        return await BanAsync();
+    case "unban":
+        return await UnbanAsync();
+    case "baninfo":
+        return await BanInfoAsync();
+    case "banlist":
+        return await BanListAsync();
     default:
         PrintUsage();
         return 1;
@@ -130,6 +143,119 @@ async Task<int> ListAsync()
     return 0;
 }
 
+// --- bans (the same rows as .ban in game: account_banned, written through IBanStore) ---------------
+
+async Task<int> BanAsync()
+{
+    if (args.Length != 4)
+    {
+        Console.Error.WriteLine("usage: arcane-account ban <username> <duration|0> <reason>   (duration like 1d2h3m4s; 0 or an unknown format is permanent, as in retail)");
+        return 1;
+    }
+
+    Account? account = await accounts.FindByUsernameAsync(args[1].ToUpperInvariant()).ConfigureAwait(false);
+    if (account is null)
+    {
+        Console.Error.WriteLine($"account '{args[1].ToUpperInvariant()}' does not exist");
+        return 1;
+    }
+
+    uint seconds = BanTime.TimeStringToSecs(args[2]);
+    int realm = int.TryParse(builder.Configuration["Bans:RealmId"], out int configured) ? configured : 1;
+    IBanStore bans = scope.ServiceProvider.GetRequiredService<IBanStore>();
+    await bans.BanAccountAsync(new BanRequest(account.Id, seconds, args[3], ConsoleAuthor, null, realm)).ConfigureAwait(false);
+
+    Console.WriteLine(seconds > 0
+        ? $"'{account.Username}' is banned for {BanTime.SecsToTimeString(seconds)}. Reason: {args[3]}."
+        : $"'{account.Username}' is banned permanently for {args[3]}.");
+    Console.WriteLine(RecheckWarning);
+    return 0;
+}
+
+async Task<int> UnbanAsync()
+{
+    if (args.Length != 3)
+    {
+        Console.Error.WriteLine("usage: arcane-account unban <username> <message>");
+        return 1;
+    }
+
+    Account? account = await accounts.FindByUsernameAsync(args[1].ToUpperInvariant()).ConfigureAwait(false);
+    if (account is null)
+    {
+        Console.Error.WriteLine($"account '{args[1].ToUpperInvariant()}' does not exist");
+        return 1;
+    }
+
+    bool lifted = await scope.ServiceProvider.GetRequiredService<IBanStore>()
+        .UnbanAccountAsync(account.Id, ConsoleAuthor, args[2]).ConfigureAwait(false);
+    Console.WriteLine(lifted ? $"'{account.Username}' unbanned." : $"'{account.Username}' had no ban in force (an audit row was written).");
+    return 0;
+}
+
+async Task<int> BanInfoAsync()
+{
+    if (args.Length != 2)
+    {
+        Console.Error.WriteLine("usage: arcane-account baninfo <username>");
+        return 1;
+    }
+
+    Account? account = await accounts.FindByUsernameAsync(args[1].ToUpperInvariant()).ConfigureAwait(false);
+    if (account is null)
+    {
+        Console.Error.WriteLine($"account '{args[1].ToUpperInvariant()}' does not exist");
+        return 1;
+    }
+
+    IReadOnlyList<AccountBanRecord> history = await scope.ServiceProvider.GetRequiredService<IBanStore>()
+        .GetHistoryAsync(account.Id).ConfigureAwait(false);
+    if (history.Count == 0)
+    {
+        Console.WriteLine($"Account {account.Username} has never been banned");
+        return 0;
+    }
+
+    long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+    Console.WriteLine($"Ban history for account {account.Username}:");
+    foreach (AccountBanRecord row in history)
+    {
+        bool active = AccountBanEvaluator.IsActive(row, now);
+        string length = row.IsPermanent ? "Inf." : BanTime.SecsToTimeString((ulong)(row.UnbanDate - row.BanDate));
+        Console.WriteLine($"Ban Date: {DateTimeOffset.FromUnixTimeSeconds(row.BanDate).ToLocalTime():yyyy-MM-dd HH:mm:ss} Bantime: {length} Still active: {(active ? "Yes" : "No")}  Reason: {row.Reason} Set by: {row.BannedBy} (realm {row.Realm})");
+    }
+
+    return 0;
+}
+
+async Task<int> BanListAsync()
+{
+    IBanStore bans = scope.ServiceProvider.GetRequiredService<IBanStore>();
+    await bans.PurgeExpiredAsync().ConfigureAwait(false);
+    IReadOnlyList<AccountBanRecord> rows = await bans.ListActiveAccountBansAsync().ConfigureAwait(false);
+    IReadOnlyList<IpBanRecord> ips = await bans.ListIpBansAsync(string.Empty).ConfigureAwait(false);
+    if (rows.Count == 0 && ips.Count == 0)
+    {
+        Console.WriteLine("(no bans in force)");
+        return 0;
+    }
+
+    List<int> bannedIds = [.. rows.Select(r => r.AccountId).Distinct()];
+    Dictionary<int, string> names = await db.Accounts.AsNoTracking()
+        .Where(a => bannedIds.Contains(a.Id)).ToDictionaryAsync(a => a.Id, a => a.Username).ConfigureAwait(false);
+    foreach (AccountBanRecord row in rows)
+    {
+        Console.WriteLine($"account {names.GetValueOrDefault(row.AccountId, "?"),-16} {(row.IsPermanent ? "permanent" : "until " + DateTimeOffset.FromUnixTimeSeconds(row.UnbanDate).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"))}  {row.BannedBy}: {row.Reason}");
+    }
+
+    foreach (IpBanRecord ip in ips)
+    {
+        Console.WriteLine($"ip      {ip.Ip,-16} {(ip.IsPermanent ? "permanent" : "until " + DateTimeOffset.FromUnixTimeSeconds(ip.UnbanDate).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"))}  {ip.BannedBy}: {ip.Reason}");
+    }
+
+    return 0;
+}
+
 static (byte[] Salt, byte[] Verifier) MakeCredentials(string username, string password)
 {
     byte[] salt = WowSrp6.GenerateSalt();
@@ -156,4 +282,8 @@ static void PrintUsage()
     Console.Error.WriteLine("  arcane-account set-password <username> <password>");
     Console.Error.WriteLine("  arcane-account set-gmlevel <username> <0-3|player|moderator|gamemaster|administrator>");
     Console.Error.WriteLine("  arcane-account list");
+    Console.Error.WriteLine("  arcane-account ban <username> <duration|0> <reason>");
+    Console.Error.WriteLine("  arcane-account unban <username> <message>");
+    Console.Error.WriteLine("  arcane-account baninfo <username>");
+    Console.Error.WriteLine("  arcane-account banlist");
 }

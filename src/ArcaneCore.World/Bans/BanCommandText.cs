@@ -1,5 +1,6 @@
 using System.Globalization;
-using System.Text.RegularExpressions;
+
+using ArcaneCore.Kernel.Accounts;
 
 namespace ArcaneCore.World.Bans;
 
@@ -9,7 +10,7 @@ namespace ArcaneCore.World.Bans;
 /// (D:\refs\classic-db Full_DB mangos_string; the multi-line IP entry follows mangos-classic sql/base/mangos.sql:3776,
 /// because the classic-db dump lost its newlines).
 /// </summary>
-public static partial class BanCommandText
+public static class BanCommandText
 {
     // mangos_string 408-428.
     public const string YouBanned = "{0} is banned for {1}. Reason: {2}.";                       // 408
@@ -35,89 +36,17 @@ public static partial class BanCommandText
     public const string BanListMatchingAccount = "The following accounts match your query:";     // 428
     public const string PlayerNotFound = "Player not found!";                                    // 499
 
-    [GeneratedRegex(@"^(\d+[dhms])+$", RegexOptions.CultureInvariant)]
-    private static partial Regex WellFormedDuration();
+    /// <summary>vmangos TimeStringToSecs (Util.cpp:252-275); the port lives in <see cref="BanTime"/>, shared with the account tool.</summary>
+    public static uint TimeStringToSecs(string timeString) => BanTime.TimeStringToSecs(timeString);
 
     /// <summary>
-    /// vmangos TimeStringToSecs (Util.cpp:252-275): digits accumulate, a unit letter d/h/m/s multiplies and adds,
-    /// ANY other character returns 0 (which the ban commands treat as a permanent ban); digits without a unit
-    /// contribute nothing. The arithmetic is 32-bit unsigned and wraps, like the original.
+    /// Whether the duration is a clean <c>1d2h3m4s</c> string. Retail does not ask: an operator typo becomes a
+    /// permanent ban. Used only when <c>Bans:RejectUnparseableDuration</c> is on.
     /// </summary>
-    public static uint TimeStringToSecs(string timeString)
-    {
-        ArgumentNullException.ThrowIfNull(timeString);
-        uint secs = 0;
-        uint buffer = 0;
-        unchecked
-        {
-            foreach (char c in timeString)
-            {
-                if (c is >= '0' and <= '9')
-                {
-                    buffer *= 10;
-                    buffer += (uint)(c - '0');
-                    continue;
-                }
-
-                uint multiplier = c switch
-                {
-                    'd' => 86400,
-                    'h' => 3600,
-                    'm' => 60,
-                    's' => 1,
-                    _ => 0,
-                };
-                if (multiplier == 0)
-                {
-                    return 0; // bad format
-                }
-
-                buffer *= multiplier;
-                secs += buffer;
-                buffer = 0;
-            }
-        }
-
-        return secs;
-    }
-
-    /// <summary>
-    /// Whether the duration is a clean <c>1d2h3m4s</c> string (every digit run has a unit). Retail does not ask: an
-    /// operator typo becomes a permanent ban. Used only when <c>Bans:RejectUnparseableDuration</c> is on.
-    /// </summary>
-    public static bool IsWellFormedDuration(string timeString) => WellFormedDuration().IsMatch(timeString);
+    public static bool IsWellFormedDuration(string timeString) => BanTime.IsWellFormed(timeString);
 
     /// <summary>vmangos secsToTimeString(secs, shortText = true) (Util.cpp:197-250), e.g. "1d", "2h3m", "45s", "0s".</summary>
-    public static string SecsToTimeString(ulong timeInSecs)
-    {
-        ulong secs = timeInSecs % 60;
-        ulong minutes = timeInSecs % 3600 / 60;
-        ulong hours = timeInSecs % 86400 / 3600;
-        ulong days = timeInSecs / 86400;
-
-        string text = string.Empty;
-        if (days != 0)
-        {
-            text += days.ToString(CultureInfo.InvariantCulture) + "d";
-        }
-
-        if (hours != 0)
-        {
-            text += hours.ToString(CultureInfo.InvariantCulture) + "h";
-        }
-
-        if (minutes != 0)
-        {
-            text += minutes.ToString(CultureInfo.InvariantCulture) + "m";
-        }
-
-        if (secs != 0 || (days == 0 && hours == 0 && minutes == 0))
-        {
-            text += secs.ToString(CultureInfo.InvariantCulture) + "s";
-        }
-
-        return text;
-    }
+    public static string SecsToTimeString(ulong timeInSecs) => BanTime.SecsToTimeString(timeInSecs);
 
     /// <summary>MySQL FROM_UNIXTIME shape in the server's local time zone (the baninfo date columns).</summary>
     public static string FromUnixTime(long seconds)
