@@ -1,5 +1,6 @@
 using System.Text;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Characters.Creation;
 
 namespace ArcaneCore.World.Characters;
 
@@ -65,91 +66,32 @@ public static class CharacterNames
             return null;
         }
 
-        return CodePointCount(decoded) > MaxInternalLength ? null : Normalize(decoded);
+        return CharacterNameRules.CodePointCount(decoded) > MaxInternalLength ? null : Normalize(decoded);
     }
+
+    /// <summary><see cref="ValidateUtf8(ReadOnlySpan{byte}, in NameRuleSettings, out string?)"/> with the vmangos defaults.</summary>
+    public static CharResult? ValidateUtf8(ReadOnlySpan<byte> raw, out string? normalized)
+        => ValidateUtf8(raw, NameRuleSettings.Default, out normalized);
 
     /// <summary>
     /// The whole creation-time name check over the raw bytes: normalize, then
-    /// <see cref="Validate"/>. Returns the CHAR_NAME_* code, or null with the normalized name.
+    /// <see cref="CharacterNameRules.Check"/>. Returns the CHAR_NAME_* code, or null with the normalized name.
     /// </summary>
-    public static CharResult? ValidateUtf8(ReadOnlySpan<byte> raw, out string? normalized)
+    public static CharResult? ValidateUtf8(ReadOnlySpan<byte> raw, in NameRuleSettings settings, out string? normalized)
     {
         normalized = NormalizeUtf8(raw);
-        return normalized is null ? CharResult.CharNameNoName : Validate(normalized);
+        return normalized is null ? CharResult.CharNameNoName : CharacterNameRules.Check(normalized, settings);
     }
 
     /// <summary>
-    /// Check a (normalized) name for character creation. Returns null when it is acceptable,
-    /// otherwise the CHAR_NAME_* code SMSG_CHAR_CREATE reports (vmangos HandleCharCreateOpcode).
+    /// Check a (normalized) name for character creation with the vmangos defaults. Returns null
+    /// when it is acceptable, otherwise the CHAR_NAME_* code SMSG_CHAR_CREATE reports
+    /// (vmangos HandleCharCreateOpcode).
     /// </summary>
-    public static CharResult? Validate(string name)
-    {
-        if (name.Length == 0)
-        {
-            return CharResult.CharNameNoName;
-        }
-
-        // CheckPlayerName: a name that cannot be converted to wide characters is
-        // CHAR_NAME_INVALID_CHARACTER (ObjectMgr.cpp:9582); a lone surrogate is that case here.
-        if (!IsWellFormed(name))
-        {
-            return CharResult.CharNameInvalidCharacter;
-        }
-
-        int length = CodePointCount(name);
-
-        // normalizePlayerName fails for an over-long name → CHAR_NAME_NO_NAME.
-        if (length > MaxInternalLength)
-        {
-            return CharResult.CharNameNoName;
-        }
-
-        if (length > MaxLength)
-        {
-            return CharResult.CharNameTooLong;
-        }
-
-        if (length < MinLength)
-        {
-            return CharResult.CharNameTooShort;
-        }
-
-        if (All(name, IsExtendedLatin) || All(name, IsCyrillic) || All(name, IsEastAsian))
-        {
-            return null;
-        }
-
-        return CharResult.CharNameMixedLanguages;
-    }
+    public static CharResult? Validate(string name) => CharacterNameRules.Check(name, NameRuleSettings.Default);
 
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
-    private static int CodePointCount(string text)
-    {
-        int count = 0;
-        foreach (Rune _ in text.EnumerateRunes())
-        {
-            count++;
-        }
-
-        return count;
-    }
-
-    private static bool IsWellFormed(string text)
-    {
-        ReadOnlySpan<char> span = text;
-        while (!span.IsEmpty)
-        {
-            if (Rune.DecodeFromUtf16(span, out _, out int consumed) != System.Buffers.OperationStatus.Done)
-            {
-                return false;
-            }
-
-            span = span[consumed..];
-        }
-
-        return true;
-    }
 
     /// <summary>vmangos Util.h wcharToUpper (:268-292).</summary>
     private static char ToUpper(char c)
@@ -213,22 +155,12 @@ public static class CharacterNames
         return c is >= 'А' and <= 'Я' ? (char)(c + 0x20) : c;
     }
 
-    private static bool All(string name, Func<char, bool> predicate)
-    {
-        foreach (char c in name)
-        {
-            if (!predicate(c))
-            {
-                return false;
-            }
-        }
 
-        return true;
-    }
-
+    /// <summary>vmangos Util.h isBasicLatinCharacter.</summary>
+    internal static bool IsBasicLatin(char c) => c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z');
 
     /// <summary>vmangos Util.h isExtendedLatinCharacter.</summary>
-    private static bool IsExtendedLatin(char c) =>
+    internal static bool IsExtendedLatin(char c) =>
         c is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z')
         or (>= 'À' and <= 'Ö')
         or (>= 'Ø' and <= 'ß')
@@ -238,10 +170,10 @@ public static class CharacterNames
         or 'ẞ';
 
     /// <summary>vmangos Util.h isCyrillicCharacter.</summary>
-    private static bool IsCyrillic(char c) => c is (>= 'А' and <= 'я') or 'Ё' or 'ё';
+    internal static bool IsCyrillic(char c) => c is (>= 'А' and <= 'я') or 'Ё' or 'ё';
 
     /// <summary>vmangos Util.h isEastAsianCharacter.</summary>
-    private static bool IsEastAsian(char c) =>
+    internal static bool IsEastAsian(char c) =>
         c is (>= 'ᄀ' and <= 'ᇹ')
         or (>= 'ぁ' and <= 'ヿ')
         or (>= 'ㄱ' and <= 'ㆎ')
