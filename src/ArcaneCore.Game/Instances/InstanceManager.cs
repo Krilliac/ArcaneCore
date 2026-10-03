@@ -296,6 +296,7 @@ public sealed partial class InstanceManager : IMapResolver
     public void OnEntered(Player player, Map map)
     {
         PlayerState state = StateFor(player);
+        SendSavedInstances(player); // every far teleport, instance or not (vmangos SendNewWorld)
         if (!_mapStates.TryGetValue(map, out InstanceMapState? mapState))
         {
             // vmangos HandleMoveWorldportAckOpcode: "reset instance validity, except if going

@@ -113,6 +113,12 @@ public static class InstancePackets
     /// <summary>SMSG_INSTANCE_SAVE_CREATED: u32 0 (every emulator sends 0).</summary>
     public static byte[] BuildInstanceSaveCreated() => U32(0);
 
+    /// <summary>SMSG_UPDATE_INSTANCE_OWNERSHIP (0x032B): Bool32 player_is_saved_to_a_raid (wow_messages raid/smsg_update_instance_ownership.wowm).</summary>
+    public static byte[] BuildUpdateInstanceOwnership(bool savedToARaid) => U32(savedToARaid ? 1u : 0u);
+
+    /// <summary>SMSG_UPDATE_LAST_INSTANCE (0x0320): u32 map (wow_messages raid/smsg_update_last_instance.wowm).</summary>
+    public static byte[] BuildUpdateLastInstance(uint mapId) => U32(mapId);
+
     private static byte[] U32(uint value)
     {
         var packet = new PacketWriter(4);
