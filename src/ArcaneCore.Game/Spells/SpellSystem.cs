@@ -485,11 +485,10 @@ public sealed partial class SpellSystem
     // --- checks -------------------------------------------------------------------------
 
     /// <summary>
-    /// The subset of vmangos Spell::CheckCast this area owns: caster alive, cooldowns and school
-    /// lockouts, stun, movement, explicit target presence and liveness, range (CheckRange), line of
-    /// sight through <see cref="LineOfSight"/>, party/raid-only targets, nothing to dispel, and
-    /// power (CheckPower). Reagents, items, shapeshift, facing and area restrictions belong to
-    /// other areas (docs/areas/spells.md).
+    /// The subset of vmangos Spell::CheckCast this area owns: caster alive, cooldowns, stun,
+    /// movement, explicit target presence and liveness, range (CheckRange) and power (CheckPower).
+    /// Reagents, items, shapeshift, facing, line of sight and area restrictions belong to other
+    /// areas (docs/areas/spells.md).
     /// </summary>
     private SpellCastResult CheckCast(UnitSpellState state, SpellInfo spell, SpellCastTargets targets, Unit? unitTarget, bool triggered, bool strict, bool skipCooldown = false)
     {
@@ -543,23 +542,6 @@ public sealed partial class SpellSystem
             {
                 return range;
             }
-
-            if (!IsInLineOfSight(spell, caster, target))
-            {
-                return SpellCastResult.LineOfSight;
-            }
-
-            SpellCastResult group = CheckGroupTarget(caster, spell, target);
-            if (group != SpellCastResult.CastOk)
-            {
-                return group;
-            }
-
-            if (strict && IsDispelOnly(spell)
-                && !spell.Effects.Any(e => e.Effect == SpellEffectName.Dispel && DispellableAuras(caster, target, (uint)e.MiscValue).Count > 0))
-            {
-                return SpellCastResult.NothingToDispel;
-            }
         }
         else if (targets.HasDest)
         {
@@ -568,14 +550,10 @@ public sealed partial class SpellSystem
             {
                 return range;
             }
-
-            if (!IsInLineOfSight(spell, caster, targets.Dest.X, targets.Dest.Y, targets.Dest.Z))
-            {
-                return SpellCastResult.LineOfSight;
-            }
         }
 
-        return CheckPower(caster, spell);
+        SpellCastResult targetRules = CheckTargetRules(caster, spell, targets, unitTarget, strict);
+        return targetRules != SpellCastResult.CastOk ? targetRules : CheckPower(caster, spell);
     }
 
     /// <summary>
@@ -685,6 +663,33 @@ public sealed partial class SpellSystem
         }
 
         return !(state.GlobalCooldowns.TryGetValue(spell.StartRecoveryCategory, out until) && until > now);
+    }
+
+    /// <summary>
+    /// The explicit-target rules this round adds after range and line of sight (vmangos
+    /// Spell::CheckCast / CheckTarget): party- and raid-only targets must be in the caster's
+    /// group, and a client-requested dispel-only spell needs something to dispel.
+    /// </summary>
+    private SpellCastResult CheckTargetRules(Unit caster, SpellInfo spell, SpellCastTargets targets, Unit? unitTarget, bool strict)
+    {
+        if (!NeedsUnitTarget(spell) || (unitTarget ?? (targets.Mask == SpellCastTargetFlags.Self ? caster : null)) is not { } target)
+        {
+            return SpellCastResult.CastOk;
+        }
+
+        SpellCastResult group = CheckGroupTarget(caster, spell, target);
+        if (group != SpellCastResult.CastOk)
+        {
+            return group;
+        }
+
+        if (strict && IsDispelOnly(spell)
+            && !spell.Effects.Any(e => e.Effect == SpellEffectName.Dispel && DispellableAuras(caster, target, (uint)e.MiscValue).Count > 0))
+        {
+            return SpellCastResult.NothingToDispel;
+        }
+
+        return SpellCastResult.CastOk;
     }
 
     /// <summary>Party/raid-only explicit targets (vmangos Spell::CheckTarget for TARGET_SINGLE_PARTY / TARGET_SINGLE_FRIEND_2).</summary>
