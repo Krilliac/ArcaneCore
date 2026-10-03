@@ -9,6 +9,7 @@ using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Instances;
 using ArcaneCore.Data.Quests;
+using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Social;
 using ArcaneCore.Data.World.Creatures;
@@ -46,6 +47,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
             (typeof(SocialDataModule), DatabaseComponent.Characters, 6),
+            (typeof(CharacterReputationDataModule), DatabaseComponent.Characters, 7),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),

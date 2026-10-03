@@ -72,7 +72,9 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
                 ?? (string.IsNullOrWhiteSpace(Options.FactionTemplateDbcPath)
                     ? FactionTemplateCatalog.Empty
                     : FactionTemplateDbcReader.Load(Options.FactionTemplateDbcPath));
-            Services = BuildServices(new QuestStore(quests), new NpcStore(npcs), factions);
+            // Reputation (docs/integration/reputation.md) resolves known factions and contested guards.
+            Services = BuildServices(new QuestStore(quests), new NpcStore(npcs), factions,
+                _services.GetService<Reputation.ReputationFeature>()?.Service);
         }
 
         _world = world;
@@ -138,8 +140,10 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
         }
     }
 
-    private QuestNpcServices BuildServices(QuestStore quests, NpcStore npcs, FactionTemplateCatalog? factions = null) => new(quests, npcs,
-        new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions ?? FactionTemplateCatalog.Empty)),
+    private QuestNpcServices BuildServices(QuestStore quests, NpcStore npcs, FactionTemplateCatalog? factions = null,
+        Game.Reputation.ReputationService? reputation = null) => new(quests, npcs,
+        new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions ?? FactionTemplateCatalog.Empty, reputation),
+            Reputation: reputation is { Factions.Count: > 0 } ? reputation : null),
         Options, new PersistenceSink(this), () => _clock.GetUtcNow().ToUnixTimeSeconds(), _logger);
 
     private void OnMapCreated(Map map)
