@@ -219,21 +219,6 @@ public sealed partial class QuestNpcServices
             && EndersOf(npc).Contains(questId);
     }
 
-    /// <summary>
-    /// The allowlist stays the opt-in: a listed quest is rewarded only when every requirement and
-    /// reward it carries has an adapter (XP needs <see cref="IQuestExperience"/>, reward spells need
-    /// <see cref="IQuestRewardEffects"/>, reputation gates need a reputation owner).
-    /// </summary>
-    private bool SupportedRewardQuest(Quest quest) => Options.OrdinaryRewardQuestIds.Contains(quest.Id)
-        && quest.IsActive && quest.Template.Method == 2 && AcceptableQuest(quest)
-        && ((quest.Template.RequiredMinRepFaction == 0 && quest.Template.RequiredMaxRepFaction == 0) || Deps.Reputation is not null)
-        && ((quest.Template.RewXP == 0 && quest.Template.RewMoneyMaxLevel == 0) || Deps.Experience is IQuestExperience)
-        && (RewardSpell(quest) == 0 || Deps.RewardEffects?.CanCastRewardSpell(RewardSpell(quest)) == true)
-        && (!HasReputationReward(quest) || Deps.ReputationRewards is not null)
-        && CoherentObjectives(quest)
-        && CoherentRewards(quest.RewItemId, quest.RewItemCount, dense: false)
-        && CoherentRewards(quest.RewChoiceItemId, quest.RewChoiceItemCount, dense: true);
-
     /// <summary>vmangos RewardQuest: RewSpellCast wins over RewSpell.</summary>
     public static uint RewardSpell(Quest quest) => quest.Template.RewSpellCast != 0 ? quest.Template.RewSpellCast : quest.Template.RewSpell;
 

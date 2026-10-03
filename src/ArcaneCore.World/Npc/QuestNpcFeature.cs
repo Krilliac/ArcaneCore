@@ -100,6 +100,7 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
         world.PlayerLoggedIn += OnPlayerLoggedIn;
         world.PlayerLoggingOut += OnPlayerLoggingOut;
         _logger.LogInformation("Loaded {Quests} quest templates for persisted journals and queries", Services.Quests.Count);
+        LogSupportSummary();
     }
 
     /// <summary>

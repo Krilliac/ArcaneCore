@@ -195,12 +195,4 @@ public sealed partial class QuestNpcServices
         state.Quests.SwapSlots(slot1, slot2);
     }
 
-    // Source spells, loot-source counters, party confirmation, PvP activation and auto rewards
-    // still lack adapters; reputation objectives need a reputation owner (docs/integration/quest-progression.md).
-    private bool AcceptableQuest(Quest quest) => quest.Template.Type is 0 or 1 or 21 or 62 or 81
-        && quest.Template.SrcSpell == 0 && (quest.Template.RepObjectiveFaction == 0 || Deps.Reputation is not null)
-        && quest.ReqSourceId.All(id => id == 0) && quest.ReqSourceCount.All(count => count == 0)
-        && !quest.HasFlag(QuestFlags.PartyAccept | QuestFlags.AutoRewarded | QuestFlags.StayAlive)
-        && (!(quest.HasSpecialFlag(QuestSpecialFlags.ExplorationOrEvent) || quest.HasFlag(QuestFlags.Exploration))
-            || HasAreaTrigger(quest.Id));
 }

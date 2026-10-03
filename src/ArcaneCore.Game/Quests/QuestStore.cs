@@ -99,6 +99,9 @@ public sealed class QuestStore
 
     public int Count => _quests.Count;
 
+    /// <summary>Every loaded quest (unordered), for startup reports.</summary>
+    public IEnumerable<Quest> All => _quests.Values;
+
     /// <summary>Whether any loaded quest carries a RewXP value (a vmangos-style dataset; classic-db has no such column).</summary>
     public bool HasRewXpColumn => _hasRewXp;
 

@@ -21,6 +21,15 @@ public sealed class QuestNpcOptions
     public uint[] OrdinaryRewardQuestIds { get; set; } = [];
 
     /// <summary>
+    /// Quests:RewardMode. <see cref="QuestRewardMode.AllSupported"/> (default, retail) rewards every quest whose needs have adapters;
+    /// <see cref="QuestRewardMode.AllowlistOnly"/> restores the earlier opt-in through <see cref="OrdinaryRewardQuestIds"/>.
+    /// </summary>
+    public QuestRewardMode RewardMode { get; set; } = QuestRewardMode.AllSupported;
+
+    /// <summary>Quests:LogWithheld (default true): log at startup how many quests are withheld and why.</summary>
+    public bool LogWithheld { get; set; } = true;
+
+    /// <summary>
     /// areatrigger_involvedrelation rows (trigger id → exploration quest). Exploration/event
     /// quests without a relation stay unavailable: nothing else could complete them.
     /// </summary>

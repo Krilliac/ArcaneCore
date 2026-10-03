@@ -377,7 +377,7 @@ public sealed class QuestRewardTests
             Services = new QuestNpcServices(new QuestStore(new QuestContent([quest], [],
                 [new CreatureQuestRelation { Id = template.Entry, Quest = QuestId }])), NpcStore.Empty,
                 new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions)),
-                new QuestNpcOptions { OrdinaryRewardQuestIds = allowlisted ? [QuestId] : [] }, Sink,
+                new QuestNpcOptions { OrdinaryRewardQuestIds = allowlisted ? [QuestId] : [], RewardMode = QuestRewardMode.AllowlistOnly }, Sink,
                 () => 100, NullLogger.Instance);
             State = Services.Track(Player);
             Services.CompleteLoad(State, new CharacterQuestData([new(1, QuestId,
