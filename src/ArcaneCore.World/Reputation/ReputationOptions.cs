@@ -26,4 +26,10 @@ public sealed class ReputationOptions
 
     /// <summary>Retail (true): reputation_spillover_template applies (ReputationMgr.cpp:211-243). False switches every spillover off.</summary>
     public bool SpilloverEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Retail (true): combat attackability and creature aggro follow player reputation (at war, Hated guards, contested guards,
+    /// forced reactions; Object.cpp:3608-3816). False keeps the template-only hooks. Needs Faction.dbc and FactionTemplate.dbc.
+    /// </summary>
+    public bool CombatReactions { get; set; } = true;
 }

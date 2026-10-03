@@ -38,6 +38,13 @@ public static class ReputationReactions
             return true;
         }
 
+        // GetFactionReactionTo (Object.cpp:3714-3720): a forced rank follows the contested-guard rule and precedes standing.
+        if (reputation is not null && reputation.TryGetForcedRank(npc.Faction, out ReputationRank forcedNpc))
+        {
+            reaction = forcedNpc;
+            return true;
+        }
+
         if (npc.Faction != 0)
         {
             if (factions.Find(npc.Faction) is not { } faction)
@@ -79,6 +86,13 @@ public static class ReputationReactions
         if (player.IsGameMaster)
         {
             reaction = ReputationRank.Neutral;
+            return true;
+        }
+
+        // GetReactionTo (Object.cpp:3622-3627): a forced rank answers right after the GM rule.
+        if (reputation is not null && reputation.TryGetForcedRank(npc.Faction, out ReputationRank forced))
+        {
+            reaction = forced;
             return true;
         }
 

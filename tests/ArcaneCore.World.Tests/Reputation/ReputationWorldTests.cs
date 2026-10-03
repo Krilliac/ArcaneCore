@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Reputation;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
@@ -276,8 +277,16 @@ internal sealed class ReputationTestServices : IWorldTestServices
     /// <summary>Spillover/reward-rate rows served by a fake <see cref="IReputationContentSource"/> (null: none registered).</summary>
     public static readonly AsyncLocal<ReputationContentRows?> ContentRows = new();
 
+    /// <summary>A FactionTemplate catalog for the combat and creature features (null: none registered).</summary>
+    public static readonly AsyncLocal<FactionTemplateCatalog?> Templates = new();
+
     public void Register(IServiceCollection services)
     {
+        if (Templates.Value is { } templates)
+        {
+            services.AddSingleton(templates);
+        }
+
         if (Current.Value is not { } store)
         {
             return;
