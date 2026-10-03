@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Protocol;
@@ -45,7 +46,11 @@ public sealed class Map
         MapId = mapId;
         _world = world;
         _logger = logger;
+        Combat = new MapCombat(this, world);
     }
+
+    /// <summary>Combat for this map (src/ArcaneCore.Game/Combat; docs/integration/combat.md).</summary>
+    public MapCombat Combat { get; }
 
     public uint MapId { get; }
 
@@ -212,6 +217,9 @@ public sealed class Map
                 _world.LogoutPlayer(player);
             }
         }
+
+        // (1c) combat: swings, damage, death, regeneration, corpses (docs/integration/combat.md)
+        Combat.Update(diffMs);
 
         _inUpdatePhase = true;
         try
