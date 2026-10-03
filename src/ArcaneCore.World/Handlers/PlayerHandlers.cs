@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
+using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -56,6 +57,9 @@ public sealed class PlayerHandlers : IOpcodeHandlerGroup
     {
         var reader = new PacketReader(payload);
         player.Selection = new ObjectGuid(reader.ReadUInt64());
+
+        // ranged (autorepeat lane): a running Auto Shot / Shoot follows the selection or stops (MiscHandler.cpp:416-428).
+        session.Services.GetService<SpellFeature>()?.System.RetargetAutoRepeat(player, player.Selection);
     }
 
     /// <summary>

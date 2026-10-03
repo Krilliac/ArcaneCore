@@ -162,6 +162,12 @@ public sealed partial class SpellSystem
             Cancel(cast);
         }
 
+        // ranged (autorepeat lane): InterruptNonMeleeSpells(false, spellId) also takes the auto-repeat slot when the id matches.
+        if (GetState(caster.Guid)?.AutoRepeatCast is { } autoRepeat && (spellId == 0 || autoRepeat.Spell.Id == spellId))
+        {
+            CancelAutoRepeat(caster);
+        }
+
         CancelQueuedMeleeSpell(caster);
     }
 
@@ -231,6 +237,11 @@ public sealed partial class SpellSystem
                 continue;
             }
 
+            if (state.AutoRepeatCast is { } autoRepeat)
+            {
+                UpdateAutoRepeat(state, autoRepeat); // before the casts, as Unit::_UpdateSpells does (Unit.cpp:2673-2674)
+            }
+
             if (state.CurrentCast is { } cast)
             {
                 UpdateCast(cast, diffMs);
@@ -263,7 +274,7 @@ public sealed partial class SpellSystem
 
     // --- cast pipeline ------------------------------------------------------------------
 
-    private SpellCastResult Prepare(Unit caster, SpellInfo spell, SpellCastTargets targets, bool triggered)
+    private SpellCastResult Prepare(Unit caster, SpellInfo spell, SpellCastTargets targets, bool triggered, bool autoRepeatShot = false)
     {
         if (IsQuestSettlementPending(caster))
         {
@@ -276,6 +287,12 @@ public sealed partial class SpellSystem
         {
             // Own slot: neither blocked by nor interrupting a generic cast or a channel.
             return QueueNextSwing(state, caster, spell, targets, ResolveUnitTarget(caster, targets));
+        }
+
+        if (!triggered && RangedSpellFacts.IsAutoRepeatRanged(spell))
+        {
+            // ranged (autorepeat lane): Auto Shot / wand Shoot toggle in their own slot (SpellSystem.AutoRepeat.cs).
+            return PrepareAutoRepeat(state, caster, spell, targets);
         }
 
         if (!triggered && state.CurrentCast is { } current)
@@ -301,8 +318,10 @@ public sealed partial class SpellSystem
 
         int castTime = triggered ? 0 : CastTimeFor(caster, spell);
         var cast = new SpellCast(spell, caster, targets, triggered, castTime, PowerCostFor(caster, spell), DurationFor(caster, spell));
+        cast.AutoRepeatShot = autoRepeatShot;
         if (!triggered)
         {
+            OnGenericCastStarted(state, spell); // ranged (autorepeat lane): a wand is broken, Auto Shot gets a new wind-up (Unit::SetCurrentCastedSpell)
             state.CurrentCast = cast;
             SendToSet(caster, WorldOpcode.SmsgSpellStart, SpellPackets.BuildSpellStart(
                 caster.Guid, caster.Guid, spell.Id, WithAmmoFlag(SpellCastFlags.Unknown2, spell), (uint)castTime, targets,
@@ -346,7 +365,7 @@ public sealed partial class SpellSystem
         }
 
         InterruptAtCastCompletion(cast); // rogue lane: ACTION_LATE / ATTACKING half (vmangos Spell.cpp:3697-3714), docs/integration/rogue-aura-interrupt.md
-        AddCooldown(state, spell, cast.IsTriggered);
+        AddCooldown(state, spell, cast.IsTriggered && !cast.AutoRepeatShot); // ranged (autorepeat lane): shots tell the client nothing
         TakePower(caster, spell, cast.PowerCost, cast.IsTriggered);
         TakeAmmo(caster, spell); // ranged (hunter lane): vmangos order TakePower, TakeReagents, TakeAmmo (Spell.cpp:3716-3718)
         SendCastResult(caster, spell, SpellCastResult.CastOk, cast.IsTriggered);
@@ -535,6 +554,11 @@ public sealed partial class SpellSystem
             {
                 state.MeleeCast = null;
             }
+
+            if (ReferenceEquals(state.AutoRepeatCast, cast))
+            {
+                state.AutoRepeatCast = null;
+            }
         }
 
         if (!alreadyFinished)
@@ -546,7 +570,7 @@ public sealed partial class SpellSystem
     private void Forget(UnitSpellState state)
     {
         RevokeAuraCaster(state.Unit);
-        foreach (SpellCast? slot in new[] { state.CurrentCast, state.MeleeCast })
+        foreach (SpellCast? slot in new[] { state.CurrentCast, state.MeleeCast, state.AutoRepeatCast })
         {
             if (slot is { State: not SpellCastState.Finished } cast)
             {
@@ -557,6 +581,7 @@ public sealed partial class SpellSystem
 
         state.CurrentCast = null;
         state.MeleeCast = null;
+        state.AutoRepeatCast = null;
 
         foreach (SpellAuraHolder holder in state.Auras)
         {
@@ -615,6 +640,12 @@ public sealed partial class SpellSystem
             {
                 return stateResult;
             }
+        }
+
+        // ranged (autorepeat lane): an auto-repeat spell cast while moving is delayed, not refused (vmangos Spell.cpp:5395-5403).
+        if (!triggered && caster is Player moving && RangedSpellFacts.IsAutoRepeatRanged(spell) && IsMoving(moving))
+        {
+            return SpellCastResult.Moving;
         }
 
         if (!triggered && strict && caster is Player mover && CastTimeFor(caster, spell) > 0
