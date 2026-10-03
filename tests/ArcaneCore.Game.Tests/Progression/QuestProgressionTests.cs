@@ -264,7 +264,9 @@ public sealed class QuestProgressionTests
 
         Assert.True(kit.Accept(910025));
         Assert.False(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910025, 0, out _));
-        Assert.Contains(InventoryResult.InventoryFull, ItemTestData.EquipErrors(kit.Session));
+        // Bag space is QUESTGIVER_QUEST_FAILED reason 4 (Player.cpp:12755-12760), not an equip error.
+        Assert.DoesNotContain(InventoryResult.InventoryFull, ItemTestData.EquipErrors(kit.Session));
+        Assert.Contains(kit.Session.Sent, p => p.Opcode == WorldOpcode.SmsgQuestgiverQuestFailed);
         Assert.True(kit.Accept(910024));
         Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910024, 0, out QuestRewardPlan? plan));
         kit.Settle(plan);

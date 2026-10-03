@@ -76,8 +76,7 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
                 }
 
                 if (character.Money != request.Before.Money
-                    || (row is null ? request.ExpectedQuest.Rewarded
-                        : row.Status is not (0 or 1) || ToStatus(row) with { Status = 1 } != request.ExpectedQuest))
+                    || (row is null ? request.ExpectedQuest.Rewarded : ToStatus(row) with { Status = 1 } != request.ExpectedQuest))
                 {
                     return QuestRewardCommitResult.Conflict;
                 }

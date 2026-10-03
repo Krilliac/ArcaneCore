@@ -119,7 +119,10 @@ public sealed class QuestRewardTests
         Assert.Equal(50u, kit.Player.Money);
         Assert.False(kit.State.Quests.Get(QuestId)!.Rewarded);
         Assert.Equal(0, events);
-        Assert.Equal(new[] { ArcaneCore.Game.Items.InventoryResult.InventoryFull }, ItemTestData.EquipErrors(kit.Session));
+        // vmangos CanRewardQuest (Player.cpp:12755-12774): bag space is QUESTGIVER_QUEST_FAILED reason 4, not an equip error,
+        // and the offer window is sent again (QuestHandler.cpp:262-271).
+        Assert.Empty(ItemTestData.EquipErrors(kit.Session));
+        AssertFailedThenOfferAgain(kit.Session, QuestInvalidReason.InventoryFull);
     }
 
     [Fact]
@@ -157,7 +160,8 @@ public sealed class QuestRewardTests
         using var kit = new Kit(quest);
         Assert.False(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, QuestId, 0, out _));
         Assert.Empty(kit.Player.Inventory.AllItems);
-        Assert.Equal(new[] { ArcaneCore.Game.Items.InventoryResult.CantCarryMoreOfThis }, ItemTestData.EquipErrors(kit.Session));
+        Assert.Empty(ItemTestData.EquipErrors(kit.Session));
+        AssertFailedThenOfferAgain(kit.Session, QuestInvalidReason.DuplicateItem);
     }
 
     [Theory]
@@ -313,7 +317,16 @@ public sealed class QuestRewardTests
         bank.Session.Clear();
         Assert.False(bank.Services.TryPrepareReward(bank.Player, bank.Creature.Guid, QuestId, 0, out _));
         Assert.Equal(1u, bank.Player.Inventory.GetItemCount(ItemTestData.UniqueKey, inBankAlso: true));
-        Assert.Equal(new[] { ArcaneCore.Game.Items.InventoryResult.CantCarryMoreOfThis }, ItemTestData.EquipErrors(bank.Session));
+        Assert.Empty(ItemTestData.EquipErrors(bank.Session));
+        AssertFailedThenOfferAgain(bank.Session, QuestInvalidReason.DuplicateItem);
+    }
+
+    private static void AssertFailedThenOfferAgain(FakeSession session, QuestInvalidReason reason)
+    {
+        var sent = session.Sent.ToArray();
+        var failed = Assert.Single(sent, p => p.Opcode == WorldOpcode.SmsgQuestgiverQuestFailed);
+        Assert.Equal(QuestPackets.QuestFailed(QuestId, reason).AsSpan().ToArray(), failed.Payload);
+        Assert.Equal(WorldOpcode.SmsgQuestgiverOfferReward, sent[^1].Opcode);
     }
 
     [Fact]
@@ -371,7 +384,7 @@ public sealed class QuestRewardTests
             Player.Map!.AddObject(Creature);
             World.RunTick(5);
             quest ??= new QuestTemplate { Entry = QuestId, Method = 2, ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 2,
-                RewItemId1 = ItemTestData.ToughJerky, RewItemCount1 = 5,
+                RewItemId1 = ItemTestData.ToughJerky, RewItemCount1 = 5, RequestItemsText = "Bring it.",
                 RewChoiceItemId1 = ItemTestData.Hearthstone, RewChoiceItemCount1 = 1, RewOrReqMoney = 30 };
             var factions = new FactionTemplateCatalog([new(1, 1, 0, 1, 0, 0), new(2, 0, 0, 8, 0, 0), new(3, 0, 0, 8, 0, 1)]);
             Services = new QuestNpcServices(new QuestStore(new QuestContent([quest], [],

@@ -54,9 +54,11 @@ public sealed partial class QuestNpcServices
     /// vmangos Player::CanTakeQuest (Player.cpp:12565-12577): null when the quest can be taken, otherwise
     /// the first failing check in vmangos's order, with the message its SatisfyQuest* sends. MaxLevel and
     /// IsActive refuse silently. <paramref name="visibilityOnly"/> skips the level and timed checks (the
-    /// quest-giver status icon applies its own level handling).
+    /// quest-giver status icon applies its own level handling). <paramref name="skipStatusCheck"/> is vmangos's
+    /// skipStatusCheck: the autocomplete turn-in ignores the quest's current status (Player.cpp:12684-12698).
     /// </summary>
-    private TakeRefusal? RefuseTakeQuest(PlayerNpcState state, Quest quest, HashSet<uint> visited, bool visibilityOnly = false)
+    private TakeRefusal? RefuseTakeQuest(PlayerNpcState state, Quest quest, HashSet<uint> visited, bool visibilityOnly = false,
+        bool skipStatusCheck = false)
     {
         Player player = state.Quests.Player;
         QuestTemplate t = quest.Template;
@@ -71,7 +73,7 @@ public sealed partial class QuestNpcServices
         }
 
         // SatisfyQuestStatus (13532-13545)
-        if (state.Quests.GetStatus(quest.Id) != QuestStatus.None)
+        if (!skipStatusCheck && state.Quests.GetStatus(quest.Id) != QuestStatus.None)
         {
             return Refused(QuestInvalidReason.AlreadyOn);
         }

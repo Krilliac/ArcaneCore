@@ -141,7 +141,10 @@ public sealed class QuestRewardAdversarialTests
 
         await using OwnedCharacterClient filled = await ReconnectAsync(server, owned.Guid, token);
         await MockScenarios.ChooseRewardAsync(filled.Connection, 1, token);
-        Assert.NotEmpty(await filled.Connection.ReadUntilAsync(WorldOpcode.SmsgInventoryChangeFailure, token));
+        // vmangos CanRewardQuest (Player.cpp:12755-12760): a full bag is QUESTGIVER_QUEST_FAILED reason 4, then the offer
+        // window is sent again (QuestHandler.cpp:262-271); neither pays anything.
+        Assert.NotEmpty(await filled.Connection.ReadUntilAsync(WorldOpcode.SmsgQuestgiverQuestFailed, token));
+        Assert.NotEmpty(await filled.Connection.ReadUntilAsync(WorldOpcode.SmsgQuestgiverOfferReward, token));
         await AssertRejectedUntilPongAsync(filled.Connection, 0x90000330, token);
         RewardObservation live = await MockScenarios.ObserveRewardAsync(server, owned.Guid, token);
         Assert.Equal(0u, live.Money);

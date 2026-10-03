@@ -19,30 +19,38 @@ namespace ArcaneCore.Game.Npc;
 /// </summary>
 public sealed partial class QuestNpcServices
 {
-    /// <summary>Open the turn-in window using current server progress; this request never credits an objective.</summary>
+    /// <summary>
+    /// CMSG_QUESTGIVER_COMPLETE_QUEST (vmangos HandleQuestgiverCompleteQuest, QuestHandler.cpp:383-397): the request-items
+    /// window with the completable flag, redirected to the offer-reward window when the quest has no request text or no
+    /// items and is complete (GossipDef.cpp:484-497). A repeatable quest not in the log is completable from the ender's
+    /// list (CanCompleteRepeatableQuest). This request never credits an objective.
+    /// </summary>
     public void CompleteQuest(Player player, ObjectGuid guid, uint questId)
     {
-        if (!TryRewardQuest(player, guid, questId, out PlayerNpcState? state, out Quest? quest)
-            || state.Quests.Get(questId) is not { } data || !Pending(quest, data))
+        if (!TryRewardQuest(player, guid, questId, out PlayerNpcState? state, out Quest? quest))
         {
             return;
         }
 
-        bool complete = data.Status == QuestStatus.Complete && ObjectivesComplete(player, quest, data);
-        Send(player, complete ? WorldOpcode.SmsgQuestgiverOfferReward : WorldOpcode.SmsgQuestgiverRequestItems,
-            complete ? QuestPackets.OfferReward(guid, quest, Options.RateDropMoney, RewardDisplayOf(player))
-                : QuestPackets.RequestItems(guid, quest, false, RewardDisplayOf(player), closeOnCancel: false));
+        bool complete = state.Quests.GetStatus(questId) != QuestStatus.Complete && quest.IsRepeatable
+            ? CanCompleteRepeatableQuest(state, quest)
+            : CanRewardQuest(state, quest, msg: false);
+        SendRequestItems(player, guid, quest, complete, closeOnCancel: false);
     }
 
-    /// <summary>Only a genuinely complete accepted quest may expose its reward selection.</summary>
+    /// <summary>
+    /// CMSG_QUESTGIVER_REQUEST_REWARD (QuestHandler.cpp:283-312): an accepted quest must genuinely be complete before its
+    /// reward selection is shown; an autocomplete quest only needs <c>CanTakeQuest</c> (CanCompleteQuest, Player.cpp:12612-12614).
+    /// </summary>
     public void RequestReward(Player player, ObjectGuid guid, uint questId)
     {
         if (TryRewardQuest(player, guid, questId, out PlayerNpcState? state, out Quest? quest)
-            && state.Quests.Get(questId) is { Status: QuestStatus.Complete } data
-            && Pending(quest, data) && ObjectivesComplete(player, quest, data))
+            && (quest.IsAutoComplete
+                ? RewardBase(state, quest)
+                : state.Quests.Get(questId) is { Status: QuestStatus.Complete } data && Pending(quest, data)
+                    && ObjectivesComplete(player, quest, data)))
         {
-            Send(player, WorldOpcode.SmsgQuestgiverOfferReward,
-                QuestPackets.OfferReward(guid, quest, Options.RateDropMoney, RewardDisplayOf(player)));
+            ResendOfferReward(player, guid, quest);
         }
     }
 
@@ -51,10 +59,27 @@ public sealed partial class QuestNpcServices
         [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out QuestRewardPlan? plan)
     {
         plan = null;
-        if (!TryRewardQuest(player, guid, questId, out PlayerNpcState? state, out Quest? quest)
-            || state.Quests.Get(questId) is not { Status: QuestStatus.Complete } data || !Pending(quest, data)
-            || !ObjectivesComplete(player, quest, data) || !TryRewardGrants(quest, choice, out List<InventoryRewardGrant> grants,
-                out uint chosenItem) || !TryRewardMoney(player, quest, out uint moneyAfter, out uint summaryMoney)
+        if (!TryRewardQuest(player, guid, questId, out PlayerNpcState? state, out Quest? quest) || !RewardBase(state, quest))
+        {
+            return false;
+        }
+
+        // From here the quest is genuinely rewardable (vmangos CanRewardQuest base rules hold). A refusal for missing
+        // items, money or bag space tells the client why and re-sends the offer window so the player can retry
+        // (QuestHandler.cpp:262-271); the live state stays untouched.
+        QuestStatusData? data = state.Quests.Get(questId);
+        if (!RewardRequirements(player, quest, msg: true))
+        {
+            ResendOfferReward(player, guid, quest);
+            return false;
+        }
+
+        if (!TryRewardGrants(quest, choice, out List<InventoryRewardGrant> grants, out uint chosenItem))
+        {
+            return false;
+        }
+
+        if (!TryRewardMoney(player, quest, out uint moneyAfter, out uint summaryMoney)
             || !TryRewardExperience(player, quest, out uint experience, out byte levelAfter)
             // Preflight refusals keep the reward available and mutate nothing: no hold, no journal change, and
             // the client simply keeps its offer window (no standard error packet exists for them).
@@ -70,11 +95,19 @@ public sealed partial class QuestNpcServices
             out InventoryRewardStage? stage, out uint failedEntry);
         if (result != ItemInventoryResult.Ok || stage is null)
         {
-            player.Inventory.SendEquipError(result, null, null, entry: failedEntry);
+            SendRewardStageRefusal(player, questId, result, failedEntry);
+            ResendOfferReward(player, guid, quest);
             return false;
         }
 
-        CharacterQuestStatus expected = RewardRow(player, questId, data);
+        // An autocomplete quest is claimed (or inserted) by the transaction whether or not it was ever in the log.
+        bool autocomplete = quest.IsAutoComplete;
+        if (autocomplete && data?.TimerEndUnix is not null and not 0)
+        {
+            return false;
+        }
+
+        CharacterQuestStatus expected = autocomplete ? VirtualRow(player, questId, data) : RewardRow(player, questId, data!);
         // vmangos RewardQuest: a repeatable returns to QUEST_STATUS_NONE (it may be taken again),
         // anything else stays COMPLETE; both remember that they were rewarded.
         plan = new QuestRewardPlan(this, player, guid, choice, moneyAfter, summaryMoney, experience, levelAfter, expected,
@@ -82,7 +115,7 @@ public sealed partial class QuestNpcServices
             {
                 Status = quest.IsRepeatable ? (byte)QuestStatus.None : expected.Status,
                 Rewarded = true, Timer = 0, RewardChoice = chosenItem,
-            }, stage, spellGrant, reputation);
+            }, stage, spellGrant, reputation, insertIfMissing: autocomplete);
         return true;
     }
 
@@ -131,15 +164,19 @@ public sealed partial class QuestNpcServices
         ArgumentNullException.ThrowIfNull(plan);
         Player player = plan.Player;
         if (!ReferenceEquals(plan.Services, this) || Ready(player) is not { } state
-            || Quests.Get(plan.QuestId) is not { } quest || state.Quests.Get(plan.QuestId) is not { } data
-            || RewardRow(player, plan.QuestId, data) != plan.ExpectedQuest || player.Money != plan.MoneyBefore
-            || player.Level != plan.LevelBefore || !plan.Stage.MatchesBefore())
+            || Quests.Get(plan.QuestId) is not { } quest
+            || (plan.InsertIfMissing
+                ? VirtualRow(player, plan.QuestId, state.Quests.Get(plan.QuestId))
+                : state.Quests.Get(plan.QuestId) is { } live ? RewardRow(player, plan.QuestId, live) : null) != plan.ExpectedQuest
+            || player.Money != plan.MoneyBefore || player.Level != plan.LevelBefore || !plan.Stage.MatchesBefore())
         {
             throw new InvalidOperationException("the quest reward plan no longer matches its live character");
         }
 
+        // An autocomplete quest may never have been in the journal (no slot, perhaps no row yet).
+        QuestStatusData data = state.Quests.GetOrAdd(plan.QuestId);
         int slot = state.Quests.FindSlot(plan.QuestId);
-        if (slot >= QuestConstants.MaxQuestLogSize)
+        if (slot >= QuestConstants.MaxQuestLogSize && !plan.InsertIfMissing)
         {
             throw new InvalidOperationException("the rewarded quest no longer occupies its journal slot");
         }
@@ -151,7 +188,11 @@ public sealed partial class QuestNpcServices
         data.TimerEndUnix = 0;
         data.RewardChoice = plan.RewardedQuest.RewardChoice;
         state.Quests.RemoveTimed(quest.Id);
-        state.Quests.SetSlot(slot, 0);
+        if (slot < QuestConstants.MaxQuestLogSize)
+        {
+            state.Quests.SetSlot(slot, 0);
+        }
+
         // The rewarded row was durably written by the transaction; it must never enter the
         // ordinary quest delta sink before that transaction. Other objectives may change below.
         player.Inventory.NotifyQuestRewardInventory(plan.Stage);
@@ -214,7 +255,7 @@ public sealed partial class QuestNpcServices
         quest = Quests.Get(questId);
         return state is not null && quest is not null && SupportedRewardQuest(quest)
             && player.Inventory.IsLoaded && player.Inventory.GuidAllocator is not null
-            && state.Quests.FindSlot(questId) < QuestConstants.MaxQuestLogSize
+            && (quest.IsAutoComplete || state.Quests.FindSlot(questId) < QuestConstants.MaxQuestLogSize)
             && InteractableNpc(player, guid, NpcFlags.QuestGiver) is { } npc
             && EndersOf(npc).Contains(questId);
     }
