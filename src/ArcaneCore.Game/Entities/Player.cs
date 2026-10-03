@@ -490,6 +490,12 @@ public sealed partial class Player : Unit
         int powerIndex = (int)appearance.PowerType;
         SetUInt32(UpdateFields.UnitFieldMaxpower1 + powerIndex, appearance.MaxPower);
         SetUInt32(UpdateFields.UnitFieldPower1 + powerIndex, appearance.StartPower);
+        if (Class == Game.Class.Druid)
+        {
+            // vmangos UpdateAllStats gives every class all maxima; restricted to druids here, the only class that
+            // ever uses rage/energy without it as its create power (other classes would only gain invisible fields).
+            Spells.Druid.PowerTypeSwitch.EnsureFeralPowerCaps(this);
+        }
 
         SetUInt32(UpdateFields.PlayerNextLevelXp, appearance.NextLevelXp);
         Money = c.Money;
