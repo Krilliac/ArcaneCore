@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
@@ -112,12 +113,46 @@ public sealed class ChatFeature : IWorldFeature
         state.SpeakTime = current + Options.FloodMessageDelaySeconds;
     }
 
-    private ChatState State(Player player) => _states.GetValue(player, _ => new ChatState());
+    /// <summary>
+    /// vmangos MasterPlayer::IsAcceptWhispers: plain players always accept ("players always
+    /// accept", Player.cpp:134); a staff account starts as <see cref="ChatOptions.GmWhisperingTo"/> says.
+    /// </summary>
+    public bool AcceptsWhispers(Player player) => State(player).AcceptsWhispers;
 
-    private sealed class ChatState
+    /// <summary>vmangos Player::SetAcceptWhispers (<c>.whispers on|off</c>).</summary>
+    public void SetAcceptWhispers(Player player, bool on) => State(player).AcceptsWhispers = on;
+
+    /// <summary>
+    /// vmangos MasterPlayer::AcceptsWhispersFrom (MasterPlayer.h:99): the receiver accepts whispers
+    /// in general, or has whispered <paramref name="whisperer"/> first.
+    /// </summary>
+    public bool AcceptsWhispersFrom(Player receiver, ObjectGuid whisperer)
+    {
+        ChatState state = State(receiver);
+        return state.AcceptsWhispers || (state.AllowedWhisperers?.Contains(whisperer) ?? false);
+    }
+
+    /// <summary>vmangos MasterPlayer::Whisper (end): a sender that does not accept whispers lets the receiver whisper back.</summary>
+    public void NoteWhisperSent(Player sender, Player receiver)
+    {
+        ChatState state = State(sender);
+        if (!state.AcceptsWhispers)
+        {
+            (state.AllowedWhisperers ??= []).Add(receiver.Guid);
+        }
+    }
+
+    /// <summary>vmangos MasterPlayer::ClearAllowedWhisperers (<c>.whispers off</c>).</summary>
+    public void ClearAllowedWhisperers(Player player) => State(player).AllowedWhisperers?.Clear();
+
+    private ChatState State(Player player) => _states.GetValue(player, p => new ChatState(p.Security == AccountSecurity.Player || Options.GmWhisperingTo == 1));
+
+    private sealed class ChatState(bool acceptsWhispers)
     {
         internal long MuteUntil;
         internal long SpeakTime;
         internal uint SpeakCount;
+        internal bool AcceptsWhispers = acceptsWhispers;
+        internal HashSet<ObjectGuid>? AllowedWhisperers;
     }
 }

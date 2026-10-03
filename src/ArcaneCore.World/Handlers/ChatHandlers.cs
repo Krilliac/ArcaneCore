@@ -274,7 +274,11 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     {
         string name = CharacterNames.Normalize(targetName);
         Player? receiver = name.Length == 0 ? null : session.World.FindOnlinePlayer(name);
-        if (receiver is null)
+        // A plain player cannot see a staff member who does not accept its whispers (vmangos
+        // ChatHandler.cpp:411: the same "player not found" notice as for an offline target).
+        if (receiver is null
+            || (sender.Security == AccountSecurity.Player && receiver.Security > AccountSecurity.Player
+                && !chat.AcceptsWhispersFrom(receiver, sender.Guid)))
         {
             session.Send(WorldOpcode.SmsgChatPlayerNotFound, ChatPackets.BuildPlayerNotFound(name));
             return;
@@ -294,6 +298,7 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        chat.NoteWhisperSent(sender, receiver);
         receiver.Session.Send(WorldOpcode.SmsgMessagechat,
             ChatPackets.BuildMessage(ChatType.Whisper, Language.Universal, sender.Guid, message, sender.ChatTag));
         session.Send(WorldOpcode.SmsgMessagechat,

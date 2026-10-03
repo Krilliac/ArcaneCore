@@ -179,8 +179,12 @@ public sealed class ChatGateTests
         await friend.CollectAsync();
         await gm.CollectAsync();
 
-        await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<ChatFeature>()
-            .MuteUntil(host.World.FindOnlinePlayer("Muted")!, clock.UnixNow + 30));
+        await host.OnWorldAsync(() =>
+        {
+            var chat = host.WorldServices.GetRequiredService<ChatFeature>();
+            chat.MuteUntil(host.World.FindOnlinePlayer("Muted")!, clock.UnixNow + 30);
+            chat.SetAcceptWhispers(host.World.FindOnlinePlayer("Staff")!, true); // a plain player only sees staff that accepts whispers
+        });
 
         // vmangos HandleEmoteOpcode / HandleTextEmoteOpcode: CanSpeak() before anything else.
         await muted.SendAsync(WorldOpcode.CmsgEmote, BitConverter.GetBytes(3u));
