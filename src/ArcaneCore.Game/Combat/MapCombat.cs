@@ -7,16 +7,19 @@ namespace ArcaneCore.Game.Combat;
 
 /// <summary>
 /// Combat for one map (world thread only): auto attack, the swing loop, damage, death and
-/// spirit release, corpses, threat, the combat timer, PvP flag and regeneration. It runs as
-/// one step of <see cref="Map.Update"/>, after the in-world packets and logouts and before
-/// the visibility/values/flush phases, so every field it changes goes out in the same tick.
+/// spirit release, corpses, threat, the combat timer, PvP flag and regeneration. It is an
+/// <see cref="IMapUpdater"/> that every map gets (<see cref="DefaultMapUpdaterAttribute"/>,
+/// first in order), so it runs in <see cref="Map.Update"/> after the in-world packets and
+/// logouts and before the visibility/values/flush phases, and every field it changes goes out
+/// in the same tick. Reach it with <c>map.Combat</c> (<see cref="MapCombatExtensions"/>).
 /// <para>
 /// Players are always updated; other units (creatures) are updated once they take part in
 /// combat (<see cref="Track"/>), until they are idle again. Method names and logic follow
 /// vmangos Unit/Player (see docs/areas/combat.md).
 /// </para>
 /// </summary>
-public sealed partial class MapCombat
+[DefaultMapUpdater(Order = 0)]
+public sealed partial class MapCombat : IMapUpdater
 {
     private readonly Map _map;
     private readonly WorldRuntime _world;
@@ -86,7 +89,17 @@ public sealed partial class MapCombat
         return Hooks.FindUnit(_map, guid);
     }
 
-    /// <summary>One combat step (called by <see cref="Map.Update"/>).</summary>
+    /// <inheritdoc/>
+    void IMapUpdater.Update(Map map, uint diffMs) => Update(diffMs);
+
+    /// <summary>
+    /// The player is leaving the map. Logout already ran <see cref="OnPlayerLeaving"/> from
+    /// <see cref="WorldRuntime.PlayerLoggingOut"/> while the player was still in the map; this
+    /// repeat is a no-op then and covers any other way out of the map.
+    /// </summary>
+    void IMapUpdater.OnPlayerRemoved(Map map, Player player) => OnPlayerLeaving(player);
+
+    /// <summary>One combat step (run by <see cref="Map.Update"/> through <see cref="IMapUpdater"/>).</summary>
     public void Update(uint diffMs)
     {
         _elapsedMs += diffMs;

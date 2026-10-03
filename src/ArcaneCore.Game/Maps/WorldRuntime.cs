@@ -146,12 +146,16 @@ public sealed class WorldRuntime : IDisposable
         return completion.Task;
     }
 
-    /// <summary>The map with the given id, created on first use (world thread).</summary>
+    /// <summary>
+    /// The map with the given id, created on first use with its default per-map systems
+    /// (<see cref="DefaultMapUpdaters"/>; world thread).
+    /// </summary>
     public Map GetMap(uint mapId)
     {
         if (!_maps.TryGetValue(mapId, out Map? map))
         {
             map = new Map(mapId, this, _logger);
+            DefaultMapUpdaters.AttachTo(map, this);
             _maps[mapId] = map;
         }
 
