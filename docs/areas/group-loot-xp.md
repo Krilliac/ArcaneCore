@@ -35,7 +35,7 @@ bounding radii; a raid map is unlimited; a world boss victim adds 150 yd; a dead
 his corpse (a living one never does). `CorpseRaid` is a hook for `CREATURE_STATIC_FLAG_CORPSE_RAID`
 (Object.cpp:1485-1486): no creature data sets it (0 rows in the classic-db dump), so it is null by default.
 
-References: `D:efsmangos\src\game\Objects\Object.cpp:1478-1499` and `:1738-1752`,
+References: `D:\refs\vmangos\src\game\Objects\Object.cpp:1478-1499` and `:1738-1752`,
 `Objects\Player.cpp:20034-20050`.
 
 Adopted by `LootService.RecipientsFor` (loot recipients, and through them the round-robin eligibility).
