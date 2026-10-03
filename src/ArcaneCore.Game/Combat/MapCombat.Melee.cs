@@ -832,7 +832,9 @@ public sealed partial class MapCombat
     /// <summary>vmangos Unit::SetInCombatWithAggressor: the victim's PvP pulse and combat state (players linger 5.5 s).</summary>
     private void SetInCombatWithAggressor(Unit victim, Unit aggressor)
     {
-        if ((aggressor.UnitFlags & UnitFlags.Pvp) != 0 && victim is Player pv && aggressor is Player pa && !ReferenceEquals(pv, pa))
+        // Duel opponents do not pulse each other (vmangos Unit.cpp:5973, !IsInDuelWith).
+        if ((aggressor.UnitFlags & UnitFlags.Pvp) != 0 && victim is Player pv && aggressor is Player pa && !ReferenceEquals(pv, pa)
+            && !DuelRules.IsInDuelWith(pv, pa))
         {
             pv.Combat.InPvpCombat = true;
             UpdatePvp(pv, true);

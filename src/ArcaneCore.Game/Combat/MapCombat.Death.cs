@@ -404,6 +404,12 @@ public sealed partial class MapCombat
     /// <summary>vmangos Unit::TogglePlayerPvPFlagOnAttackVictim: attacking a PvP-flagged unit flags the attacker.</summary>
     private static void TogglePlayerPvpFlagOnAttackVictim(Player attacker, Unit victim)
     {
+        // Duel opponents do not pulse each other (vmangos Unit.cpp:6047, !IsInDuelWith).
+        if (DuelRules.ControllingPlayer(victim) is { } victimPlayer && DuelRules.IsInDuelWith(attacker, victimPlayer))
+        {
+            return;
+        }
+
         if ((victim.UnitFlags & UnitFlags.Pvp) != 0 && !ReferenceEquals(attacker, victim))
         {
             attacker.Combat.InPvpCombat = true;

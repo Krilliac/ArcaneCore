@@ -75,7 +75,8 @@ public class CombatHooks
     /// same team are friendly; everything else is not.
     /// </summary>
     public virtual bool IsFriendly(Unit a, Unit b)
-        => a is Player pa && b is Player pb && pa.Team == pb.Team;
+        // Duel opponents are hostile before any team rule (vmangos Object.cpp:3650-3652, "duel - always hostile to opponent").
+        => !DuelRules.IsOpponentHostile(a, b) && a is Player pa && b is Player pb && pa.Team == pb.Team;
 
     /// <summary>
     /// Whether <paramref name="attacker"/> may attack <paramref name="victim"/> (the parts of
@@ -113,8 +114,9 @@ public class CombatHooks
         }
 
         // Player vs player outside duels needs the victim flagged for PvP (vmangos
-        // Unit::IsValidAttackTarget → player targets must be IsPvP unless FFA/duel).
-        if (attacker is Player && victim is Player && (victim.UnitFlags & UnitFlags.Pvp) == 0)
+        // Unit::IsValidAttackTarget → player targets must be IsPvP unless FFA/duel). A started duel is
+        // checked first and does not test Finished (Object.cpp:3797-3800), so it holds for the whole finishing tick.
+        if (attacker is Player pa && victim is Player pv && (victim.UnitFlags & UnitFlags.Pvp) == 0 && !DuelRules.IsInDuelWith(pa, pv))
         {
             return false;
         }
