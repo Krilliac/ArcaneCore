@@ -25,6 +25,25 @@ public sealed class WorldSessionOptions
     public int MaxWorldPacketsPerTick { get; set; } = 150;
 
     /// <summary>
+    /// Most world-handler packets one session may have queued for the world thread; the session
+    /// is disconnected when a packet would exceed it. 0 disables the bound. The drain rate is
+    /// <see cref="MaxWorldPacketsPerTick"/> per 50 ms tick (3000 per second) and a retail client
+    /// sends a few tens of packets per second (movement heartbeats, casts, chat), so 8192 only
+    /// fills if the world thread stalled for minutes or the peer floods. Hardening: vmangos
+    /// (WorldSession.cpp:307-332 <c>QueuePacket</c> into <c>m_recvQueue</c>) and mangos-classic
+    /// (WorldSession.cpp:256-285) queue without any bound. Bound from World:MaxQueuedWorldPackets.
+    /// </summary>
+    public int MaxQueuedWorldPackets { get; set; } = 8192;
+
+    /// <summary>
+    /// Most payload bytes one session may have queued for the world thread (see
+    /// <see cref="MaxQueuedWorldPackets"/>); 0 disables the bound. Mirrors the 8 MiB outbound
+    /// bound. The largest client frame is <see cref="WorldSession.MaxClientPacketSize"/> bytes, so
+    /// this holds a few hundred maximum-size packets. Bound from World:MaxQueuedWorldBytes.
+    /// </summary>
+    public long MaxQueuedWorldBytes { get; set; } = 8 * 1024 * 1024;
+
+    /// <summary>
     /// How long a closing session lets the writer flush queued frames (for example a refusal
     /// reply) before the stream is torn down so a client that stopped reading cannot hold the
     /// connection, its DI scope and its queued frames forever. Hardening (vmangos has no
@@ -73,6 +92,8 @@ public sealed class WorldSession : IPlayerSession
     private readonly CancellationTokenSource _kick = new();
     private readonly CancellationTokenSource _writerAbort = new();
     private long _outboundBytes;
+    private int _queuedPackets;
+    private long _queuedBytes;
     private volatile SessionState _state = SessionState.Connected;
     private uint _serverSeed;
 
@@ -107,6 +128,12 @@ public sealed class WorldSession : IPlayerSession
     public bool StrictMovementFiniteness => _options.StrictMovementFiniteness;
 
     public SessionState State => _state;
+
+    /// <summary>World-handler packets queued for the world thread and not yet handled or dropped.</summary>
+    public int QueuedWorldPackets => Volatile.Read(ref _queuedPackets);
+
+    /// <summary>Payload bytes of <see cref="QueuedWorldPackets"/>.</summary>
+    public long QueuedWorldBytes => Interlocked.Read(ref _queuedBytes);
 
     public int AccountId { get; private set; }
 
@@ -194,6 +221,7 @@ public sealed class WorldSession : IPlayerSession
     {
         for (int budget = _options.MaxWorldPacketsPerTick; budget > 0 && _worldQueue.TryDequeue(out QueuedPacket packet); budget--)
         {
+            Release(packet);
             if (_kick.IsCancellationRequested)
             {
                 return;
@@ -256,7 +284,7 @@ public sealed class WorldSession : IPlayerSession
                 return false;
             }
 
-            _worldQueue.Clear(); // nothing from a previous stay in the world may leak into this one
+            DiscardQueuedPackets(); // nothing from a previous stay in the world may leak into this one
             _state = SessionState.LoggingIn;
             return true;
         }
@@ -276,7 +304,7 @@ public sealed class WorldSession : IPlayerSession
             }
 
             Player = null;
-            _worldQueue.Clear();
+            DiscardQueuedPackets();
             _state = SessionState.CharacterSelect;
         }
 
@@ -383,6 +411,22 @@ public sealed class WorldSession : IPlayerSession
             {
                 if (_state is SessionState.LoggingIn or SessionState.InWorld)
                 {
+                    // The read loop is the only producer, so this check-then-add cannot race another
+                    // enqueue; the world thread only ever lowers the counters.
+                    int maxPackets = _options.MaxQueuedWorldPackets;
+                    long maxBytes = _options.MaxQueuedWorldBytes;
+                    if ((maxPackets > 0 && _queuedPackets >= maxPackets)
+                        || (maxBytes > 0 && Interlocked.Read(ref _queuedBytes) + payload.Length > maxBytes))
+                    {
+                        // Counts and limits only: nothing from the payload is logged.
+                        _logger.LogWarning(
+                            "[{Endpoint}] inbound world queue over its bound ({Packets} packets, {Bytes} bytes queued; limits {MaxPackets}/{MaxBytes}); disconnecting",
+                            RemoteEndpoint, _queuedPackets, Interlocked.Read(ref _queuedBytes), maxPackets, maxBytes);
+                        return false;
+                    }
+
+                    Interlocked.Increment(ref _queuedPackets);
+                    Interlocked.Add(ref _queuedBytes, payload.Length);
                     _worldQueue.Enqueue(new QueuedPacket(handler, payload));
                 }
 
@@ -403,6 +447,21 @@ public sealed class WorldSession : IPlayerSession
         {
             _logger.LogWarning("[{Endpoint}] malformed {Opcode}; disconnecting", RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
             return false;
+        }
+    }
+
+    private void Release(QueuedPacket packet)
+    {
+        Interlocked.Decrement(ref _queuedPackets);
+        Interlocked.Add(ref _queuedBytes, -packet.Payload.Length);
+    }
+
+    /// <summary>Drop every queued packet, keeping the count and byte accounting exact.</summary>
+    private void DiscardQueuedPackets()
+    {
+        while (_worldQueue.TryDequeue(out QueuedPacket packet))
+        {
+            Release(packet);
         }
     }
 
@@ -543,6 +602,7 @@ public sealed class WorldSession : IPlayerSession
         }
 
         _registry.Unregister(this);
+        DiscardQueuedPackets(); // a closed session retains nothing
 
         // Remove the player on the world thread; queued after any pending login command, which
         // sees the Closed state and backs out.

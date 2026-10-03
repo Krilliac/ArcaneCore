@@ -32,10 +32,13 @@ internal sealed class WorldTestHost : IAsyncDisposable
     private readonly Task _acceptLoop;
 
     private readonly WorldSessionOptions _sessionOptions;
+    private readonly ILogger _sessionLogger;
 
-    private WorldTestHost(int compressionThreshold, Action<WorldRuntimeOptions>? configure, WorldSessionOptions? sessionOptions)
+    private WorldTestHost(
+        int compressionThreshold, Action<WorldRuntimeOptions>? configure, WorldSessionOptions? sessionOptions, ILogger? sessionLogger)
     {
         _sessionOptions = sessionOptions ?? new WorldSessionOptions();
+        _sessionLogger = sessionLogger ?? NullLogger.Instance;
         var collection = new ServiceCollection();
         collection.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         collection.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
@@ -92,8 +95,9 @@ internal sealed class WorldTestHost : IAsyncDisposable
 
     /// <summary>Start a host. Compression is off by default so tests can read update blocks directly.</summary>
     public static WorldTestHost Start(
-        int compressionThreshold = 0, Action<WorldRuntimeOptions>? configure = null, WorldSessionOptions? sessionOptions = null)
-        => new(compressionThreshold, configure, sessionOptions);
+        int compressionThreshold = 0, Action<WorldRuntimeOptions>? configure = null, WorldSessionOptions? sessionOptions = null,
+        ILogger? sessionLogger = null)
+        => new(compressionThreshold, configure, sessionOptions, sessionLogger);
 
     /// <summary>Create an account with a fresh session key (as if it had just logged in at the realm).</summary>
     public async Task<byte[]> AddAccountAsync(string name, AccountSecurity security = AccountSecurity.Player)
@@ -223,7 +227,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
                 {
                     var worldSession = new WorldSession(
                         stream, "test", scope.ServiceProvider, Opcodes, World, Registry,
-                        _sessionOptions, NullLogger.Instance);
+                        _sessionOptions, _sessionLogger);
                     await worldSession.RunAsync(_stop.Token);
                 }
             });
