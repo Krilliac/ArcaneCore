@@ -68,6 +68,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(LootStateDataModule), DatabaseComponent.Characters, LootStateDataModule.Version),
             (typeof(CharacterSkillsDataModule), DatabaseComponent.Characters, CharacterSkillsDataModule.Version),
             (typeof(CharacterLifeDataModule), DatabaseComponent.Characters, CharacterLifeDataModule.Version),
+            (typeof(PetitionDataModule), DatabaseComponent.Characters, PetitionDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
