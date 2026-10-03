@@ -210,27 +210,12 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return; // the client disconnected while the character loaded
         }
 
-        // Login order per vmangos WorldSession::HandlePlayerLogin and
-        // Player::SendInitialPacketsBeforeAddToMap: verify world, account data hashes,
-        // social lists, MOTD, rest/bind point, tutorials, spells, action bar, reputations,
-        // time speed; then the map add sends the self create, then the zone's world states.
+        // Login order per vmangos WorldSession::HandlePlayerLogin (LoginSequence): login
+        // packets, SendInitialPacketsBeforeAddToMap, the map add (which sends the self
+        // create), SendInitialPacketsAfterAddToMap; then the world features hear of the login.
         player.Relocate(character.X, character.Y, character.Z, character.Orientation, world.NowMs);
-        session.Send(WorldOpcode.SmsgLoginVerifyWorld, CharacterPackets.BuildLoginVerifyWorld(character));
-        session.Send(WorldOpcode.SmsgAccountDataMd5, account.DataMd5);
-        session.Send(WorldOpcode.SmsgFriendList, LoginPackets.BuildEmptyFriendList());
-        session.Send(WorldOpcode.SmsgIgnoreList, LoginPackets.BuildEmptyIgnoreList());
-        foreach (string line in world.Options.Motd.Split('@', StringSplitOptions.RemoveEmptyEntries))
-        {
-            session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(line));
-        }
-
-        session.Send(WorldOpcode.SmsgSetRestStart, LoginPackets.BuildSetRestStart());
-        session.Send(WorldOpcode.SmsgBindpointupdate, LoginPackets.BuildBindPointUpdate(player.Home));
-        session.Send(WorldOpcode.SmsgTutorialFlags, account.TutorialFlags);
-        session.Send(WorldOpcode.SmsgInitialSpells, CharacterPackets.BuildInitialSpells());
-        session.Send(WorldOpcode.SmsgActionButtons, LoginPackets.BuildActionButtons(player.ActionButtons));
-        session.Send(WorldOpcode.SmsgInitializeFactions, LoginPackets.BuildInitializeFactions());
-        session.Send(WorldOpcode.SmsgLoginSettimespeed, CharacterPackets.BuildTimeSpeed(DateTime.UtcNow));
+        LoginSequence.SendLoginPackets(session, world, character, account.DataMd5);
+        LoginSequence.SendInitialPacketsBeforeAddToMap(session, player, account.TutorialFlags);
 
         try
         {
@@ -244,9 +229,10 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        session.Send(WorldOpcode.SmsgInitWorldStates, LoginPackets.BuildInitWorldStates(player.MapId, player.ZoneId));
+        LoginSequence.SendInitialPacketsAfterAddToMap(session, player);
         session.Logger.LogInformation("[{Endpoint}] '{Account}' entered the world as '{Name}'",
             session.RemoteEndpoint, session.AccountName, player.Name);
+        world.NotifyLoggedIn(player);
     }
 
     private static async Task<bool> WaitUntilOfflineAsync(WorldRuntime world, ObjectGuid guid)
