@@ -18,6 +18,9 @@ internal sealed class SpellTestServices : IWorldTestServices
     public const uint Renew = 9004;
     public const uint Cooldown = 9005;
     public const uint SlowBolt = 9006;
+    public const uint DeathDot = 9007;
+    public const uint DeathStun = 9008;
+    public const uint DeathRoot = 9009;
 
     public void Register(IServiceCollection services)
     {
@@ -49,6 +52,25 @@ internal sealed class SpellTestServices : IWorldTestServices
                 b.CastingTimeIndex = 5;
                 b.RangeIndex = 4;
                 b.InterruptFlags = 0x2; // damage pushback
+            }),
+            With(Spell(DeathDot, "Test Death DoT", effect: 6, value: 1, targetA: 1), d =>
+            {
+                d.EffectApplyAuraName1 = 3; // SPELL_AURA_PERIODIC_DAMAGE
+                d.EffectAmplitude1 = 3000;
+                d.DurationIndex = 3;
+                d.SpellVisual = 1;
+            }),
+            With(Spell(DeathStun, "Test Death Stun", effect: 6, value: 0, targetA: 1), s =>
+            {
+                s.EffectApplyAuraName1 = 12; // SPELL_AURA_MOD_STUN
+                s.DurationIndex = 3;
+                s.SpellVisual = 1;
+            }),
+            With(Spell(DeathRoot, "Test Death Root", effect: 6, value: 0, targetA: 1), s =>
+            {
+                s.EffectApplyAuraName1 = 26; // SPELL_AURA_MOD_ROOT
+                s.DurationIndex = 3;
+                s.SpellVisual = 1;
             }),
         ],
         [new SpellCastTimeRow { Id = 2, CastTime = 500, MinCastTime = 500 }, new SpellCastTimeRow { Id = 5, CastTime = 3000, MinCastTime = 3000 }],

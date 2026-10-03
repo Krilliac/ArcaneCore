@@ -212,6 +212,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             foreach (MapCombat combat in _combatSubscriptions)
             {
                 combat.DamageDealt -= OnDamageDealt;
+                combat.UnitKilled -= OnUnitKilled;
             }
 
             _combatSubscriptions.Clear();
@@ -248,9 +249,13 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             if (_combatSubscriptions.Add(combat))
             {
                 combat.DamageDealt += OnDamageDealt;
+                combat.UnitKilled += OnUnitKilled;
             }
         }
     }
+
+    /// <summary>A unit died in combat: its non-passive auras go (<see cref="SpellSystem.OnUnitDied"/>).</summary>
+    private void OnUnitKilled(Unit? killer, Unit victim) => System.OnUnitDied(victim);
 
     private void OnDamageDealt(Unit attacker, Unit victim, uint damage, bool direct, bool meleeDamage)
     {

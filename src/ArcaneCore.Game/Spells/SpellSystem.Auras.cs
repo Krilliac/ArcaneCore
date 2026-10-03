@@ -47,7 +47,7 @@ public sealed partial class SpellSystem
     /// <summary>vmangos Spell::EffectApplyAura: add this effect's aura to the target's pending holder.</summary>
     private void EffectApplyAura(SpellEffectContext context)
     {
-        if (!context.Target.IsAlive && !context.Spell.IsPassive)
+        if (!context.Target.IsAlive && !context.Spell.IsPassive && !context.Spell.IsDeathPersistent && !context.Spell.CanTargetDead)
         {
             return;
         }
@@ -424,7 +424,9 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// vmangos Aura::HandleAuraModRoot → Unit::SetRooted: players get SMSG_FORCE_MOVE_ROOT/UNROOT
-    /// through <see cref="Player.SetRooted"/>; the root lifts when the last root/stun aura goes.
+    /// through <see cref="Player.SetRooted"/>; the root lifts when the last root/stun aura goes,
+    /// except on a dead player, whose root belongs to MapCombat (set on JUST_DIED, lifted by release
+    /// or resurrection).
     /// </summary>
     private void ApplyRoot(SpellAuraHolder holder, bool apply)
     {
@@ -437,7 +439,7 @@ public sealed partial class SpellSystem
         {
             player.SetRooted(true);
         }
-        else if (!GetAuras(player).Any(h => !h.IsRemoved && (h.HasAura(AuraType.ModRoot) || h.HasAura(AuraType.ModStun))))
+        else if (player.IsAlive && !GetAuras(player).Any(h => !h.IsRemoved && (h.HasAura(AuraType.ModRoot) || h.HasAura(AuraType.ModStun))))
         {
             player.SetRooted(false);
         }

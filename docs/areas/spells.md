@@ -81,6 +81,32 @@ When a server and the docs disagree, the server wins and the conflict is listed 
    - Use `.learn <id>` and `.cast <id>` as a GM.
    - Apply a damage-over-time spell and check the aura icon, its timer and the ticks.
 
+## Death
+
+`SpellFeature` subscribes `MapCombat.UnitKilled` and calls `SpellSystem.OnUnitDied`, which follows vmangos
+`Unit::SetDeathState(JUST_DIED)` (`src/game/Objects/Unit.cpp:7322-7323`, `InterruptNonMeleeSpells(false)`): the
+cast or channel in progress is cancelled (a channel also drops its auras), then `Unit::RemoveAllAurasOnDeath`
+(`Unit.cpp:3969-4004`) rule: every aura that is neither passive nor death persistent is removed through the
+normal removal path (stun/root handlers, aura slots and area children are cleaned up). Death persistent is
+`SPELL_ATTR_EX3_ALLOW_AURA_WHILE_DEAD` for a 1.12.1 build (`SpellEntry.h:952-959`, `SpellDefines.h:967`), exposed
+as `SpellInfo.IsDeathPersistent`. Applying an aura to a dead target needs a passive, death-persistent or
+dead-target spell (`Unit.cpp:3110`, `SpellEffects.cpp:1672`; `SpellInfo.CanTargetDead` = Ex2 ALLOW_DEAD_TARGET or
+death-only, `SpellEntry.h:931-942`), and the cast check accepts a dead explicit target for such a spell
+(`Spell.cpp:5572`). A dead player keeps the root `MapCombat` set on JUST_DIED. Cooldowns and auras the dead unit
+cast on others are untouched, so a death-then-logout save holds no auras.
+
+Deliberate limits:
+
+- The Hunter's Mark (`SPELL_AURA_MOD_STALKED`) carve-out at the top of `RemoveAllAurasOnDeath` has no handler
+  yet (vmangos-only; cmangos-classic lacks it).
+- The creature-respawn clear of death-persistent auras (`Creature.cpp:827`) is not implemented.
+- Player side effects of dying (shapeshift removal, pet, combo points) belong to other systems.
+- vmangos also treats `Attributes == DO_NOT_DISPLAY && DurationIndex == 21` as passive (`SpellAuras.cpp:6666`);
+  `SpellInfo` carries the resolved duration, not the DBC index, so that case is not covered.
+- Passive auras may still be applied to a dead target (existing behaviour; vmangos only allows it while a player
+  is loading).
+- A death-only spell aimed at a living target is not rejected by the cast check (vmangos returns BAD_TARGETS).
+
 ## What's left
 
 - Area, chain and AoE target selection, and TargetB-based unit selection.
