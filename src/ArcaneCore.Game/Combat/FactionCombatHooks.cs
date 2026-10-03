@@ -65,6 +65,13 @@ public sealed class FactionCombatHooks(FactionTemplateCatalog factions) : Combat
         return forward != Reaction.Friendly && backward != Reaction.Friendly;
     }
 
+    /// <summary>
+    /// vmangos Unit::IsHostileTo (Unit.cpp:4429-4432): the template reaction of <paramref name="a"/> towards
+    /// <paramref name="b"/> is hostile. Neutral units are not hostile. The reputation and PvP parts of
+    /// GetReactionTo are not modelled (see the class remarks).
+    /// </summary>
+    public override bool IsHostileTo(Unit a, Unit b) => ReactionTo(a, b) == Reaction.Hostile;
+
     // WorldObject::GetFactionReactionTo, template part only (Object.cpp:3701-3741).
     private Reaction ReactionTo(Unit from, Unit to)
     {

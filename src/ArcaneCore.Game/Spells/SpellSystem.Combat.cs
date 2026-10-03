@@ -69,7 +69,7 @@ public sealed partial class SpellSystem
 
         uint resisted = Math.Min(amount, CombatRules.RollPartialResist(this, caster, target, spell, amount));
         amount -= resisted;
-        uint dealt = Damage.DealSpellDamage(caster, target, spell, amount, periodic: false);
+        uint dealt = Damage.DealSpellDamage(caster, target, spell, amount, periodic: false, startsCombat: StartsCombat(caster, target));
         OnDamageTaken(target, caster, dealt, periodic: false);
         SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog, SpellPackets.BuildSpellNonMeleeDamageLog(
             target.Guid, caster.Guid, spell.Id, dealt, spell.School, resisted: resisted, hitInfo: crit ? SpellHitTypeCrit : 0), includeSelf: true);

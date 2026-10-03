@@ -589,13 +589,13 @@ public sealed partial class MapCombat
     /// combat; the attacker earns rage; lethal damage kills; otherwise health drops, a player
     /// attacker without a victim starts attacking, non-player victims gain threat and player
     /// victims earn rage. <paramref name="outcome"/> / <paramref name="cleanDamage"/> carry the
-    /// dodge/parry rage case. Returns the damage dealt. Public for the spells area (direct
+    /// dodge/parry rage case. <paramref name="startsCombat"/> false skips the combat link and the auto-attack start. Returns the damage dealt. Public for the spells area (direct
     /// spell damage uses <paramref name="direct"/> = false for DoTs, and
     /// <paramref name="meleeDamage"/> = false for every spell). vmangos Unit.cpp DealDamage
     /// distinguishes DIRECT_DAMAGE from SPELL_DIRECT_DAMAGE: only weapon damage rewards
     /// outgoing rage, and its auto-start Attack call enables melee only for DIRECT_DAMAGE.
     /// </summary>
-    public uint DealDamage(Unit attacker, Unit victim, uint damage, MeleeHitOutcome outcome = MeleeHitOutcome.Normal, uint cleanDamage = 0, bool direct = true, bool meleeDamage = true)
+    public uint DealDamage(Unit attacker, Unit victim, uint damage, MeleeHitOutcome outcome = MeleeHitOutcome.Normal, uint cleanDamage = 0, bool direct = true, bool meleeDamage = true, bool startsCombat = true)
     {
         if (IsQuestSettlementPending(attacker) || IsQuestSettlementPending(victim) || !IsAliveState(victim))
         {
@@ -608,6 +608,7 @@ public sealed partial class MapCombat
         }
 
         bool enterCombat = !ReferenceEquals(attacker, victim);
+        bool combatLink = enterCombat && startsCombat; // false: a hunter trap's hit on a player (vmangos Spell.cpp:1650)
         if (damage == 0)
         {
             if (outcome is MeleeHitOutcome.Parry or MeleeHitOutcome.Dodge
@@ -616,10 +617,14 @@ public sealed partial class MapCombat
                 RewardRage(ragePlayer, (uint)(cleanDamage * 0.75f), attacker: true);
             }
 
-            if (enterCombat)
+            if (combatLink)
             {
                 SetInCombatWithAggressor(victim, attacker);
                 SetInCombatWithVictim(attacker, victim);
+            }
+
+            if (enterCombat)
+            {
                 if (victim is not Player)
                 {
                     // A missed creature still aggroes: its AI's AttackStart adds the attacker
@@ -632,7 +637,7 @@ public sealed partial class MapCombat
             return 0;
         }
 
-        if (enterCombat)
+        if (combatLink)
         {
             SetInCombatWithAggressor(victim, attacker);
             SetInCombatWithVictim(attacker, victim);
@@ -651,7 +656,7 @@ public sealed partial class MapCombat
 
         victim.Health -= damage;
 
-        if (direct && enterCombat)
+        if (direct && combatLink)
         {
             if (attacker.Combat.Victim is null && attacker is Player)
             {

@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
@@ -15,20 +16,22 @@ namespace ArcaneCore.Game.Ranged;
 /// <para>
 /// Not modelled: environmental traps (no owner; they cast from the game object, which the spell
 /// system cannot do), battleground traps, totems counting at a third of the radius, stealthed
-/// traps being hidden from enemies, the neutral-creature distinction of IsHostileTo (see
-/// <see cref="IsHostileTo"/>), and the original-caster marker that keeps a trap from putting
-/// players in combat (docs/areas/hunter.md).
+/// traps being hidden from enemies, pets and charmed units for the owner PvP rule (the port has no
+/// owner or charmer link on units), and reflection exemption of traps (docs/areas/hunter.md).
 /// </para>
 /// </summary>
 public sealed class TrapSystem(SpellSystem spells) : IMapUpdater
 {
     /// <summary>
-    /// vmangos Unit::IsHostileTo (faction reaction) for the "in combat or hostile" test. The default
-    /// is the spell system's attack-target relation, which also accepts neutral creatures, so a
-    /// neutral creature that is not fighting triggers the trap here but not in vmangos; a faction
-    /// aware host can replace it.
+    /// The "hostile" half of the in-combat-or-hostile test (GameObject.cpp:300-302). Retail
+    /// (<see cref="TrapHostilityRule.Faction"/>): the map's <see cref="Combat.CombatHooks.IsHostileTo"/>, the faction
+    /// reaction, so neutral creatures do not trigger traps. The deviation <see cref="TrapHostilityRule.AttackTarget"/> uses
+    /// the attack-target relation instead.
     /// </summary>
-    public Func<Unit, Unit, bool> IsHostileTo { get; set; } = (owner, target) => spells.Relations.IsHostile(owner, target);
+    private bool IsHostileTo(Map map, Unit owner, Unit target)
+        => spells.RangedOptions.Traps.Hostility == TrapHostilityRule.AttackTarget
+            ? spells.Relations.IsHostile(owner, target)
+            : map.Combat.Hooks.IsHostileTo(owner, target);
 
     public void Update(Map map, uint diffMs)
     {
@@ -129,7 +132,7 @@ public sealed class TrapSystem(SpellSystem spells) : IMapUpdater
                 continue;
             }
 
-            if (!spells.Relations.IsHostile(owner, unit) || !(unit.Combat.IsInCombat || IsHostileTo(owner, unit)))
+            if (!spells.Relations.IsHostile(owner, unit) || !(unit.Combat.IsInCombat || IsHostileTo(map, owner, unit)))
             {
                 continue;
             }

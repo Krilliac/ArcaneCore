@@ -36,6 +36,7 @@ public sealed class TrapSystemTests : IDisposable
     private readonly GameObjectMapSystem _objects;
     private readonly SpellSystem _spells;
     private readonly FakeRelations _relations = new();
+    private readonly FactionReactionHooks _hooks;
     private readonly Player _hunter;
     private readonly FakeSession _session = new(1);
     private readonly List<Unit> _hit = [];
@@ -47,6 +48,8 @@ public sealed class TrapSystemTests : IDisposable
         (WorldRuntime world, Map map, CreatureMapSystem creatures) = CreateSystem(content);
         _world = world;
         _map = map;
+        _hooks = new FactionReactionHooks(_relations);
+        map.Combat.Hooks = _hooks; // the faction reaction (Unit::IsHostileTo) of the trap's in-combat-or-hostile test
         _creatures = creatures;
         var goContent = new GameObjectContent(
         [
@@ -337,5 +340,97 @@ public sealed class TrapSystemTests : IDisposable
 
         Assert.Contains(trap.Guid.Value, _session.Sent.Where(p => p.Opcode == WorldOpcode.SmsgGameobjectCustomAnim)
             .Select(p => BinaryPrimitives.ReadUInt64LittleEndian(p.Payload)));
+    }
+
+    /// <summary>The production damage sink's route into map combat (WorldSpellDamageSink), without the world daemon.</summary>
+    private sealed class MapCombatSink(Map map) : IDamageSink
+    {
+        public uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic)
+            => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat: true);
+
+        public uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat)
+        {
+            uint health = victim.Health;
+            map.Combat.DealDamage(caster, victim, damage, direct: !periodic, meleeDamage: false, startsCombat: startsCombat);
+            return health - Math.Min(health, victim.Health);
+        }
+
+        public uint Heal(Unit caster, Unit target, SpellInfo spell, uint amount) => 0;
+    }
+
+    /// <summary>
+    /// The test's faction reactions: hostile exactly when the fake attack relation says so, except for units in
+    /// <see cref="Neutral"/> (attackable, but neutral: IsHostileTo is false).
+    /// </summary>
+    private sealed class FactionReactionHooks(FakeRelations relations) : CombatHooks
+    {
+        public HashSet<ObjectGuid> Neutral { get; } = [];
+
+        public override bool IsHostileTo(Unit a, Unit b) => !Neutral.Contains(b.Guid) && relations.IsHostile(a, b);
+    }
+
+    [Fact]
+    public void ANeutralCreatureThatIsNotFighting_DoesNotTriggerTheTrap_ButOneInCombatDoes()
+    {
+        GameObject trap = LayTrap(CustomEntry);
+        Creature wolf = Wolf(0);
+        _hooks.Neutral.Add(wolf.Guid); // attackable per the attack-target relation, but its faction reaction is neutral
+        Place(wolf, trap, 1.0f);
+
+        Tick();
+        Assert.Empty(_hit); // GameObject.cpp:300-302 needs IsInCombat or IsHostileTo
+
+        _map.Combat.DealDamage(_hunter, wolf, 1, direct: false, meleeDamage: false); // now in combat with the hunter
+        Tick();
+        Assert.Equal([wolf], _hit);
+    }
+
+    [Fact]
+    public void TheAttackTargetOption_RestoresTheNeutralApproximation()
+    {
+        _spells.RangedOptions.Traps.Hostility = TrapHostilityRule.AttackTarget;
+        GameObject trap = LayTrap(CustomEntry);
+        Creature wolf = Wolf(0);
+        _hooks.Neutral.Add(wolf.Guid);
+        Place(wolf, trap, 1.0f);
+
+        Tick();
+
+        Assert.Equal([wolf], _hit);
+    }
+
+    [Fact]
+    public void ATrapHitDoesNotPutAPlayerInCombat_ButStillHurtsIt()
+    {
+        _spells.Damage = new MapCombatSink(_map);
+        _hunter.UnitFlags |= UnitFlags.Pvp;
+        _hunter.Combat.PvpFlagTimer = CombatConstants.PvpFlagTimerMs;
+        GameObject trap = LayTrap(CustomEntry);
+        Player enemy = TestWorld.CreatePlayer(2, trap.X + 1, trap.Y, new FakeSession(2));
+        enemy.UnitFlags |= UnitFlags.Pvp;
+        _world.AddPlayer(enemy);
+        _relations.Hostile.Add(enemy.Guid);
+        uint before = enemy.Health;
+
+        Tick();
+
+        Assert.Equal([enemy], _hit);
+        Assert.True(enemy.Health < before);
+        Assert.False(enemy.Combat.IsInCombat); // Spell.cpp:1650
+        Assert.False(_hunter.Combat.IsInCombat);
+    }
+
+    [Fact]
+    public void ATrapHitStillPutsACreatureInCombat()
+    {
+        _spells.Damage = new MapCombatSink(_map);
+        GameObject trap = LayTrap(CustomEntry);
+        Creature wolf = Wolf(0);
+        Place(wolf, trap, 1.0f);
+
+        Tick();
+
+        Assert.Equal([wolf], _hit);
+        Assert.True(wolf.Combat.IsInCombat);
     }
 }

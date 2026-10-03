@@ -19,6 +19,7 @@ public sealed class RangedFeatureTests
         Assert.Equal(AmmoMode.Retail, options.Ammo.Mode);
         Assert.Equal(RangeLeewayMode.Retail, options.Range.Leeway);
         Assert.Equal(TrapRadiusSource.Vmangos, options.Traps.RadiusSource);
+        Assert.Equal(TrapHostilityRule.Faction, options.Traps.Hostility);
     }
 
     [Fact]
@@ -29,6 +30,7 @@ public sealed class RangedFeatureTests
             ["Ranged:Ammo:Mode"] = "Infinite",
             ["Ranged:Range:Leeway"] = "None",
             ["Ranged:Traps:RadiusSource"] = "Template",
+            ["Ranged:Traps:Hostility"] = "AttackTarget",
         }).Build();
 
         RangedOptions options = RangedFeature.Bind(configuration);
@@ -36,6 +38,7 @@ public sealed class RangedFeatureTests
         Assert.Equal(AmmoMode.Infinite, options.Ammo.Mode);
         Assert.Equal(RangeLeewayMode.None, options.Range.Leeway);
         Assert.Equal(TrapRadiusSource.Template, options.Traps.RadiusSource);
+        Assert.Equal(TrapHostilityRule.AttackTarget, options.Traps.Hostility);
     }
 
     [Fact]

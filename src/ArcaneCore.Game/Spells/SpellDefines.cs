@@ -89,6 +89,8 @@ public enum SpellAttributes : uint
     Passive = 0x00000040,
     DoNotDisplay = 0x00000080,
     OnNextSwing = 0x00000400,
+    /// <summary>vmangos SPELL_ATTR_ALLOW_WHILE_MOUNTED (SpellDefines.h:854).</summary>
+    AllowWhileMounted = 0x01000000,
     AllowCastWhileDead = 0x00800000,
     CooldownOnEvent = 0x02000000,
     AuraIsDebuff = 0x04000000,
@@ -104,6 +106,9 @@ public enum SpellAttributesEx : uint
     UseAllMana = 0x00000002,
     IsChanneled = 0x00000004,
     IsSelfChanneled = 0x00000040,
+
+    /// <summary>vmangos SPELL_ATTR_EX_NO_AUTOCAST_AI (SpellDefines.h:887).</summary>
+    NoAutocastAi = 0x00020000,
 
     /// <summary>vmangos SPELL_ATTR_EX_CANT_TARGET_SELF (AoE and chain selection skip the caster).</summary>
     CantTargetSelf = 0x00080000,

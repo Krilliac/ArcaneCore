@@ -30,6 +30,16 @@ public enum TrapRadiusSource
     Template = 1,
 }
 
+/// <summary>How a trap decides a unit is "hostile" for its in-combat-or-hostile test (<c>Ranged:Traps:Hostility</c>).</summary>
+public enum TrapHostilityRule
+{
+    /// <summary>Retail (GameObject.cpp:300-302): Unit::IsHostileTo, the faction reaction; a neutral creature that is not fighting never triggers a trap.</summary>
+    Faction = 0,
+
+    /// <summary>Deviation: the spell system's attack-target relation, which also accepts neutral creatures.</summary>
+    AttackTarget = 1,
+}
+
 /// <summary>
 /// Hunter / ranged-combat settings (configuration section "Ranged"). Every default is the
 /// retail 1.12.1 behaviour (vmangos); a value that differs is a deliberate, documented deviation.
@@ -54,6 +64,8 @@ public sealed class RangedOptions
     public sealed class TrapOptions
     {
         public TrapRadiusSource RadiusSource { get; set; } = TrapRadiusSource.Vmangos;
+
+        public TrapHostilityRule Hostility { get; set; } = TrapHostilityRule.Faction;
     }
 
     /// <summary>Range settings (<c>Ranged:Range</c>).</summary>

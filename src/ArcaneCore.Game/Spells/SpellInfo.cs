@@ -189,6 +189,17 @@ public sealed record SpellInfo
 
     public bool IsPassive => HasAttribute(SpellAttributes.Passive);
 
+    /// <summary>
+    /// vmangos SpellEntry::GetSpellSpecific SPELL_TRACKER precondition (SpellEntry.cpp:153-157): a tracking aura
+    /// (44, 45 or 151) on a spell with AttributesEx NO_AUTOCAST_AI or Attributes ALLOW_WHILE_MOUNTED. It leaves
+    /// out Well Fed and other always-allowed spells that merely carry such an aura.
+    /// </summary>
+    public bool IsTracker => (HasAura(AuraType.TrackCreatures) || HasAura(AuraType.TrackResources) || HasAura(AuraType.TrackStealthed))
+        && (HasAttribute(SpellAttributesEx.NoAutocastAi) || HasAttribute(SpellAttributes.AllowWhileMounted));
+
+    /// <summary>vmangos SpellEntry::IsFitToFamily&lt;family, bit&gt;: the family name matches and the flag bit is set.</summary>
+    public bool IsFitToFamily(uint familyName, int flagBit) => SpellFamilyName == familyName && (SpellFamilyFlags & (1UL << flagBit)) != 0;
+
     /// <summary>vmangos SPELL_ATTR_EX3_ONLY_ON_GHOSTS (SpellDefines.h, AttributesEx3 bit 12).</summary>
     private const uint Ex3OnlyOnGhosts = 0x00001000;
 

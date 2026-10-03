@@ -365,7 +365,7 @@ public sealed partial class SpellSystem
                 SendToSet(caster, WorldOpcode.SmsgSpelllogmiss, SpellPackets.BuildSpellLogMiss(spell.Id, caster.Guid, target.Guid, entry.Miss), includeSelf: true);
                 if (!IsQuestSettlementPending(caster) && !IsQuestSettlementPending(target) && target.IsAlive && Relations.IsHostile(caster, target))
                 {
-                    Damage.DealSpellDamage(caster, target, spell, 0, periodic: false);
+                    Damage.DealSpellDamage(caster, target, spell, 0, periodic: false, startsCombat: StartsCombat(caster, target));
                 }
 
                 continue;
@@ -547,7 +547,7 @@ public sealed partial class SpellSystem
         }
 
         // ranged (hunter lane): Hunter's Mark needs an attackable unit (Spell.cpp:6436-6447).
-        SpellCastResult stalked = CheckStalkedTarget(caster, spell, targets, unitTarget);
+        SpellCastResult stalked = CheckStalkedTarget(caster, spell, unitTarget);
         if (stalked != SpellCastResult.CastOk)
         {
             return stalked;

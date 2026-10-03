@@ -24,7 +24,7 @@ public sealed partial class SpellSystem
     /// <summary>
     /// A trap's spell (vmangos GameObject::Update: <c>owner->CastSpell(target, spellId, true, ..., trapGuid)</c>, a triggered
     /// cast, which neither checks range nor needs a living caster). Runs synchronously: a triggered cast has no cast time.
-    /// The original-caster marker (no combat for a player a trap hits, Spell.cpp:1650) is not modelled.
+    /// A player a trap hits is not put in combat (Spell.cpp:1650, see <see cref="StartsCombat"/>); the trap's damage over time, applied later by an aura, is not covered.
     /// </summary>
     internal SpellCastResult CastFromObject(Unit owner, uint spellId, Unit target)
     {
@@ -38,6 +38,12 @@ public sealed partial class SpellSystem
             _objectCastDepth--;
         }
     }
+
+    /// <summary>
+    /// vmangos Spell::DoAllEffectOnTarget (Spell.cpp:1650): a hostile spell cast on behalf of a game object (hunter
+    /// trap) does not put a player target in combat.
+    /// </summary>
+    private bool StartsCombat(Unit caster, Unit target) => _objectCastDepth == 0 || target is not Player;
 
     /// <summary>SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4 (the slot is the effect: 0x68-0x6B).</summary>
     internal void EffectSummonObject(SpellEffectContext context)

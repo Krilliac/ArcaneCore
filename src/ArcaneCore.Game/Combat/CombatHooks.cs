@@ -78,6 +78,14 @@ public class CombatHooks
         => a is Player pa && b is Player pb && pa.Team == pb.Team;
 
     /// <summary>
+    /// vmangos Unit::IsHostileTo (GetReactionTo(target) &lt;= REP_HOSTILE): the FACTION reaction, which unlike
+    /// <see cref="CanAttack"/> is false for neutral units. Without faction templates the reaction is unknown, so
+    /// the default falls back to <see cref="CanAttack"/> (a documented seam limit; <see cref="FactionCombatHooks"/>
+    /// supplies the real reaction).
+    /// </summary>
+    public virtual bool IsHostileTo(Unit a, Unit b) => CanAttack(a, b);
+
+    /// <summary>
     /// Whether <paramref name="attacker"/> may attack <paramref name="victim"/> (the parts of
     /// vmangos Unit::IsValidAttackTarget / IsTargetableBy that do not need factions): both in
     /// the same map, the victim alive and not flagged non-attackable, not a GM in GM mode, not

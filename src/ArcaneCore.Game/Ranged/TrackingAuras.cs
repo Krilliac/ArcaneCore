@@ -18,7 +18,7 @@ public static class UnitDynFlags
 /// client from the player's tracking fields; the server only keeps the bits.
 /// <list type="bullet">
 /// <item>TRACK_CREATURES / TRACK_RESOURCES (HandleAuraTrackCreatures / TrackResources, 2909-2931):
-/// players only; applying removes the other tracking auras (SPELL_TRACKER stacking, SpellEntry.cpp:148-157);
+/// players only; applying removes the other tracking auras (SPELL_TRACKER stacking, SpellEntry.cpp:148-157: only spells with NO_AUTOCAST_AI or ALLOW_WHILE_MOUNTED count as trackers, see SpellInfo.IsTracker);
 /// bit (MiscValue - 1) of PLAYER_TRACK_CREATURES / PLAYER_TRACK_RESOURCES is set or cleared.</item>
 /// <item>TRACK_STEALTHED (2933-2940): the same exclusivity; sets or clears the TRACK_STEALTHED bit
 /// (0x02) of byte 0 of PLAYER_FIELD_BYTES (Player.h:360,378).</item>
@@ -45,7 +45,7 @@ internal static class TrackingAuras
                     return;
                 }
 
-                if (apply)
+                if (apply && holder.Spell.IsTracker)
                 {
                     system.RemoveOtherHolders(target, holder, TrackerTypes);
                 }
@@ -59,7 +59,7 @@ internal static class TrackingAuras
                     return;
                 }
 
-                if (apply)
+                if (apply && holder.Spell.IsTracker)
                 {
                     system.RemoveOtherHolders(target, holder, TrackerTypes);
                 }
