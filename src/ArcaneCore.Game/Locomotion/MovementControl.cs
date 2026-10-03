@@ -108,6 +108,13 @@ public static class MovementControl
     {
         ArgumentNullException.ThrowIfNull(unit);
         ArgumentNullException.ThrowIfNull(change);
+        if (change.Type == MovementChangeType.KnockBack)
+        {
+            // "Not resendable change": the knock back is dropped, not enforced (CheckPendingMovementChanges, Unit.cpp:6653-6658);
+            // the resolve switch has no knock back case either.
+            return;
+        }
+
         if (UnitSpeed.IsSpeedChange(change.Type))
         {
             // ResolvePendingMovementChange, speed cases (Unit.cpp:6767-6797): SetSpeedRateReal + SendSpeedChangeToAll.

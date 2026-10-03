@@ -38,6 +38,19 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
+    /// vmangos Unit::InterruptNonMeleeSpells(false): stop the unit's current cast, whether it is still being prepared or is a
+    /// channel (a queued melee ability is not a non-melee spell and stays).
+    /// </summary>
+    public void InterruptNonMeleeSpells(Unit unit)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        if (GetState(unit.Guid)?.CurrentCast is { } cast && cast.State is SpellCastState.Preparing or SpellCastState.Casting)
+        {
+            Cancel(cast);
+        }
+    }
+
+    /// <summary>
     /// vmangos Unit::InterruptSpellsWithChannelFlags: stop the unit's channel when its channel interrupt flags carry any of
     /// <paramref name="flags"/> (a channeled spell that ends when the caster mounts, for instance).
     /// </summary>

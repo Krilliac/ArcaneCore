@@ -69,7 +69,7 @@ public static class UnitSpeed
         _ => throw new ArgumentOutOfRangeException(nameof(type)),
     };
 
-    public static bool IsSpeedChange(MovementChangeType type) => type >= MovementChangeType.SpeedWalk;
+    public static bool IsSpeedChange(MovementChangeType type) => type is >= MovementChangeType.SpeedWalk and <= MovementChangeType.SpeedSwimBack;
 
     public static MoveType MoveTypeOf(MovementChangeType type) => type switch
     {

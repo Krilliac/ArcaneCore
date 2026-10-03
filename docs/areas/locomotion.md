@@ -255,3 +255,26 @@ Not delivered (the systems are not on this base): unsummoning or disabling the p
 the disallowed shapeshift form refusal (only for mounts without a spell), `ResetExtraAttacks`, the Silithyst drop on mounting. **Taxi**: `TaxiFlightSystem`
 sets and clears the mount display itself and vmangos removes the Mounted aura when a flight starts (`ActivateTaxiPathTo`); here an aura mount is not removed
 at taxi start, so the display is overwritten for the flight and cleared at its end while the aura stays: the taxi code needs the spell system to remove it.
+## Slice 9: knockback (delivered)
+
+`SPELL_EFFECT_KNOCK_BACK` (98, 133 classic spells; 51 are creature casts in dungeons and raids) and `SPELL_EFFECT_PLAYER_PULL` (124, 7 spells) in
+`Spells/Effects/KnockbackEffects.cs`, after vmangos `Spell::EffectKnockBack` (`SpellEffects.cpp:5474-5484`) and `EffectPlayerPull` (`:5495-5505`);
+the movement part is `Locomotion/Knockback/Knockback.cs` (vmangos `Unit::KnockBackFrom` / `KnockBack`, `Unit.cpp:9932-9960`).
+
+* **Order**: a target that is stunned or rooted is left alone; its current non-melee cast is interrupted; a player in a map gets `SMSG_MOVE_KNOCK_BACK` =
+  packed GUID, u32 counter, f32 vcos, f32 vsin, f32 horizontal speed, f32 vertical speed **negated** (gtker `smsg_move_knock_back.wowm`, vmangos
+  `MovementPacketSender.cpp:241-278`) and a pending `KnockBack` change. The direction is the angle from the caster to the target in [0, 2 pi), or the target's
+  orientation plus pi when it knocks itself back. Horizontal speed is `misc value / 10`; vertical speed is `value / 10` **with vmangos' integer division** of
+  the effect value (57 gives 5; mangos-classic divides as a float and gets 5.7): vmangos is primary and is followed, the difference is an open question.
+  A taxi passenger is skipped; the Dream Fog sleep (24778) is removed first. Only players are moved, as in every pre-WotLK core (mangos-classic
+  `Unit.cpp:10816`: "Effect properly implemented only for players"); creatures are never knocked back, but their cast is still interrupted.
+* **Pull**: toward the caster by `min(2D distance, value)` as a negative horizontal speed, `misc value / 10` vertical (vmangos itself flags this as "very wrong").
+* **Ack** (`ArcaneCore.World/Locomotion/KnockbackAckHandler.cs`, vmangos `HandleMoveKnockBackAck`, `MovementHandler.cpp:747-802`): the movement block's jump
+  section (cos, sin, xy speed, z speed) must repeat the order within 0.01 and the counter must match; a match ends the fall in progress, stores the block
+  and relays `MSG_MOVE_KNOCK_BACK` (packed GUID, block, the four numbers) to the observers, not to the mover. Mismatches are ignored and counted.
+  The server does not move the unit: the client's next movement packets carry the launch.
+* **Timeout**: an unacknowledged knock back is not resendable, so after `Locomotion:PendingAckResponseTimeMs` it is dropped and counted as a failed ack, not
+  enforced (`CheckPendingMovementChanges`, `Unit.cpp:6653-6658`).
+
+Not delivered: `SetLaunched` / the anticheat's knock back tolerance and `SetJumpInitialSpeed` (extrapolation only); damage-immunity interactions (a spell
+immunity that stops knock back belongs to the spell combat rules). Unverified against a 1.12.1 client (packed GUID width, see slice 1).

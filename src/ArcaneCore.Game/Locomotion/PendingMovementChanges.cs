@@ -19,7 +19,13 @@ public enum MovementChangeType
     SpeedRunBack,
     SpeedSwim,
     SpeedSwimBack,
+
+    /// <summary>A knock back order (vmangos KNOCK_BACK); it carries <see cref="PendingMovementChange.Knockback"/> and is never enforced.</summary>
+    KnockBack,
 }
+
+/// <summary>The four numbers of SMSG_MOVE_KNOCK_BACK that the client must echo in its ack (vmangos knockbackInfo): direction cosine and sine, horizontal speed and vertical speed (sent negated).</summary>
+public readonly record struct KnockbackInfo(float VCos, float VSin, float SpeedXY, float SpeedZ);
 
 /// <summary>One sent-but-unacknowledged change (vmangos PlayerMovementPendingChange, Unit.h).</summary>
 /// <param name="Counter">The movement counter sent to the client (the ack echoes it).</param>
@@ -29,6 +35,9 @@ public sealed record PendingMovementChange(uint Counter, MovementChangeType Type
 {
     /// <summary>The speed in yards per second a speed change orders (vmangos pendingChange.newValue); 0 for the flag changes.</summary>
     public float NewValue { get; init; }
+
+    /// <summary>The numbers of a knock back order; null for every other change.</summary>
+    public KnockbackInfo? Knockback { get; init; }
 
     /// <summary>Milliseconds since the change was sent, advanced by the map tick (the ack timeout clock).</summary>
     public uint AgeMs { get; internal set; }
@@ -101,9 +110,9 @@ public sealed class PendingMovementChanges
     public bool HasPendingOfType(MovementChangeType type) => _changes.Any(c => c.Type == type);
 
     /// <summary>Record a sent order (vmangos PushPendingMovementChange).</summary>
-    public PendingMovementChange Push(uint counter, MovementChangeType type, bool apply, float newValue = 0.0f)
+    public PendingMovementChange Push(uint counter, MovementChangeType type, bool apply, float newValue = 0.0f, KnockbackInfo? knockback = null)
     {
-        var change = new PendingMovementChange(counter, type, apply) { NewValue = newValue };
+        var change = new PendingMovementChange(counter, type, apply) { NewValue = newValue, Knockback = knockback };
         _lastCounter[type] = counter;
         _changes.Add(change);
         return change;
@@ -143,6 +152,33 @@ public sealed class PendingMovementChanges
                 _changes.RemoveAt(i);
                 return true;
             }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Match a knock back acknowledgement (vmangos FindPendingMovementKnockbackChange, Unit.cpp:6867-6890): the same counter and
+    /// the jump block of the client's movement block (cos, sin, xy speed, z speed) within 0.01 of what was sent.
+    /// </summary>
+    public bool TryAcknowledgeKnockBack(uint counter, in MovementInfo block)
+    {
+        for (int i = 0; i < _changes.Count; i++)
+        {
+            PendingMovementChange change = _changes[i];
+            if (change.Counter != counter || change.Type != MovementChangeType.KnockBack || change.Knockback is not { } sent)
+            {
+                continue;
+            }
+
+            if (Math.Abs(sent.SpeedXY - block.JumpXySpeed) > 0.01f || Math.Abs(sent.SpeedZ - block.JumpZSpeed) > 0.01f
+                || Math.Abs(sent.VCos - block.JumpCosAngle) > 0.01f || Math.Abs(sent.VSin - block.JumpSinAngle) > 0.01f)
+            {
+                continue;
+            }
+
+            _changes.RemoveAt(i);
+            return true;
         }
 
         return false;
