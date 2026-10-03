@@ -40,6 +40,7 @@ public static class WorldServiceCollectionExtensions
         services.Configure<WorldOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<WorldRuntimeOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<WorldSessionOptions>(configuration.GetSection(WorldOptions.SectionName));
+        services.Configure<HotCodeOptions>(configuration.GetSection(HotCodeOptions.SectionName));
 
         services.AddSingleton(_ => BuildOpcodeTable());
         services.AddSingleton(_ => ChatCommands.CreateTable());

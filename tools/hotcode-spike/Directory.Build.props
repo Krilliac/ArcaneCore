@@ -1,0 +1,4 @@
+<Project>
+  <!-- Intentionally empty: stops the repo-root Directory.Build.props (warnings as errors, analyzers)
+       from applying to the spike, which is copied and edited by run-spike.ps1. -->
+</Project>
