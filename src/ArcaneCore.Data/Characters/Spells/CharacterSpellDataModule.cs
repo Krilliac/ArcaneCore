@@ -37,7 +37,7 @@ public interface ICharacterSpellStore
 }
 
 /// <summary>The <c>character_spell</c> table (characters schema version 4; see docs/integration/spells.md).</summary>
-public sealed class CharacterSpellDataModule : IDataModule
+public sealed class CharacterSpellDataModule : IDataModule, ICharacterDataCleanup
 {
     public const string Table = "character_spell";
 
@@ -58,6 +58,14 @@ public sealed class CharacterSpellDataModule : IDataModule
     }
 
     public void AddServices(IServiceCollection services) => services.AddScoped<ICharacterSpellStore, EfCharacterSpellStore>();
+
+    /// <summary>The spellbook (vmangos DeleteFromDB: character_spell).</summary>
+    public async Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        await db.Set<CharacterSpellRow>().Where(r => r.CharacterId == characterId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+    }
 }
 
 /// <summary>EF Core implementation of <see cref="ICharacterSpellStore"/>.</summary>

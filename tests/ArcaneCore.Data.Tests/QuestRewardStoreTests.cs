@@ -240,7 +240,8 @@ public sealed class QuestRewardStoreTests : IAsyncLifetime
         Assert.Equal(QuestRewardCommitResult.CharacterMissing, await CommitAsync(seed.Connection, seed.Request));
         await using CharacterDbContext verify = TestContexts.Create<CharacterDbContext>(seed.Connection);
         Assert.Empty(await new EfItemStore(verify).GetInventoryAsync(seed.Request.Before.Id));
-        Assert.False((await new EfCharacterQuestStore(verify).LoadAsync(seed.Request.Before.Id)).Quests.Single().Rewarded);
+        // The quest row went with the character (CharacterDeletionTests); the refused reward wrote none.
+        Assert.Empty((await new EfCharacterQuestStore(verify).LoadAsync(seed.Request.Before.Id)).Quests);
     }
 
     [Theory]
