@@ -1,4 +1,5 @@
 using System.Globalization;
+using ArcaneCore.Data.Content.Chr;
 using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Data.Content.Spells;
@@ -183,6 +184,7 @@ public static class ContentImporterCli
         var itemsAndQuests = new ItemQuestDumpImporter { QuestXp = ParseQuestXp(a) };
         var onKill = new OnKillReputationDumpImporter();
         var playerCreate = new PlayerCreateDumpImporter();
+        var startActions = new PlayerCreateActionDumpImporter();
         var locations = new LocationDumpImporter();
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
@@ -207,6 +209,11 @@ public static class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             playerCreate.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            startActions.Read(reader);
         }
 
         using (TextReader reader = ChainedTextReader.Create(inputs))
@@ -244,6 +251,7 @@ public static class ContentImporterCli
         ItemQuestImportReport itemQuestReport = itemsAndQuests.BuildReport();
         ReputationOnKillImportReport onKillReport = onKill.BuildReport();
         PlayerCreateImportReport playerReport = playerCreate.BuildReport();
+        PlayerCreateActionImportReport startActionReport = startActions.BuildReport();
         LocationImportReport locationReport = locations.BuildReport();
         if (!dryRun)
         {
@@ -259,6 +267,7 @@ public static class ContentImporterCli
                     itemQuestReport = await itemsAndQuests.WriteAsync(db, replace, token).ConfigureAwait(false);
                     onKillReport = await onKill.WriteAsync(db, replace, token).ConfigureAwait(false);
                     playerReport = await playerCreate.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    startActionReport = await startActions.WriteAsync(db, replace, token).ConfigureAwait(false);
                     locationReport = await locations.WriteAsync(db, replace, token).ConfigureAwait(false);
                 }, ct).ConfigureAwait(false);
             }
@@ -273,6 +282,7 @@ public static class ContentImporterCli
         warnings.AddRange(itemQuestReport.Warnings);
         warnings.AddRange(onKillReport.Warnings);
         warnings.AddRange(playerReport.Warnings);
+        warnings.AddRange(startActionReport.Warnings);
         warnings.AddRange(locationReport.Warnings);
         if (itemQuestReport.DerivedQuestXp > 0)
         {
@@ -281,7 +291,7 @@ public static class ContentImporterCli
                 "(the source has no RewXP; cmangos Quest::XPValue); XP reduced for grey quests can differ from cmangos by 1");
         }
 
-        (Dictionary<string, long> imported, Dictionary<string, long> skipped) = Counts(creatureReport, objectReport, itemQuestReport, onKillReport, playerReport, locationReport);
+        (Dictionary<string, long> imported, Dictionary<string, long> skipped) = Counts(creatureReport, objectReport, itemQuestReport, onKillReport, playerReport, startActionReport, locationReport);
         o.WriteLine(dryRun ? "would import:" : "imported:");
         foreach ((string table, long count) in imported)
         {
@@ -317,7 +327,7 @@ public static class ContentImporterCli
 
     private static (Dictionary<string, long> Imported, Dictionary<string, long> Skipped) Counts(
         CreatureImportReport creatures, GameObjectLootImportReport objects, ItemQuestImportReport itemsAndQuests, ReputationOnKillImportReport onKill,
-        PlayerCreateImportReport playerCreate, LocationImportReport locations)
+        PlayerCreateImportReport playerCreate, PlayerCreateActionImportReport startActions, LocationImportReport locations)
     {
         var imported = new Dictionary<string, long>
         {
@@ -345,6 +355,7 @@ public static class ContentImporterCli
             ["creature_onkill_reputation"] = onKill.Entries,
             ["player_create_info"] = playerCreate.StartPositions,
             ["playercreateinfo_spell"] = playerCreate.CreateSpells,
+            ["playercreateinfo_action"] = startActions.Rows,
             ["spell_target_position"] = playerCreate.SpellTargetPositions,
             ["level_stats_rows"] = playerCreate.LevelStatRows,
             ["areatrigger_teleport"] = locations.Portals,
@@ -357,6 +368,7 @@ public static class ContentImporterCli
             ["item_and_quest_rows"] = itemsAndQuests.SkippedRows,
             ["creature_onkill_reputation"] = onKill.SkippedRows,
             ["player_create_rows"] = playerCreate.SkippedRows,
+            ["playercreateinfo_action_rows"] = startActions.SkippedRows,
             ["areatrigger_teleport_rows"] = locations.SkippedRows,
         };
         return (imported, skipped);
@@ -456,6 +468,7 @@ public static class ContentImporterCli
                 ("creature_onkill_reputation", await db.Set<CreatureOnKillReputationRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("player_create_info", await db.PlayerCreateInfo.CountAsync(ct).ConfigureAwait(false)),
                 ("playercreateinfo_spell", await db.Set<PlayerCreateSpellRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("playercreateinfo_action", await db.Set<PlayerCreateActionRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_target_position", await db.Set<SpellTargetPositionRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("areatrigger_teleport", await db.Set<AreaTriggerTeleportRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("game_tele", await db.Set<GameTeleRow>().CountAsync(ct).ConfigureAwait(false)),

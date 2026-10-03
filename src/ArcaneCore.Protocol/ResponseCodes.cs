@@ -14,7 +14,9 @@ public enum CharResult : byte
     CharCreateFailed = 0x30,
     CharCreateNameInUse = 0x31,
     CharCreateDisabled = 0x32,
+    CharCreatePvpTeamsViolation = 0x33,
     CharCreateServerLimit = 0x34,
+    CharCreateAccountLimit = 0x35,
     CharDeleteSuccess = 0x39,
     CharDeleteFailed = 0x3A,
     CharLoginInProgress = 0x3C,
@@ -30,6 +32,12 @@ public enum CharResult : byte
     CharNameTooLong = 0x47,
     CharNameInvalidCharacter = 0x48, // gtker CHAR_NAME_ONLY_LETTERS
     CharNameMixedLanguages = 0x49,
+    CharNameProfane = 0x4A,
+    CharNameReserved = 0x4B,
+    CharNameInvalidApostrophe = 0x4C,
+    CharNameMultipleApostrophes = 0x4D,
+    CharNameThreeConsecutive = 0x4E,
+    CharNameInvalidSpace = 0x4F,
     CharNameSuccess = 0x50,
     CharNameFailure = 0x51,
 }

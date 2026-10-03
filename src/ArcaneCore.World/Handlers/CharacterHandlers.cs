@@ -1,10 +1,12 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
+using ArcaneCore.World.Characters.Creation;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Packets;
@@ -23,6 +25,9 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
     /// <summary>How long a login waits for the same character's previous session to leave the world.</summary>
     private static readonly TimeSpan DuplicateLoginWait = TimeSpan.FromSeconds(5);
 
+    /// <summary>The most characters the client can list (it cannot handle values larger than 10).</summary>
+    private const int MaxListedCharacters = 10;
+
     public void Register(OpcodeTable table)
     {
         table.OnSession(WorldOpcode.CmsgCharEnum, SessionStates.CharacterSelect, HandleCharEnumAsync);
@@ -39,6 +44,11 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
 
         ICharacterStore characters = session.Services.GetRequiredService<ICharacterStore>();
         IReadOnlyList<CharacterRecord> list = await characters.GetByAccountAsync(session.AccountId).ConfigureAwait(false);
+
+        if (session.Services.GetService<CharacterCreationFeature>()?.Options.Mode != CharacterCreationMode.Legacy)
+        {
+            list = await LimitForClientAsync(session, list).ConfigureAwait(false);
+        }
 
         // Visible equipment comes from the features that own it (ICharacterHooks); first answer wins.
         Dictionary<int, CharEnumItem[]>? equipment = null;
@@ -60,12 +70,38 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         session.Send(WorldOpcode.SmsgCharEnum, CharacterPackets.BuildCharEnum(list, equipment));
     }
 
+    /// <summary>
+    /// At most 10 characters, oldest first (vmangos HandleCharEnum LIMIT 0,10, CharacterHandler.cpp:168-183;
+    /// the client cannot handle more, gtker smsg_char_enum.wowm), without those whose race/class pair has no
+    /// create info (Player::BuildEnumData skips them, Player.cpp:1632-1650).
+    /// </summary>
+    private static async Task<IReadOnlyList<CharacterRecord>> LimitForClientAsync(WorldSession session, IReadOnlyList<CharacterRecord> list)
+    {
+        IWorldDataStore worldData = session.Services.GetRequiredService<IWorldDataStore>();
+        var shown = new List<CharacterRecord>(Math.Min(list.Count, MaxListedCharacters));
+        foreach (CharacterRecord character in list.Take(MaxListedCharacters))
+        {
+            if (await worldData.IsValidRaceClassAsync(character.Race, character.Class).ConfigureAwait(false))
+            {
+                shown.Add(character);
+            }
+            else
+            {
+                session.Logger.LogError("[{Endpoint}] character {Id} has race {Race} class {Class} without create info and is not listed",
+                    session.RemoteEndpoint, character.Id, character.Race, character.Class);
+            }
+        }
+
+        return shown;
+    }
+
     private static async Task HandleCharCreateAsync(WorldSession session, byte[] payload)
     {
         // CMSG_CHAR_CREATE: CString name, u8 race, class, gender, skin, face, hair style,
         // hair color, facial hair, outfit id (vmangos WorldSession::HandleCharCreateOpcode).
         var reader = new PacketReader(payload);
-        string rawName = reader.ReadCString();
+        // Raw bytes: vmangos normalizePlayerName fails on invalid UTF-8 (CHAR_NAME_NO_NAME).
+        byte[] rawName = reader.ReadCStringBytes().ToArray();
         byte race = reader.ReadByte();
         byte cls = reader.ReadByte();
         byte gender = reader.ReadByte();
@@ -77,33 +113,23 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
 
         ICharacterStore characters = session.Services.GetRequiredService<ICharacterStore>();
         IWorldDataStore worldData = session.Services.GetRequiredService<IWorldDataStore>();
+        CharacterCreationFeature? feature = session.Services.GetService<CharacterCreationFeature>();
+        CharacterCreationOptions options = feature?.Options ?? new CharacterCreationOptions();
 
-        // Checks in vmangos order: race/class, name rules, name in use, characters per realm.
-        if (!await worldData.IsValidRaceClassAsync(race, cls).ConfigureAwait(false) || gender > 1)
+        // The checks of vmangos HandleCharCreateOpcode, in its order (CharacterCreationRules).
+        CharacterCreationDecision decision = await CharacterCreationRules.EvaluateAsync(
+            new CharacterCreationRequest(rawName, race, cls, gender),
+            session.Security,
+            options,
+            session.World.Options.CharactersPerRealm,
+            new StoreFacts(characters, worldData, session.AccountId)).ConfigureAwait(false);
+        if (!decision.Accepted)
         {
-            SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharCreateFailed);
+            SendResult(session, WorldOpcode.SmsgCharCreate, decision.Result);
             return;
         }
 
-        string name = CharacterNames.Normalize(rawName);
-        if (CharacterNames.Validate(name) is { } nameError)
-        {
-            SendResult(session, WorldOpcode.SmsgCharCreate, nameError);
-            return;
-        }
-
-        if (await characters.IsNameTakenAsync(name).ConfigureAwait(false))
-        {
-            SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharCreateNameInUse);
-            return;
-        }
-
-        if (await characters.CountByAccountAsync(session.AccountId).ConfigureAwait(false) >= session.World.Options.CharactersPerRealm)
-        {
-            SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharCreateServerLimit);
-            return;
-        }
-
+        string name = decision.Name!;
         StartPosition? start = await worldData.GetStartPositionAsync(race, cls).ConfigureAwait(false);
         if (start is null)
         {
@@ -138,12 +164,25 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             HomeZ = start.Z,
         };
 
+        if (options.Mode == CharacterCreationMode.Retail)
+        {
+            // StartPlayerLevel / GM.StartLevel / StartPlayerMoney (vmangos Player.cpp:16217-16219).
+            record.Level = (byte)options.StartLevelFor(session.Security > AccountSecurity.Player, feature?.MaxPlayerLevel ?? 60);
+            record.Money = options.StartMoney;
+        }
+
         // A store failure (or a refused id) must answer the client, never escape to the dispatcher,
         // which would drop the whole session without any SMSG_CHAR_CREATE.
         CharacterRecord created;
         try
         {
             created = await characters.CreateAsync(record).ConfigureAwait(false);
+        }
+        catch (CharacterNameTakenException)
+        {
+            // Another creation of the same name committed between the check and the insert.
+            SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharCreateNameInUse);
+            return;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -168,11 +207,56 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             session.Logger.LogError(ex, "[{Endpoint}] a feature failed to set up new character '{Name}'", session.RemoteEndpoint, name);
+            if (options.Mode == CharacterCreationMode.Retail)
+            {
+                // vmangos saves a new character in one transaction (Player::SaveNewPlayer), so a
+                // failure leaves nothing: take the half-created character back out through the whole
+                // delete contract (hooks, per-module cleanup, ledger, directory).
+                await RollBackCreationAsync(session, created).ConfigureAwait(false);
+            }
+
             SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharCreateError);
             return;
         }
 
         SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharCreateSuccess);
+    }
+
+    /// <summary>Remove a character whose creation failed after the row was inserted.</summary>
+    private static async Task RollBackCreationAsync(WorldSession session, CharacterRecord created)
+    {
+        bool removed = false;
+        try
+        {
+            removed = await CharacterDeletion.TryDeleteAsync(session, (ulong)created.Id).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            session.Logger.LogError(ex, "[{Endpoint}] could not roll back character {Id}", session.RemoteEndpoint, created.Id);
+        }
+
+        if (!removed)
+        {
+            session.Logger.LogError("[{Endpoint}] character '{Name}' ({Id}) stays half-created: its creation failed and the rollback was refused",
+                session.RemoteEndpoint, created.Name, created.Id);
+        }
+    }
+
+    /// <summary>The realm facts <see cref="CharacterCreationRules"/> asks for, read from the stores.</summary>
+    private sealed class StoreFacts(ICharacterStore characters, IWorldDataStore worldData, int accountId) : ICharacterCreationFacts
+    {
+        public Task<bool> IsNameTakenAsync(string name) => characters.IsNameTakenAsync(name);
+
+        public Task<int> CountOnRealmAsync() => characters.CountByAccountAsync(accountId);
+
+        public async Task<byte?> FirstCharacterRaceAsync()
+        {
+            // GetByAccountAsync is ordered by id: the first element is the lowest guid.
+            IReadOnlyList<CharacterRecord> own = await characters.GetByAccountAsync(accountId).ConfigureAwait(false);
+            return own.Count == 0 ? null : own[0].Race;
+        }
+
+        public Task<bool> HasStartInfoAsync(byte race, byte cls) => worldData.IsValidRaceClassAsync(race, cls);
     }
 
     private static async Task HandleCharDeleteAsync(WorldSession session, byte[] payload)

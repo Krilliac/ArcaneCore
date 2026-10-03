@@ -6,6 +6,7 @@ using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Data.Characters.Talents;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.Content.Chr;
 using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Data.Content.Spells;
@@ -64,6 +65,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.World.WorldState.WorldStateDataModule), DatabaseComponent.World, ArcaneCore.Data.World.WorldState.WorldStateDataModule.Version),
             (typeof(GameObjectSpawnDataModule), DatabaseComponent.World, GameObjectSpawnDataModule.Version),
             (typeof(SpecialLootDataModule), DatabaseComponent.World, SpecialLootDataModule.Version),
+            (typeof(StartActionWorldModule), DatabaseComponent.World, StartActionWorldModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),

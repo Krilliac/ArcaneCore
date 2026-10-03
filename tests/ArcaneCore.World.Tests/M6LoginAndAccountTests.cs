@@ -77,7 +77,8 @@ public sealed class M6LoginAndAccountTests
         Assert.Equal((byte)CharResult.CharNameTooShort, await client.TryCreateCharacterAsync("A"));
         Assert.Equal((byte)CharResult.CharNameMixedLanguages, await client.TryCreateCharacterAsync("Abc1"));
         Assert.Equal((byte)CharResult.CharNameMixedLanguages, await client.TryCreateCharacterAsync("Abcд")); // Latin + Cyrillic
-        Assert.Equal((byte)CharResult.CharCreateFailed, await client.TryCreateCharacterAsync("Gnomer", race: 7)); // not offered by the test data
+        Assert.Equal((byte)CharResult.CharCreateError, await client.TryCreateCharacterAsync("Gnomer", race: 7)); // a real race without a start row in the test data (Player.cpp:408-413)
+        Assert.Equal((byte)CharResult.CharCreateFailed, await client.TryCreateCharacterAsync("Nonrace", race: 12)); // no ChrRaces row
         Assert.Equal((byte)CharResult.CharCreateSuccess, await client.TryCreateCharacterAsync("ñandú"));
         Assert.Equal((byte)CharResult.CharCreateSuccess, await client.TryCreateCharacterAsync("ЖЕНЯ"));
         Assert.Equal((byte)CharResult.CharCreateServerLimit, await client.TryCreateCharacterAsync("Fourth"));

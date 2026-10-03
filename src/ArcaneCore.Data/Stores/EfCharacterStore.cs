@@ -52,6 +52,11 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
                 await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
                 return character;
             }
+            catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+            {
+                // A generated id cannot collide, so the unique index that fired is the one on the name.
+                throw new CharacterNameTakenException(character.Name, ex);
+            }
             finally
             {
                 // A failed insert must not stay tracked: the next save on this scope would retry it.
@@ -83,6 +88,27 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
         {
             db.ChangeTracker.Clear();
         }
+    }
+
+    /// <summary>
+    /// Whether an insert failed on a unique constraint, per engine: SQLite extended result code 2067
+    /// (SQLITE_CONSTRAINT_UNIQUE) or 1555 (PRIMARY KEY), MySqlConnector error 1062 (duplicate entry),
+    /// Npgsql SQLSTATE 23505 (unique_violation).
+    /// </summary>
+    internal static bool IsUniqueViolation(DbUpdateException ex)
+    {
+        for (Exception? e = ex.InnerException; e is not null; e = e.InnerException)
+        {
+            switch (e)
+            {
+                case Microsoft.Data.Sqlite.SqliteException sqlite when sqlite.SqliteExtendedErrorCode is 2067 or 1555:
+                case MySqlConnector.MySqlException mysql when mysql.ErrorCode == MySqlConnector.MySqlErrorCode.DuplicateKeyEntry:
+                case Npgsql.PostgresException pg when pg.SqlState == "23505":
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     public Task<bool> DeleteAsync(int id, int accountId, CancellationToken cancellationToken = default)
