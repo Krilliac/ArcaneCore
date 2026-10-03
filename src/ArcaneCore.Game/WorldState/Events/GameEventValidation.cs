@@ -97,6 +97,10 @@ public static class GameEventValidation
             {
                 issues.Add($"game_event {source.Id} has game_event_time but is not date scheduled - ignoring");
             }
+            else if (source.Start is null || source.End is null)
+            {
+                issues.Add($"game_event {source.Id} has an unreadable start or end in game_event_time and never runs");
+            }
             else if (definition.Start != GameEventCalendar.FarFuture)
             {
                 definition = definition with { Start = source.Start ?? s_defaultStart, End = source.End ?? s_defaultEnd };

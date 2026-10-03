@@ -127,6 +127,42 @@ Pure maths in `Game/WorldState/Events`, every function taking the time and the z
   are the only place provider semantics are exercised), including signed events and date text; duplicate keys are refused;
   the status store replaces atomically and serialises two concurrent replaces. This machine ran SQLite only.
 
+### Game-event service (`game-event-service`)
+
+- `GameEventService` (`Game/WorldState/Events`) is the state machine of `GameEventMgr`: `Update` (vmangos GameEventMgr.cpp:708-763,
+  mangos-classic :669-712), `StartEvent` / `StopEvent` with overwrite (:72-113), `EnableEvent` (:115-152), `Initialize`
+  (:673-696). One shell serves both dialects; the rules that exist in one reference only are guarded by the dialect:
+  vmangos skips `hardcoded` events (an `IWorldEventHandler` runs them and sets the next-update delay) and has no `linkedTo`;
+  mangos-classic starts a linked event only while its parent is active, skips serverside events after the first pass, and
+  recomputes its computed schedules (here once per local calendar day instead of at the weekly reset, which ArcaneCore does
+  not have; `WeeklyReset` is a recorded limit, not an option that cannot work).
+- `Update` returns the delay in ms: the smallest `NextCheck` (and any hardcoded handler's delay) plus one second, at most a
+  day plus one second. On the first pass an INACTIVE event spawns its negative-listed objects (`SpawnEvent(-id)`), never
+  again (the `m_IsGameEventsInit` quirk).
+- A start runs the effect phases in vmangos' order for every registered `IGameEventEffects` (spawn +id, unspawn -id,
+  creature data, event quests; a stop reverses the signs), then tells the `IGameEventListener`s (`OnEventChanged(id, active,
+  resume)`, mangos-classic `OnEventHappened`). A throwing effect or listener is logged and does not stop the others or the
+  start. `IGameEventStatusSink` receives the running set after every change; `Initialize` first reports the empty set (vmangos
+  TRUNCATEs `game_event_status` after reading it), then events that were running resume (`resume = true`, listeners see it).
+- **Manual start/stop arithmetic**: `StartEvent(overwrite)` sets the start to now and, if the end is not after it, the end to start
+  plus the length; both references add the length as SECONDS (`start + length`) although it is minutes everywhere else, which
+  would end a manually started event after `length` seconds. Minutes are used. Under the mangos-classic boundary (`start < now`)
+  the manual start is dated one second back so an update in the same second does not stop the event just started.
+  `StopEvent(overwrite)` back-dates the start by the length so the schedule does not restart it.
+- `GameEventLoader` builds the definitions: dialect (`Auto`: vmangos when any row carries its own `start_time`), start
+  boundary (`Inclusive` vmangos, `Exclusive` mangos-classic), `Wall`/`StandardTime` date reading, the validation rules, and
+  the per-event row lists with rows that name a missing event or event 0 dropped (each an issue line). An unreadable date
+  (`0000-00-00 00:00:00`) is reported and the event never runs (it does not default to 1970).
+- `GameEventFeature` (world feature): binds `World:GameEvents`, loads the tables and `game_event_status`, and drives the service
+  from `WorldRuntime.WorldTick`: the first tick initialises, later ticks accumulate until the delay the last update asked for.
+  It is the `IGameEventState` consumers ask (`IsActiveEvent`, `IsActiveHoliday`, `ActiveEvents`). `GameEventStatusWriter` stores
+  the running set off the world thread: the latest set wins, writes never overlap, a failure is logged and retained for the next
+  change or the shutdown flush, and never reaches the world thread. `Announce` sends mangos_string 4
+  (`|cffff0000[Event Message]: <description>|r`) to every player when the option is on.
+- `RestoreServersideEvents` (default false): with it, serverside events recorded in `game_event_status` are re-applied with
+  resume at start-up and kept out of the first pass that would stop them. Retail restores nothing.
+- Event mails (`SendEventMails`) are not delivered (see limits).
+
 ## Not delivered (limits)
 
 Recorded as slices are completed; see the final section.
