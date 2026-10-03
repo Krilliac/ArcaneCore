@@ -24,6 +24,12 @@ public abstract class EventAiEventHandler
     public virtual EventAiTrigger Trigger => EventAiTrigger.None;
 
     /// <summary>
+    /// Whether the periodic update considers the event at every batch regardless of its timer and armed state
+    /// (cmangos special-cases EVENT_T_TARGET_NOT_REACHABLE in UpdateEventTimers, :1937-1941).
+    /// </summary>
+    public virtual bool CheckedEveryBatch => false;
+
+    /// <summary>
     /// cmangos IsRepeatableEvent: false for the events that happen once per spawn or fight (spawned, death, aggro,
     /// evade, reached home), which the repeatable flag does not gate.
     /// </summary>

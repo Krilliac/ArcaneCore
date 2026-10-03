@@ -40,6 +40,7 @@ public static class CreatureAiServicesBinder
         {
             Hostility = hostility,
             Spells = spells is null ? null : new SpellSystemCreatureCaster(spells.System),
+            UnitSpells = spells is null ? null : new SpellSystemUnitSpellQueries(spells.System),
             Factory = services.GetService<CreatureAiFactory>() ?? new CreatureAiFactory(),
         };
 

@@ -84,6 +84,22 @@ public sealed class CreatureAiServicesBindingTests
     }
 
     [Fact]
+    public void ARegisteredUnitSpellQueries_IsBound_ThroughTheSameReflectionPath()
+    {
+        var queries = new FixedQueries();
+        CreatureAiServices services = CreatureAiServicesBinder.Build(Container(c => c.AddSingleton<IUnitSpellQueries>(queries)), new CreatureOptions());
+
+        Assert.Same(queries, services.UnitSpells);
+    }
+
+    private sealed class FixedQueries : IUnitSpellQueries
+    {
+        public int GetAuraStacks(Unit unit, uint spellId) => 1;
+
+        public bool IsCasting(Unit unit) => false;
+    }
+
+    [Fact]
     public void ARegisteredServiceOfAnUnrelatedType_ChangesNothing()
     {
         CreatureAiServices services = CreatureAiServicesBinder.Build(Container(c => c.AddSingleton("unrelated")), new CreatureOptions());

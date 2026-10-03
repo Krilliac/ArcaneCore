@@ -50,15 +50,25 @@ docs/integration/creature-ai.md.
     events, phase 0) and `EnterCombat`. The phase only returns to 0 on death. Rows flagged DEBUG_ONLY
     (0x80) are skipped unless `Creatures:EventAi:DebugOnlyEvents`.
   - **Events with a handler**: 0 timer in combat, 1 timer out of combat, 2 health percent (with the
-    allow-out-of-combat parameter), 4 aggro, 5 kill (parameters: repeat min, repeat max, player only;
-    the old implementation read the wrong columns), 6 death, 7 evade, 8 spell hit (spell id and school mask
-    must both match), 11 spawned (always, or map id), 21 reached home.
+    allow-out-of-combat parameter), 3 mana percent (needs a mana creature in combat), 4 aggro, 5 kill
+    (parameters: repeat min, repeat max, player only; the old implementation read the wrong columns), 6
+    death, 7 evade, 8 spell hit (spell id and school mask must both match), 9 range (the victim between the
+    min and max yards, bounding radii added, Object.cpp:1401-1420), 11 spawned (always, or map id), 12 target
+    health, 13 target casting (repeat timers are parameters 1 and 2), 18 target mana, 21 reached home, 23/24
+    aura and target aura (at least N stacks), 27/28 missing aura and target missing aura (fewer than N), 29
+    generic timer (in and out of combat), 31 energy percent, 33 facing target (within 5 yd, victim's back or
+    front half circle), 36 target not reachable. Aura stacks and the victim's casting state come from the
+    `IUnitSpellQueries` seam (`SpellSystemUnitSpellQueries` over the spell system, bound by
+    `CreatureAiServicesBinder`; without a spell system nobody has auras or casts).
   - **Actions with a handler**: 1 text (the 1/2/3-way choice by `rnd % 3` / `rnd % 2`), 11 cast (aura-not-
     present, triggered and interrupt flags; a creature that is casting only casts again when the spell is
     triggered or interrupts; success is the cast being accepted), 12 summon, 20 auto attack, 21 combat
     movement (no change or casting fails), 22 and 23 phases, 24 evade (with the combat-only parameter), 25
     flee for assistance, 37 die, 39 call for help.
   - **Targets**: 0-6, 7 (the invoker; there are no pets), 10, 12 and 15 (no unit). Others fail the action.
+  - Event 36 (target not reachable) is checked at every batch but nothing marks a chase unreachable until the no-path
+    chase generator exists, so it does not fire in play yet; death-prevented (35) needs the death-prevention action and
+    a combat hook and is not implemented.
   - **Not supported, reported once per entry** (`CreatureEventAI.Unsupported`): every other event and action
     type; a death event with a condition id (no conditions system); a spawned event with the zone condition
     (no zone lookup); cast flags beyond the three above, SET_RANGED_MODE and caster mode (ranged mode is

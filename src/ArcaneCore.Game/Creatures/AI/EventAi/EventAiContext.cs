@@ -59,6 +59,12 @@ public sealed class EventAiContext
     public bool CanExecuteCombatAction
         => Me.IsAlive && !((Me.UnitFlags & UnitFlags.Silenced) != 0 && (Me.UnitFlags & UnitFlags.Pacified) != 0) && !IsCasting;
 
+    /// <summary>The stack amount of <paramref name="spellId"/> on <paramref name="unit"/> (0 when absent or without a spell system).</summary>
+    public int AuraStacks(Unit unit, uint spellId) => System?.AiServices.UnitSpells?.GetAuraStacks(unit, spellId) ?? 0;
+
+    /// <summary>Whether <paramref name="unit"/> is casting a non-melee spell (cmangos IsNonMeleeSpellCasted).</summary>
+    public bool IsCastingNonMelee(Unit unit) => System?.AiServices.UnitSpells?.IsCasting(unit) ?? false;
+
     /// <summary>A uniform integer in [<paramref name="min"/>, <paramref name="max"/>] (cmangos urand).</summary>
     public int Random(int min, int max) => System?.RandomInt(min, max) ?? min;
 

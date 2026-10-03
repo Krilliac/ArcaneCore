@@ -207,6 +207,12 @@ public sealed class EventAiEngine
             EnsureDepth();
             foreach (EventAiHolder holder in _holders)
             {
+                if (holder.Handler is { CheckedEveryBatch: true })
+                {
+                    CheckAndReady(holder, null, null);
+                    continue;
+                }
+
                 if (holder.TimerMs != 0 && (holder.Event.InversePhaseMask & (1u << Context.Phase)) == 0)
                 {
                     holder.TimerMs = holder.TimerMs > _diffMs ? holder.TimerMs - _diffMs : 0;

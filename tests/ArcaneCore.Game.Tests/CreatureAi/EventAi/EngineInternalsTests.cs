@@ -13,9 +13,9 @@ namespace ArcaneCore.Game.Tests.CreatureAi.EventAi;
 public sealed class EngineInternalsTests
 {
     [Fact]
-    public void TheDefaultRegistry_HandlesTheTenEventsAndTheElevenActionsThatWerePorted()
+    public void TheDefaultRegistry_HandlesTheImplementedEventsAndActions()
     {
-        Assert.Equal([0, 1, 2, 4, 5, 6, 7, 8, 11, 21], EventAiRegistry.Default.EventTypes.Select(t => (int)t).Order());
+        Assert.Equal([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 18, 21, 23, 24, 27, 28, 29, 31, 33, 36], EventAiRegistry.Default.EventTypes.Select(t => (int)t).Order());
         Assert.Equal([1, 11, 12, 20, 21, 22, 23, 24, 25, 37, 39], EventAiRegistry.Default.ActionTypes.Select(t => (int)t).Order());
     }
 
