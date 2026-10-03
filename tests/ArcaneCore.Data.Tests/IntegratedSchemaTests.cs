@@ -40,6 +40,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
     {
         (Type Type, DatabaseComponent Component, int Version)[] expected =
         [
+            (typeof(BanDataModule), DatabaseComponent.Auth, BanDataModule.Version),
             (typeof(CreatureDataModule), DatabaseComponent.World, 2),
             (typeof(MapDataModule), DatabaseComponent.World, 3),
             (typeof(ItemWorldDataModule), DatabaseComponent.World, 4),
@@ -64,7 +65,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             DataModules.All.OrderBy(m => m.Component).ThenBy(m => m.SchemaVersion)
                 .Select(m => (m.GetType(), m.Component, m.SchemaVersion)));
         // The forward index repair is the top step of characters and world (the constants are what an integrator renumbers).
-        Assert.Equal(2, AuthDbContext.Schema.CurrentVersion);
+        Assert.Equal(BanDataModule.Version, AuthDbContext.Schema.CurrentVersion);
         // The current version is the highest of the modules and the inline repair; versions are contiguous (Compose throws on gaps).
         Assert.Equal(
             Math.Max(CharacterDbContext.IndexRepairVersion, DataModules.For(DatabaseComponent.Characters).Max(m => m.SchemaVersion)),

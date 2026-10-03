@@ -18,6 +18,13 @@ public sealed class AuthDbInitializer(IServiceProvider services, ILogger<AuthDbI
 
         await SchemaBootstrapper.EnsureAsync(db, AuthDbContext.Schema, logger, cancellationToken).ConfigureAwait(false);
 
+        // Expired bans are cleaned at startup like realmd (Main.cpp:213-215) and mangosd (World.cpp:1818-1820).
+        Kernel.Accounts.IBanStore? bans = scope.ServiceProvider.GetService<Kernel.Accounts.IBanStore>();
+        if (bans is not null)
+        {
+            await bans.PurgeExpiredAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         RealmSeedOptions? seed = scope.ServiceProvider.GetService<IOptions<RealmSeedOptions>>()?.Value;
         if (seed is { Seed.Count: > 0 } && !await db.Realms.AnyAsync(cancellationToken).ConfigureAwait(false))
         {
