@@ -273,6 +273,7 @@ public sealed partial class LootService : IViewerFieldFilter
         }
 
         AssignOwner(bag, group, recipients);
+        CloseReplacedBag(creature.Guid, bag);
         _bags[creature.Guid] = (creature, bag);
         creature.ViewerFieldFilter = this;
         if (bag.IsEmpty)
@@ -715,10 +716,6 @@ public sealed partial class LootService : IViewerFieldFilter
     public LootResult Open(Player player, ObjectGuid guid)
     {
         ArgumentNullException.ThrowIfNull(player);
-        if (SpecialOpen?.Invoke(player, guid) is { } special)
-        {
-            return special; // a source the corpse path does not know (a pickpocketed live creature)
-        }
 
         if (!_bags.TryGetValue(guid, out var entry) || entry.Source is not Creature creature
             || !ReferenceEquals(creature.Map, player.Map) || entry.Bag.Kind != LootSourceKind.Creature
@@ -1053,7 +1050,8 @@ public sealed partial class LootService : IViewerFieldFilter
         {
             bool gone = source switch
             {
-                Creature c => !c.IsInWorld || c.DeathState != CreatureDeathState.Corpse,
+                // A special bag (a pickpocketed live creature) is kept by its own area, never swept as a stale corpse.
+                Creature c when bag.ReleaseHandler is null => !c.IsInWorld || c.DeathState != CreatureDeathState.Corpse,
                 _ => false,
             };
             if (gone)

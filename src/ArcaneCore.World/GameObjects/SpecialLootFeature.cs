@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Fishing;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Loot;
@@ -13,15 +14,16 @@ using Microsoft.Extensions.Logging;
 namespace ArcaneCore.World.GameObjects;
 
 /// <summary>
-/// The special loot sources of the world daemon (an <see cref="IWorldFeature"/>, discovered): fishing today. It hangs on the maps' game object systems
+/// The special loot sources of the world daemon (an <see cref="IWorldFeature"/>, discovered): fishing and Pick Pocket. It hangs on the maps' game object systems
 /// of <see cref="GameObjectLootFeature"/> (which stays untouched) and on the spell system of <see cref="SpellFeature"/>:
-/// per map a <see cref="FishingService"/> (bobber timers, the click, holes), the use handler of fishing bobbers, and once per spell system the
-/// TRANS_DOOR effect of the fishing spells. Missing collaborators (no spell feature, no game object feature) leave fishing off, never half on.
+/// per map a <see cref="FishingService"/> (bobber timers, the click, holes), the use handler of fishing bobbers and a <see cref="PickpocketLoot"/>,
+/// and once per spell system the TRANS_DOOR effect of the fishing spells and the Pick Pocket check and effect. Missing collaborators (no spell feature, no game object feature) leave fishing off, never half on.
 /// Options come from the <c>SpecialLoot</c> section (<see cref="SpecialLootOptions"/>); all defaults are the retail behaviour.
 /// </summary>
 public sealed class SpecialLootFeature(IServiceProvider services, ILogger<SpecialLootFeature> logger) : IWorldFeature
 {
     private readonly Dictionary<Map, FishingService> _fishing = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<Map, PickpocketLoot> _pickpockets = new(ReferenceEqualityComparer.Instance);
     private WorldRuntime? _world;
 
     public SpecialLootOptions Options { get; } = new();
@@ -50,6 +52,7 @@ public sealed class SpecialLootFeature(IServiceProvider services, ILogger<Specia
         // Fishing needs the "fishing pole equipped" requirement; it is the generic equipped-item rule of every spell with one.
         EquippedItemCastCheck.Install(spells.System);
         new FishingSpells(() => _fishing.Values).Register(spells.System);
+        new PickpocketSpells(map => _pickpockets.GetValueOrDefault(map)).Register(spells.System);
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;
         foreach (Map map in world.Maps.ToArray())
@@ -70,7 +73,21 @@ public sealed class SpecialLootFeature(IServiceProvider services, ILogger<Specia
         map.AddUpdater(fishing);
         objects.RegisterUseHandler(GameObjectType.FishingNode, fishing.UseBobber);
         _fishing.Add(map, fishing);
+
+        if (objects.Loot is { } loot)
+        {
+            var pockets = new PickpocketLoot(loot);
+            map.Combat.UnitKilled += pockets.OnCreatureKilled;
+            _pickpockets.Add(map, pockets);
+        }
     }
 
-    private void OnMapUnloading(Map map) => _fishing.Remove(map);
+    private void OnMapUnloading(Map map)
+    {
+        _fishing.Remove(map);
+        if (_pickpockets.Remove(map, out PickpocketLoot? pockets))
+        {
+            map.Combat.UnitKilled -= pockets.OnCreatureKilled;
+        }
+    }
 }

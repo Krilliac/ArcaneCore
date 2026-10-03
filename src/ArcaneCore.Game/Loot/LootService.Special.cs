@@ -8,12 +8,6 @@ namespace ArcaneCore.Game.Loot;
 public sealed partial class LootService
 {
     /// <summary>
-    /// Offered first by <see cref="Open"/> (CMSG_LOOT): a non-null answer is the result, null falls through to the corpse path.
-    /// The pickpocket area answers for a rogue reopening a pickpocketed creature (vmangos LootHandler.cpp:100-110).
-    /// </summary>
-    public Func<Player, ObjectGuid, LootResult?>? SpecialOpen { get; set; }
-
-    /// <summary>
     /// Register <paramref name="bag"/> as the loot of <paramref name="source"/> and open its window for
     /// <paramref name="player"/>. An older bag of the same source is closed for its viewers first. The caller sets
     /// <see cref="LootBag.ReleaseHandler"/> and friends and has checked everything the source type requires.
@@ -37,6 +31,15 @@ public sealed partial class LootService
     {
         ArgumentNullException.ThrowIfNull(source);
         ForgetLoot(source);
+    }
+
+    /// <summary>A new bag takes over the registration of <paramref name="source"/>: the windows of the older, different bag close (a pickpocketed creature dying).</summary>
+    private void CloseReplacedBag(ObjectGuid source, LootBag next)
+    {
+        if (_bags.TryGetValue(source, out var previous) && !ReferenceEquals(previous.Bag, next))
+        {
+            CloseForViewers(previous.Bag);
+        }
     }
 
     private static bool IsAliveInSameMap(Player player, WorldObject source)

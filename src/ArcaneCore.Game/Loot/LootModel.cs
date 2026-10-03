@@ -271,6 +271,13 @@ public sealed class LootBag
 
     internal void Add(LootItem item) => _items.Add(item);
 
+    /// <summary>vmangos <c>Loot::leaveOnlyQuestItems</c> (<c>clear(false)</c>): drop every ordinary item and the money, keep the quest items.</summary>
+    internal void KeepOnlyQuestItems()
+    {
+        _items.RemoveAll(i => !i.IsQuestItem);
+        Gold = 0;
+    }
+
     public LootItem? FindSlot(byte slot) => _items.Find(i => i.Slot == slot);
 
     /// <summary>Whether <paramref name="player"/> is a recipient (or the loot is open to anyone).</summary>
