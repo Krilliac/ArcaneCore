@@ -267,9 +267,17 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         // quest status …). The player is not yet visible to the world thread. Fail closed.
         try
         {
-            foreach (ICharacterHooks hooks in session.Services.GetServices<ICharacterHooks>())
+            ICharacterHooks[] allHooks = [.. session.Services.GetServices<ICharacterHooks>()];
+            foreach (ICharacterHooks hooks in allHooks)
             {
                 await hooks.OnPlayerLoadingAsync(session, character, player).ConfigureAwait(false);
+            }
+
+            // Second phase: state that goes on top of everything the loading hooks produced
+            // (stored health and power after the final maximums; Player.cpp:15057-15075).
+            foreach (ICharacterHooks hooks in allHooks)
+            {
+                await hooks.OnPlayerLoadedAsync(session, character, player).ConfigureAwait(false);
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
