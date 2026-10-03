@@ -36,8 +36,10 @@ public sealed class Creature : Unit, ICombatCreature
 
     private readonly Random _random;
 
-    public Creature(uint counter, CreatureTemplate template, CreatureSpawn? spawn, CreatureContent content, Random random)
-        : base(ObjectGuid.WithEntry(HighGuid.Unit, template.Entry, counter), Game.TypeId.Unit, CreatureTypeMask, UpdateFields.UnitEnd)
+    // highGuid: HIGHGUID_PET for pets, guardians and mini pets, HIGHGUID_UNIT for everything else
+    // including totems (vmangos SpellEffects.cpp; docs/integration/pets.md).
+    public Creature(uint counter, CreatureTemplate template, CreatureSpawn? spawn, CreatureContent content, Random random, HighGuid highGuid = HighGuid.Unit)
+        : base(ObjectGuid.WithEntry(highGuid, template.Entry, counter), Game.TypeId.Unit, CreatureTypeMask, UpdateFields.UnitEnd)
     {
         ArgumentNullException.ThrowIfNull(template);
         ArgumentNullException.ThrowIfNull(content);
@@ -94,6 +96,15 @@ public sealed class Creature : Unit, ICombatCreature
 
     /// <summary>Set by the map system while the creature runs home after leaving combat.</summary>
     internal bool IsEvading { get; set; }
+
+    /// <summary>The summon record of a totem, pet, guardian or mini pet; null for an ordinary creature (Game/Pets).</summary>
+    internal Pets.SummonLinks? Summon { get; set; }
+
+    /// <summary>vmangos Creature::IsTotem: the single source for the pets area.</summary>
+    public bool IsTotem => Summon?.Kind == Pets.SummonKind.Totem;
+
+    /// <summary>vmangos Creature::IsPet: a summoned Pet object of any kind (pet, guardian, mini pet).</summary>
+    public bool IsPet => Summon is { Kind: Pets.SummonKind.Pet or Pets.SummonKind.Guardian or Pets.SummonKind.MiniPet };
 
     /// <summary>The script driving this creature (null outside a creature map system).</summary>
     public CreatureAI? AI { get; internal set; }

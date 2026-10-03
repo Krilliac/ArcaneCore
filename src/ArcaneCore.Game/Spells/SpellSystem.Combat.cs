@@ -425,7 +425,7 @@ public sealed partial class SpellSystem
 
         SpellCastTargets targets = context.Cast.Targets;
         (float x, float y, float z) = targets.HasDest ? (targets.Dest.X, targets.Dest.Y, targets.Dest.Z) : (context.Caster.X, context.Caster.Y, context.Caster.Z);
-        if (sink.Summon(context.Caster, entry, x, y, z, context.Caster.Orientation, context.Spell.GetDuration()) is null)
+        if (sink.Summon(context.Caster, new SpellSummonRequest(context.Spell.Id, entry, x, y, z, context.Caster.Orientation, context.Spell.GetDuration())) is null)
         {
             ReportUnsupported("summon failed", entry, context.Spell.Id);
         }

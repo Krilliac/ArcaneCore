@@ -68,4 +68,15 @@ public interface ISpellSummonSink
     /// creating anything. Quest reward preflight asks this before a summon reward may consume the quest.
     /// </summary>
     bool CanSummon(Unit owner, uint entry);
+
+    /// <summary>
+    /// The same summon with the spell that causes it (UNIT_CREATED_BY_SPELL). Additive overload for
+    /// the pets area (docs/integration/pets.md): a sink that only knows the original member keeps
+    /// working because this forwards to it.
+    /// </summary>
+    Unit? Summon(Unit caster, in SpellSummonRequest request)
+        => Summon(caster, request.Entry, request.X, request.Y, request.Z, request.Orientation, request.DurationMs);
 }
+
+/// <summary>What <see cref="ISpellSummonSink.Summon(Unit, in SpellSummonRequest)"/> is asked to summon.</summary>
+public readonly record struct SpellSummonRequest(uint SpellId, uint Entry, float X, float Y, float Z, float Orientation, int DurationMs);
