@@ -81,6 +81,9 @@ public sealed class NavMeshTile
     /// <summary>Four bytes per detail triangle: three vertex indices and a flags byte.</summary>
     public byte[] DetailTriangles { get; }
 
+
+    private const uint CmangosMmapVersion = 8;
+
     /// <summary>An <c>.mmtile</c>: the generator header, then the Detour tile data.</summary>
     public static NavMeshTile ParseFile(ReadOnlySpan<byte> file)
     {
@@ -89,6 +92,12 @@ public sealed class NavMeshTile
         if (header.Magic != NavMeshFormat.MmapMagic)
         {
             throw new InvalidDataException($"bad mmap magic 0x{header.Magic:x8}");
+        }
+
+        if (header.MmapVersion != NavMeshFormat.MmapVersion && header.MmapVersion == CmangosMmapVersion)
+        {
+            // mangos-classic MoveMapSharedDefines.h:26 writes MMAP_VERSION 8 (and 32-bit refs); vmangos reads only 6.
+            throw new InvalidDataException($"mmap tile version {header.MmapVersion} comes from the cMaNGOS generator; regenerate with vmangos' MoveMapGen (version {NavMeshFormat.MmapVersion})");
         }
 
         if (header.DetourVersion != NavMeshFormat.DetourVersion || header.MmapVersion != NavMeshFormat.MmapVersion)
