@@ -79,6 +79,32 @@ public struct MovementInfo
 
     public readonly bool HasFlag(MovementFlags flag) => (Flags & flag) != 0;
 
+    /// <summary>
+    /// Remove flag combinations a real client never sends (vmangos MovementInfo::CorrectData, Object.cpp:153-189,
+    /// "causing client freezes"): Root together with any moving flag (MASK_MOVING) drops Root; turning left and right,
+    /// strafing left and right, pitching up and down and moving forward and backward at once drop both. The
+    /// "cannot hover without the aura" rule is commented out in vmangos and is not applied.
+    /// </summary>
+    public void CorrectData()
+    {
+        if (HasFlag(MovementFlags.Root) && (Flags & MovementFlags.MaskMoving) != 0)
+        {
+            Flags &= ~MovementFlags.Root;
+        }
+
+        RemoveBoth(MovementFlags.TurnLeft, MovementFlags.TurnRight);
+        RemoveBoth(MovementFlags.StrafeLeft, MovementFlags.StrafeRight);
+        RemoveBoth(MovementFlags.PitchUp, MovementFlags.PitchDown);
+        RemoveBoth(MovementFlags.Forward, MovementFlags.Backward);
+    }
+
+    private void RemoveBoth(MovementFlags a, MovementFlags b)
+    {
+        if (HasFlag(a) && HasFlag(b))
+        {
+            Flags &= ~(a | b);
+        }
+    }
     /// <summary>Parse a movement block; throws <see cref="ArgumentOutOfRangeException"/> if truncated.</summary>
     public static MovementInfo Read(ref PacketReader reader)
     {

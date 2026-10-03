@@ -134,13 +134,37 @@ public abstract class Unit : WorldObject
         SetPosition(movement.X, movement.Y, movement.Z, movement.Orientation);
     }
 
+    /// <summary>
+    /// Set movement flags the server decided (vmangos Unit::AddUnitMovementFlag). Locomotion uses it to apply an
+    /// acknowledged root, water walk, hover or feather fall (src/ArcaneCore.Game/Locomotion).
+    /// </summary>
+    public void AddMovementFlags(MovementFlags flags) => _movement.Flags |= flags;
+
+    /// <summary>Clear movement flags the server decided (vmangos Unit::RemoveUnitMovementFlag).</summary>
+    public void RemoveMovementFlags(MovementFlags flags) => _movement.Flags &= ~flags;
+
+    /// <summary>
+    /// Flags that are server state, not client motion: a teleport or relocation does not clear them
+    /// (vmangos only rewrites the position of m_movementInfo on a teleport).
+    /// </summary>
+    private const MovementFlags ServerOwnedFlags = MovementFlags.Root | MovementFlags.WaterWalking | MovementFlags.Hover | MovementFlags.SafeFall;
+
     /// <summary>Place the unit (teleport, spawn, login) with a fresh, stationary movement state.</summary>
     public void Relocate(float x, float y, float z, float orientation, uint serverTimeMs)
     {
+        MovementFlags kept = _movement.Flags & ServerOwnedFlags;
+
+        // A teleport, spell relocation, taxi stop or login ends any fall in progress (vmangos SetFallInformation(0),
+        // Player.cpp:1932,2082,15051).
+        if (global::ArcaneCore.Game.Locomotion.LocomotionStates.TryGet(this, out global::ArcaneCore.Game.Locomotion.LocomotionState state))
+        {
+            state.ResetFall();
+        }
+
         SetPosition(x, y, z, orientation);
         _movement = new MovementInfo
         {
-            Flags = MovementFlags.None,
+            Flags = kept,
             Time = serverTimeMs,
             X = x,
             Y = y,

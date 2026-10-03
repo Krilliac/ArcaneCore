@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
@@ -25,45 +26,7 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgMoveFallReset,
             (session, player, payload) => HandleMovement(session, player, WorldOpcode.CmsgMoveFallReset, payload, relay: false));
 
-        table.OnWorld(WorldOpcode.CmsgForceMoveRootAck, (session, player, payload) => HandleRootAck(session, player, payload, rooted: true));
-        table.OnWorld(WorldOpcode.CmsgForceMoveUnrootAck, (session, player, payload) => HandleRootAck(session, player, payload, rooted: false));
         table.OnWorld(WorldOpcode.CmsgMoveTimeSkipped, HandleMoveTimeSkipped);
-    }
-
-    /// <summary>
-    /// CMSG_FORCE_MOVE_(UN)ROOT_ACK: u64 mover GUID, u32 movement counter, MovementInfo
-    /// (vmangos Movement::MoveRootAck; gtker agrees). The client confirms a root the server
-    /// ordered; its movement block is applied and relayed to observers as MSG_MOVE_(UN)ROOT —
-    /// packed GUID + movement block (vmangos HandleMoveRootAck →
-    /// MovementPacketSender::SendMovementFlagChangeToObservers). An ack for another unit, or
-    /// one that does not match the current root state (stale), is ignored.
-    /// </summary>
-    private static void HandleRootAck(WorldSession session, Player player, byte[] payload, bool rooted)
-    {
-        if (session.Services.GetRequiredService<TeleportFeature>().Teleports.IsBeingTeleported(player))
-        {
-            return;
-        }
-
-        var reader = new PacketReader(payload);
-        ulong guid = reader.ReadUInt64();
-        _ = reader.ReadUInt32(); // movement counter
-        MovementInfo movement = MovementInfo.Read(ref reader);
-        if (guid != player.Guid.Value || player.IsRooted != rooted)
-        {
-            return;
-        }
-
-        if (!MovementValidator.IsValid(movement, session.StrictMovementFiniteness))
-        {
-            return; // dropped like vmangos VerifyMovementInfo failures (MovementHandler.cpp:596,:690)
-        }
-
-        player.ApplyClientMovement(movement, session.World.NowMs);
-        var packet = new PacketWriter(payload.Length + 9);
-        packet.WritePackedGuid(player.Guid.Value);
-        player.Movement.Write(packet);
-        player.Map?.BroadcastToObservers(player, rooted ? WorldOpcode.MsgMoveRoot : WorldOpcode.MsgMoveUnroot, packet.AsSpan());
     }
 
     /// <summary>
@@ -102,12 +65,12 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
 
         // An invalid packet is dropped, not stored, relayed or punished with a kick
         // (vmangos HandleMovementOpcodes: VerifyMovementInfo, MovementHandler.cpp:315,:489,:1042-1061).
-        if (!MovementValidator.IsValid(movement, session.StrictMovementFiniteness))
+        if (!IsAcceptable(session, movement))
         {
             return;
         }
 
-        player.ApplyClientMovement(movement, session.World.NowMs);
+        ApplyObserved(session, player, opcode, movement);
         if (!relay)
         {
             return;
@@ -120,4 +83,26 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         player.Movement.Write(packet);
         player.Map?.BroadcastToObservers(player, opcode, packet.AsSpan());
     }
+
+    /// <summary>
+    /// Store a client's movement block with the locomotion observers around it (vmangos HandleMovementOpcodes
+    /// :333-344 and HandleMoverRelocation :1062-1170): the Before observers see the previously stored block and
+    /// may correct the incoming one, the After observers see the stored result. Shared with the movement-change
+    /// acks (HandleMoveRootAck runs the same relocation).
+    /// </summary>
+    internal static void ApplyObserved(WorldSession session, Player player, WorldOpcode opcode, MovementInfo movement)
+    {
+        MovementInfo previous = player.Movement;
+        var context = new MovementObserverContext(player, session.World, opcode);
+        MovementObservers.Before(context, in previous, ref movement, session.Logger);
+        player.ApplyClientMovement(movement, session.World.NowMs);
+        MovementObservers.After(context, in previous, session.Logger);
+    }
+
+    /// <summary>
+    /// A malformed movement block is dropped, not kicked (vmangos VerifyMovementInfo, MovementHandler.cpp:1042-1061);
+    /// shared with the movement-change acks.
+    /// </summary>
+    internal static bool IsAcceptable(WorldSession session, in MovementInfo movement) =>
+        MovementValidator.IsValid(movement, session.StrictMovementFiniteness);
 }
