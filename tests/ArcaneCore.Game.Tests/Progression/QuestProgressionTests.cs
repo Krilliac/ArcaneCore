@@ -471,8 +471,6 @@ public sealed class QuestProgressionTests
     [Theory]
     [InlineData(1u)] // SrcSpell
     [InlineData(2u)] // party accept
-    [InlineData(3u)] // loot source counters
-    [InlineData(4u)] // PvP quest type
     [InlineData(6u)] // reputation objective without a reputation owner
     public void QuestsWithoutAdapters_StillFailClosedAtAccept(uint variant)
     {
@@ -480,8 +478,6 @@ public sealed class QuestProgressionTests
         {
             1 => new QuestTemplate { Entry = 910090, Method = 2, SrcSpell = 100 },
             2 => new QuestTemplate { Entry = 910090, Method = 2, QuestFlags = (uint)QuestFlags.PartyAccept },
-            3 => new QuestTemplate { Entry = 910090, Method = 2, ReqSourceId1 = ItemTestData.ToughJerky, ReqSourceCount1 = 1 },
-            4 => new QuestTemplate { Entry = 910090, Method = 2, Type = 41 },
             _ => new QuestTemplate { Entry = 910090, Method = 2, RepObjectiveFaction = 72, RepObjectiveValue = 3000 },
         };
         using var kit = new Kit([quest]);

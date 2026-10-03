@@ -55,6 +55,9 @@ public enum QuestRewardMode
 /// <summary>The classifier: which adapters a quest template needs. Pure; no state, no configuration.</summary>
 public static class QuestNeeds
 {
+    /// <summary>QUEST_TYPE_PVP (vmangos QuestDef.h:137).</summary>
+    public const uint PvpType = 41;
+
     /// <summary>
     /// QuestFlags 0x1 (STAY_ALIVE) and 0x4 (EXPLORATION) are "Not used currently" in vmangos (QuestDef.h:150-152) and
     /// quest types 82, 83, 84 (world event, legendary, escort) only select a client icon, so none of them is a need.
@@ -90,7 +93,7 @@ public static class QuestNeeds
             needs |= QuestAdapter.ReqSource;
         }
 
-        if (t.Type == 41)
+        if (t.Type == PvpType)
         {
             needs |= QuestAdapter.PvpType;
         }
@@ -154,7 +157,9 @@ public sealed partial class QuestNpcServices
     public (QuestAdapter Provided, HashSet<uint> EventCovered) MergeProviders(IEnumerable<IQuestAdapterModule> modules)
     {
         ArgumentNullException.ThrowIfNull(modules);
-        QuestAdapter provided = Deps.Reputation is not null ? QuestAdapter.RepObjective : QuestAdapter.None;
+        // ReqSource has no behaviour beyond loot visibility (vmangos reads it only in Player::HasQuestForItem,
+        // Player.cpp:14298-14316), which QuestNpcServices.ItemNeeds.cs implements; it is provided natively.
+        QuestAdapter provided = QuestAdapter.ReqSource | (Deps.Reputation is not null ? QuestAdapter.RepObjective : QuestAdapter.None);
         var owners = new Dictionary<QuestAdapter, string>();
         var covered = new HashSet<uint>();
         foreach (IQuestAdapterModule module in modules)

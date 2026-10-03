@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Protocol;
@@ -129,6 +130,12 @@ public sealed partial class QuestNpcServices
                     }
 
                     state.Quests.SetSlot(slot, questId, (uint)Math.Clamp(data.TimerEndUnix, 0, uint.MaxValue));
+                    if (quest.Template.Type == QuestNeeds.PvpType)
+                    {
+                        // vmangos Player::AddQuest (Player.cpp:12866-12867): a PvP quest flags the player.
+                        MapCombat.UpdatePvp(player, true);
+                    }
+
                     state.Quests.MarkChanged(questId);
                     GiveSourceItem(player, quest);
                     AdjustRequiredItemCounts(state, quest, data);
@@ -140,6 +147,13 @@ public sealed partial class QuestNpcServices
         }
 
         CloseGossip(player);
+        if (accepted && Quests.Get(questId) is { Template.SrcSpell: not 0 } sourceSpell && Deps.SpellCaster is { } spellCaster)
+        {
+            // vmangos HandleQuestgiverAcceptQuestOpcode (QuestHandler.cpp:202-203): the source spell is cast on the player
+            // after the quest is in the log and the gossip window is closed.
+            spellCaster.CastOnSelf(player, sourceSpell.Template.SrcSpell);
+        }
+
         return accepted;
     }
 

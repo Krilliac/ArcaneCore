@@ -96,7 +96,7 @@ public sealed class QuestSupportGateTests
     {
         QuestTemplate[] quests =
         [
-            QuestFlowKit.Task(Id), QuestFlowKit.Task(Id + 1, type: 41), QuestFlowKit.Task(Id + 2, type: 41),
+            QuestFlowKit.Task(Id), QuestFlowKit.Task(Id + 1, flags: (uint)QuestFlags.PartyAccept), QuestFlowKit.Task(Id + 2, flags: (uint)QuestFlags.PartyAccept),
             new QuestTemplate { Entry = Id + 3, Method = 2, SrcSpell = 5, RewMailTemplateId = 9 },
             QuestFlowKit.Task(Id + 4, method: 1),
         ];
@@ -109,7 +109,7 @@ public sealed class QuestSupportGateTests
         Assert.Equal(4, summary.ActiveQuests);
         Assert.Equal(1, summary.Supported);
         Assert.Equal(3, summary.Withheld);
-        Assert.Equal(2, summary.WithheldByReason[QuestAdapter.PvpType]);
+        Assert.Equal(2, summary.WithheldByReason[QuestAdapter.PartyAccept]);
         Assert.Equal(1, summary.WithheldByReason[QuestAdapter.SrcSpell]);
         Assert.Equal(1, summary.WithheldByReason[QuestAdapter.Mail]);
     }
@@ -139,7 +139,7 @@ public sealed class QuestSupportGateTests
         Assert.Throws<InvalidOperationException>(() => kit.Services.MergeProviders([new Provider(QuestAdapter.Mail), new OtherProvider(QuestAdapter.Mail | QuestAdapter.SrcSpell)]));
         (QuestAdapter provided, HashSet<uint> covered) = kit.Services.MergeProviders(
             [new Provider(QuestAdapter.Mail, Id), new OtherProvider(QuestAdapter.SrcSpell)]);
-        Assert.Equal(QuestAdapter.Mail | QuestAdapter.SrcSpell, provided);
+        Assert.Equal(QuestAdapter.Mail | QuestAdapter.SrcSpell | QuestAdapter.ReqSource, provided);
         Assert.Equal([Id], covered);
     }
 
@@ -149,7 +149,8 @@ public sealed class QuestSupportGateTests
         // The first support query merges every discovered module; a duplicate provider would throw here.
         using var kit = new QuestFlowKit([QuestFlowKit.Task(Id)], starters: [Id]);
         _ = kit.Services.SupportSummary();
-        Assert.Equal(QuestAdapter.None, kit.Services.ProvidedAdapters & QuestAdapter.PvpType);
+        // PvP quests, loot-source quests and autocomplete quests have adapters; party confirmation does not exist yet.
+        Assert.Equal(QuestAdapter.PvpType | QuestAdapter.ReqSource | QuestAdapter.Autocomplete, kit.Services.ProvidedAdapters);
     }
 
     private sealed class Provider(QuestAdapter adapters, params uint[] covered) : IQuestAdapterModule

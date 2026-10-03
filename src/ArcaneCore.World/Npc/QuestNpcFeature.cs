@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Quests;
+using ArcaneCore.Game.Quests.Adapters;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Quests;
@@ -166,7 +167,8 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             RewardEffects: progression && _services.GetService<SpellFeature>() is { } spells
                 ? new QuestRewardEffects(spells.System, _logger)
                 : null,
-            ReputationRewards: reputation is { Factions.Count: > 0 } ? reputation : null), npcs),
+            ReputationRewards: reputation is { Factions.Count: > 0 } ? reputation : null,
+            SpellCaster: progression && _services.GetService<SpellFeature>() is { } caster ? new SpellSystemQuestCaster(caster.System) : null), npcs),
         Options, new PersistenceSink(this), () => _clock.GetUtcNow().ToUnixTimeSeconds(), _logger);
 
     private QuestNpcDependencies ExtendDependencies(QuestNpcDependencies dependencies, NpcStore npcs)
