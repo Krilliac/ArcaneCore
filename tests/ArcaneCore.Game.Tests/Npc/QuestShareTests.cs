@@ -190,6 +190,37 @@ public sealed class QuestShareTests
     }
 
     [Fact]
+    public void AConfirmedPartyAcceptQuest_IsNotReOfferedToMembersWhoHaveNotAnsweredYet()
+    {
+        // vmangos fans a PARTY_ACCEPT quest out only from the accept handler (QuestHandler.cpp:166-191); HandleQuestConfirmAccept
+        // (332-381) just adds the quest. Fourth has not answered when Third confirms: no second box, offer still names the accepter.
+        using var kit = new ShareKit(Templates(), withFourth: true);
+        kit.Take(kit.Sharer, Party);
+        Assert.True(kit.Services.AcceptQuest(kit.Member, kit.Sharer.Guid, Party));
+        Assert.Single(kit.Sent(kit.Third, WorldOpcode.SmsgQuestConfirmAccept));
+        Assert.Single(kit.Sent(kit.Fourth, WorldOpcode.SmsgQuestConfirmAccept));
+
+        kit.Services.ConfirmAcceptQuest(kit.Third, Party);
+        Assert.Equal(QuestStatus.Incomplete, kit.Services.StateOf(kit.Third)!.Quests.GetStatus(Party));
+        Assert.Single(kit.Sent(kit.Fourth, WorldOpcode.SmsgQuestConfirmAccept));
+        Assert.Equal(new QuestShareInfo(kit.Member.Guid, Party), kit.Services.ShareInfoOf(kit.Fourth));
+    }
+
+    [Fact]
+    public void APartyAcceptFanOut_TellsAMemberWhoCannotTakeTheQuestWhy()
+    {
+        // QuestHandler.cpp:179 calls CanTakeQuest(qInfo, true): the refusal message goes to the member and no box is sent.
+        using var kit = new ShareKit(Templates(), withFourth: true);
+        kit.Third.Level = 0;
+        kit.Take(kit.Sharer, Party);
+        Assert.True(kit.Services.AcceptQuest(kit.Member, kit.Sharer.Guid, Party));
+        Assert.Empty(kit.Sent(kit.Third, WorldOpcode.SmsgQuestConfirmAccept));
+        Assert.Null(kit.Services.ShareInfoOf(kit.Third));
+        Assert.Equal([QuestPackets.QuestInvalid(QuestInvalidReason.DontHaveReq).AsSpan().ToArray()],
+            kit.Sent(kit.Third, WorldOpcode.SmsgQuestgiverQuestInvalid));
+    }
+
+    [Fact]
     public void ConfirmAccept_NeedsAMatchingOffer_AndAPartyAcceptQuest()
     {
         using var kit = new ShareKit(Templates());
@@ -253,12 +284,13 @@ public sealed class QuestShareTests
     {
         private readonly Dictionary<Player, FakeSession> _sessions = [];
 
-        public ShareKit(IReadOnlyList<QuestTemplate> templates, Action<QuestNpcOptions>? configure = null, bool withThird = false)
+        public ShareKit(IReadOnlyList<QuestTemplate> templates, Action<QuestNpcOptions>? configure = null, bool withThird = false, bool withFourth = false)
         {
             Sharer = Add(1, 0);
             Member = Add(2, 3);
-            Third = withThird ? Add(3, 60) : Member;
-            Party = new FakeParty([Sharer, Member, .. withThird ? [Third] : Array.Empty<Player>()]);
+            Third = withThird || withFourth ? Add(3, 60) : Member;
+            Fourth = withFourth ? Add(4, 61) : Member;
+            Party = new FakeParty([Sharer, Member, .. withThird || withFourth ? [Third] : Array.Empty<Player>(), .. withFourth ? [Fourth] : Array.Empty<Player>()]);
             var options = new QuestNpcOptions();
             configure?.Invoke(options);
             Services = new QuestNpcServices(new QuestStore(new QuestContent(templates, [], [])), NpcStore.Empty,
@@ -280,6 +312,8 @@ public sealed class QuestShareTests
         public Player Member { get; }
 
         public Player Third { get; }
+
+        public Player Fourth { get; }
 
         public FakeParty Party { get; }
 

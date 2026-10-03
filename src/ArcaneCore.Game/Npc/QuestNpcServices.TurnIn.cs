@@ -18,14 +18,14 @@ public sealed partial class QuestNpcServices
 {
     /// <summary>
     /// The first half of vmangos <c>CanRewardQuest(quest, msg)</c>: an autocomplete quest must pass CanTakeQuest without
-    /// its status check (prevents packet-editing exploits, Player.cpp:12684-12698); any other quest must be accepted and
+    /// its status check (prevents packet-editing exploits, Player.cpp:12684-12698; a game master bypasses it, 12688-12692, without the sysmessage); any other quest must be accepted and
     /// complete. In both cases a quest already rewarded cannot be rewarded again (12701-12703). Sends nothing.
     /// </summary>
     private bool RewardBase(PlayerNpcState state, Quest quest)
     {
         if (quest.IsAutoComplete)
         {
-            if (RefuseTakeQuest(state, quest, [], skipStatusCheck: true) is not null)
+            if (RefuseTakeQuest(state, quest, [], skipStatusCheck: true) is not null && !state.Quests.Player.IsGameMaster)
             {
                 return false;
             }

@@ -115,6 +115,12 @@ public sealed partial class QuestNpcServices
             accepted = AddQuestFrom(player, state, quest, sharedTimerEnd: null);
         }
 
+        if (accepted && Quests.Get(questId) is { } taken && taken.HasFlag(QuestFlags.PartyAccept))
+        {
+            // The fan-out belongs to the accept handler alone (QuestHandler.cpp:166-191); AddQuest and the confirm handler (332-381) have none.
+            OfferPartyAccept(player, taken);
+        }
+
         ClearShareInfo(player);
         CloseGossip(player);
         if (accepted && Quests.Get(questId) is { Template.SrcSpell: not 0 } sourceSpell && Deps.SpellCaster is { } spellCaster)
@@ -128,8 +134,8 @@ public sealed partial class QuestNpcServices
     }
 
     /// <summary>
-    /// The common part of every accept (vmangos CanTakeQuest(msg), CanAddQuest(msg), AddQuest, then the party confirmation
-    /// and completion check, QuestHandler.cpp:131-196 and Player.cpp:12820-12934). A refusal sends its message and returns
+    /// The common part of every accept (vmangos CanTakeQuest(msg), CanAddQuest(msg), AddQuest, then
+    /// the completion check, QuestHandler.cpp:131-196 and Player.cpp:12820-12934; the party fan-out is the caller's, see <see cref="AcceptQuest"/>). A refusal sends its message and returns
     /// false. <paramref name="sharedTimerEnd"/> is the sharer's timer end for a shared timed quest (Player.cpp:12855-12860).
     /// </summary>
     private bool AddQuestFrom(Player player, PlayerNpcState state, Quest quest, long? sharedTimerEnd)
@@ -186,11 +192,6 @@ public sealed partial class QuestNpcServices
         AdjustRequiredItemCounts(state, quest, data);
         RefreshCompletion(state, quest, data, slot);
         Flush(state);
-        if (quest.HasFlag(QuestFlags.PartyAccept))
-        {
-            OfferPartyAccept(player, quest);
-        }
-
         return true;
     }
 

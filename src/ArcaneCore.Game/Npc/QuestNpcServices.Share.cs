@@ -182,8 +182,8 @@ public sealed partial class QuestNpcServices
     }
 
     /// <summary>
-    /// After a PARTY_ACCEPT quest was accepted (QuestHandler.cpp:166-191): every other group member on the accepter's map who
-    /// could take it gets a pending offer, any open gossip window closed and an SMSG_QUEST_CONFIRM_ACCEPT naming the quest.
+    /// After a PARTY_ACCEPT quest was accepted through <see cref="AcceptQuest"/> (QuestHandler.cpp:166-191): every other group member on the accepter's map who
+    /// could take it (one who cannot is sent the refusal) gets a pending offer, any open gossip window closed and an SMSG_QUEST_CONFIRM_ACCEPT naming the quest.
     /// </summary>
     private void OfferPartyAccept(Player accepter, Quest quest)
     {
@@ -194,9 +194,19 @@ public sealed partial class QuestNpcServices
 
         foreach (Player member in party.MembersOf(accepter))
         {
-            if (ReferenceEquals(member, accepter) || member.MapId != accepter.MapId || Ready(member) is not { } state
-                || !CanTakeQuest(state, quest, []))
+            if (ReferenceEquals(member, accepter) || member.MapId != accepter.MapId || Ready(member) is not { } state)
             {
+                continue;
+            }
+
+            if (RefuseTakeQuest(state, quest, []) is { } refusal)
+            {
+                // CanTakeQuest(qInfo, true) (QuestHandler.cpp:179) tells the member why it was not offered the quest.
+                if (refusal.Message is { } reason)
+                {
+                    Send(member, WorldOpcode.SmsgQuestgiverQuestInvalid, QuestPackets.QuestInvalid(reason));
+                }
+
                 continue;
             }
 

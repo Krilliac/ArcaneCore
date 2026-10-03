@@ -96,6 +96,15 @@ public sealed class QuestTurnInTests
     }
 
     [Fact]
+    public void AutocompleteQuest_FailingTheClassCheck_IsRewardableByAGameMaster()
+    {
+        // Player.cpp:12688-12692: a game master bypasses the CanTakeQuest gate for an autocomplete quest.
+        using QuestFlowKit kit = AutoKit(QuestFlowKit.Task(Id, method: 0, classes: 1u << ((byte)Class.Mage - 1)));
+        kit.Player.Flags |= PlayerFlags.Gm;
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, Id, 0, out _));
+    }
+
+    [Fact]
     public void NotEnoughMoney_SendsInvalid22_AndResendsTheOfferWindow()
     {
         var quest = new QuestTemplate
