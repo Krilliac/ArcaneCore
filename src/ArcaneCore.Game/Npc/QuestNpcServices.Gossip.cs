@@ -17,6 +17,13 @@ public sealed partial class QuestNpcServices
     /// </summary>
     public event Action<Player, NpcInfo, GossipOption>? ForeignOptionSelected;
 
+    /// <summary>
+    /// Whether the "unlearn talents" option (GOSSIP_OPTION_UNLEARNTALENTS, 16) is offered to a player by a creature
+    /// (vmangos Creature::CanTrainAndResetTalentsOf, see <c>Talents.TalentTrainerRules</c>). The talents area supplies it;
+    /// while unset the option stays hidden (fail closed), and selecting it raises <see cref="ForeignOptionSelected"/>.
+    /// </summary>
+    public Func<Player, NpcInfo, bool>? UnlearnTalentsOffered { get; set; }
+
     /// <summary>CMSG_GOSSIP_HELLO (vmangos HandleGossipHelloOpcode, no script hooks).</summary>
     public void GossipHello(Player player, ObjectGuid guid)
     {
@@ -126,8 +133,9 @@ public sealed partial class QuestNpcServices
                 GossipOption.StablePet => p.Class == Class.Hunter,
                 GossipOption.SpiritGuide or GossipOption.Innkeeper or GossipOption.Banker or GossipOption.Petitioner
                     or GossipOption.TabardDesigner or GossipOption.Auctioneer => true,
+                GossipOption.UnlearnTalents => UnlearnTalentsOffered?.Invoke(p, npc) ?? false,
 
-                // Battlemasters, talent and pet-skill resets need owners outside this area;
+                // Battlemasters and pet-skill resets need owners outside this area (talents: UnlearnTalentsOffered);
                 // without them the option is hidden (fail closed). Unknown ids are hidden as in vmangos.
                 _ => false,
             };
@@ -254,6 +262,7 @@ public sealed partial class QuestNpcServices
                 break;
             case GossipOption.Petitioner:
             case GossipOption.TabardDesigner:
+            case GossipOption.UnlearnTalents: // vmangos Player.cpp:12242-12245: CloseGossip, then the owner sends the wipe confirmation
                 CloseGossip(p);
                 ForeignOptionSelected?.Invoke(p, npc, item.OptionId);
                 break;

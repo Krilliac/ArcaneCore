@@ -5,6 +5,7 @@ using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Data.Characters.Ranged;
 using ArcaneCore.Data.Characters.Spells;
+using ArcaneCore.Data.Characters.Talents;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Content.Maps;
@@ -73,6 +74,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(CharacterSkillsDataModule), DatabaseComponent.Characters, CharacterSkillsDataModule.Version),
             (typeof(CharacterLifeDataModule), DatabaseComponent.Characters, CharacterLifeDataModule.Version),
             (typeof(CharacterAmmoDataModule), DatabaseComponent.Characters, CharacterAmmoDataModule.Version),
+            (typeof(CharacterTalentDataModule), DatabaseComponent.Characters, CharacterTalentDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),

@@ -285,8 +285,8 @@ the melee slot in `SpellSystem.NextSwing.cs`.
 ## What's left
 
 - Area, chain and cone target selection are implemented (`SpellSystem.Targeting.cs`, with a line-of-sight filter on area lists); only the remaining TargetB-based selections are missing.
-- Reagents, item casts, totems, spell focus, non-warrior shapeshift forms, facing, area restrictions.
-- Talents, ranks, spell modifiers, proc system (aura holders carry `procCharges`, but nothing consumes them). Hit, crit, resist, diminishing returns, immunities, dispel, crowd-control state, pushback and lockout, absorb and the caster-state gate exist: see [spell-rules.md](spell-rules.md) for scope, configuration and limits.
+- Reagents, item casts, spell focus, non-warrior shapeshift forms, facing, area restrictions.
+- Talent spell effects (point accounting, learning, respec and persistence exist: [talents](talents.md)), ranks, the proc system (aura holders carry `procCharges`, but nothing consumes them). Hit, crit, resist, diminishing returns, immunities, dispel, crowd-control state, pushback and lockout, absorb and the caster-state gate exist: see [spell-rules.md](spell-rules.md) for scope, configuration and limits.
 - Complete spell combat modifiers. Integrated spell damage now uses map combat death/threat,
   and effective healing adds base distributed threat and enters combat.
 - Non-player far teleports. Player far teleports and shared creature lookup are connected in

@@ -56,6 +56,12 @@ public interface ISpellbook
 
     /// <summary>Add a spell (world thread). Returns false when it was already known.</summary>
     bool LearnSpell(Player player, uint spellId);
+
+    /// <summary>
+    /// Remove a spell (world thread; vmangos Player::RemoveSpell storage half). Returns false when it was not known
+    /// or the book cannot forget spells (default: a book written before talents existed keeps its spells).
+    /// </summary>
+    bool ForgetSpell(Player player, uint spellId) => false;
 }
 
 /// <summary>A fixed teleport destination (cmangos-classic <c>spell_target_position</c>).</summary>

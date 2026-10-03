@@ -198,7 +198,7 @@ persisted). Fixing this needs a reserved characters migration that adds `xp` (an
 ## Limitations / known gaps
 - No rested XP accumulation (inn/city resting) and no persistence. The rest pool is
   in memory only.
-- Level-up doesn't grant talent points or skill increases, and doesn't update
+- Level-up grants talent points through the talents area (docs/areas/talents.md) but no skill increases, and doesn't update
   health/mana regen formulas beyond base values.
 - Kill XP goes to the killing-blow player and their group. Tap ownership, pet/totem
   kills, `CREATURE_FLAG_EXTRA_NO_XP`, and the battleground/PvP honor paths are not
