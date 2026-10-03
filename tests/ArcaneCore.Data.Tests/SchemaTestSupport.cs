@@ -82,6 +82,14 @@ internal sealed class CommandTap : DbCommandInterceptor
 
     public int Ddl => Commands.Count(IsDdl);
 
+    /// <summary>
+    /// Whether any statement of the command text is one of the given DML verbs. Pomelo prefixes every
+    /// SaveChanges batch with <c>SET AUTOCOMMIT = 1;</c>, so the verb is not always the first word.
+    /// </summary>
+    public static bool IsWrite(string sql, params string[] verbs)
+        => verbs.Any(v => System.Text.RegularExpressions.Regex.IsMatch(
+            sql, @"(^|;)\s*" + v + @"\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant));
+
     public static bool IsDdl(string sql)
     {
         string s = sql.TrimStart();

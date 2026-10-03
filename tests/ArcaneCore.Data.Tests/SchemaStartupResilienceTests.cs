@@ -76,8 +76,7 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         Assert.True(ddl > 0, $"{component} step {stepVersion} issued no DDL");
 
         Func<string, bool> isVersionWrite = sql => sql.Contains(component + "_schema", StringComparison.Ordinal)
-            && (sql.TrimStart().StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase)
-                || sql.TrimStart().StartsWith("INSERT", StringComparison.OrdinalIgnoreCase));
+            && CommandTap.IsWrite(sql, "UPDATE", "INSERT");
 
         var faults = new List<(string Label, Func<string, bool> When, int On)>();
         for (int k = 1; k <= ddl; k++)
@@ -119,7 +118,7 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         // Die after each DDL statement, and just before the statement that records the version
         // (the crash the historic bootstrapper left an empty version table for).
         Func<string, bool> isVersionInsert = sql => sql.Contains(component + "_schema", StringComparison.Ordinal)
-            && sql.TrimStart().StartsWith("INSERT", StringComparison.OrdinalIgnoreCase);
+            && CommandTap.IsWrite(sql, "INSERT");
         var faults = new List<(string Label, Func<string, bool> When, int On, bool Before)>();
         for (int k = 1; k <= ddl; k++)
         {
