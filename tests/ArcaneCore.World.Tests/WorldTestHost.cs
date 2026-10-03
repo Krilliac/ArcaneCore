@@ -42,7 +42,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
         collection.AddSingleton<IAccountDataStore>(AccountData);
         collection.AddSingleton<IWorldDataStore>(WorldData);
         collection.AddSingleton(Directory);
-        collection.AddSingleton(_ => ChatCommands.CreateTable());
+        collection.AddSingleton(sp => ChatCommands.CreateTable(sp));
         collection.AddSingleton<CharacterSaveQueue>();
         collection.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());
         collection.AddWorldFeatures();

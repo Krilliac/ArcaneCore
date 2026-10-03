@@ -29,23 +29,39 @@ public sealed class ReloadFeature : IWorldFeature
         Options = _services.GetService<IOptions<HotReloadOptions>>()?.Value
             ?? _services.GetService<IConfiguration>()?.GetSection(HotReloadOptions.SectionName).Get<HotReloadOptions>()
             ?? new HotReloadOptions();
-        Coordinator = new ReloadCoordinator(logger, Options);
+        if (Options.Commands)
+        {
+            _coordinator = new ReloadCoordinator(logger, Options);
+        }
     }
 
-    /// <summary>The <c>HotReload</c> options (read when the world starts; the commands consult <see cref="HotReloadOptions.Commands"/> on every use).</summary>
+    private readonly ReloadCoordinator? _coordinator;
+
+    /// <summary>The <c>HotReload</c> options (read when the world starts).</summary>
     public HotReloadOptions Options { get; }
 
-    public ReloadCoordinator Coordinator { get; }
+    /// <summary>Whether live reload is on (<see cref="HotReloadOptions.Commands"/>, default off). When off there is no coordinator and no <c>.reload</c> root.</summary>
+    public bool Enabled => _coordinator is not null;
+
+    /// <summary>The coordinator; only exists when <see cref="Enabled"/>.</summary>
+    public ReloadCoordinator Coordinator => _coordinator
+        ?? throw new InvalidOperationException("Live reload is disabled (HotReload:Commands is false).");
 
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
+        if (_coordinator is null)
+        {
+            _logger.LogInformation("Live reload is disabled (HotReload:Commands=false); the .reload commands do not exist");
+            return;
+        }
+
         Coordinator.Attach(world);
         foreach (Type type in AssemblyDiscovery.FindTypes<IContentReloadable>())
         {
             Coordinator.Register((IContentReloadable)ActivatorUtilities.CreateInstance(_services, type));
         }
 
-        _logger.LogInformation("Live reload ready: {Names} (commands {State})", string.Join(", ", Coordinator.Names), Options.Commands ? "enabled" : "disabled");
+        _logger.LogInformation("Live reload ready: {Names} (commands enabled)", string.Join(", ", Coordinator.Names));
     }
 }

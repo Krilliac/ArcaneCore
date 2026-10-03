@@ -11,11 +11,14 @@ public sealed class HotReloadOptions
     public const string SectionName = "HotReload";
 
     /// <summary>
-    /// Whether the <c>.reload</c> commands act. Default true: retail ships them enabled for
-    /// administrators (vmangos Chat.cpp:1212 registers the <c>reload</c> root). When false the
-    /// command still exists but replies that reloading is disabled.
+    /// The one switch for live reload. Default false: a production server does not carry the
+    /// reload machinery (vmangos registers the <c>reload</c> root, Chat.cpp:1212, but ArcaneCore's
+    /// operator-initiated hot reload is a development tool, so it is opt-in). When false the
+    /// reload coordinator is not built, no reloadable is registered and the <c>.reload</c> root does
+    /// not exist (the chat reply is "There is no such command."). A development server turns it on
+    /// with <c>HotReload:Commands=true</c>. Read once when the world starts.
     /// </summary>
-    public bool Commands { get; set; } = true;
+    public bool Commands { get; set; }
 
     /// <summary>How long a candidate may take to build (database read plus indexing) before the reload is abandoned. 0 = no limit.</summary>
     public int BuildTimeoutMs { get; set; } = 60_000;

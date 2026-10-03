@@ -26,7 +26,13 @@ root 1212), `src/game/Commands/ServerCommands.cpp` (config 1016, spell_template 
 - Reloadables are discovered (`IContentReloadable` in the World assembly) and registered by
   `ReloadFeature`; a new one is a new class, no registry edit.
 
-**Commands** (`ReloadCommands`, Administrator, `HotReload:Commands` default on)
+**Switch**: `HotReload:Commands` is the single switch and defaults to **off** (`HotReloadOptions`,
+shipped `appsettings.json`). Off: `ReloadFeature` builds no coordinator and registers no reloadable, and
+the `.reload` root is not in the command table (`ICommandGroup.IsEnabled`), so `.reload` answers "There is
+no such command." exactly like any unknown command. On: everything below. A development server enables it
+with `HotReload:Commands=true` (the dev runner script sets it). Read once when the world starts.
+
+**Commands** (`ReloadCommands`, Administrator, only when `HotReload:Commands=true`)
 - `.reload config`, `.reload spell_template`, `.reload all` (the reloadables vmangos `reload all` reaches, ServerCommands.cpp:885-905:
   `areatrigger_teleport` :907-914, `game_tele` :900, `spell_template` :969-971; not the config, and not
   `item_template` or `creature_template`, which vmangos' `all_item` :996-1002 and `all_npc` :925-933 leave out
@@ -127,7 +133,7 @@ retail variant of (no switch is possible); they are limits, not options.
 | Retail behaviour, switchable: an empty `item_template`, `game_tele` or unusable `areatrigger_teleport` empties the table (vmangos clears first); `spell_template` and `creature_template` keep what is loaded (vmangos returns early). | `HotReload:EmptyTables` (`Retail` default; `KeepLoaded` keeps the loaded rows for the three clearing tables) |
 | A negative interval/range in `.reload config` is replaced by its default and noted (vmangos `setConfigPos`/`setConfigMin`). | `HotReload:NegativeNumbers` (`Retail` default; `Reject` rejects the reload) |
 | `.reload spell_template` does not reload `spell_mod` (no such table here; vmangos ServerCommands.cpp:1414). | none |
-| The commands can be switched off. Retail has no such switch. | `HotReload:Commands` (default true = retail) |
+| Live reload is off by default and is a development facility: vmangos always registers its `reload` root (Chat.cpp:1212), here the root and the coordinator do not exist unless enabled. Per the standing rule that hot-reload commands are off by default. | `HotReload:Commands` (default false; `true` for a development server) |
 
 ## Limits (not delivered, by design of this slice)
 

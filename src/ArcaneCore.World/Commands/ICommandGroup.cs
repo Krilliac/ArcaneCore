@@ -12,17 +12,28 @@ namespace ArcaneCore.World.Commands;
 public interface ICommandGroup
 {
     IReadOnlyList<ChatCommand> Commands { get; }
+
+    /// <summary>
+    /// Whether this group's roots are registered at all. Default true. A group behind a
+    /// configuration switch returns false when the switch is off, so its roots do not exist
+    /// (the chat reply is the same "There is no such command." as for any unknown root).
+    /// <paramref name="services"/> is null when the table is built without a host.
+    /// </summary>
+    bool IsEnabled(IServiceProvider? services) => true;
 }
 
 /// <summary>The daemon's command table: <see cref="BuiltinCommands"/>, then every <see cref="ICommandGroup"/>.</summary>
 public static class ChatCommands
 {
-    public static CommandTable CreateTable()
+    public static CommandTable CreateTable(IServiceProvider? services = null)
     {
         var roots = new List<ChatCommand>(BuiltinCommands.Create().Roots);
         foreach (ICommandGroup group in AssemblyDiscovery.CreateAll<ICommandGroup>())
         {
-            roots.AddRange(group.Commands);
+            if (group.IsEnabled(services))
+            {
+                roots.AddRange(group.Commands);
+            }
         }
 
         string? duplicate = roots.GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase)

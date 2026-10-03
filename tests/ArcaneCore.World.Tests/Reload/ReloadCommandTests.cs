@@ -2,6 +2,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Commands;
 using ArcaneCore.World.Reload;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -10,14 +11,14 @@ using Xunit;
 
 namespace ArcaneCore.World.Tests.Reload;
 
-/// <summary>Registers the reload feature's doubles for <see cref="WorldTestHost"/> (discovered).</summary>
+/// <summary>Registers the reload feature's doubles for <see cref="WorldTestHost"/> (discovered). Live reload is off by default, so the host turns it on explicitly.</summary>
 internal sealed class ReloadTestServices : IWorldTestServices
 {
     public void Register(IServiceCollection services)
     {
         services.AddSingleton(new ConfigurationManager());
         services.AddSingleton<IConfiguration>(sp => sp.GetRequiredService<ConfigurationManager>());
-        services.AddSingleton(Options.Create(new HotReloadOptions()));
+        services.AddSingleton(Options.Create(new HotReloadOptions { Commands = true }));
     }
 }
 
@@ -161,17 +162,53 @@ public sealed class ReloadCommandTests
     }
 
     [Fact]
-    public async Task WhenDisabledByConfiguration_TheCommandSaysSo_AndReloadsNothing()
+    public async Task WhenDisabled_TheReloadRootDoesNotExist_AndNothingIsReloaded()
     {
-        await using var host = WorldTestHost.Start();
+        await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton(Options.Create(new HotReloadOptions { Commands = false })));
         await using WorldTestClient admin = await AdministratorAsync(host);
-        host.WorldServices.GetRequiredService<IOptions<HotReloadOptions>>().Value.Commands = false;
         SpellStore before = host.WorldServices.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>().System.Store;
+        ReloadFeature feature = host.WorldServices.GetRequiredService<ReloadFeature>();
 
         await SayAsync(admin, ".reload spell_template");
 
-        Assert.Equal("Hot reload is disabled (HotReload:Commands).", (await admin.ReadChatAsync()).Text);
+        Assert.Equal("There is no such command.", (await admin.ReadChatAsync()).Text);
         Assert.Same(before, host.WorldServices.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>().System.Store);
+        Assert.False(feature.Enabled);
+        Assert.Throws<InvalidOperationException>(() => feature.Coordinator);
+    }
+
+    [Fact]
+    public void WithTheDefaults_TheReloadRootsDoNotExist()
+    {
+        // No HotReload section anywhere (an options object nobody touched): the shipped default.
+        Assert.False(new HotReloadOptions().Commands);
+        ServiceProvider services = new ServiceCollection().AddSingleton(Options.Create(new HotReloadOptions())).BuildServiceProvider();
+        Assert.DoesNotContain(ChatCommands.CreateTable(services).Roots, c => c.Name.Equals("reload", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(ChatCommands.CreateTable().Roots, c => c.Name.Equals("reload", StringComparison.OrdinalIgnoreCase));
+
+        ServiceProvider enabled = new ServiceCollection().AddSingleton(Options.Create(new HotReloadOptions { Commands = true })).BuildServiceProvider();
+        Assert.Contains(ChatCommands.CreateTable(enabled).Roots, c => c.Name.Equals("reload", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void TheShippedAppsettings_LeaveHotReloadOff()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        // The world daemon's file is copied next to the test assembly when it is referenced; otherwise read it from the source tree.
+        if (!File.Exists(path))
+        {
+            string? dir = AppContext.BaseDirectory;
+            while (dir is not null && !File.Exists(Path.Combine(dir, "src", "ArcaneCore.World", "appsettings.json")))
+            {
+                dir = Path.GetDirectoryName(dir);
+            }
+
+            Assert.NotNull(dir);
+            path = Path.Combine(dir!, "src", "ArcaneCore.World", "appsettings.json");
+        }
+
+        IConfiguration configuration = new ConfigurationBuilder().AddJsonFile(path).Build();
+        Assert.False(configuration.GetSection(HotReloadOptions.SectionName).Get<HotReloadOptions>()!.Commands);
     }
 
     [Fact]
