@@ -146,22 +146,9 @@ public sealed partial class SpellSystem
             return;
         }
 
-        int old = Math.Max((int)holder.StackAmount, 1);
-        if (old - stacks <= 0)
+        if (ModStackAmount(holder, -stacks))
         {
-            RemoveHolder(state, holder);
-            return;
+            RemoveHolder(state, holder, AuraRemoveMode.Dispel);
         }
-
-        holder.StackAmount = (byte)(old - stacks);
-        foreach (SpellAura? aura in holder.Auras)
-        {
-            if (aura is not null)
-            {
-                aura.Amount = aura.Amount / old * holder.StackAmount;
-            }
-        }
-
-        WriteAuraApplications(holder);
     }
 }

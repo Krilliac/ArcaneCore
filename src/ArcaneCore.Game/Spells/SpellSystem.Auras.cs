@@ -87,34 +87,21 @@ public sealed partial class SpellSystem
             && (h.CasterGuid == holder.CasterGuid || holder.IsPositive));
         if (existing is not null)
         {
-            if (existing.CasterGuid == holder.CasterGuid
-                && ReferenceEquals(existing.CasterOwner, holder.CasterOwner) && holder.Spell.StackAmount > 1)
+            bool sameOwner = existing.CasterGuid == holder.CasterGuid && ReferenceEquals(existing.CasterOwner, holder.CasterOwner);
+            if (sameOwner && CanBeRefreshedBy(existing, holder))
             {
-                existing.StackAmount = (byte)Math.Min(existing.StackAmount + 1, holder.Spell.StackAmount);
-                existing.Duration = existing.MaxDuration = holder.MaxDuration;
-                for (int i = 0; i < SpellConstants.MaxEffects; i++)
-                {
-                    if (existing.Auras[i] is { } aura && holder.Auras[i] is { } fresh)
-                    {
-                        // vmangos SpellAuraHolder::SetStackAmount (SpellAuras.cpp:6987-6991): an amount that
-                        // changes is un-applied with the old value and applied with the new one.
-                        int amount = fresh.Amount * existing.StackAmount;
-                        if (amount != aura.Amount)
-                        {
-                            AuraHandler? handler = AuraHandlers.GetValueOrDefault(aura.Type);
-                            handler?.Apply?.Invoke(this, existing, aura, false);
-                            aura.Amount = amount;
-                            handler?.Apply?.Invoke(this, existing, aura, true);
-                        }
-                    }
-                }
-
-                WriteAuraApplications(existing);
-                SendAuraDuration(existing);
+                RefreshHolderInPlace(existing, holder);
                 return;
             }
 
-            RemoveHolder(state, existing);
+            if (sameOwner && holder.Spell.StackAmount > 0)
+            {
+                // vmangos Unit.cpp:3149-3154: "Aura can stack on self -> Stack it".
+                ModStackAmount(existing, holder.StackAmount, holder);
+                return;
+            }
+
+            RemoveHolder(state, existing, AuraRemoveMode.Stack);
         }
 
         holder.AppliedAtUnixSeconds = UnixSecondsClock();
@@ -135,14 +122,17 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>Remove every aura of <paramref name="spellId"/> from <paramref name="target"/> (vmangos Unit::RemoveAurasDueToSpell).</summary>
-    public void RemoveAuras(Unit target, uint spellId)
+    public void RemoveAuras(Unit target, uint spellId) => RemoveAuras(target, spellId, AuraRemoveMode.Default);
+
+    /// <summary>vmangos Unit::RemoveAurasDueToSpell(spellId, except, mode) / RemoveAurasDueToSpellByCancel: the removal reason is kept on the holder.</summary>
+    public void RemoveAuras(Unit target, uint spellId, AuraRemoveMode mode)
     {
         ArgumentNullException.ThrowIfNull(target);
         if (GetState(target.Guid) is { } state)
         {
             foreach (SpellAuraHolder holder in state.Auras.Where(h => h.Spell.Id == spellId).ToArray())
             {
-                RemoveHolder(state, holder);
+                RemoveHolder(state, holder, mode);
             }
         }
     }
@@ -224,18 +214,125 @@ public sealed partial class SpellSystem
 
             if (!holder.IsRemoved && !holder.IsPermanent && holder.Duration == 0)
             {
-                RemoveHolder(state, holder);
+                RemoveHolder(state, holder, AuraRemoveMode.Expire);
             }
         }
     }
 
-    private void RemoveHolder(UnitSpellState state, SpellAuraHolder holder)
+    /// <summary>
+    /// vmangos SpellAuraHolder::CanBeRefreshedBy (SpellAuras.cpp:381-394): the same caster's same spell, with no stack amount
+    /// and no proc charges (a charge aura refreshes through the replace path, which fixes a client visual bug).
+    /// </summary>
+    internal static bool CanBeRefreshedBy(SpellAuraHolder existing, SpellAuraHolder other)
+        => existing.CasterGuid == other.CasterGuid && existing.Spell.Id == other.Spell.Id
+            && existing.Spell.StackAmount == 0 && existing.Spell.ProcCharges == 0;
+
+    /// <summary>
+    /// vmangos SpellAuraHolder::Refresh + Aura::Refresh (SpellAuras.cpp:311-379): the SAME holder keeps its slot, takes the new
+    /// duration and apply time, restarts its periodic timers and re-applies an amount that changed; no remove or add happens
+    /// (so no HolderRemoved/HolderAdded, and diminishing returns do not see a crowd control end and restart). Documented
+    /// deviation: an unchanged amount is not un-applied and re-applied (vmangos does, unconditionally), so side-effect-only
+    /// handlers do not fire twice; the 1.7 "do not reset health/mana on a stat refresh" rule belongs to the stat lane.
+    /// </summary>
+    private void RefreshHolderInPlace(SpellAuraHolder existing, SpellAuraHolder fresh)
+    {
+        existing.AppliedAtUnixSeconds = UnixSecondsClock();
+        existing.Duration = fresh.Duration;
+        existing.MaxDuration = fresh.MaxDuration;
+        existing.ChannelTarget = fresh.ChannelTarget;
+        for (int i = 0; i < SpellConstants.MaxEffects; i++)
+        {
+            if (existing.Auras[i] is not { } aura || fresh.Auras[i] is not { } source)
+            {
+                continue;
+            }
+
+            aura.PeriodicTimer = (int)aura.Amplitude;
+            aura.TickCount = 0;
+            if (source.Amount != aura.Amount)
+            {
+                AuraHandler? handler = AuraHandlers.GetValueOrDefault(aura.Type);
+                handler?.Apply?.Invoke(this, existing, aura, false);
+                aura.Amount = source.Amount;
+                aura.UnitAmount = source.UnitAmount;
+                handler?.Apply?.Invoke(this, existing, aura, true);
+            }
+        }
+
+        WriteAuraApplications(existing);
+        SendAuraDuration(existing);
+    }
+
+    /// <summary>
+    /// vmangos SpellAuraHolder::ModStackAmount / SetStackAmount (SpellAuras.cpp:6942-6999): the stack count moves by
+    /// <paramref name="num"/> within the spell's limit; every aura amount becomes stacks times its one-stack value, un-applied
+    /// with the old amount and applied with the new one when it changes; an increase refreshes the duration. Returns true when
+    /// the stacks ran out (the caller removes the holder). <paramref name="fresh"/> is the new cast's holder (its one-stack
+    /// amounts and duration); a dispel passes none.
+    /// </summary>
+    private bool ModStackAmount(SpellAuraHolder holder, int num, SpellAuraHolder? fresh = null)
+    {
+        int proto = (int)holder.Spell.StackAmount;
+        if (proto == 0)
+        {
+            return true;
+        }
+
+        int stacks = holder.StackAmount + num;
+        if (stacks > proto)
+        {
+            stacks = proto;
+        }
+        else if (stacks <= 0)
+        {
+            return true;
+        }
+
+        bool refresh = stacks >= holder.StackAmount;
+        if (stacks != holder.StackAmount)
+        {
+            holder.StackAmount = (byte)stacks;
+            WriteAuraApplications(holder);
+            for (int i = 0; i < SpellConstants.MaxEffects; i++)
+            {
+                if (holder.Auras[i] is not { } aura)
+                {
+                    continue;
+                }
+
+                if (fresh?.Auras[i] is { } source)
+                {
+                    aura.UnitAmount = source.UnitAmount;
+                }
+
+                int amount = aura.UnitAmount * stacks;
+                if (amount != aura.Amount)
+                {
+                    AuraHandler? handler = AuraHandlers.GetValueOrDefault(aura.Type);
+                    handler?.Apply?.Invoke(this, holder, aura, false);
+                    aura.Amount = amount;
+                    handler?.Apply?.Invoke(this, holder, aura, true);
+                }
+            }
+        }
+
+        if (refresh)
+        {
+            holder.Duration = holder.MaxDuration = fresh?.MaxDuration ?? holder.MaxDuration;
+            SendAuraDuration(holder);
+        }
+
+        return false;
+    }
+
+    private void RemoveHolder(UnitSpellState state, SpellAuraHolder holder, AuraRemoveMode mode = AuraRemoveMode.Default)
     {
         if (holder.IsRemoved)
         {
             return;
         }
 
+        holder.RemoveMode = mode;
         holder.IsRemoved = true;
         state.Auras.Remove(holder);
         if (holder.Slot != SpellAuraHolder.NoSlot)

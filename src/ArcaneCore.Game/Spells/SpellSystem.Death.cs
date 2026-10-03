@@ -44,7 +44,7 @@ public sealed partial class SpellSystem
 
         foreach (SpellAuraHolder holder in state.Auras.Where(h => !h.Spell.IsPassive && !h.Spell.IsDeathPersistent).ToArray())
         {
-            RemoveHolder(state, holder);
+            RemoveHolder(state, holder, AuraRemoveMode.Death);
         }
     }
 }

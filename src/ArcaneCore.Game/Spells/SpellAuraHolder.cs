@@ -36,6 +36,7 @@ public sealed class SpellAura
         EffectIndex = effectIndex;
         Type = type;
         Amount = amount;
+        UnitAmount = amount;
         Amplitude = amplitude;
         MiscValue = miscValue;
         PeriodicTimer = (int)amplitude;
@@ -53,6 +54,12 @@ public sealed class SpellAura
 
     /// <summary>Modifier amount (vmangos Modifier::m_amount), from the effect value at application.</summary>
     public int Amount { get; internal set; }
+
+    /// <summary>
+    /// The one-stack amount: <see cref="Amount"/> is this times the holder's stack count (vmangos recomputes
+    /// stacks * CalculateSpellEffectValue in SetStackAmount, SpellAuras.cpp:6975-6990, instead of dividing the total).
+    /// </summary>
+    internal int UnitAmount { get; set; }
 
     /// <summary>Periodic interval in ms (Spell.dbc EffectAmplitude; 0 = not periodic).</summary>
     public uint Amplitude { get; }
@@ -177,6 +184,9 @@ public sealed class SpellAuraHolder
     public int Charges { get; internal set; }
 
     public bool IsRemoved { get; internal set; }
+
+    /// <summary>Why this holder was removed (vmangos SpellAuraHolder::m_removeMode); set before the remove handlers and <see cref="SpellSystem.HolderRemoved"/> run.</summary>
+    public AuraRemoveMode RemoveMode { get; internal set; }
 
     /// <summary>For an aura a party area aura put on a group member: the caster's source holder (vmangos AreaAura owner).</summary>
     public SpellAuraHolder? AreaParent { get; internal set; }

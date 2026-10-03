@@ -44,7 +44,7 @@ public sealed partial class SpellSystem
             return;
         }
 
-        RemoveAuras(player, spellId);
+        RemoveAuras(player, spellId, AuraRemoveMode.Cancel);
     }
 
     /// <summary>vmangos SpellEntry::HasAreaAuraEffect: any of the party/pet/friend/enemy/raid/owner area aura effects.</summary>
