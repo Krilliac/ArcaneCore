@@ -11,7 +11,7 @@ namespace ArcaneCore.Game.Spells;
 /// REQUIRES_MAIN_HAND_WEAPON / REQUIRES_OFFHAND_WEAPON), a triggered one DONT_REPORT. For a main-hand or ranged spell the other
 /// attack's weapon does not count (vmangos <c>ignore</c>): an off-hand dagger alone does not satisfy a main-hand ability.
 /// <para>
-/// Not covered: casts that name an item (enchanting, key use) - their item rules belong to the items area; item classes other than weapon and
+/// Passive spells are never checked (Spell.cpp:5696; the weapon proficiency spells carry the item class they grant). Not covered: casts that name an item (enchanting, key use) - their item rules belong to the items area; item classes other than weapon and
 /// armor pass (vmangos fails them with a logged error; test content leaves the field at 0 where DBC data has -1, so passing is the safe reading).
 /// </para>
 /// </summary>
@@ -51,7 +51,8 @@ public sealed class EquippedItemCastCheck : ISpellCastCheck
     public SpellCastResult Check(in SpellCastCheckContext context)
     {
         SpellInfo spell = context.Spell;
-        if (spell.EquippedItemClass < 0 || context.Caster is not Player player || !context.Targets.Item.IsEmpty)
+        // vmangos runs CheckItems "always (except passive spells)" (Spell.cpp:5696): the proficiency spells carry the item class they grant.
+        if (spell.EquippedItemClass < 0 || spell.IsPassive || context.Caster is not Player player || !context.Targets.Item.IsEmpty)
         {
             return SpellCastResult.CastOk;
         }

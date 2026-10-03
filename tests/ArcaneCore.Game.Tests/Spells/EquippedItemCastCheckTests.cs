@@ -187,6 +187,16 @@ public sealed class EquippedItemCastCheckTests
     }
 
     [Fact]
+    public void APassiveSpell_IsNeverChecked_TheProficiencySpellsCarryTheClassTheyGrant()
+    {
+        using var rig = new Rig();
+        SpellInfo proficiency = Requiring(FishingSpell, 2, 1 << 7) with { Attributes = SpellAttributes.Passive };
+
+        Assert.Equal(SpellCastResult.CastOk, new EquippedItemCastCheck().Check(new SpellCastCheckContext(
+            rig.Kit.System, rig.Player, proficiency, SpellCastTargets.ForSelf(), null, true, true)));
+    }
+
+    [Fact]
     public void ANonPlayerCaster_IsNotChecked()
     {
         using var rig = new Rig();
