@@ -236,4 +236,48 @@ public sealed class MeleeSpellLoopTests
         Assert.Equal(1, rig.WhiteSwings);
         Assert.NotNull(rig.Kit.System.GetState(rig.Caster.Guid)!.MeleeCast);
     }
+
+    [Fact]
+    public void QueuedSpellThatKillsItsTarget_IsNotReportedInterrupted()
+    {
+        // Review finding: the kill runs CombatStop -> AttackStop -> CancelQueuedMeleeSpell from inside Cast; the
+        // cast is already past its cast point (SMSG_SPELL_GO sent), so it must not be cancelled.
+        using var rig = new Rig();
+        Assert.Equal(SpellCastResult.CastOk, rig.QueueHeroicStrike());
+        rig.Combat.Attack(rig.Caster, rig.Target);
+        rig.Kit.System.Damage = new CombatDamageSink();   // the world wiring (WorldSpellDamageSink): spell damage goes through map combat, so it can kill
+        rig.Target.Health = 5;
+        rig.CasterSession.Clear();
+
+        rig.Tick(50);
+
+        Assert.False(rig.Target.IsAlive);
+        Assert.Contains(WorldOpcode.SmsgSpellGo, Opcodes(rig.CasterSession));
+        Assert.DoesNotContain(SpellCastResult.Interrupted, Packets(rig.CasterSession, WorldOpcode.SmsgCastResult).Where(p => p.Length > 5).Select(p => (SpellCastResult)p[5]));
+        Assert.Null(rig.Kit.System.GetState(rig.Caster.Guid)?.MeleeCast);
+        Assert.False(rig.Kit.System.IsSpellReady(rig.Caster, Strike()));   // the global cooldown was not wiped
+    }
+
+    [Fact]
+    public void NextSwingSpell_CanBeQueuedOutOfMeleeReach()
+    {
+        // vmangos Spell::CheckRange returns CAST_OK for a next-melee-swing spell with the combat range (Spell.cpp:6882).
+        using var rig = new Rig();
+        rig.Target.Relocate(40, 0, rig.Target.Z, 0, 1);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.QueueHeroicStrike());
+        Assert.NotNull(rig.Kit.System.GetState(rig.Caster.Guid)!.MeleeCast);
+    }
+
+    private sealed class CombatDamageSink : IDamageSink
+    {
+        public uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic)
+        {
+            uint health = victim.Health;
+            caster.Map!.Combat.DealDamage(caster, victim, damage, direct: !periodic, meleeDamage: false);
+            return health - Math.Min(health, victim.Health);
+        }
+
+        public uint Heal(Unit caster, Unit target, SpellInfo spell, uint amount) => 0;
+    }
 }

@@ -69,6 +69,13 @@ public sealed partial class SpellSystem
             return false;
         }
 
+        if (cast.Completed)
+        {
+            // Re-entrancy: the cast is past its cast point (SMSG_SPELL_GO sent, effects running) and its own damage
+            // ended the attack (kill -> CombatStop -> AttackStop); vmangos has nothing left to interrupt then.
+            return false;
+        }
+
         Cancel(cast);
         return true;
     }

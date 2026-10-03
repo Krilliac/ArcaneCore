@@ -689,6 +689,12 @@ public sealed partial class SpellSystem
         float reach = CombatReach(caster) + CombatReach(target);
         if (spell.RangeIndex == SpellConstants.RangeIndexCombat)
         {
+            // vmangos Spell::CheckRange (Spell.cpp:6882): a next-melee-swing spell passes; the swing itself checks reach.
+            if (spell.IsNextMeleeSwing)
+            {
+                return SpellCastResult.CastOk;
+            }
+
             // vmangos WorldObject::CanReachWithMeleeSpellAttack with Spell::CheckRange's range_mod
             // 1.0: reach = both combat reaches + 1.0 + BASE_MELEERANGE_OFFSET (4/3), at least
             // ATTACK_DISTANCE, compared in 2D ("melee spells ignore Z-axis checks").
