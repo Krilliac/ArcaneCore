@@ -150,7 +150,10 @@ public static class ReputationMath
         };
     }
 
-    /// <summary>vmangos rand_dither: floor plus one with probability of the fractional part.</summary>
+    /// <summary>
+    /// vmangos rand_dither (Random.cpp:80-83): copysign(floor(|v| + frand(0,1)), v). <paramref name="roll"/> is the
+    /// frand(0,1) draw in [0,1); the magnitude rounds up with the probability of its fraction.
+    /// </summary>
     public static int Dither(float value, double roll)
     {
         if (!float.IsFinite(value))
@@ -158,8 +161,8 @@ public static class ReputationMath
             return 0;
         }
 
-        double floor = Math.Floor(value);
-        double result = floor + (roll < value - floor ? 1 : 0);
+        double magnitude = Math.Floor(Math.Abs((double)value) + roll);
+        double result = value < 0 ? -magnitude : magnitude;
         return (int)Math.Clamp(result, int.MinValue, int.MaxValue);
     }
 }

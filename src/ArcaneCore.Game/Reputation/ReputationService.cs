@@ -51,12 +51,18 @@ public sealed class ReputationService : IReputationService, IPlayerReputation, I
     /// </summary>
     public Func<Player, ReputationSource, uint, float>? GainModifier { get; set; }
 
+    /// <summary>Option <c>Reputation:PeaceForcedUsesEffectiveStanding</c>, copied onto every state built by <see cref="Create"/>.</summary>
+    public bool PeaceForcedUsesEffectiveStanding { get; init; }
+
     /// <summary>Build a player's initial state (session task, before the player enters the world).</summary>
     public PlayerReputation Create(Player player, CharacterReputationData stored)
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(stored);
-        var reputation = new PlayerReputation(Factions, player.Race, player.Class);
+        var reputation = new PlayerReputation(Factions, player.Race, player.Class)
+        {
+            PeaceForcedUsesEffectiveStanding = PeaceForcedUsesEffectiveStanding,
+        };
         reputation.Load(stored.Factions, stored.WatchedFaction);
         player.SetInt32(UpdateFields.PlayerFieldWatchedFactionIndex, reputation.WatchedFaction);
         return reputation;

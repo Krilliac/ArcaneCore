@@ -17,4 +17,10 @@ public sealed class ReputationOptions
     public float RateGain { get; set; } = 1f;
 
     public float RateLowLevelKill { get; set; } = 0.2f;
+
+    /// <summary>
+    /// Retail (false) lets forced peace be lifted by the RELATIVE standing only (ReputationMgr.cpp:334-336);
+    /// true compares the effective rank including the race base. Deliberate deviation, default retail.
+    /// </summary>
+    public bool PeaceForcedUsesEffectiveStanding { get; set; }
 }

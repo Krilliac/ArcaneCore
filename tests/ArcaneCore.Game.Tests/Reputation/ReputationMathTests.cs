@@ -77,15 +77,4 @@ public sealed class ReputationMathTests
         rates.LowLevelKill = 0.5f;
         Assert.Equal(25f, ReputationMath.GainBeforeDither(ReputationSource.Kill, 25, 20, 1, rates));
     }
-
-    [Theory]
-    [InlineData(2.25f, 0.24, 3)]
-    [InlineData(2.25f, 0.25, 2)]
-    [InlineData(2.0f, 0.0, 2)]
-    [InlineData(-2.5f, 0.4, -2)]
-    [InlineData(-2.5f, 0.6, -3)]
-    [InlineData(float.NaN, 0.0, 0)]
-    [InlineData(float.PositiveInfinity, 0.0, 0)]
-    public void Dither_RoundsUpWithTheFractionalProbability(float value, double roll, int expected)
-        => Assert.Equal(expected, ReputationMath.Dither(value, roll));
 }

@@ -212,7 +212,10 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
 
             _writes = new ReputationWriteQueue(scopes, loggers.CreateLogger<ReputationWriteQueue>());
             var rates = new ReputationRates { Gain = Options.RateGain, LowLevelKill = Options.RateLowLevelKill };
-            return _service = new ReputationService(factions, onKill, rates, new Sink(_writes));
+            return _service = new ReputationService(factions, onKill, rates, new Sink(_writes))
+            {
+                PeaceForcedUsesEffectiveStanding = Options.PeaceForcedUsesEffectiveStanding,
+            };
         }
     }
 
