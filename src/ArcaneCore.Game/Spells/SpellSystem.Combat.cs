@@ -82,24 +82,26 @@ public sealed partial class SpellSystem
     /// AURA_INTERRUPT_FLAG_DAMAGE (and NON_PERIODIC_DAMAGE for direct hits) break; a cast in
     /// progress is interrupted (SPELL_INTERRUPT_FLAG_ABORT_ON_DMG) or pushed back
     /// (SPELL_INTERRUPT_FLAG_PUSH_BACK) by direct damage only ("DoTs can't interrupt or delay");
-    /// a channel is delayed (CHANNEL_FLAG_DELAY) or interrupted (CHANNEL_FLAG_DAMAGE). Self damage is ignored.
+    /// a channel is delayed (CHANNEL_FLAG_DELAY) or interrupted (CHANNEL_FLAG_DAMAGE). Self damage breaks auras (build 5875, Unit.cpp:660-670) but never pushes back or interrupts a cast.
     /// </summary>
     public void OnDamageTaken(Unit victim, Unit? attacker, uint damage, bool periodic)
     {
         ArgumentNullException.ThrowIfNull(victim);
-        if (damage == 0 || ReferenceEquals(victim, attacker) || !victim.IsAlive || GetState(victim.Guid) is not { } state
+        if (damage == 0 || !victim.IsAlive || GetState(victim.Guid) is not { } state
             || !ReferenceEquals(state.Unit, victim))
         {
             return;
         }
 
+        // vmangos Unit.cpp:660-670: self-inflicted damage breaks auras at this build (SKIP_STEALTH is false above 1.6.1).
+        // Cast pushback and interrupts below still ignore self damage.
         SpellAuraInterruptFlags breaking = SpellAuraInterruptFlags.Damage | (periodic ? 0 : SpellAuraInterruptFlags.NonPeriodicDamage);
         foreach (SpellAuraHolder holder in state.Auras.Where(h => (h.Spell.AuraInterruptFlags & breaking) != 0).ToArray())
         {
             RemoveHolder(state, holder);
         }
 
-        if (state.CurrentCast is not { } cast)
+        if (ReferenceEquals(victim, attacker) || state.CurrentCast is not { } cast)
         {
             return;
         }

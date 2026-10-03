@@ -353,6 +353,7 @@ public sealed partial class MapCombat
             CombatPackets.AttackerStateUpdate(info.HitInfo, attacker.Guid, victim.Guid, info.TotalDamage, sub, info.TargetState, info.Blocked));
 
         DealMeleeDamage(info);
+        MeleeSwingResolved?.Invoke(attacker, victim); // vmangos Unit.cpp:2285: the swing cancels ATTACKING auras
         return info;
     }
 

@@ -312,6 +312,7 @@ public sealed partial class SpellSystem
             return result;
         }
 
+        InterruptForCast(cast); // rogue lane: aura-interrupt dispatch, docs/integration/rogue-aura-interrupt.md
         AddCooldown(state, spell, cast.IsTriggered);
         TakePower(caster, spell, cast.PowerCost);
         SendCastResult(caster, spell, SpellCastResult.CastOk, cast.IsTriggered);
@@ -359,6 +360,7 @@ public sealed partial class SpellSystem
             {
                 // vmangos SpellCaster::SendSpellMiss; a missed hostile spell still starts combat (zero damage).
                 SendToSet(caster, WorldOpcode.SmsgSpelllogmiss, SpellPackets.BuildSpellLogMiss(spell.Id, caster.Guid, target.Guid, entry.Miss), includeSelf: true);
+                InterruptTargetOfHostileSpell(cast, target, hit: false, dealsDamage: false); // rogue lane (vmangos Spell.cpp:1893-1897)
                 if (!IsQuestSettlementPending(caster) && !IsQuestSettlementPending(target) && target.IsAlive && Relations.IsHostile(caster, target))
                 {
                     Damage.DealSpellDamage(caster, target, spell, 0, periodic: false);

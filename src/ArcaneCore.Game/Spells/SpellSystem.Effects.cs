@@ -104,6 +104,7 @@ public sealed partial class SpellSystem
         }
 
         SpellAuraHolder? holder = null;
+        bool dealsDamage = false; // rogue lane: vmangos m_damage != 0 proxy for the hostile-action interrupt
         for (int i = 0; i < SpellConstants.MaxEffects; i++)
         {
             if ((effectMask & (1 << i)) == 0)
@@ -123,6 +124,7 @@ public sealed partial class SpellSystem
             {
                 value = (int)(value * multipliers[i]);
             }
+            dealsDamage |= IsDamageEffectWithValue(effect.Effect, value);
             var context = new SpellEffectContext(this, cast, target, i, value) { EffectMask = effectMask, PendingHolder = holder };
             handler(context);
             holder = context.PendingHolder;
@@ -133,6 +135,7 @@ public sealed partial class SpellSystem
             AddAuraHolder(holder);
         }
 
+        InterruptTargetOfHostileSpell(cast, target, hit: true, dealsDamage); // rogue lane (vmangos Spell.cpp:1622-1650)
         SpellHitTarget?.Invoke(cast.Caster, target, cast.Spell.Id);
         SpellHit?.Invoke(cast.Caster, target, cast.Spell);
     }
