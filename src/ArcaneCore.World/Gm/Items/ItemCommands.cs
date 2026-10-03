@@ -61,7 +61,7 @@ public sealed class ItemCommands : ICommandGroup
             return IdRead.Ok;
         }
 
-        if (context.Player.Inventory.Templates is ItemTemplateStore store
+        if (LiveItemTemplateStore.Unwrap(context.Player.Inventory.Templates) is { } store
             && store.All.Where(t => t.Name.Equals(read, StringComparison.OrdinalIgnoreCase)).MinBy(t => t.Entry) is { } match)
         {
             itemId = match.Entry;

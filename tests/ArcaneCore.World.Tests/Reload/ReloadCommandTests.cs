@@ -89,7 +89,7 @@ public sealed class ReloadCommandTests
         await SayAsync(admin, ".reload");
 
         string reply = (await admin.ReadChatAsync()).Text;
-        Assert.StartsWith("Incorrect syntax. .reload:", reply);
+        Assert.StartsWith("Syntax: .reload", reply); // the GM lane prints the help text in place of "Incorrect syntax."
         Assert.Contains("spell_template", reply);
         Assert.Contains("config", reply);
     }
@@ -157,7 +157,7 @@ public sealed class ReloadCommandTests
 
         await SayAsync(gm, ".reload spell_template");
 
-        Assert.Equal("There is no such command.", (await gm.ReadChatAsync()).Text);
+        Assert.Equal("This command is not available to you.", (await gm.ReadChatAsync()).Text); // Wave-2 integration: the GM lane's retail command texts (no trailing period; below-level commands answer CommandUnavailable).
     }
 
     [Fact]

@@ -495,7 +495,7 @@ public sealed class RefreshCoreTests : IDisposable
             host.WorldServices.GetRequiredService<CommandTableSource>(), catalog, new HotCodeAudit(null), NullLogger.Instance);
 
         await player.SendChatAsync(ChatType.Say, Language.Common, ".hotadded");
-        Assert.Equal("There is no such command.", (await player.ReadChatAsync()).Text);
+        Assert.Equal("There is no such command", (await player.ReadChatAsync()).Text); // Wave-2 integration: the GM lane's retail command texts (no trailing period; below-level commands answer CommandUnavailable).
         await player.SendAsync(unused, []);
         await Task.Delay(100);
         Assert.Equal(0, Volatile.Read(ref RealWorldProbe.Hits));

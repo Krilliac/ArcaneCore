@@ -83,7 +83,7 @@ public sealed class LookupCommands : ICommandGroup
 
         string needle = args.ToLowerInvariant();
         Player caller = context.Player;
-        if (caller.Inventory.Templates is not ItemTemplateStore store)
+        if (LiveItemTemplateStore.Unwrap(caller.Inventory.Templates) is not { } store)
         {
             context.Reply(GmStrings.NoItemsFound);
             return true;

@@ -41,7 +41,7 @@ public sealed class HotCodeCommandTests
         await using WorldTestHost host = WorldTestHost.Start();
         await using WorldTestClient admin = await host.EnterWorldAsync("HCOFF", "Hcoff", AccountSecurity.Administrator);
         await admin.CollectAsync();
-        Assert.Equal("There is no such command.", await SayAsync(admin, ".hotcode status"));
+        Assert.Equal("There is no such command", await SayAsync(admin, ".hotcode status")); // Wave-2 integration: the GM lane's retail command texts (no trailing period; below-level commands answer CommandUnavailable).
         Assert.DoesNotContain("hotcode", await SayAsync(admin, ".commands"));
     }
 
@@ -60,9 +60,9 @@ public sealed class HotCodeCommandTests
         await master.CollectAsync();
         await admin.CollectAsync();
 
-        Assert.Equal("There is no such command.", await SayAsync(moderator, ".hotcode status"));
-        Assert.Equal("There is no such command.", await SayAsync(master, ".hotcode status"));
-        Assert.Equal("There is no such command.", await SayAsync(master, ".hotc freeze"));
+        Assert.Equal("This command is not available to you.", await SayAsync(moderator, ".hotcode status"));
+        Assert.Equal("This command is not available to you.", await SayAsync(master, ".hotcode status"));
+        Assert.Equal("This command is not available to you.", await SayAsync(master, ".hotc freeze"));
         Assert.False(state.Frozen);
 
         string status = await SayAsync(admin, ".hotcode status");

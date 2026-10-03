@@ -296,7 +296,7 @@ public sealed class ConfigReloadTests : IDisposable
     public void EveryWorldOption_IsClassified_LiveOrRestartOnly()
     {
         var expected = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (PropertyInfo property in typeof(WorldRuntimeOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(MapOptions)))
+        foreach (PropertyInfo property in typeof(WorldRuntimeOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(MapOptions) && p.PropertyType != typeof(PerformanceLogOptions))) // Perf is bound from the top-level PerformanceLog section (ops lane), not World:*
         {
             expected.Add($"World:{property.Name}");
         }
@@ -329,8 +329,9 @@ public sealed class ConfigReloadTests : IDisposable
 
         // TickIntervalMs: WorldRuntime.Run reads it once for the thread's sleep and SpellFeature.Attach
         // for its timer; Maps:DataDirectory: TerrainManager / CollisionServices load at attach (vmangos
-        // DataDir, World.cpp:932-935); Port / BindAddress: the listener is bound at start (World.cpp:598).
-        Assert.Equal(["World:BindAddress", "World:Maps:DataDirectory", "World:Port", "World:TickIntervalMs"], restartOnly);
+        // DataDir, World.cpp:932-935); Port / BindAddress: the listener is bound at start (World.cpp:598);
+        // MaxConnections / MaxConnectionsPerIp: the connection limiter is built at start (hardening lane).
+        Assert.Equal(["World:BindAddress", "World:Maps:DataDirectory", "World:MaxConnections", "World:MaxConnectionsPerIp", "World:Port", "World:TickIntervalMs"], restartOnly);
     }
 
     private sealed class NullSaveQueue : ICharacterSaveQueue

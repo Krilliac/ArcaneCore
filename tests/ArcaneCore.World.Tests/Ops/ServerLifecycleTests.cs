@@ -150,10 +150,10 @@ public sealed class ServerLifecycleTests
         await gm.CollectAsync();
         await admin.CollectAsync();
 
-        Assert.StartsWith("There is no such subcommand.", await CommandAsync(gm, ".server shutdown 10"));
-        Assert.StartsWith("Incorrect syntax.", await CommandAsync(admin, ".server shutdown"));
-        Assert.StartsWith("Incorrect syntax.", await CommandAsync(admin, ".server shutdown soon"));
-        Assert.StartsWith("Incorrect syntax.", await CommandAsync(admin, ".server restart 10 126"));
+        Assert.StartsWith("This command is not available to you.", await CommandAsync(gm, ".server shutdown 10")); // Wave-2 integration: the GM lane's retail command texts (no trailing period; below-level commands answer CommandUnavailable).
+        Assert.StartsWith("Syntax: .server shutdown", await CommandAsync(admin, ".server shutdown")); await admin.CollectAsync(); // the GM lane prints the help text in place of "Incorrect syntax."
+        Assert.StartsWith("Syntax: .server shutdown", await CommandAsync(admin, ".server shutdown soon")); await admin.CollectAsync();
+        Assert.StartsWith("Syntax: .server restart", await CommandAsync(admin, ".server restart 10 126"));
         Assert.False(host.WorldServices.GetRequiredService<ServerLifecycleFeature>().IsDraining);
     }
 }

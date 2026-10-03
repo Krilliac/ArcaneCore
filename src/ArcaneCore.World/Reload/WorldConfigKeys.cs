@@ -76,6 +76,10 @@ public static class WorldConfigKeys
         FixedListener("Port", v => v.Port),
         FixedListener("BindAddress", v => v.BindAddress),
 
+        // Connection caps (security hardening lane): the listener's ConnectionLimiter is built at start.
+        FixedListener("MaxConnections", v => v.MaxConnections),
+        FixedListener("MaxConnectionsPerIp", v => v.MaxConnectionsPerIp),
+
         // Live: read from the shared options object at each use.
         LiveNonNegative("UpdateCompressionThreshold", o => o.UpdateCompressionThreshold, (o, v) => o.UpdateCompressionThreshold = v),
         LiveNonNegative("AutosaveIntervalMs", o => o.AutosaveIntervalMs, (o, v) => o.AutosaveIntervalMs = v),
@@ -91,6 +95,9 @@ public static class WorldConfigKeys
         Live("GmLevelInWhoList", o => o.GmLevelInWhoList, (o, v) => o.GmLevelInWhoList = v, DefinedSecurity),
         Live("PlayerCommands", o => o.PlayerCommands, (o, v) => o.PlayerCommands = v),
 
+        // Map.CountUpdaterFault reads the shared options on every updater failure (code hot reload lane; 0 never skips).
+        LiveNonNegative("MaxConsecutiveUpdaterFaults", o => o.MaxConsecutiveUpdaterFaults, (o, v) => o.MaxConsecutiveUpdaterFaults = v),
+
         // GridContainer reads the shared MapOptions at each use; running grids keep the timer they have
         // until it is reset, as vmangos MapManager::SetGridCleanUpDelay does (World.cpp:588-590).
         Live("Maps:GridUnload", o => o.Maps.GridUnload, (o, v) => o.Maps.GridUnload = v),
@@ -103,6 +110,9 @@ public static class WorldConfigKeys
         LiveSocial("AllowTwoSideGroup", o => o.AllowTwoSideGroup, (o, v) => o.AllowTwoSideGroup = v),
         LiveSocial("AllowTwoSideGuild", o => o.AllowTwoSideGuild, (o, v) => o.AllowTwoSideGuild = v),
         LiveSocial("AllowTwoSideChannel", o => o.AllowTwoSideChannel, (o, v) => o.AllowTwoSideChannel = v),
+
+        // Opt-in channel-join cap (security hardening lane; 0 = unlimited, the retail behaviour): ChannelManager reads it at each join.
+        LiveSocialCount("MaxJoinedChannels", o => o.MaxJoinedChannels, (o, v) => o.MaxJoinedChannels = v),
     ];
 
     private static string? NonNegative<T>(T value) where T : struct, IComparable<T>
@@ -126,6 +136,13 @@ public static class WorldConfigKeys
             v => get(v.Runtime),
             (view, v) => set(view.Runtime, (T)v!),
             check is null ? null : v => check((T)v!));
+
+    private static WorldConfigKey LiveSocialCount(string path, Func<SocialOptions, int> get, Action<SocialOptions, int> set)
+        => new(
+            $"{SocialOptions.SectionName}:{path}",
+            v => v.Social is { } social ? get(social) : null,
+            (view, v) => set(view.Social!, (int)v!),
+            v => NonNegative((int)v!));
 
     private static WorldConfigKey LiveSocial(string path, Func<SocialOptions, bool> get, Action<SocialOptions, bool> set)
         => new(

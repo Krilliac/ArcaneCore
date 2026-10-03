@@ -21,6 +21,13 @@ public sealed class LiveItemTemplateStore : IItemTemplateStore
 
     public IReadOnlyList<Kernel.Items.StartingItem> StartingItems(byte race, byte cls) => _current.StartingItems(race, cls);
 
+    /// <summary>
+    /// The enumerable <see cref="ItemTemplateStore"/> behind <paramref name="templates"/> (unwrapping this live store), or
+    /// null when the store cannot list its templates. GM lookups and name searches use it.
+    /// </summary>
+    public static ItemTemplateStore? Unwrap(IItemTemplateStore templates)
+        => templates is LiveItemTemplateStore live ? live.Current as ItemTemplateStore : templates as ItemTemplateStore;
+
     /// <summary>Make <paramref name="store"/> the one lookups go to.</summary>
     public void Replace(IItemTemplateStore store)
     {

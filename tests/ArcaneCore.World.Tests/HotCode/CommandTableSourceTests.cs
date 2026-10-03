@@ -214,7 +214,7 @@ public sealed class CommandTableSourceTests
         await player.CollectAsync();
 
         await player.SendChatAsync(ChatType.Say, Language.Common, ".hotprobe");
-        Assert.Equal("There is no such command.", (await player.ReadChatAsync()).Text);
+        Assert.Equal("There is no such command", (await player.ReadChatAsync()).Text); // Wave-2 integration: the GM lane's retail command texts (no trailing period; below-level commands answer CommandUnavailable).
 
         var source = host.WorldServices.GetRequiredService<CommandTableSource>();
         Assert.True(source.TryAdd([Root("hotprobe", handler: (context, _) =>
@@ -225,7 +225,15 @@ public sealed class CommandTableSourceTests
 
         await player.SendChatAsync(ChatType.Say, Language.Common, ".hotprobe");
         Assert.Equal("hotprobe: ran", (await player.ReadChatAsync()).Text);
-        await player.SendChatAsync(ChatType.Say, Language.Common, ".help");
-        Assert.EndsWith("server, hotprobe", (await player.ReadChatAsync()).Text);
+        // Wave-2 integration: .help prints its own syntax first (GM lane); the command list is .commands.
+        await player.SendChatAsync(ChatType.Say, Language.Common, ".commands");
+        Assert.Equal("Commands available to you:", (await player.ReadChatAsync()).Text);
+        var listed = new List<string>();
+        for (int i = 0; i < 12 && !listed.Any(line => line.Contains("hotprobe")); i++)
+        {
+            listed.Add((await player.ReadChatAsync()).Text);
+        }
+
+        Assert.Contains(listed, line => line.Contains("hotprobe"));
     }
 }
