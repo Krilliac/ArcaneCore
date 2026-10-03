@@ -206,6 +206,7 @@ public sealed partial class SpellSystem
             }
 
             UpdateAuras(state, diffMs);
+            UpdateAreaAuras(state);
             ExpireCooldowns(state, now);
             if (state.IsIdle)
             {
@@ -216,7 +217,8 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// A unit leaves the world (logout, despawn): its cast stops without packets and its state is
-    /// dropped. Auras are not persisted yet (character_aura is listed as remaining work).
+    /// dropped. A player's saveable auras and cooldowns are captured first by the world daemon
+    /// (<see cref="CaptureState"/>, character_aura / character_spell_cooldown).
     /// </summary>
     public void RemoveUnit(Unit unit)
     {
@@ -305,10 +307,25 @@ public sealed partial class SpellSystem
         TakePower(caster, spell, cast.PowerCost);
         SendCastResult(caster, spell, SpellCastResult.CastOk, cast.IsTriggered);
 
-        Dictionary<Unit, int> targetEffects = SelectTargets(cast, unitTarget);
-        var hits = targetEffects.Keys.Select(u => u.Guid).ToList();
+        Dictionary<Unit, SpellTargetEntry> targetEffects = SelectTargets(cast, unitTarget);
+        var hits = new List<ObjectGuid>();
+        var misses = new List<(ObjectGuid Guid, SpellMissInfo Reason)>();
+        foreach ((Unit target, SpellTargetEntry entry) in targetEffects)
+        {
+            // vmangos Spell::AddUnitTarget → Unit::SpellHitResult, once per target.
+            entry.Miss = ReferenceEquals(target, caster) ? SpellMissInfo.None : CombatRules.RollHit(this, caster, target, spell);
+            if (entry.Miss == SpellMissInfo.None)
+            {
+                hits.Add(target.Guid);
+            }
+            else
+            {
+                misses.Add((target.Guid, entry.Miss));
+            }
+        }
+
         SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(
-            caster.Guid, caster.Guid, spell.Id, SpellCastFlags.Unknown9, hits, [], cast.Targets), includeSelf: true);
+            caster.Guid, caster.Guid, spell.Id, SpellCastFlags.Unknown9, hits, misses, cast.Targets), includeSelf: true);
 
         int duration = spell.GetDuration();
         if (spell.IsChanneled && duration > 0 && !cast.IsTriggered)
@@ -327,9 +344,21 @@ public sealed partial class SpellSystem
             caster.SetUInt32(UpdateFields.UnitChannelSpell, spell.Id);
         }
 
-        foreach ((Unit target, int effectMask) in targetEffects)
+        foreach ((Unit target, SpellTargetEntry entry) in targetEffects)
         {
-            ApplyEffects(cast, target, effectMask);
+            if (entry.Miss != SpellMissInfo.None)
+            {
+                // vmangos SpellCaster::SendSpellMiss; a missed hostile spell still starts combat (zero damage).
+                SendToSet(caster, WorldOpcode.SmsgSpelllogmiss, SpellPackets.BuildSpellLogMiss(spell.Id, caster.Guid, target.Guid, entry.Miss), includeSelf: true);
+                if (!IsQuestSettlementPending(caster) && !IsQuestSettlementPending(target) && target.IsAlive && Relations.IsHostile(caster, target))
+                {
+                    Damage.DealSpellDamage(caster, target, spell, 0, periodic: false);
+                }
+
+                continue;
+            }
+
+            ApplyEffects(cast, target, entry.EffectMask, entry.Multipliers);
         }
 
         if (cast.State != SpellCastState.Casting)
@@ -456,10 +485,11 @@ public sealed partial class SpellSystem
     // --- checks -------------------------------------------------------------------------
 
     /// <summary>
-    /// The subset of vmangos Spell::CheckCast this area owns: caster alive, cooldowns, stun,
-    /// movement, explicit target presence and liveness, range (CheckRange) and power (CheckPower).
-    /// Reagents, items, shapeshift, facing, line of sight and area restrictions belong to other
-    /// areas (docs/areas/spells.md).
+    /// The subset of vmangos Spell::CheckCast this area owns: caster alive, cooldowns and school
+    /// lockouts, stun, movement, explicit target presence and liveness, range (CheckRange), line of
+    /// sight through <see cref="LineOfSight"/>, party/raid-only targets, nothing to dispel, and
+    /// power (CheckPower). Reagents, items, shapeshift, facing and area restrictions belong to
+    /// other areas (docs/areas/spells.md).
     /// </summary>
     private SpellCastResult CheckCast(UnitSpellState state, SpellInfo spell, SpellCastTargets targets, Unit? unitTarget, bool triggered, bool strict, bool skipCooldown = false)
     {
@@ -513,6 +543,23 @@ public sealed partial class SpellSystem
             {
                 return range;
             }
+
+            if (!IsInLineOfSight(spell, caster, target))
+            {
+                return SpellCastResult.LineOfSight;
+            }
+
+            SpellCastResult group = CheckGroupTarget(caster, spell, target);
+            if (group != SpellCastResult.CastOk)
+            {
+                return group;
+            }
+
+            if (strict && IsDispelOnly(spell)
+                && !spell.Effects.Any(e => e.Effect == SpellEffectName.Dispel && DispellableAuras(caster, target, (uint)e.MiscValue).Count > 0))
+            {
+                return SpellCastResult.NothingToDispel;
+            }
         }
         else if (targets.HasDest)
         {
@@ -520,6 +567,11 @@ public sealed partial class SpellSystem
             if (range != SpellCastResult.CastOk)
             {
                 return range;
+            }
+
+            if (!IsInLineOfSight(spell, caster, targets.Dest.X, targets.Dest.Y, targets.Dest.Z))
+            {
+                return SpellCastResult.LineOfSight;
             }
         }
 
@@ -627,8 +679,36 @@ public sealed partial class SpellSystem
             return false;
         }
 
+        if (state.SchoolLockouts.TryGetValue(spell.School, out until) && until > now)
+        {
+            return false;
+        }
+
         return !(state.GlobalCooldowns.TryGetValue(spell.StartRecoveryCategory, out until) && until > now);
     }
+
+    /// <summary>Party/raid-only explicit targets (vmangos Spell::CheckTarget for TARGET_SINGLE_PARTY / TARGET_SINGLE_FRIEND_2).</summary>
+    private SpellCastResult CheckGroupTarget(Unit caster, SpellInfo spell, Unit target)
+    {
+        foreach (SpellEffectInfo effect in spell.Effects)
+        {
+            if (effect.IsEmpty)
+            {
+                continue;
+            }
+
+            if ((effect.TargetA == SpellImplicitTarget.UnitParty && !IsGroupMember(caster, target, raid: false))
+                || (effect.TargetA == SpellImplicitTarget.UnitRaid && !IsGroupMember(caster, target, raid: true)))
+            {
+                return SpellCastResult.BadTargets;
+            }
+        }
+
+        return SpellCastResult.CastOk;
+    }
+
+    private static bool IsDispelOnly(SpellInfo spell)
+        => spell.Effects.Any(e => e.Effect == SpellEffectName.Dispel) && spell.Effects.All(e => e.IsEmpty || e.Effect == SpellEffectName.Dispel);
 
     // --- costs and cooldowns ------------------------------------------------------------
 
@@ -788,6 +868,13 @@ public sealed partial class SpellSystem
         Expire(state.SpellCooldowns, now);
         Expire(state.CategoryCooldowns, now);
         Expire(state.GlobalCooldowns, now);
+        foreach ((SpellSchool school, uint until) in state.SchoolLockouts.ToArray())
+        {
+            if (until <= now)
+            {
+                state.SchoolLockouts.Remove(school);
+            }
+        }
 
         static void Expire(Dictionary<uint, uint> cooldowns, uint now)
         {
@@ -864,7 +951,8 @@ public sealed partial class SpellSystem
         => spell.Effects.Any(e => !e.IsEmpty && IsExplicitUnitTarget(e.TargetA));
 
     private static bool IsExplicitUnitTarget(SpellImplicitTarget target)
-        => target is SpellImplicitTarget.UnitEnemy or SpellImplicitTarget.UnitFriend or SpellImplicitTarget.Unit or SpellImplicitTarget.UnitParty;
+        => target is SpellImplicitTarget.UnitEnemy or SpellImplicitTarget.UnitFriend or SpellImplicitTarget.Unit or SpellImplicitTarget.UnitParty
+            or SpellImplicitTarget.UnitRaid or SpellImplicitTarget.UnitFriendChainHeal;
 
     private static bool IsMoving(Player player)
         => (player.Movement.Flags & (MovementFlags.Forward | MovementFlags.Backward | MovementFlags.StrafeLeft
