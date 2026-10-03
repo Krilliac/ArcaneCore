@@ -112,6 +112,7 @@ public sealed class SpellHandlerModuleTests
         // not depend on reflection enumeration order.
         IReadOnlyList<Type> found = SpellHandlerModules.Discover(typeof(SpellSystem).Assembly);
 
+        Assert.Contains(typeof(DirectCombatEffects), found);
         Assert.Equal(found.OrderBy(t => t.FullName, StringComparer.Ordinal), found);
         Assert.All(found, t => Assert.True(typeof(ISpellHandlerModule).IsAssignableFrom(t) && !t.IsAbstract));
         Assert.Equal(found, SpellHandlerModules.BuiltIn);

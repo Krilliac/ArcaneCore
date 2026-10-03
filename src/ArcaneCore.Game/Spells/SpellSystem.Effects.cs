@@ -165,7 +165,16 @@ public sealed partial class SpellSystem
             return;
         }
 
-        uint amount = (uint)context.Value;
+        DeliverHeal(context, (uint)context.Value);
+    }
+
+    /// <summary>
+    /// The shared tail of the heal effects (vmangos Spell::DoSpellHitOnUnit, m_healing): crit roll,
+    /// <see cref="IDamageSink.Heal"/> and SMSG_SPELLHEALLOG. HEAL_MAX_HEALTH uses it too
+    /// (<see cref="DirectCombatEffects"/>).
+    /// </summary>
+    internal void DeliverHeal(SpellEffectContext context, uint amount)
+    {
         bool crit = CombatRules.RollCrit(this, context.Caster, context.Target, context.Spell);
         if (crit)
         {
