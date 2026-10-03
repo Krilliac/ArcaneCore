@@ -671,6 +671,7 @@ public sealed partial class MapCombat
             RewardRage((Player)victim, damage, attacker: false);
         }
 
+        DamageDealt?.Invoke(attacker, victim, damage, direct, meleeDamage);
         AttackedBy(victim, attacker);
         return damage;
     }
