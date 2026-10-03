@@ -50,6 +50,7 @@ public sealed partial class InstanceManager : IMapResolver
     private readonly Dictionary<ObjectGuid, PlayerState> _players = [];
     private readonly Dictionary<ObjectGuid, (uint MapId, uint InstanceId)> _lastInstance = [];
     private readonly Dictionary<uint, RaidSchedule> _raidSchedules = [];
+    private readonly Entry.InstanceEnterLimiter _enterLimiter = new();
     private uint _nextInstanceId = FirstInstanceId;
     private bool _installed;
 
@@ -251,6 +252,7 @@ public sealed partial class InstanceManager : IMapResolver
         {
             Map map = GetOrCreateInstanceMap(save);
             BindPlayerOrGroupOnEnter(player, save, map);
+            _enterLimiter.Record(player.AccountId, save.InstanceId, Now);
             return map;
         }
 
@@ -289,6 +291,7 @@ public sealed partial class InstanceManager : IMapResolver
         save ??= CreateSave(template);
         Map map = GetOrCreateInstanceMap(save);
         BindPlayerOrGroupOnEnter(player, save, map);
+        _enterLimiter.Record(player.AccountId, save.InstanceId, Now); // vmangos DungeonMap::Add
         return map;
     }
 
@@ -664,25 +667,38 @@ public sealed partial class InstanceManager : IMapResolver
             return TransferAbortReason.Silently;
         }
 
+        // vmangos MapManager::CanPlayerEnter (MapManager.cpp:209-214): the hourly per-account
+        // limit, keyed by the id of the save the player would enter (0 when it will be a new one).
+        // Checked on teleports only (sendErrors), not on the login re-entry.
+        if (sendErrors && _options.PerHourLimit > 0 && !player.IsGameMaster
+            && !_enterLimiter.CanEnter(player.AccountId, save?.InstanceId ?? 0, _options.PerHourLimit, Now))
+        {
+            player.Session.Send(WorldOpcode.SmsgTransferAborted, TeleportPackets.BuildTransferAborted(TransferAbortReason.TooManyInstances));
+            return TransferAbortReason.TooManyInstances;
+        }
+
         if (save is null)
         {
             return null;
         }
 
         Map? map = _world.FindMap(save.MapId, save.InstanceId);
-        if (map is null || player.IsGameMaster)
+        if (map is null)
         {
             return null;
         }
 
+        // vmangos DungeonMap::CanEnter (Map.cpp:2134-2146): the player cap first (GMs neither
+        // count nor are refused), then the pending reset, which also refuses GMs.
         TransferAbortReason? reason = null;
-        if (_mapStates.TryGetValue(map, out InstanceMapState? state) && state.ResetAfterUnload)
+        if (!player.IsGameMaster && template.PlayerLimit > 0
+            && map.Players.Count(p => !p.IsGameMaster && !ReferenceEquals(p, player)) >= template.PlayerLimit)
         {
-            reason = TransferAbortReason.NotFound; // vmangos DungeonMap::CanEnter: pending reset
+            reason = TransferAbortReason.MaxPlayers;
         }
-        else if (template.PlayerLimit > 0 && map.Players.Count(p => !p.IsGameMaster && !ReferenceEquals(p, player)) >= template.PlayerLimit)
+        else if (_mapStates.TryGetValue(map, out InstanceMapState? state) && state.ResetAfterUnload)
         {
-            reason = TransferAbortReason.MaxPlayers; // vmangos DungeonMap::CanEnter: GMs do not count
+            reason = TransferAbortReason.NotFound;
         }
 
         if (reason is { } abort && sendErrors)

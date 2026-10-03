@@ -37,6 +37,13 @@ public sealed class InstanceOptions
     /// <summary>A creature kill in a normal dungeon moves the reset time to respawn + 2 h when later (vmangos Map::BindToInstanceOrRaid, Map.cpp:3536-3544). Default on (retail).</summary>
     public bool ResetExtendsOnKills { get; set; } = true;
 
+    /// <summary>
+    /// New instances one account may enter per hour (vmangos <c>Instance.PerHourLimit</c>, default 5;
+    /// <c>MAX_INSTANCE_PER_ACCOUNT_PER_HOUR</c> Player.h:669). 0 turns the limit off (a ArcaneCore
+    /// convention: vmangos would refuse every new instance at 0). Game masters are exempt.
+    /// </summary>
+    public int PerHourLimit { get; set; } = 5;
+
     /// <summary>Let players enter raids without a raid group (vmangos <c>Instance.IgnoreRaid</c>, default off).</summary>
     public bool IgnoreRaidGroup { get; set; }
 
