@@ -38,6 +38,7 @@ public sealed class Map
     private readonly ILogger _logger;
     private readonly Dictionary<ObjectGuid, Player> _players = [];
     private readonly List<WorldObject> _valuesQueue = [];
+    private readonly List<IMapUpdater> _updaters = [];
     private bool _inUpdatePhase;
 
     internal Map(uint mapId, WorldRuntime world, ILogger logger)
@@ -54,6 +55,23 @@ public sealed class Map
     public IReadOnlyCollection<Player> Players => _players.Values;
 
     public Player? FindPlayer(ObjectGuid guid) => _players.GetValueOrDefault(guid);
+
+    /// <summary>The systems attached with <see cref="AddUpdater"/>, in attach order.</summary>
+    public IReadOnlyList<IMapUpdater> Updaters => _updaters;
+
+    /// <summary>Attach a per-map system, updated every tick after the timers (world thread).</summary>
+    public void AddUpdater(IMapUpdater updater)
+    {
+        ArgumentNullException.ThrowIfNull(updater);
+        EnsureWorldThread();
+        EnsureNotInUpdatePhase();
+        _updaters.Add(updater);
+    }
+
+    /// <summary>The first attached system of type <typeparamref name="T"/>, if any.</summary>
+    public T? FindUpdater<T>()
+        where T : class, IMapUpdater
+        => _updaters.OfType<T>().FirstOrDefault();
 
     /// <summary>
     /// Put a player into the map: its own create block goes out at once as its own packet
@@ -113,6 +131,11 @@ public sealed class Map
         {
             _valuesQueue.Remove(player);
             player.IsQueuedForUpdate = false;
+        }
+
+        foreach (IMapUpdater updater in _updaters)
+        {
+            updater.OnPlayerRemoved(this, player);
         }
 
         player.ClearChangedFields();
@@ -210,6 +233,19 @@ public sealed class Map
             if (player.Map == this && player.IsLogoutDue(now, _world.Options.LogoutDelayMs))
             {
                 _world.LogoutPlayer(player);
+            }
+        }
+
+        // (1c) per-map systems (creatures, …) — see IMapUpdater
+        foreach (IMapUpdater updater in _updaters)
+        {
+            try
+            {
+                updater.Update(this, diffMs);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "map {MapId} updater {Updater} failed", MapId, updater.GetType().Name);
             }
         }
 
