@@ -130,10 +130,11 @@ internal sealed class SchemaLock : IAsyncDisposable
                         break;
                 }
             }
-            catch (DbException)
+            catch (Exception ex) when (ex is DbException or InvalidOperationException)
             {
-                // The connection is gone, and the server releases a session's locks when the
-                // session ends; the error that broke the connection is the one worth reporting.
+                // The connection is gone or still busy with the command that failed (MySqlConnector throws
+                // InvalidOperationException for that), and the server releases a session's locks when the
+                // session ends; the error that broke the bootstrap is the one worth reporting.
             }
         }
     }

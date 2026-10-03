@@ -131,6 +131,37 @@ descendants). Nothing was released; "released" in the handoff means this candida
 database upgraded by the historic bootstrapper (`HistoricUpgraded`: no index of a table created after version 1).
 Every table has at least one row (the test asserts it).
 
+## Provider tests: how to run locally
+
+Several schema tests (the schema lock, interrupted and concurrent startup, index parity) only run
+against MariaDB and PostgreSQL when a server is configured; otherwise they run against SQLite only
+and say nothing about the other engines. This is how the schema-bootstrap work first reached `main`
+with 35 failing provider tests that no local run had exercised.
+
+- `ARCANECORE_TEST_MARIADB`: a MariaDB/MySQL connection string without a database name, for example
+  `Server=127.0.0.1;Port=3306;User=root;Password=arcane;`
+- `ARCANECORE_TEST_POSTGRES`: a PostgreSQL connection string without a database name, for example
+  `Host=127.0.0.1;Port=5432;Username=arcane;Password=arcane;`
+
+Each test creates and drops its own throw-away database (`arcane_t_<guid>`), so the account needs
+`CREATE DATABASE` rights. A provider whose variable is unset is silently left out of the theories.
+
+CI (`.github/workflows/ci.yml`) runs both as service containers: `mariadb:10.11` (root / `arcane`)
+and `postgres:16` (user `arcane` / `arcane`). To match it locally:
+
+```
+docker run -d --name ac-mariadb -e MARIADB_ROOT_PASSWORD=arcane -p 3306:3306 mariadb:10.11
+docker run -d --name ac-postgres -e POSTGRES_USER=arcane -e POSTGRES_PASSWORD=arcane -p 5432:5432 postgres:16
+```
+
+Provider semantics the tests must respect: MariaDB DDL is not transactional (implicit commit) while
+PostgreSQL DDL is; `GET_LOCK` locks belong to one connection; `pg_advisory_lock` returns void and is
+re-entrant within a session (use `pg_try_advisory_lock` to learn whether a lock was taken, and take
+a "held elsewhere" lock on an unpooled connection); `CREATE DATABASE` is issued by the bootstrapper
+before it holds a connection to the database.
+
+Provider-gated tests must be run locally, or the CI run watched to green, before schema work is merged.
+A SQLite-only pass is not evidence for the other two engines.
 ## Limits (not delivered, and why)
 
 - **MariaDB and PostgreSQL were not run on this machine** (no server, no `ARCANECORE_TEST_*` variables). Their lock SQL

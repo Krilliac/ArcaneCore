@@ -82,9 +82,26 @@ internal sealed class CommandTap : DbCommandInterceptor
 
     public int Ddl => Commands.Count(IsDdl);
 
+    /// <summary>
+    /// Whether any statement of the command text is one of the given DML verbs. Pomelo prefixes every
+    /// SaveChanges batch with <c>SET AUTOCOMMIT = 1;</c>, so the verb is not always the first word.
+    /// </summary>
+    public static bool IsWrite(string sql, params string[] verbs)
+        => verbs.Any(v => System.Text.RegularExpressions.Regex.IsMatch(
+            sql, @"(^|;)\s*" + v + @"\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant));
+
     public static bool IsDdl(string sql)
     {
         string s = sql.TrimStart();
+
+        // CREATE DATABASE runs before the bootstrapper has a connection to the database; a failure of it is
+        // swallowed on purpose when the database now exists (another process may have created it), so it is not
+        // a point where a startup can meaningfully die, and a startup that loses that race issues it too.
+        if (s.StartsWith("CREATE DATABASE", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
         return s.StartsWith("CREATE", StringComparison.OrdinalIgnoreCase)
             || s.StartsWith("ALTER", StringComparison.OrdinalIgnoreCase)
             || s.StartsWith("DROP", StringComparison.OrdinalIgnoreCase);
@@ -121,7 +138,7 @@ internal sealed class CommandTap : DbCommandInterceptor
     public override ValueTask<DbDataReader> ReaderExecutedAsync(
         DbCommand command, CommandExecutedEventData eventData, DbDataReader result, CancellationToken cancellationToken = default)
     {
-        After(command);
+        After(command, result);
         return ValueTask.FromResult(result);
     }
 
@@ -151,11 +168,22 @@ internal sealed class CommandTap : DbCommandInterceptor
         }
     }
 
-    private void After(DbCommand command)
+    private void After(DbCommand command, DbDataReader? reader = null)
     {
         if (!_faultBeforeStatement)
         {
-            MaybeFault(command.CommandText);
+            try
+            {
+                MaybeFault(command.CommandText);
+            }
+            catch (InjectedFaultException)
+            {
+                // A process that dies takes its open reader with it. Throwing from this hook while the reader
+                // is still open would leave the connection "in use" (MySqlConnector refuses the next command on
+                // it), which is not a state a crashed startup can leave behind.
+                reader?.Dispose();
+                throw;
+            }
         }
     }
 
