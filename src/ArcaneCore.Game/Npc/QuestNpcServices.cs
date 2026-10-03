@@ -175,13 +175,16 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
     private static void Send(Player player, WorldOpcode opcode, PacketWriter body) => player.Session.Send(opcode, body.AsSpan());
 
     /// <summary>vmangos Player::ModifyMoney (clamped to 0..MAX_MONEY_AMOUNT), then MoneyChanged.</summary>
-    private void ModifyMoney(PlayerNpcState state, long delta)
+    private void ModifyMoney(PlayerNpcState state, long delta, bool saveCharacter = true)
     {
         Player player = state.Quests.Player;
         long money = Math.Clamp((long)player.Money + delta, 0, MaxMoneyAmount);
         player.Money = (uint)money;
         MoneyChanged(state, (uint)money);
-        _sink.CharacterChanged(player);
+        if (saveCharacter)
+        {
+            _sink.CharacterChanged(player);
+        }
     }
 
     /// <summary>

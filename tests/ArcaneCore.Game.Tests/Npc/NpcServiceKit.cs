@@ -117,6 +117,8 @@ internal sealed class NpcServiceKit : IDisposable
     {
         public int CharacterChanges { get; private set; }
 
+        public Action<Player>? OnCharacterChanged { get; set; }
+
         public List<uint[]> TaxiMasks { get; } = [];
 
         public void QuestsChanged(Player player, IReadOnlyList<CharacterQuestStatus> rows)
@@ -125,6 +127,10 @@ internal sealed class NpcServiceKit : IDisposable
 
         public void TaxiMaskChanged(Player player, IReadOnlyList<uint> mask) => TaxiMasks.Add([.. mask]);
 
-        public void CharacterChanged(Player player) => CharacterChanges++;
+        public void CharacterChanged(Player player)
+        {
+            CharacterChanges++;
+            OnCharacterChanged?.Invoke(player);
+        }
     }
 }

@@ -2,6 +2,7 @@ using Xunit;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
 using static ArcaneCore.Game.Tests.Npc.NpcServiceKit;
@@ -342,6 +343,71 @@ public sealed class NpcVendorServiceTests
         far.Services.RepairItem(far.Player, far.Npc.Guid, farSword.Guid);
         Assert.Equal(1u, farSword.Durability);
         Assert.Equal(1000u, far.Player.Money);
+    }
+
+    [Fact]
+    public void RepairItem_One_SnapshotContainsChargedMoneyAndRepairedDurability()
+    {
+        using var kit = new NpcServiceKit(NpcFlags.Repair, repair: Repair());
+        Item sword = kit.Give(Sword);
+        sword.Durability = 40;
+        kit.Player.Money = 100;
+        Assert.Equal(40u, Assert.Single(kit.Player.CreateSnapshot(0).Inventory!.Items).Item.Durability);
+        List<CharacterState> snapshots = CaptureRepairSnapshots(kit);
+
+        kit.Services.RepairItem(kit.Player, kit.Npc.Guid, sword.Guid);
+
+        CharacterState saved = Assert.Single(snapshots);
+        Assert.Equal(70u, saved.Money);
+        Assert.Equal(50u, Assert.Single(saved.Inventory!.Items).Item.Durability);
+    }
+
+    [Theory]
+    [InlineData(1000u, 810u, 50u)]
+    [InlineData(100u, 60u, 0u)]
+    public void RepairItem_All_SnapshotIncludesEveryAffordableRepair(uint money, uint expectedMoney, uint swordDurability)
+    {
+        using var kit = new NpcServiceKit(NpcFlags.Repair, repair: Repair());
+        Item helm = kit.Give(Helm);
+        kit.Player.Inventory.AutoEquipItem(InventorySlots.Bag0, helm.Slot);
+        helm.Durability = 0;
+        Item sword = kit.Give(Sword);
+        sword.Durability = 0;
+        kit.Player.Money = money;
+        Assert.Equal(2, kit.Player.CreateSnapshot(0).Inventory!.Items.Count);
+        List<CharacterState> snapshots = CaptureRepairSnapshots(kit);
+
+        kit.Services.RepairItem(kit.Player, kit.Npc.Guid, ObjectGuid.Empty);
+
+        CharacterState saved = Assert.Single(snapshots);
+        Assert.Equal(expectedMoney, saved.Money);
+        Assert.Equal(40u, Assert.Single(saved.Inventory!.Items, row => row.Item.Guid == helm.Guid.Low).Item.Durability);
+        Assert.Equal(swordDurability, Assert.Single(saved.Inventory!.Items, row => row.Item.Guid == sword.Guid.Low).Item.Durability);
+        Assert.Equal(expectedMoney, kit.Player.Money);
+        Assert.Equal(swordDurability, sword.Durability);
+    }
+
+    [Fact]
+    public void RepairItem_Unaffordable_EmitsNoSnapshot()
+    {
+        using var kit = new NpcServiceKit(NpcFlags.Repair, repair: Repair());
+        Item sword = kit.Give(Sword);
+        sword.Durability = 40;
+        kit.Player.Money = 29;
+        List<CharacterState> snapshots = CaptureRepairSnapshots(kit);
+
+        kit.Services.RepairItem(kit.Player, kit.Npc.Guid, sword.Guid);
+
+        Assert.Empty(snapshots);
+        Assert.Equal(29u, kit.Player.Money);
+        Assert.Equal(40u, sword.Durability);
+    }
+
+    private static List<CharacterState> CaptureRepairSnapshots(NpcServiceKit kit)
+    {
+        var snapshots = new List<CharacterState>();
+        kit.Sink.OnCharacterChanged = player => snapshots.Add(player.CreateSnapshot(kit.World.NowMs));
+        return snapshots;
     }
 
     [Fact]

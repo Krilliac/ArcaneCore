@@ -240,11 +240,13 @@ public sealed partial class QuestNpcServices
                 return false;
             }
 
-            ModifyMoney(s, -(long)cost);
+            // The item owner restores durability after this callback; save the completed batch below.
+            ModifyMoney(s, -(long)cost, saveCharacter: false);
             return true;
         });
         if (paid > 0)
         {
+            _sink.CharacterChanged(player);
             Flush(s);
         }
     }
