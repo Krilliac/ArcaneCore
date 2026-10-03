@@ -323,6 +323,7 @@ public sealed partial class MapCombat
         Hooks.RemoveGhostForm(player);
         SetGhost(player, false, wasGhost);
         player.SetRooted(false);
+        player.SetUInt32(UpdateFields.PlayerSelfResSpell, 0); // "clear self-resurrection state after resurrection by another way"
 
         if (restorePercent > 0f)
         {

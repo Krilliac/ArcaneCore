@@ -49,3 +49,17 @@ public sealed class ResurrectionHandlers : IOpcodeHandlerGroup
         session.Services.GetService<ResurrectionFeature>()?.Service?.Respond(player, response.Resurrector, response.Accept);
     }
 }
+
+/// <summary>CMSG_SELF_RES (vmangos HandleSelfResOpcode, SpellHandler.cpp:461-485): an empty body; casts the player's self-resurrection spell.</summary>
+public sealed class SelfResurrectionHandlers : IOpcodeHandlerGroup
+{
+    public void Register(OpcodeTable table) => table.OnWorld(WorldOpcode.CmsgSelfRes, HandleSelfRes);
+
+    private static void HandleSelfRes(WorldSession session, Player player, byte[] payload)
+    {
+        if (session.Services.GetService<SpellFeature>()?.System is { } system)
+        {
+            SelfResurrection.Use(system, player);
+        }
+    }
+}
