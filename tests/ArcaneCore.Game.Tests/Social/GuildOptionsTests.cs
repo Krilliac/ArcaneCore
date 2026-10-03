@@ -18,7 +18,7 @@ public sealed class GuildOptionsTests
         Assert.Equal(9, options.MinPetitionSigns);          // MinPetitionSigns = 9 (conf:1341)
         Assert.Equal(2, options.MinCharterNameLength);       // MinCharterName = 2 (conf:1299)
         Assert.Equal(0, options.StrictCharterNames);         // StrictCharterNames = 0 (conf:1296)
-        Assert.False(options.AllowClientGuildCreate);
+        Assert.True(options.AllowClientGuildCreate);         // vmangos honours CMSG_GUILD_CREATE (GuildHandler.cpp:47-72)
         Assert.False(options.DeleteRankMovesMembers);        // vmangos Guild::DelRank leaves members on the dead id
         Assert.True(options.KickOnOversizedText);            // vmangos GuildHandler.cpp ProcessAnticheatAction kick
     }

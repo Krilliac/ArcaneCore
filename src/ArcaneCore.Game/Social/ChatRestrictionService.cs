@@ -62,18 +62,18 @@ public sealed class ChatRestrictionService(ChatRestrictionOptions options, Func<
             return new ChatDecision(true, 0);
         }
 
-        long remaining = MuteRemaining(accountId);
-        if (type != ChatType.Whisper && remaining > 0)
+        if (type != ChatType.Whisper && MuteRemaining(accountId) is var remaining and > 0)
         {
             return new ChatDecision(false, remaining);
         }
 
         UpdateSpeakTime(accountId, characterId, isStaff);
 
-        // A flood mute armed by this very message does not refuse it (vmangos processes the message that arms it).
-        if (type == ChatType.Whisper && whisperTargetIsPlainPlayer == true && remaining > 0)
+        // The whisper gate reads the mute afresh (:417-428), after UpdateSpeakTime (:235-236): a whisper that arms
+        // the flood mute is itself refused when its target is a plain player.
+        if (type == ChatType.Whisper && whisperTargetIsPlainPlayer == true && MuteRemaining(accountId) is var fresh and > 0)
         {
-            return new ChatDecision(false, remaining);
+            return new ChatDecision(false, fresh);
         }
 
         return new ChatDecision(true, 0);

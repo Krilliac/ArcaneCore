@@ -64,7 +64,7 @@ internal sealed class PetitionKit : IDisposable
     public FakePersistence Persistence => F.Persistence;
 
     /// <summary>An online player next to the NPC with a real inventory, money and NPC state.</summary>
-    public Player Add(uint guid, Race race = Race.Human, int accountId = 0, uint money = 10_000)
+    public Player Add(uint guid, Race race = Race.Human, int accountId = 0, uint money = 10_000, bool loadNpcState = true)
     {
         Player player = F.AddPlayer(guid, race, accountId: accountId);
         player.Inventory.Templates = WithTemplates ? Templates : ItemTemplateStore.Empty;
@@ -73,7 +73,11 @@ internal sealed class PetitionKit : IDisposable
         player.Money = money;
         F.World.RunTick(0);
         PlayerNpcState state = Services.Track(player);
-        Services.CompleteLoad(state, new CharacterQuestData([], []));
+        if (loadNpcState)
+        {
+            Services.CompleteLoad(state, new CharacterQuestData([], []));
+        }
+
         _tracked.Add((player, state));
         F.Session(player).Clear();
         return player;

@@ -169,10 +169,16 @@ public sealed class PetitionManager
             return;
         }
 
+        // vmangos charges, then stores (PetitionsHandler.cpp:116-125). The charge can fail with money in hand (the
+        // quest-NPC state is not Loaded yet), and then nothing is handed out.
+        if (!Npc.TryCharge(player, PetitionConstants.CharterCost))
+        {
+            return;
+        }
+
         int id = _nextId++;
         Item charter = player.Inventory.StoreNewItem(destination, template, template.BuyCount);
         charter.SetUInt32(UpdateFields.ItemFieldEnchantment + (PetitionConstants.EnchantmentSlot * 3), (uint)id);
-        Npc.TryCharge(player, PetitionConstants.CharterCost);
         player.Session.Send(WorldOpcode.SmsgItemPushResult, ItemPackets.ItemPushResult(player.Guid, charter, 1, received: true, created: false, showInChat: true));
 
         var petition = new Petition(id, player.Guid.Low, charter.Guid.Low, name, player.Team);

@@ -33,7 +33,7 @@ public sealed class GuildConfigBindingTests
 
         Assert.Same(feature, manager);
         Assert.Equal(9, manager.MinPetitionSigns);
-        Assert.False(manager.AllowClientGuildCreate);
+        Assert.True(manager.AllowClientGuildCreate);
     }
 
     [Fact]
@@ -41,13 +41,13 @@ public sealed class GuildConfigBindingTests
     {
         IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["World:Guild:AllowClientGuildCreate"] = "true",
+            ["World:Guild:AllowClientGuildCreate"] = "false",
             ["World:Guild:MinPetitionSigns"] = "4",
         }).Build();
 
         (_, GuildOptions manager) = await AttachAsync(configuration);
 
-        Assert.True(manager.AllowClientGuildCreate);
+        Assert.False(manager.AllowClientGuildCreate);
         Assert.Equal(4, manager.MinPetitionSigns);
     }
 

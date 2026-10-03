@@ -156,14 +156,30 @@ public sealed class ChatRestrictionServiceTests
         Assert.True(s.Evaluate(Account, Character, false, ChatType.Whisper, Language.Common, whisperTargetIsPlainPlayer: null).Allowed); // unknown target: the core answers "not found"
     }
 
-    [Fact] // :221-247 whispers are counted by UpdateSpeakTime like every other message
-    public void Whispers_CountTowardFlood()
+    [Fact] // :221-247 whispers are counted by UpdateSpeakTime like every other message; the whisper that arms the mute is itself refused (:235 runs before the :417-428 check)
+    public void Whispers_CountTowardFlood_AndTheArmingWhisperToAPlayerIsRefused()
+    {
+        ChatRestrictionService s = Service();
+
+        for (int i = 0; i < 10; i++)
+        {
+            Assert.True(s.Evaluate(Account, Character, false, ChatType.Whisper, Language.Common, whisperTargetIsPlainPlayer: true).Allowed);
+        }
+
+        ChatDecision arming = s.Evaluate(Account, Character, false, ChatType.Whisper, Language.Common, whisperTargetIsPlainPlayer: true);
+        Assert.False(arming.Allowed);
+        Assert.Equal(10, arming.MuteRemainingSeconds);
+        Assert.False(Say(s).Allowed);
+    }
+
+    [Fact] // the same arming whisper to staff goes through (:419 only gates SEC_PLAYER targets)
+    public void TheArmingWhisper_ToStaff_IsAllowed()
     {
         ChatRestrictionService s = Service();
 
         for (int i = 0; i < 11; i++)
         {
-            Assert.True(s.Evaluate(Account, Character, false, ChatType.Whisper, Language.Common, whisperTargetIsPlainPlayer: true).Allowed);
+            Assert.True(s.Evaluate(Account, Character, false, ChatType.Whisper, Language.Common, whisperTargetIsPlainPlayer: false).Allowed);
         }
 
         Assert.False(Say(s).Allowed);

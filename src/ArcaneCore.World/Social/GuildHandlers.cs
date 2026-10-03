@@ -43,8 +43,7 @@ public sealed class GuildHandlers : IOpcodeHandlerGroup
     /// <summary>
     /// CMSG_GUILD_CREATE: CString name (vmangos HandleGuildCreateOpcode: ignored when already
     /// guilded, a name over 24 characters disconnects, a failed Guild::Create sends nothing).
-    /// The retail client founds guilds only through charters, so the request is honoured only with
-    /// <see cref="GuildOptions.AllowClientGuildCreate"/> (World:Guild; default off).
+    /// Honoured unless <see cref="GuildOptions.AllowClientGuildCreate"/> (World:Guild; default on, as vmangos) is switched off.
     /// </summary>
     private static void HandleCreate(WorldSession session, Player player, byte[] payload)
     {

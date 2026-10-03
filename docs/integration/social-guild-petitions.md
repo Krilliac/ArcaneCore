@@ -45,7 +45,7 @@ never a literal.
 
 | Key | Default | Reference | Meaning |
 |---|---|---|---|
-| `World:Guild:AllowClientGuildCreate` | false | GuildHandler.cpp:47-72 honours it, the retail client has no UI path (uncited judgment) | honour `CMSG_GUILD_CREATE` |
+| `World:Guild:AllowClientGuildCreate` | true | GuildHandler.cpp:47-72 honours CMSG_GUILD_CREATE (default is vmangos; false is an operator opt-out) | honour `CMSG_GUILD_CREATE` |
 | `World:Guild:MinPetitionSigns` | 9 | mangosd.conf.dist.in:1341, World.cpp:666 (0..9) | signatures that complete a charter (`==`, GuildMgr.h:124) |
 | `World:Guild:MinCharterNameLength` | 2 | :1299, World.cpp:625 (2..24) | |
 | `World:Guild:StrictCharterNames` | 0 | :1296 | 0 = one script for the whole name; bit 1 = basic Latin (bit 2, realm-zone language, is not supported) |
@@ -130,8 +130,7 @@ attach/are offered messages in the right order (features sort by full type name)
 
 ## Open questions
 
-1. `AllowClientGuildCreate` defaults to off (charter-only). vmangos honours the opcode; does the developer accept
-   departing from vmangos there?
+1. `AllowClientGuildCreate` defaults to on (vmangos honours the opcode); set it false to found guilds by charter only.
 2. `DeleteRankMovesMembers` defaults to the vmangos behavior (members stranded on a dead rank id until restart).
    Retail behavior is unknown; flip the default if the stranded state is judged a vmangos bug.
 3. Charter names are not trimmed or collapsed (neither server does it); should leading/trailing/double spaces be

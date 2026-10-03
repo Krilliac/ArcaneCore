@@ -18,10 +18,10 @@ public sealed class GuildOptions
     public const int MaxPetitionSigns = 9;
 
     /// <summary>
-    /// Honour CMSG_GUILD_CREATE. vmangos honours it (GuildHandler.cpp:47-72) but the retail client
-    /// only founds guilds through charters, so the default is off (deliberate, documented).
+    /// Honour CMSG_GUILD_CREATE (vmangos HandleGuildCreateOpcode, GuildHandler.cpp:47-72, honours it). Default on, as
+    /// vmangos; an operator may turn it off to found guilds through charters only.
     /// </summary>
-    public bool AllowClientGuildCreate { get; set; }
+    public bool AllowClientGuildCreate { get; set; } = true;
 
     /// <summary>MinPetitionSigns (mangosd.conf.dist.in:1341, default 9, World.cpp:666 clamps to 0..9).</summary>
     public int MinPetitionSigns { get; set; } = MaxPetitionSigns;

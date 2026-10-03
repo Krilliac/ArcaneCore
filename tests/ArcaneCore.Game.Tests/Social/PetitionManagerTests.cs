@@ -187,6 +187,20 @@ public sealed class PetitionManagerTests
         Assert.Equal(0u, a.Inventory.GetItemCount(PetitionConstants.CharterEntry));
     }
 
+    [Fact] // vmangos charges, then stores (:116-125); an uncharged buy (NPC state not Loaded yet) must hand out nothing
+    public void Buy_WhenTheChargeCannotBeTaken_GivesNoCharterAndCreatesNoPetition()
+    {
+        using var k = new PetitionKit();
+        Player a = k.Add(1, loadNpcState: false);
+
+        k.Petitions.Buy(a, k.Npc.Guid, "Arcane Order");
+
+        Assert.Equal(10_000u, a.Money);
+        Assert.Equal(0u, a.Inventory.GetItemCount(PetitionConstants.CharterEntry));
+        Assert.Null(k.Petitions.GetByOwner(a.Guid.Low));
+        Assert.Empty(k.Persistence.PetitionWrites);
+    }
+
     [Fact] // :98-103
     public void Buy_WithoutACharterTemplate_AnswersBuyFailedCantFindItem()
     {

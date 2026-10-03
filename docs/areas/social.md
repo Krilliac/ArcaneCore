@@ -75,6 +75,8 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
   and are restart-only (see [social-guild-petitions](../integration/social-guild-petitions.md)).
 - **WorldDefense is muted.** vmangos `Channel::Say` lets only honor rank 15 and up speak there;
   honor ranks are not implemented (always 0), so nobody can talk in WorldDefense.
+- **Client guild create.** `CMSG_GUILD_CREATE` is honoured as in vmangos (`GuildHandler.cpp:47-72`);
+  `World:Guild:AllowClientGuildCreate=false` ignores it (charter-only), an operator opt-out.
 - **Deleting a rank (DelRank).** vmangos `Guild::DelRank` drops the lowest rank (never below
   the minimum of 5) and leaves its members with an out-of-range rank id (name `<unknown>`, no
   rights) until the next load clamps them (`Guild.cpp:696-723,458-460`). That is the default;

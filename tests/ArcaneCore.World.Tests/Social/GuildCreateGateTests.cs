@@ -7,8 +7,8 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Social;
 
 /// <summary>
-/// CMSG_GUILD_CREATE is honoured only with World:Guild:AllowClientGuildCreate (the retail client
-/// founds guilds through charters); vmangos disconnects a name over 24 characters
+/// CMSG_GUILD_CREATE is honoured by default as in vmangos and ignored with World:Guild:AllowClientGuildCreate=false;
+/// vmangos disconnects a name over 24 characters
 /// (GuildHandler.cpp:47-72).
 /// </summary>
 public sealed class GuildCreateGateTests
@@ -38,12 +38,13 @@ public sealed class GuildCreateGateTests
     }
 
     [Fact]
-    public async Task ByDefault_AClientGuildCreateFoundsNothing()
+    public async Task WhenSwitchedOff_AClientGuildCreateFoundsNothing()
     {
         (WorldTestHost host, WorldTestClient client, SocialFeature feature) = await StartAsync();
         await using (host)
         await using (client)
         {
+            await host.OnWorldAsync(() => feature.Context.Guilds.Options.AllowClientGuildCreate = false);
             await SendCreateAsync(client, "Free Guild");
             await SettleAsync(client);
 
@@ -52,13 +53,12 @@ public sealed class GuildCreateGateTests
     }
 
     [Fact]
-    public async Task WithAllowClientGuildCreate_TheGuildIsFounded()
+    public async Task ByDefault_AClientGuildCreateFoundsTheGuild()
     {
         (WorldTestHost host, WorldTestClient client, SocialFeature feature) = await StartAsync();
         await using (host)
         await using (client)
         {
-            await host.OnWorldAsync(() => feature.Context.Guilds.Options.AllowClientGuildCreate = true);
             await SendCreateAsync(client, "Free Guild");
             await host.WaitForWorldAsync(() => feature.Context.Guilds.GetByName("Free Guild") is not null, "the guild to be founded");
         }
@@ -71,7 +71,6 @@ public sealed class GuildCreateGateTests
         await using (host)
         await using (client)
         {
-            await host.OnWorldAsync(() => feature.Context.Guilds.Options.AllowClientGuildCreate = true);
             await SendCreateAsync(client, new string('G', 25));
             await host.WaitForWorldAsync(() => host.World.OnlinePlayerCount == 0, "the oversized request to disconnect the session");
 
