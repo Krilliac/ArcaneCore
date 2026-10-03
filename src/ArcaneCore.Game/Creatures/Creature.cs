@@ -1,3 +1,4 @@
+using System.Numerics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -30,6 +31,9 @@ public sealed class Creature : Unit, ICombatCreature
     /// <summary>vmangos/cmangos CREATURE_FLAG_EXTRA_ALWAYS_RUN.</summary>
     public const uint ExtraFlagAlwaysRun = 0x00000040;
 
+    /// <summary>vmangos CREATURE_FLAG_EXTRA_NO_AGGRO / cmangos CREATURE_EXTRA_FLAG_NO_AGGRO_ON_SIGHT.</summary>
+    public const uint ExtraFlagNoAggro = 0x00000002;
+
     private readonly Random _random;
 
     public Creature(uint counter, CreatureTemplate template, CreatureSpawn? spawn, CreatureContent content, Random random)
@@ -56,6 +60,7 @@ public sealed class Creature : Unit, ICombatCreature
             MovementType = (CreatureMovementType)template.MovementType;
         }
 
+        Motion = new MotionMaster(this);
         Relocate(Home.X, Home.Y, Home.Z, Home.Orientation, 0);
         InitializeFields();
     }
@@ -81,9 +86,29 @@ public sealed class Creature : Unit, ICombatCreature
     /// <summary>The map system owns death, movement and respawn even while the spawn is hidden.</summary>
     internal CreatureMapSystem? System { get; set; }
 
-    // This creature model has no evade, pet or regeneration overrides; preserve the
-    // documented CombatHooks defaults (docs/integration/combat.md). Rank is loaded content.
-    public bool IsInEvadeMode => false;
+    /// <summary>
+    /// vmangos Creature::IsInEvadeMode: true from EnterEvadeMode until the creature is home.
+    /// Combat refuses new attacks on an evading creature (docs/integration/combat.md).
+    /// </summary>
+    public bool IsInEvadeMode => IsEvading;
+
+    /// <summary>Set by the map system while the creature runs home after leaving combat.</summary>
+    internal bool IsEvading { get; set; }
+
+    /// <summary>The script driving this creature (null outside a creature map system).</summary>
+    public CreatureAI? AI { get; internal set; }
+
+    /// <summary>The movement generator stack (vmangos MotionMaster).</summary>
+    public MotionMaster Motion { get; }
+
+    /// <summary>Where combat began (vmangos m_combatStartX/Y/Z): waypoint movers evade back here.</summary>
+    internal CreatureHome? CombatStart { get; set; }
+
+    /// <summary>The aggro hook ran for the current fight (reset by evade, death and respawn).</summary>
+    internal bool HasAggroed { get; set; }
+
+    /// <summary>The assistance call went out for the current fight (vmangos m_AlreadyCallAssistance).</summary>
+    internal bool CalledAssistance { get; set; }
 
     public bool CanParry => true;
 
@@ -98,6 +123,16 @@ public sealed class Creature : Unit, ICombatCreature
     /// <summary>vmangos CreatureAI::AttackedBy: an idle creature retaliates against its attacker.</summary>
     public void OnAttackedBy(Unit attacker)
     {
+        if (AI is { } ai)
+        {
+            if (IsAlive && !IsEvading && Map is not null)
+            {
+                ai.OnAttackedBy(attacker);
+            }
+
+            return;
+        }
+
         if (Map is not { } map || Combat.Victim is not null || !IsAlive || !map.Combat.Hooks.CanAttack(this, attacker))
         {
             return;
@@ -107,8 +142,8 @@ public sealed class Creature : Unit, ICombatCreature
         map.Combat.Attack(this, attacker);
     }
 
-    /// <summary>vmangos CreatureAI::JustDied: begin the map system's corpse and respawn timers.</summary>
-    public void OnJustDied(Unit? killer) => System?.OnCreatureDied(this);
+    /// <summary>vmangos CreatureAI::JustDied: tell the AI, then begin the map system's corpse and respawn timers.</summary>
+    public void OnJustDied(Unit? killer) => System?.OnCreatureDied(this, killer);
 
     public uint NpcFlags
     {
@@ -120,9 +155,6 @@ public sealed class Creature : Unit, ICombatCreature
     public CreatureSpline? Spline { get; private set; }
 
     public bool IsMoving => Spline is not null;
-
-    /// <summary>Movement generator state (owned by <see cref="CreatureMapSystem"/>).</summary>
-    internal ICreatureMovementGenerator? MovementGenerator { get; set; }
 
     /// <summary>Corpse time left (ms) while <see cref="DeathState"/> is <see cref="CreatureDeathState.Corpse"/>.</summary>
     internal uint CorpseDecayMs { get; set; }
@@ -355,18 +387,45 @@ public sealed class Creature : Unit, ICombatCreature
 
     /// <summary>Start a straight move to (x, y, z); returns the spline (world thread).</summary>
     internal CreatureSpline StartSpline(float x, float y, float z, bool run, float? finalOrientation, uint splineId, long clockMs)
+        => StartSpline([new Vector3(x, y, z)], run, finalOrientation is { } angle ? SplineFacing.ToAngle(angle) : SplineFacing.None, splineId, clockMs);
+
+    /// <summary>
+    /// Start a linear move through <paramref name="path"/> (every point after the current
+    /// position, destination last). The duration is the path length over the walk or run speed
+    /// (vmangos MoveSpline::Initialize: computeDuration over a linear spline), at least 1 ms.
+    /// </summary>
+    internal CreatureSpline StartSpline(IReadOnlyList<Vector3> path, bool run, SplineFacing facing, uint splineId, long clockMs)
     {
+        ArgumentNullException.ThrowIfNull(path);
+        if (path.Count == 0)
+        {
+            throw new ArgumentException("a spline needs at least one point", nameof(path));
+        }
+
         float speed = run ? CreatureRunSpeed : CreatureWalkSpeed;
-        float dx = x - X;
-        float dy = y - Y;
-        float dz = z - Z;
-        float distance = MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
-        uint duration = Math.Max(1u, (uint)MathF.Round(distance / speed * 1000f));
-        var spline = new CreatureSpline(splineId, X, Y, Z, x, y, z, run, finalOrientation, clockMs, duration);
+        var start = new Vector3(X, Y, Z);
+        float length = 0;
+        Vector3 previous = start;
+        foreach (Vector3 point in path)
+        {
+            length += Vector3.Distance(previous, point);
+            previous = point;
+        }
+
+        uint duration = Math.Max(1u, (uint)MathF.Round(length / speed * 1000f));
+        Vector3 end = path[^1];
+        var spline = new CreatureSpline(splineId, X, Y, Z, end.X, end.Y, end.Z, run, facing.FinalAngle, clockMs, duration)
+        {
+            Path = path.Count > 1 ? [.. path] : [],
+            Facing = facing,
+        };
         Spline = spline;
 
         // While on a spline the unit faces its direction of travel.
-        if (distance > 0.01f)
+        Vector3 first = path[0];
+        float dx = first.X - X;
+        float dy = first.Y - Y;
+        if ((dx * dx) + (dy * dy) > 0.0001f)
         {
             Orientation = NormalizeOrientation(MathF.Atan2(dy, dx));
         }
@@ -424,20 +483,75 @@ public sealed class Creature : Unit, ICombatCreature
 public readonly record struct CreatureHome(float X, float Y, float Z, float Orientation);
 
 /// <summary>
-/// A straight-line spline (vmangos linear MoveSpline with one destination): positions
-/// interpolate linearly over <see cref="DurationMs"/>, measured on the map clock.
+/// A linear spline (vmangos linear MoveSpline): positions interpolate along the path by
+/// distance over <see cref="DurationMs"/>, measured on the map clock. A single-segment spline
+/// has an empty <see cref="Path"/>; a multi-point one lists every point after the start.
 /// </summary>
 public sealed record CreatureSpline(
     uint Id, float StartX, float StartY, float StartZ, float EndX, float EndY, float EndZ,
     bool Run, float? FinalOrientation, long StartClockMs, uint DurationMs)
 {
+    /// <summary>Every point after the start, the destination last, for a multi-point path; otherwise empty.</summary>
+    public IReadOnlyList<Vector3> Path { get; init; } = [];
+
+    /// <summary>How the spline ends facing.</summary>
+    public SplineFacing Facing { get; init; } = SplineFacing.None;
+
     public bool IsFinished(long clockMs) => clockMs - StartClockMs >= DurationMs;
 
     public uint ElapsedMs(long clockMs) => (uint)Math.Clamp(clockMs - StartClockMs, 0, DurationMs);
 
+    /// <summary>All points after the start (destination last).</summary>
+    public IReadOnlyList<Vector3> Points => Path.Count > 0 ? Path : [new Vector3(EndX, EndY, EndZ)];
+
     public (float X, float Y, float Z) PositionAt(long clockMs)
     {
         float t = DurationMs == 0 ? 1f : Math.Clamp((float)(clockMs - StartClockMs) / DurationMs, 0f, 1f);
-        return (StartX + ((EndX - StartX) * t), StartY + ((EndY - StartY) * t), StartZ + ((EndZ - StartZ) * t));
+        (Vector3 position, _) = Locate(t);
+        return (position.X, position.Y, position.Z);
+    }
+
+    /// <summary>The points still ahead at <paramref name="clockMs"/> (destination last).</summary>
+    public IReadOnlyList<Vector3> RemainingPoints(long clockMs)
+    {
+        float t = DurationMs == 0 ? 1f : Math.Clamp((float)(clockMs - StartClockMs) / DurationMs, 0f, 1f);
+        (_, int segment) = Locate(t);
+        IReadOnlyList<Vector3> points = Points;
+        return [.. points.Skip(segment)];
+    }
+
+    private (Vector3 Position, int Segment) Locate(float t)
+    {
+        var start = new Vector3(StartX, StartY, StartZ);
+        IReadOnlyList<Vector3> points = Points;
+        if (points.Count == 1)
+        {
+            return (Vector3.Lerp(start, points[0], t), 0);
+        }
+
+        float total = 0;
+        Vector3 previous = start;
+        foreach (Vector3 point in points)
+        {
+            total += Vector3.Distance(previous, point);
+            previous = point;
+        }
+
+        float target = total * t;
+        previous = start;
+        for (int i = 0; i < points.Count; i++)
+        {
+            float segment = Vector3.Distance(previous, points[i]);
+            if (target <= segment || i == points.Count - 1)
+            {
+                float f = segment <= 0 ? 1f : Math.Clamp(target / segment, 0f, 1f);
+                return (Vector3.Lerp(previous, points[i], f), i);
+            }
+
+            target -= segment;
+            previous = points[i];
+        }
+
+        return (points[^1], points.Count - 1);
     }
 }
