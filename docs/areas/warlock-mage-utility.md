@@ -118,3 +118,30 @@ unchanged non-ward shield, module not installed, other-school shield). The absor
 
 Tests: `tests/ArcaneCore.Game.Tests/Spells/Utility/PetPowerTests.cs` (14 tests; RED first with the effect and the script moved away and no per-second hook:
 12 failed, the two "does nothing" cases passed by design). Targets 5 and 27 (wlm-03) and the script dispatcher (wlm-02) are exercised end to end.
+
+## wlm-15 Regeneration auras (`Combat/Power/RegenModifiers.cs`, `MapCombat.Regen.cs`, `IPowerAuraSource`)
+
+Player regeneration ignored every aura but two. It now follows vmangos `Player::UpdateManaRegen` (StatSystem.cpp:642-661) and
+`RegenerateAll` / `Regenerate` / `RegenerateHealth` (Player.cpp:2269-2402); the formulas are pure functions in `RegenModifiers`:
+
+| Aura | Effect | Examples (classic-db z2815 values, base points + 1) |
+|---|---|---|
+| `MOD_POWER_REGEN_PERCENT` (110), mana | multiplies the spirit regen by (amount + 100) / 100, also inside the five second window | Evocation 1500 (x16) |
+| `MOD_POWER_REGEN` (85), mana | amount / 5 per second, always | Drink 42 |
+| `MOD_MANA_REGEN_INTERRUPT` (134) | inside the window the spirit part counts min(100, total) percent | Evocation 100, Mage Armor 30 |
+| `MOD_REGEN` (84, Food) | out of combat, health + amount * (2000 / interval) per tick | no row quoted, test shape |
+| `MOD_HEALTH_REGEN_IN_COMBAT` (161) | 2 * (total / 5) per tick, also in combat (health regenerates in combat with it) | Demon Armor 7 |
+| `MOD_HEALTH_REGEN_PERCENT` (88) | out of combat x (100 + amount) / 100 | Health Funnel -100 |
+| `MOD_REGEN_DURING_COMBAT` (116) | health regenerates in combat, x total / 100 | none yet |
+| polymorph | health regenerates in combat, a tenth of the maximum per tick | Polymorph |
+
+`IPowerAuraSource` (the seam combat uses to read auras; implemented by `SpellSystemPowerAuras`) gained four default-bodied members
+(`GetTotalAuraModifier`, `GetTotalAuraModifierByMisc`, `GetRegenAuras`, `IsPolymorphed`), so a source that implements only the old three keeps
+compiling and sees no such aura. The shared edits are `MapCombat.Regen.cs` (the health gate, `RegenerateHealth`, the mana tick) and
+`CombatOptions.cs` (interface and implementation). The five second rule itself is unchanged: no spirit regen inside the window unless an aura says so.
+
+Limits: (1) `IsPolymorphed` stands in for vmangos' `GetTransForm()` (the Transform aura has no handler, so no transform is tracked): a live holder with a
+Transform aura and the mage polymorph classification (mage family, first effect confuse, silence prevention) counts, whichever transform is newest;
+(2) `Rate.Health` does not exist in `CombatOptions` (the health regen never had it) and is not added; (3) the heal-on-tick regen of creatures and pets is untouched.
+
+Tests: `tests/ArcaneCore.Game.Tests/CombatMechanics/RegenAuraTests.cs` (11 tests; RED first: 9 failed, the two baseline tests proving the harness passed).

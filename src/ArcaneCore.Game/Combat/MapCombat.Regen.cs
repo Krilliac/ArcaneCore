@@ -25,12 +25,17 @@ public sealed partial class MapCombat
         }
 
         CombatEnvironment power = CombatEnvironment.For(_world);
-        if (!c.IsInCombat)
+        bool inCombat = c.IsInCombat;
+
+        // vmangos Player::RegenerateAll (Player.cpp:2272-2281): health also regenerates in combat with MOD_REGEN_DURING_COMBAT, MOD_HEALTH_REGEN_IN_COMBAT
+        // (Demon Armor) or while polymorphed; rage still only decays out of combat.
+        if (!inCombat || power.HasAuraType(player, AuraType.ModRegenDuringCombat) || power.HasAuraType(player, AuraType.ModHealthRegenInCombat)
+            || power.IsPolymorphed(player))
         {
-            RegenerateHealth(player);
+            RegenerateHealth(player, power, inCombat);
 
             // vmangos Player::RegenerateAll (Player.cpp:2278): rage only decays without SPELL_AURA_INTERRUPT_REGEN (Bloodrage).
-            if (!power.HasAuraType(player, AuraType.InterruptRegen))
+            if (!inCombat && !power.HasAuraType(player, AuraType.InterruptRegen))
             {
                 RegeneratePower(player, PowerType.Rage, power);
             }
@@ -42,10 +47,11 @@ public sealed partial class MapCombat
     }
 
     /// <summary>
-    /// vmangos Player::RegenerateHealth (out of combat): GetRegenHPPerSpirit, ×1.5 when not
-    /// standing; fractions carry over to the next tick.
+    /// vmangos Player::RegenerateHealth (Player.cpp:2366-2402): GetRegenHPPerSpirit, ×1.5 when not
+    /// standing, shaped by the regeneration auras (<see cref="RegenModifiers.HealthPerTick"/>: polymorph, Health Funnel, Food,
+    /// Demon Armor, MOD_REGEN_DURING_COMBAT); fractions carry over to the next tick.
     /// </summary>
-    private static void RegenerateHealth(Player player)
+    private static void RegenerateHealth(Player player, CombatEnvironment environment, bool inCombat)
     {
         uint cur = player.Health;
         uint max = player.MaxHealth;
@@ -55,11 +61,17 @@ public sealed partial class MapCombat
         }
 
         UnitCombat c = player.Combat;
-        float add = RegenHealthPerSpirit(player.Class, player.GetUInt32(UpdateFields.UnitFieldStat0 + 4));
-        if (!IsStandingUp(player))
-        {
-            add *= 1.5f;
-        }
+        float add = RegenModifiers.HealthPerTick(
+            RegenHealthPerSpirit(player.Class, player.GetUInt32(UpdateFields.UnitFieldStat0 + 4)),
+            max,
+            inCombat,
+            IsStandingUp(player),
+            environment.IsPolymorphed(player),
+            environment.HasAuraType(player, AuraType.ModRegenDuringCombat),
+            environment.GetTotalAuraModifier(player, AuraType.ModRegenDuringCombat),
+            [.. environment.GetRegenAuras(player, AuraType.ModHealthRegenPercent).Select(a => a.Amount)],
+            environment.GetRegenAuras(player, AuraType.ModRegen),
+            environment.GetTotalAuraModifier(player, AuraType.ModHealthRegenInCombat));
 
         add += c.HealthRegenCarry;
         c.HealthRegenCarry = add - (int)add;
@@ -81,9 +93,17 @@ public sealed partial class MapCombat
         float regenFactor = power == PowerType.Mana ? 1.0f : environment.GetPowerRegenFactor(player, power);
         uint add = power switch
         {
-            PowerType.Mana => player.Combat.LastManaUseTimer > 0
-                ? 0u
-                : PowerRules.ManaPerTick(RegenManaPerSpirit(player.Class, player.GetUInt32(UpdateFields.UnitFieldStat0 + 4)), options.RateMana),
+            // vmangos UpdateManaRegen: the percent aura on the spirit part, mp5 (Drink), the interrupt percentage inside the five second window.
+            PowerType.Mana => PowerRules.ManaPerTick(
+                Math.Max(
+                    0f,
+                    RegenModifiers.ManaPerSecond(
+                        RegenManaPerSpirit(player.Class, player.GetUInt32(UpdateFields.UnitFieldStat0 + 4)),
+                        environment.GetPowerRegenFactor(player, PowerType.Mana),
+                        environment.GetTotalAuraModifierByMisc(player, AuraType.ModPowerRegen, (int)PowerType.Mana),
+                        environment.GetTotalAuraModifier(player, AuraType.ModManaRegenInterrupt),
+                        player.Combat.LastManaUseTimer > 0)),
+                options.RateMana),
             PowerType.Rage => PowerRules.RageDecayPerTick(options.RateRageLoss, regenFactor),
             PowerType.Energy => PowerRules.EnergyPerTick(options.RateEnergy, regenFactor),
             _ => 0u,

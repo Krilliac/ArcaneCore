@@ -84,7 +84,25 @@ public interface IPowerAuraSource
     /// <paramref name="power"/> (vmangos Player::Regenerate, Player.cpp:2323-2328); 1 when there is none.
     /// </summary>
     float GetPowerRegenFactor(Unit unit, PowerType power);
+
+    // The members below feed the regeneration auras of mage, warlock and consumable spells (docs/areas/warlock-mage-utility.md, wlm-15). They have
+    // default bodies so a source that only knows the three members above keeps working: no unit has any of these auras then.
+
+    /// <summary>vmangos Unit::GetTotalAuraModifier: the sum of the amounts of the unit's auras of <paramref name="type"/>.</summary>
+    int GetTotalAuraModifier(Unit unit, AuraType type) => 0;
+
+    /// <summary>vmangos Unit::GetTotalAuraModifierByMiscValue: the same, for the auras whose misc value is <paramref name="miscValue"/>.</summary>
+    int GetTotalAuraModifierByMisc(Unit unit, AuraType type, int miscValue) => 0;
+
+    /// <summary>The amount and periodic interval of every aura of <paramref name="type"/> on the unit (the Food aura needs its interval).</summary>
+    IReadOnlyList<RegenAura> GetRegenAuras(Unit unit, AuraType type) => [];
+
+    /// <summary>vmangos Unit::IsPolymorphed: the unit's transform is a mage polymorph.</summary>
+    bool IsPolymorphed(Unit unit) => false;
 }
+
+/// <summary>One aura of a regeneration type: its modifier amount and its periodic interval in ms (0 when it is not periodic).</summary>
+public readonly record struct RegenAura(int Amount, uint PeriodMs);
 
 /// <summary>
 /// The combat settings and the links from combat down to the spell system for one world. The world daemon creates it
@@ -182,6 +200,14 @@ public sealed class CombatEnvironment
     internal bool HasAuraType(Unit unit, AuraType type) => Auras?.HasAuraType(unit, type) ?? false;
 
     internal float GetPowerRegenFactor(Unit unit, PowerType power) => Auras?.GetPowerRegenFactor(unit, power) ?? 1.0f;
+
+    internal int GetTotalAuraModifier(Unit unit, AuraType type) => Auras?.GetTotalAuraModifier(unit, type) ?? 0;
+
+    internal int GetTotalAuraModifierByMisc(Unit unit, AuraType type, int miscValue) => Auras?.GetTotalAuraModifierByMisc(unit, type, miscValue) ?? 0;
+
+    internal IReadOnlyList<RegenAura> GetRegenAuras(Unit unit, AuraType type) => Auras?.GetRegenAuras(unit, type) ?? [];
+
+    internal bool IsPolymorphed(Unit unit) => Auras?.IsPolymorphed(unit) ?? false;
 }
 
 /// <summary>The <see cref="IPowerAuraSource"/> backed by the world's <see cref="SpellSystem"/>.</summary>
@@ -231,4 +257,65 @@ public sealed class SpellSystemPowerAuras(SpellSystem spells) : IPowerAuraSource
 
         return factor;
     }
+
+    public int GetTotalAuraModifier(Unit unit, AuraType type)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        return _spells.GetTotalAuraModifier(unit, type);
+    }
+
+    public int GetTotalAuraModifierByMisc(Unit unit, AuraType type, int miscValue)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        return _spells.GetTotalAuraModifier(unit, type, aura => aura.MiscValue == miscValue);
+    }
+
+    public IReadOnlyList<RegenAura> GetRegenAuras(Unit unit, AuraType type)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        var found = new List<RegenAura>();
+        foreach (SpellAuraHolder holder in _spells.GetAuras(unit))
+        {
+            if (holder.IsRemoved)
+            {
+                continue;
+            }
+
+            foreach (SpellAura? aura in holder.Auras)
+            {
+                if (aura is not null && aura.Type == type)
+                {
+                    found.Add(new RegenAura(aura.Amount, aura.Amplitude));
+                }
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>
+    /// vmangos Unit::IsPolymorphed is <c>GetSpellSpecific(GetTransForm()) == SPELL_MAGE_POLYMORPH</c> (SpellEntry.cpp:67-75: mage family, first effect
+    /// MOD_CONFUSE, silence prevention type). The unit's transform is not tracked here (the Transform aura has no handler yet), so a live holder
+    /// that carries a Transform aura and has that classification stands in for it: any such holder, not only the latest transform.
+    /// </summary>
+    public bool IsPolymorphed(Unit unit)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        foreach (SpellAuraHolder holder in _spells.GetAuras(unit))
+        {
+            SpellInfo spell = holder.Spell;
+            if (!holder.IsRemoved && spell.SpellFamilyName == MageFamily && spell.PreventionType == SilencePrevention
+                && holder.HasAura(AuraType.Transform) && spell.Effects.Count > 0 && spell.Effects[0].AuraType == AuraType.ModConfuse)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private const uint MageFamily = 3;
+
+    /// <summary>SPELL_PREVENTION_TYPE_SILENCE (vmangos SpellDefines.h).</summary>
+    private const uint SilencePrevention = 1;
 }
