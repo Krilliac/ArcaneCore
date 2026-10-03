@@ -35,7 +35,7 @@ public interface IQuestReputationSettlement
 /// </summary>
 public sealed class QuestReputationStage
 {
-    internal QuestReputationStage(IReadOnlyList<(uint Faction, int Gain)> gains, IReadOnlyList<CharacterReputationRow> after)
+    internal QuestReputationStage(IReadOnlyList<(uint Faction, int Gain, bool NoSpillover)> gains, IReadOnlyList<CharacterReputationRow> after)
     {
         Gains = gains;
         After = after;
@@ -47,5 +47,5 @@ public sealed class QuestReputationStage
     /// <summary>The faction rows (standing relative to the base, and flags) after the reward.</summary>
     public IReadOnlyList<CharacterReputationRow> After { get; }
 
-    internal IReadOnlyList<(uint Faction, int Gain)> Gains { get; }
+    internal IReadOnlyList<(uint Faction, int Gain, bool NoSpillover)> Gains { get; }
 }

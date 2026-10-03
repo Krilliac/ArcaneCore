@@ -28,7 +28,7 @@ public sealed class FactionState(FactionRecord faction, FactionStateFlags flags)
 /// World thread once the player is in the world; the session task only builds it.
 /// Re-implemented from vmangos/core 4b3d241 ReputationMgr.cpp; no GPL source is copied.
 /// </summary>
-public sealed class PlayerReputation
+public sealed partial class PlayerReputation
 {
     private readonly SortedDictionary<int, FactionState> _states = [];
     private readonly List<int> _newlyVisible = [];

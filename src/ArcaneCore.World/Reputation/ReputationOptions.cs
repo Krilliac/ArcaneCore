@@ -23,4 +23,7 @@ public sealed class ReputationOptions
     /// true compares the effective rank including the race base. Deliberate deviation, default retail.
     /// </summary>
     public bool PeaceForcedUsesEffectiveStanding { get; set; }
+
+    /// <summary>Retail (true): reputation_spillover_template applies (ReputationMgr.cpp:211-243). False switches every spillover off.</summary>
+    public bool SpilloverEnabled { get; set; } = true;
 }

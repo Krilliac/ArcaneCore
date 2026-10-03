@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.Reputation;
 /// client notifications, kill/quest rewards and reaction resolution. Also serves the NPC
 /// services' <see cref="IPlayerReputation"/> seam.
 /// </summary>
-public sealed class ReputationService : IReputationService, IPlayerReputation, IQuestReputationSettlement
+public sealed partial class ReputationService : IReputationService, IPlayerReputation, IQuestReputationSettlement
 {
     private readonly ConditionalWeakTable<Player, PlayerReputation> _players = new();
     private readonly Dictionary<uint, ReputationOnKillEntry> _onKill;
@@ -42,6 +42,18 @@ public sealed class ReputationService : IReputationService, IPlayerReputation, I
     public FactionCatalog Factions { get; }
 
     public ReputationRates Rates { get; }
+
+    private ReputationContent _content = ReputationContent.Empty;
+
+    /// <summary>Spillover templates and reward rates (reputation_spillover_template, reputation_reward_rate). Swapped whole on reload.</summary>
+    public ReputationContent Content
+    {
+        get => Volatile.Read(ref _content);
+        set => Volatile.Write(ref _content, value ?? throw new ArgumentNullException(nameof(value)));
+    }
+
+    /// <summary>Option <c>Reputation:SpilloverEnabled</c> (retail true): false suppresses every spillover.</summary>
+    public bool SpilloverEnabled { get; init; } = true;
 
     public int OnKillCount => _onKill.Count;
 
@@ -99,9 +111,13 @@ public sealed class ReputationService : IReputationService, IPlayerReputation, I
         return npc.FactionId != 0 && GetRank(player, npc.FactionId) >= ReputationRank.Honored ? 0.9f : 1f;
     }
 
-    public bool ModifyReputation(Player player, uint factionId, int delta) => Change(player, factionId, delta, incremental: true);
+    public bool ModifyReputation(Player player, uint factionId, int delta) => Change(player, factionId, delta, incremental: true, noSpillover: false);
 
-    public bool SetReputation(Player player, uint factionId, int reputation) => Change(player, factionId, reputation, incremental: false);
+    /// <summary>ReputationMgr::ModifyReputation(faction, standing, noSpillover).</summary>
+    public bool ModifyReputation(Player player, uint factionId, int delta, bool noSpillover)
+        => Change(player, factionId, delta, incremental: true, noSpillover);
+
+    public bool SetReputation(Player player, uint factionId, int reputation) => Change(player, factionId, reputation, incremental: false, noSpillover: false);
 
     public void RewardKill(Player player, Creature victim, float rate = 1f)
     {
@@ -136,7 +152,7 @@ public sealed class ReputationService : IReputationService, IPlayerReputation, I
             }
 
             int gain = Gain(ReputationSource.Quest, player, reward.Value, reward.FactionId, level);
-            ModifyReputation(player, reward.FactionId, gain);
+            ModifyReputation(player, reward.FactionId, gain, reward.NoSpillover);
         }
     }
 
@@ -190,7 +206,7 @@ public sealed class ReputationService : IReputationService, IPlayerReputation, I
     {
         ArgumentNullException.ThrowIfNull(player);
         float modifier = rep > 0 ? GainModifier?.Invoke(player, source, faction) ?? 0 : 0;
-        float value = ReputationMath.GainBeforeDither(source, rep, player.Level, creatureOrQuestLevel, Rates, modifier);
+        float value = ReputationMath.GainBeforeDither(source, rep, player.Level, creatureOrQuestLevel, Rates, modifier, FactionRate(source, faction));
         return ReputationMath.Dither(value, _roll());
     }
 
@@ -210,7 +226,7 @@ public sealed class ReputationService : IReputationService, IPlayerReputation, I
 
         if (teamAward && faction.ParentFactionId != 0 && Factions.Find(faction.ParentFactionId) is not null)
         {
-            ModifyReputation(player, faction.ParentFactionId, gain / 2);
+            ModifyReputation(player, faction.ParentFactionId, gain / 2, noSpillover: true); // Player.cpp:6395 passes noSpillover
         }
     }
 
@@ -218,35 +234,44 @@ public sealed class ReputationService : IReputationService, IPlayerReputation, I
     /// ReputationMgr::SetOneFactionReputation and the client updates, persisted through the sink. Refused
     /// while a quest settlement holds the character (only its own publication step may change standings).
     /// </summary>
-    private bool Change(Player player, uint factionId, int value, bool incremental)
+    private bool Change(Player player, uint factionId, int value, bool incremental, bool noSpillover)
     {
         ArgumentNullException.ThrowIfNull(player);
-        if (!player.CanMutateQuestSettlementState || !ApplyAndNotify(player, factionId, value, incremental, out PlayerReputation? rep))
+        if (!player.CanMutateQuestSettlementState)
         {
             return false;
         }
 
-        Persist(player, rep);
-        return true;
+        bool changed = ApplyAndNotify(player, factionId, value, incremental, noSpillover, out PlayerReputation? rep);
+        if (rep is not null)
+        {
+            Persist(player, rep); // spillover may have changed rows even when the main faction has no state
+        }
+
+        return changed;
     }
 
-    private bool ApplyAndNotify(Player player, uint factionId, int value, bool incremental,
-        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out PlayerReputation? rep)
+    private bool ApplyAndNotify(Player player, uint factionId, int value, bool incremental, bool noSpillover, out PlayerReputation? rep)
     {
         rep = For(player);
-        if (rep is null || Factions.Find(factionId) is not { } faction || rep.State(faction) is not { } state
-            || !rep.Apply(faction, value, incremental))
+        if (rep is null || Factions.Find(factionId) is not { } faction)
         {
             return false;
         }
 
+        bool changed = rep.ApplyWithSpillover(faction, value, incremental, noSpillover || !SpilloverEnabled, Content, out _);
         foreach (int listId in rep.TakeNewlyVisible())
         {
             player.Session.Send(WorldOpcode.SmsgSetFactionVisible, ReputationPackets.SetFactionVisible(listId));
         }
 
+        if (rep.State(faction) is not { } state)
+        {
+            return false; // vmangos only reports the main faction (SendState), and only when it has a state
+        }
+
         player.Session.Send(WorldOpcode.SmsgSetFactionStanding, ReputationPackets.SetFactionStanding(rep.TakeStandingUpdate(state)));
-        return true;
+        return changed;
     }
 
     public bool TryStage(Player player, int questLevel, IReadOnlyList<QuestReputationReward> rewards, out QuestReputationStage stage)
@@ -257,7 +282,7 @@ public sealed class ReputationService : IReputationService, IPlayerReputation, I
         uint level = questLevel > 0 ? (uint)questLevel : player.Level;
         PlayerReputation? live = For(player);
         PlayerReputation? copy = null;
-        var gains = new List<(uint Faction, int Gain)>();
+        var gains = new List<(uint Faction, int Gain, bool NoSpillover)>();
         foreach (QuestReputationReward reward in rewards)
         {
             // The same skip rules as RewardQuest (vmangos RewardReputation ignores a pair with a zero value).
@@ -273,9 +298,9 @@ public sealed class ReputationService : IReputationService, IPlayerReputation, I
 
             copy ??= live.Clone();
             int gain = Gain(ReputationSource.Quest, player, reward.Value, reward.FactionId, level);
-            if (copy.Apply(faction, gain, incremental: true))
+            if (copy.ApplyWithSpillover(faction, gain, incremental: true, reward.NoSpillover || !SpilloverEnabled, Content, out bool spilled) || spilled)
             {
-                gains.Add((reward.FactionId, gain));
+                gains.Add((reward.FactionId, gain, reward.NoSpillover));
             }
         }
 
@@ -297,10 +322,10 @@ public sealed class ReputationService : IReputationService, IPlayerReputation, I
         }
 
         PlayerReputation? rep = For(player);
-        foreach ((uint faction, int gain) in stage.Gains)
+        foreach ((uint faction, int gain, bool noSpillover) in stage.Gains)
         {
             // The publication scope lifts the settlement hold; no sink call, the transaction persisted the rows.
-            ApplyAndNotify(player, faction, gain, incremental: true, out rep);
+            ApplyAndNotify(player, faction, gain, incremental: true, noSpillover, out rep);
         }
 
         if (rep is null)

@@ -220,6 +220,7 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
             return _service = new ReputationService(factions, onKill, rates, new Sink(_writes))
             {
                 PeaceForcedUsesEffectiveStanding = Options.PeaceForcedUsesEffectiveStanding,
+                SpilloverEnabled = Options.SpilloverEnabled,
             };
         }
     }
