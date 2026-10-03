@@ -152,6 +152,31 @@ a zone entry does not shift unrelated tests' packet sequences; weather tests swi
 delivered: the weather-dependent client sounds beyond the sound ids, per-instance zone scripts, and
 `.reload game_weather` wiring (the reload coordinator is another lane).
 
+### Explored zones across logins (`exploration-persistence`)
+
+Characters schema module `ExploredZonesDataModule` (constant `Version = 14`, next free after the
+loot state step at 13; the integrator renumbers) with one row per character in
+`character_explored_zones` (the 64 words in the vmangos text form, `characters.explored_zones`
+longtext, `sql/characters.sql:92`: decimal u32 values, one trailing space each). It implements
+`ICharacterDataCleanup` (the row goes in the deletion transaction). `ExploredZonesText.Parse` is strict:
+a wrong value count, a non-numeric or out-of-range token is an error, never a silent zero.
+`ExploredZonesPersistence` (world feature + `ICharacterHooks`):
+
+- Loads on the session task while the character loads (vmangos `Player.cpp:14648`) and fills
+  `PLAYER_EXPLORED_ZONES_1..64` before the player reaches the world thread. Fail closed: a malformed
+  row, or an earlier write for the character that is still not durable (retained by the queue), fails the
+  login (CHAR_LOGIN_FAILED) instead of showing a re-explored map.
+- Writes through `ExploredZonesWriteQueue` (one consumer, the reputation queue's retention rules):
+  on every change (`IExploredZonesSink.Changed`, so a crash does not lose a discovery) and when the
+  character leaves the world (`Player.cpp:16481`). Three attempts per write; a write that still fails is
+  retained and retried by the next change, the login barrier, the logout retry and shutdown (which
+  throws, loudly, if storage is still failing). Logout is never blocked.
+- `OnCharacterCreatedAsync` clears a row left by a deleted character whose id is reused;
+  `ExploredZonesDeleteHook` drains queued writes before deletion and forgets anything retained
+  after it, so nothing can bring a deleted character's row back (the store also ignores writes for a
+  character that no longer exists).
+- With no `IExploredZonesStore` registered the words live in memory only.
+
 ## Deviations from retail (all documented, none silent)
 
 - `ClientZoneTrust=Auto` is a development-world allowance, not retail. Retail is `Never`.

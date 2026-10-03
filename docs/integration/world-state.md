@@ -12,7 +12,7 @@ Seams added: `WorldStateHooks.For(world)` (options, clock, zone locator, locatio
 `IPlayerLocationListener`, `IZoneLocator`, `IGameTime`. Rest/tavern, PvP-enforced-area and
 channel logic from other lanes should use `IPlayerLocationListener` instead of polling zones.
 
-Schema: World `WorldStateDataModule.Version` (11 at this base; tests reference the constant). No characters modules yet.
+Schema: World `WorldStateDataModule.Version` (11 at this base) and Characters `ExploredZonesDataModule.Version` (14 at this base); tests reference the constants.
 
 ## game-time slice
 
@@ -37,3 +37,7 @@ Renumbering: change `WorldStateDataModule.Version` only; the tests use the const
 
 Another lane's tests that assert a literal login sequence on the real defaults (weather on) will see
 one extra `SMSG_WEATHER` after `SMSG_INIT_WORLD_STATES`; that is retail behaviour.
+
+## exploration-persistence slice
+
+`tests/ArcaneCore.Data.Tests/IntegratedSchemaTests.cs`: one more tuple appended to the expected module list (through the constant). No other shared file. The characters module list is also checked by the existing character-deletion guard (`ICharacterDataCleanup`).

@@ -34,6 +34,9 @@ public sealed class WorldStateHooks
 
     public WeatherOptions WeatherSettings { get; } = new();
 
+    /// <summary>Where explored-zones changes go for persistence (null: not persisted).</summary>
+    public Exploration.IExploredZonesSink? ExploredZonesSink { get; set; }
+
     /// <summary>The loaded <c>game_weather</c> chances (empty until a feature loads them).</summary>
     public WeatherChanceTable WeatherChances { get; } = new();
 
