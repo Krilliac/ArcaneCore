@@ -10,7 +10,7 @@ namespace ArcaneCore.Data.Characters.Items;
 /// (vmangos-shaped). Characters schema version 3 — allocated per docs/integration/items.md;
 /// the lead renumbers on a collision.
 /// </summary>
-public sealed class ItemCharacterDataModule : IDataModule
+public sealed class ItemCharacterDataModule : IDataModule, ICharacterDataCleanup
 {
     public DatabaseComponent Component => DatabaseComponent.Characters;
 
@@ -29,4 +29,8 @@ public sealed class ItemCharacterDataModule : IDataModule
     }
 
     public void AddServices(IServiceCollection services) => services.AddScoped<IItemStore, EfItemStore>();
+
+    /// <summary>Every item the character owns and every inventory slot it holds (vmangos DeleteFromDB: item_instance, character_inventory).</summary>
+    public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
+        => ItemPersistence.StageDeleteAllAsync(db, characterId, cancellationToken);
 }

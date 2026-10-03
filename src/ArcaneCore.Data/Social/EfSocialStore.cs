@@ -139,4 +139,7 @@ public sealed class EfSocialStore(CharacterDbContext db) : ISocialStore
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         db.ChangeTracker.Clear();
     }
+
+    public Task PurgeCharacterAsync(int characterId, CancellationToken cancellationToken = default)
+        => SocialDataModule.DeleteReferencesAsync(db, characterId, cancellationToken);
 }

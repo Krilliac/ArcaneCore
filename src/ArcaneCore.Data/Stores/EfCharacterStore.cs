@@ -2,6 +2,7 @@ using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace ArcaneCore.Data.Stores;
 
@@ -39,22 +40,62 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore
         return character;
     }
 
-    public async Task<bool> DeleteAsync(int id, int accountId, CancellationToken cancellationToken = default)
+    public Task<bool> DeleteAsync(int id, int accountId, CancellationToken cancellationToken = default)
+        => DeleteAsync(id, accountId, CharacterDataCleanups.All, cancellationToken);
+
+    /// <summary>
+    /// Delete the character row, its action bar and every module's per-character rows
+    /// (<see cref="ICharacterDataCleanup"/>) in one transaction: either all of it goes or none.
+    /// A module's refusal answers false and leaves everything in place. <paramref name="cleanups"/> is
+    /// normally <see cref="CharacterDataCleanups.All"/> (tests substitute their own).
+    /// </summary>
+    public async Task<bool> DeleteAsync(
+        int id, int accountId, IReadOnlyList<ICharacterDataCleanup> cleanups, CancellationToken cancellationToken)
     {
-        CharacterRecord? character = await db.Characters
-            .FirstOrDefaultAsync(c => c.Id == id && c.AccountId == accountId, cancellationToken)
-            .ConfigureAwait(false);
-        if (character is null)
+        ArgumentNullException.ThrowIfNull(cleanups);
+        if (db.ChangeTracker.Entries().Any())
         {
-            return false;
+            throw new InvalidOperationException("Character deletion requires a context without tracked caller state.");
         }
 
-        db.Characters.Remove(character);
-        db.ActionButtons.RemoveRange(db.ActionButtons.Where(b => b.CharacterId == id));
-        await ItemPersistence.StageDeleteAllAsync(db, id, cancellationToken).ConfigureAwait(false);
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        db.ChangeTracker.Clear();
-        return true;
+        // Join a caller's transaction (its commit decides); otherwise own one.
+        bool own = db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
+        await using IDbContextTransaction? transaction = own
+            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            : null;
+        try
+        {
+            CharacterRecord? character = await db.Characters
+                .FirstOrDefaultAsync(c => c.Id == id && c.AccountId == accountId, cancellationToken)
+                .ConfigureAwait(false);
+            if (character is null)
+            {
+                return false;
+            }
+
+            foreach (ICharacterDataCleanup cleanup in cleanups)
+            {
+                await cleanup.DeleteCharacterDataAsync(db, id, cancellationToken).ConfigureAwait(false);
+            }
+
+            db.ActionButtons.RemoveRange(db.ActionButtons.Where(b => b.CharacterId == id));
+            db.Characters.Remove(character);
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            return true;
+        }
+        catch (CharacterDeletionRefusedException) when (transaction is not null)
+        {
+            return false; // disposing the transaction rolls back any set-based deletes
+        }
+        finally
+        {
+            db.ChangeTracker.Clear();
+        }
     }
 
     public async Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default)
