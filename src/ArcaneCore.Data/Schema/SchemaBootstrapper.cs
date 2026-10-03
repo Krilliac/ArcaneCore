@@ -69,7 +69,12 @@ public sealed class SchemaDefinition
 }
 
 /// <summary>Raised when a database cannot be brought to the version the code requires.</summary>
-public sealed class SchemaMismatchException(string message) : Exception(message);
+/// <remarks>
+/// Not sealed: the upgrade tooling (SchemaUpgrader, the startup policy) raises more specific subtypes (<see cref="SchemaDowngradeException"/>,
+/// <see cref="SchemaBlockedException"/>, <see cref="SchemaPolicyException"/>) that every existing
+/// <c>catch (SchemaMismatchException)</c> still handles.
+/// </remarks>
+public class SchemaMismatchException(string message) : Exception(message);
 
 /// <summary>
 /// Creates, adopts and upgrades one component's schema inside a database that other
@@ -122,12 +127,29 @@ public static class SchemaBootstrapper
     /// <param name="lockTimeout">How long to wait for another process that is changing the same component's schema.</param>
     /// <param name="logger">Optional progress log.</param>
     /// <param name="cancellationToken">Cancels the wait for the lock and the work.</param>
-    public static async Task EnsureAsync(
+    public static Task EnsureAsync(
         DbContext db, SchemaDefinition definition, TimeSpan lockTimeout, ILogger? logger = null, CancellationToken cancellationToken = default)
+        => EnsureAsync(db, definition, new SchemaUpgradeOptions { LockTimeout = lockTimeout }, logger, cancellationToken);
+
+    /// <summary>
+    /// <see cref="EnsureAsync(DbContext, SchemaDefinition, TimeSpan, ILogger?, CancellationToken)"/> with the
+    /// upgrade tooling's options: the startup policy (checked before the database is created and again, under
+    /// the lock, against the state the lock holder sees), the lock wait and a per-step progress callback.
+    /// </summary>
+    public static async Task EnsureAsync(
+        DbContext db, SchemaDefinition definition, SchemaUpgradeOptions options, ILogger? logger = null, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(options);
+        TimeSpan lockTimeout = options.LockTimeout;
         var creator = (IRelationalDatabaseCreator)db.GetService<IDatabaseCreator>();
         if (!await creator.ExistsAsync(cancellationToken).ConfigureAwait(false))
         {
+            if (options.Policy == SchemaPolicy.Never)
+            {
+                // Refuse before CreateAsync: policy Never creates nothing, not even an empty database.
+                throw new SchemaPolicyException(SchemaPolicyException.MissingDatabaseMessage(definition), SchemaState.Missing, null, definition.CurrentVersion);
+            }
+
             try
             {
                 await creator.CreateAsync(cancellationToken).ConfigureAwait(false);
@@ -148,7 +170,7 @@ public static class SchemaBootstrapper
         {
             await using SchemaLock schemaLock = await SchemaLock.AcquireAsync(db, definition.Component, lockTimeout, cancellationToken)
                 .ConfigureAwait(false);
-            await RunAsync(db, definition, logger, cancellationToken).ConfigureAwait(false);
+            await RunAsync(db, definition, options, logger, cancellationToken).ConfigureAwait(false);
             await schemaLock.CompleteAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -157,17 +179,27 @@ public static class SchemaBootstrapper
         }
     }
 
-    private static async Task RunAsync(DbContext db, SchemaDefinition definition, ILogger? logger, CancellationToken ct)
+    private static async Task RunAsync(DbContext db, SchemaDefinition definition, SchemaUpgradeOptions options, ILogger? logger, CancellationToken ct)
     {
+        // The startup policy, judged on the read-only plan under the lock (before anything, including the
+        // version-0 marker of a resumed create, is written): a process that waited sees the winner's work.
+        if (options.Policy != SchemaPolicy.Always)
+        {
+            SchemaPlan plan = await SchemaPlanner.PlanAsync(db, definition, includeScript: false, ct).ConfigureAwait(false);
+            SchemaPolicyException.ThrowIfForbidden(options.Policy, plan);
+        }
+
         // Read only now that the lock is held: a process that waited sees the winner's work.
         int? version = await TryReadVersionAsync(db, definition, ct).ConfigureAwait(false);
         if (version is null)
         {
             version = await CreateOrAdoptAsync(db, definition, logger, ct).ConfigureAwait(false);
+            options.Report(definition, version.Value);
         }
         else if (version == CreatingVersion)
         {
             version = await CreateFreshAsync(db, definition, logger, ct).ConfigureAwait(false);
+            options.Report(definition, version.Value);
         }
 
         if (version > definition.CurrentVersion)
@@ -187,6 +219,7 @@ public static class SchemaBootstrapper
             await WriteVersionAsync(db, step.Version, ct).ConfigureAwait(false);
             logger?.LogInformation("Upgraded {Component} schema to version {Version}", definition.Component, step.Version);
             version = step.Version;
+            options.Report(definition, step.Version);
         }
 
         if (version != definition.CurrentVersion)
