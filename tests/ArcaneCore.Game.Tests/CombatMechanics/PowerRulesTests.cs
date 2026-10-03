@@ -60,7 +60,7 @@ public sealed class PowerRulesTests
         SetMaxRage(player);
 
         var auras = new FakeAuras();
-        var environment = new PowerEnvironment(new CombatOptions(), auras);
+        var environment = new CombatEnvironment(new CombatOptions(), auras);
 
         MapCombat.RewardRage(player, 1000, attacker: false, environment);
         Assert.Equal(108u, Rage(player));   // no aura
@@ -98,7 +98,7 @@ public sealed class PowerRulesTests
         Player player = CombatTestKit.AddPlayer(world, 1, 0, 0, new FakeSession(1), level: 60);
         SetMaxRage(player);
 
-        MapCombat.RewardRage(player, 1000, attacker: true, new PowerEnvironment(new CombatOptions { RateRageIncome = 2.0f }, null));
+        MapCombat.RewardRage(player, 1000, attacker: true, new CombatEnvironment(new CombatOptions { RateRageIncome = 2.0f }, null));
 
         Assert.Equal(650u, Rage(player));
     }
@@ -146,7 +146,7 @@ public sealed class PowerRulesTests
     {
         (WorldRuntime world, _, _, _) = CombatTestKit.CreateWorld();
         using WorldRuntime w = world;
-        PowerEnvironment.Register(world, new PowerEnvironment(new CombatOptions { RateRageLoss = 2.0f }, null));
+        CombatEnvironment.Register(world, new CombatEnvironment(new CombatOptions { RateRageLoss = 2.0f }, null));
         Player player = CombatTestKit.AddPlayer(world, 1, 0, 0, new FakeSession(1));
         player.SetUInt32(UpdateFields.UnitFieldPower1 + RageIndex, 100);
 
@@ -162,7 +162,7 @@ public sealed class PowerRulesTests
         using WorldRuntime w = world;
         var auras = new FakeAuras();
         auras.Types.Add(AuraType.InterruptRegen);   // Bloodrage
-        PowerEnvironment.Register(world, new PowerEnvironment(new CombatOptions(), auras));
+        CombatEnvironment.Register(world, new CombatEnvironment(new CombatOptions(), auras));
         Player player = CombatTestKit.AddPlayer(world, 1, 0, 0, new FakeSession(1));
         player.SetUInt32(UpdateFields.UnitFieldPower1 + RageIndex, 100);
         player.SetUInt32(UpdateFields.UnitFieldStat0 + 4, 30);
@@ -179,7 +179,7 @@ public sealed class PowerRulesTests
     {
         (WorldRuntime world, _, _, _) = CombatTestKit.CreateWorld();
         using WorldRuntime w = world;
-        PowerEnvironment.Register(world, new PowerEnvironment(new CombatOptions(), new FakeAuras { RegenFactor = 1.5f }));
+        CombatEnvironment.Register(world, new CombatEnvironment(new CombatOptions(), new FakeAuras { RegenFactor = 1.5f }));
         Player player = CombatTestKit.AddPlayer(world, 1, 0, 0, new FakeSession(1));
         player.SetUInt32(UpdateFields.UnitFieldPower1 + RageIndex, 100);
 
@@ -193,7 +193,7 @@ public sealed class PowerRulesTests
     {
         (WorldRuntime world, _, _, _) = CombatTestKit.CreateWorld();
         using WorldRuntime w = world;
-        PowerEnvironment.Register(world, new PowerEnvironment(new CombatOptions { RateEnergy = 2.0f }, null));
+        CombatEnvironment.Register(world, new CombatEnvironment(new CombatOptions { RateEnergy = 2.0f }, null));
         Player player = CombatTestKit.AddPlayer(world, 1, 0, 0, new FakeSession(1));
         player.SetUInt32(UpdateFields.UnitFieldMaxpower1 + EnergyIndex, 100);
         player.SetUInt32(UpdateFields.UnitFieldPower1 + EnergyIndex, 0);

@@ -126,12 +126,28 @@ CMSG_TOGGLE_PVP: an optional u8 state (gtker `pvp/cmsg_toggle_pvp.wowm`, vmangos
 - Turning it off lets a 5-minute timer run out, paused during PvP combat (`Player::UpdatePvPFlagTimer`).
 - Attacking a flagged player flags the attacker (`TogglePlayerPvPFlagOnAttackVictim`).
 
+### Melee spells and the swing (warrior-mechanics S08b)
+The swing reaches the spell system through `IMeleeSpellHooks` (`CombatEnvironment.MeleeSpells`, installed by the
+world daemon's `MeleeSpellFeature` as `SpellSystemMeleeHooks`; without it nothing is cast from a swing):
+
+- **No swing while casting.** `MapCombat.AttackerStateUpdate` returns without a swing while the unit has a generic
+  cast or a channel in progress (vmangos `Unit::AttackerStateUpdate`, `Unit.cpp:2239-2240`). The attack timer still
+  restarts, so the swing is lost, not delayed. `Combat:MeleeCastingBlocksSwing` (default true, retail) turns it off.
+- **Queued next-swing spell.** The main-hand swing casts the spell queued in `UnitSpellState.MeleeCast` at the victim
+  instead of the white hit (`Unit.cpp:2249-2257`): power is taken, effects applied, SMSG_SPELL_GO sent. A cast that fails
+  (no rage left) drops the spell and the white hit is still lost, as vmangos returns when the slot is empty. The
+  off-hand never fires it; an out-of-range swing waits.
+- **Attack stop.** `AttackStop` (also a target switch and `CombatStop`) interrupts the queued spell
+  (`Unit.cpp:4604`).
+- **One environment per world.** `CombatEnvironment` carries the options and the links; `PowerFeature`,
+  `MeleeSpellFeature` and `StanceFeature` share it (`CombatEnvironments.GetOrCreate` binds `Combat` once).
+
 ### Power economy (warrior-mechanics S03)
 The rates live in `CombatOptions` (config section `Combat`: `RateRageIncome`, `RateRageLoss`, `RateEnergy`,
 `RateMana`; defaults 1 = retail, `mangosd.conf.dist.in:2793-2799`). `Rate.Mana` and `Rate.Rage.Loss` fall back to 1 when
 negative (`World::setConfigPos`, `World.cpp:2959-2967`); the other two are not validated, like vmangos. The world
-daemon's `PowerFeature` binds them and registers a `PowerEnvironment` (options plus an aura source backed by the spell
-system) for the world; worlds without it use `PowerEnvironment.Default`.
+daemon's `PowerFeature` binds them and registers a `CombatEnvironment` (options plus an aura source backed by the spell
+system) for the world; worlds without it use `CombatEnvironment.Default`.
 
 - **Refund.** `PowerRefundObserver` (a spell cast observer) returns `round(cost x 0.82)` of the power of an
   `EX_DISCOUNT_POWER_ON_MISS` ability: energy on miss, dodge, parry or immune, rage on dodge or parry only

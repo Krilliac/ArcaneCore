@@ -159,8 +159,10 @@ the melee slot in `SpellSystem.NextSwing.cs`.
   (`SpellHandler.cpp:329-330`); `CancelQueuedMeleeSpell` is the same for the combat area (target lost, `Unit.cpp:4604`).
 - `ISpellChainRangeProvider` (`RegisterChainRangeProvider`): replaces the fixed chain jump distance
   (`SpellConstants.ChainJumpRadius`); the melee-chain rule (`Spell.cpp:2256-2265`) is its first consumer (later slice).
-- Limits: no swing loop calls `CastQueuedMeleeSpell` yet (the melee slice does); the queued spell is not cancelled
-  automatically when the unit stops attacking; the SMSG_ATTACKERSTATEUPDATE a swing spell sends is the melee slice's.
+- The melee swing calls `CastQueuedMeleeSpell` and `CancelQueuedMeleeSpell` through `IMeleeSpellHooks` (see combat.md,
+  "Melee spells and the swing").
+- Limit: the SMSG_ATTACKERSTATEUPDATE a swing spell sends (spell id, no-action flag) is not implemented; the spell's
+  damage goes through SMSG_SPELLNONMELEEDAMAGELOG only.
 
 ## Warrior stances (warrior-mechanics S06)
 

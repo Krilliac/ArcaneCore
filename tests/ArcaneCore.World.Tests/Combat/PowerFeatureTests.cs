@@ -41,7 +41,7 @@ public sealed class PowerFeatureTests
 
         new PowerFeature(sp, NullLogger<PowerFeature>.Instance).Attach(world);
 
-        PowerEnvironment environment = PowerEnvironment.For(world);
+        CombatEnvironment environment = CombatEnvironment.For(world);
         Assert.Equal(1.0f, environment.Options.RateRageIncome);
         Assert.Equal(1.0f, environment.Options.RateRageLoss);
         Assert.Equal(1.0f, environment.Options.RateEnergy);
@@ -62,7 +62,7 @@ public sealed class PowerFeatureTests
 
         new PowerFeature(sp, NullLogger<PowerFeature>.Instance).Attach(world);
 
-        CombatOptions options = PowerEnvironment.For(world).Options;
+        CombatOptions options = CombatEnvironment.For(world).Options;
         Assert.Equal(2.5f, options.RateRageIncome);
         Assert.Equal(1.0f, options.RateRageLoss);   // negative: vmangos setConfigPos falls back to the default
         Assert.Equal(3.0f, options.RateEnergy);
@@ -75,6 +75,6 @@ public sealed class PowerFeatureTests
         await using ServiceProvider sp = Services();
         using WorldRuntime world = NewWorld(sp);
 
-        Assert.Same(PowerEnvironment.Default, PowerEnvironment.For(world));
+        Assert.Same(CombatEnvironment.Default, CombatEnvironment.For(world));
     }
 }

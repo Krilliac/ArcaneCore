@@ -3,8 +3,8 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.World.Combat;
 using ArcaneCore.World.Features;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -18,14 +18,14 @@ namespace ArcaneCore.World.Spells;
 /// </summary>
 public sealed class StanceFeature(IServiceProvider services, ILogger<StanceFeature> logger) : IWorldFeature
 {
-    public CombatOptions Options { get; } = new();
+    public CombatOptions Options { get; private set; } = new();
 
     public ShapeshiftService? Service { get; private set; }
 
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
-        services.GetService<IConfiguration>()?.GetSection(CombatOptions.SectionName).Bind(Options);
+        Options = CombatEnvironments.GetOrCreate(services, world, logger).Options;
 
         ShapeshiftFormCatalog forms;
         if (string.IsNullOrWhiteSpace(Options.ShapeshiftFormDbcPath))

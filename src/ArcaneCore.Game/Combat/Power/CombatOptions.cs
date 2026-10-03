@@ -34,6 +34,13 @@ public sealed class CombatOptions
     /// </summary>
     public bool StanceShiftKeepsSelfBuffs { get; set; }
 
+    /// <summary>
+    /// Whether a unit casting a non-melee spell loses its melee swing (vmangos Unit::AttackerStateUpdate, Unit.cpp:2239-2240:
+    /// <c>if (!extra &amp;&amp; IsNonMeleeSpellCasted(false)) return</c>). Default true, the retail behaviour; the swing timer
+    /// still restarts, so the swing is lost, not delayed.
+    /// </summary>
+    public bool MeleeCastingBlocksSwing { get; set; } = true;
+
     /// <summary>Path of the client's SpellShapeshiftForm.dbc (build 5875). Empty = only the three warrior stances are known.</summary>
     public string ShapeshiftFormDbcPath { get; set; } = string.Empty;
 
@@ -79,27 +86,96 @@ public interface IPowerAuraSource
     float GetPowerRegenFactor(Unit unit, PowerType power);
 }
 
-/// <summary>The options and aura source of one world, registered by the world daemon before the world thread starts.</summary>
-public sealed class PowerEnvironment(CombatOptions options, IPowerAuraSource? auras)
+/// <summary>
+/// The combat settings and the links from combat down to the spell system for one world. The world daemon creates it
+/// before the world thread starts (<see cref="GetOrCreate"/>) and its features fill in the links they own;
+/// worlds without one use <see cref="Default"/> (retail rates, no links).
+/// </summary>
+public sealed class CombatEnvironment
 {
-    private static readonly ConditionalWeakTable<WorldRuntime, PowerEnvironment> s_registered = new();
+    private static readonly ConditionalWeakTable<WorldRuntime, CombatEnvironment> s_registered = new();
+    private readonly bool _frozen;
+    private IPowerAuraSource? _auras;
+    private IMeleeSpellHooks? _meleeSpells;
 
-    /// <summary>Retail rates, no aura source.</summary>
-    public static PowerEnvironment Default { get; } = new(new CombatOptions(), null);
+    public CombatEnvironment(CombatOptions options, IPowerAuraSource? auras = null, IMeleeSpellHooks? meleeSpells = null)
+        : this(options, auras, meleeSpells, frozen: false)
+    {
+    }
 
-    public CombatOptions Options { get; } = options ?? throw new ArgumentNullException(nameof(options));
+    private CombatEnvironment(CombatOptions options, IPowerAuraSource? auras, IMeleeSpellHooks? meleeSpells, bool frozen)
+    {
+        Options = options ?? throw new ArgumentNullException(nameof(options));
+        _auras = auras;
+        _meleeSpells = meleeSpells;
+        _frozen = frozen;
+    }
 
-    public IPowerAuraSource? Auras { get; } = auras;
+    /// <summary>Retail rates, no links. Shared and read-only.</summary>
+    public static CombatEnvironment Default { get; } = new(new CombatOptions(), null, null, frozen: true);
 
-    public static void Register(WorldRuntime world, PowerEnvironment environment)
+    public CombatOptions Options { get; }
+
+    /// <summary>Aura queries for the power economy (set by the power feature).</summary>
+    public IPowerAuraSource? Auras
+    {
+        get => _auras;
+        set
+        {
+            ThrowIfFrozen();
+            _auras = value;
+        }
+    }
+
+    /// <summary>The melee swing's link to casts (set by the melee spell feature).</summary>
+    public IMeleeSpellHooks? MeleeSpells
+    {
+        get => _meleeSpells;
+        set
+        {
+            ThrowIfFrozen();
+            _meleeSpells = value;
+        }
+    }
+
+    public static void Register(WorldRuntime world, CombatEnvironment environment)
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(environment);
+        if (environment._frozen)
+        {
+            throw new ArgumentException("the default environment cannot be registered", nameof(environment));
+        }
+
         s_registered.AddOrUpdate(world, environment);
     }
 
-    public static PowerEnvironment For(WorldRuntime world)
-        => s_registered.TryGetValue(world, out PowerEnvironment? environment) ? environment : Default;
+    /// <summary>The environment registered for <paramref name="world"/>, else <see cref="Default"/>.</summary>
+    public static CombatEnvironment For(WorldRuntime world)
+        => s_registered.TryGetValue(world, out CombatEnvironment? environment) ? environment : Default;
+
+    /// <summary>The registered environment of <paramref name="world"/>, creating and registering one from <paramref name="options"/> first.</summary>
+    public static CombatEnvironment GetOrCreate(WorldRuntime world, Func<CombatOptions> options)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(options);
+        if (s_registered.TryGetValue(world, out CombatEnvironment? existing))
+        {
+            return existing;
+        }
+
+        var created = new CombatEnvironment(options());
+        s_registered.Add(world, created);
+        return created;
+    }
+
+    private void ThrowIfFrozen()
+    {
+        if (_frozen)
+        {
+            throw new InvalidOperationException("the default combat environment is read-only; register one for the world");
+        }
+    }
 
     internal bool HasAura(Unit unit, uint spellId, int effectIndex) => Auras?.HasAura(unit, spellId, effectIndex) ?? false;
 

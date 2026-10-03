@@ -108,6 +108,7 @@ public sealed partial class MapCombat
         c.Victim = null;
         c.IsMeleeAttacking = false;
         attacker.Target = default;
+        CombatEnvironment.For(_world).MeleeSpells?.OnMeleeAttackStopped(attacker);
 
         CombatPackets.SendToSet(attacker, WorldOpcode.SmsgAttackstop,
             CombatPackets.AttackStop(attacker.Guid, victim.Guid, attacker.Health == 0));
@@ -337,7 +338,10 @@ public sealed partial class MapCombat
     /// <summary>
     /// One white swing (vmangos Unit::AttackerStateUpdate): roll and calculate the damage,
     /// send SMSG_ATTACKERSTATEUPDATE to the set (before the damage, so the client can still
-    /// resolve a victim that dies), deal it, then the victim's AI reaction.
+    /// resolve a victim that dies), deal it, then the victim's AI reaction. A unit that is casting a
+    /// non-melee spell does not swing (<see cref="CombatOptions.MeleeCastingBlocksSwing"/>), and a queued
+    /// next-swing spell is cast by the main-hand swing instead of the white hit
+    /// (<see cref="IMeleeSpellHooks"/>, Unit.cpp:2239-2257); both return null.
     /// </summary>
     public MeleeDamageInfo? AttackerStateUpdate(Unit attacker, Unit victim, WeaponAttackType attackType)
     {
@@ -345,6 +349,20 @@ public sealed partial class MapCombat
             || !IsAliveState(victim) || attackType == WeaponAttackType.RangedAttack)
         {
             return null;
+        }
+
+        CombatEnvironment environment = CombatEnvironment.For(_world);
+        if (environment.MeleeSpells is { } spells)
+        {
+            if (environment.Options.MeleeCastingBlocksSwing && spells.IsNonMeleeSpellCasted(attacker))
+            {
+                return null;
+            }
+
+            if (attackType == WeaponAttackType.BaseAttack && spells.TryCastQueuedSwingSpell(attacker, victim))
+            {
+                return null;
+            }
         }
 
         MeleeDamageInfo info = CalculateMeleeDamage(attacker, victim, attackType);
@@ -613,7 +631,7 @@ public sealed partial class MapCombat
             if (outcome is MeleeHitOutcome.Parry or MeleeHitOutcome.Dodge
                 && cleanDamage > 0 && direct && meleeDamage && enterCombat && attacker is Player { PowerType: PowerType.Rage } ragePlayer)
             {
-                RewardRage(ragePlayer, (uint)(cleanDamage * 0.75f), attacker: true, PowerEnvironment.For(_world));
+                RewardRage(ragePlayer, (uint)(cleanDamage * 0.75f), attacker: true, CombatEnvironment.For(_world));
             }
 
             if (enterCombat)
@@ -640,7 +658,7 @@ public sealed partial class MapCombat
 
         if (direct && meleeDamage && enterCombat && attacker is Player { PowerType: PowerType.Rage } rager)
         {
-            RewardRage(rager, damage, attacker: true, PowerEnvironment.For(_world));
+            RewardRage(rager, damage, attacker: true, CombatEnvironment.For(_world));
         }
 
         if (victim.Health <= damage)
@@ -668,7 +686,7 @@ public sealed partial class MapCombat
         }
         else if (enterCombat && victim.PowerType == PowerType.Rage)
         {
-            RewardRage((Player)victim, damage, attacker: false, PowerEnvironment.For(_world));
+            RewardRage((Player)victim, damage, attacker: false, CombatEnvironment.For(_world));
         }
 
         DamageDealt?.Invoke(attacker, victim, damage, direct, meleeDamage);
@@ -689,15 +707,15 @@ public sealed partial class MapCombat
     /// vmangos Player::RewardRage (Kalgan's formula): conversion = 0.0091107836·L² +
     /// 3.225598133·L + 4.2652911; dealing earns damage/conversion × 7.5, taking ×2.5; the power
     /// field holds rage × 10. This overload uses the retail rates and knows no auras; the world's
-    /// rates and Berserker Rage come with <see cref="PowerEnvironment"/>.
+    /// rates and Berserker Rage come with <see cref="CombatEnvironment"/>.
     /// </summary>
-    public static void RewardRage(Player player, uint damage, bool attacker) => RewardRage(player, damage, attacker, PowerEnvironment.Default);
+    public static void RewardRage(Player player, uint damage, bool attacker) => RewardRage(player, damage, attacker, CombatEnvironment.Default);
 
     /// <summary>
     /// <see cref="RewardRage(Player, uint, bool)"/> with the world's power environment: Rate.Rage.Income, and
     /// Berserker Rage (18499, effect 0) multiplies rage taken by 1.3 (<see cref="PowerRules.RageFromDamage"/>).
     /// </summary>
-    public static void RewardRage(Player player, uint damage, bool attacker, PowerEnvironment power)
+    public static void RewardRage(Player player, uint damage, bool attacker, CombatEnvironment power)
     {
         ArgumentNullException.ThrowIfNull(power);
         if (IsQuestSettlementPending(player))

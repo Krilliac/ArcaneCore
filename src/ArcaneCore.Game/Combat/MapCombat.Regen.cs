@@ -24,7 +24,7 @@ public sealed partial class MapCombat
             return;
         }
 
-        PowerEnvironment power = PowerEnvironment.For(_world);
+        CombatEnvironment power = CombatEnvironment.For(_world);
         if (!c.IsInCombat)
         {
             RegenerateHealth(player);
@@ -71,7 +71,7 @@ public sealed partial class MapCombat
     /// vmangos Player::Regenerate: mana GetRegenMPPerSpirit × 2 per tick (0 within five seconds
     /// of spending mana), rage −20 (2 rage) per tick, energy +20.
     /// </summary>
-    private static void RegeneratePower(Player player, PowerType power, PowerEnvironment environment)
+    private static void RegeneratePower(Player player, PowerType power, CombatEnvironment environment)
     {
         uint cur = GetPower(player, power);
         uint max = GetMaxPower(player, power);
