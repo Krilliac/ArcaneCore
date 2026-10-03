@@ -253,7 +253,7 @@ public sealed class HotCodeRefresh
             ((IOpcodeHandlerGroup)Create(type)).Register(fresh);
         }
 
-        OpcodeTable merged = _opcodes.WithNewHandlersFrom(fresh, out IReadOnlyList<WorldOpcode> newOpcodes);
+        _ = _opcodes.WithNewHandlersFrom(fresh, out IReadOnlyList<WorldOpcode> newOpcodes);
 
         // Chat commands: roots whose name the live table does not have, checked as TryAdd will check them.
         IReadOnlyList<ChatCommand> liveRoots = _commands.Current.Roots;
@@ -272,7 +272,7 @@ public sealed class HotCodeRefresh
         // Default map updaters: rescan (an invalid marked type throws here).
         HashSet<Type> liveUpdaters = [.. _catalog.CurrentMapUpdaterTypes()];
         MapUpdaterScan scan = _catalog.ScanMapUpdaters();
-        return new Candidate(merged, newOpcodes, newRoots, scan, scan.Types.Where(t => !liveUpdaters.Contains(t)).ToArray());
+        return new Candidate(fresh, newOpcodes, newRoots, scan, scan.Types.Where(t => !liveUpdaters.Contains(t)).ToArray());
     }
 
     private static object Create(Type type)
@@ -311,12 +311,15 @@ public sealed class HotCodeRefresh
     private string? Apply(Candidate candidate)
     {
         OpcodeTable? previous = null;
+        bool rootsAdded = false;
         try
         {
             if (candidate.NewOpcodes.Count > 0)
             {
+                // Merge into the table as it is NOW, not as it was when the scan ran: something else
+                // (a module load) may have changed the live table in between.
                 previous = _opcodes.Copy();
-                _opcodes.Replace(candidate.Opcodes);
+                _opcodes.Replace(_opcodes.WithNewHandlersFrom(candidate.Fresh, out _));
             }
 
             if (candidate.NewRoots.Count > 0)
@@ -326,6 +329,8 @@ public sealed class HotCodeRefresh
                 {
                     throw new InvalidOperationException(added.Error);
                 }
+
+                rootsAdded = true;
             }
 
             if (candidate.NewUpdaters.Count > 0)
@@ -342,12 +347,17 @@ public sealed class HotCodeRefresh
                 _opcodes.Replace(previous);
             }
 
+            if (rootsAdded)
+            {
+                _commands.TryReplace([.. candidate.NewRoots.Select(c => c.Name)], []);
+            }
+
             return $"commit failed and was rolled back: {ex.Message}";
         }
     }
 
     private sealed record Candidate(
-        OpcodeTable Opcodes,
+        OpcodeTable Fresh,
         IReadOnlyList<WorldOpcode> NewOpcodes,
         IReadOnlyList<ChatCommand> NewRoots,
         MapUpdaterScan Updaters,

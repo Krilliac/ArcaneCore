@@ -99,6 +99,37 @@ public sealed class OpcodeTable
         return new OpcodeTable { _handlers = merged };
     }
 
+    /// <summary>The opcodes this table has a handler for (a snapshot).</summary>
+    public IReadOnlyCollection<WorldOpcode> Opcodes => [.. _handlers.Keys];
+
+    /// <summary>
+    /// A new, unpublished table equal to this one without the handlers of <paramref name="remove"/>
+    /// and with all of <paramref name="add"/>'s handlers (a hot-loaded module replacing its previous
+    /// version, or going away). Null with an <paramref name="error"/> when an added opcode is
+    /// already handled by a handler that stays: a module can never replace a handler it does not own.
+    /// This table is not modified.
+    /// </summary>
+    public OpcodeTable? TrySwap(IReadOnlyCollection<WorldOpcode> remove, OpcodeTable add, out string? error)
+    {
+        var merged = new Dictionary<WorldOpcode, OpcodeHandler>(_handlers);
+        foreach (WorldOpcode opcode in remove)
+        {
+            merged.Remove(opcode);
+        }
+
+        foreach ((WorldOpcode opcode, OpcodeHandler handler) in add._handlers)
+        {
+            if (!merged.TryAdd(opcode, handler))
+            {
+                error = $"{WorldOpcodeNames.GetName(opcode)} already has a handler that this module does not own";
+                return null;
+            }
+        }
+
+        error = null;
+        return new OpcodeTable { _handlers = merged };
+    }
+
     /// <summary>An unpublished copy of this table (the state to restore if a swap has to be undone).</summary>
     public OpcodeTable Copy() => new() { _handlers = new Dictionary<WorldOpcode, OpcodeHandler>(_handlers) };
 

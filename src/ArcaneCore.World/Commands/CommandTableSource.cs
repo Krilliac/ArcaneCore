@@ -56,6 +56,28 @@ public sealed class CommandTableSource(CommandTable initial)
     }
 
     /// <summary>
+    /// Remove the roots named <paramref name="remove"/> and append <paramref name="add"/>, all or
+    /// nothing, as one swap (a hot-loaded module replacing its previous version, or going away; a
+    /// failed refresh undoing its own append). The additions are validated against the roots that
+    /// remain. Names that are not in the table are ignored.
+    /// </summary>
+    public CommandAddResult TryReplace(IReadOnlyCollection<string> remove, IReadOnlyList<ChatCommand> add)
+    {
+        lock (_gate)
+        {
+            ChatCommand[] remaining = [.. _current.Roots.Where(c => !remove.Contains(c.Name, StringComparer.OrdinalIgnoreCase))];
+            string? error = Validate(remaining, add);
+            if (error is not null)
+            {
+                return new CommandAddResult(0, error);
+            }
+
+            _current = new CommandTable([.. remaining, .. add]);
+            return new CommandAddResult(add.Count, null);
+        }
+    }
+
+    /// <summary>
     /// Why appending <paramref name="added"/> to <paramref name="existing"/> would be unsafe, or
     /// null. Checked against every existing root whatever its security level, because a root
     /// hidden from one caller still changes what another caller's abbreviation resolves to.

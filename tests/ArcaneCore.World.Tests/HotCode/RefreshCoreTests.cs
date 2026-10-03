@@ -84,6 +84,8 @@ internal sealed class TestCatalog : IHotCodeCatalog
 
     public Exception? ScanFailure { get; set; }
 
+    public Exception? CommitFailure { get; set; }
+
     public IReadOnlyList<Type> OpcodeGroupTypes() => [.. OpcodeGroups];
 
     public IReadOnlyList<Type> CommandGroupTypes() => [.. CommandGroups];
@@ -101,6 +103,11 @@ internal sealed class TestCatalog : IHotCodeCatalog
         return new MapUpdaterScan(scanned, () =>
         {
             CommitThreads.Add(Environment.CurrentManagedThreadId);
+            if (CommitFailure is not null)
+            {
+                throw CommitFailure;
+            }
+
             Type[] added = [.. scanned.Except(LiveUpdaters)];
             LiveUpdaters.Clear();
             LiveUpdaters.AddRange(scanned);
