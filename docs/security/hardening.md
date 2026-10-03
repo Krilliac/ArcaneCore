@@ -47,8 +47,10 @@ Not delivered here: session-key age (see below).
 
 `Kick()` only cancelled the read side, so `RunAsync` awaited a writer parked in `WriteAsync`
 against a client with a zero TCP window; the socket, DI scope and up to 8 MiB of frames
-leaked. Writes now take an abort token; after `WorldSessionOptions.WriterDrainGrace` (5 s)
-the write is cancelled and the stream disposed. `StalledWriterTests`.
+leaked. Writes now take an abort token; after `WorldSessionOptions.WriterDrainGrace`
+(`World:WriterDrainGrace`) the write is cancelled and the stream disposed. The default is
+`00:00:00`, which waits forever as retail does; an internet-facing operator should set a bound,
+for example `00:00:05`. `StalledWriterTests`.
 
 ### Logon limits and input validation (F2 partial, F12)
 
@@ -63,8 +65,9 @@ the write is cancelled and the stream disposed. `StalledWriterTests`.
 * Client text goes through `LogSafe.Escape` before logging (CR/LF/ESC and format characters
   escaped, 64-character cap) to stop log forging.
 * `Realm/appsettings.json` ships `AutocreateAccounts: false` (was `true`). **Deviation from the
-  WCell convenience, not from retail** (vmangos has no autocreate). README.md:104 and
-  docs/M1_ACCEPTANCE.md:31 still describe enabling it; the integrator should add a note.
+  WCell convenience, not from retail** (vmangos has no autocreate). README.md and
+  docs/M1_ACCEPTANCE.md describe enabling it as an opt-in dev convenience; accounts are normally
+  created with `arcane-account create`.
 
 ### Connection admission and accept-loop resilience (F7, listener half)
 
@@ -92,9 +95,22 @@ elevation must be finite, because they are stored and relayed to every observer 
 makes a refused join answer the existing `INVALID_NAME` notify and create no channel. Opt-in
 hardening: vmangos has no cap (`ChannelMgr.cpp:52-69`).
 
+### Pre-auth deadline and inbound queue bounds
+
+`WorldSessionOptions.PreAuthTimeout` (`World:PreAuthTimeout`, default 10 s) closes a world
+connection that has not sent a valid `CMSG_AUTH_SESSION` in time; this is the retail rule
+(vmangos `Network.TimeoutSecsIfNoAuth = 10`, `WorldSocket.cpp:621-628`), and `00:00:00` disables
+it. `MaxQueuedWorldPackets` (8192) and `MaxQueuedWorldBytes` (8 MiB) bound what one session may
+have queued for the world thread and disconnect it past either (0 disables). vmangos queues
+without a bound (`WorldSession.cpp:307-332`), so these two are hardening that is **on by
+default**. Tests: `CodexNetAuthWorldTests`, `InboundQueueCapTests`.
+
 ## Configuration summary
 
-Every non-retail behaviour is opt-in and defaults to retail.
+The hardening switches below default to retail behaviour (a value of 0, off or unlimited), except
+the two inbound-queue bounds, which are on by default because vmangos has no equivalent.
+The full list of every key and its default is the generated
+[configuration reference](../reference/configuration.md).
 
 | Key | Default | Source |
 |---|---|---|
@@ -105,6 +121,8 @@ Every non-retail behaviour is opt-in and defaults to retail.
 | `World:MaxConnections` / `MaxConnectionsPerIp` | 0 / 0 (unlimited) | opt-in hardening |
 | `Auth:AutocreateAccounts` | false (also shipped) | retail has no autocreate |
 | `World:WriterDrainGrace` | 00:00:00 (wait forever) | opt-in hardening, for example `00:00:05` |
+| `World:PreAuthTimeout` | 00:00:10 | vmangos retail (`Network.TimeoutSecsIfNoAuth`) |
+| `World:MaxQueuedWorldPackets` / `MaxQueuedWorldBytes` | 8192 / 8388608 (on by default) | hardening, no vmangos bound |
 | `World:StrictMovementFiniteness` | false | opt-in hardening |
 | `World:Social:MaxJoinedChannels` | 0 (unlimited) | opt-in hardening |
 
@@ -113,10 +131,10 @@ Every non-retail behaviour is opt-in and defaults to retail.
 * The wrong-password throttle (vmangos `LoginThrottle.cpp`, `WrongPass.MaxAttempts = 10` / 60 s). The ban tables,
   IP bans, expiry, reasons, `IBanStore` and `AccountTool` ban verbs were delivered by the live-ban lane
   (`docs/security/live-bans.md`).
-* World session-key age (vmangos `WorldSocket.cpp:287-290`), pre-auth deadline
-  (`Network.TimeoutSecsIfNoAuth = 10`), char-screen idle kick (900 s), overspeed-ping kick,
-  inbound world-queue cap, malformed-packet strike policy, `AddonInfo` response cap (F11),
-  opcode >= 828 rejection.
+* World session-key age (vmangos `WorldSocket.cpp:287-290`), char-screen idle kick (900 s),
+  overspeed-ping kick, malformed-packet strike policy, `AddonInfo` response cap (F11),
+  opcode >= 828 rejection. (The pre-auth deadline and the inbound world-queue bounds are delivered:
+  see "Pre-auth deadline and inbound queue bounds" above.)
 * `IPacketGate`, generated per-opcode payload bounds, and the vmangos antiflood port.
   The antiflood must run at the drain point with per-pass counters; the update cadence has not
   been verified, so a kick default is not safe to ship yet.

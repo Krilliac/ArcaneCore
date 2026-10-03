@@ -8,6 +8,9 @@ charter and prime directives.
 > generated protocol tables, persistence, multi-engine schema management; M6: logout,
 > chat, /who, account settings, action bars, GM commands); awaiting real-client
 > acceptance. Scope and order of the next milestones: [`docs/ROADMAP.md`](docs/ROADMAP.md).
+> Everything beyond M6 below is likewise verified by automated tests only. The documentation
+> index is [`docs/README.md`](docs/README.md); every configuration key and default is in the
+> generated [configuration reference](docs/reference/configuration.md).
 
 This integration candidate also combines creatures, grids/terrain/teleports,
 items, spells, social systems, and the partial quests/NPC draft. Exact branch
@@ -107,7 +110,7 @@ dotnet test  ArcaneCore.slnx -c Release
 1. Provision a MariaDB/MySQL/PostgreSQL database and set the connection string in
    `src/ArcaneCore.Realm/appsettings.json` (`Database` section; `Provider` is
    `MariaDb`, `MySql` or `PostgreSql`).
-2. Create a test account (or enable `Auth:AutocreateAccounts`):
+2. Create a test account (the shipped `Auth:AutocreateAccounts` is `false`; see below):
    ```bash
    dotnet run --project tools/ArcaneCore.AccountTool -- create MYUSER
    # prompts (no echo); or pipe it: echo ... | dotnet run ... -- create MYUSER --password-stdin
@@ -123,10 +126,12 @@ dotnet test  ArcaneCore.slnx -c Release
 
 ### Auto-create-on-login (WCell convention)
 
-With `Auth:AutocreateAccounts` enabled, an unknown account is created on the first
+`Auth:AutocreateAccounts` is **off** in the shipped `src/ArcaneCore.Realm/appsettings.json`,
+and it is not retail behaviour (vmangos has no auto-create); it is a development convenience
+you must switch on yourself. With it enabled, an unknown account is created on the first
 login **when the password equals the username** — the only password the server can
 confirm for a brand-new account under SRP6. Change it afterward with
-`arcane-account set-password`.
+`arcane-account set-password`. Never enable it on an internet-facing realm.
 
 ## Running the world daemon
 

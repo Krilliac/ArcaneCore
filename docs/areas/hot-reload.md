@@ -96,8 +96,8 @@ into a throwaway configuration (the live root is never reloaded: a broken file w
 on the world thread, so every reader sees the new value on its next read.
 - Live: `UpdateCompressionThreshold`, `AutosaveIntervalMs`, `CharactersPerRealm`, `Motd`,
   `ListenRange*`, `AllowTwoSideChat`, `AllowTwoSideWhoList`, `LogoutDelayMs`, `InstantLogoutSecurity`,
-  `GmLevelInWhoList`, `PlayerCommands`, `Maps:GridUnload`, `Maps:GridCleanUpDelayMs`,
-  `Maps:GridActivationDistance` (`GridContainer` reads the shared `MapOptions` at each use; grids
+  `GmLevelInWhoList`, `PlayerCommands`, `World:Maps:GridUnload`, `World:Maps:GridCleanUpDelayMs`,
+  `World:Maps:GridActivationDistance` (`GridContainer` reads the shared `MapOptions` at each use; grids
   already running keep their timer until it resets, like `MapManager::SetGridCleanUpDelay`).
 - Live, social rules (`World:Social:*`, a configuration surface that did not exist before: `SocialOptions`
   was never bound from configuration; `SocialFeature` now binds it at attach and the reload keeps it
@@ -108,7 +108,7 @@ on the world thread, so every reader sees the new value on its next read.
   already lived (`...Interaction.Chat` :610, `...WhoList` :617). vmangos' other `AllowTwoSide.*` keys
   (Accounts, Trade, Auction, Mail) have no ArcaneCore option and are not added here.
 - Restart-only, reported as `<key> option can't be changed at reload, using current value (<v>).`
-  (vmangos `configNoReload`, World.cpp:3044-3055): `TickIntervalMs`, `Maps:DataDirectory`, `Port`,
+  (vmangos `configNoReload`, World.cpp:3044-3055): `TickIntervalMs`, `World:Maps:DataDirectory`, `Port`,
   `BindAddress` (the last two only when `IOptions<WorldOptions>` is registered, as in the daemon).
 - A key removed from the file returns to its default (vmangos `GetIntDefault`).
 - An unreadable or missing source or a value of the wrong type rejects the whole reload. A negative

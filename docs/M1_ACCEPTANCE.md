@@ -28,7 +28,8 @@ correctly does not complete — that is expected at M1.
    seeded) pointing `address` at the (future) world daemon, e.g. `127.0.0.1:8085`.
 3. One of:
    - **Pre-created account** via `ArcaneCore.AccountTool` (username + password), or
-   - **Auto-create enabled** (`Auth:AutocreateAccounts = true`).
+   - **Auto-create enabled** (`Auth:AutocreateAccounts = true`). It is `false` in the shipped
+     Realm configuration and not retail behaviour (a development convenience), so set it yourself.
 4. The client's `realmlist.wtf` contains `set realmlist 127.0.0.1` (or the host
    running the daemon).
 
