@@ -306,7 +306,9 @@ function New-WindowScript([string]$label, [string]$project, [string[]]$extraEnv,
 
 $worldEnv = @(
     "`$env:World__HotCode__Enabled = 'true'",
-    "`$env:World__HotCode__AuditLogPath = '$run\logs\hotcode-audit.log'"
+    "`$env:World__HotCode__AuditLogPath = '$run\logs\hotcode-audit.log'",
+    # Content reload (.reload spell_template, .reload all ...): off by default in the shipped config, a dev server turns it on.
+    "`$env:HotReload__Commands = 'true'"
 )
 if (-not $NoModules) {
     $worldEnv += @(
