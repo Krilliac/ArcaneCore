@@ -97,14 +97,14 @@ public sealed partial class PlayerInventory
         set => Player?.SetByte(UpdateFields.PlayerBytes2, 2, value);
     }
 
-    /// <summary>Every item in the player's own slots, then every item inside bags.</summary>
+    /// <summary>Every item in the player's own slots (buyback excluded, as vmangos GetItemByGuid/GetItemCount), then every item inside bags.</summary>
     public IEnumerable<Item> AllItems
     {
         get
         {
-            foreach (Item? item in _items)
+            for (int slot = 0; slot < _items.Length; slot++)
             {
-                if (item is not null)
+                if (_items[slot] is { } item && !IsBuybackSlot((byte)slot))
                 {
                     yield return item;
                 }
@@ -244,7 +244,8 @@ public sealed partial class PlayerInventory
         var rows = new List<InventoryItemData>();
         for (int slot = 0; slot < _items.Length; slot++)
         {
-            if (_items[slot] is { } item)
+            // Buyback items are never stored (vmangos _SaveInventory deletes them).
+            if (_items[slot] is { } item && !IsBuybackSlot((byte)slot))
             {
                 rows.Add(new InventoryItemData(0, (byte)slot, item.ToData()));
             }
