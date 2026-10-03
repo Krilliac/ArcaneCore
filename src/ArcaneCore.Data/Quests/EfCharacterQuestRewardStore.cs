@@ -67,14 +67,38 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
                 .FirstOrDefaultAsync(r => r.CharacterId == id && r.Quest == request.ExpectedQuest.Quest, cancellationToken)
                 .ConfigureAwait(false);
             bool repeatable = request.RewardedQuest.Status == 0;
-            if (row?.Rewarded == true && (!repeatable || row.Status != 1))
+            if (request.InsertIfMissing)
             {
-                return QuestRewardCommitResult.AlreadyRewarded;
-            }
+                // Autocomplete turn-in: no journal row is required (see CharacterQuestRewardRequest.InsertIfMissing).
+                if (row?.Rewarded == true && !repeatable)
+                {
+                    return QuestRewardCommitResult.AlreadyRewarded;
+                }
 
-            if (row is null || ToStatus(row) != request.ExpectedQuest || character.Money != request.Before.Money)
+                if (character.Money != request.Before.Money
+                    || (row is null ? request.ExpectedQuest.Rewarded
+                        : row.Status is not (0 or 1) || ToStatus(row) with { Status = 1 } != request.ExpectedQuest))
+                {
+                    return QuestRewardCommitResult.Conflict;
+                }
+
+                if (row is null)
+                {
+                    row = new CharacterQuestStatusRow { CharacterId = id, Quest = request.ExpectedQuest.Quest };
+                    db.Set<CharacterQuestStatusRow>().Add(row);
+                }
+            }
+            else
             {
-                return QuestRewardCommitResult.Conflict;
+                if (row?.Rewarded == true && (!repeatable || row.Status != 1))
+                {
+                    return QuestRewardCommitResult.AlreadyRewarded;
+                }
+
+                if (row is null || ToStatus(row) != request.ExpectedQuest || character.Money != request.Before.Money)
+                {
+                    return QuestRewardCommitResult.Conflict;
+                }
             }
 
             IReadOnlyList<InventoryItemData> stored = await new EfItemStore(db).GetInventoryAsync(id, cancellationToken)
