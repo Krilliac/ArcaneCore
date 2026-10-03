@@ -194,7 +194,7 @@ public sealed class ChatGateTests
         await muted.SendAsync(WorldOpcode.CmsgTextEmote, [.. BitConverter.GetBytes(34u), .. BitConverter.GetBytes(0u), .. BitConverter.GetBytes(0ul)]);
         Assert.Equal("You must wait 30 Seconds. before speaking again.", new PacketReader(await muted.ReadUntilAsync(WorldOpcode.SmsgNotification)).ReadCString());
 
-        // Whispers: "Can only whisper GMs while muted" (ChatHandler.cpp:420) — a plain target is refused.
+        // Whispers: "Can only whisper GMs while muted" (ChatHandler.cpp:417) — a plain target is refused.
         await muted.SendChatAsync(ChatType.Whisper, Language.Common, "psst", target: "Friend");
         Assert.Equal("You must wait 30 Seconds. before speaking again.", new PacketReader(await muted.ReadUntilAsync(WorldOpcode.SmsgNotification)).ReadCString());
         Assert.DoesNotContain(await friend.CollectAsync(), p => p.Opcode == WorldOpcode.SmsgMessagechat);

@@ -63,8 +63,8 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
   map (vmangos sends them during HandlePlayerLogin before the map add).
 - **No character-delete hook.** Social rows and guild memberships of deleted characters are
   skipped on load instead of deleted.
-- **Options are not bound to configuration.** `SocialFeature.Options` (two-side friend/group/
-  guild/channel, GM visibility of channels) use code defaults.
+- **Options.** `SocialFeature.Options` (two-side friend/group/guild/channel, vmangos channel
+  extensions) is bound from `World:Social`; chat gates are in [chat.md](chat.md).
 - **WorldDefense is muted.** vmangos `Channel::Say` lets only honor rank 15 and up speak there;
   honor ranks are not implemented (always 0), so nobody can talk in WorldDefense.
 - **Deleting a rank (DelRank).** vmangos `Guild::DelRank` drops the lowest rank (never below
@@ -74,7 +74,7 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
   when that viewer has the view-officer-note right; the roster broadcast to the whole guild
   after a change never includes them.
 - **Channels:** no GM join of the opposite faction's built-in channels and no silent GM join
-  configuration.
+  configuration. The vmangos-only "World"/"China" channel names are off by default (chat.md).
 - **Whisper ignore is client-side.** The server still delivers whispers from ignored players;
   the 1.12 client drops them and sends `CMSG_CHAT_IGNORED`, and the whisperer then gets
   CHAT_MSG_IGNORED (vmangos HandleChatIgnoredOpcode).

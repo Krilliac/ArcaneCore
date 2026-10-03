@@ -302,7 +302,7 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        // "Can only whisper GMs while muted" (vmangos ChatHandler.cpp:420).
+        // "Can only whisper GMs while muted" (vmangos ChatHandler.cpp:417-428).
         if (receiver.Security == AccountSecurity.Player && chat.MuteNotice(sender) is { } notice)
         {
             session.Send(WorldOpcode.SmsgNotification, ChatPackets.BuildNotification(notice));
