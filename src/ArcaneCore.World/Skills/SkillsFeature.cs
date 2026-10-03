@@ -103,6 +103,7 @@ public sealed class SkillsFeature : IWorldFeature, ISpellbookLoadObserver, IChar
         IsActive = true;
 
         RegisterEffects(_spells.System);
+        new GatheringSpells(_services, this).Register(_spells.System);
         _spells.Spellbook.SpellLearned += OnSpellLearned;
         _spells.Spellbook.SpellForgotten += OnSpellForgotten;
         Saves.Start();

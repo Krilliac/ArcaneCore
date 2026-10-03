@@ -97,6 +97,11 @@ public sealed partial class SpellSystem
             case SpellImplicitTarget.LocationCasterTargetPosition:
                 // A location-only effect (teleport, summon) acts on the caster.
                 return [(caster, 1.0f)];
+            case SpellImplicitTarget.GameObject:
+            case SpellImplicitTarget.GameObjectItem:
+                // The effect reads the explicit object or item of the target block itself (vmangos m_targets.getGOTarget /
+                // getItemTarget); the caster carries the effect.
+                return [(caster, 1.0f)];
             case SpellImplicitTarget.UnitEnemy:
             case SpellImplicitTarget.UnitFriend:
             case SpellImplicitTarget.Unit:

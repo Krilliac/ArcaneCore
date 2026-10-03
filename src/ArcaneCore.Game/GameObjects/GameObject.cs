@@ -80,6 +80,12 @@ public sealed class GameObject : WorldObject
     /// <summary>Number of times a consumable object has been used since it spawned.</summary>
     internal uint UseCount { get; set; }
 
+    /// <summary>
+    /// The players who already earned a gathering skill-up from this object since it spawned (vmangos
+    /// GameObject::m_SkillupSet / AddToSkillupList: one skill-up per player until the node respawns).
+    /// </summary>
+    public HashSet<ObjectGuid> SkillupSet { get; } = [];
+
     internal GameObjectMapSystem? System { get; set; }
 
     /// <summary>vmangos GameObject::GetRespawnDelay: the spawn's spawntimesecs magnitude (0 for a runtime object).</summary>
@@ -128,6 +134,7 @@ public sealed class GameObject : WorldObject
         User = default;
         ResetAtMs = 0;
         UseCount = 0;
+        SkillupSet.Clear();
     }
 
     /// <summary>Distance between this object and <paramref name="other"/>, 3D, minus both bounding radii (vmangos GetDistance).</summary>

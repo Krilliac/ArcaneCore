@@ -217,7 +217,7 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
     /// the casting item. On success a chest opens its loot and a door/button activates. The cast
     /// time and skill-ups belong to the spell (not done here).
     /// </summary>
-    public GameObjectUseResult OpenLock(Player player, ObjectGuid guid, LockType lockType, uint keyItemId = 0)
+    public GameObjectUseResult OpenLock(Player player, ObjectGuid guid, LockType lockType, uint keyItemId = 0, uint skillBonus = 0)
     {
         ArgumentNullException.ThrowIfNull(player);
         GameObject? go = _objects.GetValueOrDefault(guid);
@@ -230,7 +230,7 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
         uint lockId = GameObjectLocks.LockIdOf(go!.Template);
         LockEntry? entry = _content.FindLock(lockId);
         result = lockId != 0 && entry is null ? GameObjectUseResult.Locked
-            : GameObjectLocks.CheckOpenLock(entry, player, lockType, keyItemId, SkillValue);
+            : GameObjectLocks.CheckOpenLock(entry, player, lockType, keyItemId, SkillValue, skillBonus);
         if (result != GameObjectUseResult.Ok)
         {
             return result;
