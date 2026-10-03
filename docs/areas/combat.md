@@ -126,6 +126,26 @@ CMSG_TOGGLE_PVP: an optional u8 state (gtker `pvp/cmsg_toggle_pvp.wowm`, vmangos
 - Turning it off lets a 5-minute timer run out, paused during PvP combat (`Player::UpdatePvPFlagTimer`).
 - Attacking a flagged player flags the attacker (`TogglePlayerPvPFlagOnAttackVictim`).
 
+### Aura states and reactive abilities (warrior-mechanics S07)
+`AuraStateService` and `ReactiveService` (`Combat/Reactive/`, installed by `ReactiveFeature`), after vmangos
+`Unit::ModifyAuraState` (`Unit.cpp:4682-4745`) and `ProcSkillsAndReactives` (`:8834-8915`):
+
+- **States.** `UNIT_FIELD_AURASTATE` bit (state - 1). Setting a state casts the passives a player knows that need it as caster
+  state; clearing it removes the auras that need it. The 20% health state follows `health < 0.2 x max` every tick for players
+  and units in combat (`Unit.cpp:318-319`) and goes when the unit dies.
+- **Checks.** A spell's caster aura state is required (`CASTER_AURASTATE`, also for triggered casts, `Spell.cpp:5392`). The
+  only target state vmangos checks is the 20% one (Execute): no target is `BAD_IMPLICIT_TARGETS`, a healthy target `BAD_TARGETS`,
+  after the power check (`:5733-5742`).
+- **Windows.** A dodge, parry or block opens a 4 s window (`REACTIVE_TIMER_START`): the victim gets Defense (Revenge, Riposte;
+  a rogue's dodge excepted), a parrying hunter gets HunterParry and a combo point (Counterattack), and a warrior whose attack was
+  dodged gets the Overpower marker, a combo point on the victim. When the window ends the state or the marker goes; a death clears
+  every window. White swings report through `MapCombat.MeleeSwingResolved` (before the packet and the damage, like vmangos'
+  proc call); melee and ranged class spells report their per-target outcome through the spell observer.
+- **Limits.** The custom states 9-11 (health 15, 10, 5 percent) are not 1.12 data and are not implemented; the Berserking crit
+  state exists only for clients up to 1.8.4 and is omitted; the creature health states and speed changes are the creature area's;
+  melee spell Block outcomes appear once the spell hit table produces them; Overpower's "cannot be dodged, parried or blocked"
+  attribute is honoured by the hit table slice, not here.
+
 ### Combo points (warrior-mechanics S09)
 `ComboPointService` (`Combat/Combo/`, installed by `ComboFeature`) follows vmangos `Player::AddComboPoints`,
 `ClearComboPoints` and `SetComboPoints` (`Player.cpp:19032-19093`):

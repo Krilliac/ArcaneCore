@@ -336,6 +336,12 @@ public sealed partial class MapCombat
     }
 
     /// <summary>
+    /// A white swing's hit table result is known, before SMSG_ATTACKERSTATEUPDATE and the damage (vmangos runs
+    /// <c>ProcDamageAndSpell</c> at this point, Unit.cpp:2260-2271): the reactive abilities hang off it.
+    /// </summary>
+    public event Action<MeleeDamageInfo>? MeleeSwingResolved;
+
+    /// <summary>
     /// One white swing (vmangos Unit::AttackerStateUpdate): roll and calculate the damage,
     /// send SMSG_ATTACKERSTATEUPDATE to the set (before the damage, so the client can still
     /// resolve a victim that dies), deal it, then the victim's AI reaction. A unit that is casting a
@@ -366,6 +372,7 @@ public sealed partial class MapCombat
         }
 
         MeleeDamageInfo info = CalculateMeleeDamage(attacker, victim, attackType);
+        MeleeSwingResolved?.Invoke(info);   // vmangos ProcDamageAndSpell, before the packet and the damage (Unit.cpp:2260-2271)
         SubDamage[] sub = [new SubDamage(0, info.TotalDamage, 0, 0)]; // physical: first school index 0, no absorb/resist without auras
         CombatPackets.SendToSet(attacker, WorldOpcode.SmsgAttackerstateupdate,
             CombatPackets.AttackerStateUpdate(info.HitInfo, attacker.Guid, victim.Guid, info.TotalDamage, sub, info.TargetState, info.Blocked));
