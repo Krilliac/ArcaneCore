@@ -57,7 +57,7 @@ Branch `feat/items`. Integration notes (schema versions, shared-file edits, seam
 
 ## Item mechanics lane (vw2/item-mechanics)
 
-Branch `claude/vw2-item-mechanics`, six slices on top of main 49448fd, each one commit. Standing directive: vanilla/retail 1.12.1 as in vmangos; every rule below cites `D:\refs\vmangos` (read-only, nothing copied). Deliberate deviations are listed; every config option defaults to retail.
+Branch `claude/vw2-item-mechanics`, five commits on top of main 49448fd (load/trade/durability fixes, small handlers, timed items and area limits, spell CreateItem, ammo). Standing directive: vanilla/retail 1.12.1 as in vmangos; every rule below cites `D:\refs\vmangos` (read-only, nothing copied). Deliberate deviations are listed; every config option defaults to retail.
 
 ### Delivered
 
