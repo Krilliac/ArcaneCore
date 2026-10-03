@@ -292,22 +292,42 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
     }
 
     /// <summary>
-    /// vmangos Spell::CheckCast spell focus search: a spawned GAMEOBJECT_TYPE_SPELL_FOCUS whose
-    /// data0 is <paramref name="focusId"/> within its data1 radius (yards, 2D+Z as 3D) of the player.
+    /// vmangos GameObjectFocusCheck (GridNotifiers.h:586-606): the spawned GAMEOBJECT_TYPE_SPELL_FOCUS object whose data0
+    /// is <paramref name="focusId"/> and whose data1 radius reaches <paramref name="caster"/>: the 3D distance between the
+    /// centres is strictly below data1 plus both bounding radii (WorldObject::IsWithinDistInMap with SizeFactor::BoundingRadius,
+    /// Object.cpp:1738-1752), in the caster's map. Deterministic: the lowest spawn guid wins when several match.
+    /// Limit: vmangos first narrows the search with a 10 yard grid visit (Spell.cpp:7236-7240), which covers whole cells and so
+    /// never excludes an object that the distance test accepts for the focus distances in the data (at most 7); it is not modelled.
     /// </summary>
-    public bool HasSpellFocusNearby(Player player, uint focusId)
+    public GameObject? FindSpellFocus(WorldObject caster, uint focusId)
     {
-        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(caster);
+        GameObject? best = null;
         foreach (GameObject go in _objects.Values)
         {
-            if (go.IsSpawned && go.Type == GameObjectType.SpellFocus && go.Template.GetData(0) == focusId
-                && LootService.Distance3D(player, go) <= Math.Max(1u, go.Template.GetData(1)))
+            if (!go.IsSpawned || go.Type != GameObjectType.SpellFocus || go.Template.GetData(0) != focusId || !ReferenceEquals(go.Map, caster.Map))
             {
-                return true;
+                continue;
+            }
+
+            float dx = go.X - caster.X;
+            float dy = go.Y - caster.Y;
+            float dz = go.Z - caster.Z;
+            float reach = go.Template.GetData(1) + go.BoundingRadius + caster.BoundingRadius;
+            if (((dx * dx) + (dy * dy) + (dz * dz)) < reach * reach && (best is null || go.Guid.Counter < best.Guid.Counter))
+            {
+                best = go;
             }
         }
 
-        return false;
+        return best;
+    }
+
+    /// <summary>Whether <see cref="FindSpellFocus"/> finds a focus object for <paramref name="player"/>.</summary>
+    public bool HasSpellFocusNearby(Player player, uint focusId)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        return FindSpellFocus(player, focusId) is not null;
     }
 
     private GameObjectUseResult CheckUsable(Player player, GameObject? go)

@@ -21,6 +21,22 @@ Config: section `GameObjects` (`GameObjectOptions`), bound by `GameObjectLootFea
 
 Tests: `GameObjectFidelityPrimitivesTests` (new); the existing door test was changed to the raw seconds*0x10000 value.
 
+### GO7a spell focus enforcement
+
+| Item | Where | Reference |
+|---|---|---|
+| `SpellFocusCastCheck` (`ISpellCastCheck`, phase `Items`, after the equipment checks): a non-passive spell with `RequiresSpellFocus` needs a spawned `SPELL_FOCUS` object of that focus id whose data1 radius reaches the caster, else `RequiresSpellFocus`. 3D distance, strictly below data1 plus both bounding radii, no clamp to 1 yard. No triggered-cast exemption | `src/ArcaneCore.Game/Spells/Checks/SpellFocusCastCheck.cs` | `D:\refs\vmangos\src\game\Spells\Spell.cpp:7230-7243`, `Maps\GridNotifiers.h:586-606`, `Objects\Object.cpp:1738-1752` |
+| `GameObjectMapSystem.FindSpellFocus` (lowest spawn guid wins); `HasSpellFocusNearby` now delegates to it (its old `Math.Max(1, data1)` clamp and radius-free test were not retail) | `GameObjectMapSystem.cs` | same |
+| `SpellFocusFeature` (discovered `IWorldFeature`) registers the check with the per-map systems of `GameObjectLootFeature`; config `Spells:RequireSpellFocus` (default true) | `src/ArcaneCore.World/GameObjects/SpellFocusFeature.cs` | |
+
+Behaviour to know: a map without game object content finds no focus object, so focus spells (forges, anvils, cooking fires, 695 classic-db spells)
+fail with `RequiresSpellFocus`, exactly as an empty map does in retail. Set `Spells:RequireSpellFocus=false` for content-less development worlds.
+The GM no-check-cast cheat exemption (Spell.cpp:5304) is not modelled (ArcaneCore has no such cheat). The 10 yard grid pre-filter of the search
+(Spell.cpp:7236-7240) is not modelled; vmangos visits whole cells, so it never excludes an object the distance test accepts.
+`Spell::focusObject` (kept for spell visuals) is not stored.
+
+Tests: `SpellFocusCastCheckTests` (Game.Tests), `SpellFocusWorldTests` (World.Tests).
+
 ## Limits (not delivered, documented)
 
 * Goober Use semantics (page before the quest gate, group quest credit, IN_USE/ACTIVATED machine, use spell, linked trap,
