@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
 
@@ -330,13 +331,8 @@ public sealed partial class QuestNpcServices
 
     private float PriceDiscount(Player player, NpcInfo npc) => Deps.Reputation?.GetPriceDiscount(player, npc) ?? 1.0f;
 
-    /// <summary>vmangos uint32(floor(price × GetReputationPriceDiscount)) (vendors and trainers).</summary>
-    private static uint Discounted(ulong price, float discount)
-    {
-        // Single precision as vmangos (uint32 × float): 10 × 0.9f is 9, not 8.999….
-        double value = MathF.Floor(price * discount);
-        return value >= uint.MaxValue ? uint.MaxValue : value <= 0 ? 0 : (uint)value;
-    }
+    /// <summary>vmangos uint32(price × GetReputationPriceDiscount() + 0.5f) (vendors and trainers): <see cref="ReputationPricing"/>.</summary>
+    private static uint Discounted(ulong price, float discount) => ReputationPricing.Round(price, discount);
 
     /// <summary>vmangos Creature::GetVendorItemCurrentCount (restock by BuyCount every incrtime seconds).</summary>
     private uint CurrentStock(ObjectGuid vendor, VendorItem item, ItemInfo proto)

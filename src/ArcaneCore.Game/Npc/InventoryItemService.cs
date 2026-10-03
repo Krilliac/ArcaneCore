@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Npc;
@@ -100,8 +101,7 @@ public sealed class InventoryItemService(
                 continue; // vmangos: unknown item level / quality row — nothing repaired
             }
 
-            double discounted = MathF.Floor(baseCost * discount); // single precision as vmangos
-            uint cost = discounted >= uint.MaxValue ? uint.MaxValue : (uint)Math.Max(discounted, 0);
+            uint cost = ReputationPricing.Round(baseCost, discount); // Player.cpp:4955 uint32(costs * discountMod + 0.5f)
             cost = Math.Max(cost, 1u); // vmangos "fix for ITEM_QUALITY_ARTIFACT"
             if (!pay(cost))
             {

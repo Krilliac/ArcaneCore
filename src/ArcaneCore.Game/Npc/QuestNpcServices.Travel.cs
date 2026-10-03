@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
@@ -178,6 +179,7 @@ public sealed partial class QuestNpcServices
 
         var paths = new uint[nodes.Count - 1];
         ulong total = 0;
+        float discount = PriceDiscount(player, npc);
         for (int i = 1; i < nodes.Count; i++)
         {
             if (Npcs.Path(nodes[i - 1], nodes[i]) is not { } path)
@@ -186,7 +188,7 @@ public sealed partial class QuestNpcServices
             }
 
             paths[i - 1] = path.Id;
-            total += path.Price;
+            total += ReputationPricing.Round(path.Price, discount); // Player.cpp:17977, 17997: every leg is rounded on its own
         }
 
         uint mount = player.Team == Team.Alliance ? node.MountAlliance : node.MountHorde;
@@ -196,8 +198,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        double discounted = MathF.Ceiling(total * PriceDiscount(player, npc)); // single precision as vmangos
-        uint cost = discounted >= uint.MaxValue ? uint.MaxValue : (uint)discounted;
+        uint cost = total >= uint.MaxValue ? uint.MaxValue : (uint)total;
         if (player.Money < cost)
         {
             TaxiReply(player, ActivateTaxiReply.NotEnoughMoney);

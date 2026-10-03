@@ -411,13 +411,36 @@ public sealed class NpcVendorServiceTests
     }
 
     [Fact]
-    public void Discounts_AreFlooredAsVmangosDoes()
+    public void Discounts_AreRoundedHalfUpAsVmangosDoes()
     {
         var reputation = new FixedReputation(0.9f);
         using var kit = new NpcServiceKit(NpcFlags.Vendor, Vendor(Row(Bread)), new QuestNpcDependencies(Reputation: reputation));
         kit.Player.Money = 100;
         kit.Services.BuyItem(kit.Player, kit.Npc.Guid, Bread, 1);
-        Assert.Equal(78u, kit.Player.Money); // floor(25 × 0.9) = 22
+        Assert.Equal(77u, kit.Player.Money); // uint32(25 × 0.9f + 0.5f) = 23 (Player.cpp:18445), the old floor charged 22
+    }
+
+    [Fact]
+    public void ListInventory_AtHonored_ShowsTheHalfUpRoundedPrice()
+    {
+        using var kit = new NpcServiceKit(NpcFlags.Vendor, Vendor(Row(Bread)), new QuestNpcDependencies(Reputation: new FixedReputation(0.9f)));
+        kit.Services.ListInventory(kit.Player, kit.Npc.Guid);
+        var r = new PacketReader(kit.Single(WorldOpcode.SmsgListInventory));
+        r.ReadUInt64();
+        r.ReadByte();
+        r.ReadBytes(4 + 4 + 4 + 4); // slot, item, display, max count
+        Assert.Equal(23u, r.ReadUInt32()); // ItemHandler.cpp:763: uint32(25 × 0.9f + 0.5f)
+    }
+
+    [Fact]
+    public void RepairItem_AtHonored_RoundsHalfUp()
+    {
+        using var kit = new NpcServiceKit(NpcFlags.Vendor | NpcFlags.Repair, null, new QuestNpcDependencies(Reputation: new FixedReputation(0.9f)), repair: Repair());
+        Item sword = kit.Give(Sword);
+        sword.Durability = 43; // 7 lost × 3 × 1.0 = 21; 21 × 0.9f = 18.9 -> 19 (Player.cpp:4955), the old floor charged 18
+        kit.Player.Money = 100;
+        kit.Services.RepairItem(kit.Player, kit.Npc.Guid, sword.Guid);
+        Assert.Equal(81u, kit.Player.Money);
     }
 
     internal sealed class FixedReputation(float discount, byte rank = 4) : IPlayerReputation

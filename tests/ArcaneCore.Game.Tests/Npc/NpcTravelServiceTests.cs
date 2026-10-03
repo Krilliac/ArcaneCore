@@ -82,7 +82,7 @@ public sealed class NpcTravelServiceTests
 
     // ---- flight masters -----------------------------------------------------------------------
 
-    private static NpcContent TaxiContent() => NpcContent.Empty with
+    private static NpcContent TaxiContent(uint secondLegPrice = 50) => NpcContent.Empty with
     {
         TaxiNodes =
         [
@@ -96,7 +96,7 @@ public sealed class NpcTravelServiceTests
         TaxiPaths =
         [
             new TaxiPath { Id = 10, FromNode = 1, ToNode = 2, Price = 100 },
-            new TaxiPath { Id = 11, FromNode = 2, ToNode = 3, Price = 50 },
+            new TaxiPath { Id = 11, FromNode = 2, ToNode = 3, Price = secondLegPrice },
             new TaxiPath { Id = 12, FromNode = 1, ToNode = 4, Price = 10 },
             new TaxiPath { Id = 13, FromNode = 5, ToNode = 1, Price = 10 },
             new TaxiPath { Id = 14, FromNode = 6, ToNode = 2, Price = 10 },
@@ -112,9 +112,9 @@ public sealed class NpcTravelServiceTests
 
     private sealed class TaxiRig : IDisposable
     {
-        public TaxiRig(float discount = 1, bool learnAll = true)
+        public TaxiRig(float discount = 1, bool learnAll = true, uint secondLegPrice = 50)
         {
-            NpcContent content = TaxiContent();
+            NpcContent content = TaxiContent(secondLegPrice);
             Flights = new TaxiFlightSystem(new NpcStore(content), PathNodes, e => e == Gryphon ? GryphonDisplay : 0u, () => 0u);
             Flights.Landed += (_, node) => Landings.Add(node);
             Kit = new NpcServiceKit(NpcFlags.FlightMaster | NpcFlags.Gossip, content,
@@ -233,13 +233,25 @@ public sealed class NpcTravelServiceTests
     }
 
     [Fact]
+    public void ActivateTaxiExpress_RoundsEachLegHalfUp_NotTheCeilOfTheSum()
+    {
+        // Player.cpp:17977 and 17997: every leg is uint32(price × discount + 0.5f). 100 -> 95 and 55 -> 52 = 147,
+        // where ceil(155 × 0.95f) = 148 charged one copper too much.
+        using var rig = new TaxiRig(discount: 0.95f, secondLegPrice: 55);
+        NpcServiceKit kit = rig.Kit;
+        kit.Player.Money = 1000;
+        kit.Services.ActivateTaxiExpress(kit.Player, kit.Npc.Guid, [1, 2, 3]);
+        Assert.Equal(1000u - 147u, kit.Player.Money);
+    }
+
+    [Fact]
     public void ActivateTaxiExpress_SumsEveryHopAndChainsTheSplines()
     {
         using var rig = new TaxiRig(discount: 0.95f);
         NpcServiceKit kit = rig.Kit;
         kit.Player.Money = 1000;
         kit.Services.ActivateTaxiExpress(kit.Player, kit.Npc.Guid, [1, 2, 3]);
-        Assert.Equal(1000u - 143u, kit.Player.Money); // ceil(150 × 0.95)
+        Assert.Equal(1000u - 143u, kit.Player.Money); // 95 + 48 (each leg half-up)
         kit.Drain();
 
         rig.Flights.Update(rig.Map, 2100); // end of hop 1 → hop 2 starts from node 2
