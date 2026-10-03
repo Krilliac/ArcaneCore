@@ -106,7 +106,7 @@ Status: implemented on `feat/creatures` (PR into `claude/friendly-hamilton-cuz4j
   - AI and aggro (combat)
   - Movement scripts
   - Wander at waypoint nodes
-  - Entry-based waypoint paths (`creature_movement_template`)
+  - Entry-based waypoint paths (`creature_movement_template`): done in the wave-4 movement lane, see `creature-movement-spawns.md`
   - Creature groups / formations
   - Linked spawns
   - Game-event spawns

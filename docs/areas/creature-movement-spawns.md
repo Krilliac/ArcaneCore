@@ -86,3 +86,44 @@ needs a Characters schema module).
 Limits: the Home leg still goes straight when the pathfinder finds no path (vmangos teleports with `NearTeleportTo`,
 `HomeMovementGenerator.cpp:71-72`; no creature teleport primitive exists to reuse); `RemoveAurasAtReset`, the low-health aura-state
 reset (`:39-42`) and `LoadCreatureAddon(true)` on arrival (`:94`) are not done (aura lane / addon reload).
+
+### 5. Waypoint paths by entry, and the waypoint generator (slice `waypoint-path-data` + `waypoint-generator-core`)
+
+Data (World schema version **21**, `CreatureMovementTemplateDataModule.Version`; the integrator renumbers):
+
+* New table `creature_movement_template` (`Entry, PathId, Point, X, Y, Z, Orientation, WaitTimeMs`, key `(Entry, PathId, Point)`),
+  imported from the classic-db layout (`Entry, PathId, Point, PositionX/Y/Z, Orientation, WaitTime`) and loaded into
+  `CreatureContent` with the other definitions (so `.reload` swaps it with them). classic-db has 15,402 such rows on 544 paths of
+  479 entries, and **319 of its 2,898 waypoint spawns (11.0 percent) have no `creature_movement` rows of their own**: they idled
+  before and now walk their entry's path.
+* `CreatureContent.ResolveWaypointPath(spawnGuid, entry)` is mangos-classic `WaypointManager::GetDefaultPath`
+  (`MotionGenerators/WaypointManager.h:69-93`) and vmangos `Movement/WaypointManager.h:77-93`: the spawn's own rows win, else the
+  entry's default path (PathId 0). Other path ids (51 entries use them) are stored and readable (`GetEntryWaypoints`) but only a
+  script could select them. A summoned creature whose template has `MovementType 2` takes the entry path (case 2a of the header comment).
+* Nodes are ordered by point id and never renumbered (ten classic-db paths have gaps).
+* `ScriptId` and `Comment` are not stored: no creature-movement script engine exists. The importer reports "N waypoint node(s) carry
+  a ScriptId" (668 nodes of 182 scripts in classic-db) instead of dropping them silently.
+* `ContentTableSpecs`/the content importer CLI count and report the new table.
+
+Generator (`Movement/WaypointMovementGenerator.cs`, moved out of `CreatureMovement.cs`):
+
+* Evade goes to the **last reached node** (`GetResetPosition`, `WaypointMovementGenerator.cpp:292-303`), or to the spawn point when no
+  node was reached yet (`GetRespawnCoord`); it used to go to where the fight began. The generator then resumes the same leg.
+  A reset position carries no orientation (vmangos sets facing only for the spawn point, `HomeMovementGenerator.cpp:54-65`): the home
+  leg ends facing its travel direction.
+* The AI is told of every arrival with the node's point id (`MovementInform(WAYPOINT, node)`, `:158-160`) before the delay starts.
+* Legs walk unless the template has ALWAYS_RUN (`:240`). The per-node `Run` column (an ArcaneCore addition in neither classic-db nor
+  vmangos) is ignored unless `Creatures:Movement:HonorWaypointRunColumn=true` (default false, retail).
+* Legs go through the map's pathfinder (`:235 MOVE_PATHFINDING`; straight without navmeshes).
+* Gates (`:249-272`): a stunned/rooted/confused/fleeing creature starts no leg and its timers stand still; a casting creature stops and
+  sets off for the same node again when the cast ends.
+
+Verification: `WaypointGeneratorTests` (map clock, explicit diffs, no wall time), `CreatureMovementTemplateTests` (importer, content,
+upgrade from the previous schema version on every provider the machine has; **only SQLite ran locally, MariaDB/PostgreSQL run on hosted
+CI**: the step is one `CREATE TABLE` with a composite integer key and float columns, no raw SQL).
+
+Limits (not delivered, no stubs): node script execution, wander at a node (`wander_distance`), sub-paths (`path_id`), non-repeating
+paths and `SetNextWaypoint`, the 30 s pause while a player talks to the creature, `creature_movement_special`, vmangos-dialect
+columns of `creature_movement` (`wander_distance`, `path_id`, `script_id`), cmangos `waypoint_path`/spawn-group formations (163
+formation paths in classic-db), creature groups and linking. vmangos numbers nodes from 0 and treats the first reached node as "none"
+(`m_lastReachedWaypoint`); this lane keeps the data's 1-based ids (see the generator comment).

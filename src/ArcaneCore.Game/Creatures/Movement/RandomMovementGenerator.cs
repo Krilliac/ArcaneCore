@@ -44,7 +44,7 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
 
     public bool Update(Creature creature, ICreatureMover mover, uint diffMs)
     {
-        if (CannotMove(creature))
+        if (CreatureMovementGates.CannotMove(creature))
         {
             _nextMoveMs = 0; // i_nextMoveTime.Reset(0): the first free tick moves
             return true;
@@ -109,14 +109,11 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
         float dy = creature.Y - start.Y;
         float wander = WanderOf(creature);
         return (dx * dx) + (dy * dy) <= wander * wander
-            ? new CreatureHome(creature.X, creature.Y, creature.Z, creature.Orientation)
+            ? new CreatureHome(creature.X, creature.Y, creature.Z, float.NaN) // no facing: GetPosition only (RandomMovementGenerator.cpp:134-135)
             : start;
     }
 
     private static float WanderOf(Creature creature) => creature.WanderDistance > 0 ? creature.WanderDistance : DefaultWanderDistance;
-
-    private static bool CannotMove(Creature creature)
-        => (creature.UnitFlags & (UnitFlags.Stunned | UnitFlags.Fleeing | UnitFlags.Confused)) != 0 || creature.Movement.HasFlag(MovementFlags.Root);
 
     private static bool ShouldRun(Creature creature, ICreatureMover mover)
     {

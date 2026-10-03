@@ -127,6 +127,8 @@ public static class ContentTableSpecs
             s_spawnSignatures),
         new("creature_movement", [new KeyColumn("Id"), new KeyColumn("Point")],
             ["PositionX", "position_x", "PositionY", "position_y", "PositionZ", "position_z", "Orientation", "WaitTime", "Run", "run"], []),
+        new("creature_movement_template", [new KeyColumn("Entry"), new KeyColumn("PathId", "path_id"), new KeyColumn("Point")],
+            ["PositionX", "position_x", "PositionY", "position_y", "PositionZ", "position_z", "Orientation", "WaitTime", "waittime"], []),
         new("creature_model_info", [new KeyColumn("modelid", "display_id")],
             ["build", "bounding_radius", "combat_reach", "gender", "modelid_other_gender", "display_id_other_gender"], []),
         new("creature_display_info_addon", [new KeyColumn("modelid", "display_id")],

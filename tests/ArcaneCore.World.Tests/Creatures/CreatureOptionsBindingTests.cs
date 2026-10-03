@@ -62,18 +62,19 @@ public sealed class CreatureOptionsBindingTests
     [Fact]
     public void MovementOptions_DefaultToRetail_AndBindFromTheSection()
     {
-        Assert.Equal((MonsterMoveOffsetBase.Destination, 15u, false), (new CreatureOptions().Movement.MonsterMoveOffsetBase, new CreatureOptions().Movement.RunDuringWanderChancePercent, new CreatureOptions().Movement.EvadeRestoresFullHealth));
+        Assert.Equal((MonsterMoveOffsetBase.Destination, 15u, false, false), (new CreatureOptions().Movement.MonsterMoveOffsetBase, new CreatureOptions().Movement.RunDuringWanderChancePercent, new CreatureOptions().Movement.EvadeRestoresFullHealth, new CreatureOptions().Movement.HonorWaypointRunColumn));
 
         IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Creatures:Movement:MonsterMoveOffsetBase"] = "Midpoint",
             ["Creatures:Movement:RunDuringWanderChancePercent"] = "40",
             ["Creatures:Movement:EvadeRestoresFullHealth"] = "true",
+            ["Creatures:Movement:HonorWaypointRunColumn"] = "true",
         }).Build();
         var bound = new CreatureOptions();
         configuration.GetSection(CreatureOptions.SectionName).Bind(bound);
 
-        Assert.Equal((MonsterMoveOffsetBase.Midpoint, 40u, true), (bound.Movement.MonsterMoveOffsetBase, bound.Movement.RunDuringWanderChancePercent, bound.Movement.EvadeRestoresFullHealth));
+        Assert.Equal((MonsterMoveOffsetBase.Midpoint, 40u, true, true), (bound.Movement.MonsterMoveOffsetBase, bound.Movement.RunDuringWanderChancePercent, bound.Movement.EvadeRestoresFullHealth, bound.Movement.HonorWaypointRunColumn));
     }
 
     [Fact]

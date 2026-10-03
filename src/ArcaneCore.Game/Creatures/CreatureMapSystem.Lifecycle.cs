@@ -238,14 +238,16 @@ public sealed partial class CreatureMapSystem
                 return new RandomMovementGenerator();
 
             case CreatureMovementType.Waypoint:
-                IReadOnlyList<CreatureWaypoint> path = creature.Spawn is null ? [] : _content.GetWaypoints(creature.Spawn.Guid);
-                if (path.Count == 0)
+                // The spawn's own creature_movement rows, else the entry's creature_movement_template path (a summon has no spawn row and
+                // takes the entry path): mangos-classic WaypointManager::GetDefaultPath.
+                CreatureWaypointPath path = _content.ResolveWaypointPath(creature.Spawn?.Guid ?? 0, creature.Template.Entry);
+                if (path.Points.Count == 0)
                 {
-                    _logger.LogWarning("{Creature} has waypoint movement but no creature_movement path; idling", creature.Guid);
+                    _logger.LogWarning("{Creature} has waypoint movement but no creature_movement or creature_movement_template path; idling", creature.Guid);
                     return IdleMovementGenerator.Instance;
                 }
 
-                return new WaypointMovementGenerator(path);
+                return new WaypointMovementGenerator(path.Points);
 
             default:
                 return IdleMovementGenerator.Instance;

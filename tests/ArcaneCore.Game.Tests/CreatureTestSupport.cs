@@ -42,8 +42,8 @@ internal static class CreatureTestSupport
     public static CreatureContent Content(
         IEnumerable<CreatureTemplate> templates, IEnumerable<CreatureSpawn> spawns,
         IEnumerable<(uint, CreatureWaypoint)>? waypoints = null, IEnumerable<CreatureModelInfo>? models = null,
-        IEnumerable<CreatureAddon>? addons = null)
-        => new(templates, spawns, waypoints ?? [], models ?? [], addons ?? []);
+        IEnumerable<CreatureAddon>? addons = null, IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryWaypoints = null)
+        => new(templates, spawns, waypoints ?? [], models ?? [], addons ?? [], entryWaypoints: entryWaypoints);
 
     public static (WorldRuntime World, Map Map, CreatureMapSystem System) CreateSystem(CreatureContent content, CreatureOptions? options = null, int seed = 1)
     {

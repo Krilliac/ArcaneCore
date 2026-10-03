@@ -39,6 +39,13 @@ public sealed class CreatureMovementOptions
     public uint RunDuringWanderChancePercent { get; set; } = 15;
 
     /// <summary>
+    /// <c>Creatures:Movement:HonorWaypointRunColumn</c>: a waypoint node whose <c>creature_movement.Run</c> column is set is travelled at
+    /// run speed. Not retail: the column exists in neither classic-db nor vmangos (an ArcaneCore addition of the creature-AI step);
+    /// vmangos waypoint legs walk unless the creature runs by default (<c>SetWalk(!UNIT_STATE_RUNNING ...)</c>, Movement/WaypointMovementGenerator.cpp:240).
+    /// </summary>
+    public bool HonorWaypointRunColumn { get; set; }
+
+    /// <summary>
     /// <c>Creatures:Movement:EvadeRestoresFullHealth</c>: a creature entering evade mode gets full health and mana at once. Retail (false):
     /// vmangos CreatureAI::EnterEvadeMode sets neither (AI/CreatureAI.cpp:323-346); health and mana return through the creature's own
     /// regeneration, a third of the maximum every 5 s (Objects/Creature.cpp:1087-1160).
