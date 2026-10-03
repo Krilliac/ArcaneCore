@@ -8,6 +8,11 @@ public sealed partial class PlayerInventory
     /// <summary>vmangos Player::SwapItem: move, merge/fill or swap the items at two positions.</summary>
     public void SwapItem(byte srcBag, byte srcSlot, byte dstBag, byte dstSlot)
     {
+        if (Player is { CanMutateQuestSettlementState: false })
+        {
+            return;
+        }
+
         Item? src = GetItem(srcBag, srcSlot);
         Item? dst = GetItem(dstBag, dstSlot);
         if (src is null)
@@ -79,6 +84,11 @@ public sealed partial class PlayerInventory
     /// </summary>
     public bool AutoEquipItem(byte srcBag, byte srcSlot)
     {
+        if (Player is { CanMutateQuestSettlementState: false })
+        {
+            return false;
+        }
+
         if (GetItem(srcBag, srcSlot) is not { } src)
         {
             return false;
@@ -178,6 +188,11 @@ public sealed partial class PlayerInventory
     /// <summary>WorldSession::HandleAutoStoreBagItemOpcode: move an item into a bag (any free place in it).</summary>
     public void AutoStoreBagItem(byte srcBag, byte srcSlot, byte dstBag)
     {
+        if (Player is { CanMutateQuestSettlementState: false })
+        {
+            return;
+        }
+
         if (GetItem(srcBag, srcSlot) is not { } item)
         {
             return;
@@ -232,6 +247,11 @@ public sealed partial class PlayerInventory
     /// <summary>vmangos Player::SplitItem: move <paramref name="count"/> of a stack to a new item at the destination.</summary>
     public void SplitItem(byte srcBag, byte srcSlot, byte dstBag, byte dstSlot, uint count)
     {
+        if (Player is { CanMutateQuestSettlementState: false })
+        {
+            return;
+        }
+
         if (GetItem(srcBag, srcSlot) is not { } src)
         {
             SendEquipError(InventoryResult.ItemNotFound, null, null);
@@ -300,6 +320,11 @@ public sealed partial class PlayerInventory
     /// </summary>
     public void DestroyItemRequest(byte bag, byte slot, byte count)
     {
+        if (Player is { CanMutateQuestSettlementState: false })
+        {
+            return;
+        }
+
         if (InventorySlots.IsEquipmentPos(bag, slot) || InventorySlots.IsBagPos(bag, slot))
         {
             InventoryResult msg = CanUnequipItem(bag, slot, swap: false);

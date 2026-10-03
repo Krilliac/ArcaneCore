@@ -86,6 +86,11 @@ public sealed class TeleportService
     /// </summary>
     public bool TeleportTo(Player player, uint mapId, float x, float y, float z, float orientation)
     {
+        if (player.IsQuestSettlementPending)
+        {
+            return false;
+        }
+
         if (!GridDefines.IsValidMapCoord(x, y, z, orientation))
         {
             _logger.LogWarning("teleport of {Player} to invalid coordinates {X} {Y} {Z} {O} on map {MapId}", player.Name, x, y, z, orientation, mapId);
@@ -149,6 +154,11 @@ public sealed class TeleportService
     /// </summary>
     public bool HandleTeleportAck(Player player, ulong moverGuid)
     {
+        if (player.IsQuestSettlementPending)
+        {
+            return false;
+        }
+
         if (!_pending.TryGetValue(player.Guid, out Pending? pending) || pending.Stage != TeleportStage.Near)
         {
             return false;
@@ -182,6 +192,11 @@ public sealed class TeleportService
     /// </summary>
     public bool HandleWorldportAck(Player player)
     {
+        if (player.IsQuestSettlementPending)
+        {
+            return false;
+        }
+
         if (!_pending.TryGetValue(player.Guid, out Pending? pending) || pending.Stage != TeleportStage.Far)
         {
             return false;
@@ -209,8 +224,13 @@ public sealed class TeleportService
             return; // logged out or superseded
         }
 
+        if (player.IsQuestSettlementPending)
+        {
+            return;
+        }
+
         Map source = pending.SourceMap;
-        if (!ReferenceEquals(player.Map, source) || !_world.IsOnline(player.Guid))
+        if (!ReferenceEquals(player.Map, source) || !ReferenceEquals(_world.FindOnlinePlayer(player.Guid), player))
         {
             _pending.Remove(player.Guid);
             return;
@@ -238,9 +258,14 @@ public sealed class TeleportService
             return;
         }
 
+        if (player.IsQuestSettlementPending)
+        {
+            return;
+        }
+
         _pending.Remove(player.Guid);
         pending.SourceMap.EndTransit(player);
-        if (!_world.IsOnline(player.Guid) || player.Map is not null)
+        if (!ReferenceEquals(_world.FindOnlinePlayer(player.Guid), player) || player.Map is not null)
         {
             return;
         }

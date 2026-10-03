@@ -150,6 +150,11 @@ public sealed partial class MapCombat : IMapUpdater
 
     private void UpdateUnit(Unit unit, uint diff)
     {
+        if (IsQuestSettlementPending(unit))
+        {
+            return;
+        }
+
         UnitCombat c = unit.Combat;
         c.Tracker = this;
 
@@ -260,6 +265,9 @@ public sealed partial class MapCombat : IMapUpdater
     }
 
     // --- helpers ------------------------------------------------------------------
+
+    private static bool IsQuestSettlementPending(Unit? unit)
+        => unit is Player { IsQuestSettlementPending: true };
 
     /// <summary>Alive in the death-state sense (vmangos Unit::IsAlive: m_deathState == ALIVE).</summary>
     internal static bool IsAliveState(Unit unit) => unit.Combat.DeathState == DeathState.Alive;

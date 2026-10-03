@@ -96,6 +96,7 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
     /// </summary>
     public async Task OnPlayerLoadingAsync(WorldSession session, CharacterRecord character, Player player)
     {
+        await WaitForSettlementAsync(character.Id).ConfigureAwait(false);
         await Persistence.FlushCharacterAsync(character.Id).ConfigureAwait(false);
         long revision = Persistence.CaptureLoadRevision(character.Id);
         CharacterQuestData loaded = session.Services.GetService<ICharacterQuestStore>() is { } store
@@ -119,11 +120,21 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             world.PlayerLoggingOut -= OnPlayerLoggingOut;
         }
 
-        await Persistence.DisposeAsync().ConfigureAwait(false);
+        await StopAsync().ConfigureAwait(false);
     }
 
     /// <summary>The world has stopped; drain quest/taxi saves before host shutdown succeeds.</summary>
-    public Task StopAsync() => Persistence.DisposeAsync().AsTask();
+    public async Task StopAsync()
+    {
+        try
+        {
+            await StopSettlementsAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            await Persistence.DisposeAsync().ConfigureAwait(false);
+        }
+    }
 
     private QuestNpcServices BuildServices(QuestStore quests, NpcStore npcs, FactionTemplateCatalog? factions = null) => new(quests, npcs,
         new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions ?? FactionTemplateCatalog.Empty)),

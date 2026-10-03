@@ -29,20 +29,23 @@ Turn-in checks the current map, visible and interactable ender, server objective
 counters, selected zero-based choice, money and capacity for the entire reward
 batch. Detached staging preserves existing inventory objects and bag identity.
 
-The local world thread drains earlier quest and character saves and persists a
-complete current character snapshot. A fresh scoped serializable transaction
+The world thread captures a complete character snapshot and freezes that Player.
+Observed background work first saves the captured core Before through its retaining
+queue, then drains quest saves. A fresh scoped serializable transaction
 compares the completed quest, money and inventory, then saves reward history,
 money and the complete resulting inventory in one commit. Live inventory,
 money, journal fields and success packets are published only after durability.
 Rewarded history remains COMPLETE, records the chosen item entry, and leaves
 the visible journal slot empty. Duplicate requests cannot grant again.
 
-Settlement deliberately holds the local world thread. A five-second cooperative
-cancellation budget applies to normal settlement, with another five-second
-budget for outcome reconciliation. The commit task is always observed; a
-provider that ignores cancellation can exceed the budget. This is a bounded
-development slice, with a tick-latency limitation. An asynchronous production
-settlement gate across every character mutation is future work.
+Settlement allows eight concurrent character operations and keeps world ticks
+running. Pending characters reject ordinary packets, inventory/money changes,
+quest mutations, combat, spell effects and teleports; other players remain active.
+A five-second cooperative budget applies to storage, with a separate reconciliation
+budget. The entire task remains observed if a provider ignores cancellation, so
+the affected character/slot and shutdown may wait longer. Exact operation identity
+and the live Player guard control synchronous world-thread publication. See the
+[asynchronous contract and limitations](integration/quest-settlement-async.md).
 
 An ambiguous acknowledgement is reconciled using a fresh scope and exact
 before/after quest, money and deep inventory comparisons. Unknown outcomes or
@@ -84,7 +87,7 @@ of broader offer semantics remains outstanding.
 
 ## Qualification
 
-The native serialized Release build passed with zero warnings/errors. All
+The preceding combat/reward native serialized Release build passed with zero warnings/errors. All
 8,760 tests passed, with zero failures/skips: crypto 8,005; SQLite data 74;
 Game 398; mock-client 92; Realm 3; World 188. The standalone executable
 passed 41 checks across 122 frames in 5.024 seconds. The 16 adverse reward
@@ -92,6 +95,15 @@ cases include unreadable-outcome quarantine, an actual stale autosave attempt,
 fresh login recovery, lost acknowledgement, capacity and failure/retry. Four
 blocked-read social regressions passed. Hosted provider qualification and
 published source accounting are recorded on canonical draft #11.
+
+Its async successor passes Release with zero warnings/errors and **8,799 native
+tests**, zero failures/skips: crypto 8,005, SQLite data 78, Game 416, mock-client
+100, Realm 3, World 197. The standalone remains **41 checks / 122 frames** and
+passed in **4.935 seconds**. A **744.517 ms** store hold allowed **47 actual map
+ticks**, max gap **16.551 ms**; another player's actual quest acceptance took
+**16.901 ms**. Eight operations and ninth-player retry, real delayed SaveChanges
+rollback, uncertain commit and stale-session recovery pass. Exact source/merge
+and final hosted provider evidence are retained in the ledger and draft #11.
 
 Run the complete Release solution and all configured data providers, then
 `dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-test`.

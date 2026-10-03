@@ -15,6 +15,11 @@ public sealed partial class MapCombat
     /// </summary>
     public void KillPlayer(Player player)
     {
+        if (IsQuestSettlementPending(player))
+        {
+            return;
+        }
+
         UnitCombat c = player.Combat;
         SetDeathState(player, DeathState.Corpse);
         player.SetUInt32(UpdateFields.UnitDynamicFlags, 0);
@@ -36,7 +41,7 @@ public sealed partial class MapCombat
     public bool RepopPlayer(Player player)
     {
         UnitCombat c = player.Combat;
-        if (IsAliveState(player) || (player.Flags & PlayerFlags.Ghost) != 0)
+        if (IsQuestSettlementPending(player) || IsAliveState(player) || (player.Flags & PlayerFlags.Ghost) != 0)
         {
             return false;
         }
@@ -83,7 +88,7 @@ public sealed partial class MapCombat
     public bool TryReclaimCorpse(Player player)
     {
         UnitCombat c = player.Combat;
-        if (IsAliveState(player) || (player.Flags & PlayerFlags.Ghost) == 0 || c.Corpse is not { } corpse)
+        if (IsQuestSettlementPending(player) || IsAliveState(player) || (player.Flags & PlayerFlags.Ghost) == 0 || c.Corpse is not { } corpse)
         {
             return false;
         }
@@ -120,6 +125,11 @@ public sealed partial class MapCombat
     /// </summary>
     public void ResurrectPlayer(Player player, float restorePercent, bool applySickness)
     {
+        if (IsQuestSettlementPending(player))
+        {
+            return;
+        }
+
         SetDeathState(player, DeathState.Alive);
         Hooks.RemoveGhostForm(player);
         SetGhost(player, false);
@@ -224,6 +234,11 @@ public sealed partial class MapCombat
     /// </summary>
     public void TogglePvp(Player player, bool? desired)
     {
+        if (IsQuestSettlementPending(player))
+        {
+            return;
+        }
+
         bool want = desired ?? (player.Flags & PlayerFlags.PvpDesired) == 0;
         player.Flags = want ? player.Flags | PlayerFlags.PvpDesired : player.Flags & ~PlayerFlags.PvpDesired;
         if (want)
@@ -238,6 +253,11 @@ public sealed partial class MapCombat
     /// <summary>vmangos Player::UpdatePvP(state, override = false): on → flag and refresh the 5-minute timer; off → drop the flag once the timer is over.</summary>
     public static void UpdatePvp(Player player, bool state)
     {
+        if (IsQuestSettlementPending(player))
+        {
+            return;
+        }
+
         if (state)
         {
             player.Combat.PvpFlagTimer = CombatConstants.PvpFlagTimerMs;

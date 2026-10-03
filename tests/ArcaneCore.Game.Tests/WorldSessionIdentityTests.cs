@@ -8,6 +8,30 @@ namespace ArcaneCore.Game.Tests;
 public sealed class WorldSessionIdentityTests
 {
     [Fact]
+    public void SettlementSaveHoldSkipsSnapshotCreation_AndDisconnectStillRemovesThePlayer()
+    {
+        var saves = new RecordingSaveQueue();
+        using WorldRuntime world = TestWorld.CreateRuntime(saves);
+        var player = TestWorld.CreatePlayer(1, 0, 0, new FakeSession());
+        world.AddPlayer(player);
+        Assert.True(player.SetActionButton(0, 123));
+        Guid operation = Guid.NewGuid();
+        Assert.True(player.BeginQuestSettlement(operation));
+
+        world.SavePlayer(player);
+        world.SaveAll();
+        world.RemovePlayer(player);
+
+        Assert.Empty(saves.Saved);
+        Assert.False(world.IsOnline(player.Guid));
+        Assert.Null(player.Map);
+        Assert.True(player.EndQuestSettlement(operation));
+        CharacterState final = player.CreateSnapshot(world.NowMs);
+        Assert.NotNull(final.ActionButtons);
+        Assert.Equal(123u, Assert.Single(final.ActionButtons!).Action);
+    }
+
+    [Fact]
     public void OldSessionCallbacks_CannotRemoveLogoutOrSaveAReplacementPlayer()
     {
         var saves = new RecordingSaveQueue();

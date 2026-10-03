@@ -195,6 +195,11 @@ public sealed partial class SpellSystem
                 continue;
             }
 
+            if (IsQuestSettlementPending(state.Unit))
+            {
+                continue;
+            }
+
             if (state.CurrentCast is { } cast)
             {
                 UpdateCast(cast, diffMs);
@@ -226,6 +231,12 @@ public sealed partial class SpellSystem
 
     private SpellCastResult Prepare(Unit caster, SpellInfo spell, SpellCastTargets targets, bool triggered)
     {
+        if (IsQuestSettlementPending(caster))
+        {
+            SendCastResult(caster, spell, SpellCastResult.NotReady, triggered);
+            return SpellCastResult.NotReady;
+        }
+
         UnitSpellState state = GetOrCreateState(caster);
         if (!triggered && state.CurrentCast is { } current)
         {
@@ -451,6 +462,11 @@ public sealed partial class SpellSystem
     private SpellCastResult CheckCast(UnitSpellState state, SpellInfo spell, SpellCastTargets targets, Unit? unitTarget, bool triggered, bool strict, bool skipCooldown = false)
     {
         Unit caster = state.Unit;
+        if (IsQuestSettlementPending(caster))
+        {
+            return SpellCastResult.NotReady;
+        }
+
         if (!caster.IsAlive && !spell.HasAttribute(SpellAttributes.AllowCastWhileDead))
         {
             return SpellCastResult.CasterDead;
@@ -476,6 +492,11 @@ public sealed partial class SpellSystem
         {
             Unit? target = unitTarget ?? (targets.Mask == SpellCastTargetFlags.Self ? caster : null);
             if (target is null)
+            {
+                return SpellCastResult.BadTargets;
+            }
+
+            if (IsQuestSettlementPending(target))
             {
                 return SpellCastResult.BadTargets;
             }
@@ -819,6 +840,9 @@ public sealed partial class SpellSystem
     }
 
     // --- helpers ------------------------------------------------------------------------
+
+    private static bool IsQuestSettlementPending(Unit? unit)
+        => unit is Player { IsQuestSettlementPending: true };
 
     private UnitSpellState GetOrCreateState(Unit unit)
     {

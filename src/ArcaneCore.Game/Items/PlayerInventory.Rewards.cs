@@ -110,6 +110,7 @@ public sealed partial class PlayerInventory
     /// <summary>Publish the exact inventory already committed by the reward transaction, preserving existing item and container identities.</summary>
     internal void ApplyQuestRewardInventory(InventoryRewardStage stage)
     {
+        Player?.EnsureQuestSettlementMutationAllowed();
         if (!ReferenceEquals(stage.Inventory, this) || !stage.MatchesBefore())
         {
             throw new InvalidOperationException("the inventory changed while its quest reward was settling");

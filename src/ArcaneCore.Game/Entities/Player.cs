@@ -35,7 +35,7 @@ public enum Team
 /// An in-world player character. Owned by the world thread once added to a map; the network
 /// side talks to it only through <see cref="Session"/>.
 /// </summary>
-public sealed class Player : Unit
+public sealed partial class Player : Unit
 {
     /// <summary>vmangos ObjectDefines.h DEFAULT_WORLD_OBJECT_SIZE (used until model data is imported).</summary>
     public const float DefaultBoundingRadius = 0.388999998569489f;
@@ -164,7 +164,11 @@ public sealed class Player : Unit
     public uint Money
     {
         get => GetUInt32(UpdateFields.PlayerFieldCoinage);
-        set => SetUInt32(UpdateFields.PlayerFieldCoinage, value);
+        set
+        {
+            EnsureQuestSettlementMutationAllowed();
+            SetUInt32(UpdateFields.PlayerFieldCoinage, value);
+        }
     }
 
     /// <summary>Visible optional action bars (vmangos PLAYER_FIELD_BYTES_OFFSET_ACTION_BARS = byte 2).</summary>

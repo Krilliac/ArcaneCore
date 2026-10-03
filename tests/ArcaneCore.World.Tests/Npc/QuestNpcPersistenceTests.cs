@@ -244,6 +244,84 @@ public sealed class QuestNpcPersistenceTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => queue.DisposeAsync().AsTask());
     }
 
+    [Fact]
+    public async Task Quarantine_SuppressesQueuedAndNewDeltasAndShutdownSnapshots()
+    {
+        var storage = new Storage { BlockFirstQuestSave = true };
+        await using ServiceProvider provider = Provider(storage);
+        await using var queue = Queue(provider);
+        queue.SaveQuests(8, [Row(8, 202, 1)]);
+        await storage.FirstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        queue.SaveQuests(7, [Row(7, 101, 5)]);
+        queue.SaveTaxiMask(7, [1]);
+        queue.QuarantineCharacter(7);
+        queue.SaveQuests(7, [Row(7, 303, 3)]);
+        queue.SaveTaxiMask(7, [9]);
+        Task drain = queue.FlushCharacterAsync(7);
+        Assert.False(drain.IsCompleted);
+        storage.ReleaseFirst.TrySetResult();
+        await drain.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(queue.IsQuarantined(7));
+        Assert.Empty(storage.Snapshot(7).Quests);
+        Assert.Empty(storage.Snapshot(7).TaxiMask);
+        await queue.DisposeAsync();
+        Assert.DoesNotContain(storage.Attempts, attempt => attempt.StartsWith("quests:7:", StringComparison.Ordinal)
+            || attempt == "taxi:7");
+        Assert.Equal(storage.ScopesCreated, storage.ScopesDisposed);
+    }
+
+    [Fact]
+    public async Task QuarantinedFailure_FreshAuthoritativeLoadSupersedesRetainedCacheBeforeExplicitResume()
+    {
+        var storage = new Storage { FailWrites = true };
+        await using ServiceProvider provider = Provider(storage);
+        await using var queue = Queue(provider);
+        queue.LoadCharacter(7, new CharacterQuestData([Row(7, 101, 3)], [1]), queue.CaptureLoadRevision(7));
+        queue.SaveQuests(7, [Row(7, 101, 5)]);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => queue.FlushCharacterAsync(7));
+        queue.QuarantineCharacter(7);
+        int failedAttempts = storage.Attempts.Count;
+        await queue.FlushCharacterAsync(7);
+        Assert.Equal(failedAttempts, storage.Attempts.Count);
+        CharacterQuestStatus authoritative = Row(7, 101, 1) with { Rewarded = true, RewardChoice = 117 };
+        queue.LoadCharacter(7, new CharacterQuestData([authoritative], [9]), queue.CaptureLoadRevision(7));
+        queue.SaveQuests(7, [Row(7, 101, 3)]);
+        queue.SaveTaxiMask(7, [1]);
+        Assert.True(queue.IsQuarantined(7));
+        storage.FailWrites = false;
+        storage.FailuresRemaining = 1;
+        queue.ResumeCharacter(7);
+        queue.SaveQuests(7, [Row(7, 202, 1)]);
+        await queue.FlushCharacterAsync(7).WaitAsync(TimeSpan.FromSeconds(5));
+        CharacterQuestData recovered = storage.Snapshot(7);
+        Assert.Equal(authoritative, Assert.Single(recovered.Quests, row => row.Quest == 101));
+        Assert.Equal(new uint[] { 9 }, recovered.TaxiMask);
+        Assert.False(queue.IsQuarantined(7));
+    }
+
+    [Fact]
+    public async Task DurableReward_CanBeAdoptedWhileQuarantinedWithoutShutdownRewritingTheOldJournal()
+    {
+        var storage = new Storage();
+        await using ServiceProvider provider = Provider(storage);
+        await using var queue = Queue(provider);
+        CharacterQuestStatus expected = Row(7, 101, 1);
+        CharacterQuestStatus rewarded = expected with { Rewarded = true, RewardChoice = 117 };
+        queue.LoadCharacter(7, new CharacterQuestData([expected], []), queue.CaptureLoadRevision(7));
+        long previousRevision = queue.CaptureLoadRevision(7);
+        await storage.SaveQuestsAsync(7, [rewarded]);
+        queue.QuarantineCharacter(7);
+        queue.AdoptRewarded(rewarded);
+        Assert.Equal(previousRevision + 1, queue.CaptureLoadRevision(7));
+        Assert.Throws<InvalidOperationException>(() => queue.LoadCharacter(7,
+            new CharacterQuestData([expected], []), previousRevision));
+        await queue.FlushCharacterAsync(7);
+        await queue.DisposeAsync();
+        Assert.True(queue.IsQuarantined(7));
+        Assert.Equal(rewarded, Assert.Single(storage.Snapshot(7).Quests));
+        Assert.Single(storage.Attempts);
+    }
+
     private static QuestNpcPersistence Queue(IServiceProvider provider) =>
         new(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance);
 

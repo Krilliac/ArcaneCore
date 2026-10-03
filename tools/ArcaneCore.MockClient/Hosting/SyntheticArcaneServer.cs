@@ -101,10 +101,12 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
     /// <summary>The unique fixture directory, removed after sessions and saves drain.</summary>
     public string DataDirectory => _directory.Path;
 
-    /// <summary>Observe actual handler writes after both ordered persistence queues drain.</summary>
+    /// <summary>Observe actual handler writes after reward settlement and both ordered save queues drain.</summary>
     public async Task FlushCharacterAsync(int characterId, CancellationToken cancellationToken = default)
     {
         await World.InvokeAsync(() => true).WaitAsync(cancellationToken).ConfigureAwait(false);
+        await _services.GetRequiredService<QuestNpcFeature>().WaitForSettlementAsync(characterId, cancellationToken)
+            .ConfigureAwait(false);
         await _services.GetRequiredService<QuestNpcFeature>().Persistence.FlushCharacterAsync(characterId)
             .WaitAsync(cancellationToken).ConfigureAwait(false);
         await _services.GetRequiredService<CharacterSaveQueue>().FlushCharacterAsync(characterId, cancellationToken)

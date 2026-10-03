@@ -247,6 +247,12 @@ public static class BuiltinCommands
             return true;
         }
 
+        if (target.IsQuestSettlementPending)
+        {
+            context.Reply("This player's quest reward is still settling.");
+            return true;
+        }
+
         long updated = Math.Clamp((long)target.Money + delta, 0L, MaxMoney);
         target.Money = (uint)updated;
         context.Reply($"{target.Name} now has {updated} copper.");

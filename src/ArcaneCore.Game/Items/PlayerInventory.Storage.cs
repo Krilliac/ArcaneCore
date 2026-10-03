@@ -10,6 +10,7 @@ public sealed partial class PlayerInventory
     /// <summary>vmangos Player::StoreItem: place an item per <paramref name="dest"/> (clones for all but the last position). Returns the item holding the last part.</summary>
     public Item StoreItem(IReadOnlyList<ItemPosCount> dest, Item item)
     {
+        Player?.EnsureQuestSettlementMutationAllowed();
         ArgumentNullException.ThrowIfNull(dest);
         ArgumentNullException.ThrowIfNull(item);
         if (dest.Count == 0)
@@ -29,6 +30,7 @@ public sealed partial class PlayerInventory
     /// <summary>vmangos Player::StoreNewItem: create <paramref name="count"/> items of <paramref name="template"/> per <paramref name="dest"/> (from CanStoreItem).</summary>
     public Item StoreNewItem(IReadOnlyList<ItemPosCount> dest, ItemTemplate template, uint count)
     {
+        Player?.EnsureQuestSettlementMutationAllowed();
         ArgumentNullException.ThrowIfNull(dest);
         ArgumentNullException.ThrowIfNull(template);
         Item item = Item.Create(NextGuid(), template, _ownerGuid);
@@ -41,6 +43,7 @@ public sealed partial class PlayerInventory
     /// <summary>vmangos Player::EquipItem: wear <paramref name="item"/> in own slot <paramref name="slot"/> (merging into a worn stack of the same item).</summary>
     public Item EquipItem(byte slot, Item item)
     {
+        Player?.EnsureQuestSettlementMutationAllowed();
         ArgumentNullException.ThrowIfNull(item);
         if (_items[slot] is { } existing)
         {
@@ -65,6 +68,7 @@ public sealed partial class PlayerInventory
     /// </summary>
     public void RemoveItem(byte bag, byte slot)
     {
+        Player?.EnsureQuestSettlementMutationAllowed();
         if (GetItem(bag, slot) is not { } item)
         {
             return;
@@ -93,6 +97,7 @@ public sealed partial class PlayerInventory
     /// <summary>vmangos Player::DestroyItem: remove and delete an item (a bag takes its contents with it).</summary>
     public void DestroyItem(byte bag, byte slot)
     {
+        Player?.EnsureQuestSettlementMutationAllowed();
         if (GetItem(bag, slot) is not { } item)
         {
             return;
@@ -119,6 +124,7 @@ public sealed partial class PlayerInventory
     /// <summary>vmangos Player::DestroyItemCount(Item*): destroy up to <paramref name="count"/> of one stack; returns how many were destroyed.</summary>
     public uint DestroyItemCount(Item item, uint count)
     {
+        Player?.EnsureQuestSettlementMutationAllowed();
         ArgumentNullException.ThrowIfNull(item);
         if (item.Count <= count)
         {
@@ -139,6 +145,7 @@ public sealed partial class PlayerInventory
     /// </summary>
     public uint DestroyItemCount(uint entry, uint count, bool includeBank = false)
     {
+        Player?.EnsureQuestSettlementMutationAllowed();
         uint remaining = count;
         foreach (Item item in RemovalOrder(includeBank).Where(i => i.Entry == entry).ToList())
         {
@@ -180,6 +187,11 @@ public sealed partial class PlayerInventory
     public InventoryResult AddItem(uint entry, uint count, out Item? item, bool received = false, bool created = false, bool showInChat = true)
     {
         item = null;
+        if (Player is { CanMutateQuestSettlementState: false })
+        {
+            return InventoryResult.CantDoRightNow;
+        }
+
         var dest = new List<ItemPosCount>();
         InventoryResult result = CanStoreNewItem(entry, count, dest, out _);
         if (result != InventoryResult.Ok)
@@ -204,6 +216,7 @@ public sealed partial class PlayerInventory
     /// </summary>
     public void AddStartingItems()
     {
+        Player?.EnsureQuestSettlementMutationAllowed();
         foreach (StartingItem starting in Templates.StartingItems((byte)Race, (byte)Class))
         {
             StoreNewItemInBestSlots(starting.ItemId, starting.Amount);
@@ -239,6 +252,11 @@ public sealed partial class PlayerInventory
     /// <summary>vmangos Player::StoreNewItemInBestSlots.</summary>
     public bool StoreNewItemInBestSlots(uint entry, uint amount)
     {
+        if (Player is { CanMutateQuestSettlementState: false })
+        {
+            return false;
+        }
+
         if (Templates.Find(entry) is not { } template)
         {
             return false;
