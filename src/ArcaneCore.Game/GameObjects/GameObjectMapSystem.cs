@@ -2,6 +2,8 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Loot;
 using ArcaneCore.Kernel.WorldData.GameObjects;
@@ -223,6 +225,8 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
             GameObjectType.Chest => UseChest(player, go),
             GameObjectType.Goober => UseGoober(player, go),
             GameObjectType.Text => UseText(player, go),
+            GameObjectType.Chair => UseChair(player, go),
+            GameObjectType.Camera => UseCamera(player, go),
             GameObjectType.QuestGiver => QuestGiver is { } giver && giver.OpenQuestMenu(player, go) ? GameObjectUseResult.Ok : GameObjectUseResult.Unsupported,
             GameObjectType.Mailbox => GameObjectUseResult.Ok,
             GameObjectType.Generic or GameObjectType.SpellFocus or GameObjectType.Trap or GameObjectType.Binder
@@ -532,6 +536,57 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
         else if (autoCloseSeconds > 0)
         {
             ActivateDoorOrButton(go, autoCloseSeconds);
+        }
+
+        return GameObjectUseResult.Ok;
+    }
+
+    /// <summary>
+    /// Where a chair user is moved when they sit (same-map teleport). Defaults to <see cref="NearTeleportSink"/> (vmangos
+    /// <c>Unit::NearTeleportTo</c>: the player is relocated at once and the client is told with MSG_MOVE_TELEPORT_ACK).
+    /// </summary>
+    public ITeleportSink Teleports { get; set; } = new NearTeleportSink();
+
+    /// <summary>
+    /// GAMEOBJECT_TYPE_CHAIR (GameObject.cpp:1515-1533 with PlayerCanUse :2229-2236): the user must be within 3 yards (3D) of the
+    /// nearest slot, then needs line of sight to the chair; they are moved to the slot at the chair orientation and sit with
+    /// SIT_LOW_CHAIR plus the chair height. A refused use is silent for the client. Limit: a mounted user is not dismounted
+    /// first and an occupied slot is not refused (neither does vmangos refuse it).
+    /// </summary>
+    private GameObjectUseResult UseChair(Player player, GameObject go)
+    {
+        (float slotX, float slotY) = GameObjectChairs.ClosestSlot(go, player.X, player.Y);
+        float dx = slotX - player.X;
+        float dy = slotY - player.Y;
+        float dz = go.Z - player.Z;
+        if (MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz)) > GameObjectChairs.MaxSitDistance)
+        {
+            return GameObjectUseResult.TooFar;
+        }
+
+        if (!player.IsWithinLineOfSight(go))
+        {
+            return GameObjectUseResult.LineOfSight;
+        }
+
+        if (!Teleports.Teleport(player, Map.MapId, slotX, slotY, go.Z, go.Orientation))
+        {
+            return GameObjectUseResult.NotUsable;
+        }
+
+        player.SetStandState(GameObjectChairs.SeatedState(go.Template));
+        return GameObjectUseResult.Ok;
+    }
+
+    /// <summary>
+    /// GAMEOBJECT_TYPE_CAMERA (GameObject.cpp:1613-1634): SMSG_TRIGGER_CINEMATIC with data1 when it is set. The event id (data2)
+    /// needs the scripts engine, which this codebase does not have, so it is not run. Cinematic ids are not validated against CinematicSequences.dbc.
+    /// </summary>
+    private static GameObjectUseResult UseCamera(Player player, GameObject go)
+    {
+        if (go.Template.GetData(1) is var cinematic and not 0)
+        {
+            player.Session.Send(WorldOpcode.SmsgTriggerCinematic, CinematicPackets.TriggerCinematic(cinematic));
         }
 
         return GameObjectUseResult.Ok;

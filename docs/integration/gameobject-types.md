@@ -51,6 +51,22 @@ Provider coverage: the schema tests (`GameObjectSpawnDataTests`, `IntegratedSche
 (quoted identifiers through `ISqlGenerationHelper`), but **only SQLite was available on this machine**; the MariaDB and PostgreSQL runs happen on hosted CI.
 Not modelled: the `spawnMask` column, vmangos `visibility_mod` (cannot be verified, no vmangos world dump in the references), `gameobject_spawn_entry`/pools/game events (no lane owns them).
 
+### GO5 chairs and cameras
+
+| Item | Where | Reference |
+|---|---|---|
+| Chair use: the user must be within 3 yards (3D, no radii) of the nearest slot, then needs line of sight to the chair; they are moved to the slot at the chair orientation (same-map teleport through `GameObjectMapSystem.Teleports`, default `NearTeleportSink`: relocation plus `MSG_MOVE_TELEPORT_ACK`) and sit with `SIT_LOW_CHAIR` + chair height. A refused use is `TooFar` / the new `LineOfSight` result and silent for the client. 2766 classic-db spawns are chairs | `GameObjectMapSystem.UseChair` | `D:\refs\vmangos\src\game\Objects\GameObject.cpp:1515-1533`, `:2229-2236`, `GameObjectDefines.h:799` |
+| Slot geometry: `data0` slots on the line perpendicular to the orientation, spaced by the template size, nearest slot wins, a later slot wins a tie, centre when there are no slots or none within 100 yards | `GameObjectChairs.ClosestSlot` | `GameObject.cpp:2536-2582` |
+| Chair height data1 0..2, a larger value is a data error fixed to 0 | `GameObjectChairs.Height` | `D:\refs\vmangos\src\game\ObjectMgr.cpp:8108-8118` |
+| Camera: `SMSG_TRIGGER_CINEMATIC` (u32 cinematic id from data1, when non-zero) | `GameObjectMapSystem.UseCamera`, `CinematicPackets` | `GameObject.cpp:1613-1634`, `Player.cpp:6049-6056`, `Server/Packets/Misc.cpp:789-797` |
+
+The 1.12 layout of the cinematic packet is taken from vmangos only (the wow_messages definition is 3.3.5-only); it has not been checked against a real client.
+Not modelled: dismounting a mounted user before sitting (vmangos does it in the Use prologue), the camera event id (data2, needs the scripts engine), the server-side cinematic state
+of `Player::CinematicStart` (camera path, explore check at the end), `onlyCreatorUse` (vmangos does not read it either).
+CMSG_STANDSTATECHANGE already stands a seated player up (existing handler).
+
+Tests: `ChairCameraTests`.
+
 ## Limits (not delivered, documented)
 
 * Goober Use semantics (page before the quest gate, group quest credit, IN_USE/ACTIVATED machine, use spell, linked trap,
@@ -58,5 +74,5 @@ Not modelled: the `spawnMask` column, vmangos `visibility_mod` (cannot be verifi
   The existing goober still returns `InUse` while an auto-close goober is active (vmangos has no such gate, GameObject.cpp:1541-1611).
 * Spawn flag 0x08 (dynamic respawn time, realm population) and 0x01 (active object) are carried but not modelled.
 * `SMSG_GAMEOBJECT_SPAWN_ANIM` / `RESET_STATE` builders are not added (they have no caller until the object-spell slice).
-* Behaviour seam (`IGameObjectBehavior`), visibility modifiers, chairs/cameras, spell-focus enforcement and summon effects,
-  traps/spell casters/rituals, transports: see `slices_not_done` of the lane report.
+* Behaviour seam (`IGameObjectBehavior`: the per-type switch in `GameObjectMapSystem.Use` stays, chairs and cameras were added to it in place), per-object
+  visibility modifiers, page text, spell-created objects (TRANS_DOOR, SUMMON_OBJECT_*, ACTIVATE_OBJECT), traps/spell casters/rituals, transports: see the lane report.
