@@ -31,4 +31,17 @@ public sealed class CreatureRespawnOptions
     /// :1936-1944). False ignores the rows: a spawn whose <c>id</c> is 0 then never spawns (the earlier behaviour).
     /// </summary>
     public bool AlternateEntries { get; set; } = true;
+
+    /// <summary>
+    /// <c>Creatures:Respawn:Persist</c>: dead spawns keep their respawn time across restarts (vmangos <c>creature_respawn</c>, characters
+    /// database). False keeps the timers in memory only, as before.
+    /// </summary>
+    public bool Persist { get; set; } = true;
+
+    /// <summary>
+    /// <c>Creatures:Respawn:SaveImmediately</c>: every database spawn saves its respawn time at death (vmangos SaveRespawnTimeImmediately = 1,
+    /// mangosd.conf.dist.in:397, World.cpp:729). False saves a normal creature only when it leaves the map or at shutdown; a world boss is
+    /// always saved at death (Creature.cpp:2262-2263).
+    /// </summary>
+    public bool SaveImmediately { get; set; } = true;
 }

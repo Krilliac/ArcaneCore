@@ -50,6 +50,7 @@ public sealed partial class CreatureMapSystem
         creature.SkinningForOthersMs = Creature.SkinningForOthersDefaultMs; // Creature.cpp:822-825: a new life, a new corpse
         creature.LootedForSkin = false;
         creature.RespawnAtMs = _clockMs + (creature.NextRespawnDelaySeconds() * 1000L);
+        SaveRespawnOnDeath(creature);
     }
 
     /// <summary>Respawn a dead creature now (GM command / script).</summary>
@@ -169,13 +170,20 @@ public sealed partial class CreatureMapSystem
                 creature.DrawRespawnDelay(); // m_respawnDelay is drawn once per loaded object (Creature.cpp:1963)
             }
 
-            if (_respawnAt.Remove(spawn.Guid, out long respawnAt) && respawnAt > _clockMs)
+            if (_respawnAt.Remove(spawn.Guid, out long respawnAt))
             {
-                creature.Health = 0;
-                creature.NpcFlags = 0;
-                creature.DeathState = CreatureDeathState.Dead;
-                creature.Combat.DeathState = DeathState.Dead;
-                creature.RespawnAtMs = respawnAt;
+                if (respawnAt > _clockMs)
+                {
+                    creature.Health = 0;
+                    creature.NpcFlags = 0;
+                    creature.DeathState = CreatureDeathState.Dead;
+                    creature.Combat.DeathState = DeathState.Dead;
+                    creature.RespawnAtMs = respawnAt;
+                }
+                else
+                {
+                    DeletePersistedRespawn(creature); // "respawn time set but expired" (vmangos Creature.cpp:1984-1989)
+                }
             }
 
             AddToWorld(creature, grid);
@@ -202,6 +210,7 @@ public sealed partial class CreatureMapSystem
             if (creature.Spawn is not null && creature.DeathState != CreatureDeathState.Alive)
             {
                 _respawnAt[creature.Spawn.Guid] = creature.RespawnAtMs;
+                SaveRespawnOnRemoval(creature);
             }
 
             RemoveFromWorld(creature);
@@ -296,6 +305,7 @@ public sealed partial class CreatureMapSystem
             // The creature died after walking out of an unloaded home grid. Keep its deadline
             // as dormant spawn data; do not respawn into a grid no player has loaded.
             _respawnAt[creature.Spawn.Guid] = creature.RespawnAtMs;
+            SaveRespawnOnRemoval(creature);
             RemoveFromWorld(creature);
         }
     }
@@ -325,6 +335,7 @@ public sealed partial class CreatureMapSystem
         creature.InitializeFields();
         creature.DeathState = CreatureDeathState.Alive;
         creature.RespawnAtMs = 0;
+        DeletePersistedRespawn(creature);
 
         // vmangos Creature::Update DEAD -> respawn (Objects/Creature.cpp:877-878): 5 s before it may initiate an attack.
         creature.PacifiedMs = _options.RespawnPacifyMs;
@@ -381,6 +392,7 @@ public sealed partial class CreatureMapSystem
             if (creature.Spawn is not null && creature.DeathState != CreatureDeathState.Alive)
             {
                 _respawnAt[creature.Spawn.Guid] = creature.RespawnAtMs;
+                SaveRespawnOnRemoval(creature);
             }
 
             foreach (LoadedGrid loaded in _grids.Values)

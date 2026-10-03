@@ -81,16 +81,19 @@ public sealed class CreatureOptionsBindingTests
     public void RespawnOptions_DefaultToRetail_AndBindFromTheSection()
     {
         var defaults = new CreatureOptions();
-        Assert.Equal((true, false), (defaults.Respawn.DrawDelayAtLoad, defaults.Respawn.HonorTemplateCorpseDecay));
+        Assert.Equal((true, false, true, true, true), (defaults.Respawn.DrawDelayAtLoad, defaults.Respawn.HonorTemplateCorpseDecay, defaults.Respawn.AlternateEntries, defaults.Respawn.Persist, defaults.Respawn.SaveImmediately));
 
         IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Creatures:Respawn:DrawDelayAtLoad"] = "false",
             ["Creatures:Respawn:HonorTemplateCorpseDecay"] = "true",
+            ["Creatures:Respawn:AlternateEntries"] = "false",
+            ["Creatures:Respawn:Persist"] = "false",
+            ["Creatures:Respawn:SaveImmediately"] = "false",
         }).Build();
         var bound = new CreatureOptions();
         configuration.GetSection(CreatureOptions.SectionName).Bind(bound);
 
-        Assert.Equal((false, true), (bound.Respawn.DrawDelayAtLoad, bound.Respawn.HonorTemplateCorpseDecay));
+        Assert.Equal((false, true, false, false, false), (bound.Respawn.DrawDelayAtLoad, bound.Respawn.HonorTemplateCorpseDecay, bound.Respawn.AlternateEntries, bound.Respawn.Persist, bound.Respawn.SaveImmediately));
     }
 }

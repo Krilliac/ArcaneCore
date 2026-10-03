@@ -137,6 +137,9 @@ public sealed partial class Creature : Unit, ICombatCreature
     private bool _respawnDelayDrawn;
     private uint _respawnDelaySeconds;
 
+    /// <summary>The respawn delay (s) of this object: the one drawn at load, else the last death's (vmangos <c>m_respawnDelay</c>); 0 before any.</summary>
+    internal uint RespawnDelaySeconds => _respawnDelaySeconds;
+
     /// <summary>True only during the visibility pass of a runtime add (vmangos Map::Add → SetIsNewObject).</summary>
     internal bool IsNewObject { get; set; }
 

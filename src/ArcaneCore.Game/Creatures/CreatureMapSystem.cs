@@ -63,7 +63,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
 
     public CreatureMapSystem(
         Map map, CreatureContent content, CreatureOptions? options = null, ICreatureHeightProvider? height = null,
-        Random? random = null, Func<uint>? serverTime = null, ILogger? logger = null, CreatureAiServices? aiServices = null)
+        Random? random = null, Func<uint>? serverTime = null, ILogger? logger = null, CreatureAiServices? aiServices = null,
+        ICreatureRespawnPersistence? respawnPersistence = null, IRespawnClock? respawnClock = null)
     {
         ArgumentNullException.ThrowIfNull(map);
         ArgumentNullException.ThrowIfNull(content);
@@ -75,6 +76,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
         _serverTime = serverTime ?? (() => unchecked((uint)_clockMs));
         _logger = logger ?? NullLogger.Instance;
         _ai = aiServices ?? CreatureAiServices.Default;
+        _persistence = respawnPersistence;
+        _respawnClock = respawnClock ?? SystemRespawnClock.Instance;
         SubscribeAi();
 
         uint maxGuid = 0;
@@ -92,6 +95,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
 
         // Runtime spawns (GM .npc add, summons) take counters above the database spawns.
         _nextTemporaryCounter = maxGuid + 1;
+        LoadPersistedRespawns();
 
         Map.Grids.GridLoaded += grid => LoadGrid(new GridCoord(grid.Coord.X, grid.Coord.Y));
         Map.Grids.GridUnloading += OnMapGridUnloading;

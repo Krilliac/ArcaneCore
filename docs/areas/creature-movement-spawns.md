@@ -158,3 +158,40 @@ Differences from the references, on purpose: cmangos uses `creature.id` when it 
 load as well. One rule serves both dialects: a spawn that has rows always chooses among them (the 46 classic-db spawns with both an `id`
 and rows lose nothing: the `id` is normally one of the rows). vmangos group entry limits (`creature_groups_entry_limit`) are not applied. Only SQLite ran locally for the store
 tests; MariaDB/PostgreSQL run on hosted CI (one `CREATE TABLE`, composite integer key).
+
+### 7. Durable respawn timers (slice `respawn-persistence`)
+
+A restart no longer brings every dead rare and boss back to life (classic-db: 757 of 765 rares have a spawn-time range, bosses are mostly
+604,800 s).
+
+Data (Characters schema version **21**, `CreatureRespawnDataModule.Version`; the integrator renumbers): table `creature_respawn`
+(`instance_id, spawn_guid, map_id, respawn_time` unix seconds, key `(instance_id, spawn_guid)`; vmangos `sql/characters.sql:472-480`
+keys by guid and instance). `EfCreatureRespawnStore` upserts by EF update-or-insert (no `REPLACE INTO`, which PostgreSQL lacks), one
+transaction per batch, explicit lower-case column names. `LoadAsync(now)` deletes (does not just skip) rows whose time has passed
+(vmangos `MapPersistentStateMgr.cpp:1070-1100`) and rows of a dungeon instance whose `instance` row is gone (the loot-state guard
+against a reused instance id). `EfInstanceStore.DeleteInstanceAsync` deletes the instance's rows with it. The module implements
+`ICharacterDataCleanup` as a deliberate no-op (the rows are keyed by spawn and instance, never by character).
+
+Behaviour (`CreatureMapSystem.RespawnPersistence.cs`, `ICreatureRespawnPersistence`/`IRespawnClock` seams, injected wall clock):
+
+* A database spawn that dies saves `now + respawn delay` at once (vmangos `SaveRespawnTimeImmediately = 1`, `mangosd.conf.dist.in:397`;
+  `Creature::SetDeathState`, `:2262-2263`); a world boss is saved at death whatever the option says. With
+  `Creatures:Respawn:SaveImmediately=false` a normal creature is saved when it leaves the map (grid unload, instance unload) or at shutdown
+  (`Map.cpp:1319-1322`): dead without a corpse saves its respawn time, one with a corpse `now + delay + corpse time left`
+  (`Creature::SaveRespawnTime`, `:2785-2794`; vmangos' own formula, kept).
+* At load a pending time makes the creature dead for what is left (`Creature.cpp:1972-1989`); an expired one spawns it alive and deletes the row
+  (`:1984-1989`). The row is also deleted when the creature respawns, naturally or by hand.
+* The world side (`CreatureRespawnFeature`, `CreatureRespawnQueue`): reads answer from memory, writes are queued to one consumer off the world
+  thread, in order, retried three times; the creature systems save what is still dead at shutdown (`StopAsync` after the world stopped) and the
+  queue drains. Inactive without a store or with `Creatures:Respawn:Persist=false`.
+
+Verification: `RespawnPersistenceTests` (fake persistence and clock), `CreatureRespawnQueueTests` (ordering, copy semantics, retry, drain), and
+`CreatureRespawnStoreTests` (round trip, upsert replace, delete, expired and orphaned-instance purge, instance delete, upgrade from the previous
+version with a re-run) in `AvailableProviders` theories: **only SQLite ran on this machine; MariaDB and PostgreSQL run on hosted CI.** The store
+was written for their semantics (non-transactional MariaDB DDL: the step is one `CREATE TABLE`; PostgreSQL identifier folding: explicit
+lower-case names; no `REPLACE INTO`; no advisory locks), but nothing here proves it until CI runs.
+
+Limits: battleground maps are not excluded (vmangos never stores them, `MapPersistentStateMgr.cpp:86-88`; no battleground lane yet, the
+exclusion belongs in `CreatureRespawnQueue.Save`); creature pools/linking that share dormant state are not implemented; the instance reset
+path outside `EfInstanceStore.DeleteInstanceAsync` (an in-memory-only reset) is the instances area's; a crash between a death and its queued write
+loses that one write (same window as vmangos' asynchronous character-database queue).
