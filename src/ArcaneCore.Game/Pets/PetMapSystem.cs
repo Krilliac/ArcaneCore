@@ -164,7 +164,14 @@ public sealed class PetMapSystem : IMapUpdater
         {
             if (creature.System is not { } system || !ReferenceEquals(system.FindCreature(creature.Guid), creature) || creature.Summon is not { } links)
             {
-                Forget(creature); // killed and decayed, or its grid unloaded
+                // Killed and decayed, or its grid unloaded. vmangos Pet::Update unsummons a pet whose
+                // corpse timer ran out (Pet.cpp:679-686): the owner's pet link and action bar go too.
+                if (creature.Summon is { Kind: SummonKind.Pet } && _map.FindObject(creature.OwnerGuid) is Unit petOwner)
+                {
+                    SummonService.ReleasePetLink(creature, petOwner);
+                }
+
+                Forget(creature);
                 continue;
             }
 
@@ -257,7 +264,14 @@ public sealed class PetMapSystem : IMapUpdater
 
         if (pet.DeathState != CreatureDeathState.Alive)
         {
-            return; // the creature system decays the corpse
+            // vmangos CORPSE: the decay timer running out unsummons (Pet.cpp:677-686); the creature
+            // system decays the corpse itself, and the removal is handled in Update.
+            if (pet.DeathState == CreatureDeathState.Corpse && pet.CorpseDecayMs <= diffMs)
+            {
+                _service?.Unsummon(pet);
+            }
+
+            return;
         }
 
         // Despawn if the owner is dead and the pet is out of combat.

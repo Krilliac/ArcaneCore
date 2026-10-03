@@ -220,22 +220,29 @@ public sealed partial class SummonService : ISpellSummonSink
                 RemoveTotemSpellAuras(creature, owner);
                 break;
             case SummonKind.Pet:
-                // Player::RemovePetActionBar for a controlled pet (Pet.cpp:1085)
-                if (owner is Player player)
-                {
-                    player.Session.Send(WorldOpcode.SmsgPetSpells, PetPackets.BuildRemoveActionBar());
-                }
-
-                if (owner is not null && owner.PetGuid == creature.Guid)
-                {
-                    owner.SetPetGuid(ObjectGuid.Empty);
-                }
-
+                ReleasePetLink(creature, owner);
                 break;
         }
 
         map?.Pets?.Forget(creature);
         creature.System?.Despawn(creature);
+    }
+
+    /// <summary>
+    /// The owner side of Pet::Unsummon: Player::RemovePetActionBar for a controlled pet (Pet.cpp:1085)
+    /// and clearing the owner's pet GUID (UNIT_FIELD_SUMMON) when it still points at this pet.
+    /// </summary>
+    internal static void ReleasePetLink(Creature pet, Unit? owner)
+    {
+        if (owner is Player player)
+        {
+            player.Session.Send(WorldOpcode.SmsgPetSpells, PetPackets.BuildRemoveActionBar());
+        }
+
+        if (owner is not null && owner.PetGuid == pet.Guid)
+        {
+            owner.SetPetGuid(ObjectGuid.Empty);
+        }
     }
 
     private void RemoveTotemSpellAuras(Creature totem, Unit? owner)

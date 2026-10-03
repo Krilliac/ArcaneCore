@@ -112,6 +112,32 @@ public sealed class SummonedPetTests
     }
 
     [Fact]
+    public void PetThatDiesIsUnsummonedWhenItsCorpseDecays_AndTheOwnerCanSummonAgain()
+    {
+        // vmangos Pet::Update CORPSE: m_corpseDecayTimer <= diff -> Unsummon (Pet.cpp:677-686).
+        using var kit = Kit();
+        (Player caster, FakeSession session) = kit.AddPlayer(1);
+        kit.Cast(caster, PetSpell);
+        Creature pet = Assert.Single(kit.Creatures.Creatures);
+        Assert.Equal(pet.Guid, caster.PetGuid);
+
+        kit.Creatures.KillCreature(pet);
+        Assert.Equal(CreatureDeathState.Corpse, pet.DeathState);
+        kit.Run(600_000);
+
+        Assert.Null(kit.Creatures.FindCreature(pet.Guid));
+        Assert.True(caster.PetGuid.IsEmpty);
+        Assert.True(caster.GetUInt64(UpdateFields.UnitFieldSummon) == 0);
+        Assert.Empty(kit.Map.Pets!.Summons);
+        Assert.True(kit.Service.CanSummon(caster, PetEntry));
+
+        kit.Cast(caster, PetSpell);
+        Creature second = Assert.Single(kit.Creatures.Creatures);
+        Assert.NotEqual(pet.Guid, second.Guid);
+        Assert.Equal(second.Guid, caster.PetGuid);
+    }
+
+    [Fact]
     public void OwnerLeavingTheMap_TakesItsPetWithIt()
     {
         using var kit = Kit();
