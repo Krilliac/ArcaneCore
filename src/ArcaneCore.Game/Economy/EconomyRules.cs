@@ -27,7 +27,7 @@ public sealed class EconomyOptions
     /// <summary>Days before a cash-on-delivery letter expires (vmangos: 3).</summary>
     public uint CodExpireDays { get; set; } = 3;
 
-    /// <summary>Most letters a mailbox may hold (vmangos MAX_INBOX_CLIENT_CAPACITY 100 is the client view).</summary>
+    /// <summary>A recipient already holding MORE than this many letters is refused (vmangos MailHandler.cpp:258: count &gt; 100).</summary>
     public int MaxMailboxSize { get; set; } = 100;
 
     /// <summary>Whether players of opposite teams may mail each other (vmangos CONFIG_BOOL_ALLOW_TWO_SIDE_INTERACTION_MAIL).</summary>
@@ -47,6 +47,24 @@ public sealed class EconomyOptions
 
     /// <summary>Rate.Auction.Cut multiplier (vmangos World.cpp:536, default 1.0).</summary>
     public float AuctionRateCut { get; set; } = 1.0f;
+
+    /// <summary>Delivery delay of letters carrying an item or money, seconds (vmangos MailDeliveryDelay, World.cpp:691: 1 hour).</summary>
+    public uint MailDeliveryDelaySeconds { get; set; } = 3600;
+
+    /// <summary>Reading a letter shortens its remaining life to this many days when more remains (vmangos MailHandler.cpp:454-458: 3; 0 disables).</summary>
+    public uint MailReadExpiryDays { get; set; } = 3;
+
+    /// <summary>Largest cash-on-delivery amount accepted, copper (vmangos MailHandler.cpp:162: 100,000,000).</summary>
+    public uint MailMaxCodCopper { get; set; } = 100_000_000;
+
+    /// <summary>Longest subject in bytes; longer ones are dropped (vmangos MailHandler.cpp:155: 64).</summary>
+    public int MailSubjectMaxLength { get; set; } = 64;
+
+    /// <summary>Longest body in bytes; longer ones are dropped (vmangos MailHandler.cpp:158: 500).</summary>
+    public int MailBodyMaxLength { get; set; } = 500;
+
+    /// <summary>Answer oversize or over-COD letters with an internal error instead of dropping them silently like vmangos (default false).</summary>
+    public bool MailOversizeAnswersError { get; set; }
 
     /// <summary>Seconds between expiry sweeps of mail and auctions.</summary>
     public uint ExpirySweepSeconds { get; set; } = 60;
@@ -277,19 +295,34 @@ public static class MailRules
         Money = money,
         Checked = MailCheckMask.Copied,
         DeliverTime = now,
-        ExpireTime = now + (options.MailExpireDays * SecondsPerDay),
+        // vmangos Mail.cpp:318-321: an auction note without item and money lives one hour.
+        ExpireTime = now + (money == 0 && itemGuid == 0 ? 3600 : options.MailExpireDays * SecondsPerDay),
     };
 
+    /// <summary>
+    /// Delivery and expiry of a new letter (vmangos MailDraft::SendMailTo, Mail.cpp:312-326): letters with an item or money
+    /// arrive after the configured delay, text-only letters at once, and expiry (3 days COD, else 30) counts from delivery.
+    /// </summary>
+    public static (long Deliver, long Expire) SendTiming(long now, bool hasItemOrMoney, uint cod, EconomyOptions options)
+    {
+        long deliver = now + (hasItemOrMoney ? options.MailDeliveryDelaySeconds : 0);
+        return (deliver, deliver + ((cod > 0 ? options.CodExpireDays : options.MailExpireDays) * SecondsPerDay));
+    }
+
+    /// <summary>MailHandler.cpp:454-458: reading clamps the remaining life to <paramref name="days"/> days when more remains (0 = off).</summary>
+    public static long ExpireAfterRead(long expireTime, long now, uint days)
+        => days > 0 && expireTime - now > days * SecondsPerDay ? now + (days * SecondsPerDay) : expireTime;
+
     /// <summary>The returned copy of a player's letter (vmangos MailDraft::SendReturnToSender): sender and receiver swap, COD cleared.</summary>
-    public static MailRecord Returned(MailRecord mail, uint newId, long now, EconomyOptions options) => mail with
+    public static MailRecord Returned(MailRecord mail, uint newId, long now, EconomyOptions options, uint deliverDelaySeconds = 0) => mail with
     {
         Id = newId,
         SenderId = checked((uint)mail.ReceiverId),
         ReceiverId = checked((int)mail.SenderId),
         Cod = 0,
         Checked = (mail.Checked & (MailCheckMask.HasBody | MailCheckMask.Copied)) | MailCheckMask.Returned,
-        DeliverTime = now,
-        ExpireTime = now + (options.MailExpireDays * SecondsPerDay),
+        DeliverTime = now + deliverDelaySeconds,
+        ExpireTime = now + deliverDelaySeconds + (options.MailExpireDays * SecondsPerDay),
     };
 
     /// <summary>Whether the letter can be returned to a player (a player's unreturned letter).</summary>
