@@ -1,6 +1,6 @@
 # M13b — Live creature quest journal interactions
 
-**Source status:** serialized Release build passed with zero warnings/errors; focused native tests passed (9 data, 23 Game, 14 World). Full combined/provider CI remains a coordinator integration gate.
+**Source status:** serialized Release build passed with zero warnings/errors; the combined native suite passed all 8,657 tests, including 24 NPC Game cases, 14 interaction World cases, and the native mock's NPC lifecycle. Three-provider hosted CI remains a coordinator integration gate.
 **Real-client status:** pending developer acceptance on 1.12.1 build 5875. Synthetic mocks do not establish real-client acceptance.
 
 This tranche connects the persisted M13a journal to real creatures for status, details, acceptance,
@@ -36,6 +36,9 @@ lookup and known hostility, preserving the reference's lack of distance/liveness
 checks. Visible dead or distant known-faction creatures may therefore return status. Unknown
 reactions receive no reply under the requested conservative policy. Repeatable journal mutation
 is denied until completion/expiry can account for rewarded history; that history remains readable.
+Rewarded history rows are also denied mutation when their stored status is NONE,
+including non-repeatable quests, so acceptance cannot create a journal that
+completion/expiry would ignore or that relog would discard.
 
 | Fact | Pinned primary reference |
 |---|---|

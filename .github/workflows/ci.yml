@@ -51,3 +51,6 @@ jobs:
 
       - name: Test
         run: dotnet test ArcaneCore.slnx -c Release --no-build --verbosity normal
+
+      - name: Native mock-client scenario
+        run: dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-test

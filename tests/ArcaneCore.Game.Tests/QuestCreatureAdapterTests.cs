@@ -147,17 +147,19 @@ public sealed class QuestCreatureAdapterTests
         Assert.Equal(0u, kit.State.Quests.SlotQuestId(1));
     }
 
-    [Fact]
-    public void PreviouslyRewardedRepeatable_CannotEnterJournalOnlyFlow()
+    [Theory]
+    [InlineData(900001u)]
+    [InlineData(900004u)]
+    public void PreviouslyRewardedHistory_CannotEnterJournalOnlyFlow(uint questId)
     {
         // A real persisted history row reaches the service through CompleteLoad.
-        var history = new CharacterQuestStatus(1, 900004, (byte)QuestStatus.None, true, false, 0,
+        var history = new CharacterQuestStatus(1, questId, (byte)QuestStatus.None, true, false, 0,
             5, 0, 0, 0, 0, 0, 0, 0, 0);
         using var kit = new Kit([history]);
-        Assert.False(kit.Services.AcceptQuest(kit.Player, kit.Creature.Guid, 900004));
-        Assert.Equal(QuestStatus.None, kit.State.Quests.GetStatus(900004));
-        Assert.True(kit.State.Quests.Get(900004)!.Rewarded);
-        Assert.Equal(5u, kit.State.Quests.Get(900004)!.CreatureOrGOCount[0]);
+        Assert.False(kit.Services.AcceptQuest(kit.Player, kit.Creature.Guid, questId));
+        Assert.Equal(QuestStatus.None, kit.State.Quests.GetStatus(questId));
+        Assert.True(kit.State.Quests.Get(questId)!.Rewarded);
+        Assert.Equal(5u, kit.State.Quests.Get(questId)!.CreatureOrGOCount[0]);
         Assert.Equal(0u, kit.State.Quests.SlotQuestId(0));
         Assert.Empty(kit.State.Quests.TimedQuests);
         Assert.Empty(kit.Sink.Rows);

@@ -92,6 +92,7 @@ public sealed partial class QuestNpcServices
         bool accepted = false;
         if (InteractableNpc(player, guid, NpcFlags.QuestGiver) is { } npc && Quests.Get(questId) is { } quest
             && Quests.StartersOf(npc.Entry).Contains(questId) && CanTakeQuest(state, quest, [])
+            && state.Quests.Get(questId)?.Rewarded != true
             && JournalOnlyQuest(quest))
         {
             int slot = state.Quests.FindSlot(0);

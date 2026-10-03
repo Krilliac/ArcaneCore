@@ -145,6 +145,8 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         System.Update(diff);
     }
 
+    public Task StopAsync() => DisposeAsync().AsTask();
+
     public async ValueTask DisposeAsync()
     {
         if (_timer is not null)
