@@ -61,6 +61,11 @@ public sealed class CharacterCreationOptions
     /// <summary>vmangos GM.StartLevel (default 1), clamped to StartPlayerLevel..MaxPlayerLevel; used for accounts above player security (World.cpp:679, Player.cpp:16217).</summary>
     public int GmStartLevel { get; set; } = 1;
 
+    /// <summary>
+    /// Give new characters their <c>playercreateinfo_action</c> bar (vmangos MasterPlayer::Create). False leaves it empty.
+    /// </summary>
+    public bool StartActions { get; set; } = true;
+
     /// <summary>vmangos StartPlayerMoney in copper (default 0), clamped to 0..MAX_MONEY_AMOUNT (World.cpp:674).</summary>
     public long StartPlayerMoney { get; set; }
 

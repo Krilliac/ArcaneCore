@@ -168,6 +168,7 @@ public static class ContentTableSpecs
         new("creature_onkill_reputation", [new KeyColumn("creature_id")], [], s_onKillSignatures, OnKillReputationDumpImporter.ReadsColumn),
         new("playercreateinfo", [new KeyColumn("race"), new KeyColumn("class")], [], [], PlayerCreateDumpImporter.ReadsStartColumn),
         new("playercreateinfo_spell", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("spell")], [], s_buildRangeSignatures, PlayerCreateDumpImporter.ReadsSpellColumn),
+        new("playercreateinfo_action", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("button")], [], [], PlayerCreateActionDumpImporter.ReadsColumn),
         new("spell_target_position", [new KeyColumn("id")], [], s_buildRangeSignatures, PlayerCreateDumpImporter.ReadsTargetColumn),
         new("player_levelstats", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("level")], [], [], PlayerCreateDumpImporter.ReadsLevelColumn),
         new("player_classlevelstats", [new KeyColumn("class"), new KeyColumn("level")], [], [], PlayerCreateDumpImporter.ReadsClassColumn),
