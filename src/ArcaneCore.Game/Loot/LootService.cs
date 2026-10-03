@@ -165,8 +165,9 @@ public sealed class LootService : IViewerFieldFilter
 
     /// <summary>
     /// The players who share loot with <paramref name="looter"/> at <paramref name="source"/>:
-    /// the looter plus group members in the same map within the group loot distance (vmangos
-    /// Group::GetMemberGuids with IsAtGroupRewardDistance), in group order.
+    /// the looter plus group members at group reward distance of the source (vmangos
+    /// Group::GetMemberGuids with Player::IsAtGroupRewardDistance: 2D, strict, raid maps unlimited,
+    /// world bosses +150 yd, a dead member counts through his corpse; see <see cref="GroupRewardRange"/>), in group order.
     /// </summary>
     public List<Player> RecipientsFor(Player looter, WorldObject source, out Group? group)
     {
@@ -182,7 +183,7 @@ public sealed class LootService : IViewerFieldFilter
         foreach (GroupMemberSlot member in group.Members)
         {
             Player? player = member.Guid == looter.Guid ? looter : map.FindPlayer(member.Guid);
-            if (player is null || (!ReferenceEquals(player, looter) && Distance3D(player, source) > Options.GroupLootDistance))
+            if (player is null || (!ReferenceEquals(player, looter) && !GroupRewardRange.IsAtGroupRewardDistance(player, source, Options.RewardRange)))
             {
                 continue;
             }

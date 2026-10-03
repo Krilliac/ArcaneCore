@@ -27,6 +27,25 @@ Tests: `tests/ArcaneCore.Game.Tests/Social/GroupLooterSelectionTests.cs` (pure r
 looter untouched, offline master fallback and group-loot downgrade), `GameObjects/DurableChestTests.cs`,
 `World.Tests/GameObjects/InstanceChestDurabilityTests.cs` (owner roles swapped to the leader-first order).
 
+## Delivered: group-reward-range
+
+`Groups/GroupRewardRange` ports vmangos `WorldObject::IsWithinLootXPDist` and
+`Player::IsAtGroupRewardDistance`: same map, 2D (horizontal) distance, strict `<`, limit widened by both
+bounding radii; a raid map is unlimited; a world boss victim adds 150 yd; a dead player counts through
+his corpse (a living one never does). `CorpseRaid` is a hook for `CREATURE_STATIC_FLAG_CORPSE_RAID`
+(Object.cpp:1485-1486): no creature data sets it (0 rows in the classic-db dump), so it is null by default.
+
+References: `D:efsmangos\src\game\Objects\Object.cpp:1478-1499` and `:1738-1752`,
+`Objects\Player.cpp:20034-20050`.
+
+Adopted by `LootService.RecipientsFor` (loot recipients, and through them the round-robin eligibility).
+Config (section `Loot`): `GroupLootDistance=74`, `BossRewardDistanceBonus=150`,
+`RaidMapsUnlimitedRewardDistance=true`. Setting the bonus to 0 and the raid switch to false removes those
+two retail rules.
+
+Tests: `Social/GroupRewardRangeTests.cs` (7 cases: 2D, strict, radii, world boss, raid, other map,
+ghost corpse, hook) and `LootServiceTests.Recipients_UseTheRetailRewardDistance_*`.
+
 ## Limits (recorded, not delivered)
 
 * Master loot has no master-give yet (no SMSG_LOOT_MASTER_LIST, CMSG_LOOT_MASTER_GIVE, master slot
@@ -34,14 +53,16 @@ looter untouched, offline master fallback and group-loot downgrade), `GameObject
   looter when he is within reward distance (otherwise it is open to every recipient). Retail shows
   every opener the under-threshold items and the master the rest (`LootMgr.cpp:829-981`).
 * Loot threshold, roll (need/greed/group loot) packets and state, quest-item sharing, chest
-  `groupLootRules`, money split rules, loot errors, open range and the 74 yd 3D reward distance are
+  `groupLootRules`, money split rules, loot errors, open range are
   unchanged and still differ from retail (see `docs/integration/gameobjects-loot.md`). The reviewed
   design of this lane lists them as further slices.
 * Loot recipient is still the killer's group, not a tap list (stats-combat-formulas lane owns
   `ITapInfo`), so pets/totems credit nobody.
-* The "in reach" test for the pointer is membership of the bag's recipients (same map, 3D <= 74 yd);
-  vmangos uses `IsWithinLootXPDist` (2D, strict, bounding radii, raid maps unlimited, world boss
-  +150 yd). Switching to that helper is the `group-reward-range` slice.
+* The money split (`LootService.TakeMoney`) still measures 3D <= 74 yd from the corpse; retail splits among
+  group members within `IsWithinLootXPDist` of the LOOTER. `Progression/KillRewards.Recipients` (XP,
+  quest kill credit; stats-combat-formulas lane's file) still uses the 3D `<=` rule, so XP/quest credit
+  and loot disagree at the edges until it adopts `GroupRewardRange.IsAtGroupRewardDistance` (one-line
+  change, handed to that lane).
 * Unlike vmangos, SMSG_GROUP_LIST is only resent when the pointer value actually changes (vmangos also
   resends when it is already cleared).
 * Group state stays memory-only (docs/areas/social.md).

@@ -423,6 +423,23 @@ public sealed class LootServiceTests
     }
 
     [Fact]
+    public void Recipients_UseTheRetailRewardDistance_HorizontalStrictAndGhostsCountThroughTheirCorpse()
+    {
+        Rig rig = CreateRig();
+        (Player alice, _) = rig.Join(1);
+        (Player high, _) = rig.Join(2, 60, 0);
+        high.Z = 183.5f; // 57 yd horizontal, 100 yd above the wolf: Object.cpp:1738-1752 is 2D
+        (Player ghost, _) = rig.Join(3, 0, 0);
+        ghost.Combat.Corpse = Corpse.CreateFor(ghost, pvpDeath: false); // died next to the wolf
+        ghost.Combat.DeathState = DeathState.Dead;
+        ghost.Relocate(400, 0, 83.5f, 0, 0); // Player::IsAtGroupRewardDistance (Player.cpp:20034-20050)
+        (Player far, _) = rig.Join(4, 400, 0);
+        rig.Groups.Create(LootMethod.FreeForAll, alice, high, ghost, far);
+        Creature wolf = rig.KillWolf(alice);
+        Assert.True(rig.Loot.FindLoot(wolf.Guid)!.Recipients.SetEquals([alice.Guid, high.Guid, ghost.Guid]));
+    }
+
+    [Fact]
     public void PartyLootItem_EveryRecipientGetsACopy()
     {
         Rig rig = CreateRig(rows: [(LootTableKind.Creature, Row(WolfLoot, PartyItem, 100))], minGold: 0, maxGold: 0);
