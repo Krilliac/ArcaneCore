@@ -40,4 +40,10 @@ public sealed class SpellModOptions
     /// false spends it anyway.
     /// </summary>
     public bool InstantCastKeepsFlatCastTimeCharge { get; set; } = true;
+
+    /// <summary>
+    /// Tell the client about every modifier change (SMSG_SET_FLAT_SPELL_MODIFIER / SMSG_SET_PCT_SPELL_MODIFIER, one packet per
+    /// mask bit): the client needs them to show modified costs and cast bars (vmangos Player::SendSpellMod). Retail is true.
+    /// </summary>
+    public bool SendClientModifiers { get; set; } = true;
 }
