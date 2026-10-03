@@ -34,4 +34,11 @@ public sealed class DeathOptions
     /// player level gives none.
     /// </summary>
     public int SicknessLevel { get; set; } = 11;
+
+    /// <summary>
+    /// Whether a released spirit gets the real ghost aura (spell 8326, vmangos Player::ApplyGhostForm), default on, which is
+    /// what gives the ghost its +25% run and swim speed and its visibility flag. Off keeps the earlier behaviour: only the
+    /// ghost player flag and water walking, no aura.
+    /// </summary>
+    public bool GhostFormAura { get; set; } = true;
 }

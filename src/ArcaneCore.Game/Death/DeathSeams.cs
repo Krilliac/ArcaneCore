@@ -32,6 +32,19 @@ public interface IGraveyardRepop
     bool TeleportToCorpseGraveyard(Player player, CorpsePlace? corpse);
 }
 
+/// <summary>
+/// The ghost aura of a released spirit (vmangos Player::ApplyGhostForm / RemoveGhostForm, Player.cpp:4561-4577): the ghost
+/// spell and, for a night elf, the wisp. Water walking is not part of it (vmangos orders it separately); combat does that.
+/// </summary>
+public interface IGhostForm
+{
+    /// <summary>Cast the ghost spell(s) on the player.</summary>
+    void Apply(Player player);
+
+    /// <summary>Remove the ghost spell(s) from the player.</summary>
+    void Remove(Player player);
+}
+
 /// <summary>Where a corpse lies: its map and position.</summary>
 public readonly record struct CorpsePlace(uint MapId, float X, float Y, float Z);
 
@@ -49,6 +62,7 @@ public sealed class DeathSeams
     private static readonly ConditionalWeakTable<WorldRuntime, DeathSeams> s_registered = new();
 
     private IGraveyardRepop? _graveyards;
+    private IGhostForm? _ghostForm;
 
     private DeathSeams()
     {
@@ -56,6 +70,9 @@ public sealed class DeathSeams
 
     /// <summary>The graveyard implementation, or null (a released spirit then stays on its body, the behaviour before the graveyard feature).</summary>
     public IGraveyardRepop? Graveyards => _graveyards;
+
+    /// <summary>The ghost form implementation, or null (combat then sets the ghost flag itself, as before the ghost aura existed).</summary>
+    public IGhostForm? GhostForm => _ghostForm;
 
     /// <summary>The seams of <paramref name="world"/>, created empty on first use (startup).</summary>
     public static DeathSeams Of(WorldRuntime world)
@@ -69,6 +86,13 @@ public sealed class DeathSeams
     {
         ArgumentNullException.ThrowIfNull(world);
         return s_registered.TryGetValue(world, out DeathSeams? seams) ? seams : null;
+    }
+
+    /// <summary>Register the ghost form implementation; the first registration wins and later ones return false.</summary>
+    public bool TryRegisterGhostForm(IGhostForm ghostForm)
+    {
+        ArgumentNullException.ThrowIfNull(ghostForm);
+        return Interlocked.CompareExchange(ref _ghostForm, ghostForm, null) is null;
     }
 
     /// <summary>Register the graveyard implementation; the first registration wins and later ones return false.</summary>

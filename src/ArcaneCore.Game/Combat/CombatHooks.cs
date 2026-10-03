@@ -192,18 +192,14 @@ public class CombatHooks
 
     /// <summary>
     /// Apply the ghost form at spirit release (vmangos Player::ApplyGhostForm: cast 8326, or
-    /// 20584 too for night elves with 20585). The default does nothing and no production code
-    /// overrides it yet (nothing registers a <see cref="CombatHooks"/> subclass), so the ghost
-    /// aura is never cast; combat itself sets PLAYER_FLAGS_GHOST and water walking.
+    /// 20584 too for night elves with 20585). The default asks the world's registered
+    /// <see cref="Death.IGhostForm"/> (<see cref="Death.DeathSeams"/>) and does nothing without one; combat itself
+    /// sets PLAYER_FLAGS_GHOST and water walking either way.
     /// </summary>
-    public virtual void ApplyGhostForm(Player player)
-    {
-    }
+    public virtual void ApplyGhostForm(Player player) => player.Map?.Combat.ApplyGhostFormViaSeam(player);
 
-    /// <summary>Remove the ghost form at resurrection (vmangos Player::RemoveGhostForm).</summary>
-    public virtual void RemoveGhostForm(Player player)
-    {
-    }
+    /// <summary>Remove the ghost form at resurrection (vmangos Player::RemoveGhostForm); the default asks the registered <see cref="Death.IGhostForm"/>.</summary>
+    public virtual void RemoveGhostForm(Player player) => player.Map?.Combat.RemoveGhostFormViaSeam(player);
 
     /// <summary>
     /// Where a released spirit goes (vmangos Player::RepopAtGraveyard → nearest graveyard

@@ -61,8 +61,10 @@ public sealed partial class MapCombat
             KillPlayer(player); // released before its update ran (HandleRepopRequestOpcode)
         }
 
+        // The ghost aura (when there is one) sets the ghost flag itself, so the order to walk on water is not gated on the flag
+        // being clear afterwards (RepopPlayer refused a player that already was a ghost above).
         Hooks.ApplyGhostForm(player);
-        SetGhost(player, true);
+        SetGhost(player, true, wasGhost: false);
 
         if (c.Corpse is { } old)
         {
@@ -287,9 +289,10 @@ public sealed partial class MapCombat
             return;
         }
 
+        bool wasGhost = (player.Flags & PlayerFlags.Ghost) != 0;
         SetDeathState(player, DeathState.Alive);
         Hooks.RemoveGhostForm(player);
-        SetGhost(player, false);
+        SetGhost(player, false, wasGhost);
         player.SetRooted(false);
 
         if (restorePercent > 0f)
@@ -326,15 +329,15 @@ public sealed partial class MapCombat
     }
 
     /// <summary>
-    /// PLAYER_FLAGS_GHOST and water walking. vmangos gets both from the ghost aura (8326:
-    /// SPELL_AURA_GHOST + SPELL_AURA_WATER_WALK); nothing casts that aura yet (the ghost-form
-    /// hooks have no override), so combat applies them directly, and
-    /// the move change goes to the client as SMSG_MOVE_WATER_WALK / SMSG_MOVE_LAND_WALK.
+    /// PLAYER_FLAGS_GHOST and water walking. The ghost aura (8326: SPELL_AURA_GHOST, +25% run and swim speed; vmangos
+    /// <c>HandleAuraGhost</c> sets the flag) sets the flag when the ghost form feature is registered; water walking is
+    /// ordered separately in vmangos too (<c>SetWaterWalking(true)</c>, Player.cpp:4566). Without the aura, combat sets the flag
+    /// itself. The move change goes to the client as SMSG_MOVE_WATER_WALK / SMSG_MOVE_LAND_WALK. <paramref name="wasGhost"/> is
+    /// whether the player was a ghost before the aura was applied or removed: the aura changes the flag, so it cannot be read here.
     /// </summary>
-    private static void SetGhost(Player player, bool ghost)
+    private static void SetGhost(Player player, bool ghost, bool wasGhost)
     {
-        bool isGhost = (player.Flags & PlayerFlags.Ghost) != 0;
-        if (isGhost == ghost)
+        if (wasGhost == ghost)
         {
             return;
         }
@@ -342,6 +345,12 @@ public sealed partial class MapCombat
         player.Flags = ghost ? player.Flags | PlayerFlags.Ghost : player.Flags & ~PlayerFlags.Ghost;
         SendGhostMovement(player, ghost);
     }
+
+    /// <summary>The default of <see cref="CombatHooks.ApplyGhostForm"/>: the world's registered ghost form, if any.</summary>
+    internal void ApplyGhostFormViaSeam(Player player) => Death.DeathSeams.Find(_world)?.GhostForm?.Apply(player);
+
+    /// <summary>The default of <see cref="CombatHooks.RemoveGhostForm"/>: the world's registered ghost form, if any.</summary>
+    internal void RemoveGhostFormViaSeam(Player player) => Death.DeathSeams.Find(_world)?.GhostForm?.Remove(player);
 
     /// <summary>
     /// SMSG_MOVE_WATER_WALK / SMSG_MOVE_LAND_WALK: the client starts or stops walking on water. The order goes through

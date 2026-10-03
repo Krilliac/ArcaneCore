@@ -129,7 +129,26 @@ internal static class CombatTestKit
     {
         foreach (ArcaneCore.Game.Locomotion.PendingMovementChange change in player.Locomotion.Pending.Changes.ToArray())
         {
-            ArcaneCore.Game.Locomotion.MovementControl.Acknowledge(player, change.Type, change.Counter, change.Apply);
+            ArcaneCore.Game.Locomotion.MoveType? speed = change.Type switch
+            {
+                ArcaneCore.Game.Locomotion.MovementChangeType.SpeedWalk => ArcaneCore.Game.Locomotion.MoveType.Walk,
+                ArcaneCore.Game.Locomotion.MovementChangeType.SpeedRun => ArcaneCore.Game.Locomotion.MoveType.Run,
+                ArcaneCore.Game.Locomotion.MovementChangeType.SpeedRunBack => ArcaneCore.Game.Locomotion.MoveType.RunBack,
+                ArcaneCore.Game.Locomotion.MovementChangeType.SpeedSwim => ArcaneCore.Game.Locomotion.MoveType.Swim,
+                ArcaneCore.Game.Locomotion.MovementChangeType.SpeedSwimBack => ArcaneCore.Game.Locomotion.MoveType.SwimBack,
+                _ => null,
+            };
+            if (speed is { } moveType)
+            {
+                if (ArcaneCore.Game.Locomotion.MovementControl.AcknowledgeSpeed(player, moveType, change.Counter, change.NewValue))
+                {
+                    ArcaneCore.Game.Locomotion.UnitSpeed.SetReal(player, moveType, change.NewValue); // the handler applies what the client reports
+                }
+            }
+            else if (ArcaneCore.Game.Locomotion.MovementControl.Acknowledge(player, change.Type, change.Counter, change.Apply))
+            {
+                ArcaneCore.Game.Locomotion.MovementControl.ApplyReal(player, change.Type, change.Apply);
+            }
         }
     }
 
