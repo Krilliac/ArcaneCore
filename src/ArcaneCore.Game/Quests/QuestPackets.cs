@@ -8,7 +8,7 @@ namespace ArcaneCore.Game.Quests;
 /// QuestGiverQuestList, QuestGiverQuestDetails, QuestGiverRequestItems and QuestGiverOfferReward.
 /// https://github.com/vmangos/core/blob/development/src/game/Server/Packets/Quest.cpp
 /// </summary>
-internal static class QuestPackets
+public static partial class QuestPackets
 {
     public static PacketWriter List(ObjectGuid npc, IReadOnlyList<(Quest Quest, DialogStatus Icon)> quests)
     {

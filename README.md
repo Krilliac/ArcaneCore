@@ -14,6 +14,11 @@ items, spells, social systems, and the partial quests/NPC draft. Exact branch
 heads, schema allocations, integration repairs, validation, and remaining
 client acceptance work are in [the fleet integration record](docs/integration/fleet-20261003.md).
 
+The [M13a follow-up](MILESTONE_M13A.md) restores saved quest journals before
+login, serves quest/NPC text queries, and persists timed expiry across relogs
+and map transfers. Full quest/NPC interaction and
+[real-client acceptance](docs/M13A_ACCEPTANCE.md) remain pending.
+
 ## Layout
 
 ```

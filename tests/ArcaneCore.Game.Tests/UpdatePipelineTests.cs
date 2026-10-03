@@ -43,10 +43,11 @@ public sealed class UpdatePipelineTests
 
         a.Health = 5;                                // UF_FLAG_PUBLIC
         a.SetUInt32(UpdateFields.PlayerXp, 77);      // UF_FLAG_PRIVATE
+        a.SetUInt32(UpdateFields.PlayerQuestLog11, 9201); // UF_FLAG_GROUP_ONLY, also visible to self
 
         var own = new PacketWriter();
         Assert.True(UpdateBlockWriter.TryWriteValuesBlock(own, a, a));
-        Assert.Equal(new Dictionary<int, uint> { [UpdateFields.UnitFieldHealth] = 5, [UpdateFields.PlayerXp] = 77 }, ParseValues(own.ToArray()));
+        Assert.Equal(new Dictionary<int, uint> { [UpdateFields.UnitFieldHealth] = 5, [UpdateFields.PlayerXp] = 77, [UpdateFields.PlayerQuestLog11] = 9201 }, ParseValues(own.ToArray()));
 
         var other = new PacketWriter();
         Assert.True(UpdateBlockWriter.TryWriteValuesBlock(other, a, b));
@@ -55,6 +56,7 @@ public sealed class UpdatePipelineTests
         // Only a private field changed: nothing for an observer.
         a.ClearChangedFields();
         a.SetUInt32(UpdateFields.PlayerXp, 78);
+        a.SetUInt32(UpdateFields.PlayerQuestLog11, 9202);
         var none = new PacketWriter();
         Assert.False(UpdateBlockWriter.TryWriteValuesBlock(none, a, b));
         Assert.Equal(0, none.Length);
@@ -67,6 +69,7 @@ public sealed class UpdatePipelineTests
         Player a = TestWorld.CreatePlayer(1, 0, 0, session);
         Player b = TestWorld.CreatePlayer(2, 0, 0, new FakeSession(2));
         a.Target = ObjectGuid.Player(2); // low half non-zero, high half zero
+        a.SetUInt32(UpdateFields.PlayerQuestLog11, 9201);
 
         Dictionary<int, uint> self = ParseCreateValues(Create(a, a));
         Dictionary<int, uint> seenByB = ParseCreateValues(Create(a, b));
@@ -78,6 +81,8 @@ public sealed class UpdatePipelineTests
         // PLAYER_NEXT_LEVEL_XP is private.
         Assert.Equal(400u, self[UpdateFields.PlayerNextLevelXp]);
         Assert.False(seenByB.ContainsKey(UpdateFields.PlayerNextLevelXp));
+        Assert.Equal(9201u, self[UpdateFields.PlayerQuestLog11]);
+        Assert.False(seenByB.ContainsKey(UpdateFields.PlayerQuestLog11));
     }
 
     [Fact]

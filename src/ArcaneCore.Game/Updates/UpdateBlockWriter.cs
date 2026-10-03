@@ -105,7 +105,9 @@ public static class UpdateBlockWriter
         UpdateFieldFlags visible = UpdateFieldFlags.Public | UpdateFieldFlags.Dynamic;
         if (ReferenceEquals(obj, viewer))
         {
-            visible |= UpdateFieldFlags.Private;
+            // vmangos Object::GetUpdateFieldFlagsForTarget and Player::IsInSameRaidWith:
+            // a player is in their own raid for field visibility, even while ungrouped.
+            visible |= UpdateFieldFlags.Private | UpdateFieldFlags.GroupOnly;
         }
 
         // vmangos GetUpdateFieldFlagsForTarget: an item's owner also gets OWNER_ONLY | UNK2 (item owner).

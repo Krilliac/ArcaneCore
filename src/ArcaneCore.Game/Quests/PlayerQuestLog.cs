@@ -79,8 +79,9 @@ public sealed class PlayerQuestLog(Player player)
 
             // Timed and running: keep the end time (an expired one fails at the next timer check).
             uint slotTimer = 0;
-            if (quest.HasSpecialFlag(QuestSpecialFlags.Timed) && !RewardStatus(quest) && data.Status is QuestStatus.Incomplete or QuestStatus.Complete
-                && row.Timer != 0)
+            // vmangos Player::_LoadQuestStatus treats any elapsed deadline, including zero,
+            // as one remaining millisecond so the next player update fails the active quest.
+            if (quest.HasSpecialFlag(QuestSpecialFlags.Timed) && !RewardStatus(quest) && data.Status is QuestStatus.Incomplete or QuestStatus.Complete)
             {
                 _timed.Add(row.Quest);
                 data.TimerEndUnix = row.Timer;

@@ -196,6 +196,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
 
         await Task.WhenAll(sessions).WaitAsync(TimeSpan.FromSeconds(10));
         World.Stop();
+        await _services.StopWorldFeaturesAsync();
         await SaveQueue.StopAsync();
         World.Dispose();
         await _services.DisposeAsync();
