@@ -92,6 +92,13 @@ public static class ContentTableSpecs
         new(ContentDialect.VMangos, ["build_min", "build_max"], []),
     ];
 
+    // areatrigger_teleport: vmangos rows carry patch (ObjectMgr.cpp:7717); classic-db has none.
+    private static readonly DialectSignature[] s_portalSignatures =
+    [
+        new(ContentDialect.CMangos, ["target_map"], ["patch"]),
+        new(ContentDialect.VMangos, ["target_map", "patch"], []),
+    ];
+
     // quest relations: vmangos filters on patch_min/patch_max (ObjectMgr.cpp:9178).
     private static readonly DialectSignature[] s_relationSignatures =
     [
@@ -164,6 +171,8 @@ public static class ContentTableSpecs
         new("spell_target_position", [new KeyColumn("id")], [], s_buildRangeSignatures, PlayerCreateDumpImporter.ReadsTargetColumn),
         new("player_levelstats", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("level")], [], [], PlayerCreateDumpImporter.ReadsLevelColumn),
         new("player_classlevelstats", [new KeyColumn("class"), new KeyColumn("level")], [], [], PlayerCreateDumpImporter.ReadsClassColumn),
+        new("areatrigger_teleport", [new KeyColumn("id")], [], s_portalSignatures, LocationDumpImporter.ReadsPortalColumn),
+        new("game_tele", [new KeyColumn("id")], [], [], LocationDumpImporter.ReadsTeleColumn),
     ];
 
     private static readonly FrozenDictionary<string, TableSpec> s_byTable =

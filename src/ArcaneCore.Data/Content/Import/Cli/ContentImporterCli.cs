@@ -1,5 +1,6 @@
 using System.Globalization;
 using ArcaneCore.Data.Content.Items;
+using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Quests;
 using ArcaneCore.Data.Reputation;
@@ -36,7 +37,8 @@ public static class ContentImporterCli
           plan <dump>...        read the dump(s) and print, per table, the dialect, row and key
                                 counts and which columns an importer reads; writes no database
           import <dump>...      import the creature, game object, loot, item, quest, kill-reputation and
-                                new-character (start position, starting spell, teleport target) tables
+                                new-character (start position, starting spell, teleport target) and
+                                location (portal, GM teleport) tables
                                 (and the starting outfit, playercreateinfo_item)
           import-dbc <dir>      import the five spell DBCs from a client DBFilesClient directory
           verify                count the imported tables and check references
@@ -180,6 +182,7 @@ public static class ContentImporterCli
         var itemsAndQuests = new ItemQuestDumpImporter { QuestXp = ParseQuestXp(a) };
         var onKill = new OnKillReputationDumpImporter();
         var playerCreate = new PlayerCreateDumpImporter();
+        var locations = new LocationDumpImporter();
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             creatures.Read(reader);
@@ -203,6 +206,11 @@ public static class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             playerCreate.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            locations.Read(reader);
         }
 
         string? dbcDirectory = a.Value("--dbc-dir");
@@ -235,6 +243,7 @@ public static class ContentImporterCli
         ItemQuestImportReport itemQuestReport = itemsAndQuests.BuildReport();
         ReputationOnKillImportReport onKillReport = onKill.BuildReport();
         PlayerCreateImportReport playerReport = playerCreate.BuildReport();
+        LocationImportReport locationReport = locations.BuildReport();
         if (!dryRun)
         {
             o.WriteLine($"target: {target!.Describe}");
@@ -249,6 +258,7 @@ public static class ContentImporterCli
                     itemQuestReport = await itemsAndQuests.WriteAsync(db, replace, token).ConfigureAwait(false);
                     onKillReport = await onKill.WriteAsync(db, replace, token).ConfigureAwait(false);
                     playerReport = await playerCreate.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    locationReport = await locations.WriteAsync(db, replace, token).ConfigureAwait(false);
                 }, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -262,6 +272,7 @@ public static class ContentImporterCli
         warnings.AddRange(itemQuestReport.Warnings);
         warnings.AddRange(onKillReport.Warnings);
         warnings.AddRange(playerReport.Warnings);
+        warnings.AddRange(locationReport.Warnings);
         if (itemQuestReport.DerivedQuestXp > 0)
         {
             warnings.Add(
@@ -269,7 +280,7 @@ public static class ContentImporterCli
                 "(the source has no RewXP; cmangos Quest::XPValue); XP reduced for grey quests can differ from cmangos by 1");
         }
 
-        (Dictionary<string, long> imported, Dictionary<string, long> skipped) = Counts(creatureReport, objectReport, itemQuestReport, onKillReport, playerReport);
+        (Dictionary<string, long> imported, Dictionary<string, long> skipped) = Counts(creatureReport, objectReport, itemQuestReport, onKillReport, playerReport, locationReport);
         o.WriteLine(dryRun ? "would import:" : "imported:");
         foreach ((string table, long count) in imported)
         {
@@ -305,7 +316,7 @@ public static class ContentImporterCli
 
     private static (Dictionary<string, long> Imported, Dictionary<string, long> Skipped) Counts(
         CreatureImportReport creatures, GameObjectLootImportReport objects, ItemQuestImportReport itemsAndQuests, ReputationOnKillImportReport onKill,
-        PlayerCreateImportReport playerCreate)
+        PlayerCreateImportReport playerCreate, LocationImportReport locations)
     {
         var imported = new Dictionary<string, long>
         {
@@ -333,6 +344,8 @@ public static class ContentImporterCli
             ["playercreateinfo_spell"] = playerCreate.CreateSpells,
             ["spell_target_position"] = playerCreate.SpellTargetPositions,
             ["level_stats_rows"] = playerCreate.LevelStatRows,
+            ["areatrigger_teleport"] = locations.Portals,
+            ["game_tele"] = locations.Teleports,
         };
         var skipped = new Dictionary<string, long>
         {
@@ -341,6 +354,7 @@ public static class ContentImporterCli
             ["item_and_quest_rows"] = itemsAndQuests.SkippedRows,
             ["creature_onkill_reputation"] = onKill.SkippedRows,
             ["player_create_rows"] = playerCreate.SkippedRows,
+            ["areatrigger_teleport_rows"] = locations.SkippedRows,
         };
         return (imported, skipped);
     }
@@ -435,6 +449,8 @@ public static class ContentImporterCli
                 ("player_create_info", await db.PlayerCreateInfo.CountAsync(ct).ConfigureAwait(false)),
                 ("playercreateinfo_spell", await db.Set<PlayerCreateSpellRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_target_position", await db.Set<SpellTargetPositionRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("areatrigger_teleport", await db.Set<AreaTriggerTeleportRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("game_tele", await db.Set<GameTeleRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_template", await db.Set<SpellTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
             };
             foreach ((string table, int count) in counts)

@@ -1,6 +1,6 @@
 # Area: content import (classic-db / vmangos dumps to the world database)
 
-Status: first five slices of the unified importer (core, CLI, items and quests, kill reputation, new-character content), branch `claude/vw-content-import-full`. WoW 1.12.1 (5875). Data source of record:
+Status: first six slices of the unified importer (core, CLI, items and quests, kill reputation, new-character content, locations), branch `claude/vw-content-import-full`. WoW 1.12.1 (5875). Data source of record:
 the cmaNGOS **classic-db** Full_DB snapshot (`ClassicDB_1_12_1_z2815.sql.gz`, "Melting Pot v2", core z2815). vmangos
 dumps are a second accepted layout. The dumps are GPL-3 data with Blizzard copyright material in them (classic-db
 `COPYRIGHT.md`): they are read from wherever the developer keeps them, never committed, and the importer refuses to write a
@@ -135,6 +135,16 @@ feature reads:
   2400 race/class/level rows". With no spells imported (`import-dbc` needs client DBCs) the spell feature logs each
   `spell_target_position` row as "unknown spell, skipped", the same as vmangos' "Non existing spell" skip.
 
+### `locations-min` (`Import/Mappers/LocationDumpImporter.cs`; no schema change)
+
+`areatrigger_teleport` (dungeon and instance portals) -> `AreaTriggerTeleportRow` and `game_tele` (GM `.tele` names) ->
+`GameTeleRow`, both into the existing map-data tables. cmangos' `status_failed_text` is the row's `Message` (vmangos:
+`message`); vmangos rows take the highest `patch` not above 10 (`ObjectMgr.cpp:7712-7717`). The row carries no item, quest or
+heroic-key requirement, so cmangos' `required_item`, `required_item2`, `required_quest_done` and `condition_id` are not
+enforced (`plan` lists them as not imported). The trigger shapes (`areatrigger_template`) and `map_template`/`area_template`
+come from client DBCs and are not imported, so a portal row cannot fire until those exist. Verified: 103 portals and 269 GM
+teleports imported; the daemon logged "103 area trigger teleports, 269 teleport locations".
+
 ## Verified against the real classic-db dump
 
 Run on `ClassicDB_1_12_1_z2815.sql.gz` (12,959,882 bytes, SHA-256 `4f92db52...d0c0`, `db_version` "Classic DB version 1.12.1
@@ -160,10 +170,11 @@ Run on `ClassicDB_1_12_1_z2815.sql.gz` (12,959,882 bytes, SHA-256 `4f92db52...d0
 | creature_onkill_reputation | 470 | 470 |
 | playercreateinfo / playercreateinfo_spell / spell_target_position | 40 / 1,497 / 353 | 40 / 1,497 / 353 |
 | player_levelstats (joined with player_classlevelstats) | 2,400 | 2,400 rows in the level-stats file |
+| areatrigger_teleport / game_tele | 103 / 269 | 103 / 269 |
 
 The world daemon (`ArcaneCore.World`, SQLite for all three databases, port overridden) then logged "Loaded 10384 creature
 templates and 66310 spawns" and "Loaded 10743 game object templates, 47827 spawns, 0 locks, 222501 loot rows, 5060 creature
-loot entries" and "Loaded 4245 quest templates". Item templates load lazily (first character creation), so a throw-away probe built `ItemTemplateStore` from the imported database through `EfItemTemplateSource` (17,718 templates; Hearthstone, Worn Shortsword, Linen Cloth and Lionheart Helm read back with plausible names, qualities, prices and display ids). `plan` shows the 162 other source tables (412,088 rows) as not read by any importer.
+loot entries" and "Loaded 4245 quest templates". Item templates load lazily (first character creation), so a throw-away probe built `ItemTemplateStore` from the imported database through `EfItemTemplateSource` (17,718 templates; Hearthstone, Worn Shortsword, Linen Cloth and Lionheart Helm read back with plausible names, qualities, prices and display ids). `plan` shows the 160 other source tables (411,716 rows) as not read by any importer.
 
 ## Limits (explicit, not done)
 

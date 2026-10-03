@@ -6,6 +6,7 @@ using System.Text.Json;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Import;
 using ArcaneCore.Data.Content.Items;
+using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Quests;
 using ArcaneCore.Data.Reputation;
@@ -542,6 +543,36 @@ public sealed class ContentImporterCliTests : IDisposable
         Assert.Contains("player_create_info  2", output, StringComparison.Ordinal);
         Assert.Contains("playercreateinfo_spell  2", output, StringComparison.Ordinal);
         Assert.Contains("spell_target_position  1", output, StringComparison.Ordinal);
+    }
+
+    // --- locations --------------------------------------------------------------------------------------------
+
+    private const string LocationsDump = """
+        CREATE TABLE `areatrigger_teleport` (`id` mediumint unsigned NOT NULL, `name` text, `required_level` tinyint unsigned NOT NULL, `required_item` mediumint unsigned, `target_map` smallint unsigned NOT NULL, `target_position_x` float NOT NULL, `target_position_y` float NOT NULL, `target_position_z` float NOT NULL, `target_orientation` float NOT NULL, `status_failed_text` text, PRIMARY KEY (`id`));
+        INSERT INTO `areatrigger_teleport` VALUES (45,'Scarlet Monastery - Entering',20,0,189,1687.27,1050.09,18.6773,1.5708,'You must be at least level 20 to enter.');
+        CREATE TABLE `game_tele` (`id` mediumint unsigned NOT NULL, `position_x` float NOT NULL, `position_y` float NOT NULL, `position_z` float NOT NULL, `orientation` float NOT NULL, `map` smallint unsigned NOT NULL, `name` varchar(100) NOT NULL, PRIMARY KEY (`id`));
+        INSERT INTO `game_tele` VALUES (1,1400.61,-1493.87,54.7844,4.08661,0,'RuinsOfAndorhal'),(2,1728.65,-1602.25,63.429,1.6558,0,'WesternPlaguelands');
+        """;
+
+    [Fact]
+    public async Task Import_WritesPortalsAndGmTeleports_AndPlanNamesTheRequirementColumnsItIgnores()
+    {
+        string database = Db("world.db");
+        string dump = WriteDump("loc.sql", LocationsDump);
+
+        (_, string plan, _) = await RunAsync("plan", dump);
+        (int import, string output, _) = await RunAsync("import", dump, "--database", database);
+        (int verify, string verifyOutput, _) = await RunAsync("verify", "--database", database);
+
+        Assert.Contains("required_item", TableLine(plan, "areatrigger_teleport").Unmapped, StringComparison.Ordinal);
+        Assert.Contains("status_failed_text", TableLine(plan, "areatrigger_teleport").Mapped, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Ok, import);
+        Assert.Contains("areatrigger_teleport  1", output, StringComparison.Ordinal);
+        Assert.Contains("game_tele  2", output, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Ok, verify);
+        Assert.Contains("game_tele  2", verifyOutput, StringComparison.Ordinal);
+        await using WorldDbContext db = Open(database);
+        Assert.Equal("You must be at least level 20 to enter.", (await db.Set<AreaTriggerTeleportRow>().AsNoTracking().SingleAsync()).Message);
     }
 
     // --- import-dbc ---------------------------------------------------------------------------------------

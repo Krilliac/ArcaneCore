@@ -83,6 +83,8 @@ $expected = [ordered]@{
     'playercreateinfo_spell'      = 'playercreateinfo_spell'
     'spell_target_position'       = 'spell_target_position'
     'player_levelstats'           = 'level_stats_rows'
+    'areatrigger_teleport'        = 'areatrigger_teleport'
+    'game_tele'                   = 'game_tele'
 }
 
 $failures = 0
