@@ -42,6 +42,11 @@ is `feat/quests-npc` at `5d26e1f7c08ebc0448f0c5c967c59caffcf27c21`
 (PR #2), already incorporated at that base. This follow-up introduces no schema
 version: auth remains v2, characters/world v6.
 
+Source follow-up `5db1fb1c9dd21bf93b2ab009958167505786ee7a` (draft #13) is
+incorporated into canonical draft #11 by merge
+`fe766bbd44ea827d00f9b04b93bc5a062a97837c`. The original follow-up draft is
+preserved; combined validation is recorded in the fleet integration document.
+
 Release builds treat warnings as errors. Automated coverage includes exact packet
 layouts, self/observer field visibility, real loopback login/query/expiry/relog,
 offline and zero-deadline expiry, persistence failure/recovery, far-map transfer,

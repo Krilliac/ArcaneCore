@@ -2,6 +2,10 @@
 
 Base: `43f1e22`, separate candidate `codex/atomic-creature-import-20261003`.
 
+Source `a47d06be3a382264131fa3e7c488a3a43d9d6a55` (draft #12) is incorporated
+into canonical draft #11 by merge `a09d2339342171d3c661e56e171ad5ade0f19322`.
+The source draft is preserved; combined validation is in the fleet accounting.
+
 The [P1 finding on PR #7](https://github.com/Krilliac/ArcaneCore/pull/7#discussion_r4171210272)
 identifies replacement imports that delete existing creature content before inserting
 new rows in 2,000-row batches. There was no transaction spanning those operations:
