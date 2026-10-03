@@ -10,7 +10,7 @@ using Xunit;
 
 namespace ArcaneCore.Data.Tests.Spells;
 
-/// <summary>The spell tables (world v2, characters v3) on every engine, and the DBC importer.</summary>
+/// <summary>The spell tables on every engine, and the DBC importer.</summary>
 public sealed class SpellDataTests : IAsyncLifetime
 {
     private readonly TestDatabases _databases = new();
@@ -18,12 +18,12 @@ public sealed class SpellDataTests : IAsyncLifetime
     public static IEnumerable<object[]> Providers() => TestDatabases.AvailableProviders();
 
     [Fact]
-    public void Modules_ClaimWorldV2_AndCharactersV3()
+    public void Modules_AreDiscovered_InTheirDatabaseComponents()
     {
-        Assert.Contains(DataModules.For(DatabaseComponent.World), m => m is SpellWorldDataModule { SchemaVersion: 2 });
-        Assert.Contains(DataModules.For(DatabaseComponent.Characters), m => m is CharacterSpellDataModule { SchemaVersion: 3 });
-        Assert.True(WorldDbContext.Schema.CurrentVersion >= 2);
-        Assert.True(CharacterDbContext.Schema.CurrentVersion >= 3);
+        IDataModule world = Assert.Single(DataModules.For(DatabaseComponent.World), m => m is SpellWorldDataModule);
+        IDataModule characters = Assert.Single(DataModules.For(DatabaseComponent.Characters), m => m is CharacterSpellDataModule);
+        Assert.Contains(WorldDbContext.Schema.Steps, s => s.Version == world.SchemaVersion && s.Changes.SequenceEqual(world.SchemaChanges));
+        Assert.Contains(CharacterDbContext.Schema.Steps, s => s.Version == characters.SchemaVersion && s.Changes.SequenceEqual(characters.SchemaChanges));
     }
 
     [Theory]

@@ -5,7 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ArcaneCore.Data.Content.Spells;
 
 /// <summary>
-/// The spell tables of the world database (world schema version 2; see
+/// The spell tables of the world database (world schema version 5; see
 /// docs/integration/spells.md for the version claim). Table and column names follow
 /// cmangos-classic so the M8 content importer maps classic-db rows by name; the four
 /// DBC-derived tables are filled by <c>tools/spell-import</c>. Nothing is seeded: spell data is
@@ -23,7 +23,7 @@ public sealed class SpellWorldDataModule : IDataModule
 
     public DatabaseComponent Component => DatabaseComponent.World;
 
-    public int SchemaVersion => 2;
+    public int SchemaVersion => 5;
 
     public IReadOnlyList<SchemaChange> SchemaChanges { get; } =
     [

@@ -36,14 +36,14 @@ public interface ICharacterSpellStore
     Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default);
 }
 
-/// <summary>The <c>character_spell</c> table (characters schema version 3; see docs/integration/spells.md).</summary>
+/// <summary>The <c>character_spell</c> table (characters schema version 4; see docs/integration/spells.md).</summary>
 public sealed class CharacterSpellDataModule : IDataModule
 {
     public const string Table = "character_spell";
 
     public DatabaseComponent Component => DatabaseComponent.Characters;
 
-    public int SchemaVersion => 3;
+    public int SchemaVersion => 4;
 
     public IReadOnlyList<SchemaChange> SchemaChanges { get; } = [new CreateTableChange(Table)];
 

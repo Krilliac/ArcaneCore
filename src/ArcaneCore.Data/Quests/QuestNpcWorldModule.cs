@@ -8,7 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ArcaneCore.Data.Quests;
 
 /// <summary>
-/// World schema version 2 (quests and NPC services, docs/integration/quests-npc.md): quest
+/// World schema version 6 (quests and NPC services, docs/integration/quests-npc.md): quest
 /// templates and creature quest relations, gossip menus and texts, vendor and trainer lists,
 /// flight nodes and paths. Table and column names follow vmangos/cmangos so the classic-db
 /// content maps by name (ROADMAP § Content); the taxi tables mirror TaxiNodes.dbc/TaxiPath.dbc.
@@ -17,7 +17,7 @@ public sealed class QuestNpcWorldModule : IDataModule
 {
     public DatabaseComponent Component => DatabaseComponent.World;
 
-    public int SchemaVersion => 2;
+    public int SchemaVersion => 6;
 
     public IReadOnlyList<SchemaChange> SchemaChanges { get; } =
     [

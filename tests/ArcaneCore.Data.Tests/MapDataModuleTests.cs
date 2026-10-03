@@ -7,7 +7,7 @@ using Xunit;
 
 namespace ArcaneCore.Data.Tests;
 
-/// <summary>The world map tables (<see cref="MapDataModule"/>, world schema version 2).</summary>
+/// <summary>The world map tables (<see cref="MapDataModule"/>).</summary>
 public sealed class MapDataModuleTests : IAsyncLifetime
 {
     private readonly TestDatabases _databases = new();
@@ -15,7 +15,7 @@ public sealed class MapDataModuleTests : IAsyncLifetime
     public static IEnumerable<object[]> Providers() => TestDatabases.AvailableProviders();
 
     [Fact]
-    public void Module_IsDiscovered_AsWorldVersion2()
+    public void Module_IsDiscovered_AtItsAllocatedWorldVersion()
     {
         IDataModule module = Assert.Single(DataModules.All, m => m is MapDataModule);
         Assert.Equal(DatabaseComponent.World, module.Component);
@@ -50,9 +50,9 @@ public sealed class MapDataModuleTests : IAsyncLifetime
     public async Task Version1WorldDatabase_IsUpgraded_KeepingItsRows(DatabaseProvider provider)
     {
         DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
-        await using (WorldV1Context v1 = TestContexts.Create<WorldV1Context>(cs))
+        await using (MapWorldV1Context v1 = TestContexts.Create<MapWorldV1Context>(cs))
         {
-            await SchemaBootstrapper.EnsureAsync(v1, WorldV1Context.Schema);
+            await SchemaBootstrapper.EnsureAsync(v1, MapWorldV1Context.Schema);
             v1.Set<ClassInfoRow>().Add(new ClassInfoRow { Class = 1, BaseHealth = 60, BaseMana = 0, PowerType = 1 });
             await v1.SaveChangesAsync();
         }
@@ -110,7 +110,7 @@ public sealed class MapDataModuleTests : IAsyncLifetime
 }
 
 /// <summary>The world database as M1–M6 mapped it: world schema version 1 (three tables).</summary>
-internal sealed class WorldV1Context(DbContextOptions<WorldV1Context> options) : DbContext(options)
+internal sealed class MapWorldV1Context(DbContextOptions<MapWorldV1Context> options) : DbContext(options)
 {
     public static readonly SchemaDefinition Schema = new()
     {

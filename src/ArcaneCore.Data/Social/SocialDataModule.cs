@@ -53,13 +53,13 @@ public sealed class GuildMemberRow
 
 /// <summary>
 /// Social tables of the characters database: friend/ignore lists and guilds. Characters schema
-/// v3 (allocated in docs/integration/social.md). The tables are new; nothing existing changes.
+/// v6 (allocated in docs/integration/social.md). The tables are new; nothing existing changes.
 /// </summary>
 public sealed class SocialDataModule : IDataModule
 {
     public DatabaseComponent Component => DatabaseComponent.Characters;
 
-    public int SchemaVersion => 3;
+    public int SchemaVersion => 6;
 
     public IReadOnlyList<SchemaChange> SchemaChanges { get; } =
     [

@@ -7,7 +7,7 @@ namespace ArcaneCore.Data.Content.Items;
 
 /// <summary>
 /// Items' world-database tables: <c>item_template</c> and <c>playercreateinfo_item</c>
-/// (vmangos-shaped). World schema version 2 — allocated per docs/integration/items.md; the lead
+/// (vmangos-shaped). World schema version 4 — allocated per docs/integration/items.md; the lead
 /// renumbers on a collision. The tables ship empty: content comes from the importer (no GPL data
 /// is committed).
 /// </summary>
@@ -15,7 +15,7 @@ public sealed class ItemWorldDataModule : IDataModule
 {
     public DatabaseComponent Component => DatabaseComponent.World;
 
-    public int SchemaVersion => 2;
+    public int SchemaVersion => 4;
 
     public IReadOnlyList<SchemaChange> SchemaChanges { get; } =
     [

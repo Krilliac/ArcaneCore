@@ -6,14 +6,14 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ArcaneCore.Data.Quests;
 
 /// <summary>
-/// Characters schema version 3 (quests and NPC services, docs/integration/quests-npc.md):
+/// Characters schema version 5 (quests and NPC services, docs/integration/quests-npc.md):
 /// per-character quest progress (vmangos character_queststatus) and known flight paths.
 /// </summary>
 public sealed class QuestNpcCharactersModule : IDataModule
 {
     public DatabaseComponent Component => DatabaseComponent.Characters;
 
-    public int SchemaVersion => 3;
+    public int SchemaVersion => 5;
 
     public IReadOnlyList<SchemaChange> SchemaChanges { get; } =
     [

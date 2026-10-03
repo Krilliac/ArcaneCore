@@ -14,7 +14,7 @@ namespace ArcaneCore.Data.Content.Maps;
 public sealed class MapDataModule : IDataModule
 {
     /// <summary>The world schema version this module's tables arrive in.</summary>
-    public const int Version = 2;
+    public const int Version = 3;
 
     public const string MapTemplateTable = "map_template";
     public const string AreaTemplateTable = "area_template";
