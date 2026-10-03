@@ -21,7 +21,8 @@ internal sealed class QuestFlowKit : IDisposable
 
     public QuestFlowKit(IReadOnlyList<QuestTemplate> templates, IReadOnlyList<CharacterQuestStatus>? rows = null,
         IReadOnlyList<uint>? starters = null, IReadOnlyList<uint>? enders = null, IReadOnlyList<uint>? rewardable = null,
-        Race race = Race.Human, byte level = 5, Class cls = Class.Warrior, Action<QuestNpcOptions>? configure = null)
+        Race race = Race.Human, byte level = 5, Class cls = Class.Warrior, Action<QuestNpcOptions>? configure = null,
+        IPlayerReputation? reputation = null)
     {
         Player = TestWorld.CreatePlayer(1, 0, 0, Session, race: race);
         Player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)cls);
@@ -40,7 +41,7 @@ internal sealed class QuestFlowKit : IDisposable
             (enders ?? []).Select(id => new CreatureQuestRelation { Id = CreatureEntry, Quest = id }).ToArray());
         var factions = new FactionTemplateCatalog([new(1, 1, 0, 1, 0, 0), new(2, 0, 0, 8, 0, 0), new(3, 0, 0, 8, 0, 1)]);
         Services = new QuestNpcServices(new QuestStore(content), NpcStore.Empty,
-            new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions)),
+            new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions), Reputation: reputation),
             Configure(new QuestNpcOptions { OrdinaryRewardQuestIds = (rewardable ?? []).ToArray() }, configure), Sink, () => 100, NullLogger.Instance);
         State = Services.Track(Player);
         Services.CompleteLoad(State, new CharacterQuestData(rows ?? [], []));
