@@ -38,13 +38,16 @@ public sealed record DialectSignature(ContentDialect Dialect, IReadOnlyList<stri
 public sealed class TableSpec
 {
     private readonly HashSet<string> _mapped;
+    private readonly Func<string, bool>? _mappedWhen;
 
-    public TableSpec(string table, IReadOnlyList<KeyColumn> keys, IEnumerable<string> mapped, IReadOnlyList<DialectSignature> signatures)
+    /// <param name="mappedWhen">When the importer maps by rule rather than by list (a <see cref="RowMapper{T}"/>), the rule: whether it reads a column.</param>
+    public TableSpec(string table, IReadOnlyList<KeyColumn> keys, IEnumerable<string> mapped, IReadOnlyList<DialectSignature> signatures, Func<string, bool>? mappedWhen = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(table);
         Table = table;
         Keys = keys;
         Signatures = signatures;
+        _mappedWhen = mappedWhen;
         _mapped = new HashSet<string>(mapped, StringComparer.OrdinalIgnoreCase);
         foreach (KeyColumn key in keys)
         {
@@ -62,7 +65,7 @@ public sealed class TableSpec
     public IReadOnlyCollection<string> MappedColumns => _mapped;
 
     /// <summary>Whether an importer reads this source column.</summary>
-    public bool IsMapped(string column) => _mapped.Contains(column);
+    public bool IsMapped(string column) => _mapped.Contains(column) || (_mappedWhen?.Invoke(column) ?? false);
 
     /// <summary>
     /// The index in <paramref name="columns"/> of each key part.

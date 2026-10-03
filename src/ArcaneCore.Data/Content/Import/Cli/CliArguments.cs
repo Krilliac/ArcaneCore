@@ -10,14 +10,14 @@ internal sealed class UsageException(string message) : Exception(message);
 internal sealed class CliArguments
 {
     private static readonly string[] s_valueOptions =
-        ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir"];
+        ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir", "--quest-xp"];
 
     private static readonly string[] s_flags = ["--replace", "--dry-run", "--verbose"];
 
     private static readonly Dictionary<string, string[]> s_allowed = new(StringComparer.Ordinal)
     {
         ["plan"] = ["--dialect", "--report", "--verbose"],
-        ["import"] = ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir", "--replace", "--dry-run", "--verbose"],
+        ["import"] = ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir", "--quest-xp", "--replace", "--dry-run", "--verbose"],
         ["import-dbc"] = ["--database", "--provider", "--connection-string"],
         ["verify"] = ["--database", "--provider", "--connection-string"],
     };

@@ -5,10 +5,13 @@ using System.Text;
 using System.Text.Json;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Import;
+using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.Quests;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
+using ArcaneCore.Kernel.Quests;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 
@@ -341,6 +344,94 @@ public sealed class ContentImporterCliTests : IDisposable
         Assert.Equal(ExitCodes.Io, bad);
         Assert.Contains("Lock.dbc", err, StringComparison.Ordinal);
         Assert.False(File.Exists(other));
+    }
+
+    // --- items and quests -------------------------------------------------------------------------------------
+
+    private const string ItemsAndQuests = """
+        CREATE TABLE `item_template` (`entry` mediumint unsigned NOT NULL, `name` varchar(255), `displayid` mediumint, `Quality` tinyint, `ScriptName` varchar(64), PRIMARY KEY (`entry`));
+        INSERT INTO `item_template` VALUES (25,'Worn Shortsword',1542,1,'x'),(6948,'Hearthstone',6418,1,'');
+        CREATE TABLE `quest_template` (`entry` mediumint unsigned NOT NULL, `QuestLevel` smallint, `Title` text, `RewMoneyMaxLevel` int, `StartScript` int, PRIMARY KEY (`entry`));
+        INSERT INTO `quest_template` VALUES (783,3,'A Threat Within',1000,0);
+        CREATE TABLE `creature_questrelation` (`id` mediumint unsigned NOT NULL, `quest` mediumint unsigned NOT NULL, PRIMARY KEY (`id`, `quest`));
+        INSERT INTO `creature_questrelation` VALUES (1001,783),(1002,783);
+        CREATE TABLE `creature_involvedrelation` (`id` mediumint unsigned NOT NULL, `quest` mediumint unsigned NOT NULL, PRIMARY KEY (`id`, `quest`));
+        INSERT INTO `creature_involvedrelation` VALUES (1001,783),(555,783);
+        CREATE TABLE `playercreateinfo_item` (`race` tinyint unsigned NOT NULL, `class` tinyint unsigned NOT NULL, `itemid` mediumint unsigned NOT NULL, `amount` tinyint unsigned NOT NULL DEFAULT '1', PRIMARY KEY (`race`, `class`, `itemid`));
+        INSERT INTO `playercreateinfo_item` VALUES (1,1,25,1),(1,1,6948,1),(1,2,9999,1);
+        """;
+
+    [Fact]
+    public async Task Plan_ListsTheItemAndQuestTables_WithTheirUnimportedColumns()
+    {
+        (int code, string output, _) = await RunAsync("plan", WriteDump("iq.sql", ItemsAndQuests));
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Line items = TableLine(output, "item_template");
+        Assert.Contains("CMangos", items.Text, StringComparison.Ordinal);
+        Assert.Contains("ScriptName", items.Unmapped, StringComparison.Ordinal);
+        Assert.Contains("displayid", items.Mapped, StringComparison.Ordinal);
+        Assert.Contains("StartScript", TableLine(output, "quest_template").Unmapped, StringComparison.Ordinal);
+        Assert.Contains("RewMoneyMaxLevel", TableLine(output, "quest_template").Mapped, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Import_WritesItemsQuestsRelationsAndTheStartingOutfit_AndReportsTheDerivedQuestXp()
+    {
+        string database = Db("world.db");
+        string report = Path.Combine(_directory, "iq.json");
+
+        (int code, string output, _) = await RunAsync("import", WriteDump("iq.sql", ItemsAndQuests), "--database", database, "--report", report);
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.Contains("RewXP was derived", output, StringComparison.Ordinal);
+        await using WorldDbContext db = Open(database);
+        Assert.Equal(["Hearthstone", "Worn Shortsword"], (await db.Set<ItemTemplateRow>().AsNoTracking().ToListAsync()).Select(i => i.Name).Order());
+        QuestTemplate quest = await db.Set<QuestTemplate>().AsNoTracking().SingleAsync();
+        Assert.Equal((783u, "A Threat Within", 1667u), (quest.Entry, quest.Title, quest.RewXP));
+        Assert.Equal(2, await db.Set<CreatureQuestStarterRow>().CountAsync());
+        Assert.Equal(3, await db.Set<PlayerCreateInfoItemRow>().CountAsync());
+        using JsonDocument json = JsonDocument.Parse(File.ReadAllText(report));
+        Assert.Equal(2, json.RootElement.GetProperty("imported").GetProperty("item_template").GetInt64());
+        Assert.Equal(1, json.RootElement.GetProperty("imported").GetProperty("quest_template").GetInt64());
+    }
+
+    [Fact]
+    public async Task QuestXpNone_LeavesRewXpAtZero_AndABogusValueIsAUsageError()
+    {
+        string database = Db("world.db");
+
+        (int none, _, _) = await RunAsync("import", WriteDump("iq.sql", ItemsAndQuests), "--database", database, "--quest-xp", "none");
+        (int bogus, _, _) = await RunAsync("import", WriteDump("iq.sql", ItemsAndQuests), "--database", Db("x.db"), "--quest-xp", "lots");
+
+        Assert.Equal(ExitCodes.Ok, none);
+        Assert.Equal(ExitCodes.Usage, bogus);
+        await using WorldDbContext db = Open(database);
+        Assert.Equal(0u, (await db.Set<QuestTemplate>().AsNoTracking().SingleAsync()).RewXP);
+    }
+
+    [Fact]
+    public async Task Verify_FlagsStartingItemsWithoutATemplate_AndNotesQuestGiversWithoutOne()
+    {
+        string database = Db("world.db");
+        Assert.Equal(ExitCodes.Ok, (await RunAsync("import", WriteDump("iq.sql", ItemsAndQuests), "--database", database)).Code);
+
+        (int code, string output, _) = await RunAsync("verify", "--database", database);
+
+        Assert.Equal(ExitCodes.Verify, code);
+        Assert.Contains("1 playercreateinfo_item row(s) name an item that has no item_template", output, StringComparison.Ordinal);
+        Assert.Contains("2 creature_questrelation and 2 creature_involvedrelation", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RenamedItemKey_ExitsWithSchemaError()
+    {
+        string dump = WriteDump("iq.sql", ItemsAndQuests.Replace("`entry` mediumint unsigned NOT NULL, `name` varchar(255), `displayid`", "`itemid` mediumint unsigned NOT NULL, `name` varchar(255), `displayid`", StringComparison.Ordinal));
+
+        (int code, _, string err) = await RunAsync("plan", dump);
+
+        Assert.Equal(ExitCodes.Schema, code);
+        Assert.Contains("item_template", err, StringComparison.Ordinal);
     }
 
     // --- import-dbc ---------------------------------------------------------------------------------------

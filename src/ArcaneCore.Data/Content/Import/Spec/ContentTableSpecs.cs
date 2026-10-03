@@ -61,6 +61,29 @@ public static class ContentTableSpecs
         new(ContentDialect.VMangos, ["patch_min"], []),
     ];
 
+    // item_template: cmangos z2815 `displayid` vs vmangos `display_id` + `patch`
+    // (vmangos ObjectMgr.cpp:3820 LoadItemPrototypes select).
+    private static readonly DialectSignature[] s_itemSignatures =
+    [
+        new(ContentDialect.CMangos, ["displayid"], ["patch", "display_id"]),
+        new(ContentDialect.VMangos, ["display_id", "patch"], []),
+    ];
+
+    // quest_template: vmangos has RewXP and patch (ObjectMgr.cpp:5523-5566 LoadQuests select);
+    // cmangos z2815 has neither and carries RewMoneyMaxLevel (Quest::XPValue derives the XP from it).
+    private static readonly DialectSignature[] s_questSignatures =
+    [
+        new(ContentDialect.CMangos, ["RewMoneyMaxLevel"], ["patch", "RewXP"]),
+        new(ContentDialect.VMangos, ["patch", "RewXP"], []),
+    ];
+
+    // quest relations: vmangos filters on patch_min/patch_max (ObjectMgr.cpp:9178).
+    private static readonly DialectSignature[] s_relationSignatures =
+    [
+        new(ContentDialect.CMangos, ["id", "quest"], ["patch_min"]),
+        new(ContentDialect.VMangos, ["patch_min", "patch_max"], []),
+    ];
+
     private static readonly DialectSignature[] s_lootSignatures =
     [
         new(ContentDialect.CMangos, ["condition_id"], ["patch_min"]),
@@ -115,6 +138,11 @@ public static class ContentTableSpecs
         new("item_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),
         new("skinning_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),
         new("reference_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),
+        new("item_template", [new KeyColumn("entry")], [], s_itemSignatures, ItemQuestDumpImporter.ReadsItemColumn),
+        new("quest_template", [new KeyColumn("entry")], [], s_questSignatures, ItemQuestDumpImporter.ReadsQuestColumn),
+        new("creature_questrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], s_relationSignatures),
+        new("creature_involvedrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], s_relationSignatures),
+        new("playercreateinfo_item", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("itemid")], ["amount"], []),
     ];
 
     private static readonly FrozenDictionary<string, TableSpec> s_byTable =

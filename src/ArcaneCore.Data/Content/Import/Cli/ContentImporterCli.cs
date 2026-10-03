@@ -1,8 +1,11 @@
 using System.Globalization;
+using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.Quests;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
+using ArcaneCore.Kernel.Quests;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArcaneCore.Data.Content.Import;
@@ -31,7 +34,8 @@ public static class ContentImporterCli
         commands:
           plan <dump>...        read the dump(s) and print, per table, the dialect, row and key
                                 counts and which columns an importer reads; writes no database
-          import <dump>...      import the creature, game object and loot tables
+          import <dump>...      import the creature, game object, loot, item and quest tables
+                                (and the starting outfit, playercreateinfo_item)
           import-dbc <dir>      import the five spell DBCs from a client DBFilesClient directory
           verify                count the imported tables and check references
 
@@ -44,6 +48,9 @@ public static class ContentImporterCli
           --provider <sqlite|mariadb|mysql|postgresql> --connection-string <cs>
                                            any other engine; or set ARCANECORE_CONTENT_CONNECTION
           --dbc-dir <DBFilesClient>        import: also read Lock.dbc (game object locks)
+          --quest-xp derived|none          import: a source without quest_template.RewXP (cmangos) gets
+                                           RewXP derived from RewMoneyMaxLevel like cmangos' Quest::XPValue
+                                           (default derived), or none (RewXP 0: quests give no XP)
           --replace                        import: empty the importers' tables first
           --dry-run                        import: read and count everything, write nothing
           --report <file>                  write the JSON report (outside the repository)
@@ -164,6 +171,7 @@ public static class ContentImporterCli
 
         var creatures = new CreatureDumpImporter();
         var objects = new GameObjectLootDumpImporter();
+        var itemsAndQuests = new ItemQuestDumpImporter { QuestXp = ParseQuestXp(a) };
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             creatures.Read(reader);
@@ -172,6 +180,11 @@ public static class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             objects.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            itemsAndQuests.Read(reader);
         }
 
         string? dbcDirectory = a.Value("--dbc-dir");
@@ -201,6 +214,7 @@ public static class ContentImporterCli
 
         CreatureImportReport creatureReport = creatures.BuildReport();
         GameObjectLootImportReport objectReport = objects.BuildReport();
+        ItemQuestImportReport itemQuestReport = itemsAndQuests.BuildReport();
         if (!dryRun)
         {
             o.WriteLine($"target: {target!.Describe}");
@@ -212,6 +226,7 @@ public static class ContentImporterCli
                 {
                     creatureReport = await creatures.WriteAsync(db, replace, token).ConfigureAwait(false);
                     objectReport = await objects.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    itemQuestReport = await itemsAndQuests.WriteAsync(db, replace, token).ConfigureAwait(false);
                 }, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -222,7 +237,15 @@ public static class ContentImporterCli
 
         warnings.AddRange(creatureReport.Warnings);
         warnings.AddRange(objectReport.Warnings);
-        (Dictionary<string, long> imported, Dictionary<string, long> skipped) = Counts(creatureReport, objectReport);
+        warnings.AddRange(itemQuestReport.Warnings);
+        if (itemQuestReport.DerivedQuestXp > 0)
+        {
+            warnings.Add(
+                $"quest_template.RewXP was derived from RewMoneyMaxLevel for {itemQuestReport.DerivedQuestXp} quest(s) " +
+                "(the source has no RewXP; cmangos Quest::XPValue); XP reduced for grey quests can differ from cmangos by 1");
+        }
+
+        (Dictionary<string, long> imported, Dictionary<string, long> skipped) = Counts(creatureReport, objectReport, itemQuestReport);
         o.WriteLine(dryRun ? "would import:" : "imported:");
         foreach ((string table, long count) in imported)
         {
@@ -240,7 +263,7 @@ public static class ContentImporterCli
     }
 
     private static (Dictionary<string, long> Imported, Dictionary<string, long> Skipped) Counts(
-        CreatureImportReport creatures, GameObjectLootImportReport objects)
+        CreatureImportReport creatures, GameObjectLootImportReport objects, ItemQuestImportReport itemsAndQuests)
     {
         var imported = new Dictionary<string, long>
         {
@@ -258,11 +281,17 @@ public static class ContentImporterCli
             ["lock_template"] = objects.Locks,
             ["loot_template_rows"] = objects.LootRows,
             ["creature_loot_info"] = objects.CreatureLootInfos,
+            ["item_template"] = itemsAndQuests.Items,
+            ["quest_template"] = itemsAndQuests.Quests,
+            ["creature_questrelation"] = itemsAndQuests.QuestStarters,
+            ["creature_involvedrelation"] = itemsAndQuests.QuestEnders,
+            ["playercreateinfo_item"] = itemsAndQuests.StartingItems,
         };
         var skipped = new Dictionary<string, long>
         {
             ["creature_spawn"] = creatures.SkippedSpawns,
             ["gameobject_and_loot_rows"] = objects.SkippedRows,
+            ["item_and_quest_rows"] = itemsAndQuests.SkippedRows,
         };
         return (imported, skipped);
     }
@@ -348,6 +377,11 @@ public static class ContentImporterCli
                 ("skinning_loot_template", await db.Set<SkinningLootTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("reference_loot_template", await db.Set<ReferenceLootTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_loot_info", await db.Set<CreatureLootInfoRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("item_template", await db.Set<ItemTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("quest_template", await db.Set<QuestTemplate>().CountAsync(ct).ConfigureAwait(false)),
+                ("creature_questrelation", await db.Set<CreatureQuestStarterRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("creature_involvedrelation", await db.Set<CreatureQuestEnderRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("playercreateinfo_item", await db.Set<PlayerCreateInfoItemRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_template", await db.Set<SpellTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
             };
             foreach ((string table, int count) in counts)
@@ -363,6 +397,25 @@ public static class ContentImporterCli
             int missingObjects = await db.Set<GameObjectSpawnRow>()
                 .CountAsync(s => s.Entry != 0 && !objectTemplates.Any(t => t.Entry == s.Entry), ct).ConfigureAwait(false);
             int randomEntryObjects = await db.Set<GameObjectSpawnRow>().CountAsync(s => s.Entry == 0, ct).ConfigureAwait(false);
+
+            int giversWithoutTemplate = await db.Set<CreatureQuestStarterRow>()
+                .CountAsync(r => !templates.Any(t => t.Entry == r.Id), ct).ConfigureAwait(false);
+            int endersWithoutTemplate = await db.Set<CreatureQuestEnderRow>()
+                .CountAsync(r => !templates.Any(t => t.Entry == r.Id), ct).ConfigureAwait(false);
+            IQueryable<ItemTemplateRow> itemTemplates = db.Set<ItemTemplateRow>();
+            int startingItemsMissing = await db.Set<PlayerCreateInfoItemRow>()
+                .CountAsync(r => !itemTemplates.Any(i => i.Entry == r.ItemId), ct).ConfigureAwait(false);
+            if (giversWithoutTemplate + endersWithoutTemplate > 0)
+            {
+                o.WriteLine(
+                    $"note: {giversWithoutTemplate} creature_questrelation and {endersWithoutTemplate} creature_involvedrelation row(s) name a creature " +
+                    "that has no creature_template (the loaders keep these and only log them)");
+            }
+
+            if (startingItemsMissing > 0)
+            {
+                problems.Add($"{startingItemsMissing} playercreateinfo_item row(s) name an item that has no item_template");
+            }
 
             if (missingCreatures > 0)
             {
@@ -466,6 +519,14 @@ public static class ContentImporterCli
             ? dialect
             : throw new UsageException($"unknown dialect '{dialect}' (auto, cmangos, vmangos)");
     }
+
+    private static QuestXpSource ParseQuestXp(CliArguments a)
+        => (a.Value("--quest-xp") ?? "derived").ToLowerInvariant() switch
+        {
+            "derived" => QuestXpSource.Derived,
+            "none" => QuestXpSource.None,
+            string other => throw new UsageException($"unknown --quest-xp '{other}' (derived, none)"),
+        };
 
     private static void RequireInputs(CliArguments a)
     {
