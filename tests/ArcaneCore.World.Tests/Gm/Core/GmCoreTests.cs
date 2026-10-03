@@ -75,6 +75,27 @@ public sealed class GmCoreTests
     }
 
     [Fact]
+    public void TheShippedAppSettings_SpellOutTheDefaults()
+    {
+        string? dir = AppContext.BaseDirectory;
+        while (dir is not null && !File.Exists(Path.Combine(dir, "src", "ArcaneCore.World", "appsettings.json")))
+        {
+            dir = Path.GetDirectoryName(dir);
+        }
+
+        Assert.NotNull(dir);
+        IConfiguration configuration = new ConfigurationBuilder()
+            .AddJsonFile(Path.Combine(dir, "src", "ArcaneCore.World", "appsettings.json")).Build();
+
+        GmOptions shipped = GmOptions.Bind(configuration);
+        var defaults = new GmOptions();
+        Assert.Equal(defaults.SecurityMap.OrderBy(p => p.Key), shipped.SecurityMap.OrderBy(p => p.Key));
+        Assert.Equal(
+            (defaults.HideUnavailable, defaults.ExactNameFirst, defaults.RetailLevels, defaults.LogCommands, defaults.LowerSecurity, defaults.LookupMaxResults),
+            (shipped.HideUnavailable, shipped.ExactNameFirst, shipped.RetailLevels, shipped.LogCommands, shipped.LowerSecurity, shipped.LookupMaxResults));
+    }
+
+    [Fact]
     public void Defaults_AreLoggingOnAndStrictLowerSecurity()
     {
         var options = new GmOptions();
