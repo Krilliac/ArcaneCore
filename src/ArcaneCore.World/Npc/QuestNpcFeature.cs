@@ -3,6 +3,7 @@ using ArcaneCore.Data.Npc;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
@@ -10,6 +11,9 @@ using ArcaneCore.Kernel.Quests;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Progression;
+using ArcaneCore.World.Spells;
+using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -22,7 +26,7 @@ namespace ArcaneCore.World.Npc;
 /// with the quest service. Creature quest interactions use live map/visibility snapshots and
 /// optional faction templates; missing reaction data denies interaction.
 /// </summary>
-public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IAsyncDisposable
+public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IAreaTriggerListener, IAsyncDisposable
 {
     private readonly IServiceProvider _services;
     private readonly IServiceScopeFactory _scopes;
@@ -30,6 +34,7 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
     private readonly TimeProvider _clock;
     private readonly ConditionalWeakTable<Player, CharacterQuestData> _staged = new();
     private readonly HashSet<Map> _maps = [];
+    private readonly Dictionary<Player, Action<uint, int>> _itemListeners = new(ReferenceEqualityComparer.Instance);
     private QuestObjectiveAdapter? _objectives;
     private WorldRuntime? _world;
 
@@ -72,11 +77,17 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
                 ?? (string.IsNullOrWhiteSpace(Options.FactionTemplateDbcPath)
                     ? FactionTemplateCatalog.Empty
                     : FactionTemplateDbcReader.Load(Options.FactionTemplateDbcPath));
-            Services = BuildServices(new QuestStore(quests), new NpcStore(npcs), factions);
+            Services = BuildServices(new QuestStore(quests), new NpcStore(npcs), factions, progression: true);
         }
 
         _world = world;
-        _objectives = new QuestObjectiveAdapter(Services);
+        _objectives = new QuestObjectiveAdapter(Services, RewardGroups.Resolver(_services),
+            _services.GetService<ProgressionFeature>()?.Progression.Options.GroupXpDistance ?? new ProgressionOptions().GroupXpDistance);
+        if (_services.GetService<SpellFeature>() is { } spells)
+        {
+            _objectives.Attach(spells.System);
+        }
+
         Persistence.Start();
         world.MapCreated += OnMapCreated;
         foreach (Map map in world.Maps)
@@ -113,6 +124,12 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
     public async ValueTask DisposeAsync()
     {
         _objectives?.Dispose();
+        foreach ((Player player, Action<uint, int> listener) in _itemListeners)
+        {
+            player.Inventory.ItemCountChanged -= listener;
+        }
+
+        _itemListeners.Clear();
         if (_world is { } world)
         {
             world.MapCreated -= OnMapCreated;
@@ -136,9 +153,17 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
         }
     }
 
-    private QuestNpcServices BuildServices(QuestStore quests, NpcStore npcs, FactionTemplateCatalog? factions = null) => new(quests, npcs,
-        new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions ?? FactionTemplateCatalog.Empty)),
+    private QuestNpcServices BuildServices(QuestStore quests, NpcStore npcs, FactionTemplateCatalog? factions = null,
+        bool progression = false) => new(quests, npcs,
+        new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions ?? FactionTemplateCatalog.Empty),
+            Experience: progression ? _services.GetService<ProgressionFeature>()?.Progression : null,
+            RewardEffects: progression && _services.GetService<SpellFeature>() is { } spells
+                ? new QuestRewardEffects(spells.System, () => _services.GetServices<IQuestReputationRewards>(), _logger)
+                : null),
         Options, new PersistenceSink(this), () => _clock.GetUtcNow().ToUnixTimeSeconds(), _logger);
+
+    /// <summary>CMSG_AREATRIGGER inside the trigger: areatrigger_involvedrelation exploration credit.</summary>
+    public void OnAreaTrigger(Player player, uint triggerId) => Services.AreaTriggerReached(player, triggerId);
 
     private void OnMapCreated(Map map)
     {
@@ -161,12 +186,38 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
         }
 
         Services.CompleteLoad(Services.Track(player), data);
+        // Item-collect objectives follow the live inventory (vmangos ItemAddedQuestCheck /
+        // ItemRemovedQuestCheck); counters are reconciled with the loaded bags first.
+        RemoveItemListener(player);
+        Action<uint, int> listener = (entry, delta) =>
+        {
+            if (delta > 0)
+            {
+                Services.ItemAdded(player, entry, (uint)delta);
+            }
+            else if (delta < 0)
+            {
+                Services.ItemRemoved(player, entry, (uint)-(long)delta);
+            }
+        };
+        _itemListeners[player] = listener;
+        player.Inventory.ItemCountChanged += listener;
+        Services.ReconcileItemCounts(player);
     }
 
     private void OnPlayerLoggingOut(Player player)
     {
+        RemoveItemListener(player);
         Services.Untrack(player);
         _staged.Remove(player);
+    }
+
+    private void RemoveItemListener(Player player)
+    {
+        if (_itemListeners.Remove(player, out Action<uint, int>? listener))
+        {
+            player.Inventory.ItemCountChanged -= listener;
+        }
     }
 
     private sealed class PersistenceSink(QuestNpcFeature feature) : IQuestNpcSink
