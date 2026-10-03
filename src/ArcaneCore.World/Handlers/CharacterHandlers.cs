@@ -162,16 +162,8 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         var reader = new PacketReader(payload);
         ulong guid = reader.ReadUInt64();
 
-        // A character still in the world (e.g. a lingering previous session) is not deletable.
-        bool deleted = guid <= int.MaxValue
-            && !session.World.IsOnline(ObjectGuid.Player((uint)guid))
-            && await session.Services.GetRequiredService<ICharacterStore>()
-                .DeleteAsync((int)guid, session.AccountId).ConfigureAwait(false);
-        if (deleted)
-        {
-            session.Services.GetRequiredService<CharacterDirectory>().Remove((int)guid);
-        }
-
+        // Stored rows go through the data modules, live state through ICharacterDeleteHook.
+        bool deleted = await CharacterDeletion.TryDeleteAsync(session, guid).ConfigureAwait(false);
         SendResult(session, WorldOpcode.SmsgCharDelete, deleted ? CharResult.CharDeleteSuccess : CharResult.CharDeleteFailed);
     }
 

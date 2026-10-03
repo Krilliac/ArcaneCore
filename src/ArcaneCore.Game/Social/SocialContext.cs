@@ -31,6 +31,14 @@ public interface ISocialPersistence
     void SaveGuild(GuildData guild);
 
     void DeleteGuild(int guildId);
+
+    /// <summary>
+    /// A deleted character's friend/ignore rows (owned and pointing at it) and guild membership,
+    /// after every earlier write (docs/integration/character-delete.md). Default: nothing to purge.
+    /// </summary>
+    void PurgeCharacter(int characterId)
+    {
+    }
 }
 
 /// <summary>
