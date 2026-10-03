@@ -45,6 +45,7 @@ public static class WorldServiceCollectionExtensions
         services.AddSingleton(_ => ChatCommands.CreateTable());
         services.AddWorldFeatures();
         services.AddSingleton<CharacterDirectory>();
+        services.AddSingleton<CharacterDeletionReconciler>();
         services.AddSingleton<SessionRegistry>();
         services.AddSingleton<CharacterSaveQueue>();
         services.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());

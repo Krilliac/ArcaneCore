@@ -61,6 +61,9 @@ public interface IInstanceStore
     /// <summary>Insert or update the instance a character last entered.</summary>
     Task SaveLastInstanceAsync(CharacterLastInstanceRecord last, CancellationToken cancellationToken = default);
 
-    /// <summary>Delete every bind and last-instance row of a character (character deletion).</summary>
+    /// <summary>
+    /// Delete every bind and last-instance row of a character id that has no <c>characters</c> row
+    /// (the queued removal after a character deletion; a recreated character's rows are kept).
+    /// </summary>
     Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default);
 }

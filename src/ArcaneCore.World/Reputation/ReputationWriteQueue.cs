@@ -33,7 +33,8 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
     public void SaveWatchedFaction(int characterId, int watched) => Enqueue(store => store.SaveWatchedFactionAsync(characterId, watched));
 
-    public void DeleteCharacter(int characterId) => Enqueue(store => store.DeleteCharacterAsync(characterId));
+    /// <summary>Remove a deleted character's rows, unless its id has a <c>characters</c> row again by the time this runs.</summary>
+    public void DeleteCharacter(int characterId) => Enqueue(store => store.DeleteDeletedCharacterAsync(characterId));
 
     /// <summary>Completes once every write queued before the call has been attempted.</summary>
     public Task FlushAsync()

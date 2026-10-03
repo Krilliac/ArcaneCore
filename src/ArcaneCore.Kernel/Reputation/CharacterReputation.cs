@@ -24,8 +24,15 @@ public interface ICharacterReputationStore
     /// <summary>Persist the watched reputation-list slot (-1 for none); a missing character is ignored.</summary>
     Task SaveWatchedFactionAsync(int characterId, int watchedFaction, CancellationToken cancellationToken = default);
 
-    /// <summary>Remove every reputation row of a character (deletion, or a reused id at creation).</summary>
+    /// <summary>Remove every reputation row of a character (a reused id at creation).</summary>
     Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Remove the reputation rows of a character id that has no <c>characters</c> row: the queued
+    /// removal after a deletion, which must not wipe a character recreated with the same id before
+    /// it executes (docs/integration/character-delete.md).
+    /// </summary>
+    Task DeleteDeletedCharacterAsync(int characterId, CancellationToken cancellationToken = default);
 }
 
 /// <summary>

@@ -197,4 +197,8 @@ internal sealed class MemoryReputationStore : ICharacterReputationStore
 
         return Task.CompletedTask;
     }
+
+    /// <summary>This in-memory store has no characters table, so a deleted character's id never has a live row.</summary>
+    public Task DeleteDeletedCharacterAsync(int characterId, CancellationToken cancellationToken = default)
+        => DeleteCharacterAsync(characterId, cancellationToken);
 }

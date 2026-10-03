@@ -189,8 +189,23 @@ public sealed class EfCharacterSpellStateStore(CharacterDbContext db) : ICharact
         }
     }
 
-    public Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default)
-        => DeleteRowsAsync(characterId, cancellationToken);
+    /// <summary>
+    /// Remove the cooldown and aura rows of a character id that has no <c>characters</c> row (the
+    /// queued removal after a deletion). Each of the two statements carries the condition, so a late
+    /// or retried removal never wipes a character recreated with the same id. This is defense in
+    /// depth: the deletion ledger and the create fence are the primary guarantee, because a
+    /// concurrent create is not atomic with these two statements on every engine
+    /// (docs/integration/character-delete.md).
+    /// </summary>
+    public async Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default)
+    {
+        await db.Set<CharacterSpellCooldownRow>()
+            .Where(r => r.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<CharacterAuraRow>()
+            .Where(r => r.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     private async Task DeleteRowsAsync(int characterId, CancellationToken cancellationToken)
     {

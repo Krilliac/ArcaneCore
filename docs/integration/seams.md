@@ -63,6 +63,14 @@ v6 social. Auth remains v2. See [fleet accounting](fleet-20261003.md) for the
 exact source heads, schema lineage, and validation. These assignments apply to
 this candidate; the original feature branches retain their draft allocations.
 
+At `c3dea16` the characters chain continues v7 reputation, v8 instances, v9 spell
+state, v10 economy (world v7 game-object loot, v8 creature AI). The deletion-outcome
+recovery branch (`claude/ac-1-delete-recovery`) takes **characters v11**
+(`CharacterDeletionDataModule.Version`, table `character_deletion`; see
+[character-delete.md](character-delete.md)); the integrator renumbers it in merge order
+(expected final number 12). Its tests use `CharacterDbContext.Schema.CurrentVersion` and the
+module constant, never a literal.
+
 ## Local build and test (box)
 
 ```

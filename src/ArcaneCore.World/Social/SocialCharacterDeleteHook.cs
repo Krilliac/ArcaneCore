@@ -88,5 +88,9 @@ public sealed class SocialCharacterDeleteHook(SocialFeature social, CharacterDir
             context.Persistence.PurgeCharacter(character.Id);
             return true;
         }).WaitAsync(WorldCallTimeout).ConfigureAwait(false);
+
+        // The deletion completes only after the purge was attempted (it is conditional on the id
+        // still having no character row, so a recreated character keeps its friends and guild).
+        await social.Context.Persistence.FlushAsync().WaitAsync(CharacterDeletion.DrainTimeout).ConfigureAwait(false);
     }
 }

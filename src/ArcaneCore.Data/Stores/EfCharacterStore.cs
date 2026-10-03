@@ -7,7 +7,7 @@ using Microsoft.EntityFrameworkCore.Storage;
 namespace ArcaneCore.Data.Stores;
 
 /// <summary>EF Core implementation of <see cref="ICharacterStore"/>.</summary>
-public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore
+public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, ICharacterDeletionStore
 {
     public async Task<IReadOnlyList<CharacterRecord>> GetByAccountAsync(
         int accountId, CancellationToken cancellationToken = default)
@@ -32,16 +32,95 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore
     public async Task<int> CountByAccountAsync(int accountId, CancellationToken cancellationToken = default)
         => await db.Characters.CountAsync(c => c.AccountId == accountId, cancellationToken).ConfigureAwait(false);
 
+    /// <summary>
+    /// Insert a character. A caller-supplied nonzero <c>Id</c> (an explicit id; the world never
+    /// supplies one) is fenced: it is refused with <see cref="CharacterIdPendingDeletionException"/>
+    /// while a deletion of that id is still pending finalization, so a late finalizer of the earlier
+    /// lifetime cannot reach the new one. The insert comes first and the check follows in the same
+    /// transaction, so a deletion committing concurrently (which the insert waits for) is always seen.
+    /// Generated ids are not fenced (docs/integration/character-delete.md, Limits).
+    /// </summary>
     public async Task<CharacterRecord> CreateAsync(CharacterRecord character, CancellationToken cancellationToken = default)
     {
-        db.Characters.Add(character);
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        db.ChangeTracker.Clear();
-        return character;
+        ArgumentNullException.ThrowIfNull(character);
+        if (character.Id == 0)
+        {
+            try
+            {
+                db.Characters.Add(character);
+                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                return character;
+            }
+            finally
+            {
+                // A failed insert must not stay tracked: the next save on this scope would retry it.
+                db.ChangeTracker.Clear();
+            }
+        }
+
+        bool own = db.Database.CurrentTransaction is null && System.Transactions.Transaction.Current is null;
+        await using IDbContextTransaction? transaction = own
+            ? await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
+            : null;
+        try
+        {
+            db.Characters.Add(character);
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            if (await db.Set<CharacterDeletionRow>().AnyAsync(r => r.CharacterId == character.Id, cancellationToken).ConfigureAwait(false))
+            {
+                throw new CharacterIdPendingDeletionException(character.Id); // disposing the transaction rolls the insert back
+            }
+
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            return character;
+        }
+        finally
+        {
+            db.ChangeTracker.Clear();
+        }
     }
 
     public Task<bool> DeleteAsync(int id, int accountId, CancellationToken cancellationToken = default)
-        => DeleteAsync(id, accountId, CharacterDataCleanups.All, cancellationToken);
+        => DeleteAsync(Guid.Empty, id, accountId, CharacterDataCleanups.All, cancellationToken);
+
+    Task<bool> ICharacterDeletionStore.DeleteAsync(Guid operationId, int id, int accountId, CancellationToken cancellationToken)
+    {
+        if (operationId == Guid.Empty)
+        {
+            throw new ArgumentException("A deletion operation needs a non-empty id.", nameof(operationId));
+        }
+
+        return DeleteAsync(operationId, id, accountId, CharacterDataCleanups.All, cancellationToken);
+    }
+
+    public async Task<bool> IsCommittedAsync(Guid operationId, CancellationToken cancellationToken = default)
+    {
+        string key = operationId.ToString("D");
+        return await db.Set<CharacterDeletionRow>().AsNoTracking()
+            .AnyAsync(r => r.OperationId == key, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<PendingCharacterDeletion>> GetPendingAsync(
+        int accountId, CancellationToken cancellationToken = default)
+    {
+        List<CharacterDeletionRow> rows = await db.Set<CharacterDeletionRow>().AsNoTracking()
+            .Where(r => r.AccountId == accountId)
+            .OrderBy(r => r.CharacterId)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return [.. rows.Select(r => new PendingCharacterDeletion(Guid.Parse(r.OperationId), r.CharacterId, r.AccountId, r.Name))];
+    }
+
+    public async Task CompleteAsync(Guid operationId, CancellationToken cancellationToken = default)
+    {
+        string key = operationId.ToString("D");
+        await db.Set<CharacterDeletionRow>().Where(r => r.OperationId == key)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Delete the character row, its action bar and every module's per-character rows
@@ -49,8 +128,18 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore
     /// A module's refusal answers false and leaves everything in place. <paramref name="cleanups"/> is
     /// normally <see cref="CharacterDataCleanups.All"/> (tests substitute their own).
     /// </summary>
-    public async Task<bool> DeleteAsync(
+    public Task<bool> DeleteAsync(
         int id, int accountId, IReadOnlyList<ICharacterDataCleanup> cleanups, CancellationToken cancellationToken)
+        => DeleteAsync(Guid.Empty, id, accountId, cleanups, cancellationToken);
+
+    /// <summary>
+    /// As the overload without an operation, and a non-empty <paramref name="operationId"/> is also
+    /// written to <c>character_deletion</c> in the same transaction (the ledger row commits or rolls
+    /// back with the deletion; in a caller-owned transaction the caller's outcome decides).
+    /// <see cref="Guid.Empty"/> writes no ledger row.
+    /// </summary>
+    public async Task<bool> DeleteAsync(
+        Guid operationId, int id, int accountId, IReadOnlyList<ICharacterDataCleanup> cleanups, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(cleanups);
         if (db.ChangeTracker.Entries().Any())
@@ -80,6 +169,18 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore
 
             db.ActionButtons.RemoveRange(db.ActionButtons.Where(b => b.CharacterId == id));
             db.Characters.Remove(character);
+            if (operationId != Guid.Empty)
+            {
+                db.Set<CharacterDeletionRow>().Add(new CharacterDeletionRow
+                {
+                    OperationId = operationId.ToString("D"),
+                    CharacterId = character.Id,
+                    AccountId = accountId,
+                    Name = character.Name,
+                    CommittedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                });
+            }
+
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             if (transaction is not null)
             {

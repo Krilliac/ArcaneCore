@@ -54,15 +54,16 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(InstanceDataModule), DatabaseComponent.Characters, 8),
             (typeof(CharacterSpellStateDataModule), DatabaseComponent.Characters, 9),
             (typeof(EconomyDataModule), DatabaseComponent.Characters, EconomyDataModule.Version),
+            (typeof(CharacterDeletionDataModule), DatabaseComponent.Characters, CharacterDeletionDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
             DataModules.All.OrderBy(m => m.Component).ThenBy(m => m.SchemaVersion)
                 .Select(m => (m.GetType(), m.Component, m.SchemaVersion)));
         Assert.Equal(2, AuthDbContext.Schema.CurrentVersion);
-        Assert.Equal(10, CharacterDbContext.Schema.CurrentVersion);
+        Assert.Equal(CharacterDeletionDataModule.Version, CharacterDbContext.Schema.CurrentVersion);
         Assert.Equal(8, WorldDbContext.Schema.CurrentVersion);
-        Assert.Equal([2, 3, 4, 5, 6, 7, 8, 9, 10], CharacterDbContext.Schema.Steps.Select(s => s.Version));
+        Assert.Equal(Enumerable.Range(2, CharacterDbContext.Schema.CurrentVersion - 1), CharacterDbContext.Schema.Steps.Select(s => s.Version));
         Assert.Equal([2, 3, 4, 5, 6, 7, 8], WorldDbContext.Schema.Steps.Select(s => s.Version));
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })

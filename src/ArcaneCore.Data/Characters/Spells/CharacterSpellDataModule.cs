@@ -111,8 +111,13 @@ public sealed class EfCharacterSpellStore(CharacterDbContext db) : ICharacterSpe
             .Where(r => r.CharacterId == characterId && r.Spell == spell)
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
 
+    /// <summary>
+    /// Remove the spellbook rows of a character id that has no <c>characters</c> row (the queued
+    /// removal after a deletion). Conditional in one statement, so a late or retried removal never
+    /// wipes a character recreated with the same id (docs/integration/character-delete.md).
+    /// </summary>
     public async Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default)
         => await db.Set<CharacterSpellRow>()
-            .Where(r => r.CharacterId == characterId)
+            .Where(r => r.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
 }

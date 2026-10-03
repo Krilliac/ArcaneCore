@@ -98,15 +98,24 @@ public sealed class InstanceStoreTests : IAsyncLifetime
             Assert.Equal([new CharacterLastInstanceRecord(bob, 36, 102)], snapshot.LastInstances);
 
             await store.SaveBindAsync(new CharacterInstanceBindRecord(bob, 102, true));
-            await store.DeleteCharacterAsync(bob);
+            await store.DeleteCharacterAsync(bob); // the queued post-delete removal keeps a live character's rows
         });
 
         await WithStore(cs, async store =>
         {
             InstanceStoreSnapshot snapshot = await store.LoadAsync();
-            Assert.Empty(snapshot.Binds);
-            Assert.Empty(snapshot.LastInstances);
+            Assert.Equal([new CharacterInstanceBindRecord(bob, 102, true)], snapshot.Binds);
+            Assert.Equal([new CharacterLastInstanceRecord(bob, 36, 102)], snapshot.LastInstances);
+
+            const int gone = 424242; // no characters row: the removal deletes its binds and last instance
+            await store.SaveBindAsync(new CharacterInstanceBindRecord(gone, 102, true));
+            await store.SaveLastInstanceAsync(new CharacterLastInstanceRecord(gone, 36, 102));
+            await store.DeleteCharacterAsync(gone);
         });
+
+        await using CharacterDbContext check = TestContexts.Create<CharacterDbContext>(cs);
+        Assert.Equal(0, await check.Set<CharacterInstanceRow>().CountAsync(r => r.CharacterId == 424242));
+        Assert.Equal(0, await check.Set<CharacterLastInstanceRow>().CountAsync(r => r.CharacterId == 424242));
     }
 
     [Theory]

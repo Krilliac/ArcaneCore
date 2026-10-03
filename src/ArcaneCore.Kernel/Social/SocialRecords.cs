@@ -60,6 +60,7 @@ public interface ISocialStore
     /// <summary>
     /// A deleted character's leftovers: friend/ignore entries it owns or that point at it, and its
     /// guild membership. Queued after earlier social writes so none of them can bring a row back.
+    /// Applies only while the id has no character row, so a character recreated with the same id keeps its own.
     /// </summary>
     Task PurgeCharacterAsync(int characterId, CancellationToken cancellationToken = default) => Task.CompletedTask;
 }

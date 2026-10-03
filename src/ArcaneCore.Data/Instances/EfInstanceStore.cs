@@ -117,8 +117,12 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
     public async Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default)
     {
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-        await db.Set<CharacterInstanceRow>().Where(b => b.CharacterId == characterId).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-        await db.Set<CharacterLastInstanceRow>().Where(l => l.CharacterId == characterId).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        // Only for a character id that has no characters row: the queued removal after a deletion
+        // must not wipe a character recreated with the same id (docs/integration/character-delete.md).
+        await db.Set<CharacterInstanceRow>().Where(b => b.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<CharacterLastInstanceRow>().Where(l => l.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
