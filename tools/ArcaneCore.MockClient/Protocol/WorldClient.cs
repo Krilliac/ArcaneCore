@@ -15,6 +15,7 @@ public sealed class WorldClient : IAsyncDisposable
     private const int MaximumClientPayload = 0x2800 - 4;
     private const int MaximumServerPayload = 32 * 1024;
     private const int MaximumSkippedBytes = 1024 * 1024;
+    private static readonly TimeSpan IdlePollInterval = TimeSpan.FromMilliseconds(10);
 
     private readonly TcpClient _client;
     private readonly NetworkStream _stream;
@@ -154,6 +155,30 @@ public sealed class WorldClient : IAsyncDisposable
 
     public Task<WorldFrame> ReadAsync(CancellationToken ct = default)
         => ReadOperationAsync("World packet read", ct, ReadFrameAsync);
+
+    /// <summary>
+    /// Waits until the server has sent something (or closed the connection) without consuming a
+    /// byte and without the per-operation deadline that bounds <see cref="ReadAsync"/>. A reader
+    /// that is legitimately quiet for a long stretch, such as a held settlement, calls this before
+    /// each read so only the arrival of a frame is held to that deadline, never the silence before
+    /// it. A timed-out read cannot be resumed: it closes the connection.
+    /// </summary>
+    public async Task WaitForTrafficAsync(CancellationToken ct = default)
+    {
+        RequireUsable();
+        EnterReader();
+        try
+        {
+            while (!_client.Client.Poll(0, SelectMode.SelectRead))
+            {
+                await Task.Delay(IdlePollInterval, ct).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            ExitReader();
+        }
+    }
 
     public Task<WorldFrame> ReadUntilAsync(ushort opcode, CancellationToken ct = default, int maxPackets = 128)
     {

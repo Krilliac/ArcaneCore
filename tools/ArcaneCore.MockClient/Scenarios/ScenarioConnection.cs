@@ -18,6 +18,9 @@ internal sealed class ScenarioConnection(WorldClient client)
     internal Task SendAsync(WorldOpcode opcode, byte[] payload, CancellationToken cancellationToken)
         => client.SendAsync((ushort)opcode, payload, cancellationToken);
 
+    /// <summary>Wait for the next frame to start arriving, however long the quiet before it lasts.</summary>
+    internal Task WaitForTrafficAsync(CancellationToken cancellationToken) => client.WaitForTrafficAsync(cancellationToken);
+
     internal async Task<WorldFrame> ReadAsync(CancellationToken cancellationToken)
     {
         WorldFrame frame = await client.ReadAsync(cancellationToken).ConfigureAwait(false);
