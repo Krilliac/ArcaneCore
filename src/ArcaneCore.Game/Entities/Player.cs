@@ -87,6 +87,7 @@ public sealed class Player : Unit
         _raceFactionTemplate = appearance.FactionTemplate;
 
         InitializeFields(character, appearance);
+        Inventory = new Items.PlayerInventory(this);
 
         foreach (ActionButton button in actionButtons ?? [])
         {
@@ -98,6 +99,9 @@ public sealed class Player : Unit
     }
 
     public IPlayerSession Session { get; }
+
+    /// <summary>Equipment, bags, bank and keyring (items area, <see cref="Items.PlayerInventory"/>).</summary>
+    public Items.PlayerInventory Inventory { get; }
 
     public int AccountId { get; }
 
@@ -400,7 +404,8 @@ public sealed class Player : Unit
 
         return new CharacterState(
             (int)Guid.Low, MapId, ZoneId, X, Y, Z, Orientation, Level,
-            Math.Max(PlayedTimeAt(nowMs), 1u), LevelPlayedTimeAt(nowMs), Money, ActionBarToggles, buttons, Home);
+            Math.Max(PlayedTimeAt(nowMs), 1u), LevelPlayedTimeAt(nowMs), Money, ActionBarToggles, buttons, Home,
+            Inventory.TakeSnapshotIfChanged());
     }
 
     private static uint Pack(uint action, byte type) => (action & 0x00FFFFFF) | ((uint)type << 24);
