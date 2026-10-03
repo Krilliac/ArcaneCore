@@ -156,9 +156,13 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
         CapacityHold hold, CancellationToken token)
     {
         // One deadline-bound reader continuously consumes ambient map traffic for this
-        // connection; packet count is not a stand-in for elapsed settlement time.
+        // connection; packet count is not a stand-in for elapsed settlement time. A held
+        // connection is legitimately silent for as long as the other players take to prepare,
+        // which under load exceeds a single read's five-second deadline (that timeout closes the
+        // connection), so wait for traffic first and bound only the frame itself.
         while (true)
         {
+            await connection.WaitForTrafficAsync(token);
             WorldFrame frame = await connection.ReadAsync(token);
             if (!hold.IsReleased)
             {

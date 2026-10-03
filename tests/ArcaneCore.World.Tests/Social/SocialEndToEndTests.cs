@@ -29,6 +29,7 @@ public sealed class SocialEndToEndTests
         await alice.LoginAsync(1);
         await using (WorldTestClient bob = await host.EnterWorldAsync("BOB", "Bob"))
         {
+            await WaitForSocialReadyAsync(host, "Bob");
             await alice.SendAsync(WorldOpcode.CmsgAddFriend, CString("bob"));
             byte[] added = await alice.ReadUntilAsync(WorldOpcode.SmsgFriendStatus);
             Assert.Equal((byte)FriendsResult.AddedOnline, added[0]);
@@ -143,6 +144,25 @@ public sealed class SocialEndToEndTests
         => ((WorldSession)player.Session).Services.GetRequiredService<SocialFeature>();
 
     private static Task<SocialFeature> FeatureAsync(WorldTestHost host, string name) => host.PlayerStateAsync(name, Feature);
+
+    /// <summary>
+    /// EnterWorldAsync returns once the client sees the world, but a player's social rows load
+    /// asynchronously afterwards, and the "came online" broadcast to friends only goes out when
+    /// that load completes. Friending someone inside that window answers AddedOnline now and then
+    /// delivers a second, late Online packet, so a test that goes on to expect the next status
+    /// (Offline) intermittently reads the Online one instead. Wait for the load first.
+    /// </summary>
+    private static async Task WaitForSocialReadyAsync(WorldTestHost host, string name)
+    {
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await host.OnWorldAsync(() =>
+        {
+            ArcaneCore.Game.Entities.Player player = host.World.FindOnlinePlayer(name)
+                ?? throw new InvalidOperationException($"{name} is not online");
+            Feature(player).ExecuteWhenReady(player, _ => ready.TrySetResult());
+        });
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    }
 
     private static Task<ISocialStore> StoreAsync(WorldTestHost host, string name)
         => host.PlayerStateAsync(name, p => ((WorldSession)p.Session).Services.GetRequiredService<ISocialStore>());
