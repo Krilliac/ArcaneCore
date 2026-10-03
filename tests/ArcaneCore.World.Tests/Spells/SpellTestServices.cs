@@ -16,11 +16,14 @@ internal sealed class SpellTestServices : IWorldTestServices
     public const uint Bolt = 9002;
     public const uint Learnable = 9003;
     public const uint Renew = 9004;
+    public const uint Cooldown = 9005;
+    public const uint SlowBolt = 9006;
 
     public void Register(IServiceCollection services)
     {
         services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(Content()));
         services.AddSingleton<ICharacterSpellStore, InMemoryCharacterSpellStore>();
+        services.AddSingleton<ICharacterSpellStateStore, InMemoryCharacterSpellStateStore>();
     }
 
     public static SpellContent Content() => new(
@@ -40,8 +43,15 @@ internal sealed class SpellTestServices : IWorldTestServices
                 r.DurationIndex = 3;
                 r.SpellVisual = 1;
             }),
+            With(Spell(Cooldown, "Test Cooldown", effect: 3, value: 0, targetA: 1), c => c.RecoveryTime = 60_000),
+            With(Spell(SlowBolt, "Test Slow Bolt", effect: 2, value: 3, targetA: 6), b =>
+            {
+                b.CastingTimeIndex = 5;
+                b.RangeIndex = 4;
+                b.InterruptFlags = 0x2; // damage pushback
+            }),
         ],
-        [new SpellCastTimeRow { Id = 2, CastTime = 500, MinCastTime = 500 }],
+        [new SpellCastTimeRow { Id = 2, CastTime = 500, MinCastTime = 500 }, new SpellCastTimeRow { Id = 5, CastTime = 3000, MinCastTime = 3000 }],
         [new SpellDurationRow { Id = 3, Duration = 15000, MaxDuration = 15000 }],
         [new SpellRangeRow { Id = 1 }, new SpellRangeRow { Id = 4, MaxRange = 30 }],
         [],
@@ -110,6 +120,37 @@ internal sealed class InMemoryCharacterSpellStore : ICharacterSpellStore
             _rows.TryRemove(key, out _);
         }
 
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>In-memory <see cref="ICharacterSpellStateStore"/>; <see cref="FailSave"/> makes saves throw.</summary>
+internal sealed class InMemoryCharacterSpellStateStore : ICharacterSpellStateStore
+{
+    private readonly ConcurrentDictionary<int, CharacterSpellState> _states = new();
+
+    public bool FailSave { get; set; }
+
+    public int Saves { get; private set; }
+
+    public Task<CharacterSpellState> LoadAsync(int characterId, CancellationToken cancellationToken = default)
+        => Task.FromResult(_states.TryGetValue(characterId, out CharacterSpellState? state) ? state : new CharacterSpellState([], []));
+
+    public Task SaveAsync(int characterId, CharacterSpellState state, CancellationToken cancellationToken = default)
+    {
+        if (FailSave)
+        {
+            throw new InvalidOperationException("spell state storage unavailable");
+        }
+
+        Saves++;
+        _states[characterId] = new CharacterSpellState([.. state.Cooldowns], [.. state.Auras]);
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default)
+    {
+        _states.TryRemove(characterId, out _);
         return Task.CompletedTask;
     }
 }
