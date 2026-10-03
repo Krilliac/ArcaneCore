@@ -116,6 +116,51 @@ on the world thread, so every reader sees the new value on its next read.
   do (World.cpp:2949-2977); `HotReload:NegativeNumbers = Reject` rejects the whole reload instead. A test fails if a new `WorldRuntimeOptions` / `MapOptions` / `WorldOptions` property is
   not classified in `WorldConfigKeys`.
 
+## Reload table audit (vmangos `Chat.cpp:794-910` against ArcaneCore)
+
+Every entry of the vmangos reload table, what ArcaneCore does with it, and whether `.reload all` reaches it
+(`ServerCommands.cpp:885-1002`). `ReloadAllMembershipTests` pins the "in all" answer for every registered
+reloadable, so a new reloadable that forgets to say whether `all` includes it fails the suite. Status words:
+**delivered** (a reloadable exists), **planned** (this lane, a later slice), **owner lane** (the store belongs to
+another wave-4 lane, which adds a reloadable when its store is swappable), **no store** (ArcaneCore reads no such
+table or catalog from the database).
+
+| vmangos name (Chat.cpp line) | In vmangos `all` | ArcaneCore | Status |
+|---|---|---|---|
+| `all` (796), `all_area` (797) | itself; all_area = areatrigger_teleport, areatrigger_tavern, game_graveyard_zone (:910-912) | `.reload all` | delivered |
+| `areatrigger_teleport` (813) | yes, via all_area (:910) | `areatrigger_teleport` | delivered |
+| `areatrigger_tavern` (812) | yes, via all_area (:911) | none | no store |
+| `game_graveyard_zone` (835) | yes, via all_area (:912) | none | owner lane (graveyards-resurrection) |
+| `areatrigger_involvedrelation` (811) | yes, via all_quest (:937) | none: the quest area triggers are the configuration key `Quests:AreaTriggerQuests`, bound when the world starts | no store (restart) |
+| `config` (808) | no | `config` | delivered |
+| `game_tele` (836) | yes (:902) | `game_tele` | delivered |
+| `spell_template` (905) | yes, via all_spell (:971) | `spell_template` | delivered |
+| `item_template` (855) | no | `item_template` | delivered |
+| `creature_template` (830) | no (all_npc :925-933 omits it) | `creature_template` | delivered |
+| `creature_ai_events` (820) | yes (:890) | part of the creature content, rides on `creature_template` (so not in `all`) | delivered, see Limits |
+| `quest_template` (884) and the four `*_questrelation` / `*_involvedrelation` tables (824, 827, 840, 842) | yes, via all_quest (:938-942) | none yet | planned |
+| `npc_gossip` (867), `npc_trainer` (869), `npc_vendor` (870), `points_of_interest` (880) | yes, via all_npc (:928-931) | none yet | planned |
+| `gossip_menu` (847), `gossip_menu_option` (848) | yes, via all_gossips (:987-988) | none yet | planned |
+| `npc_text` (868) | no | none yet | planned |
+| `creature_loot_template` (825), `gameobject_loot_template` (841), `item_loot_template` (853), `skinning_loot_template` (890), `reference_loot_template` (885), `fishing_loot_template` (834), `pickpocketing_loot_template` (874), `disenchant_loot_template` (831) | yes, all at once via all_loot (:891, :916-922) | none yet | planned |
+| `mail_loot_template` (863) | yes, via all_loot | none | no store |
+| `skill_fishing_base_level` (889) | yes (:887) | none yet; the base levels live in the loot content object | planned |
+| `item_enchantment_template` (852), `page_text` (871), `item_required_target` (854) | yes, via all_item (:996-1002) | none | no store |
+| `gameobject_template` (845) | no | none yet | planned |
+| `gameobject` (838), `gameobject_requirement` (843) | no | none | owner lane (gameobject-types) |
+| `command` (817), `reserved_name` (888), `mangos_string` (864) | yes (:899-901) | none | no store |
+| `creature` (819), `creature_groups` (823), `creature_display_info_addon` (822), `cinematic_waypoints` (816) | no | none | owner lane (creature-movement-spawns) |
+| `creature_spells` (828) | no | none | no store |
+| `creature_onkill_reputation` (826), `reputation_reward_rate` (886), `reputation_spillover_template` (887) | no | none | owner lane (reputation-factions) |
+| `spell_area`, `spell_chain`, `spell_elixir`, `spell_learn_spell`, `spell_proc_event`, `spell_proc_item_enchant`, `spell_script_target`, `spell_target_position`, `spell_threats`, `spell_pet_auras` (891-906) | yes, via all_spell (:972-981) | none | owner lane (spell-modifier-engine, aura-engine-completeness, threat-and-aggro) |
+| `spell_mod` (898), `spell_group` (895), `spell_group_stack_rules` (896), `spell_disabled` (893) | no | none | owner lane (spell-modifier-engine, aura-engine-completeness) |
+| `*_scripts` (829, 832, 844, 846, 849, 881, 883, 903), `all_scripts` (804) | not in `all` (:946-967) | none | no store (DB scripts are not interpreted) |
+| `game_weather` (837) | no | none | owner lane (game-events-weather) |
+| `creature_battleground`, `gameobject_battleground` (821, 839) | yes (:903) | none | owner lane (battlegrounds) |
+| `locales_*` (856-862), `all_locales` (800) | yes (:897) | none | no store (only the default strings are read) |
+| `conditions` (818) | no | none | owner lane (condition evaluator content) |
+| `exploration_basexp` (833), `instance_buff_removal` (850), `map_template` (866), `map_loot_disabled` (865), `taxi_path_transitions` (907), `quest_greeting` (882), `trainer_greeting` (908), `pet_name_generation` (872), `variables` (909), `player_factionchange_*` (875-879), `petitions` (873), `character_pet` (815), `autobroadcast` (814), `anticheat` (807), `account_banned` (810), `ip_banned` (851) | no | none | no store, or another area's live store (bans are enforced live from the database, not from a cached list) |
+
 ## Deviations from retail
 
 Every row with a switch defaults to retail. Rows marked *structural* are behaviours the design cannot offer a
