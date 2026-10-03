@@ -57,7 +57,7 @@ function Invoke-Importer([string[]]$Arguments) {
 }
 
 Invoke-Importer @('plan', $Dump, '--report', $planReport)
-Invoke-Importer @('import', $Dump, '--database', $database, '--report', $importReport)
+Invoke-Importer @('import', $Dump, '--database', $database, '--report', $importReport, '--level-stats-file', (Join-Path $WorkDir 'levelstats.csv'))
 
 $plan = Get-Content -LiteralPath $planReport -Raw | ConvertFrom-Json
 $import = Get-Content -LiteralPath $importReport -Raw | ConvertFrom-Json
@@ -79,6 +79,10 @@ $expected = [ordered]@{
     'creature_questrelation'      = 'creature_questrelation'
     'creature_involvedrelation'   = 'creature_involvedrelation'
     'creature_onkill_reputation'  = 'creature_onkill_reputation'
+    'playercreateinfo'            = 'player_create_info'
+    'playercreateinfo_spell'      = 'playercreateinfo_spell'
+    'spell_target_position'       = 'spell_target_position'
+    'player_levelstats'           = 'level_stats_rows'
 }
 
 $failures = 0

@@ -84,6 +84,14 @@ public static class ContentTableSpecs
         new(ContentDialect.VMangos, ["RewOnKillRepFaction1", "patch"], []),
     ];
 
+    // playercreateinfo_spell and spell_target_position: vmangos selects WHERE 5875 BETWEEN build_min AND
+    // build_max (ObjectMgr.cpp:4679, Spells/SpellMgr.cpp:52); classic-db has no build columns.
+    private static readonly DialectSignature[] s_buildRangeSignatures =
+    [
+        new(ContentDialect.CMangos, [], ["build_min"]),
+        new(ContentDialect.VMangos, ["build_min", "build_max"], []),
+    ];
+
     // quest relations: vmangos filters on patch_min/patch_max (ObjectMgr.cpp:9178).
     private static readonly DialectSignature[] s_relationSignatures =
     [
@@ -151,6 +159,11 @@ public static class ContentTableSpecs
         new("creature_involvedrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], s_relationSignatures),
         new("playercreateinfo_item", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("itemid")], ["amount"], []),
         new("creature_onkill_reputation", [new KeyColumn("creature_id")], [], s_onKillSignatures, OnKillReputationDumpImporter.ReadsColumn),
+        new("playercreateinfo", [new KeyColumn("race"), new KeyColumn("class")], [], [], PlayerCreateDumpImporter.ReadsStartColumn),
+        new("playercreateinfo_spell", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("spell")], [], s_buildRangeSignatures, PlayerCreateDumpImporter.ReadsSpellColumn),
+        new("spell_target_position", [new KeyColumn("id")], [], s_buildRangeSignatures, PlayerCreateDumpImporter.ReadsTargetColumn),
+        new("player_levelstats", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("level")], [], [], PlayerCreateDumpImporter.ReadsLevelColumn),
+        new("player_classlevelstats", [new KeyColumn("class"), new KeyColumn("level")], [], [], PlayerCreateDumpImporter.ReadsClassColumn),
     ];
 
     private static readonly FrozenDictionary<string, TableSpec> s_byTable =

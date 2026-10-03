@@ -1,6 +1,6 @@
 # Area: content import (classic-db / vmangos dumps to the world database)
 
-Status: first four slices of the unified importer (core, CLI, items and quests, kill reputation), branch `claude/vw-content-import-full`. WoW 1.12.1 (5875). Data source of record:
+Status: first five slices of the unified importer (core, CLI, items and quests, kill reputation, new-character content), branch `claude/vw-content-import-full`. WoW 1.12.1 (5875). Data source of record:
 the cmaNGOS **classic-db** Full_DB snapshot (`ClassicDB_1_12_1_z2815.sql.gz`, "Melting Pot v2", core z2815). vmangos
 dumps are a second accepted layout. The dumps are GPL-3 data with Blizzard copyright material in them (classic-db
 `COPYRIGHT.md`): they are read from wherever the developer keeps them, never committed, and the importer refuses to write a
@@ -114,6 +114,27 @@ importer.
   reputation entries" (the factions need `Faction.dbc`, which this machine does not have, so reputation gains were not
   exercised end to end).
 
+### `player-create-content` (`Import/Mappers/PlayerCreateDumpImporter.cs`; no schema change)
+
+New-character content that already had tables and consumers but no importer, plus the level-stats file the progression
+feature reads:
+
+- **`playercreateinfo`** -> `player_create_info` (`PlayerCreateInfoRow`: start map, zone, x/y/z/orientation; vmangos
+  `LoadPlayerInfo` select, `ObjectMgr.cpp:4525`). `--replace` replaces the 40 dev-seed rows of `WorldDbInitializer`
+  (which seeds only an empty table) with the real ones; the seeds differ from classic-db for Night Elf, Undead and Gnome starts.
+- **`playercreateinfo_spell`** -> `PlayerCreateSpellRow` (the spells a new character knows; 1,497 rows) and
+  **`spell_target_position`** -> `SpellTargetPositionRow` (fixed teleport destinations; 353). vmangos keeps only rows whose
+  `build_min..build_max` contains 5875 (`ObjectMgr.cpp:4679`, `Spells/SpellMgr.cpp:52`); classic-db has no build columns.
+- **Level stats file.** `import --level-stats-file <path>` joins `player_levelstats` (race, class, level, str, agi, sta, inte,
+  spi; vmangos `:4898`) with `player_classlevelstats` (base health and mana; `:4801`) into the text form of
+  `PlayerLevelStatsTable` (`race,class,level,basehp,basemana,str,agi,sta,int,spi`), which `Progression:LevelStatsPath`
+  loads (`World/Progression/ProgressionFeature.cs`); a World test parses a generated file with that parser. Without the
+  file, level-ups change level and XP but no base values. A row with no class values is left out and reported.
+- Verified on the z2815 dump: 40 start positions, 1,497 starting spells, 353 teleport targets and 2,400 level-stat rows (human
+  warrior level 1: strength 23; the file is a sample of the retail table, not committed); the daemon logged "level stats for
+  2400 race/class/level rows". With no spells imported (`import-dbc` needs client DBCs) the spell feature logs each
+  `spell_target_position` row as "unknown spell, skipped", the same as vmangos' "Non existing spell" skip.
+
 ## Verified against the real classic-db dump
 
 Run on `ClassicDB_1_12_1_z2815.sql.gz` (12,959,882 bytes, SHA-256 `4f92db52...d0c0`, `db_version` "Classic DB version 1.12.1
@@ -137,18 +158,21 @@ Run on `ClassicDB_1_12_1_z2815.sql.gz` (12,959,882 bytes, SHA-256 `4f92db52...d0
 | creature_questrelation / creature_involvedrelation | 3,826 / 3,951 | 3,826 / 3,951 (none dropped) |
 | playercreateinfo_item | 0 | 0 (see above) |
 | creature_onkill_reputation | 470 | 470 |
+| playercreateinfo / playercreateinfo_spell / spell_target_position | 40 / 1,497 / 353 | 40 / 1,497 / 353 |
+| player_levelstats (joined with player_classlevelstats) | 2,400 | 2,400 rows in the level-stats file |
 
 The world daemon (`ArcaneCore.World`, SQLite for all three databases, port overridden) then logged "Loaded 10384 creature
 templates and 66310 spawns" and "Loaded 10743 game object templates, 47827 spawns, 0 locks, 222501 loot rows, 5060 creature
-loot entries" and "Loaded 4245 quest templates". Item templates load lazily (first character creation), so a throw-away probe built `ItemTemplateStore` from the imported database through `EfItemTemplateSource` (17,718 templates; Hearthstone, Worn Shortsword, Linen Cloth and Lionheart Helm read back with plausible names, qualities, prices and display ids). `plan` shows the 168 other source tables (417,388 rows) as not read by any importer.
+loot entries" and "Loaded 4245 quest templates". Item templates load lazily (first character creation), so a throw-away probe built `ItemTemplateStore` from the imported database through `EfItemTemplateSource` (17,718 templates; Hearthstone, Worn Shortsword, Linen Cloth and Lionheart Helm read back with plausible names, qualities, prices and display ids). `plan` shows the 162 other source tables (412,088 rows) as not read by any importer.
 
 ## Limits (explicit, not done)
 
 - **Only what the importers read is imported.** Not imported (listed by `plan`):
   NPC vendors (11,890 rows), trainers (27,309), gossip menus/options/NPC text and `npc_*_template` tables (they need `creature_template.VendorTemplateId/TrainerTemplateId/GossipMenuId`, which the creature template does not carry, plus schema and Game-side consumers), conditions, `creature_spawn_entry`/`gameobject_spawn_entry`, equipment
   and template addons, `creature_template_classlevelstats` and the template multipliers, movement templates, pools and
-  game events, broadcast text, DBC-derived tables (maps, areas, taxi, races, start outfits), player start
-  stats, graveyards. The unmapped columns of every read table are printed by `plan`.
+  game events, broadcast text, DBC-derived tables (maps, areas, taxi, races, start outfits), `playercreateinfo_action` (215 rows, needs
+  the action-button seam wired at character creation) and `playercreateinfo_skills` (77; no skills consumer), `race_info`/`class_info`
+  (still dev seeds; their retail source is ChrRaces.dbc), graveyards. The unmapped columns of every read table are printed by `plan`.
 - **Spawns with id 0** (2,802 creatures, 3,614 game objects in z2815) are imported with entry 0: cmangos resolves them through
   `creature_spawn_entry` / `gameobject_spawn_entry` (not imported), so the runtime cannot spawn them. `verify` notes them.
 - **`spawnMask`** is not read: cmangos does not place a spawn whose mask is 0 in any grid (`src/game/Globals/ObjectMgr.cpp:2060-2063` creatures, `:2335-2338` game objects), the importer still imports it.

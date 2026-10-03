@@ -461,6 +461,89 @@ public sealed class ContentImporterCliTests : IDisposable
         Assert.Contains("item_template", err, StringComparison.Ordinal);
     }
 
+    // --- new-character content ------------------------------------------------------------------------------
+
+    private const string PlayerCreateDump = """
+        CREATE TABLE `playercreateinfo` (`race` tinyint unsigned NOT NULL, `class` tinyint unsigned NOT NULL, `map` mediumint unsigned NOT NULL, `zone` mediumint unsigned NOT NULL, `position_x` float NOT NULL, `position_y` float NOT NULL, `position_z` float NOT NULL, `orientation` float NOT NULL, PRIMARY KEY (`race`, `class`));
+        INSERT INTO `playercreateinfo` VALUES (1,1,0,12,-8949.95,-132.493,83.5312,0),(4,5,1,141,10311.3,832.463,1326.41,5.69632);
+        CREATE TABLE `playercreateinfo_spell` (`race` tinyint unsigned NOT NULL, `class` tinyint unsigned NOT NULL, `Spell` mediumint unsigned NOT NULL, `Note` varchar(255), PRIMARY KEY (`race`, `class`, `Spell`));
+        INSERT INTO `playercreateinfo_spell` VALUES (1,1,78,'Heroic Strike'),(1,1,81,'Dodge');
+        CREATE TABLE `spell_target_position` (`id` mediumint unsigned NOT NULL, `target_map` smallint unsigned NOT NULL, `target_position_x` float NOT NULL, `target_position_y` float NOT NULL, `target_position_z` float NOT NULL, `target_orientation` float NOT NULL, PRIMARY KEY (`id`));
+        INSERT INTO `spell_target_position` VALUES (3561,0,-9003.01,874.04,29.62,5.75);
+        CREATE TABLE `player_classlevelstats` (`class` tinyint unsigned NOT NULL, `level` tinyint unsigned NOT NULL, `basehp` mediumint unsigned NOT NULL, `basemana` mediumint unsigned NOT NULL, PRIMARY KEY (`class`, `level`));
+        INSERT INTO `player_classlevelstats` VALUES (1,1,60,0),(5,1,52,85);
+        CREATE TABLE `player_levelstats` (`race` tinyint unsigned NOT NULL, `class` tinyint unsigned NOT NULL, `level` tinyint unsigned NOT NULL, `str` tinyint unsigned NOT NULL, `agi` tinyint unsigned NOT NULL, `sta` tinyint unsigned NOT NULL, `inte` tinyint unsigned NOT NULL, `spi` tinyint unsigned NOT NULL, PRIMARY KEY (`race`, `class`, `level`));
+        INSERT INTO `player_levelstats` VALUES (1,1,1,22,20,22,20,21),(4,5,1,17,25,19,20,22);
+        """;
+
+    [Fact]
+    public async Task Import_WritesStartPositionsStartingSpellsAndTeleportTargets_AndTheLevelStatsFile()
+    {
+        string database = Db("world.db");
+        string levelStats = Path.Combine(_directory, "levelstats.csv");
+
+        (int code, string output, string err) = await RunAsync(
+            "import", WriteDump("pc.sql", PlayerCreateDump), "--database", database, "--level-stats-file", levelStats);
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.True(string.IsNullOrEmpty(err), err);
+        Assert.Contains("player_create_info  2", output, StringComparison.Ordinal);
+        Assert.Contains("level stats file", output, StringComparison.OrdinalIgnoreCase);
+        await using WorldDbContext db = Open(database);
+        Assert.Equal(2, await db.PlayerCreateInfo.CountAsync());
+        Assert.Equal(2, await db.Set<PlayerCreateSpellRow>().CountAsync());
+        Assert.Equal(1, await db.Set<SpellTargetPositionRow>().CountAsync());
+        string[] lines = [.. File.ReadAllLines(levelStats).Where(l => !l.StartsWith('#'))];
+        Assert.Equal(["1,1,1,60,0,22,20,22,20,21", "4,5,1,52,85,17,25,19,20,22"], lines);
+    }
+
+    [Fact]
+    public async Task Plan_ListsThePlayerTables_AndDryRunWritesNoLevelStatsFile()
+    {
+        string dump = WriteDump("pc.sql", PlayerCreateDump);
+        string levelStats = Path.Combine(_directory, "levelstats.csv");
+
+        (_, string plan, _) = await RunAsync("plan", dump);
+        (int dry, _, _) = await RunAsync("import", dump, "--dry-run", "--level-stats-file", levelStats);
+
+        Assert.Contains("map", TableLine(plan, "playercreateinfo").Mapped, StringComparison.Ordinal);
+        Assert.Contains("Note", TableLine(plan, "playercreateinfo_spell").Mapped, StringComparison.Ordinal);
+        Assert.Contains("target_orientation", TableLine(plan, "spell_target_position").Mapped, StringComparison.Ordinal);
+        Assert.Contains("inte", TableLine(plan, "player_levelstats").Mapped, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Ok, dry);
+        Assert.False(File.Exists(levelStats));
+    }
+
+    [Fact]
+    public async Task LevelStatsFileInsideAGitWorkTree_IsRefusedBeforeAnythingIsWritten()
+    {
+        string repo = Path.Combine(_directory, "repo");
+        Directory.CreateDirectory(repo);
+        Git(repo, "init", "-q");
+        string database = Db("world.db");
+
+        (int code, _, _) = await RunAsync(
+            "import", WriteDump("pc.sql", PlayerCreateDump), "--database", database, "--level-stats-file", Path.Combine(repo, "levelstats.csv"));
+
+        Assert.Equal(ExitCodes.RepositoryPath, code);
+        Assert.False(File.Exists(database));
+        Assert.False(File.Exists(Path.Combine(repo, "levelstats.csv")));
+    }
+
+    [Fact]
+    public async Task Verify_CountsThePlayerCreateTables()
+    {
+        string database = Db("world.db");
+        Assert.Equal(ExitCodes.Ok, (await RunAsync("import", WriteDump("pc.sql", PlayerCreateDump), "--database", database)).Code);
+
+        (int code, string output, _) = await RunAsync("verify", "--database", database);
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.Contains("player_create_info  2", output, StringComparison.Ordinal);
+        Assert.Contains("playercreateinfo_spell  2", output, StringComparison.Ordinal);
+        Assert.Contains("spell_target_position  1", output, StringComparison.Ordinal);
+    }
+
     // --- import-dbc ---------------------------------------------------------------------------------------
 
     [Fact]

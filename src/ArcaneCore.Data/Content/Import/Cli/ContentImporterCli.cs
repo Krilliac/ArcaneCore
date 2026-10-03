@@ -35,7 +35,8 @@ public static class ContentImporterCli
         commands:
           plan <dump>...        read the dump(s) and print, per table, the dialect, row and key
                                 counts and which columns an importer reads; writes no database
-          import <dump>...      import the creature, game object, loot, item, quest and kill-reputation tables
+          import <dump>...      import the creature, game object, loot, item, quest, kill-reputation and
+                                new-character (start position, starting spell, teleport target) tables
                                 (and the starting outfit, playercreateinfo_item)
           import-dbc <dir>      import the five spell DBCs from a client DBFilesClient directory
           verify                count the imported tables and check references
@@ -52,6 +53,8 @@ public static class ContentImporterCli
           --quest-xp derived|none          import: a source without quest_template.RewXP (cmangos) gets
                                            RewXP derived from RewMoneyMaxLevel like cmangos' Quest::XPValue
                                            (default derived), or none (RewXP 0: quests give no XP)
+          --level-stats-file <file>        import: write the race/class/level base stats file that
+                                           Progression:LevelStatsPath reads (outside the repository)
           --replace                        import: empty the importers' tables first
           --dry-run                        import: read and count everything, write nothing
           --report <file>                  write the JSON report (outside the repository)
@@ -152,6 +155,8 @@ public static class ContentImporterCli
         Target? target = dryRun && a.Value("--database") is null && a.Value("--provider") is null ? null : ResolveTarget(a);
         string? reportPath = a.Value("--report");
         GuardPath(reportPath);
+        string? levelStatsPath = a.Value("--level-stats-file");
+        GuardPath(levelStatsPath);
         if (!dryRun && target?.FilePath is not null)
         {
             GuardPath(target.FilePath);
@@ -174,6 +179,7 @@ public static class ContentImporterCli
         var objects = new GameObjectLootDumpImporter();
         var itemsAndQuests = new ItemQuestDumpImporter { QuestXp = ParseQuestXp(a) };
         var onKill = new OnKillReputationDumpImporter();
+        var playerCreate = new PlayerCreateDumpImporter();
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             creatures.Read(reader);
@@ -192,6 +198,11 @@ public static class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             onKill.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            playerCreate.Read(reader);
         }
 
         string? dbcDirectory = a.Value("--dbc-dir");
@@ -223,6 +234,7 @@ public static class ContentImporterCli
         GameObjectLootImportReport objectReport = objects.BuildReport();
         ItemQuestImportReport itemQuestReport = itemsAndQuests.BuildReport();
         ReputationOnKillImportReport onKillReport = onKill.BuildReport();
+        PlayerCreateImportReport playerReport = playerCreate.BuildReport();
         if (!dryRun)
         {
             o.WriteLine($"target: {target!.Describe}");
@@ -236,6 +248,7 @@ public static class ContentImporterCli
                     objectReport = await objects.WriteAsync(db, replace, token).ConfigureAwait(false);
                     itemQuestReport = await itemsAndQuests.WriteAsync(db, replace, token).ConfigureAwait(false);
                     onKillReport = await onKill.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    playerReport = await playerCreate.WriteAsync(db, replace, token).ConfigureAwait(false);
                 }, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -248,6 +261,7 @@ public static class ContentImporterCli
         warnings.AddRange(objectReport.Warnings);
         warnings.AddRange(itemQuestReport.Warnings);
         warnings.AddRange(onKillReport.Warnings);
+        warnings.AddRange(playerReport.Warnings);
         if (itemQuestReport.DerivedQuestXp > 0)
         {
             warnings.Add(
@@ -255,7 +269,7 @@ public static class ContentImporterCli
                 "(the source has no RewXP; cmangos Quest::XPValue); XP reduced for grey quests can differ from cmangos by 1");
         }
 
-        (Dictionary<string, long> imported, Dictionary<string, long> skipped) = Counts(creatureReport, objectReport, itemQuestReport, onKillReport);
+        (Dictionary<string, long> imported, Dictionary<string, long> skipped) = Counts(creatureReport, objectReport, itemQuestReport, onKillReport, playerReport);
         o.WriteLine(dryRun ? "would import:" : "imported:");
         foreach ((string table, long count) in imported)
         {
@@ -267,13 +281,31 @@ public static class ContentImporterCli
             o.WriteLine($"  {table}  {count.ToString(CultureInfo.InvariantCulture)} source row(s) skipped");
         }
 
+        if (levelStatsPath is not null)
+        {
+            if (dryRun)
+            {
+                o.WriteLine($"level stats file: would write {playerReport.LevelStatRows} row(s) to the --level-stats-file path");
+            }
+            else
+            {
+                WriteLevelStatsFile(levelStatsPath, playerCreate);
+                o.WriteLine($"level stats file: wrote {playerReport.LevelStatRows} row(s) to {Path.GetFullPath(levelStatsPath)}; set Progression:LevelStatsPath to it");
+            }
+        }
+        else if (playerReport.LevelStatRows > 0)
+        {
+            warnings.Add($"{playerReport.LevelStatRows} level-stats row(s) were read but no --level-stats-file was given, so level-ups will not change base health, mana or stats");
+        }
+
         PrintWarnings(o, warnings);
         WriteReport(reportPath, ContentImportReport.Create("import", files, scan, warnings, dryRun) with { Imported = imported, Skipped = skipped });
         return ExitCodes.Ok;
     }
 
     private static (Dictionary<string, long> Imported, Dictionary<string, long> Skipped) Counts(
-        CreatureImportReport creatures, GameObjectLootImportReport objects, ItemQuestImportReport itemsAndQuests, ReputationOnKillImportReport onKill)
+        CreatureImportReport creatures, GameObjectLootImportReport objects, ItemQuestImportReport itemsAndQuests, ReputationOnKillImportReport onKill,
+        PlayerCreateImportReport playerCreate)
     {
         var imported = new Dictionary<string, long>
         {
@@ -297,6 +329,10 @@ public static class ContentImporterCli
             ["creature_involvedrelation"] = itemsAndQuests.QuestEnders,
             ["playercreateinfo_item"] = itemsAndQuests.StartingItems,
             ["creature_onkill_reputation"] = onKill.Entries,
+            ["player_create_info"] = playerCreate.StartPositions,
+            ["playercreateinfo_spell"] = playerCreate.CreateSpells,
+            ["spell_target_position"] = playerCreate.SpellTargetPositions,
+            ["level_stats_rows"] = playerCreate.LevelStatRows,
         };
         var skipped = new Dictionary<string, long>
         {
@@ -304,6 +340,7 @@ public static class ContentImporterCli
             ["gameobject_and_loot_rows"] = objects.SkippedRows,
             ["item_and_quest_rows"] = itemsAndQuests.SkippedRows,
             ["creature_onkill_reputation"] = onKill.SkippedRows,
+            ["player_create_rows"] = playerCreate.SkippedRows,
         };
         return (imported, skipped);
     }
@@ -395,6 +432,9 @@ public static class ContentImporterCli
                 ("creature_involvedrelation", await db.Set<CreatureQuestEnderRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("playercreateinfo_item", await db.Set<PlayerCreateInfoItemRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_onkill_reputation", await db.Set<CreatureOnKillReputationRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("player_create_info", await db.PlayerCreateInfo.CountAsync(ct).ConfigureAwait(false)),
+                ("playercreateinfo_spell", await db.Set<PlayerCreateSpellRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("spell_target_position", await db.Set<SpellTargetPositionRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_template", await db.Set<SpellTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
             };
             foreach ((string table, int count) in counts)
@@ -616,6 +656,18 @@ public static class ContentImporterCli
         }
 
         return warnings;
+    }
+
+    private static void WriteLevelStatsFile(string path, PlayerCreateDumpImporter importer)
+    {
+        string? directory = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        using var writer = new StreamWriter(path, append: false, new System.Text.UTF8Encoding(false));
+        importer.WriteLevelStats(writer);
     }
 
     private static void WriteReport(string? path, ContentImportReport report)
