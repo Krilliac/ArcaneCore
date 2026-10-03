@@ -40,13 +40,28 @@ public sealed class ClassInfoRow
 /// </summary>
 public sealed class WorldDbContext(DbContextOptions<WorldDbContext> options) : DbContext(options)
 {
+    /// <summary>
+    /// The world version of the forward index repair (the single constant the lead renumbers at merge time,
+    /// docs/integration/seams.md). Tests refer to it or to <c>Schema.CurrentVersion</c>, never to a literal.
+    /// </summary>
+    public const int IndexRepairVersion = 9;
+
     /// <summary>Schema history of the world-content database.</summary>
     /// <remarks>Versions 2+ come from <see cref="IDataModule"/>s of <see cref="DatabaseComponent.World"/>.</remarks>
     public static readonly SchemaDefinition Schema = DataModules.Compose(
         DatabaseComponent.World,
         "world",
         ["player_create_info", "race_info", "class_info"],
-        []);
+        [
+            // Forward index repair: spawn and script tables created by upgrade steps before the bootstrapper
+            // carried the model's indexes (docs/integration/schema-index-repair.md).
+            new SchemaStep(IndexRepairVersion,
+            [
+                new EnsureIndexesChange("creature_spawn"),
+                new EnsureIndexesChange("gameobject_spawn"),
+                new EnsureIndexesChange("creature_ai_scripts"),
+            ]),
+        ]);
 
     public DbSet<PlayerCreateInfoRow> PlayerCreateInfo => Set<PlayerCreateInfoRow>();
 

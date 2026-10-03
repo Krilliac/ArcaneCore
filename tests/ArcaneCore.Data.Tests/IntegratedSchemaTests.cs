@@ -59,11 +59,14 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
             DataModules.All.OrderBy(m => m.Component).ThenBy(m => m.SchemaVersion)
                 .Select(m => (m.GetType(), m.Component, m.SchemaVersion)));
+        // The forward index repair is the top step of characters and world (the constants are what an integrator renumbers).
         Assert.Equal(2, AuthDbContext.Schema.CurrentVersion);
-        Assert.Equal(10, CharacterDbContext.Schema.CurrentVersion);
-        Assert.Equal(8, WorldDbContext.Schema.CurrentVersion);
-        Assert.Equal([2, 3, 4, 5, 6, 7, 8, 9, 10], CharacterDbContext.Schema.Steps.Select(s => s.Version));
-        Assert.Equal([2, 3, 4, 5, 6, 7, 8], WorldDbContext.Schema.Steps.Select(s => s.Version));
+        Assert.Equal(CharacterDbContext.IndexRepairVersion, CharacterDbContext.Schema.CurrentVersion);
+        Assert.Equal(WorldDbContext.IndexRepairVersion, WorldDbContext.Schema.CurrentVersion);
+        Assert.Equal(Enumerable.Range(2, CharacterDbContext.IndexRepairVersion - 1), CharacterDbContext.Schema.Steps.Select(s => s.Version));
+        Assert.Equal(Enumerable.Range(2, WorldDbContext.IndexRepairVersion - 1), WorldDbContext.Schema.Steps.Select(s => s.Version));
+        Assert.All(DataModules.For(DatabaseComponent.Characters), m => Assert.True(m.SchemaVersion < CharacterDbContext.IndexRepairVersion));
+        Assert.All(DataModules.For(DatabaseComponent.World), m => Assert.True(m.SchemaVersion < WorldDbContext.IndexRepairVersion));
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })
         {
@@ -166,6 +169,12 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         await db.Database.OpenConnectionAsync();
         try
         {
+            // Upgrades must leave the indexes a fresh database has (they once dropped every index of a created table).
+            string[] tablesHere = [.. expectedTables.Distinct(StringComparer.Ordinal)];
+            Assert.Equal(
+                SchemaProbe.ModelIndexes(db).Where(i => tablesHere.Contains(i.Table, StringComparer.Ordinal)),
+                await SchemaProbe.ActualIndexesAsync(db, tablesHere.Where(t => t != schema.VersionTable)));
+
             foreach (string name in expectedTables.Distinct(StringComparer.Ordinal))
             {
                 ITable table = Assert.Single(model.Tables, t => t.Name == name);
