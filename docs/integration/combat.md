@@ -9,11 +9,13 @@ This branch is built on the seam PR #1 (`feat/fleet-plan`, 165b885). It does not
 | File | Change | Why |
 |---|---|---|
 | `src/ArcaneCore.Game/Entities/Unit.cs` | Added `public UnitCombat Combat => field ??= new UnitCombat(this);`. `IsAlive` is now `Health > 0 && Combat.DeathState == DeathState.Alive`. | Each unit needs per-unit combat state (victim, attackers, threat, swing timers, death state). A ghost has health 1 but is not alive (vmangos `Unit::IsAlive` is `m_deathState == ALIVE`). |
-| `src/ArcaneCore.Game/Maps/Map.cs` | `using ArcaneCore.Game.Combat;`, a `public MapCombat Combat { get; }` property set in the constructor (`Combat = new MapCombat(this, world);`), and one line in `Update` after step (1b): `Combat.Update(diffMs);`. | Swing timers, regen, the combat timer, death timers and corpse visibility tick per map on the world thread, after player movement and before visibility flushes, as in vmangos `Map::Update` → `Player::Update` / `Unit::Update`. |
 
-**Proposal for the lead:** a generic per-map update seam (for example an `IMapSystem`
-registry that `Map.Update` iterates) would remove the `Map.cs` edit and also serve creatures,
-spells and AI.
+**Per-map update (lead, after merge):** combat no longer edits `Map.cs`. `MapCombat` is an
+`IMapUpdater` with `[DefaultMapUpdater(Order = 0)]`, so `WorldRuntime.GetMap` attaches it to
+every map, first, and `Map.Update` runs it at step (1c) before the other per-map systems.
+`map.Combat` is the C# 14 extension property in `Game/Combat/MapCombatExtensions.cs`
+(`map.FindUpdater<MapCombat>()`). `OnPlayerRemoved` repeats the logout cleanup (a no-op after
+`PlayerLoggingOut`). See the per-map row in `seams.md`.
 
 ## Registrations (discovered, no shared list touched)
 
