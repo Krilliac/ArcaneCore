@@ -87,6 +87,7 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
             Items = items,
             Spells = dependencies.Spells ?? new SpellSystemLearner(() => services.GetService<SpellFeature>()?.System, tables.Abilities),
             Reputation = dependencies.Reputation ?? services.GetService<IPlayerReputation>(),
+            Conditions = dependencies.Conditions ?? services.GetService<ConditionFeature>(),
             Flights = dependencies.Flights ?? Flights,
             Maps = dependencies.Maps ?? new WorldMapInfo(() => _world),
             Resurrection = dependencies.Resurrection
