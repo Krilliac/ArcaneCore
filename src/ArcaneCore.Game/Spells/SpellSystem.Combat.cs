@@ -1,11 +1,12 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells;
 
 /// <summary>The result of one direct spell damage application.</summary>
-public readonly record struct SpellDamageResult(uint Dealt, uint Resisted, bool Critical);
+public readonly record struct SpellDamageResult(uint Dealt, uint Resisted, bool Critical, uint Absorbed = 0);
 
 public sealed partial class SpellSystem
 {
@@ -72,11 +73,13 @@ public sealed partial class SpellSystem
 
         uint resisted = Math.Min(amount, CombatRules.RollPartialResist(this, caster, target, spell, amount));
         amount -= resisted;
+        uint absorbed = AbsorbDamage(caster, target, spell.SchoolMask(), amount, spell); // shields, mana shield, split (Unit.cpp:1920-2200)
+        amount -= absorbed;
         uint dealt = Damage.DealSpellDamage(caster, target, spell, amount, periodic: false);
         OnDamageTaken(target, caster, dealt, periodic: false);
         SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog, SpellPackets.BuildSpellNonMeleeDamageLog(
-            target.Guid, caster.Guid, spell.Id, dealt, spell.School, resisted: resisted, hitInfo: crit ? SpellHitTypeCrit : 0), includeSelf: true);
-        return new SpellDamageResult(dealt, resisted, crit);
+            target.Guid, caster.Guid, spell.Id, dealt, spell.School, absorbed: absorbed, resisted: resisted, hitInfo: crit ? SpellHitTypeCrit : 0), includeSelf: true);
+        return new SpellDamageResult(dealt, resisted, crit, absorbed);
     }
 
     /// <summary>

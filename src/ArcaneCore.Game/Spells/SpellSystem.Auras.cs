@@ -375,10 +375,12 @@ public sealed partial class SpellSystem
 
         uint resisted = Math.Min(amount, CombatRules.RollPartialResist(this, caster, target, holder.Spell, amount));
         amount -= resisted;
+        uint absorbed = AbsorbDamage(caster, target, holder.Spell.SchoolMask(), amount, holder.Spell);
+        amount -= absorbed;
         uint dealt = Damage.DealSpellDamage(caster, target, holder.Spell, amount, periodic: true);
         OnDamageTaken(target, caster, dealt, periodic: true);
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
-            target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, dealt, (uint)holder.Spell.School, Resisted: resisted)), includeSelf: true);
+            target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, dealt, (uint)holder.Spell.School, Absorbed: absorbed, Resisted: resisted)), includeSelf: true);
     }
 
     /// <summary>

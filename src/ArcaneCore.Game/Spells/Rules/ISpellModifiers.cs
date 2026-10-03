@@ -9,6 +9,7 @@ public enum SpellModOp
     NotLoseCastingTime = 9,
     CritDamageBonus = 15,
     ResistMissChance = 16,
+    MultipleValue = 27,
     ResistDispelChance = 28,
 }
 

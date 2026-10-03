@@ -67,6 +67,30 @@ public static class ImmunityRules
     }
 
     /// <summary>
+    /// vmangos Unit::IsImmuneToSchoolMask (Unit.cpp:10497-10508): any school-immunity aura covers a school of the mask,
+    /// whatever its polarity. Used to absorb all damage of an immune unit.
+    /// </summary>
+    public static bool IsImmuneToSchoolMask(SpellSystem system, Unit unit, uint schoolMask)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        ArgumentNullException.ThrowIfNull(unit);
+        if (!system.ImmunityEnforcement)
+        {
+            return false;
+        }
+
+        foreach (SpellAura aura in LiveAuras(system, unit, AuraType.SchoolImmunity))
+        {
+            if (((uint)aura.MiscValue & schoolMask) != 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// vmangos Unit::IsImmuneToDamage (+ Creature override): damage-immunity auras and creature school masks
     /// block outright; school-immunity auras block when their polarity applies and the spell does not carry
     /// NO_SCHOOL_IMMUNITIES. A spell with NO_IMMUNITIES or ignoring restrictions is never blocked.
