@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Progression;
+using ArcaneCore.Game.Stats;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -107,10 +108,20 @@ public sealed class StatAuras : ISpellHandlerModule
 
             if (stat == 2)
             {
-                ChangeMaxHealth(target, target is Player
-                    ? (int)ExperienceFormulas.HealthBonusFromStamina((uint)Math.Max(0, before + delta))
-                        - (int)ExperienceFormulas.HealthBonusFromStamina((uint)Math.Max(0, before))
-                    : delta * 10);
+                if (target is Player staminaPlayer)
+                {
+                    int healthDelta = (int)ExperienceFormulas.HealthBonusFromStamina((uint)Math.Max(0, before + delta))
+                        - (int)ExperienceFormulas.HealthBonusFromStamina((uint)Math.Max(0, before));
+                    ChangeMaxHealth(target, healthDelta);
+
+                    // The stats lane recomputes this bonus from the total stamina on every item and level update and keeps a
+                    // ledger of what the maximum already includes: tell it, or the next update counts the aura a second time.
+                    StatBonuses.NoteHealthMoved(staminaPlayer, healthDelta);
+                }
+                else
+                {
+                    ChangeMaxHealth(target, delta * 10);
+                }
             }
             else if (stat == 3)
             {
@@ -118,8 +129,10 @@ public sealed class StatAuras : ISpellHandlerModule
                 {
                     if (player.PowerType == PowerType.Mana)
                     {
-                        ChangeMaxMana(target, (int)ExperienceFormulas.ManaBonusFromIntellect((uint)Math.Max(0, before + delta))
-                            - (int)ExperienceFormulas.ManaBonusFromIntellect((uint)Math.Max(0, before)));
+                        int manaDelta = (int)ExperienceFormulas.ManaBonusFromIntellect((uint)Math.Max(0, before + delta))
+                            - (int)ExperienceFormulas.ManaBonusFromIntellect((uint)Math.Max(0, before));
+                        ChangeMaxMana(target, manaDelta);
+                        StatBonuses.NoteManaMoved(player, manaDelta); // see NoteHealthMoved above
                     }
                 }
                 else

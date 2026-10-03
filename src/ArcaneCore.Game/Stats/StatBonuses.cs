@@ -17,6 +17,23 @@ namespace ArcaneCore.Game.Stats;
 /// </summary>
 internal static class StatBonuses
 {
+    /// <summary>
+    /// Record that something other than <see cref="Update"/> (a stat aura, StatAuras.ApplyStat) already moved the maximum health by
+    /// <paramref name="delta"/> because the stamina field moved, so the next <see cref="Update"/> does not add the same bonus again.
+    /// </summary>
+    internal static void NoteHealthMoved(Player player, int delta)
+    {
+        PlayerStatState state = player.StatState;
+        state.HealthBonusIncluded = (uint)Math.Clamp((long)state.HealthBonusIncluded + delta, 0L, uint.MaxValue);
+    }
+
+    /// <summary>The mana counterpart of <see cref="NoteHealthMoved"/>.</summary>
+    internal static void NoteManaMoved(Player player, int delta)
+    {
+        PlayerStatState state = player.StatState;
+        state.ManaBonusIncluded = (uint)Math.Clamp((long)state.ManaBonusIncluded + delta, 0L, uint.MaxValue);
+    }
+
     /// <summary>Bring the health and mana maximums in line with the current stamina and intellect.</summary>
     public static void Update(Player player)
     {
