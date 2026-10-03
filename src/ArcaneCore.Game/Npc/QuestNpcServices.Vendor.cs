@@ -94,7 +94,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        uint price = (uint)((proto.BuyPrice * count * PriceDiscount(player, npc)) + 0.5f);
+        uint price = Discounted((ulong)proto.BuyPrice * count, PriceDiscount(player, npc));
         if (player.Money < price)
         {
             Send(player, WorldOpcode.SmsgBuyFailed, NpcPackets.BuyFailed(npc.Guid, itemId, BuyResult.NotEnoughMoney));
@@ -168,6 +168,87 @@ public sealed partial class QuestNpcServices
         Flush(s);
     }
 
+    /// <summary>
+    /// CMSG_BUYBACK_ITEM (vmangos HandleBuybackItem): an interactable vendor, an item in the buyback
+    /// slot, the slot price affordable and the item storable; then the price is taken and the item
+    /// returns to the bags.
+    /// </summary>
+    public void BuybackItem(Player player, ObjectGuid vendorGuid, uint slot)
+    {
+        if (Ready(player) is not { } s || !player.IsInWorld)
+        {
+            return;
+        }
+
+        if (InteractableNpc(player, vendorGuid, NpcFlags.Vendor) is not { } npc)
+        {
+            LogMissing("BuybackItem", vendorGuid);
+            Send(player, WorldOpcode.SmsgSellItem, NpcPackets.SellFailed(ObjectGuid.Empty, ObjectGuid.Empty, SellResult.CantFindVendor));
+            return;
+        }
+
+        if (slot > byte.MaxValue || Deps.Items is not { } items || items.GetBuyback(player, (byte)slot) is not { } buyback)
+        {
+            Send(player, WorldOpcode.SmsgBuyFailed, NpcPackets.BuyFailed(npc.Guid, 0, BuyResult.CantFindItem));
+            return;
+        }
+
+        if (player.Money < buyback.Price)
+        {
+            Send(player, WorldOpcode.SmsgBuyFailed, NpcPackets.BuyFailed(npc.Guid, buyback.Entry, BuyResult.NotEnoughMoney));
+            return;
+        }
+
+        InventoryResult result = items.RestoreBuyback(player, (byte)slot);
+        if (result != InventoryResult.Ok)
+        {
+            items.SendEquipError(player, result, buyback.Entry);
+            return;
+        }
+
+        ModifyMoney(s, -(long)buyback.Price);
+        Flush(s);
+    }
+
+    /// <summary>
+    /// CMSG_REPAIR_ITEM (vmangos HandleRepairItemOpcode → DurabilityRepair / DurabilityRepairAll):
+    /// an interactable NPC with UNIT_NPC_FLAG_REPAIR; one item (GUID) or everything carried (empty
+    /// GUID), each item charged its discounted cost and skipped when that is not affordable.
+    /// </summary>
+    public void RepairItem(Player player, ObjectGuid npcGuid, ObjectGuid itemGuid)
+    {
+        if (Ready(player) is not { } s || !player.IsInWorld)
+        {
+            return;
+        }
+
+        if (InteractableNpc(player, npcGuid, NpcFlags.Repair) is not { } npc)
+        {
+            LogMissing("RepairItem", npcGuid);
+            return;
+        }
+
+        if (Deps.Items is not { } items)
+        {
+            return;
+        }
+
+        uint paid = items.Repair(player, itemGuid, PriceDiscount(player, npc), cost =>
+        {
+            if (player.Money < cost)
+            {
+                return false;
+            }
+
+            ModifyMoney(s, -(long)cost);
+            return true;
+        });
+        if (paid > 0)
+        {
+            Flush(s);
+        }
+    }
+
     /// <summary>vmangos WorldSession::SendListInventory (npc_vendor rows; vendor templates are not modelled).</summary>
     internal void SendListInventory(PlayerNpcState s, ObjectGuid guid)
     {
@@ -190,7 +271,7 @@ public sealed partial class QuestNpcServices
 
             uint left = vendorItem.MaxCount == 0 ? 0xFFFFFFFF : CurrentStock(npc.Guid, vendorItem, proto);
             entries.Add(new VendorListEntry((uint)entries.Count + 1, vendorItem.Item, proto.DisplayId, left,
-                (uint)((proto.BuyPrice * discount) + 0.5f), proto.MaxDurability, proto.BuyCount));
+                Discounted(proto.BuyPrice, discount), proto.MaxDurability, proto.BuyCount));
             if (entries.Count >= MaxVendorItems)
             {
                 break;
@@ -228,6 +309,14 @@ public sealed partial class QuestNpcServices
     }
 
     private float PriceDiscount(Player player, NpcInfo npc) => Deps.Reputation?.GetPriceDiscount(player, npc) ?? 1.0f;
+
+    /// <summary>vmangos uint32(floor(price × GetReputationPriceDiscount)) (vendors and trainers).</summary>
+    private static uint Discounted(ulong price, float discount)
+    {
+        // Single precision as vmangos (uint32 × float): 10 × 0.9f is 9, not 8.999….
+        double value = MathF.Floor(price * discount);
+        return value >= uint.MaxValue ? uint.MaxValue : value <= 0 ? 0 : (uint)value;
+    }
 
     /// <summary>vmangos Creature::GetVendorItemCurrentCount (restock by BuyCount every incrtime seconds).</summary>
     private uint CurrentStock(ObjectGuid vendor, VendorItem item, ItemInfo proto)
