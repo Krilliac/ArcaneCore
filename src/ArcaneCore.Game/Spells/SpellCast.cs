@@ -45,6 +45,9 @@ public sealed class SpellCast
 
     public uint PowerCost { get; }
 
+    /// <summary>Damage pushbacks taken (cast bar or channel; vmangos m_delayAtDamageCount).</summary>
+    public int PushbackCount { get; internal set; }
+
     internal float CastX { get; set; }
 
     internal float CastY { get; set; }
@@ -77,10 +80,13 @@ public sealed class UnitSpellState
     /// <summary>StartRecoveryCategory → absolute expiry of the global cooldown.</summary>
     internal Dictionary<uint, uint> GlobalCooldowns { get; } = [];
 
+    /// <summary>School → absolute end of an interrupt lockout (vmangos Unit::ProhibitSpellSchool).</summary>
+    internal Dictionary<SpellSchool, uint> SchoolLockouts { get; } = [];
+
     internal List<SpellAuraHolder> Auras { get; } = [];
 
     public IReadOnlyList<SpellAuraHolder> AuraHolders => Auras;
 
     internal bool IsIdle => CurrentCast is null && Auras.Count == 0 && SpellCooldowns.Count == 0
-        && CategoryCooldowns.Count == 0 && GlobalCooldowns.Count == 0;
+        && CategoryCooldowns.Count == 0 && GlobalCooldowns.Count == 0 && SchoolLockouts.Count == 0;
 }

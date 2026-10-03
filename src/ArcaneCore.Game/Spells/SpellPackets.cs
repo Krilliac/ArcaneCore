@@ -273,6 +273,34 @@ public static class SpellPackets
         return writer.ToArray();
     }
 
+    /// <summary>
+    /// SMSG_SPELLLOGMISS (vmangos SpellCaster::SendSpellMiss, 1.12): u32 spell, u64 caster, u8 0,
+    /// u32 target count (1), then (u64 target, u8 miss reason) per target. gtker smsg_spelllogmiss agrees.
+    /// </summary>
+    public static byte[] BuildSpellLogMiss(uint spellId, ObjectGuid caster, ObjectGuid target, SpellMissInfo reason)
+    {
+        var writer = new PacketWriter(22);
+        writer.WriteUInt32(spellId);
+        writer.WriteUInt64(caster.Value);
+        writer.WriteByte(0);
+        writer.WriteUInt32(1);
+        writer.WriteUInt64(target.Value);
+        writer.WriteByte((byte)reason);
+        return writer.ToArray();
+    }
+
+    /// <summary>
+    /// SMSG_SPELL_DELAYED (cmangos-classic / vmangos Spell::Delayed): packed caster GUID, u32 delay
+    /// ms. gtker lists a full GUID for 1.12; the servers win (recorded in docs/integration/spells-persistence.md).
+    /// </summary>
+    public static byte[] BuildSpellDelayed(ObjectGuid caster, uint delayMs)
+    {
+        var writer = new PacketWriter(13);
+        writer.WritePackedGuid(caster.Value);
+        writer.WriteUInt32(delayMs);
+        return writer.ToArray();
+    }
+
     /// <summary>SMSG_SPELLHEALLOG: packed target, packed caster, u32 spell, u32 amount, u8 critical (vmangos Unit::SendHealSpellLog).</summary>
     public static byte[] BuildSpellHealLog(ObjectGuid target, ObjectGuid caster, uint spellId, uint amount, bool critical = false)
     {

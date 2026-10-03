@@ -3,12 +3,27 @@ using ArcaneCore.Game.Entities;
 namespace ArcaneCore.Game.Spells;
 
 /// <summary>One exact caster's aura ownership lifetime, without retaining the unit or its session.</summary>
-internal sealed class AuraCasterOwner(Unit caster)
+internal sealed class AuraCasterOwner
 {
-    private readonly WeakReference<Unit> _caster = new(caster);
+    private readonly WeakReference<Unit>? _caster;
     private bool _revoked;
 
-    internal Unit? Caster => !_revoked && _caster.TryGetTarget(out Unit? caster) ? caster : null;
+    internal AuraCasterOwner(Unit caster) => _caster = new WeakReference<Unit>(caster);
+
+    private AuraCasterOwner()
+    {
+        _revoked = true;
+    }
+
+    internal Unit? Caster => !_revoked && _caster is not null && _caster.TryGetTarget(out Unit? caster) ? caster : null;
+
+    internal bool IsRevoked => _revoked;
+
+    /// <summary>
+    /// A permanently revoked token with no caster: a restored foreign aura (character_aura) keeps
+    /// its caster GUID as provenance only and always uses the target fallback (docs/integration/aura-caster-ownership.md).
+    /// </summary>
+    internal static AuraCasterOwner Orphaned() => new();
 
     internal void Revoke() => _revoked = true;
 }
@@ -60,13 +75,19 @@ public sealed class SpellAuraHolder
     private readonly SpellAura?[] _auras = new SpellAura?[SpellConstants.MaxEffects];
 
     internal SpellAuraHolder(SpellInfo spell, Unit target, Unit caster, AuraCasterOwner casterOwner, int duration)
+        : this(spell, target, caster.Guid, caster.Level, casterOwner, duration)
+    {
+    }
+
+    internal SpellAuraHolder(SpellInfo spell, Unit target, ObjectGuid casterGuid, byte casterLevel, AuraCasterOwner casterOwner, int duration)
     {
         Spell = spell;
         Target = target;
-        CasterGuid = caster.Guid;
-        CasterLevel = caster.Level;
+        CasterGuid = casterGuid;
+        CasterLevel = casterLevel;
         CasterOwner = casterOwner;
         IsPositive = spell.IsPositive;
+        Charges = (int)spell.ProcCharges;
 
         // vmangos SpellAuraHolder ctor: permanent for -1 durations and passive spells; durations
         // below 200 ms are raised to 300 ms ("some spells have 1 ms duration").
@@ -104,7 +125,22 @@ public sealed class SpellAuraHolder
 
     public byte StackAmount { get; internal set; } = 1;
 
+    /// <summary>Remaining proc charges (Spell.dbc procCharges at application; 0 = unlimited). Persisted; consumption belongs to the proc system.</summary>
+    public int Charges { get; internal set; }
+
     public bool IsRemoved { get; internal set; }
+
+    /// <summary>For an aura a party area aura put on a group member: the caster's source holder (vmangos AreaAura owner).</summary>
+    public SpellAuraHolder? AreaParent { get; internal set; }
+
+    /// <summary>Whether this holder is a caster's own party area aura that spreads to its group.</summary>
+    public bool IsAreaSource => AreaParent is null && CasterGuid == Target.Guid && Spell.HasEffect(SpellEffectName.ApplyAreaAuraParty);
+
+    /// <summary>Members currently holding a child of this area aura source.</summary>
+    internal Dictionary<ObjectGuid, SpellAuraHolder> AreaChildren { get; } = [];
+
+    /// <summary>Whether <c>character_aura</c> keeps this holder across logout (see SpellSystem.CaptureState).</summary>
+    public bool IsSaveable => !IsRemoved && !Spell.IsPassive && !Spell.IsChanneled && AreaParent is null && !IsEmpty;
 
     public IReadOnlyList<SpellAura?> Auras => _auras;
 

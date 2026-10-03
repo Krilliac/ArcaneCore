@@ -1,5 +1,7 @@
+using System.Runtime.CompilerServices;
 using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
@@ -7,6 +9,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Social;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -23,21 +26,33 @@ namespace ArcaneCore.World.Spells;
 /// world tick interval. This system serves all maps, so attaching the same update to each map
 /// would advance its auras multiple times per world tick. At most one update is queued at a time.
 /// </para>
+/// <para>
+/// Cooldowns and auras persist across logout (<see cref="SpellStatePersistence"/>,
+/// docs/integration/spells-persistence.md): captured on the world thread when the player logs
+/// out, loaded on the session task while the character loads, cooldowns restored before
+/// SMSG_INITIAL_SPELLS and auras once the player is in the world.
+/// </para>
 /// </summary>
 public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposable
 {
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<SpellFeature> _logger;
+    private readonly TimeProvider _clock;
+    private readonly object _stagedLock = new();
+    private readonly ConditionalWeakTable<Player, SpellStateSnapshot> _staged = [];
+    private readonly HashSet<MapCombat> _combatSubscriptions = new(ReferenceEqualityComparer.Instance);
     private WorldRuntime? _world;
     private Timer? _timer;
     private int _updateQueued;
     private uint _lastUpdateMs;
 
-    public SpellFeature(IServiceScopeFactory scopes, ILogger<SpellFeature> logger)
+    public SpellFeature(IServiceScopeFactory scopes, ILogger<SpellFeature> logger, TimeProvider? timeProvider = null)
     {
         _scopes = scopes ?? throw new ArgumentNullException(nameof(scopes));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _clock = timeProvider ?? TimeProvider.System;
         Spellbook = new SpellbookCache(scopes, logger);
+        State = new SpellStatePersistence(scopes, logger);
         System = new SpellSystem(SpellStore.Empty, () => _world?.NowMs ?? 0, spellbook: Spellbook, logger: logger);
     }
 
@@ -46,6 +61,12 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
 
     /// <summary>Known spells of every character.</summary>
     public SpellbookCache Spellbook { get; }
+
+    /// <summary>Cooldowns and auras saved across logout.</summary>
+    public SpellStatePersistence State { get; }
+
+    /// <summary>Wall clock (Unix ms) used for persisted cooldown ends and offline aura time.</summary>
+    public long UnixNowMs => _clock.GetUtcNow().ToUnixTimeMilliseconds();
 
     public void Attach(WorldRuntime world)
     {
@@ -61,6 +82,13 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             // Features attach alphabetically: TeleportFeature attaches after this feature.
             // Resolve its singleton now, but defer accessing its service until a spell lands.
             TeleportFeature teleports = scope.ServiceProvider.GetRequiredService<TeleportFeature>();
+
+            // Seams owned by other areas: combat rules and groups (social area, attached later, so
+            // its manager is resolved per query). Line of sight comes from map.Collision (vmap-los).
+            System.CombatRules = scope.ServiceProvider.GetService<ISpellCombatRules>() ?? new VanillaSpellCombatRules();
+            System.Summons = scope.ServiceProvider.GetService<ISpellSummonSink>();
+            SocialFeature? social = scope.ServiceProvider.GetService<SocialFeature>();
+            System.Groups = social is null ? NoGroupResolver.Instance : new WorldSpellGroups(() => social.Context.Groups);
             System.Teleports = new WorldSpellTeleportSink(() => teleports.Teleports);
             System.IsInTransit = unit => unit is Player player && world.IsOnline(player.Guid)
                 && teleports.Teleports.IsBeingTeleportedFar(player);
@@ -82,6 +110,11 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
 
         world.PlayerLoggedIn += OnPlayerLoggedIn;
         world.PlayerLoggingOut += OnPlayerLoggingOut;
+        world.MapCreated += SubscribeCombat;
+        foreach (Map map in world.Maps)
+        {
+            SubscribeCombat(map);
+        }
 
         int interval = Math.Max(1, world.Options.TickIntervalMs);
         _lastUpdateMs = world.NowMs;
@@ -97,6 +130,17 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
     {
         ArgumentNullException.ThrowIfNull(player);
         Spellbook.EnsureDefaults(player, System.Store.GetCreateSpells((byte)player.Race, (byte)player.Class));
+        SpellStateSnapshot? staged;
+        lock (_stagedLock)
+        {
+            _staged.TryGetValue(player, out staged);
+        }
+
+        if (staged is { Cooldowns.Count: > 0 })
+        {
+            System.RestoreCooldowns(player, staged.Cooldowns, UnixNowMs);
+        }
+
         return SpellPackets.BuildInitialSpells([.. Spellbook.GetSpells(player)], [.. System.GetActiveCooldowns(player)]);
     }
 
@@ -118,6 +162,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         if (session.Services.GetService<ICharacterSpellStore>() is not { } store)
         {
             Spellbook.EnsureDefaults(player, System.Store.GetCreateSpells(character.Race, character.Class));
+            await StageStateAsync(session, character, player).ConfigureAwait(false);
             return;
         }
 
@@ -134,6 +179,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         }
 
         Spellbook.LoadCharacter(character.Id, spells);
+        await StageStateAsync(session, character, player).ConfigureAwait(false);
     }
 
     /// <summary>Run one spell update now (world thread; tests).</summary>
@@ -158,9 +204,60 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         {
             _world.PlayerLoggedIn -= OnPlayerLoggedIn;
             _world.PlayerLoggingOut -= OnPlayerLoggingOut;
+            _world.MapCreated -= SubscribeCombat;
         }
 
+        lock (_combatSubscriptions)
+        {
+            foreach (MapCombat combat in _combatSubscriptions)
+            {
+                combat.DamageDealt -= OnDamageDealt;
+            }
+
+            _combatSubscriptions.Clear();
+        }
+
+        await State.FlushAsync().ConfigureAwait(false);
         await Spellbook.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Player::_LoadAuras / _LoadSpellCooldowns on the session task: wait for this character's
+    /// logout save, then stage what is restored on the world thread. A storage error fails the
+    /// login (fail closed).
+    /// </summary>
+    private async Task StageStateAsync(WorldSession session, CharacterRecord character, Player player)
+    {
+        SpellStateSnapshot snapshot = await State.LoadAsync(character.Id, session.Services.GetService<ICharacterSpellStateStore>()).ConfigureAwait(false);
+        lock (_stagedLock)
+        {
+            _staged.AddOrUpdate(player, snapshot);
+        }
+    }
+
+    /// <summary>Weapon (melee/ranged) damage reaches casts and auras of the victim; spell damage already did in the spell system.</summary>
+    private void SubscribeCombat(Map map)
+    {
+        if (map.FindUpdater<MapCombat>() is not { } combat)
+        {
+            return;
+        }
+
+        lock (_combatSubscriptions)
+        {
+            if (_combatSubscriptions.Add(combat))
+            {
+                combat.DamageDealt += OnDamageDealt;
+            }
+        }
+    }
+
+    private void OnDamageDealt(Unit attacker, Unit victim, uint damage, bool direct, bool meleeDamage)
+    {
+        if (meleeDamage)
+        {
+            System.OnDamageTaken(victim, attacker, damage, periodic: !direct);
+        }
     }
 
     private void QueueUpdate()
@@ -191,6 +288,23 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
     /// </summary>
     private void OnPlayerLoggedIn(Player player)
     {
+        SpellStateSnapshot? staged;
+        lock (_stagedLock)
+        {
+            _staged.TryGetValue(player, out staged);
+            _staged.Remove(player);
+        }
+
+        if (player.Map is { } map)
+        {
+            SubscribeCombat(map);
+        }
+
+        if (staged is { Auras.Count: > 0 })
+        {
+            System.RestoreAuras(player, staged.Auras, UnixNowMs);
+        }
+
         foreach (uint spellId in Spellbook.GetSpells(player))
         {
             SpellInfo? spell = System.Store.Get(spellId);
@@ -201,5 +315,23 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         }
     }
 
-    private void OnPlayerLoggingOut(Player player) => System.RemoveUnit(player);
+    /// <summary>Player::SaveToDB at logout: capture cooldowns and auras before the unit leaves the spell system.</summary>
+    private void OnPlayerLoggingOut(Player player)
+    {
+        lock (_stagedLock)
+        {
+            _staged.Remove(player);
+        }
+
+        try
+        {
+            State.Save(SpellbookCache.CharacterId(player), System.CaptureState(player, UnixNowMs));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Capturing the spell state of {Player} failed", player.Guid);
+        }
+
+        System.RemoveUnit(player);
+    }
 }

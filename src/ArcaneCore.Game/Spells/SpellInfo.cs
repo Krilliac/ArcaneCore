@@ -50,6 +50,9 @@ public sealed record SpellEffectInfo
 
     public float PointsPerComboPoint { get; init; }
 
+    /// <summary>Spell.dbc DmgMultiplier: the value multiplier applied per chain jump (vmangos m_damageMultipliers; 0 is read as 1).</summary>
+    public float DamageMultiplier { get; init; } = 1.0f;
+
     public bool IsEmpty => Effect == SpellEffectName.None;
 }
 
@@ -128,6 +131,9 @@ public sealed record SpellInfo
     public float Speed { get; init; }
 
     public uint StackAmount { get; init; }
+
+    /// <summary>Spell.dbc procCharges: charges a new aura holder starts with (0 = unlimited).</summary>
+    public uint ProcCharges { get; init; }
 
     public uint StartRecoveryCategory { get; init; }
 
@@ -213,12 +219,16 @@ public sealed record SpellInfo
                 }
 
                 if (effect.TargetA is SpellImplicitTarget.UnitEnemy or SpellImplicitTarget.UnitEnemyNearCaster
-                    or SpellImplicitTarget.EnumUnitsEnemyAoeAtSrcLoc or SpellImplicitTarget.EnumUnitsEnemyAoeAtDestLoc)
+                    or SpellImplicitTarget.EnumUnitsEnemyAoeAtSrcLoc or SpellImplicitTarget.EnumUnitsEnemyAoeAtDestLoc
+                    or SpellImplicitTarget.EnumUnitsEnemyInCone24 or SpellImplicitTarget.EnumUnitsEnemyInCone54
+                    or SpellImplicitTarget.EnumUnitsEnemyWithinCasterRange)
                 {
                     return false;
                 }
 
-                if (effect.Effect == SpellEffectName.SchoolDamage)
+                if (effect.Effect is SpellEffectName.SchoolDamage or SpellEffectName.HealthLeech or SpellEffectName.WeaponDamage
+                    or SpellEffectName.WeaponDamageNoschool or SpellEffectName.NormalizedWeaponDmg or SpellEffectName.WeaponPercentDamage
+                    or SpellEffectName.InterruptCast or SpellEffectName.EnvironmentalDamage)
                 {
                     return false;
                 }
