@@ -48,8 +48,7 @@ exactly the references' table; `SpellCritTable.VerifiedRetail` is `false`. Nothi
 
 ### 2. Player base data (`PlayerStatsDataModule`, `PlayerStatsDumpImporter`, `VMangosMigrationReader`)
 
-World schema step `PlayerStatsDataModule.Version` (11 in this tree; the integrator renumbers the one
-constant). Tables, named like the source tables: `player_classlevelstats`, `player_levelstats`,
+World schema step `PlayerStatsDataModule.Version` (World 11 in the integrated tree). Tables, named like the source tables: `player_classlevelstats`, `player_levelstats`,
 `player_xp_for_level`, `player_crit_per_agility`, `player_dodge_per_agility`. `PlayerStatsContent`
 (Kernel) is the read model; it applies the reference's gap fill (a level without a row uses the nearest
 lower one, ObjectMgr.cpp:4884-4892, 4996-5004) and `Validate` reports what the reference exits on

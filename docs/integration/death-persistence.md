@@ -33,7 +33,7 @@ inventory, spells, auras and `UpdateAllStats` (`Player.cpp:15057-15070`), so the
 when the stored values are clamped to them.
 
 ### Life persistence (characters schema module `CharacterLifeDataModule`)
-- `CharacterLifeDataModule.Version` (= 14 at this branch's base; the integrator renumbers; tests use the
+- `CharacterLifeDataModule.Version` (= 15 after the 2026-10-03 vanilla-wave integration, after skills at 14; it was 14 on the lane branch; tests use the
   constant): tables `character_vitals` (health, power1-5, xp, death_expire_time, is_ghost) and
   `character_corpse` (map, position, orientation, ghost time, type). They mirror the vmangos
   `characters` columns `health, power1..power5, xp, death_expire_time`, the ghost flag, and the `corpse`
@@ -84,7 +84,7 @@ when the stored values are clamped to them.
   the current time, the load-time packet counts it from the ghost time, so they can differ by one step.
 
 ## Schema allocation
-Characters 14 (`CharacterLifeDataModule.Version`). Tests refer to the constant and to
+Characters 15 in the integrated tree (`CharacterLifeDataModule.Version`; 14 on the lane branch). Tests refer to the constant and to
 `CharacterDbContext.Schema.CurrentVersion`, never to the literal; `IntegratedSchemaTests` lists the module.
 
 ## Tests

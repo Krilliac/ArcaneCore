@@ -218,8 +218,7 @@ The design's NQ0 imports eleven new tables. Only the table with a finished consu
 ### Delivered
 
 * **Schema.** `ConditionsWorldModule` (`src/ArcaneCore.Data/Npc/`) creates `conditions` at
-  `ConditionsWorldModule.Version` (**World 11**, the next free number after 9 index repair and 10 quest reputation
-  columns; one constant, tests use the constant or `WorldDbContext.Schema.CurrentVersion`, never a literal; the
+  `ConditionsWorldModule.Version` (**World 13** in the integrated tree after player stats 11 and creature behaviour 12; it was 11 on the lane branch; one constant, tests use the constant or `WorldDbContext.Schema.CurrentVersion`, never a literal; the
   integrator renumbers). The allocation table of `IntegratedSchemaTests` lists it. No cleanup registration: the world
   schema has no per-character rows.
 * **Columns** are the classic-db layout: `condition_entry` (key), `type` (signed), `value1..value4`, `flags`

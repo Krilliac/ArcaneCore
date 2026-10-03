@@ -112,8 +112,8 @@ changed, checked by identical test totals and a line-multiset comparison of the 
 
 ## Content model (world schema step `CreatureBehaviourDataModule`)
 
-The world step that follows the first AI step (`CreatureBehaviourDataModule.Version`, 11 in this
-tree; a named constant the integration lead renumbers) widens the data the AI reads. It is additive
+The world step that follows the first AI step (`CreatureBehaviourDataModule.Version`, 12 after the
+2026-10-03 vanilla-wave integration; it was 11 on the lane branch) widens the data the AI reads. It is additive
 only (new tables and columns), so a database at the previous version upgrades in place.
 
 - **EventAI rows** (`CreatureAiEvent`): `Flags` is a full `uint32` (new column `EventFlags32`; the

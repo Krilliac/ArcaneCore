@@ -100,8 +100,7 @@ Kill reputation was a hole: `IReputationOnKillSource` (Kernel `CharacterReputati
 from DI, and nothing registered it, so no creature ever granted reputation. This slice adds the table, the source and the
 importer.
 
-- **Schema.** `CreatureOnKillReputationWorldModule`, one new `IDataModule` file, `Version = 11` (the next free World version
-  after the quest-reputation step at 10; the single constant the integrator renumbers; `IntegratedSchemaTests` and the module
+- **Schema.** `CreatureOnKillReputationWorldModule`, one new `IDataModule` file, `Version = 14` (renumbered by the 2026-10-03 vanilla-wave integration: World 11 player stats, 12 creature behaviour, 13 conditions, 14 this step; it was 11 on the lane branch; the single constant the integrator renumbers; `IntegratedSchemaTests` and the module
   test refer to the constant). Table `creature_onkill_reputation`, key `CreatureId`; the module registers
   `EfReputationOnKillSource` (scoped). No `ICharacterDataCleanup`: the world schema holds no per-character rows.
 - **By-name mapping.** vmangos selects `IsTeamAward` before `MaxStanding` (`ObjectMgr.cpp:8897-8899`) and classic-db stores

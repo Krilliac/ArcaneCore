@@ -93,7 +93,8 @@ No ExecutionPolicy bypass or speculative service restart is needed.
     retained older row cannot overwrite rows the reward writes; the reputation write queue's
     post-delete removal uses the conditional `DeleteDeletedCharacterAsync`.
 
-Schema allocations at the integration of 2026-10-03: **Auth 2 / World 10 / Characters 13**.
+Schema allocations at the first integration of 2026-10-03: **Auth 2 / World 10 / Characters 13**
+(the vanilla-wave integration below takes them to **Auth 2 / World 14 / Characters 15**).
 Characters: reputation 7, instances 8, spell state 9, economy 10, forward index repair 11
 (inline step, `CharacterDbContext.IndexRepairVersion`), deletion outcome ledger 12
 (`CharacterDeletionDataModule.Version`), durable loot state 13 (`LootStateDataModule.Version`).
@@ -140,6 +141,31 @@ dotnet test ArcaneCore.slnx -c Release --no-build -m:1 --verbosity normal
 dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-test
 ```
 
+## Vanilla-fidelity wave (nine lanes; local verification only; hosted CI pending)
+
+Integrated on `claude/vw-integration` from base `49448fd`, in the order stats, skills, death, spells, warrior,
+creature AI, NPC/quests, content import, hot reload. Standing rule: retail 1.12.1 mechanics and data, references
+vmangos (primary), mangos-classic, wow_messages, classic-db (read-only, nothing copied); every deviation is behind a
+config option that defaults to retail. Each area document carries the file:line citations and its own limits; they
+are not repeated here and remain the authority.
+
+| Lane | Delivered | Where the exact limits are |
+|---|---|---|
+| stats-combat-formulas | Player stat system and formulas (base data tables, agility crit/dodge rates, spell crit, stamina/intellect bonuses, SetCanDualWield recompute, lenient mode with partial agility rows); no schema change beyond World 11 `PlayerStatsDataModule` | `docs/areas/stats.md` (Limits) |
+| skills-professions | Skill model, gain rules, spell/proficiency handling, gathering (skinning orange roll at world max), trainer skill rules, persistence (Characters 14) | `docs/areas/skills.md` (Limits), `docs/integration/skills.md` |
+| death-persistence | Death/ghost clock, life and ghost persistence (Characters 15), death seams and options, character hooks at the loaded phase | `docs/integration/death-persistence.md` (Limits) |
+| spell-breadth-data-driven | `ISpellHandlerModule` discovery; Instakill, HealMaxHealth, Threat, DispelMechanic; stat/resistance/AP auras; visual auras; periodic leech auras; stack-count re-apply | `docs/areas/spells.md` ("Handler modules and spell breadth": remaining gaps listed by count) |
+| warrior-mechanics | Combat spell data model and seams, warrior stances, next-swing spells (re-entrant cancel, out-of-range queueing), generic cast rules | `docs/areas/spells.md`, `docs/areas/combat.md`; forms other than 17-19 unhandled; talent tree not loaded |
+| creature-ai-eventai | AI content model and importer fidelity, EventAI engine and combat-state events, aggro/relocation/initiate rules, combat leash (World 12) | `docs/areas/creature-ai.md` |
+| npc-services-quests | GO interaction distance per type, conditions numbering (World 13), quest journal raid wiring, NPC service/quest fidelity | `docs/integration/npc-quest-fidelity.md` |
+| content-import-full | Complete vanilla content import, RowMapper shared-state race fix, on-kill reputation importer (World 14) | `docs/areas/content-import.md` |
+| hot-reload | Live reload of content tables: reload-all matches vmangos, retail empty-table and negative-number behaviour behind switches | `docs/areas/hot-reload.md` |
+
+Schema after this wave (one named constant each; tests use constants and `Schema.CurrentVersion`):
+**Auth 2 / World 14 / Characters 15**. Characters: skills 14, life 15. World: player stats 11, creature behaviour 12,
+conditions 13, on-kill reputation 14. The lanes had allocated 14/14 (Characters) and 11/11/11/11 (World) in parallel;
+they were renumbered in merge order. Remaining work from the list below is unchanged unless an area document above says
+otherwise. This wave has no real-client evidence; do not read it as client-accepted.
 ## Remaining work, in priority order
 
 Items 1-6 were delivered by the 2026-10-03 integration (`claude/ac-integration`). That is local

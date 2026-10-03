@@ -38,7 +38,7 @@ copied). Each piece of code cites file:line.
 - `SMSG_SET_PROFICIENCY` (0x0127: u8 class, u32 mask).
 
 **Persistence** (`Data/Skills`, `World/Skills/SkillSaveCoordinator`; slice `skills-persistence`)
-- Characters schema `CharacterSkillsDataModule.Version` (**14**), tables `character_skills` and
+- Characters schema `CharacterSkillsDataModule.Version` (**14**, Characters), tables `character_skills` and
   `character_forgotten_skills` (vmangos `characters.sql:199-204, 344-350`), with `ICharacterDataCleanup`.
 - `EfCharacterSkillStore.ReplaceSnapshotAsync` deletes and inserts a character's rows in one transaction and answers
   false for a character that no longer exists. `SkillSaveCoordinator` is a single writer with latest-snapshot-wins
