@@ -28,8 +28,21 @@ public interface IDamageSink
     uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat)
         => DealSpellDamage(caster, victim, spell, damage, periodic);
 
+    /// <summary>
+    /// As above with <paramref name="critical"/>: whether a direct hit crit, for the threat formula (a critical hit multiplies the
+    /// threat by the caster's MOD_CRITICAL_THREAT auras, vmangos ThreatCalcHelper::CalcThreat). Sinks that do not model threat ignore it.
+    /// </summary>
+    uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat, bool critical)
+        => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat);
+
     /// <summary>Heal <paramref name="amount"/>; returns the health actually restored.</summary>
     uint Heal(Unit caster, Unit target, SpellInfo spell, uint amount);
+
+    /// <summary>
+    /// As above, saying whether the heal is periodic (vmangos gives a heal over time half the healed amount as threat for every class,
+    /// a direct heal 0.5 or, for a paladin, 0.25: Spell.cpp:1362-1366, SpellAuras.cpp:6013). Sinks that do not model threat ignore it.
+    /// </summary>
+    uint Heal(Unit caster, Unit target, SpellInfo spell, uint amount, bool periodic) => Heal(caster, target, spell, amount);
 }
 
 /// <summary>

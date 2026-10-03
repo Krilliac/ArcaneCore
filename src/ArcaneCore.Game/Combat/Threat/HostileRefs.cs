@@ -1,4 +1,6 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Rules;
 
 namespace ArcaneCore.Game.Combat.Threat;
 
@@ -47,6 +49,42 @@ public static class HostileRefs
         {
             holder.Combat.Threat.Remove(target);
         }
+    }
+
+    /// <summary>vmangos SPELL_ATTR_EX4_NO_HELPFUL_THREAT (SpellDefines.h:989): HostileRefManager::threatAssist ignores the spell.</summary>
+    public const uint AttributeEx4NoHelpfulThreat = 0x00000008;
+
+    /// <summary>
+    /// vmangos HostileRefManager::threatAssist: <paramref name="threat"/> is divided by the number of units whose lists hold
+    /// <paramref name="target"/> (all references, not only living holders) and added to every one of them for the
+    /// <paramref name="assister"/> as assist threat (zero while that holder is confused or fleeing); a spell with
+    /// NO_HELPFUL_THREAT adds none. The threat formula applies per list (<see cref="ThreatCalc.Calc"/> with the spell's school, or physical
+    /// without a spell). Returns the lists that were given threat.
+    /// </summary>
+    public static Unit[] ThreatAssist(Unit target, Unit assister, float threat, SpellInfo? spell, IThreatModifierSource? modifiers, bool singleTarget = false)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(assister);
+        if (spell is not null && (spell.AttributesEx4 & AttributeEx4NoHelpfulThreat) != 0)
+        {
+            return [];
+        }
+
+        Unit[] holders = [.. target.Combat.ThreatenedBy];
+        if (holders.Length == 0)
+        {
+            return [];
+        }
+
+        float each = threat / (singleTarget ? 1 : holders.Length);
+        uint schoolMask = spell is null ? ThreatCalc.PhysicalMask : spell.SchoolMask();
+        bool noNewEntry = spell is not null && ((uint)spell.AttributesEx & MapCombat.AttributeExNoThreat) != 0;
+        foreach (Unit holder in holders)
+        {
+            holder.Combat.Threat.AddThreat(assister, ThreatCalc.Calc(modifiers, assister, each, false, schoolMask, spell), new ThreatContext(IsAssist: true, NoNewEntry: noNewEntry));
+        }
+
+        return holders;
     }
 
     // The lists mutate ThreatenedBy while they are walked.

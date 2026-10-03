@@ -35,8 +35,6 @@ The list re-sorts lazily (only after a change), with a stable insertion sort, as
 - "Taxi flying" targets going offline wait for a taxi primitive on `Player`; the GM case is real.
 - The second-choice selector predicate (`isLowPriority`) is supported by `SelectVictim`; the creature host passes feared and
   confused targets only (damage-immune, breakable-CC and totem second choices need aura-holder data and a spell catalog).
-- `ThreatContext` carries only the list-side flags. School, crit and spell-threat scaling (vmangos `ThreatCalcHelper::CalcThreat`)
-  are not implemented: damage threat stays raw damage, MOD_THREAT and spell_threat are unimplemented.
 
 ### victim-selection (Creatures/CreatureMapSystem.Combat.cs `SelectHostileTarget`)
 
@@ -73,3 +71,35 @@ gets taunted until the creature data lane exposes it.
 
 Limits: SMSG_CAST_RESULT with DONT_REPORT for "already attacking you" is not sent; the taunted creature is not turned to face
 the taunter; after the taunt fades the victim is re-selected at the creature's next update (vmangos selects at once).
+
+### threat pipeline (Combat/Threat/ThreatCalc.cs, Combat/MapCombat.Threat.cs, Spells/SpellSystem.Threat.cs, World/Combat/ThreatFeature.cs)
+
+One formula for all threat, `ThreatCalc.Calc` (vmangos `ThreatCalcHelper::CalcThreat`, ThreatManager.cpp:35-52): no threat stays none; with a threat
+spell the caster's SPELLMOD_THREAT talents apply (`SpellSystem.SpellModifiers`, identity until the spell-modifier lane installs the
+storage) and a critical hit multiplies by the caster's MOD_CRITICAL_THREAT auras for the spell's school; then the caster's MOD_THREAT
+multiplier for the first school of the mask (`Unit::ApplyTotalThreatModifier`, Unit.cpp:7409-7420; players only,
+`Aura::HandleModThreat`, SpellAuras.cpp:3914; the two Naxxramas auras 26400/28862 add per-level threat, :3897-3912).
+
+| Source | Behaviour | Reference |
+|---|---|---|
+| Melee swing | damage x physical MOD_THREAT | Unit.cpp:866-870 |
+| Spell damage and DoT ticks | damage x spell_threat multiplier, the spell's school, crit flag from direct hits; NO_HARMFUL_THREAT adds nothing; EX_NO_THREAT only raises an existing entry | Unit.cpp:866-870, :7426, ThreatManager.cpp:424 |
+| SPELL_EFFECT_THREAT | through the same formula; players only get MOD_THREAT (a deviation from the old code, which scaled any caster) | SpellEffects.cpp:3503-3514 |
+| Heal | 0.5 x effective heal (paladin direct heal 0.25) x spell_threat multiplier, divided by the number of lists holding the target, assist threat per list (zero while that creature is confused or fleeing); NO_HELPFUL_THREAT adds none | Spell.cpp:1362-1366, HostileRefManager.cpp:62-76 |
+| Heal over time | 0.5 for every class | SpellAuras.cpp:6013 |
+| Flat spell_threat | once per hit target; harmful spells to the target's list, positive spells spread like healing; skipped when every selected effect is inverted | Spell.cpp:5172-5230 |
+| Harmless hostile hit (debuff, CC, dispel) | both sides in combat, AttackedBy, zero-threat entry; not for triggered casts, EX_NO_THREAT, NO_INITIAL_THREAT, MOD_POSSESS | Spell.cpp:1649-1679 |
+| Positive spell on an in-combat target | caster in combat and a zero-threat entry on every list holding the target | Spell.cpp:1713-1720 |
+
+The spell_threat table is the `ISpellThreatCatalog` seam (`MapCombat.SpellThreatCatalog`). **No data source is delivered in this lane:**
+nothing implements the interface in production, so spell multipliers are 1 and there is no flat threat until the content layer binds a
+catalog (the world feature takes it from the service provider when one is registered). classic-db has 103 `spell_threat` rows (one with a
+multiplier other than 1), vmangos' own migrations add 313 more entries: the retail-accurate table is not in classic-db.
+
+`MapCombatDamageSink` (Game/Spells) is the production sink the world daemon uses (`WorldSpellDamageSink` derives from it), so tests exercise
+it directly.
+
+Limits: spell crit threat is applied for direct spell hits only (damage over time never crits in vanilla); stealth/visibility checks before a
+hostile hit starts combat, the Pickpocket back-attack and the refusal of flat threat for spells that are partly positive are not modelled; a
+triggered cast stands in for "triggered by an aura"; druid bear-form and talent threat modifiers flow once the forms and talent lanes apply
+their auras and spell modifiers.

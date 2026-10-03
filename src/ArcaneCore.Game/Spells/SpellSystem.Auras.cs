@@ -415,7 +415,7 @@ public sealed partial class SpellSystem
             : (uint)aura.Amount;
         Unit caster = ResolveAuraCaster(holder) ?? target;
         amount = ModifyTick(SpellAmountStage.HealOverTimeTick, holder, aura, caster, amount);
-        uint healed = Damage.Heal(caster, target, holder.Spell, amount);
+        uint healed = Damage.Heal(caster, target, holder.Spell, amount, periodic: true);
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
             target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, healed, 0)), includeSelf: true);
     }
