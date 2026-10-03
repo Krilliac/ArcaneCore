@@ -322,10 +322,10 @@ public sealed partial class Player : Unit
         }
 
         IsRooted = rooted;
-        var packet = new PacketWriter(13);
-        packet.WritePackedGuid(Guid.Value);
-        packet.WriteUInt32(NextMovementCounter());
-        Session.Send(rooted ? WorldOpcode.SmsgForceMoveRoot : WorldOpcode.SmsgForceMoveUnroot, packet.AsSpan());
+
+        // The order is also recorded in the pending-change ledger: the flag lands in Movement.Flags when the client
+        // acknowledges it or the ack times out (docs/areas/locomotion-foundation.md).
+        global::ArcaneCore.Game.Locomotion.MovementControl.Order(this, global::ArcaneCore.Game.Locomotion.MovementChangeType.Root, rooted);
     }
 
     /// <summary>
