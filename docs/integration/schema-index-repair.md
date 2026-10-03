@@ -143,7 +143,10 @@ Every table has at least one row (the test asserts it).
   populated-baseline upgrade, concurrency-on-baseline and duplicate-row tests run on SQLite. Intermediate lineages
   (characters 7/8/9, world 7) are covered through every contiguous step of the stepwise tests, not through frozen DDL.
 - **Index repair is explicit, not automatic drift detection.** A database that is already at the current version is
-  not scanned for missing indexes at startup, and an index an external DBA drops later is not noticed.
+  not scanned for missing indexes at startup. Drift is now detectable on demand: `arcane-db check` compares the live
+  database with the model (missing or extra index, column, nullability, version row; see
+  `docs/integration/db-upgrade-tooling.md` and `docs/ops/database-upgrade.md`), and `arcane-db plan` predicts the
+  duplicate-row failure below before anything is changed. It is still not run automatically at startup.
 - **Seeding is outside the lock.** The realm and content seeding after `EnsureAsync` (`AuthDbInitializer`
   realm rows, `WorldDbInitializer` `player_create_info`) is a check-then-insert and can still race between two
   daemons; this change serializes the schema only.

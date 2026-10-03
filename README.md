@@ -52,7 +52,8 @@ src/
   ArcaneCore.Realm          logon/realm daemon (TCP 3724)
   ArcaneCore.World          world daemon (TCP 8085): sessions, opcode table, handlers, chat commands, save queue
 tools/
-  ArcaneCore.AccountTool    account create / set-password / set-gmlevel / list CLI
+  ArcaneCore.AccountTool    account create / set-password / set-gmlevel / list CLI (`db ...` forwards to arcane-db)
+  ArcaneCore.DbUpgrade      arcane-db: database upgrade tool (status / plan / check / upgrade / backup-info)
   ArcaneCore.MockClient     owned-loopback realm/world protocol acceptance CLI
   codegen/                  generates WorldOpcode.g.cs + UpdateFields.g.cs from the references
 tests/
@@ -82,6 +83,11 @@ Each component keeps a version row (`auth_schema`, `characters_schema`, `world_s
 Startup creates missing schemas, adopts M1–M4 databases, applies additive upgrades and
 **refuses to start** on anything else. World data (start positions, race appearance,
 class stats) is seeded into the world database until the content importer lands (M8).
+
+Upgrading a production database between versions is an operator procedure with a dry run, a backup gate and a drift
+check: `arcane-db` (see [docs/ops/database-upgrade.md](docs/ops/database-upgrade.md)). By default every start still
+creates and upgrades the schema; `Database:Upgrade:Policy` (`CreateOnly` or `Never`) makes a start refuse to upgrade an
+existing database instead, the way the retail servers do.
 
 The data-layer tests run against MariaDB and PostgreSQL when
 `ARCANECORE_TEST_MARIADB` / `ARCANECORE_TEST_POSTGRES` hold a server connection string

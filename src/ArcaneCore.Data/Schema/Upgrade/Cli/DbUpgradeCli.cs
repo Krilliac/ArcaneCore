@@ -56,7 +56,11 @@ public static class DbUpgradeCli
         7 schema lock timeout, 8 backup not confirmed
         """;
 
-    private static readonly string[] s_componentOrder = ["auth", "characters", "world"];
+    /// <summary>The commands the tool accepts (the closed set the argument parser enforces; the runbook must name each).</summary>
+    public static IReadOnlyList<string> Commands => DbUpgradeArguments.Commands;
+
+    /// <summary>The options the tool accepts (the closed set the argument parser enforces; the runbook must name each).</summary>
+    public static IReadOnlyList<string> Options => [.. DbUpgradeArguments.ValueOptions, .. DbUpgradeArguments.Flags];
 
     /// <summary>Run one command line. Never throws for expected failures; returns the exit code.</summary>
     public static async Task<int> RunAsync(
