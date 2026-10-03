@@ -24,11 +24,15 @@ public sealed class StealthRegistry
 {
     private readonly ConditionalWeakTable<Unit, StrongBox> _states = new();
     private readonly HashSet<Unit> _stealthed = new(ReferenceEqualityComparer.Instance);
+    private int _hidden;
 
     private sealed class StrongBox
     {
         public StealthVisibility Visibility;
     }
+
+    /// <summary>Whether any unit is in a non-<see cref="StealthVisibility.On"/> group (the visibility rule skips its lookups when none is).</summary>
+    public bool AnyHidden => _hidden > 0;
 
     /// <summary>Number of units in the <see cref="StealthVisibility.Stealth"/> group (the detection pass is skipped when 0).</summary>
     public int Count => _stealthed.Count;
@@ -46,6 +50,15 @@ public sealed class StealthRegistry
     {
         ArgumentNullException.ThrowIfNull(unit);
         StrongBox box = _states.GetValue(unit, static _ => new StrongBox());
+        if (box.Visibility == StealthVisibility.On && visibility != StealthVisibility.On)
+        {
+            _hidden++;
+        }
+        else if (box.Visibility != StealthVisibility.On && visibility == StealthVisibility.On)
+        {
+            _hidden--;
+        }
+
         box.Visibility = visibility;
         if (visibility == StealthVisibility.Stealth)
         {
@@ -60,13 +73,18 @@ public sealed class StealthRegistry
     /// <summary>A snapshot of the units in the Stealth group (vmangos AnyStealthedCheck: VISIBILITY_GROUP_STEALTH).</summary>
     public IReadOnlyList<Unit> Stealthed() => [.. _stealthed];
 
-    /// <summary>Forget units that left the world for good (their auras were dropped without handlers, e.g. at logout).</summary>
+    /// <summary>Forget units that left the world for good (their auras were dropped without handlers, e.g. at logout): they go back to the On group.</summary>
     public void Prune(Func<Unit, bool> isGone)
     {
         ArgumentNullException.ThrowIfNull(isGone);
-        if (_stealthed.Count > 0)
+        if (_stealthed.Count == 0)
         {
-            _stealthed.RemoveWhere(u => isGone(u));
+            return;
+        }
+
+        foreach (Unit gone in _stealthed.Where(u => isGone(u)).ToArray())
+        {
+            SetVisibility(gone, StealthVisibility.On);
         }
     }
 }

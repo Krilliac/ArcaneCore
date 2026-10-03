@@ -27,7 +27,7 @@ public sealed class StealthVisibilityRule : IVisibilityRule
 
     public bool CanSee(Player viewer, WorldObject target, bool alreadyVisible, bool detect)
     {
-        if (target is not Unit unit || ReferenceEquals(viewer, target))
+        if (!_registry.AnyHidden || target is not Unit unit || ReferenceEquals(viewer, target))
         {
             return true;
         }

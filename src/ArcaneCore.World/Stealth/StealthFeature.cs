@@ -31,6 +31,7 @@ public sealed class StealthFeature(SpellFeature spells, IServiceProvider service
         services.GetService<IConfiguration>()?.GetSection(StealthOptions.SectionName).Bind(Options);
 
         SpellSystem system = spells.System;
+        system.ImprovedSapRollPerPhase = Options.ImprovedSapRollPerPhase;
         var stealthServices = new StealthServices(system, Registry, Options);
         system.RegisterAura(AuraType.ModStealth, StealthAuras.Handler(Registry));
         // Data auras: their amounts are read by the detection formula (SpellSystem.GetTotalAuraModifier), nothing happens at apply.

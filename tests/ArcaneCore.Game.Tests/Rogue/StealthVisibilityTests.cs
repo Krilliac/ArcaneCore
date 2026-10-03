@@ -291,9 +291,11 @@ public sealed class StealthVisibilityTests
         rig.Stealthed();
         Assert.Equal(1, rig.Registry.Count);
 
+        Assert.True(rig.Registry.AnyHidden);
         rig.Registry.Prune(_ => true);
 
         Assert.Equal(0, rig.Registry.Count);
-        Assert.Equal(StealthVisibility.Stealth, rig.Registry.VisibilityOf(rig.Rogue)); // the table entry stays, only the scan set shrinks
+        Assert.Equal(StealthVisibility.On, rig.Registry.VisibilityOf(rig.Rogue));
+        Assert.False(rig.Registry.AnyHidden); // the visibility rule goes back to its no-lookup fast path
     }
 }

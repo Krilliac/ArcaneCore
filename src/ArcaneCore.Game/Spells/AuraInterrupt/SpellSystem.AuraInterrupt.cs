@@ -10,6 +10,12 @@ namespace ArcaneCore.Game.Spells;
 public sealed partial class SpellSystem
 {
     /// <summary>
+    /// Roll Improved Sap separately at cast start and cast completion, as vmangos literally does (Spell.cpp:3455, 3713). Default false:
+    /// one roll per cast, so the 30/60/90 percent of the talent text hold (docs/areas/rogue.md, open questions).
+    /// </summary>
+    public bool ImprovedSapRollPerPhase { get; set; }
+
+    /// <summary>
     /// vmangos Unit::RemoveAurasWithInterruptFlags (Unit.cpp:3735-3751): remove every aura whose spell has any bit of
     /// <paramref name="flags"/> in its AuraInterruptFlags, except the spell <paramref name="exceptSpellId"/>,
     /// stealth auras (Dispel type 5) when <paramref name="skipStealth"/> and invisibility auras (Dispel type 6)
@@ -77,8 +83,9 @@ public sealed partial class SpellSystem
 
         Unit caster = cast.Caster;
         SpellInfo spell = cast.Spell;
-        bool removeStealth = StealthBreakRules.ShouldRemoveStealthAuras(spell, triggered: false, caster is Player,
+        bool RollRemoveStealth() => StealthBreakRules.ShouldRemoveStealthAuras(spell, triggered: false, caster is Player,
             auraId => HasAura(caster, auraId), chance => Random.Next(100) < chance);
+        bool removeStealth = RollRemoveStealth();
         bool skipInvisibility = ((uint)spell.AttributesEx2 & StealthBreakRules.AttributesEx2AllowWhileInvisible) != 0;
 
         uint early = AuraInterruptMask.Action;
@@ -94,6 +101,14 @@ public sealed partial class SpellSystem
         if (!StealthBreakRules.IsPositiveTarget(first.TargetA, first.TargetB))
         {
             late |= AuraInterruptMask.Attacking;
+        }
+
+        // vmangos calls ShouldRemoveStealthAuras separately at the start and at the completion of the cast, so Improved Sap rolls
+        // twice (a 30/60/90 percent talent keeps stealth 9/36/81 percent of the time). The talent text, and this lane by default,
+        // use one roll per cast; ImprovedSapRollPerPhase reproduces the literal vmangos double roll.
+        if (ImprovedSapRollPerPhase)
+        {
+            removeStealth = RollRemoveStealth();
         }
 
         RemoveAurasWithInterruptFlags(caster, late, spell.Id, skipStealth: !removeStealth, skipInvisibility);

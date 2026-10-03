@@ -16,7 +16,8 @@ the aura handler rebuilds the visibility state when the aura is restored (`Resto
   visibility refresh after each, hostile casts in progress cancelled (`InterruptSpellsCastedOnMe`, `Unit.cpp:10181-10215`).
 - `Game/Stealth/StealthVisibilityRule.cs`: the stealth part of `IsVisibleForOrDetect` (`Unit.cpp:6321-6461`) in vmangos order.
 - `Game/Stealth/StealthDetectionUpdater.cs`: `HandleStealthedUnitsDetection` (`Player.cpp:22007-22052`) on the player timer
-  (first pass after 1000 ms, then every 2000 ms, `Player.cpp:272, 1141-1151`); idle while no unit is stealthed.
+  (first pass after 1000 ms, then every 2000 ms, `Player.cpp:272, 1141-1151`). While no unit is stealthed it does no work at all, not even timer
+  upkeep; the timers restart at the next stealth, so the phase of the 2000 ms cadence is not retail-exact (the cadence is).
 - `Game/Stealth/SpellSystem.Stealth.cs`: `HasAuraType`, `InterruptSpellsCastedOnMe`.
 - `Game/Maps/VisibilityRules.cs`: the generic `IVisibilityRule` seam (no rogue content; gm-commands, Prowl, Shadowmeld, Feign Death and
   invisibility can use it).

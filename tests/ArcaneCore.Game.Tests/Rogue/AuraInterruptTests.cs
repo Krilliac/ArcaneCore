@@ -408,6 +408,37 @@ public sealed class AuraInterruptTests
         }
     }
 
+    [Fact]
+    public void ImprovedSapRollPerPhase_RollsAtCastStartAndAgainAtCompletion_LikeTheLiteralVmangosCode()
+    {
+        (SpellTestKit kit, Player rogue, Player enemy) = Setup();
+        using (kit)
+        {
+            Give(kit, rogue, ImprovedSapR1);
+            kit.System.ImprovedSapRollPerPhase = true;
+
+            // roll 1 keeps (10 < 30), roll 2 removes (80 >= 30): the second phase breaks stealth
+            Give(kit, rogue, Stealth);
+            kit.System.Random = new SequenceRandom(10, 80);
+            Request(kit, rogue, Sap, enemy);
+            Assert.False(kit.System.HasAura(rogue, Stealth));
+
+            // both rolls keep: stealth survives
+            Give(kit, rogue, Stealth);
+            kit.System.RemoveAuras(enemy, Sap);
+            kit.System.Random = new SequenceRandom(10, 10);
+            Request(kit, rogue, Sap, enemy);
+            Assert.True(kit.System.HasAura(rogue, Stealth));
+
+            // the default is one roll per cast: the same first roll alone decides
+            kit.System.ImprovedSapRollPerPhase = false;
+            kit.System.RemoveAuras(enemy, Sap);
+            kit.System.Random = new SequenceRandom(10, 80);
+            Request(kit, rogue, Sap, enemy);
+            Assert.True(kit.System.HasAura(rogue, Stealth));
+        }
+    }
+
     [Theory]
     [InlineData(SpellImplicitTarget.UnitEnemy, SpellImplicitTarget.None, false)]
     [InlineData(SpellImplicitTarget.UnitCaster, SpellImplicitTarget.None, true)]
@@ -426,6 +457,13 @@ public sealed class AuraInterruptTests
         Assert.Equal(0x00001000u, AuraInterruptMask.Attacking);
         Assert.Equal(0x00010000u, AuraInterruptMask.ActionLate);
         Assert.Equal(0x00400000u, AuraInterruptMask.EnterWorld);
+    }
+
+    private sealed class SequenceRandom(params int[] values) : Random
+    {
+        private int _next;
+
+        public override int Next(int maxValue) => values[Math.Min(_next++, values.Length - 1)];
     }
 
     private sealed class FixedRandom(int value) : Random
