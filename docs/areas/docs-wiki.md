@@ -26,10 +26,10 @@ and requires it to be covered by the catalog or the exception table, so a lane t
 **Drift fixed** (each was wrong at the lane base, and a test now ties the statement to the code): README and the M1 acceptance page told operators to enable `Auth:AutocreateAccounts` without saying it is off in the shipped
 configuration and not retail; `docs/security/hardening.md` gave `WriterDrainGrace` as 5 s in one place and `00:00:00` (wait forever, the code default) in another, and listed the pre-auth deadline and the inbound queue bounds as
 not delivered although they are; `docs/areas/quests-npc.md` said gossip, vendor and trainer behaviour does not exist; and the creature-AI and live-reload pages named keys without their section prefix, so an operator copying
-`EventAi:UpdateIntervalMs` would have set a key nothing reads.
+an unprefixed `EventAi` key would have set a key nothing reads.
 
 **Findings recorded by the catalog:** the three `World:Chat` flood keys are bound twice, by `ChatFeature` into `ChatOptions` and by `ChatRestrictionFeature` into `ChatRestrictionOptions` (same keys, same defaults, different
-integer types); `Loot:RewardRange` is a computed property, not a key; `World:Perf:*` is a dead alias of `PerformanceLog:*`. The generated page lists each under "Aliases and framework sections".
+integer types); the `RewardRange` property of the loot options is computed, not a key; `World:Perf:*` is a dead alias of `PerformanceLog:*`. The generated page lists each under "Aliases and framework sections".
 
 ## Regenerating, and what the integrator must do
 
