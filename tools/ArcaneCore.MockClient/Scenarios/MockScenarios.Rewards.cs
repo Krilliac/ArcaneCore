@@ -23,20 +23,51 @@ public static partial class MockScenarios
     {
         await AssertVisibleRewardTargetsAsync(server, connection, guid, token).ConfigureAwait(false);
         Check(checks, "reward.live-targets", "Both distinct low health target spawns and the starter/ender exist in the real map and the player's actual visible-object set.");
+        await GreetingListAsync(connection, WorldOpcode.CmsgGossipHello, token).ConfigureAwait(false);
+        Check(checks, "reward.greeting-list", "The combat lifecycle began from a real NPC greeting listing both eligible quests.");
+        await connection.SendAsync(WorldOpcode.CmsgQuestgiverQueryQuest,
+            ScenarioWire.GuidQuest(SyntheticArcaneServer.NpcGuid, SyntheticArcaneServer.RewardQuestId), token).ConfigureAwait(false);
+        ValidateRewardDetails(ScenarioWire.QuestDetails(await connection.ReadUntilAsync(WorldOpcode.SmsgQuestgiverQuestDetails, token).ConfigureAwait(false)));
+        Check(checks, "reward.greeting-details", "Selecting listed 900003 decoded its objectives, fixed reward, both choices and money before real acceptance.");
         await AcceptRewardQuestAsync(server, connection, guid, token).ConfigureAwait(false);
         Check(checks, "reward.accept-fields", "Quest 900003 occupies the empty second journal slot with zero objective counters and no timer.");
+        await GreetingMixedRewardAsync(connection, complete: false, token).ConfigureAwait(false);
+        Check(checks, "reward.greeting-mixed-incomplete", "After acceptance the list contained available 900002/icon five and current incomplete 900003/icon three without changing progress.");
+        await connection.SendAsync(WorldOpcode.CmsgQuestgiverCompleteQuest,
+            ScenarioWire.GuidQuest(SyntheticArcaneServer.NpcGuid, SyntheticArcaneServer.RewardQuestId), token).ConfigureAwait(false);
+        await ReadIncompleteRewardAsync(connection, token, closeOnCancel: 0).ConfigureAwait(false);
+        Check(checks, "reward.greeting-current-selection", "Selecting the current incomplete quest returned the exact progress text and disabled completion flags.");
+        await AcceptTemporaryNpcQuestAsync(connection, guid, token).ConfigureAwait(false);
+        await GreetingIncompleteRewardAsync(connection, token).ConfigureAwait(false);
+        await ChooseRewardAsync(connection, 1, token).ConfigureAwait(false);
+        await connection.AssertNoRewardUntilPongAsync(0x90000320, token).ConfigureAwait(false);
+        ValidateRewardObservation(await ObserveRewardAsync(server, guid, token).ConfigureAwait(false), rewarded: false);
+        await ValidatePersistedRewardAsync(server, guid, rewarded: false, count: 0, token).ConfigureAwait(false);
+        Check(checks, "reward.greeting-incomplete", "With 900002 temporarily accepted into slot two, the sole-current greeting disabled completion and an early real choice granted nothing.");
 
         await KillRewardTargetAsync(server, connection, guid, SyntheticArcaneServer.FirstTargetGuid, 1, token).ConfigureAwait(false);
         await ValidatePersistedRewardAsync(server, guid, rewarded: false, count: 1, token).ConfigureAwait(false);
         Check(checks, "reward.kill-partial", "An exact eight-byte CMSG_ATTACKSWING killed spawn 900021 through MapCombat and produced count one, incomplete journal fields and a saved objective row.");
+        await GreetingIncompleteRewardAsync(connection, token).ConfigureAwait(false);
+        Check(checks, "reward.greeting-partial", "After the first actual kill, greeting retained the progress text and disabled completion flags at objective count one.");
         await KillRewardTargetAsync(server, connection, guid, SyntheticArcaneServer.SecondTargetGuid, 2, token).ConfigureAwait(false);
         await ValidatePersistedRewardAsync(server, guid, rewarded: false, count: 2, token).ConfigureAwait(false);
         Check(checks, "reward.kill-complete", "A second real client swing killed spawn 900022, produced count two and set the journal complete bit while retaining original journal progress.");
+        await GreetingCompletedRewardAsync(connection, token).ConfigureAwait(false);
+        Check(checks, "reward.greeting-complete", "After two actual deaths, the sole-current questgiver hello returned the fully decoded reward offer.");
+        await connection.SendAsync(WorldOpcode.CmsgQuestlogRemoveQuest, [2], token).ConfigureAwait(false);
+        await connection.ReadUntilFieldAsync(guid, TemporaryNpcQuestField, 0, token).ConfigureAwait(false);
+        await ValidatePersistedNpcQuestAsync(server, guid, expectedStatus: 0, token).ConfigureAwait(false);
+        ValidateOriginalJournalDelta(connection.FieldsOf(guid));
+        Check(checks, "reward.greeting-restore-slot", "A real slot-two abandonment restored 900002's prior None history while preserving the completed reward slot and original journal.");
+        await GreetingMixedRewardAsync(connection, complete: true, token).ConfigureAwait(false);
+        Check(checks, "reward.greeting-mixed-complete", "The completed mixed list contained available 900002/icon five and completed unrewarded 900003/icon four.");
 
         await connection.SendAsync(WorldOpcode.CmsgQuestgiverCompleteQuest,
             ScenarioWire.GuidQuest(SyntheticArcaneServer.NpcGuid, SyntheticArcaneServer.RewardQuestId), token).ConfigureAwait(false);
         ValidateRewardOffer(ScenarioWire.QuestOfferReward(await connection.ReadUntilAsync(WorldOpcode.SmsgQuestgiverOfferReward, token).ConfigureAwait(false)));
         Check(checks, "reward.complete-offer", "The twelve-byte complete request returned the full offer reward body with both choices, fixed reward, 1234 copper, emotes and the pinned zero flags/spell suffix.");
+        Check(checks, "reward.greeting-complete-selection", "Selecting completed 900003 from the mixed menu returned the same strict offer before any settlement.");
         await connection.SendAsync(WorldOpcode.CmsgQuestgiverRequestReward,
             ScenarioWire.GuidQuest(SyntheticArcaneServer.NpcGuid, SyntheticArcaneServer.RewardQuestId), token).ConfigureAwait(false);
         ValidateRewardOffer(ScenarioWire.QuestOfferReward(await connection.ReadUntilAsync(WorldOpcode.SmsgQuestgiverOfferReward, token).ConfigureAwait(false)));
@@ -62,6 +93,8 @@ public static partial class MockScenarios
         ValidateRewardObservation(await ObserveRewardAsync(server, guid, token).ConfigureAwait(false), rewarded: true);
         await ValidatePersistedRewardAsync(server, guid, rewarded: true, count: 2, token).ConfigureAwait(false);
         Check(checks, "reward.duplicate-choice", "Repeating the sixteen-byte choice request emitted no reward success or item grant, and live/durable copper and item counts stayed unchanged.");
+        await GreetingAvailableNpcAsync(connection, token).ConfigureAwait(false);
+        Check(checks, "reward.greeting-rewarded", "After settlement and duplicate choice, greeting offered only available 900002 and excluded rewarded nonrepeatable 900003.");
     }
 
     internal static async Task AcceptRewardQuestAsync(SyntheticArcaneServer server, ScenarioConnection connection,

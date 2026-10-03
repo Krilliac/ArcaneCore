@@ -14,11 +14,14 @@ namespace ArcaneCore.World.Npc;
 /// Handlers/QuestHandler.cpp; gtker/wow_messages 70abb9deff0bb63440d8aeb4386b820653e8a176
 /// quest/cmsg_questgiver_accept_quest.wowm, queries/cmsg_questgiver_query_quest.wowm,
 /// quest/cmsg_questlog_remove_quest.wowm. Vanilla GUIDs are full u64, no later-build suffixes.
+/// Both greeting opcodes use vmangos PrepareGossipMenu/SendPreparedGossip for the creature.
 /// </summary>
 public sealed class QuestNpcInteractionHandlers : IOpcodeHandlerGroup
 {
     public void Register(OpcodeTable table)
     {
+        table.OnWorld(WorldOpcode.CmsgGossipHello, GossipHello);
+        table.OnWorld(WorldOpcode.CmsgQuestgiverHello, GossipHello);
         table.OnWorld(WorldOpcode.CmsgQuestgiverStatusQuery, Status);
         table.OnWorld(WorldOpcode.CmsgQuestgiverQueryQuest, Details);
         table.OnWorld(WorldOpcode.CmsgQuestgiverAcceptQuest, Accept);
@@ -29,6 +32,9 @@ public sealed class QuestNpcInteractionHandlers : IOpcodeHandlerGroup
     }
 
     private static QuestNpcServices Services(WorldSession session) => session.Services.GetRequiredService<QuestNpcFeature>().Services;
+
+    private static void GossipHello(WorldSession session, Player player, byte[] payload)
+        => Services(session).GossipHello(player, ReadGuid(payload));
 
     private static void Status(WorldSession session, Player player, byte[] payload)
     {
@@ -82,6 +88,13 @@ public sealed class QuestNpcInteractionHandlers : IOpcodeHandlerGroup
         RequireLength(payload, 12);
         var reader = new PacketReader(payload);
         return (new ObjectGuid(reader.ReadUInt64()), reader.ReadUInt32());
+    }
+
+    private static ObjectGuid ReadGuid(byte[] payload)
+    {
+        RequireLength(payload, 8);
+        var reader = new PacketReader(payload);
+        return new ObjectGuid(reader.ReadUInt64());
     }
 
     private static void RequireLength(byte[] payload, int expected)

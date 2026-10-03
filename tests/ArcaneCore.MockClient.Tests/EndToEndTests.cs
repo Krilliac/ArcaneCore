@@ -20,7 +20,7 @@ public sealed class EndToEndTests
         Assert.Equal((ushort)5875, report.ClientBuild);
         Assert.True(report.CharacterGuid > 0);
         Assert.True(report.FramesReceived >= 30);
-        Assert.True(report.CheckCount >= 41);
+        Assert.Equal(59, report.CheckCount);
         Assert.Equal(report.CheckCount, report.Checks.Select(check => check.Name).Distinct().Count());
         Assert.All(report.Checks, check => Assert.True(check.Passed, check.Detail));
         Assert.Contains(report.Checks, check => check.Name == "realm.srp");
@@ -46,6 +46,21 @@ public sealed class EndToEndTests
         Assert.Contains(report.Checks, check => check.Name == "reward.duplicate-choice");
         Assert.Contains(report.Checks, check => check.Name == "reward.relogin-fields");
         Assert.Contains(report.Checks, check => check.Name == "reward.relogin-history");
+        Assert.Contains(report.Checks, check => check.Name == "npc.greeting-list");
+        Assert.Contains(report.Checks, check => check.Name == "npc.questgiver-hello");
+        Assert.Contains(report.Checks, check => check.Name == "npc.greeting-selection");
+        Assert.Contains(report.Checks, check => check.Name == "npc.greeting-relogin");
+        Assert.Contains(report.Checks, check => check.Name == "npc.greeting-abandon");
+        Assert.Contains(report.Checks, check => check.Name == "reward.greeting-mixed-incomplete");
+        Assert.Contains(report.Checks, check => check.Name == "reward.greeting-current-selection");
+        Assert.Contains(report.Checks, check => check.Name == "reward.greeting-incomplete");
+        Assert.Contains(report.Checks, check => check.Name == "reward.greeting-partial");
+        Assert.Contains(report.Checks, check => check.Name == "reward.greeting-complete");
+        Assert.Contains(report.Checks, check => check.Name == "reward.greeting-mixed-complete");
+        Assert.Contains(report.Checks, check => check.Name == "reward.greeting-complete-selection");
+        Assert.Contains(report.Checks, check => check.Name == "reward.greeting-restore-slot");
+        Assert.Contains(report.Checks, check => check.Name == "reward.greeting-rewarded");
+        Assert.Contains(report.Checks, check => check.Name == "reward.greeting-relogin");
         Assert.Contains(report.Checks, check => check.Name == "fixture.disposed");
     }
 
