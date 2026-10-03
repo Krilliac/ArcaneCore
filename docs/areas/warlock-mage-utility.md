@@ -33,3 +33,21 @@ the observer order. No script ships in this slice: the scripts of later slices r
 Tests: `tests/ArcaneCore.Game.Tests/Spells/Utility/SpellScriptTests.cs` (12 tests: hook order, the late-check ordering, power already
 taken at `OnCast`, no unsupported-effect log, dispel only on removal, duplicate/unknown/unmarked scripts, double install, chaining
 before and after).
+
+## wlm-03 Pet and minion targets (`Game/Spells/Utility/Targets`, `World/Spells/Utility/PetTargetFeature.cs`)
+
+Three implicit targets the built-in switch did not serve (they were logged as "implicit target N is not implemented" and hit nothing):
+
+| Target | Meaning | vmangos |
+|---|---|---|
+| 5 `UNIT_CASTER_PET` | the caster's pet (`UNIT_FIELD_SUMMON`), else the creature it charms (`UNIT_FIELD_CHARM`) | Spell.cpp:2212-2222 |
+| 27 `UNIT_CASTER_MASTER` | the charmer or owner of the caster (Sacrifice) | Spell.cpp:2770-2772 |
+| 32 `LOCATION_UNIT_MINION_POSITION` | caster position + (effect radius, orientation + 0.25 pi); radius 0 when the effect has no radius index; location-only, the caster carries the effect (every Summon Pet spell) | Spell.cpp:2975-3022 |
+
+`CasterPetCastCheck` (phase `Items`, before the equipment check) is the "check pet presents" block (Spell.cpp:5545-5568): no pet is
+`NO_PET`, a dead pet `TARGETS_DEAD`, and a triggered cast is `DONT_REPORT`. Limits: vmangos answers `DONT_REPORT` only for a cast triggered
+by an aura (`m_triggeredByAuraSpell`); the check context carries only "triggered", so every triggered cast is silent. The pet line-of-sight
+check (:5567) is not made. The point of target 32 is the unclamped offset at the caster's Z (vmangos `GetFirstCollisionPosition`; the same
+limit as the existing caster-relative locations 41-47). Installing twice throws (a second selector for one target id fails closed).
+
+Tests: `tests/ArcaneCore.Game.Tests/Spells/Utility/PetTargetTests.cs` (9 tests, run RED against an empty `Install` first: 7 failed).
