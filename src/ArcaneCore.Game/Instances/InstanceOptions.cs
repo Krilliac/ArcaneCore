@@ -34,6 +34,9 @@ public sealed class InstanceOptions
     /// </summary>
     public int HomebindTimerMs { get; set; } = 60_000;
 
+    /// <summary>A creature kill in a normal dungeon moves the reset time to respawn + 2 h when later (vmangos Map::BindToInstanceOrRaid, Map.cpp:3536-3544). Default on (retail).</summary>
+    public bool ResetExtendsOnKills { get; set; } = true;
+
     /// <summary>Let players enter raids without a raid group (vmangos <c>Instance.IgnoreRaid</c>, default off).</summary>
     public bool IgnoreRaidGroup { get; set; }
 

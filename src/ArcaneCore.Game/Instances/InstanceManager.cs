@@ -728,13 +728,6 @@ public sealed partial class InstanceManager : IMapResolver
         return map;
     }
 
-    private void OnUnitKilled(Map map, Unit? killer, Unit victim)
-    {
-        if (victim is Creature creature && (creature.Template.ExtraFlags & CreatureFlagExtraInstanceBind) != 0 && killer is Player player)
-        {
-            PermBindAllPlayers(map, player);
-        }
-    }
 
     // vmangos DungeonMap::BindPlayerOrGroupOnEnter.
     private void BindPlayerOrGroupOnEnter(Player player, InstanceSave save, Map map)
