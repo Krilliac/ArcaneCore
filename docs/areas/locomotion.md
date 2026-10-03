@@ -134,3 +134,30 @@ vmangos' anticheat (`MovementAnticheat.cpp:750-870`) are not delivered (opt-in h
 (`LocomotionEnvironment.RegisterMitigation`); the default mitigates nothing, so lava is not reduced by fire resistance
 and fire immunity does not protect until that lane registers an implementation. `DealDamageMods` (`:763`) is not
 ported: it only changes damage for GM-like invulnerability states and game masters are excluded already.
+## Slice 4: fall-damage (delivered)
+
+`FallObserver` (`Locomotion/Falling/FallObserver.cs`, `[MovementObserver(Order = 20)]`, a `Before` observer because
+`HandleFall` reads the previously stored flags) ports `Player::UpdateFallInformationIfNeed` and `Player::HandleFall`
+(vmangos `Player.cpp:20799-20870`, called from `HandleMovementOpcodes`, `MovementHandler.cpp:333-344`).
+
+* **Fall start** (`m_fallStartZ`, `LocomotionState.FallStartZ`): a block with Jumping or FallingFar records the height
+  (again when the player rises above it); `MSG_MOVE_FALL_LAND`, `MSG_MOVE_START_SWIM`, a Hover or SafeFall flag, or a
+  block with neither Jumping nor FallingFar forgets it (`:20799-20817`). A teleport, spell relocation, taxi stop or
+  login does too (`Unit.Relocate` resets it; vmangos `SetFallInformation(0)` at `Player.cpp:1932,2082,15051`).
+* **Landing damage** on `MSG_MOVE_FALL_LAND` (not while taxi flying): the previously stored block must have FallingFar,
+  the reported fall time must be at least 1229 ms (`:20832`), the landing must not be above the start height, and the
+  distance at least 14.57 yards (`:20845`); not a dead player, a game master, or a unit with a Hover (106) or Feather Fall
+  (105) aura. Safe Fall (144) amounts are summed and subtracted from the distance; damage is
+  `(uint)((0.018f * (zDiff - safeFall) - 0.2426f) * maxHealth * Locomotion:RateDamageFall * takenMod)` capped at the
+  maximum health (`:20850-20867`), float arithmetic and truncation as in vmangos, dealt as `EnvironmentalDamage` FALL
+  (slice 3: log, self damage, durability and death consequences). The 14.57 gate, not the formula's own zero (13.48
+  yards), is what first yields damage. Worked values are in `FallDamageTests` (z 14.56 -> 0, 14.57 at 1000 hp -> 19,
+  30 at 2000 hp -> 594, 40 at 3000 hp -> 1432, 75 at 3000 hp -> 3000 capped).
+* **Seam:** `takenMod` (the physical damage-taken-percent auras, `:20854`) belongs to the spell combat rules and is 1 until
+  `LocomotionEnvironment.RegisterFallModifiers` is used (`IFallDamageModifiers`). Safe Fall, Hover and Feather Fall are
+  read from the aura ledger, which `MovementFlagAuras` (slice 2) fills; any other lane's aura of those types is not seen
+  unless it records itself in the ledger.
+* **Not delivered:** `SetJumpInitialSpeed` (extrapolation only); the knockback "launched" reset and the knockback-ack fall
+  reset (no knockback in this wave); transports do not exist, so the transport branches compare the block's transport
+  fields but never meet a transport. Real clients report fall time and z in their own way: damage numbers were checked
+  against the formula, not against a 1.12.1 client.

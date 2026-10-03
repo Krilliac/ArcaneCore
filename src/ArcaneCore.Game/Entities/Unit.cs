@@ -153,6 +153,14 @@ public abstract class Unit : WorldObject
     public void Relocate(float x, float y, float z, float orientation, uint serverTimeMs)
     {
         MovementFlags kept = _movement.Flags & ServerOwnedFlags;
+
+        // A teleport, spell relocation, taxi stop or login ends any fall in progress (vmangos SetFallInformation(0),
+        // Player.cpp:1932,2082,15051).
+        if (global::ArcaneCore.Game.Locomotion.LocomotionStates.TryGet(this, out global::ArcaneCore.Game.Locomotion.LocomotionState state))
+        {
+            state.ResetFall();
+        }
+
         SetPosition(x, y, z, orientation);
         _movement = new MovementInfo
         {

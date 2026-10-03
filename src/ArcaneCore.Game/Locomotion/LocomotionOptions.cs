@@ -83,6 +83,23 @@ public sealed class LocomotionEnvironment
         s_mitigations.AddOrUpdate(world, mitigation);
     }
 
+    private static readonly ConditionalWeakTable<WorldRuntime, IFallDamageModifiers> s_fallModifiers = new();
+
+    /// <summary>Use <paramref name="modifiers"/> for the fall damage of <paramref name="world"/> (the spell combat rules feature registers it).</summary>
+    public static void RegisterFallModifiers(WorldRuntime world, IFallDamageModifiers modifiers)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(modifiers);
+        s_fallModifiers.AddOrUpdate(world, modifiers);
+    }
+
+    /// <summary>The registered fall modifiers, or the pass-through ones.</summary>
+    public static IFallDamageModifiers FallModifiersFor(WorldRuntime world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        return s_fallModifiers.TryGetValue(world, out IFallDamageModifiers? modifiers) ? modifiers : NoFallDamageModifiers.Instance;
+    }
+
     /// <summary>The registered mitigation, or the pass-through one.</summary>
     public static IEnvironmentalDamageMitigation MitigationFor(WorldRuntime world)
     {
