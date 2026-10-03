@@ -250,7 +250,7 @@ public sealed class AmountModTests
         kit.System.LearnSpell(caster, MultiplyMod);
         Cast(kit, caster, Leech, target);
 
-        // Damage 20, multiple 0.5 -> heals 10; with a +100% MULTIPLE_VALUE mod the multiple is 1.0 -> heals 20 (vmangos SpellEffects.cpp:1804).
+        // Damage 20, multiple 0.5 -> heals 10; with a +100% MULTIPLE_VALUE mod the multiple is 1.0 -> heals 20 (vmangos SpellEffects.cpp:1868).
         Assert.Equal([10u, 20u], sink.Healing);
     }
 

@@ -14,7 +14,7 @@ internal static class PassiveReapply
     [ThreadStatic]
     private static int _depth;
 
-    /// <summary>A recast passive that is itself a modifier would re-enter; two levels cover the retail talent chains.</summary>
+    /// <summary>A recast passive that is itself a modifier would re-enter. vmangos has no limit; this is a safety guard against a cycle, and that two levels cover the retail talent chains is unverified (docs/areas/spell-mods.md, Limits).</summary>
     private const int MaxDepth = 2;
 
     public static void Run(SpellSystem system, SpellModEngine engine, Player player, SpellMod mod, SpellInfo modSpell)

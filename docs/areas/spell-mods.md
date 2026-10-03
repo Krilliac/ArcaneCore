@@ -67,7 +67,7 @@ Improved Fire Ward (11094, 13043, mask `0x8`) are flat RESIST_MISS_CHANCE mods b
 | CRITICAL_CHANCE, CRIT_DAMAGE_BONUS, RESIST_MISS_CHANCE (magic), RESIST_DISPEL_CHANCE, MULTIPLE_VALUE (mana shield), NOT_LOSE_CASTING_TIME | the sites the `ISpellModifiers` seam already had | `Unit.cpp:5311-5314`, `SpellCaster.cpp:958-980`, `:841`, `SpellEffects.cpp:2548`, `Unit.cpp:2062`, `Spell.cpp:7482` |
 | RESIST_MISS_CHANCE (melee) | `MeleeSpellHitResult`: a hit-chance bonus that lowers the miss chance | `SpellCaster.cpp:381-388` |
 | THREAT | `SpellThreat.Add`, before the MOD_THREAT auras | `ThreatManager.cpp:41-44` |
-| MULTIPLE_VALUE | health leech effect, leech aura tick, mana leech tick | `SpellEffects.cpp:1804`, `SpellAuras.cpp:6008`, `:6171-6175` |
+| MULTIPLE_VALUE | health leech effect, leech aura tick, mana leech tick | `SpellEffects.cpp:1868`, `SpellAuras.cpp:6008`, `:6171-6175` |
 
 ### Charges (`Player::DropModCharge`, `RestoreSpellMods`, `RemoveSpellMods`, `Player.cpp:17617-17783`)
 
@@ -126,6 +126,9 @@ count. `SpellModFeature` and `TalentModCoverage` print the numbers, which is the
   cast reads its owner's mods but never spends the owner's charges (vmangos guards the restore and remove calls with `IsPlayer`, so a pet
   would leave the mod stuck at -1). A saved charged aura comes back with the holder's charges, as in vmangos, which does not mirror
   consumption to the holder.
+- **Unswitched deviations, awaiting a developer decision** (no `Spells:Mods` option exists for either; the standing directive wants a default-retail switch, and neither retail behaviour is a sensible default):
+  (1) a pet's or totem's cast reads its owner's mods but never spends the owner's charges (`SpellModEngine.CreateScope` returns no scope for a non-player). In vmangos the spell's `m_appliedMods` does record the spend (`DropModCharge`) but `Spell::finish` and `cancel` only call `RemoveSpellMods`/`RestoreSpellMods` when `m_caster->IsPlayer()` (`Spell.cpp:3534`, `:3564`, `:4399`), so retail leaves the owner's mod stuck at -1; a switch would reproduce that bug.
+  (2) `PassiveReapply` stops re-entering after depth 2 (a recast passive that is itself a modifier). vmangos has no limit; the depth is a safety guard against a cycle of mutually affecting passives, and the claim that two levels cover the retail talent chains is **unverified** (no `Spell.dbc` here).
 - **Pets and totems** are not refreshed by `ReapplyAffectedPassiveAuras` when the owner's mod changes (`CallForAllControlledUnits`,
   `:1067-1073`).
 - **Mask data**: vmangos corrects 99 masks from the classic SpellEffect.db2 in `sql/migrations/20240926142033_world.sql` (23 of them above
