@@ -174,6 +174,10 @@ public sealed class WorldSession : IPlayerSession
     {
         for (int budget = _options.MaxWorldPacketsPerTick; budget > 0 && _worldQueue.TryDequeue(out QueuedPacket packet); budget--)
         {
+            if (_kick.IsCancellationRequested)
+            {
+                return;
+            }
             if (_state != SessionState.InWorld || !ReferenceEquals(Player, player))
             {
                 continue;

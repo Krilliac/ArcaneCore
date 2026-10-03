@@ -25,9 +25,12 @@ public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFac
 {
     /// <summary>How often grouped players' changed stats go to out-of-range members (vmangos sends them from the player update).</summary>
     public const int StatsIntervalMs = 1000;
+    private const int MaxDeferredCommands = 128;
 
     private readonly ILogger _logger = loggers.CreateLogger<SocialFeature>();
     private readonly HashSet<ObjectGuid> _ready = [];
+    private readonly Dictionary<Player, List<Action<SocialContext>>> _pendingCommands = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<Player> _rejectedCommands = new(ReferenceEqualityComparer.Instance);
     private SocialWriteQueue? _writes;
     private Timer? _statsTimer;
     private Task _guildsLoaded = Task.CompletedTask;
@@ -50,6 +53,47 @@ public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFac
 
     /// <summary>Writes queued or in progress.</summary>
     public int PendingWrites => _writes?.Pending ?? 0;
+
+    /// <summary>
+    /// World thread: defer parsed social commands until this exact player's stored list is
+    /// installed. Commands from a departed session cannot mutate a replacement with its GUID.
+    /// </summary>
+    public void ExecuteWhenReady(Player player, Action<SocialContext> action)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(action);
+        if (_world is not { } world || !world.IsWorldThread)
+        {
+            throw new InvalidOperationException("social commands require the attached world thread");
+        }
+
+        if (_stopping || _rejectedCommands.Contains(player) || !ReferenceEquals(world.FindOnlinePlayer(player.Guid), player))
+        {
+            return;
+        }
+
+        if (_ready.Contains(player.Guid))
+        {
+            action(Context);
+            return;
+        }
+
+        if (!_pendingCommands.TryGetValue(player, out List<Action<SocialContext>>? pending))
+        {
+            _pendingCommands[player] = pending = [];
+        }
+
+        if (pending.Count >= MaxDeferredCommands)
+        {
+            _pendingCommands.Remove(player);
+            _rejectedCommands.Add(player);
+            _logger.LogWarning("deferred social command limit exceeded for {Player}; disconnecting", player.Name);
+            player.Session.Kick();
+            return;
+        }
+
+        pending.Add(action);
+    }
 
     public void Attach(WorldRuntime world)
     {
@@ -196,7 +240,8 @@ public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFac
 
     private void CompleteLogin(Player player, IReadOnlyList<SocialEntry> entries)
     {
-        if (_stopping || !ReferenceEquals(_world!.FindOnlinePlayer(player.Guid), player))
+        WorldRuntime world = _world!;
+        if (_stopping || !ReferenceEquals(world.FindOnlinePlayer(player.Guid), player))
         {
             return; // logged out meanwhile
         }
@@ -220,6 +265,25 @@ public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFac
         context.Groups.OnLoggedIn(player);
         context.Friends.BroadcastPresence(player, online: true);
         _ready.Add(player.Guid);
+        if (_pendingCommands.Remove(player, out List<Action<SocialContext>>? pending))
+        {
+            foreach (Action<SocialContext> action in pending)
+            {
+                if (_stopping || !ReferenceEquals(world.FindOnlinePlayer(player.Guid), player))
+                {
+                    break;
+                }
+
+                try
+                {
+                    action(context);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "deferred social command failed for {Player}", player.Name);
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -229,6 +293,8 @@ public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFac
     /// </summary>
     private void OnLoggingOut(Player player)
     {
+        _pendingCommands.Remove(player);
+        _rejectedCommands.Remove(player);
         SocialContext context = Context;
         bool ready = _ready.Remove(player.Guid);
         if (ready)

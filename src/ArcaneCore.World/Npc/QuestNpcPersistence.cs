@@ -119,6 +119,28 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
         }
     }
 
+    /// <summary>Adopt an already committed reward without scheduling a second quest write.</summary>
+    public void AdoptRewarded(CharacterQuestStatus row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        if (!row.Rewarded)
+        {
+            throw new ArgumentException("only a durable rewarded row may be adopted", nameof(row));
+        }
+
+        lock (_gate)
+        {
+            CharacterState state = WritableCharacter(row.CharacterId);
+            if (state.Pending != 0 || state.Failure is not null)
+            {
+                throw new InvalidOperationException("quest writes must drain before adopting a reward");
+            }
+
+            state.Quests[row.Quest] = row;
+            state.Revision = checked(state.Revision + 1);
+        }
+    }
+
     /// <summary>
     /// Wait for this character's earlier writes. If one failed, retry the complete snapshot
     /// captured at this barrier; an unsuccessful recovery refuses login and keeps that data.

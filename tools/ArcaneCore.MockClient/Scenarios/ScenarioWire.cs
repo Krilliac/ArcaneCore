@@ -9,6 +9,8 @@ namespace ArcaneCore.MockClient.Scenarios;
 /// Independent request encodings and bounded response decoders for the synthetic build 5875 fixture.
 /// Layout reference: gtker/wow_messages, commit 70abb9deff0bb63440d8aeb4386b820653e8a176,
 /// wow_message_parser/wowm/world/{character_screen,quest,gameobject,login_logout}.
+/// Reward and kill bodies: vmangos/core, commit 4b3d241cffe245a1f68da11380bce96c23db48c0,
+/// src/game/Server/Packets/Quest.cpp. These decoders implement the build 5875 field layout.
 /// No production packet builder or reader participates in these assertions.
 /// </summary>
 internal static class ScenarioWire
@@ -44,6 +46,15 @@ internal static class ScenarioWire
         byte[] payload = new byte[12];
         BinaryPrimitives.WriteUInt64LittleEndian(payload, guid);
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(8), quest);
+        return payload;
+    }
+
+    internal static byte[] GuidQuestChoice(ulong guid, uint quest, uint choice)
+    {
+        byte[] payload = new byte[16];
+        BinaryPrimitives.WriteUInt64LittleEndian(payload, guid);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(8), quest);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(12), choice);
         return payload;
     }
 
@@ -110,11 +121,34 @@ internal static class ScenarioWire
     internal static MockSelfCreate SelfCreate(byte[] body)
     {
         var cursor = new WireCursor(body);
-        Require(cursor.UInt32() == 1, "Synthetic initial update must contain one self create block.");
+        uint count = cursor.UInt32();
+        Require(count is > 0 and <= 128, "Synthetic initial update exceeded the block limit.");
         Require(cursor.Byte() == 0, "Synthetic self create cannot contain a transport.");
-        Require(cursor.Byte() == 2, "Initial self update must use CREATE_OBJECT.");
-        ulong guid = cursor.PackedGuid();
-        Require(cursor.Byte() == 4, "Self create must describe a player.");
+        MockSelfCreate? self = null;
+        for (uint index = 0; index < count; index++)
+        {
+            byte type = cursor.Byte();
+            Require(type is 2 or 3, "Initial update must contain create blocks.");
+            ulong guid = cursor.PackedGuid();
+            byte objectType = cursor.Byte();
+            if (objectType != 4)
+            {
+                SkipMovement(cursor);
+                _ = ReadFields(cursor);
+                continue;
+            }
+
+            Require(type == 2, "Initial self update must use CREATE_OBJECT.");
+            Require(self is null, "Synthetic initial update contains more than one self player.");
+            self = ReadSelfCreate(cursor, guid);
+        }
+
+        cursor.End();
+        return self ?? throw new MockProtocolException("Synthetic initial update lacks its self player.");
+    }
+
+    private static MockSelfCreate ReadSelfCreate(WireCursor cursor, ulong guid)
+    {
         Require(cursor.Byte() == 0x71, "Self create must advertise SELF, ALL, LIVING and HAS_POSITION.");
         Require(cursor.UInt32() == 0, "Unmoving fixture must not advertise optional movement fields.");
         _ = cursor.UInt32(); // movement clock is dynamic
@@ -131,8 +165,8 @@ internal static class ScenarioWire
 
         Require(cursor.UInt32() == 1, "Self create ALL trailer must equal one.");
         IReadOnlyDictionary<int, uint> values = ReadFields(cursor);
-        cursor.End();
-        Require(values.GetValueOrDefault(0) == (uint)guid && values.GetValueOrDefault(1) == (uint)(guid >> 32),
+        Require(values.TryGetValue(0, out uint low) && values.TryGetValue(1, out uint high)
+            && low == (uint)guid && high == (uint)(guid >> 32),
             "Self create object fields must contain its full GUID.");
         Require(values.GetValueOrDefault(2) == 0x19, "Self create object field type must be player.");
         Require(float.IsFinite(x) && float.IsFinite(y) && float.IsFinite(z) && float.IsFinite(orientation),
@@ -217,10 +251,64 @@ internal static class ScenarioWire
         return new MockQuestDetails(guid, quest, title, details, objectives, activateAccept, choices, rewards, money, spell, emotes);
     }
 
+    internal static MockQuestOfferReward QuestOfferReward(byte[] payload)
+    {
+        var cursor = new WireCursor(payload);
+        ulong guid = cursor.UInt64();
+        uint quest = cursor.UInt32();
+        string title = cursor.CString(1024);
+        string text = cursor.CString(8192);
+        uint enableNext = cursor.UInt32();
+        uint emoteCount = cursor.UInt32();
+        Require(emoteCount <= 4, "Quest offer reward emote count exceeds its vanilla limit.");
+        var emotes = new MockQuestEmote[(int)emoteCount];
+        for (int index = 0; index < emotes.Length; index++)
+        {
+            // Offer reward reverses the emote/delay order used by quest details.
+            uint delay = cursor.UInt32();
+            emotes[index] = new MockQuestEmote(cursor.UInt32(), delay);
+        }
+
+        MockQuestReward[] choices = ReadRewards(cursor, 6);
+        MockQuestReward[] rewards = ReadRewards(cursor, 4);
+        int money = unchecked((int)cursor.UInt32());
+        uint flags = cursor.UInt32();
+        uint spell = cursor.UInt32();
+        cursor.End();
+        return new MockQuestOfferReward(guid, quest, title, text, enableNext, emotes, choices, rewards, money, flags, spell);
+    }
+
+    internal static MockQuestComplete QuestComplete(byte[] payload)
+    {
+        var cursor = new WireCursor(payload);
+        uint quest = cursor.UInt32();
+        uint type = cursor.UInt32();
+        uint experience = cursor.UInt32();
+        uint money = cursor.UInt32();
+        uint rewardCount = cursor.UInt32();
+        Require(rewardCount <= 4, "Quest completion reward count exceeds its vanilla limit.");
+        var rewards = new MockQuestCompletedReward[(int)rewardCount];
+        for (int index = 0; index < rewards.Length; index++)
+        {
+            rewards[index] = new MockQuestCompletedReward(cursor.UInt32(), cursor.UInt32());
+        }
+
+        cursor.End();
+        return new MockQuestComplete(quest, type, experience, money, rewards);
+    }
+
+    internal static MockQuestKill QuestKill(byte[] payload)
+    {
+        var cursor = new WireCursor(payload);
+        var result = new MockQuestKill(cursor.UInt32(), cursor.UInt32(), cursor.UInt32(), cursor.UInt32(), cursor.UInt64());
+        cursor.End();
+        return result;
+    }
+
     private static MockQuestReward[] ReadRewards(WireCursor cursor, uint maximum)
     {
         uint count = cursor.UInt32();
-        Require(count <= maximum, "Quest details reward count exceeds its vanilla limit.");
+        Require(count <= maximum, "Quest reward count exceeds its vanilla limit.");
         var rewards = new MockQuestReward[(int)count];
         for (int index = 0; index < rewards.Length; index++)
         {
@@ -471,3 +559,12 @@ internal sealed record MockQuestEmote(uint Id, uint Delay);
 
 internal sealed record MockQuestDetails(ulong Guid, uint QuestId, string Title, string Details, string Objectives,
     uint ActivateAccept, MockQuestReward[] Choices, MockQuestReward[] Rewards, int Money, uint Spell, MockQuestEmote[] Emotes);
+
+internal sealed record MockQuestOfferReward(ulong Guid, uint QuestId, string Title, string Text, uint EnableNext,
+    MockQuestEmote[] Emotes, MockQuestReward[] Choices, MockQuestReward[] Rewards, int Money, uint Flags, uint Spell);
+
+internal sealed record MockQuestCompletedReward(uint ItemId, uint Count);
+
+internal sealed record MockQuestComplete(uint QuestId, uint Type, uint Experience, uint Money, MockQuestCompletedReward[] Rewards);
+
+internal sealed record MockQuestKill(uint QuestId, uint CreatureId, uint Count, uint RequiredCount, ulong Guid);

@@ -25,43 +25,48 @@ public sealed class SocialHandlers : IOpcodeHandlerGroup
 
     internal static SocialContext Social(WorldSession session) => session.Services.GetRequiredService<SocialFeature>().Context;
 
+    private static SocialFeature Feature(WorldSession session) => session.Services.GetRequiredService<SocialFeature>();
+
     /// <summary>CMSG_FRIEND_LIST (empty): the friend and ignore lists (vmangos HandleFriendListOpcode → SendSocialList).</summary>
     private static void HandleFriendList(WorldSession session, Player player, byte[] payload)
     {
-        SocialContext social = Social(session);
-        if (social.Friends.IsLoaded(player))
+        Feature(session).ExecuteWhenReady(player, social =>
         {
             social.Friends.SendFriendList(player);
             social.Friends.SendIgnoreList(player);
-        }
+        });
     }
 
     /// <summary>CMSG_ADD_FRIEND: CString name (vmangos HandleAddFriendOpcode).</summary>
     private static void HandleAddFriend(WorldSession session, Player player, byte[] payload)
     {
         var reader = new PacketReader(payload);
-        Social(session).Friends.AddFriend(player, CharacterNames.Normalize(reader.ReadCString()));
+        string name = CharacterNames.Normalize(reader.ReadCString());
+        Feature(session).ExecuteWhenReady(player, social => social.Friends.AddFriend(player, name));
     }
 
     /// <summary>CMSG_DEL_FRIEND: u64 guid (vmangos HandleDelFriendOpcode).</summary>
     private static void HandleDelFriend(WorldSession session, Player player, byte[] payload)
     {
         var reader = new PacketReader(payload);
-        Social(session).Friends.RemoveFriend(player, new ObjectGuid(reader.ReadUInt64()));
+        var friend = new ObjectGuid(reader.ReadUInt64());
+        Feature(session).ExecuteWhenReady(player, social => social.Friends.RemoveFriend(player, friend));
     }
 
     /// <summary>CMSG_ADD_IGNORE: CString name (vmangos HandleAddIgnoreOpcode).</summary>
     private static void HandleAddIgnore(WorldSession session, Player player, byte[] payload)
     {
         var reader = new PacketReader(payload);
-        Social(session).Friends.AddIgnore(player, CharacterNames.Normalize(reader.ReadCString()));
+        string name = CharacterNames.Normalize(reader.ReadCString());
+        Feature(session).ExecuteWhenReady(player, social => social.Friends.AddIgnore(player, name));
     }
 
     /// <summary>CMSG_DEL_IGNORE: u64 guid (vmangos HandleDelIgnoreOpcode).</summary>
     private static void HandleDelIgnore(WorldSession session, Player player, byte[] payload)
     {
         var reader = new PacketReader(payload);
-        Social(session).Friends.RemoveIgnore(player, new ObjectGuid(reader.ReadUInt64()));
+        var ignored = new ObjectGuid(reader.ReadUInt64());
+        Feature(session).ExecuteWhenReady(player, social => social.Friends.RemoveIgnore(player, ignored));
     }
 
     /// <summary>

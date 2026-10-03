@@ -24,7 +24,7 @@ public sealed record MockScenarioReport(string Outcome, ushort ClientBuild, ulon
 /// Exercises the production realm, world sessions, database stores and features using independently
 /// encoded client packets. It owns both listeners and every synthetic account and character.
 /// </summary>
-public static class MockScenarios
+public static partial class MockScenarios
 {
     private const string AccountName = "MOCKACCOUNT";
     private const string Password = "MOCKPASSWORD";
@@ -176,8 +176,37 @@ public static class MockScenarios
                 ValidateNpcSlot(finalLogin.Self.Fields, accepted: false);
                 await ValidatePersistedNpcQuestAsync(server, characterGuid, expectedStatus: 0, token).ConfigureAwait(false);
                 Check(checks, "npc.abandon-relogin", "A second fresh realm/world reconnect left the abandoned slot empty and the separate journal unchanged.");
+                await RunRewardFlowAsync(server, connection, characterGuid, checks, token).ConfigureAwait(false);
+                await WaitForCombatExitAsync(server, connection, characterGuid, token).ConfigureAwait(false);
                 await connection.LogoutAsync(token).ConfigureAwait(false);
                 Require(server.World.OnlinePlayerCount == 0, "Final logout left the character online.");
+                await ValidatePersistedRewardAsync(server, characterGuid, rewarded: true, count: 2, token).ConfigureAwait(false);
+                framesReceived += connection.FramesReceived;
+            }
+
+            LogonResult rewardRelog = await LogonClient.AuthenticateAsync(server.RealmEndpoint, AccountName, Password, token).ConfigureAwait(false);
+            await AssertStoredSessionAsync(server, accountId, rewardRelog, token).ConfigureAwait(false);
+            await using (WorldClient client = await WorldClient.ConnectAsync(RealmEndpoint(server, rewardRelog), token).ConfigureAwait(false))
+            {
+                Require(await client.AuthenticateAsync(AccountName, rewardRelog.SessionKey, token).ConfigureAwait(false) == 0x0C,
+                    "Reward relog rejected the fresh realm-derived session key.");
+                framesReceived += 3;
+                var connection = new ScenarioConnection(client);
+                MockCharacter saved = SingleCharacter(await connection.EnumerateAsync(token).ConfigureAwait(false));
+                Require(saved.Guid == characterGuid, "Reward reconnect enumerated a different character.");
+                MockLogin rewardedLogin = await connection.LoginAsync(characterGuid, token).ConfigureAwait(false);
+                ValidateLogin(saved, rewardedLogin);
+                ValidateJournal(rewardedLogin.Self);
+                ValidateNpcSlot(rewardedLogin.Self.Fields, accepted: false);
+                RewardObservation reward = await ObserveRewardAsync(server, characterGuid, token).ConfigureAwait(false);
+                ValidateRewardObservation(reward, rewarded: true);
+                ValidateRewardWireFields(connection, characterGuid, reward);
+                await ValidatePersistedRewardAsync(server, characterGuid, rewarded: true, count: 2, token).ConfigureAwait(false);
+                await ValidatePersistedJournalAsync(server, characterGuid, token).ConfigureAwait(false);
+                Check(checks, "reward.relogin-fields", "Fresh realm/world authentication restored 1234 copper and fixed/chosen item creates while keeping the rewarded quest slot clear.");
+                Check(checks, "reward.relogin-history", "The real quest store retained complete rewarded history, two kills and chosen item entry 900042; the original journal still has one kill.");
+                await connection.LogoutAsync(token).ConfigureAwait(false);
+                Require(server.World.OnlinePlayerCount == 0, "Reward relog logout left the character online.");
                 await connection.SendAsync(WorldOpcode.CmsgCharDelete, ScenarioWire.Guid(characterGuid), token).ConfigureAwait(false);
                 byte[] deletion = await connection.ExpectAsync(WorldOpcode.SmsgCharDelete, token).ConfigureAwait(false);
                 Require(deletion.AsSpan().SequenceEqual(new byte[] { 0x39 }), "Final character deletion did not succeed.");
@@ -209,7 +238,7 @@ public static class MockScenarios
             && stored.SessionKey.AsSpan().SequenceEqual(result.SessionKey), "The real realm store did not persist the client-derived session key.");
     }
 
-    private static async Task SeedJournalAsync(SyntheticArcaneServer server, ulong guid, CancellationToken token)
+    internal static async Task SeedJournalAsync(SyntheticArcaneServer server, ulong guid, CancellationToken token)
     {
         int characterId = checked((int)guid);
         var status = new CharacterQuestStatus(characterId, SyntheticArcaneServer.JournalQuestId, Status: 3,

@@ -22,7 +22,7 @@ namespace ArcaneCore.World.Npc;
 /// with the quest service. Creature quest interactions use live map/visibility snapshots and
 /// optional faction templates; missing reaction data denies interaction.
 /// </summary>
-public sealed class QuestNpcFeature : IWorldFeature, ICharacterHooks, IAsyncDisposable
+public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IAsyncDisposable
 {
     private readonly IServiceProvider _services;
     private readonly IServiceScopeFactory _scopes;
@@ -30,6 +30,7 @@ public sealed class QuestNpcFeature : IWorldFeature, ICharacterHooks, IAsyncDisp
     private readonly TimeProvider _clock;
     private readonly ConditionalWeakTable<Player, CharacterQuestData> _staged = new();
     private readonly HashSet<Map> _maps = [];
+    private QuestObjectiveAdapter? _objectives;
     private WorldRuntime? _world;
 
     public QuestNpcFeature(IServiceProvider services, IServiceScopeFactory scopes, ILogger<QuestNpcFeature> logger,
@@ -75,6 +76,7 @@ public sealed class QuestNpcFeature : IWorldFeature, ICharacterHooks, IAsyncDisp
         }
 
         _world = world;
+        _objectives = new QuestObjectiveAdapter(Services);
         Persistence.Start();
         world.MapCreated += OnMapCreated;
         foreach (Map map in world.Maps)
@@ -109,6 +111,7 @@ public sealed class QuestNpcFeature : IWorldFeature, ICharacterHooks, IAsyncDisp
 
     public async ValueTask DisposeAsync()
     {
+        _objectives?.Dispose();
         if (_world is { } world)
         {
             world.MapCreated -= OnMapCreated;
@@ -130,6 +133,7 @@ public sealed class QuestNpcFeature : IWorldFeature, ICharacterHooks, IAsyncDisp
     {
         if (_maps.Add(map))
         {
+            _objectives?.Attach(map);
             map.AddUpdater(new QuestNpcMapUpdater(Services));
         }
     }

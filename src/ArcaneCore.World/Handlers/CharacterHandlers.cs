@@ -7,6 +7,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -199,6 +200,30 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        try
+        {
+            if (session.Services.GetService<CharacterSaveQueue>() is { } saves)
+            {
+                await saves.FlushCharacterAsync(character.Id).ConfigureAwait(false);
+            }
+
+            // The previous session may have committed a reward while this login waited.
+            // Its final snapshot precedes the barrier; never construct a player from the
+            // record fetched before waiting for that session to leave the world.
+            character = await characters.GetByIdAsync(character.Id).ConfigureAwait(false);
+            if (character is null || character.AccountId != session.AccountId)
+            {
+                session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginNoCharacter));
+                return;
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            session.Logger.LogError(ex, "[{Endpoint}] character saves did not drain before login", session.RemoteEndpoint);
+            session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
+            return;
+        }
+
         RaceInfo? raceInfo = await worldData.GetRaceInfoAsync(character.Race, character.Gender).ConfigureAwait(false);
         ClassInfo? classInfo = await worldData.GetClassInfoAsync(character.Class).ConfigureAwait(false);
         var home = new HomeBind(character.HomeMapId, character.HomeZoneId, character.HomeX, character.HomeY, character.HomeZ);
@@ -281,6 +306,9 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         }
 
         LoginSequence.SendInitialPacketsAfterAddToMap(session, player);
+        // Every loading hook and map insertion succeeded with fresh durable state.
+        // Stale old-session callbacks cannot save or remove this player by GUID alone.
+        session.Services.GetService<CharacterSaveQueue>()?.ResumeCharacter(character.Id);
         session.Logger.LogInformation("[{Endpoint}] '{Account}' entered the world as '{Name}'",
             session.RemoteEndpoint, session.AccountName, player.Name);
         world.NotifyLoggedIn(player);

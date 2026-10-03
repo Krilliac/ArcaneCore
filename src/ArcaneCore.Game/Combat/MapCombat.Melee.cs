@@ -730,6 +730,8 @@ public sealed partial class MapCombat
             // vmangos Creature::Update turns JUST_DIED into CORPSE on its next update.
             victim.Combat.DeathState = DeathState.Corpse;
         }
+
+        UnitKilled?.Invoke(killer, victim);
     }
 
     /// <summary>vmangos Unit::SetDeathState / Player::SetDeathState for the states combat drives.</summary>

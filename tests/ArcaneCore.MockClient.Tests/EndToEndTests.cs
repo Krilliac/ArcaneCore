@@ -13,14 +13,14 @@ namespace ArcaneCore.MockClient.Tests;
 public sealed class EndToEndTests
 {
     [Fact]
-    public async Task Lifecycle_AuthenticatesAcceptsAndAbandonsNpcQuestPreservesJournalReconnectsAndDeletes()
+    public async Task Lifecycle_CombatRewardsPersistExactlyOnceAndPreserveExistingNpcAndJournalChecks()
     {
         MockScenarioReport report = await MockScenarios.RunAsync();
         Assert.Equal("passed", report.Outcome);
         Assert.Equal((ushort)5875, report.ClientBuild);
         Assert.True(report.CharacterGuid > 0);
         Assert.True(report.FramesReceived >= 30);
-        Assert.True(report.CheckCount >= 28);
+        Assert.True(report.CheckCount >= 41);
         Assert.Equal(report.CheckCount, report.Checks.Select(check => check.Name).Distinct().Count());
         Assert.All(report.Checks, check => Assert.True(check.Passed, check.Detail));
         Assert.Contains(report.Checks, check => check.Name == "realm.srp");
@@ -34,6 +34,18 @@ public sealed class EndToEndTests
         Assert.Contains(report.Checks, check => check.Name == "npc.abandon-fields");
         Assert.Contains(report.Checks, check => check.Name == "npc.abandon-persisted");
         Assert.Contains(report.Checks, check => check.Name == "npc.abandon-relogin");
+        Assert.Contains(report.Checks, check => check.Name == "reward.live-targets");
+        Assert.Contains(report.Checks, check => check.Name == "reward.accept-fields");
+        Assert.Contains(report.Checks, check => check.Name == "reward.kill-partial");
+        Assert.Contains(report.Checks, check => check.Name == "reward.kill-complete");
+        Assert.Contains(report.Checks, check => check.Name == "reward.complete-offer");
+        Assert.Contains(report.Checks, check => check.Name == "reward.request-offer");
+        Assert.Contains(report.Checks, check => check.Name == "reward.choose-complete");
+        Assert.Contains(report.Checks, check => check.Name == "reward.inventory-money-fields");
+        Assert.Contains(report.Checks, check => check.Name == "reward.atomic-store");
+        Assert.Contains(report.Checks, check => check.Name == "reward.duplicate-choice");
+        Assert.Contains(report.Checks, check => check.Name == "reward.relogin-fields");
+        Assert.Contains(report.Checks, check => check.Name == "reward.relogin-history");
         Assert.Contains(report.Checks, check => check.Name == "fixture.disposed");
     }
 
