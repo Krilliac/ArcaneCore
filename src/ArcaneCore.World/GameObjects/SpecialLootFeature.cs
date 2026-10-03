@@ -1,0 +1,73 @@
+using ArcaneCore.Game;
+using ArcaneCore.Game.Fishing;
+using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Loot;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.World.Features;
+using ArcaneCore.World.Spells;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+
+namespace ArcaneCore.World.GameObjects;
+
+/// <summary>
+/// The special loot sources of the world daemon (an <see cref="IWorldFeature"/>, discovered): fishing today. It hangs on the maps' game object systems
+/// of <see cref="GameObjectLootFeature"/> (which stays untouched) and on the spell system of <see cref="SpellFeature"/>:
+/// per map a <see cref="FishingService"/> (bobber timers, the click, holes), the use handler of fishing bobbers, and once per spell system the
+/// TRANS_DOOR effect of the fishing spells. Missing collaborators (no spell feature, no game object feature) leave fishing off, never half on.
+/// Options come from the <c>SpecialLoot</c> section (<see cref="SpecialLootOptions"/>); all defaults are the retail behaviour.
+/// </summary>
+public sealed class SpecialLootFeature(IServiceProvider services, ILogger<SpecialLootFeature> logger) : IWorldFeature
+{
+    private readonly Dictionary<Map, FishingService> _fishing = new(ReferenceEqualityComparer.Instance);
+    private WorldRuntime? _world;
+
+    public SpecialLootOptions Options { get; } = new();
+
+    /// <summary>The fishing service of this exact map instance (world thread), or null.</summary>
+    public FishingService? FindFishing(Map map) => _fishing.GetValueOrDefault(map);
+
+    public void Attach(WorldRuntime world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        _world = world;
+        services.GetService<IConfiguration>()?.GetSection(SpecialLootOptions.SectionName).Bind(Options);
+        // Posted after GameObjectLootFeature's own install (it attaches first: type names order), so its map systems exist when ours run.
+        world.Post(Install);
+    }
+
+    private void Install()
+    {
+        WorldRuntime world = _world!;
+        if (services.GetService<GameObjectLootFeature>() is null || services.GetService<SpellFeature>() is not { } spells)
+        {
+            logger.LogInformation("Special loot: the game object or spell feature is missing, fishing is off");
+            return;
+        }
+
+        new FishingSpells(() => _fishing.Values).Register(spells.System);
+        world.MapCreated += OnMapCreated;
+        world.MapUnloading += OnMapUnloading;
+        foreach (Map map in world.Maps.ToArray())
+        {
+            OnMapCreated(map);
+        }
+    }
+
+    private void OnMapCreated(Map map)
+    {
+        if (_fishing.ContainsKey(map) || services.GetService<GameObjectLootFeature>()?.GetOrCreateSystem(map) is not { } objects)
+        {
+            return;
+        }
+
+        SpellFeature spells = services.GetRequiredService<SpellFeature>();
+        var fishing = new FishingService(map, objects, Options.Fishing, () => spells.System, new Random(), services.GetService<IFishingTerrain>());
+        map.AddUpdater(fishing);
+        objects.RegisterUseHandler(GameObjectType.FishingNode, fishing.UseBobber);
+        _fishing.Add(map, fishing);
+    }
+
+    private void OnMapUnloading(Map map) => _fishing.Remove(map);
+}

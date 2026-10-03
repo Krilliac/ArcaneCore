@@ -199,6 +199,12 @@ public enum SpellImplicitTarget : uint
     UnitFriendAndParty = 37,
     UnitFriendChainHeal = 45,
     LocationCasterTargetPosition = 53,
+
+    /// <summary>
+    /// TARGET_LOCATION_CASTER_FISHING_SPOT (cmangos / vmangos value 39, Spell.cpp:2859): the fishing spells' only target,
+    /// the caster carries the effect (the bobber position is the TRANS_DOOR effect's own business).
+    /// </summary>
+    LocationCasterFishingSpot = 39,
     EnumUnitsEnemyInCone54 = 54,
     EnumUnitsRaidWithinCasterRange = 56,
 

@@ -101,7 +101,12 @@ public sealed partial class LootService : IViewerFieldFilter
     /// (vmangos Loot::FillLoot): normal items first (at most 16), then quest items only some
     /// recipient needs (at most 32), each visible only to those recipients.
     /// </summary>
-    public LootBag Generate(ObjectGuid source, LootSourceKind kind, LootType type, LootTableKind table, uint entry, IReadOnlyList<Player> recipients)
+    /// <param name="zeroEntryIsATable">
+    /// Entry 0 normally means "no loot id" and yields an empty bag; fishing_loot_template entry 0 is the failed-cast junk table
+    /// (vmangos Player.cpp:7692 FillLoot(0, LootTemplates_Fishing)), so the fishing area asks for it explicitly.
+    /// </param>
+    public LootBag Generate(ObjectGuid source, LootSourceKind kind, LootType type, LootTableKind table, uint entry, IReadOnlyList<Player> recipients,
+        bool zeroEntryIsATable = false)
     {
         ArgumentNullException.ThrowIfNull(recipients);
         var bag = new LootBag(source, kind, type);
@@ -110,7 +115,7 @@ public sealed partial class LootService : IViewerFieldFilter
             bag.Recipients.Add(player.Guid);
         }
 
-        if (entry == 0)
+        if (entry == 0 && !zeroEntryIsATable)
         {
             return bag;
         }
