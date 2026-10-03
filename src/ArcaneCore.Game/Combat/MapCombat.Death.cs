@@ -268,10 +268,13 @@ public sealed partial class MapCombat
         SendGhostMovement(player, ghost);
     }
 
-    /// <summary>SMSG_MOVE_WATER_WALK / SMSG_MOVE_LAND_WALK: the client starts or stops walking on water.</summary>
+    /// <summary>
+    /// SMSG_MOVE_WATER_WALK / SMSG_MOVE_LAND_WALK: the client starts or stops walking on water. The order goes through
+    /// the locomotion handshake (the server flag follows the client's ack, src/ArcaneCore.Game/Locomotion); it is always
+    /// sent, also while the player is not in a map yet (login restore: the create block was built without the flag).
+    /// </summary>
     private static void SendGhostMovement(Player player, bool ghost)
-        => player.Session.Send(ghost ? WorldOpcode.SmsgMoveWaterWalk : WorldOpcode.SmsgMoveLandWalk,
-            CombatPackets.MovementFlagChange(player.Guid, player.NextMovementCounter()));
+        => Locomotion.MovementControl.Order(player, Locomotion.MovementChangeType.WaterWalk, ghost);
 
     /// <summary>
     /// vmangos Player::GetCorpseReclaimDelay: 30/60/120 s by deaths in the last 5-minute steps
