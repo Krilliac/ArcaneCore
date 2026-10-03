@@ -17,6 +17,7 @@ namespace ArcaneCore.Game.Spells;
 /// </summary>
 public sealed partial class SpellSystem
 {
+    private volatile SpellStore _store;
     private readonly Dictionary<ObjectGuid, UnitSpellState> _states = [];
     private readonly Func<uint> _clock;
     private readonly ILogger _logger;
@@ -33,7 +34,7 @@ public sealed partial class SpellSystem
         Random? random = null,
         ILogger? logger = null)
     {
-        Store = store ?? throw new ArgumentNullException(nameof(store));
+        _store = store ?? throw new ArgumentNullException(nameof(store));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         Units = units ?? new MapPlayerResolver();
         Damage = damage ?? new HealthOnlyDamageSink();
@@ -47,8 +48,16 @@ public sealed partial class SpellSystem
         RegisterModules(SpellHandlerModules.BuiltIn);
     }
 
-    /// <summary>The spell table (replaceable, e.g. after a reload).</summary>
-    public SpellStore Store { get; set; }
+    /// <summary>
+    /// The spell table, replaced as a whole by <c>.reload spell_template</c> (docs/areas/hot-reload.md).
+    /// The store is immutable, so a reader sees either the old table or the new one; the volatile
+    /// field publishes the swap to the session tasks that look spells up off the world thread.
+    /// </summary>
+    public SpellStore Store
+    {
+        get => _store;
+        set => _store = value;
+    }
 
     public ISpellUnitResolver Units { get; set; }
 

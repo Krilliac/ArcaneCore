@@ -27,10 +27,26 @@ namespace ArcaneCore.World.Items;
 public sealed class ItemsFeature(IServiceScopeFactory scopes, ILogger<ItemsFeature> logger) : IWorldFeature, ICharacterHooks
 {
     private readonly SemaphoreSlim _loadLock = new(1, 1);
+    private readonly LiveItemTemplateStore _live = new();
     private volatile IItemTemplateStore? _templates;
 
-    /// <summary>Item content (empty until <see cref="EnsureLoadedAsync"/> succeeds).</summary>
-    public IItemTemplateStore Templates => _templates ?? ItemTemplateStore.Empty;
+    /// <summary>
+    /// Item content (empty until <see cref="EnsureLoadedAsync"/> succeeds). A stable view that follows
+    /// <see cref="ReplaceTemplates"/>, so a reference kept by an inventory or another feature sees
+    /// <c>.reload item_template</c> on its next lookup (docs/areas/hot-reload.md).
+    /// </summary>
+    public IItemTemplateStore Templates => _live;
+
+    /// <summary>The immutable store lookups currently go to (empty until loaded).</summary>
+    public IItemTemplateStore LoadedStore => _templates ?? ItemTemplateStore.Empty;
+
+    /// <summary>Make <paramref name="store"/> the item content (the reload's swap; the world thread).</summary>
+    public void ReplaceTemplates(IItemTemplateStore store)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        _live.Replace(store);
+        _templates = store;
+    }
 
     /// <summary>The process-wide item GUID source.</summary>
     public ItemGuidAllocator GuidAllocator { get; } = new();
@@ -43,17 +59,17 @@ public sealed class ItemsFeature(IServiceScopeFactory scopes, ILogger<ItemsFeatu
     /// <summary>Load item content and seed the GUID allocator once (thread-safe).</summary>
     public async Task<IItemTemplateStore> EnsureLoadedAsync(CancellationToken cancellationToken = default)
     {
-        if (_templates is { } loaded)
+        if (_templates is not null)
         {
-            return loaded;
+            return _live;
         }
 
         await _loadLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_templates is { } raced)
+            if (_templates is not null)
             {
-                return raced;
+                return _live;
             }
 
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
@@ -71,8 +87,9 @@ public sealed class ItemsFeature(IServiceScopeFactory scopes, ILogger<ItemsFeatu
             }
 
             logger.LogInformation("Loaded {Count} item templates", store.Count);
+            _live.Replace(store);
             _templates = store;
-            return store;
+            return _live;
         }
         finally
         {

@@ -190,18 +190,52 @@ public sealed record CreatureModelInfo(uint DisplayId, float BoundingRadius, flo
 public sealed record CreatureAddon(uint Guid, uint MountDisplayId, byte StandState, byte SheathState, uint EmoteState);
 
 /// <summary>
-/// Every creature row the world uses, loaded once at startup and read-only afterwards, so the
-/// world thread looks things up without locks or database round trips (ROADMAP § Content).
+/// The replaceable half of a <see cref="CreatureContent"/>: templates, model infos, addons,
+/// waypoints and EventAI. Immutable; obtained from <see cref="CreatureContent.SwapDefinitions"/>
+/// to undo a swap.
+/// </summary>
+public sealed class CreatureDefinitions
+{
+    internal CreatureDefinitions(
+        Dictionary<uint, CreatureTemplate> templates,
+        Dictionary<uint, CreatureModelInfo> models,
+        Dictionary<uint, CreatureAddon> addons,
+        Dictionary<uint, IReadOnlyList<CreatureWaypoint>> waypoints,
+        CreatureAiContent ai)
+    {
+        Templates = templates;
+        Models = models;
+        Addons = addons;
+        Waypoints = waypoints;
+        Ai = ai;
+    }
+
+    internal Dictionary<uint, CreatureTemplate> Templates { get; }
+
+    internal Dictionary<uint, CreatureModelInfo> Models { get; }
+
+    internal Dictionary<uint, CreatureAddon> Addons { get; }
+
+    internal Dictionary<uint, IReadOnlyList<CreatureWaypoint>> Waypoints { get; }
+
+    internal CreatureAiContent Ai { get; }
+}
+
+/// <summary>
+/// Every creature row the world uses, read-only for the world thread's lookups (no locks, no
+/// database round trips; ROADMAP § Content). The spawns are fixed for the life of the object. The
+/// definitions (templates, models, addons, waypoints, EventAI) can be swapped as a whole with
+/// <see cref="SwapDefinitions"/> (<c>.reload creature_template</c>), so everything holding this
+/// object sees the new definitions at once, the way vmangos' <c>LoadCreatureTemplates</c>
+/// overwrites the <c>CreatureInfo</c> table that live creatures point into (ObjectMgr.cpp:1190).
 /// </summary>
 public sealed class CreatureContent
 {
     public static readonly CreatureContent Empty = new([], [], [], [], []);
 
-    private readonly Dictionary<uint, CreatureTemplate> _templates;
-    private readonly Dictionary<uint, CreatureModelInfo> _models;
-    private readonly Dictionary<uint, CreatureAddon> _addons;
-    private readonly Dictionary<uint, IReadOnlyList<CreatureWaypoint>> _waypoints;
     private readonly Dictionary<uint, IReadOnlyList<CreatureSpawn>> _spawnsByMap;
+    private volatile CreatureDefinitions _definitions;
+    private int _version;
 
     public CreatureContent(
         IEnumerable<CreatureTemplate> templates,
@@ -211,38 +245,75 @@ public sealed class CreatureContent
         IEnumerable<CreatureAddon> addons,
         CreatureAiContent? ai = null)
     {
-        Ai = ai ?? CreatureAiContent.Empty;
-        _templates = templates.ToDictionary(t => t.Entry);
-        _models = models.ToDictionary(m => m.DisplayId);
-        _addons = addons.ToDictionary(a => a.Guid);
-        _waypoints = waypoints
-            .GroupBy(w => w.SpawnGuid)
-            .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureWaypoint>)[.. g.Select(w => w.Point).OrderBy(p => p.Point)]);
+        _definitions = new CreatureDefinitions(
+            templates.ToDictionary(t => t.Entry),
+            models.ToDictionary(m => m.DisplayId),
+            addons.ToDictionary(a => a.Guid),
+            waypoints
+                .GroupBy(w => w.SpawnGuid)
+                .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureWaypoint>)[.. g.Select(w => w.Point).OrderBy(p => p.Point)]),
+            ai ?? CreatureAiContent.Empty);
         CreatureSpawn[] all = [.. spawns];
         SpawnCount = all.Length;
         _spawnsByMap = all.GroupBy(s => s.MapId)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureSpawn>)[.. g.OrderBy(s => s.Guid)]);
     }
 
-    public int TemplateCount => _templates.Count;
+    public int TemplateCount => _definitions.Templates.Count;
 
     /// <summary>EventAI scripts and texts (<c>creature_ai_scripts</c>, <c>creature_ai_texts</c>).</summary>
-    public CreatureAiContent Ai { get; }
+    public CreatureAiContent Ai => _definitions.Ai;
 
     public int SpawnCount { get; }
+
+    /// <summary>Changes every time the definitions are swapped; a holder that caches a lookup compares it to know when to look again.</summary>
+    public int DefinitionsVersion => Volatile.Read(ref _version);
 
     /// <summary>Maps that have at least one spawn.</summary>
     public IEnumerable<uint> MapsWithSpawns => _spawnsByMap.Keys;
 
-    public CreatureTemplate? FindTemplate(uint entry) => _templates.GetValueOrDefault(entry);
+    public CreatureTemplate? FindTemplate(uint entry) => _definitions.Templates.GetValueOrDefault(entry);
 
-    public CreatureModelInfo? FindModel(uint displayId) => _models.GetValueOrDefault(displayId);
+    public CreatureModelInfo? FindModel(uint displayId) => _definitions.Models.GetValueOrDefault(displayId);
 
-    public CreatureAddon? FindAddon(uint spawnGuid) => _addons.GetValueOrDefault(spawnGuid);
+    public CreatureAddon? FindAddon(uint spawnGuid) => _definitions.Addons.GetValueOrDefault(spawnGuid);
 
-    public IReadOnlyList<CreatureWaypoint> GetWaypoints(uint spawnGuid) => _waypoints.GetValueOrDefault(spawnGuid) ?? [];
+    public IReadOnlyList<CreatureWaypoint> GetWaypoints(uint spawnGuid) => _definitions.Waypoints.GetValueOrDefault(spawnGuid) ?? [];
 
     public IReadOnlyList<CreatureSpawn> GetSpawns(uint mapId) => _spawnsByMap.GetValueOrDefault(mapId) ?? [];
+
+    /// <summary>
+    /// Make the definitions of <paramref name="fresh"/> this content's definitions (its spawns are
+    /// ignored) and return the ones replaced, for <see cref="RestoreDefinitions"/>. The shared
+    /// <see cref="Empty"/> instance refuses: it belongs to every host that has no creature data.
+    /// Call on the world thread; readers on other threads see either generation.
+    /// </summary>
+    public CreatureDefinitions SwapDefinitions(CreatureContent fresh)
+    {
+        ArgumentNullException.ThrowIfNull(fresh);
+        if (ReferenceEquals(this, Empty))
+        {
+            throw new InvalidOperationException("the shared empty creature content cannot be changed");
+        }
+
+        CreatureDefinitions previous = _definitions;
+        _definitions = fresh._definitions;
+        Interlocked.Increment(ref _version);
+        return previous;
+    }
+
+    /// <summary>Put back definitions returned by <see cref="SwapDefinitions"/>.</summary>
+    public void RestoreDefinitions(CreatureDefinitions previous)
+    {
+        ArgumentNullException.ThrowIfNull(previous);
+        if (ReferenceEquals(this, Empty))
+        {
+            throw new InvalidOperationException("the shared empty creature content cannot be changed");
+        }
+
+        _definitions = previous;
+        Interlocked.Increment(ref _version);
+    }
 }
 
 /// <summary>Loads the creature content from the world database.</summary>

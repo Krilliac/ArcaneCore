@@ -35,6 +35,8 @@ public sealed partial class Creature : Unit, ICombatCreature
     public const uint ExtraFlagNoAggro = 0x00000002;
 
     private readonly Random _random;
+    private CreatureTemplate _template;
+    private int _templateVersion;
 
     public Creature(uint counter, CreatureTemplate template, CreatureSpawn? spawn, CreatureContent content, Random random)
         : base(ObjectGuid.WithEntry(HighGuid.Unit, template.Entry, counter), Game.TypeId.Unit, CreatureTypeMask, UpdateFields.UnitEnd)
@@ -43,9 +45,10 @@ public sealed partial class Creature : Unit, ICombatCreature
         ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(random);
 
-        Template = template;
+        _template = template;
         Spawn = spawn;
         Content = content;
+        _templateVersion = content.DefinitionsVersion;
         _random = random;
 
         if (spawn is not null)
@@ -65,7 +68,27 @@ public sealed partial class Creature : Unit, ICombatCreature
         InitializeFields();
     }
 
-    public CreatureTemplate Template { get; }
+    /// <summary>
+    /// The creature_template row, looked up by entry in <see cref="Content"/> after every
+    /// <c>.reload creature_template</c> (vmangos <c>Creature::GetCreatureInfo</c> reads the shared
+    /// <c>CreatureInfo</c> table, which the reload overwrites in place). A template that no longer
+    /// exists keeps the last one this creature knew. Values copied into the unit fields at creation
+    /// or respawn (<see cref="InitializeFields"/>) change at the next respawn, not at the reload.
+    /// </summary>
+    public CreatureTemplate Template
+    {
+        get
+        {
+            int version = Content.DefinitionsVersion;
+            if (version != _templateVersion)
+            {
+                _template = Content.FindTemplate(_template.Entry) ?? _template;
+                _templateVersion = version;
+            }
+
+            return _template;
+        }
+    }
 
     /// <summary>The spawn row, or null for creatures not placed by the database.</summary>
     public CreatureSpawn? Spawn { get; }
