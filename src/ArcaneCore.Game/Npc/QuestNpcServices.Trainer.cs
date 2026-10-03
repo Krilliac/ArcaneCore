@@ -56,7 +56,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        uint cost = (uint)((trainerSpell.SpellCost * PriceDiscount(player, npc)) + 0.5f);
+        uint cost = Discounted(trainerSpell.SpellCost, PriceDiscount(player, npc));
         if (player.Money < cost)
         {
             Send(player, WorldOpcode.SmsgTrainerBuyFailed, NpcPackets.TrainerBuyFailed(guid, spellId, TrainFailNotEnoughMoney));
@@ -107,7 +107,7 @@ public sealed partial class QuestNpcServices
             // The client wants chain node 2 only when node 1 is set: req first when present.
             (uint node1, uint node2) = info.ChainReq != 0 ? (info.ChainReq, info.ChainPrev) : (info.ChainPrev, 0u);
             entries.Add(new TrainerListEntry(trainerSpell.Spell, GetTrainerSpellState(player, trainerSpell, info),
-                (uint)((trainerSpell.SpellCost * discount) + 0.5f), canLearnPrimary, info.LearnedIsPrimaryProfessionFirstRank,
+                Discounted(trainerSpell.SpellCost, discount), canLearnPrimary, info.LearnedIsPrimaryProfessionFirstRank,
                 (byte)Math.Min(level, byte.MaxValue), trainerSpell.ReqSkill, trainerSpell.ReqSkillValue, node1, node2));
         }
 

@@ -16,7 +16,8 @@ public sealed record QuestNpcDependencies(
     IPlayerReputation? Reputation = null,
     IConditionEvaluator? Conditions = null,
     ITaxiFlights? Flights = null,
-    IMapInfo? Maps = null);
+    IMapInfo? Maps = null,
+    IResurrection? Resurrection = null);
 
 /// <summary>Where quest/NPC state changes go (the world daemon's save queue). World thread.</summary>
 public interface IQuestNpcSink
@@ -175,13 +176,16 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
     private static void Send(Player player, WorldOpcode opcode, PacketWriter body) => player.Session.Send(opcode, body.AsSpan());
 
     /// <summary>vmangos Player::ModifyMoney (clamped to 0..MAX_MONEY_AMOUNT), then MoneyChanged.</summary>
-    private void ModifyMoney(PlayerNpcState state, long delta)
+    private void ModifyMoney(PlayerNpcState state, long delta, bool saveCharacter = true)
     {
         Player player = state.Quests.Player;
         long money = Math.Clamp((long)player.Money + delta, 0, MaxMoneyAmount);
         player.Money = (uint)money;
         MoneyChanged(state, (uint)money);
-        _sink.CharacterChanged(player);
+        if (saveCharacter)
+        {
+            _sink.CharacterChanged(player);
+        }
     }
 
     /// <summary>
@@ -197,13 +201,21 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
     {
         // Player.cpp CanInteractWithNPC rejects lost control / inability to react.
         const UnitFlags unavailable = UnitFlags.TaxiFlight | UnitFlags.Stunned | UnitFlags.Confused | UnitFlags.Fleeing;
-        if (guid.IsEmpty || !player.IsInWorld || !player.IsAlive || (player.UnitFlags & unavailable) != 0)
+        if (guid.IsEmpty || !player.IsInWorld || (player.UnitFlags & unavailable) != 0)
         {
             return null;
         }
 
         NpcInfo? npc = Deps.Creatures?.Find(player, guid);
         if (npc is null || npc.MapId != player.MapId)
+        {
+            return null;
+        }
+
+        // Spirit healers and guides are invisible to the living and the only NPCs the dead can use
+        // (vmangos IsInvisibleForAlive / m_isSpiritService; ghosts only see spirit services).
+        bool spiritService = (npc.NpcFlags & (NpcFlags.SpiritHealer | NpcFlags.SpiritGuide)) != 0;
+        if (player.IsAlive == spiritService)
         {
             return null;
         }

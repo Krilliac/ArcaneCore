@@ -142,9 +142,13 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
 
     private QuestNpcServices BuildServices(QuestStore quests, NpcStore npcs, FactionTemplateCatalog? factions = null,
         Game.Reputation.ReputationService? reputation = null) => new(quests, npcs,
-        new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions ?? FactionTemplateCatalog.Empty, reputation),
-            Reputation: reputation is { Factions.Count: > 0 } ? reputation : null),
+        ExtendDependencies(new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions ?? FactionTemplateCatalog.Empty, reputation),
+            Reputation: reputation is { Factions.Count: > 0 } ? reputation : null), npcs),
         Options, new PersistenceSink(this), () => _clock.GetUtcNow().ToUnixTimeSeconds(), _logger);
+
+    /// <summary>The NPC-services feature fills vendor/trainer/taxi/bank/spirit-healer collaborators (docs/integration/npc-services.md).</summary>
+    private QuestNpcDependencies ExtendDependencies(QuestNpcDependencies dependencies, NpcStore npcs)
+        => _services.GetService<NpcServicesFeature>() is { } npcServices ? npcServices.Extend(dependencies, npcs) : dependencies;
 
     private void OnMapCreated(Map map)
     {

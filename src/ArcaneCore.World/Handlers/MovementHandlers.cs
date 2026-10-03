@@ -1,3 +1,4 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
@@ -81,6 +82,12 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
     {
         // vmangos HandleMovementOpcodes ignores movement while either teleport semaphore is set.
         if (session.Services.GetRequiredService<TeleportFeature>().Teleports.IsBeingTeleported(player))
+        {
+            return;
+        }
+
+        // On a taxi flight the server moves the player (FlightPathMovementGenerator); client movement is ignored.
+        if ((player.UnitFlags & UnitFlags.TaxiFlight) != 0)
         {
             return;
         }

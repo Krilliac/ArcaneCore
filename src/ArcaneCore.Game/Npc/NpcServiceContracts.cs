@@ -152,7 +152,43 @@ public interface IItemService
 
     /// <summary>SMSG_INVENTORY_CHANGE_FAILURE for a failed store of a new item (vmangos Player::SendEquipError(msg, null, null, 0, item)).</summary>
     void SendEquipError(Player player, InventoryResult result, uint itemId);
+
+    /// <summary>The item and price in buyback slot <paramref name="slot"/> (69..80), or null (vmangos GetItemFromBuyBackSlot).</summary>
+    BuybackInfo? GetBuyback(Player player, byte slot) => null;
+
+    /// <summary>
+    /// Move the buyback item back into the bags if it fits (vmangos HandleBuybackItem after the
+    /// money check); on failure nothing changes and the result is returned for SendEquipError.
+    /// </summary>
+    InventoryResult RestoreBuyback(Player player, byte slot) => InventoryResult.ItemNotFound;
+
+    /// <summary>
+    /// vmangos Player::DurabilityRepair / DurabilityRepairAll with cost: each damaged candidate
+    /// (one item, or all carried when <paramref name="item"/> is empty) is priced
+    /// uint(uint(lost × multiplier × quality) × <paramref name="discount"/>) (minimum 1) and repaired
+    /// only if <paramref name="pay"/> accepts that price. Returns the total paid.
+    /// </summary>
+    uint Repair(Player player, ObjectGuid item, float discount, Func<uint, bool> pay) => 0;
+
+    /// <summary>vmangos Player::DurabilityLossAll(percent, inventory: true).</summary>
+    void DurabilityLossAll(Player player, double percent)
+    {
+    }
+
+    /// <summary>Allow bank moves while <paramref name="canUseBank"/> holds (vmangos Player::CanUseBank: the banker is in range).</summary>
+    void OpenBank(Player player, Func<bool> canUseBank)
+    {
+    }
+
+    /// <summary>BankBagSlotPrices.dbc price of bank bag slot <paramref name="slot"/> (1-based), null when unknown.</summary>
+    uint? BankBagSlotPrice(uint slot) => null;
+
+    /// <summary>Set and persist the bought bank bag slot count; false when it cannot be persisted (nothing changes then).</summary>
+    bool SetBankBagSlotCount(Player player, byte count) => false;
 }
+
+/// <summary>An item waiting in a buyback slot and the price to get it back.</summary>
+public sealed record BuybackInfo(uint Entry, uint Price);
 
 /// <summary>
 /// Spell data of one trainer entry, from the teaching spell (npc_trainer.spell) and its
@@ -229,11 +265,26 @@ public interface IPlayerReputation
 public interface ITaxiFlights
 {
     /// <summary>
-    /// Start a flight along <paramref name="pathId"/> (vmangos Player::ActivateTaxiPathTo after
-    /// the checks: CombatStop, mount, SMSG_ACTIVATETAXIREPLY OK, MoveTaxiFlight). False when it
-    /// could not start; nothing has been charged then.
+    /// Start a flight through <paramref name="nodes"/> (two or more) along <paramref name="pathIds"/>
+    /// (one per hop; vmangos Player::ActivateTaxiPathTo after the checks: mount,
+    /// SMSG_ACTIVATETAXIREPLY OK, MoveTaxiFlight). False when it could not start; nothing has been
+    /// charged then.
     /// </summary>
-    bool StartFlight(Player player, uint sourceNode, uint destinationNode, uint pathId, uint mountCreatureEntry);
+    bool StartFlight(Player player, IReadOnlyList<uint> nodes, IReadOnlyList<uint> pathIds, uint mountCreatureEntry);
+
+    /// <summary>Whether the player is on a flight started here.</summary>
+    bool IsFlying(Player player) => false;
+}
+
+/// <summary>
+/// Resurrection at a spirit healer (owned by the combat/spells areas): vmangos
+/// WorldSession::SendSpiritResurrect — resurrect at 50% with resurrection sickness, 25%
+/// durability loss, corpse removed. World thread.
+/// </summary>
+public interface IResurrection
+{
+    /// <summary>False when the player cannot be resurrected now (alive, not a ghost, settlement pending).</summary>
+    bool ResurrectAtSpiritHealer(Player player);
 }
 
 /// <summary>Map properties (owned by the maps area). World thread.</summary>
