@@ -17,7 +17,8 @@ public sealed class WorldRuntime : IDisposable
     private readonly ILogger _logger;
     private readonly ICharacterSaveQueue _saveQueue;
     private readonly ConcurrentQueue<Action> _commands = new();
-    private readonly Dictionary<uint, Map> _maps = [];
+    private readonly Dictionary<(uint MapId, uint InstanceId), Map> _maps = [];
+    private readonly List<Map> _unloadRequests = [];
     private readonly ConcurrentDictionary<ObjectGuid, Player> _online = new();
     private readonly ConcurrentDictionary<string, Player> _onlineByName = new(StringComparer.OrdinalIgnoreCase);
     private readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -69,6 +70,21 @@ public sealed class WorldRuntime : IDisposable
     /// Features install their per-map simulation here, including maps first visited later.
     /// </summary>
     public event Action<Map>? MapCreated;
+
+    /// <summary>
+    /// Raised on the world thread when an instance map is about to be unloaded (it is empty,
+    /// nobody is in transit from it, and its owner asked with <see cref="UnloadMap"/>), before
+    /// its grids are unloaded and it leaves <see cref="Maps"/>. Features drop their per-map
+    /// state here (vmangos <c>MapManager::DeleteInstance</c> → <c>Map::UnloadAll</c>).
+    /// </summary>
+    public event Action<Map>? MapUnloading;
+
+    /// <summary>
+    /// Chooses the map (and instance) a player enters at login and after a far teleport. Null
+    /// means every map has the single instance 0 (the instances feature installs one;
+    /// docs/integration/instances.md). World thread.
+    /// </summary>
+    public IMapResolver? MapResolver { get; set; }
 
     /// <summary>
     /// Raised on the world thread once a player has entered the world and its client has the
@@ -162,20 +178,44 @@ public sealed class WorldRuntime : IDisposable
     }
 
     /// <summary>
-    /// The map with the given id, created on first use with its default per-map systems
-    /// (<see cref="DefaultMapUpdaters"/>; world thread).
+    /// The map with the given id (instance 0: continents and other shared maps), created on
+    /// first use with its default per-map systems (<see cref="DefaultMapUpdaters"/>; world thread).
     /// </summary>
-    public Map GetMap(uint mapId)
+    public Map GetMap(uint mapId) => GetMap(mapId, 0);
+
+    /// <summary>
+    /// One instance of a map, created on first use with its default per-map systems (vmangos
+    /// <c>MapManager::CreateMap</c> / <c>CreateDungeonMap</c>, keyed by <c>MapID(id, instance)</c>;
+    /// world thread). Instance 0 is the shared copy.
+    /// </summary>
+    public Map GetMap(uint mapId, uint instanceId)
     {
-        if (!_maps.TryGetValue(mapId, out Map? map))
+        if (!_maps.TryGetValue((mapId, instanceId), out Map? map))
         {
-            map = new Map(mapId, this, _logger);
+            map = new Map(mapId, instanceId, this, _logger);
             DefaultMapUpdaters.AttachTo(map, this);
-            _maps[mapId] = map;
+            _maps[(mapId, instanceId)] = map;
             Raise(MapCreated, map, nameof(MapCreated));
         }
 
         return map;
+    }
+
+    /// <summary>An existing map instance, or null (vmangos <c>MapManager::FindMap</c>; world thread).</summary>
+    public Map? FindMap(uint mapId, uint instanceId = 0) => _maps.GetValueOrDefault((mapId, instanceId));
+
+    /// <summary>
+    /// Ask for an instance map to be unloaded after the current map pass (world thread). It is
+    /// unloaded only if it is still registered, is not instance 0, has no players and nobody is
+    /// in transit from it; otherwise the request is dropped and the owner asks again later.
+    /// </summary>
+    public void UnloadMap(Map map)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        if (map.InstanceId != 0 && !_unloadRequests.Contains(map))
+        {
+            _unloadRequests.Add(map);
+        }
     }
 
     /// <summary>Put a loaded player into its map and the online registry (world thread).</summary>
@@ -188,7 +228,8 @@ public sealed class WorldRuntime : IDisposable
 
         _onlineByName[player.Name] = player;
         player.StartPlayedTime(NowMs);
-        GetMap(player.MapId).AddPlayer(player);
+        Map map = MapResolver?.ResolveLoginMap(player) ?? GetMap(player.MapId);
+        map.AddPlayer(player);
     }
 
     /// <summary>Take a player out of the world and queue its state for saving (world thread).</summary>
@@ -231,7 +272,8 @@ public sealed class WorldRuntime : IDisposable
     {
         RunCommands();
 
-        foreach (Map map in _maps.Values)
+        // A snapshot: a map system may create another map (an instance) during its update.
+        foreach (Map map in _maps.Values.ToArray())
         {
             try
             {
@@ -242,6 +284,8 @@ public sealed class WorldRuntime : IDisposable
                 _logger.LogError(ex, "map {MapId} update failed", map.MapId);
             }
         }
+
+        UnloadRequestedMaps();
 
         if (Options.AutosaveIntervalMs > 0)
         {
@@ -277,6 +321,36 @@ public sealed class WorldRuntime : IDisposable
             {
                 object? description = subject is Player player ? player.Name : subject;
                 _logger.LogError(ex, "{Event} handler failed for {Subject}", name, description);
+            }
+        }
+    }
+
+    private void UnloadRequestedMaps()
+    {
+        if (_unloadRequests.Count == 0)
+        {
+            return;
+        }
+
+        Map[] pending = [.. _unloadRequests];
+        _unloadRequests.Clear();
+        foreach (Map map in pending)
+        {
+            if (!_maps.TryGetValue((map.MapId, map.InstanceId), out Map? current) || !ReferenceEquals(current, map)
+                || map.PlayerCount > 0 || map.TransitCount > 0)
+            {
+                continue;
+            }
+
+            Raise(MapUnloading, map, nameof(MapUnloading));
+            _maps.Remove((map.MapId, map.InstanceId));
+            try
+            {
+                map.UnloadAll();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "unloading map {MapId} instance {InstanceId} failed", map.MapId, map.InstanceId);
             }
         }
     }
