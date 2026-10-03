@@ -84,14 +84,13 @@ public interface ICharacterSpellStateStore
 }
 
 /// <summary>
-/// The <c>character_spell_cooldown</c> and <c>character_aura</c> tables. Reserved as characters
-/// schema version 8 (after reputation's v7); this branch uses 7 until v7 lands because versions
-/// must be contiguous — the lead renumbers <see cref="Version"/> at merge (docs/integration/spells-persistence.md).
+/// The <c>character_spell_cooldown</c> and <c>character_aura</c> tables: characters schema
+/// version 8, after reputation's v7 (docs/integration/spells-persistence.md).
 /// </summary>
 public sealed class CharacterSpellStateDataModule : IDataModule, ICharacterDataCleanup
 {
     /// <summary>The single place the schema version is set.</summary>
-    public const int Version = 7;
+    public const int Version = 8;
 
     public const string CooldownTable = "character_spell_cooldown";
 

@@ -2,7 +2,7 @@
 
 Area: fleet round 2 follow-up to [spells.md](spells.md) (branch `feat/spells-persistence`,
 branched from `codex/integrate-feature-fleet-20261003` at `0d32fba`, then merged with the
-integration head that carries `feat/character-delete-cleanup` (#21) and `feat/vmap-los` (#17)). Behaviour is re-implemented from
+integration head that carries `feat/character-delete-cleanup` (#21), `feat/vmap-los` (#17) and `feat/reputation` (#19)). Behaviour is re-implemented from
 vmangos / cMaNGOS-classic (`Spell::FillTargetMap`/`SetTargetMap`, `Spell::EffectWeaponDmg`,
 `EffectHealthLeech`, `EffectDispel`, `EffectInterruptCast`, `EffectApplyAreaAura`,
 `AreaAura::Update`, `Unit::SpellHitResult`, `SpellCaster::MagicSpellHitChance`, `IsSpellCrit`,
@@ -14,14 +14,11 @@ GPL code was copied; each member cites its source behaviour.
 
 | Component | Version | Module | Tables |
 |---|---|---|---|
-| characters | **8 reserved — 7 on this branch** | `ArcaneCore.Data.Characters.Spells.CharacterSpellStateDataModule` | `character_spell_cooldown`, `character_aura` |
+| characters | **8** | `ArcaneCore.Data.Characters.Spells.CharacterSpellStateDataModule` | `character_spell_cooldown`, `character_aura` |
 
-Characters v8 is reserved for this work, but `DataModules.Compose` requires contiguous versions
-and characters v7 (reputation, `feat/reputation`) is not on the base yet: a standalone v8 would
-fail every Data and World test at startup. The module therefore declares a single constant,
-`CharacterSpellStateDataModule.Version = 7`, so this branch builds and its CI runs. **At merge the
-lead sets that constant to 8** (after reputation's v7) and changes `IntegratedSchemaTests`'
-characters expectations from `7`/`[2..7]` to `8`/`[2..8]`. No other code depends on the number.
+Characters v8 was reserved for this work and follows reputation's v7 (#19), which is now on the
+base. The version is the single constant `CharacterSpellStateDataModule.Version`;
+`IntegratedSchemaTests` expects characters `8` / `[2..8]`.
 
 - `character_spell_cooldown` (CharacterId, Kind, Id, EndsAtUnixMs), key (CharacterId, Kind, Id).
   Kind 0 = spell cooldown, 1 = Spell.dbc category cooldown. Ends are absolute Unix ms, so
@@ -37,7 +34,7 @@ characters expectations from `7`/`[2..7]` to `8`/`[2..8]`. No other code depends
 | File | Change | Why |
 |---|---|---|
 | `src/ArcaneCore.Game/Combat/MapCombat.Melee.cs` | One line in `DealDamage`: `DamageDealt?.Invoke(attacker, victim, damage, direct, meleeDamage)` after non-lethal damage is applied. | Weapon hits must push back/interrupt casts and break damage-interruptible auras. The event itself is declared in a new partial file, `MapCombat.DamageEvents.cs`; nothing else in combat changes. |
-| `tests/ArcaneCore.Data.Tests/IntegratedSchemaTests.cs` | Adds the new module to the expected list; characters current version 6 → 7, steps `[2..6]` → `[2..7]`. | The test hardcodes the integrated allocation. |
+| `tests/ArcaneCore.Data.Tests/IntegratedSchemaTests.cs` | Adds the new module to the expected list after reputation; characters current version 7 → 8, steps `[2..7]` → `[2..8]`. | The test hardcodes the integrated allocation. |
 | `src/ArcaneCore.Game/Spells/SpellSystem.cs` `CheckCast` | The vmap-los hunks (#17: `SpellLineOfSight.Check`/`CheckDest`) are kept as merged; this branch only replaces the final `return CheckPower(...)` with `CheckTargetRules` (party/raid targets, nothing to dispel) followed by `CheckPower`, and extends the doc comment. | Keeps the merge with #17 conflict-free; LOS for explicit targets stays owned by vmap-los. |
 | `src/ArcaneCore.World/Spells/SpellCharacterDeleteHook.cs` (from #21) | `OnCharacterDeletingAsync` also waits for this character's queued state saves; `OnCharacterDeletedAsync` also calls `SpellStatePersistence.DeleteCharacter`. | Deleted characters must not leave an unsaved snapshot or rows for a reused id. |
 
@@ -161,7 +158,6 @@ and `DmgMultiplier1-3`), `SpellFeature.cs`, the spell test kits and `SpellTestSe
 
 ## Known limits
 
-- **Schema number**: 7 here, reserved 8 — renumber the constant at merge (above).
 - Cone arc is π/2 (`SpellConstants.ConeArc`); vmangos's per-spell cone angle was not confirmed.
 - SMSG_SPELL_DELAYED is written with a packed caster GUID (vmangos); gtker lists a full GUID for
   1.12 — not verified against a client.
