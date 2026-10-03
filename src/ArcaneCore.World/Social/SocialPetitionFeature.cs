@@ -79,13 +79,19 @@ public sealed class SocialPetitionFeature(IServiceProvider services, IServiceSco
 
     /// <summary>
     /// The Petitioner gossip option closed the menu; the petition list opens (vmangos Player::OnGossipSelect,
-    /// Player.cpp:12264-12267 → SendPetitionShowList). The tabard designer option belongs to another owner.
+    /// Player.cpp:12264-12267 → SendPetitionShowList). The TabardDesigner option closed it too and the tabard
+    /// designer opens (Player.cpp:12268-12271 → SendTabardVendorActivate).
     /// </summary>
     public void OnForeignOptionSelected(Player player, NpcInfo npc, GossipOption option)
     {
-        if (option == GossipOption.Petitioner)
+        switch (option)
         {
-            Petitions.ShowList(player, npc.Guid);
+            case GossipOption.Petitioner:
+                Petitions.ShowList(player, npc.Guid);
+                break;
+            case GossipOption.TabardDesigner:
+                Social.Context.Guilds.ActivateTabardVendor(player, npc.Guid);
+                break;
         }
     }
 
@@ -181,6 +187,7 @@ public sealed class SocialPetitionFeature(IServiceProvider services, IServiceSco
         _wired = npc;
         npc.ForeignOptionSelected += OnForeignOptionSelected;
         Petitions.Npc = npc;
+        Social.Context.Guilds.Npc = npc;
     }
 
     // --- player lifecycle ----------------------------------------------------------------------------

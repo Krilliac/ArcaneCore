@@ -44,6 +44,7 @@ internal sealed class PetitionKit : IDisposable
         Services = new QuestNpcServices(new QuestStore(QuestContent.Empty), new NpcStore(NpcContent.Empty), deps, new QuestNpcOptions(), Sink,
             () => 1_000, NullLogger.Instance);
         F.Context.Petitions.Npc = Services;
+        F.Context.Guilds.Npc = Services;
     }
 
     public SocialFixture F { get; }

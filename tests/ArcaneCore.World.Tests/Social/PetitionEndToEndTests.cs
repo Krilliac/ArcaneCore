@@ -88,6 +88,61 @@ public sealed class PetitionEndToEndTests
     }
 
     [Fact]
+    public async Task TheCreateAGuildCrestGossipOption_OpensTheTabardDesigner()
+    {
+        await using Harness h = await Harness.StartAsync();
+        await using WorldTestClient owner = await h.EnterAsync("OWNER", "Owner");
+
+        await owner.SendAsync(WorldOpcode.CmsgGossipHello, U64(Npc.Value));
+        await owner.ReadUntilAsync(WorldOpcode.SmsgGossipMessage);
+        await owner.SendAsync(WorldOpcode.CmsgGossipSelectOption, [.. U64(Npc.Value), 1, 0, 0, 0]); // option 1: I want to create a guild crest
+
+        await owner.ReadUntilAsync(WorldOpcode.SmsgGossipComplete);
+        Assert.Equal(Npc.Value, BitConverter.ToUInt64(await owner.ReadUntilAsync(WorldOpcode.MsgTabardvendorActivate)));
+
+        // The client may also ask directly (NPCHandler.cpp:49-69).
+        await owner.SendAsync(WorldOpcode.MsgTabardvendorActivate, U64(Npc.Value));
+        Assert.Equal(Npc.Value, BitConverter.ToUInt64(await owner.ReadUntilAsync(WorldOpcode.MsgTabardvendorActivate)));
+    }
+
+    [Fact]
+    public async Task SavingAnEmblem_ChargesTenGold_AnswersTheLeader_AndIsStored()
+    {
+        await using Harness h = await Harness.StartAsync();
+        await using WorldTestClient leader = await h.EnterAsync("LEADER", "Leader", money: 150_000);
+        SocialFeature social = h.Host.WorldServices.GetRequiredService<SocialFeature>();
+        await h.Host.OnWorldAsync(() => Assert.Equal(GuildAdminResult.Ok, social.Context.Guilds.Create(1, "Arcane", out _)));
+
+        // MSG_SAVE_GUILD_EMBLEM: u64 vendor, five u32 (gtker msg_save_guild_emblem_client).
+        await leader.SendAsync(WorldOpcode.MsgSaveGuildEmblem, [.. U64(Npc.Value), 3, 0, 0, 0, 4, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0, 7, 0, 0, 0]);
+
+        Assert.Equal(0u, BitConverter.ToUInt32(await leader.ReadUntilAsync(WorldOpcode.MsgSaveGuildEmblem)));
+        byte[] query = await leader.ReadUntilAsync(WorldOpcode.SmsgGuildQueryResponse);
+        Assert.Equal([3, 4, 5, 6, 7], Enumerable.Range(0, 5).Select(i => BitConverter.ToInt32(query, query.Length - 20 + (i * 4))));
+        Assert.Equal(50_000u, await h.Host.PlayerStateAsync("Leader", p => p.Money));
+        await h.FlushAsync();
+        GuildData stored = Assert.Single(await h.Host.WorldServices.GetRequiredService<ISocialStore>().GetGuildsAsync());
+        Assert.Equal((3, 4, 5, 6, 7), (stored.EmblemStyle, stored.EmblemColor, stored.BorderStyle, stored.BorderColor, stored.BackgroundColor));
+
+        // A second save needs another 10 gold: 50000 copper is not enough (result 4), nothing changes.
+        await leader.SendAsync(WorldOpcode.MsgSaveGuildEmblem, [.. U64(Npc.Value), 9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 0, 0]);
+        Assert.Equal(4u, BitConverter.ToUInt32(await leader.ReadUntilAsync(WorldOpcode.MsgSaveGuildEmblem)));
+        Assert.Equal(3, await h.Host.OnWorldAsync(() => social.Context.Guilds.GetByName("Arcane")!.EmblemStyle));
+    }
+
+    [Fact]
+    public async Task AShortEmblemPayload_DisconnectsTheClient()
+    {
+        await using Harness h = await Harness.StartAsync();
+        await using WorldTestClient client = await h.EnterAsync("BAD", "Bad");
+        await client.CollectAsync();
+
+        await client.SendAsync(WorldOpcode.MsgSaveGuildEmblem, [.. U64(Npc.Value), 1, 0, 0, 0]);
+
+        Assert.True(await client.IsClosedByServerAsync());
+    }
+
+    [Fact]
     public async Task ABuy_OutOfRange_OrWithoutTheTabardFlag_OrWithTooLittleMoney_ChargesNothing()
     {
         await using Harness h = await Harness.StartAsync();
