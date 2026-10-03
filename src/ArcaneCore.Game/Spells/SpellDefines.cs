@@ -89,6 +89,8 @@ public enum SpellAttributes : uint
     Passive = 0x00000040,
     DoNotDisplay = 0x00000080,
     OnNextSwing = 0x00000400,
+    /// <summary>vmangos SPELL_ATTR_ONLY_OUTDOORS (SpellDefines.h:845).</summary>
+    OnlyOutdoors = 0x00008000,
     /// <summary>vmangos SPELL_ATTR_ALLOW_WHILE_MOUNTED (SpellDefines.h:854).</summary>
     AllowWhileMounted = 0x01000000,
     AllowCastWhileDead = 0x00800000,
