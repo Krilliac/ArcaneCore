@@ -20,8 +20,8 @@ namespace ArcaneCore.Game.Spells;
 /// <remarks>
 /// Deliberate differences, all documented in docs/areas/druid-forms.md: the previous form is removed before the new one is
 /// applied (in vmangos the aura stacking rules remove it when the new spell is added, before the handler runs, so the
-/// display and power switch of the new form are not undone by the old form's removal); Heart of the Wild (a custom-value
-/// cast) and the weapon-dependent crit refresh of HandleShapeshiftBoosts are not implemented.
+/// display and power switch of the new form are not undone by the old form's removal); the weapon-dependent crit refresh of
+/// HandleShapeshiftBoosts (Elemental Sharpening Stone) is not implemented.
 /// </remarks>
 public sealed class ShapeshiftService
 {
@@ -246,9 +246,40 @@ public sealed class ShapeshiftService
             {
                 _spells.CastSpell(target, FormBoostTable.LeaderOfThePackEffectSpell, SpellCastTargets.ForSelf(), triggered: true);
             }
+
+            CastHeartOfTheWild(target, form);
         }
 
         InitDataForForm(target, oldForm, (byte)form);
+    }
+
+    /// <summary>
+    /// Heart of the Wild (SpellAuras.cpp:5505-5530): the talent's aura (ModTotalStatPercentage, spell icon 240, misc value 3)
+    /// carries the percent; Cat and the bears cast their effect spell (24900 / 24899) with that amount as base points.
+    /// Those spells are bound to the form by their Stances, so the form's end removes them.
+    /// </summary>
+    private void CastHeartOfTheWild(Unit target, ShapeshiftForm form)
+    {
+        uint effectSpell = FormBoostTable.Get((byte)form).HeartOfTheWildSpell;
+        if (effectSpell == 0 || _spells.Store.Get(effectSpell) is null)
+        {
+            return;
+        }
+
+        foreach (SpellAuraHolder holder in _spells.GetAuras(target))
+        {
+            if (holder.IsRemoved || holder.Spell.SpellIconId != FormBoostTable.HeartOfTheWildIconId)
+            {
+                continue;
+            }
+
+            SpellAura? talent = holder.Auras.FirstOrDefault(a => a is { Type: AuraType.ModTotalStatPercentage } && a.MiscValue == FormBoostTable.HeartOfTheWildMiscValue);
+            if (talent is not null)
+            {
+                _spells.CastCustomSpell(target, effectSpell, SpellCastTargets.ForSelf(), talent.Amount);
+                return;
+            }
+        }
     }
 
     private void RemoveForm(SpellAuraHolder holder, ShapeshiftForm form)

@@ -445,6 +445,13 @@ public sealed partial class SpellSystem
     /// <summary>vmangos Aura::PeriodicTick SPELL_AURA_PERIODIC_TRIGGER_SPELL: the caster casts EffectTriggerSpell at the target, triggered.</summary>
     private void TickTriggerSpell(SpellAuraHolder holder, SpellAura aura)
     {
+        // A spell with its own tick script (vmangos Aura::TriggerSpell's switch on the aura id, e.g. Frenzied Regeneration).
+        if (_periodicTriggerScripts.TryGetValue(holder.Spell.Id, out PeriodicTriggerScript? script))
+        {
+            script(this, holder, aura);
+            return;
+        }
+
         uint triggerSpell = holder.Spell.Effects[aura.EffectIndex].TriggerSpell;
         Unit caster = ResolveAuraCaster(holder) ?? holder.Target;
         Unit triggerTarget = holder.Target;
