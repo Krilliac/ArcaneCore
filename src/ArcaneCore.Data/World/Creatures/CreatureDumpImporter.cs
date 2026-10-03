@@ -26,7 +26,14 @@ public sealed record CreatureImportReport(
     int Models,
     int Addons,
     int SkippedSpawns,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings)
+{
+    /// <summary>cmangos <c>creature_ai_scripts</c> rows (EventAI).</summary>
+    public int AiEvents { get; init; }
+
+    /// <summary>cmangos <c>creature_ai_texts</c> rows.</summary>
+    public int AiTexts { get; init; }
+}
 
 /// <summary>
 /// Maps the creature tables of a cmangos classic-db or vmangos world dump into ArcaneCore's
@@ -55,6 +62,9 @@ public sealed class CreatureDumpImporter
     private readonly Dictionary<uint, (int Build, CreatureModelInfoRow Row)> _models = [];
     private readonly Dictionary<uint, CreatureAddonRow> _addons = [];
     private readonly Dictionary<(byte Class, byte Level), ClassLevelStats> _classLevelStats = [];
+    private readonly Dictionary<uint, CreatureAiScriptRow> _aiScripts = [];
+    private readonly Dictionary<int, CreatureAiTextRow> _aiTexts = [];
+    private bool _warnedVMangosAiEvents;
     private readonly List<string> _warnings = [];
     private int _skippedSpawns;
 
@@ -91,6 +101,20 @@ public sealed class CreatureDumpImporter
                     break;
                 case "creature_classlevelstats":
                     ReadClassLevelStats(row);
+                    break;
+                case "creature_ai_scripts" when row.Has("action1_type"):
+                    ReadAiScript(row);
+                    break;
+                case "creature_ai_texts":
+                    ReadAiText(row);
+                    break;
+                case "creature_ai_events":
+                    if (!_warnedVMangosAiEvents)
+                    {
+                        _warnedVMangosAiEvents = true;
+                        Warn("vmangos creature_ai_events use generic script commands; they are not imported (cmangos EventAI rows are)");
+                    }
+
                     break;
             }
         }
@@ -139,6 +163,8 @@ public sealed class CreatureDumpImporter
         {
             if (replace)
             {
+                await db.Set<CreatureAiScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<CreatureAiTextRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureAddonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureMovementRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureSpawnRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
@@ -151,6 +177,8 @@ public sealed class CreatureDumpImporter
             await InsertBatchedAsync(db, _spawns.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _movement.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _addons.Values, cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _aiScripts.Values, cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _aiTexts.Values, cancellationToken).ConfigureAwait(false);
 
             if (savepoint is not null)
             {
@@ -204,7 +232,15 @@ public sealed class CreatureDumpImporter
     }
 
     public CreatureImportReport BuildReport() => new(
-        Dialect, _templates.Count, _spawns.Count, _movement.Count, _models.Count, _addons.Count, _skippedSpawns, [.. _warnings]);
+        Dialect, _templates.Count, _spawns.Count, _movement.Count, _models.Count, _addons.Count, _skippedSpawns, [.. _warnings])
+    {
+        AiEvents = _aiScripts.Count,
+        AiTexts = _aiTexts.Count,
+    };
+
+    /// <summary>The EventAI rows that would be written (for inspection and tests).</summary>
+    public (IReadOnlyCollection<CreatureAiScriptRow> Scripts, IReadOnlyCollection<CreatureAiTextRow> Texts) AiSnapshot()
+        => ([.. _aiScripts.Values], [.. _aiTexts.Values]);
 
     private static async Task InsertBatchedAsync<T>(WorldDbContext db, IEnumerable<T> rows, CancellationToken ct)
         where T : class
@@ -296,6 +332,7 @@ public sealed class CreatureDumpImporter
             MovementType = U8(row, "MovementType", "movement_type"),
             CorpseDecaySeconds = U32(row, "CorpseDecay"),
             ExtraFlags = U32(row, "ExtraFlags", "flags_extra"),
+            AIName = Truncate(Str(row, "AIName", "ai_name"), 64),
         };
 
         VMangosStats? stats = null;
@@ -442,6 +479,7 @@ public sealed class CreatureDumpImporter
             Z = F32(row, 0f, "PositionZ", "position_z"),
             Orientation = F32(row, 0f, "Orientation"),
             WaitTimeMs = U32(row, "WaitTime"),
+            Run = U32(row, "Run", "run") != 0,
         };
         _movement[(point.SpawnGuid, point.Point)] = point;
     }
@@ -496,6 +534,60 @@ public sealed class CreatureDumpImporter
             throw new FormatException($"mixed dump dialects: {Dialect} and {dialect}");
         }
     }
+
+    // --- creature_ai_scripts / creature_ai_texts (cmangos-classic EventAI) ------------------
+
+    private void ReadAiScript(DumpRow row)
+    {
+        var script = new CreatureAiScriptRow
+        {
+            Id = U32(row, "id"),
+            CreatureId = U32(row, "creature_id"),
+            EventType = U8(row, "event_type"),
+            EventInversePhaseMask = U32(row, "event_inverse_phase_mask"),
+            EventChance = U8(row, "event_chance"),
+            EventFlags = U8(row, "event_flags"),
+            EventParam1 = Int(Get(row, "event_param1")),
+            EventParam2 = Int(Get(row, "event_param2")),
+            EventParam3 = Int(Get(row, "event_param3")),
+            EventParam4 = Int(Get(row, "event_param4")),
+            Action1Type = U8(row, "action1_type"),
+            Action1Param1 = Int(Get(row, "action1_param1")),
+            Action1Param2 = Int(Get(row, "action1_param2")),
+            Action1Param3 = Int(Get(row, "action1_param3")),
+            Action2Type = U8(row, "action2_type"),
+            Action2Param1 = Int(Get(row, "action2_param1")),
+            Action2Param2 = Int(Get(row, "action2_param2")),
+            Action2Param3 = Int(Get(row, "action2_param3")),
+            Action3Type = U8(row, "action3_type"),
+            Action3Param1 = Int(Get(row, "action3_param1")),
+            Action3Param2 = Int(Get(row, "action3_param2")),
+            Action3Param3 = Int(Get(row, "action3_param3")),
+            Comment = Truncate(Str(row, "comment"), 255),
+        };
+        _aiScripts[script.Id] = script;
+    }
+
+    private void ReadAiText(DumpRow row)
+    {
+        var text = new CreatureAiTextRow
+        {
+            Entry = Int(Get(row, "entry")),
+            Content = Str(row, "content_default"),
+            Type = U8(row, "type"),
+            Language = U32(row, "language"),
+            Emote = U32(row, "emote"),
+        };
+        if (text.Entry >= 0)
+        {
+            Warn($"creature_ai_texts entry {text.Entry} is not negative; skipped");
+            return;
+        }
+
+        _aiTexts[text.Entry] = text;
+    }
+
+    private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max];
 
     private void Warn(string message)
     {
