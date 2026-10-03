@@ -142,3 +142,17 @@ Provider coverage. The schema and store tests are theories over `TestDatabases.A
 is not transactional and commits implicitly, so the step is only re-runnable (the upgrade test drops the table and runs the step twice);
 PostgreSQL folds unquoted identifiers to lower case, so EF quotes every identifier and the importer matches headers case-insensitively in
 code, never in SQL. The MariaDB and PostgreSQL cases have not been run.
+
+### AI selection (Creatures/AI/CreatureAiServices.cs `CreatureAiFactory.Create`)
+
+A creature with no `AIName` and `creature_ai_scripts` rows for its entry (or its spawn guid: a negative `creature_id`) now runs EventAI
+(`Creatures:ImplicitEventAi`, default true); an explicit `AIName` always wins, and a summoned pet, guardian or totem never gets it. This is a
+**data-dialect bridge, not the vmangos rule**: vmangos selects EventAI only for `ai_name = 'EventAI'` (AI/CreatureAISelector.cpp:37-100, AI/EventAI/CreatureEventAI.cpp:51-56),
+while mangos-classic selects it for every creature that is not a pet, totem or guard (CreatureEventAI::Permissible, AI/EventAI/CreatureEventAI.cpp:51-63).
+The classic-db dump this server imports has no `AIName` column at all (79 `creature_template` columns), yet 4,325 of its 10,384 templates have
+`creature_ai_scripts` rows (1,284 of them the "flee at 15%" script); without the bridge those rows never run. Counts: python over the z2815 dump,
+not verified by a run of this server. Switch it off to get vmangos' AIName-only selection.
+
+Limits: the vmangos selector's other branches (GuardAI for guards, CritterAI for critters, GuardEventAI/PetEventAI, the permit contest, PetAI/TotemAI by owner)
+are not delivered; pets and totems get theirs from the pets and totems areas. Unsupported EventAI events and actions in the newly attached rows are
+reported once per entry (`Creatures:EventAi:ReportUnsupported`) and skipped, so scripts that need a missing primitive are partly inert.

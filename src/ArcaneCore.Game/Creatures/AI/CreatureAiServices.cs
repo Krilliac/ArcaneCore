@@ -92,7 +92,7 @@ public interface ICreatureSpellCaster
 /// Builds a creature's AI from its <c>AIName</c> (vmangos CreatureAISelector / cmangos
 /// ScriptMgr::GetCreatureAI). Built-ins: <c>NullAI</c>, <c>ReactorAI</c>, <c>PassiveAI</c>,
 /// <c>AggressorAI</c>, <c>EventAI</c>. Scripts register more names before the world starts.
-/// An empty name picks ReactorAI for civilians and AggressorAI otherwise; an unknown name uses
+/// An empty name picks EventAI when the entry or spawn has creature_ai_scripts rows (<c>Creatures:ImplicitEventAi</c>), else ReactorAI for civilians and AggressorAI otherwise; an unknown name uses
 /// the same default and is reported once.
 /// </summary>
 public sealed class CreatureAiFactory
@@ -123,6 +123,15 @@ public sealed class CreatureAiFactory
 
     /// <summary>The AI for <paramref name="creature"/>; <paramref name="unknown"/> is true when its AIName is not registered.</summary>
     public CreatureAI Create(Creature creature, CreatureContent content, out bool unknown)
+        => Create(creature, content, out unknown, implicitEventAi: true);
+
+    /// <summary>
+    /// Select the AI (vmangos FactorySelector::selectAI, AI/CreatureAISelector.cpp:37-100, as far as this server has the classes): the
+    /// template's AIName when it names a registered AI; otherwise, with <paramref name="implicitEventAi"/> (<c>Creatures:ImplicitEventAi</c>) and
+    /// <c>creature_ai_scripts</c> rows for the creature's entry or spawn guid, EventAI (the cmangos-classic default permit; classic-db has no AIName
+    /// column); otherwise ReactorAI for a civilian and AggressorAI for the rest. A summoned pet, guardian or totem never gets the implicit EventAI.
+    /// </summary>
+    public CreatureAI Create(Creature creature, CreatureContent content, out bool unknown, bool implicitEventAi)
     {
         ArgumentNullException.ThrowIfNull(creature);
         string name = creature.Template.AIName;
@@ -136,9 +145,19 @@ public sealed class CreatureAiFactory
 
             unknown = true;
         }
+        else if (implicitEventAi && creature.Summon is null && HasEventRows(creature, content)
+            && _factories.TryGetValue(EventAIName, out Func<Creature, CreatureContent, CreatureAI>? eventFactory))
+        {
+            return eventFactory(creature, content);
+        }
 
         return creature.Template.Civilian ? new ReactorAI(creature) : new AggressorAI(creature);
     }
+
+    /// <summary>Whether <c>creature_ai_scripts</c> has rows for the creature's entry, or for its spawn (a negative creature_id).</summary>
+    private static bool HasEventRows(Creature creature, CreatureContent content)
+        => content.Ai.GetEvents(creature.Template.Entry).Count > 0
+            || (creature.Spawn is { } spawn && content.Ai.GetGuidEvents(spawn.Guid).Count > 0);
 }
 
 /// <summary>Everything the creature AI needs from other areas; each member has a working default.</summary>

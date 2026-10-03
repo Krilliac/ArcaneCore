@@ -97,7 +97,7 @@ public sealed partial class CreatureMapSystem
 
     private void CreateAi(Creature creature)
     {
-        CreatureAI ai = _ai.Factory.Create(creature, _content, out bool unknown);
+        CreatureAI ai = _ai.Factory.Create(creature, _content, out bool unknown, _options.ImplicitEventAi);
         string aiName = creature.Template.AIName;
         if (unknown && _reportedAi.Add($"name:{aiName}"))
         {
