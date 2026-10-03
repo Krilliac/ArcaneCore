@@ -1,0 +1,314 @@
+using ArcaneCore.Game;
+using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Protocol;
+using ArcaneCore.World.Bans;
+using Xunit;
+
+namespace ArcaneCore.World.Tests.Bans;
+
+/// <summary>
+/// The .ban / .unban / .baninfo / .banlist commands end to end against the real world host, with the retail
+/// texts (mangos_string 408-428) and mechanics (vmangos AccountCommands.cpp:516-1010, World.cpp:2461-2665). The
+/// store call is asynchronous; the reply arrives when it completes, like retail's BanQueryHolder.
+/// </summary>
+public sealed class BanCommandTests
+{
+    [Fact]
+    public async Task BanAccount_Temporary_RepliesWithTheRetailText_KicksTheVictim_AndWritesTheRow()
+    {
+        await using var host = WorldTestHost.Start(banOptions: new BanOptions { RealmId = 7 });
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await using WorldTestClient victim = await host.EnterWorldAsync("VICTIM", "Victim");
+        await Drain(admin, victim);
+
+        Assert.Equal("VICTIM is banned for 1d. Reason: spam.", await CommandAsync(admin, ".ban account victim 1d spam"));
+
+        Assert.True(await victim.IsClosedByServerAsync());
+        int id = (await host.Accounts.FindByUsernameAsync("VICTIM"))!.Id;
+        AccountBanRecord row = (await host.Bans.GetActiveAccountBanAsync(id))!;
+        Assert.False(row.IsPermanent);
+        Assert.Equal(86400, row.UnbanDate - row.BanDate);
+        Assert.Equal("spam", row.Reason);
+        Assert.Equal("Admin", row.BannedBy);
+        Assert.Equal(7, row.Realm); // Bans:RealmId
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("forever")] // retail quirk: an unparseable duration is a PERMANENT ban
+    [InlineData("5")]       // digits without a unit contribute nothing
+    public async Task BanAccount_ZeroOrUnparseableDuration_IsPermanent(string duration)
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await host.AddAccountAsync("TARGET");
+        await Drain(admin);
+
+        Assert.Equal("TARGET is banned permanently for cheating.", await CommandAsync(admin, $".ban account target {duration} cheating"));
+
+        int id = (await host.Accounts.FindByUsernameAsync("TARGET"))!.Id;
+        Assert.True((await host.Bans.GetActiveAccountBanAsync(id))!.IsPermanent);
+    }
+
+    [Fact]
+    public async Task RejectUnparseableDuration_TurnsATypoIntoASyntaxError()
+    {
+        await using var host = WorldTestHost.Start(banOptions: new BanOptions { RejectUnparseableDuration = true });
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await host.AddAccountAsync("TARGET");
+        await Drain(admin);
+
+        Assert.StartsWith("Incorrect syntax. .ban account:", await CommandAsync(admin, ".ban account target forever x"));
+        Assert.Equal("TARGET is banned for 1h. Reason: x.", await CommandAsync(admin, ".ban account target 1h x"));
+    }
+
+    [Fact]
+    public async Task BanAccount_UnknownAccount_AndMissingArguments()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await Drain(admin);
+
+        Assert.Equal("account NOBODY not found", await CommandAsync(admin, ".ban account nobody 1d spam"));
+        Assert.StartsWith("Incorrect syntax.", await CommandAsync(admin, ".ban account nobody 1d")); // no reason
+        Assert.Equal("Account not exist: ABCDEFGHIJKLMNOPQ", await CommandAsync(admin, ".ban account abcdefghijklmnopq 1d x")); // normalizeString fails
+    }
+
+    [Fact]
+    public async Task BanAccount_TheReasonIsOneToken_UnlessQuoted()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await host.AddAccountAsync("ONE");
+        await host.AddAccountAsync("TWO");
+        await Drain(admin);
+
+        Assert.Equal("ONE is banned for 1m. Reason: cheating.", await CommandAsync(admin, ".ban account one 1m cheating and more"));
+        Assert.Equal("TWO is banned for 1m. Reason: two words.", await CommandAsync(admin, ".ban account two 1m 'two words'"));
+    }
+
+    [Fact]
+    public async Task BanningYourOwnAccount_BansButDoesNotKickTheInvoker()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("SELFBAN", "Selfban", AccountSecurity.Administrator);
+        await Drain(admin);
+
+        Assert.Equal("SELFBAN is banned for 1h. Reason: oops.", await CommandAsync(admin, ".ban account selfban 1h oops"));
+
+        int id = (await host.Accounts.FindByUsernameAsync("SELFBAN"))!.Id;
+        Assert.NotNull(await host.Bans.GetActiveAccountBanAsync(id));
+        Assert.NotNull(host.Registry.Find(id)); // World.cpp:2552-2553: the author is not kicked
+    }
+
+    [Fact]
+    public async Task BanCharacter_ResolvesOfflineCharacters_ThroughTheDirectory_AndBansTheOwningAccount()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        WorldTestClient sleeper = await host.EnterWorldAsync("SLEEPER", "Sleeper");
+        await sleeper.DisposeAsync();
+        await WorldTestHost.WaitForAsync(() => host.World.FindOnlinePlayer("Sleeper") is null, "Sleeper to go offline");
+        await Drain(admin);
+
+        Assert.Equal("Sleeper is banned for 2h. Reason: x.", await CommandAsync(admin, ".ban character sleeper 2h x"));
+        Assert.Equal("character Ghost not found", await CommandAsync(admin, ".ban character ghost 2h x"));
+
+        int id = (await host.Accounts.FindByUsernameAsync("SLEEPER"))!.Id;
+        Assert.NotNull(await host.Bans.GetActiveAccountBanAsync(id));
+    }
+
+    [Fact]
+    public async Task BanIp_KicksSessionsFromThatAddress_AndRejectsAMalformedAddress()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await using WorldTestClient other = await host.EnterWorldAsync("OTHER", "Other");
+        await Drain(admin, other);
+
+        Assert.StartsWith("Incorrect syntax.", await CommandAsync(admin, ".ban ip not-an-ip 1d x"));
+        Assert.Equal("127.0.0.1 is banned permanently for lan.", await CommandAsync(admin, ".ban ip 127.0.0.1 0 lan"));
+
+        // Both clients connect from the loopback address; the invoker's own account is spared, the other is kicked.
+        Assert.True(await other.IsClosedByServerAsync());
+        Assert.NotNull(await host.Bans.GetActiveIpBanAsync("127.0.0.1"));
+        int adminId = (await host.Accounts.FindByUsernameAsync("ADMIN"))!.Id;
+        Assert.NotNull(host.Registry.Find(adminId));
+    }
+
+    [Fact]
+    public async Task Unban_LiftsTheBan_AndTheAccountCanAuthenticateAgain()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        byte[] key = await host.AddAccountAsync("LIFTED");
+        await Drain(admin);
+        await CommandAsync(admin, ".ban account lifted 1d x");
+
+        Assert.StartsWith("Incorrect syntax.", await CommandAsync(admin, ".unban account lifted")); // the message is required
+        Assert.Equal("LIFTED unbanned.", await CommandAsync(admin, ".unban account lifted appealed"));
+        Assert.Equal("There was an error removing the ban on NOBODY.", await CommandAsync(admin, ".unban account nobody m"));
+
+        await using WorldTestClient again = await host.ConnectAsync();
+        await again.AuthenticateAsync("LIFTED", key); // asserts AUTH_OK
+        int id = (await host.Accounts.FindByUsernameAsync("LIFTED"))!.Id;
+        Assert.Contains(await host.Bans.GetHistoryAsync(id), r => r.Reason == "UNBAN: appealed" && !r.Active);
+    }
+
+    [Fact]
+    public async Task UnbanIp_DeletesTheRow_AndAlwaysReportsSuccess()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await Drain(admin);
+        host.Bans.AddIpRow("10.0.0.9", 1, 1);
+
+        Assert.Equal("10.0.0.9 unbanned.", await CommandAsync(admin, ".unban ip 10.0.0.9 done"));
+        Assert.Null(await host.Bans.GetActiveIpBanAsync("10.0.0.9"));
+        Assert.Equal("10.0.0.9 unbanned.", await CommandAsync(admin, ".unban ip 10.0.0.9 again"));
+    }
+
+    [Fact]
+    public async Task BanInfo_ShowsTheHistory_OrThatTheAccountWasNeverBanned()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await host.AddAccountAsync("CLEAN");
+        await host.AddAccountAsync("HISTORY");
+        await Drain(admin);
+
+        Assert.Equal("Account CLEAN has never been banned", await CommandAsync(admin, ".baninfo account clean"));
+        Assert.Equal("Account not exist: GHOST", await CommandAsync(admin, ".baninfo account ghost"));
+
+        await CommandAsync(admin, ".ban account history 1d noisy");
+        await CommandAsync(admin, ".unban account history sorry");
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".baninfo account history");
+        string[] lines = await ReadLinesAsync(admin, 3);
+
+        Assert.Equal("Ban history for account HISTORY:", lines[0]);
+        Assert.Matches(@"^Ban Date: \d{4}-\d\d-\d\d \d\d:\d\d:\d\d Bantime: 1d Still active: No  Reason: noisy Set by: Admin \(NoRealm\)$", lines[1]);
+        Assert.Matches(@"^Ban Date: \S+ \S+ Bantime: 1s Still active: (Yes|No)  Reason: UNBAN: sorry Set by: Admin \(NoRealm\)$", lines[2]);
+
+        int id = (await host.Accounts.FindByUsernameAsync("HISTORY"))!.Id;
+        await admin.SendChatAsync(ChatType.Say, Language.Common, $".baninfo account {id}"); // by id
+        Assert.Equal("Ban history for account HISTORY:", (await ReadLinesAsync(admin, 3))[0]);
+    }
+
+    [Fact]
+    public async Task BanInfoIp_ShowsTheEntry_OrThatThereIsNone()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await Drain(admin);
+
+        Assert.Equal("There is no such IP in banlist.", await CommandAsync(admin, ".baninfo ip 10.9.8.7"));
+        host.Bans.AddIpRow("10.9.8.7", 1, 1);
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".baninfo ip 10.9.8.7");
+        string[] lines = await ReadLinesAsync(admin, 6);
+        Assert.Equal("IP: 10.9.8.7", lines[0]);
+        Assert.StartsWith("Ban Date: ", lines[1]);
+        Assert.Equal("Unban Date: Never", lines[2]);
+        Assert.Equal("Remaining: Inf.", lines[3]);
+        Assert.Equal("Reason: ext", lines[4]);
+        Assert.Equal("Set by: ext", lines[5]);
+    }
+
+    [Fact]
+    public async Task BanList_Account_Character_Ip_ListMatchesAndPurgeExpiredIpsFirst()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        WorldTestClient pat = await host.EnterWorldAsync("PATRICK", "Patty");
+        await pat.DisposeAsync();
+        await host.AddAccountAsync("PETER");
+        await Drain(admin);
+        await CommandAsync(admin, ".ban account patrick 1d x");
+        await CommandAsync(admin, ".ban account peter 1d x");
+
+        Assert.Equal("There is no matching account.", await CommandAsync(admin, ".banlist account zzz"));
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".banlist account pa");
+        Assert.Equal(["The following accounts match your query:", "PATRICK"], await ReadLinesAsync(admin, 2));
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".banlist account");
+        Assert.Equal(["The following accounts match your query:", "PATRICK", "PETER"], await ReadLinesAsync(admin, 3));
+
+        Assert.Equal("There is no banned account owning a character matching this part.", await CommandAsync(admin, ".banlist character zzz"));
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".banlist character patt");
+        Assert.Equal(["The following accounts match your query:", "PATRICK"], await ReadLinesAsync(admin, 2));
+
+        host.Bans.AddIpRow("1.2.3.4", 100, 200);       // expired long ago: purged first
+        host.Bans.AddIpRow("1.2.3.5", 100, 100);       // permanent
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".banlist ip 1.2.3");
+        Assert.Equal(["The following IPs match your pattern:", "1.2.3.5"], await ReadLinesAsync(admin, 2));
+        Assert.Equal("There is no matching IPban.", await CommandAsync(admin, ".banlist ip 9."));
+        Assert.True(host.Bans.PurgeCalls >= 1);
+    }
+
+    [Fact]
+    public async Task SecurityTiers_FollowVmangosChatCpp()
+    {
+        // vmangos Chat.cpp:170-191, 1022-1024, 1263-1266 mapped onto ArcaneCore's levels: ban account/character and
+        // baninfo/banlist ip are GAMEMASTER, baninfo/banlist account/character are TICKETMASTER (Moderator), and
+        // ban ip, ban allip and unban are ADMINISTRATOR.
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient mod = await host.EnterWorldAsync("MOD", "Moderator", AccountSecurity.Moderator);
+        await using WorldTestClient gm = await host.EnterWorldAsync("GM", "Gamemaster", AccountSecurity.GameMaster);
+        await host.AddAccountAsync("TARGET");
+        await Drain(mod, gm);
+
+        // A visible parent with only hidden children answers with the subcommand list; either way the verb did not run.
+        static bool Refused(string reply) => reply.StartsWith("There is no such command", StringComparison.Ordinal) || reply.StartsWith("There is no such subcommand", StringComparison.Ordinal);
+        Assert.True(Refused(await CommandAsync(mod, ".ban account target 1d x")));
+        Assert.True(Refused(await CommandAsync(mod, ".baninfo ip 1.2.3.4")));
+        Assert.True(Refused(await CommandAsync(mod, ".banlist ip")));
+        Assert.True(Refused(await CommandAsync(mod, ".unban account target x")));
+        Assert.False(Refused(await CommandAsync(mod, ".baninfo account target")));
+        Assert.False(Refused(await CommandAsync(mod, ".banlist account")));
+
+        Assert.True(Refused(await CommandAsync(gm, ".unban account target x")));
+        Assert.True(Refused(await CommandAsync(gm, ".ban ip 1.2.3.4 1d x")));
+        Assert.False(Refused(await CommandAsync(gm, ".baninfo ip 1.2.3.4")));
+        Assert.False(Refused(await CommandAsync(gm, ".banlist ip")));
+        Assert.Equal("TARGET is banned for 1d. Reason: x.", await CommandAsync(gm, ".ban account target 1d x"));
+    }
+
+    [Fact]
+    public async Task AStoreFault_IsLoggedAndAnswered_NotThrownIntoTheWorld()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await host.AddAccountAsync("TARGET");
+        await Drain(admin);
+        host.Bans.FailWriteWith = new InvalidOperationException("database down");
+
+        Assert.Equal("The ban database is unavailable; see the server log.", await CommandAsync(admin, ".ban account target 1d x"));
+        host.Bans.FailWriteWith = null;
+        Assert.Equal("TARGET is banned for 1d. Reason: x.", await CommandAsync(admin, ".ban account target 1d x")); // the session survived
+    }
+
+    private static async Task Drain(params WorldTestClient[] clients)
+    {
+        foreach (WorldTestClient client in clients)
+        {
+            await client.CollectAsync();
+        }
+    }
+
+    private static async Task<string> CommandAsync(WorldTestClient client, string line)
+    {
+        await client.SendChatAsync(ChatType.Say, Language.Common, line);
+        ChatMessage reply = await client.ReadChatAsync();
+        Assert.Equal(ChatType.System, reply.Type);
+        return reply.Text;
+    }
+
+    private static async Task<string[]> ReadLinesAsync(WorldTestClient client, int count)
+    {
+        string[] lines = new string[count];
+        for (int i = 0; i < count; i++)
+        {
+            lines[i] = (await client.ReadChatAsync()).Text;
+        }
+
+        return lines;
+    }
+}

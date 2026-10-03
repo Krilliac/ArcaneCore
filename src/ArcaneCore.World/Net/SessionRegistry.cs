@@ -35,4 +35,7 @@ public sealed class SessionRegistry
         => _byAccount.TryRemove(new KeyValuePair<int, WorldSession>(session.AccountId, session));
 
     public WorldSession? Find(int accountId) => _byAccount.GetValueOrDefault(accountId);
+
+    /// <summary>A point-in-time snapshot of the registered sessions (live ban enforcement and the periodic re-check).</summary>
+    public IReadOnlyList<WorldSession> Sessions => [.. _byAccount.Values];
 }

@@ -88,10 +88,11 @@ public sealed class LogonServer(
             {
                 IAccountStore accountStore = scope.ServiceProvider.GetRequiredService<IAccountStore>();
                 IRealmStore realmStore = scope.ServiceProvider.GetRequiredService<IRealmStore>();
+                IBanStore? banStore = scope.ServiceProvider.GetService<IBanStore>();
 
                 var session = new LogonSession(
                     stream, accountStore, realmStore, config,
-                    loggerFactory.CreateLogger<LogonSession>(), endpoint);
+                    loggerFactory.CreateLogger<LogonSession>(), endpoint, banStore);
 
                 await session.RunAsync(stoppingToken).ConfigureAwait(false);
             }

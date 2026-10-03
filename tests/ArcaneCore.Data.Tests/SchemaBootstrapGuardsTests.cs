@@ -33,7 +33,7 @@ public sealed class SchemaBootstrapGuardsTests : IAsyncLifetime
         // Modules may be numbered after the repair: their tables are created with their indexes.
         Assert.True(CharacterDbContext.Schema.CurrentVersion >= CharacterDbContext.IndexRepairVersion);
         Assert.True(WorldDbContext.Schema.CurrentVersion >= WorldDbContext.IndexRepairVersion);
-        Assert.Equal(2, AuthDbContext.Schema.CurrentVersion); // auth has no index repair: its one index is a version-1 index
+        Assert.Equal(ArcaneCore.Data.Auth.BanDataModule.Version, AuthDbContext.Schema.CurrentVersion); // auth has no index repair: the ban tables are created with their indexes
 
         foreach ((SchemaDefinition schema, int repairVersion) in new[]
         {

@@ -7,6 +7,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.World.Bans;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Features;
@@ -35,14 +36,26 @@ internal sealed class WorldTestHost : IAsyncDisposable
     private readonly ILogger _sessionLogger;
 
     private WorldTestHost(
-        int compressionThreshold, Action<WorldRuntimeOptions>? configure, Action<IServiceCollection>? configureServices, WorldSessionOptions? sessionOptions, ILogger? sessionLogger)
+        int compressionThreshold, Action<WorldRuntimeOptions>? configure, Action<IServiceCollection>? configureServices, WorldSessionOptions? sessionOptions, ILogger? sessionLogger,
+        BanOptions? banOptions)
     {
         _sessionOptions = sessionOptions ?? new WorldSessionOptions();
         _sessionLogger = sessionLogger ?? NullLogger.Instance;
+        Bans = new Bans.InMemoryBanStore(StatusEvents);
         var collection = new ServiceCollection();
         collection.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         collection.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        Accounts.Events = StatusEvents;
         collection.AddSingleton<IAccountStore>(Accounts);
+        collection.AddSingleton<IAccountAdmin>(Accounts);
+        // Live-ban enforcement (docs/security/live-bans.md): the registry, the status events and the ban rows.
+        collection.AddSingleton(Registry);
+        collection.AddSingleton(StatusEvents);
+        collection.AddSingleton<IBanStore>(Bans);
+        if (banOptions is not null)
+        {
+            collection.AddSingleton(Microsoft.Extensions.Options.Options.Create(banOptions));
+        }
         collection.AddSingleton<ICharacterStore>(Characters);
         collection.AddSingleton<ICharacterLifeStore>(Characters);
         collection.AddSingleton<IAccountDataStore>(AccountData);
@@ -77,6 +90,17 @@ internal sealed class WorldTestHost : IAsyncDisposable
 
     public InMemoryAccountStore Accounts { get; } = new();
 
+    /// <summary>When true, an exception escaping a session is collected in <see cref="SessionFaults"/> instead of failing the host.</summary>
+    public bool ExpectSessionFaults { get; set; }
+
+    public List<Exception> SessionFaults { get; } = [];
+
+    /// <summary>In-process ban notifications (the stores publish, the BanEnforcementFeature subscribes).</summary>
+    public AccountStatusEvents StatusEvents { get; } = new();
+
+    /// <summary>The ban rows (account_banned / ip_banned equivalent).</summary>
+    public Bans.InMemoryBanStore Bans { get; }
+
     public InMemoryCharacterStore Characters { get; } = new();
 
     public InMemoryAccountDataStore AccountData { get; } = new();
@@ -101,8 +125,8 @@ internal sealed class WorldTestHost : IAsyncDisposable
     /// <summary>Start a host. Compression is off by default so tests can read update blocks directly.</summary>
     public static WorldTestHost Start(
         int compressionThreshold = 0, Action<WorldRuntimeOptions>? configure = null, Action<IServiceCollection>? configureServices = null,
-        WorldSessionOptions? sessionOptions = null, ILogger? sessionLogger = null)
-        => new(compressionThreshold, configure, configureServices, sessionOptions, sessionLogger);
+        WorldSessionOptions? sessionOptions = null, ILogger? sessionLogger = null, BanOptions? banOptions = null)
+        => new(compressionThreshold, configure, configureServices, sessionOptions, sessionLogger, banOptions);
 
     /// <summary>Create an account with a fresh session key (as if it had just logged in at the realm).</summary>
     public async Task<byte[]> AddAccountAsync(string name, AccountSecurity security = AccountSecurity.Player)
@@ -231,9 +255,21 @@ internal sealed class WorldTestHost : IAsyncDisposable
                 await using (AsyncServiceScope scope = _services.CreateAsyncScope())
                 {
                     var worldSession = new WorldSession(
-                        stream, "test", scope.ServiceProvider, Opcodes, World, Registry,
+                        stream, client.Client.RemoteEndPoint?.ToString() ?? "test", scope.ServiceProvider, Opcodes, World, Registry,
                         _sessionOptions, _sessionLogger);
-                    await worldSession.RunAsync(_stop.Token);
+                    try
+                    {
+                        await worldSession.RunAsync(_stop.Token);
+                    }
+                    catch (Exception ex) when (ExpectSessionFaults)
+                    {
+                        // The production host (WorldServer.HandleClientAsync) logs a session fault and closes the
+                        // connection; a test that provokes one (a store outage) opts in to collecting it.
+                        lock (SessionFaults)
+                        {
+                            SessionFaults.Add(ex);
+                        }
+                    }
                 }
             });
 
