@@ -187,11 +187,9 @@ public sealed class PlayerStatSystem : ICombatStatSource
         }
 
         uint time = apply ? template.Delay : CombatConstants.BaseAttackTimeMs;
-        player.SetUInt32(UpdateFields.UnitFieldBaseattacktime + (int)attackType, time);
-        if (resetTimer)
-        {
-            player.Combat.ResetAttackTimer(attackType);
-        }
+        // ranged (autorepeat lane): SetAttackTime stores time * speed multiplier (vmangos Unit::SetAttackTime), so a weapon swap
+        // under haste keeps the haste.
+        player.Combat.SetAttackTime(attackType, time, resetTimer);
 
         UpdateDamagePhysical(player, attackType);
     }

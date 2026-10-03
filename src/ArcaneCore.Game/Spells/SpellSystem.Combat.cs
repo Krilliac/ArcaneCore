@@ -286,7 +286,8 @@ public sealed partial class SpellSystem
 
         // vmangos Unit::GetTotalAttackPowerValue (Unit.cpp:8037): AP + positive mods + negative mods (the halves of *_MODS are int16, the negative one is <= 0).
         float attackPower = Math.Max(0, unit.GetInt32(apIndex) + (short)(unit.GetUInt32(apIndex + 1) & 0xFFFF) + (short)(unit.GetUInt32(apIndex + 1) >> 16));
-        float speed = unit.GetUInt32(timeIndex) / 1000.0f;
+        // ranged (autorepeat lane): the UNHASTED speed (Unit::GetAttackTime), so haste does not change damage per hit (SpellCaster.cpp:1826-1833).
+        float speed = unit.Combat.GetUnhastedTime(attack) / 1000.0f;
         float normalizedSpeed = NormalizedWeaponSpeed(unit, attack);
         return Math.Max(0f, roll + ((normalizedSpeed - speed) * attackPower / 14.0f));
     }
