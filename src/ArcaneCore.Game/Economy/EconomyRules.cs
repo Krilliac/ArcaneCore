@@ -42,6 +42,12 @@ public sealed class EconomyOptions
     /// <summary>Minimum deposit in copper (vmangos CONFIG_UINT32_AUCTION_DEPOSIT_MIN, default 0).</summary>
     public uint AuctionDepositMin { get; set; }
 
+    /// <summary>Rate.Auction.Deposit multiplier (vmangos World.cpp:535, default 1.0).</summary>
+    public float AuctionRateDeposit { get; set; } = 1.0f;
+
+    /// <summary>Rate.Auction.Cut multiplier (vmangos World.cpp:536, default 1.0).</summary>
+    public float AuctionRateCut { get; set; } = 1.0f;
+
     /// <summary>Seconds between expiry sweeps of mail and auctions.</summary>
     public uint ExpirySweepSeconds { get; set; } = 60;
 
@@ -84,17 +90,37 @@ public static class AuctionHouseRules
         return options.AuctionHouses.FirstOrDefault(h => h.Id == id);
     }
 
-    /// <summary>vmangos GetAuctionDeposit: SellPrice × count × (duration / 2 h) × deposit% (at least the configured minimum).</summary>
-    public static uint Deposit(AuctionHouseEntry house, uint sellPrice, uint count, uint durationMinutes, uint minimum = 0)
+    /// <summary>
+    /// vmangos GetAuctionDeposit (AuctionHouseMgr.cpp:98-110): single-precision arithmetic in vmangos order,
+    /// float(sell * count * units) * depositPercent / 100.0f, raised to the minimum, then multiplied by
+    /// Rate.Auction.Deposit and truncated. The integer product is taken in 64 bits (vmangos wraps it in uint32;
+    /// real item data never reaches that: max SellPrice*stack*12 = 24,000,000).
+    /// </summary>
+    public static uint Deposit(AuctionHouseEntry house, uint sellPrice, uint count, uint durationMinutes, uint minimum = 0, float rate = 1f)
     {
         ulong units = (ulong)durationMinutes * 60 / MinAuctionSeconds;
-        ulong deposit = (ulong)sellPrice * count * units * house.DepositPercent / 100;
-        return (uint)Math.Min(uint.MaxValue, Math.Max(deposit, minimum));
+        float deposit = (float)((ulong)sellPrice * count * units);
+        deposit = deposit * house.DepositPercent;
+        deposit /= 100.0f;
+        float min = minimum;
+        if (deposit < min)
+        {
+            deposit = min;
+        }
+
+        float scaled = deposit * rate;
+        return scaled >= uint.MaxValue ? uint.MaxValue : scaled <= 0f ? 0u : (uint)scaled;
     }
 
-    /// <summary>vmangos GetAuctionCut: cut% of the winning bid.</summary>
-    public static uint Cut(AuctionHouseEntry house, uint bid) => (uint)((ulong)house.CutPercent * bid / 100);
-
+    /// <summary>
+    /// vmangos GetAuctionCut (AuctionHouseMgr.cpp:845-848): cutPercent * bid * Rate.Auction.Cut / 100.0f in single
+    /// precision. ArcaneCore keeps the cutPercent*bid product in 64 bits on purpose (vmangos wraps it in uint32).
+    /// </summary>
+    public static uint Cut(AuctionHouseEntry house, uint bid, float rate = 1f)
+    {
+        float cut = (float)((ulong)house.CutPercent * bid) * rate / 100.0f;
+        return cut >= uint.MaxValue ? uint.MaxValue : cut <= 0f ? 0u : (uint)cut;
+    }
     /// <summary>vmangos GetAuctionOutBid: 5% of the current bid in whole percents, at least 1 copper.</summary>
     public static uint OutBid(uint bid) => Math.Max(bid / 100 * 5, 1);
 

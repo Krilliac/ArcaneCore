@@ -107,7 +107,7 @@ public sealed partial class EconomyFeature
             return;
         }
 
-        uint deposit = AuctionHouseRules.Deposit(house, item.Template.SellPrice, item.Count, minutes, Options.AuctionDepositMin);
+        uint deposit = AuctionHouseRules.Deposit(house, item.Template.SellPrice, item.Count, minutes, Options.AuctionDepositMin, Options.AuctionRateDeposit);
         if (player.Money < deposit)
         {
             Fail(AuctionError.NotEnoughMoney);
@@ -299,7 +299,7 @@ public sealed partial class EconomyFeature
         }
 
         AuctionRecord auction = view.Auction;
-        uint cut = auction.BidderId != 0 ? AuctionHouseRules.Cut(house, auction.Bid) : 0;
+        uint cut = auction.BidderId != 0 ? AuctionHouseRules.Cut(house, auction.Bid, Options.AuctionRateCut) : 0;
         if (player.Money < cut)
         {
             Fail(AuctionError.NotEnoughMoney);
@@ -428,7 +428,7 @@ public sealed partial class EconomyFeature
         yield return AuctionMail(auction, auction.BidderId, AuctionMailAction.Won, now, item: item);
         if (CharacterExists(auction.SellerId))
         {
-            uint cut = AuctionHouseRules.Cut(house, auction.Bid);
+            uint cut = AuctionHouseRules.Cut(house, auction.Bid, Options.AuctionRateCut);
             uint proceeds = (uint)Math.Min(EconomyOptions.MaxMoney, (long)auction.Bid + auction.Deposit - cut);
             yield return AuctionMail(auction, auction.SellerId, AuctionMailAction.Successful, now, money: proceeds, cut: cut);
         }
