@@ -26,8 +26,22 @@ public enum GuildAdminResult
 /// officer chat, and the GM create/delete/invite/uninvite/rank commands. The rules follow
 /// vmangos GuildHandler.cpp and Guild.cpp (citations per method). World thread.
 /// </summary>
-public sealed class GuildManager(SocialContext context)
+public sealed partial class GuildManager(SocialContext context)
 {
+    /// <summary>
+    /// Raised after every membership addition (accept, GM invite, founding, petition turn-in):
+    /// guild, character and the petition id that is being completed (0 for none). vmangos
+    /// Guild::AddMember strips the joiner's other petitions and signatures here (Guild.cpp:213,
+    /// Player::RemovePetitionsAndSigns, Player.cpp:17796-17806).
+    /// </summary>
+    public event Action<Guild, uint, int>? MemberJoined;
+
+    /// <summary>Raised after a member leaves a guild by any path (leave, kick, GM uninvite, disband): guild and character.</summary>
+    public event Action<Guild, uint>? MemberLeft;
+
+    /// <summary>Guild, charter and petition rules (World:Guild); defaults are the retail values.</summary>
+    public GuildOptions Options { get; set; } = new();
+
     private readonly Dictionary<int, Guild> _guilds = [];
     private readonly Dictionary<uint, Guild> _memberOf = [];
     private readonly Dictionary<ObjectGuid, (int GuildId, ObjectGuid Inviter)> _invites = [];
@@ -866,7 +880,7 @@ public sealed class GuildManager(SocialContext context)
 
     private static byte RankOf(Guild guild, Player player) => guild.Find(player.Guid.Low)?.Rank ?? guild.LowestRank;
 
-    private void AddMember(Guild guild, uint characterId, byte rank)
+    private void AddMember(Guild guild, uint characterId, byte rank, int exceptPetitionId = 0)
     {
         guild.AddMember(characterId, rank);
         _memberOf[characterId] = guild;
@@ -878,6 +892,8 @@ public sealed class GuildManager(SocialContext context)
             SetFields(online, guild.Id, rank);
             _invites.Remove(online.Guid);
         }
+
+        MemberJoined?.Invoke(guild, characterId, exceptPetitionId);
     }
 
     /// <summary>
@@ -907,6 +923,7 @@ public sealed class GuildManager(SocialContext context)
             SetFields(online, 0, 0);
         }
 
+        MemberLeft?.Invoke(guild, characterId);
         return guild.MemberCount == 0;
     }
 

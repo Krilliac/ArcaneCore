@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Guilds;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Social;
@@ -48,6 +49,9 @@ public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFac
 
     /// <summary>Realm rules for cross-faction interaction (vmangos AllowTwoSide.*); off by default.</summary>
     public SocialOptions Options { get; } = new();
+
+    /// <summary>Guild, charter and petition rules (World:Guild, bound at startup; restart-only).</summary>
+    public GuildOptions GuildOptions { get; } = new();
 
     /// <summary>Completes when the stored guilds are installed (world thread).</summary>
     public Task GuildsLoaded => _guildsLoaded;
@@ -100,8 +104,10 @@ public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFac
     {
         _world = world;
         configuration?.GetSection(SocialOptions.SectionName).Bind(Options);
+        configuration?.GetSection(GuildOptions.SectionName).Bind(GuildOptions);
         _writes = new SocialWriteQueue(scopes, loggers.CreateLogger<SocialWriteQueue>());
         _context = new SocialContext(world, new CharacterLookup(directory), _writes, Options);
+        _context.Guilds.Options = GuildOptions;
         _writes.Start();
         world.PlayerLoggedIn += OnLoggedIn;
         world.PlayerLoggingOut += OnLoggingOut;
