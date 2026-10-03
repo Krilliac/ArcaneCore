@@ -23,7 +23,7 @@ internal sealed class ThreatArena : IDisposable
     public ThreatArena(params SpellInfo[] spells)
     {
         Kit = new SpellTestKit(spells);
-        (Tank, _) = Kit.AddPlayer(1, 0, 0);
+        (Tank, TankSession) = Kit.AddPlayer(1, 0, 0);
         (Dps, _) = Kit.AddPlayer(2, 0, 1);
         (Healer, _) = Kit.AddPlayer(3, 0, 2);
         Map.Combat.ThreatModifiers = new SpellThreatModifiers(Kit.System);
@@ -42,6 +42,8 @@ internal sealed class ThreatArena : IDisposable
     public SpellTestKit Kit { get; }
 
     public Player Tank { get; }
+
+    public FakeSession TankSession { get; }
 
     public Player Dps { get; }
 

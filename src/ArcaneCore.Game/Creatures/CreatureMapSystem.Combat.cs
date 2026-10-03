@@ -95,11 +95,14 @@ public sealed partial class CreatureMapSystem
     /// who sees it that it attacks, and the client plays its aggro sound. SMSG_AI_REACTION: guid, u32 reaction (gtker wow_messages
     /// smsg_ai_reaction.wowm).
     /// </summary>
-    private void SendAiReaction(Creature creature)
+    private void SendAiReaction(Creature creature) => SendAiReaction(creature, AiReaction.Hostile);
+
+    /// <summary>SMSG_AI_REACTION with <paramref name="reaction"/> (alert for a noticed stealthed player, hostile for an attack).</summary>
+    private void SendAiReaction(Creature creature, AiReaction reaction)
     {
         if (_options.SendAiReaction)
         {
-            Map.BroadcastToObservers(creature, WorldOpcode.SmsgAiReaction, CreatureAiReactionPackets.Build(creature.Guid, AiReaction.Hostile));
+            Map.BroadcastToObservers(creature, WorldOpcode.SmsgAiReaction, CreatureAiReactionPackets.Build(creature.Guid, reaction));
         }
     }
 

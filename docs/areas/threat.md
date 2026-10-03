@@ -156,3 +156,20 @@ not verified by a run of this server. Switch it off to get vmangos' AIName-only 
 Limits: the vmangos selector's other branches (GuardAI for guards, CritterAI for critters, GuardEventAI/PetEventAI, the permit contest, PetAI/TotemAI by owner)
 are not delivered; pets and totems get theirs from the pets and totems areas. Unsupported EventAI events and actions in the newly attached rows are
 reported once per entry (`Creatures:EventAi:ReportUnsupported`) and skipped, so scripts that need a missing primitive are partly inert.
+
+### stealth and alert (Creatures/CreatureMapSystem.Aggro.cs, .Host.cs, CreatureAlert.cs)
+
+The line promised in docs/integration/rogue-creature-stealth.md is applied:
+
+- `CanAggroOnSight` asks `StealthServices.CanCreatureSee` (when the map has the stealth services): a stealthed player the creature cannot detect
+  is not attacked (vmangos Unit::CanDetectStealthOf, Objects/Unit.cpp:6543-6616; sniffed: a level 4 creature notices a level 1 rogue inside
+  3.3 yd).
+- `CallAiMoveInLineOfSight` is vmangos `CallAIMoveLOS` (Maps/GridNotifiersImpl.h:57-69): a visible unit gets `MoveInLineOfSight`; a stealthed player the creature
+  cannot see but whose stealth it nearly breaks (the 5 yd alert band) gets `CreatureAI.OnMoveInStealth`.
+- The alert (`CanTriggerAlert` / `TriggerAlert`, AI/CreatureAI.cpp:349-385): a creature that is alive, not in combat, not stunned, confused or
+  fleeing, not a civilian, not passive, with a hostile target in line of sight and no alert in the last 10 s sends SMSG_AI_REACTION (alert, wow_messages
+  smsg_ai_reaction.wowm), stops and turns to the player. Options: `Creatures:StealthAlertEnabled` (default true), `Creatures:StealthAlertCooldownMs` (10000).
+
+Limits: the 5 s MoveDistract that follows the alert needs a movement generator this server does not have (the creature carries on moving); the turn is
+the orientation field, no facing spline packet is sent; the alert comes only from the relocation-driven scan (`Poll` mode calls `MoveInLineOfSight` directly and has no
+stealth awareness); detect-range auras and creature-versus-creature detection are not modelled; the Vanish 1 s window belongs to the rogue lane.

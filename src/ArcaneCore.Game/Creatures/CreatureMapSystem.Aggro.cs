@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Stealth;
 using ArcaneCore.Kernel.WorldData.Creatures;
 
 namespace ArcaneCore.Game.Creatures;
@@ -96,6 +97,7 @@ public sealed partial class CreatureMapSystem
 
         return Map.Combat.Hooks.CanAttack(creature, player)
             && _ai.Hostility.IsHostile(creature, player)
+            && (StealthServices.Find(Map) is not { } stealth || stealth.CanCreatureSee(creature, player, out _)) // a stealthed player the creature cannot detect is not attacked (docs/integration/rogue-creature-stealth.md)
             && InLineOfSight(creature, player);
     }
 }

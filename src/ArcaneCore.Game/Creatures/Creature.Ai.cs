@@ -39,6 +39,9 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// </summary>
     internal uint PacifiedMs { get; set; }
 
+    /// <summary>The map clock (ms) of the creature's last stealth alert (vmangos m_uLastAlertTime), or null before the first one.</summary>
+    internal long? LastAlertAtMs { get; set; }
+
     /// <summary>Whether the creature is temporarily pacified (vmangos IsTempPacified).</summary>
     public bool IsTempPacified => PacifiedMs > 0;
 
