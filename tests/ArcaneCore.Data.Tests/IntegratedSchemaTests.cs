@@ -10,6 +10,7 @@ using ArcaneCore.Data.Content.Chr;
 using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.Honor;
 using ArcaneCore.Data.Instances;
 using ArcaneCore.Data.Loot;
 using ArcaneCore.Data.Economy;
@@ -84,6 +85,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.WorldState.ExploredZonesDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ExploredZonesDataModule.Version),
             (typeof(ItemLootDataModule), DatabaseComponent.Characters, ItemLootDataModule.Version),
             (typeof(PetitionDataModule), DatabaseComponent.Characters, PetitionDataModule.Version),
+            (typeof(CharacterHonorDataModule), DatabaseComponent.Characters, CharacterHonorDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
