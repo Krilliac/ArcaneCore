@@ -664,6 +664,9 @@ public sealed partial class MapCombat
             return 0;
         }
 
+        // Duels end at 1 hp (MapCombat.Duel.cs; vmangos Unit.cpp:762-779).
+        bool duelEnded = ApplyDuelClamp(attacker, victim, ref damage);
+
         if (combatLink)
         {
             SetInCombatWithAggressor(victim, attacker);
@@ -678,6 +681,11 @@ public sealed partial class MapCombat
         if (victim.Health <= damage)
         {
             Kill(attacker, victim);
+            if (duelEnded)
+            {
+                AfterLethalDuelDamage((Player)victim); // Unit.cpp:825-843
+            }
+
             return damage;
         }
 
@@ -705,6 +713,11 @@ public sealed partial class MapCombat
 
         DamageDealt?.Invoke(attacker, victim, damage, direct, meleeDamage);
         AttackedBy(victim, attacker);
+        if (duelEnded)
+        {
+            AfterClampedDuelDamage((Player)victim); // Unit.cpp:954-969
+        }
+
         return damage;
     }
 
@@ -838,7 +851,9 @@ public sealed partial class MapCombat
     /// <summary>vmangos Unit::SetInCombatWithAggressor: the victim's PvP pulse and combat state (players linger 5.5 s).</summary>
     private void SetInCombatWithAggressor(Unit victim, Unit aggressor)
     {
-        if ((aggressor.UnitFlags & UnitFlags.Pvp) != 0 && victim is Player pv && aggressor is Player pa && !ReferenceEquals(pv, pa))
+        // Duel opponents do not pulse each other (vmangos Unit.cpp:5973, !IsInDuelWith).
+        if ((aggressor.UnitFlags & UnitFlags.Pvp) != 0 && victim is Player pv && aggressor is Player pa && !ReferenceEquals(pv, pa)
+            && !DuelRules.IsInDuelWith(pv, pa))
         {
             pv.Combat.InPvpCombat = true;
             UpdatePvp(pv, true);

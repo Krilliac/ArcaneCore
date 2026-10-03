@@ -73,9 +73,10 @@ needs a characters-DB version from the lead.
   reactions (`Object.cpp:3625-3637`); duel / same-group / FFA ordering (`Object.cpp:3648-3664`) and the PvP block
   (`Object.cpp:3796-3815`); resolving the affecting player of a pet/charm (no owner field exists; the pet branch uses only the
   flag and templates).
-  The base `CombatHooks.IsFriendly` makes same-team players friendly so `CanAttack` refuses same-team duels, whereas
-  vmangos reports duel opponents HOSTILE first (`Object.cpp:3651`, `3799-3800`); ArcaneCore has no duel system yet (no
-  duel code under `src/`), so no live path is affected; a duel implementation must bypass or extend `CanAttack`.
+  Duels are now modelled in the base hooks: `CombatHooks.IsFriendly` reports a started duel opponent hostile before the team
+  rule (`Object.cpp:3650-3652`) and `CanAttack` waives the PvP-flag gate for it (`Object.cpp:3797-3800`), so same-team and
+  unflagged enemy-team duelists can fight, and `FactionCombatHooks` inherits both. See [duels](duels.md) and
+  [areas/duels.md](../areas/duels.md).
   Evidence: automated tests plus the vmangos references cited above (`D:\refs\vmangos`), no 1.12.1 client (charter 1.3).
 - Register hooks per world: `CombatHooks.Register(world, hooks)` (last writer wins) or
   `CombatHooks.TryRegister(world, hooks)` (first wins, returns false otherwise).

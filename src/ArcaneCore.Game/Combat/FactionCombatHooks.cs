@@ -27,8 +27,9 @@ namespace ArcaneCore.Game.Combat;
 /// 3677-3693); neutral-versus-neutral being attackable only when the faction is at war for reputation-capable
 /// factions (Object.cpp:3775-3792); the contested-guard rule (IsContestedGuardFaction plus PLAYER_FLAGS_CONTESTED_PVP
 /// => HOSTILE, Object.cpp:3714-3716); GM players reading NEUTRAL (Object.cpp:3625-3626, 3633-3634) and forced
-/// reactions (GetForcedRankIfAny); the ordering with duel / same-group / FFA reactions (Object.cpp:3648-3664) and
-/// the PvP block (Object.cpp:3796-3815); resolving the affecting player of a pet or charm (no owner field exists).
+/// reactions (GetForcedRankIfAny); the ordering with same-group / FFA reactions (Object.cpp:3654-3664) and
+/// the FFA parts of the PvP block (Object.cpp:3805-3815); the duel reaction and the duel PvP exemption ARE modelled, in the
+/// base <see cref="CombatHooks"/> (Object.cpp:3650-3652, 3797-3800; see <see cref="DuelRules"/>); resolving the affecting player of a pet or charm (no owner field exists).
 /// <see cref="CombatHooks.IsFriendly"/> is not overridden (vmangos IsFriendlyTo / IsValidHelpfulTarget polarity for
 /// friendly-NPC spells, heals and dispels is unchanged): spell targeting and other consumers keep the base rule.
 /// A world with no loaded catalog does not register these hooks at all (see WorldCombatHooksFeature), so the

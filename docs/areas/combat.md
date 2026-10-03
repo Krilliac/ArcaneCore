@@ -276,4 +276,4 @@ system) for the world; worlds without it use `CombatEnvironment.Default`.
 - Spell damage paths beyond `DealDamage`.
 - Stat-driven damage and percentages.
 - Immune results.
-- Duel and FFA PvP rules.
+- FFA PvP rules. (Duels are implemented: see [duels](duels.md).)
