@@ -330,11 +330,12 @@ public sealed partial class QuestNpcServices
 
     private float PriceDiscount(Player player, NpcInfo npc) => Deps.Reputation?.GetPriceDiscount(player, npc) ?? 1.0f;
 
-    /// <summary>vmangos uint32(floor(price × GetReputationPriceDiscount)) (vendors and trainers).</summary>
+    /// <summary>vmangos ItemHandler.cpp:763, Player.cpp:18445, NPCHandler.cpp:114,309:
+    /// uint32(price * GetReputationPriceDiscount + 0.5f).</summary>
     private static uint Discounted(ulong price, float discount)
     {
-        // Single precision as vmangos (uint32 × float): 10 × 0.9f is 9, not 8.999….
-        double value = MathF.Floor(price * discount);
+        // Keep the float operation used by vmangos before converting to copper.
+        double value = (float)price * discount + 0.5f;
         return value >= uint.MaxValue ? uint.MaxValue : value <= 0 ? 0 : (uint)value;
     }
 

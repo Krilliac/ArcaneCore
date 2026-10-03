@@ -111,6 +111,21 @@ public sealed class NpcTrainerServiceTests
     }
 
     [Fact]
+    public void TrainerPrice_RoundsHalfCopperUpInListAndPurchase()
+    {
+        using var rig = new Rig(discount: 0.85f);
+        NpcServiceKit kit = rig.Kit;
+        kit.Services.TrainerList(kit.Player, kit.Npc.Guid);
+        var rows = ReadList(kit.Single(WorldOpcode.SmsgTrainerList), out _);
+        Assert.Equal(9u, rows.Single(r => r.Spell == TeachStrike).Cost);
+
+        kit.Player.Money = 9;
+        kit.Services.BuyTrainerSpell(kit.Player, kit.Npc.Guid, TeachStrike);
+        Assert.True(rig.Book.HasSpell(kit.Player, 100));
+        Assert.Equal(0u, kit.Player.Money);
+    }
+
+    [Fact]
     public void BuyTrainerSpell_LearnsTheTaughtSpellAndCharges()
     {
         using var rig = new Rig();

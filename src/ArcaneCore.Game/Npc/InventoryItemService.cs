@@ -18,8 +18,8 @@ namespace ArcaneCore.Game.Npc;
 /// <param name="bankSlotPrices">BankBagSlotPrices (empty: no slot is sold).</param>
 /// <param name="unixNow">Seconds clock for buyback timestamps.</param>
 /// <param name="persistBankBagSlots">
-/// Stores the bought bank bag slot count; null while characters have no column for it, so
-/// purchases are refused rather than lost at the next login.
+/// Optional purchase veto used by alternate item services. The normal world path saves the
+/// count and money together in the next character snapshot (CharacterBankSlotsDataModule).
 /// </param>
 public sealed class InventoryItemService(
     Func<IItemTemplateStore> templates,
@@ -100,7 +100,9 @@ public sealed class InventoryItemService(
                 continue; // vmangos: unknown item level / quality row — nothing repaired
             }
 
-            double discounted = MathF.Floor(baseCost * discount); // single precision as vmangos
+            // vmangos Player.cpp:4953-4958 truncates the base DBC cost first, then rounds
+            // the reputation-discounted copper amount with +0.5f (minimum one copper).
+            double discounted = baseCost * discount + 0.5f;
             uint cost = discounted >= uint.MaxValue ? uint.MaxValue : (uint)Math.Max(discounted, 0);
             cost = Math.Max(cost, 1u); // vmangos "fix for ITEM_QUALITY_ARTIFACT"
             if (!pay(cost))
@@ -123,7 +125,7 @@ public sealed class InventoryItemService(
 
     public bool SetBankBagSlotCount(Player player, byte count)
     {
-        if (persistBankBagSlots is null || !persistBankBagSlots(player, count))
+        if (persistBankBagSlots is not null && !persistBankBagSlots(player, count))
         {
             return false;
         }
