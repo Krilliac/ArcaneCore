@@ -40,17 +40,17 @@ public sealed partial class QuestNpcServices
         }
     }
 
-    private bool CanTakeQuest(PlayerNpcState state, Quest quest, HashSet<uint> visited)
+    private bool CanTakeQuest(PlayerNpcState state, Quest quest, HashSet<uint> visited, bool visibilityOnly = false)
     {
         Player player = state.Quests.Player;
         QuestTemplate t = quest.Template;
         if (!visited.Add(quest.Id) || !quest.IsActive || state.Quests.GetStatus(quest.Id) != QuestStatus.None
-            || player.Level < t.MinLevel || (t.MaxLevel != 0 && player.Level > t.MaxLevel)
+            || (!visibilityOnly && (player.Level < t.MinLevel || (t.MaxLevel != 0 && player.Level > t.MaxLevel)))
             || (t.RequiredClasses != 0 && (t.RequiredClasses & Mask((byte)player.Class)) == 0)
             || (t.RequiredRaces != 0 && (t.RequiredRaces & Mask((byte)player.Race)) == 0)
-            || (t.RequiredSkill != 0 && (Deps.Spells?.GetSkillValue(player, t.RequiredSkill) ?? 0) < t.RequiredSkillValue)
+            || (t.RequiredSkill != 0 && (Deps.Spells is not { } skills || skills.GetSkillValue(player, t.RequiredSkill) < t.RequiredSkillValue))
             || (t.RequiredCondition != 0 && !(Deps.Conditions?.IsSatisfied(t.RequiredCondition, player, null) ?? false))
-            || (quest.HasSpecialFlag(QuestSpecialFlags.Timed) && state.Quests.TimedQuests.Count > 0)
+            || (!visibilityOnly && quest.HasSpecialFlag(QuestSpecialFlags.Timed) && state.Quests.TimedQuests.Count > 0)
             || (t.RequiredMinRepFaction != 0 && (Deps.Reputation is not { } minRep
                 || minRep.GetReputation(player, t.RequiredMinRepFaction) < t.RequiredMinRepValue))
             || (t.RequiredMaxRepFaction != 0 && (Deps.Reputation is not { } maxRep
