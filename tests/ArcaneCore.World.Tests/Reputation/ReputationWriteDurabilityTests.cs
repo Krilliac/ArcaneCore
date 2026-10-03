@@ -158,6 +158,7 @@ public sealed class ReputationWriteDurabilityTests
         fixture.Queue.SaveFactions(id, [new(id, BootyBay, 3100, 0x03)]);
         fixture.Queue.SaveWatchedFaction(id, 0);
         await fixture.Control.Entered.Task.WaitAsync(Fixture.Budget);
+        await fixture.RemoveCharacterRowAsync(id);
         fixture.Queue.DeleteCharacter(id);
         fixture.Control.Release.TrySetResult();
         await fixture.Queue.FlushAsync().WaitAsync(Fixture.Budget);
@@ -211,6 +212,13 @@ public sealed class ReputationWriteDurabilityTests
             services.AddScoped<ICharacterReputationStore>(provider => new FaultingStore(
                 new EfCharacterReputationStore(provider.GetRequiredService<CharacterDbContext>()), control));
             return new Fixture(path, options, services.BuildServiceProvider(), control, [.. ids]);
+        }
+
+        /// <summary>The character row removal a real deletion commits before the queued reputation removal runs (the removal is conditional on it).</summary>
+        public async Task RemoveCharacterRowAsync(int id)
+        {
+            await using CharacterDbContext db = NewContext();
+            await db.Characters.Where(c => c.Id == id).ExecuteDeleteAsync();
         }
 
         public async Task<CharacterReputationData> LoadAsync(int id)
@@ -300,6 +308,13 @@ public sealed class ReputationWriteDurabilityTests
         {
             await control.BeforeAsync(characterId);
             await inner.DeleteCharacterAsync(characterId, cancellationToken);
+            LoseAcknowledgementOnce();
+        }
+
+        public async Task DeleteDeletedCharacterAsync(int characterId, CancellationToken cancellationToken = default)
+        {
+            await control.BeforeAsync(characterId);
+            await inner.DeleteDeletedCharacterAsync(characterId, cancellationToken);
             LoseAcknowledgementOnce();
         }
 

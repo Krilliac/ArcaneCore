@@ -140,9 +140,10 @@ public sealed partial class QuestNpcFeature
 
             if (operation.Request.ReputationAfter is { Count: > 0 } && _services.GetService<ReputationFeature>() is { } reputationFeature)
             {
-                // Completes even after queued writes were dropped (docs/integration/reputation.md): only the
-                // factions this reward writes are converged, not the rest of the character's standings.
-                await reputationFeature.FlushAsync().WaitAsync(budget.Token).ConfigureAwait(false);
+                // The write queue retains failed writes (docs/integration/reputation.md). Retry this character's
+                // once more before the transaction, so a retained older row cannot later overwrite the rows the
+                // reward writes; it throws while they are still not durable: no transaction, journal intact.
+                await reputationFeature.FlushCharacterAsync(id).WaitAsync(budget.Token).ConfigureAwait(false);
             }
 
             budget.Token.ThrowIfCancellationRequested();

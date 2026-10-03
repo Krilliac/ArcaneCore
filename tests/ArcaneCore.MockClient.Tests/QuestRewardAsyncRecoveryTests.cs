@@ -314,6 +314,56 @@ public sealed class QuestRewardAsyncRecoveryTests
         await AssertStoredAsync(server, original.Guid, rewarded: true, token);
     }
 
+    [Fact]
+    public async Task RetainedReputationWrite_BlocksSettlementWithoutTouchingRows_ThenSettlesAfterRecovery()
+    {
+        using var deadline = TestDeadline();
+        CancellationToken token = deadline.Token;
+        var control = new RewardControl(holdAfterSave: false);
+        await using SyntheticArcaneServer server = await StartAsync(control, token, 0, ReputationFaction, ReputationValue);
+        await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
+        QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
+        ReputationFeature reputationFeature = server.Services.GetRequiredService<ReputationFeature>();
+        int id = checked((int)original.Guid);
+        Assert.True(await CanPrepareAsync(server, feature, original.Guid, token));
+
+        // An earlier gain fails all its attempts and is retained by the write queue.
+        Volatile.Write(ref control.FailReputationWrites, 1);
+        Player player = await FindPlayerAsync(server, original.Guid, token);
+        Assert.True(await server.World.InvokeAsync(() => reputationFeature.Service.ModifyReputation(player, ReputationFaction, 10)).WaitAsync(token));
+        await reputationFeature.FlushAsync().WaitAsync(token);
+        Assert.True(reputationFeature.HasRetainedFailure(id));
+
+        int failuresBefore = Volatile.Read(ref control.ReputationFailureCount);
+        await MockScenarios.ChooseRewardAsync(original.Connection, 1, token);
+        // The settlement's pre-commit drain retries the retained write, which still fails: no transaction.
+        while (Volatile.Read(ref control.ReputationFailureCount) <= failuresBefore)
+        {
+            await Task.Delay(10, token);
+        }
+
+        await feature.WaitForSettlementAsync(id, token);
+        await original.Connection.AssertNoRewardUntilPongAsync(0x90000448, token);
+        Assert.Equal(0, control.Attempts); // no transaction started
+        Assert.Equal(0, feature.PendingSettlementCount);
+        Assert.False(await server.World.InvokeAsync(() => player.IsQuestSettlementPending).WaitAsync(token));
+        await AssertStoredAsync(server, original.Guid, rewarded: false, token, flush: false);
+
+        // Storage recovers: the same reward is still available; the retained gain is written before the reward rows.
+        Volatile.Write(ref control.FailReputationWrites, 0);
+        Assert.True(await CanPrepareAsync(server, feature, original.Guid, token));
+        await MockScenarios.ChooseRewardAsync(original.Connection, 1, token);
+        await ReadRewardFramesAsync(original.Connection, feature, id, 0x90000449, token);
+        Assert.Equal(1, control.Attempts);
+        Assert.False(reputationFeature.HasRetainedFailure(id));
+        int live = await server.World.InvokeAsync(() => reputationFeature.Service.GetReputation(player, ReputationFaction)).WaitAsync(token);
+        await using AsyncServiceScope scope = server.Services.CreateAsyncScope();
+        CharacterReputationRow stored = Assert.Single((await scope.ServiceProvider.GetRequiredService<ICharacterReputationStore>()
+            .LoadAsync(id, token)).Factions, row => row.Faction == ReputationFaction);
+        Assert.Equal(live, stored.Standing);
+        await AssertStoredAsync(server, original.Guid, rewarded: true, token);
+    }
+
     private const uint ReputationFaction = 21;
     private const int ReputationValue = 250;
 
@@ -792,6 +842,8 @@ public sealed class QuestRewardAsyncRecoveryTests
                 new EfCharacterQuestStore(provider.GetRequiredService<CharacterDbContext>()), control));
             services.AddScoped<ICharacterSpellStore>(provider => new FaultSpellStore(
                 new EfCharacterSpellStore(provider.GetRequiredService<CharacterDbContext>()), control));
+            services.AddScoped<ICharacterReputationStore>(provider => new FaultReputationStore(
+                new EfCharacterReputationStore(provider.GetRequiredService<CharacterDbContext>()), control));
             if (reputationFaction != 0)
             {
                 // Faction.dbc content: without it the daemon has no reputation owner and such quests stay unsupported.
@@ -1168,6 +1220,40 @@ public sealed class QuestRewardAsyncRecoveryTests
             => inner.DeleteCharacterAsync(characterId, cancellationToken);
     }
 
+    /// <summary>Delegates to the real reputation store, except that writes fail while the control says so.</summary>
+    private sealed class FaultReputationStore(ICharacterReputationStore inner, RewardControl control) : ICharacterReputationStore
+    {
+        private void Check()
+        {
+            if (Volatile.Read(ref control.FailReputationWrites) != 0)
+            {
+                Interlocked.Increment(ref control.ReputationFailureCount);
+                throw new IOException("Synthetic reputation store failure.");
+            }
+        }
+
+        public Task<CharacterReputationData> LoadAsync(int characterId, CancellationToken cancellationToken = default)
+            => inner.LoadAsync(characterId, cancellationToken);
+
+        public Task SaveFactionsAsync(int characterId, IReadOnlyList<CharacterReputationRow> upserts, CancellationToken cancellationToken = default)
+        {
+            Check();
+            return inner.SaveFactionsAsync(characterId, upserts, cancellationToken);
+        }
+
+        public Task SaveWatchedFactionAsync(int characterId, int watchedFaction, CancellationToken cancellationToken = default)
+        {
+            Check();
+            return inner.SaveWatchedFactionAsync(characterId, watchedFaction, cancellationToken);
+        }
+
+        public Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default)
+            => inner.DeleteCharacterAsync(characterId, cancellationToken);
+
+        public Task DeleteDeletedCharacterAsync(int characterId, CancellationToken cancellationToken = default)
+            => inner.DeleteDeletedCharacterAsync(characterId, cancellationToken);
+    }
+
     private sealed class RewardControl(bool holdAfterSave, bool loseAcknowledgement = false, bool unreadable = false,
         bool holdSuccessfulReturn = false)
     {
@@ -1183,6 +1269,8 @@ public sealed class QuestRewardAsyncRecoveryTests
         internal int FailQuestWrites;
         internal int FailSpellWrites;
         internal int SpellFailureCount;
+        internal int FailReputationWrites;
+        internal int ReputationFailureCount;
         internal Tamper Tamper { get; init; }
         internal int Attempts => Volatile.Read(ref AttemptCount);
         internal int FailedReads => Volatile.Read(ref ReadFailureCount);

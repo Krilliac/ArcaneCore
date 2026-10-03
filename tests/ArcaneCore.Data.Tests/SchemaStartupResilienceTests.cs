@@ -301,7 +301,7 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
     /// <param name="provider">The engine.</param>
     /// <param name="component">characters or world.</param>
     /// <param name="version">The version the database is left at.</param>
-    /// <param name="nextStep">The step about to run. When it only repairs indexes, the indexes it repairs are dropped first: a database prepared by the current bootstrapper would not need the repair.</param>
+    /// <param name="nextStep">The step about to run. When it only repairs indexes, the indexes it repairs are dropped first: a database prepared by the current bootstrapper would not need the repair. The columns it adds are dropped first for the same reason.</param>
     private async Task<DatabaseConnectionOptions> PrepareLegacyAsync(DatabaseProvider provider, string component, int version, int nextStep)
     {
         DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
@@ -332,6 +332,17 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         {
             await using DbContext db = SchemaProbe.CreateContext(component, connection);
             await SchemaProbe.DropIndexesAsync(db, repair.Table);
+        }
+
+        // A table created by an earlier step of this harness already has the columns the current model gives it,
+        // including those a later step adds. A real database upgraded across that step lacks them, so remove them.
+        foreach (AddColumnChange add in next.Changes.OfType<AddColumnChange>())
+        {
+            await using DbContext db = SchemaProbe.CreateContext(component, connection);
+            if (await SchemaCatalog.ColumnExistsAsync(db, add.Table, add.Column))
+            {
+                await SchemaProbe.ExecuteAsync(db, $"ALTER TABLE {TestContexts.Quote(db, add.Table)} DROP COLUMN {TestContexts.Quote(db, add.Column)}");
+            }
         }
 
         return connection;

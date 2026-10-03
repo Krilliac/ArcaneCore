@@ -28,15 +28,20 @@ public sealed class SchemaBootstrapGuardsTests : IAsyncLifetime
     public static IEnumerable<object[]> Providers() => TestDatabases.AvailableProviders();
 
     [Fact]
-    public void IndexRepairVersions_AreTheTopOfTheirComponentsAndFollowTheModules()
+    public void IndexRepairVersions_AreInlineSteps_DistinctFromTheModules()
     {
-        Assert.Equal(CharacterDbContext.IndexRepairVersion, CharacterDbContext.Schema.CurrentVersion);
-        Assert.Equal(WorldDbContext.IndexRepairVersion, WorldDbContext.Schema.CurrentVersion);
+        // Modules may be numbered after the repair: their tables are created with their indexes.
+        Assert.True(CharacterDbContext.Schema.CurrentVersion >= CharacterDbContext.IndexRepairVersion);
+        Assert.True(WorldDbContext.Schema.CurrentVersion >= WorldDbContext.IndexRepairVersion);
         Assert.Equal(2, AuthDbContext.Schema.CurrentVersion); // auth has no index repair: its one index is a version-1 index
 
-        foreach (SchemaDefinition schema in new[] { CharacterDbContext.Schema, WorldDbContext.Schema })
+        foreach ((SchemaDefinition schema, int repairVersion) in new[]
         {
-            SchemaStep repair = schema.Steps.Single(s => s.Version == schema.CurrentVersion);
+            (CharacterDbContext.Schema, CharacterDbContext.IndexRepairVersion),
+            (WorldDbContext.Schema, WorldDbContext.IndexRepairVersion),
+        })
+        {
+            SchemaStep repair = schema.Steps.Single(s => s.Version == repairVersion);
             Assert.All(repair.Changes, c => Assert.IsType<EnsureIndexesChange>(c));
         }
 
@@ -47,8 +52,8 @@ public sealed class SchemaBootstrapGuardsTests : IAsyncLifetime
             new DatabaseConnectionOptions { Provider = DatabaseProvider.Sqlite, ConnectionString = "Data Source=:memory:" });
         using WorldDbContext world = TestContexts.Create<WorldDbContext>(
             new DatabaseConnectionOptions { Provider = DatabaseProvider.Sqlite, ConnectionString = "Data Source=:memory:" });
-        AssertRepairCoversIndexedTables(characters, CharacterDbContext.Schema);
-        AssertRepairCoversIndexedTables(world, WorldDbContext.Schema);
+        AssertRepairCoversIndexedTables(characters, CharacterDbContext.Schema, CharacterDbContext.IndexRepairVersion);
+        AssertRepairCoversIndexedTables(world, WorldDbContext.Schema, WorldDbContext.IndexRepairVersion);
     }
 
     [Theory]
@@ -261,10 +266,10 @@ public sealed class SchemaBootstrapGuardsTests : IAsyncLifetime
         yield return new WorldDbContext(world.Options);
     }
 
-    private static void AssertRepairCoversIndexedTables(DbContext db, SchemaDefinition schema)
+    private static void AssertRepairCoversIndexedTables(DbContext db, SchemaDefinition schema, int repairVersion)
     {
-        string[] repaired = [.. schema.Steps.Single(s => s.Version == schema.CurrentVersion).Changes.OfType<EnsureIndexesChange>().Select(c => c.Table)];
-        string[] createdAfterV1 = [.. schema.Steps.Where(s => s.Version < schema.CurrentVersion).SelectMany(s => s.Changes)
+        string[] repaired = [.. schema.Steps.Single(s => s.Version == repairVersion).Changes.OfType<EnsureIndexesChange>().Select(c => c.Table)];
+        string[] createdAfterV1 = [.. schema.Steps.Where(s => s.Version < repairVersion).SelectMany(s => s.Changes)
             .OfType<CreateTableChange>().Select(c => c.Table)];
         string[] indexedAfterV1 = [.. SchemaProbe.ModelIndexes(db).Select(i => i.Table).Distinct(StringComparer.Ordinal)
             .Where(t => createdAfterV1.Contains(t, StringComparer.Ordinal))];

@@ -101,6 +101,7 @@ public sealed class ReputationWriteRetentionTests
         fixture.Control.FailWrites = true;
         fixture.Queue.SaveFactions(id, [new(id, BootyBay, 3100, 0x03)]);
         await fixture.Queue.FlushAsync();
+        await fixture.RemoveCharacterRowAsync(id);
         fixture.Queue.DeleteCharacter(id);
         await fixture.Queue.FlushAsync();
         Assert.True(fixture.Queue.HasRetainedFailure(id)); // the delete itself is retained until storage recovers
@@ -120,8 +121,10 @@ public sealed class ReputationWriteRetentionTests
         await using var fixture = await Fixture.CreateAsync();
         int id = fixture.Ids[0];
         fixture.Control.HoldNextWrite();
+        await fixture.RemoveCharacterRowAsync(id);
         fixture.Queue.DeleteCharacter(id);
         await fixture.Control.Entered.Task.WaitAsync(Fixture.Budget);
+        await fixture.RemoveCharacterRowAsync(id);
         fixture.Queue.DeleteCharacter(id);
         fixture.Control.Release.TrySetResult();
         await fixture.Queue.FlushAsync().WaitAsync(Fixture.Budget);
