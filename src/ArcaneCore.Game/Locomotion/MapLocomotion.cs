@@ -20,6 +20,8 @@ internal sealed class MapLocomotion : IMapUpdater
         _world = world ?? throw new ArgumentNullException(nameof(world));
     }
 
+    internal WorldRuntime World => _world;
+
     /// <summary>The environment of this map's world (options, teleport probe).</summary>
     internal LocomotionEnvironment Environment => LocomotionEnvironment.For(_world);
 

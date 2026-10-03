@@ -106,6 +106,20 @@ public sealed class LocomotionEnvironment
         s_mitigations.AddOrUpdate(world, mitigation);
     }
 
+    private static readonly ConditionalWeakTable<WorldRuntime, IMountDisplaySource> s_mountDisplays = new();
+
+    /// <summary>Use <paramref name="source"/> to resolve mount spells' creature entries to display ids in <paramref name="world"/> (the world daemon's creature data).</summary>
+    public static void RegisterMountDisplays(WorldRuntime world, IMountDisplaySource source)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(source);
+        s_mountDisplays.AddOrUpdate(world, source);
+    }
+
+    /// <summary>The mount display source of the world <paramref name="map"/> belongs to, or null when none is registered.</summary>
+    public static IMountDisplaySource? MountDisplaysFor(Map? map)
+        => map?.FindUpdater<MapLocomotion>()?.World is { } world && s_mountDisplays.TryGetValue(world, out IMountDisplaySource? source) ? source : null;
+
     private static readonly ConditionalWeakTable<WorldRuntime, IFallDamageModifiers> s_fallModifiers = new();
 
     /// <summary>Use <paramref name="modifiers"/> for the fall damage of <paramref name="world"/> (the spell combat rules feature registers it).</summary>

@@ -148,6 +148,12 @@ public enum SpellAuraInterruptFlags : uint
     Action = 0x00000004,
     Moving = 0x00000008,
     Turning = 0x00000010,
+
+    /// <summary>AURA_INTERRUPT_DISMOUNT_CANCELS (vmangos SpellDefines.h:583): removed when the unit dismounts.</summary>
+    DismountCancels = 0x00000040,
+
+    /// <summary>AURA_INTERRUPT_MOUNT_CANCELS (vmangos SpellDefines.h:594): removed when the unit mounts.</summary>
+    MountCancels = 0x00020000,
     StandingCancels = 0x00040000,
     LeaveWorld = 0x00080000,
     NonPeriodicDamage = 0x01000000,

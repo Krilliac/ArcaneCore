@@ -228,3 +228,30 @@ calls `UpdateSpeed` (a speed aura, fleeing at low health, returning from an assi
 health used here is the one at the recompute, and the AI lane has to call `UnitSpeed.UpdateSpeed(creature, MoveType.Run)` at
 those moments (no creature AI hooks were edited). Pets of players are normalised to the default run rate in vmangos; no pets
 exist on this base, so that branch is not applied.
+## Slice 8: mount-aura (delivered)
+
+`SPELL_AURA_MOUNTED` (78, `Spells/Auras/MountAura.cs`, vmangos `HandleAuraMounted`, `SpellAuras.cpp:2251-2276`): the misc value is the creature
+entry of the mount; its template's display becomes `UNIT_FIELD_MOUNTDISPLAYID` (the mount state, 1.12 has no mounted unit flag). Removing
+the aura dismounts. 126 classic spells carry the aura (108 are item mounts).
+
+* **Display source**: the creature data lives in the world daemon, so `IMountDisplaySource` (`LocomotionEnvironment.RegisterMountDisplays`) is
+  implemented by `ArcaneCore.World/Locomotion/MountDisplayFeature.cs` from `CreatureWorldFeature.Content`: `Creature.ChooseDisplayId`, then the
+  other-gender model half of the time, as a creature does at spawn. A creature entry that is not in the data is logged and the rider stays on foot
+  (vmangos logs a database error and returns). Without a registered source nobody mounts.
+* **Mount** (`MountService`, vmangos `Unit::Mount` `Unit.cpp:5794-5821` and `Player::Mount` `Player.cpp:18170-18230`): a player that is already mounted
+  gets `SMSG_MOUNTRESULT` 2 (the new aura stays, the display does not change: vmangos does not remove it); a looting player gets 6 and the mount aura
+  is removed; otherwise channels and auras that end on mounting (`AURA_INTERRUPT_MOUNT_CANCELS` 0x20000) are removed, the display is set and
+  `SMSG_MOUNTRESULT` 10 is sent. **The result codes are vmangos / gtker's (`MOUNTRESULT_OK` = 10, `DISMOUNTRESULT_OK` = 3, `ALREADYMOUNTED` = 2,
+  `LOOTING` = 6), not 0.** A creature updates its walk and run speed.
+* **Dismount** (`Unit::Unmount`, `:5823-5842`, `Player::Unmount`, `:18233-18255`): auras that end on dismount (`AURA_INTERRUPT_DISMOUNT_CANCELS` 0x40)
+  are removed, the display cleared, `SMSG_DISMOUNTRESULT` 3 sent; a unit that is not mounted is left alone and nothing is sent when it comes from an aura.
+* **Speed**: the mounted speed auras (32, 130, 172) are slice 6 and apply only while mounted. A mount spell lists the mounted aura first, so the run speed
+  order is sent when the 32 aura is applied right after (the same order vmangos relies on; `Unit::Mount` recomputes only for creatures).
+* **New spell-system API** (`Spells/SpellSystem.InterruptFlags.cs`): `RemoveAurasWithInterruptFlags`, `InterruptChannelsWithFlags` (vmangos
+  `RemoveAurasWithInterruptFlags`, `InterruptSpellsWithChannelFlags`) and `RemoveAurasByType` (`RemoveSpellsCausingAura`); `SpellAuraInterruptFlags`
+  gained `DismountCancels` and `MountCancels` (vmangos `SpellDefines.h:583,594`).
+
+Not delivered (the systems are not on this base): unsummoning or disabling the pet on mount and resummoning on dismount (`Player.cpp:18205-18218,18245-18250`),
+the disallowed shapeshift form refusal (only for mounts without a spell), `ResetExtraAttacks`, the Silithyst drop on mounting. **Taxi**: `TaxiFlightSystem`
+sets and clears the mount display itself and vmangos removes the Mounted aura when a flight starts (`ActivateTaxiPathTo`); here an aura mount is not removed
+at taxi start, so the display is overwritten for the flight and cleared at its end while the aura stays: the taxi code needs the spell system to remove it.

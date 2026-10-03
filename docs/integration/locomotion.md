@@ -11,4 +11,7 @@ Characters/World version to renumber and no provider theory.
 | `src/ArcaneCore.Game/Entities/Player.cs` | `SetRooted` records its order in the pending ledger (`MovementControl.Order`) instead of building the packet itself (same bytes). | Ack validation and timeout. |
 | `src/ArcaneCore.Protocol/MovementInfo.cs` | Added `CorrectData()` (additive). | vmangos MovementInfo::CorrectData. |
 | `src/ArcaneCore.Game/Combat/MapCombat.Death.cs` | `SendGhostMovement` calls `MovementControl.Order` (same packet, now recorded in the pending ledger). | The ghost's water walk follows the client's ack. |
-| `src/ArcaneCore.Game/Spells/SpellDefines.cs` | not edited (the four aura interrupt bits of the design are only needed by the mount and liquid slices, which are not delivered). | - |
+| `src/ArcaneCore.Game/Spells/SpellDefines.cs` | `SpellAuraInterruptFlags` gained `DismountCancels` (0x40) and `MountCancels` (0x20000), additive. | Mount aura. |
+| `src/ArcaneCore.Game/Creatures/Creature.cs` | `InitializeFields` sets Walk/Run speed from the template (two lines, vmangos UpdateEntry ends with UpdateSpeed). | Creature speeds. |
+| `src/ArcaneCore.Game/Creatures/Creature.Movement.cs` | `StartSpline` reads the live `RunSpeed` / `WalkSpeed` instead of the template speed. | A snared creature moves slower. |
+| `src/ArcaneCore.Game/Spells/SpellSystem.InterruptFlags.cs` | new partial file: `RemoveAurasWithInterruptFlags`, `InterruptChannelsWithFlags`, `RemoveAurasByType`. | Mount aura (the liquid slice would use it too). |
