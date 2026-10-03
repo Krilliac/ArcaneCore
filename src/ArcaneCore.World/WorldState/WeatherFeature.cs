@@ -53,6 +53,20 @@ public sealed class WeatherFeature(IServiceProvider services, ILogger<WeatherFea
             r.Zone, ZoneWeatherChances.FromColumns(r.Zone, r.Chances, message => logger.LogError("{Message}", message)))));
     }
 
+    /// <summary>
+    /// Overlay the chances on the loaded table (vmangos <c>LoadWeatherZoneChances</c> as <c>.reload game_weather</c> runs it,
+    /// Weather.cpp:446-505): a listed zone takes its new row, a zone no longer listed keeps its old one. Returns the
+    /// validation messages (a chance above 100 became 25).
+    /// </summary>
+    public IReadOnlyList<string> MergeChances(IEnumerable<GameWeatherRecord> rows)
+    {
+        WorldStateHooks hooks = _hooks ?? throw new InvalidOperationException("the weather feature is not attached");
+        var messages = new List<string>();
+        hooks.WeatherChances.Merge(rows.Select(r => new KeyValuePair<uint, ZoneWeatherChances>(
+            r.Zone, ZoneWeatherChances.FromColumns(r.Zone, r.Chances, messages.Add))));
+        return messages;
+    }
+
     public void OnZoneChanged(Player player, uint oldZone, uint newZone, uint newArea, AreaTemplate? zoneEntry)
     {
         if (_hooks is { WeatherSettings.Enabled: true } && player.Map?.FindUpdater<MapWeather>() is { } weather)

@@ -1,5 +1,6 @@
 using System.Globalization;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.Content.Import;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using Microsoft.EntityFrameworkCore;
 
@@ -199,6 +200,40 @@ public static class WorldStateDumpImporter
 
             throw new InvalidDataException($"{table}: expected ',' or the end of the statement at offset {i}");
         }
+    }
+
+    /// <summary>
+    /// The content-importer CLI's write (same contract as the other <c>WriteAsync</c> importers, see <c>ImportTransaction</c>): with
+    /// <paramref name="replace"/> both tables are emptied first, without it an existing key fails the write and nothing changes.
+    /// Joins the caller's transaction through a savepoint. Returns the row counts written.
+    /// </summary>
+    public static async Task<(int Weather, int BaseXp)> WriteAsync(WorldDbContext db, WorldStateContent content, bool replace, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        ArgumentNullException.ThrowIfNull(content);
+        GameWeatherRow[] weather = content.Weather.Select(GameWeatherRow.From).ToArray();
+        ExplorationBaseXpRow[] baseXp = content.BaseXp.Select(b => new ExplorationBaseXpRow { Level = b.Level, BaseXp = b.BaseXp }).ToArray();
+        await ImportTransaction.RunAsync(db, async token =>
+        {
+            bool detect = db.ChangeTracker.AutoDetectChangesEnabled;
+            db.ChangeTracker.AutoDetectChangesEnabled = false;
+            try
+            {
+                if (replace)
+                {
+                    await db.Set<GameWeatherRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
+                    await db.Set<ExplorationBaseXpRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
+                }
+
+                await ImportBatch.InsertAsync(db, weather, token).ConfigureAwait(false);
+                await ImportBatch.InsertAsync(db, baseXp, token).ConfigureAwait(false);
+            }
+            finally
+            {
+                db.ChangeTracker.AutoDetectChangesEnabled = detect;
+            }
+        }, cancellationToken).ConfigureAwait(false);
+        return (weather.Length, baseXp.Length);
     }
 
     /// <summary>

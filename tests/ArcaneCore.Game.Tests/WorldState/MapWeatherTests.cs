@@ -160,19 +160,61 @@ public sealed class MapWeatherTests
     }
 
     [Fact]
-    public void Disabled_NeverRegenerates()
+    public void Disabled_StillTicksTheZonesThatExist_BecauseVmangosOnlyGuardsTheirCreation()
     {
+        // Map::UpdateWeathers (Map.cpp:1042) and Weather::Update (Weather.cpp:67-84) read no ActivateWeather switch; the switch
+        // guards zone entry (Player.cpp:6600) and .wchange (ServerCommands.cpp:101). A zone a script created keeps regenerating.
         var f = new Fixture();
-        f.Join(1, 12);
+        (_, FakeSession session) = f.Join(1, 12);
         f.World.RunTick(50);
         f.Weather.FindOrCreate(12);
         f.Hooks.WeatherSettings.Enabled = false;
         var script = new Script(40, 1);
         f.Hooks.WeatherRandom = script;
 
-        f.World.RunTick(5000);
+        f.World.RunTick(1000);
 
-        Assert.Equal(2, script.Remaining);
+        Assert.Equal(0, script.Remaining);
+        Assert.Single(Weather(session));
+        Assert.Equal(WeatherType.Rain, f.Weather.Find(12)!.Type);
+    }
+
+    [Fact]
+    public void MapSetWeather_ForAScript_SendsOnePacketToTheZoneOnly_AndAPermanentWeatherNeverRegenerates()
+    {
+        var f = new Fixture();
+        (_, FakeSession inZone) = f.Join(1, 12);
+        (_, FakeSession elsewhere) = f.Join(2, 40);
+        f.World.RunTick(50);
+        inZone.Clear();
+        elsewhere.Clear();
+        Map map = f.World.GetMap(0);
+
+        // (grade 1 would be stored as 0.9999 by the first send, as vmangos does, and a repeat of 1 would then count as a change)
+        map.SetWeather(12, WeatherType.Storm, 0.5f, permanent: true);
+        map.SetWeather(12, WeatherType.Storm, 0.5f, permanent: true); // the same again: nothing to tell
+
+        byte[] packet = Assert.Single(Weather(inZone));
+        Assert.Equal(3u, BitConverter.ToUInt32(packet, 0));
+        Assert.Empty(Weather(elsewhere));
+        Assert.Equal(WeatherType.Storm, map.GetWeather(12)!.Type);
+        Assert.True(map.GetWeather(12)!.IsPermanent);
+
+        var script = new Script(); // a regeneration would dequeue from an empty script and throw
+        f.Hooks.WeatherRandom = script;
+        f.World.RunTick(5000);
+        Assert.Equal(WeatherType.Storm, map.GetWeather(12)!.Type);
+        Assert.Single(Weather(inZone));
+    }
+
+    [Fact]
+    public void MapGetWeather_IsNullForAZoneNobodyHasEnteredOrSet()
+    {
+        var f = new Fixture();
+        Assert.Null(f.World.GetMap(0).GetWeather(12));
+        f.World.GetMap(0).SetWeather(12, WeatherType.Rain, 0.5f);
+        Assert.Equal(WeatherType.Rain, f.World.GetMap(0).GetWeather(12)!.Type);
+        Assert.False(f.World.GetMap(0).GetWeather(12)!.IsPermanent);
     }
 
     [Fact]

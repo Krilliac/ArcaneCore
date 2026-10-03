@@ -9,6 +9,8 @@ using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
 using ArcaneCore.Data.World.SpecialLoot;
+using ArcaneCore.Data.World.WorldState;
+using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.Kernel.Quests;
 using Microsoft.EntityFrameworkCore;
 
@@ -41,7 +43,8 @@ public static class ContentImporterCli
           import <dump>...      import the creature, game object, loot, item, quest, kill-reputation and
                                 new-character (start position, starting spell, teleport target) and
                                 location (portal, GM teleport) tables
-                                (and the starting outfit, playercreateinfo_item)
+                                (and the starting outfit, playercreateinfo_item), and the world-state
+                                tables game_weather (zone weather chances) and exploration_basexp
           import-dbc <dir>      import the five spell DBCs from a client DBFilesClient directory
           verify                count the imported tables and check references
 
@@ -221,6 +224,13 @@ public static class ContentImporterCli
             locations.Read(reader);
         }
 
+        // game_weather and exploration_basexp (the world-state tables): read by column name, the same dumps as above.
+        WorldStateContent worldState;
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            worldState = WorldStateDumpImporter.Parse(reader);
+        }
+
         string? dbcDirectory = a.Value("--dbc-dir");
         if (dbcDirectory is not null)
         {
@@ -269,6 +279,7 @@ public static class ContentImporterCli
                     playerReport = await playerCreate.WriteAsync(db, replace, token).ConfigureAwait(false);
                     startActionReport = await startActions.WriteAsync(db, replace, token).ConfigureAwait(false);
                     locationReport = await locations.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    await WorldStateDumpImporter.WriteAsync(db, worldState, replace, token).ConfigureAwait(false);
                 }, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -292,6 +303,8 @@ public static class ContentImporterCli
         }
 
         (Dictionary<string, long> imported, Dictionary<string, long> skipped) = Counts(creatureReport, objectReport, itemQuestReport, onKillReport, playerReport, startActionReport, locationReport);
+        imported["game_weather"] = worldState.Weather.Count;
+        imported["exploration_basexp"] = worldState.BaseXp.Count;
         o.WriteLine(dryRun ? "would import:" : "imported:");
         foreach ((string table, long count) in imported)
         {

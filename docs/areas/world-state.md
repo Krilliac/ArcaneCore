@@ -117,8 +117,8 @@ both tables in one transaction. No data is bundled; point the importer at your o
 against the real classic-db dump: 33 `game_weather` rows (zone 12 spring rain 20, zone 1377 spring
 storm 20, zones 1/12/1377/3429 present) and 61 `exploration_basexp` rows (level 0..60, level 60 =
 660); that test is skipped, with a visible reason, when the dump is not available.
-No command-line importer entry point is delivered; the content-import-full lane owns
-`tools/ArcaneCore.ContentImporter` and can call `Parse` / `ImportAsync`.
+The content-importer command line imports both tables since wave 4 (see game-events-weather.md); the lane that owns
+`tools/ArcaneCore.ContentImporter` calls `Parse` / `WriteAsync`.
 
 ### Weather in the world (`weather-runtime`)
 
@@ -150,7 +150,7 @@ caller's zone non-permanent and tells the zone's players unless nothing changed
 Test harness note: `WorldTestHost` switches weather off by default so the extra SMSG_WEATHER after
 a zone entry does not shift unrelated tests' packet sequences; weather tests switch it on. Not
 delivered: the weather-dependent client sounds beyond the sound ids, per-instance zone scripts, and
-`.reload game_weather` wiring (the reload coordinator is another lane).
+`.reload game_weather` is wired by the wave-4 game-events-weather lane (game-events-weather.md).
 
 ### Explored zones across logins (`exploration-persistence`)
 
