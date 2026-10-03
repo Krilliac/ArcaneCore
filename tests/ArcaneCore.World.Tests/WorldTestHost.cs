@@ -39,10 +39,17 @@ internal sealed class WorldTestHost : IAsyncDisposable
     {
         _sessionOptions = sessionOptions ?? new WorldSessionOptions();
         _sessionLogger = sessionLogger ?? NullLogger.Instance;
+        Bans = new Bans.InMemoryBanStore(StatusEvents);
         var collection = new ServiceCollection();
         collection.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         collection.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        Accounts.Events = StatusEvents;
         collection.AddSingleton<IAccountStore>(Accounts);
+        collection.AddSingleton<IAccountAdmin>(Accounts);
+        // Live-ban enforcement (docs/security/live-bans.md): the registry, the status events and the ban rows.
+        collection.AddSingleton(Registry);
+        collection.AddSingleton(StatusEvents);
+        collection.AddSingleton<IBanStore>(Bans);
         collection.AddSingleton<ICharacterStore>(Characters);
         collection.AddSingleton<IAccountDataStore>(AccountData);
         collection.AddSingleton<IWorldDataStore>(WorldData);
@@ -71,6 +78,17 @@ internal sealed class WorldTestHost : IAsyncDisposable
     }
 
     public InMemoryAccountStore Accounts { get; } = new();
+
+    /// <summary>When true, an exception escaping a session is collected in <see cref="SessionFaults"/> instead of failing the host.</summary>
+    public bool ExpectSessionFaults { get; set; }
+
+    public List<Exception> SessionFaults { get; } = [];
+
+    /// <summary>In-process ban notifications (the stores publish, the BanEnforcementFeature subscribes).</summary>
+    public AccountStatusEvents StatusEvents { get; } = new();
+
+    /// <summary>The ban rows (account_banned / ip_banned equivalent).</summary>
+    public Bans.InMemoryBanStore Bans { get; }
 
     public InMemoryCharacterStore Characters { get; } = new();
 
@@ -226,9 +244,21 @@ internal sealed class WorldTestHost : IAsyncDisposable
                 await using (AsyncServiceScope scope = _services.CreateAsyncScope())
                 {
                     var worldSession = new WorldSession(
-                        stream, "test", scope.ServiceProvider, Opcodes, World, Registry,
+                        stream, client.Client.RemoteEndPoint?.ToString() ?? "test", scope.ServiceProvider, Opcodes, World, Registry,
                         _sessionOptions, _sessionLogger);
-                    await worldSession.RunAsync(_stop.Token);
+                    try
+                    {
+                        await worldSession.RunAsync(_stop.Token);
+                    }
+                    catch (Exception ex) when (ExpectSessionFaults)
+                    {
+                        // The production host (WorldServer.HandleClientAsync) logs a session fault and closes the
+                        // connection; a test that provokes one (a store outage) opts in to collecting it.
+                        lock (SessionFaults)
+                        {
+                            SessionFaults.Add(ex);
+                        }
+                    }
                 }
             });
 

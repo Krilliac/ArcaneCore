@@ -120,6 +120,7 @@ public sealed class WorldSession : IPlayerSession
     {
         _stream = stream;
         RemoteEndpoint = remoteEndpoint;
+        RemoteAddress = AccountBanEvaluator.AddressOfEndpoint(remoteEndpoint);
         Services = services;
         _opcodes = opcodes;
         World = world;
@@ -129,6 +130,13 @@ public sealed class WorldSession : IPlayerSession
     }
 
     public string RemoteEndpoint { get; }
+
+    /// <summary>
+    /// The client's IP address, parsed once from <see cref="RemoteEndpoint"/> and normalised (an IPv4-mapped
+    /// IPv6 address becomes IPv4). Null when the endpoint text is not an address (tests pass a placeholder).
+    /// Matched against IP bans at authentication and by the live ban enforcement.
+    /// </summary>
+    public string? RemoteAddress { get; }
 
     /// <summary>This connection's DI scope (stores are scoped per connection).</summary>
     public IServiceProvider Services { get; }
@@ -538,10 +546,20 @@ public sealed class WorldSession : IPlayerSession
         // Account status is enforced here too: the logon server only gates the SRP exchange, and
         // a session key may have been issued before the ban. vmangos has a single ban reply,
         // AUTH_BANNED, for any banned account (WorldSocket.cpp:333-345) after the digest check;
-        // it also refuses IP-banned addresses there (not implemented).
+        // it also refuses IP-banned addresses there (checked below against the ban rows).
         if (stored.Status != AccountStatus.Active)
         {
             _logger.LogInformation("[{Endpoint}] refused world login for {Status} account", RemoteEndpoint, stored.Status);
+            SendAuthResponse(AuthResponseCode.Banned);
+            return false;
+        }
+
+        // Ban rows and IP bans (live bans): a store error propagates and closes the connection (fail closed).
+        // Unlike retail's cached IP list (AccountMgr.cpp:317-327) this reads the rows, so a fresh ban is seen at once.
+        IBanStore? bans = Services.GetService<IBanStore>();
+        if (bans is not null && await IsBannedAsync(bans, stored.Id).ConfigureAwait(false))
+        {
+            _logger.LogInformation("[{Endpoint}] refused world login for banned account or address", RemoteEndpoint);
             SendAuthResponse(AuthResponseCode.Banned);
             return false;
         }
@@ -551,22 +569,56 @@ public sealed class WorldSession : IPlayerSession
 
         lock (_sendLock)
         {
-            _crypt.Initialize(stored.SessionKey);
             AccountId = stored.Id;
             AccountName = account;
             Security = stored.Security;
             Settings = settings;
-            _state = SessionState.CharacterSelect;
         }
 
         // One world session per account: a reconnect replaces (and disconnects) the old one,
         // as vmangos World::AddSession_ does.
         _registry.Register(this);
+
+        // A ban (or status change) committed between the reads above and Register could not reach this
+        // not-yet-registered session through the live-ban events, so look once more now that it can be found.
+        Account? recheck = await accounts.FindByUsernameAsync(account).ConfigureAwait(false);
+        if ((recheck is not null && recheck.Status != AccountStatus.Active)
+            || (bans is not null && await IsBannedAsync(bans, stored.Id).ConfigureAwait(false)))
+        {
+            _logger.LogInformation("[{Endpoint}] '{Account}' was banned while authenticating; refusing", RemoteEndpoint, account);
+            SendAuthResponse(AuthResponseCode.Banned); // still plain: the header cipher is not initialised yet
+            return false;
+        }
+
+        // Only now does the session become usable: header encryption on and the character screen reachable.
+        // It may have been kicked (a live ban event) while it was registered but not yet authenticated.
+        lock (_sendLock)
+        {
+            if (_state == SessionState.Closed)
+            {
+                return false;
+            }
+
+            _crypt.Initialize(stored.SessionKey);
+            _state = SessionState.CharacterSelect;
+        }
+
         _logger.LogInformation("[{Endpoint}] '{Account}' authenticated", RemoteEndpoint, account);
 
         SendAuthResponse(AuthResponseCode.Ok);
         Send(WorldOpcode.SmsgAddonInfo, AddonInfo.BuildResponse(addonBlock));
         return true;
+    }
+
+    /// <summary>An account ban row in force, or an IP ban on this connection's address (WorldSocket.cpp:339).</summary>
+    private async Task<bool> IsBannedAsync(IBanStore bans, int accountId)
+    {
+        if (await bans.GetActiveAccountBanAsync(accountId).ConfigureAwait(false) is not null)
+        {
+            return true;
+        }
+
+        return RemoteAddress is { } address && await bans.GetActiveIpBanAsync(address).ConfigureAwait(false) is not null;
     }
 
     private void SendAuthResponse(AuthResponseCode code) => Send(WorldOpcode.SmsgAuthResponse, [(byte)code]);
