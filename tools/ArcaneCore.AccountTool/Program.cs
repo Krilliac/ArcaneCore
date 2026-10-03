@@ -42,14 +42,13 @@ switch (command)
 
 async Task<int> CreateAsync()
 {
-    if (args.Length != 3)
+    if (!TryReadPassword(out string password))
     {
-        Console.Error.WriteLine("usage: arcane-account create <username> <password>");
+        Console.Error.WriteLine("usage: arcane-account create <username> [<password> | --password-stdin]   (no password argument: ARCANE_ACCOUNT_PASSWORD)");
         return 1;
     }
 
     string username = args[1].ToUpperInvariant();
-    string password = args[2];
 
     if (await accounts.FindByUsernameAsync(username).ConfigureAwait(false) is not null)
     {
@@ -72,14 +71,13 @@ async Task<int> CreateAsync()
 
 async Task<int> SetPasswordAsync()
 {
-    if (args.Length != 3)
+    if (!TryReadPassword(out string password))
     {
-        Console.Error.WriteLine("usage: arcane-account set-password <username> <password>");
+        Console.Error.WriteLine("usage: arcane-account set-password <username> [<password> | --password-stdin]   (no password argument: ARCANE_ACCOUNT_PASSWORD)");
         return 1;
     }
 
     string username = args[1].ToUpperInvariant();
-    string password = args[2];
 
     if (await accounts.FindByUsernameAsync(username).ConfigureAwait(false) is null)
     {
@@ -130,6 +128,28 @@ async Task<int> ListAsync()
     return 0;
 }
 
+// The password never has to be on a command line (where other processes can read it): pass
+// --password-stdin and write it on standard input, or pass neither and set ARCANE_ACCOUNT_PASSWORD.
+bool TryReadPassword(out string password)
+{
+    password = string.Empty;
+    if (args.Length < 2 || args.Length > 3)
+    {
+        return false;
+    }
+
+    string? value = args.Length == 3
+        ? args[2] == "--password-stdin" ? Console.In.ReadLine() : args[2]
+        : Environment.GetEnvironmentVariable("ARCANE_ACCOUNT_PASSWORD");
+    if (string.IsNullOrEmpty(value))
+    {
+        return false;
+    }
+
+    password = value;
+    return true;
+}
+
 static (byte[] Salt, byte[] Verifier) MakeCredentials(string username, string password)
 {
     byte[] salt = WowSrp6.GenerateSalt();
@@ -152,8 +172,10 @@ static void PrintUsage()
 {
     Console.Error.WriteLine("ArcaneCore account tool");
     Console.Error.WriteLine("usage:");
-    Console.Error.WriteLine("  arcane-account create <username> <password>");
-    Console.Error.WriteLine("  arcane-account set-password <username> <password>");
+    Console.Error.WriteLine("  arcane-account create <username> [<password> | --password-stdin]");
+    Console.Error.WriteLine("  arcane-account set-password <username> [<password> | --password-stdin]");
+    Console.Error.WriteLine("  (without a password argument the password is read from the ARCANE_ACCOUNT_PASSWORD environment variable;");
+    Console.Error.WriteLine("   --password-stdin reads it from the first line of standard input. Neither puts it on a command line.)");
     Console.Error.WriteLine("  arcane-account set-gmlevel <username> <0-3|player|moderator|gamemaster|administrator>");
     Console.Error.WriteLine("  arcane-account list");
 }

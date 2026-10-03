@@ -8,8 +8,9 @@
   * Sets World__HotCode__Enabled=true for this process only; nothing is written to a config file.
   * Builds Debug: hot reload cannot patch an optimized (Release) build.
   * Interactive by default: when an edit cannot be applied live (a signature change, a rename ...)
-    dotnet watch asks before it restarts the server. With -NonInteractive it restarts on its own,
-    and the restart skips the graceful save path, so only use that on a world you can lose.
+    dotnet watch asks before it restarts the server. With -NonInteractive it restarts on its own
+    (measured on SDK 10.0.401: the restart ran the host shutdown, "World saved and stopped", but the new process
+    drops every connected client). scripts/dev-runner.ps1 is the full local test environment built on this.
 
 .PARAMETER NonInteractive
   Do not prompt; restart the server whenever an edit needs a restart.
