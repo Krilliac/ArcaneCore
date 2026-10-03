@@ -86,27 +86,30 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             if (scope.ServiceProvider.GetService<IEconomyStore>() is { } store)
             {
                 // Startup content load, as the quest feature does: a failure stops attachment.
+                // Rows and escrow come from one snapshot. The ID seed is read after it, so every
+                // loaded ID is at or below the seed.
+                AuctionSnapshot snapshot = store.GetAuctionSnapshotAsync(new AuctionSnapshotFilter()).GetAwaiter().GetResult();
                 EconomyIdSeed seed = store.GetIdSeedAsync().GetAwaiter().GetResult();
                 _lastMailId = seed.MaxMailId;
                 _lastAuctionId = seed.MaxAuctionId;
                 _lastTextId = seed.MaxItemTextId;
-                IReadOnlyList<AuctionRecord> auctions = store.GetAuctionsAsync().GetAwaiter().GetResult();
-                IReadOnlyDictionary<uint, ItemInstanceData> items = store
-                    .GetEscrowItemsAsync(auctions.Select(a => a.ItemGuid).ToArray()).GetAwaiter().GetResult();
-                foreach (AuctionRecord auction in auctions)
+                foreach (AuctionRecord auction in snapshot.Auctions)
                 {
-                    if (items.TryGetValue(auction.ItemGuid, out ItemInstanceData? item))
+                    if (snapshot.Escrow.TryGetValue(auction.ItemGuid, out ItemInstanceData? item) && EscrowMatches(auction, item))
                     {
                         _auctions[auction.Id] = new AuctionView(auction, item);
                     }
                     else
                     {
-                        _logger.LogError("auction {Auction} references missing escrow item {Item}; it is not listed", auction.Id, auction.ItemGuid);
+                        // Reserved, not dropped: the row is durable, so it is re-read until its escrow item matches.
+                        _logger.LogError("auction {Auction} has no matching escrow item {Item}; it stays reserved and unlisted until the item is repaired",
+                            auction.Id, auction.ItemGuid);
+                        ReserveMismatchedAuction(auction);
                     }
                 }
 
                 Enabled = true;
-                _logger.LogInformation("Loaded {Auctions} auctions", _auctions.Count);
+                _logger.LogInformation("Loaded {Auctions} auctions ({Reserved} reserved)", _auctions.Count, _auctionRecoveries.Count);
             }
         }
 
@@ -189,7 +192,8 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
 
     private uint NextMailId() => Interlocked.Increment(ref _lastMailId);
 
-    private uint NextAuctionId() => Interlocked.Increment(ref _lastAuctionId);
+    /// <summary>World thread. Internal so tests can observe the allocator after a reseed.</summary>
+    internal uint NextAuctionId() => Interlocked.Increment(ref _lastAuctionId);
 
     private uint NextTextId() => Interlocked.Increment(ref _lastTextId);
 
@@ -258,11 +262,44 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
     private bool Start(IReadOnlyList<EconomyActor> actors, IReadOnlyList<EconomyChange> changes, Action<EconomyOutcome> finished)
         => Enabled && !_stopping && Settlements.TryStart(actors, changes, (outcome, live) =>
         {
+            if (outcome == EconomyOutcome.Before && changes.Any(c => c is InsertAuction or InsertMail))
+            {
+                // A refused insert may mean another writer took the ID: raise the allocators past it.
+                ReseedIds();
+            }
+
             if (live)
             {
                 finished(outcome);
             }
         });
+
+    /// <summary>
+    /// World thread: re-read the highest IDs in use and raise (never lower) the allocators. Every
+    /// allocation and this completion run on the world thread; the compare loop only keeps the
+    /// raise monotonic.
+    /// </summary>
+    private void ReseedIds() => Read((store, ct) => store.GetIdSeedAsync(ct), seed =>
+    {
+        RaiseTo(ref _lastMailId, seed.MaxMailId);
+        RaiseTo(ref _lastAuctionId, seed.MaxAuctionId);
+        RaiseTo(ref _lastTextId, seed.MaxItemTextId);
+    });
+
+    private static void RaiseTo(ref uint field, uint value)
+    {
+        uint current = Volatile.Read(ref field);
+        while (current < value)
+        {
+            uint seen = Interlocked.CompareExchange(ref field, value, current);
+            if (seen == current)
+            {
+                return;
+            }
+
+            current = seen;
+        }
+    }
 
     private void OnPlayerLoggedIn(Player player)
     {

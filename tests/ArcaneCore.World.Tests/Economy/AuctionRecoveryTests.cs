@@ -2,10 +2,13 @@ using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Economy;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Data.Stores;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Economy;
 using ArcaneCore.World.Persistence;
+using ArcaneCore.World.Tests.Npc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -81,7 +84,7 @@ public sealed class AuctionRecoveryTests
     }
 
     [Fact]
-    public async Task Known_committed_and_conflict_outcomes_release_the_reservation_without_quarantine()
+    public async Task Known_commit_releases_and_conflict_resyncs_then_releases()
     {
         await using var fixture = await Fixture.CreateAsync(true, false, loseAcknowledgement: false);
         AuctionRecord committed = fixture.Primary with { BidderId = 99, Bid = 80 };
@@ -102,10 +105,16 @@ public sealed class AuctionRecoveryTests
             return true;
         });
         Assert.Equal(EconomyOutcome.Before, await conflict.Task.WaitAsync(Fixture.Budget));
+        // A refused same-ID update means the cache no longer matches the row: the ID stays
+        // reserved until a fresh authoritative read repairs it, then it is released.
+        Assert.True(await fixture.OnWorld(() => fixture.Feature.IsAuctionQuarantined(1)),
+            "a conflicting update must reserve the auction until it is resynced");
+        Assert.True(await fixture.TryWaitUntilAsync(() => !fixture.Feature.IsAuctionQuarantined(1)),
+            "the reserved auction was never resynced and released");
         var next = NewCompletion<EconomyOutcome>();
         await fixture.OnWorld(() =>
         {
-            Assert.False(fixture.Feature.IsAuctionQuarantined(1));
+            Assert.Equal(committed, fixture.Feature.Auctions.Single(v => v.Auction.Id == 1).Auction);
             fixture.Feature.RunAuctionOperation([], [new UpdateAuction(committed, committed with { Bid = 100 })], 1,
                 outcome => next.TrySetResult(outcome));
             return true;
@@ -150,7 +159,9 @@ public sealed class AuctionRecoveryTests
     [InlineData(true, true)] // Auction row readable but escrow read initially unavailable.
     public async Task Lost_ack_and_failed_reconciliation_reserve_then_recover_only_affected_auction(bool existing, bool failEscrow)
     {
-        await using var fixture = await Fixture.CreateAsync(existing, failEscrow);
+        // The failEscrow case is a readable row with a mismatching escrow: it backs off on the feature clock.
+        ManualQuestClock? clock = failEscrow ? new ManualQuestClock() : null;
+        await using var fixture = await Fixture.CreateAsync(existing, failEscrow, clock: clock);
         AuctionRecord expected = fixture.Primary;
         AuctionRecord committed = existing ? expected with { BidderId = 99, Bid = 80 } : expected;
         EconomyChange change = existing ? new UpdateAuction(expected, committed) : new InsertAuction(committed);
@@ -197,6 +208,7 @@ public sealed class AuctionRecoveryTests
         });
         await fixture.Control.OtherEntered.Task.WaitAsync(Fixture.Budget);
         fixture.Control.RecoveryAvailable = true;
+        clock?.Advance(TimeSpan.FromSeconds(31));
         // Exercise the dedicated bounded retry timer with optional expiry sweeping disabled.
         await fixture.WaitUntilAsync(() => !fixture.Feature.IsAuctionQuarantined(1));
 
@@ -237,6 +249,207 @@ public sealed class AuctionRecoveryTests
         Assert.Equal(2, fixture.Control.PrimaryCommitAttempts);
     }
 
+    [Fact]
+    public async Task Conflict_after_external_same_id_update_resyncs_only_that_auction()
+    {
+        await using var fixture = await Fixture.CreateAsync(true, false, loseAcknowledgement: false);
+        AuctionRecord external = fixture.Primary with { BidderId = 55, Bid = 70 };
+        await using (CharacterDbContext db = fixture.NewContext())
+        {
+            Assert.Equal(EconomyCommitResult.Committed, await new EfEconomyStore(db).CommitAsync(
+                new EconomyCommitRequest(Guid.NewGuid(), [], [new UpdateAuction(fixture.Primary, external)])));
+        }
+
+        object unrelatedView = await fixture.OnWorld(() => fixture.Feature.Auctions.Single(v => v.Auction.Id == 2));
+        var outcome = NewCompletion<EconomyOutcome>();
+        await fixture.OnWorld(() =>
+        {
+            fixture.Feature.RunAuctionOperation([], [new UpdateAuction(fixture.Primary, fixture.Primary with { BidderId = 56, Bid = 90 })], 1,
+                result => outcome.TrySetResult(result));
+            return true;
+        });
+        Assert.Equal(EconomyOutcome.Before, await outcome.Task.WaitAsync(Fixture.Budget));
+        Assert.True(await fixture.TryWaitUntilAsync(() => !fixture.Feature.IsAuctionQuarantined(1)
+                && fixture.Feature.Auctions.Single(v => v.Auction.Id == 1).Auction == external),
+            "the cache for the externally changed auction was never resynced");
+        await fixture.OnWorld(() =>
+        {
+            Assert.Same(unrelatedView, fixture.Feature.Auctions.Single(v => v.Auction.Id == 2));
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task Conflicting_expiry_backs_off_and_does_not_starve_later_expired_auction()
+    {
+        const int Poisoned = 16;
+        int goodSeller = 0;
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        await using var fixture = await Fixture.CreateAsync(true, false, loseAcknowledgement: false, seed: async db =>
+        {
+            goodSeller = (await new EfCharacterStore(db).CreateAsync(new CharacterRecord
+            { AccountId = 1, Name = "Goodseller", Race = 1, Class = 1, Level = 10 })).Id;
+            for (int i = 0; i < Poisoned + 1; i++)
+            {
+                bool good = i == Poisoned;
+                // Poisoned sellers have no characters row: the expiry letter is refused every time.
+                var auction = new AuctionRecord
+                {
+                    Id = (uint)(100 + i), HouseId = 1, ItemGuid = (uint)(1000 + i), ItemEntry = 4100, ItemCount = 1,
+                    SellerId = good ? goodSeller : 5000 + i, StartBid = 50, Buyout = 0,
+                    ExpireTime = now - 1000 + i, Deposit = 1,
+                };
+                var item = new ItemInstanceRow { Guid = auction.ItemGuid };
+                item.CopyFrom(0, new ItemInstanceData { Guid = auction.ItemGuid, Entry = auction.ItemEntry, Count = 1 });
+                db.Add(item);
+                var row = new AuctionRow();
+                row.CopyFrom(auction);
+                db.Add(row);
+            }
+
+            await db.SaveChangesAsync();
+        });
+
+        uint goodId = 100 + Poisoned;
+        bool settled = false;
+        for (int sweep = 0; sweep < 6 && !settled; sweep++)
+        {
+            await fixture.OnWorld(() =>
+            {
+                fixture.Feature.RunExpirySweep();
+                return true;
+            });
+            await fixture.Feature.DrainAsync().WaitAsync(Fixture.Budget);
+            await using CharacterDbContext probe = fixture.NewContext();
+            settled = !await probe.Set<AuctionRow>().AnyAsync(a => a.Id == goodId);
+        }
+
+        Assert.True(settled, "the later expired auction was starved by earlier auctions that always conflict");
+        await using CharacterDbContext db = fixture.NewContext();
+        Assert.Equal(1, await db.Set<MailRow>().CountAsync(m => m.ReceiverId == goodSeller));
+        Assert.True(await fixture.TryWaitUntilAsync(() => fixture.Feature.Auctions.All(v => v.Auction.Id != goodId)));
+        Assert.Equal(Poisoned, await db.Set<AuctionRow>().CountAsync(a => a.Id >= 100 && a.Id < goodId));
+    }
+
+    [Fact]
+    public async Task Startup_reserves_auction_without_matching_escrow_and_lists_it_after_repair()
+    {
+        var clock = new ManualQuestClock();
+        await using var fixture = await Fixture.CreateAsync(true, false, loseAcknowledgement: false, clock: clock, omitPrimaryEscrow: true);
+        await fixture.OnWorld(() =>
+        {
+            Assert.True(fixture.Feature.IsAuctionQuarantined(1), "an auction without its escrow item must be reserved, not silently dropped");
+            Assert.DoesNotContain(fixture.Feature.Auctions, v => v.Auction.Id == 1);
+            Assert.Contains(fixture.Feature.Auctions, v => v.Auction.Id == 2);
+            return true;
+        });
+        await using (CharacterDbContext db = fixture.NewContext())
+        {
+            var item = new ItemInstanceRow { Guid = fixture.Primary.ItemGuid };
+            item.CopyFrom(0, new ItemInstanceData { Guid = fixture.Primary.ItemGuid, Entry = fixture.Primary.ItemEntry, Count = fixture.Primary.ItemCount });
+            db.Add(item);
+            await db.SaveChangesAsync();
+        }
+
+        clock.Advance(TimeSpan.FromSeconds(60));
+        Assert.True(await fixture.TryWaitUntilAsync(() => !fixture.Feature.IsAuctionQuarantined(1)
+                && fixture.Feature.Auctions.Any(v => v.Auction.Id == 1)),
+            "the repaired auction was never listed");
+    }
+
+    [Fact]
+    public async Task Escrow_mismatch_backs_off_on_the_feature_clock()
+    {
+        var clock = new ManualQuestClock();
+        await using var fixture = await Fixture.CreateAsync(true, false, clock: clock);
+        AuctionRecord committed = fixture.Primary with { BidderId = 99, Bid = 80 };
+        var unknown = NewCompletion<EconomyOutcome>();
+        await fixture.OnWorld(() =>
+        {
+            fixture.Feature.RunAuctionOperation([], [new UpdateAuction(fixture.Primary, committed)], 1, result => unknown.TrySetResult(result));
+            return true;
+        });
+        Assert.Equal(EconomyOutcome.Unknown, await unknown.Task.WaitAsync(Fixture.Budget));
+        await fixture.Control.RecoveryFailed.Task.WaitAsync(Fixture.Budget);
+        await using (CharacterDbContext db = fixture.NewContext())
+        {
+            // CommitAsync refuses to orphan an auction reference, so remove the escrow row directly.
+            db.Remove(await db.Set<ItemInstanceRow>().SingleAsync(i => i.Guid == committed.ItemGuid));
+            await db.SaveChangesAsync();
+        }
+
+        fixture.Control.RecoveryAvailable = true;
+        Assert.True(await fixture.TryWaitUntilAsync(() => fixture.Control.AvailableReads >= 1, TimeSpan.FromSeconds(5), pollOnWorld: false));
+        // The clock is frozen: a mismatch must not be re-read on every one-second timer tick.
+        await Task.Delay(TimeSpan.FromSeconds(3.5));
+        Assert.Equal(1, fixture.Control.AvailableReads);
+        Assert.True(await fixture.OnWorld(() => fixture.Feature.IsAuctionQuarantined(1)));
+
+        clock.Advance(TimeSpan.FromSeconds(31));
+        Assert.True(await fixture.TryWaitUntilAsync(() => fixture.Control.AvailableReads >= 2, TimeSpan.FromSeconds(5), pollOnWorld: false));
+        await Task.Delay(TimeSpan.FromSeconds(1.5));
+        Assert.Equal(2, fixture.Control.AvailableReads);
+    }
+
+    [Fact]
+    public async Task Auction_id_collision_with_an_external_insert_refuses_that_operation_and_reseeds_the_allocator()
+    {
+        await using var fixture = await Fixture.CreateAsync(true, false, loseAcknowledgement: false);
+        // Another writer takes ID 3 (it is not in the cache, which only the startup load fills).
+        await using (CharacterDbContext db = fixture.NewContext())
+        {
+            var item = new ItemInstanceRow { Guid = 300 };
+            item.CopyFrom(0, new ItemInstanceData { Guid = 300, Entry = 4002, Count = 1 });
+            db.Add(item);
+            var row = new AuctionRow();
+            row.CopyFrom(fixture.Primary with { Id = 3, ItemGuid = 300, ItemEntry = 4002, ItemCount = 1, SellerId = 30 });
+            db.Add(row);
+            await db.SaveChangesAsync();
+        }
+
+        uint allocated = await fixture.OnWorld(() => fixture.Feature.NextAuctionId());
+        Assert.Equal(3u, allocated);
+        var outcome = NewCompletion<EconomyOutcome>();
+        AuctionRecord mine = fixture.Primary with { Id = allocated, ItemGuid = 301, ItemEntry = 4003, ItemCount = 1 };
+        await fixture.OnWorld(() =>
+        {
+            fixture.Feature.RunAuctionOperation([], [new InsertAuction(mine)], allocated, result => outcome.TrySetResult(result));
+            return true;
+        });
+        Assert.Equal(EconomyOutcome.Before, await outcome.Task.WaitAsync(Fixture.Budget));
+        await fixture.Feature.DrainAsync().WaitAsync(Fixture.Budget);
+        Assert.True(await fixture.TryWaitUntilAsync(() => fixture.Feature.NextAuctionId() >= 5),
+            "the allocator was not raised past the externally inserted ID");
+        // Only the colliding operation was refused: its ID is released, not quarantined.
+        Assert.False(await fixture.OnWorld(() => fixture.Feature.IsAuctionQuarantined(allocated)));
+    }
+
+    [Fact]
+    public async Task Deletion_resync_reserves_a_kept_auction_whose_escrow_does_not_match_instead_of_dropping_it()
+    {
+        var clock = new ManualQuestClock();
+        await using var fixture = await Fixture.CreateAsync(true, false, loseAcknowledgement: false, clock: clock);
+        await fixture.OnWorld(() =>
+        {
+            // Deletion kept auction 1 (the seller row survived the cleanup) but its snapshot has no matching escrow item.
+            fixture.Feature.ResyncDeletedCharacter(fixture.Primary.SellerId, [fixture.Primary], new Dictionary<uint, ItemInstanceData>(), []);
+            return true;
+        });
+        await fixture.OnWorld(() =>
+        {
+            Assert.True(fixture.Feature.IsAuctionQuarantined(1), "the kept auction must stay reserved while its escrow is unmatched");
+            Assert.DoesNotContain(fixture.Feature.Auctions, v => v.Auction.Id == 1);
+            Assert.Contains(fixture.Feature.Auctions, v => v.Auction.Id == 2);
+            return true;
+        });
+
+        // The real escrow row exists, so the first retry after the mismatch backoff repairs the cache.
+        clock.Advance(TimeSpan.FromSeconds(31));
+        Assert.True(await fixture.TryWaitUntilAsync(() => !fixture.Feature.IsAuctionQuarantined(1)
+                && fixture.Feature.Auctions.Any(v => v.Auction.Id == 1)),
+            "the reserved auction was never repaired from the authoritative rows");
+    }
+
     private static TaskCompletionSource<T> NewCompletion<T>() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private sealed class Fixture : IAsyncDisposable
@@ -248,7 +461,7 @@ public sealed class AuctionRecoveryTests
         private readonly CharacterSaveQueue _saves;
 
         private Fixture(string path, DbContextOptions<CharacterDbContext> options, ServiceProvider services,
-            Control control, AuctionRecord primary, AuctionRecord other)
+            Control control, AuctionRecord primary, AuctionRecord other, TimeProvider? clock)
         {
             _path = path;
             _options = options;
@@ -259,7 +472,7 @@ public sealed class AuctionRecoveryTests
             _saves = services.GetRequiredService<CharacterSaveQueue>();
             World = new WorldRuntime(new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 },
                 _saves, NullLogger<WorldRuntime>.Instance);
-            Feature = new EconomyFeature(services, services.GetRequiredService<IServiceScopeFactory>(), NullLogger<EconomyFeature>.Instance);
+            Feature = new EconomyFeature(services, services.GetRequiredService<IServiceScopeFactory>(), NullLogger<EconomyFeature>.Instance, clock);
             Feature.Options.ExpirySweepSeconds = 0;
             Feature.Attach(World);
             World.Start();
@@ -273,6 +486,25 @@ public sealed class AuctionRecoveryTests
         public CharacterDbContext NewContext() => new(_options);
         public Task<T> OnWorld<T>(Func<T> action) => World.InvokeAsync(action).WaitAsync(Budget);
 
+        /// <summary>Poll until the predicate holds (on the world thread unless told otherwise) or the budget ends.</summary>
+        public async Task<bool> TryWaitUntilAsync(Func<bool> predicate, TimeSpan? budget = null, bool pollOnWorld = true)
+        {
+            using var timeout = new CancellationTokenSource(budget ?? Budget);
+            try
+            {
+                while (!(pollOnWorld ? await OnWorld(predicate).WaitAsync(timeout.Token) : predicate()))
+                {
+                    await Task.Delay(10, timeout.Token);
+                }
+
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
+        }
+
         public async Task WaitUntilAsync(Func<bool> predicate)
         {
             using var timeout = new CancellationTokenSource(Budget);
@@ -282,7 +514,8 @@ public sealed class AuctionRecoveryTests
             }
         }
 
-        public static async Task<Fixture> CreateAsync(bool existing, bool failEscrow, bool loseAcknowledgement = true)
+        public static async Task<Fixture> CreateAsync(bool existing, bool failEscrow, bool loseAcknowledgement = true,
+            TimeProvider? clock = null, bool omitPrimaryEscrow = false, Func<CharacterDbContext, Task>? seed = null)
         {
             string path = Path.Combine(Path.GetTempPath(), $"arcanecore-auction-recovery-{Guid.NewGuid():N}.db");
             var options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite($"Data Source={path};Pooling=False").Options;
@@ -298,9 +531,13 @@ public sealed class AuctionRecoveryTests
                 await db.Database.EnsureCreatedAsync();
                 foreach (AuctionRecord row in new[] { primary, other })
                 {
-                    var item = new ItemInstanceRow { Guid = row.ItemGuid };
-                    item.CopyFrom(0, new ItemInstanceData { Guid = row.ItemGuid, Entry = row.ItemEntry, Count = row.ItemCount });
-                    db.Add(item);
+                    if (!(row.Id == 1 && omitPrimaryEscrow))
+                    {
+                        var item = new ItemInstanceRow { Guid = row.ItemGuid };
+                        item.CopyFrom(0, new ItemInstanceData { Guid = row.ItemGuid, Entry = row.ItemEntry, Count = row.ItemCount });
+                        db.Add(item);
+                    }
+
                     if (row.Id == 2 || existing)
                     {
                         var auction = new AuctionRow();
@@ -309,6 +546,10 @@ public sealed class AuctionRecoveryTests
                     }
                 }
                 await db.SaveChangesAsync();
+                if (seed is not null)
+                {
+                    await seed(db);
+                }
             }
 
             var control = new Control { FailEscrow = failEscrow, LoseAcknowledgement = loseAcknowledgement };
@@ -318,7 +559,7 @@ public sealed class AuctionRecoveryTests
                 new EfEconomyStore(provider.GetRequiredService<CharacterDbContext>()), control));
             services.AddSingleton(provider => new CharacterSaveQueue(provider.GetRequiredService<IServiceScopeFactory>(),
                 NullLogger<CharacterSaveQueue>.Instance));
-            return new Fixture(path, options, services.BuildServiceProvider(), control, primary, other);
+            return new Fixture(path, options, services.BuildServiceProvider(), control, primary, other, clock);
         }
 
         public async ValueTask DisposeAsync()
@@ -343,6 +584,18 @@ public sealed class AuctionRecoveryTests
         public int SnapshotClaimed;
         public Guid UnknownOperation;
         public int PrimaryCommitAttempts;
+        private int _availableReads;
+
+        /// <summary>Authoritative auction reads served after the lost acknowledgement and once reads are available.</summary>
+        public int AvailableReads => Volatile.Read(ref _availableReads);
+
+        public void CountAvailableRead()
+        {
+            if (LostAcknowledgement && RecoveryAvailable)
+            {
+                Interlocked.Increment(ref _availableReads);
+            }
+        }
         public TaskCompletionSource<EconomyCommitResult> PrimaryCommitted { get; } = NewCompletion<EconomyCommitResult>();
         public TaskCompletionSource RecoveryFailed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource OtherEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -356,7 +609,7 @@ public sealed class AuctionRecoveryTests
         public async Task<EconomyCommitResult> CommitAsync(EconomyCommitRequest request, CancellationToken cancellationToken = default)
         {
             bool primary = request.Changes.Any(c => c is InsertAuction { Auction.Id: 1 } or UpdateAuction { Expected.Id: 1 });
-            if (!primary)
+            if (request.Changes.Any(c => c is UpdateAuction { Expected.Id: 2 }))
             {
                 control.OtherEntered.TrySetResult();
                 await control.OtherRelease.Task.WaitAsync(cancellationToken);
@@ -379,29 +632,35 @@ public sealed class AuctionRecoveryTests
                 : inner.IsCommittedAsync(operationId, cancellationToken);
 
         public Task<IReadOnlyList<AuctionRecord>> GetAuctionsAsync(CancellationToken cancellationToken = default)
-        {
-            if (control.LostAcknowledgement && !control.RecoveryAvailable && !control.FailEscrow)
-            {
-                control.RecoveryFailed.TrySetResult();
-                return Task.FromException<IReadOnlyList<AuctionRecord>>(new IOException("controlled recovery auction read failure"));
-            }
-            return inner.GetAuctionsAsync(cancellationToken);
-        }
+            => inner.GetAuctionsAsync(cancellationToken);
 
-        public async Task<IReadOnlyDictionary<uint, ItemInstanceData>> GetEscrowItemsAsync(IReadOnlyCollection<uint> itemGuids,
-            CancellationToken cancellationToken = default)
+        public Task<IReadOnlyDictionary<uint, ItemInstanceData>> GetEscrowItemsAsync(IReadOnlyCollection<uint> itemGuids,
+            CancellationToken cancellationToken = default) => inner.GetEscrowItemsAsync(itemGuids, cancellationToken);
+
+        /// <summary>Every recovery, startup and deletion read goes through here; the hooks live on this one method.</summary>
+        public async Task<AuctionSnapshot> GetAuctionSnapshotAsync(AuctionSnapshotFilter filter, CancellationToken cancellationToken = default)
         {
-            if (control.LostAcknowledgement && !control.RecoveryAvailable && control.FailEscrow)
+            if (control.LostAcknowledgement && !control.RecoveryAvailable)
             {
                 control.RecoveryFailed.TrySetResult();
-                throw new IOException("controlled recovery escrow read failure");
+                if (!control.FailEscrow)
+                {
+                    throw new IOException("controlled recovery snapshot read failure");
+                }
+
+                // The row is readable but its escrow does not match yet (repaired once RecoveryAvailable).
+                AuctionSnapshot partial = await inner.GetAuctionSnapshotAsync(filter, cancellationToken);
+                return partial with { Escrow = new Dictionary<uint, ItemInstanceData>() };
             }
-            IReadOnlyDictionary<uint, ItemInstanceData> snapshot = await inner.GetEscrowItemsAsync(itemGuids, cancellationToken);
+
+            control.CountAvailableRead();
+            AuctionSnapshot snapshot = await inner.GetAuctionSnapshotAsync(filter, cancellationToken);
             if (control.HoldRecoverySnapshot && Interlocked.CompareExchange(ref control.SnapshotClaimed, 1, 0) == 0)
             {
                 control.SnapshotCaptured.TrySetResult();
                 await control.SnapshotRelease.Task.WaitAsync(cancellationToken);
             }
+
             return snapshot;
         }
 

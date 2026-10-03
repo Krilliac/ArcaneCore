@@ -5,7 +5,9 @@ using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace ArcaneCore.Data.Economy;
 
@@ -198,6 +200,91 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
         List<uint> guids = [.. itemGuids];
         return await db.Set<ItemInstanceRow>().AsNoTracking().Where(r => r.OwnerGuid == 0 && guids.Contains(r.Guid))
             .ToDictionaryAsync(r => r.Guid, r => r.ToData(), cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<AuctionSnapshot> GetAuctionSnapshotAsync(AuctionSnapshotFilter filter, CancellationToken cancellationToken = default)
+    {
+        if (db.ChangeTracker.Entries().Any()
+            || db.Database.CurrentTransaction is not null
+            || System.Transactions.Transaction.Current is not null)
+        {
+            throw new InvalidOperationException("Auction snapshots require a dedicated context without tracked caller state or a caller transaction.");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        bool sqlite = db.Database.IsSqlite();
+        IDbContextTransaction transaction = await BeginSnapshotAsync(sqlite, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            IQueryable<AuctionRow> query = db.Set<AuctionRow>().AsNoTracking();
+            if (filter.AuctionId is { } auctionId)
+            {
+                query = query.Where(r => r.Id == auctionId);
+            }
+
+            if (filter.SellerId is { } sellerId)
+            {
+                query = query.Where(r => r.SellerId == sellerId);
+            }
+
+            AuctionRecord[] auctions = [.. (await query.OrderBy(r => r.Id).ToListAsync(cancellationToken).ConfigureAwait(false)).Select(r => r.ToRecord())];
+            IReadOnlyDictionary<uint, ItemInstanceData> escrow = await GetEscrowItemsAsync([.. auctions.Select(a => a.ItemGuid)], cancellationToken)
+                .ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return new AuctionSnapshot(auctions, escrow);
+        }
+        catch
+        {
+            try
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception rollbackError) when (rollbackError is not OutOfMemoryException)
+            {
+                // The original failure propagates; the dedicated context is discarded by its scope.
+            }
+
+            throw;
+        }
+        finally
+        {
+            await transaction.DisposeAsync().ConfigureAwait(false);
+            if (sqlite)
+            {
+                // Opened by BeginSnapshotAsync: EF does not close a connection it was asked to keep open.
+                await db.Database.CloseConnectionAsync().ConfigureAwait(false);
+            }
+
+            db.ChangeTracker.Clear();
+        }
+    }
+
+    /// <summary>
+    /// A read-only transaction that sees one snapshot. MariaDB/MySQL/PostgreSQL: repeatable read
+    /// (an MVCC snapshot from the first statement, no locking reads). SQLite: Microsoft.Data.Sqlite
+    /// promotes repeatable read to serializable (BEGIN IMMEDIATE, the write lock), which would make
+    /// a pure read contend with every commit, so a deferred transaction is opened instead: its
+    /// SHARED lock already holds the file steady across the two statements.
+    /// </summary>
+    private async Task<IDbContextTransaction> BeginSnapshotAsync(bool sqlite, CancellationToken cancellationToken)
+    {
+        if (!sqlite)
+        {
+            return await db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false);
+        }
+
+        await db.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var connection = (SqliteConnection)db.Database.GetDbConnection();
+            return await db.Database.UseTransactionAsync(connection.BeginTransaction(deferred: true), cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("the SQLite snapshot transaction was not attached");
+        }
+        catch
+        {
+            await db.Database.CloseConnectionAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     public async Task<EconomyIdSeed> GetIdSeedAsync(CancellationToken cancellationToken = default) => new(
