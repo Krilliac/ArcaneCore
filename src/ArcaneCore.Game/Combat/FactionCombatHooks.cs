@@ -4,30 +4,41 @@ using ArcaneCore.Kernel.Npc;
 namespace ArcaneCore.Game.Combat;
 
 /// <summary>
-/// Production <see cref="CombatHooks"/>: a player cannot attack a non-player whose
-/// FactionTemplate.dbc row (the <see cref="FactionTemplateCatalog"/> the creature and quest areas
-/// already load) is friendly to the player's, by <see cref="FactionTemplateRecord.IsFriendlyTo"/>
-/// (explicit enemies deny, explicit friends allow, then the friendly masks; DBCStructure.h as
-/// cited on the record, not checked against a vmangos/cmangos checkout).
+/// Production <see cref="CombatHooks"/>: a template-only SUBSET of vmangos
+/// <c>WorldObject::IsValidAttackTarget</c> (D:\refs\vmangos\src\game\Objects\Object.cpp:3745-3815). It is not
+/// "vmangos CanAttack"; it reads only the FactionTemplate.dbc rows of the <see cref="FactionTemplateCatalog"/>
+/// the creature and quest areas already load.
 /// <para>
-/// Only <see cref="CanAttack"/> is overridden. <see cref="CombatHooks.IsFriendly"/> is left alone
-/// on purpose: spell targeting (friendly AoE, chain heal, dispel polarity) and other consumers
-/// route through it, and this change must not alter them. This is not the predicate
-/// <see cref="Creatures.FactionCreatureHostility"/> uses (that one is <c>IsHostileTo</c> plus the
-/// contested-guard flag, from the creature's side); the two are cross-checked for the catalog
-/// pairs in tests, not proven equivalent. A neutral template is neither friendly nor hostile and
-/// stays attackable.
+/// Template reaction of <c>a</c> towards <c>b</c> (<c>GetFactionReactionTo</c>, Object.cpp:3734-3741, record logic
+/// DBCStructure.h:362-388): hostile if <c>a.IsHostileTo(b)</c> (checked first, so a template with both hostile and
+/// friendly bits is hostile); else friendly if <c>a.IsFriendlyTo(b)</c> or <c>b.IsFriendlyTo(a)</c>; else neutral.
+/// A template missing from the catalog (including 0) is neutral (Object.cpp:3705-3709).
 /// </para>
 /// <para>
-/// Not modelled: player reputation and at-war state, and contested-guard state. Templates missing
-/// from the catalog (including template 0) are not friendly, i.e. the permissive base rule
-/// applies. Player versus player and every non-faction rule of <see cref="CombatHooks.CanAttack"/>
-/// are inherited unchanged. A world with no loaded catalog does not register these hooks at all
-/// (see WorldCombatHooksFeature).
+/// Pairs: (1) neither unit has <see cref="UnitFlags.PlayerControlled"/> (the vmangos UNIT_FLAG_PLAYER_CONTROLLED,
+/// UnitDefines.h:494): attackable only if the reaction is hostile in EITHER direction (Object.cpp:3760-3763), so
+/// neutral creature pairs are not attackable. (2) Otherwise (player, pet, charm or totem involved) the attack is
+/// refused if the reaction is friendly in EITHER direction (Object.cpp:3767-3769); neutral stays attackable.
+/// (3) Player versus player is left to the base rule (team friendliness, PvP flag).
+/// </para>
+/// <para>
+/// Not modelled, so this is NOT equivalent to vmangos: player reputation / at-war state (Faction.dbc
+/// reputationListID, <c>CanHaveReputation</c>, FACTION_FLAG_AT_WAR making a faction HOSTILE, Object.cpp:3714-3731 and
+/// 3677-3693); neutral-versus-neutral being attackable only when the faction is at war for reputation-capable
+/// factions (Object.cpp:3775-3792); the contested-guard rule (IsContestedGuardFaction plus PLAYER_FLAGS_CONTESTED_PVP
+/// => HOSTILE, Object.cpp:3714-3716); GM players reading NEUTRAL (Object.cpp:3625-3626, 3633-3634) and forced
+/// reactions (GetForcedRankIfAny); the ordering with duel / same-group / FFA reactions (Object.cpp:3648-3664) and
+/// the PvP block (Object.cpp:3796-3815); resolving the affecting player of a pet or charm (no owner field exists).
+/// <see cref="CombatHooks.IsFriendly"/> is not overridden (vmangos IsFriendlyTo / IsValidHelpfulTarget polarity for
+/// friendly-NPC spells, heals and dispels is unchanged): spell targeting and other consumers keep the base rule.
+/// A world with no loaded catalog does not register these hooks at all (see WorldCombatHooksFeature), so the
+/// permissive <see cref="CombatHooks.Default"/> applies there.
 /// </para>
 /// </summary>
 public sealed class FactionCombatHooks(FactionTemplateCatalog factions) : CombatHooks
 {
+    private enum Reaction { Hostile, Neutral, Friendly }
+
     public FactionTemplateCatalog Factions { get; } = factions ?? throw new ArgumentNullException(nameof(factions));
 
     public override bool CanAttack(Unit attacker, Unit victim)
@@ -37,17 +48,36 @@ public sealed class FactionCombatHooks(FactionTemplateCatalog factions) : Combat
             return false;
         }
 
-        if (attacker is Player != victim is Player)
+        if (attacker is Player && victim is Player)
         {
-            Unit npc = attacker is Player ? victim : attacker;
-            Unit player = attacker is Player ? attacker : victim;
-            if (Factions.Find(npc.FactionTemplate) is { } npcTemplate && Factions.Find(player.FactionTemplate) is { } playerTemplate
-                && npcTemplate.IsFriendlyTo(playerTemplate))
-            {
-                return false;
-            }
+            return true;
         }
 
-        return true;
+        Reaction forward = ReactionTo(attacker, victim);
+        Reaction backward = ReactionTo(victim, attacker);
+        if (((attacker.UnitFlags | victim.UnitFlags) & UnitFlags.PlayerControlled) == 0)
+        {
+            // Object.cpp:3760-3763
+            return forward == Reaction.Hostile || backward == Reaction.Hostile;
+        }
+
+        // Object.cpp:3767-3769
+        return forward != Reaction.Friendly && backward != Reaction.Friendly;
+    }
+
+    // WorldObject::GetFactionReactionTo, template part only (Object.cpp:3701-3741).
+    private Reaction ReactionTo(Unit from, Unit to)
+    {
+        if (Factions.Find(from.FactionTemplate) is not { } a || Factions.Find(to.FactionTemplate) is not { } b)
+        {
+            return Reaction.Neutral;
+        }
+
+        if (a.IsHostileTo(b))
+        {
+            return Reaction.Hostile;
+        }
+
+        return a.IsFriendlyTo(b) || b.IsFriendlyTo(a) ? Reaction.Friendly : Reaction.Neutral;
     }
 }

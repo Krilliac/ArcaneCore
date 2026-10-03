@@ -51,16 +51,31 @@ needs a characters-DB version from the lead.
   (vmangos `Player::RepopAtGraveyard`). The default leaves it at the corpse.
 - **Factions:** the daemon registers `FactionCombatHooks` (`src/ArcaneCore.Game/Combat/FactionCombatHooks.cs`) through
   `WorldCombatHooksFeature` (`src/ArcaneCore.World/Combat/`) when a `FactionTemplateCatalog` is loaded (a registered
-  catalog, else `Creatures:FactionTemplateDbcPath`). A player cannot attack a non-player whose faction template
-  `IsFriendlyTo` the player's (the DBCStructure.h predicate as cited on `FactionTemplateRecord`, unverified against the vmangos/cmangos
-  references; it is not the `IsHostileTo` + contested-guard rule of `FactionCreatureHostility`, a test cross-checks the two on
-  the catalog pairs); neutral and hostile NPCs, PvP
-  and every other `CanAttack` rule are unchanged. **With no catalog loaded (or an empty one) nothing is registered and
+  catalog, else `Creatures:FactionTemplateDbcPath`). It is a **template-only subset** of vmangos
+  `WorldObject::IsValidAttackTarget` (`Objects/Object.cpp:3745-3815`), not "vmangos CanAttack". Template reaction
+  (`GetFactionReactionTo`, `Object.cpp:3734-3741`; record logic `Database/DBCStructure.h:362-388`): hostile if `IsHostileTo`
+  (tested first), else friendly if `IsFriendlyTo` either way, else neutral; a template missing from the catalog is neutral
+  (`Object.cpp:3705-3709`). Pairs where neither unit has `UNIT_FLAG_PLAYER_CONTROLLED` (`UnitDefines.h:494`;
+  `UnitFlags.PlayerControlled`, set on players and on any flagged pet/charm/totem) are attackable only if the reaction is
+  hostile in either direction (`Object.cpp:3760-3763`), so neutral creature pairs are not attackable and creature
+  assist/call-for-help (`CreatureMapSystem.Ai.cs`) only picks hostile-reaction enemies. Every other non-PvP pair is refused
+  if the reaction is friendly in either direction (`Object.cpp:3767-3769`); neutral stays attackable. Player versus player is
+  the base rule (team friendly, PvP flag). **With no catalog loaded (or an empty one) nothing is registered and
   the permissive `CombatHooks.Default` applies: a player may attack any non-player unit** (a warning is logged once).
-  **Only `CanAttack` is overridden; `IsFriendly` is deliberately untouched**, so spell targeting (friendly AoE, chain heal, dispel
-  polarity) and `CombatHandlers` keep the base rule (player vs player of the same team only) and friendly NPCs do not become friendly-spell
-  targets. Not modelled: reputation/at-war, contested-guard state; templates missing from the catalog count as not friendly.
-  Evidence: automated tests only, no 1.12.1 client (charter 1.3); the reference clones were not available when this was
-  written, semantics are cited from the comments on `FactionTemplateRecord`.
+  **Only `CanAttack` is overridden; `IsFriendly` is deliberately untouched** (vmangos `IsFriendlyTo` /
+  `IsValidHelpfulTarget` polarity is not reproduced), so spell targeting (friendly AoE, chain heal, dispel
+  polarity) and `CombatHandlers` keep the base rule and friendly NPCs do not become friendly-spell targets.
+  **Not modelled (backlog; needs Faction.dbc data and a reputation manager):** reputation / at-war making a
+  reputation-capable faction hostile (`Object.cpp:3677-3693`, `3714-3731`, `FACTION_FLAG_AT_WAR`;
+  `reputationListID >= 0` = `CanHaveReputation`, `DBCStructure.h:346`); neutral-versus-neutral attackable only when at war
+  for reputation-capable factions (`Object.cpp:3775-3792`); contested-guard (`IsContestedGuardFaction` +
+  `PLAYER_FLAGS_CONTESTED_PVP` => hostile, `Object.cpp:3714-3716`, `3682-3685`); GM players reading NEUTRAL and forced
+  reactions (`Object.cpp:3625-3637`); duel / same-group / FFA ordering (`Object.cpp:3648-3664`) and the PvP block
+  (`Object.cpp:3796-3815`); resolving the affecting player of a pet/charm (no owner field exists; the pet branch uses only the
+  flag and templates).
+  The base `CombatHooks.IsFriendly` makes same-team players friendly so `CanAttack` refuses same-team duels, whereas
+  vmangos reports duel opponents HOSTILE first (`Object.cpp:3651`, `3799-3800`); ArcaneCore has no duel system yet (no
+  duel code under `src/`), so no live path is affected; a duel implementation must bypass or extend `CanAttack`.
+  Evidence: automated tests plus the vmangos references cited above (`D:\refs\vmangos`), no 1.12.1 client (charter 1.3).
 - Register hooks per world: `CombatHooks.Register(world, hooks)` (last writer wins) or
   `CombatHooks.TryRegister(world, hooks)` (first wins, returns false otherwise).
