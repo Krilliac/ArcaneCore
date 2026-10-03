@@ -207,12 +207,14 @@ public sealed class M6LogoutAndCommandTests
         await client.CollectAsync();
 
         await client.SendChatAsync(ChatType.Say, Language.Common, ".serv i"); // abbreviations, as vmangos hasStringAbbr
-        Assert.StartsWith("ArcaneCore ", (await client.ReadChatAsync()).Text);
-        Assert.StartsWith("Players online: 1. Uptime: ", (await client.ReadChatAsync()).Text);
+        Assert.StartsWith("Core revision: ArcaneCore ", (await client.ReadChatAsync()).Text);   // ServerCommands.cpp:310
+        Assert.Equal("Players online: 1 (0 queued). Max online: 1 (0 queued).", (await client.ReadChatAsync()).Text);
+        Assert.StartsWith("Server uptime: ", (await client.ReadChatAsync()).Text);
 
+        // vmangos prints the message as one text (LANG_MOTD_CURRENT); '@' only splits the login greeting.
         await client.SendChatAsync(ChatType.Say, Language.Common, ".server motd");
-        Assert.Equal("Be excellent", (await client.ReadChatAsync()).Text);
-        Assert.Equal("to each other", (await client.ReadChatAsync()).Text);
+        Assert.Equal("Current Message of the day: \r", (await client.ReadChatAsync()).Text);
+        Assert.Equal("Be excellent@to each other", (await client.ReadChatAsync()).Text);
 
         // ".s" is ambiguous; the first command in table order wins (save — silent for players).
         await client.SendChatAsync(ChatType.Say, Language.Common, ".s");

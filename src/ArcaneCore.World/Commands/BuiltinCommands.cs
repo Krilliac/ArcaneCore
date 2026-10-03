@@ -3,6 +3,10 @@ using System.Reflection;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Gm.Args;
+using ArcaneCore.World.Gm.Core;
+using ArcaneCore.World.Gm.Server;
+using Microsoft.Extensions.DependencyInjection;
 using ArcaneCore.World.Packets;
 
 namespace ArcaneCore.World.Commands;
@@ -105,21 +109,21 @@ public static class BuiltinCommands
 
     private static bool ServerInfo(CommandContext context, string args)
     {
+        // vmangos HandleServerInfoCommand (ServerCommands.cpp:302-316).
         string version = typeof(BuiltinCommands).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
-        TimeSpan uptime = context.World.Uptime;
-        context.Reply($"ArcaneCore {version} (WoW 1.12.1 build 5875)");
-        context.Reply($"Players online: {context.World.OnlinePlayerCount}. Uptime: {FormatDuration(uptime)}.");
+        ServerStats? stats = context.Session.Services.GetService<ServerStats>();
+        int active = stats?.Active(context.World) ?? context.World.OnlinePlayerCount;
+        context.Reply("Core revision: ArcaneCore " + version + " (WoW 1.12.1 build 5875)");
+        context.Reply(GmStrings.PlayersOnline(active, 0, Math.Max(stats?.MaxActive ?? 0, active), 0));
+        context.Reply(GmStrings.Uptime(GmDuration.SecsToTimeString((long)context.World.Uptime.TotalSeconds)));
         return true;
     }
 
     private static bool ServerMotd(CommandContext context, string args)
     {
-        foreach (string line in context.World.Options.Motd.Split('@', StringSplitOptions.RemoveEmptyEntries))
-        {
-            context.Reply(line);
-        }
-
+        // vmangos prints the motd as one text (no '@' split; that is the login greeting only).
+        context.Reply(GmStrings.MotdCurrent(context.World.Options.Motd));
         return true;
     }
 
@@ -281,9 +285,4 @@ public static class BuiltinCommands
                 return false;
         }
     }
-
-    private static string FormatDuration(TimeSpan span)
-        => span.TotalDays >= 1
-            ? string.Create(CultureInfo.InvariantCulture, $"{(int)span.TotalDays}d {span.Hours}h {span.Minutes}m")
-            : string.Create(CultureInfo.InvariantCulture, $"{span.Hours}h {span.Minutes}m {span.Seconds}s");
 }

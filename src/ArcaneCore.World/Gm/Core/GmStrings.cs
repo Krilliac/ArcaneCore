@@ -82,4 +82,17 @@ public static class GmStrings
 
     /// <summary>Not a vmangos text: printed when <c>GmCommands:LookupMaxResults</c> cut a lookup short.</summary>
     public const string LookupOmitted = "More results were omitted (World:GmCommands:LookupMaxResults).";
+
+    /// <summary>LANG_MOTD_CURRENT (56; mangos.sql:3478): "Current Message of the day: \r\n%s".</summary>
+    public static string MotdCurrent(string motd) => $"Current Message of the day: \r\n{motd}";
+
+    /// <summary>LANG_MOTD_NEW (vmangos 1101; mangos-classic mangos.sql:4083): "Message of the day changed to:\r\n%s".</summary>
+    public static string MotdChanged(string motd) => $"Message of the day changed to:\r\n{motd}";
+
+    /// <summary>LANG_CONNECTED_USERS as vmangos prints it for .server info (ServerCommands.cpp:310).</summary>
+    public static string PlayersOnline(int active, int queued, int maxActive, int maxQueued)
+        => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"Players online: {active} ({queued} queued). Max online: {maxActive} ({maxQueued} queued).");
+
+    /// <summary>LANG_UPTIME (13; mangos.sql:3435).</summary>
+    public static string Uptime(string time) => $"Server uptime: {time}";
 }
