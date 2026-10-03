@@ -136,6 +136,12 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
             IsGameEventActive = events.Contains,
             IsHolidayActive = holidays.Contains,
             Quests = () => services.GetService<QuestNpcFeature>()?.Services,
+
+            // GetHonorRankInfo().rank (the PvP_RANK condition, classic-db/mangos-classic type 11). Without honor the condition stays
+            // undecidable and fails closed, as before.
+            HonorRank = services.GetService<Honor.HonorFeature>()?.ActiveService is { } honor
+                ? player => ((Game.Honor.IPlayerHonor)honor).CurrentRank(player)
+                : null,
         };
     }
 

@@ -396,13 +396,14 @@ public sealed class Channel
     }
 
     /// <summary>
-    /// vmangos Channel::Say: member; not muted (WorldDefense needs honor rank 15, which no
-    /// character has yet); moderated channels need a moderator or GM; universal language with
+    /// vmangos Channel::Say: member; not muted (WorldDefense needs internal honor rank 15, see
+    /// <see cref="ArcaneCore.Game.Honor.HonorHooks.InternalRank"/>); moderated channels need a moderator or GM; universal language with
     /// two-side channels; members ignoring a non-moderator speaker do not receive it.
     /// </summary>
     internal void Say(Player player, string text, Language language)
     {
-        const byte honorRank = 0; // no honor system yet
+        // GetHonorMgr().GetRank().rank (Channel.cpp:636-648, 670); 0 until the honor feature supplies the ranks.
+        byte honorRank = ArcaneCore.Game.Honor.HonorHooks.For(_context.World).InternalRank?.Invoke(player) ?? 0;
         if (!IsOn(player.Guid))
         {
             SendToOne(player, ChannelPackets.BuildNotify(ChatNotify.NotMember, Name));
