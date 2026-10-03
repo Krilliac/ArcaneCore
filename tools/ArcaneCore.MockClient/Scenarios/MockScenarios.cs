@@ -94,11 +94,16 @@ public static partial class MockScenarios
                 Require(status is { Guid: SyntheticArcaneServer.NpcGuid, Status: 5 },
                     "Synthetic NPC must return its exact full GUID and AVAILABLE status.");
                 Check(checks, "npc.status", "The real nearby creature returned its full GUID and exact u32 available status.");
+                await GreetingListAsync(connection, WorldOpcode.CmsgGossipHello, token).ConfigureAwait(false);
+                Check(checks, "npc.greeting-list", "An exact eight-byte right-click greeting returned the two eligible quest ids, titles, levels and available icons in a strict vanilla list.");
+                await GreetingListAsync(connection, WorldOpcode.CmsgQuestgiverHello, token).ConfigureAwait(false);
+                Check(checks, "npc.questgiver-hello", "The separate eight-byte questgiver hello followed the same real greeting path and returned the same eligible list.");
                 await connection.SendAsync(WorldOpcode.CmsgQuestgiverQueryQuest,
                     ScenarioWire.GuidQuest(SyntheticArcaneServer.NpcGuid, SyntheticArcaneServer.NpcQuestId), token).ConfigureAwait(false);
                 MockQuestDetails details = ScenarioWire.QuestDetails(await connection.ReadUntilAsync(WorldOpcode.SmsgQuestgiverQuestDetails, token).ConfigureAwait(false));
                 ValidateNpcDetails(details);
                 Check(checks, "npc.details", "Decoded the complete vanilla quest details body, including strings, empty reward arrays, spell and four emotes.");
+                Check(checks, "npc.greeting-selection", "Selecting listed quest 900002 through the real query opcode returned its complete details before acceptance.");
                 await connection.SendAsync(WorldOpcode.CmsgQuestgiverAcceptQuest,
                     ScenarioWire.GuidQuest(SyntheticArcaneServer.NpcGuid, SyntheticArcaneServer.NpcQuestId), token).ConfigureAwait(false);
                 Require((await connection.ReadUntilAsync(WorldOpcode.SmsgGossipComplete, token).ConfigureAwait(false)).Length == 0,
@@ -107,6 +112,8 @@ public static partial class MockScenarios
                 ValidateNpcSlot(accepted.Fields, accepted: true);
                 ValidateOriginalJournalDelta(accepted.Fields);
                 Check(checks, "npc.accept-fields", "The exact twelve-byte accept request produced empty gossip completion and slot-one quest id 900002 in a real update mask.");
+                await GreetingAvailableRewardAsync(connection, token).ConfigureAwait(false);
+                Check(checks, "npc.greeting-accepted", "After accepting 900002, a fresh greeting offered only the still-eligible combat quest's full details.");
 
                 const uint pingSequence = 0x12345678;
                 await connection.SendAsync(WorldOpcode.CmsgPing, ScenarioWire.Ping(pingSequence, 42), token).ConfigureAwait(false);
@@ -147,11 +154,15 @@ public static partial class MockScenarios
                 Check(checks, "character.relogin", "The new world connection logged in the same persisted character.");
                 Check(checks, "journal.relogin-fields", "Reloaded quest id and objective progress survived logout and a fresh realm/world handshake.");
                 Check(checks, "npc.relogin-fields", "Accepted quest 900002 reloaded into slot one after a fresh realm/world handshake.");
+                await GreetingAvailableRewardAsync(connection, token).ConfigureAwait(false);
+                Check(checks, "npc.greeting-relogin", "Fresh realm/world login retained eligibility: accepted 900002 stayed absent and unaccepted 900003 remained available.");
                 await connection.SendAsync(WorldOpcode.CmsgQuestlogRemoveQuest, [1], token).ConfigureAwait(false);
                 MockFieldUpdate abandoned = await connection.ReadUntilFieldAsync(characterGuid, NpcQuestIdField, 0, token).ConfigureAwait(false);
                 ValidateNpcSlot(abandoned.Fields, accepted: false);
                 ValidateOriginalJournalDelta(abandoned.Fields);
                 Check(checks, "npc.abandon-fields", "The one-byte slot-one abandon request cleared quest id 900002 in an independently decoded update mask.");
+                await GreetingListAsync(connection, WorldOpcode.CmsgGossipHello, token).ConfigureAwait(false);
+                Check(checks, "npc.greeting-abandon", "Abandoning 900002 restored both available quest entries in a subsequent real NPC greeting.");
                 await connection.LogoutAsync(token).ConfigureAwait(false);
                 Require(server.World.OnlinePlayerCount == 0, "Logout after quest abandonment left the character online.");
                 await ValidatePersistedNpcQuestAsync(server, characterGuid, expectedStatus: 0, token).ConfigureAwait(false);
@@ -205,6 +216,8 @@ public static partial class MockScenarios
                 await ValidatePersistedJournalAsync(server, characterGuid, token).ConfigureAwait(false);
                 Check(checks, "reward.relogin-fields", "Fresh realm/world authentication restored 1234 copper and fixed/chosen item creates while keeping the rewarded quest slot clear.");
                 Check(checks, "reward.relogin-history", "The real quest store retained complete rewarded history, two kills and chosen item entry 900042; the original journal still has one kill.");
+                await GreetingAvailableNpcAsync(connection, token).ConfigureAwait(false);
+                Check(checks, "reward.greeting-relogin", "A fresh realm/world login offered only unaccepted 900002 and kept nonrepeatable rewarded 900003 out of greeting eligibility.");
                 await connection.LogoutAsync(token).ConfigureAwait(false);
                 Require(server.World.OnlinePlayerCount == 0, "Reward relog logout left the character online.");
                 await connection.SendAsync(WorldOpcode.CmsgCharDelete, ScenarioWire.Guid(characterGuid), token).ConfigureAwait(false);

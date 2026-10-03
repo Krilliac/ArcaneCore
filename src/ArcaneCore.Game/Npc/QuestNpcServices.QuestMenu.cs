@@ -111,24 +111,27 @@ public sealed partial class QuestNpcServices
 
         QuestMenuItem item = state.Menu.QuestItems[0];
         Quest quest = Quests.Get(item.QuestId)!;
+        Player player = state.Quests.Player;
+        uint Display(uint id) => Deps.Items?.GetItem(id)?.DisplayId
+            ?? player.Inventory.Templates.Find(id)?.DisplayId ?? 0;
         bool complete = CanDisplayReward(state, quest);
         if (item.Icon is DialogStatus.RewardRep or DialogStatus.Incomplete || (quest.IsRepeatable && complete))
         {
             if (quest.RequestItemsText.Length == 0 || (quest.ReqItemsCount == 0 && complete))
             {
                 Send(state.Quests.Player, WorldOpcode.SmsgQuestgiverOfferReward,
-                    QuestPackets.OfferReward(npc.Guid, quest, Options.RateDropMoney, DisplayOf));
+                    QuestPackets.OfferReward(npc.Guid, quest, Options.RateDropMoney, Display));
             }
             else
             {
                 Send(state.Quests.Player, WorldOpcode.SmsgQuestgiverRequestItems,
-                    QuestPackets.RequestItems(npc.Guid, quest, complete, DisplayOf));
+                    QuestPackets.RequestItems(npc.Guid, quest, complete, Display));
             }
         }
         else
         {
             Send(state.Quests.Player, WorldOpcode.SmsgQuestgiverQuestDetails,
-                QuestPackets.Details(npc.Guid, quest, Options.RateDropMoney, DisplayOf));
+                QuestPackets.Details(npc.Guid, quest, Options.RateDropMoney, Display));
         }
     }
 

@@ -7,15 +7,11 @@ using ArcaneCore.Data;
 using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
-using ArcaneCore.Data.Content.Items;
-using ArcaneCore.Data.Quests;
-using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Npc;
-using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Realm.Net;
 using ArcaneCore.World;
@@ -41,21 +37,21 @@ namespace ArcaneCore.MockClient.Hosting;
 /// </summary>
 public sealed class SyntheticArcaneServer : IAsyncDisposable
 {
-    public const uint JournalQuestId = 900001;
-    public const uint NpcQuestId = 900002;
-    public const uint RewardQuestId = 900003;
-    public const uint NpcEntry = 900010;
-    public const uint NpcSpawn = 900020;
+    public const uint JournalQuestId = SyntheticQuestContent.JournalQuestId;
+    public const uint NpcQuestId = SyntheticQuestContent.NpcQuestId;
+    public const uint RewardQuestId = SyntheticQuestContent.RewardQuestId;
+    public const uint NpcEntry = SyntheticQuestContent.NpcEntry;
+    public const uint NpcSpawn = SyntheticQuestContent.NpcSpawn;
     public const ulong NpcGuid = ((ulong)0xF130 << 48) | ((ulong)NpcEntry << 24) | NpcSpawn;
-    public const uint TargetEntry = 900030;
-    public const uint FirstTargetSpawn = 900021;
-    public const uint SecondTargetSpawn = 900022;
+    public const uint TargetEntry = SyntheticQuestContent.TargetEntry;
+    public const uint FirstTargetSpawn = SyntheticQuestContent.FirstTargetSpawn;
+    public const uint SecondTargetSpawn = SyntheticQuestContent.SecondTargetSpawn;
     public const ulong FirstTargetGuid = ((ulong)0xF130 << 48) | ((ulong)TargetEntry << 24) | FirstTargetSpawn;
     public const ulong SecondTargetGuid = ((ulong)0xF130 << 48) | ((ulong)TargetEntry << 24) | SecondTargetSpawn;
-    public const uint FixedRewardItem = 900040;
-    public const uint UnchosenRewardItem = 900041;
-    public const uint ChosenRewardItem = 900042;
-    public const uint RewardMoney = 1234;
+    public const uint FixedRewardItem = SyntheticQuestContent.FixedRewardItem;
+    public const uint UnchosenRewardItem = SyntheticQuestContent.UnchosenRewardItem;
+    public const uint ChosenRewardItem = SyntheticQuestContent.ChosenRewardItem;
+    public const uint RewardMoney = SyntheticQuestContent.RewardMoney;
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(5);
     private readonly object _gate = new();
@@ -360,124 +356,7 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
         await using (AsyncServiceScope scope = _services.CreateAsyncScope())
         {
             WorldDbContext content = scope.ServiceProvider.GetRequiredService<WorldDbContext>();
-            content.Set<QuestTemplate>().Add(new QuestTemplate
-            {
-                Entry = JournalQuestId,
-                Method = 2,
-                MinLevel = 1,
-                QuestLevel = 1,
-                Title = "Mock journal",
-                Details = "synthetic lifecycle query",
-                Objectives = "synthetic progress",
-                ReqCreatureOrGOId1 = 900101,
-                ReqCreatureOrGOCount1 = 2,
-            });
-            content.Set<QuestTemplate>().Add(new QuestTemplate
-            {
-                Entry = NpcQuestId,
-                Method = 2,
-                MinLevel = 1,
-                QuestLevel = 1,
-                Title = "Mock NPC quest",
-                Details = "synthetic NPC acceptance",
-                Objectives = "defeat two synthetic targets",
-                ReqCreatureOrGOId1 = 900102,
-                ReqCreatureOrGOCount1 = 2,
-            });
-            content.Set<QuestTemplate>().Add(new QuestTemplate
-            {
-                Entry = RewardQuestId,
-                Method = 2,
-                Type = 0,
-                MinLevel = 1,
-                QuestLevel = 1,
-                Title = "Mock combat reward",
-                Details = "synthetic combat and durable reward",
-                Objectives = "defeat two live synthetic targets",
-                OfferRewardText = "Choose one synthetic keepsake.",
-                ReqCreatureOrGOId1 = (int)TargetEntry,
-                ReqCreatureOrGOCount1 = 2,
-                RewOrReqMoney = (int)RewardMoney,
-                RewItemId1 = FixedRewardItem,
-                RewItemCount1 = 1,
-                RewChoiceItemId1 = UnchosenRewardItem,
-                RewChoiceItemCount1 = 1,
-                RewChoiceItemId2 = ChosenRewardItem,
-                RewChoiceItemCount2 = 1,
-            });
-            content.Set<CreatureTemplateRow>().Add(new CreatureTemplateRow
-            {
-                Entry = NpcEntry,
-                Name = "Synthetic guide",
-                Faction = 900011,
-                NpcFlags = 2,
-                DisplayId1 = 900012,
-                MinLevelHealth = 10,
-                MaxLevelHealth = 10,
-                UnitClass = 1,
-                Civilian = true,
-            });
-            content.Set<CreatureModelInfoRow>().Add(new CreatureModelInfoRow
-            {
-                DisplayId = 900012,
-                BoundingRadius = 0.5f,
-                CombatReach = 1.5f,
-            });
-            content.Set<CreatureSpawnRow>().Add(new CreatureSpawnRow
-            {
-                Guid = NpcSpawn,
-                Entry = NpcEntry,
-                MapId = 0,
-                X = -8948.95f,
-                Y = -132.493f,
-                Z = 83.5312f,
-            });
-            content.Set<CreatureQuestStarterRow>().Add(new CreatureQuestStarterRow { Id = NpcEntry, Quest = NpcQuestId });
-            content.Set<CreatureQuestStarterRow>().Add(new CreatureQuestStarterRow { Id = NpcEntry, Quest = RewardQuestId });
-            content.Set<CreatureQuestEnderRow>().Add(new CreatureQuestEnderRow { Id = NpcEntry, Quest = RewardQuestId });
-            content.Set<CreatureTemplateRow>().Add(new CreatureTemplateRow
-            {
-                Entry = TargetEntry,
-                Name = "Synthetic combat target",
-                Faction = 900011,
-                DisplayId1 = 900012,
-                MinLevel = 1,
-                MaxLevel = 1,
-                MinLevelHealth = 1,
-                MaxLevelHealth = 1,
-                UnitClass = 1,
-                Civilian = true,
-            });
-            foreach (uint spawn in new[] { FirstTargetSpawn, SecondTargetSpawn })
-            {
-                content.Set<CreatureSpawnRow>().Add(new CreatureSpawnRow
-                {
-                    Guid = spawn,
-                    Entry = TargetEntry,
-                    MapId = 0,
-                    X = -8949.95f + (spawn == FirstTargetSpawn ? 0.5f : -0.5f),
-                    Y = -132.493f,
-                    Z = 83.5312f,
-                    SpawnTimeMinSeconds = 3600,
-                    SpawnTimeMaxSeconds = 3600,
-                });
-            }
-
-            foreach (uint item in new[] { FixedRewardItem, UnchosenRewardItem, ChosenRewardItem })
-            {
-                content.Set<ItemTemplateRow>().Add(new ItemTemplateRow
-                {
-                    Entry = item,
-                    Class = 15,
-                    Name = $"Synthetic keepsake {item}",
-                    DisplayId = item + 100,
-                    Quality = 1,
-                    AllowableClass = -1,
-                    AllowableRace = -1,
-                    Stackable = 20,
-                });
-            }
-            await content.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await SyntheticQuestContent.SeedAsync(content, SyntheticQuestProfile.SelfTest, cancellationToken).ConfigureAwait(false);
         }
 
         await _worldHost.StartAsync(cancellationToken).ConfigureAwait(false);

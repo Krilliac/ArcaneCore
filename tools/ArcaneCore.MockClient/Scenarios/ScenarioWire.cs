@@ -13,7 +13,7 @@ namespace ArcaneCore.MockClient.Scenarios;
 /// src/game/Server/Packets/Quest.cpp. These decoders implement the build 5875 field layout.
 /// No production packet builder or reader participates in these assertions.
 /// </summary>
-internal static class ScenarioWire
+internal static partial class ScenarioWire
 {
     internal const int MaximumInflatedBytes = 1024 * 1024;
 
