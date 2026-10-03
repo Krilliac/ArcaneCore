@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Maps.Collision.VMaps;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -29,6 +30,21 @@ public sealed class CollisionServicesTests : IDisposable
         var vmaps = Assert.IsType<VMapManager>(collision.LineOfSight);
         Assert.True(vmaps.LineOfSightEnabled);
         Assert.False(vmaps.HeightEnabled);
+    }
+
+    [Fact]
+    public void MMapDirectory_InstallsTheNavMesh_UnlessDisabled()
+    {
+        Directory.CreateDirectory(Path.Combine(_dir, "mmaps"));
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        WorldCollision collision = WorldCollision.Of(world);
+
+        CollisionServices.Install(collision, new CollisionOptions { EnablePathfinding = false }, _dir, NullLogger.Instance);
+        Assert.IsType<StraightLinePathfinder>(collision.Pathfinder);
+
+        CollisionServices.Install(collision, new CollisionOptions(), _dir, NullLogger.Instance);
+        Assert.IsType<NavMeshPathfinder>(collision.Pathfinder);
+        Assert.IsType<OpenLineOfSight>(collision.LineOfSight);
     }
 
     [Fact]
