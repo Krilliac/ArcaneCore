@@ -172,6 +172,55 @@ public sealed class HonorService : IPlayerHonor, IHonorAwards
         _sink?.StateChanged(player, state.Snapshot());
     }
 
+    /// <summary>The persisted bit for "PvP flagged" (vmangos CHARACTER_FLAG_PVP_ENABLED).</summary>
+    public const byte PvpFlaggedBit = 1;
+
+    /// <summary>The persisted bit for "PvP desired" (vmangos CHARACTER_FLAG_PVP_DESIRED).</summary>
+    public const byte PvpDesiredBit = 2;
+
+    /// <summary>
+    /// Player::LoadFromDB (Player.cpp:14674-14677): a character saved PvP flagged is flagged again with a fresh timer, and
+    /// one that desired PvP desires it again. Login stage, before the player is visible.
+    /// </summary>
+    public void RestorePvpFlags(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (For(player) is not { } state)
+        {
+            return;
+        }
+
+        if ((state.PvpFlags & PvpFlaggedBit) != 0)
+        {
+            ArcaneCore.Game.Combat.MapCombat.UpdatePvp(player, true);
+        }
+
+        if ((state.PvpFlags & PvpDesiredBit) != 0)
+        {
+            player.Flags |= PlayerFlags.PvpDesired;
+        }
+    }
+
+    /// <summary>
+    /// Player::UpdateCharacterFlags (Player.cpp:16337): note the player's PvP flag and desire so the next login restores
+    /// them. Persisted only when it changed.
+    /// </summary>
+    public void CapturePvpFlags(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (For(player) is not { } state)
+        {
+            return;
+        }
+
+        byte bits = (byte)(((player.UnitFlags & UnitFlags.Pvp) != 0 ? PvpFlaggedBit : 0) | ((player.Flags & PlayerFlags.PvpDesired) != 0 ? PvpDesiredBit : 0));
+        if (bits != state.PvpFlags)
+        {
+            state.PvpFlags = bits;
+            _sink?.StateChanged(player, state.Snapshot());
+        }
+    }
+
     /// <summary>HonorMgr::CalculateTotalKills: how often <paramref name="killer"/> killed this exact victim today.</summary>
     public uint TotalKillsToday(Player killer, Unit victim)
     {

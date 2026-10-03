@@ -24,6 +24,12 @@ public sealed class HonorHooks
 
     public HonorClock Clock { get; }
 
+    /// <summary>
+    /// A player's internal honor rank (0..18) for the rules that sit below the honor owner, such as the WorldDefense channel
+    /// (vmangos Channel.cpp:636-648, 670). Set by the daemon's honor feature; null means every player is unranked.
+    /// </summary>
+    public Func<Entities.Player, byte>? InternalRank { get; set; }
+
     /// <summary>Use <paramref name="hooks"/> for <paramref name="world"/> (call before the world thread starts).</summary>
     public static void Register(WorldRuntime world, HonorHooks hooks)
     {
