@@ -57,6 +57,12 @@ public sealed record GameEventContent(
 public interface IGameEventDataStore
 {
     Task<GameEventContent> LoadAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Write the <c>disabled</c> flag of an event (vmangos <c>UPDATE game_event SET disabled</c>, GameEventMgr.cpp:132): <c>.event
+    /// enable</c> and <c>.event disable</c> are stored so they survive a restart.
+    /// </summary>
+    Task SetDisabledAsync(uint entry, bool disabled, CancellationToken cancellationToken = default);
 }
 
 /// <summary>

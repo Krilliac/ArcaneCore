@@ -191,6 +191,26 @@ Pure maths in `Game/WorldState/Events`, every function taking the time and the z
   (retail: one). When the creature-movement-spawns lane lands a pool primitive, the gate must also exclude pooled guids that are
   not the pool's pick.
 
+### Consumers: conditions and commands (`game-event-consumers`)
+
+- `CONDITION_ACTIVE_GAME_EVENT` and `CONDITION_ACTIVE_HOLIDAY` read the live state (`GameEventFeature`, read at every evaluation so
+  attach order and a reload do not matter), in the same tick an event starts or stops (cmangos Conditions.cpp:245-248 and :318-321,
+  vmangos :245 and :350). `Conditions:ActiveGameEvents` and `Conditions:ActiveHolidays` stay as an operator override added to the
+  live state (default none). Holiday 0 is never active. The battleground weekend rotation (vmangos BattleGroundMgr.cpp:1613) can ask
+  `GameEventFeature.IsActiveHoliday(283..285)` (Call to Arms events 18-20 in classic-db) when that lane lands.
+- `.event` (`GameEventCommands`, vmangos Chat.cpp:373-382, ServerCommands.cpp:639-883): `.event list [all]`, `.event <id>` (info),
+  `.event start|stop|enable|disable <id>`. The id is a number or a `|Hgameevent:<id>|` link. Account levels are the vmangos
+  ones through `ChatCommand.RetailLevel` (list and info 3, start and stop 4, enable and disable 5), so with the default map a
+  GameMaster (3) can look and an Administrator (6) can change. `start` and `stop` pass `overwrite = true` like the originals.
+  Texts: mangos_string 583-588 and 1130-1131 are in classic-db and used verbatim (`" [active]"` is string 35, `" [inactive]"` 317),
+  the info times are vmangos `TimeToTimestampStr` (`YYYY-MM-DD_HH-MM-SS`, local) and `secsToTimeString` (long form); the
+  vmangos-only ids 1600-1603 (disabled, enabled, already enabled, already disabled) are in no dump available here, so their
+  English wording is ArcaneCore's.
+- `.event enable|disable` write `game_event.disabled` (`IGameEventDataStore.SetDisabledAsync`, in order, off the world thread; a
+  failure is logged and the in-memory flag stays until restart).
+- `.lookup event <name>` (`LookupEventCommand`, an `ICommandExtension` on `.lookup`; LookupCommands.cpp:1480-1526; retail level 2).
+- Not delivered: the event lines of `.npc info` and `.gobject info` (they need the creature and gameobject info commands' owners).
+
 ## Not delivered (limits)
 
 Recorded as slices are completed; see the final section.

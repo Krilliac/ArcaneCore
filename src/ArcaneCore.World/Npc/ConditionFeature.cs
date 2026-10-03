@@ -10,6 +10,7 @@ using ArcaneCore.World.Features;
 using ArcaneCore.World.Reputation;
 using ArcaneCore.World.Skills;
 using ArcaneCore.World.Spells;
+using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -22,13 +23,13 @@ public sealed class ConditionOptions
     public const string SectionName = "Conditions";
 
     /// <summary>
-    /// Game event ids reported active to CONDITION_ACTIVE_GAME_EVENT (cmangos Conditions.cpp:245-248). Retail
-    /// events are date driven (game_event + the calendar); that scheduler does not exist yet, so by default
-    /// no event is active. This is a documented placeholder, not retail behaviour.
+    /// Game event ids reported active to CONDITION_ACTIVE_GAME_EVENT (cmangos Conditions.cpp:245-248) IN ADDITION to the events the
+    /// game-event service says are running (<c>GameEventFeature</c>, docs/areas/game-events-weather.md). Default none: an
+    /// operator override for a world that runs no event service or wants an event forced on for its conditions only.
     /// </summary>
     public uint[] ActiveGameEvents { get; set; } = [];
 
-    /// <summary>Holiday ids reported active to CONDITION_ACTIVE_HOLIDAY (Conditions.cpp:318-321); default none, same placeholder.</summary>
+    /// <summary>Holiday ids reported active to CONDITION_ACTIVE_HOLIDAY (Conditions.cpp:318-321) in addition to the running events' holidays; default none, same override.</summary>
     public uint[] ActiveHolidays { get; set; } = [];
 }
 
@@ -133,8 +134,9 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
                 .Any(h => !h.IsRemoved && h.Spell.Id == spell && effect < h.Auras.Count && h.Auras[effect] is not null) ?? false,
             HasAdCommissionAura = player => services.GetService<SpellFeature>()?.System.GetAuras(player).Any(h => !h.IsRemoved
                 && (h.Spell.HasAttribute(AllowWhileMounted) || h.Spell.HasAttribute(SpellAttributes.IsAbility)) && h.Spell.SpellVisual == AdCommissionVisual) ?? false,
-            IsGameEventActive = events.Contains,
-            IsHolidayActive = holidays.Contains,
+            // The live game-event state is read at every evaluation (the feature may attach after this one, and its service is replaced by a reload).
+            IsGameEventActive = id => events.Contains(id) || (id is > 0 and <= ushort.MaxValue && services.GetService<GameEventFeature>()?.IsActiveEvent((ushort)id) == true),
+            IsHolidayActive = id => holidays.Contains(id) || (services.GetService<GameEventFeature>()?.IsActiveHoliday(id) ?? false),
             Quests = () => services.GetService<QuestNpcFeature>()?.Services,
         };
     }

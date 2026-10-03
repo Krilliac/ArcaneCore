@@ -128,6 +128,29 @@ public sealed class GameEventDataTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task SetDisabled_WritesTheFlag_OfThatEventOnly_AndIgnoresAnUnknownEvent(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
+        await using WorldDbContext world = TestContexts.Create<WorldDbContext>(cs);
+        await SchemaBootstrapper.EnsureAsync(world, WorldDbContext.Schema);
+        await SaveAsync(world, Sample());
+        var store = new EfGameEventDataStore(world);
+
+        await store.SetDisabledAsync(1, true);
+        await store.SetDisabledAsync(9999, true); // no such event: nothing changes, nothing throws
+
+        GameEventContent loaded = await store.LoadAsync();
+        Assert.True(loaded.Events.Single(e => e.Entry == 1).Disabled);
+        Assert.True(loaded.Events.Single(e => e.Entry == 400).Disabled);  // the sample had it disabled already
+        Assert.False(loaded.Events.Single(e => e.Entry == 24).Disabled);
+        Assert.Equal(3, loaded.Events.Count);
+
+        await store.SetDisabledAsync(1, false);
+        Assert.False((await store.LoadAsync()).Events.Single(e => e.Entry == 1).Disabled);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task DuplicateKeys_AreRefused_ByThePrimaryKeys(DatabaseProvider provider)
     {
         DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);

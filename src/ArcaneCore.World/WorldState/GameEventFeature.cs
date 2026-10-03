@@ -28,6 +28,8 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
     private uint _elapsedMs;
     private uint _delayMs;
     private GameEventStatusWriter? _writer;
+    private readonly object _disabledGate = new();
+    private Task _disabledWrites = Task.CompletedTask;
 
     /// <summary>The running service (null before the feature is attached). With the feature off it exists but never starts an event.</summary>
     public GameEventService? Service => _service;
@@ -118,7 +120,7 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
             "loaded {Events} game events ({Dialect} dialect, {Boundary} start boundary)",
             load.Definitions.Count, load.Dialect, load.Boundary);
         var announcer = new WorldAnnouncer(_world ?? throw new InvalidOperationException("the game event feature is not attached"));
-        _service = new GameEventService(load, options, () => hooks.Time.UtcNow, zone, logger, status, announcer);
+        _service = new GameEventService(load, options, () => hooks.Time.UtcNow, zone, logger, status, announcer, PersistDisabled);
         _initialiseWith = options.Enabled ? activeAtShutdown : null;
         ServiceCreated?.Invoke(_service);
         _elapsedMs = 0;
@@ -149,7 +151,46 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
         }
     }
 
-    public Task StopAsync() => _writer?.FlushAsync() ?? Task.CompletedTask;
+    /// <summary>
+    /// <c>.event enable</c> / <c>.event disable</c> are written to <c>game_event.disabled</c> in the order they were given, off the world
+    /// thread; a failure is logged (the in-memory flag still holds until restart).
+    /// </summary>
+    private void PersistDisabled(ushort eventId, bool disabled)
+    {
+        lock (_disabledGate)
+        {
+            _disabledWrites = _disabledWrites.ContinueWith(async _ =>
+            {
+                try
+                {
+                    using IServiceScope scope = services.CreateScope();
+                    if (scope.ServiceProvider.GetService<IGameEventDataStore>() is { } store)
+                    {
+                        await store.SetDisabledAsync(eventId, disabled).ConfigureAwait(false);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "storing the disabled flag of game event {EventId} failed", eventId);
+                }
+            }, TaskScheduler.Default).Unwrap();
+        }
+    }
+
+    public async Task StopAsync()
+    {
+        Task writes;
+        lock (_disabledGate)
+        {
+            writes = _disabledWrites;
+        }
+
+        await writes.ConfigureAwait(false);
+        if (_writer is not null)
+        {
+            await _writer.FlushAsync().ConfigureAwait(false);
+        }
+    }
 
     /// <summary>The announcement of an event start (vmangos <c>SendWorldText(LANG_EVENTMESSAGE)</c>, mangos_string 4).</summary>
     private sealed class WorldAnnouncer(WorldRuntime world) : IGameEventAnnouncer

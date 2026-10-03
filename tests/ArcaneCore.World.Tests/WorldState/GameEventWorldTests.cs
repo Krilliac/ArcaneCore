@@ -26,6 +26,8 @@ public sealed class GameEventWorldTests
     private sealed class FakeDataStore(GameEventContent content) : IGameEventDataStore
     {
         public Task<GameEventContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(content);
+
+        public Task SetDisabledAsync(uint entry, bool disabled, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private sealed class FakeStatusStore(params ushort[] stored) : IGameEventStatusStore

@@ -21,6 +21,8 @@ internal sealed class GameEventTestStore : IGameEventDataStore
     private readonly GameEventContent _content = Current.Value ?? GameEventContent.Empty;
 
     public Task<GameEventContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(_content);
+
+    public Task SetDisabledAsync(uint entry, bool disabled, CancellationToken cancellationToken = default) => Task.CompletedTask;
 }
 
 /// <summary>Registers <see cref="GameEventTestStore"/> in every test host (empty unless a game event test set content).</summary>

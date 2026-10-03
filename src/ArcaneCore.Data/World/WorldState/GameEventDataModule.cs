@@ -229,4 +229,8 @@ public sealed class EfGameEventDataStore(WorldDbContext db) : IGameEventDataStor
             .ToList();
         return new GameEventContent(events, times, creatures, gameObjects, creatureData, quests, mails);
     }
+
+    public async Task SetDisabledAsync(uint entry, bool disabled, CancellationToken cancellationToken = default)
+        => await db.Set<GameEventRow>().Where(r => r.Entry == entry)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Disabled, disabled), cancellationToken).ConfigureAwait(false);
 }
