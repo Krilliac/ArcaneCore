@@ -1,0 +1,142 @@
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
+using ArcaneCore.Kernel.Items;
+using ArcaneCore.Protocol;
+using Xunit;
+using static ArcaneCore.Game.Tests.ItemTestData;
+
+namespace ArcaneCore.Game.Tests.Economy;
+
+/// <summary>Detached economy transfers: planning never mutates, publishing preserves item identity.</summary>
+public sealed class PlayerInventoryEconomyTests
+{
+    private static (Player Player, FakeSession Session) Loaded(uint guid = 1)
+    {
+        (Player player, FakeSession session) = CreatePlayer(guid);
+        player.Inventory.Load([]);
+        return (player, session);
+    }
+
+    private static ItemInstanceData Foreign(uint guid, uint entry, uint count = 1) => new()
+    {
+        Guid = guid, Entry = entry, Count = count, Creator = 42, Durability = 7,
+        Charges = [0, 0, 0, 0, 0], Enchantments = new uint[21],
+    };
+
+    [Fact]
+    public void Stage_DoesNotMutate_ApplyMovesItemsAndKeepsTheirData()
+    {
+        (Player player, _) = Loaded();
+        PlayerInventory inv = player.Inventory;
+        Item jerky = Give(inv, ToughJerky, 4);
+        InventorySnapshot initial = inv.CreateSnapshot();
+
+        Assert.Equal(InventoryResult.Ok, inv.TryStageEconomyTransfer([jerky.Guid], [Foreign(5000, RecruitsPants)], out EconomyInventoryStage? stage));
+        Assert.True(PlayerInventory.SameEconomySnapshot(initial, inv.CreateSnapshot()));
+        Assert.Same(jerky, inv.GetItemByGuid(jerky.Guid));
+        Assert.Equal(4u, Assert.Single(stage!.RemovedData).Count);
+        Assert.Contains(stage.After.Items, row => row.Item.Guid == 5000 && row.Item.Creator == 42);
+        Assert.DoesNotContain(stage.After.Items, row => row.Item.Guid == jerky.Guid.Low);
+
+        inv.ApplyEconomyTransfer(stage);
+        Assert.True(stage.Applied);
+        Assert.Null(inv.GetItemByGuid(jerky.Guid));
+        Item pants = inv.GetItemByGuid(ObjectGuid.Item(5000))!;
+        Assert.Equal((RecruitsPants, 7u, InventorySlots.Bag0, InventorySlots.ItemStart), (pants.Entry, pants.Durability, pants.BagSlot, pants.Slot));
+        Assert.True(PlayerInventory.SameEconomySnapshot(stage.After, inv.CreateSnapshot()));
+        Assert.Throws<InvalidOperationException>(() => inv.ApplyEconomyTransfer(stage));
+    }
+
+    [Fact]
+    public void Stage_RefusesItemsThatCannotLeave()
+    {
+        (Player player, _) = CreatePlayer();
+        PlayerInventory inv = player.Inventory;
+        inv.Load([new InventoryItemData(0, InventorySlots.MainHand, new ItemInstanceData { Guid = 4000, Entry = WornShortsword, Durability = 20 })]);
+        Item sword = inv.GetItem(InventorySlots.Bag0, InventorySlots.MainHand)!;
+        Item stone = Give(inv, Hearthstone);
+        Item bag = Give(inv, SmallBrownPouch);
+        Assert.True(inv.AutoEquipItem(bag.BagSlot, bag.Slot));
+        Item inBagContainer = Give(inv, SmallBrownPouch);
+        Item content = Give(inv, RecruitsShirt);
+
+        Assert.Equal(InventoryResult.CantDropSoulbound, inv.TryStageEconomyTransfer([stone.Guid], [], out EconomyInventoryStage? stage));
+        Assert.Null(stage);
+        Assert.Equal(InventoryResult.ItemNotFound, inv.TryStageEconomyTransfer([sword.Guid], [], out _));
+        Assert.Equal(InventoryResult.ItemNotFound, inv.TryStageEconomyTransfer([bag.Guid], [], out _));
+        Assert.Equal(InventoryResult.ItemNotFound, inv.TryStageEconomyTransfer([ObjectGuid.Item(77777)], [], out _));
+        Assert.Equal(InventoryResult.ItemNotFound, inv.TryStageEconomyTransfer([content.Guid, content.Guid], [], out _));
+        Assert.Equal(InventoryResult.Ok, inv.TryStageEconomyTransfer([inBagContainer.Guid], [], out _));
+        Assert.Equal(InventoryResult.Ok, inv.CanTransferOut(content));
+    }
+
+    [Fact]
+    public void Stage_NeedsALoadedInventory()
+    {
+        (Player unloaded, _) = CreatePlayer(2);
+        Assert.Equal(InventoryResult.CantDoRightNow, unloaded.Inventory.TryStageEconomyTransfer([], [Foreign(5000, RecruitsShirt)], out EconomyInventoryStage? stage));
+        Assert.Null(stage);
+    }
+
+    [Fact]
+    public void Stage_FullInventory_OrUnknownTemplate_OrClashingGuid()
+    {
+        (Player player, _) = Loaded();
+        PlayerInventory inv = player.Inventory;
+        Item first = Give(inv, RecruitsShirt);
+        for (int i = 1; i < 16; i++)
+        {
+            Give(inv, RecruitsShirt);
+        }
+
+        Assert.Equal(InventoryResult.InventoryFull, inv.TryStageEconomyTransfer([], [Foreign(5000, RecruitsPants)], out _));
+        Assert.Equal(InventoryResult.Ok, inv.TryStageEconomyTransfer([first.Guid], [Foreign(5000, RecruitsPants)], out EconomyInventoryStage? swap));
+        Assert.Contains(swap!.After.Items, row => row.Item.Guid == 5000 && row.Slot == first.Slot);
+        Assert.Equal(InventoryResult.ItemNotFound, inv.TryStageEconomyTransfer([first.Guid], [Foreign(5000, 123456)], out _));
+        Assert.Equal(InventoryResult.CantDoRightNow, inv.TryStageEconomyTransfer([first.Guid], [Foreign(first.Guid.Low, RecruitsPants)], out _));
+        Assert.Equal(InventoryResult.ItemNotFound, inv.TryStageEconomyTransfer([], [Foreign(5000, RecruitsPants), Foreign(5000, RecruitsBoots)], out _));
+    }
+
+    [Fact]
+    public void Stage_UniqueLimitApplies()
+    {
+        (Player player, _) = Loaded();
+        Give(player.Inventory, UniqueKey);
+        Assert.Equal(InventoryResult.CantCarryMoreOfThis, player.Inventory.TryStageEconomyTransfer([], [Foreign(5000, UniqueKey)], out _));
+    }
+
+    [Fact]
+    public void Stage_PlacesIntoACarriedBagWhenTheBackpackIsFull()
+    {
+        (Player player, _) = Loaded();
+        PlayerInventory inv = player.Inventory;
+        Item bag = Give(inv, SmallBrownPouch);
+        Assert.True(inv.AutoEquipItem(bag.BagSlot, bag.Slot));
+        for (int i = 0; i < 16; i++)
+        {
+            Give(inv, RecruitsShirt);
+        }
+
+        Assert.Equal(InventoryResult.Ok, inv.TryStageEconomyTransfer([], [Foreign(5000, RecruitsPants)], out EconomyInventoryStage? stage));
+        inv.ApplyEconomyTransfer(stage!);
+        Item pants = inv.GetItemByGuid(ObjectGuid.Item(5000))!;
+        Assert.Same(bag, pants.Container);
+        Assert.Equal((InventorySlots.BagStart, (byte)0), (pants.BagSlot, pants.Slot));
+    }
+
+    [Fact]
+    public void Apply_ThrowsWhenTheInventoryChangedAfterPlanning()
+    {
+        (Player player, _) = Loaded();
+        PlayerInventory inv = player.Inventory;
+        Item jerky = Give(inv, ToughJerky, 4);
+        Assert.Equal(InventoryResult.Ok, inv.TryStageEconomyTransfer([jerky.Guid], [], out EconomyInventoryStage? stage));
+        Give(inv, RecruitsShirt);
+        Assert.Throws<InvalidOperationException>(() => inv.ApplyEconomyTransfer(stage!));
+        Assert.Same(jerky, inv.GetItemByGuid(jerky.Guid));
+        Assert.False(stage!.Applied);
+
+        (Player other, _) = Loaded(3);
+        Assert.Throws<InvalidOperationException>(() => other.Inventory.ApplyEconomyTransfer(stage));
+    }
+}
