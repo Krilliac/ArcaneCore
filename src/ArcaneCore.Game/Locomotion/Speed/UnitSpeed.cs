@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 
@@ -11,9 +12,8 @@ namespace ArcaneCore.Game.Locomotion;
 /// <see cref="PendingMovementChanges"/> and takes effect on the ack, everything else changes at once.
 /// <para>
 /// A rate is a multiple of the base speed (<see cref="Unit.BaseRunSpeed"/> and friends); the speeds the unit stores
-/// and sends are rate times base. Creatures are not recomputed here: their template rates and the wounded slowdown
-/// belong to the creature speed slice, so a creature keeps the speed its template gave it
-/// (docs/areas/locomotion.md).
+/// and sends are rate times base. Creatures include their template rates and the wounded slowdown
+/// (<see cref="ComputeRate"/>).
 /// </para>
 /// </summary>
 public static class UnitSpeed
@@ -167,17 +167,69 @@ public static class UnitSpeed
             }
         }
 
+        if (unit is Creature creature)
+        {
+            speed = ApplyCreatureFactors(creature, type, speed);
+        }
+
+        return speed;
+    }
+
+    /// <summary>vmangos CREATURE_STATIC_FLAG_2_NO_WOUNDED_SLOWDOWN (CreatureDefines.h:140): "Does not reduce run speed at low health".</summary>
+    public const uint NoWoundedSlowdownFlag = 0x00000040;
+
+    /// <summary>
+    /// The creature part of Unit::UpdateSpeed (:7063-7094): run and walk are multiplied by the template's speed rate
+    /// (<c>speed_run</c>, default 1.14286 = <see cref="Creature.DefaultRunSpeedRate"/>; <c>speed_walk</c>, default 1), and a
+    /// run speed is multiplied by 0.7, 0.6 or 0.5 while the creature is under 16%, 11% or 6% health, unless it is a world
+    /// boss or has the no-wounded-slowdown static flag (:7080-7090; creature.cpp:971-973 sets the three aura states from
+    /// the health percent). Pets of players are normalised to the default run rate in vmangos; there are no pets on this base.
+    /// <para>
+    /// vmangos refreshes the three health aura states every creature update but only recomputes the run speed when
+    /// something calls UpdateSpeed (a speed aura, fleeing at low health, returning from an assist call). The health used
+    /// here is the one at that recompute; the AI lane calls <see cref="UpdateSpeed"/> where vmangos does.
+    /// </para>
+    /// </summary>
+    private static float ApplyCreatureFactors(Creature creature, MoveType type, float speed)
+    {
+        switch (type)
+        {
+            case MoveType.Run:
+                speed *= creature.Template.SpeedRun > 0 ? creature.Template.SpeedRun : Creature.DefaultRunSpeedRate;
+                break;
+            case MoveType.Walk:
+                speed *= creature.Template.SpeedWalk > 0 ? creature.Template.SpeedWalk : 1.0f;
+                break;
+        }
+
+        if (type == MoveType.Run && !creature.IsWorldBoss && (creature.Template.StaticFlags2 & NoWoundedSlowdownFlag) == 0 && creature.MaxHealth > 0)
+        {
+            float healthPercent = creature.Health * 100.0f / creature.MaxHealth;
+            if (healthPercent < 6.0f)
+            {
+                speed *= 0.5f;   // SPEED_REDUCTION_HP_5
+            }
+            else if (healthPercent < 11.0f)
+            {
+                speed *= 0.6f;   // SPEED_REDUCTION_HP_10
+            }
+            else if (healthPercent < 16.0f)
+            {
+                speed *= 0.7f;   // SPEED_REDUCTION_HP_15
+            }
+        }
+
         return speed;
     }
 
     /// <summary>
-    /// Recompute one speed from the unit's auras and apply it (vmangos Unit::UpdateSpeed(mtype, forced = false)).
-    /// Only players are computed here; other units keep their speed.
+    /// Recompute one speed from the unit's auras and apply it (vmangos Unit::UpdateSpeed(mtype, forced = false)) for players
+    /// and creatures; any other unit keeps its speed.
     /// </summary>
     public static void UpdateSpeed(Unit unit, MoveType type)
     {
         ArgumentNullException.ThrowIfNull(unit);
-        if (unit is not Player)
+        if (unit is not (Player or Creature))
         {
             return;
         }

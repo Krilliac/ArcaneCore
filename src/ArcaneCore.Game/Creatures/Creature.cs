@@ -200,6 +200,11 @@ public sealed partial class Creature : Unit, ICombatCreature
         // > 1.11.2: UNIT_MOD_CAST_SPEED is a float 1.0 (vmangos InitEntry).
         SetFloat(UpdateFields.UnitModCastSpeed, 1.0f);
 
+        // "update speed for the new CreatureInfo base speed mods": UpdateSpeed(MOVE_WALK / MOVE_RUN) at the end of
+        // vmangos Creature::UpdateEntry (Creature.cpp:419-421); the speed auras change them from here on.
+        WalkSpeed = CreatureWalkSpeed;
+        RunSpeed = CreatureRunSpeed;
+
         // Sheath melee and the auras flag (vmangos UpdateEntry: SetSheath(SHEATH_STATE_MELEE),
         // UNIT_BYTES_2_OFFSET_MISC_FLAGS = UNIT_BYTE2_FLAG_AURAS 0x10).
         SetByte(UpdateFields.UnitFieldBytes2, 0, 1);

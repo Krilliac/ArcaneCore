@@ -45,7 +45,8 @@ public sealed partial class Creature : Unit, ICombatCreature
             throw new ArgumentException("a spline needs at least one point", nameof(path));
         }
 
-        float speed = run ? CreatureRunSpeed : CreatureWalkSpeed;
+        // The live speed: slows, hastes and the wounded slowdown change it (Locomotion/Speed/UnitSpeed.cs); it starts as the template speed.
+        float speed = run ? RunSpeed : WalkSpeed;
         var start = new Vector3(X, Y, Z);
         float length = 0;
         Vector3 previous = start;

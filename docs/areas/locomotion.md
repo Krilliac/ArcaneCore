@@ -206,8 +206,25 @@ snare, mounts), none of which did anything before.
   aura (8326), which `CombatHooks.ApplyGhostForm` (the death lane's seam, a no-op on this base) would have to cast: when it does,
   these auras take effect through the same formula with no further change.
 
-Limits: creatures are not recomputed (their template rate and wounded slowdown are the creature slice, not delivered; a creature
-keeps the speed it spawned with); pets and charmed units do not follow the owner's speed (`CallForAllControlledUnits`, no pets on
+Limits: creatures are covered by slice 7; pets and charmed units do not follow the owner's speed (`CallForAllControlledUnits`, no pets on
 this base); the talent speed modifier on a caster's own speed aura (`SPELLMOD_SPEED`) is not applied; the turn rate is not
 changed by any 1.12 aura and is not handled; a speed that is within 0.01 of the sent one is stored as the client reported it
 (vmangos does the same). Unverified against a real 1.12.1 client (packed GUID widths, see slice 1).
+## Slice 7: speed-rates-creatures (delivered)
+
+Creatures take the same auras (the speed aura module acts on any unit) and `UnitSpeed.ComputeRate` adds the creature part of
+`Unit::UpdateSpeed` (`Unit.cpp:7063-7094`): run and walk are multiplied by the template's `speed_run` (default 1.14286, vmangos
+`DEFAULT_NPC_RUN_SPEED_RATE`) and `speed_walk` (default 1), and the run speed by 0.7, 0.6 or 0.5 while the creature is under
+16%, 11% or 6% health (`SPEED_REDUCTION_HP_*`, `CreatureDefines.h:225-230`; health thresholds `Creature.cpp:971-973`), except
+pets, world bosses and templates with `StaticFlags2 & 0x40` (`CREATURE_STATIC_FLAG_2_NO_WOUNDED_SLOWDOWN`, `CreatureDefines.h:140`;
+155 of the 10384 classic template rows carry it, 901 have a non-default run rate, per the design survey of `D:\refs\classic-db`).
+A creature is server-moved, so a change is immediate and everyone nearby gets `SMSG_SPLINE_SET_*_SPEED` (packed GUID + f32), no
+handshake (`Unit::SetSpeedRate` third branch, `Unit.cpp:7176-7181`). `Creature.InitializeFields` now sets the template speeds
+(vmangos `UpdateEntry` ends with `UpdateSpeed(MOVE_WALK/RUN)`), and `Creature.StartSpline` uses the live speed, so a snared wolf
+takes twice as long to cover 14 yards (1750 ms to 3500 ms in `CreatureSpeedTests`).
+
+Limits: vmangos refreshes the three health aura states every creature update but only recomputes the run speed when something
+calls `UpdateSpeed` (a speed aura, fleeing at low health, returning from an assist call, `Creature.cpp:1191,1222,2282`); the
+health used here is the one at the recompute, and the AI lane has to call `UnitSpeed.UpdateSpeed(creature, MoveType.Run)` at
+those moments (no creature AI hooks were edited). Pets of players are normalised to the default run rate in vmangos; no pets
+exist on this base, so that branch is not applied.
