@@ -282,6 +282,10 @@ public sealed class StealthVisibilityTests
         rig.Stealthed();
         Assert.False(rig.ViewerSeesRogue);
 
+        // Wave-2 integration: Hunter's Mark needs a target the caster may attack (vmangos Spell.cpp:6436-6447, hunter lane).
+        var relations = new FakeRelations();
+        relations.Hostile.Add(rig.Rogue.Guid);
+        rig.Kit.System.Relations = relations;
         rig.Kit.System.CastSpell(rig.Viewer, HuntersMark, SpellCastTargets.ForUnit(rig.Rogue.Guid), triggered: true);
         Assert.True(rig.Kit.System.HasAura(rig.Rogue, HuntersMark));
         Assert.True(rig.Kit.System.HasAura(rig.Rogue, Stealth)); // an allow-while-stealthed spell does not strip stealth
