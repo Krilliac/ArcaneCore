@@ -79,6 +79,7 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
         _objectives = new QuestObjectiveAdapter(Services);
         Persistence.Start();
         world.MapCreated += OnMapCreated;
+        world.MapUnloading += OnMapUnloading;
         foreach (Map map in world.Maps)
         {
             OnMapCreated(map);
@@ -116,6 +117,7 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
         if (_world is { } world)
         {
             world.MapCreated -= OnMapCreated;
+            world.MapUnloading -= OnMapUnloading;
             world.PlayerLoggedIn -= OnPlayerLoggedIn;
             world.PlayerLoggingOut -= OnPlayerLoggingOut;
         }
@@ -146,6 +148,15 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
         {
             _objectives?.Attach(map);
             map.AddUpdater(new QuestNpcMapUpdater(Services));
+        }
+    }
+
+    // An unloaded dungeon instance (docs/integration/instances.md) is forgotten.
+    private void OnMapUnloading(Map map)
+    {
+        if (_maps.Remove(map))
+        {
+            _objectives?.Detach(map);
         }
     }
 

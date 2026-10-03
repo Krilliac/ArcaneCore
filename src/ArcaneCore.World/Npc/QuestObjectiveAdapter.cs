@@ -20,6 +20,16 @@ public sealed class QuestObjectiveAdapter(IQuestObjectiveEvents objectives) : ID
         }
     }
 
+    /// <summary>Stop following an unloaded map instance.</summary>
+    public void Detach(Map map)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        if (map.FindUpdater<MapCombat>() is { } combat && _combat.Remove(combat))
+        {
+            combat.UnitKilled -= OnUnitKilled;
+        }
+    }
+
     public void Dispose()
     {
         foreach (MapCombat combat in _combat)
