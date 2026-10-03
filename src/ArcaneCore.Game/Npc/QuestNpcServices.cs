@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Quests;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
@@ -189,9 +190,8 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
     /// combat, selectable, and within INTERACTION_DISTANCE (3D, measured between bounding radii).
     /// </summary>
     /// <remarks>
-    /// The "unfriendly reputation rank" and "invisible for alive / visible to ghosts" checks belong
-    /// to the creature/reputation owners and are expected in <see cref="NpcInfo.IsHostile"/> /
-    /// the lookup's visibility (docs/integration/quests-npc.md).
+    /// Reputation eligibility is separate from hostility: an Unfriendly NPC is not hostile,
+    /// but refuses interaction. Ghost visibility remains the creature lookup owner's check.
     /// </remarks>
     public NpcInfo? InteractableNpc(Player player, ObjectGuid guid, NpcFlags flags)
     {
@@ -219,6 +219,14 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
         }
 
         if (!npc.IsAlive || npc.IsHostile || npc.IsInCombat || npc.IsNotSelectable)
+        {
+            return null;
+        }
+
+        // vmangos 4b3d241 Player::CanInteractWithNPC also rejects ranks <= Unfriendly.
+        // The reputation owner returns Neutral for factions without a reputation list.
+        if (npc.FactionId != 0 && Deps.Reputation is { } reputation
+            && reputation.GetReputationRank(player, npc.FactionId) <= (byte)ReputationRank.Unfriendly)
         {
             return null;
         }
