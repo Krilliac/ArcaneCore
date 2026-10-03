@@ -44,6 +44,7 @@ public sealed partial class SpellSystem
 
         foreach (SpellAuraHolder holder in state.Auras.Where(h => !h.Spell.IsPassive && !h.Spell.IsDeathPersistent).ToArray())
         {
+            holder.RemovedByDeath = true; // wlm-07: the aura handlers tell death from expiry (vmangos AURA_REMOVE_BY_DEATH)
             RemoveHolder(state, holder);
         }
     }

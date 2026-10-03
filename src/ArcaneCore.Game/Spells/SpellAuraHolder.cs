@@ -144,6 +144,12 @@ public sealed class SpellAuraHolder
 
     public bool IsRemoved { get; internal set; }
 
+    /// <summary>
+    /// Whether the holder was removed because its target died (vmangos AURA_REMOVE_BY_DEATH): set by <c>SpellSystem.RemoveAurasOnDeath</c> just before
+    /// the remove handlers run, so a handler (Soul Shard creation) can tell death from expiry, a dispel or a cancel. Warlock lane (wlm-07).
+    /// </summary>
+    internal bool RemovedByDeath { get; set; }
+
     /// <summary>For an aura a party area aura put on a group member: the caster's source holder (vmangos AreaAura owner).</summary>
     public SpellAuraHolder? AreaParent { get; internal set; }
 
