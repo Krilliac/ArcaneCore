@@ -6,7 +6,11 @@ using ArcaneCore.Kernel.Social;
 namespace ArcaneCore.Game.Social;
 
 /// <summary>The identity of any character on the realm, online or not.</summary>
-public sealed record CharacterInfo(uint Id, int AccountId, string Name, Race Race, Class Class)
+/// <remarks>
+/// <see cref="Level"/> and <see cref="ZoneId"/> are the last stored values of an offline character (vmangos
+/// PlayerCacheData uiLevel / uiZoneId, read by Guild::AddMember, Guild.cpp:230-256).
+/// </remarks>
+public sealed record CharacterInfo(uint Id, int AccountId, string Name, Race Race, Class Class, byte Level = 1, uint ZoneId = 0)
 {
     public ObjectGuid Guid => ObjectGuid.Player(Id);
 

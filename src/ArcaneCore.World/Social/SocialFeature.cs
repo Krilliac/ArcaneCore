@@ -304,6 +304,14 @@ public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFac
         _pendingCommands.Remove(player);
         _rejectedCommands.Remove(player);
         SocialContext context = Context;
+
+        // Keep the character directory's level and zone current: an offline guild member's roster
+        // line and a later Guild::AddMember read them (vmangos PlayerCacheData, Guild.cpp:230-256).
+        if (directory.Find((int)player.Guid.Low) is { } identity)
+        {
+            directory.Add(identity with { Level = player.Level, ZoneId = player.ZoneId });
+        }
+
         bool ready = _ready.Remove(player.Guid);
         if (ready)
         {

@@ -63,9 +63,9 @@ internal sealed class SocialFixture : IDisposable
     public SocialContext Context { get; }
 
     /// <summary>A known character that is not online.</summary>
-    public CharacterInfo AddOffline(uint guid, Race race = Race.Human)
+    public CharacterInfo AddOffline(uint guid, Race race = Race.Human, byte level = 1, uint zoneId = 0)
     {
-        var info = new CharacterInfo(guid, (int)guid, $"P{guid}", race, Class.Warrior);
+        var info = new CharacterInfo(guid, (int)guid, $"P{guid}", race, Class.Warrior, level, zoneId);
         Characters.Add(info);
         return info;
     }

@@ -279,7 +279,7 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
 
     public async Task<IReadOnlyList<CharacterIdentity>> GetAllIdentitiesAsync(CancellationToken cancellationToken = default)
         => await db.Characters.AsNoTracking()
-            .Select(c => new CharacterIdentity(c.Id, c.AccountId, c.Name, c.Race, c.Gender, c.Class))
+            .Select(c => new CharacterIdentity(c.Id, c.AccountId, c.Name, c.Race, c.Gender, c.Class, c.Level, c.ZoneId))
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 }

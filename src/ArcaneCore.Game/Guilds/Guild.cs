@@ -106,7 +106,8 @@ public sealed class Guild
 
     public uint RankRights(byte rank) => rank < _ranks.Count ? _ranks[rank].Rights : GuildRights.Empty;
 
-    public string RankName(byte rank) => rank < _ranks.Count ? _ranks[rank].Name : string.Empty;
+    /// <summary>vmangos Guild::GetRankName: an out-of-range id (a deleted rank) reads "&lt;unknown&gt;" (Guild.cpp:709-715).</summary>
+    public string RankName(byte rank) => rank < _ranks.Count ? _ranks[rank].Name : "<unknown>";
 
     public bool HasRight(byte rank, uint right) => GuildRights.Has(RankRights(rank), right);
 

@@ -403,9 +403,11 @@ public sealed class GuildManagerTests
     }
 
     [Fact]
-    public void Ranks_AddAndDelete_MovesMembersOfTheDeletedRank()
+    public void Ranks_AddAndDelete_WithDeleteRankMovesMembers_MovesMembersOfTheDeletedRank()
     {
-        using var f = new SocialFixture();
+        // The deviation switch; the default (vmangos) strands them, see GuildParityTests.
+        using var f = new SocialFixture(options: null);
+        f.Context.Guilds.Options = new GuildOptions { DeleteRankMovesMembers = true };
         Player a = f.AddPlayer(1);
         Player b = f.AddPlayer(2);
         Guild guild = Found(f, a);

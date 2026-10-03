@@ -15,5 +15,5 @@ public sealed class CharacterLookup(CharacterDirectory directory) : ICharacterLo
 
     private static CharacterInfo? ToInfo(CharacterIdentity? identity) => identity is null
         ? null
-        : new CharacterInfo((uint)identity.Id, identity.AccountId, identity.Name, (Race)identity.Race, (Class)identity.Class);
+        : new CharacterInfo((uint)identity.Id, identity.AccountId, identity.Name, (Race)identity.Race, (Class)identity.Class, identity.Level, identity.ZoneId);
 }

@@ -153,7 +153,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         }
 
         session.Services.GetRequiredService<CharacterDirectory>().Add(
-            new CharacterIdentity(created.Id, created.AccountId, created.Name, created.Race, created.Gender, created.Class));
+            new CharacterIdentity(created.Id, created.AccountId, created.Name, created.Race, created.Gender, created.Class, created.Level, created.ZoneId));
         session.Logger.LogInformation("[{Endpoint}] '{Account}' created character '{Name}'",
             session.RemoteEndpoint, session.AccountName, name);
 
