@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A hot-loadable GM command module (docs/areas/code-hot-reload.md, "Module lane").
+       Copy this folder, rename it, and change AssemblyName: the assembly must be named exactly like the module
+       (<name>.dll in <name>/ of the module directory). Not part of ArcaneCore.slnx.
+
+       The server's own assemblies are referenced as plain dll references (Private=false) from a built server,
+       not as ProjectReference: building this module must never rebuild the world project, whose dll a running
+       dev runner holds locked. Point ArcaneCoreBin at the server's output folder if it is not the default. -->
+  <PropertyGroup>
+    <AssemblyName>GmCommands</AssemblyName>
+    <RootNamespace>GmCommands</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <ArcaneCoreBin Condition="'$(ArcaneCoreBin)' == ''">$(MSBuildThisFileDirectory)..\..\..\src\ArcaneCore.World\bin\Debug\net10.0\</ArcaneCoreBin>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="ArcaneCore.World"><HintPath>$(ArcaneCoreBin)ArcaneCore.World.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="ArcaneCore.Protocol"><HintPath>$(ArcaneCoreBin)ArcaneCore.Protocol.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="ArcaneCore.Kernel"><HintPath>$(ArcaneCoreBin)ArcaneCore.Kernel.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="ArcaneCore.Game"><HintPath>$(ArcaneCoreBin)ArcaneCore.Game.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+
+</Project>

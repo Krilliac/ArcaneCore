@@ -332,6 +332,13 @@ public sealed class ModuleHost
 
         byte[] bytes = File.ReadAllBytes(file.FullName);
         string sha = Convert.ToHexString(SHA256.HashData(bytes));
+        // The hash is of the very bytes that are loaded below (no second read), so the check cannot be raced.
+        AllowlistVerdict allowlist = ModuleAllowlist.Check(_options.Allowlist, sha);
+        if (!allowlist.Allowed)
+        {
+            throw new ModuleRejectedException($"refused by the module allowlist: {allowlist.Detail}");
+        }
+
         var context = new ModuleLoadContext(name, directory);
         try
         {

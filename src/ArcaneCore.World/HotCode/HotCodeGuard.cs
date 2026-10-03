@@ -87,6 +87,14 @@ public static class HotCodeGuard
             }
         }
 
+        if (options.Modules.Enabled && options.Modules.AllowAnyEnvironment
+            && !IsDevelopmentLike(probe.EnvironmentName) && string.IsNullOrWhiteSpace(options.Modules.Allowlist))
+        {
+            refusals.Add(
+                $"{HotCodeOptions.SectionName}:Modules:AllowAnyEnvironment lets code be loaded into a '{probe.EnvironmentName}' instance, "
+                + $"which also needs {HotCodeOptions.SectionName}:Modules:Allowlist (a file of the SHA-256 hashes of the module dlls that may be loaded).");
+        }
+
         return new HotCodeVerdict(refusals, active.Count > 0);
     }
 

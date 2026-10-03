@@ -30,6 +30,14 @@ internal sealed class HotModuleHost(
         logger.LogWarning(
             "Hot code MODULES are ENABLED (World:HotCode:Modules:Enabled): code in {Directory} can be loaded into this process by an Administrator with .hotmodule and runs with full server trust.",
             options.Value.Modules.Directory);
+        if (string.IsNullOrWhiteSpace(options.Value.Modules.Allowlist))
+        {
+            logger.LogWarning("No module allowlist is configured (World:HotCode:Modules:Allowlist): any dll in the module directory can be loaded.");
+        }
+        else
+        {
+            logger.LogInformation("Module allowlist: {Allowlist} (a module whose SHA-256 is not listed is refused).", options.Value.Modules.Allowlist);
+        }
 
         // Not awaited: the commit needs the world thread, which starts after this service.
         foreach (string name in options.Value.Modules.LoadOnStart)

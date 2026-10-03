@@ -59,6 +59,15 @@ public sealed class HotModuleOptions
     /// </summary>
     public bool AllowAnyEnvironment { get; set; }
 
+    /// <summary>
+    /// Path of a text file of SHA-256 hashes (hex, one per line, <c>#</c> comments) of the module dlls that may be loaded.
+    /// Empty adds no restriction (any dll in <see cref="Directory"/> can be loaded by an Administrator). When set it is
+    /// fail-closed: a missing, unreadable or malformed file, or a dll whose hash is not listed, refuses the load and is
+    /// audited. Read on every load, so editing it needs no restart. Required when <see cref="AllowAnyEnvironment"/> lets
+    /// modules into a Production instance.
+    /// </summary>
+    public string Allowlist { get; set; } = string.Empty;
+
     /// <summary>Module names to load once the world is running (asynchronously; a failure is logged, not fatal).</summary>
     public List<string> LoadOnStart { get; set; } = [];
 }
