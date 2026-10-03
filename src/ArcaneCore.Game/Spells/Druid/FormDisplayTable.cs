@@ -4,8 +4,8 @@ namespace ArcaneCore.Game.Spells.Druid;
 public readonly record struct FormDisplay(uint DisplayId, float Scale);
 
 /// <summary>
-/// vmangos GetShapeshiftDisplayInfo (D:\refs\vmangos\src\game\Spells\SpellAuras.cpp:2317-2411), druid forms
-/// only. The scale (0.8 for cat/travel/aquatic) is the vmangos value; mangos-classic does not scale. The
+/// vmangos GetShapeshiftDisplayInfo (D:\refs\vmangos\src\game\Spells\SpellAuras.cpp:2317-2411), the druid forms
+/// and Ghost Wolf (the shaman form, display 4613, scale 0.8, :2387-2390). The scale (0.8 for cat/travel/aquatic) is the vmangos value; mangos-classic does not scale. The
 /// player Team picks the Alliance/Horde model (Player::TeamForRace); a non-player target uses the Alliance one.
 /// </summary>
 public static class FormDisplayTable
@@ -18,6 +18,7 @@ public static class FormDisplayTable
         DruidForms.Bear or DruidForms.DireBear => new FormDisplay(alliance ? 2281u : 2289u, 1.0f),
         DruidForms.Moonkin => new FormDisplay(alliance ? 15374u : 15375u, 1.0f),
         DruidForms.Tree => new FormDisplay(864, 1.0f),
+        DruidForms.GhostWolf => new FormDisplay(4613, 0.80f),
         _ => null,
     };
 }

@@ -23,6 +23,9 @@ public static class DruidForms
     public const byte Shadow = 0x1C;
     public const byte Stealth = 0x1E;
 
+    /// <summary>FORM_GHOSTWOLF (SharedDefines.h:1431).</summary>
+    public const byte GhostWolf = 0x10;
+
     /// <summary>FORM_MOONKIN. Present in 1.12.1 data (spells 24858/24905/24907) and in both reference cores.</summary>
     public const byte Moonkin = 0x1F;
 

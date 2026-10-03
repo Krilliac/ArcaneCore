@@ -13,8 +13,9 @@ namespace ArcaneCore.Game.Spells;
 /// the 1.12.1 build for the warrior stances and the druid forms (Cat, Tree of Life, Travel, Aquatic, Bear, Dire Bear and
 /// Moonkin): the Shapeshift Form Effect spell, the display and its scale, the power type switch (Cat energy, Bear rage, a
 /// druid leaving a form back to mana), Furor, the form byte, the linked boost spells, the known passives that need the
-/// form and Leader of the Pack. A form without a handler yet (Ghost Wolf, Shadowform, Stealth and the ones no spell
-/// uses) leaves its aura unhandled and is reported once.
+/// form and Leader of the Pack; and for the forms that only share the form byte, Ghost Wolf (display and scale),
+/// Shadowform and Stealth (the byte alone: the stance gate of the 21 stealth spells and the Holy spells Shadowform blocks).
+/// A form without a handler (the ones no spell uses) leaves its aura unhandled and is reported once.
 /// </summary>
 /// <remarks>
 /// Deliberate differences, all documented in docs/areas/druid-forms.md: the previous form is removed before the new one is
@@ -49,6 +50,7 @@ public sealed class ShapeshiftService
     [
         (byte)ShapeshiftForm.BattleStance, (byte)ShapeshiftForm.DefensiveStance, (byte)ShapeshiftForm.BerserkerStance,
         DruidForms.Cat, DruidForms.Tree, DruidForms.Travel, DruidForms.Aquatic, DruidForms.Bear, DruidForms.DireBear, DruidForms.Moonkin,
+        DruidForms.GhostWolf, DruidForms.Shadow, DruidForms.Stealth,
     ];
 
     private readonly SpellSystem _spells;
