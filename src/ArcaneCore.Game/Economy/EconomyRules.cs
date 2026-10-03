@@ -271,11 +271,17 @@ public static class AuctionSearch
 {
     public const uint Any = 0xFFFFFFFF;
 
+    private const uint InvTypeChest = 5;
+    private const uint InvTypeRobe = 20;
+
     /// <summary>The page of matching auctions (at most <see cref="AuctionHouseRules.PageSize"/>) and the total match count.</summary>
     public static (IReadOnlyList<AuctionRecord> Page, int Total) Run(IEnumerable<AuctionRecord> auctions, AuctionQuery query,
         Func<uint, ItemTemplate?> templates, Func<ItemTemplate, bool>? usable = null)
     {
-        List<AuctionRecord> matches = auctions.OrderBy(a => a.Id).Where(a => templates(a.ItemEntry) is { } t && Matches(t, query, usable)).ToList();
+        // vmangos keeps OrderedAuctionMap keyed by buyout price (AuctionHouseMgr.cpp:71-75, 711-790), insertion order
+        // (the auction id) within a key, so which rows a page shows follows the buyout price.
+        List<AuctionRecord> matches = auctions.OrderBy(a => a.Buyout).ThenBy(a => a.Id)
+            .Where(a => templates(a.ItemEntry) is { } t && Matches(t, query, usable)).ToList();
         int from = (int)Math.Min(query.ListFrom, (uint)matches.Count);
         return (matches.Skip(from).Take(AuctionHouseRules.PageSize).ToList(), matches.Count);
     }
@@ -292,7 +298,9 @@ public static class AuctionSearch
             return false;
         }
 
-        if (query.InventoryType != Any && template.InventoryType != query.InventoryType)
+        // vmangos AuctionHouseMgr.cpp:760: the chest slot (INVTYPE_CHEST 5) also lists robes (INVTYPE_ROBE 20).
+        if (query.InventoryType != Any && template.InventoryType != query.InventoryType
+            && !(query.InventoryType == InvTypeChest && template.InventoryType == InvTypeRobe))
         {
             return false;
         }
@@ -302,8 +310,9 @@ public static class AuctionSearch
             return false;
         }
 
-        if ((query.LevelMin != 0 && template.RequiredLevel < query.LevelMin)
-            || (query.LevelMax != 0 && template.RequiredLevel > query.LevelMax))
+        // vmangos AuctionHouseMgr.cpp:765: the maximum level only applies together with a minimum level.
+        if (query.LevelMin != 0 && (template.RequiredLevel < query.LevelMin
+            || (query.LevelMax != 0 && template.RequiredLevel > query.LevelMax)))
         {
             return false;
         }
