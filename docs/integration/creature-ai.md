@@ -4,11 +4,13 @@ Built on the creature, combat and spell areas. It is wired through the existing 
 `IDataModule`, `IWorldFeature`, `IMapUpdater` and the creature map system. It does not edit
 `Map.cs`, `WorldRuntime`, `Player.cs`, the DbContexts or the host wiring.
 
-## Schema version (lead to renumber)
+## Integrated schema allocation
 
-| Component | Version on this branch | Reserved | Owner | Step |
-|---|---|---|---|---|
-| world | **7** | **8** | `ArcaneCore.Data.World.Creatures.CreatureAiDataModule` | `CreateTableChange` × 2: `creature_ai_scripts` and `creature_ai_texts`. `AddColumnChange` × 2: `creature_template.AIName` and `creature_movement.Run`. |
+World v8 follows gameobjects/loot v7. `CreatureAiDataModule.Version = 8` adds
+`creature_ai_scripts`, `creature_ai_texts`, `creature_template.AIName` and
+`creature_movement.Run`. Original source heads retain provisional v7.
+
+`AddColumnChange` × 2: `creature_template.AIName` and `creature_movement.Run`. |
 
 World 8 is reserved for this area. The bootstrapper only accepts contiguous steps
 (`SchemaBootstrapper.EnsureAsync` refuses a gap), and world 7 (gameobjects + loot) is not in
@@ -19,7 +21,7 @@ the world current version and add 8 to the steps list. Nothing else depends on t
 
 `AddColumnChange` on tables created in an earlier step needed one generic bootstrapper fix. An
 upgrade across both steps (for example world 1 → 7) creates `creature_template` from the
-current model in step 2, so the column already exists when step 7 runs. `SchemaBootstrapper`
+current model in step 2, so the column already exists when step 8 runs. `SchemaBootstrapper`
 now asks the engine catalog (SQLite `pragma_table_info`, MySQL/PostgreSQL
 `information_schema.columns`) and skips an `AddColumnChange` whose column exists.
 `IntegratedSchemaTests.EnsureAndInspectAsync` likewise leaves out columns that later steps add

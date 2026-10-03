@@ -137,11 +137,9 @@ last-instance rows of characters that no longer exist, and binds of missing inst
 character's `character_instance` and `character_last_instance` rows in the deletion
 transaction; an instance nobody is bound to any more is dropped at the next load.
 
-**Schema version: the fleet plan reserves characters v9.** `DataModules.Compose` refuses
-version gaps and the integration base ends at v6, so this branch claims
-`InstanceDataModule.BranchSchemaVersion = 7`; `ReservedSchemaVersion = 9` is recorded next to it.
-**The integration lead renumbers it to 9** when v7 and v8 from the other round-2 branches
-are merged (one constant, plus the expected list in `IntegratedSchemaTests`).
+**Integrated allocation: characters v8**, after reputation v7.
+`BranchSchemaVersion = 8` is active; the reserved-v9 marker is historical.
+Spell state follows at v9 and economy at v10. Source histories retain provisional allocations.
 
 Group binds are kept in memory only, because groups themselves are not persisted in this
 codebase. After a restart only character binds remain, so a dungeon only its group was bound

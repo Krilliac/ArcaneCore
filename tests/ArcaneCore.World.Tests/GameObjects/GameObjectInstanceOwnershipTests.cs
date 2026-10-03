@@ -127,10 +127,13 @@ public sealed class GameObjectInstanceOwnershipTests
     {
         var template = new CreatureTemplate { Entry = CreatureEntry, Name = "Loot owner test", MinLevelHealth = 10, MaxLevelHealth = 10 };
         var content = new CreatureContent([template], [], [], [], []);
-        var creature = new Creature(42, template, null, content, new Random(1));
-        creature.Relocate(2, 0, 0, 0, 0);
-        map.AddObject(creature);
-        map.Combat.DealDamage(killer, creature, creature.Health, direct: false);
+        // A runtime creature must belong to its map system for OnJustDied to advance
+        // the creature's corpse lifecycle before the real UnitKilled loot listener runs.
+        var system = new CreatureMapSystem(map, content, random: new Random(1));
+        map.AddUpdater(system);
+        Creature creature = system.SpawnTemporary(template, 2, 0, 0, 0);
+        uint health = creature.Health;
+        Assert.Equal(health, map.Combat.DealDamage(killer, creature, health, direct: false));
         Assert.Equal(CreatureDeathState.Corpse, creature.DeathState);
         return creature;
     }

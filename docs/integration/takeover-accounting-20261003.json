@@ -1,0 +1,418 @@
+{
+  "codeCheckpoint": "620cab672366a8c80d47b9e3a3a12ba8e3b86266",
+  "canonicalBranch": "codex/integrate-feature-fleet-20261003",
+  "draftPr": "https://github.com/Krilliac/ArcaneCore/pull/11",
+  "schema": {
+    "auth": 2,
+    "world": 8,
+    "characters": 10
+  },
+  "sources": [
+    {
+      "kind": "original",
+      "branch": "feat/fleet-plan",
+      "pr": 1,
+      "sourceHead": "165b885e810fe08c09ab22fdba9cd737d98e1407",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": "70bf59b4e106957ce5dcd77f66768f949bc1f436",
+      "squashAncestor": true,
+      "included": true,
+      "incorporation": "inherited from base squash `70bf59b4e106957ce5dcd77f66768f949bc1f436`; original history also reachable through feature branches"
+    },
+    {
+      "kind": "original",
+      "branch": "feat/combat",
+      "pr": 5,
+      "sourceHead": "7955db26743adf15487aa3d0326598a672c80b1c",
+      "directAncestor": false,
+      "sourceObjectPresent": false,
+      "squashCommit": "05884c77515f33b0b9aee242e395e1fe68d68fb8",
+      "squashAncestor": true,
+      "included": true,
+      "incorporation": "inherited from base squash `05884c77515f33b0b9aee242e395e1fe68d68fb8`"
+    },
+    {
+      "kind": "original",
+      "branch": "feat/character-hooks",
+      "pr": 9,
+      "sourceHead": "7af773500b076467f0f05238780578863860ced0",
+      "directAncestor": false,
+      "sourceObjectPresent": false,
+      "squashCommit": "c03d8674cf0d6afff770cc6ae3d5c34d99719e4b",
+      "squashAncestor": true,
+      "included": true,
+      "incorporation": "inherited from base squash `c03d8674cf0d6afff770cc6ae3d5c34d99719e4b`"
+    },
+    {
+      "kind": "original",
+      "branch": "feat/map-updaters",
+      "pr": 10,
+      "sourceHead": "f6ade23357850dad0a6337630ccb95002b549a0b",
+      "directAncestor": false,
+      "sourceObjectPresent": false,
+      "squashCommit": "0b5dcd0260d5919f2811e32f42f9d0ab720843c1",
+      "squashAncestor": true,
+      "included": true,
+      "incorporation": "inherited from base squash `0b5dcd0260d5919f2811e32f42f9d0ab720843c1`"
+    },
+    {
+      "kind": "original",
+      "branch": "feat/creatures",
+      "pr": 7,
+      "sourceHead": "ec8485e4bcc39615bd30a91ac926f47d720cce69",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "merge `59a97dba9686037ab647137c7c1cb1be0d41064e`"
+    },
+    {
+      "kind": "original",
+      "branch": "feat/grid-terrain",
+      "pr": 3,
+      "sourceHead": "f1a60fa3267cdbd7f44d9f50da3eb0b262301792",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "merge `2d3c53247c5a74bc80743bbe28b27b3145441efd`; map conflict resolved by retaining the grid index and updater lifecycle"
+    },
+    {
+      "kind": "original",
+      "branch": "feat/items",
+      "pr": 6,
+      "sourceHead": "b7e5051b4341e3f5a9a1dc31971cd29294986e16",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "merge `e8ea31cfd35563dce2036aabcc908fb09b706572`; retained the current seam documentation and item owner updates"
+    },
+    {
+      "kind": "original",
+      "branch": "feat/spells",
+      "pr": 4,
+      "sourceHead": "20651ff2cff74da9a10e9e11daabe228ec4319ec",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "merge `03ab1f7082e6d385bbad86b626d5081a7956986d`"
+    },
+    {
+      "kind": "original",
+      "branch": "feat/quests-npc",
+      "pr": 2,
+      "sourceHead": "5d26e1f7c08ebc0448f0c5c967c59caffcf27c21",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "merge `812c8ff7e3b9be7a28fa1e419d7b82f39a50d238`; incomplete draft service code repaired locally; daemon delivery still partial"
+    },
+    {
+      "kind": "original",
+      "branch": "feat/social",
+      "pr": 8,
+      "sourceHead": "41bdd8b2b69cc88473e787ef47332e2e2c4c59ad",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "merge `520e6f97ee299c2a0ced3d09825066a49ace556b`"
+    },
+    {
+      "kind": "original",
+      "branch": "codex/atomic-creature-import-20261003",
+      "pr": 12,
+      "sourceHead": "a47d06be3a382264131fa3e7c488a3a43d9d6a55",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "merge `a09d2339342171d3c661e56e171ad5ade0f19322`; atomic replacement across deletes and every batch, caller savepoint ownership, cancellation rollback"
+    },
+    {
+      "kind": "original",
+      "branch": "codex/quest-npc-daemon-slice-20261003",
+      "pr": 13,
+      "sourceHead": "5db1fb1c9dd21bf93b2ab009958167505786ee7a",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "merge `fe766bbd44ea827d00f9b04b93bc5a062a97837c`; saved journal login, vanilla content queries, timed expiry, ordered recovery, reconnect revisions and shutdown drain"
+    },
+    {
+      "kind": "original",
+      "branch": "codex/npc-quest-adapters-20261003",
+      "pr": 11,
+      "sourceHead": "0e7e0807d9a99e96101e506ef64cadd495c81955",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "preserved by merge `32d556ed98fd06c0066354375152ec7913ba7e94` in the mock branch; live-creature status/details/accept/abandon, immutable factions and synthetic DBC checks"
+    },
+    {
+      "kind": "original",
+      "branch": "codex/mock-client-lifecycle-20261003",
+      "pr": 11,
+      "sourceHead": "0b405cb75505db30d408ff3df291effe75d8459c",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "merge `a9c4f6a6a2467904e71a81d71b718a6cbacf1339`; independent real realm/world mock, NPC wire lifecycle, production shutdown repair and rewarded-history acceptance regression"
+    },
+    {
+      "kind": "original",
+      "branch": "codex/quest-reward-vertical-20261003",
+      "pr": 11,
+      "sourceHead": "b884d830ec03f462be6a2de4a40d8b5be3c7d05e",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "merge `55daa7ee2b62a436f4f7676a554cb624c1835307`; authoritative creature-kill progress, guarded ordinary NPC turn-in, atomic money/items/history, quarantine/relog recovery and expanded native mock"
+    },
+    {
+      "kind": "original",
+      "branch": "codex/quest-reward-async-20261003",
+      "pr": 11,
+      "sourceHead": "1bf0bdaef36cb775c18b3f7c01ca9e4f81fadaaa",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "merge `cd66c674f921e7f2ead189fe802dc7b3d20b499c`; bounded observed background settlement, exact-owner publication, per-character mutation/save holds, real delayed-store recovery/latency/capacity evidence and bounded client handoff"
+    },
+    {
+      "kind": "original",
+      "branch": "codex/quest-greeting-fixture-20261003",
+      "pr": 11,
+      "sourceHead": "248accc71acbe70144b92c33761d8f9ae0ab07cc",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "merge `0c5fb11cfd087ae5e7e568f3fe3a2f7f2f83b376`; strict vanilla NPC greetings, exact-player item display fallback, independently decoded menus and persistent repository-authored disposable client fixture; full source provider CI succeeded before incorporation"
+    },
+    {
+      "kind": "original",
+      "branch": "codex/protocol-lifecycle-compat-20261003",
+      "pr": 11,
+      "sourceHead": "434968a555bfbf15fb4bc6156e34ae277baee572",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "merge `a656e61ceeae287358f2fe327f59fdd0991d29de`; verified inactive queue polls, owned production session shutdown, and SQLite-backed countdown/relog/fresh-host restart regressions; full exact-source provider CI succeeded before incorporation"
+    },
+    {
+      "kind": "original",
+      "branch": "codex/aura-caster-ownership-20261003",
+      "pr": 11,
+      "sourceHead": "838dbc952a8126fee8f7d2ef5d5e7761cbb2e40d",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "merge `407bfb1fb86dade233d954d0e65668fafb9f3679`; weak revocable exact-caster lifetime, replacement-safe attribution/settlement/stacks and stale cleanup; full exact-source provider CI succeeded before incorporation"
+    },
+    {
+      "kind": "external",
+      "branch": "feat/npc-services",
+      "pr": 14,
+      "sourceHead": "056dfca52c906afa3cc2355d3154a17baaf72979",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": ""
+    },
+    {
+      "kind": "external",
+      "branch": "feat/instances",
+      "pr": 15,
+      "sourceHead": "a159c888fd525e4231438aa3acd3ae9637202e45",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": ""
+    },
+    {
+      "kind": "external",
+      "branch": "feat/quest-progression",
+      "pr": 16,
+      "sourceHead": "9a8fde546ff04f4b4787eadb533f6c8a2fa83452",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": ""
+    },
+    {
+      "kind": "external",
+      "branch": "feat/vmap-los",
+      "pr": 17,
+      "sourceHead": "7e6799c709b8916e3111cf74d9bec1ed092c0bb5",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "61b06f16b7bc068f93912d942f0d0f94d0eac29f"
+    },
+    {
+      "kind": "external",
+      "branch": "feat/economy",
+      "pr": 18,
+      "sourceHead": "23d8850a8630aaeefd2b307eb4488c4f1dad5c66",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": ""
+    },
+    {
+      "kind": "external",
+      "branch": "feat/reputation",
+      "pr": 19,
+      "sourceHead": "0ca9a6c9d0eae80d17bf22c6426137437af082d8",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "24dc5a4f68d981d9c35345bbab092e7fa7094162"
+    },
+    {
+      "kind": "external",
+      "branch": "feat/creature-ai",
+      "pr": 20,
+      "sourceHead": "111f8a2b47b99706ffdbcb5964ed1c6b9bc4144f",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": ""
+    },
+    {
+      "kind": "external",
+      "branch": "feat/character-delete-cleanup",
+      "pr": 21,
+      "sourceHead": "03793e4f16b63ed0b751e7d7c658bd7ffa2707fd",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": "9346ad4dfa4055a3adef0926beea53e76a5d57dd"
+    },
+    {
+      "kind": "external",
+      "branch": "feat/gameobjects-loot",
+      "pr": 22,
+      "sourceHead": "46c39d6c5c35d3ba75ec4745657bec0c799b74e0",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": ""
+    },
+    {
+      "kind": "external",
+      "branch": "feat/spells-persistence",
+      "pr": 23,
+      "sourceHead": "35647ced1c885deba6b2fc9a0dce6cd391610434",
+      "directAncestor": true,
+      "sourceObjectPresent": true,
+      "squashCommit": null,
+      "squashAncestor": false,
+      "included": true,
+      "incorporation": ""
+    }
+  ],
+  "corrections": [
+    {
+      "branch": "codex/reputation-interaction-fix-20261003",
+      "head": "4c4ed2402ce25fed670111ba2cb29fe65a845411",
+      "directAncestor": true
+    },
+    {
+      "branch": "codex/instance-transit-unload-fix-20261003",
+      "head": "f9e05e1a8379039a1f4a182cea38b12f399e8c43",
+      "directAncestor": true
+    },
+    {
+      "branch": "codex/npc-repair-persistence-20261003",
+      "head": "470b7f36898e170dfdb8ed7407ca512a604e1ea7",
+      "directAncestor": true
+    },
+    {
+      "branch": "codex/spell-settlement-freeze-fix-20261003",
+      "head": "fdfebf3f8d46fe2c541cc54fb4400ad76fcbbdd5",
+      "directAncestor": true
+    },
+    {
+      "branch": "codex/loot-state-correctness-fix-20261003",
+      "head": "6d4845d33a1de4c414f2fa97fe9d95f1f213d00a",
+      "directAncestor": true
+    },
+    {
+      "branch": "codex/creature-ai-correctness-fix-20261003",
+      "head": "a5b1f8ece370a54b11bd99a013ebfe33ed0d7537",
+      "directAncestor": true
+    },
+    {
+      "branch": "codex/quest-reward-effect-fix-20261003",
+      "head": "a5a4e6deb772c4226ad8b8bf6e30a0428a913564",
+      "directAncestor": true
+    },
+    {
+      "branch": "codex/economy-lifecycle-fix-20261003",
+      "head": "230be5a27cb235fda25f6b75f045ef00f9d62a5b",
+      "directAncestor": true
+    },
+    {
+      "branch": "codex/economy-auction-recovery-fix-20261003",
+      "head": "697869ad241b10f5e710e7779064679197cbc58b",
+      "directAncestor": true
+    },
+    {
+      "branch": "codex/economy-delete-fence-fix-20261003",
+      "head": "0323c03c2204def7e667a9987f14c0a7d5f4e329",
+      "directAncestor": true
+    }
+  ],
+  "excluded": [],
+  "notes": [
+    "The final fixture/docs commit descends from this checkpoint.",
+    "Three unavailable original objects are represented by verified historical squash ancestors.",
+    "No source histories or existing worktrees were rewritten."
+  ]
+}

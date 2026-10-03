@@ -36,7 +36,7 @@ place, before the next milestone that depends on it is built further.
 | Terrain heights | Optional reader for CMaNGOS/vmangos-extracted `.map` files (later) | Needed for believable creature movement; extraction requires the developer's client. vmaps (line of sight) and mmaps (pathfinding) are out of scope for now. |
 | Scripting | DB-driven only (gossip, EventAI-style creature scripts later) | Hard-coded C++-style boss scripts are a content project, not an emulator core. |
 | Warden | **Out** | The 1.12 Warden needs Blizzard module binaries, and it does not stop modern cheats. |
-| Battlegrounds, honor, auction house, mail, LFG | Out of this plan | Large systems with no dependents; revisit after quests/social. |
+| Battlegrounds, honor, LFG | Out of this plan | Large systems with no dependents; revisit after quests/social. |
 | Clustering (gRPC) | Planned M15: explicit process ownership, gateway/session routing and map workers, delivered in gated phases | Developer request 2026-10-03. Compare incomplete MaNGOS Sharp / the developer's MaNGOS Zero fork and SparkEngine executable separation against current code; preserve build-5875 compatibility and local mode. [Design and implementation plan](CLUSTERING_DESIGN.md). |
 | Plugin host / event bus | Introduced with its first real consumer (GM commands → scripts) | A plugin API without callers would be invented surface. |
 | SQLite provider | **Added** (dev + tests) | Zero-setup local runs and end-to-end tests of the real EF stores in CI. MariaDB stays primary. |
@@ -113,12 +113,12 @@ session outbound channel ◄───────────────┘
 | M7 | Teleports | Near/far teleport, world-port ack, area triggers, `.tele` | integrated candidate — [scope and gaps](integration/grid-terrain.md); client acceptance pending |
 | M8 | Content platform | World schema, dump importer, in-memory stores, WDBC reader | partial integrated candidate — [fleet scope](integration/fleet-20261003.md); complete importer/content acceptance pending |
 | M9 | Items | Item/bag objects, inventory, equipment visuals, starting outfit, item query, equip/swap/split/destroy, persistence | integrated candidate — [scope and gaps](integration/items.md); client acceptance pending |
-| M10 | Creatures | Grid/cell index, creature/gameobject spawns, queries, waypoints, respawn | partial integrated candidate — [scope and gaps](integration/creatures.md); gameobjects and client acceptance pending |
+| M10 | Creatures | Grid/cell index, creature/gameobject spawns, queries, waypoints, respawn | partial integrated candidate — [scope and gaps](integration/creatures.md); gameobjects/loot now in the takeover candidate; client acceptance pending |
 | M11 | Combat | Melee, hit table, creature AI, death/ghost/resurrect, regen, XP/levels, loot/money | partial integrated candidate — [scope and gaps](integration/combat.md); remaining scope and client acceptance pending |
 | M12 | Spells | Cast pipeline, cooldowns, costs, core effects, auras, spellbook, trainers | integrated candidate — [scope and gaps](integration/spells.md); full effects/targeting and client acceptance pending |
 | M13 | Quests & NPC services | Gossip, quest flow, objectives, rewards, vendors | partial candidate — [M13a](../MILESTONE_M13A.md) journal/query/timers, [M13b](../MILESTONE_M13B.md) ordinary NPC accept/abandon and [ordinary kill/item/money rewards](QUEST_REWARD_ACCEPTANCE.md); broader rewards/objectives/services and client acceptance pending |
 | M14 | Social | Groups, channels, friends/ignore, guilds | integrated candidate — [scope and gaps](integration/social.md); client acceptance pending |
-| Mock | Native client acceptance tool | Real SRP/M2, realm/world, character/journal, NPC accept/abandon and combat/reward/relog lifecycle | implemented candidate — [milestone](../MILESTONE_MOCK_CLIENT.md), expanded 41-check scenario; exact qualification in the [ledger](integration/fleet-20261003.md), real-client testing deferred |
+| Mock | Native client acceptance tool | Real SRP/M2, realm/world, character/journal, NPC accept/abandon and combat/reward/relog lifecycle | implemented candidate — [milestone](../MILESTONE_MOCK_CLIENT.md), expanded 59-check scenario; exact qualification in the [ledger](integration/fleet-20261003.md), real-client testing deferred |
 | M15 | Clustered runtime and tools | Realm replicas, world gateways, map/instance workers, realm-wide social ownership, fenced persistence/placement and compatible offline tools | planned — [design and phased implementation](CLUSTERING_DESIGN.md); research/planning authorized, cluster deployment and runtime replacement are outside this tranche |
 
 Each milestone ships: code + automated loopback tests + `docs/Mx_ACCEPTANCE.md` +
@@ -174,3 +174,7 @@ deferred real-client acceptance retain their gates.
 
 **WotLK-era references (TrinityCore, ArcEmu) never supply 1.12.1 wire values** — opcodes,
 update fields and packet layouts differ by build (charter §2). They inform design only.
+
+## 2026-10-03 takeover
+
+NPC services, instances, AI, gameobjects/loot, progression, spell persistence and mail/auction/trade economy sources are consolidated in draft #11. [Exact scope](integration/takeover-20261003.md), [Claude handoff and remaining work](integration/claude-handoff-20261003.md). Earlier pending-source labels are historical; client acceptance and complete content/effects remain pending.

@@ -13,6 +13,9 @@ This integration candidate also combines creatures, grids/terrain/teleports,
 items, spells, social systems, and the partial quests/NPC draft. Exact branch
 heads, schema allocations, integration repairs, validation, and remaining
 client acceptance work are in [the fleet integration record](docs/integration/fleet-20261003.md).
+Later NPC, instance, AI, loot, progression, spell persistence and economy work is in
+[the takeover ledger](docs/integration/takeover-20261003.md). Continue from
+[the Claude handoff](docs/integration/claude-handoff-20261003.md).
 
 The [M13a follow-up](MILESTONE_M13A.md) restores saved quest journals before
 login, serves quest/NPC text queries, and persists timed expiry across relogs
