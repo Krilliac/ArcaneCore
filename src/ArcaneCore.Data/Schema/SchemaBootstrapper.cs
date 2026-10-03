@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Migrations.Operations;
 using Microsoft.EntityFrameworkCore.Storage;
+using ArcaneCore.Data.Schema.Upgrade;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Data.Schema;
@@ -68,7 +69,26 @@ public sealed class SchemaDefinition
 }
 
 /// <summary>Raised when a database cannot be brought to the version the code requires.</summary>
-public sealed class SchemaMismatchException(string message) : Exception(message);
+/// <remarks>
+/// Not sealed: the upgrade tooling (SchemaUpgrader, the startup policy) raises more specific subtypes (<see cref="SchemaDowngradeException"/>,
+/// <see cref="SchemaBlockedException"/>, <see cref="SchemaPolicyException"/>) that every existing
+/// <c>catch (SchemaMismatchException)</c> still handles.
+/// </remarks>
+public class SchemaMismatchException(string message) : Exception(message)
+{
+    /// <summary>Why the bootstrap failed, for callers that map failures to exit codes without parsing the message.</summary>
+    public SchemaMismatchReason Reason { get; init; }
+}
+
+/// <summary>The cause behind a <see cref="SchemaMismatchException"/> where one is distinguished.</summary>
+public enum SchemaMismatchReason
+{
+    /// <summary>Any other mismatch (unknown state, newer database, damaged table, refused index).</summary>
+    Other = 0,
+
+    /// <summary>The wait for another process's schema lock ran out.</summary>
+    LockTimeout = 1,
+}
 
 /// <summary>
 /// Creates, adopts and upgrades one component's schema inside a database that other
@@ -121,12 +141,29 @@ public static class SchemaBootstrapper
     /// <param name="lockTimeout">How long to wait for another process that is changing the same component's schema.</param>
     /// <param name="logger">Optional progress log.</param>
     /// <param name="cancellationToken">Cancels the wait for the lock and the work.</param>
-    public static async Task EnsureAsync(
+    public static Task EnsureAsync(
         DbContext db, SchemaDefinition definition, TimeSpan lockTimeout, ILogger? logger = null, CancellationToken cancellationToken = default)
+        => EnsureAsync(db, definition, new SchemaUpgradeOptions { LockTimeout = lockTimeout }, logger, cancellationToken);
+
+    /// <summary>
+    /// <see cref="EnsureAsync(DbContext, SchemaDefinition, TimeSpan, ILogger?, CancellationToken)"/> with the
+    /// upgrade tooling's options: the startup policy (checked before the database is created and again, under
+    /// the lock, against the state the lock holder sees), the lock wait and a per-step progress callback.
+    /// </summary>
+    public static async Task EnsureAsync(
+        DbContext db, SchemaDefinition definition, SchemaUpgradeOptions options, ILogger? logger = null, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(options);
+        TimeSpan lockTimeout = options.LockTimeout;
         var creator = (IRelationalDatabaseCreator)db.GetService<IDatabaseCreator>();
         if (!await creator.ExistsAsync(cancellationToken).ConfigureAwait(false))
         {
+            if (options.Policy == SchemaPolicy.Never)
+            {
+                // Refuse before CreateAsync: policy Never creates nothing, not even an empty database.
+                throw new SchemaPolicyException(SchemaPolicyException.MissingDatabaseMessage(definition), SchemaState.Missing, null, definition.CurrentVersion);
+            }
+
             try
             {
                 await creator.CreateAsync(cancellationToken).ConfigureAwait(false);
@@ -147,7 +184,7 @@ public static class SchemaBootstrapper
         {
             await using SchemaLock schemaLock = await SchemaLock.AcquireAsync(db, definition.Component, lockTimeout, cancellationToken, logger)
                 .ConfigureAwait(false);
-            await RunAsync(db, definition, logger, cancellationToken).ConfigureAwait(false);
+            await RunAsync(db, definition, options, logger, cancellationToken).ConfigureAwait(false);
             await schemaLock.CompleteAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -156,24 +193,32 @@ public static class SchemaBootstrapper
         }
     }
 
-    private static async Task RunAsync(DbContext db, SchemaDefinition definition, ILogger? logger, CancellationToken ct)
+    private static async Task RunAsync(DbContext db, SchemaDefinition definition, SchemaUpgradeOptions options, ILogger? logger, CancellationToken ct)
     {
+        // The startup policy, judged on the read-only plan under the lock (before anything, including the
+        // version-0 marker of a resumed create, is written): a process that waited sees the winner's work.
+        if (options.Policy != SchemaPolicy.Always)
+        {
+            SchemaPlan plan = await SchemaPlanner.PlanAsync(db, definition, includeScript: false, ct).ConfigureAwait(false);
+            SchemaPolicyException.ThrowIfForbidden(options.Policy, plan);
+        }
+
         // Read only now that the lock is held: a process that waited sees the winner's work.
         int? version = await TryReadVersionAsync(db, definition, ct).ConfigureAwait(false);
         if (version is null)
         {
             version = await CreateOrAdoptAsync(db, definition, logger, ct).ConfigureAwait(false);
+            options.Report(definition, version.Value);
         }
         else if (version == CreatingVersion)
         {
             version = await CreateFreshAsync(db, definition, logger, ct).ConfigureAwait(false);
+            options.Report(definition, version.Value);
         }
 
         if (version > definition.CurrentVersion)
         {
-            throw new SchemaMismatchException(
-                $"The {definition.Component} database is at schema version {version}, newer than this build " +
-                $"({definition.CurrentVersion}). Run a newer ArcaneCore or restore a matching backup.");
+            throw new SchemaMismatchException(SchemaChangeDecider.NewerMessage(definition, version.Value));
         }
 
         foreach (SchemaStep step in definition.Steps.Where(s => s.Version > version).OrderBy(s => s.Version))
@@ -188,6 +233,7 @@ public static class SchemaBootstrapper
             await WriteVersionAsync(db, step.Version, ct).ConfigureAwait(false);
             logger?.LogInformation("Upgraded {Component} schema to version {Version}", definition.Component, step.Version);
             version = step.Version;
+            options.Report(definition, step.Version);
         }
 
         if (version != definition.CurrentVersion)
@@ -232,9 +278,7 @@ public static class SchemaBootstrapper
             return CreatingVersion;
         }
 
-        throw new SchemaMismatchException(
-            $"{definition.VersionTable} exists but holds no version row; the {definition.Component} schema is in an unknown state " +
-            $"({present} of {modelTables.Length} tables present).");
+        throw new SchemaMismatchException(SchemaChangeDecider.NoRowMessage(definition, present, modelTables.Length));
     }
 
     private static async Task<int> CreateOrAdoptAsync(DbContext db, SchemaDefinition definition, ILogger? logger, CancellationToken ct)
@@ -262,9 +306,7 @@ public static class SchemaBootstrapper
             return 1;
         }
 
-        throw new SchemaMismatchException(
-            $"The {definition.Component} database has {present} of the {definition.Version1Tables.Count} expected tables " +
-            "and no version table. Refusing to guess; repair or recreate it.");
+        throw new SchemaMismatchException(SchemaChangeDecider.PartialV1Message(definition, present));
     }
 
     /// <summary>
@@ -293,22 +335,11 @@ public static class SchemaBootstrapper
     }
 
     private static Task ApplyStepAsync(DbContext db, SchemaDefinition definition, SchemaStep step, CancellationToken ct)
-    {
-        // Columns that a later step adds may legitimately be missing from a table this step
-        // created on an earlier attempt (the table was made before the column was in the model).
-        HashSet<(string Table, string Column)> addedLater = [.. definition.Steps.Where(s => s.Version > step.Version)
-            .SelectMany(s => s.Changes).OfType<AddColumnChange>().Select(c => (c.Table, c.Column))];
-        return ExecuteAsync(db, step.Changes, addedLater, ct);
-    }
+        => ExecuteAsync(db, step.Changes, SchemaChangeDecider.AddedLater(definition, step), ct);
 
     /// <summary>The tables of the current model other than the component's version table, in creation order.</summary>
     private static string[] ModelTables(DbContext db, SchemaDefinition definition)
-    {
-        IRelationalModel model = db.GetService<IDesignTimeModel>().Model.GetRelationalModel();
-        IReadOnlyList<MigrationOperation> all = db.GetService<IMigrationsModelDiffer>().GetDifferences(null, model);
-        return [.. all.OfType<CreateTableOperation>().Select(t => t.Name)
-            .Where(n => !string.Equals(n, definition.VersionTable, StringComparison.Ordinal))];
-    }
+        => SchemaChangeDecider.ModelTables(db, definition);
 
     /// <summary>
     /// Turn model-derived changes into provider DDL with EF's own migrations SQL generator, one
@@ -318,22 +349,9 @@ public static class SchemaBootstrapper
     private static async Task ExecuteAsync(
         DbContext db, IReadOnlyList<SchemaChange> changes, IReadOnlySet<(string Table, string Column)> addedLater, CancellationToken ct)
     {
-        IRelationalModel model = db.GetService<IDesignTimeModel>().Model.GetRelationalModel();
-        IReadOnlyList<MigrationOperation> all = db.GetService<IMigrationsModelDiffer>().GetDifferences(null, model);
-
-        // A fresh model yields CREATE TABLE and CREATE INDEX operations (plus, with Pomelo, the database's
-        // default character set, which only a fresh create applies). Anything else would be dropped
-        // silently, which is how indexes were once lost, so refuse it loudly.
-        MigrationOperation? other = all.FirstOrDefault(o => o is not (CreateTableOperation or CreateIndexOperation or AlterDatabaseOperation));
-        if (other is not null)
-        {
-            throw new InvalidOperationException(
-                $"the model differ produced an unsupported operation {other.GetType().Name}; the bootstrapper only creates tables and indexes");
-        }
-
-        var createTables = all.OfType<CreateTableOperation>().ToDictionary(t => t.Name, StringComparer.Ordinal);
-        ILookup<string, CreateIndexOperation> indexesByTable = all.OfType<CreateIndexOperation>()
-            .ToLookup(i => i.Table, StringComparer.Ordinal);
+        SchemaChangeDecider.ModelOperations ops = SchemaChangeDecider.ReadModel(db);
+        IReadOnlyDictionary<string, CreateTableOperation> createTables = ops.Tables;
+        ILookup<string, CreateIndexOperation> indexesByTable = ops.IndexesByTable;
 
         foreach (SchemaChange change in changes)
         {
@@ -361,8 +379,11 @@ public static class SchemaBootstrapper
                 case AddColumnChange add:
                     CreateTableOperation table = createTables.GetValueOrDefault(add.Table)
                         ?? throw new InvalidOperationException($"table {add.Table} is not in the model");
-                    AddColumnOperation column = table.Columns.FirstOrDefault(c => c.Name == add.Column)
-                        ?? throw new InvalidOperationException($"column {add.Table}.{add.Column} is not in the model");
+                    if (!table.Columns.Any(c => c.Name == add.Column))
+                    {
+                        throw new InvalidOperationException($"column {add.Table}.{add.Column} is not in the model");
+                    }
+
                     if (await SchemaCatalog.ColumnExistsAsync(db, table.Name, add.Column, ct).ConfigureAwait(false))
                     {
                         // A table created by an earlier step from the current model already
@@ -370,15 +391,7 @@ public static class SchemaBootstrapper
                         break;
                     }
 
-                    column.Table = table.Name;
-                    column.Schema = table.Schema;
-                    if (!column.IsNullable && column.DefaultValue is null && column.DefaultValueSql is null)
-                    {
-                        // Existing rows need a value; SQLite also refuses NOT NULL without a default.
-                        column.DefaultValue = column.ClrType.IsValueType ? Activator.CreateInstance(column.ClrType) : string.Empty;
-                    }
-
-                    await RunAsync(db, column, ct).ConfigureAwait(false);
+                    await RunAsync(db, SchemaChangeDecider.PrepareAddColumn(table, add.Column), ct).ConfigureAwait(false);
                     break;
 
                 case EnsureIndexesChange ensure:
@@ -407,82 +420,36 @@ public static class SchemaBootstrapper
     }
 
     /// <summary>
-    /// An existing table is kept only if it has exactly the model's columns (ignoring columns that
-    /// a later step adds): anything else is another component's table, or damage, and is not adopted.
+    /// An existing table is kept only if it has exactly the model's columns (see
+    /// <see cref="SchemaChangeDecider.ColumnMismatch"/>).
     /// </summary>
     private static async Task RequireModelColumnsAsync(
         DbContext db, CreateTableOperation expected, IReadOnlySet<(string Table, string Column)> addedLater, CancellationToken ct)
     {
         IReadOnlyList<string> actual = await SchemaCatalog.ReadColumnsAsync(db, expected.Name, ct).ConfigureAwait(false);
-        string[] model = [.. expected.Columns.Select(c => c.Name)];
-        string[] missing = [.. model.Where(c => !addedLater.Contains((expected.Name, c)) && !actual.Contains(c, StringComparer.OrdinalIgnoreCase))];
-        string[] unexpected = [.. actual.Where(c => !model.Contains(c, StringComparer.OrdinalIgnoreCase))];
-        if (missing.Length > 0 || unexpected.Length > 0)
+        string? mismatch = SchemaChangeDecider.ColumnMismatch(expected, actual, addedLater);
+        if (mismatch is not null)
         {
-            throw new SchemaMismatchException(
-                $"table {expected.Name} already exists but does not match the model (missing columns: [{string.Join(", ", missing)}], " +
-                $"unexpected columns: [{string.Join(", ", unexpected)}]). Refusing to adopt it; repair or recreate it.");
+            throw new SchemaMismatchException(mismatch);
         }
     }
 
+    /// <summary>Create a model index unless the shared decision says it is satisfied; refuse a conflict or duplicates.</summary>
     private static async Task EnsureIndexAsync(DbContext db, CreateIndexOperation index, CancellationToken ct)
     {
         IReadOnlyList<CatalogIndex> existing = await SchemaCatalog.ReadIndexesAsync(db, index.Table, ct).ConfigureAwait(false);
-        bool SameShape(CatalogIndex i) => i.IsUnique == index.IsUnique && i.Columns.SequenceEqual(index.Columns, StringComparer.OrdinalIgnoreCase);
-
-        CatalogIndex? sameName = existing.FirstOrDefault(i => string.Equals(i.Name, index.Name, StringComparison.Ordinal));
-        if (sameName is not null)
+        SchemaChangeDecider.IndexDecision decision = await SchemaChangeDecider.DecideIndexAsync(db, index, existing, tableIsEmpty: false, ct).ConfigureAwait(false);
+        switch (decision.Decision)
         {
-            if (SameShape(sameName))
-            {
+            case ChangeDecision.Create:
+                await RunAsync(db, index, ct).ConfigureAwait(false);
                 return;
-            }
-
-            throw new SchemaMismatchException(
-                $"index {index.Name} on {index.Table} exists but is {Describe(sameName.IsUnique, sameName.Columns)}; " +
-                $"the model needs {Describe(index.IsUnique, index.Columns)}. Refusing to replace it; drop or rename it.");
+            case ChangeDecision.Satisfied or ChangeDecision.SatisfiedUnderOtherName:
+                return;
+            default:
+                throw new SchemaMismatchException(decision.Message);
         }
-
-        if (existing.Any(SameShape))
-        {
-            // The same index under another name (a DBA's, or an older build's) satisfies the model.
-            return;
-        }
-
-        if (index.IsUnique)
-        {
-            long groups = await CountDuplicateGroupsAsync(db, index, ct).ConfigureAwait(false);
-            if (groups > 0)
-            {
-                throw new SchemaMismatchException(
-                    $"cannot create unique index {index.Name} on {index.Table}({string.Join(", ", index.Columns)}): " +
-                    $"{groups} group(s) of rows share a value. Remove or fix the duplicates and start again; no rows were changed " +
-                    "(docs/integration/schema-index-repair.md).");
-            }
-        }
-
-        await RunAsync(db, index, ct).ConfigureAwait(false);
     }
-
-    private static string Describe(bool unique, IEnumerable<string> columns)
-        => $"{(unique ? "a unique" : "a non-unique")} index on ({string.Join(", ", columns)})";
-
-    /// <summary>
-    /// How many distinct values appear in more than one row of the index's columns. Rows with a
-    /// NULL in any key column are ignored: unique indexes treat NULLs as distinct on every provider.
-    /// </summary>
-    private static async Task<long> CountDuplicateGroupsAsync(DbContext db, CreateIndexOperation index, CancellationToken ct)
-    {
-        ISqlGenerationHelper sql = db.GetService<ISqlGenerationHelper>();
-        string columns = string.Join(", ", index.Columns.Select(c => sql.DelimitIdentifier(c)));
-        string notNull = string.Join(" AND ", index.Columns.Select(c => sql.DelimitIdentifier(c) + " IS NOT NULL"));
-        string table = sql.DelimitIdentifier(index.Table, index.Schema);
-        return await SchemaCatalog.ScalarAsync(
-            db,
-            $"SELECT COUNT(*) FROM (SELECT {columns} FROM {table} WHERE {notNull} GROUP BY {columns} HAVING COUNT(*) > 1) AS duplicate_groups",
-            ct).ConfigureAwait(false);
-    }
-
     private static async Task RunAsync(DbContext db, MigrationOperation operation, CancellationToken ct)
     {
         IReadOnlyList<MigrationCommand> commands = db.GetService<IMigrationsSqlGenerator>()

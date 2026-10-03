@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Schema.Upgrade;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -11,6 +12,6 @@ public sealed class CharacterDbInitializer(IServiceProvider services, ILogger<Ch
     {
         using IServiceScope scope = services.CreateScope();
         CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
-        await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema, logger, cancellationToken).ConfigureAwait(false);
+        await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema, DatabaseStartup.OptionsFrom(services), logger, cancellationToken).ConfigureAwait(false);
     }
 }

@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Realms;
 using Microsoft.EntityFrameworkCore;
@@ -16,7 +17,7 @@ public sealed class AuthDbInitializer(IServiceProvider services, ILogger<AuthDbI
         using IServiceScope scope = services.CreateScope();
         AuthDbContext db = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
 
-        await SchemaBootstrapper.EnsureAsync(db, AuthDbContext.Schema, logger, cancellationToken).ConfigureAwait(false);
+        await SchemaBootstrapper.EnsureAsync(db, AuthDbContext.Schema, DatabaseStartup.OptionsFrom(services), logger, cancellationToken).ConfigureAwait(false);
 
         // Expired bans are cleaned at startup like realmd (Main.cpp:213-215) and mangosd (World.cpp:1818-1820).
         Kernel.Accounts.IBanStore? bans = scope.ServiceProvider.GetService<Kernel.Accounts.IBanStore>();
