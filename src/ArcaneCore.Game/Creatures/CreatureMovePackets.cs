@@ -14,10 +14,12 @@ namespace ArcaneCore.Game.Creatures;
 /// offsets of the intermediate points.
 /// </para>
 /// <para>
-/// Intermediate points (WriteLinearPath): each is written as <c>middle − point</c>, where
-/// <c>middle</c> is the midpoint of the start and the destination, packed into a u32 as
-/// 11 bits x, 11 bits y, 10 bits z in quarter yards (ByteBuffer::appendPackXYZ). Re-implemented
-/// from the documented layout; no reference code is copied.
+/// Intermediate points (WriteLinearPath, vmangos Movement/spline/packet_builder.cpp:77-111,
+/// mangos-classic Movement/packet_builder.cpp:98-125): each is written as <c>destination − point</c>,
+/// packed into a u32 as 11 bits x, 11 bits y, 10 bits z in quarter yards (ByteBuffer::appendPackXYZ);
+/// an offset under 0.25 yd on every axis is nudged on z so the client never gets a zero offset.
+/// <see cref="MonsterMoveOffsetBase.Midpoint"/> keeps the former start/destination midpoint layout as a rollback switch.
+/// Re-implemented from the documented layout; no reference code is copied.
 /// </para>
 /// <para>
 /// The stop form ends after the move-type byte (MonsterMoveStop = 1) in vmangos; gtker
@@ -36,7 +38,8 @@ public static class CreatureMovePackets
 
     /// <summary>A linear path: <paramref name="points"/> holds every point after the start (destination last, at least one).</summary>
     public static byte[] BuildPath(
-        ObjectGuid guid, Vector3 start, uint splineId, SplineFacing facing, bool run, uint durationMs, IReadOnlyList<Vector3> points)
+        ObjectGuid guid, Vector3 start, uint splineId, SplineFacing facing, bool run, uint durationMs, IReadOnlyList<Vector3> points,
+        MonsterMoveOffsetBase offsetBase = MonsterMoveOffsetBase.Destination)
     {
         ArgumentNullException.ThrowIfNull(points);
         if (points.Count == 0)
@@ -87,11 +90,28 @@ public static class CreatureMovePackets
             Vector3 middle = (start + destination) / 2f;
             for (int i = 0; i < points.Count - 1; i++)
             {
-                w.WriteUInt32(PackXYZ(middle - points[i]));
+                Vector3 offset = offsetBase == MonsterMoveOffsetBase.Midpoint
+                    ? middle - points[i]
+                    : AvoidZeroOffset(destination - points[i]);
+                w.WriteUInt32(PackXYZ(offset));
             }
         }
 
         return w.ToArray();
+    }
+
+    /// <summary>
+    /// "The client freezes when it gets a zero offset": an offset under a quarter yard on every axis gets +0.51 (z below
+    /// zero) or +0.26 on z, so it never packs to nothing (vmangos Movement/spline/packet_builder.cpp:99-106).
+    /// </summary>
+    private static Vector3 AvoidZeroOffset(Vector3 offset)
+    {
+        if (MathF.Abs(offset.X) < 0.25f && MathF.Abs(offset.Y) < 0.25f && MathF.Abs(offset.Z) < 0.25f)
+        {
+            offset.Z += offset.Z < 0 ? 0.51f : 0.26f;
+        }
+
+        return offset;
     }
 
     /// <summary>The stop form: packed GUID, current position, spline id, u8 MonsterMoveStop (vmangos MoveSplineInit::Launch, args.flags.done).</summary>

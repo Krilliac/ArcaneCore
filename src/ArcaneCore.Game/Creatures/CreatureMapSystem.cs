@@ -200,7 +200,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
         uint id = ++_splineCounter;
         var start = new Vector3(creature.X, creature.Y, creature.Z);
         CreatureSpline spline = creature.StartSpline(path, run, facing, id, _clockMs);
-        byte[] packet = CreatureMovePackets.BuildPath(creature.Guid, start, id, facing, run, spline.DurationMs, spline.Points);
+        byte[] packet = CreatureMovePackets.BuildPath(creature.Guid, start, id, facing, run, spline.DurationMs, spline.Points, _options.Movement.MonsterMoveOffsetBase);
+        SyncWalkMode(creature, run);
         Map.BroadcastToObservers(creature, WorldOpcode.SmsgMonsterMove, packet);
     }
 
@@ -272,7 +273,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
             (float x, float y, float z) = spline.PositionAt(_clockMs);
             uint remaining = spline.DurationMs - spline.ElapsedMs(_clockMs);
             byte[] packet = CreatureMovePackets.BuildPath(
-                creature.Guid, new Vector3(x, y, z), spline.Id, spline.Facing, spline.Run, remaining, spline.RemainingPoints(_clockMs));
+                creature.Guid, new Vector3(x, y, z), spline.Id, spline.Facing, spline.Run, remaining, spline.RemainingPoints(_clockMs), _options.Movement.MonsterMoveOffsetBase);
             viewer.Session.Send(WorldOpcode.SmsgMonsterMove, packet);
         }
 

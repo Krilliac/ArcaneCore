@@ -58,4 +58,19 @@ public sealed class CreatureOptionsBindingTests
         Assert.Equal((250u, true, false), (options.EventAi.UpdateIntervalMs, options.EventAi.DebugOnlyEvents, options.EventAi.ReportUnsupported));
         Assert.Equal(2f, options.AggroRate);
     }
+
+    [Fact]
+    public void MovementOptions_DefaultToRetail_AndBindFromTheSection()
+    {
+        Assert.Equal(MonsterMoveOffsetBase.Destination, new CreatureOptions().Movement.MonsterMoveOffsetBase);
+
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Creatures:Movement:MonsterMoveOffsetBase"] = "Midpoint",
+        }).Build();
+        var bound = new CreatureOptions();
+        configuration.GetSection(CreatureOptions.SectionName).Bind(bound);
+
+        Assert.Equal(MonsterMoveOffsetBase.Midpoint, bound.Movement.MonsterMoveOffsetBase);
+    }
 }

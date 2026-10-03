@@ -16,7 +16,7 @@ namespace ArcaneCore.Game.Tests.CreatureAi;
 public sealed class CreatureMotionTests
 {
     [Fact]
-    public void PathPacket_PacksMiddleOffsets_AndRoundTripsEveryPointToAQuarterYard()
+    public void PathPacket_PacksDestinationOffsets_AndRoundTripsEveryPointToAQuarterYard()
     {
         var guid = ObjectGuid.WithEntry(HighGuid.Unit, WolfEntry, 7);
         var start = new Vector3(100, 200, 50);

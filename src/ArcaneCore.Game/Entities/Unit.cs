@@ -145,9 +145,10 @@ public abstract class Unit : WorldObject
 
     /// <summary>
     /// Flags that are server state, not client motion: a teleport or relocation does not clear them
-    /// (vmangos only rewrites the position of m_movementInfo on a teleport).
+    /// (vmangos only rewrites the position of m_movementInfo on a teleport). Walk mode is kept too: a creature's spline
+    /// launch decides it (MoveSplineInit.cpp:109-112) and every spline step relocates the creature.
     /// </summary>
-    private const MovementFlags ServerOwnedFlags = MovementFlags.Root | MovementFlags.WaterWalking | MovementFlags.Hover | MovementFlags.SafeFall;
+    private const MovementFlags ServerOwnedFlags = MovementFlags.Root | MovementFlags.WaterWalking | MovementFlags.Hover | MovementFlags.SafeFall | MovementFlags.WalkMode;
 
     /// <summary>Place the unit (teleport, spawn, login) with a fresh, stationary movement state.</summary>
     public void Relocate(float x, float y, float z, float orientation, uint serverTimeMs)
