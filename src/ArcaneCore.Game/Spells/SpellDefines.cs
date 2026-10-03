@@ -104,6 +104,9 @@ public enum SpellAttributesEx : uint
     UseAllMana = 0x00000002,
     IsChanneled = 0x00000004,
     IsSelfChanneled = 0x00000040,
+
+    /// <summary>vmangos SPELL_ATTR_EX_CANT_TARGET_SELF (AoE and chain selection skip the caster).</summary>
+    CantTargetSelf = 0x00080000,
 }
 
 /// <summary>Spell.dbc AttributesEx2 bits (vmangos SpellDefines.h SpellAttributesEx2).</summary>
@@ -111,7 +114,13 @@ public enum SpellAttributesEx : uint
 public enum SpellAttributesEx2 : uint
 {
     None = 0,
+
+    /// <summary>vmangos SPELL_ATTR_EX2_IGNORE_LINE_OF_SIGHT.</summary>
+    IgnoreLineOfSight = 0x00000004,
     DoNotReportSpellFailure = 0x00000080,
+
+    /// <summary>vmangos SPELL_ATTR_EX2_CANT_CRIT.</summary>
+    CantCrit = 0x20000000,
 }
 
 /// <summary>Spell.dbc InterruptFlags (vmangos SpellDefines.h SpellInterruptFlags).</summary>
@@ -141,6 +150,19 @@ public enum SpellAuraInterruptFlags : uint
     NonPeriodicDamage = 0x01000000,
 }
 
+/// <summary>
+/// Spell.dbc ChannelInterruptFlags bits that differ from the aura interrupt meaning
+/// (vmangos SpellDefines.h SpellChannelInterruptFlags: CHANNEL_FLAG_DAMAGE 0x0002,
+/// CHANNEL_FLAG_MOVEMENT 0x0008, CHANNEL_FLAG_TURNING 0x0010, CHANNEL_FLAG_DAMAGE2 0x0080,
+/// CHANNEL_FLAG_DELAY 0x4000).
+/// </summary>
+public static class SpellChannelInterruptFlags
+{
+    public const uint Damage = 0x0002;
+    public const uint Damage2 = 0x0080;
+    public const uint Delay = 0x4000;
+}
+
 /// <summary>Spell.dbc EffectImplicitTargetA/B values handled here (cmangos-classic SpellTargetDefines.h Targets).</summary>
 public enum SpellImplicitTarget : uint
 {
@@ -156,11 +178,26 @@ public enum SpellImplicitTarget : uint
     EnumUnitsEnemyAoeAtDestLoc = 16,
     LocationDatabase = 17,
     LocationCasterDest = 18,
+    EnumUnitsPartyWithinCasterRange = 20,
     UnitFriend = 21,
     LocationCasterSrc = 22,
     GameObject = 23,
+    EnumUnitsEnemyInCone24 = 24,
     Unit = 25,
+    EnumUnitsFriendAoeAtSrcLoc = 30,
+    EnumUnitsFriendAoeAtDestLoc = 31,
+    EnumUnitsPartyAoeAtSrcLoc = 33,
+    EnumUnitsPartyAoeAtDestLoc = 34,
     UnitParty = 35,
+    EnumUnitsEnemyWithinCasterRange = 36,
+    UnitFriendAndParty = 37,
+    UnitFriendChainHeal = 45,
+    LocationCasterTargetPosition = 53,
+    EnumUnitsEnemyInCone54 = 54,
+    EnumUnitsRaidWithinCasterRange = 56,
+
+    /// <summary>A single raid member (vmangos TARGET_SINGLE_FRIEND_2 / cmangos TARGET_UNIT_RAID).</summary>
+    UnitRaid = 57,
 }
 
 /// <summary>SMSG_CAST_RESULT status byte (vmangos SpellDefines.h SpellCastResultStatus).</summary>
@@ -201,4 +238,25 @@ public static class SpellConstants
 
     /// <summary>Distance a caster may drift before a movement-interruptible cast is cancelled (vmangos Spell::update: 0.5 yd... see Spell).</summary>
     public const float MovementCancelThreshold = 0.5f;
+
+    /// <summary>Jump radius between chain targets (vmangos Spell.h CHAIN_SPELL_JUMP_RADIUS = 10 yd).</summary>
+    public const float ChainJumpRadius = 10.0f;
+
+    /// <summary>
+    /// Total arc of a frontal cone target (TrinityCore SpellInfo default cone angle M_PI/2;
+    /// vmangos PUSH_IN_FRONT uses its own arcs — recorded in docs/integration/spells-persistence.md).
+    /// </summary>
+    public const float ConeArc = MathF.PI / 2.0f;
+
+    /// <summary>Eye height added to both ends of a line-of-sight query (vmangos WorldObject::IsWithinLOSInMap: + 2.0 yd).</summary>
+    public const float LineOfSightHeight = 2.0f;
+
+    /// <summary>Cast-bar pushback per hit (vmangos/cmangos-classic Spell::Delayed: 500 ms).</summary>
+    public const int PushbackMs = 500;
+
+    /// <summary>Channel pushback per hit, percent of the channel duration (vmangos Spell::DelayedChannel: 25%).</summary>
+    public const int ChannelPushbackPercent = 25;
+
+    /// <summary>Spell.dbc PreventionType SPELL_PREVENTION_TYPE_SILENCE (interruptible by SPELL_EFFECT_INTERRUPT_CAST).</summary>
+    public const uint PreventionTypeSilence = 1;
 }
