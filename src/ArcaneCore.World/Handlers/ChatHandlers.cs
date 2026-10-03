@@ -127,6 +127,24 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
                 return; // vmangos SanitizeChatMessage
             }
 
+            // The rest of SanitizeChatMessage (addon messages returned above): invisible-character
+            // runs, then the link check, which drops (or kicks for) a malformed message.
+            if (chat.Options.FakeMessagePreventing)
+            {
+                message = ChatSanitizer.StripInvisibleChars(message);
+            }
+
+            if (chat.Options.StrictLinkSeverity > 0 && !ChatSanitizer.IsValidChatMessage(message, chat.Options.StrictLinkSeverity))
+            {
+                session.Logger.LogWarning("[{Endpoint}] {Player} sent a chat message with an invalid link", session.RemoteEndpoint, player.Name);
+                if (chat.Options.StrictLinkKick)
+                {
+                    session.Kick();
+                }
+
+                return;
+            }
+
             if (TryRunCommand(session, player, message))
             {
                 return;
