@@ -29,6 +29,9 @@ public sealed class ReloadAllMembershipTests
         // all_spell calls HandleReloadSpellTemplateCommand (:971).
         ["spell_template"] = true,
 
+        // all_quest calls HandleReloadQuestTemplateCommand (:938) and reloads the quest relations (:940-942).
+        ["quest_template"] = true,
+
         // Not reached by any all_* command: the config (Chat.cpp:808 registers it on its own), item_template
         // (all_item :996-1002 only reloads page_text, item_enchantment and item_required_target) and
         // creature_template (all_npc :925-933 leaves it out).
@@ -43,7 +46,7 @@ public sealed class ReloadAllMembershipTests
     /// </summary>
     private static readonly HashSet<string> VmangosNames = new(StringComparer.Ordinal)
     {
-        "areatrigger_teleport", "config", "creature_template", "game_tele", "item_template", "spell_template",
+        "areatrigger_teleport", "config", "creature_template", "game_tele", "item_template", "quest_template", "spell_template",
     };
 
     /// <summary>Names with no vmangos counterpart (none yet; each needs a reason in docs/areas/hot-reload.md).</summary>

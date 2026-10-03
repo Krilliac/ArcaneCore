@@ -79,8 +79,8 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
         Func<long> unixNow,
         ILogger logger)
     {
-        Quests = quests;
-        Npcs = npcs;
+        _quests = quests;
+        _npcs = npcs;
         Deps = dependencies;
         Options = options;
         _sink = sink;
@@ -88,9 +88,20 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
         _logger = logger;
     }
 
-    public QuestStore Quests { get; }
+    // The stores are immutable; the live reload (.reload quest_template, npc_vendor, ...) swaps whole
+    // stores on the world thread, and the session tasks that read them see the old one or the new one.
+    private QuestStore _quests;
+    private NpcStore _npcs;
 
-    public NpcStore Npcs { get; }
+    public QuestStore Quests => Volatile.Read(ref _quests);
+
+    public NpcStore Npcs => Volatile.Read(ref _npcs);
+
+    /// <summary>Swap the quest content (live reload, world thread); returns the store it replaced.</summary>
+    public QuestStore ReplaceQuests(QuestStore quests) => Interlocked.Exchange(ref _quests, quests ?? throw new ArgumentNullException(nameof(quests)));
+
+    /// <summary>Swap the NPC service content (live reload, world thread); returns the store it replaced.</summary>
+    public NpcStore ReplaceNpcs(NpcStore npcs) => Interlocked.Exchange(ref _npcs, npcs ?? throw new ArgumentNullException(nameof(npcs)));
 
     public QuestNpcDependencies Deps { get; }
 

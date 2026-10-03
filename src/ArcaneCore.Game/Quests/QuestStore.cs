@@ -99,6 +99,12 @@ public sealed class QuestStore
 
     public int Count => _quests.Count;
 
+    /// <summary>
+    /// The templates this store was built from, by quest id. The live reload reads them to keep a
+    /// quest whose row has left the table, as vmangos does (a reload never erases a loaded template).
+    /// </summary>
+    public IEnumerable<QuestTemplate> Templates => _quests.Values.Select(q => q.Template);
+
     /// <summary>Whether any loaded quest carries a RewXP value (a vmangos-style dataset; classic-db has no such column).</summary>
     public bool HasRewXpColumn => _hasRewXp;
 
