@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Ranged;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Rules.Immunity;
 
@@ -113,7 +114,7 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
             return SpellMissInfo.Immune;
         }
 
-        switch (spell.DamageClass)
+        switch (RangedSpellFacts.HitDamageClass(spell)) // ranged (autorepeat lane): wands roll on the ranged table (SpellCaster.cpp:215-232)
         {
             case SpellDamageClass.Magic:
             {
@@ -198,7 +199,9 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
     {
         ArgumentNullException.ThrowIfNull(system);
         ArgumentNullException.ThrowIfNull(spell);
-        WeaponAttackType attack = spell.DamageClass == SpellDamageClass.Ranged ? WeaponAttackType.RangedAttack : WeaponAttackType.BaseAttack;
+        // vmangos MeleeSpellHitResult (SpellCaster.cpp:732-737): "Wands use the ranged attack type" through the Ex3 attribute too.
+        WeaponAttackType attack = spell.DamageClass == SpellDamageClass.Ranged || (spell.AttributesEx3 & RangedSpellFacts.NormalRangedAttackEx3) != 0
+            ? WeaponAttackType.RangedAttack : WeaponAttackType.BaseAttack;
         MapCombat? combat = caster.Map?.FindUpdater<MapCombat>();
         float miss;
         float dodge = 0;
@@ -284,7 +287,7 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
         }
         else
         {
-            switch (spell.DamageClass)
+            switch (RangedSpellFacts.HitDamageClass(spell)) // ranged (autorepeat lane): "wand shoot forced to use ranged crit" (Unit.cpp:5231-5239)
             {
                 case SpellDamageClass.Magic:
                     chance = spell.School == SpellSchool.Normal
@@ -305,7 +308,7 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
                         return 100f;
                     }
 
-                    chance = UnitCritChance(system, caster, target, spell.DamageClass == SpellDamageClass.Ranged ? WeaponAttackType.RangedAttack : WeaponAttackType.BaseAttack)
+                    chance = UnitCritChance(system, caster, target, RangedSpellFacts.HitDamageClass(spell) == SpellDamageClass.Ranged ? WeaponAttackType.RangedAttack : WeaponAttackType.BaseAttack)
                         + system.GetTotalAuraModifier(caster, AuraType.ModSpellCritChanceSchool, a => ((uint)a.MiscValue & schoolMask) != 0);                    break;
                 default:
                     return 0f;

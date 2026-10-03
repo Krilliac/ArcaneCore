@@ -258,7 +258,25 @@ public sealed partial class SpellSystem
             return;
         }
 
-        DealDirectDamage(context.Caster, context.Target, context.Spell, (uint)total, allowCrit: true);
+        DealDirectDamage(context.Caster, context.Target, WithWandSchool(context.Spell, context.Caster, attack), (uint)total, allowCrit: true);
+    }
+
+    /// <summary>
+    /// A ranged attack of a priest, mage or warlock deals the school of the wielded ranged weapon's first damage entry (a fire wand
+    /// burns, an arcane wand is arcane): vmangos Spell::Spell "wand case" (Spell.cpp:68-71) overrides the spell's school mask with
+    /// <c>GetWeaponDamageSchool(RANGED_ATTACK)</c> for those classes. Done here for the damage only (absorb, resist and the damage log);
+    /// the hit roll keeps the spell's own school.
+    /// </summary>
+    private static SpellInfo WithWandSchool(SpellInfo spell, Unit caster, WeaponAttackType attack)
+    {
+        if (attack != WeaponAttackType.RangedAttack || caster is not Player player || !RangedSpellFacts.IsWandUser(player.Class)
+            || PlayerAmmo.RangedWeapon(player, nonBroken: true) is not { } weapon || weapon.Template.Damages.Count == 0)
+        {
+            return spell;
+        }
+
+        var school = (SpellSchool)weapon.Template.Damages[0].School;
+        return school == spell.School ? spell : spell with { School = school };
     }
 
     /// <summary>
