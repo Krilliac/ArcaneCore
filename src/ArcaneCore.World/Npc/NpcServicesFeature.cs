@@ -23,7 +23,7 @@ namespace ArcaneCore.World.Npc;
 /// creature metadata come from the "NpcServices" section (<see cref="NpcServiceOptions"/>).
 /// Collaborators another feature already supplies are kept (<see cref="Extend"/> only fills gaps).
 /// </summary>
-public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcServicesFeature> logger) : IWorldFeature
+public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcServicesFeature> logger) : IWorldFeature, IDisposable
 {
     private readonly HashSet<Map> _maps = [];
     private readonly object _loadLock = new();
@@ -42,6 +42,7 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
         _world = world;
         EnsureLoaded();
         world.MapCreated += OnMapCreated;
+        world.MapUnloading += OnMapUnloading;
         foreach (Map map in world.Maps)
         {
             OnMapCreated(map);
@@ -49,6 +50,19 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
 
         world.PlayerLoggedIn += OnPlayerLoggedIn;
         world.PlayerLoggingOut += OnPlayerLoggingOut;
+    }
+
+    public void Dispose()
+    {
+        if (_world is { } world)
+        {
+            world.MapCreated -= OnMapCreated;
+            world.MapUnloading -= OnMapUnloading;
+            world.PlayerLoggedIn -= OnPlayerLoggedIn;
+            world.PlayerLoggingOut -= OnPlayerLoggingOut;
+        }
+
+        _maps.Clear();
     }
 
     /// <summary>
@@ -121,6 +135,8 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
     }
 
     private void OnPlayerLoggedIn(Player player) => _items?.SessionStarted(player);
+
+    private void OnMapUnloading(Map map) => _maps.Remove(map);
 
     private void OnPlayerLoggingOut(Player player)
     {

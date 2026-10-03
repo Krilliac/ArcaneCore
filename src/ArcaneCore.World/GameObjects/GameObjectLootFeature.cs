@@ -34,18 +34,15 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
 {
     public const string SectionName = "Loot";
 
-    private readonly Dictionary<uint, GameObjectMapSystem> _systems = [];
-    private readonly HashSet<Map> _maps = [];
+    private readonly Dictionary<Map, GameObjectMapSystem> _systems = new(ReferenceEqualityComparer.Instance);
     private GameObjectContent _content = GameObjectContent.Empty;
+    private LootContent _lootContent = LootContent.Empty;
     private WorldRuntime? _world;
 
     /// <summary>The loaded game object content (immutable; safe to read from any thread).</summary>
     public GameObjectContent Content => Volatile.Read(ref _content);
 
     public LootOptions Options { get; } = new();
-
-    /// <summary>The world's loot service (world thread), created on attach.</summary>
-    public LootService Loot { get; private set; } = new(LootContent.Empty);
 
     /// <summary>Quest checks used by loot and game objects (adapts the quest feature).</summary>
     public ILootQuestJournal Quests { get; private set; } = NullQuestJournal.Instance;
@@ -73,13 +70,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
 
         Volatile.Write(ref _content, content);
         Quests = new QuestJournalAdapter(services, world);
-        Loot = new LootService(loot, Options, new Random(), logger)
-        {
-            Items = new DeferredItemTemplates(services),
-            Quests = Quests,
-            Groups = new SocialGroups(services),
-            CreatureOptions = services.GetService<CreatureWorldFeature>()?.Options ?? new CreatureOptions(),
-        };
+        _lootContent = loot;
 
         logger.LogInformation(
             "Loaded {Templates} game object templates, {Spawns} spawns, {Locks} locks, {LootRows} loot rows, {CreatureLoot} creature loot entries",
@@ -92,7 +83,8 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
     {
         WorldRuntime world = _world!;
         world.MapCreated += OnMapCreated;
-        world.PlayerLoggingOut += player => Loot.OnPlayerLeft(player);
+        world.MapUnloading += OnMapUnloading;
+        world.PlayerLoggingOut += OnPlayerLoggingOut;
         foreach (Map map in world.Maps.ToArray())
         {
             OnMapCreated(map);
@@ -106,17 +98,37 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
 
     private void OnMapCreated(Map map)
     {
-        if (!_maps.Add(map))
+        if (_systems.ContainsKey(map))
         {
             return;
         }
 
-        map.Combat.UnitKilled += OnUnitKilled;
-        if (!_systems.ContainsKey(map.MapId))
+        var loot = new LootService(_lootContent, Options, new Random(), logger)
         {
-            var system = new GameObjectMapSystem(map, Content, Loot, Quests, logger);
-            map.AddUpdater(system);
-            _systems[map.MapId] = system;
+            Items = new DeferredItemTemplates(services),
+            Quests = Quests,
+            Groups = new SocialGroups(services),
+            CreatureOptions = services.GetService<CreatureWorldFeature>()?.Options ?? new CreatureOptions(),
+        };
+        var system = new GameObjectMapSystem(map, Content, loot, Quests, logger);
+        map.AddUpdater(system);
+        _systems.Add(map, system);
+        map.Combat.UnitKilled += OnUnitKilled;
+    }
+
+    private void OnMapUnloading(Map map)
+    {
+        if (_systems.Remove(map))
+        {
+            map.Combat.UnitKilled -= OnUnitKilled;
+        }
+    }
+
+    private void OnPlayerLoggingOut(Player player)
+    {
+        if (player.Map is { } map)
+        {
+            FindSystem(map)?.Loot?.OnPlayerLeft(player);
         }
     }
 
@@ -124,7 +136,10 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
     {
         try
         {
-            Loot.OnCreatureKilled(killer, victim);
+            if (victim.Map is { } map)
+            {
+                FindSystem(map)?.Loot?.OnCreatureKilled(killer, victim);
+            }
         }
         catch (Exception ex)
         {
@@ -132,15 +147,31 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         }
     }
 
-    /// <summary>The game object system of a map, if it has one (world thread).</summary>
-    public GameObjectMapSystem? FindSystem(uint mapId) => _systems.GetValueOrDefault(mapId);
+    /// <summary>The game object system of this exact map instance (world thread).</summary>
+    public GameObjectMapSystem? FindSystem(Map map) => _systems.GetValueOrDefault(map);
+
+    /// <summary>The game object system of the shared copy, if it exists (world thread).</summary>
+    public GameObjectMapSystem? FindSystem(uint mapId)
+        => _world?.FindMap(mapId) is { } map ? FindSystem(map) : null;
+
+    /// <summary>Attach an independent loot service and object system to a current exact map.</summary>
+    public GameObjectMapSystem GetOrCreateSystem(Map map)
+    {
+        WorldRuntime world = _world ?? throw new InvalidOperationException("the game object feature is not attached");
+        if (map.IsUnloaded || !ReferenceEquals(world.FindMap(map.MapId, map.InstanceId), map))
+        {
+            throw new InvalidOperationException("cannot attach game objects to an obsolete map");
+        }
+
+        OnMapCreated(map);
+        return _systems[map];
+    }
 
     /// <summary>The game object system of a map, attaching one if needed (world thread).</summary>
     public GameObjectMapSystem GetOrCreateSystem(uint mapId)
     {
         WorldRuntime world = _world ?? throw new InvalidOperationException("the game object feature is not attached");
-        OnMapCreated(world.GetMap(mapId));
-        return _systems[mapId];
+        return GetOrCreateSystem(world.GetMap(mapId));
     }
 
     /// <summary>Item templates from the items feature, read at use time (it loads them lazily at first login).</summary>

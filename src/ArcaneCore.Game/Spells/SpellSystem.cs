@@ -366,7 +366,6 @@ public sealed partial class SpellSystem
             }
 
             ApplyEffects(cast, target, entry.EffectMask, entry.Multipliers);
-            SpellHit?.Invoke(caster, target, spell);
         }
 
         if (cast.State != SpellCastState.Casting)

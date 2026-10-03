@@ -23,6 +23,7 @@ public sealed partial class MapCombat : IMapUpdater
 {
     private readonly Map _map;
     private readonly WorldRuntime _world;
+    private readonly Action<Player> _onPlayerLoggingOut;
     private readonly HashSet<Unit> _units = [];
     private readonly List<Corpse> _corpses = [];
     private readonly Dictionary<Corpse, MapGrid> _corpseGrids = [];
@@ -45,13 +46,26 @@ public sealed partial class MapCombat : IMapUpdater
                 RemoveCorpse(corpse);
             }
         };
-        world.PlayerLoggingOut += player =>
+        _onPlayerLoggingOut = OnPlayerLoggingOut;
+        world.PlayerLoggingOut += _onPlayerLoggingOut;
+        world.MapUnloading += OnMapUnloading;
+    }
+
+    private void OnPlayerLoggingOut(Player player)
+    {
+        if (ReferenceEquals(player.Map, _map) || ReferenceEquals(player.Combat.Corpse?.Map, _map))
         {
-            if (ReferenceEquals(player.Map, _map) || ReferenceEquals(player.Combat.Corpse?.Map, _map))
-            {
-                OnPlayerLeaving(player);
-            }
-        };
+            OnPlayerLeaving(player);
+        }
+    }
+
+    private void OnMapUnloading(Map map)
+    {
+        if (ReferenceEquals(map, _map))
+        {
+            _world.PlayerLoggingOut -= _onPlayerLoggingOut;
+            _world.MapUnloading -= OnMapUnloading;
+        }
     }
 
     /// <summary>The seams into other areas; defaults to the world's registered hooks (<see cref="CombatHooks.Register"/>).</summary>

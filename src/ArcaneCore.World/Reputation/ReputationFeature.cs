@@ -57,6 +57,7 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
         _writes!.Start();
         _world = world;
         world.MapCreated += OnMapCreated;
+        world.MapUnloading += OnMapUnloading;
         foreach (Map map in world.Maps)
         {
             OnMapCreated(map);
@@ -119,6 +120,7 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
         if (_world is { } world)
         {
             world.MapCreated -= OnMapCreated;
+            world.MapUnloading -= OnMapUnloading;
             world.PlayerLoggingOut -= OnPlayerLoggingOut;
         }
 
@@ -140,6 +142,14 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
     }
 
     private void OnPlayerLoggingOut(Player player) => Service.Untrack(player);
+
+    private void OnMapUnloading(Map map)
+    {
+        if (_combat.Remove(map.Combat))
+        {
+            map.Combat.UnitKilled -= OnUnitKilled;
+        }
+    }
 
     /// <summary>Player::RewardReputation(Unit*, 1.0) for a direct, live, same-map player kill.</summary>
     private void OnUnitKilled(Unit? killer, Unit victim)

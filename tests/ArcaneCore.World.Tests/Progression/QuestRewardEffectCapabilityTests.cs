@@ -21,9 +21,9 @@ public sealed class QuestRewardEffectCapabilityTests
     [Fact]
     public void CapabilityUsesTheActiveHandlerRegistryRatherThanAFixedEffectList()
     {
-        SpellSystem system = System(Spell(1, SpellEffectName.EnvironmentalDamage));
+        SpellSystem system = System(Spell(1, SpellEffectName.PowerDrain));
         Assert.False(Effects(system).CanCastRewardSpell(1));
-        system.RegisterEffect(SpellEffectName.EnvironmentalDamage, static _ => { });
+        system.RegisterEffect(SpellEffectName.PowerDrain, static _ => { });
         Assert.True(Effects(system).CanCastRewardSpell(1));
         Assert.False(Effects(system).CanCastRewardSpell(999));
     }
@@ -63,18 +63,25 @@ public sealed class QuestRewardEffectCapabilityTests
         Assert.False(Effects(system).CanCastRewardSpell(8));
     }
 
-    [Fact]
-    public void AuraRequiresItsActiveHandlerAndBoundedLifetime()
+    [Theory]
+    [InlineData(SpellEffectName.ApplyAura)]
+    [InlineData(SpellEffectName.ApplyAreaAuraParty)]
+    public void AuraRequiresItsActiveHandlerAndBoundedLifetime(SpellEffectName effect)
     {
-        SpellInfo finite = Spell(1, SpellEffectName.ApplyAura, aura: AuraType.ModStat) with
+        // A synthetic aura type stays absent as the merged daemon gains built-in handlers.
+        AuraType aura = (AuraType)255;
+        SpellInfo finite = Spell(1, effect, aura: aura) with
         {
             Duration = new SpellDuration(5_000, 0, 5_000),
         };
-        SpellSystem system = System(finite, finite with { Id = 2, Duration = new SpellDuration(-1, 0, -1) });
+        SpellSystem system = System(finite,
+            finite with { Id = 2, Duration = new SpellDuration(-1, 0, -1) },
+            finite with { Id = 3, Attributes = SpellAttributes.Passive });
         Assert.False(Effects(system).CanCastRewardSpell(1));
-        system.RegisterAura(AuraType.ModStat, new AuraHandler(null, null));
+        system.RegisterAura(aura, new AuraHandler(null, null));
         Assert.True(Effects(system).CanCastRewardSpell(1));
         Assert.False(Effects(system).CanCastRewardSpell(2));
+        Assert.False(Effects(system).CanCastRewardSpell(3));
     }
 
     [Fact]

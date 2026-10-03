@@ -2,6 +2,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Loot;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
@@ -29,6 +30,9 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
 
     private static GameObjectLootFeature? Feature(WorldSession session) => session.Services.GetService<GameObjectLootFeature>();
 
+    private static LootService? LootOf(WorldSession session, Player player)
+        => player.Map is { } map ? Feature(session)?.FindSystem(map)?.Loot : null;
+
     /// <summary>CMSG_GAMEOBJECT_QUERY: u32 entry, u64 guid. Answered on the session task (content is immutable).</summary>
     private static Task HandleQueryAsync(WorldSession session, byte[] payload)
     {
@@ -49,7 +53,7 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_GAMEOBJ_USE: u64 guid.</summary>
     private static void Use(WorldSession session, Player player, byte[] payload)
     {
-        if (payload.Length < 8 || Feature(session)?.FindSystem(player.MapId) is not { } system)
+        if (payload.Length < 8 || player.Map is not { } map || Feature(session)?.FindSystem(map) is not { } system)
         {
             return;
         }
@@ -61,46 +65,46 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_LOOT: u64 corpse guid.</summary>
     private static void Loot(WorldSession session, Player player, byte[] payload)
     {
-        if (payload.Length < 8 || Feature(session) is not { } feature)
+        if (payload.Length < 8 || LootOf(session, player) is not { } loot)
         {
             return;
         }
 
         var reader = new PacketReader(payload);
-        feature.Loot.Open(player, new ObjectGuid(reader.ReadUInt64()));
+        loot.Open(player, new ObjectGuid(reader.ReadUInt64()));
     }
 
     /// <summary>CMSG_AUTOSTORE_LOOT_ITEM: u8 loot slot.</summary>
     private static void AutostoreLootItem(WorldSession session, Player player, byte[] payload)
     {
-        if (payload.Length < 1 || Feature(session) is not { } feature)
+        if (payload.Length < 1 || LootOf(session, player) is not { } loot)
         {
             return;
         }
 
-        feature.Loot.TakeItem(player, payload[0]);
+        loot.TakeItem(player, payload[0]);
     }
 
     /// <summary>CMSG_LOOT_MONEY: empty.</summary>
     private static void LootMoney(WorldSession session, Player player, byte[] payload)
-        => Feature(session)?.Loot.TakeMoney(player);
+        => LootOf(session, player)?.TakeMoney(player);
 
     /// <summary>CMSG_LOOT_RELEASE: u64 guid.</summary>
     private static void LootRelease(WorldSession session, Player player, byte[] payload)
     {
-        if (payload.Length < 8 || Feature(session) is not { } feature)
+        if (payload.Length < 8 || LootOf(session, player) is not { } loot)
         {
             return;
         }
 
         var reader = new PacketReader(payload);
-        feature.Loot.Release(player, new ObjectGuid(reader.ReadUInt64()));
+        loot.Release(player, new ObjectGuid(reader.ReadUInt64()));
     }
 
     /// <summary>CMSG_OPEN_ITEM: u8 bag, u8 slot.</summary>
     private static void OpenItem(WorldSession session, Player player, byte[] payload)
     {
-        if (payload.Length < 2 || Feature(session) is not { } feature)
+        if (payload.Length < 2 || LootOf(session, player) is not { } loot)
         {
             return;
         }
@@ -111,6 +115,6 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        feature.Loot.OpenItem(player, item);
+        loot.OpenItem(player, item);
     }
 }

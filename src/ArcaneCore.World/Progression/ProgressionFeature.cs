@@ -51,6 +51,7 @@ public sealed class ProgressionFeature : IWorldFeature, ICharacterHooks, IDispos
         _groups = RewardGroups.Resolver(_services);
         Progression.LevelChanged += OnLevelChanged;
         world.MapCreated += OnMapCreated;
+        world.MapUnloading += OnMapUnloading;
         foreach (Map map in world.Maps)
         {
             OnMapCreated(map);
@@ -79,6 +80,7 @@ public sealed class ProgressionFeature : IWorldFeature, ICharacterHooks, IDispos
         if (_world is { } world)
         {
             world.MapCreated -= OnMapCreated;
+            world.MapUnloading -= OnMapUnloading;
         }
 
         if (_progression.IsValueCreated)
@@ -102,6 +104,14 @@ public sealed class ProgressionFeature : IWorldFeature, ICharacterHooks, IDispos
         if (_combat.Add(map.Combat))
         {
             map.Combat.UnitKilled += OnUnitKilled;
+        }
+    }
+
+    private void OnMapUnloading(Map map)
+    {
+        if (_combat.Remove(map.Combat))
+        {
+            map.Combat.UnitKilled -= OnUnitKilled;
         }
     }
 

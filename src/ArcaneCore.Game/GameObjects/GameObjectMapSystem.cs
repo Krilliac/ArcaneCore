@@ -349,7 +349,9 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
 
     private GameObjectUseResult OpenChest(Player player, GameObject go)
     {
-        if (Loot is null)
+        // Ordinary instance unload can preserve its bind while recreating the whole map.
+        // Until consumed chest state follows that logical save, opening would reroll awards.
+        if (Map.InstanceId != 0 || Loot is null)
         {
             return GameObjectUseResult.Unsupported;
         }

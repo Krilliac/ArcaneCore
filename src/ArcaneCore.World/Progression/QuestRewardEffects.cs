@@ -51,7 +51,7 @@ public sealed class QuestRewardEffects(SpellSystem spells, Func<IEnumerable<IQue
                     return false;
                 }
 
-                if (effect.Effect == SpellEffectName.ApplyAura
+                if (effect.Effect is (SpellEffectName.ApplyAura or SpellEffectName.ApplyAreaAuraParty)
                     && (!spells.HasAuraHandler(effect.AuraType) || spell.IsPassive || spell.GetDuration() <= 0))
                 {
                     return false;
