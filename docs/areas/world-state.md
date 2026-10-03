@@ -208,6 +208,24 @@ are the classic-db `mangos_string` rows.
 Reference disagreement resolved toward the primary: vmangos sends the exploration packet for every
 discovered area with an entry (mangos-classic only when the area level is above 0).
 
+### World-state contents (`world-states-runtime`)
+
+SMSG_INIT_WORLD_STATES now carries real pairs. `WorldStateRegistry` (`WorldStateHooks.WorldStates`) builds
+the list for a zone entry: the operator's default pairs first, then each `IWorldStateProvider` in `Order`
+(vmangos adds `def_world_states` before the zone script, battleground and war-effort states,
+`Player.cpp:8156-8213`). A provider is asked on login and on every real zone change with the zone being
+entered, never on an area change; battlegrounds, outdoor PvP, war-effort and invasion lanes register one
+instead of editing this lane. Wire form: `u32 map, u32 zone, u16 count, (u32 state, i32 value)[]`
+(`Server/Packets/Misc.cpp:1043-1060`, wow_messages `smsg_init_world_states.wowm` 1.12);
+`WorldStatePackets.BuildUpdate` builds SMSG_UPDATE_WORLD_STATE (`u32 state, u32 value`, `Misc.cpp:1007-1024`).
+`LoginPackets.BuildInitWorldStates(map, zone)` keeps its signature and sends an empty list.
+
+Defaults: vmangos hard-codes 108 sniffed pairs (`Player.cpp:8041-8213`, "TODO: Determine what these
+values mean"). That table is GPL data and is not copied here; `World:WorldStates:DefaultsPath` points at an
+operator-supplied JSON file `[[state, value], ...]` (parsed strictly: numbers only, u32 state, i32 value, no
+duplicates; a missing or malformed file stops startup). Without a file the list is provider-only, like
+mangos-classic. Documented limit, not a stub.
+
 ## Deviations from retail (all documented, none silent)
 
 - `ClientZoneTrust=Auto` is a development-world allowance, not retail. Retail is `Never`.

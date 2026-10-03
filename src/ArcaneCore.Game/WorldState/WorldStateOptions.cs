@@ -83,3 +83,16 @@ public sealed class ExplorationOptions
     /// </summary>
     public bool CorrectExploreCheat { get; set; }
 }
+
+/// <summary>World-state options (configuration section <c>World:WorldStates</c>).</summary>
+public sealed class WorldStatesOptions
+{
+    public const string SectionName = "World:WorldStates";
+
+    /// <summary>
+    /// A JSON file holding the default world states sent with every zone entry, as <c>[[state, value], ...]</c>
+    /// (vmangos hard-codes 108 sniffed pairs, Player.cpp:8041-8213; that table is GPL data and is not
+    /// shipped here). Empty (default) = no default pairs, like mangos-classic.
+    /// </summary>
+    public string DefaultsPath { get; set; } = "";
+}

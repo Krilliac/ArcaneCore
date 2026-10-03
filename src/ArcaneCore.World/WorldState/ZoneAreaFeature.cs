@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.WorldState;
+using ArcaneCore.Game.WorldState.States;
 using ArcaneCore.Game.WorldState.Zones;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -41,6 +42,13 @@ public sealed class ZoneAreaFeature(IServiceProvider services) : IWorldFeature, 
             _ = TimeZoneInfo.FindSystemTimeZoneById(hooks.TimeSettings.TimeZoneId);
         }
 
+        configuration?.GetSection(WorldStatesOptions.SectionName).Bind(hooks.WorldStateSettings);
+        if (hooks.WorldStateSettings.DefaultsPath.Length > 0)
+        {
+            // Fail closed at startup: a missing or malformed defaults file stops the daemon.
+            hooks.WorldStates.Defaults = WorldStateDefaults.Load(hooks.WorldStateSettings.DefaultsPath);
+        }
+
         hooks.AddLocationListener(this);
         foreach (IPlayerLocationListener listener in services.GetServices<IWorldFeature>().OfType<IPlayerLocationListener>())
         {
@@ -49,7 +57,11 @@ public sealed class ZoneAreaFeature(IServiceProvider services) : IWorldFeature, 
     }
 
     public void OnZoneChanged(Player player, uint oldZone, uint newZone, uint newArea, AreaTemplate? zoneEntry)
-        => player.Session.Send(WorldOpcode.SmsgInitWorldStates, LoginPackets.BuildInitWorldStates(player.MapId, newZone));
+    {
+        // vmangos SendInitWorldStates(newZone): the operator's defaults, then the registered providers.
+        List<WorldStatePair> states = WorldStateHooks.For(_world ?? throw new InvalidOperationException("the zone feature is not attached")).WorldStates.Build(player, newZone);
+        player.Session.Send(WorldOpcode.SmsgInitWorldStates, WorldStatePackets.BuildInit(player.MapId, newZone, states));
+    }
 
     /// <summary>
     /// vmangos <c>SendInitialPacketsAfterAddToMap</c>: derive the zone now and run the zone update

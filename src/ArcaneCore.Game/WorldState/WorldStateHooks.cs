@@ -34,6 +34,11 @@ public sealed class WorldStateHooks
 
     public WeatherOptions WeatherSettings { get; } = new();
 
+    public WorldStatesOptions WorldStateSettings { get; } = new();
+
+    /// <summary>The default pairs and providers of SMSG_INIT_WORLD_STATES.</summary>
+    public States.WorldStateRegistry WorldStates { get; } = new();
+
     /// <summary>Where explored-zones changes go for persistence (null: not persisted).</summary>
     public Exploration.IExploredZonesSink? ExploredZonesSink { get; set; }
 

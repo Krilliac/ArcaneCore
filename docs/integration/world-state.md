@@ -41,3 +41,9 @@ one extra `SMSG_WEATHER` after `SMSG_INIT_WORLD_STATES`; that is retail behaviou
 ## exploration-persistence slice
 
 `tests/ArcaneCore.Data.Tests/IntegratedSchemaTests.cs`: one more tuple appended to the expected module list (through the constant). No other shared file. The characters module list is also checked by the existing character-deletion guard (`ICharacterDataCleanup`).
+
+## world-states-runtime slice
+
+| File | Change | Why |
+|---|---|---|
+| `src/ArcaneCore.World/Packets/LoginPackets.cs` | `BuildInitWorldStates(map, zone)` delegates to `WorldStatePackets.BuildInit` (same bytes). | One builder for the list. |
