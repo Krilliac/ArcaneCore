@@ -1,15 +1,17 @@
 using System.Globalization;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 
 namespace ArcaneCore.World.Reload;
 
 /// <summary>
-/// The world options one configuration view carries: the runtime tuning (<see cref="WorldRuntimeOptions"/>,
-/// shared by reference with every reader) and, when known, the listener options (<see cref="WorldOptions"/>).
+/// The option objects one configuration view carries: the runtime tuning (<see cref="WorldRuntimeOptions"/>,
+/// shared by reference with every reader) and, when known, the listener options (<see cref="WorldOptions"/>)
+/// and the social rules (<see cref="SocialOptions"/>). A side that is not known reads as null.
 /// </summary>
-public readonly record struct WorldConfigView(WorldRuntimeOptions Runtime, WorldOptions? Listener);
+public readonly record struct WorldConfigView(WorldRuntimeOptions Runtime, WorldOptions? Listener, SocialOptions? Social = null);
 
 /// <summary>
 /// One option under the <c>World</c> section and what <c>.reload config</c> does with it. A live
@@ -23,7 +25,7 @@ public sealed class WorldConfigKey
     internal WorldConfigKey(
         string path,
         Func<WorldConfigView, object?> read,
-        Action<WorldRuntimeOptions, object?>? apply,
+        Action<WorldConfigView, object?>? apply,
         Func<object?, string?>? check)
     {
         Path = path;
@@ -40,7 +42,7 @@ public sealed class WorldConfigKey
 
     internal Func<WorldConfigView, object?> Read { get; }
 
-    internal Action<WorldRuntimeOptions, object?>? Apply { get; }
+    internal Action<WorldConfigView, object?>? Apply { get; }
 
     internal Func<object?, string?>? Check { get; }
 
@@ -49,8 +51,8 @@ public sealed class WorldConfigKey
 }
 
 /// <summary>
-/// Every option of <see cref="WorldRuntimeOptions"/>, <see cref="Game.Maps.Grid.MapOptions"/> and
-/// <see cref="WorldOptions"/>, classified live or restart-only. A test fails when a new option is
+/// Every option of <see cref="WorldRuntimeOptions"/>, <see cref="Game.Maps.Grid.MapOptions"/>,
+/// <see cref="WorldOptions"/> and <see cref="SocialOptions"/>, classified live or restart-only. A test fails when a new option is
 /// added without being classified here, so no option is silently left out of the reload.
 /// </summary>
 public static class WorldConfigKeys
@@ -89,6 +91,13 @@ public static class WorldConfigKeys
         Live("Maps:GridUnload", o => o.Maps.GridUnload, (o, v) => o.Maps.GridUnload = v),
         Live("Maps:GridCleanUpDelayMs", o => o.Maps.GridCleanUpDelayMs, (o, v) => o.Maps.GridCleanUpDelayMs = v, NonNegative),
         Live("Maps:GridActivationDistance", o => o.Maps.GridActivationDistance, (o, v) => o.Maps.GridActivationDistance = v, NonNegative),
+
+        // The cross-faction rules, read from the shared SocialOptions at each use. Keys map to vmangos
+        // AllowTwoSide.Interaction.Group / .Guild / .Channel (World.cpp:610-613) and AllowTwoSide.AddFriend (:618).
+        LiveSocial("AllowTwoSideAddFriend", o => o.AllowTwoSideAddFriend, (o, v) => o.AllowTwoSideAddFriend = v),
+        LiveSocial("AllowTwoSideGroup", o => o.AllowTwoSideGroup, (o, v) => o.AllowTwoSideGroup = v),
+        LiveSocial("AllowTwoSideGuild", o => o.AllowTwoSideGuild, (o, v) => o.AllowTwoSideGuild = v),
+        LiveSocial("AllowTwoSideChannel", o => o.AllowTwoSideChannel, (o, v) => o.AllowTwoSideChannel = v),
     ];
 
     private static string? NonNegative<T>(T value) where T : struct, IComparable<T>
@@ -101,8 +110,15 @@ public static class WorldConfigKeys
         => new(
             $"{Root}:{path}",
             v => get(v.Runtime),
-            (o, v) => set(o, (T)v!),
+            (view, v) => set(view.Runtime, (T)v!),
             check is null ? null : v => check((T)v!));
+
+    private static WorldConfigKey LiveSocial(string path, Func<SocialOptions, bool> get, Action<SocialOptions, bool> set)
+        => new(
+            $"{SocialOptions.SectionName}:{path}",
+            v => v.Social is { } social ? get(social) : null,
+            (view, v) => set(view.Social!, (bool)v!),
+            null);
 
     private static WorldConfigKey Fixed(string path, Func<WorldConfigView, object?> read)
         => new($"{Root}:{path}", read, null, null);

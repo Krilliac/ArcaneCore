@@ -1,13 +1,17 @@
 using System.Reflection;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Grid;
+using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Reload;
+using ArcaneCore.World.Characters;
 using ArcaneCore.World.Reload;
+using ArcaneCore.World.Social;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -45,12 +49,17 @@ public sealed class ConfigReloadTests : IDisposable
         return path;
     }
 
-    private ReloadCoordinator Reloader(IConfiguration configuration, WorldOptions? live = null)
+    private ReloadCoordinator Reloader(IConfiguration configuration, WorldOptions? live = null, SocialFeature? social = null)
     {
         IServiceCollection services = new ServiceCollection().AddSingleton(configuration);
         if (live is not null)
         {
             services.AddSingleton(Options.Create(live));
+        }
+
+        if (social is not null)
+        {
+            services.AddSingleton(social);
         }
 
         var coordinator = new ReloadCoordinator(NullLogger.Instance);
@@ -187,6 +196,30 @@ public sealed class ConfigReloadTests : IDisposable
     }
 
     [Fact]
+    public async Task TheSocialRules_AreLive_AndMapToTheVmangosAllowTwoSideKeys()
+    {
+        // World:Social:* <-> vmangos AllowTwoSide.* (World.cpp:610-613, 618): Group = Interaction.Group,
+        // Guild = Interaction.Guild, Channel = Interaction.Channel, AddFriend = AddFriend.
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Social": { "AllowTwoSideGroup": true, "AllowTwoSideChannel": true } } }""");
+        var social = new SocialFeature(new CharacterDirectory(), new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(), NullLoggerFactory.Instance);
+        ReloadCoordinator coordinator = Reloader(FromFile(path), social: social);
+
+        ReloadResult result = await coordinator.ReloadAsync("config");
+
+        Assert.Equal(ReloadStatus.Applied, result.Status);
+        Assert.True(social.Options.AllowTwoSideGroup);
+        Assert.True(social.Options.AllowTwoSideChannel);
+        Assert.False(social.Options.AllowTwoSideGuild);
+        Assert.False(social.Options.AllowTwoSideAddFriend);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
+        await coordinator.ReloadAsync("config");
+
+        Assert.False(social.Options.AllowTwoSideGroup);
+        Assert.False(social.Options.AllowTwoSideChannel);
+    }
+
+    [Fact]
     public async Task AKeyRemovedFromTheFile_ReturnsToItsDefault()
     {
         string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
@@ -252,6 +285,11 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(WorldOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"World:{property.Name}");
+        }
+
+        foreach (PropertyInfo property in typeof(SocialOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{SocialOptions.SectionName}:{property.Name}");
         }
 
         var classified = new SortedSet<string>(WorldConfigKeys.All.Select(k => k.Path), StringComparer.Ordinal);

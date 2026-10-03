@@ -1,6 +1,8 @@
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Reload;
+using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.World.Social;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -45,12 +47,14 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
 
         var runtime = new WorldRuntimeOptions();
         var listener = new WorldOptions();
+        var social = new SocialOptions();
         IConfigurationRoot snapshot = fresh.Build();
         try
         {
             IConfigurationSection section = snapshot.GetSection(WorldOptions.SectionName);
             section.Bind(runtime);
             section.Bind(listener);
+            snapshot.GetSection(SocialOptions.SectionName).Bind(social);
         }
         finally
         {
@@ -58,10 +62,11 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
         }
 
         WorldOptions? liveListener = services.GetService<IOptions<WorldOptions>>()?.Value;
-        return Task.FromResult<ContentCandidate>(new ConfigCandidate(new WorldConfigView(runtime, listener), liveListener));
+        SocialOptions? liveSocial = services.GetService<SocialFeature>()?.Options;
+        return Task.FromResult<ContentCandidate>(new ConfigCandidate(new WorldConfigView(runtime, listener, social), liveListener, liveSocial));
     }
 
-    private sealed class ConfigCandidate(WorldConfigView candidate, WorldOptions? liveListener) : ContentCandidate
+    private sealed class ConfigCandidate(WorldConfigView candidate, WorldOptions? liveListener, SocialOptions? liveSocial) : ContentCandidate
     {
         private string _summary = "configuration";
 
@@ -83,25 +88,26 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
 
         public override void Commit(WorldRuntime world, ReloadTransaction transaction)
         {
-            var live = new WorldConfigView(world.Options, liveListener);
+            var live = new WorldConfigView(world.Options, liveListener, liveSocial);
             int changed = 0;
             foreach (WorldConfigKey key in WorldConfigKeys.All)
             {
                 object? current = key.Read(live);
                 object? wanted = key.Read(candidate);
-                if (Equals(current, wanted))
+                if (current is null || Equals(current, wanted))
                 {
+                    // A null current value means the live side is unknown (no listener or social options
+                    // registered): there is nothing to compare or to apply to.
                     continue;
                 }
 
                 if (key.Apply is { } apply)
                 {
-                    transaction.Step(key.Path, () => apply(world.Options, wanted), () => apply(world.Options, current));
+                    transaction.Step(key.Path, () => apply(live, wanted), () => apply(live, current));
                     changed++;
                 }
-                else if (current is not null)
+                else
                 {
-                    // A null current value means the live side is unknown (no listener options registered): nothing to compare.
                     transaction.Note($"{key.Path} option can't be changed at reload, using current value ({WorldConfigKey.Show(current)}).");
                 }
             }

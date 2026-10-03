@@ -9,6 +9,7 @@ using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -20,7 +21,7 @@ namespace ArcaneCore.World.Social;
 /// channel chat and the background work (guild preload, ordered writes, out-of-range party
 /// stats). Discovered through <see cref="IWorldFeature"/> (docs/integration/seams.md).
 /// </summary>
-public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFactory scopes, ILoggerFactory loggers)
+public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFactory scopes, ILoggerFactory loggers, IConfiguration? configuration = null)
     : IWorldFeature, IChatMessageHandler, IAsyncDisposable
 {
     /// <summary>How often grouped players' changed stats go to out-of-range members (vmangos sends them from the player update).</summary>
@@ -98,6 +99,7 @@ public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFac
     public void Attach(WorldRuntime world)
     {
         _world = world;
+        configuration?.GetSection(SocialOptions.SectionName).Bind(Options);
         _writes = new SocialWriteQueue(scopes, loggers.CreateLogger<SocialWriteQueue>());
         _context = new SocialContext(world, new CharacterLookup(directory), _writes, Options);
         _writes.Start();

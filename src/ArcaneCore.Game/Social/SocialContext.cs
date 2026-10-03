@@ -46,10 +46,14 @@ public interface ISocialPersistence
 
 /// <summary>
 /// Realm rules for cross-faction social interaction. Names and defaults follow the vmangos
-/// mangosd.conf AllowTwoSide.* options (all off by default).
+/// mangosd.conf AllowTwoSide.* options (all off by default); bound from <see cref="SectionName"/>
+/// and reloadable with <c>.reload config</c> (docs/areas/hot-reload.md).
 /// </summary>
 public sealed class SocialOptions
 {
+    /// <summary>The configuration section these options are bound from.</summary>
+    public const string SectionName = "World:Social";
+
     /// <summary>AllowTwoSide.AddFriend.</summary>
     public bool AllowTwoSideAddFriend { get; set; }
 

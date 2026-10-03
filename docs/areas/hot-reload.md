@@ -50,6 +50,14 @@ on the world thread, so every reader sees the new value on its next read.
   `GmLevelInWhoList`, `PlayerCommands`, `Maps:GridUnload`, `Maps:GridCleanUpDelayMs`,
   `Maps:GridActivationDistance` (`GridContainer` reads the shared `MapOptions` at each use; grids
   already running keep their timer until it resets, like `MapManager::SetGridCleanUpDelay`).
+- Live, social rules (`World:Social:*`, a configuration surface that did not exist before: `SocialOptions`
+  was never bound from configuration; `SocialFeature` now binds it at attach and the reload keeps it
+  current). Keys map one to one to vmangos: `AllowTwoSideGroup` = `AllowTwoSide.Interaction.Group`
+  (World.cpp:612), `AllowTwoSideGuild` = `...Interaction.Guild` (:613), `AllowTwoSideChannel` =
+  `...Interaction.Channel` (:611), `AllowTwoSideAddFriend` = `AllowTwoSide.AddFriend` (:618). All default
+  to false, as vmangos. `AllowTwoSideChat` and `AllowTwoSideWhoList` stay under `World:` where they
+  already lived (`...Interaction.Chat` :610, `...WhoList` :617). vmangos' other `AllowTwoSide.*` keys
+  (Accounts, Trade, Auction, Mail) have no ArcaneCore option and are not added here.
 - Restart-only, reported as `<key> option can't be changed at reload, using current value (<v>).`
   (vmangos `configNoReload`, World.cpp:3044-3055): `TickIntervalMs`, `Maps:DataDirectory`, `Port`,
   `BindAddress` (the last two only when `IOptions<WorldOptions>` is registered, as in the daemon).
