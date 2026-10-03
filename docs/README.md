@@ -9,6 +9,7 @@ unfinished parts documented as limits).
 | Page | What it is |
 |---|---|
 | [Installation and first run](guide/installation.md) | Build, databases, realm list, first account, content import, `check-config`, starting both daemons, connecting a client, the development runner. |
+| [Operating a realm](guide/operations.md) | Start, stop and restart, backups and upgrades, bans, monitoring, and the release caveats (which defaults are not retail, what is not delivered). |
 | [Configuration reference](reference/configuration.md) | Every configuration key with its type, default, `.reload config` behaviour and meaning. **Generated from the code**; a test fails when the page is stale. |
 | [GM command reference](reference/gm-commands.md) | Every chat command with the account level it needs and which stored account reaches it. **Generated.** |
 | [Exit codes](reference/exit-codes.md) | The process exit codes of the daemons and the content importer (supervisors must not restart on 78). **Generated.** |
