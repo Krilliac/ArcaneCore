@@ -4,10 +4,29 @@ using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Kernel.Ops;
 using ArcaneCore.World;
+using ArcaneCore.World.Ops.Cli;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
+
+// Operations verbs (check-config) run instead of the daemon: nothing binds, no schema is touched.
+if (OpsCli.TryRun(args, builder.Configuration, Console.Out, out int verbExitCode))
+{
+    return verbExitCode;
+}
+
+// Fail fast, listing every configuration problem at once (exit 78; supervisors must not restart on it).
+ArcaneCore.Kernel.Configuration.Validation.ConfigReport startupReport = OpsCli.Validate(builder.Configuration);
+if (startupReport.Issues.Count > 0)
+{
+    startupReport.Write(Console.Error);
+}
+
+if (startupReport.IsInvalid)
+{
+    return ExitCodes.InvalidConfiguration;
+}
 
 // The HostOptions section (e.g. ShutdownTimeout) is not bound by the default builder; a full save
 // drain for many players must not be cut short by the host default (docs/areas/ops-perf.md).

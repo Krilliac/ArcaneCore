@@ -17,6 +17,15 @@ public static class ExitCodes
     /// <summary>Restart requested (vmangos RESTART_EXIT_CODE). Only a restart request may use 2.</summary>
     public const int Restart = 2;
 
+    /// <summary>
+    /// The configuration is invalid (sysexits EX_CONFIG, an ArcaneCore addition: vmangos has only 0/1/2).
+    /// Supervisors must not restart on it; systemd: RestartPreventExitStatus=78.
+    /// </summary>
+    public const int InvalidConfiguration = 78;
+
+    /// <summary>Unknown operations verb or bad verb arguments (sysexits EX_USAGE). Never 2: that means restart.</summary>
+    public const int Usage = 64;
+
     /// <summary>Largest code a shutdown command may ask for: 126-255 belong to shells (vmangos ServerCommands.cpp:424-430).</summary>
     public const int MaxRequested = 125;
 
