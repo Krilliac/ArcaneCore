@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Stats;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Progression;
@@ -31,10 +32,22 @@ public sealed class PlayerProgression : IQuestExperience
 
     public ProgressionOptions Options { get; }
 
-    public IPlayerLevelStatsSource Stats { get; }
+    public IPlayerLevelStatsSource Stats { get; private set; }
+
+    /// <summary>
+    /// Replace the level stats source (the stats feature installs the imported world data when no developer file is
+    /// configured). Call before players are initialised; a player already initialised keeps the values it has.
+    /// </summary>
+    public void UseLevelStats(IPlayerLevelStatsSource source) => Stats = source ?? throw new ArgumentNullException(nameof(source));
 
     /// <summary>Raised on the world thread after a level-up has been applied (persistence requests a save).</summary>
     public event Action<Player>? LevelChanged;
+
+    /// <summary>
+    /// Raised after the base values of a level were applied to a player (login and level-up), so the derived combat
+    /// stats (attack power, crit, dodge, armor) can be recomputed from the new stat fields.
+    /// </summary>
+    public event Action<Player>? BaseValuesApplied;
 
     /// <summary>
     /// Prepare a loaded player before it enters the world: the next-level requirement for its
@@ -53,6 +66,7 @@ public sealed class PlayerProgression : IQuestExperience
         }
 
         SetRestBonus(player, state.RestBonus);
+        BaseValuesApplied?.Invoke(player);
     }
 
     /// <summary>The XP currently shown (PLAYER_XP).</summary>
@@ -188,6 +202,7 @@ public sealed class PlayerProgression : IQuestExperience
         player.SetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Focus, 0);
         player.SetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Happiness, 0);
         SetRestBonus(player, state.RestBonus);
+        BaseValuesApplied?.Invoke(player);
     }
 
     /// <summary>vmangos Player::GetRestBonus (rested XP pool; not persisted and not accumulated by this slice).</summary>
@@ -240,21 +255,22 @@ public sealed class PlayerProgression : IQuestExperience
             player.SetUInt32(field, Add(player.GetUInt32(field), delta));
         }
 
-        healthDelta = (int)stats.BaseHealth - (int)player.GetUInt32(UpdateFields.UnitFieldBaseHealth)
-            + (int)ExperienceFormulas.HealthBonusFromStamina(stats.Stamina) - (int)ExperienceFormulas.HealthBonusFromStamina(old?.Stamina ?? 0);
+        // The class base health and mana move the maximums here; the stamina and intellect bonuses (level base values
+        // plus whatever items add) are StatBonuses', which keeps them in line with the stat fields.
+        healthDelta = (int)stats.BaseHealth - (int)player.GetUInt32(UpdateFields.UnitFieldBaseHealth);
         player.SetUInt32(UpdateFields.UnitFieldBaseHealth, stats.BaseHealth);
         player.MaxHealth = Add(player.MaxHealth, healthDelta);
         manaDelta = 0;
         if (player.PowerType == PowerType.Mana)
         {
-            manaDelta = (int)stats.BaseMana - (int)player.GetUInt32(UpdateFields.UnitFieldBaseMana)
-                + (int)ExperienceFormulas.ManaBonusFromIntellect(stats.Intellect) - (int)ExperienceFormulas.ManaBonusFromIntellect(old?.Intellect ?? 0);
+            manaDelta = (int)stats.BaseMana - (int)player.GetUInt32(UpdateFields.UnitFieldBaseMana);
             int maxMana = UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana;
             player.SetUInt32(maxMana, Add(player.GetUInt32(maxMana), manaDelta));
         }
 
         player.SetUInt32(UpdateFields.UnitFieldBaseMana, stats.BaseMana);
         state.Applied = stats;
+        StatBonuses.Update(player);
         if (refill)
         {
             player.Health = player.MaxHealth;

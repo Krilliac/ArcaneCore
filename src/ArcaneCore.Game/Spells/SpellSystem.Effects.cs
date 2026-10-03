@@ -71,7 +71,9 @@ public sealed partial class SpellSystem
     /// (EffectTriggerSpell), DUMMY (no generic behaviour; scripts hook it), and the second set:
     /// ENVIRONMENTAL_DAMAGE, HEALTH_LEECH, the weapon damage family (WEAPON_DAMAGE,
     /// WEAPON_DAMAGE_NOSCHOOL, NORMALIZED_WEAPON_DMG, WEAPON_PERCENT_DAMAGE), DISPEL,
-    /// INTERRUPT_CAST, SUMMON (through <see cref="ISpellSummonSink"/>) and APPLY_AREA_AURA_PARTY.
+    /// INTERRUPT_CAST, SUMMON (through <see cref="ISpellSummonSink"/>) and APPLY_AREA_AURA_PARTY, plus the
+    /// combat abilities PARRY (EffectParry :5280), BLOCK (EffectBlock :5286) and DUAL_WIELD (EffectDualWield :2620),
+    /// which set the player's ability flag (<see cref="Stats.PlayerStatState"/>) and do nothing for other targets.
     /// </summary>
     private Dictionary<SpellEffectName, SpellEffectHandler> CreateEffectHandlers() => new()
     {
@@ -93,6 +95,9 @@ public sealed partial class SpellSystem
         [SpellEffectName.InterruptCast] = EffectInterruptCast,
         [SpellEffectName.Summon] = EffectSummon,
         [SpellEffectName.ApplyAreaAuraParty] = EffectApplyAreaAuraParty,
+        [SpellEffectName.Parry] = static context => (context.Target as Player)?.StatState.SetCanParry(true),
+        [SpellEffectName.Block] = static context => (context.Target as Player)?.StatState.SetCanBlock(true),
+        [SpellEffectName.DualWield] = static context => (context.Target as Player)?.StatState.SetCanDualWield(true),
     };
 
     /// <summary>vmangos Spell::DoAllEffectOnTarget → HandleEffects per effect, then the built aura holder is added.</summary>

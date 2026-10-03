@@ -78,7 +78,7 @@ public sealed partial class MapCombat
         Track(victim);
 
         // delay the off-hand to the next attack time
-        if (Hooks.HasOffhandWeapon(attacker))
+        if (HasOffhandWeapon(attacker))
         {
             c.ResetAttackTimer(WeaponAttackType.OffAttack);
         }
@@ -233,7 +233,7 @@ public sealed partial class MapCombat
             return false;
         }
 
-        bool offhand = Hooks.HasOffhandWeapon(attacker);
+        bool offhand = HasOffhandWeapon(attacker);
         if (!c.IsAttackReady(WeaponAttackType.BaseAttack) && !(offhand && c.IsAttackReady(WeaponAttackType.OffAttack)))
         {
             return false;
@@ -371,9 +371,9 @@ public sealed partial class MapCombat
             if (victim is Player pv)
             {
                 dodge = pv.GetFloat(UpdateFields.PlayerDodgePercentage);
-                parry = hooks.PlayerCanParry(pv) ? pv.GetFloat(UpdateFields.PlayerParryPercentage) : 0f;
+                parry = PlayerCanParry(pv) ? pv.GetFloat(UpdateFields.PlayerParryPercentage) : 0f;
                 bool unarmedSheath = pv.GetByte(UpdateFields.UnitFieldBytes2, 0) == 0; // SHEATH_STATE_UNARMED
-                block = !unarmedSheath && hooks.PlayerCanBlock(pv) ? pv.GetFloat(UpdateFields.PlayerBlockPercentage) : 0f;
+                block = !unarmedSheath && PlayerCanBlock(pv) ? pv.GetFloat(UpdateFields.PlayerBlockPercentage) : 0f;
             }
             else
             {
@@ -399,9 +399,9 @@ public sealed partial class MapCombat
             VictimLevel = victim.Level,
             AttackerMaxSkill = MeleeHitTable.SkillMaxForLevel(attacker, victim),
             VictimMaxSkill = MeleeHitTable.SkillMaxForLevel(victim, attacker),
-            AttackerWeaponSkill = hooks.GetWeaponSkill(attacker, attackType, victim),
+            AttackerWeaponSkill = WeaponSkill(attacker, attackType, victim),
             VictimDefenseSkill = hooks.GetDefenseSkill(victim, attacker),
-            DualWield = hooks.HasOffhandWeapon(attacker),
+            DualWield = HasOffhandWeapon(attacker),
             HitBonus = 0f,
             BaseCritChance = attacker is Player pa ? pa.GetFloat(UpdateFields.PlayerCritPercentage) : 5f,
             DodgeChance = dodge,
@@ -464,7 +464,7 @@ public sealed partial class MapCombat
                 damage = 0;
                 break;
             case MeleeHitOutcome.Block:
-                blocked = Hooks.GetShieldBlockValue(victim);
+                blocked = ShieldBlockValue(victim);
                 if (blocked >= damage)
                 {
                     state = VictimState.Blocks;
@@ -564,7 +564,7 @@ public sealed partial class MapCombat
             UnitCombat vc = victim.Combat;
             float offTime = vc.GetAttackTimer(WeaponAttackType.OffAttack);
             float baseTime = vc.GetAttackTimer(WeaponAttackType.BaseAttack);
-            WeaponAttackType hand = Hooks.HasOffhandWeapon(victim) && offTime < baseTime ? WeaponAttackType.OffAttack : WeaponAttackType.BaseAttack;
+            WeaponAttackType hand = HasOffhandWeapon(victim) && offTime < baseTime ? WeaponAttackType.OffAttack : WeaponAttackType.BaseAttack;
             float timer = hand == WeaponAttackType.OffAttack ? offTime : baseTime;
             float percent20 = vc.GetAttackTime(hand) * 0.20f;
             float percent60 = 3.0f * percent20;
