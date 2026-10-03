@@ -22,7 +22,7 @@ namespace ArcaneCore.Game.Totems;
 /// </para>
 /// <para>
 /// Limits, recorded in docs/areas/class-shaman-paladin.md: no collision-pushed placement (vmangos
-/// CreatureCreatePos uses GetFirstCollisionPosition; the point is the unclamped 2 yd offset at the caster's Z);
+/// CreatureCreatePos uses GetFirstCollisionPosition; the point is the unclamped offset of 2 yd plus both bounding radii at the caster's Z);
 /// vmangos runs the totem's own <c>Creature::Update</c> once more before unsummoning so its last aura tick is
 /// not lost, here auras tick in the spell system's own update so the last tick can land up to one tick either
 /// side of expiry; an unsummoned totem is removed at once instead of first dying for the client animation;
@@ -220,6 +220,18 @@ public sealed class TotemSystem
     internal static float AngleOf(TotemSlot slot)
         => slot < TotemSlot.None ? (MathF.PI / SlotCount) - ((int)slot * 2 * MathF.PI / SlotCount) : 0f;
 
+    /// <summary>
+    /// CreatureCreatePos::SelectFinalPoint (Creature.cpp:232) calls <c>caster.GetClosePoint(..., totem radius, distance, angle)</c>:
+    /// GetNearPointAroundPosition (Object.cpp:2748) passes <c>distance + totem radius</c> to GetNearPoint2DAroundPosition,
+    /// which adds the caster's own bounding radius again (Object.cpp:2728-2729). The reach is therefore
+    /// <c>distance + caster radius + totem radius</c>.
+    /// </summary>
+    internal static (float X, float Y) PlacementPoint(Unit caster, float totemRadius, float distance, float angle)
+    {
+        float reach = distance + totemRadius + caster.BoundingRadius;
+        return (caster.X + (reach * MathF.Cos(angle)), caster.Y + (reach * MathF.Sin(angle)));
+    }
+
     // vmangos Spell::EffectSummonTotem.
     private void EffectSummonTotem(SpellEffectContext context)
     {
@@ -248,12 +260,16 @@ public sealed class TotemSystem
             return;
         }
 
-        float angle = caster.Orientation + AngleOf(slot);
-        float x = caster.X + (Options.PlacementDistance * MathF.Cos(angle));
-        float y = caster.Y + (Options.PlacementDistance * MathF.Sin(angle));
-
         // The totem is driven by this system, never by creature AI: NullAI (no aggro, no wandering), idle movement.
-        Creature totem = creatures.SpawnTemporary(template with { AIName = "NullAI", MovementType = 0 }, x, y, caster.Z, caster.Orientation);
+        // Its model (hence bounding radius) is chosen when it is created, so the final point is set right after.
+        float angle = caster.Orientation + AngleOf(slot);
+        float provisional = Options.PlacementDistance + caster.BoundingRadius;
+        Creature totem = creatures.SpawnTemporary(
+            template with { AIName = "NullAI", MovementType = 0 },
+            caster.X + (provisional * MathF.Cos(angle)), caster.Y + (provisional * MathF.Sin(angle)), caster.Z, caster.Orientation);
+        (float x, float y) = PlacementPoint(caster, totem.BoundingRadius, Options.PlacementDistance, angle);
+        totem.SetPosition(x, y, caster.Z, caster.Orientation);
+        totem.SetHome(new CreatureHome(x, y, caster.Z, caster.Orientation));
 
         // Totem::SetOwner and the rest of EffectSummonTotem.
         totem.SetUInt64(UpdateFields.UnitFieldCreatedby, caster.Guid.Value);

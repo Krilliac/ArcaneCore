@@ -32,13 +32,18 @@ References (read only, never copied): **vmangos** `D:\refs\vmangos` (primary), *
   95 totem creatures get a spell (none needs the list fallback) and 8 have none, Sentry Totem 3968 among them.
 - **Schema constant:** `TotemWorldDataModule.Version = 11` (World; table `totem_spell`). The integrator renumbers;
   tests use the constant. No Characters schema change (totems are never persisted: vmangos unsummons them on logout).
+- **The `totem_spell` table stays empty until the import is run.** `TotemSpellDumpImporter` is a library class used by
+  tests only (like the other dump importers, no tool invokes it yet). With an empty table every totem is summoned
+  without its passive aura, and `TotemFeature.Attach` logs a warning saying so. Filling it needs a one-off call of
+  `TotemSpellDumpImporter` on the classic-db dump followed by the store write; no command-line wrapper exists.
 - `ARCANECORE_CLASSIC_DB` (path to the dump, `.sql` or `.sql.gz`) enables the real-data audit; unset it is reported
   Skipped, never green.
 
 ### 3. Totem system (`Game/Totems`, `World/Spells/Totems/TotemFeature.cs`)
 - Effects 74 SUMMON_TOTEM (no slot), 87-90 SUMMON_TOTEM_SLOT1-4 (fire, earth, water, air), 110 DESTROY_ALL_TOTEMS
   after vmangos `SpellEffects.cpp:4923-5003` and `:5566-5573`: the old totem in the slot is unsummoned first, the
-  creature is placed 2.0 yd from the caster at angle `pi/4 - slot * pi/2`, takes the owner's faction and level, the
+  creature is placed at angle `pi/4 - slot * pi/2` and `PlacementDistance` (2.0) plus the caster's and the totem's
+  bounding radii from the caster (`Creature.cpp:232`, `Object.cpp:2728-2729` and `:2748`), takes the owner's faction and level, the
   effect value as health (5 for 61 of 67 ids), `UNIT_FIELD_SUMMONEDBY` / `UNIT_FIELD_CREATEDBY` /
   `UNIT_CREATED_BY_SPELL`, `PLAYER_CONTROLLED` for player owners and the owner's PvP flag.
 - A totem is an ordinary `Creature` (sealed class) recorded in `TotemQuery` (`IsTotem`, `TryGet`, `GetOwnerGuid`),
@@ -72,8 +77,13 @@ References (read only, never copied): **vmangos** `D:\refs\vmangos` (primary), *
 - An unsummoned totem is removed at once; vmangos first sets it dead for the client animation.
 - The per-effect totem immunity rule (`Totem.cpp:180-216`: immune to heal, energize, negative auras and regeneration
   auras except the Healing Stream / Mana Spring / Mana Tide family mask `0x4006000`) needs an immunity seam in the spell
-  core that does not exist; it is **not applied**. A killed totem still fires `MapCombat.UnitKilled`, so kill XP and
-  quest credit consumers must call `TotemQuery.IsTotem` (vmangos `Player::IsHonorOrXPTarget` excludes totems).
+  core that does not exist; it is **not applied**.
+- A killed totem still fires `MapCombat.UnitKilled`, but `KillRewards.AwardExperience` returns no XP for it
+  (`Player::IsHonorOrXPTarget`, `Player.cpp:19943-19954`; `MaNGOS::XP::Gain`, `Formulas.h:102-107`) and
+  `QuestObjectiveAdapter` gives no kill credit for a player-owned totem (a player-owned victim is PvP in
+  `RewardSinglePlayerAtKill`, `Player.cpp:19961-19982`). A creature-owned totem still credits the kill, as in vmangos.
+  Honor is not modelled by this tree. Totems are not rooted by flag (vmangos `AI/TotemAI.cpp` roots them): they never
+  move here only because they run NullAI with idle movement, so a forced movement effect is not blocked.
 - The totem area aura still lands on the totem itself (vmangos sets its aura name to NONE,
   `SpellAuras.cpp:424-436`); friendliness/PvP filters, tick synchronisation and per-member rank selection of the area
   aura are not ported (`SpellSystem.AreaAuras.cs` belongs to the spell-breadth lane).

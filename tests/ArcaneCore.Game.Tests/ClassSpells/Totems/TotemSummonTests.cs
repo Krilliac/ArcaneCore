@@ -30,8 +30,12 @@ public sealed class TotemSummonTests
 
         Creature totem = Assert.IsType<Creature>(kit.Totems.GetTotem(shaman, TotemSlot.Earth));
         float angle = 0.5f + (Pi / 4) - (Pi / 2);
-        Assert.Equal(100 + (2 * MathF.Cos(angle)), totem.X, 3);
-        Assert.Equal(200 + (2 * MathF.Sin(angle)), totem.Y, 3);
+        // Object.cpp:2748 + 2728: distance2d + the searcher's (totem's) radius, plus the close object's (caster's) radius.
+        float reach = 2 + shaman.BoundingRadius + totem.BoundingRadius;
+        Assert.True(totem.BoundingRadius > 0 && shaman.BoundingRadius > 0);
+        Assert.Equal(100 + (reach * MathF.Cos(angle)), totem.X, 3);
+        Assert.Equal(200 + (reach * MathF.Sin(angle)), totem.Y, 3);
+        Assert.Equal(totem.X, totem.Home.X, 3);
         Assert.Equal(shaman.Z, totem.Z, 3);
         Assert.Equal(TotemKit.EarthEntry, totem.Entry);
         Assert.Equal(1u, totem.FactionTemplate);
@@ -67,8 +71,9 @@ public sealed class TotemSummonTests
         kit.Cast(shaman, spell);
 
         Creature totem = Assert.IsType<Creature>(kit.Totems.GetTotem(shaman, slot));
-        Assert.Equal(2 * MathF.Cos(Pi * piMultiple), totem.X, 3);
-        Assert.Equal(2 * MathF.Sin(Pi * piMultiple), totem.Y, 3);
+        float reach = 2 + shaman.BoundingRadius + totem.BoundingRadius;
+        Assert.Equal(reach * MathF.Cos(Pi * piMultiple), totem.X, 3);
+        Assert.Equal(reach * MathF.Sin(Pi * piMultiple), totem.Y, 3);
     }
 
     [Fact]
@@ -191,6 +196,27 @@ public sealed class TotemSummonTests
         kit.Cast(shaman, TotemKit.FireTotemSummon);
 
         Creature totem = kit.Totems.GetTotem(shaman, TotemSlot.Fire)!;
-        Assert.Equal(5f, MathF.Sqrt((totem.X * totem.X) + (totem.Y * totem.Y)), 3);
+        Assert.Equal(5f + shaman.BoundingRadius + totem.BoundingRadius, MathF.Sqrt((totem.X * totem.X) + (totem.Y * totem.Y)), 3);
+    }
+
+    [Fact]
+    public void KillingATotem_GrantsNoExperience_WhileTheSameCreatureOutsideTheTotemSystemDoes()
+    {
+        // Player::IsHonorOrXPTarget (Player.cpp:19943-19954) and MaNGOS::XP::Gain (Formulas.h:102-107) refuse totems.
+        using var kit = new TotemKit();
+        (Player shaman, _) = kit.AddPlayer(1, 0, 0);
+        (Player enemy, _) = kit.AddPlayer(2, 5, 0);
+        shaman.Level = 20;
+        enemy.Level = 20;
+        var progression = new ArcaneCore.Game.Progression.PlayerProgression(new ArcaneCore.Game.Progression.ProgressionOptions());
+        progression.InitializeLoadedPlayer(enemy);
+
+        kit.Cast(shaman, TotemKit.EarthTotemSummon);
+        Creature totem = kit.Totems.GetTotem(shaman, TotemSlot.Earth)!;
+        Creature plain = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(TotemKit.EarthEntry)! with { AIName = "NullAI" }, 3, 3, 0, 0);
+        plain.Level = 20;
+
+        Assert.Equal([0u], ArcaneCore.Game.Progression.KillRewards.AwardExperience(progression, [enemy], totem, nonRaidDungeon: false));
+        Assert.True(ArcaneCore.Game.Progression.KillRewards.AwardExperience(progression, [enemy], plain, nonRaidDungeon: false)[0] > 0);
     }
 }

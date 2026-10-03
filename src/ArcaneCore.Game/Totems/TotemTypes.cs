@@ -29,8 +29,9 @@ public sealed class TotemOptions
     public bool Enabled { get; set; } = true;
 
     /// <summary>
-    /// Distance from the caster at which a totem is placed (vmangos Spell::EffectSummonTotem builds
-    /// <c>CreatureCreatePos(caster, orientation, 2.0f, angle)</c>, SpellEffects.cpp:4952-4957).
+    /// Base distance from the caster at which a totem is placed (vmangos Spell::EffectSummonTotem builds
+    /// <c>CreatureCreatePos(caster, orientation, 2.0f, angle)</c>, SpellEffects.cpp:4952-4957). The caster's and the
+    /// totem's bounding radii are added to it, as GetClosePoint does (Object.cpp:2728-2729, 2748).
     /// </summary>
     public float PlacementDistance { get; set; } = 2.0f;
 
@@ -76,8 +77,9 @@ public sealed class TotemInfo
 }
 
 /// <summary>
-/// Totem lookups for other areas (stats: no dodge/block; progression and quests: no kill credit,
-/// vmangos Player::IsHonorOrXPTarget excludes totems, Objects/Player.cpp:19924-19935). Keyed by the
+/// Totem lookups for other areas (stats: no dodge/block; progression and quests: no kill reward, vmangos
+/// Player::IsHonorOrXPTarget excludes totems, Objects/Player.cpp:19943-19954; KillRewards and QuestObjectiveAdapter
+/// consult it). Keyed by the
 /// creature instance, so nothing is kept alive and tests never share state.
 /// </summary>
 public static class TotemQuery

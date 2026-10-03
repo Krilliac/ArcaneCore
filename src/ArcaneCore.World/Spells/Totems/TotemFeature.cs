@@ -59,6 +59,10 @@ public sealed class TotemFeature(IServiceProvider services, ILogger<TotemFeature
         spells.System.Groups = new OwnerAwareGroupResolver(spells.System.Groups);
         System = system;
         logger.LogInformation("Loaded {Count} totem spells", content.Count);
+        if (content.Count == 0)
+        {
+            logger.LogWarning("The totem_spell table is empty: every totem will be summoned without its passive aura (Stoneskin, Healing Stream, Windfury and so on). Run the totem_spell import (TotemSpellDumpImporter) against the classic-db dump to fill it");
+        }
         world.MapCreated += system.EnsureUpdater;
         world.Post(() =>
         {
