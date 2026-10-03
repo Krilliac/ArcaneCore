@@ -4,26 +4,6 @@ using ArcaneCore.Game.Maps;
 
 namespace ArcaneCore.Game.Spells;
 
-/// <summary>
-/// Line of sight between two points of a map (vmangos <c>Map::isInLineOfSight</c> over vmaps).
-/// The vmap/LoS area (branch <c>feat/vmap-los</c>) owns the real implementation; the spell system
-/// only consumes this seam and defaults to <see cref="AlwaysVisibleLineOfSight"/>
-/// (docs/integration/spells-persistence.md).
-/// </summary>
-public interface ILineOfSight
-{
-    /// <summary>Whether nothing static blocks the segment between the two points of <paramref name="map"/>.</summary>
-    bool IsInLineOfSight(Map map, float x1, float y1, float z1, float x2, float y2, float z2);
-}
-
-/// <summary>Default <see cref="ILineOfSight"/>: no collision data, everything is visible.</summary>
-public sealed class AlwaysVisibleLineOfSight : ILineOfSight
-{
-    public static readonly AlwaysVisibleLineOfSight Instance = new();
-
-    public bool IsInLineOfSight(Map map, float x1, float y1, float z1, float x2, float y2, float z2) => true;
-}
-
 /// <summary>Who is an enemy or a friend of a caster when a spell picks implicit targets.</summary>
 public interface ISpellTargetRelations
 {

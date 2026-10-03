@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -15,9 +16,6 @@ internal sealed class SpellTargetEntry
 
 public sealed partial class SpellSystem
 {
-    /// <summary>Line of sight for explicit, area and chain targets (default: always visible; the vmap area installs the real one).</summary>
-    public ILineOfSight LineOfSight { get; set; } = AlwaysVisibleLineOfSight.Instance;
-
     /// <summary>Enemy/friend relations used by implicit target selection.</summary>
     public ISpellTargetRelations Relations { get; set; } = CombatHookRelations.Instance;
 
@@ -210,22 +208,24 @@ public sealed partial class SpellSystem
         return ReferenceEquals(reference, unit) || Groups.GetGroupMembers(reference, raid).Contains(unit.Guid);
     }
 
-    /// <summary>Line of sight between two units (eye height on both ends), honouring IGNORE_LINE_OF_SIGHT.</summary>
+    /// <summary>
+    /// Line of sight between two units for area and chain targets, through the vmap-los seam
+    /// (<c>map.Collision</c>, eye height on both ends; no collision data means visible), honouring
+    /// IGNORE_LINE_OF_SIGHT. Explicit targets are checked by <see cref="SpellLineOfSight"/> in CheckCast.
+    /// </summary>
     public bool IsInLineOfSight(SpellInfo spell, Unit from, Unit to)
     {
         ArgumentNullException.ThrowIfNull(spell);
         ArgumentNullException.ThrowIfNull(from);
         ArgumentNullException.ThrowIfNull(to);
-        return ReferenceEquals(from, to) || IsInLineOfSight(spell, from, to.X, to.Y, to.Z);
+        return ReferenceEquals(from, to) || spell.HasAttribute(SpellAttributesEx2.IgnoreLineOfSight)
+            || (from.Map is { } map && map.Collision.IsWithinLineOfSight(from, to));
     }
 
-    private bool IsInLineOfSight(SpellInfo spell, Unit from, float x, float y, float z)
-        => spell.HasAttribute(SpellAttributesEx2.IgnoreLineOfSight) || from.Map is not { } map
-            || LineOfSight.IsInLineOfSight(map, from.X, from.Y, from.Z + SpellConstants.LineOfSightHeight, x, y, z + SpellConstants.LineOfSightHeight);
-
-    private bool IsInLineOfSightFromPoint(SpellInfo spell, Map map, float x, float y, float z, Unit to)
+    /// <summary>Line of sight from an area centre (a point raised to eye height) to a unit (vmangos Spell::CheckTarget from the AoE centre).</summary>
+    private static bool IsInLineOfSightFromPoint(SpellInfo spell, Map map, float x, float y, float z, Unit to)
         => spell.HasAttribute(SpellAttributesEx2.IgnoreLineOfSight)
-            || LineOfSight.IsInLineOfSight(map, x, y, z + SpellConstants.LineOfSightHeight, to.X, to.Y, to.Z + SpellConstants.LineOfSightHeight);
+            || map.Collision.IsInLineOfSight(x, y, z + MapCollision.DefaultEyeHeight, to.X, to.Y, to.Z + MapCollision.DefaultEyeHeight);
 
     /// <summary>Units of the caster's map within <paramref name="radius"/> (3D, plus the unit's bounding radius) of a point, deduplicated, in grid order.</summary>
     private static List<Unit> UnitsInRadius(Map map, float x, float y, float z, float radius)

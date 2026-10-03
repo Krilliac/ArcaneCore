@@ -83,10 +83,9 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             // Resolve its singleton now, but defer accessing its service until a spell lands.
             TeleportFeature teleports = scope.ServiceProvider.GetRequiredService<TeleportFeature>();
 
-            // Seams owned by other areas: combat rules, line of sight (vmap/LoS area) and groups
-            // (social area, attached later, so its manager is resolved per query).
+            // Seams owned by other areas: combat rules and groups (social area, attached later, so
+            // its manager is resolved per query). Line of sight comes from map.Collision (vmap-los).
             System.CombatRules = scope.ServiceProvider.GetService<ISpellCombatRules>() ?? new VanillaSpellCombatRules();
-            System.LineOfSight = scope.ServiceProvider.GetService<ILineOfSight>() ?? AlwaysVisibleLineOfSight.Instance;
             System.Summons = scope.ServiceProvider.GetService<ISpellSummonSink>();
             SocialFeature? social = scope.ServiceProvider.GetService<SocialFeature>();
             System.Groups = social is null ? NoGroupResolver.Instance : new WorldSpellGroups(() => social.Context.Groups);

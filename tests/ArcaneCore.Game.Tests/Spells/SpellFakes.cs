@@ -1,5 +1,6 @@
+using System.Numerics;
 using ArcaneCore.Game.Entities;
-using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
 
 namespace ArcaneCore.Game.Tests.Spells;
@@ -14,17 +15,36 @@ internal sealed class FakeRelations : ISpellTargetRelations
     public bool IsFriendly(Unit caster, Unit target) => ReferenceEquals(caster, target) || !IsHostile(caster, target);
 }
 
-/// <summary>Line of sight blocked for any segment ending at or beyond <see cref="WallX"/> (or starting beyond it).</summary>
+/// <summary>
+/// A vmap-los <see cref="ILineOfSight"/> with a wall at <see cref="WallX"/>: a segment is blocked
+/// when its ends lie on different sides. Installed with <c>WorldCollision.Of(world).Install</c>.
+/// </summary>
 internal sealed class FakeLineOfSight : ILineOfSight
 {
     public float WallX { get; set; } = float.MaxValue;
 
     public int Queries { get; private set; }
 
-    public bool IsInLineOfSight(Map map, float x1, float y1, float z1, float x2, float y2, float z2)
+    public bool Enabled => true;
+
+    public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true)
     {
         Queries++;
-        return (x1 < WallX) == (x2 < WallX);
+        return (from.X < WallX) == (to.X < WallX);
+    }
+
+    public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+    {
+        hit = to;
+        return false;
+    }
+
+    public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance) => null;
+
+    public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+    {
+        info = default;
+        return false;
     }
 }
 
