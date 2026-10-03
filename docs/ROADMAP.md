@@ -37,7 +37,7 @@ place, before the next milestone that depends on it is built further.
 | Scripting | DB-driven only (gossip, EventAI-style creature scripts later) | Hard-coded C++-style boss scripts are a content project, not an emulator core. |
 | Warden | **Out** | The 1.12 Warden needs Blizzard module binaries, and it does not stop modern cheats. |
 | Battlegrounds, honor, auction house, mail, LFG | Out of this plan | Large systems with no dependents; revisit after quests/social. |
-| Clustering (gRPC) | Seam kept, transport deferred | Charter §5. A single-process server comes first; `WorldState`, `IAccountStore`, etc. stay interfaces. |
+| Clustering (gRPC) | Planned M15: explicit process ownership, gateway/session routing and map workers, delivered in gated phases | Developer request 2026-10-03. Compare incomplete MaNGOS Sharp / the developer's MaNGOS Zero fork and SparkEngine executable separation against current code; preserve build-5875 compatibility and local mode. [Design and implementation plan](CLUSTERING_DESIGN.md). |
 | Plugin host / event bus | Introduced with its first real consumer (GM commands → scripts) | A plugin API without callers would be invented surface. |
 | SQLite provider | **Added** (dev + tests) | Zero-setup local runs and end-to-end tests of the real EF stores in CI. MariaDB stays primary. |
 
@@ -96,8 +96,10 @@ session outbound channel ◄───────────────┘
 
 ### 4. Content
 
-* `tools/ArcaneCore.ContentImporter` streams the MySQL dump (`CREATE TABLE` + `INSERT`)
-  and maps the columns ArcaneCore uses into its world schema.
+* The implemented creature importer library streams MySQL dump tables and maps
+  supported columns into the world schema. A complete
+  `tools/ArcaneCore.ContentImporter` CLI is future work; `tools/spell-import` is
+  the current standalone DBC spell importer.
 * The world daemon loads the content into in-memory stores at startup.
 
 ---
@@ -108,17 +110,43 @@ session outbound channel ◄───────────────┘
 |---|---|---|---|
 | M5 | Runtime core | Opcode registry + session states, outbound queues, world tick, generated update fields + values updates, persistence of position, DB split + schema versioning, SQLite | **implemented** — [MILESTONE_M5.md](../MILESTONE_M5.md) |
 | M6 | Session essentials | Name query, logout, time/played, stand state, selection, account data, action buttons, tutorials, chat (say/yell/emote/whisper), text emotes, /who, GM commands | **implemented** — [MILESTONE_M6.md](../MILESTONE_M6.md) |
-| M7 | Teleports | Near/far teleport, world-port ack, area triggers, `.tele` | planned |
-| M8 | Content platform | World schema, dump importer, in-memory stores, WDBC reader | planned |
-| M9 | Items | Item/bag objects, inventory, equipment visuals, starting outfit, item query, equip/swap/split/destroy, persistence | planned |
-| M10 | Creatures | Grid/cell index, creature/gameobject spawns, queries, waypoints, respawn | planned |
-| M11 | Combat | Melee, hit table, creature AI, death/ghost/resurrect, regen, XP/levels, loot/money | planned |
-| M12 | Spells | Cast pipeline, cooldowns, costs, core effects, auras, spellbook, trainers | planned |
-| M13 | Quests & NPC services | Gossip, quest flow, objectives, rewards, vendors | partial candidate — [M13a](../MILESTONE_M13A.md): saved journal, queries, timed expiry; interaction and client acceptance pending |
-| M14 | Social | Groups, channels, friends/ignore, guilds | planned |
+| M7 | Teleports | Near/far teleport, world-port ack, area triggers, `.tele` | integrated candidate — [scope and gaps](integration/grid-terrain.md); client acceptance pending |
+| M8 | Content platform | World schema, dump importer, in-memory stores, WDBC reader | partial integrated candidate — [fleet scope](integration/fleet-20261003.md); complete importer/content acceptance pending |
+| M9 | Items | Item/bag objects, inventory, equipment visuals, starting outfit, item query, equip/swap/split/destroy, persistence | integrated candidate — [scope and gaps](integration/items.md); client acceptance pending |
+| M10 | Creatures | Grid/cell index, creature/gameobject spawns, queries, waypoints, respawn | partial integrated candidate — [scope and gaps](integration/creatures.md); gameobjects and client acceptance pending |
+| M11 | Combat | Melee, hit table, creature AI, death/ghost/resurrect, regen, XP/levels, loot/money | partial integrated candidate — [scope and gaps](integration/combat.md); remaining scope and client acceptance pending |
+| M12 | Spells | Cast pipeline, cooldowns, costs, core effects, auras, spellbook, trainers | integrated candidate — [scope and gaps](integration/spells.md); full effects/targeting and client acceptance pending |
+| M13 | Quests & NPC services | Gossip, quest flow, objectives, rewards, vendors | partial candidate — [M13a](../MILESTONE_M13A.md) journal/query/timers and [M13b](../MILESTONE_M13B.md) ordinary NPC accept/abandon; full rewards/objectives/services and client acceptance pending |
+| M14 | Social | Groups, channels, friends/ignore, guilds | integrated candidate — [scope and gaps](integration/social.md); client acceptance pending |
+| Mock | Native client acceptance tool | Real SRP/M2, realm/world, character/journal and NPC accept/relog/abandon/relog lifecycle | implemented — [milestone](../MILESTONE_MOCK_CLIENT.md), 29 executable checks and CI; real-client testing deferred |
+| M15 | Clustered runtime and tools | Realm replicas, world gateways, map/instance workers, realm-wide social ownership, fenced persistence/placement and compatible offline tools | planned — [design and phased implementation](CLUSTERING_DESIGN.md); research/planning authorized, cluster deployment and runtime replacement are outside this tranche |
 
 Each milestone ships: code + automated loopback tests + `docs/Mx_ACCEPTANCE.md` +
 `MILESTONE_Mx.md` (verified-against table, decisions, limitations).
+
+### M15 clustering worklist
+
+M15 is tracked here as the canonical work item, requested 2026-10-03. The
+[selected design](CLUSTERING_DESIGN.md) combines Sharp topology, Zero supervised
+offload/fencing and Spark executable/handoff separation around ArcaneCore's actual
+runtime. It records source pins and gaps, ownership, routing, contracts,
+persistence, failure recovery, placement, compatibility, tests and migration.
+The developer approved this module/process direction on 2026-10-03; implementation
+phases remain planned and deployment is a separate gate.
+
+| Phase | Work | Status |
+|---|---|---|
+| M15.0 | Ownership/session seams, durable fencing and saves, ID allocation, schema authority | planned — first implementation tranche |
+| M15.1 | Separate gateway and one worker, versioned gRPC, replica session claims/readiness | planned — depends on M15.0 |
+| M15.2 | Realm-wide identity/social authority and distinct map instances | planned — depends on M15.1 |
+| M15.3 | Complete fenced handoff and static multiple-worker placement | planned — depends on M15.2 |
+| M15.4 | Host supervision, recovery, drain and capacity-aware placement | planned — depends on M15.3 |
+| M15.5 | Existing CLI/build/import/test jobs, content rollout, migration/rollback and cross-host acceptance | planned — depends on M15.4 |
+
+Runtime code is introduced only in its bounded implementation phase. The current
+request authorizes research/planning; no deployment or immediate runtime rewrite
+is part of this tranche. The existing native mock milestone and intentionally
+deferred real-client acceptance retain their gates.
 
 ## Verification policy
 

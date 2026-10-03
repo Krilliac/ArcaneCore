@@ -47,5 +47,8 @@ Not edited: `WorldServiceCollectionExtensions.cs`, `ChatHandlers.cs`, `Character
   skipped when loaded (friend lists, guild load) rather than deleted.
 - Cross-faction options (`SocialFeature.Options`: AllowTwoSide AddFriend/Group/Guild/Channel)
   default to off and are not bound to configuration yet.
-- Social writes go through an ordered background queue (`SocialWriteQueue`); the feature
-  drains it when the service provider disposes it at shutdown.
+- Social writes go through an ordered background queue (`SocialWriteQueue`). The normal
+  host shutdown now calls `SocialFeature.StopAsync` before provider disposal: tracked
+  login reads are canceled and awaited with their scopes, then guild/social writes drain.
+  Disposal awaits the same idempotent stop operation. Regression tests prevent a deferred
+  login callback or storage scope from outliving host shutdown.
