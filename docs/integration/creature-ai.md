@@ -12,12 +12,12 @@ World v8 follows gameobjects/loot v7. `CreatureAiDataModule.Version = 8` adds
 
 `AddColumnChange` × 2: `creature_template.AIName` and `creature_movement.Run`. |
 
-World 8 is reserved for this area. The bootstrapper only accepts contiguous steps
-(`SchemaBootstrapper.EnsureAsync` refuses a gap), and world 7 (gameobjects + loot) is not in
-this branch's base. So the module ships as `Version = 7` and records
-`ReservedVersion = 8`. When the world-7 module merges first, set
-`CreatureAiDataModule.Version` to 8 and update `IntegratedSchemaTests`: add the module row, set
-the world current version and add 8 to the steps list. Nothing else depends on the number.
+World 8 was reserved for this area. The bootstrapper only accepts contiguous steps
+(`SchemaBootstrapper.EnsureAsync` refuses a gap), and world 7 (gameobjects + loot) was not in
+the source branch's base, so that branch shipped `Version = 7` and recorded
+`ReservedVersion = 8`. In the integrated tree world 7 is present: `Version` and
+`ReservedVersion` are both 8, and `IntegratedSchemaTests` lists the module and expects world
+steps `[2..8]`. Nothing else depends on the number.
 
 `AddColumnChange` on tables created in an earlier step needed one generic bootstrapper fix. An
 upgrade across both steps (for example world 1 → 7) creates `creature_template` from the
@@ -33,7 +33,7 @@ when it inspects a prefix.
 |---|---|---|
 | `src/ArcaneCore.Game/Spells/SpellSystem.cs` | New `public event Action<Unit, Unit, SpellInfo>? SpellHit`, raised once per unit target after `ApplyEffects` in `Cast`. | The EventAI SPELLHIT event and `CreatureAI.OnSpellHit` need it. It has no other behaviour change. |
 | `src/ArcaneCore.Data/Schema/SchemaBootstrapper.cs` | `AddColumnChange` is skipped when the column already exists, checked through the catalog (`ColumnExistsAsync`, sharing `CatalogCountAsync` with `TableExistsAsync`). | Upgrades across a create-table step and a later add-column step (see above). |
-| `tests/ArcaneCore.Data.Tests/IntegratedSchemaTests.cs` | Module row for world 7, world current version 7 and steps `[2..7]`. Prefix inspection skips columns that later steps add. | Schema ledger. |
+| `tests/ArcaneCore.Data.Tests/IntegratedSchemaTests.cs` | Module row for the AI step, world current version and steps list (source branch: 7 / `[2..7]`; integrated: 8 / `[2..8]`). Prefix inspection skips columns that later steps add. | Schema ledger. |
 | `src/ArcaneCore.Kernel/WorldData/Creatures/CreatureContent.cs` | `CreatureTemplate.AIName`, `CreatureWaypoint.Run`, and an optional `CreatureAiContent` constructor argument exposed as the `Ai` property. | Content model. |
 | `src/ArcaneCore.Data/World/Creatures/CreatureDataModule.cs` | `CreatureTemplateRow.AIName` (≤ 64) and `CreatureMovementRow.Run`. | The columns added by the step. |
 | `src/ArcaneCore.Data/World/Creatures/EfCreatureDataStore.cs`, `CreatureDumpImporter.cs` | Load and import AIName, Run, `creature_ai_scripts` and `creature_ai_texts`. | Data path. |

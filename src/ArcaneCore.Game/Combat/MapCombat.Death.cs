@@ -161,7 +161,8 @@ public sealed partial class MapCombat
 
     /// <summary>
     /// PLAYER_FLAGS_GHOST and water walking. vmangos gets both from the ghost aura (8326:
-    /// SPELL_AURA_GHOST + SPELL_AURA_WATER_WALK); until auras exist combat applies them, and
+    /// SPELL_AURA_GHOST + SPELL_AURA_WATER_WALK); nothing casts that aura yet (the ghost-form
+    /// hooks have no override), so combat applies them directly, and
     /// the move change goes to the client as SMSG_MOVE_WATER_WALK / SMSG_MOVE_LAND_WALK.
     /// </summary>
     private static void SetGhost(Player player, bool ghost)

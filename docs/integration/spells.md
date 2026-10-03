@@ -88,7 +88,7 @@ chat; source-only weak-lifetime reasoning does not claim a forced-GC measurement
 ## Follow-up: persistence, targeting, effects and combat rules
 
 Round 2 (`feat/spells-persistence`) adds cooldown/aura persistence across logout (characters
-schema reserved v8), area/cone/chain/party targeting with a line-of-sight seam, weapon, leech,
+schema: the spell-state module is v9 in the integrated allocation Auth2/World8/Characters10), area/cone/chain/party targeting with a line-of-sight seam, weapon, leech,
 dispel, interrupt, summon and party area aura effects, vanilla hit/crit/resist rules and
 pushback/channel interrupts. See [spells-persistence.md](spells-persistence.md).
 
