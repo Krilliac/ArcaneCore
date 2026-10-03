@@ -129,6 +129,10 @@ feature reads:
   `PlayerLevelStatsTable` (`race,class,level,basehp,basemana,str,agi,sta,int,spi`), which `Progression:LevelStatsPath`
   loads (`World/Progression/ProgressionFeature.cs`); a World test parses a generated file with that parser. Without the
   file, level-ups change level and XP but no base values. A row with no class values is left out and reported.
+- **Class masks.** `class-masks <dump>... --class-mask-file <path>` reads `spell_affect` (entry, effectId, 64-bit `SpellFamilyMask`) and
+  writes `spell effect 0xMASK` lines that `Spells:Mods:ClassMaskFile` loads ([spell-mods](spell-mods.md)); the spell DBC reads these
+  masks as 32 bits and about 11% of the classic rows need more. It writes no database; `--dry-run` writes no file. vmangos' own mask
+  corrections (migration `20240926142033`) are not applied.
 - Verified on the z2815 dump: 40 start positions, 1,497 starting spells, 353 teleport targets and 2,400 level-stat rows (human
   warrior level 1: strength 23; the file is a sample of the retail table, not committed); the daemon logged "level stats for
   2400 race/class/level rows". With no spells imported (`import-dbc` needs client DBCs) the spell feature logs each
