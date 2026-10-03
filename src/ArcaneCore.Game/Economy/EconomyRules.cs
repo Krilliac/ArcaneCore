@@ -102,6 +102,12 @@ public sealed class EconomyOptions
     /// </summary>
     public uint AuctionAccountConcurrentLimit { get; set; }
 
+    /// <summary>
+    /// A bid the bidder cannot afford, or a cancellation whose cut the seller cannot pay, is answered with nothing, as
+    /// vmangos does (AuctionHouseHandler.cpp:498-503, 592-594); false answers NOT_ENOUGH_MONEY. Default true.
+    /// </summary>
+    public bool AuctionSilentRefusals { get; set; } = true;
+
     /// <summary>Seconds between expiry sweeps of mail and auctions.</summary>
     public uint ExpirySweepSeconds { get; set; } = 60;
 

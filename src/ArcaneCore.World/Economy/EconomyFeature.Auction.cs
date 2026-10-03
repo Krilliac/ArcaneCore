@@ -230,7 +230,16 @@ public sealed partial class EconomyFeature
         }
 
         uint cost = auction.BidderId == me ? price - auction.Bid : price;
-        if (player.Money < cost)
+        if (Options.AuctionSilentRefusals)
+        {
+            // vmangos AuctionHouseHandler.cpp:498-503: the whole price must be in hand and the refusal gets no answer
+            // (the 1.12 client checks its own money first).
+            if (price > player.Money)
+            {
+                return;
+            }
+        }
+        else if (player.Money < cost)
         {
             Fail(AuctionError.NotEnoughMoney);
             return;
@@ -327,7 +336,12 @@ public sealed partial class EconomyFeature
         uint cut = auction.BidderId != 0 ? AuctionHouseRules.Cut(house, auction.Bid, Options.AuctionRateCut) : 0;
         if (player.Money < cut)
         {
-            Fail(AuctionError.NotEnoughMoney);
+            // vmangos AuctionHouseHandler.cpp:592-594: "maybe message needed", but none is sent.
+            if (!Options.AuctionSilentRefusals)
+            {
+                Fail(AuctionError.NotEnoughMoney);
+            }
+
             return;
         }
 
