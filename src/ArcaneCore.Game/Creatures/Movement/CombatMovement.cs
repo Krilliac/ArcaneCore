@@ -90,6 +90,10 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
 
     protected abstract bool Run(Creature creature);
 
+    protected virtual void OnInPosition(Creature creature)
+    {
+    }
+
     /// <summary>The point at <paramref name="distance"/> from the target in direction <paramref name="angle"/> (world angle).</summary>
     protected Vector3 PointAround(float distance, float angle)
         => new(Target.X + (distance * MathF.Cos(angle)), Target.Y + (distance * MathF.Sin(angle)), Target.Z);
@@ -104,6 +108,7 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
                 mover.StopMoving(creature);
             }
 
+            OnInPosition(creature);
             _aimedAt = null;
             return;
         }
@@ -124,13 +129,24 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
 /// vmangos ChaseMovementGenerator: run to the target's contact point (both bounding radii plus
 /// <see cref="TargetedMovementGenerator.ContactDistance"/>, on the line from the target to the
 /// chaser) until melee auto-attack reach (<see cref="MapCombat.CanReachWithMeleeAutoAttack"/>).
-/// No facing packet is sent in reach: the client turns the creature to UNIT_FIELD_TARGET.
+/// In reach, update the server facing for melee checks; the client turns to UNIT_FIELD_TARGET
+/// without a separate facing packet (vmangos TargetedMovementGenerator::Update / SetInFront).
 /// </summary>
 internal sealed class ChaseMovementGenerator(Unit target) : TargetedMovementGenerator(target)
 {
     public override MovementGeneratorType Type => MovementGeneratorType.Chase;
 
     protected override bool IsInPosition(Creature creature) => MapCombat.CanReachWithMeleeAutoAttack(creature, Target);
+
+    protected override void OnInPosition(Creature creature)
+    {
+        float dx = Target.X - creature.X;
+        float dy = Target.Y - creature.Y;
+        if ((dx * dx) + (dy * dy) > 0.0001f)
+        {
+            creature.Orientation = Creature.NormalizeOrientation(MathF.Atan2(dy, dx));
+        }
+    }
 
     protected override Vector3 Destination(Creature creature)
     {

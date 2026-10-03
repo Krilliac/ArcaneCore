@@ -354,6 +354,16 @@ public sealed partial class CreatureMapSystem
         ArgumentNullException.ThrowIfNull(helper);
         ArgumentNullException.ThrowIfNull(caller);
         ArgumentNullException.ThrowIfNull(enemy);
+        float range = radius + helper.BoundingRadius + caller.BoundingRadius;
+        return CanAssistNow(helper, caller, enemy)
+            && DistanceSquared(helper, caller) <= range * range
+            && InLineOfSight(helper, caller);
+    }
+
+    // CanAssistTo is rechecked when the delayed call executes. Radius and sight belong to
+    // the initial neighbour search: the caller may have chased away during the delay.
+    private bool CanAssistNow(Creature helper, Creature caller, Unit enemy)
+    {
         if (ReferenceEquals(helper, caller) || !helper.IsAlive || helper.DeathState != CreatureDeathState.Alive
             || helper.IsEvading || helper.Combat.Victim is not null || helper.Combat.IsInCombat
             || helper.AI is null or NullCreatureAI || helper.Template.Civilian
@@ -363,11 +373,8 @@ public sealed partial class CreatureMapSystem
             return false;
         }
 
-        float range = radius + helper.BoundingRadius + caller.BoundingRadius;
-        return DistanceSquared(helper, caller) <= range * range
-            && _ai.Hostility.CanAssist(helper, caller)
-            && Map.Combat.Hooks.CanAttack(helper, enemy)
-            && InLineOfSight(helper, caller);
+        return _ai.Hostility.CanAssist(helper, caller)
+            && Map.Combat.Hooks.CanAttack(helper, enemy);
     }
 
     /// <summary>
@@ -568,7 +575,7 @@ public sealed partial class CreatureMapSystem
         creature.HasAggroed = false;
         creature.CalledAssistance = false;
         creature.CombatStart = null;
-        _pendingAssists.RemoveAll(p => ReferenceEquals(p.Helper, creature));
+        _pendingAssists.RemoveAll(p => ReferenceEquals(p.Helper, creature) || ReferenceEquals(p.Caller, creature));
     }
 
     private void ForgetAi(Creature creature)
@@ -625,8 +632,13 @@ public sealed partial class CreatureMapSystem
             foreach (PendingAssist assist in due)
             {
                 Creature helper = assist.Helper;
-                if (!_creatures.ContainsKey(helper.Guid) || !helper.IsAlive || helper.IsEvading
-                    || helper.Combat.Victim is not null || !assist.Enemy.IsAlive || !ReferenceEquals(assist.Enemy.Map, Map))
+                Creature caller = assist.Caller;
+                if (!_creatures.TryGetValue(helper.Guid, out Creature? currentHelper) || !ReferenceEquals(currentHelper, helper)
+                    || !_creatures.TryGetValue(caller.Guid, out Creature? currentCaller) || !ReferenceEquals(currentCaller, caller)
+                    || !ReferenceEquals(helper.Map, Map) || !ReferenceEquals(caller.Map, Map)
+                    || !caller.IsAlive || caller.IsEvading || !ReferenceEquals(caller.Combat.Victim, assist.Enemy)
+                    || !assist.Enemy.IsAlive || !ReferenceEquals(assist.Enemy.Map, Map)
+                    || !CanAssistNow(helper, caller, assist.Enemy))
                 {
                     continue;
                 }

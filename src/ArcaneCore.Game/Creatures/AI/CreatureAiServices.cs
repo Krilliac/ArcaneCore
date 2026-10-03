@@ -23,7 +23,7 @@ public interface ICreatureHostility
 /// explicit enemies, then explicit friends, then the hostile mask against the target's own
 /// mask). Reputation is not modelled yet, so a template-only answer is used for factions with a
 /// reputation list too; contested guards (FACTION_TEMPLATE_FLAG_ATTACK_PVP_ACTIVE_PLAYERS) only
-/// attack PvP-flagged players. Unknown templates are not hostile (fail closed: no aggro).
+/// attack players with PLAYER_FLAGS_CONTESTED_PVP. Unknown templates are not hostile (fail closed: no aggro).
 /// Assistance needs the same faction template (vmangos CanAssistTo with checkfaction).
 /// </summary>
 public sealed class FactionCreatureHostility(FactionTemplateCatalog factions) : ICreatureHostility
@@ -41,7 +41,7 @@ public sealed class FactionCreatureHostility(FactionTemplateCatalog factions) : 
             return false;
         }
 
-        if ((own.Flags & ContestedGuard) != 0 && target is Player && (target.UnitFlags & UnitFlags.Pvp) != 0)
+        if ((own.Flags & ContestedGuard) != 0 && target is Player player && (player.Flags & PlayerFlags.ContestedPvp) != 0)
         {
             return true;
         }

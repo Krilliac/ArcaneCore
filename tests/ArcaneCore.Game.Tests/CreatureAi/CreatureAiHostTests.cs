@@ -401,6 +401,8 @@ public sealed class CreatureAiHostTests
         Assert.False(hostility.IsHostile(Get(3), player));
         Assert.False(hostility.IsHostile(Get(4), player));
         player.UnitFlags |= UnitFlags.Pvp;
+        Assert.False(hostility.IsHostile(Get(4), player));
+        player.Flags |= PlayerFlags.ContestedPvp;
         Assert.True(hostility.IsHostile(Get(4), player));
         Assert.True(hostility.CanAssist(Get(1), Get(1)));
         Assert.False(hostility.CanAssist(Get(1), Get(2)));
