@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Totems;
 
 namespace ArcaneCore.Game.Progression;
 
@@ -64,6 +65,12 @@ public static class KillRewards
         ArgumentNullException.ThrowIfNull(progression);
         ArgumentNullException.ThrowIfNull(recipients);
         ArgumentNullException.ThrowIfNull(victim);
+        if (TotemQuery.IsTotem(victim))
+        {
+            // Player::IsHonorOrXPTarget (Player.cpp:19950) and MaNGOS::XP::Gain (Formulas.h:102-107): a summoned totem is worth nothing.
+            return new uint[recipients.Count];
+        }
+
         KillCandidate[] candidates = recipients
             .Select(p => new KillCandidate(p.Level, p.IsAlive, (p.Flags & PlayerFlags.Ghost) != 0)).ToArray();
         IReadOnlyList<KillShare> shares = KillExperience.Distribute(candidates, victim.Level, IsElite(victim), nonRaidDungeon,

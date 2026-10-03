@@ -6,6 +6,7 @@ using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Totems;
 
 namespace ArcaneCore.World.Npc;
 
@@ -69,6 +70,13 @@ public sealed class QuestObjectiveAdapter(IQuestObjectiveEvents objectives, Func
     private void OnUnitKilled(Unit? killer, Unit victim)
     {
         if (!Authoritative(killer, victim, out Player? player, out Creature? creature))
+        {
+            return;
+        }
+
+        // Player::RewardSinglePlayerAtKill (Player.cpp:19961, 19968-19982): a victim owned by a player is a PvP kill
+        // (IsCharmerOrOwnerPlayerOrPlayerItself), which gives no KilledMonster credit; a totem is owned by its summoner.
+        if (TotemQuery.TryGet(creature, out TotemInfo totem) && totem.Owner is Player)
         {
             return;
         }

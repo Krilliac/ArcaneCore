@@ -159,13 +159,14 @@ public sealed partial class SpellSystem
             case SpellImplicitTarget.EnumUnitsEnemyInCone54:
                 return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(spell, effect, selector), u => IsEnemy(caster, u), cone: true);
             default:
-                return null;
+                // Class lanes register further targets (SpellSystem.TargetSelectors.cs); null = not implemented.
+                return TrySelectRegistered(cast, effect, selector, unitTarget);
         }
     }
 
     /// <summary>Location-only implicit targets (no unit of their own).</summary>
-    private static bool IsLocationTarget(SpellImplicitTarget target)
-        => target is SpellImplicitTarget.LocationCasterHomeBind or SpellImplicitTarget.LocationDatabase
+    private bool IsLocationTarget(SpellImplicitTarget target)
+        => IsRegisteredLocationTarget(target) || target is SpellImplicitTarget.LocationCasterHomeBind or SpellImplicitTarget.LocationDatabase
             or SpellImplicitTarget.LocationCasterDest or SpellImplicitTarget.LocationCasterSrc
             or SpellImplicitTarget.LocationCasterTargetPosition;
 
