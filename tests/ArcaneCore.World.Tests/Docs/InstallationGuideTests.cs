@@ -90,6 +90,28 @@ public sealed class InstallationGuideTests
         Assert.Equal(2, ArcaneCore.Kernel.Ops.ExitCodes.Restart);
     }
 
+    /// <summary>ContentImporterCli.ResolveTarget throws a usage error when a target verb has neither --database nor --provider; the env variable supplies only the connection string.</summary>
+    [Fact]
+    public void EveryImporterExample_NeedingATarget_NamesOne()
+    {
+        string[] targetVerbs = ["import", "import-dbc", "verify"];
+        string[] lines = [.. Text.Split('\n').Where(l => l.Contains("tools/ArcaneCore.ContentImporter -- ", StringComparison.Ordinal))];
+        Assert.Contains(lines, l => l.Contains(" -- import-dbc ", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.Contains(" -- verify", StringComparison.Ordinal));
+        foreach (string line in lines)
+        {
+            string verb = line[(line.IndexOf(" -- ", StringComparison.Ordinal) + 4)..].Split(' ')[0];
+            if (!targetVerbs.Contains(verb) || line.Contains("--dry-run", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            Assert.True(line.Contains("--database ", StringComparison.Ordinal) || line.Contains("--provider ", StringComparison.Ordinal), "no target given: " + line);
+        }
+
+        Assert.Contains("still needs `--provider`", Text, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void EveryProviderValueNamed_IsADatabaseProvider()
     {

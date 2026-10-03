@@ -87,12 +87,12 @@ World content is not shipped. `arcane-content-importer` reads cmangos classic-db
 ```
 dotnet run --project tools/ArcaneCore.ContentImporter -- plan classic-db-dump.sql
 dotnet run --project tools/ArcaneCore.ContentImporter -- import classic-db-dump.sql --provider mariadb --connection-string "Server=127.0.0.1;Database=arcanecore_world;User=arcane;Password=..."
-dotnet run --project tools/ArcaneCore.ContentImporter -- import-dbc path/to/DBFilesClient
-dotnet run --project tools/ArcaneCore.ContentImporter -- verify
+dotnet run --project tools/ArcaneCore.ContentImporter -- import-dbc path/to/DBFilesClient --provider mariadb --connection-string "Server=127.0.0.1;Database=arcanecore_world;User=arcane;Password=..."
+dotnet run --project tools/ArcaneCore.ContentImporter -- verify --provider mariadb --connection-string "Server=127.0.0.1;Database=arcanecore_world;User=arcane;Password=..."
 ```
 
-`plan` reads the dumps and reports without writing anything. The connection can also come from `ARCANECORE_CONTENT_CONNECTION` (keeps the password off
-the command line), and `--database <file>` targets a SQLite file. The importer refuses a database or report path that is inside a git work tree and not
+`plan` reads the dumps and reports without writing anything. Every verb except `plan` needs a target: `--database <file>` for SQLite, or `--provider` (`sqlite`, `mariadb`, `mysql`, `postgresql`) with a connection string. The connection string can come from `ARCANECORE_CONTENT_CONNECTION` (keeps the password off
+the command line), but the variable supplies only the connection string and still needs `--provider`. The importer refuses a database or report path that is inside a git work tree and not
 ignored. Details and limits: [content import](../areas/content-import.md).
 
 ## 7. Check the configuration, then start the daemons
