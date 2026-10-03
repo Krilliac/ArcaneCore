@@ -11,10 +11,16 @@ using Microsoft.Extensions.Options;
 namespace ArcaneCore.World.HotCode;
 
 /// <summary>Connects the metadata-update handler to the refresh for the life of the host.</summary>
-internal sealed class HotCodeHost(HotCodeRefresh refresh, ILogger<HotCodeHost> logger) : IHostedService
+internal sealed class HotCodeHost(HotCodeRefresh refresh, CommandTableSource commands, HotCodeAudit audit, ILogger<HotCodeHost> logger) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        CommandAddResult added = commands.TryAdd([HotCodeCommands.Create(refresh, audit)]);
+        if (!added.Applied)
+        {
+            logger.LogError("The .hotcode command was not registered: {Error}", added.Error);
+        }
+
         HotCodeMetadataHandler.Activate(refresh);
         logger.LogWarning("Code hot reload refresh is active: new opcode handlers, chat commands and default map updaters are picked up after a code edit.");
         return Task.CompletedTask;

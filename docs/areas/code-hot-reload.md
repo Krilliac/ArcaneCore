@@ -38,6 +38,23 @@ runs) is expected to work the same way but has not been demonstrated here.
 When you edit a method **body**, the next call runs the new code. Existing objects keep their
 state, the process keeps its id, and connected clients stay connected.
 
+## `.hotcode` (Administrator, only when enabled)
+
+| Command | Does |
+|---|---|
+| `.hotcode status` | Generation and last applied generation, frozen / degraded state (and why), refreshes applied and rejected, and **Process diverged from build**: yes once the runtime has applied any code edit. |
+| `.hotcode refresh` | Rescan now under a new generation. The answer arrives from the next tick. |
+| `.hotcode freeze` / `thaw` | Stop / resume registry refreshes. Edits the runtime already applied stay applied; freeze only stops the server from picking up *new* registrations. |
+
+The root exists only with `World:HotCode:Enabled=true` (even an Administrator gets "There is no
+such command" otherwise), is appended last so it cannot change how any existing abbreviation
+resolves (tested for every prefix of every existing root at every security level), and every use
+is audited. None of these commands loads code.
+
+"Diverged from build" matters: an applied edit cannot be rolled back. If the source on disk and the
+running process disagree (you reverted the file, or an edit was applied then the tree was changed),
+the process still runs the edited bodies until restart.
+
 ## Configuration (`World:HotCode`)
 
 | Key | Default | Meaning |
