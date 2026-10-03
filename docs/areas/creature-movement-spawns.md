@@ -195,3 +195,31 @@ Limits: battleground maps are not excluded (vmangos never stores them, `MapPersi
 exclusion belongs in `CreatureRespawnQueue.Save`); creature pools/linking that share dormant state are not implemented; the instance reset
 path outside `EfInstanceStore.DeleteInstanceAsync` (an in-memory-only reset) is the instances area's; a crash between a death and its queued write
 loses that one write (same window as vmangos' asynchronous character-database queue).
+
+## Not done in this lane (recorded, not stubbed)
+
+* **Spawn flags** (`RANDOM_RESPAWN_TIME` x urand(90,110)/100, `DYNAMIC_RESPAWN_TIME`, `DEAD`, `DISABLED`, `ACTIVE`, `EVADE_OUT_HOME_AREA`, ...; `ObjectDefines.h:127-134`) and
+  the config-driven dynamic respawn formula (`Creature.cpp:2703-2783`, off by default in vmangos): no column carries them yet.
+* **Creature groups, formations, linking, pools, patrol** (`CreatureGroups.cpp`, `CreatureLinkingMgr`, `PoolManager`): data is mostly cmangos-shaped
+  (`spawn_group*`, 568 entry-0 spawns resolve through `spawn_group_entry` and still do not spawn) and needs a translator. No importer, schema or
+  behaviour was started.
+* **Interaction pause** (`Creature::PauseOutOfCombatMovement`) touches the NPC and quest handlers owned by other lanes.
+* **Stuck/unreachable evade** belongs to the threat-and-aggro lane (`Creature.cpp:~998-1043` sits beside its leash code); leash radius, 3 s leash checks and
+  `NO_LEASH_EVADE` already exist on the base.
+* **Home-leg teleport fallback** when no path exists (`HomeMovementGenerator.cpp:71-72`; no creature teleport primitive exists to reuse), `RemoveAurasAtReset`,
+  addon reload on arrival.
+* **Node scripts, wander at nodes, sub-paths, non-repeating paths** (`WaypointMovementGenerator.cpp:128-242`), navmesh random wander points and flying
+  wander circles, the spline in the create block (`packet_builder.cpp:152-200`), a GM `.wp show`/`.creature movement` inspection command.
+* **Real-client verification** of the destination-relative spline offsets and the walk/run toggle packets. Both references agree, so the retail layout is the
+  default, but the only oracle in the tests is bytes derived by hand from the references.
+
+## References used
+
+vmangos: `Movement/spline/packet_builder.cpp`, `Movement/MoveSplineInit.cpp`, `Movement/MotionMaster.h`, `Movement/RandomMovementGenerator.cpp`,
+`Movement/WaypointMovementGenerator.cpp`, `Movement/WaypointManager.{h,cpp}`, `Movement/HomeMovementGenerator.cpp`, `AI/CreatureAI.cpp`, `Objects/Creature.cpp`
+(`:817-884`, `:1087-1161`, `:1318-1343`, `:1925-2004`, `:2242-2264`, `:2785-2794`, `:3305-3401`), `Maps/Map.cpp:1310-1365`, `Maps/MapPersistentStateMgr.cpp:80-101`,
+`sql/characters.sql:472-480`, `mangosd.conf.dist.in:397,1468-1478,1526,1537-1542`. mangos-classic: `Movement/packet_builder.cpp:60-125`,
+`MotionGenerators/RandomMovementGenerator.cpp`, `MotionGenerators/WaypointManager.{h,cpp}`, `MotionGenerators/WaypointMovementGenerator.cpp:35-80`,
+`Entities/Creature.cpp:1595-1660,636-655,3025-3055`, `Globals/ObjectMgr.cpp:1826-1869`, `World/World.cpp:457`. wow_messages: `smsg_spline_move_set_walk_mode.wowm`.
+classic-db z2815: the `creature`, `creature_movement`, `creature_movement_template`, `creature_spawn_entry`, `spawn_group_*` tables (figures pinned by the
+`RealClassicDb_*` tests, which run when `ARCANECORE_CLASSICDB_DUMP` points at the dump). Nothing was copied into the repository.
