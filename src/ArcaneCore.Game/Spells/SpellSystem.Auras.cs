@@ -107,6 +107,7 @@ public sealed partial class SpellSystem
         holder.AppliedAtUnixSeconds = UnixSecondsClock();
         holder.Slot = holder.NeedsVisibleSlot ? FindFreeSlot(holder.Target, holder.IsPositive) : SpellAuraHolder.NoSlot;
         state.Auras.Add(holder);
+        SitDownForStandingCancelsAura(holder);
         if (holder.Slot != SpellAuraHolder.NoSlot)
         {
             WriteAuraFields(holder, add: true);
@@ -188,6 +189,14 @@ public sealed partial class SpellSystem
             if (IsQuestSettlementPending(holder.Target)
                 || IsQuestSettlementPending(ResolveAuraCaster(holder)))
             {
+                continue;
+            }
+
+            // vmangos Unit::SetStandState (Unit.cpp:9302-9310): standing up removes STANDING_CANCELS auras (food, drink).
+            if ((holder.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.StandingCancels) != 0
+                && holder.Target.StandState is StandState.Stand or StandState.Dead)
+            {
+                RemoveHolder(state, holder);
                 continue;
             }
 
@@ -324,6 +333,31 @@ public sealed partial class SpellSystem
 
         return false;
     }
+
+    /// <summary>
+    /// vmangos SpellAuraHolder::_AddSpellAuraHolder (SpellAuras.cpp:6803-6806): an aura that STANDING_CANCELS (food, drink) sits
+    /// its target down. Standing up removes it again (<see cref="UpdateAuras"/>; vmangos does it inside SetStandState).
+    /// </summary>
+    private static void SitDownForStandingCancelsAura(SpellAuraHolder holder)
+    {
+        if ((holder.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.StandingCancels) == 0 || IsSittingDown(holder.Target))
+        {
+            return;
+        }
+
+        if (holder.Target is Player player)
+        {
+            player.SetStandState(StandState.Sit);
+        }
+        else
+        {
+            holder.Target.StandState = StandState.Sit;
+        }
+    }
+
+    /// <summary>vmangos Unit::IsSittingDown: sitting on the ground or in any chair.</summary>
+    internal static bool IsSittingDown(Unit unit) => unit.StandState is StandState.Sit or StandState.SitChair or StandState.SitLowChair
+        or StandState.SitMediumChair or StandState.SitHighChair;
 
     private void RemoveHolder(UnitSpellState state, SpellAuraHolder holder, AuraRemoveMode mode = AuraRemoveMode.Default)
     {

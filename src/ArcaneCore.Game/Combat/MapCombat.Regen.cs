@@ -25,10 +25,16 @@ public sealed partial class MapCombat
         }
 
         CombatEnvironment power = CombatEnvironment.For(_world);
+        // Player::RegenerateAll (Player.cpp:2269-2287): health regenerates out of combat or with a regeneration-in-combat aura.
+        // (The polymorph clause needs the transform aura, which is not in the engine yet: docs/areas/aura-engine.md.)
+        if (!c.IsInCombat || power.HasAuraType(player, AuraType.ModRegenDuringCombat)
+            || power.HasAuraType(player, AuraType.ModHealthRegenInCombat))
+        {
+            RegenerateHealth(player, power);
+        }
+
         if (!c.IsInCombat)
         {
-            RegenerateHealth(player);
-
             // vmangos Player::RegenerateAll (Player.cpp:2278): rage only decays without SPELL_AURA_INTERRUPT_REGEN (Bloodrage).
             if (!power.HasAuraType(player, AuraType.InterruptRegen))
             {
@@ -45,7 +51,7 @@ public sealed partial class MapCombat
     /// vmangos Player::RegenerateHealth (out of combat): GetRegenHPPerSpirit, ×1.5 when not
     /// standing; fractions carry over to the next tick.
     /// </summary>
-    private static void RegenerateHealth(Player player)
+    private static void RegenerateHealth(Player player, CombatEnvironment environment)
     {
         uint cur = player.Health;
         uint max = player.MaxHealth;
@@ -55,11 +61,38 @@ public sealed partial class MapCombat
         }
 
         UnitCombat c = player.Combat;
-        float add = RegenHealthPerSpirit(player.Class, player.GetUInt32(UpdateFields.UnitFieldStat0 + 4));
-        if (!IsStandingUp(player))
+        IPowerAuraSource? auras = environment.Auras;
+        bool inCombat = c.IsInCombat;
+        bool regenDuringCombat = environment.HasAuraType(player, AuraType.ModRegenDuringCombat);
+        float add = 0.0f;
+        if (!inCombat || regenDuringCombat)
         {
-            add *= 1.5f;
+            add = RegenHealthPerSpirit(player.Class, player.GetUInt32(UpdateFields.UnitFieldStat0 + 4));
+            if (!inCombat)
+            {
+                foreach (SpellAura aura in environment.GetAuras(player, AuraType.ModHealthRegenPercent))
+                {
+                    add *= (100.0f + aura.Amount) / 100.0f;
+                }
+            }
+            else
+            {
+                add *= RegenAuraRules.Total(auras, player, AuraType.ModRegenDuringCombat) / 100.0f;
+            }
+
+            if (!IsStandingUp(player))
+            {
+                add *= 1.5f;
+            }
+
+            if (!inCombat)
+            {
+                add += RegenAuraRules.FoodPerTick(auras, player);
+            }
         }
+
+        // "always regeneration bonus (including combat)", called every 2 s (Player.cpp:2384-2386).
+        add += 2.0f * (RegenAuraRules.Total(auras, player, AuraType.ModHealthRegenInCombat) / 5.0f);
 
         add += c.HealthRegenCarry;
         c.HealthRegenCarry = add - (int)add;
@@ -81,9 +114,13 @@ public sealed partial class MapCombat
         float regenFactor = power == PowerType.Mana ? 1.0f : environment.GetPowerRegenFactor(player, power);
         uint add = power switch
         {
-            PowerType.Mana => player.Combat.LastManaUseTimer > 0
-                ? 0u
-                : PowerRules.ManaPerTick(RegenManaPerSpirit(player.Class, player.GetUInt32(UpdateFields.UnitFieldStat0 + 4)), options.RateMana),
+            PowerType.Mana => PowerRules.ManaPerTick(
+                RegenAuraRules.ManaPerSecond(
+                    environment.Auras,
+                    player,
+                    RegenManaPerSpirit(player.Class, player.GetUInt32(UpdateFields.UnitFieldStat0 + 4)),
+                    player.Combat.LastManaUseTimer > 0),
+                options.RateMana),
             PowerType.Rage => PowerRules.RageDecayPerTick(options.RateRageLoss, regenFactor),
             PowerType.Energy => PowerRules.EnergyPerTick(options.RateEnergy, regenFactor),
             _ => 0u,

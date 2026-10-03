@@ -84,6 +84,13 @@ public interface IPowerAuraSource
     /// <paramref name="power"/> (vmangos Player::Regenerate, Player.cpp:2323-2328); 1 when there is none.
     /// </summary>
     float GetPowerRegenFactor(Unit unit, PowerType power);
+
+    /// <summary>
+    /// The live auras of <paramref name="type"/> on <paramref name="unit"/> (vmangos Unit::GetAurasByType), read by the
+    /// regeneration tick for food, drink and the health regeneration modifiers (<see cref="RegenAuraRules"/>). A source
+    /// that does not implement it reports none.
+    /// </summary>
+    IReadOnlyList<SpellAura> GetAuras(Unit unit, AuraType type) => [];
 }
 
 /// <summary>
@@ -182,6 +189,8 @@ public sealed class CombatEnvironment
     internal bool HasAuraType(Unit unit, AuraType type) => Auras?.HasAuraType(unit, type) ?? false;
 
     internal float GetPowerRegenFactor(Unit unit, PowerType power) => Auras?.GetPowerRegenFactor(unit, power) ?? 1.0f;
+
+    internal IReadOnlyList<SpellAura> GetAuras(Unit unit, AuraType type) => Auras?.GetAuras(unit, type) ?? [];
 }
 
 /// <summary>The <see cref="IPowerAuraSource"/> backed by the world's <see cref="SpellSystem"/>.</summary>
@@ -207,6 +216,29 @@ public sealed class SpellSystemPowerAuras(SpellSystem spells) : IPowerAuraSource
     {
         ArgumentNullException.ThrowIfNull(unit);
         return _spells.GetAuras(unit).Any(h => !h.IsRemoved && h.HasAura(type));
+    }
+
+    public IReadOnlyList<SpellAura> GetAuras(Unit unit, AuraType type)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        List<SpellAura>? found = null;
+        foreach (SpellAuraHolder holder in _spells.GetAuras(unit))
+        {
+            if (holder.IsRemoved)
+            {
+                continue;
+            }
+
+            foreach (SpellAura? aura in holder.Auras)
+            {
+                if (aura is not null && aura.Type == type)
+                {
+                    (found ??= []).Add(aura);
+                }
+            }
+        }
+
+        return found ?? [];
     }
 
     public float GetPowerRegenFactor(Unit unit, PowerType power)
