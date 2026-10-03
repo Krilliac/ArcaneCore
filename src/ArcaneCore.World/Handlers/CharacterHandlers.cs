@@ -33,7 +33,25 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
     {
         ICharacterStore characters = session.Services.GetRequiredService<ICharacterStore>();
         IReadOnlyList<CharacterRecord> list = await characters.GetByAccountAsync(session.AccountId).ConfigureAwait(false);
-        session.Send(WorldOpcode.SmsgCharEnum, CharacterPackets.BuildCharEnum(list));
+
+        // Visible equipment comes from the features that own it (ICharacterHooks); first answer wins.
+        Dictionary<int, CharEnumItem[]>? equipment = null;
+        foreach (ICharacterHooks hooks in session.Services.GetServices<ICharacterHooks>())
+        {
+            IReadOnlyDictionary<int, CharEnumItem[]>? answer = await hooks.GetCharEnumEquipmentAsync(session, list).ConfigureAwait(false);
+            if (answer is null)
+            {
+                continue;
+            }
+
+            equipment ??= [];
+            foreach ((int id, CharEnumItem[] items) in answer)
+            {
+                equipment.TryAdd(id, items);
+            }
+        }
+
+        session.Send(WorldOpcode.SmsgCharEnum, CharacterPackets.BuildCharEnum(list, equipment));
     }
 
     private static async Task HandleCharCreateAsync(WorldSession session, byte[] payload)
@@ -118,6 +136,22 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             new CharacterIdentity(created.Id, created.AccountId, created.Name, created.Race, created.Gender, created.Class));
         session.Logger.LogInformation("[{Endpoint}] '{Account}' created character '{Name}'",
             session.RemoteEndpoint, session.AccountName, name);
+
+        // Starting items, spells … (vmangos Player::Create + SaveToDB) belong to their features.
+        try
+        {
+            foreach (ICharacterHooks hooks in session.Services.GetServices<ICharacterHooks>())
+            {
+                await hooks.OnCharacterCreatedAsync(session, created).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            session.Logger.LogError(ex, "[{Endpoint}] a feature failed to set up new character '{Name}'", session.RemoteEndpoint, name);
+            SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharCreateError);
+            return;
+        }
+
         SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharCreateSuccess);
     }
 
@@ -181,6 +215,24 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         }
 
         IReadOnlyList<ActionButton> buttons = await characters.GetActionButtonsAsync(character.Id).ConfigureAwait(false);
+        var player = new Player(character, CharacterPackets.BuildAppearance(raceInfo, classInfo), session, buttons) { Home = home };
+
+        // Per-character data owned by features (vmangos Player::LoadFromDB: inventory, spells,
+        // quest status …). The player is not yet visible to the world thread. Fail closed.
+        try
+        {
+            foreach (ICharacterHooks hooks in session.Services.GetServices<ICharacterHooks>())
+            {
+                await hooks.OnPlayerLoadingAsync(session, character, player).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            session.Logger.LogError(ex, "[{Endpoint}] a feature failed to load character {Guid}", session.RemoteEndpoint, character.Id);
+            session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
+            return;
+        }
+
         if (!session.TryBeginLogin())
         {
             return;
@@ -190,7 +242,6 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         var account = new AccountLoginPackets(
             LoginPackets.BuildAccountDataMd5(session.Settings),
             LoginPackets.BuildTutorialFlags(session.Settings.Tutorials));
-        var player = new Player(character, CharacterPackets.BuildAppearance(raceInfo, classInfo), session, buttons) { Home = home };
         WorldRuntime world = session.World;
         world.Post(() => EnterWorld(session, world, character, player, account));
     }

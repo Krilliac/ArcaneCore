@@ -19,14 +19,23 @@ Registering a duplicate fails at startup. Nothing fails silently (charter: fail 
 | GM / player chat commands | Implement `ICommandGroup { IReadOnlyList<ChatCommand> Commands }` in `ArcaneCore.World`. Its roots are appended after the M6 builtins. A duplicate root name throws. | `World/Commands/ICommandGroup.cs` | `BuiltinCommands.cs` |
 | Login / teleport packet stages | `LoginSequence.SendLoginPackets` / `SendInitialPacketsBeforeAddToMap` / `SendInitialPacketsAfterAddToMap` follow the vmangos split. A far teleport repeats the last two (vmangos `HandleMoveWorldportAckOpcode`). | `World/Handlers/LoginSequence.cs` | `CharacterHandlers.cs` |
 | Database tables | Implement `IDataModule` in `ArcaneCore.Data`. It declares `Component` (Auth/Characters/World), `SchemaVersion`, the `SchemaChanges` (additive: `CreateTableChange` / `AddColumnChange`), `ConfigureModel(ModelBuilder)` and `AddServices(IServiceCollection)`. The contexts and `Add…Database` pick it up. Versions per component must be contiguous from 2. A gap or a duplicate throws before any database is touched. | `Data/Schema/DataModules.cs` | the three `*DbContext.cs`, `DataServiceCollectionExtensions.cs` |
+| Per-character data (starting items/spells, inventory/spell/quest load, character-list equipment) | Implement `ICharacterHooks` on an `IWorldFeature` (default interface methods: override only what you need). `OnCharacterCreatedAsync(session, character)` runs after the character row exists (vmangos `Player::Create` + `SaveToDB`); a throw answers CHAR_CREATE_ERROR. `OnPlayerLoadingAsync(session, character, player)` runs before the player is handed to the world thread (vmangos `Player::LoadFromDB`); a throw fails the login with CHAR_LOGIN_FAILED. `GetCharEnumEquipmentAsync(session, characters)` returns `CharEnumItem(displayId, inventoryType)` per slot (20: 19 equipment + first bag) for SMSG_CHAR_ENUM; first answer per character wins. Session task, may use the databases, never world state. | `World/Characters/CharacterHooks.cs` | `CharacterHandlers.cs`, `CharacterPackets.BuildCharEnum` |
 | Test doubles in the end-to-end host | Implement `IWorldTestServices.Register(IServiceCollection)` in `ArcaneCore.World.Tests` (in your own folder). It is registered after the host's services. | `tests/ArcaneCore.World.Tests/WorldTestServices.cs` | `WorldTestHost.cs` |
 
 ## Schema versions
 
-Each component's versions are a single contiguous sequence, so two branches that both pick
-"the next version" will collide. **Ask the lead for a version** or take the next free number
-and note it in `docs/integration/<area>.md`. On a collision the later PR renumbers. Current
-state at this seam: auth v2 (inline, M6), characters v2 (inline, M6), world v1 (no steps).
+Each component's versions are a single contiguous sequence (a gap fails startup, see
+`DataModules.Compose`), so a number cannot be reserved before the branch that uses it is
+merged. **The lead assigns the final number at merge time, in merge order.**
+
+- Keep your module's version in one constant and start with the next free number at your
+  base. Note it in `docs/integration/<area>.md`.
+- When another branch lands that number first, the lead renumbers your constant in the merge
+  (only once your PR is out of draft, so it never races your pushes). Any test that asserts
+  a literal current version should use `<Context>.Schema.CurrentVersion` instead.
+
+Requests so far (2026-10-02): world v2 — grid-terrain, items, spells, quests-npc;
+characters v3 — items, spells, quests-npc. Current base: auth v2, characters v2, world v1.
 
 ## Local build and test (box)
 
