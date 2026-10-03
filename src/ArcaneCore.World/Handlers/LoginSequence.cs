@@ -47,7 +47,9 @@ public static class LoginSequence
         session.Send(WorldOpcode.SmsgInitialSpells,
             session.Services.GetService<SpellFeature>()?.BuildInitialSpells(player) ?? CharacterPackets.BuildInitialSpells());
         session.Send(WorldOpcode.SmsgActionButtons, LoginPackets.BuildActionButtons(player.ActionButtons));
-        session.Send(WorldOpcode.SmsgInitializeFactions, LoginPackets.BuildInitializeFactions());
+        // Reputation (docs/integration/reputation.md): the player's 64 reputation-list slots.
+        session.Send(WorldOpcode.SmsgInitializeFactions,
+            session.Services.GetService<Reputation.ReputationFeature>()?.Service.BuildInitializeFactions(player) ?? LoginPackets.BuildInitializeFactions());
         session.Send(WorldOpcode.SmsgLoginSettimespeed, CharacterPackets.BuildTimeSpeed(DateTime.UtcNow));
     }
 
