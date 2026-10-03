@@ -41,6 +41,12 @@ public sealed class SpellAura
         PeriodicTimer = (int)amplitude;
     }
 
+    /// <summary>
+    /// vmangos Aura::m_positive = SpellEntry::IsPositiveEffect(effect index) (SpellAuras.cpp:276): polarity is decided per
+    /// effect. Set by <see cref="SpellAuraHolder.ResolvePolarity"/> once every effect aura is attached.
+    /// </summary>
+    public bool IsPositive { get; internal set; } = true;
+
     public int EffectIndex { get; }
 
     public AuraType Type { get; }
@@ -86,7 +92,6 @@ public sealed class SpellAuraHolder
         CasterGuid = casterGuid;
         CasterLevel = casterLevel;
         CasterOwner = casterOwner;
-        IsPositive = spell.IsPositive;
         Charges = (int)spell.ProcCharges;
 
         // vmangos SpellAuraHolder ctor: permanent for -1 durations and passive spells; durations
@@ -118,7 +123,36 @@ public sealed class SpellAuraHolder
 
     internal AuraCasterOwner CasterOwner { get; }
 
-    public bool IsPositive { get; }
+    /// <summary>
+    /// vmangos SpellAuraHolder::IsPositive (SpellAuras.cpp:7475-7482): positive only when EVERY aura effect of this holder is
+    /// positive. Computed from the effect auras (<see cref="ResolvePolarity"/>), never from the spell as a whole: Stealth
+    /// carries a -51 speed effect yet is a buff. A holder without aura effects falls back to the spell.
+    /// </summary>
+    public bool IsPositive => _positive ??= ComputePositive(null);
+
+    private bool? _positive;
+
+    private bool ComputePositive(Func<uint, SpellInfo?>? lookup)
+    {
+        bool any = false;
+        bool positive = true;
+        for (int i = 0; i < _auras.Length; i++)
+        {
+            if (_auras[i] is not { } aura)
+            {
+                continue;
+            }
+
+            any = true;
+            aura.IsPositive = Spell.IsPositiveEffect(i, lookup);
+            positive &= aura.IsPositive;
+        }
+
+        return any ? positive : Spell.IsPositiveSpell(lookup);
+    }
+
+    /// <summary>Recompute per-effect and holder polarity once all effect auras exist (the periodic-trigger check needs the spell store).</summary>
+    internal void ResolvePolarity(Func<uint, SpellInfo?>? lookup) => _positive = ComputePositive(lookup);
 
     public bool IsPermanent { get; }
 
@@ -160,7 +194,11 @@ public sealed class SpellAuraHolder
 
     public bool HasAura(AuraType type) => _auras.Any(a => a?.Type == type);
 
-    internal void SetAura(SpellAura aura) => _auras[aura.EffectIndex] = aura;
+    internal void SetAura(SpellAura aura)
+    {
+        _auras[aura.EffectIndex] = aura;
+        _positive = null;
+    }
 
     internal bool IsEmpty => _auras.All(a => a is null);
 

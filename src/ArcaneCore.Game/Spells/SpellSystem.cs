@@ -175,33 +175,6 @@ public sealed partial class SpellSystem
         }
     }
 
-    /// <summary>
-    /// CMSG_CANCEL_AURA (vmangos HandleCancelAuraOpcode): only positive, displayed, cancelable,
-    /// non-passive auras; a channeled spell's aura stops the channel instead.
-    /// </summary>
-    public void CancelAura(Player player, uint spellId)
-    {
-        ArgumentNullException.ThrowIfNull(player);
-        SpellInfo? spell = Store.Get(spellId);
-        if (spell is null || spell.HasAttribute(SpellAttributes.NoAuraCancel) || spell.HasAttribute(SpellAttributes.DoNotDisplay)
-            || spell.IsPassive || !spell.IsPositive)
-        {
-            return;
-        }
-
-        if (spell.IsChanneled)
-        {
-            if (GetState(player.Guid)?.CurrentCast is { State: SpellCastState.Casting } cast && cast.Spell.Id == spellId)
-            {
-                Cancel(cast);
-            }
-
-            return;
-        }
-
-        RemoveAuras(player, spellId);
-    }
-
     // --- world tick ---------------------------------------------------------------------
 
     /// <summary>Advance casts, channels, auras and cooldowns by <paramref name="diffMs"/> (world thread).</summary>

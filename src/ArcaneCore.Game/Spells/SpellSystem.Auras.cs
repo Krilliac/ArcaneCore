@@ -81,6 +81,7 @@ public sealed partial class SpellSystem
     /// </summary>
     internal void AddAuraHolder(SpellAuraHolder holder)
     {
+        holder.ResolvePolarity(Store.Get);
         UnitSpellState state = GetOrCreateState(holder.Target);
         SpellAuraHolder? existing = state.Auras.FirstOrDefault(h => h.Spell.Id == holder.Spell.Id
             && (h.CasterGuid == holder.CasterGuid || holder.IsPositive));
