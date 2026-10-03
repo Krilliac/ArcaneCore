@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Stats;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Progression;
@@ -254,21 +255,22 @@ public sealed class PlayerProgression : IQuestExperience
             player.SetUInt32(field, Add(player.GetUInt32(field), delta));
         }
 
-        healthDelta = (int)stats.BaseHealth - (int)player.GetUInt32(UpdateFields.UnitFieldBaseHealth)
-            + (int)ExperienceFormulas.HealthBonusFromStamina(stats.Stamina) - (int)ExperienceFormulas.HealthBonusFromStamina(old?.Stamina ?? 0);
+        // The class base health and mana move the maximums here; the stamina and intellect bonuses (level base values
+        // plus whatever items add) are StatBonuses', which keeps them in line with the stat fields.
+        healthDelta = (int)stats.BaseHealth - (int)player.GetUInt32(UpdateFields.UnitFieldBaseHealth);
         player.SetUInt32(UpdateFields.UnitFieldBaseHealth, stats.BaseHealth);
         player.MaxHealth = Add(player.MaxHealth, healthDelta);
         manaDelta = 0;
         if (player.PowerType == PowerType.Mana)
         {
-            manaDelta = (int)stats.BaseMana - (int)player.GetUInt32(UpdateFields.UnitFieldBaseMana)
-                + (int)ExperienceFormulas.ManaBonusFromIntellect(stats.Intellect) - (int)ExperienceFormulas.ManaBonusFromIntellect(old?.Intellect ?? 0);
+            manaDelta = (int)stats.BaseMana - (int)player.GetUInt32(UpdateFields.UnitFieldBaseMana);
             int maxMana = UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana;
             player.SetUInt32(maxMana, Add(player.GetUInt32(maxMana), manaDelta));
         }
 
         player.SetUInt32(UpdateFields.UnitFieldBaseMana, stats.BaseMana);
         state.Applied = stats;
+        StatBonuses.Update(player);
         if (refill)
         {
             player.Health = player.MaxHealth;

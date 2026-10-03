@@ -45,6 +45,12 @@ public sealed class PlayerStatState
     /// <summary>The sum of the block values of the worn, unbroken items (SHIELD_BLOCK_VALUE FLAT_MOD).</summary>
     public float ShieldBlockFlat { get; internal set; }
 
+    /// <summary>The health from stamina already included in the maximum health field (<see cref="StatBonuses"/>).</summary>
+    internal uint HealthBonusIncluded { get; set; }
+
+    /// <summary>The mana from intellect already included in the maximum mana field (<see cref="StatBonuses"/>).</summary>
+    internal uint ManaBonusIncluded { get; set; }
+
     /// <summary>The agility based armor already added to the armor field (Player::UpdateArmor's dynamic part).</summary>
     internal int AppliedDynamicArmor { get; set; }
 

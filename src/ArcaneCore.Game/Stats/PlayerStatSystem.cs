@@ -105,6 +105,7 @@ public sealed class PlayerStatSystem : ICombatStatSource
     public void UpdateAll(Player player)
     {
         ArgumentNullException.ThrowIfNull(player);
+        StatBonuses.Update(player);
         UpdateArmor(player);
         UpdateAttackPowerAndDamage(player, ranged: false);
         UpdateAttackPowerAndDamage(player, ranged: true);
