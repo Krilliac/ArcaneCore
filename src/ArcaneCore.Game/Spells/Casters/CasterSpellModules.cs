@@ -15,6 +15,7 @@ public static class CasterSpellModules
         ArgumentNullException.ThrowIfNull(spells);
         options ??= new CasterOptions();
         PowerCostAuras.Register(spells);
+        Drain.DrainAuras.Register(spells);
         if (options.Bonus.Enabled)
         {
             // One amount modifier per spell system: never silently stack over another lane's modifier.

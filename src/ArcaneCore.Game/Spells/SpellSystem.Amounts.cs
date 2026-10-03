@@ -34,7 +34,7 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>One periodic tick's amount through the target side of <see cref="AmountModifier"/>, dithered like vmangos rand_ditheru.</summary>
-    private uint ModifyTick(SpellAmountStage stage, SpellAuraHolder holder, SpellAura aura, Unit caster, uint amount)
+    internal uint ModifyTick(SpellAmountStage stage, SpellAuraHolder holder, SpellAura aura, Unit caster, uint amount)
     {
         if (AmountModifier is null)
         {
@@ -43,5 +43,23 @@ public sealed partial class SpellSystem
 
         float modified = AmountModifier.Modify(stage, caster, holder.Target, holder.Spell, aura.EffectIndex, amount, holder.StackAmount);
         return (uint)Math.Floor(Math.Max(modified, 0f) + Random.NextSingle());
+    }
+
+    /// <summary>The unit that cast an aura while it is still in the world and the aura's target's map (null otherwise); the caster of a tick.</summary>
+    internal Unit? AuraCaster(SpellAuraHolder holder) => ResolveAuraCaster(holder);
+
+    /// <summary>
+    /// vmangos Unit::RemoveAurasWithInterruptFlags(AURA_INTERRUPT_DAMAGE_CANCELS) without any damage: auras that break when
+    /// the unit takes damage (polymorph-like crowd control) go.
+    /// </summary>
+    internal void BreakDamageCancelledAuras(Unit target)
+    {
+        if (GetState(target.Guid) is { } state && ReferenceEquals(state.Unit, target))
+        {
+            foreach (SpellAuraHolder holder in state.Auras.Where(h => (h.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.Damage) != 0).ToArray())
+            {
+                RemoveHolder(state, holder);
+            }
+        }
     }
 }
