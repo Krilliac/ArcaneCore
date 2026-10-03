@@ -199,6 +199,25 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
         return done.Task;
     }
 
+    /// <summary>
+    /// The character was deleted: drop its authoritative snapshot and quarantine so neither a
+    /// shutdown retry nor a later character reusing the id can write it back. Its writes must
+    /// already have drained (<see cref="FlushCharacterAsync"/>).
+    /// </summary>
+    public void ForgetCharacter(int characterId)
+    {
+        lock (_gate)
+        {
+            if (_characters.TryGetValue(characterId, out CharacterState? state) && state.Pending != 0)
+            {
+                throw new InvalidOperationException($"quest saves for deleted character {characterId} are still queued");
+            }
+
+            _characters.Remove(characterId);
+            _quarantined.Remove(characterId);
+        }
+    }
+
     /// <summary>Finish queued operations and retry outstanding failures before releasing storage.</summary>
     public async ValueTask DisposeAsync()
     {
