@@ -39,6 +39,9 @@ public sealed partial class DuelService
     /// <summary>The combo point service: points aimed at the opponent are dropped at completion. Without it that part is skipped.</summary>
     public ComboPointService? Combos { get; set; }
 
+    /// <summary>Late binding for <see cref="Combos"/> when the combo feature attaches after this service. Consulted only while <see cref="Combos"/> is null.</summary>
+    public Func<ComboPointService?>? CombosProvider { get; set; }
+
     /// <summary>Make <paramref name="service"/> the duel service of <paramref name="world"/> (before the world thread starts).</summary>
     public static void Register(WorldRuntime world, DuelService service)
     {
@@ -141,7 +144,7 @@ public sealed partial class DuelService
         RemoveHostileAuras(opponent, player.Guid, duel.StartTimeSeconds);
         RemoveHostileAuras(player, opponent.Guid, duel.StartTimeSeconds);
 
-        if (Combos is { } combos)
+        if ((Combos ?? CombosProvider?.Invoke()) is { } combos)
         {
             if (combos.GetComboTarget(player) == opponent.Guid)
             {
