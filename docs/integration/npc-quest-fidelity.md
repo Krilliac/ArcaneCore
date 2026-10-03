@@ -206,3 +206,41 @@ Needs the real client: the Llane Beshere (Northshire) class-variant gossip once 
 * Objects with a lock (`questgiver.lockId`) go through `GameObjectMapSystem`'s existing checks only.
 * Needs the real client: clicking the Wanted poster (GO 68 -> quest 176) and Rolf's corpse (GO 56 ends 45 and
   starts 71) once the content import (NQ0) supplies the relations.
+
+## Slice NQ0a: the `conditions` table content (narrowed NQ0)
+
+The design's NQ0 imports eleven new tables. Only the table with a finished consumer in this lane, `conditions`
+(the NQ2 evaluator), is delivered here; the others have no consumer wiring yet and stay open (see "Not delivered").
+
+### Delivered
+
+* **Schema.** `ConditionsWorldModule` (`src/ArcaneCore.Data/Npc/`) creates `conditions` at
+  `ConditionsWorldModule.Version` (**World 11**, the next free number after 9 index repair and 10 quest reputation
+  columns; one constant, tests use the constant or `WorldDbContext.Schema.CurrentVersion`, never a literal; the
+  integrator renumbers). The allocation table of `IntegratedSchemaTests` lists it. No cleanup registration: the world
+  schema has no per-character rows.
+* **Columns** are the classic-db layout: `condition_entry` (key), `type` (signed), `value1..value4`, `flags`
+  (the `comments` column is not kept).
+* **Importer.** `ConditionsDumpImporter` reads the cmangos/classic-db `conditions` INSERTs by column name through the
+  existing `MySqlDumpReader`, keeps later rows over earlier ones (counted as `Replaced`), reads the `db_version`
+  row text into the report so an un-updated dump is visible, rejects a bad value (non-numeric, negative unsigned,
+  flags above 255) instead of writing a zero, and **refuses the vmangos layout** (no `value3/value4` columns) because
+  vmangos's type numbering differs from the cmangos numbering the evaluator implements. `WriteAsync(db, replace)` is
+  atomic with the same transaction contract as the other importers (caller transaction protected by a savepoint, a
+  failure restores the previous rows).
+* **Store.** `EfConditionContentStore : IConditionContentStore` is registered by the module, so `ConditionFeature`
+  now loads real rows when the table is populated (until then the table is empty, as before).
+* **Real data, optional.** `ConditionsRealDumpTests` reads the dump named by `ARCANECORE_CLASSICDB_SQL` (`.sql` or
+  `.sql.gz`; never copied into the repository) and prints sizing; without the variable it is skipped with an explicit
+  message ("did NOT run"). Against the classic-db z2815 dump used while developing this slice
+  (`D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`) the importer read 1133 `conditions` rows, all of them
+  passed the cmangos validation (`ConditionTable`), and every type used is a known cmangos type. These counts are sizing,
+  not test constants.
+
+### Not delivered (still open from design NQ0/NQ1)
+
+`npc_vendor_template`, `npc_trainer_template`, `areatrigger_involvedrelation`, `questgiver_greeting`,
+`trainer_greeting`, `spell_chain`, `game_graveyard_zone`, `world_safe_locs`, `taxi_shortcuts`, `creature_template_npc`,
+the quest_template column mapping report (`RewMail*`, scripts, emote delays are not model columns), the item_template
+importer (NQ0b) and the loading of any of them into the runtime stores. `UPDATE` statements in a dump are skipped by the
+shared reader without a count, so un-applied classic-db `Updates` are visible only through `db_version`.
