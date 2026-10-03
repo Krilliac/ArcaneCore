@@ -100,6 +100,13 @@ public sealed record CreatureTemplate
 
     /// <summary>vmangos CREATURE_FLAG_EXTRA_* / cmangos ExtraFlags (ALWAYS_RUN 0x40, INVISIBLE 0x80 are read here).</summary>
     public uint ExtraFlags { get; init; }
+
+    /// <summary>
+    /// Script selection (cmangos-classic <c>creature_template.AIName</c>, vmangos <c>ai_name</c>):
+    /// "EventAI" runs the <c>creature_ai_scripts</c> rows; a registered C# AI name selects that AI;
+    /// empty picks the default (docs/areas/creature-ai.md).
+    /// </summary>
+    public string AIName { get; init; } = string.Empty;
 }
 
 /// <summary>One placed creature (a <c>creature</c> row).</summary>
@@ -133,7 +140,11 @@ public sealed record CreatureSpawn
 }
 
 /// <summary>One point of a spawn's waypoint path (<c>creature_movement</c>).</summary>
-public sealed record CreatureWaypoint(uint Point, float X, float Y, float Z, float Orientation, uint WaitTimeMs);
+public sealed record CreatureWaypoint(uint Point, float X, float Y, float Z, float Orientation, uint WaitTimeMs)
+{
+    /// <summary>Travel to this node at run speed (world schema creature-AI step, <c>creature_movement.Run</c>).</summary>
+    public bool Run { get; init; }
+}
 
 /// <summary>Per-display model data (cmangos creature_model_info, vmangos creature_display_info_addon).</summary>
 public sealed record CreatureModelInfo(uint DisplayId, float BoundingRadius, float CombatReach, byte Gender, uint DisplayIdOtherGender);
@@ -160,8 +171,10 @@ public sealed class CreatureContent
         IEnumerable<CreatureSpawn> spawns,
         IEnumerable<(uint SpawnGuid, CreatureWaypoint Point)> waypoints,
         IEnumerable<CreatureModelInfo> models,
-        IEnumerable<CreatureAddon> addons)
+        IEnumerable<CreatureAddon> addons,
+        CreatureAiContent? ai = null)
     {
+        Ai = ai ?? CreatureAiContent.Empty;
         _templates = templates.ToDictionary(t => t.Entry);
         _models = models.ToDictionary(m => m.DisplayId);
         _addons = addons.ToDictionary(a => a.Guid);
@@ -175,6 +188,9 @@ public sealed class CreatureContent
     }
 
     public int TemplateCount => _templates.Count;
+
+    /// <summary>EventAI scripts and texts (<c>creature_ai_scripts</c>, <c>creature_ai_texts</c>).</summary>
+    public CreatureAiContent Ai { get; }
 
     public int SpawnCount { get; }
 
