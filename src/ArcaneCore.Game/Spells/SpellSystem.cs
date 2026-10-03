@@ -263,7 +263,7 @@ public sealed partial class SpellSystem
 
     // --- cast pipeline ------------------------------------------------------------------
 
-    private SpellCastResult Prepare(Unit caster, SpellInfo spell, SpellCastTargets targets, bool triggered)
+    private SpellCastResult Prepare(Unit caster, SpellInfo spell, SpellCastTargets targets, bool triggered, Items.Item? castItem = null)
     {
         if (IsQuestSettlementPending(caster))
         {
@@ -292,7 +292,7 @@ public sealed partial class SpellSystem
         }
 
         Unit? unitTarget = ResolveUnitTarget(caster, targets);
-        SpellCastResult result = CheckCast(state, spell, targets, unitTarget, triggered, strict: true);
+        SpellCastResult result = CheckCast(state, spell, targets, unitTarget, triggered, strict: true, castItem: castItem);
         if (result != SpellCastResult.CastOk)
         {
             SendCastResult(caster, spell, result, triggered);
@@ -300,7 +300,7 @@ public sealed partial class SpellSystem
         }
 
         int castTime = triggered ? 0 : CastTimeFor(caster, spell);
-        var cast = new SpellCast(spell, caster, targets, triggered, castTime, PowerCostFor(caster, spell), DurationFor(caster, spell));
+        var cast = new SpellCast(spell, caster, targets, triggered, castTime, PowerCostFor(caster, spell), DurationFor(caster, spell)) { CastItem = castItem };
         if (!triggered)
         {
             state.CurrentCast = cast;
@@ -332,7 +332,7 @@ public sealed partial class SpellSystem
         SpellInfo spell = cast.Spell;
         UnitSpellState state = GetOrCreateState(caster);
         Unit? unitTarget = ResolveUnitTarget(caster, cast.Targets);
-        SpellCastResult result = CheckCast(state, spell, cast.Targets, unitTarget, cast.IsTriggered, strict: false, skipCooldown: true);
+        SpellCastResult result = CheckCast(state, spell, cast.Targets, unitTarget, cast.IsTriggered, strict: false, skipCooldown: true, castItem: cast.CastItem);
         if (result != SpellCastResult.CastOk)
         {
             SendCastResult(caster, spell, result, cast.IsTriggered);
@@ -348,6 +348,7 @@ public sealed partial class SpellSystem
         InterruptAtCastCompletion(cast); // rogue lane: ACTION_LATE / ATTACKING half (vmangos Spell.cpp:3697-3714), docs/integration/rogue-aura-interrupt.md
         AddCooldown(state, spell, cast.IsTriggered);
         TakePower(caster, spell, cast.PowerCost, cast.IsTriggered);
+        TakeCosts(cast); // crafting lane: reagents (vmangos Spell::TakeReagents, Spell.cpp:3716-3718) sit between TakePower and TakeAmmo
         TakeAmmo(caster, spell); // ranged (hunter lane): vmangos order TakePower, TakeReagents, TakeAmmo (Spell.cpp:3716-3718)
         SendCastResult(caster, spell, SpellCastResult.CastOk, cast.IsTriggered);
         cast.Completed = true;
@@ -569,7 +570,7 @@ public sealed partial class SpellSystem
     /// Line of sight is delegated to the vmap-los seam. Reagents, items, shapeshift, facing and area restrictions belong to other
     /// areas (docs/areas/spells.md).
     /// </summary>
-    private SpellCastResult CheckCast(UnitSpellState state, SpellInfo spell, SpellCastTargets targets, Unit? unitTarget, bool triggered, bool strict, bool skipCooldown = false)
+    private SpellCastResult CheckCast(UnitSpellState state, SpellInfo spell, SpellCastTargets targets, Unit? unitTarget, bool triggered, bool strict, bool skipCooldown = false, Items.Item? castItem = null)
     {
         Unit caster = state.Unit;
         if (IsQuestSettlementPending(caster))
@@ -578,7 +579,7 @@ public sealed partial class SpellSystem
         }
 
         // Registered first checks (stand state): vmangos Spell.cpp:5309.
-        SpellCastResult start = RunCastChecks(SpellCheckPhase.Start, caster, spell, targets, unitTarget, triggered, strict);
+        SpellCastResult start = RunCastChecks(SpellCheckPhase.Start, caster, spell, targets, unitTarget, triggered, strict, castItem);
         if (start != SpellCastResult.CastOk)
         {
             return start;
@@ -595,7 +596,7 @@ public sealed partial class SpellSystem
         }
 
         // Registered caster-state checks (shapeshift, caster aura state): vmangos Spell.cpp:5349-5392.
-        SpellCastResult casterState = RunCastChecks(SpellCheckPhase.Caster, caster, spell, targets, unitTarget, triggered, strict);
+        SpellCastResult casterState = RunCastChecks(SpellCheckPhase.Caster, caster, spell, targets, unitTarget, triggered, strict, castItem);
         if (casterState != SpellCastResult.CastOk)
         {
             return casterState;
@@ -656,7 +657,7 @@ public sealed partial class SpellSystem
             checkedTarget = target;
 
             // Registered target-state checks (target aura state): vmangos Spell.cpp:5636.
-            SpellCastResult targetState = RunCastChecks(SpellCheckPhase.Target, caster, spell, targets, target, triggered, strict);
+            SpellCastResult targetState = RunCastChecks(SpellCheckPhase.Target, caster, spell, targets, target, triggered, strict, castItem);
             if (targetState != SpellCastResult.CastOk)
             {
                 return targetState;
@@ -664,7 +665,7 @@ public sealed partial class SpellSystem
         }
 
         // Registered equipment checks: vmangos CheckItems (Spell.cpp:5698), before CheckRange (:5707) and CheckPower (:5721).
-        SpellCastResult items = RunCastChecks(SpellCheckPhase.Items, caster, spell, targets, checkedTarget, triggered, strict);
+        SpellCastResult items = RunCastChecks(SpellCheckPhase.Items, caster, spell, targets, checkedTarget, triggered, strict, castItem);
         if (items != SpellCastResult.CastOk)
         {
             return items;
@@ -708,14 +709,14 @@ public sealed partial class SpellSystem
             return targetRules;
         }
 
-        SpellCastResult effectChecks = CheckEffects(caster, spell, targets, unitTarget, triggered, strict);
+        SpellCastResult effectChecks = CheckEffects(caster, spell, targets, unitTarget, triggered, strict, castItem);
         if (effectChecks != SpellCastResult.CastOk)
         {
             return effectChecks;
         }
 
         // Registered checks inside vmangos CheckPower, before the amounts (combo points, Spell.cpp:7035-7038).
-        SpellCastResult beforePower = RunCastChecks(SpellCheckPhase.Power, caster, spell, targets, unitTarget, triggered, strict);
+        SpellCastResult beforePower = RunCastChecks(SpellCheckPhase.Power, caster, spell, targets, unitTarget, triggered, strict, castItem);
         if (beforePower != SpellCastResult.CastOk)
         {
             return beforePower;
@@ -728,7 +729,7 @@ public sealed partial class SpellSystem
         }
 
         // Registered checks after power and caster auras: the target aura state (Spell.cpp:5733-5742).
-        return RunCastChecks(SpellCheckPhase.Final, caster, spell, targets, unitTarget, triggered, strict);
+        return RunCastChecks(SpellCheckPhase.Final, caster, spell, targets, unitTarget, triggered, strict, castItem);
     }
 
     /// <summary>

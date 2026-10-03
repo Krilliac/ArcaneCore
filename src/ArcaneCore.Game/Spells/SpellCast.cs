@@ -36,6 +36,9 @@ public sealed class SpellCast
 
     public bool IsTriggered { get; }
 
+    /// <summary>The item the spell is cast from (vmangos Spell::m_CastItem; CMSG_USE_ITEM, recipes, bandages, poisons), or null. Set once at prepare.</summary>
+    public Items.Item? CastItem { get; internal set; }
+
     public SpellCastState State { get; internal set; } = SpellCastState.Preparing;
 
     /// <summary>
