@@ -68,11 +68,10 @@ when the stored values are clamped to them.
   health and mana, rage empty (`Player::LoadCorpse` -> `ResurrectPlayer(0.5f)`, `Player.cpp:15434-15439`).
 
 ## Limits (explicit, nothing is stubbed behind them)
-- Not delivered from the design: graveyard data and selection, so a released spirit stays at its body
-  (`CombatHooks.RepopAtGraveyard` still has no override); the real ghost aura (8326 / 20584) and
-  resurrection sickness (15007); durability loss on death; spirit visibility; ghost dungeon rules;
-  resurrection requests; rest state persistence; bank slot persistence; the Map.dbc import. These
-  slices were not started.
+- Not delivered from the design: rest state persistence; bank slot persistence; the Map.dbc import. The
+  graveyards, the ghost aura, durability loss on death, spirit visibility, ghost dungeon rules and resurrection
+  requests were delivered later by the graveyards-resurrection lane (docs/areas/graveyards-resurrection.md);
+  resurrection sickness (15007) is applied by the spirit healer only.
 - The body is not kept in the world while its owner is offline (vmangos keeps the corpse object in the
   world and saves it with the map). It is stored with the character and put back at the next login. Other
   players therefore do not see an offline player's body, and it does not decay to bones while its owner
