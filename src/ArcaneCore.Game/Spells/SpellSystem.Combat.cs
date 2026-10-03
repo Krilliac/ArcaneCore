@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Ranged;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Protocol;
 
@@ -241,9 +242,17 @@ public sealed partial class SpellSystem
             }
         }
 
-        WeaponAttackType attack = context.Spell.DamageClass == SpellDamageClass.Ranged ? WeaponAttackType.RangedAttack : WeaponAttackType.BaseAttack;
+        // ranged (autorepeat lane): SpellEntry::GetWeaponAttackType (SpellEntry.cpp:434-455): a ranged class spell, and any other class that
+        // carries the auto-repeat attribute (wand Shoot, damage class magic), swings the RANGED weapon.
+        WeaponAttackType attack = RangedSpellFacts.UsesRangedWeapon(context.Spell) ? WeaponAttackType.RangedAttack : WeaponAttackType.BaseAttack;
         float weapon = WeaponDamageRoll(context.Caster, attack, normalized);
-        float total = Math.Max(0f, (weapon + bonus) * percent);
+        float total = (weapon + bonus) * percent;
+        if (attack == WeaponAttackType.RangedAttack)
+        {
+            total += RangedDamageBonus.FlatBonus(this, context.Caster, context.Target, normalized); // auras 127, 131 and 113
+        }
+
+        total = Math.Max(0f, total);
         if (total < 1f)
         {
             return;

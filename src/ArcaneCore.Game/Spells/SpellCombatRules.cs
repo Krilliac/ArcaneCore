@@ -218,6 +218,11 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
             miss = 5.0f + ((target.Level - caster.Level) * 5 * 0.1f);
         }
 
+        if (attack == WeaponAttackType.RangedAttack)
+        {
+            miss -= system.GetTotalAuraModifier(target, AuraType.ModAttackerRangedHitChance); // ranged (autorepeat lane): SpellCaster.cpp:416
+        }
+
         miss = Math.Clamp(miss, 0f, 60f);
         int roll = system.Random.Next(0, 10_000);
         int bound = (int)(miss * 100);
