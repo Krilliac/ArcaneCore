@@ -4,6 +4,107 @@ Change C# while the world daemon is running and have the change take effect with
 Two independent lanes, both **off by default** and neither part of the retail server. Neither has
 anything to do with the *content* reload lane (database rows); this page is only about code.
 
+## Quick start: test my changes live
+
+Goal: a server running on your PC that a real WoW 1.12.1 client can connect to, where a change to the C# source
+shows up in the running server a few seconds after you save it, without restarting it or dropping the client.
+Local test machine only: Debug build, Development environment, loopback addresses, a disposable database.
+
+1. **Check the tools.** `dotnet --list-sdks` must list a 10.x SDK (this was measured with 10.0.401). The client's
+   `realmlist.wtf` must say `set realmlist 127.0.0.1` (it already does at `D:\World of Warcraft Classic 1.12.1`).
+2. **Start everything with one command**, from the repo root (never needs `-ExecutionPolicy Bypass`):
+
+   ```powershell
+   powershell -File scripts\dev-runner.ps1
+   ```
+
+   The first start builds Debug (a minute or two). It opens two console windows, **ArcaneCore dev: realm** and
+   **ArcaneCore dev: world**, each running under `dotnet watch`, and prints the realm address (`127.0.0.1:3724`),
+   the dev account name (`DEVGM`, an Administrator) and the path of the password file. The run directory is
+   `%TEMP%\ArcaneCore-dev-dev` (`-Name other` makes another one); it holds fresh SQLite databases, the logs
+   (`logs\world.log`, `logs\realm.log`) and `dev-account.txt` with the generated password.
+3. **Log in with the real client.** Account `DEVGM`, the password from `dev-account.txt` (12 characters), realm
+   "ArcaneCore Dev". Create a character and enter the world. (No client at hand? Build the mock client **before**
+   you start the runner, see Troubleshooting, then run
+   `dotnet tools\ArcaneCore.MockClient\bin\Debug\net10.0\arcane-mock.dll live --credentials-file %TEMP%\ArcaneCore-dev-dev\dev-account.txt --say ".server info"`.)
+4. **Check that hot reload is on.** In game type `.hotcode status` (Administrator only). It reports the generation and
+   `Process diverged from build: no`. Or run `powershell -File scripts\dev-runner.ps1 -Status`.
+5. **Change code while connected.** Edit a `.cs` file under `src\`, for example the text of a reply in
+   `src\ArcaneCore.World\Commands\BuiltinCommands.cs`, and save. The world window prints
+   `dotnet watch : C# and Razor changes applied in ... ms.` (about two to three seconds after the save). Run the
+   command again in game: the new text appears, on the same connection, with no relog. A new file with a new
+   chat command or opcode handler group is picked up too (`Code hot reload applied (generation N)`).
+6. **If the world window asks `Do you want to restart your app? Yes (y) / No (n) / Always (a) / Never (v)`**, the edit
+   cannot be applied live (the line above names the reason, for example `ENC0047: Changing visibility of class requires
+   restarting the application`). Nothing was restarted and nothing will be until you answer: your client stays
+   connected and keeps running the old code. Answer `n` to keep going (revert the edit), or `y` to restart the world (the
+   world saves, then every client is disconnected and has to log in again). The prompt blocks further reloads until it
+   is answered.
+7. **New code as a module** (a separate dll that you load, replace and unload without any restart, also useful for a
+   Release build). Copy `tools\hotmodule-template\GmCommands`, edit it, then:
+
+   ```powershell
+   powershell -File scripts\dev-module.ps1 -Project tools\hotmodule-template\GmCommands
+   ```
+
+   and in game `.hotmodule load GmCommands`, then try `.modhello`. After the next edit rerun the script and use
+   `.hotmodule reload GmCommands`; `.hotmodule unload GmCommands` removes it. The script puts the dll in the run's
+   module directory and **approves its SHA-256** in `modules-allowlist.txt` (see "The module allowlist").
+8. **Stop.** `powershell -File scripts\dev-runner.ps1 -Stop` sends Ctrl+Break to both windows: the world saves
+   and both windows close. Start again later with `powershell -File scripts\dev-runner.ps1 -Reuse` to keep the
+   databases, character and account. Without `-Reuse` an existing run directory is refused, never overwritten.
+
+### What changes live and what needs a restart
+
+The first four rows were measured on SDK 10.0.401 with the runner above (a mock client stayed connected throughout); the rest are the runtime's documented limits and are not re-measured here:
+
+| You change | Result |
+|---|---|
+| The body of an existing method (a chat command's reply, a handler, a formula, a map updater) in `ArcaneCore.World` | Live, about 2.6 s from save to first changed reply; same process id, same connection |
+| A new file with a new `ICommandGroup` / `IOpcodeHandlerGroup` / `[DefaultMapUpdater]` | Live: the registry refresh adds it (the registry refresh was applied 1.4 s after the save; a command sent 0.45 s after the save still got "There is no such command", the next one 5 s later worked). Existing maps keep their updaters |
+| A private method rename, a method return type, a property type | The runtime **applied** them, but "applied" is not "works": the return-type change made the next call throw `TypeLoadException` (contained: the command reported failure, the client stayed connected) until the edit was reverted. Treat any signature change as a restart |
+| The visibility of a class | Not applied: `ENC0047 ... requires restarting the application`, the watch prompt (step 6) |
+| Static initializers and constructors, `static readonly` tables, DI wiring and constructor parameters, the set of `IWorldFeature`s / `IDataModule`s and the EF model, listener, port, tick interval, threads that already started, NuGet packages | Restart (the runtime cannot rerun them) |
+| Any Release build | Never patched; restart |
+| `appsettings` values and the run's `appsettings.json` | Restart (read once at start) |
+| A module (`.hotmodule`) | Load, reload and unload live; module code only gets the interfaces the module lane exposes (opcode handler groups and chat command groups) |
+
+An applied edit cannot be rolled back (`.hotcode status` says `Process diverged from build: yes`); reverting the
+source is another forward edit, or restart. Edits are not tick-atomic.
+
+### Troubleshooting
+
+* **`port 3724 is already in use`**: another server (or another session's runner) owns it. The script names the
+  process and does not touch it. Use `-RealmPort 3725 -WorldPort 8086` (and `set realmlist 127.0.0.1:3725` for the client).
+* **A build error such as `MSB3027 ... is locked by ArcaneCore.World` while the runner is up.** Anything that
+  references `ArcaneCore.World` (the mock client, the test projects, `dotnet build ArcaneCore.slnx`) tries to
+  rebuild the running server's files. Build those first, or `-Stop` the runner. A hot-edited server must not be
+  rebuilt underneath. Modules built from `tools\hotmodule-template` are safe: they reference the built dlls and never
+  rebuild the world project.
+* **No window appears / the windows are hidden.** The script starts each daemon in a normal console window of the
+  PowerShell that runs it. When the script itself is started from a tool without a desktop (an editor task, an
+  automation harness) Windows may hide them; the daemons still run and write `logs\world.log` and `logs\realm.log`.
+  Run the script from a normal PowerShell window to see them.
+* **`.hotcode` / `.hotmodule` say "There is no such command".** Your account is not an Administrator, or the lane is
+  off. The dev account is an Administrator; the runner enables both lanes for its own processes only.
+* **The world refuses to start (exit 78, `refuses to start`)**: `HotCodeGuard`. Read the message: hot reload was
+  requested outside Development / Staging, or the runtime is set up for hot reload without
+  `World:HotCode:Enabled` (a debugger session sets `DOTNET_MODIFIABLE_ASSEMBLIES` too).
+* **`.hotmodule load X` answers `refused by the module allowlist`.** The dll's SHA-256 is not in
+  `modules-allowlist.txt`: run `scripts\dev-module.ps1` (it builds and approves), or add the hash yourself.
+* **`Unloaded modules not yet freed by the runtime: 1`.** The runtime has not collected the unloaded module yet; the
+  host never forces a GC. It reached 0 here only after a collection (a hot-edited command that called `GC.Collect()`
+  took it from 1 to 0); a count that stays above 0 after collections means module code is holding a reference.
+* **`-Stop` says `STILL RUNNING`.** Close the named window by hand (the world may not have saved); check
+  `logs\world.log` for `World saved and stopped`.
+* **Forgot the password.** Delete `dev-account.txt` and start with `-Reuse`: the account's password is reset and a
+  new file is written.
+* **After a restart the client is dropped.** Expected: a restart (yours, or `-RestartOnRudeEdit`) ends the process.
+  On SDK 10.0.401 that restart ran the host shutdown and logged `World saved and stopped`; the new process starts
+  with every client disconnected.
+
+## The two lanes
+
 | Lane | For | Needs | Switch |
 |---|---|---|---|
 | **Development runner** (`dotnet watch`) | editing the server's own source and seeing it live | SDK, Debug build, Development or Staging | `World:HotCode:Enabled` |
@@ -23,6 +124,8 @@ process. The server itself contributes only the safety gate (below). The runtime
 the patching; this lane has no code loader of its own (the module lane below is the loader).
 
 ## Using it
+
+For the full local test environment (realm + world, a dev account, windows, stop) use `scripts/dev-runner.ps1` (see "Quick start" above); the lower-level `hot-runner` scripts below only start the world daemon under `dotnet watch`.
 
 ```powershell
 scripts/hot-runner.ps1                       # interactive: asks before restarting
@@ -103,8 +206,12 @@ Reloadable live (Debug build, verified by the spike for a body edit):
 **Needs a restart.** The runtime, not ArcaneCore, decides, and the watch window says
 `Restart is needed`:
 
-* any signature change, return type change, rename, delete, base type or interface change,
-  generic arity change (verified: a signature edit made the process restart with a new pid);
+* what the compiler marks as a rude edit (the watch window says `ENC####: ... requires restarting the application`;
+  measured: changing the visibility of a class), base type or interface changes, generic arity changes. **Do not
+  assume a signature change is refused**: on SDK 10.0.401 a method return-type change, a private method rename and a
+  property type change were all *applied* live, and the return-type change then made the next call throw
+  `TypeLoadException` until it was reverted (the spike below saw a signature edit restart the process; the two
+  measurements disagree, so the SDK/runtime decides, not this page). Treat any signature change as needing a restart;
 * static initializers and static constructors of existing types, including `static readonly`
   tables and `FrozenDictionary` snapshots built from code: they ran once and are not re-run;
 * the set of `IWorldFeature` types, `IDataModule`s and the EF model, DI wiring and constructor
@@ -214,9 +321,42 @@ module directory, so the trust boundary is who can write that directory.
 | `Enabled` | `false` | Opt in. With it off no module object, command or hosted service exists. |
 | `Directory` | empty | Required when enabled; the server refuses to start without it (exit 78). |
 | `AllowAnyEnvironment` | `false` | Modules are accepted in Development and Staging only. Set this to allow them in a deployed (Production) instance: the operator saying that code may be loaded there. Has no effect on the dotnet-watch lane, which stays Development / Staging only. |
+| `Allowlist` | empty | Path of a file of SHA-256 hashes (see "The module allowlist"): a module whose hash is not listed is refused and audited. Empty: no hash check, except that a non-Development/Staging instance (`AllowAnyEnvironment`) refuses to start without it. |
 | `LoadOnStart` | `[]` | Module names loaded once the world is running (a failure is logged, not fatal). |
 
 `World:HotCode:AuditLogPath` is shared with the other lane. Startup logs a warning when modules are enabled.
+
+### The module allowlist (`World:HotCode:Modules:Allowlist`)
+
+A text file of SHA-256 hashes, one per line. A module is loaded only if the hash of its dll's bytes is listed.
+
+```text
+# blank lines and lines starting with # are ignored
+6136F56CE4E04BEDFE27F41F69EF05E928797D01BF3247E8FD8582387A17801D  GmCommands v1  (anything after the hash is a label)
+0e14067c88e64702f938da183961b51777104e0e5c1d559692248cb2d3153a36  GmCommands v2  (hex in either case)
+```
+
+* **Compute a hash**: `Get-FileHash -Algorithm SHA256 <module>\<name>.dll` (PowerShell) or `sha256sum <name>.dll`.
+  `scripts\dev-module.ps1` does it and appends the line for the dev runner. `.hotmodule load` also prints the
+  hash, and a refusal names it, so you can approve exactly what you saw.
+* **Where it lives**: the key is a path in the host configuration
+  (`World__HotCode__Modules__Allowlist=C:\path\allow.txt` or `World:HotCode:Modules:Allowlist` in `appsettings`).
+  The dev runner sets it to `<run directory>\modules-allowlist.txt`. Keep the file writable only by the operator: it is
+  the approval, so whoever can edit it decides what code the server may load. The in-game command cannot add a hash.
+* **Refusal**: the load or reload is rejected before any module code runs; the running version, if any, stays in
+  force; the audit log gets `module-rejected ... refused by the module allowlist: sha256 <hash> is not in the allowlist`.
+* **Fail-closed once configured**: a missing, unreadable, larger than 1 MB or malformed file (any non-comment line
+  whose first token is not 64 hex digits, reported with its line number) refuses every module. A malformed line is
+  never skipped: a typo must not silently shrink the list you reviewed. An empty list (only comments) allows nothing.
+* **Read on every load and reload**, so approving a new build needs no restart. The hash is taken from the very
+  bytes that are then loaded (no second read), so the file cannot be swapped between check and load.
+* **Empty key (the default)**: no hash check; any dll that is in the module directory can be loaded by an
+  Administrator. That is the behaviour of a Development or Staging run with no allowlist, and startup logs a warning
+  saying so. It is **not** accepted for a Production instance: `AllowAnyEnvironment=true` outside Development / Staging
+  without an `Allowlist` refuses to start (exit 78).
+
+The allowlist is a list of approved builds, not a signature: it says nothing about who produced a dll, and anyone who
+can write to the allowlist file or to the server's process can run code as the server.
 
 ### What happens on `load`, `reload` and `unload`
 
@@ -270,7 +410,7 @@ refused without a directory; refused outside Development / Staging unless the op
 SHA-256 in every audit line. The directory must be writable only by the account that runs the server
 (and the operator who deploys): anyone who can write there and has an Administrator in-game account can
 run code as the server. The audit log is written by the same account and is not tamper-proof. There is
-no signature check: do not point this at a directory other people can write to.
+no signature check: the allowlist (above) approves builds by hash, not authors. Do not point this at a directory other people can write to.
 
 ### Tests
 
@@ -282,7 +422,7 @@ clash with a handler the module does not own, a command that shadows an existing
 non-managed file, an assembly named wrongly, a junction, a name that is a path, and a commit the world
 thread never reaches all change nothing; readers never see a window where a handler present in both
 versions is missing during twelve reloads; every decision is audited; and the unload is collected.
-`ModuleLaneConfigTests` proves it is off by default (no service registered) and fails closed. Not covered
+`ModuleAllowlistTests` covers the allowlist logic (empty setting, case, comments and labels, unlisted hash, missing, empty, malformed, oversize and directory files, edit without restart) and `ModuleHostTests` proves a refusal changes nothing and is audited and that approving a new build lets the reload through. `ModuleLaneConfigTests` proves it is off by default (no service registered) and fails closed (including: a Production opt-in needs an allowlist). Not covered
 by a test: the `.hotmodule` handlers themselves (they need a logged-in session) and a real `WorldRuntime`
 tick loop; the swap is exercised through the same `IHotCodeWorld` seam the registry refresh tests use.
 

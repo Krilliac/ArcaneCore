@@ -333,13 +333,13 @@ $realmWindow = Start-Process -FilePath $psExe -ArgumentList @('-NoProfile', '-Fi
 } | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding utf8
 
 function Wait-Listening([int]$port, $window, [string]$label) {
-    $deadline = (Get-Date).AddSeconds(120)
+    $deadline = (Get-Date).AddSeconds(180)
     while ((Get-Date) -lt $deadline) {
         if (-not (Test-Alive $window.Id)) { Fail "the $label window exited during startup; see $run\logs\$label.log" 9 }
         if (Get-ListenerOwner $port) { return }
         Start-Sleep -Milliseconds 500
     }
-    Fail "the $label did not start listening on port $port within 120 s; see $run\logs\$label.log" 9
+    Fail "the $label did not start listening on port $port within 180 s (a first start builds under watch and a busy machine is slower); see $run\logs\$label.log. The windows are still up: wait, or run -Stop -Name $Name." 9
 }
 
 Write-Host 'dev-runner: waiting for the daemons to listen (first start compiles under watch) ...'
