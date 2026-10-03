@@ -299,22 +299,23 @@ public sealed class SchemaBootstrapGuardsTests : IAsyncLifetime
         DbConnection connection = options.Provider switch
         {
             DatabaseProvider.Sqlite => new SqliteConnection(options.ConnectionString + ";Pooling=False"),
-            DatabaseProvider.PostgreSql => new NpgsqlConnection(options.ConnectionString),
-            _ => new MySqlConnection(options.ConnectionString),
+            DatabaseProvider.PostgreSql => new NpgsqlConnection(options.ConnectionString + ";Pooling=false"),
+            _ => new MySqlConnection(options.ConnectionString + ";Pooling=false"),
         };
         await connection.OpenAsync();
+        // pg_try_advisory_lock returns a boolean; pg_advisory_lock returns void and so cannot say whether it took the lock.
         string sql = options.Provider switch
         {
             DatabaseProvider.Sqlite => "BEGIN IMMEDIATE",
-            DatabaseProvider.PostgreSql => $"SELECT pg_advisory_lock({AdvisoryKeyOf(component)})",
+            DatabaseProvider.PostgreSql => $"SELECT pg_try_advisory_lock({AdvisoryKeyOf(component)})",
             _ => $"SELECT GET_LOCK(SHA1(CONCAT('arcanecore_schema:', DATABASE(), ':{component}')), 0)",
         };
         await using (DbCommand command = connection.CreateCommand())
         {
             command.CommandText = sql;
             object? result = await command.ExecuteScalarAsync();
-            Assert.True(options.Provider == DatabaseProvider.Sqlite || Convert.ToInt64(result) == 1 || result is true || result is DBNull,
-                "could not take the lock for the test");
+            Assert.True(options.Provider == DatabaseProvider.Sqlite || result is true || (result is not (null or DBNull or string) && Convert.ToInt64(result) == 1),
+                $"could not take the lock for the test ({options.Provider}: {sql} returned {result ?? "null"} [{result?.GetType().Name}])");
         }
 
         return new Held(connection);

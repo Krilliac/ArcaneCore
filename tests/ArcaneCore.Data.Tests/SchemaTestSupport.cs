@@ -85,6 +85,15 @@ internal sealed class CommandTap : DbCommandInterceptor
     public static bool IsDdl(string sql)
     {
         string s = sql.TrimStart();
+
+        // CREATE DATABASE runs before the bootstrapper has a connection to the database; a failure of it is
+        // swallowed on purpose when the database now exists (another process may have created it), so it is not
+        // a point where a startup can meaningfully die, and a startup that loses that race issues it too.
+        if (s.StartsWith("CREATE DATABASE", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
         return s.StartsWith("CREATE", StringComparison.OrdinalIgnoreCase)
             || s.StartsWith("ALTER", StringComparison.OrdinalIgnoreCase)
             || s.StartsWith("DROP", StringComparison.OrdinalIgnoreCase);

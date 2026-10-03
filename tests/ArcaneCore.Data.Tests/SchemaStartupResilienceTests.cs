@@ -90,7 +90,8 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         foreach ((string label, Func<string, bool> when, int on) in faults)
         {
             DatabaseConnectionOptions connection = await PrepareLegacyAsync(provider, component, stepVersion - 1, stepVersion);
-            await AssertInjectedAsync(() => EnsureAsync(component, connection, stepVersion, new CommandTap(when, on)));
+            var tap = new CommandTap(when, on);
+            await AssertInjectedAsync(() => EnsureAsync(component, connection, stepVersion, tap), $"{provider} {component} step {stepVersion} {label} (probe saw {ddl} DDL)", tap);
 
             // A restart under the current definition must reach the same schema as an uninterrupted start.
             try
@@ -130,7 +131,8 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         foreach ((string label, Func<string, bool> when, int on, bool before) in faults)
         {
             DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
-            await AssertInjectedAsync(() => SchemaProbe.EnsureCurrentAsync(component, connection, new CommandTap(when, on, faultBeforeStatement: before)));
+            var tap = new CommandTap(when, on, faultBeforeStatement: before);
+            await AssertInjectedAsync(() => SchemaProbe.EnsureCurrentAsync(component, connection, tap), $"{provider} {component} fresh create {label} (probe saw {ddl} DDL)", tap);
             try
             {
                 await SchemaProbe.EnsureCurrentAsync(component, connection);
@@ -255,7 +257,7 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
     public Task DisposeAsync() => _databases.DisposeAsync().AsTask();
 
     /// <summary>The startup must die of the injected fault (EF wraps it in a DbUpdateException for SaveChanges), not of anything else.</summary>
-    private static async Task AssertInjectedAsync(Func<Task> startup)
+    private static async Task AssertInjectedAsync(Func<Task> startup, string label, CommandTap tap)
     {
         Exception? thrown = null;
         try
@@ -267,7 +269,13 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
             thrown = ex;
         }
 
-        Assert.NotNull(thrown);
+        if (thrown is null)
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"{label}: startup completed without the injected fault. EF commands seen ({tap.Commands.Count}): " +
+                string.Join(" || ", tap.Commands.Select(c => c.ReplaceLineEndings(" ")[..Math.Min(90, c.Length)])));
+        }
+
         for (Exception? e = thrown; e is not null; e = e.InnerException)
         {
             if (e is InjectedFaultException)
