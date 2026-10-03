@@ -120,6 +120,38 @@ storm 20, zones 1/12/1377/3429 present) and 61 `exploration_basexp` rows (level 
 No command-line importer entry point is delivered; the content-import-full lane owns
 `tools/ArcaneCore.ContentImporter` and can call `Parse` / `ImportAsync`.
 
+### Weather in the world (`weather-runtime`)
+
+`MapWeather` is a `[DefaultMapUpdater(Order = 20)]`, so every map (instances included) has its own
+weather, mirroring vmangos `WeatherSystem` (`Weather.cpp:371-399`): a zone's `WeatherState` is
+created fresh (fine) the first time a player enters it, regenerates every
+`World:Weather:ChangeIntervalMs` (the `ShortIntervalTimer` semantics, `Timer.h:101-126`), and sends
+`SMSG_WEATHER` to every player of the zone when a regeneration changed it. A regeneration that
+changed the weather while nobody is in the zone drops the zone's state so the next visitor starts
+fresh; an unchanged one keeps it (`Weather::Update` returning true). A zone without a
+`game_weather` row never leaves fine and consumes no randomness. `WeatherFeature` is the zone-entry
+listener (after the world states, as in `Player::UpdateZone`, `Player.cpp:6594-6604`), loads
+`game_weather` through `IWorldStateDataStore` at startup (no store registered = no weather, logged),
+and `ReplaceChances` swaps the table atomically; live zones read the current row at each
+regeneration (the reload coordinator can call it, `.reload game_weather` at
+`ServerCommands.cpp:1813`).
+
+`.wchange <type 0..3> <grade>` (Administrator, the top tier here; vmangos `SEC_BASIC_ADMIN`,
+`Chat.cpp:1281`) validates the type (`IsValidWeatherType`), clamps the grade to 0..1, sets the
+caller's zone non-permanent and tells the zone's players unless nothing changed
+(`ServerCommands.cpp:98-130`, `Map::SetWeather`). Disabled weather answers mangos_string 407
+("Weather system disabled at server.").
+
+| Key (`World:Weather`) | Default | Meaning |
+|---|---|---|
+| `Enabled` | `true` | vmangos `ActivateWeather`. |
+| `ChangeIntervalMs` | `600000` | vmangos `ChangeWeatherInterval`. |
+
+Test harness note: `WorldTestHost` switches weather off by default so the extra SMSG_WEATHER after
+a zone entry does not shift unrelated tests' packet sequences; weather tests switch it on. Not
+delivered: the weather-dependent client sounds beyond the sound ids, per-instance zone scripts, and
+`.reload game_weather` wiring (the reload coordinator is another lane).
+
 ## Deviations from retail (all documented, none silent)
 
 - `ClientZoneTrust=Auto` is a development-world allowance, not retail. Retail is `Never`.

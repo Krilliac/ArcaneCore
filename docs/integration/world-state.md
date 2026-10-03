@@ -28,3 +28,12 @@ Schema: World `WorldStateDataModule.Version` (11 at this base; tests reference t
 | `tests/ArcaneCore.Data.Tests/IntegratedSchemaTests.cs` | One tuple appended to the expected module list (through the constant). | Every data module is listed there; append only. |
 
 Renumbering: change `WorldStateDataModule.Version` only; the tests use the constant.
+
+## weather-runtime slice
+
+| File | Change | Why |
+|---|---|---|
+| `tests/ArcaneCore.World.Tests/WorldTestHost.cs` | Three lines after `AttachWorldFeatures`: weather off for the harness. | Keeps every other lane's login packet sequences unchanged; weather tests enable it. |
+
+Another lane's tests that assert a literal login sequence on the real defaults (weather on) will see
+one extra `SMSG_WEATHER` after `SMSG_INIT_WORLD_STATES`; that is retail behaviour.

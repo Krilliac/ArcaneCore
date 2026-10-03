@@ -49,3 +49,15 @@ public sealed class TimeOptions
     /// </summary>
     public string TimeZoneId { get; set; } = "";
 }
+
+/// <summary>Weather options (configuration section <c>World:Weather</c>).</summary>
+public sealed class WeatherOptions
+{
+    public const string SectionName = "World:Weather";
+
+    /// <summary>vmangos <c>ActivateWeather</c> (default 1, World.cpp:730).</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>vmangos <c>ChangeWeatherInterval</c>: ms between weather regenerations of a zone (default 10 minutes, World.cpp:596).</summary>
+    public uint ChangeIntervalMs { get; set; } = 10 * 60 * 1000;
+}

@@ -55,6 +55,9 @@ internal sealed class WorldTestHost : IAsyncDisposable
         Opcodes = WorldServiceCollectionExtensions.BuildOpcodeTable();
 
         _services.AttachWorldFeatures(World);
+        // The harness runs with weather off (vmangos ActivateWeather=0) so an SMSG_WEATHER after every zone
+        // entry does not shift the packet sequences of unrelated tests; weather tests switch it on.
+        ArcaneCore.Game.WorldState.WorldStateHooks.For(World).WeatherSettings.Enabled = false;
         SaveQueue.Start();
         World.Start();
 

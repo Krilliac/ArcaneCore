@@ -1,3 +1,4 @@
+using ArcaneCore.Game.WorldState.Weather;
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.WorldState.Time;
@@ -30,6 +31,14 @@ public sealed class WorldStateHooks
     public ZoneOptions Zones { get; } = new();
 
     public TimeOptions TimeSettings { get; } = new();
+
+    public WeatherOptions WeatherSettings { get; } = new();
+
+    /// <summary>The loaded <c>game_weather</c> chances (empty until a feature loads them).</summary>
+    public WeatherChanceTable WeatherChances { get; } = new();
+
+    /// <summary>The weather random source (the shared RNG by default; tests script it).</summary>
+    public IWeatherRandom WeatherRandom { get; set; } = SharedWeatherRandom.Instance;
 
     /// <summary>
     /// "Now" in the game's local zone (vmangos <c>localtime</c>): the server's zone by default, the
