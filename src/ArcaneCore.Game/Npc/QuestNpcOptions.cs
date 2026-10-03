@@ -1,3 +1,5 @@
+using ArcaneCore.Game.Quests;
+
 namespace ArcaneCore.Game.Npc;
 
 /// <summary>
@@ -32,6 +34,12 @@ public sealed class QuestNpcOptions
 
     /// <summary>MaxPlayerLevel (quest XP turns into money at this level).</summary>
     public uint MaxPlayerLevel { get; set; } = 60;
+
+    /// <summary>
+    /// Quests:XpSource. <see cref="QuestXpSource.Auto"/> (default) uses the RewXP column when the loaded quests have one
+    /// (vmangos data) and derives the experience from RewMoneyMaxLevel otherwise (classic-db data).
+    /// </summary>
+    public QuestXpSource XpSource { get; set; } = QuestXpSource.Auto;
 
     /// <summary>Rate.XP.Quest.</summary>
     public float RateXpQuest { get; set; } = 1.0f;

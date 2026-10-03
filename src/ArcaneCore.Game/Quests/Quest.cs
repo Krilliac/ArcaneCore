@@ -178,24 +178,11 @@ public sealed class Quest
     /// <summary>vmangos Quest::GetRewMoneyMaxLevelAtComplete (patch ≥ 1.10: RewMoneyMaxLevel × money rate).</summary>
     public int GetRewMoneyMaxLevelAtComplete(float moneyRate) => (int)(Template.RewMoneyMaxLevel * moneyRate);
 
-    /// <summary>vmangos Quest::XPValue: RewXP reduced in steps above quest level + 5 (ceil).</summary>
-    public uint XpValue(uint playerLevel)
-    {
-        if (Template.RewXP == 0)
-        {
-            return 0;
-        }
-
-        uint qLevel = (uint)Math.Max(0, QuestLevel);
-        float full = Template.RewXP;
-        float factor = playerLevel <= qLevel + 5 ? 1.0f
-            : playerLevel == qLevel + 6 ? 0.8f
-            : playerLevel == qLevel + 7 ? 0.6f
-            : playerLevel == qLevel + 8 ? 0.4f
-            : playerLevel == qLevel + 9 ? 0.2f
-            : 0.1f;
-        return (uint)MathF.Ceiling(full * factor);
-    }
+    /// <summary>
+    /// vmangos Quest::XPValue (QuestDef.cpp:180-202): the RewXP column reduced above quest level + 5. The reward code
+    /// resolves the source per dataset through <see cref="QuestExperienceRules"/>.
+    /// </summary>
+    public uint XpValue(uint playerLevel) => QuestExperienceRules.Xp(Template, QuestLevel, playerLevel, QuestXpSource.RewXpColumn);
 
     internal void AddPrevQuest(int signedQuestId) => _prevQuests.Add(signedQuestId);
 

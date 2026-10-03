@@ -67,6 +67,49 @@ public sealed class QuestProgressionTests
         Assert.Equal(xp, plan.Experience);
     }
 
+    [Theory]
+    [InlineData(1, 40u)]
+    [InlineData(8, 24u)]
+    [InlineData(10, 8u)]
+    [InlineData(12, 4u)]
+    public void QuestXp_ForClassicDbData_IsDerivedFromRewMoneyMaxLevel(byte playerLevel, uint xp)
+    {
+        // classic-db has no RewXP column: cmangos derives the experience from RewMoneyMaxLevel (QuestDef.cpp:171-206).
+        var quest = new QuestTemplate { Entry = 910008, Method = 2, QuestLevel = 1, RewMoneyMaxLevel = 24 };
+        using var kit = new Kit([quest], level: playerLevel);
+        Assert.True(kit.Accept(910008));
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910008, 0, out QuestRewardPlan? plan));
+        Assert.Equal(xp, plan.Experience);
+    }
+
+    [Fact]
+    public void QuestXp_InAVmangosDataset_StaysTheRewXpColumn_EvenForAQuestThatOnlyHasMoney()
+    {
+        // Auto resolves per dataset: one quest with RewXP makes the whole set column-based, so a quest with only
+        // RewMoneyMaxLevel earns no XP there (vmangos Quest::XPValue reads RewXP only).
+        var withColumn = new QuestTemplate { Entry = 910009, Method = 2, QuestLevel = 1, RewXP = 100 };
+        var moneyOnly = new QuestTemplate { Entry = 910010, Method = 2, QuestLevel = 1, RewMoneyMaxLevel = 24 };
+        using var kit = new Kit([withColumn, moneyOnly]);
+        Assert.True(kit.Accept(910009));
+        Assert.True(kit.Accept(910010));
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910009, 0, out QuestRewardPlan? column));
+        Assert.Equal(100u, column.Experience);
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910010, 0, out QuestRewardPlan? money));
+        Assert.Equal(0u, money.Experience);
+    }
+
+    [Theory]
+    [InlineData(QuestXpSource.Derived, 40u)]
+    [InlineData(QuestXpSource.RewXpColumn, 0u)]
+    public void QuestXp_TheSourceCanBeForcedByConfiguration(QuestXpSource source, uint xp)
+    {
+        var quest = new QuestTemplate { Entry = 910011, Method = 2, QuestLevel = 1, RewMoneyMaxLevel = 24 };
+        using var kit = new Kit([quest], configure: o => o.XpSource = source);
+        Assert.True(kit.Accept(910011));
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910011, 0, out QuestRewardPlan? plan));
+        Assert.Equal(xp, plan.Experience);
+    }
+
     [Fact]
     public void QuestXp_AppliesRateXpQuest()
     {

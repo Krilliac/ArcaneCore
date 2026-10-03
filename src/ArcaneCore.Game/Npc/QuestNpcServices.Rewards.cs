@@ -281,7 +281,8 @@ public sealed partial class QuestNpcServices
     {
         experience = 0;
         levelAfter = player.Level;
-        if (quest.Template.RewXP == 0)
+        QuestXpSource xpSource = QuestExperienceRules.Resolve(Options.XpSource, Quests.HasRewXpColumn);
+        if (QuestExperienceRules.FullXp(quest.Template, quest.QuestLevel, xpSource) <= 0)
         {
             return true;
         }
@@ -296,7 +297,7 @@ public sealed partial class QuestNpcServices
             return true;
         }
 
-        float scaled = quest.XpValue(player.Level) * Options.RateXpQuest;
+        float scaled = QuestExperienceRules.Xp(quest.Template, quest.QuestLevel, player.Level, xpSource) * Options.RateXpQuest;
         if (!float.IsFinite(scaled) || scaled < 0 || scaled >= uint.MaxValue)
         {
             return false;

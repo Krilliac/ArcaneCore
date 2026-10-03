@@ -244,3 +244,29 @@ The design's NQ0 imports eleven new tables. Only the table with a finished consu
 the quest_template column mapping report (`RewMail*`, scripts, emote delays are not model columns), the item_template
 importer (NQ0b) and the loading of any of them into the runtime stores. `UPDATE` statements in a dump are skipped by the
 shared reader without a count, so un-applied classic-db `Updates` are visible only through `db_version`.
+
+## Slice NQ4a: quest experience for classic-db data (float32)
+
+### Delivered
+
+* `QuestExperienceRules` (`src/ArcaneCore.Game/Quests/`) computes quest XP in single precision exactly as the references:
+  the RewXP column (vmangos `QuestDef.cpp:180-202`) or, for data without that column, cmangos's derivation from
+  `RewMoneyMaxLevel` (`mangos-classic/src/game/Quests/QuestDef.cpp:171-206`): `/ 0.6` for quest levels 1..60 and
+  `/ 1.2, 2.4, 3.6, 4.8, 6.0` for 61..65 and above, each step `ceil` of a float32 product (0.8, 0.6, 0.4, 0.2, 0.1 above
+  quest level + 5). A double implementation differs for a few hundred combinations (for example RewMoneyMaxLevel 7,
+  quest level 1, player level 8: float32 7, double 8); a test pins those. Both references copy the signed quest level
+  into a `uint32`, so a level of -1 behaves as 4294967295 (wrap-around of `+ 5` included); this is reproduced, with a test.
+* **`Quests:XpSource`** (`QuestXpSource`): `Auto` (default) picks per dataset, the column when any loaded quest has a
+  RewXP value (`QuestStore.HasRewXpColumn`, vmangos data), the derivation otherwise (classic-db data); `RewXpColumn` and
+  `Derived` force one. The reward code (`TryRewardExperience`) uses it; `Quest.XpValue` remains the vmangos column value.
+* Before this slice a classic-db quest (RewXP always 0) rewarded no XP at all.
+
+### Limits / honesty
+
+* The derivation is cmangos's, the column vmangos's; both approximate retail and neither is proven against a retail
+  capture here, so `Auto` is a documented choice, not a retail guarantee. The 783 -> 40/24/8/4 golden values in the design
+  are reproduced by the formula but their input (RewMoneyMaxLevel 24) was not re-verified against the dump row.
+* `QUEST_FLAGS_NO_MONEY_FROM_XP` (0x100) gating of `RewMoneyMaxLevel` (cmangos `GetRewMoneyMaxLevel`) is NOT applied:
+  vmangos names 0x100 `UNK2` (repeatable dialog) and no reference proves the cmangos meaning for retail data. The
+  allowlist replacement ("computed reward support"), Method 0 turn-ins and the reward-slot rule of design NQ4 are not
+  delivered.
