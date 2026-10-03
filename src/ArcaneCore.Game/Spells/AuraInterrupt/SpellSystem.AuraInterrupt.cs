@@ -68,13 +68,17 @@ public sealed partial class SpellSystem
         return removed;
     }
 
+    private bool RollRemoveStealth(SpellCast cast)
+        => StealthBreakRules.ShouldRemoveStealthAuras(cast.Spell, triggered: false, cast.Caster is Player,
+            auraId => HasAura(cast.Caster, auraId), chance => Random.Next(100) < chance);
+
     /// <summary>
-    /// An explicit (non-triggered) cast is about to take effect (vmangos Spell::cast, Spell.cpp:3440-3456 and
-    /// 3697-3714): remove ACTION auras (and LOOTING when the target is a game object) and, at completion, ACTION_LATE
-    /// auras plus ATTACKING auras when the spell does not target a friend. Stealth survives when
+    /// An explicit (non-triggered) cast is prepared (vmangos Spell::prepare, Spell.cpp:3443-3456: "Stealth must be removed at
+    /// cast starting"): remove ACTION auras (and LOOTING when the target is a game object) before the cast bar runs, so a
+    /// cast that is later cancelled or interrupted has already dropped them. Stealth survives when
     /// <see cref="StealthBreakRules.ShouldRemoveStealthAuras"/> says so, invisibility when the spell has ALLOW_WHILE_INVISIBLE.
     /// </summary>
-    private void InterruptForCast(SpellCast cast)
+    private void InterruptAtCastStart(SpellCast cast)
     {
         if (cast.IsTriggered)
         {
@@ -83,9 +87,8 @@ public sealed partial class SpellSystem
 
         Unit caster = cast.Caster;
         SpellInfo spell = cast.Spell;
-        bool RollRemoveStealth() => StealthBreakRules.ShouldRemoveStealthAuras(spell, triggered: false, caster is Player,
-            auraId => HasAura(caster, auraId), chance => Random.Next(100) < chance);
-        bool removeStealth = RollRemoveStealth();
+        bool removeStealth = RollRemoveStealth(cast);
+        cast.RemoveStealthRoll = removeStealth;
         bool skipInvisibility = ((uint)spell.AttributesEx2 & StealthBreakRules.AttributesEx2AllowWhileInvisible) != 0;
 
         uint early = AuraInterruptMask.Action;
@@ -95,6 +98,23 @@ public sealed partial class SpellSystem
         }
 
         RemoveAurasWithInterruptFlags(caster, early, spell.Id, skipStealth: !removeStealth, skipInvisibility);
+    }
+
+    /// <summary>
+    /// The cast takes effect (vmangos Spell::cast, Spell.cpp:3697-3714): remove ACTION_LATE auras plus ATTACKING auras when
+    /// the spell does not target a friend.
+    /// </summary>
+    private void InterruptAtCastCompletion(SpellCast cast)
+    {
+        if (cast.IsTriggered)
+        {
+            return;
+        }
+
+        Unit caster = cast.Caster;
+        SpellInfo spell = cast.Spell;
+        bool removeStealth = cast.RemoveStealthRoll ?? RollRemoveStealth(cast);
+        bool skipInvisibility = ((uint)spell.AttributesEx2 & StealthBreakRules.AttributesEx2AllowWhileInvisible) != 0;
 
         uint late = AuraInterruptMask.ActionLate;
         SpellEffectInfo first = spell.Effects[0];
@@ -108,7 +128,7 @@ public sealed partial class SpellSystem
         // use one roll per cast; ImprovedSapRollPerPhase reproduces the literal vmangos double roll.
         if (ImprovedSapRollPerPhase)
         {
-            removeStealth = RollRemoveStealth();
+            removeStealth = RollRemoveStealth(cast);
         }
 
         RemoveAurasWithInterruptFlags(caster, late, spell.Id, skipStealth: !removeStealth, skipInvisibility);

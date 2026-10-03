@@ -24,6 +24,25 @@ public sealed class StealthOptions
     /// </summary>
     public bool ImprovedSapRollPerPhase { get; set; }
 
+    /// <summary>
+    /// Who always sees a non-hostile stealthed player (vmangos Visibility.GroupMode, World.cpp:689; Player::IsGroupVisibleFor,
+    /// Player.cpp:2924-2935). Default <see cref="StealthGroupVisibility.SameGroup"/>: only the same 5-man (sub)group.
+    /// </summary>
+    public StealthGroupVisibility GroupVisibilityMode { get; set; } = StealthGroupVisibility.SameGroup;
+
     /// <summary>The retail defaults.</summary>
     public static StealthOptions Default => new();
+}
+
+/// <summary>vmangos Visibility.GroupMode values (mangosd.conf.dist.in:2548-2552).</summary>
+public enum StealthGroupVisibility
+{
+    /// <summary>0, the default: members of the same group (the same sub-group inside a raid) auto-detect.</summary>
+    SameGroup = 0,
+
+    /// <summary>1: members of the same raid auto-detect.</summary>
+    SameRaid = 1,
+
+    /// <summary>2: every player of the same team auto-detects.</summary>
+    SameTeam = 2,
 }

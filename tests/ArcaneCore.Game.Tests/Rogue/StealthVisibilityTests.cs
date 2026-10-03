@@ -38,7 +38,7 @@ public sealed class StealthVisibilityTests
 
         public FakeSession ViewerSession { get; }
 
-        public Rig(float viewerDistance = 5f, bool attachRules = true)
+        public Rig(float viewerDistance = 5f, bool attachRules = true, StealthOptions? options = null)
         {
             static SpellInfo Perm(SpellInfo s) => s with { Duration = new SpellDuration(-1, 0, -1), SpellVisual = 1, StartRecoveryCategory = 0, StartRecoveryTime = 0 };
             Kit = new SpellTestKit(
@@ -58,7 +58,7 @@ public sealed class StealthVisibilityTests
             {
                 Kit.System.RegisterAura(AuraType.ModStealth, StealthAuras.Handler(Registry));
                 Kit.System.RegisterAura(AuraType.ModStalked, new AuraHandler(null, null));
-                Map.AddVisibilityRule(new StealthVisibilityRule(Kit.System, Registry));
+                Map.AddVisibilityRule(new StealthVisibilityRule(Kit.System, Registry, options));
                 Map.AddUpdater(updater);
             }
 
@@ -153,6 +153,58 @@ public sealed class StealthVisibilityTests
         Assert.True(rig.ViewerSeesRogue); // same party
         Assert.Contains(rig.Rogue.Guid, gm.VisibleObjects);
         Assert.DoesNotContain(rig.Rogue.Guid, stranger.VisibleObjects);
+    }
+
+    [Fact]
+    public void InARaid_OnlyTheSameSubGroupAutoSeesAStealthedPlayer_ByDefault()
+    {
+        // vmangos Visibility.GroupMode = 0 (World.cpp:689): Player::IsGroupVisibleFor -> IsInSameGroupWith -> SameSubGroup (Player.cpp:2924-2941)
+        using var rig = new Rig();
+        (Player otherSubGroup, _) = rig.Kit.AddPlayer(3, 6);
+        var groups = new FakeGroups { Raid = true };
+        groups.Parties.Add([rig.Viewer.Guid, rig.Rogue.Guid]);
+        groups.Parties.Add([otherSubGroup.Guid]);
+        rig.Kit.System.Groups = groups;
+        rig.Kit.World.RunTick(0);
+        Assert.Contains(rig.Rogue.Guid, otherSubGroup.VisibleObjects);
+
+        rig.Stealthed();
+
+        Assert.True(rig.ViewerSeesRogue); // same sub-group
+        Assert.DoesNotContain(rig.Rogue.Guid, otherSubGroup.VisibleObjects); // same raid, other sub-group
+    }
+
+    [Fact]
+    public void GroupMode1_WholeRaidAutoSees_AStealthedPlayer()
+    {
+        using var rig = new Rig(options: new StealthOptions { GroupVisibilityMode = StealthGroupVisibility.SameRaid });
+        (Player otherSubGroup, _) = rig.Kit.AddPlayer(3, 6);
+        (Player outsider, _) = rig.Kit.AddPlayer(4, 7);
+        var groups = new FakeGroups { Raid = true };
+        groups.Parties.Add([rig.Viewer.Guid, rig.Rogue.Guid]);
+        groups.Parties.Add([otherSubGroup.Guid]);
+        rig.Kit.System.Groups = groups;
+        rig.Kit.World.RunTick(0);
+
+        rig.Stealthed();
+
+        Assert.Contains(rig.Rogue.Guid, otherSubGroup.VisibleObjects); // Player::IsInSameRaidWith (mode 1)
+        Assert.DoesNotContain(rig.Rogue.Guid, outsider.VisibleObjects);
+    }
+
+    [Fact]
+    public void GroupMode2_EveryPlayerOfTheSameTeamAutoSees_ButNotTheOtherTeam()
+    {
+        using var rig = new Rig(options: new StealthOptions { GroupVisibilityMode = StealthGroupVisibility.SameTeam });
+        (Player sameTeam, _) = rig.Kit.AddPlayer(3, 6);
+        Player horde = TestWorld.CreatePlayer(4, 7, 0, new FakeSession(4), race: Race.Orc);
+        rig.Kit.World.AddPlayer(horde);
+        rig.Kit.World.RunTick(0);
+
+        rig.Stealthed();
+
+        Assert.Contains(rig.Rogue.Guid, sameTeam.VisibleObjects); // GetTeam() == p->GetTeam() (mode 2)
+        Assert.DoesNotContain(rig.Rogue.Guid, horde.VisibleObjects);
     }
 
     [Fact]

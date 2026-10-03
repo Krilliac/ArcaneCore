@@ -281,6 +281,9 @@ public sealed partial class SpellSystem
             AddGlobalCooldown(state, spell);
         }
 
+        // vmangos Spell::prepare removes ACTION/LOOTING auras (and Stealth) before the cast bar runs (Spell.cpp:3443-3456).
+        InterruptAtCastStart(cast);
+
         if (castTime == 0)
         {
             return Cast(cast);
@@ -312,7 +315,7 @@ public sealed partial class SpellSystem
             return result;
         }
 
-        InterruptForCast(cast); // rogue lane: aura-interrupt dispatch, docs/integration/rogue-aura-interrupt.md
+        InterruptAtCastCompletion(cast); // rogue lane: ACTION_LATE / ATTACKING half (vmangos Spell.cpp:3697-3714), docs/integration/rogue-aura-interrupt.md
         AddCooldown(state, spell, cast.IsTriggered);
         TakePower(caster, spell, cast.PowerCost);
         SendCastResult(caster, spell, SpellCastResult.CastOk, cast.IsTriggered);

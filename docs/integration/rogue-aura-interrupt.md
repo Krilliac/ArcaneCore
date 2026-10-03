@@ -18,7 +18,8 @@ New files (no merge risk):
 
 | File | Change | Why / vmangos |
 |---|---|---|
-| `Game/Spells/SpellSystem.cs` `Cast` | `InterruptForCast(cast)` after the re-check passes, before the cooldown/power | `Spell.cpp:3440-3456` (ACTION, +LOOTING for a game object target), `3697-3714` (ACTION_LATE, +ATTACKING for a non-positive first target) |
+| `Game/Spells/SpellSystem.cs` `Prepare` | `InterruptAtCastStart(cast)` after the first `CheckCast` succeeds, non-triggered only, before the cast bar runs | `Spell.cpp:3443-3456` (ACTION, +LOOTING for a game object target, stealth via `ShouldRemoveStealthAuras`) |
+| `Game/Spells/SpellSystem.cs` `Cast` | `InterruptAtCastCompletion(cast)` after the re-check passes, before the cooldown/power | `Spell.cpp:3697-3714` (ACTION_LATE, +ATTACKING for a non-positive first target) |
 | `Game/Spells/SpellSystem.cs` `Cast` miss branch | `InterruptTargetOfHostileSpell(.., hit: false ..)` | `Spell.cpp:1893-1897` |
 | `Game/Spells/SpellSystem.Effects.cs` `ApplyEffects` | tracks "has a positive-value damage effect" and calls `InterruptTargetOfHostileSpell(.., hit: true, dealsDamage)` after the aura holder is added | `Spell.cpp:1622-1626`, `1645-1650` |
 | `Game/Spells/SpellSystem.Combat.cs` `OnDamageTaken` | the self-damage guard no longer returns before the aura break. Cast pushback/interrupt still ignores self damage | `Unit.cpp:660-670`: `SKIP_STEALTH` is false above client build 1.6.1, so self damage breaks stealth |
@@ -26,7 +27,7 @@ New files (no merge risk):
 | `World/Spells/SpellFeature.cs` | subscribes `MeleeSwingResolved`, removing ATTACKING auras from the attacker | same |
 
 Conflict notes for the integrator: warrior-mechanics S02 (cast-check/observer seams) and spell-breadth S1/S2 touch the same
-`Cast` and `RemoveHolder` regions. Re-apply the one-line `InterruptForCast` call or move it to an
+`Cast` and `RemoveHolder` regions. Re-apply the two one-line calls (`InterruptAtCastStart` in `Prepare`, `InterruptAtCastCompletion` in `Cast`) or move it to an
 `ISpellCastObserver` when that seam lands.
 
 ## Not done here (documented limits)

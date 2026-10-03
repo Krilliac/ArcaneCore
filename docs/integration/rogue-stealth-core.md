@@ -7,7 +7,7 @@ the aura handler rebuilds the visibility state when the aura is restored (`Resto
 ## New files
 
 - `Game/Stealth/StealthDetection.cs`, `StealthOptions.cs`: the vmangos detection formula (`Unit::CanDetectStealthOf`, `Unit.cpp:6543-6616`),
-  config section `World:Stealth` (`MaxPlayerDetectRange`, `MaxCreatureDetectRange`, both 30, `World.cpp:566-567`).
+  config section `World:Stealth` (`MaxPlayerDetectRange`, `MaxCreatureDetectRange`, both 30, `World.cpp:566-567`; `GroupVisibilityMode`, default `SameGroup`, `World.cpp:689`).
 - `Game/Combat/Positional/PositionalRules.cs`: `IsBehindTarget` (`Unit.cpp:2806-2821`, strict creature-facing rule), `IsFromBehindOnly`
   (`SpellEntry.h:909-912`), the Gouge facing shape (`Spell.cpp:5646`). Wraps the existing `MapCombat.HasInArc`.
 - `Game/Stealth/StealthState.cs`: `StealthRegistry` (visibility group per unit: On / Stealth / NoDetect, and the set of stealthed units).
@@ -37,7 +37,7 @@ Conflict note: gm-commands (GM invisibility) edits the same method; they should 
 
 - A hidden stealthed unit is revealed only by the detection pass, never by a movement-driven update; a unit the viewer already sees stays
   visible through movement updates and is dropped by the next pass that no longer detects it (`Unit.cpp:6438-6451`).
-- Always allowed: the viewer itself, a game master, the Hunter's Mark caster, a non-hostile party/raid member. A dead viewer never detects.
+- Always allowed: the viewer itself, a game master, the Hunter's Mark caster, a non-hostile player for whom `Player::IsGroupVisibleFor` holds (`Player.cpp:2924-2935`; `GroupVisibilityMode`: default same sub-group, `SameRaid`, `SameTeam`). A dead viewer never detects.
 - Out-of-range blocks are used to hide a player (vmangos `BuildOutOfRangeUpdateBlock`), the existing `UpdateVisibilityOf` path.
 
 ## Limits (documented, not stubbed)

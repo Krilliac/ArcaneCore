@@ -13,8 +13,8 @@ the talent text (below).
 
 **Aura-interrupt dispatch (RG-01)** `Game/Spells/AuraInterrupt/*`. The 23 `AuraInterruptFlags` bits as masks; `SpellSystem.RemoveAurasWithInterruptFlags`
 (except spell, skip stealth by Dispel 5, skip invisibility by Dispel 6); `StealthBreakRules.ShouldRemoveStealthAuras` (triggered casts,
-EX_ALLOW_WHILE_STEALTHED, the Camouflage/Shadowmeld/Vanish icons, Improved Sap 30/60/90 percent). Hooked at: cast start (ACTION, +LOOTING for a game
-object target) and cast completion (ACTION_LATE, +ATTACKING for a non-positive first target), a hostile spell hit or miss on the target (HOSTILE_ACTION_RECEIVED,
+EX_ALLOW_WHILE_STEALTHED, the Camouflage/Shadowmeld/Vanish icons, Improved Sap 30/60/90 percent). Hooked at: cast preparation, before the cast bar runs (ACTION, +LOOTING for a game
+object target, and the stealth break; `Spell.cpp:3443-3456`) and cast completion (ACTION_LATE, +ATTACKING for a non-positive first target), a hostile spell hit or miss on the target (HOSTILE_ACTION_RECEIVED,
 target stealth and invisibility strip), the end of a white swing (ATTACKING), and self damage (breaks auras at build 5875). Stealth, Vanish and Shadowmeld
 carry 0x3C07 in Spell.dbc, so all of them break exactly as their data says.
 
@@ -34,7 +34,7 @@ creature-facing rule, `IsFromBehindOnly`, the Gouge facing shape.
 
 ## Config
 
-`World:Stealth:MaxPlayerDetectRange` (30), `MaxCreatureDetectRange` (30), `ImprovedSapRollPerPhase` (false).
+`World:Stealth:MaxPlayerDetectRange` (30), `MaxCreatureDetectRange` (30), `ImprovedSapRollPerPhase` (false), `GroupVisibilityMode` (`SameGroup`; vmangos `Visibility.GroupMode` 0 same sub-group, 1 `SameRaid`, 2 `SameTeam`).
 `ImprovedSapRollPerPhase`: vmangos calls `ShouldRemoveStealthAuras` once at cast start and once at completion, so Improved Sap rolls twice and a 30/60/90 percent
 talent keeps stealth 9/36/81 percent of the time (Spell.cpp:3455, 3713, 8301-8331). mangos-classic implements Improved Sap differently (a proc that recasts the highest
 Stealth rank, `ClassScripts/Rogue.cpp:103-110`). By default one roll decides, which gives the 30/60/90 of the talent text; `true` reproduces the literal vmangos code.

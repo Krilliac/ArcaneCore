@@ -25,6 +25,14 @@ public sealed class StealthVisibilityRule : IVisibilityRule
         _options = options ?? StealthOptions.Default;
     }
 
+    /// <summary>vmangos Player::IsGroupVisibleFor (Player.cpp:2924-2935): mode 0 same sub-group, 1 same raid, 2 same team.</summary>
+    private bool IsGroupVisibleFor(Player stealthed, Player viewer) => _options.GroupVisibilityMode switch
+    {
+        StealthGroupVisibility.SameRaid => _spells.Groups.GetGroupMembers(stealthed, raid: true).Contains(viewer.Guid),
+        StealthGroupVisibility.SameTeam => stealthed.Team == viewer.Team,
+        _ => _spells.Groups.GetGroupMembers(stealthed, raid: false).Contains(viewer.Guid),
+    };
+
     public bool CanSee(Player viewer, WorldObject target, bool alreadyVisible, bool detect)
     {
         if (!_registry.AnyHidden || target is not Unit unit || ReferenceEquals(viewer, target))
@@ -56,8 +64,8 @@ public sealed class StealthVisibilityRule : IVisibilityRule
             return true;
         }
 
-        // a non-hostile group or raid member always sees a stealthed player
-        if (unit is Player && !_spells.Relations.IsHostile(viewer, unit) && _spells.Groups.GetGroupMembers(unit, raid: true).Contains(viewer.Guid))
+        // a non-hostile group-visible player always sees a stealthed player (Player::IsGroupVisibleFor, mode by Visibility.GroupMode)
+        if (unit is Player stealthed && !_spells.Relations.IsHostile(viewer, unit) && IsGroupVisibleFor(stealthed, viewer))
         {
             return true;
         }

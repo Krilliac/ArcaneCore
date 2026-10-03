@@ -33,6 +33,7 @@ public sealed class AuraInterruptTests
     private const uint ImprovedSapR3 = 14095;
     private const uint ShadowmeldLike = 910016;
     private const uint CamouflageLike = 910017;
+    private const uint SlowStrike = 910018;
 
     private static SpellInfo Instant(SpellInfo spell) => spell with
     {
@@ -94,7 +95,8 @@ public sealed class AuraInterruptTests
             Spell(BoxOpener, Effect(SpellEffectName.Dummy, 0)) with { StartRecoveryCategory = 0, StartRecoveryTime = 0 },
             SelfAura(ImprovedSapR1, AuraType.Dummy, 0),
             SelfAura(ImprovedSapR2, AuraType.Dummy, 0),
-            SelfAura(ImprovedSapR3, AuraType.Dummy, 0));
+            SelfAura(ImprovedSapR3, AuraType.Dummy, 0),
+            Instant(Spell(SlowStrike, Effect(SpellEffectName.SchoolDamage, 5, SpellImplicitTarget.UnitEnemy))) with { CastTime = new SpellCastTime(2000, 0, 0) });
         kit.System.RegisterAura(AuraType.ModStealth, new AuraHandler(null, null));
         kit.System.RegisterAura(AuraType.ModInvisibility, new AuraHandler(null, null));
         var relations = new FakeRelations();
@@ -107,7 +109,7 @@ public sealed class AuraInterruptTests
         (Player rogue, _) = kit.AddPlayer(1);
         (Player enemy, _) = kit.AddPlayer(2, 2);
         relations.Hostile.Add(enemy.Guid);
-        kit.Spellbook.Teach(rogue, Strike, Sprint, Heal, Debuff, Sap, VanishLike, ShadowmeldLike, CamouflageLike, InvisPotionUser, BoxOpener, ActionAura);
+        kit.Spellbook.Teach(rogue, Strike, Sprint, Heal, Debuff, Sap, VanishLike, ShadowmeldLike, CamouflageLike, InvisPotionUser, BoxOpener, ActionAura, SlowStrike);
         kit.Spellbook.Teach(enemy, Strike, Heal);
         return (kit, rogue, enemy);
     }
@@ -137,6 +139,46 @@ public sealed class AuraInterruptTests
 
             Request(kit, rogue, Strike, enemy);
             Assert.False(kit.System.HasAura(rogue, Stealth));
+        }
+    }
+
+    [Fact]
+    public void CastWithACastTime_DropsStealthAndActionAurasAtCastStart_AttackingAurasOnlyAtCompletion()
+    {
+        (SpellTestKit kit, Player rogue, Player enemy) = Setup();
+        using (kit)
+        {
+            Give(kit, rogue, Stealth);
+            Give(kit, rogue, ActionAura);
+            Give(kit, rogue, AttackingAura);
+
+            Request(kit, rogue, SlowStrike, enemy);
+
+            // Spell.cpp:3443-3456: the cast bar is running, yet Stealth and the ACTION aura are already gone
+            Assert.False(kit.System.HasAura(rogue, Stealth));
+            Assert.False(kit.System.HasAura(rogue, ActionAura));
+            // Spell.cpp:3697-3714: ATTACKING breaks only when the cast completes
+            Assert.True(kit.System.HasAura(rogue, AttackingAura));
+
+            kit.Advance(2000);
+            Assert.False(kit.System.HasAura(rogue, AttackingAura));
+        }
+    }
+
+    [Fact]
+    public void CancelledCastWithACastTime_HasAlreadyDroppedStealth_AndKeepsTheAttackingAura()
+    {
+        (SpellTestKit kit, Player rogue, Player enemy) = Setup();
+        using (kit)
+        {
+            Give(kit, rogue, Stealth);
+            Give(kit, rogue, AttackingAura);
+            Request(kit, rogue, SlowStrike, enemy);
+
+            kit.System.CancelCast(rogue, SlowStrike);
+
+            Assert.False(kit.System.HasAura(rogue, Stealth));
+            Assert.True(kit.System.HasAura(rogue, AttackingAura));
         }
     }
 
