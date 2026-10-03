@@ -38,6 +38,7 @@ place, before the next milestone that depends on it is built further.
 | Warden | **Out** | The 1.12 Warden needs Blizzard module binaries, and it does not stop modern cheats. |
 | Battlegrounds, honor, LFG | Out of this plan | Large systems with no dependents; revisit after quests/social. |
 | Clustering (gRPC) | Planned M15: explicit process ownership, gateway/session routing and map workers, delivered in gated phases | Developer request 2026-10-03. Compare incomplete MaNGOS Sharp / the developer's MaNGOS Zero fork and SparkEngine executable separation against current code; preserve build-5875 compatibility and local mode. [Design and implementation plan](CLUSTERING_DESIGN.md). |
+| Live hot reload | Cross-cutting goal, planned; no milestone assigned yet | Developer request 2026-10-03: wherever possible, content, configuration and feature code change on a running server without a restart. Each system must document what is reloadable versus restart-required. Reloads must keep the in-memory-store invariants (immutable snapshots swapped atomically, never mutated in place, applied on the owning thread) and must not bypass the verification policy or the vanilla-fidelity rule (retail behaviour by default; differences behind config). Needs its own design and an explicit go before runtime code; it interacts with M15 (per-node reload and rollout). |
 | Plugin host / event bus | Introduced with its first real consumer (GM commands → scripts) | A plugin API without callers would be invented surface. |
 | SQLite provider | **Added** (dev + tests) | Zero-setup local runs and end-to-end tests of the real EF stores in CI. MariaDB stays primary. |
 
@@ -101,6 +102,7 @@ session outbound channel ◄───────────────┘
   `tools/ArcaneCore.ContentImporter` CLI is future work; `tools/spell-import` is
   the current standalone DBC spell importer.
 * The world daemon loads the content into in-memory stores at startup.
+* Hot reload (planned, see the scope table): content stores are loaded as immutable snapshots at startup today; reload means building a replacement snapshot off-thread, validating it, and swapping the reference atomically at a tick boundary on the owning thread. This records intent only; no reload mechanism exists yet.
 
 ---
 
