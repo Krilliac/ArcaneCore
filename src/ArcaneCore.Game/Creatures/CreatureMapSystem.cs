@@ -1,6 +1,8 @@
+using System.Numerics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using MapGrid = ArcaneCore.Game.Maps.Grid.Grid;
@@ -25,7 +27,7 @@ namespace ArcaneCore.Game.Creatures;
 /// </para>
 /// Thread affinity: world thread only.
 /// </summary>
-public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
+public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
 {
     /// <summary>vmangos MAX_NUMBER_OF_GRIDS.</summary>
     public const int MaxNumberOfGrids = 64;
@@ -61,7 +63,7 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
 
     public CreatureMapSystem(
         Map map, CreatureContent content, CreatureOptions? options = null, ICreatureHeightProvider? height = null,
-        Random? random = null, Func<uint>? serverTime = null, ILogger? logger = null)
+        Random? random = null, Func<uint>? serverTime = null, ILogger? logger = null, CreatureAiServices? aiServices = null)
     {
         ArgumentNullException.ThrowIfNull(map);
         ArgumentNullException.ThrowIfNull(content);
@@ -72,6 +74,8 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
         _random = random ?? new Random();
         _serverTime = serverTime ?? (() => unchecked((uint)_clockMs));
         _logger = logger ?? NullLogger.Instance;
+        _ai = aiServices ?? CreatureAiServices.Default;
+        SubscribeAi();
 
         uint maxGuid = 0;
         foreach (CreatureSpawn spawn in content.GetSpawns(map.MapId))
@@ -145,6 +149,7 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
         _clockMs += diffMs;
         SendCatchUpMoves();
         UpdateCreatures(diffMs);
+        UpdatePendingAi();
         Map.RunAfterUpdate(CaptureNewObservers);
     }
 
@@ -173,13 +178,14 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
     }
 
     /// <summary>Called by combat once death has stopped the unit's fights and cleared threat.</summary>
-    internal void OnCreatureDied(Creature creature)
+    internal void OnCreatureDied(Creature creature, Unit? killer)
     {
         if (creature.DeathState != CreatureDeathState.Alive || !_creatures.ContainsKey(creature.Guid))
         {
             return;
         }
 
+        OnAiDeath(creature, killer);
         StopMoving(creature);
         creature.Health = 0;
         creature.NpcFlags = 0;
@@ -252,6 +258,16 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
     void ICreatureMover.MoveTo(Creature creature, float x, float y, float z, bool run, float? finalOrientation)
         => MoveTo(creature, x, y, z, run, finalOrientation);
 
+    void ICreatureMover.MovePath(Creature creature, IReadOnlyList<Vector3> path, bool run, SplineFacing facing)
+        => MovePath(creature, path, run, facing);
+
+    IReadOnlyList<Vector3> ICreatureMover.FindPath(Creature creature, Vector3 destination) => FindPath(creature, destination);
+
+    bool ICreatureMover.IsCasting(Creature creature) => _ai.Spells?.IsCasting(creature) ?? false;
+
+    void ICreatureMover.OnMovementFinished(Creature creature, MovementGeneratorType type, uint pointId)
+        => OnMovementFinished(creature, type, pointId);
+
     double ICreatureMover.NextDouble() => _random.NextDouble();
 
     int ICreatureMover.URand(int min, int max) => min >= max ? min : _random.Next(min, max + 1);
@@ -260,15 +276,54 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
 
     /// <summary>Launch a spline from the creature's current position and tell its observers.</summary>
     public void MoveTo(Creature creature, float x, float y, float z, bool run, float? finalOrientation)
+        => MovePath(creature, [new Vector3(x, y, z)], run, finalOrientation is { } angle ? SplineFacing.ToAngle(angle) : SplineFacing.None);
+
+    /// <summary>
+    /// Launch a linear spline through <paramref name="path"/> (every point after the current
+    /// position, destination last) and send SMSG_MONSTER_MOVE to the observers.
+    /// </summary>
+    public void MovePath(Creature creature, IReadOnlyList<Vector3> path, bool run, SplineFacing facing)
     {
         ArgumentNullException.ThrowIfNull(creature);
+        ArgumentNullException.ThrowIfNull(path);
+        if (path.Count == 0)
+        {
+            return;
+        }
+
         uint id = ++_splineCounter;
-        float sx = creature.X;
-        float sy = creature.Y;
-        float sz = creature.Z;
-        CreatureSpline spline = creature.StartSpline(x, y, z, run, finalOrientation, id, _clockMs);
-        byte[] packet = CreatureMovePackets.BuildMove(creature.Guid, sx, sy, sz, id, finalOrientation, run, spline.DurationMs, x, y, z);
+        var start = new Vector3(creature.X, creature.Y, creature.Z);
+        CreatureSpline spline = creature.StartSpline(path, run, facing, id, _clockMs);
+        byte[] packet = CreatureMovePackets.BuildPath(creature.Guid, start, id, facing, run, spline.DurationMs, spline.Points);
         Map.BroadcastToObservers(creature, WorldOpcode.SmsgMonsterMove, packet);
+    }
+
+    /// <summary>
+    /// The path from the creature to <paramref name="destination"/>: every corner after the start,
+    /// the end last. It asks the map's <see cref="IPathfinder"/> (<c>map.Collision</c>,
+    /// feat/vmap-los: the navmesh when mmaps are installed, else a straight line). When there is
+    /// no usable path (<see cref="PathType.NoPath"/>) the creature goes straight, as vmangos chase
+    /// does with <c>PATHFIND_NOPATH</c> outside instances.
+    /// </summary>
+    public IReadOnlyList<Vector3> FindPath(Creature creature, Vector3 destination)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        var start = new Vector3(creature.X, creature.Y, creature.Z);
+        PathResult path = Map.Collision.FindPath(start, destination);
+        if (!path.HasPath)
+        {
+            return [destination];
+        }
+
+        // The whole path goes into one multi-point spline (vmangos MoveSplineInit::MovebyPath),
+        // so chase, flee, home and point moves do not re-launch at every corner.
+        var corners = new List<Vector3>(path.Points.Count - 1);
+        for (int i = 1; i < path.Points.Count; i++)
+        {
+            corners.Add(path.Points[i]);
+        }
+
+        return corners;
     }
 
     /// <summary>Stop a moving creature where it is (vmangos Unit::StopMoving → MoveSplineInit::Stop).</summary>
@@ -310,8 +365,8 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
 
             (float x, float y, float z) = spline.PositionAt(_clockMs);
             uint remaining = spline.DurationMs - spline.ElapsedMs(_clockMs);
-            byte[] packet = CreatureMovePackets.BuildMove(
-                creature.Guid, x, y, z, spline.Id, spline.FinalOrientation, spline.Run, remaining, spline.EndX, spline.EndY, spline.EndZ);
+            byte[] packet = CreatureMovePackets.BuildPath(
+                creature.Guid, new Vector3(x, y, z), spline.Id, spline.Facing, spline.Run, remaining, spline.RemainingPoints(_clockMs));
             viewer.Session.Send(WorldOpcode.SmsgMonsterMove, packet);
         }
 
@@ -331,9 +386,17 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
             {
                 case CreatureDeathState.Alive:
                     creature.AdvanceSpline(_clockMs, now);
-                    if (_options.MovementEnabled && !creature.Combat.IsInCombat)
+                    UpdateAi(creature, diffMs);
+                    if (creature.DeathState != CreatureDeathState.Alive || !_creatures.ContainsKey(creature.Guid))
                     {
-                        creature.MovementGenerator?.Update(creature, this, diffMs);
+                        break; // the script killed or despawned it
+                    }
+
+                    // The default (idle/random/waypoint) generator does not run in combat;
+                    // chase, flee, home and point generators on top of it always do.
+                    if (!creature.Combat.IsInCombat || !ReferenceEquals(creature.Motion.Top, creature.Motion.Default))
+                    {
+                        creature.Motion.Update(diffMs);
                     }
 
                     break;
@@ -482,7 +545,6 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
         creature.WalkSpeed = creature.CreatureWalkSpeed;
         creature.RunSpeed = creature.CreatureRunSpeed;
         creature.ClearChangedFields();
-        creature.MovementGenerator = CreateMovementGenerator(creature);
         _creatures[creature.Guid] = creature;
         grid.Creatures.Add(creature);
         if (creature.DeathState != CreatureDeathState.Dead)
@@ -490,15 +552,19 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
             Map.AddObject(creature, isNewObject: creature.IsNewObject);
         }
 
-        if (creature.DeathState == CreatureDeathState.Alive && _options.MovementEnabled)
+        creature.Motion.Initialize(CreateMovementGenerator(creature), this, start: creature.DeathState == CreatureDeathState.Alive);
+        CreateAi(creature);
+        if (creature.DeathState == CreatureDeathState.Alive)
         {
-            creature.MovementGenerator.Reset(creature, this);
+            creature.AI?.OnRespawn();
         }
     }
 
     private void RemoveFromWorld(Creature creature)
     {
         _creatures.Remove(creature.Guid);
+        ForgetAi(creature);
+        creature.Motion.Reset();
         Map.Combat.Untrack(creature);
         Map.RemoveObject(creature);
         creature.System = null;
@@ -507,6 +573,11 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
 
     private ICreatureMovementGenerator CreateMovementGenerator(Creature creature)
     {
+        if (!_options.MovementEnabled)
+        {
+            return IdleMovementGenerator.Instance;
+        }
+
         switch (creature.MovementType)
         {
             case CreatureMovementType.Random:
@@ -534,6 +605,7 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
         creature.CorpseDecayMs = 0;
         creature.Combat.DeathState = DeathState.Dead;
         Map.Combat.Untrack(creature);
+        _ai.Spells?.OnCreatureRemoved(creature);
         Map.RemoveObject(creature);
         ForgetObservers(creature);
         creature.ResetToHome(_serverTime());
@@ -576,10 +648,9 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
         // Invisible until now, so nobody needs a values update for the re-initialization.
         creature.ClearChangedFields();
         Map.AddObject(creature);
-        if (_options.MovementEnabled)
-        {
-            creature.MovementGenerator?.Reset(creature, this);
-        }
+        ResetAiState(creature);
+        creature.Motion.Initialize(creature.Motion.Default, this, start: true);
+        creature.AI?.OnRespawn();
     }
 
     private void ForgetObservers(Creature creature)
@@ -610,8 +681,10 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
             {
                 Map.Combat.Untrack(creature);
                 StopMoving(creature);
+                ResetAiState(creature);
+                MapCombat.ClearInCombat(creature);
                 creature.ResetToHome(_serverTime());
-                creature.MovementGenerator?.Reset(creature, this);
+                creature.Motion.Initialize(creature.Motion.Default, this, start: true);
                 continue;
             }
 
