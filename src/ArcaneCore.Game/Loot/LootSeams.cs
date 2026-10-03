@@ -30,6 +30,20 @@ public interface ILootQuestJournal
 public interface ILootGroups
 {
     Group? GroupOf(Player player);
+
+    /// <summary>
+    /// The group's looter pointer or loot method changed on a kill: resend SMSG_GROUP_LIST to its
+    /// members (vmangos Group::SendUpdate after SetLooterGuid, Group.cpp:2530-2542). No-op by default.
+    /// </summary>
+    void LooterChanged(Group group)
+    {
+    }
+
+    /// <summary>
+    /// Whether the member is online anywhere (vmangos ObjectAccessor::FindPlayer), used to decide if
+    /// a master looter is still available. Defaults to true when the groups area cannot tell.
+    /// </summary>
+    bool IsMemberOnline(ObjectGuid guid) => true;
 }
 
 /// <summary>Loot tunables.</summary>

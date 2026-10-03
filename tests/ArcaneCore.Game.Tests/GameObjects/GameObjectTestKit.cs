@@ -39,11 +39,19 @@ internal sealed class FakeGroups : ILootGroups
 {
     public Dictionary<ObjectGuid, Group> ByMember { get; } = [];
 
+    public List<Group> LooterUpdates { get; } = [];
+
+    public HashSet<ObjectGuid> Offline { get; } = [];
+
     public Group? GroupOf(Player player) => ByMember.GetValueOrDefault(player.Guid);
+
+    public void LooterChanged(Group group) => LooterUpdates.Add(group);
+
+    public bool IsMemberOnline(ObjectGuid guid) => !Offline.Contains(guid);
 
     public Group Create(LootMethod method, params Player[] members)
     {
-        var group = new Group(1) { LootMethod = method, IsCreated = true, LeaderGuid = members[0].Guid };
+        var group = new Group(1) { LootMethod = method, IsCreated = true, LeaderGuid = members[0].Guid, LooterGuid = members[0].Guid }; // GroupManager.cs:135 / vmangos Group::Create
         foreach (Player member in members)
         {
             group.AddMemberSlot(member.Guid, member.Name);

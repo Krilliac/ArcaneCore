@@ -257,6 +257,38 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
                 return null; // social feature not attached
             }
         }
+
+        public void LooterChanged(Group group)
+        {
+            if (services.GetService<SocialFeature>() is { } social)
+            {
+                try
+                {
+                    social.Context.Groups.SendUpdate(group);
+                }
+                catch (InvalidOperationException)
+                {
+                    // social feature not attached: nobody to tell
+                }
+            }
+        }
+
+        public bool IsMemberOnline(ObjectGuid guid)
+        {
+            if (services.GetService<SocialFeature>() is not { } social)
+            {
+                return true;
+            }
+
+            try
+            {
+                return social.Context.World.FindOnlinePlayer(guid) is not null;
+            }
+            catch (InvalidOperationException)
+            {
+                return true;
+            }
+        }
     }
 
     private sealed class NullQuestJournal : ILootQuestJournal

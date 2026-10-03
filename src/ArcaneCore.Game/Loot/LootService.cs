@@ -194,51 +194,76 @@ public sealed class LootService : IViewerFieldFilter
     }
 
     /// <summary>
-    /// vmangos Group::UpdateLooterGuid / loot method: free-for-all leaves the loot open to every
-    /// recipient; round robin (and, until rolls exist, group/need-before-greed/master) gives it to
-    /// the next member after the group's last looter who is a recipient.
+    /// The outcome of the looter selection for one loot source: who owns the shared loot
+    /// (<see cref="Owner"/>, empty = open to every recipient) and where the group's looter pointer
+    /// stands afterwards (<see cref="Looter"/>, <see cref="Changed"/> = differs from before).
     /// </summary>
-    private static void AssignOwner(LootBag bag, Group? group, IReadOnlyList<Player> recipients)
+    internal readonly record struct LooterPlan(ObjectGuid Owner, ObjectGuid Looter, bool Changed);
+
+    /// <summary>
+    /// vmangos Unit::Kill's two Group::UpdateLooterGuid calls (Unit.cpp:1037 and 1078) without any
+    /// side effect: the first (ifneed) settles who loots THIS source, the second advances the
+    /// pointer for the next one. Free-for-all leaves the loot open; master loot never moves the
+    /// pointer and is held by the master looter while no master-give exists (documented limit,
+    /// docs/areas/group-loot-xp.md); a lone recipient needs no owner.
+    /// </summary>
+    private static LooterPlan PlanLooter(Group? group, IReadOnlyList<Player> recipients, HashSet<ObjectGuid> bagRecipients)
     {
-        if (PickOwner(group, recipients, bag.Recipients) is { } candidate)
+        if (group is null || group.LootMethod == LootMethod.FreeForAll)
         {
-            bag.Owner = candidate;
-            group!.LooterGuid = candidate;
+            return default;
+        }
+
+        ObjectGuid current = group.LooterGuid;
+        if (group.LootMethod == LootMethod.MasterLoot)
+        {
+            return new LooterPlan(recipients.Count > 1 && bagRecipients.Contains(current) ? current : default, current, false);
+        }
+
+        LooterSelection first = GroupLooterSelection.Next(group, current, true, bagRecipients.Contains);
+        LooterSelection next = GroupLooterSelection.Next(group, first.Looter, false, bagRecipients.Contains);
+        return new LooterPlan(recipients.Count > 1 ? first.Looter : default, next.Looter, next.Looter != current);
+    }
+
+    /// <summary>Apply a <see cref="LooterPlan"/>: set the bag's owner and move the group's pointer, telling its members.</summary>
+    private void ApplyLooterPlan(LootBag bag, Group? group, in LooterPlan plan)
+    {
+        bag.Owner = plan.Owner;
+        CommitLooter(group, plan);
+    }
+
+    private void CommitLooter(Group? group, in LooterPlan plan)
+    {
+        if (group is not null && plan.Changed)
+        {
+            group.LooterGuid = plan.Looter;
+            Groups?.LooterChanged(group);
         }
     }
 
     /// <summary>
-    /// The round-robin pick of <see cref="AssignOwner"/> without any side effect: the next member
-    /// after the group's last looter who is a recipient, or null when the loot stays open.
+    /// Unit::Kill (Unit.cpp:1041-1063): a master looter who is offline hands the role to the first
+    /// online leader or assistant; with none the group switches to group loot, threshold uncommon.
     /// </summary>
-    private static ObjectGuid? PickOwner(Group? group, IReadOnlyList<Player> recipients, HashSet<ObjectGuid> bagRecipients)
+    private void EnsureMasterLooterAvailable(Group? group)
     {
-        if (group is null || recipients.Count <= 1 || group.LootMethod == LootMethod.FreeForAll)
+        if (group is not { LootMethod: LootMethod.MasterLoot } || Groups is not { } groups
+            || (!group.LooterGuid.IsEmpty && groups.IsMemberOnline(group.LooterGuid)))
         {
-            return null;
+            return;
         }
 
-        IReadOnlyList<GroupMemberSlot> members = group.Members;
-        int start = 0;
-        for (int i = 0; i < members.Count; i++)
+        if (GroupLooterSelection.MasterLooterFallback(group, groups.IsMemberOnline) is { } replacement)
         {
-            if (members[i].Guid == group.LooterGuid)
-            {
-                start = i + 1;
-                break;
-            }
+            group.LooterGuid = replacement;
+        }
+        else
+        {
+            group.LootMethod = LootMethod.GroupLoot;
+            group.LootThreshold = Group.DefaultLootThreshold;
         }
 
-        for (int n = 0; n < members.Count; n++)
-        {
-            ObjectGuid candidate = members[(start + n) % members.Count].Guid;
-            if (bagRecipients.Contains(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        return null;
+        groups.LooterChanged(group);
     }
 
     // --- creature corpses -----------------------------------------------------------------
@@ -268,7 +293,8 @@ public sealed class LootService : IViewerFieldFilter
             bag.Gold = (uint)Math.Min(gold * (double)Options.MoneyRate, MaxMoneyAmount);
         }
 
-        AssignOwner(bag, group, recipients);
+        EnsureMasterLooterAvailable(group);
+        ApplyLooterPlan(bag, group, PlanLooter(group, recipients, bag.Recipients));
         _bags[creature.Guid] = (creature, bag);
         creature.ViewerFieldFilter = this;
         if (bag.IsEmpty)
@@ -357,7 +383,7 @@ public sealed class LootService : IViewerFieldFilter
             LootBag fresh = Generate(go.Guid, LootSourceKind.GameObject,
                 go.Type == GameObjectType.FishingNode ? LootType.Fishing : LootType.Corpse,
                 LootTableKind.GameObject, lootId, recipients);
-            AssignOwner(fresh, group, recipients);
+            ApplyLooterPlan(fresh, group, PlanLooter(group, recipients, fresh.Recipients));
             go.Loot = fresh;
             _bags[go.Guid] = (go, fresh);
         }
@@ -431,11 +457,8 @@ public sealed class LootService : IViewerFieldFilter
         List<Player> recipients = RecipientsFor(player, go, out Group? group);
         LootBag fresh = Generate(go.Guid, LootSourceKind.GameObject, LootType.Corpse, LootTableKind.GameObject, lootId, recipients);
         fresh.DurableKey = key;
-        ObjectGuid? pick = PickOwner(group, recipients, fresh.Recipients);
-        if (pick is { } owner)
-        {
-            fresh.Owner = owner;
-        }
+        LooterPlan plan = PlanLooter(group, recipients, fresh.Recipients);
+        fresh.Owner = plan.Owner;
 
         LootStateRecord updated = fresh.ToRecord(key, go.Entry, (record?.Generation ?? 0) + 1, RespawnAtUnix(go, durable.UnixNow));
         var operation = new LootOperation
@@ -443,7 +466,7 @@ public sealed class LootService : IViewerFieldFilter
             Key = key,
             Expected = record,
             Updated = updated,
-            Finished = (outcome, live, _) => FinishGeneration(outcome, live, player, key, fresh, group, pick),
+            Finished = (outcome, live, _) => FinishGeneration(outcome, live, player, key, fresh, group, plan),
         };
         return durable.TryStart(operation) ? LootResult.Ok : LootResult.NotAllowed;
     }
@@ -456,7 +479,7 @@ public sealed class LootService : IViewerFieldFilter
     private static long RespawnAtUnix(GameObject go, long now)
         => go.Spawn!.SpawnTimeSeconds >= 0 ? now + Math.Max(1L, go.Spawn.SpawnTimeSeconds) : long.MaxValue;
 
-    private void FinishGeneration(LootOutcome outcome, bool live, Player opener, LootStateKey key, LootBag fresh, Group? group, ObjectGuid? pick)
+    private void FinishGeneration(LootOutcome outcome, bool live, Player opener, LootStateKey key, LootBag fresh, Group? group, LooterPlan plan)
     {
         if (!live)
         {
@@ -473,10 +496,7 @@ public sealed class LootService : IViewerFieldFilter
             return;
         }
 
-        if (pick is { } owner && group is not null)
-        {
-            group.LooterGuid = owner;
-        }
+        CommitLooter(group, plan);
 
         // The object that tracks the spawn now may be a new one (its grid reloaded meanwhile).
         if (Objects?.FindBySpawn(key.SpawnGuid) is not { IsSpawned: true } go || LiveBagOf(go) is not null)

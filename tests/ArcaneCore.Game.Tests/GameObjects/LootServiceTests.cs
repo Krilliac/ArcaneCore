@@ -345,8 +345,9 @@ public sealed class LootServiceTests
         Group group = rig.Groups.Create(LootMethod.RoundRobin, alice, bob);
         Creature wolf = rig.KillWolf(bob);
         LootBag bag = rig.Loot.FindLoot(wolf.Guid)!;
-        Assert.Equal(alice.Guid, bag.Owner); // first member after the (empty) last looter
-        Assert.Equal(alice.Guid, group.LooterGuid);
+        Assert.Equal(alice.Guid, bag.Owner); // GroupManager sets the looter to the leader: he loots the first kill (Group.cpp:134, Unit.cpp:1037)
+        Assert.Equal(bob.Guid, group.LooterGuid); // ... and the pointer advanced for the next kill (Unit.cpp:1078)
+        Assert.Equal([group], rig.Groups.LooterUpdates);
         rig.World.RunTick(50);
         Assert.Equal(0u, DynFlagsSeenBy(bobSession, wolf) & LootService.UnitDynFlagLootable);
 
@@ -363,6 +364,62 @@ public sealed class LootServiceTests
         rig.Creatures.ForceRespawn(wolf);
         rig.KillWolf(alice);
         Assert.Equal(bob.Guid, rig.Loot.FindLoot(wolf.Guid)!.Owner);
+    }
+
+    [Fact]
+    public void RoundRobin_AMemberOutOfReachLosesHisTurn()
+    {
+        Rig rig = CreateRig();
+        (Player alice, _) = rig.Join(1);
+        (Player bob, _) = rig.Join(2, 1, 0);
+        (Player carol, _) = rig.Join(3, 500, 0);
+        Group group = rig.Groups.Create(LootMethod.RoundRobin, alice, bob, carol);
+        group.LooterGuid = carol.Guid; // the looter is far away from the corpse: he loses the turn (Group.cpp:2487-2493)
+        Creature wolf = rig.KillWolf(alice);
+        Assert.Equal(alice.Guid, rig.Loot.FindLoot(wolf.Guid)!.Owner); // next after carol wraps to the first member in reach
+        Assert.Equal(bob.Guid, group.LooterGuid);
+    }
+
+    [Fact]
+    public void MasterLoot_KeepsTheMasterAsLooter_AndDoesNotRotateIt()
+    {
+        Rig rig = CreateRig();
+        (Player alice, _) = rig.Join(1);
+        (Player bob, _) = rig.Join(2, 1, 0);
+        Group group = rig.Groups.Create(LootMethod.MasterLoot, alice, bob);
+        group.LooterGuid = bob.Guid; // the master looter chosen through CMSG_LOOT_METHOD
+        Creature wolf = rig.KillWolf(alice);
+        Assert.Equal(bob.Guid, group.LooterGuid); // vmangos Group.cpp:2476-2481 returns for MASTER_LOOT
+        Assert.Equal(LootMethod.MasterLoot, group.LootMethod);
+        Assert.Empty(rig.Groups.LooterUpdates);
+        Assert.Equal(bob.Guid, rig.Loot.FindLoot(wolf.Guid)!.Owner); // limit: no master-give yet, the master holds the loot
+        rig.Creatures.ForceRespawn(wolf);
+        rig.KillWolf(alice);
+        Assert.Equal(bob.Guid, group.LooterGuid);
+    }
+
+    [Fact]
+    public void MasterLoot_OfflineMaster_PassesToTheOnlineLeader_ElseTheGroupFallsBackToGroupLoot()
+    {
+        Rig rig = CreateRig();
+        (Player alice, _) = rig.Join(1);
+        (Player bob, _) = rig.Join(2, 1, 0);
+        (Player carol, _) = rig.Join(3, 2, 0);
+        Group group = rig.Groups.Create(LootMethod.MasterLoot, alice, bob, carol);
+        group.LooterGuid = bob.Guid;
+        rig.Groups.Offline.Add(bob.Guid);
+        rig.KillWolf(carol);
+        Assert.Equal(alice.Guid, group.LooterGuid); // Unit.cpp:1048-1055: the leader takes over
+        Assert.Equal(LootMethod.MasterLoot, group.LootMethod);
+        Assert.Equal([group], rig.Groups.LooterUpdates);
+
+        rig.Groups.Offline.Add(alice.Guid); // nobody left to lead the loot (Unit.cpp:1057-1062)
+        group.LootThreshold = 4;
+        rig.Creatures.ForceRespawn(rig.Wolf);
+        rig.KillWolf(carol);
+        Assert.Equal(LootMethod.GroupLoot, group.LootMethod);
+        Assert.Equal(Group.DefaultLootThreshold, group.LootThreshold);
+        Assert.Equal(3, rig.Groups.LooterUpdates.Count); // the method switch, then the pointer moving off the vanished master
     }
 
     [Fact]

@@ -175,18 +175,18 @@ public sealed class DurableChestTests
         (Player alice, FakeSession session) = rig.Join(1);
         (Player bob, _) = rig.Join(2, 1, 0);
         Group group = rig.Groups.Create(LootMethod.RoundRobin, alice, bob);
-        Assert.True(group.LooterGuid.IsEmpty);
+        Assert.Equal(alice.Guid, group.LooterGuid); // GroupManager starts the pointer at the leader
 
         rig.Durable.NextOutcome = LootOutcome.Before;
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(alice, rig.Chest.Guid));
         Assert.Single(Packets(session, WorldOpcode.SmsgLootReleaseResponse));
-        Assert.True(group.LooterGuid.IsEmpty);
+        Assert.Equal(alice.Guid, group.LooterGuid);
         Assert.Null(rig.Chest.Loot);
         Assert.Null(rig.Durable.Find(Key));
 
         rig.Durable.NextOutcome = LootOutcome.After;
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(alice, rig.Chest.Guid));
-        Assert.Equal(alice.Guid, group.LooterGuid);
+        Assert.Equal(bob.Guid, group.LooterGuid); // alice owns this chest, the pointer moved on only now that it committed
         Assert.Equal(1, rig.Durable.Find(Key)!.LootOwnerCharacterId);
         Assert.Equal([1, 2], rig.Durable.Find(Key)!.Recipients.Order());
     }
