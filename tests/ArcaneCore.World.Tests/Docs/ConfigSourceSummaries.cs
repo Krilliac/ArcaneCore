@@ -18,7 +18,7 @@ internal sealed partial class ConfigSourceSummaries
     public string? Find(Type type, string property)
     {
         var declaration = new Regex(@"\b(class|record|struct)\s+" + Regex.Escape(type.Name) + @"\b(?!\s*\()", RegexOptions.CultureInvariant);
-        var member = new Regex(@"^\s*public\s+[^=(;{]*\b" + Regex.Escape(property) + @"\s*(\{|=>)", RegexOptions.CultureInvariant);
+        var member = new Regex(@"^\s*public\s+[^=(;{]*\b" + Regex.Escape(property) + @"\s*(\{|=>|=|;)", RegexOptions.CultureInvariant);
         foreach (string[] lines in _files)
         {
             for (int i = 0; i < lines.Length; i++)

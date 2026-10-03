@@ -9,6 +9,8 @@ unfinished parts documented as limits).
 | Page | What it is |
 |---|---|
 | [Configuration reference](reference/configuration.md) | Every configuration key with its type, default, `.reload config` behaviour and meaning. **Generated from the code**; a test fails when the page is stale. |
+| [Exit codes](reference/exit-codes.md) | The process exit codes of the daemons and the content importer (supervisors must not restart on 78). **Generated.** |
+| [Database schema reference](reference/schema.md) | Every schema version of the auth, characters and world databases, which module owns it, and which modules clean up on character delete. **Generated.** |
 | [Database upgrade tooling](ops/database-upgrade.md) | The `arcane-db` runbook: status, plan, upgrade, backups, exit codes and the `Database:Upgrade` policy. |
 | [Security hardening](security/hardening.md) | The opt-in hardening switches and their defaults, and what is not delivered. |
 | [Live bans](security/live-bans.md) | Ban tables, IP bans and the live enforcement options. |
