@@ -129,6 +129,9 @@ public sealed class GameObjectContent
     /// <summary>Maps that have at least one spawn.</summary>
     public IEnumerable<uint> MapsWithSpawns => _spawnsByMap.Keys;
 
+    /// <summary>Every game object template (GM lookups; unordered).</summary>
+    public IEnumerable<GameObjectTemplate> Templates => _templates.Values;
+
     public GameObjectTemplate? FindTemplate(uint entry) => _templates.GetValueOrDefault(entry);
 
     public LockEntry? FindLock(uint lockId) => lockId == 0 ? null : _locks.GetValueOrDefault(lockId);

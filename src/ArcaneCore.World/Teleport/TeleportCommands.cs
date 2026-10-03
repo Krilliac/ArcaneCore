@@ -6,6 +6,7 @@ using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Gm.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Teleport;
@@ -109,6 +110,14 @@ public sealed class TeleportCommands : ICommandGroup
 
     // vmangos ChatHandler::HandleGoHelper (full coordinates given): validate, then TeleportTo.
     private static bool GoHelper(CommandContext context, uint mapId, float x, float y, float z, float orientation)
+        => GoHelper(context, context.Player, mapId, x, y, z, orientation);
+
+    /// <summary>
+    /// HandleGoHelper for <paramref name="subject"/> (the invoker, or a player another command
+    /// moves): validate, stop a taxi flight or else remember the recall position, then TeleportTo
+    /// (TeleportCommands.cpp:713-760).
+    /// </summary>
+    internal static bool GoHelper(CommandContext context, Player subject, uint mapId, float x, float y, float z, float orientation)
     {
         TeleportFeature feature = Feature(context);
         MapTemplate? target = feature.Maps.Registry.Find(mapId);
@@ -124,8 +133,8 @@ public sealed class TeleportCommands : ICommandGroup
             return true;
         }
 
-        Player player = context.Player;
-        if (!feature.Teleports.TeleportTo(player, mapId, x, y, z, orientation))
+        GmTeleports.BeginCommandTeleport(context, subject);
+        if (!feature.Teleports.TeleportTo(subject, mapId, x, y, z, orientation))
         {
             ReplyInvalid(context, x, y, mapId);
         }
@@ -133,11 +142,11 @@ public sealed class TeleportCommands : ICommandGroup
         return true;
     }
 
-    private static void ReplyInvalid(CommandContext context, float x, float y, uint mapId)
+    internal static void ReplyInvalid(CommandContext context, float x, float y, uint mapId)
         => context.Reply(string.Format(CultureInfo.InvariantCulture, InvalidTargetText, x, y, mapId));
 
     private static bool TryFloat(string text, out float value)
         => float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) && float.IsFinite(value);
 
-    private static TeleportFeature Feature(CommandContext context) => context.Session.Services.GetRequiredService<TeleportFeature>();
+    internal static TeleportFeature Feature(CommandContext context) => context.Session.Services.GetRequiredService<TeleportFeature>();
 }

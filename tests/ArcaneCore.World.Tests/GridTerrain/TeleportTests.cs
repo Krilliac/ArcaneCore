@@ -49,7 +49,7 @@ public sealed class TeleportTests
     public async Task GoXyz_NearTeleport_MovesOnTheAck_AndTellsObservers()
     {
         await using WorldTestHost host = WorldTestHost.Start();
-        await using WorldTestClient gm = await host.EnterWorldAsync("TPNEARGM", "Tpneargm", AccountSecurity.Moderator);
+        await using WorldTestClient gm = await host.EnterWorldAsync("TPNEARGM", "Tpneargm", AccountSecurity.GameMaster);
         await using WorldTestClient bob = await host.EnterWorldAsync("TPNEARBOB", "Tpnearbob");
         await gm.CollectAsync(Quiet);
         await bob.CollectAsync(Quiet);
@@ -88,7 +88,7 @@ public sealed class TeleportTests
     public async Task Tele_FarTeleport_TransfersToTheNewMap_WithTheLoginPackets()
     {
         await using WorldTestHost host = WorldTestHost.Start();
-        await using WorldTestClient gm = await host.EnterWorldAsync("TPFARGM", "Tpfargm", AccountSecurity.Moderator);
+        await using WorldTestClient gm = await host.EnterWorldAsync("TPFARGM", "Tpfargm", AccountSecurity.GameMaster);
         await using WorldTestClient bob = await host.EnterWorldAsync("TPFARBOB", "Tpfarbob");
         await gm.CollectAsync(Quiet);
         await bob.CollectAsync(Quiet);
@@ -136,7 +136,7 @@ public sealed class TeleportTests
     public async Task Commands_ExplainWhyTheyCannotTeleport(string command, string reply)
     {
         await using WorldTestHost host = WorldTestHost.Start();
-        await using WorldTestClient gm = await host.EnterWorldAsync("TPBADGM", "Tpbadgm", AccountSecurity.Moderator);
+        await using WorldTestClient gm = await host.EnterWorldAsync("TPBADGM", "Tpbadgm", AccountSecurity.GameMaster);
         await gm.CollectAsync(Quiet);
 
         await gm.SendChatAsync(ChatType.Say, Language.Common, command);
@@ -146,7 +146,7 @@ public sealed class TeleportTests
     }
 
     [Fact]
-    public async Task TeleportCommands_NeedModeratorSecurity()
+    public async Task TeleportCommands_NeedTheTicketMasterLevel()
     {
         await using WorldTestHost host = WorldTestHost.Start();
         await using WorldTestClient player = await host.EnterWorldAsync("TPPLAIN", "Tpplain");
@@ -154,14 +154,14 @@ public sealed class TeleportTests
 
         await player.SendChatAsync(ChatType.Say, Language.Common, ".tele Stormwind");
 
-        Assert.Equal("There is no such command.", (await player.ReadChatAsync()).Text);
+        Assert.Equal("This command is not available to you.", (await player.ReadChatAsync()).Text);
     }
 
     [Fact]
     public async Task AreaTrigger_BelowTheRequiredLevel_ShowsTheMessage_AndGmModeSkipsIt()
     {
         await using WorldTestHost host = WorldTestHost.Start();
-        await using WorldTestClient gm = await host.EnterWorldAsync("TPTRIGGM", "Tptriggm", AccountSecurity.Moderator);
+        await using WorldTestClient gm = await host.EnterWorldAsync("TPTRIGGM", "Tptriggm", AccountSecurity.GameMaster);
         await gm.CollectAsync(Quiet);
 
         // Out of the trigger (more than 5 yards outside the box): ignored.

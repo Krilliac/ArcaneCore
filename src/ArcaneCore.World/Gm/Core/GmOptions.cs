@@ -1,0 +1,76 @@
+using ArcaneCore.Kernel.Accounts;
+using Microsoft.Extensions.Configuration;
+
+namespace ArcaneCore.World.Gm.Core;
+
+/// <summary>
+/// The <c>World:GmCommands</c> configuration section. Every key's default is the retail
+/// behaviour (vmangos) unless the key's own comment says otherwise.
+/// </summary>
+public sealed class GmOptions
+{
+    public const string SectionName = "World:GmCommands";
+
+    /// <summary>
+    /// The retail account level (vmangos AccountTypes, D:\refs\vmangos\src\shared\Common.h:136-146:
+    /// PLAYER 0, MODERATOR 1, TICKETMASTER 2, GAMEMASTER 3, BASIC_ADMIN 4, DEVELOPER 5,
+    /// ADMINISTRATOR 6, CONSOLE 7) each stored <see cref="AccountSecurity"/> stands for.
+    /// ArcaneCore stores four levels, so the retail levels 2, 4 and 5 are only reachable by
+    /// mapping a stored level onto them (an operator may remap, e.g. GameMaster=4).
+    /// </summary>
+    public Dictionary<AccountSecurity, byte> SecurityMap { get; } = new()
+    {
+        [AccountSecurity.Player] = 0,
+        [AccountSecurity.Moderator] = 1,
+        [AccountSecurity.GameMaster] = 3,
+        [AccountSecurity.Administrator] = 6,
+    };
+
+    /// <summary>Write one log line per GM command (a command above level 0), as vmangos Chat.cpp:1908-1925 does.</summary>
+    public bool LogCommands { get; set; } = true;
+
+    /// <summary>
+    /// vmangos GM.LowerSecurity (mangosd.conf.dist.in:2536). Retail default is false, which lets
+    /// staff act on a higher account; ArcaneCore keeps the stricter true as its default so the
+    /// existing refusal does not weaken. Strong checks (mute/unmute) are strict in both.
+    /// </summary>
+    public bool LowerSecurity { get; set; } = true;
+
+    /// <summary>
+    /// Treat a command above the invoker's level as if it did not exist ("There is no such
+    /// command", the behaviour before the retail table work). Retail (false) resolves the command
+    /// first and answers "This command is not available to you." (Chat.cpp:1884-1888).
+    /// </summary>
+    public bool HideUnavailable { get; set; }
+
+    /// <summary>
+    /// A command word matching a command name exactly wins over a longer name that starts with it
+    /// (the behaviour before the retail table work). Retail (false) takes the first table entry the
+    /// word is a prefix of (hasStringAbbr, Chat.cpp:1566-1600), with roots in retail order.
+    /// </summary>
+    public bool ExactNameFirst { get; set; }
+
+    /// <summary>
+    /// Apply the vmangos account level of the commands declared before the retail command work
+    /// (<see cref="RetailCommandLevels"/>); off keeps their ArcaneCore four-level declarations.
+    /// </summary>
+    public bool RetailLevels { get; set; } = true;
+
+    /// <summary>
+    /// The most lines <c>.lookup</c> prints (0 = unlimited, as vmangos). A one-letter search on a
+    /// full classic database matches about 14,000 items, each its own chat packet, all sent from
+    /// the world thread; an operator may cap it (a final line says results were left out).
+    /// </summary>
+    public int LookupMaxResults { get; set; }
+
+    /// <summary>The retail level of a stored account security (unmapped values count as Player).</summary>
+    public int LevelOf(AccountSecurity security) => SecurityMap.GetValueOrDefault(security, (byte)0);
+
+    /// <summary>Bind the section from <paramref name="configuration"/>; absent keys keep their defaults.</summary>
+    public static GmOptions Bind(IConfiguration configuration)
+    {
+        var options = new GmOptions();
+        configuration.GetSection(SectionName).Bind(options);
+        return options;
+    }
+}

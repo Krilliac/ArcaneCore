@@ -45,6 +45,9 @@ public sealed class ItemTemplateStore : IItemTemplateStore
 
     public int Count => _templates.Count;
 
+    /// <summary>Every template (GM lookups and name searches; unordered, sort by entry where order matters).</summary>
+    public IEnumerable<ItemTemplate> All => _templates.Values;
+
     public ItemTemplate? Find(uint entry) => _templates.GetValueOrDefault(entry);
 
     public uint QuestStartingItem(uint questId) => _questStartingItems.GetValueOrDefault(questId);

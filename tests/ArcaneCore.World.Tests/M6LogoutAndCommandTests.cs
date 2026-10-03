@@ -171,13 +171,23 @@ public sealed class M6LogoutAndCommandTests
         await using WorldTestClient listener = await host.EnterWorldAsync("LISTENER", "Listener");
         await Drain(player, listener);
 
-        Assert.Equal("Commands available to you: help, commands, save, server", await CommandAsync(player, ".help"));
-        Assert.Equal("Commands available to you: help, commands, save, server", await CommandAsync(player, "!commands"));
-        Assert.Equal("There is no such command.", await CommandAsync(player, ".gm on"));      // moderator command
-        Assert.Equal("There is no such command.", await CommandAsync(player, ".kick Listener"));
-        Assert.Equal("There is no such command.", await CommandAsync(player, ".nonsense"));
-        Assert.Equal("Subcommands of .server: info, motd", await CommandAsync(player, ".server"));
-        Assert.Equal("Syntax: .server motd — the message of the day.", await CommandAsync(player, ".help server motd"));
+        // The vertical list in retail table order (Chat.cpp:2081-2116), "..." marking a group; ".help" shows
+        // the help of ".help" first and then the same list. Commands above the caller are not listed.
+        string[] list = ["Commands available to you:", "    server ...", "    commands", "    help", "    save"];
+        await player.SendChatAsync(ChatType.Say, Language.Common, "!commands");
+        foreach (string line in list)
+        {
+            Assert.Equal(line, (await player.ReadChatAsync()).Text);
+        }
+
+        // Known but above the caller: "not available" (resolve first, then authorise); unknown: "no such command".
+        Assert.Equal("This command is not available to you.", await CommandAsync(player, ".gm on"));
+        Assert.Equal("This command is not available to you.", await CommandAsync(player, ".kick Listener"));
+        Assert.Equal("There is no such command", await CommandAsync(player, ".nonsense"));
+        Assert.Equal("There is no such subcommand", await CommandAsync(player, ".server"));
+        await player.CollectAsync();   // the sub-command list that follows
+        Assert.Equal("Syntax: .server motd", await CommandAsync(player, ".help server motd"));
+        await player.CollectAsync();
         Assert.DoesNotContain(await listener.CollectAsync(), p => p.Opcode == WorldOpcode.SmsgMessagechat);
 
         // Not commands (vmangos ParseCommands): a lone prefix and repeated prefixes are chat.
@@ -207,56 +217,73 @@ public sealed class M6LogoutAndCommandTests
         await client.CollectAsync();
 
         await client.SendChatAsync(ChatType.Say, Language.Common, ".serv i"); // abbreviations, as vmangos hasStringAbbr
-        Assert.StartsWith("ArcaneCore ", (await client.ReadChatAsync()).Text);
-        Assert.StartsWith("Players online: 1. Uptime: ", (await client.ReadChatAsync()).Text);
+        Assert.StartsWith("Core revision: ArcaneCore ", (await client.ReadChatAsync()).Text);   // ServerCommands.cpp:310
+        Assert.Equal("Players online: 1 (0 queued). Max online: 1 (0 queued).", (await client.ReadChatAsync()).Text);
+        Assert.StartsWith("Server uptime: ", (await client.ReadChatAsync()).Text);
 
+        // vmangos prints the message as one text (LANG_MOTD_CURRENT); '@' only splits the login greeting.
         await client.SendChatAsync(ChatType.Say, Language.Common, ".server motd");
-        Assert.Equal("Be excellent", (await client.ReadChatAsync()).Text);
-        Assert.Equal("to each other", (await client.ReadChatAsync()).Text);
+        Assert.Equal("Current Message of the day: \r", (await client.ReadChatAsync()).Text);
+        Assert.Equal("Be excellent@to each other", (await client.ReadChatAsync()).Text);
 
-        // ".s" is ambiguous; the first command in table order wins (save — silent for players).
+        // ".s" is ambiguous; the first entry in the retail table that starts with it wins (Chat.cpp:1185-1366:
+        // "server" precedes "save"), and ".server" alone is a group without a handler.
         await client.SendChatAsync(ChatType.Say, Language.Common, ".s");
-        Assert.DoesNotContain(await client.CollectAsync(), p => p.Opcode == WorldOpcode.SmsgMessagechat);
+        Assert.Equal("There is no such subcommand", (await client.ReadChatAsync()).Text);
     }
 
     [Fact]
     public async Task Gm_TogglesGmModeAndFaction()
     {
         await using var host = WorldTestHost.Start();
-        await using WorldTestClient gm = await host.EnterWorldAsync("STAFF", "Staff", AccountSecurity.Moderator);
+        await using WorldTestClient gm = await host.EnterWorldAsync("STAFF", "Staff", AccountSecurity.GameMaster);
         await gm.CollectAsync();
 
-        Assert.Equal("GM mode is OFF.", await CommandAsync(gm, ".gm"));
-        Assert.Equal("GM mode is ON.", await CommandAsync(gm, ".gm on"));
-        Assert.Equal("GM mode is ON.", new PacketReader(await gm.ReadUntilAsync(WorldOpcode.SmsgNotification)).ReadCString());
+        // No argument: the state as a notification only (MiscCommands.cpp:106-109).
+        await gm.SendChatAsync(ChatType.Say, Language.Common, ".gm");
+        Assert.Equal("GM mode is OFF", new PacketReader(await gm.ReadUntilAsync(WorldOpcode.SmsgNotification)).ReadCString());
+        Assert.DoesNotContain(await gm.CollectAsync(), p => p.Opcode == WorldOpcode.SmsgMessagechat);
+
+        // "on"/"off" answer with the chat line AND the notification (Player::SetGameMaster, Player.cpp:2642-2646).
+        Assert.Equal("GM mode is ON", await CommandAsync(gm, ".gm on"));
+        Assert.Equal("GM mode is ON", new PacketReader(await gm.ReadUntilAsync(WorldOpcode.SmsgNotification)).ReadCString());
         Assert.Equal((true, Player.GameMasterFactionTemplate), await host.PlayerStateAsync("Staff", p => (p.IsGameMaster, p.FactionTemplate)));
 
-        Assert.Equal("GM mode is OFF.", await CommandAsync(gm, ".gm off"));
+        Assert.Equal("GM mode is OFF", await CommandAsync(gm, ".gm off"));
         Assert.Equal((false, 1u), await host.PlayerStateAsync("Staff", p => (p.IsGameMaster, p.FactionTemplate))); // the race's template again
-        Assert.StartsWith("Incorrect syntax. .gm: ", await CommandAsync(gm, ".gm maybe"));
+
+        // ExtractOnOff takes only on/off (Chat.cpp:2964); anything else answers LANG_USE_BOL, no syntax line.
+        Assert.Equal("Incorrect value, use on or off", await CommandAsync(gm, ".gm maybe"));
+        Assert.Equal("Incorrect value, use on or off", await CommandAsync(gm, ".gm 1"));
+        Assert.Equal("Incorrect value, use on or off", await CommandAsync(gm, ".gm On"));
     }
 
     [Fact]
     public async Task ModifyMoney_TargetsTheSelection_AndRespectsSecurity()
     {
         await using var host = WorldTestHost.Start();
-        await using WorldTestClient gm = await host.EnterWorldAsync("STAFF", "Staff", AccountSecurity.Moderator);
+        await using WorldTestClient gm = await host.EnterWorldAsync("STAFF", "Staff", AccountSecurity.Administrator);   // BASIC_ADMIN (4) needs the top account
         await using WorldTestClient player = await host.EnterWorldAsync("PLAYER", "Player");
         await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
         await Drain(gm, player, admin);
 
-        Assert.Equal("Staff now has 500 copper.", await CommandAsync(gm, ".modify money 500"));
-        Assert.Equal("Staff now has 0 copper.", await CommandAsync(gm, ".mod mon -1000")); // clamped at zero
-        Assert.StartsWith("Incorrect syntax.", await CommandAsync(gm, ".modify money lots"));
+        const string staff = "|cffffffff|Hplayer:Staff|h[Staff]|h|r";
+        const string target = "|cffffffff|Hplayer:Player|h[Player]|h|r";
+        Assert.Equal($"You give 500 copper to {staff}.", await CommandAsync(gm, ".modify money 500"));
+        Assert.Equal($"You take all copper of {staff}.", await CommandAsync(gm, ".mod mon -1000")); // CharacterCommands.cpp:4482: taking more than held takes all
+        Assert.StartsWith("Syntax: .modify money", await CommandAsync(gm, ".modify money lots"));
+        await gm.CollectAsync();   // the help text's second line
 
         await gm.SendAsync(WorldOpcode.CmsgSetSelection, U64(2));
-        Assert.Equal("Player now has 7 copper.", await CommandAsync(gm, ".modify money 7"));
-        Assert.Equal("Staff changed your money by 7 copper.", (await player.ReadChatAsync()).Text);
+        Assert.Equal($"You give 7 copper to {target}.", await CommandAsync(gm, ".modify money 7"));
+        Assert.Equal($"{staff} gave you 7 copper.", (await player.ReadChatAsync()).Text);
         Assert.Equal(7u, await host.PlayerStateAsync("Player", p => p.Money));
 
+        // The same account level is allowed (GM.LowerSecurity applies to higher accounts only); the
+        // refusal of a higher account is covered by Kick_IsForGameMasters_AndDisconnects.
         await gm.SendAsync(WorldOpcode.CmsgSetSelection, U64(3));
-        Assert.Equal("Your security level is too low for that.", await CommandAsync(gm, ".modify money 7"));
-        Assert.Equal(0u, await host.PlayerStateAsync("Admin", p => p.Money));
+        Assert.StartsWith("You give 7 copper to", await CommandAsync(gm, ".modify money 7"));
+        Assert.Equal(7u, await host.PlayerStateAsync("Admin", p => p.Money));
     }
 
     [Fact]
@@ -269,11 +296,12 @@ public sealed class M6LogoutAndCommandTests
         await using WorldTestClient victim = await host.EnterWorldAsync("VICTIM", "Victim");
         await Drain(moderator, gm, admin, victim);
 
-        Assert.Equal("There is no such command.", await CommandAsync(moderator, ".kick Victim"));
-        Assert.Equal("You cannot kick yourself; log out instead.", await CommandAsync(gm, ".kick gamemaster"));
-        Assert.Equal("Your security level is too low for that.", await CommandAsync(gm, ".kick Admin"));
-        Assert.Equal("Player not found.", await CommandAsync(gm, ".kick Nobody"));
-        Assert.Equal("Victim was kicked.", await CommandAsync(gm, ".kick victim"));
+        Assert.Equal("This command is not available to you.", await CommandAsync(moderator, ".kick Victim"));
+        Assert.Equal("You can't kick self, logout instead", await CommandAsync(gm, ".kick gamemaster"));
+        Assert.Equal("You can't kick self, logout instead", await CommandAsync(gm, ".kick"));   // nothing selected: the caller itself
+        Assert.Equal("You have low security level for this.", await CommandAsync(gm, ".kick Admin"));
+        Assert.Equal("Player not found!", await CommandAsync(gm, ".kick Nobody"));
+        Assert.Equal("Player |cffffffff|Hplayer:Victim|h[Victim]|h|r kicked.", await CommandAsync(gm, ".kick victim"));
         Assert.True(await victim.IsClosedByServerAsync());
         await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Victim") is null, "the victim to leave");
     }
@@ -282,19 +310,20 @@ public sealed class M6LogoutAndCommandTests
     public async Task AnnounceAndNotify_ReachEveryone()
     {
         await using var host = WorldTestHost.Start();
-        await using WorldTestClient gm = await host.EnterWorldAsync("STAFF", "Staff", AccountSecurity.Moderator);
+        await using WorldTestClient gm = await host.EnterWorldAsync("STAFF", "Staff", AccountSecurity.Administrator);   // BASIC_ADMIN (4)
         await using WorldTestClient player = await host.EnterWorldAsync("PLAYER", "Player");
         await host.PlaceAsync("Player", 5000, 5000, 0); // anywhere in the world
         await Drain(gm, player);
 
+        // LANG_SYSTEMMESSAGE (ServerCommands.cpp:46-53) and "Global notify: " (:55-69).
         await gm.SendChatAsync(ChatType.Say, Language.Common, ".announce Restart in 5 minutes");
         ChatMessage announcement = await player.ReadChatAsync();
-        Assert.Equal((ChatType.System, "|cffff0000[Staff announces]:|r Restart in 5 minutes"), (announcement.Type, announcement.Text));
+        Assert.Equal((ChatType.System, "|cffff0000[System Message]: Restart in 5 minutes|r"), (announcement.Type, announcement.Text));
         Assert.Equal(announcement, await gm.ReadChatAsync());
 
         await gm.SendChatAsync(ChatType.Say, Language.Common, ".notify Hello all");
-        Assert.Equal("Hello all", new PacketReader(await player.ReadUntilAsync(WorldOpcode.SmsgNotification)).ReadCString());
-        Assert.StartsWith("Incorrect syntax.", await CommandAsync(gm, ".notify"));
+        Assert.Equal("Global notify: Hello all", new PacketReader(await player.ReadUntilAsync(WorldOpcode.SmsgNotification)).ReadCString());
+        Assert.StartsWith("Syntax: .notify", await CommandAsync(gm, ".notify"));
     }
 
     [Fact]
@@ -302,12 +331,15 @@ public sealed class M6LogoutAndCommandTests
     {
         await using var host = WorldTestHost.Start();
         await using WorldTestClient player = await host.EnterWorldAsync("PLAYER", "Player");
-        await using WorldTestClient gm = await host.EnterWorldAsync("STAFF", "Staff", AccountSecurity.Moderator);
+        await using WorldTestClient gm = await host.EnterWorldAsync("STAFF", "Staff", AccountSecurity.Administrator);   // .saveall is ADMINISTRATOR (6)
         await Drain(player, gm);
 
+        // vmangos answers "Player saved." every time (CharacterCommands.cpp:1256); only the first save in 20 s is real.
         int saves = host.Characters.SaveCount;
         await player.SendChatAsync(ChatType.Say, Language.Common, ".save");
-        await player.SendChatAsync(ChatType.Say, Language.Common, ".save"); // within 20 s: silently skipped
+        await player.SendChatAsync(ChatType.Say, Language.Common, ".save"); // within 20 s: no second save
+        Assert.Equal("Player saved.", (await player.ReadChatAsync()).Text);
+        Assert.Equal("Player saved.", (await player.ReadChatAsync()).Text);
         await WorldTestHost.WaitForAsync(() => host.Characters.SaveCount == saves + 1, "one save");
         Assert.Empty(await player.CollectAsync());
 

@@ -95,7 +95,7 @@ public sealed class SpellWorldTests
     public async Task LearnCommand_TeachesASpell_ThatSurvivesRelogging_AndCanBeCast()
     {
         await using var host = WorldTestHost.Start();
-        await using WorldTestClient gm = await host.EnterWorldAsync("TEACHER", "Teacher", AccountSecurity.GameMaster);
+        await using WorldTestClient gm = await host.EnterWorldAsync("TEACHER", "Teacher", AccountSecurity.Administrator);
         await gm.CollectAsync();
 
         await gm.SendChatAsync(ChatType.Say, Language.Common, $".learn {Learnable}");
