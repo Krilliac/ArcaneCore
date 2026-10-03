@@ -37,6 +37,8 @@ public abstract class Battleground
         }
 
         Bracket = bracket;
+        MinLevel = template.MinLevel;
+        MaxLevel = template.MaxLevel;
         InstanceId = instanceId;
         ClientInstanceId = clientInstanceId;
 
@@ -68,6 +70,19 @@ public abstract class Battleground
 
     /// <summary>The instance id the client sees in the battleground list (vmangos <c>GetClientInstanceID</c>).</summary>
     public uint ClientInstanceId { get; }
+
+    /// <summary>The lowest level of the match's bracket (vmangos <c>GetMinLevel</c>; set by <see cref="SetLevelRange"/>, the template's minimum before that).</summary>
+    public uint MinLevel { get; private set; }
+
+    /// <summary>The highest level of the match's bracket (vmangos <c>GetMaxLevel</c>).</summary>
+    public uint MaxLevel { get; private set; }
+
+    /// <summary>vmangos <c>SetLevelRange</c>: the bracket's levels, set when the queue creates the match.</summary>
+    public void SetLevelRange(uint minLevel, uint maxLevel)
+    {
+        MinLevel = minLevel;
+        MaxLevel = maxLevel;
+    }
 
     public uint MinPlayersPerTeam => Template.MinPlayersPerTeam;
 

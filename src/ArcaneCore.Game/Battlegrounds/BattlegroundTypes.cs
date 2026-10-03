@@ -184,6 +184,44 @@ public static class BattlegroundConstants
         return bracket > LastBracket ? LastBracket : (int)bracket;
     }
 
+    /// <summary>
+    /// The lowest level of a bracket (vmangos <c>GetMinLevelForBattleGroundBracketId</c>, Player.cpp:19422-19438): Alterac Valley is 51 and
+    /// Arathi Basin starts one bracket higher with its minimum level reduced by 10.
+    /// </summary>
+    public static uint MinLevelOfBracket(BattlegroundType type, int bracket, uint templateMinLevel)
+    {
+        if (type == BattlegroundType.AlteracValley)
+        {
+            return 51;
+        }
+
+        int id = type == BattlegroundType.ArathiBasin ? bracket + 1 : bracket;
+        if (id > LastBracket)
+        {
+            id = LastBracket;
+        }
+
+        return type == BattlegroundType.ArathiBasin
+            ? (uint)(10 * id) + templateMinLevel - 10
+            : (uint)(10 * id) + templateMinLevel;
+    }
+
+    /// <summary>The level at which the bracket ends, exclusive (vmangos <c>GetMaxLevelForBattleGroundBracketId</c>, Player.cpp:19440-19448).</summary>
+    public static uint MaxLevelOfBracket(BattlegroundType type, int bracket, uint templateMinLevel)
+    {
+        if (type == BattlegroundType.AlteracValley)
+        {
+            return 61;
+        }
+
+        if (bracket >= LastBracket || (type == BattlegroundType.ArathiBasin && bracket == LastBracket - 1))
+        {
+            return MinLevelOfBracket(type, LastBracket, templateMinLevel) + 1;
+        }
+
+        return MinLevelOfBracket(type, bracket, templateMinLevel) + 10;
+    }
+
     /// <summary>The team index used by the arrays of a battleground (vmangos <c>BG_TEAM_ALLIANCE</c> 0, <c>BG_TEAM_HORDE</c> 1).</summary>
     public static int TeamIndex(Team team) => team == Team.Alliance ? 0 : 1;
 
