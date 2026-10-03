@@ -32,8 +32,17 @@ public sealed record GameEventDefinition(
     bool Hardcoded = false,
     bool Disabled = false)
 {
-    /// <summary>vmangos <c>isValid</c>: a length of 0 is invalid (the loader skips it).</summary>
-    public bool IsValid => LengthMinutes > 0;
+    /// <summary>The mangos-classic <c>schedule_type</c> (<see cref="GameEventScheduleType.Date"/> for vmangos data, which has none).</summary>
+    public GameEventScheduleType ScheduleType { get; init; } = GameEventScheduleType.Date;
+
+    /// <summary>mangos-classic <c>linkedTo</c>: this event can only start while that event is active (0 = none).</summary>
+    public ushort LinkedTo { get; init; }
+
+    /// <summary>
+    /// vmangos <c>isValid</c> (a length of 0 is invalid, the loader skips it); mangos-classic <c>isValid</c> also
+    /// accepts a serverside event of any length (GameEventMgr.h:64).
+    /// </summary>
+    public bool IsValid => ScheduleType == GameEventScheduleType.Serverside || LengthMinutes > 0;
 }
 
 /// <summary>
@@ -97,8 +106,12 @@ public static class GameEventSchedule
         return count;
     }
 
-    /// <summary>vmangos <c>CheckOneGameEvent</c>: inside [start, end) and inside the recurrence window.</summary>
-    public static bool IsActive(GameEventDefinition definition, DateTimeOffset now, LeapDayMode mode = LeapDayMode.DateStable)
+    /// <summary>
+    /// vmangos <c>CheckOneGameEvent</c>: inside [start, end) and inside the recurrence window. <paramref name="boundary"/>
+    /// <c>Exclusive</c> is the mangos-classic form (<c>start &lt; current</c>); <c>Auto</c> counts as inclusive here (the
+    /// service resolves it from the data's dialect before it calls).
+    /// </summary>
+    public static bool IsActive(GameEventDefinition definition, DateTimeOffset now, LeapDayMode mode = LeapDayMode.DateStable, GameEventStartBoundary boundary = GameEventStartBoundary.Inclusive)
     {
         ArgumentNullException.ThrowIfNull(definition);
         if (definition.OccurenceMinutes == 0)
@@ -109,7 +122,8 @@ public static class GameEventSchedule
         long current = now.ToUnixTimeSeconds();
         long start = definition.Start.ToUnixTimeSeconds();
         long end = definition.End.ToUnixTimeSeconds();
-        return start <= current && current < end
+        bool started = boundary == GameEventStartBoundary.Exclusive ? start < current : start <= current;
+        return started && current < end
             && (current - start - (LeapDays(definition, now, mode) * Day)) % (definition.OccurenceMinutes * Minute) < definition.LengthMinutes * Minute;
     }
 
