@@ -278,11 +278,58 @@ content-import-full's `game_event*` tables and spawn gate, which that lane owns.
   events, so the client still gets its world states. vmangos would send nothing.
 - A player that reaches a map without `SendInitialPacketsAfterAddToMap` (tests, other entry
   paths) gets its first `UpdateZone` on its first tick; vmangos relies on the explicit call.
+- The explore check needs area data and terrain (`CanDeriveZones`); a development world without them discovers nothing
+  (vmangos always has both).
+- `.wchange` needs Administrator (vmangos `SEC_BASIC_ADMIN`, a tier ArcaneCore's four levels do not have); `.explorecheat`,
+  `.showarea`, `.hidearea` need Moderator (vmangos `SEC_TICKETMASTER`).
+- `.explorecheat` follows the vmangos bug by default (`World:Exploration:CorrectExploreCheat=false`).
+- Yearly event leap days default to date-stable holidays instead of the vmangos loop (`World:GameEvents:LeapDayMode`).
+- The world daemon reads the realm's PvP kind from `World:Zones:PvpRealmMode`; vmangos reads its `GameType`.
+- Weather is cut down to what 1.12 sends: `GetWeatherState` (the client-version-gated state log) is not ported.
 
 ## Not delivered (limits, not stubs)
 
-Recorded so no one assumes them: PvP-enforced areas and the PvP flag freeze, rest-type changes
-on zone change (owned by the death-persistence / stats lanes, which can use the listener),
-`DismountCheck`, `UpdateAreaDependentAuras`, WMO area overrides, the first-login cinematic,
-the 108 default world-state pairs (sniffed retail data; an operator-supplied file is the
-planned route), game events, and weather runtime wiring (see the sections added as slices land).
+Recorded so no one assumes them:
+
+- Game events beyond the schedule maths: the service, `game_event_status`, `.event` / `.lookup event`, the cmangos
+  `schedule_type` dialect (yearly, lunar new year, Easter, Darkmoon), and every consumer (spawn gate, quests, mails). Owned
+  with the `game_event*` tables by content-import-full; adapt `GameEventSchedule` there.
+- Rest: the capital / tavern rest type, `PLAYER_FLAGS_RESTING`, the inn tick and offline accrual belong to the
+  death-persistence and stats-combat lanes; they should consume `IPlayerLocationListener.OnZoneChanged` (zone entry carries
+  `Flags` and `Team`) and `PvpAreaState` (`CAPITAL && !enforced`) instead of polling zones.
+- Zone-entry consumers owned elsewhere: `UpdateLocalChannels`, `DestroyZoneLimitedItem`, `UpdateZoneDependentAuras` /
+  `UpdateAreaDependentAuras` (spell_area), `DismountCheck`, zone scripts, group/guild zone refresh beyond `Player.ZoneId`.
+- PvP: battlegrounds, taxi flights, capture points and flag carriers (see the PvP section).
+- WMO sub-area names and the `IsOutdoors` flag: `TerrainInfo.GetAreaFlag` returns the tile cell value only (no WMO
+  override, no per-map fallback flag), and `CollisionContracts.ModelAreaInfo.MogpExterior` tests MOGP flag `0x8` where vmangos
+  and mangos-classic test `0x8000` (`GridMap.cpp:875-878`, `:887-889`). Changing it needs a real extracted vmap sample to
+  confirm which bit the files carry; that sample was not available, so the constant is untouched (pathfinding-collision lane).
+- The first-login cinematic and "explore after the cinematic ends": there is no cinematic data, so the first explore check
+  runs right after the map add (same XP and packet, no camera sequence).
+- The 108 default world-state pairs (sniffed retail data under GPL; supply a file).
+- A command-line importer entry point for `game_weather` / `exploration_basexp` (the dump parser and `ImportAsync` exist;
+  content-import-full owns the tool), `.reload game_weather`, hot-reload coordinator wiring.
+- A MockClient scenario and a real-client run (see the checklist).
+
+## Reference table
+
+| Feature | Reference |
+|---|---|
+| Weather engine, sounds, packet, chance loader | vmangos `src/game/Weather.cpp:40-52, 55-84, 87-210, 212-267, 304-310, 371-399, 402-443, 446-505`; wow_messages `smsg_weather.wowm` |
+| Zone / area tracking | vmangos `Player.cpp:1215-1236, 6560-6675, 19154-19159`; `MiscHandler.cpp:381-386` |
+| Game time | vmangos `Server/Packets/Misc.cpp:924-944`, `Player.cpp:19141-19145`; wow_messages `smsg_login_settimespeed.wowm` |
+| Exploration | vmangos `Player.cpp:5969-5985, 6089-6204, 14648, 16481, 17059-17065`, `ObjectMgr.cpp:8516`, `Misc.cpp:833-837`, `CharacterCommands.cpp:640-679, 764-830`; classic-db `exploration_basexp` |
+| World states | vmangos `Player.cpp:8156-8213`, `Misc.cpp:1007-1060`; wow_messages `smsg_init_world_states.wowm`, `smsg_update_world_state.wowm` |
+| PvP areas | vmangos `Player.cpp:6566-6636, 17199-17207, 18568-18590`, `DBCEnums.h:46-67`, `World.h:802-803` |
+| Game events | vmangos `GameEventMgr.cpp:38-70, 241-251`, `GameEventMgr.h:30-60` |
+
+## Real-client checklist (not run)
+
+1. Log in at the start of a new character: the map overlay of the start area reveals, one "Discovered" line appears with XP,
+   no repeat after /reload and relog.
+2. Walk into another zone: the zone name flashes, weather appears (rain, snow or sandstorm visuals and sound), and the
+   `.wchange 1 0.5` / `.wchange 0 0` GM commands change it for everyone in the zone only.
+3. Day/night follows the server's local clock after login (`World:Time`).
+4. Enter an enemy capital: the PvP flag appears and stays beyond five minutes while inside; it drops five minutes after leaving.
+5. `.explorecheat 1` reveals every zone; `.showarea` / `.hidearea` change single overlays.
+6. A world-state provider (battleground / war effort lanes) shows its UI after a zone change.
