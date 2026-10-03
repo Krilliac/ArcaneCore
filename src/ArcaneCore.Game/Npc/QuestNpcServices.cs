@@ -1,0 +1,228 @@
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Quests;
+using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Protocol;
+using Microsoft.Extensions.Logging;
+
+namespace ArcaneCore.Game.Npc;
+
+/// <summary>Collaborators owned by other areas; any of them may be missing (the dependent features then fail closed).</summary>
+public sealed record QuestNpcDependencies(
+    ICreatureLookup? Creatures = null,
+    IItemService? Items = null,
+    ISpellLearner? Spells = null,
+    IPlayerExperience? Experience = null,
+    IPlayerReputation? Reputation = null,
+    IConditionEvaluator? Conditions = null,
+    ITaxiFlights? Flights = null,
+    IMapInfo? Maps = null);
+
+/// <summary>Where quest/NPC state changes go (the world daemon's save queue). World thread.</summary>
+public interface IQuestNpcSink
+{
+    /// <summary>Quest rows changed (delta).</summary>
+    void QuestsChanged(Player player, IReadOnlyList<CharacterQuestStatus> rows);
+
+    /// <summary>The known flight-path mask changed.</summary>
+    void TaxiMaskChanged(Player player, IReadOnlyList<uint> mask);
+
+    /// <summary>Money or the bind point changed: save the character row.</summary>
+    void CharacterChanged(Player player);
+}
+
+/// <summary>Per-player quest/NPC state (vmangos keeps it on Player; here the feature owns it).</summary>
+public sealed class PlayerNpcState(Player player)
+{
+    public PlayerQuestLog Quests { get; } = new(player);
+
+    /// <summary>vmangos PlayerTalkClass.</summary>
+    public PlayerMenu Menu { get; } = new();
+
+    /// <summary>vmangos PlayerTaxi::m_taximask.</summary>
+    public uint[] TaxiMask { get; } = new uint[NpcStore.TaxiMaskSize];
+
+    /// <summary>Quest statuses and taxi mask have been loaded; until then requests are ignored.</summary>
+    public bool Loaded { get; set; }
+}
+
+/// <summary>
+/// Quests, gossip, vendors, trainers, innkeepers and flight masters for every online player
+/// (vmangos Player quest system, PlayerMenu, and the NPC/Quest/Taxi handlers). World thread only;
+/// content stores are immutable.
+/// </summary>
+public sealed partial class QuestNpcServices : IQuestObjectiveEvents
+{
+    /// <summary>INTERACTION_DISTANCE (vmangos ObjectDefines.h).</summary>
+    public const float InteractionDistance = 5.0f;
+
+    /// <summary>vmangos DEFAULT_GOSSIP_MESSAGE.</summary>
+    public const uint DefaultGossipMessage = 0xFFFFFF;
+
+    /// <summary>MAX_MONEY_AMOUNT (vmangos Player.h: 0x7FFFFFFF - 1).</summary>
+    public const uint MaxMoneyAmount = 0x7FFFFFFE;
+
+    private readonly Dictionary<ObjectGuid, PlayerNpcState> _players = [];
+    private readonly IQuestNpcSink _sink;
+    private readonly Func<long> _unixNow;
+    private readonly ILogger _logger;
+
+    public QuestNpcServices(
+        QuestStore quests,
+        NpcStore npcs,
+        QuestNpcDependencies dependencies,
+        QuestNpcOptions options,
+        IQuestNpcSink sink,
+        Func<long> unixNow,
+        ILogger logger)
+    {
+        Quests = quests;
+        Npcs = npcs;
+        Deps = dependencies;
+        Options = options;
+        _sink = sink;
+        _unixNow = unixNow;
+        _logger = logger;
+    }
+
+    public QuestStore Quests { get; }
+
+    public NpcStore Npcs { get; }
+
+    public QuestNpcDependencies Deps { get; }
+
+    public QuestNpcOptions Options { get; }
+
+    // ---- player lifecycle --------------------------------------------------------------
+
+    /// <summary>A player entered the world: its state exists but is not loaded yet.</summary>
+    public PlayerNpcState Track(Player player)
+    {
+        var state = new PlayerNpcState(player);
+        _players[player.Guid] = state;
+        return state;
+    }
+
+    /// <summary>The player left the world.</summary>
+    public void Untrack(Player player) => _players.Remove(player.Guid);
+
+    public PlayerNpcState? StateOf(Player player) => _players.GetValueOrDefault(player.Guid);
+
+    /// <summary>
+    /// Apply the loaded rows (vmangos _LoadQuestStatus, PlayerTaxi::LoadTaxiMask — known bits
+    /// are masked with the existing nodes). A character without a stored mask gets the race's
+    /// starting mask (vmangos PlayerTaxi::InitTaxiNodes, at character creation there).
+    /// </summary>
+    /// <remarks>
+    /// <paramref name="state"/> is the instance <see cref="Track"/> returned: a load finishing
+    /// after the player relogged (a newer state) is dropped, so stale rows are never applied.
+    /// </remarks>
+    public void CompleteLoad(PlayerNpcState state, CharacterQuestData data)
+    {
+        Player player = state.Quests.Player;
+        if (state.Loaded || !ReferenceEquals(StateOf(player), state))
+        {
+            return;
+        }
+
+        state.Quests.Load(data.Quests, Quests);
+        if (data.TaxiMask.Count > 0)
+        {
+            for (int i = 0; i < NpcStore.TaxiMaskSize; i++)
+            {
+                state.TaxiMask[i] = i < data.TaxiMask.Count ? data.TaxiMask[i] & Npcs.TaxiNodesMask[i] : 0;
+            }
+        }
+        else if (Npcs.RaceStartingTaxiMask((byte)player.Race) is var start and not 0)
+        {
+            state.TaxiMask[0] = start;
+            _sink.TaxiMaskChanged(player, [.. state.TaxiMask]);
+        }
+
+        state.Loaded = true;
+        CheckTimers(player);
+    }
+
+    // ---- shared helpers -----------------------------------------------------------------
+
+    /// <summary>The loaded state of an online player, or null (requests are then ignored).</summary>
+    private PlayerNpcState? Ready(Player player) => _players.TryGetValue(player.Guid, out PlayerNpcState? s) && s.Loaded ? s : null;
+
+    /// <summary>Hand pending quest row changes to the sink.</summary>
+    private void Flush(PlayerNpcState state)
+    {
+        if (state.Quests.HasChanges)
+        {
+            _sink.QuestsChanged(state.Quests.Player, state.Quests.TakeChanges((int)state.Quests.Player.Guid.Low));
+        }
+    }
+
+    private long UnixNow => _unixNow();
+
+    private uint DisplayOf(uint itemId) => itemId != 0 ? Deps.Items?.GetItem(itemId)?.DisplayId ?? 0 : 0;
+
+    private static void Send(Player player, WorldOpcode opcode, PacketWriter body) => player.Session.Send(opcode, body.AsSpan());
+
+    /// <summary>vmangos Player::ModifyMoney (clamped to 0..MAX_MONEY_AMOUNT), then MoneyChanged.</summary>
+    private void ModifyMoney(PlayerNpcState state, long delta)
+    {
+        Player player = state.Quests.Player;
+        long money = Math.Clamp((long)player.Money + delta, 0, MaxMoneyAmount);
+        player.Money = (uint)money;
+        MoneyChanged(state, (uint)money);
+        _sink.CharacterChanged(player);
+    }
+
+    /// <summary>
+    /// vmangos Player::GetNPCIfCanInteractWith / CanInteractWithNPC: in the world and not on a
+    /// flight, the creature exists, carries <paramref name="flags"/>, is alive, not hostile, not in
+    /// combat, selectable, and within INTERACTION_DISTANCE (3D, measured between bounding radii).
+    /// </summary>
+    /// <remarks>
+    /// The "unfriendly reputation rank" and "invisible for alive / visible to ghosts" checks belong
+    /// to the creature/reputation owners and are expected in <see cref="NpcInfo.IsHostile"/> /
+    /// the lookup's visibility (docs/integration/quests-npc.md).
+    /// </remarks>
+    public NpcInfo? InteractableNpc(Player player, ObjectGuid guid, NpcFlags flags)
+    {
+        if (guid.IsEmpty || !player.IsInWorld || (player.UnitFlags & UnitFlags.TaxiFlight) != 0)
+        {
+            return null;
+        }
+
+        NpcInfo? npc = Deps.Creatures?.Find(player, guid);
+        if (npc is null || npc.MapId != player.MapId)
+        {
+            return null;
+        }
+
+        if (flags != NpcFlags.None && (npc.NpcFlags & flags) == 0)
+        {
+            return null;
+        }
+
+        if (flags == NpcFlags.StableMaster && player.Class != Class.Hunter)
+        {
+            return null;
+        }
+
+        if (!npc.IsAlive || npc.IsHostile || npc.IsInCombat || npc.IsNotSelectable)
+        {
+            return null;
+        }
+
+        float dx = npc.X - player.X;
+        float dy = npc.Y - player.Y;
+        float dz = npc.Z - player.Z;
+        float distance = MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz)) - npc.BoundingRadius - player.BoundingRadius;
+        return distance <= InteractionDistance ? npc : null;
+    }
+
+    /// <summary>A creature the player can see (vmangos GetObjectByTypeMask(TYPEMASK_CREATURE…)), without interaction checks.</summary>
+    private NpcInfo? FindNpc(Player player, ObjectGuid guid)
+        => guid.IsEmpty || Deps.Creatures?.Find(player, guid) is not { } npc || npc.MapId != player.MapId ? null : npc;
+
+    /// <summary>vmangos PlayerMenu::CloseGossip → SMSG_GOSSIP_COMPLETE (empty).</summary>
+    private static void CloseGossip(Player player) => player.Session.Send(WorldOpcode.SmsgGossipComplete, []);
+
+    private void LogMissing(string what, ObjectGuid npc) => _logger.LogDebug("{What}: {Npc} not found or not interactable", what, npc);
+}
