@@ -262,6 +262,8 @@ those moments (no creature AI hooks were edited). Pets of players are normalised
 exist on this base, so that branch is not applied.
 ## Slice 8: mount-aura (delivered)
 
+The follow-on mount cast and restriction rules are tracked in [mounts.md](mounts.md).
+
 `SPELL_AURA_MOUNTED` (78, `Spells/Auras/MountAura.cs`, vmangos `HandleAuraMounted`, `SpellAuras.cpp:2251-2276`): the misc value is the creature
 entry of the mount; its template's display becomes `UNIT_FIELD_MOUNTDISPLAYID` (the mount state, 1.12 has no mounted unit flag). Removing
 the aura dismounts. 126 classic spells carry the aura (108 are item mounts).
