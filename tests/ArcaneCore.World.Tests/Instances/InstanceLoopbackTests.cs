@@ -1,0 +1,178 @@
+using System.Buffers.Binary;
+using System.Text;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Protocol;
+using ArcaneCore.World.Creatures;
+using ArcaneCore.World.Instances;
+using ArcaneCore.World.Net;
+using ArcaneCore.World.Social;
+using ArcaneCore.World.Teleport;
+using ArcaneCore.World.Tests.Creatures;
+using ArcaneCore.World.Tests.GridTerrain;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace ArcaneCore.World.Tests.Instances;
+
+/// <summary>
+/// Dungeon instances end to end over real sessions: the Deadmines area trigger (level
+/// requirement, then SMSG_TRANSFER_PENDING → SMSG_NEW_WORLD → MSG_MOVE_WORLDPORT_ACK) puts
+/// different groups into different instance maps, a teleport takes a player back out, and
+/// CMSG_RESET_INSTANCES / CMSG_REQUEST_RAID_INFO answer from the instance system.
+/// </summary>
+public sealed class InstanceLoopbackTests
+{
+    private const uint Deadmines = 36;
+    private static readonly TimeSpan Quiet = TimeSpan.FromMilliseconds(200);
+
+    [Fact]
+    public async Task TwoGroups_ThroughTheAreaTrigger_GetSeparateInstances_AndMembersShareOne()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient a = await host.EnterWorldAsync("INSTA", "Insta");
+        await using WorldTestClient b = await host.EnterWorldAsync("INSTB", "Instb");
+        await using WorldTestClient c = await host.EnterWorldAsync("INSTC", "Instc");
+        await using WorldTestClient d = await host.EnterWorldAsync("INSTD", "Instd");
+        await GroupAsync(host, a, b, "Insta", "Instb");
+        await GroupAsync(host, c, d, "Instc", "Instd");
+
+        await EnterThroughTriggerAsync(host, a, "Insta");
+        await EnterThroughTriggerAsync(host, c, "Instc");
+        await EnterThroughTriggerAsync(host, b, "Instb");
+        await EnterThroughTriggerAsync(host, d, "Instd");
+
+        uint ia = await InstanceOfAsync(host, "Insta"), ib = await InstanceOfAsync(host, "Instb");
+        uint ic = await InstanceOfAsync(host, "Instc"), id = await InstanceOfAsync(host, "Instd");
+        Assert.Equal(ia, ib);
+        Assert.Equal(ic, id);
+        Assert.NotEqual(ia, ic);
+        Assert.True(await host.OnWorldAsync(() => !ReferenceEquals(host.World.FindMap(Deadmines, ia), host.World.FindMap(Deadmines, ic))));
+        Assert.Null(await host.OnWorldAsync(() => host.World.FindMap(Deadmines)));
+    }
+
+    [Fact]
+    public async Task TeleportOut_ThenResetInstances_ResetsIt_AndRaidInfoIsEmpty()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("INSTSOLO", "Instsolo");
+        await EnterThroughTriggerAsync(host, client, "Instsolo");
+        uint id = await InstanceOfAsync(host, "Instsolo");
+        int character = (int)await host.PlayerStateAsync("Instsolo", p => p.Guid.Low);
+
+        // Inside: the reset skips the instance the player is in.
+        await client.CollectAsync(Quiet);
+        await client.SendAsync(WorldOpcode.CmsgResetInstances, []);
+        Assert.DoesNotContain(await client.CollectAsync(Quiet), p => p.Opcode == WorldOpcode.SmsgInstanceReset);
+
+        // Out through the teleport/worldport flow.
+        await host.OnWorldAsync(() => TeleportFeatureOf(host.World.FindOnlinePlayer("Instsolo")!).Teleports
+            .TeleportTo(host.World.FindOnlinePlayer("Instsolo")!, 0, -8913.23f, 554.633f, 93.7944f, 0.5f));
+        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(await client.ReadUntilAsync(WorldOpcode.SmsgTransferPending)));
+        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(await client.ReadUntilAsync(WorldOpcode.SmsgNewWorld)));
+        await client.SendAsync(WorldOpcode.MsgMoveWorldportAck, []);
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Instsolo")?.Map is { MapId: 0, InstanceId: 0 }, "the player is back on the continent");
+
+        await client.CollectAsync(Quiet);
+        await client.SendAsync(WorldOpcode.CmsgResetInstances, []);
+        Assert.Equal(Deadmines, BinaryPrimitives.ReadUInt32LittleEndian(await client.ReadUntilAsync(WorldOpcode.SmsgInstanceReset)));
+
+        await client.SendAsync(WorldOpcode.CmsgRequestRaidInfo, []);
+        Assert.Equal(new byte[4], await client.ReadUntilAsync(WorldOpcode.SmsgRaidInstanceInfo));
+
+        InstanceFeature feature = await host.PlayerStateAsync("Instsolo", p => Services(p).GetRequiredService<InstanceFeature>());
+        await feature.FlushAsync();
+        InMemoryInstanceStore store = await host.PlayerStateAsync("Instsolo", p => Services(p).GetRequiredService<InMemoryInstanceStore>());
+        string[] writes = [.. store.Writes];
+        Assert.Contains($"instance {id} map {Deadmines}", writes);
+        Assert.Contains($"bind {character} {id} False", writes);
+        Assert.Contains($"last {character} {Deadmines} {id}", writes);
+        Assert.Contains($"delete {id}", writes);
+        Assert.True(Array.IndexOf(writes, $"bind {character} {id} False") < Array.IndexOf(writes, $"delete {id}"));
+
+        // Entering again creates a new instance.
+        await EnterThroughTriggerAsync(host, client, "Instsolo");
+        Assert.NotEqual(id, await InstanceOfAsync(host, "Instsolo"));
+    }
+
+    [Fact]
+    public async Task EachInstance_LoadsItsOwnCreatures()
+    {
+        var template = new CreatureTemplate
+        {
+            Entry = 657, Name = "Defias Pirate", MinLevel = 18, MaxLevel = 18, DisplayIds = [2349],
+            Faction = 17, CreatureType = 7, MinLevelHealth = 500, MaxLevelHealth = 500,
+        };
+        var spawn = new CreatureSpawn { Guid = 79000, Entry = 657, MapId = Deadmines, X = -10f, Y = -380f, Z = 61.8f };
+        var context = new CreatureTestContext(new CreatureContent([template], [spawn], [], [], []));
+        CreatureTestStore.Current.Value = context;
+        WorldTestHost started;
+        try
+        {
+            started = WorldTestHost.Start();
+        }
+        finally
+        {
+            CreatureTestStore.Current.Value = null;
+        }
+
+        await using WorldTestHost host = started;
+        await using WorldTestClient a = await host.EnterWorldAsync("INSTCRA", "Instcra");
+        await using WorldTestClient b = await host.EnterWorldAsync("INSTCRB", "Instcrb");
+        await EnterThroughTriggerAsync(host, a, "Instcra");
+        await EnterThroughTriggerAsync(host, b, "Instcrb");
+
+        CreatureWorldFeature feature = await host.PlayerStateAsync("Instcra", p => Services(p).GetRequiredService<CreatureWorldFeature>());
+        Map first = await host.PlayerStateAsync("Instcra", p => p.Map!);
+        Map second = await host.PlayerStateAsync("Instcrb", p => p.Map!);
+        Assert.NotSame(first, second);
+        var guid = Game.ObjectGuid.WithEntry(Game.HighGuid.Unit, 657, 79000);
+        await host.WaitForWorldAsync(
+            () => feature.FindSystem(first)?.FindCreature(guid) is not null && feature.FindSystem(second)?.FindCreature(guid) is not null,
+            "both instances spawn the pirate");
+        (Creature one, Creature two, CreatureMapSystem s1, CreatureMapSystem s2) = await host.OnWorldAsync(() =>
+            (feature.FindSystem(first)!.FindCreature(guid)!, feature.FindSystem(second)!.FindCreature(guid)!, feature.FindSystem(first)!, feature.FindSystem(second)!));
+        Assert.NotSame(s1, s2);
+        Assert.NotSame(one, two);
+        Assert.Same(first, one.Map);
+        Assert.Same(second, two.Map);
+    }
+
+    private static IServiceProvider Services(Player player) => ((WorldSession)player.Session).Services;
+
+    private static TeleportFeature TeleportFeatureOf(Player player) => Services(player).GetRequiredService<TeleportFeature>();
+
+    private static Task<uint> InstanceOfAsync(WorldTestHost host, string name)
+        => host.PlayerStateAsync(name, p => p.Map is { MapId: Deadmines } map ? map.InstanceId : throw new InvalidOperationException($"{name} is not in the dungeon"));
+
+    private static async Task GroupAsync(WorldTestHost host, WorldTestClient leader, WorldTestClient member, string leaderName, string memberName)
+    {
+        await leader.SendAsync(WorldOpcode.CmsgGroupInvite, CString(memberName));
+        await member.ReadUntilAsync(WorldOpcode.SmsgGroupInvite);
+        await member.SendAsync(WorldOpcode.CmsgGroupAccept, []);
+        await host.WaitForWorldAsync(
+            () => host.World.FindOnlinePlayer(leaderName) is { } p && Services(p).GetRequiredService<SocialFeature>().Context.Groups.GetGroup(p.Guid)?.MemberCount == 2,
+            "the group forms");
+    }
+
+    // Stand in the trigger box at level 20 and walk through it: the dungeon transfer, then the ack.
+    private static async Task EnterThroughTriggerAsync(WorldTestHost host, WorldTestClient client, string name)
+    {
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer(name)!.Level = 20);
+        await host.PlaceAsync(name, -8962f, -130f, 84f);
+        await client.CollectAsync(Quiet);
+        byte[] trigger = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(trigger, InMemoryMapDataStore.DeadminesTrigger);
+        await client.SendAsync(WorldOpcode.CmsgAreatrigger, trigger);
+        Assert.Equal(Deadmines, BinaryPrimitives.ReadUInt32LittleEndian(await client.ReadUntilAsync(WorldOpcode.SmsgTransferPending)));
+        byte[] newWorld = await client.ReadUntilAsync(WorldOpcode.SmsgNewWorld);
+        Assert.Equal(Deadmines, BinaryPrimitives.ReadUInt32LittleEndian(newWorld));
+        await client.SendAsync(WorldOpcode.MsgMoveWorldportAck, []);
+        await client.ReadUntilAsync(WorldOpcode.SmsgInitWorldStates); // the last login packet on the new map
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer(name)?.Map?.MapId == Deadmines, $"{name} enters the dungeon");
+    }
+
+    private static byte[] CString(string text) => [.. Encoding.UTF8.GetBytes(text), 0];
+}
