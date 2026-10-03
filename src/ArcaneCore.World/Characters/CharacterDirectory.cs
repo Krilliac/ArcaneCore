@@ -30,4 +30,12 @@ public sealed class CharacterDirectory
     public void Remove(int characterId) => _byId.TryRemove(characterId, out _);
 
     public CharacterIdentity? Find(int characterId) => _byId.GetValueOrDefault(characterId);
+
+    /// <summary>
+    /// The character called <paramref name="name"/> (case-insensitive), online or not, like
+    /// vmangos ObjectMgr::GetPlayerGuidByName over its player cache. A linear scan: name lookups
+    /// come from player commands (friend/guild requests), not per-tick work.
+    /// </summary>
+    public CharacterIdentity? FindByName(string name)
+        => _byId.Values.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
 }
