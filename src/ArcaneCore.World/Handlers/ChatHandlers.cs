@@ -16,8 +16,8 @@ namespace ArcaneCore.World.Handlers;
 /// Chat, emotes and /who (vmangos ChatHandler.cpp HandleChatMessageOpcode / HandleEmoteOpcode /
 /// HandleTextEmoteOpcode, MiscHandler.cpp HandleWhoOpcode). World thread: chat reaches other
 /// players through the map and the online registry. Party, raid, guild, battleground and
-/// channel chat arrive with groups, guilds and channels (M14); until then they are dropped,
-/// exactly as vmangos drops them for a player in no group or guild.
+/// channel chat are served by world features through <see cref="IChatMessageHandler"/>; a
+/// message no feature takes is dropped, as vmangos drops it for a player in no group or guild.
 /// </summary>
 public sealed class ChatHandlers : IOpcodeHandlerGroup
 {
@@ -61,7 +61,10 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
         WorldRuntimeOptions options = session.World.Options;
         if (language == Language.Addon)
         {
-            // Addon messages only travel party/raid/guild/battleground/channel chat (M14).
+            // Addon messages skip the language checks and command parsing (vmangos
+            // HandleChatMessageOpcode / SanitizeChatMessage) and only travel the group, guild,
+            // battleground and channel chat that features serve; unserved, they are dropped.
+            OfferToFeatures(session, player, new ClientChatMessage(type, language, target, message));
             return;
         }
 
@@ -89,6 +92,11 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
             {
                 return;
             }
+        }
+
+        if (OfferToFeatures(session, player, new ClientChatMessage(type, language, target, message)))
+        {
+            return;
         }
 
         switch (type)
@@ -169,6 +177,23 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
 
                 break;
         }
+    }
+
+    /// <summary>
+    /// Offer a message to the <see cref="IChatMessageHandler"/> features (channels, groups,
+    /// social lists …) in feature-name order; true when one consumed it.
+    /// </summary>
+    private static bool OfferToFeatures(WorldSession session, Player player, ClientChatMessage message)
+    {
+        foreach (IChatMessageHandler handler in session.Services.GetServices<IChatMessageHandler>())
+        {
+            if (handler.TryHandle(session, player, message))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

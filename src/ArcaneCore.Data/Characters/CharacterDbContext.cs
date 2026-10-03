@@ -40,12 +40,11 @@ public sealed class AccountTutorialRow
 public sealed class CharacterDbContext(DbContextOptions<CharacterDbContext> options) : DbContext(options)
 {
     /// <summary>Schema history of the characters database.</summary>
-    public static readonly SchemaDefinition Schema = new()
-    {
-        Component = "characters",
-        CurrentVersion = 2,
-        Version1Tables = ["characters"],
-        Steps =
+    /// <remarks>Later versions come from <see cref="IDataModule"/>s of <see cref="DatabaseComponent.Characters"/>.</remarks>
+    public static readonly SchemaDefinition Schema = DataModules.Compose(
+        DatabaseComponent.Characters,
+        "characters",
+        ["characters"],
         [
             // M6: played time per level, money, action bars, bind point, account settings.
             new SchemaStep(2,
@@ -62,8 +61,7 @@ public sealed class CharacterDbContext(DbContextOptions<CharacterDbContext> opti
                 new CreateTableChange("account_data"),
                 new CreateTableChange("account_tutorial"),
             ]),
-        ],
-    };
+        ]);
 
     public DbSet<CharacterRecord> Characters => Set<CharacterRecord>();
 
@@ -106,5 +104,7 @@ public sealed class CharacterDbContext(DbContextOptions<CharacterDbContext> opti
             entity.HasKey(r => r.AccountId);
             entity.Property(r => r.AccountId).ValueGeneratedNever();
         });
+
+        DataModules.ConfigureModel(modelBuilder, DatabaseComponent.Characters);
     }
 }

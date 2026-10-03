@@ -12,17 +12,15 @@ namespace ArcaneCore.Data.Auth;
 public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbContext(options)
 {
     /// <summary>Schema history of the auth database.</summary>
-    public static readonly SchemaDefinition Schema = new()
-    {
-        Component = "auth",
-        CurrentVersion = 2,
-        Version1Tables = ["account", "realmlist"],
-        Steps =
+    /// <remarks>Later versions come from <see cref="IDataModule"/>s of <see cref="DatabaseComponent.Auth"/>.</remarks>
+    public static readonly SchemaDefinition Schema = DataModules.Compose(
+        DatabaseComponent.Auth,
+        "auth",
+        ["account", "realmlist"],
         [
             // M6: account GM level.
             new SchemaStep(2, [new AddColumnChange("account", "Security")]),
-        ],
-    };
+        ]);
 
     public DbSet<Account> Accounts => Set<Account>();
 
@@ -58,5 +56,7 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
             entity.Property(r => r.Population);
             entity.Property(r => r.Category);
         });
+
+        DataModules.ConfigureModel(modelBuilder, DatabaseComponent.Auth);
     }
 }

@@ -1,6 +1,7 @@
 using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
@@ -29,6 +30,7 @@ public static class DataServiceCollectionExtensions
         services.AddScoped<IAccountStore, EfAccountStore>();
         services.AddScoped<IRealmStore, EfRealmStore>();
         services.AddSingleton<AuthDbInitializer>();
+        DataModules.AddServices(services, DatabaseComponent.Auth);
         return services;
     }
 
@@ -42,6 +44,7 @@ public static class DataServiceCollectionExtensions
         services.AddScoped<ICharacterStore, EfCharacterStore>();
         services.AddScoped<IAccountDataStore, EfAccountDataStore>();
         services.AddSingleton<CharacterDbInitializer>();
+        DataModules.AddServices(services, DatabaseComponent.Characters);
         return services;
     }
 
@@ -54,6 +57,7 @@ public static class DataServiceCollectionExtensions
 
         services.AddScoped<IWorldDataStore, EfWorldDataStore>();
         services.AddSingleton<WorldDbInitializer>();
+        DataModules.AddServices(services, DatabaseComponent.World);
         return services;
     }
 
