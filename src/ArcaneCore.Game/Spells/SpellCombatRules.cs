@@ -295,6 +295,6 @@ public class VanillaSpellCombatRules : ISpellCombatRules
             return damage;
         }
 
-        return MeleeHitTable.ApplyArmor(damage, target.GetUInt32(UpdateFields.UnitFieldResistances), caster.Level);
+        return MeleeHitTable.ApplyArmor(damage, target.GetInt32(UpdateFields.UnitFieldResistances), caster.Level);
     }
 }

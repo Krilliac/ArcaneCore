@@ -330,7 +330,8 @@ public sealed partial class SpellSystem
             return roll;
         }
 
-        float attackPower = Math.Max(0, unit.GetInt32(apIndex) + (short)(unit.GetUInt32(apIndex + 1) & 0xFFFF) - (short)(unit.GetUInt32(apIndex + 1) >> 16));
+        // vmangos Unit::GetTotalAttackPowerValue (Unit.cpp:8037): AP + positive mods + negative mods (the halves of *_MODS are int16, the negative one is <= 0).
+        float attackPower = Math.Max(0, unit.GetInt32(apIndex) + (short)(unit.GetUInt32(apIndex + 1) & 0xFFFF) + (short)(unit.GetUInt32(apIndex + 1) >> 16));
         float speed = unit.GetUInt32(timeIndex) / 1000.0f;
         float normalizedSpeed = NormalizedWeaponSpeed(unit, attack);
         return Math.Max(0f, roll + ((normalizedSpeed - speed) * attackPower / 14.0f));
