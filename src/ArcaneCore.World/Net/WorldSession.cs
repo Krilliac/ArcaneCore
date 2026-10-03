@@ -179,6 +179,14 @@ public sealed class WorldSession : IPlayerSession
                 continue;
             }
 
+            // Between SMSG_NEW_WORLD and MSG_MOVE_WORLDPORT_ACK the player is in no map: only
+            // the ack is handled, everything else is dropped (vmangos STATUS_TRANSFER /
+            // WorldSession::Update skips STATUS_LOGGEDIN packets while !IsInWorld()).
+            if (player.Map is null && packet.Handler.Opcode != WorldOpcode.MsgMoveWorldportAck)
+            {
+                continue;
+            }
+
             try
             {
                 packet.Handler.World!(this, player, packet.Payload);
