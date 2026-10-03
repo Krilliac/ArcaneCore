@@ -763,6 +763,11 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
 
         foreach (GameObjectSpawn spawn in spawns)
         {
+            if ((spawn.SpawnFlags & 0x02) != 0)
+            {
+                continue; // SPAWN_FLAG_DISABLED: GameObject::LoadFromDB refuses it (GameObject.cpp:969, ObjectDefines.h:128)
+            }
+
             GameObjectTemplate? template = _content.FindTemplate(spawn.Entry);
             if (template is null)
             {

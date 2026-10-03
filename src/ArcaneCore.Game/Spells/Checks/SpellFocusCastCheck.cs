@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 
 namespace ArcaneCore.Game.Spells;
@@ -8,6 +9,7 @@ namespace ArcaneCore.Game.Spells;
 /// whose radius reaches the caster, else <see cref="SpellCastResult.RequiresSpellFocus"/> (forges, anvils, cooking fires,
 /// 695 classic-db spells). The check has no triggered-cast exemption (unlike the item checks next to it); the one retail
 /// exemption is the GM no-check-cast cheat (Spell.cpp:5304), which ArcaneCore does not model.
+/// Only a Player caster is checked: CheckItems returns SPELL_CAST_OK for any other caster before the focus block (Spell.cpp:7104-7106), so creatures and pets cast focus spells freely.
 /// A caster whose map has no game object system finds no object and so fails, exactly as an empty map does in retail.
 /// </summary>
 /// <param name="systems">The game object system of a map, or null when the map has none.</param>
@@ -23,6 +25,11 @@ public sealed class SpellFocusCastCheck(Func<Map, GameObjects.GameObjectMapSyste
 
     public SpellCastResult Check(in SpellCastCheckContext context)
     {
+        if (context.Caster is not Player)
+        {
+            return SpellCastResult.CastOk; // Spell.cpp:7104-7106: CheckItems returns SPELL_CAST_OK for a non-Player caster before the focus block
+        }
+
         SpellInfo spell = context.Spell;
         if (spell.RequiresSpellFocus == 0 || spell.IsPassive || enabled?.Invoke() == false)
         {

@@ -302,4 +302,18 @@ public sealed class GameObjectFidelityPrimitivesTests
     [Fact]
     public void DespawnAnim_IsTheGuidOnly()
         => Assert.Equal(BitConverter.GetBytes(0xF1100000_00000005UL), GameObjectPackets.DespawnAnim(new ObjectGuid(0xF1100000_00000005UL)));
+
+    [Fact]
+    public void DisabledSpawn_IsNotLoaded_ButOtherFlagsAre()
+    {
+        // GameObject.cpp:969 refuses spawn_flags & SPAWN_FLAG_DISABLED (0x02, ObjectDefines.h:128).
+        Rig rig = CreateRig(DefaultTemplates(),
+        [
+            RangeSpawn(1, 60, 60, flags: 0x02),
+            RangeSpawn(2, 60, 60, flags: 0x04),
+            RangeSpawn(3, 60, 60, flags: 0x03),
+        ]);
+        rig.Join();
+        Assert.Equal([2u], rig.System.GameObjects.Select(g => g.Spawn!.Guid).OrderBy(g => g).ToArray());
+    }
 }

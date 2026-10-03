@@ -73,6 +73,7 @@ Tests: `ChairCameraTests`.
   gossip branch `goober.gossipID`), PlayerCanUse, mounted dismount, immunity gate, button display 295 LOS: GO2 not delivered.
   The existing goober still returns `InUse` while an auto-close goober is active (vmangos has no such gate, GameObject.cpp:1541-1611).
 * Spawn flag 0x08 (dynamic respawn time, realm population) and 0x01 (active object) are carried but not modelled.
+* Spawn flag 0x02 (disabled) is honoured: such a spawn is never loaded (GameObject.cpp:969, ObjectDefines.h:128); the vmangos force path (GM or script spawn of a disabled row) is not modelled.
 * `SMSG_GAMEOBJECT_SPAWN_ANIM` / `RESET_STATE` builders are not added (they have no caller until the object-spell slice).
 * Behaviour seam (`IGameObjectBehavior`: the per-type switch in `GameObjectMapSystem.Use` stays, chairs and cameras were added to it in place), per-object
   visibility modifiers, page text, spell-created objects (TRANS_DOOR, SUMMON_OBJECT_*, ACTIVATE_OBJECT), traps/spell casters/rituals, transports: see the lane report.
