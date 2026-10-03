@@ -30,11 +30,11 @@ public sealed class FactionCombatHooksTests
     }
 
     [Fact]
-    public void FriendlyNpc_IsFriendly_AndCannotBeAttacked()
+    public void FriendlyNpc_CannotBeAttacked_ButIsNotReportedFriendlyToSpellTargeting()
     {
         (WorldRuntime world, Map map, Player player, CombatTestUnit npc) = Setup(11);
         using WorldRuntime w = world;
-        Assert.True(map.Combat.Hooks.IsFriendly(player, npc));
+        Assert.False(map.Combat.Hooks.IsFriendly(player, npc)); // IsFriendly (spell targeting, dispel polarity) is deliberately not overridden
         Assert.False(map.Combat.Hooks.CanAttack(player, npc));
     }
 
@@ -78,6 +78,27 @@ public sealed class FactionCombatHooksTests
         npc.IsInEvadeMode = false;
         npc.UnitFlags |= UnitFlags.NotAttackable1;
         Assert.False(map.Combat.Hooks.CanAttack(player, npc));
+    }
+
+    [Fact]
+    public void AgreesWithFactionCreatureHostility_ForTheSameTemplatePairs()
+    {
+        (WorldRuntime world, Map map, Player player, CombatTestUnit npc) = Setup(14);
+        using WorldRuntime w = world;
+        var hostility = new ArcaneCore.Game.Creatures.FactionCreatureHostility(Catalog);
+        foreach (uint template in new uint[] { 11, 14, 188, 35, 999, 0 })
+        {
+            var creature = new ArcaneCore.Game.Creatures.Creature(
+                template + 100, CreatureTestSupport.Template(template + 100, t => t.Faction = template), null,
+                ArcaneCore.Kernel.WorldData.Creatures.CreatureContent.Empty, new Random(1));
+            npc.FactionTemplate = template;
+            bool hostile = hostility.IsHostile(creature, player);
+            bool attackable = map.Combat.Hooks.CanAttack(player, npc);
+            bool friendly = Catalog.Find(template) is { } t2 && Catalog.Find(player.FactionTemplate) is { } p && t2.IsFriendlyTo(p);
+            if (hostile) { Assert.True(attackable, $"hostile template {template} must be attackable"); }
+            if (friendly) { Assert.False(hostile, $"friendly template {template} must not be hostile"); Assert.False(attackable); }
+            Assert.Equal(!friendly, attackable);
+        }
     }
 
     [Fact]

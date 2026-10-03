@@ -52,10 +52,14 @@ needs a characters-DB version from the lead.
 - **Factions:** the daemon registers `FactionCombatHooks` (`src/ArcaneCore.Game/Combat/FactionCombatHooks.cs`) through
   `WorldCombatHooksFeature` (`src/ArcaneCore.World/Combat/`) when a `FactionTemplateCatalog` is loaded (a registered
   catalog, else `Creatures:FactionTemplateDbcPath`). A player cannot attack a non-player whose faction template
-  `IsFriendlyTo` the player's (same template semantics as `FactionCreatureHostility`); neutral and hostile NPCs, PvP
+  `IsFriendlyTo` the player's (the DBCStructure.h predicate as cited on `FactionTemplateRecord`, unverified against the vmangos/cmangos
+  references; it is not the `IsHostileTo` + contested-guard rule of `FactionCreatureHostility`, a test cross-checks the two on
+  the catalog pairs); neutral and hostile NPCs, PvP
   and every other `CanAttack` rule are unchanged. **With no catalog loaded (or an empty one) nothing is registered and
   the permissive `CombatHooks.Default` applies: a player may attack any non-player unit** (a warning is logged once).
-  Not modelled: reputation/at-war, contested-guard state; templates missing from the catalog count as not friendly.
+  **Only `CanAttack` is overridden; `IsFriendly` is deliberately untouched**, so spell targeting (friendly AoE, chain heal, dispel
+  polarity) and `CombatHandlers` keep the base rule (player vs player of the same team only) and friendly NPCs do not become friendly-spell
+  targets. Not modelled: reputation/at-war, contested-guard state; templates missing from the catalog count as not friendly.
   Evidence: automated tests only, no 1.12.1 client (charter 1.3); the reference clones were not available when this was
   written, semantics are cited from the comments on `FactionTemplateRecord`.
 - Register hooks per world: `CombatHooks.Register(world, hooks)` (last writer wins) or
