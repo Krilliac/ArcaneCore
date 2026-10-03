@@ -147,9 +147,13 @@ CMSG_TOGGLE_PVP: an optional u8 state (gtker `pvp/cmsg_toggle_pvp.wowm`, vmangos
 - **Ghost form.** The ghost flag and water walk are set directly instead of through aura
   8326/20584, so there is no ghost speed.
 - **Unit state.** UNIT_FLAG_STUNNED stands in for the root/unit state.
-- **Player stats.** Weapon damage, crit/dodge/parry percentages and armor come from update
-  fields that are 0 until stats exist; damage then falls back to 0–5 (vmangos unarmed-ish).
-  Skills default to level×5.
+- **Player stats.** Weapon damage, attack speed, attack power, crit/dodge/parry/block
+  percentages and the agility part of armor are now written by the player stat system
+  ([stats.md](stats.md)), so a player with a weapon rolls the weapon's range plus attack
+  power instead of the 0–5 fallback. `MapCombat.Stats` (`ICombatStatSource`) answers off-hand
+  weapon, parry, block and the shield block value for players; a map without the stats
+  feature keeps the `CombatHooks` defaults. Still open: one sub-damage per swing, one armor
+  value for every school, aura modifiers. Skills default to level×5.
 - **Durability.** No durability loss and no SMSG_DURABILITY_DAMAGE_DEATH.
 - **Emotes.** No EMOTE_ONESHOT_WOUNDCRITICAL.
 - **Create blocks.** No UPDATEFLAG_MELEE_ATTACKING.
