@@ -21,12 +21,29 @@ public enum TrainerSpellState : byte
     GreenDisabled = 10,
 }
 
+/// <summary>vmangos Player.h:90-95; wow_messages smsg_buy_bank_slot_result.wowm:3-8.</summary>
+public enum BankSlotResult : uint
+{
+    TooMany = 0,
+    InsufficientFunds = 1,
+    NotBanker = 2,
+    Ok = 3,
+}
+
 /// <summary>
 /// NPC service packet bodies (build 5875), after vmangos src/game/Protocol/Packets/Npc.cpp,
 /// Taxi.cpp, Item.cpp, Misc.cpp and Handlers/NPCHandler.cpp; gtker/wow_messages cross-checked.
 /// </summary>
 public static class NpcPackets
 {
+    /// <summary>SMSG_BUY_BANK_SLOT_RESULT is one little-endian u32 (wow_messages smsg_buy_bank_slot_result.wowm:10-12).</summary>
+    public static PacketWriter BuyBankSlotResult(BankSlotResult result)
+    {
+        var writer = new PacketWriter(4);
+        writer.WriteUInt32((uint)result);
+        return writer;
+    }
+
     /// <summary>vmangos GossipDef.cpp SendTalking: the text sent for an unknown npc_text id.</summary>
     public const string DefaultGreeting = "Greetings $N";
 

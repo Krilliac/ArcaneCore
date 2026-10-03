@@ -25,7 +25,8 @@ public sealed record CharacterState(
     IReadOnlyList<ActionButton>? ActionButtons = null,
     HomeBind? Home = null,
     Items.InventorySnapshot? Inventory = null,
-    CharacterLife? Life = null);
+    CharacterLife? Life = null,
+    byte BankBagSlotCount = 0);
 
 /// <summary>A hearthstone bind point (vmangos character_homebind; sent in SMSG_BINDPOINTUPDATE).</summary>
 public readonly record struct HomeBind(uint MapId, uint ZoneId, float X, float Y, float Z)

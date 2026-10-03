@@ -32,8 +32,9 @@ public sealed partial class QuestNpcServices
 
     /// <summary>
     /// CMSG_BUY_BANK_SLOT (vmangos HandleBuyBankSlotOpcode): an interactable banker, a next slot
-    /// with a BankBagSlotPrices price, and enough money; vanilla sends no reply. The count is
-    /// stored by the items owner first; when it cannot be persisted nothing is bought or charged.
+    /// with a BankBagSlotPrices price, and enough money; vmangos ItemHandler.cpp:872-909 sends
+    /// SMSG_BUY_BANK_SLOT_RESULT for a failed purchase and no reply for success. The count is
+    /// written to PLAYER_BYTES_2 and saved with the money change in the character snapshot.
     /// </summary>
     public void BuyBankSlot(Player player, ObjectGuid guid)
     {
@@ -45,6 +46,7 @@ public sealed partial class QuestNpcServices
         if (InteractableNpc(player, guid, NpcFlags.Banker) is null)
         {
             LogMissing("BuyBankSlot", guid);
+            Send(player, WorldOpcode.SmsgBuyBankSlotResult, NpcPackets.BuyBankSlotResult(BankSlotResult.NotBanker));
             return;
         }
 
@@ -54,8 +56,15 @@ public sealed partial class QuestNpcServices
         }
 
         uint next = (uint)player.Inventory.BankBagSlotCount + 1;
-        if (next > MaxBankBagSlots || items.BankBagSlotPrice(next) is not { } price || player.Money < price)
+        if (next > MaxBankBagSlots || items.BankBagSlotPrice(next) is not { } price)
         {
+            Send(player, WorldOpcode.SmsgBuyBankSlotResult, NpcPackets.BuyBankSlotResult(BankSlotResult.TooMany));
+            return;
+        }
+
+        if (player.Money < price)
+        {
+            Send(player, WorldOpcode.SmsgBuyBankSlotResult, NpcPackets.BuyBankSlotResult(BankSlotResult.InsufficientFunds));
             return;
         }
 

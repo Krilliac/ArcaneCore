@@ -28,9 +28,8 @@ public sealed class NpcServiceOptions
     public string? BankBagSlotPricesDbcPath { get; set; }
 
     /// <summary>
-    /// creature_template gossip_menu_id and trainer_* per entry. The imported creature template
-    /// has no such columns yet, so trainers and default gossip menus are configured here; a
-    /// trainer without a row has trainer type Class and trainer class 0 and refuses everyone.
+    /// Optional per-entry overrides for imported creature_template gossip_menu_id and trainer_*.
+    /// Without an override, CreatureQuestLookup uses the World v21 imported fields.
     /// </summary>
     public List<NpcTemplateMetadata> NpcTemplates { get; set; } = [];
 }

@@ -455,7 +455,7 @@ public sealed partial class Player : Unit
             (int)Guid.Low, MapId, ZoneId, X, Y, Z, Orientation, Level,
             Math.Max(PlayedTimeAt(nowMs), 1u), LevelPlayedTimeAt(nowMs), Money, ActionBarToggles, buttons, Home,
             Inventory.TakeSnapshotIfChanged(),
-            Death.PlayerLife.Capture(this));
+            Death.PlayerLife.Capture(this), Inventory.BankBagSlotCount);
     }
 
     private static uint Pack(uint action, byte type) => (action & 0x00FFFFFF) | ((uint)type << 24);
@@ -492,6 +492,7 @@ public sealed partial class Player : Unit
         SetByte(UpdateFields.PlayerBytes, 3, c.HairColor);
         SetByte(UpdateFields.PlayerBytes2, 0, c.FacialHair);
         SetByte(UpdateFields.PlayerBytes2, 1, 0xEE);
+        SetByte(UpdateFields.PlayerBytes2, 2, c.BankBagSlotCount);
         SetByte(UpdateFields.PlayerBytes2, 3, 0x02); // REST_STATE_NORMAL
         SetUInt16(UpdateFields.PlayerBytes3, 0, c.Gender);
 

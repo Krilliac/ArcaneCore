@@ -259,6 +259,7 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
         character.LevelPlayedTime = state.LevelPlayedTime;
         character.Money = state.Money;
         character.ActionBarToggles = state.ActionBarToggles;
+        character.BankBagSlotCount = state.BankBagSlotCount;
         if (state.Home is { } home)
         {
             character.HomeMapId = home.MapId;

@@ -41,6 +41,9 @@ public sealed class CharacterRecord
     /// <summary>Which optional action bars are shown (PLAYER_FIELD_BYTES byte 2).</summary>
     public byte ActionBarToggles { get; set; }
 
+    /// <summary>Purchased bank bag slots (PLAYER_BYTES_2 byte 2; vmangos Player.cpp:14663,16403).</summary>
+    public byte BankBagSlotCount { get; set; }
+
     /// <summary>Hearthstone bind point (SMSG_BINDPOINTUPDATE). Defaults to the start position.</summary>
     public uint HomeMapId { get; set; }
 
