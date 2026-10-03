@@ -28,13 +28,35 @@ public sealed record FactionTemplateRecord(
 
         return (HostileMask & target.OwnMask) != 0;
     }
+
+    /// <summary>DBCStructure.h IsFriendlyTo: explicit enemies deny, friends allow, then either friendly mask.</summary>
+    public bool IsFriendlyTo(FactionTemplateRecord target)
+    {
+        if (target.Faction != 0)
+        {
+            if (target.Faction == Enemy1 || target.Faction == Enemy2 || target.Faction == Enemy3 || target.Faction == Enemy4)
+            {
+                return false;
+            }
+
+            if (target.Faction == Friend1 || target.Faction == Friend2 || target.Faction == Friend3 || target.Faction == Friend4)
+            {
+                return true;
+            }
+        }
+
+        return (FriendlyMask & target.OwnMask) != 0 || (OwnMask & target.FriendlyMask) != 0;
+    }
+
+    /// <summary>DBCEnums.h FACTION_TEMPLATE_FLAG_ATTACK_PVP_ACTIVE_PLAYERS (vmangos IsContestedGuardFaction).</summary>
+    public bool IsContestedGuard => (Flags & FactionTemplateCatalog.ContestedGuardFlag) != 0;
 }
 
 /// <summary>Startup faction templates; unknown or state-dependent NPC reactions fail closed.</summary>
 public sealed class FactionTemplateCatalog
 {
-    // DBCEnums.h FACTION_TEMPLATE_FLAG_ATTACK_PVP_ACTIVE_PLAYERS; requires contested-PvP state.
-    private const uint ContestedGuard = 0x1000;
+    /// <summary>DBCEnums.h FACTION_TEMPLATE_FLAG_ATTACK_PVP_ACTIVE_PLAYERS; requires contested-PvP state.</summary>
+    public const uint ContestedGuardFlag = 0x1000;
     private readonly Dictionary<uint, FactionTemplateRecord> _templates;
 
     public static FactionTemplateCatalog Empty { get; } = new([]);
@@ -62,7 +84,7 @@ public sealed class FactionTemplateCatalog
     {
         hostile = true;
         if (Find(npcTemplate) is not { } npc || Find(playerTemplate) is not { } player
-            || npc.Faction != 0 || (npc.Flags & ContestedGuard) != 0)
+            || npc.Faction != 0 || npc.IsContestedGuard)
         {
             return false;
         }
