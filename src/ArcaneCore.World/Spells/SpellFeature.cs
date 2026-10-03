@@ -3,7 +3,11 @@ using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Characters;
+using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Net;
+using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -16,11 +20,11 @@ namespace ArcaneCore.World.Spells;
 /// <c>session.Services.GetRequiredService&lt;SpellFeature&gt;()</c>.
 /// <para>
 /// The tick is a timer that posts <see cref="SpellSystem.Update"/> to the world thread every
-/// world tick interval, because a feature has no map-update hook yet (requested in
-/// docs/integration/spells.md). At most one update is queued at a time.
+/// world tick interval. This system serves all maps, so attaching the same update to each map
+/// would advance its auras multiple times per world tick. At most one update is queued at a time.
 /// </para>
 /// </summary>
-public sealed class SpellFeature : IWorldFeature, IAsyncDisposable
+public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposable
 {
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<SpellFeature> _logger;
@@ -47,11 +51,19 @@ public sealed class SpellFeature : IWorldFeature, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
+        System.Units = new WorldSpellUnitResolver();
+        System.Damage = new WorldSpellDamageSink();
 
         // Attach runs once before the world thread starts, so blocking on the startup loads is
         // safe (WorldHost loads the character name cache the same way, just before this).
         using (IServiceScope scope = _scopes.CreateScope())
         {
+            // Features attach alphabetically: TeleportFeature attaches after this feature.
+            // Resolve its singleton now, but defer accessing its service until a spell lands.
+            TeleportFeature teleports = scope.ServiceProvider.GetRequiredService<TeleportFeature>();
+            System.Teleports = new WorldSpellTeleportSink(() => teleports.Teleports);
+            System.IsInTransit = unit => unit is Player player && world.IsOnline(player.Guid)
+                && teleports.Teleports.IsBeingTeleportedFar(player);
             ISpellContentStore? content = scope.ServiceProvider.GetService<ISpellContentStore>();
             System.Store = content is null
                 ? SpellStore.Empty
@@ -78,14 +90,50 @@ public sealed class SpellFeature : IWorldFeature, IAsyncDisposable
 
     /// <summary>
     /// SMSG_INITIAL_SPELLS for a character entering the world (vmangos Player::SendInitialSpells:
-    /// the known spells and the cooldowns still running). A character without a spellbook first
-    /// gets its playercreateinfo_spell defaults. World thread.
+    /// the known spells and the cooldowns still running). Character hooks load the spellbook;
+    /// the fallback grants defaults for hosts without a character spell store. World thread.
     /// </summary>
     public byte[] BuildInitialSpells(Player player)
     {
         ArgumentNullException.ThrowIfNull(player);
         Spellbook.EnsureDefaults(player, System.Store.GetCreateSpells((byte)player.Race, (byte)player.Class));
         return SpellPackets.BuildInitialSpells([.. Spellbook.GetSpells(player)], [.. System.GetActiveCooldowns(player)]);
+    }
+
+    /// <summary>Player::Create: starting spells must be saved before creation succeeds.</summary>
+    public async Task OnCharacterCreatedAsync(WorldSession session, CharacterRecord character)
+    {
+        IReadOnlyList<uint> spells = System.Store.GetCreateSpells(character.Race, character.Class);
+        if (session.Services.GetService<ICharacterSpellStore>() is { } store && spells.Count > 0)
+        {
+            await store.AddAsync(character.Id, spells.ToArray()).ConfigureAwait(false);
+        }
+
+        Spellbook.LoadCharacter(character.Id, spells);
+    }
+
+    /// <summary>Player::_LoadSpells: loading and default writes fail the login on storage errors.</summary>
+    public async Task OnPlayerLoadingAsync(WorldSession session, CharacterRecord character, Player player)
+    {
+        if (session.Services.GetService<ICharacterSpellStore>() is not { } store)
+        {
+            Spellbook.EnsureDefaults(player, System.Store.GetCreateSpells(character.Race, character.Class));
+            return;
+        }
+
+        // A quick relog must not load before an earlier learn/unlearn write reaches storage.
+        await Spellbook.FlushCharacterAsync(character.Id).ConfigureAwait(false);
+        IReadOnlyList<uint> spells = await store.GetAsync(character.Id).ConfigureAwait(false);
+        if (spells.Count == 0 && !Spellbook.ContainsCharacter(character.Id))
+        {
+            spells = System.Store.GetCreateSpells(character.Race, character.Class);
+            if (spells.Count > 0)
+            {
+                await store.AddAsync(character.Id, spells.ToArray()).ConfigureAwait(false);
+            }
+        }
+
+        Spellbook.LoadCharacter(character.Id, spells);
     }
 
     /// <summary>Run one spell update now (world thread; tests).</summary>

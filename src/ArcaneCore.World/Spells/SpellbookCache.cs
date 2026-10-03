@@ -10,19 +10,20 @@ namespace ArcaneCore.World.Spells;
 /// <summary>
 /// The spellbook of every character, cached in memory and written through to
 /// <c>character_spell</c> (vmangos Player::m_spells + Player::_SaveSpells). All rows are read
-/// once at startup (like the character name cache, WorldHost) because the login handler
-/// offers no per-login async load seam yet; changes are queued and written in order on a
-/// background task, so the world thread never waits for the database
+/// once at startup (like the character name cache, WorldHost), then refreshed by the character
+/// loading hook. Changes are queued and written in order on a background task, so the world
+/// thread never waits for the database
 /// (docs/integration/spells.md § Spellbook persistence). Thread-safe.
 /// </summary>
 public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
 {
     private readonly Dictionary<int, HashSet<uint>> _spells = [];
+    private readonly HashSet<int> _failedCharacters = [];
     private readonly Lock _lock = new();
     private readonly IServiceScopeFactory? _scopes;
     private readonly ILogger _logger;
-    private readonly Channel<Func<ICharacterSpellStore, Task>> _writes =
-        Channel.CreateUnbounded<Func<ICharacterSpellStore, Task>>(new UnboundedChannelOptions { SingleReader = true });
+    private readonly Channel<PendingWrite> _writes =
+        Channel.CreateUnbounded<PendingWrite>(new UnboundedChannelOptions { SingleReader = true });
 
     private Task? _writer;
     private bool _warnedNoStore;
@@ -63,6 +64,25 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         }
     }
 
+    /// <summary>Replace one offline character's book after its storage load succeeds.</summary>
+    public void LoadCharacter(int characterId, IReadOnlyList<uint> spells)
+    {
+        ArgumentNullException.ThrowIfNull(spells);
+        lock (_lock)
+        {
+            _spells[characterId] = [.. spells];
+        }
+    }
+
+    /// <summary>An initialized book may be empty after its owner forgets every spell.</summary>
+    public bool ContainsCharacter(int characterId)
+    {
+        lock (_lock)
+        {
+            return _spells.ContainsKey(characterId);
+        }
+    }
+
     /// <summary>Start the background writer.</summary>
     public void Start() => _writer ??= Task.Run(WriteLoopAsync);
 
@@ -92,7 +112,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
             }
         }
 
-        Enqueue(store => store.AddAsync(id, [spellId]));
+        Enqueue(id, store => store.AddAsync(id, [spellId]));
         return true;
     }
 
@@ -108,7 +128,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
             }
         }
 
-        Enqueue(store => store.RemoveAsync(id, spellId));
+        Enqueue(id, store => store.RemoveAsync(id, spellId));
         return true;
     }
 
@@ -143,7 +163,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         if (defaults.Count > 0)
         {
             uint[] spells = [.. defaults];
-            Enqueue(store => store.AddAsync(id, spells));
+            Enqueue(id, store => store.AddAsync(id, spells));
         }
 
         return true;
@@ -157,25 +177,41 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
             _spells.Remove(characterId);
         }
 
-        Enqueue(store => store.DeleteCharacterAsync(characterId));
+        Enqueue(characterId, store => store.DeleteCharacterAsync(characterId));
     }
 
     /// <summary>Wait until every queued write has been attempted (tests, shutdown).</summary>
     public async Task FlushAsync()
     {
-        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_writes.Writer.TryWrite(_ =>
-        {
-            done.TrySetResult();
-            return Task.CompletedTask;
-        }))
+        if (_scopes is null || _writer is null)
         {
             return;
         }
 
-        if (_writer is null)
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_writes.Writer.TryWrite(new PendingWrite(null, static _ => Task.CompletedTask, done)))
         {
             return;
+        }
+
+        await done.Task.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Wait for earlier writes, then retry a failed character's final cached book before login
+    /// reloads storage. A failed retry propagates; the cache remains authoritative for the next attempt.
+    /// </summary>
+    public async Task FlushCharacterAsync(int characterId)
+    {
+        if (_scopes is null || _writer is null)
+        {
+            return;
+        }
+
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_writes.Writer.TryWrite(new PendingWrite(characterId, store => RetryFailedCharacterAsync(store, characterId), done)))
+        {
+            throw new InvalidOperationException("The spellbook writer has stopped");
         }
 
         await done.Task.ConfigureAwait(false);
@@ -201,19 +237,70 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         return book;
     }
 
-    private void Enqueue(Func<ICharacterSpellStore, Task> write)
+    private void Enqueue(int characterId, Func<ICharacterSpellStore, Task> write)
     {
         if (_scopes is null)
         {
             return;
         }
 
-        _writes.Writer.TryWrite(write);
+        _writes.Writer.TryWrite(new PendingWrite(characterId, write));
+    }
+
+    private async Task RetryFailedCharacterAsync(ICharacterSpellStore store, int characterId)
+    {
+        HashSet<uint>? desired;
+        lock (_lock)
+        {
+            if (!_failedCharacters.Contains(characterId))
+            {
+                return;
+            }
+
+            desired = _spells.TryGetValue(characterId, out HashSet<uint>? book) ? [.. book] : null;
+        }
+
+        if (ReferenceEquals(store, NullCharacterSpellStore.Instance))
+        {
+            throw new InvalidOperationException("Cannot retry a spellbook without a character spell store");
+        }
+
+        if (desired is null)
+        {
+            await store.DeleteCharacterAsync(characterId).ConfigureAwait(false);
+        }
+        else
+        {
+            IReadOnlyList<uint> persisted = await store.GetAsync(characterId).ConfigureAwait(false);
+            uint[] missing = [.. desired.Except(persisted)];
+            if (missing.Length > 0)
+            {
+                await store.AddAsync(characterId, missing).ConfigureAwait(false);
+            }
+
+            foreach (uint spell in persisted.Except(desired))
+            {
+                await store.RemoveAsync(characterId, spell).ConfigureAwait(false);
+            }
+        }
+
+        lock (_lock)
+        {
+            bool unchanged = desired is null
+                ? !_spells.ContainsKey(characterId)
+                : _spells.TryGetValue(characterId, out HashSet<uint>? current) && current.SetEquals(desired);
+            if (!unchanged)
+            {
+                throw new InvalidOperationException("Spellbook changed while its failed writes were being recovered");
+            }
+
+            _failedCharacters.Remove(characterId);
+        }
     }
 
     private async Task WriteLoopAsync()
     {
-        await foreach (Func<ICharacterSpellStore, Task> write in _writes.Reader.ReadAllAsync().ConfigureAwait(false))
+        await foreach (PendingWrite pending in _writes.Reader.ReadAllAsync().ConfigureAwait(false))
         {
             try
             {
@@ -227,19 +314,32 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
                         _logger.LogWarning("No ICharacterSpellStore is registered; spellbook changes are not persisted");
                     }
 
-                    await write(NullCharacterSpellStore.Instance).ConfigureAwait(false);
+                    await pending.Write(NullCharacterSpellStore.Instance).ConfigureAwait(false);
+                    pending.Done?.TrySetResult();
                     continue;
                 }
 
-                await write(store).ConfigureAwait(false);
+                await pending.Write(store).ConfigureAwait(false);
+                pending.Done?.TrySetResult();
             }
             catch (Exception ex)
             {
                 // Fail loudly but keep the queue alive; the cache stays authoritative until restart.
+                if (pending.CharacterId is { } characterId)
+                {
+                    lock (_lock)
+                    {
+                        _failedCharacters.Add(characterId);
+                    }
+                }
+
+                pending.Done?.TrySetException(ex);
                 _logger.LogError(ex, "Saving a spellbook change failed");
             }
         }
     }
+
+    private readonly record struct PendingWrite(int? CharacterId, Func<ICharacterSpellStore, Task> Write, TaskCompletionSource? Done = null);
 
     private sealed class NullCharacterSpellStore : ICharacterSpellStore
     {

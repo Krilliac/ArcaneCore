@@ -53,6 +53,12 @@ public sealed partial class SpellSystem
 
     public ITeleportSink Teleports { get; set; }
 
+    /// <summary>
+    /// A unit temporarily detached from its map during a player transfer (vmangos
+    /// STATUS_TRANSFER). Retain its spell state while map simulation is paused.
+    /// </summary>
+    public Func<Unit, bool> IsInTransit { get; set; } = _ => false;
+
     public ISpellbook? Spellbook { get; set; }
 
     public Random Random { get; set; }
@@ -180,6 +186,11 @@ public sealed partial class SpellSystem
         {
             if (!state.Unit.IsInWorld)
             {
+                if (IsInTransit(state.Unit))
+                {
+                    continue;
+                }
+
                 Forget(state);
                 continue;
             }
