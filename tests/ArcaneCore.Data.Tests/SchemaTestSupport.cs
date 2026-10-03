@@ -138,7 +138,7 @@ internal sealed class CommandTap : DbCommandInterceptor
     public override ValueTask<DbDataReader> ReaderExecutedAsync(
         DbCommand command, CommandExecutedEventData eventData, DbDataReader result, CancellationToken cancellationToken = default)
     {
-        After(command);
+        After(command, result);
         return ValueTask.FromResult(result);
     }
 
@@ -168,11 +168,22 @@ internal sealed class CommandTap : DbCommandInterceptor
         }
     }
 
-    private void After(DbCommand command)
+    private void After(DbCommand command, DbDataReader? reader = null)
     {
         if (!_faultBeforeStatement)
         {
-            MaybeFault(command.CommandText);
+            try
+            {
+                MaybeFault(command.CommandText);
+            }
+            catch (InjectedFaultException)
+            {
+                // A process that dies takes its open reader with it. Throwing from this hook while the reader
+                // is still open would leave the connection "in use" (MySqlConnector refuses the next command on
+                // it), which is not a state a crashed startup can leave behind.
+                reader?.Dispose();
+                throw;
+            }
         }
     }
 
