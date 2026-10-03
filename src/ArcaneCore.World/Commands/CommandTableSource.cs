@@ -50,7 +50,7 @@ public sealed class CommandTableSource(CommandTable initial)
                 return new CommandAddResult(0, null);
             }
 
-            _current = new CommandTable([.. current.Roots, .. added]);
+            _current = new CommandTable([.. current.Roots, .. added], current.Gm);
             return new CommandAddResult(added.Count, null);
         }
     }
@@ -72,7 +72,7 @@ public sealed class CommandTableSource(CommandTable initial)
                 return new CommandAddResult(0, error);
             }
 
-            _current = new CommandTable([.. remaining, .. add]);
+            _current = new CommandTable([.. remaining, .. add], _current.Gm);
             return new CommandAddResult(add.Count, null);
         }
     }

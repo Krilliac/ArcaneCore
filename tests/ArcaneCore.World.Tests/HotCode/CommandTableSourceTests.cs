@@ -1,3 +1,4 @@
+using ArcaneCore.World.Gm.Core;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
@@ -39,6 +40,18 @@ public sealed class CommandTableSourceTests
             source.Current.Roots.Select(c => c.Name));
     }
 
+    [Fact]
+    public void AddingAndReplacingRoots_KeepTheConfiguredGmOptions()
+    {
+        var options = new GmOptions { ExactNameFirst = !new GmOptions().ExactNameFirst, HideUnavailable = !new GmOptions().HideUnavailable };
+        var source = new CommandTableSource(ChatCommands.CreateTable(options));
+
+        Assert.True(source.TryAdd([Root("zzoptprobe")]).Applied);
+        Assert.Same(options, source.Current.Gm);
+
+        Assert.True(source.TryReplace(["zzoptprobe"], [Root("zzoptprobe2")]).Applied);
+        Assert.Same(options, source.Current.Gm);
+    }
     [Fact]
     public void AddedRoot_IsReachable_AndTheOldTableIsUntouched()
     {
