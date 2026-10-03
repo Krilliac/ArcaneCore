@@ -49,6 +49,24 @@ public sealed class EfAccountStore(AuthDbContext db, AccountStatusEvents? events
         return true;
     }
 
+    public async Task<IReadOnlyDictionary<int, string>> GetUsernamesAsync(
+        IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(accountIds);
+        var names = new Dictionary<int, string>();
+        foreach (int[] chunkArray in accountIds.Distinct().Chunk(ChunkSize))
+        {
+            List<int> chunk = [.. chunkArray];
+            foreach (var row in await db.Accounts.AsNoTracking().Where(a => chunk.Contains(a.Id))
+                .Select(a => new { a.Id, a.Username }).ToListAsync(cancellationToken).ConfigureAwait(false))
+            {
+                names[row.Id] = row.Username;
+            }
+        }
+
+        return names;
+    }
+
     public async Task<IReadOnlySet<int>> FindNonActiveAsync(
         IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
     {

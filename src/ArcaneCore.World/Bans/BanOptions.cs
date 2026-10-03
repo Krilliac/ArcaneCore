@@ -24,4 +24,17 @@ public sealed class BanOptions
     /// is a few indexed queries over the connected account ids. Bound from Bans:RecheckIntervalSeconds.
     /// </summary>
     public double RecheckIntervalSeconds { get; set; }
+
+    /// <summary>
+    /// Refuse a <c>.ban</c> whose duration is not a clean <c>1d2h3m4s</c> string. Retail does not: any other
+    /// character, or digits without a unit, make TimeStringToSecs return 0, which the command treats as a
+    /// PERMANENT ban (Util.cpp:252-275), so a typo bans forever. Bound from Bans:RejectUnparseableDuration; default false.
+    /// </summary>
+    public bool RejectUnparseableDuration { get; set; }
+
+    /// <summary>
+    /// The realm id written to <c>account_banned.realm</c> (vmangos <c>realmID</c>); recorded and shown by
+    /// <c>.baninfo</c>, never filtered on, exactly as retail. Bound from Bans:RealmId; default 1.
+    /// </summary>
+    public int RealmId { get; set; } = 1;
 }

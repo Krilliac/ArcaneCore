@@ -21,6 +21,10 @@ public interface IAccountAdmin
     /// </summary>
     Task<bool> RevokeSessionKeyAsync(int accountId, CancellationToken cancellationToken = default);
 
+    /// <summary>The account names of <paramref name="accountIds"/> (unknown ids are absent), for <c>.baninfo</c> and <c>.banlist</c>.</summary>
+    Task<IReadOnlyDictionary<int, string>> GetUsernamesAsync(
+        IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default);
+
     /// <summary>Which of <paramref name="accountIds"/> have a non-Active status column (chunks of 500).</summary>
     Task<IReadOnlySet<int>> FindNonActiveAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default);
 }

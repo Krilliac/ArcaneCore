@@ -19,6 +19,9 @@ internal sealed class InMemoryBanStore(AccountStatusEvents? events = null, TimeP
     /// <summary>When set, every read throws it (a database outage).</summary>
     public Exception? FailWith { get; set; }
 
+    /// <summary>When set, every ban and unban write throws it.</summary>
+    public Exception? FailWriteWith { get; set; }
+
     /// <summary>Runs after the first single-account lookup has been answered (the status-read/Register race window).</summary>
     public Action? AfterFirstAccountQuery { get; set; }
 
@@ -38,11 +41,12 @@ internal sealed class InMemoryBanStore(AccountStatusEvents? events = null, TimeP
         }
     }
 
-    public void AddAccountRow(int accountId, long banDate, long unbanDate, bool active = true)
+    public void AddAccountRow(
+        int accountId, long banDate, long unbanDate, bool active = true, string by = "ext", string reason = "ext", int realm = 1)
     {
         lock (_gate)
         {
-            _accountRows.Add(new AccountBanRecord(_nextId++, accountId, banDate, unbanDate, "ext", "ext", active, 1));
+            _accountRows.Add(new AccountBanRecord(_nextId++, accountId, banDate, unbanDate, by, reason, active, realm));
         }
     }
 
@@ -106,7 +110,12 @@ internal sealed class InMemoryBanStore(AccountStatusEvents? events = null, TimeP
 
     public Task BanAccountAsync(BanRequest request, CancellationToken cancellationToken = default)
     {
-        AddAccountRow(request.AccountId, Now, Now + request.DurationSeconds);
+        if (FailWriteWith is not null)
+        {
+            throw FailWriteWith;
+        }
+
+        AddAccountRow(request.AccountId, Now, Now + request.DurationSeconds, true, request.Author, request.Reason, request.Realm);
         events?.Publish(new AccountStatusChange(
             request.AccountId, request.DurationSeconds > 0 ? AccountStatus.Suspended : AccountStatus.Banned, request.AuthorAccountId));
         return Task.CompletedTask;
@@ -114,6 +123,11 @@ internal sealed class InMemoryBanStore(AccountStatusEvents? events = null, TimeP
 
     public Task<bool> BanIpAsync(IpBanRequest request, CancellationToken cancellationToken = default)
     {
+        if (FailWriteWith is not null)
+        {
+            throw FailWriteWith;
+        }
+
         string ip = AccountBanEvaluator.NormalizeIp(request.Ip) ?? request.Ip;
         AddIpRow(ip, Now, Now + request.DurationSeconds);
         events?.Publish(new IpBanChange(ip, request.AuthorAccountId));

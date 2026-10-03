@@ -95,6 +95,22 @@ public sealed class AccountAdminStoreTests : IAsyncLifetime
         Assert.Empty(await f.Admin.FindNonActiveAsync([]));
     }
 
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task GetUsernames_ReturnsKnownIdsOnly(DatabaseProvider provider)
+    {
+        await using Fixture f = await Fixture.CreateAsync(_databases, provider);
+        Account a = await f.Accounts.CreateAsync(NewAccount("NAMEA"));
+        Account b = await f.Accounts.CreateAsync(NewAccount("NAMEB"));
+
+        IReadOnlyDictionary<int, string> names = await f.Admin.GetUsernamesAsync([a.Id, b.Id, 9999]);
+
+        Assert.Equal(2, names.Count);
+        Assert.Equal("NAMEA", names[a.Id]);
+        Assert.Equal("NAMEB", names[b.Id]);
+        Assert.Empty(await f.Admin.GetUsernamesAsync([]));
+    }
+
     [Fact]
     public void ExistingConstructionSites_StillCompile()
     {

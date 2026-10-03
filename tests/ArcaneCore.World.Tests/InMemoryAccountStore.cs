@@ -40,6 +40,10 @@ internal sealed class InMemoryAccountStore : IAccountStore, IAccountAdmin
         return Task.FromResult(true);
     }
 
+    public Task<IReadOnlyDictionary<int, string>> GetUsernamesAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyDictionary<int, string>>(_accounts.Values
+            .Where(a => accountIds.Contains(a.Id)).ToDictionary(a => a.Id, a => a.Username));
+
     public Task<IReadOnlySet<int>> FindNonActiveAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlySet<int>>(_accounts.Values
             .Where(a => a.Status != AccountStatus.Active && accountIds.Contains(a.Id)).Select(a => a.Id).ToHashSet());
