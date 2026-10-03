@@ -141,6 +141,24 @@ public interface IItemService
     /// <summary>Store new items and tell the client (vmangos StoreNewItem + SendNewItem). False if it could not.</summary>
     bool StoreNewItem(Player player, uint itemId, uint count);
 
+    /// <summary>
+    /// The bag byte CMSG_BUY_ITEM_IN_SLOT's bag GUID names (vmangos HandleBuyItemInSlotOpcode,
+    /// ItemHandler.cpp:661-683): the player's own GUID is the backpack side, otherwise the slot of the
+    /// worn bag with that GUID, null when there is none. The default knows only the backpack.
+    /// </summary>
+    byte? FindBagSlot(Player player, ObjectGuid bagGuid) => bagGuid == player.Guid ? Items.InventorySlots.Bag0 : null;
+
+    /// <summary>
+    /// The placement checks of vmangos Player::BuyItemFromVendor (Player.cpp:18455-18496) for a client
+    /// position: an inventory position must be storable there, an equipment position needs a count of
+    /// one and a legal slot, anything else does not go to that slot. The default ignores the position
+    /// (CMSG_BUY_ITEM semantics).
+    /// </summary>
+    InventoryResult CanStoreNewItemAt(Player player, uint itemId, uint count, byte bag, byte slot) => CanStoreNewItem(player, itemId, count);
+
+    /// <summary>Store or equip the bought items at the position <see cref="CanStoreNewItemAt"/> accepted and tell the client. The default ignores the position.</summary>
+    bool StoreNewItemAt(Player player, uint itemId, uint count, byte bag, byte slot) => StoreNewItem(player, itemId, count);
+
     /// <summary>vmangos Player::DestroyItemCount(item, count, update=true).</summary>
     void DestroyItemCount(Player player, uint itemId, uint count);
 

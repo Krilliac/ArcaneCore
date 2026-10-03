@@ -94,3 +94,36 @@ decidable and which leaf types are dead; `ConditionFeature` logs it at startup.
 the real services, quest facts through the real quest log) and
 `tests/ArcaneCore.World.Tests/Npc/ConditionFeatureTests.cs` (daemon wiring, config, rebuild order).
 Needs the real client: the Llane Beshere (Northshire) class-variant gossip once NQ0 imports the table.
+
+## Slice NQ11a: CMSG_BUY_ITEM_IN_SLOT
+
+### Delivered
+
+* The handler used to read the bag and slot and drop them ("the item goes wherever it fits"). It now
+  follows vmangos `WorldSession::HandleBuyItemInSlotOpcode` (`D:\refs\vmangos\src\game\Handlers\ItemHandler.cpp:659-686`):
+  the bag GUID resolves to the backpack side (the player's own GUID, bag byte 255) or to the worn bag
+  in slots 19-22 with that GUID; an unknown bag is ignored with no reply, as a cheat.
+* The placement half of `Player::BuyItemFromVendor` (`Player.cpp:18453-18496`) is
+  `PlayerInventory.CheckAddItemAt` / `AddItemAt`: an inventory position (or none) goes through the
+  existing `CanStoreItem(bag, slot, ...)` port (specific slot, then specific bag); an equipment position
+  needs a count of one (`ITEM_CANT_BE_EQUIPPED` otherwise), `CanEquipItem(slot, ...)` and equips the new
+  item (`EquipNewItem` + `AutoUnequipOffhandIfNeed`); every other position is `ITEM_DOESNT_GO_TO_SLOT`.
+  Nothing changes on a refusal, and money is only taken after placement succeeds, so a refused
+  placement never charges.
+* The vendor checks that run before the position (vendor list and visibility, stock, reputation, honor
+  rank, money) are unchanged and still run first, as in `BuyItemFromVendor`.
+* `IItemService` gained three default members (`FindBagSlot`, `CanStoreNewItemAt`, `StoreNewItemAt`);
+  the defaults keep the old position-less behaviour for an owner that has not implemented them, and
+  `InventoryItemService` implements them.
+* `NpcServiceHandlers.ReadBuyItemInSlot` is the exact 22-byte parser (wow_messages
+  `cmsg_buy_item_in_slot`, versions "1 2": u64 vendor, u32 item, u64 bag, u8 bag slot, u8 amount).
+
+### Limits
+
+* The error packet carries the item id only for `CANT_EQUIP_LEVEL_I`, so the position errors are
+  byte-identical to vmangos's `SendEquipError(msg, nullptr, nullptr)` form.
+* A bank bag GUID is not a valid bag here (vmangos loops 19-22 only); a bank position is
+  `ITEM_DOESNT_GO_TO_SLOT`.
+* BUY_BANK_SLOT result packets, AUTOBANK / AUTOSTORE_BANK handlers and the price-rounding switch
+  (rest of design slice NQ11) are not part of this slice.
+* Needs the real client: dragging a vendor item to a bag slot / worn slot.

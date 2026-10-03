@@ -87,19 +87,30 @@ public sealed class NpcServiceHandlers : IOpcodeHandlerGroup
     }
 
     /// <summary>
-    /// CMSG_BUY_ITEM_IN_SLOT: bought like CMSG_BUY_ITEM — the requested bag/slot is not honoured
-    /// yet (vmangos BuyItemFromVendor with an explicit position); the item goes wherever it fits.
+    /// CMSG_BUY_ITEM_IN_SLOT (u64 vendor, u32 item, u64 bag, u8 slot, u8 count; wow_messages
+    /// cmsg_buy_item_in_slot, 22 bytes): bought into the named bag and slot (vmangos
+    /// HandleBuyItemInSlotOpcode, ItemHandler.cpp:659-686).
     /// </summary>
     private static void BuyItemInSlot(WorldSession session, Player player, byte[] payload)
+    {
+        BuyItemInSlotRequest request = ReadBuyItemInSlot(payload);
+        Services(session).BuyItemInSlot(player, request.Vendor, request.Item, request.Bag, request.Slot, request.Count);
+    }
+
+    /// <summary>The fields of CMSG_BUY_ITEM_IN_SLOT as the 1.12 client writes them (wow_messages cmsg_buy_item_in_slot, versions "1 2").</summary>
+    public readonly record struct BuyItemInSlotRequest(ObjectGuid Vendor, uint Item, ObjectGuid Bag, byte Slot, byte Count);
+
+    /// <summary>Parse the exact 22-byte payload (u64 vendor, u32 item, u64 bag, u8 bag slot, u8 amount); anything else throws.</summary>
+    public static BuyItemInSlotRequest ReadBuyItemInSlot(byte[] payload)
     {
         RequireLength(payload, 22);
         var reader = new PacketReader(payload);
         var vendor = new ObjectGuid(reader.ReadUInt64());
         uint item = reader.ReadUInt32();
-        _ = reader.ReadUInt64(); // bag GUID
-        _ = reader.ReadByte(); // bag slot
+        var bag = new ObjectGuid(reader.ReadUInt64());
+        byte slot = reader.ReadByte();
         byte count = reader.ReadByte();
-        Services(session).BuyItem(player, vendor, item, count);
+        return new BuyItemInSlotRequest(vendor, item, bag, slot, count);
     }
 
     private static void SellItem(WorldSession session, Player player, byte[] payload)

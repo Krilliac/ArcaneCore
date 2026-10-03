@@ -30,6 +30,24 @@ public sealed partial class QuestNpcServices
     /// is taken, the item stored, stock reduced and SMSG_BUY_ITEM sent with the client's list slot.
     /// </summary>
     public void BuyItem(Player player, ObjectGuid vendorGuid, uint itemId, byte count)
+        => BuyItemAt(player, vendorGuid, itemId, count, Items.InventorySlots.NullBag, Items.InventorySlots.NullSlot);
+
+    /// <summary>
+    /// CMSG_BUY_ITEM_IN_SLOT (vmangos HandleBuyItemInSlotOpcode, ItemHandler.cpp:659-686): the bag GUID
+    /// is resolved to the backpack side or a worn bag first (an unknown bag is ignored as a cheat),
+    /// then Player::BuyItemFromVendor runs with that (bag, slot).
+    /// </summary>
+    public void BuyItemInSlot(Player player, ObjectGuid vendorGuid, uint itemId, ObjectGuid bagGuid, byte slot, byte count)
+    {
+        if (Ready(player) is null || Deps.Items is not { } items || items.FindBagSlot(player, bagGuid) is not { } bag)
+        {
+            return;
+        }
+
+        BuyItemAt(player, vendorGuid, itemId, count, bag, slot);
+    }
+
+    private void BuyItemAt(Player player, ObjectGuid vendorGuid, uint itemId, byte count, byte bag, byte slot)
     {
         if (Ready(player) is not { } s)
         {
@@ -101,14 +119,14 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        InventoryResult store = items.CanStoreNewItem(player, itemId, totalCount);
+        InventoryResult store = items.CanStoreNewItemAt(player, itemId, totalCount, bag, slot);
         if (store != InventoryResult.Ok)
         {
             items.SendEquipError(player, store, itemId);
             return;
         }
 
-        if (!items.StoreNewItem(player, itemId, totalCount))
+        if (!items.StoreNewItemAt(player, itemId, totalCount, bag, slot))
         {
             return;
         }

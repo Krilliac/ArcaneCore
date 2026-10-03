@@ -30,6 +30,28 @@ public sealed class NpcServiceWorldTests
         }
     }
 
+    [Fact]
+    public void BuyItemInSlot_ReadsTheBagAndSlotTheClientSent()
+    {
+        // gtker/wow_messages cmsg_buy_item_in_slot (versions "1 2"): u64 vendor, u32 item, u64 bag, u8 bag_slot, u8 amount.
+        byte[] payload =
+        [
+            0x64, 0, 0, 0, 0, 0, 0, 0,        // vendor 100
+            0xC8, 0, 0, 0,                    // item 200
+            0x2C, 0x01, 0, 0, 0, 0, 0, 0,     // bag 300
+            0x07,                             // bag slot 7
+            0x03,                             // amount 3
+        ];
+        NpcServiceHandlers.BuyItemInSlotRequest request = NpcServiceHandlers.ReadBuyItemInSlot(payload);
+        Assert.Equal(100ul, request.Vendor.Value);
+        Assert.Equal(200u, request.Item);
+        Assert.Equal(300ul, request.Bag.Value);
+        Assert.Equal((byte)7, request.Slot);
+        Assert.Equal((byte)3, request.Count);
+        Assert.Throws<ArgumentOutOfRangeException>(() => NpcServiceHandlers.ReadBuyItemInSlot(payload[..21]));
+        Assert.Throws<ArgumentOutOfRangeException>(() => NpcServiceHandlers.ReadBuyItemInSlot([.. payload, 0]));
+    }
+
     public static TheoryData<WorldOpcode, byte[]> MalformedPayloads() => new()
     {
         { WorldOpcode.CmsgListInventory, new byte[7] },

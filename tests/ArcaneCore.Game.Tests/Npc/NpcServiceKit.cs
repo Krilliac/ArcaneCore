@@ -24,6 +24,7 @@ internal sealed class NpcServiceKit : IDisposable
     public const uint Junk = 91003;        // not sellable (sell price 0)
     public const uint Helm = 91004;        // armor (4/1), ilvl 10, quality 1, durability 40
     public const uint Lantern = 91005;     // single, buy 300, sell 75
+    public const uint Pouch = 91006;       // 6-slot bag
     public const uint Entry = 500;
 
     public static IReadOnlyList<ItemTemplate> Templates { get; } =
@@ -35,6 +36,7 @@ internal sealed class NpcServiceKit : IDisposable
         new() { Entry = Helm, Class = 4, SubClass = 1, Name = "Helm", DisplayId = 14, Quality = 1, ItemLevel = 10, InventoryType = 1,
             Armor = 10, MaxDurability = 40, BuyPrice = 400, SellPrice = 100 },
         new() { Entry = Lantern, Class = 15, Name = "Lantern", DisplayId = 15, Quality = 1, BuyPrice = 300, SellPrice = 75 },
+        new() { Entry = Pouch, Class = 1, SubClass = 0, Name = "Pouch", DisplayId = 16, Quality = 1, InventoryType = 18, ContainerSlots = 6 },
     ];
 
     public static ItemTemplateStore Store { get; } = new(Templates, []);
