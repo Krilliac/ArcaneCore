@@ -36,7 +36,7 @@ public interface IQuestRewardEffects
 
 /// <summary>
 /// Optional reputation owner hook (feat/reputation): vmangos RewardQuest → RewardReputation.
-/// This branch stores no reputation; implementations are discovered from DI when present.
+/// This branch stores no reputation; every world feature implementing it is called when present.
 /// </summary>
 public interface IQuestReputationRewards
 {

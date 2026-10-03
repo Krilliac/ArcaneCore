@@ -45,8 +45,9 @@ No GPL text was copied.
   `IQuestRewardEffects.QuestRewarded`. That happens exactly once, after the
   settlement is durable and released (`PublishRewardEffects`). Recovery paths never
   re-publish.
-- Reputation: `IQuestReputationRewards` is a seam interface. Any world feature that
-  implements it gets `RewardQuestReputation(player, quest)`. This branch stores no
+- Reputation: any world feature that implements `IQuestReputationRewards` gets
+  `RewardQuestReputation(player, quest)`. It is found among the registered
+  `IWorldFeature`s, so `WorldFeatures.cs` is not edited. This branch stores no
   reputation; `feat/reputation` owns that.
 
 ### Objective adapters (`QuestNpcServices.Progression.cs`, `QuestObjectiveAdapter`)
@@ -54,8 +55,9 @@ No GPL text was copied.
   `ItemAdded`/`ItemRemoved`. Counts are recomputed from the inventory, bank
   included. At login, `ReconcileItemCounts` repairs counters after a relog or crash.
 - Exploration: `Quests:AreaTriggerQuests` holds the areatrigger_involvedrelation rows.
-  `CMSG_AREATRIGGER` calls the new `IAreaTriggerListener` seam after the zone check
-  and before teleports. Only living players get credit.
+  `CMSG_AREATRIGGER` calls every world feature that implements the new
+  `IAreaTriggerListener` after the zone check and before teleports. Only living
+  players get credit.
 - Spell-cast credit: `SpellSystem.SpellHitTarget` → `CastedCreatureOrGo`. When the
   caster is not the original caster, only `QUEST_FLAGS_SHARABLE` quests get credit.
 - Gameobject use: `QuestNpcServices.CastedCreatureOrGo(player, goEntry, goGuid,
@@ -105,8 +107,7 @@ closed.
 | `Game/Npc/QuestRewardPlan.cs` | giver, experience, level before/after |
 | `Game/Quests/QuestPackets.cs` | `Complete(quest, experience, money)` |
 | `Game/Spells/SpellSystem.Effects.cs` | `SpellHitTarget` event |
-| `World/Teleport/TeleportHandlers.cs` | calls `IAreaTriggerListener`s |
-| `World/Features/WorldFeatures.cs` | seam interfaces `IAreaTriggerListener`, `IQuestReputationRewards` |
+| `World/Teleport/TeleportHandlers.cs` | calls the world features that implement `IAreaTriggerListener` |
 | `World/Npc/QuestNpcFeature.cs` / `.Rewards.cs` | progression wiring, item listeners, level in the settlement image, effects after settlement |
 | `World/Npc/QuestObjectiveAdapter.cs` | group kill credit, spell-hit credit |
 | `Data/Quests/EfCharacterQuestRewardStore.cs` | repeatable rewarded rows (status 0) accepted as a fresh settlement |

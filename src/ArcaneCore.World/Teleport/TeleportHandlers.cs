@@ -3,6 +3,7 @@ using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
@@ -58,7 +59,8 @@ public sealed class TeleportHandlers : IOpcodeHandlerGroup
         }
 
         // vmangos handles the quest relation (areatrigger_involvedrelation) before teleports.
-        foreach (IAreaTriggerListener listener in session.Services.GetServices<IAreaTriggerListener>())
+        // Listeners are world features (discovered, no shared registration edit).
+        foreach (IAreaTriggerListener listener in session.Services.GetServices<IWorldFeature>().OfType<IAreaTriggerListener>())
         {
             listener.OnAreaTrigger(player, triggerId);
         }

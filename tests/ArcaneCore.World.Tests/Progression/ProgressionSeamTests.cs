@@ -22,10 +22,13 @@ public sealed class ProgressionSeamTests
     }
 
     [Fact]
-    public void QuestFeature_IsRegisteredAsAnAreaTriggerListener()
+    public void QuestFeature_IsAnAreaTriggerListenerReachedThroughTheWorldFeatures()
     {
+        // Listeners are found among the discovered features, so WorldFeatures.cs stays untouched.
         Assert.True(typeof(IAreaTriggerListener).IsAssignableFrom(typeof(QuestNpcFeature)));
         var services = new ServiceCollection().AddWorldFeatures();
-        Assert.Contains(services, d => d.ServiceType == typeof(IAreaTriggerListener) && d.Lifetime == ServiceLifetime.Singleton);
+        Assert.Contains(services, d => d.ServiceType == typeof(QuestNpcFeature) && d.Lifetime == ServiceLifetime.Singleton);
+        Assert.Contains(services, d => d.ServiceType == typeof(IWorldFeature) && d.Lifetime == ServiceLifetime.Singleton);
+        Assert.Contains(typeof(QuestNpcFeature), WorldFeatures.FeatureTypes);
     }
 }
