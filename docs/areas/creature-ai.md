@@ -46,8 +46,52 @@ docs/integration/creature-ai.md.
   zone yell map-wide, whisper to the target. `$N` becomes the target name, and the text can
   carry an emote (SMSG_EMOTE).
 - **Data**: `CreatureDumpImporter` reads cmangos `creature_ai_scripts` (only when it has
-  `action1_type`) and `creature_ai_texts`, which must have negative entries, plus `AIName` and
-  the movement `Run` column. A vmangos `creature_ai_events` table is reported and not imported.
+  `action1_type`), `creature_ai_texts` (negative entries), `broadcast_text`,
+  `creature_ai_summons`, `AIName`, the movement `Run` column and the template behaviour columns
+  described in "Content model" below. A vmangos `creature_ai_events` table is reported and not
+  imported.
+
+## Content model (world schema step `CreatureBehaviourDataModule`)
+
+The world step that follows the first AI step (`CreatureBehaviourDataModule.Version`, 11 in this
+tree; a named constant the integration lead renumbers) widens the data the AI reads. It is additive
+only (new tables and columns), so a database at the previous version upgrades in place.
+
+- **EventAI rows** (`CreatureAiEvent`): `Flags` is a full `uint32` (new column `EventFlags32`; the
+  world-8 byte column stays and keeps the low byte, and is only read when the new column is 0).
+  classic-db z2815 has 5,446 rows with flags 1025 and 824 with 1024; the old byte column stored
+  255 for both, which also set the random-action bit. `Param5` and `Param6` are kept. A negative
+  `creature_id` is a spawn-guid key (`CreatureGuid`, `CreatureAiContent.GetGuidEvents`) instead of
+  creature 0: 39 rows. `event_chance` is clamped to 100 with a warning and 0 is reported, as cmangos
+  does. The content carries `Dialect` (`EventAiDialect.CMangos`; vmangos rows are still refused).
+- **Texts**: `broadcast_text` is imported (`BroadcastTextCatalog`, 11,104 rows in classic-db).
+  Every EventAI text action in classic-db carries a positive broadcast id and `creature_ai_texts`
+  is empty there, so `CreatureAiContent.FindText` resolves a positive id through the catalog
+  (male text, chat type, language, first emote, sound). The existing `Say` path therefore speaks
+  those lines. Female text selection, sound and emote playback and the `$N`-style substitutions
+  of `DoDisplayText` are the presentation slice's work and are not claimed here.
+- **Summons**: `creature_ai_summons` (`CreatureAiSummon`, 38 rows) for the SUMMON_ID action.
+- **Template behaviour**: `Detection`, `CallForHelp`, `Pursuit`, `Leash`, `Timeout`, `StaticFlags1/2`
+  (cmangos names; vmangos `detection_range`, `call_for_help_range`, `leash_range`, `static_flags1/2`),
+  and a dialect tag for `ExtraFlags`. A template without the detection column gets 18 yd
+  (`CreatureTemplate.DefaultDetectionRange`). These are stored and exposed; the aggro, leash and
+  assist code still uses its constants until the aggro and combat-control slices consume them.
+- **ExtraFlags dialects.** The two references give the same bits different meanings (0x01 is
+  INSTANCE_BIND in cmangos and NO_LEASH_EVADE in vmangos; 0x20 is RUN_DURING_WANDER versus
+  NO_MOVEMENT_PAUSE; 0x40 is unused versus ALWAYS_RUN; 0x10000 is CIVILIAN versus NO_ASSIST).
+  The importer records the dialect per template (detected from the column name, `ExtraFlags` versus
+  `flags_extra`, or forced with `CreatureDumpImporter.ExtraFlagsDialect`) and
+  `CreatureTemplate.Behaviour` decodes it into `CreatureBehaviourFlags`. Static flags are the same
+  bits in both engines. New game code must read `Behaviour`, not raw `ExtraFlags`.
+  Limit: the three existing raw readers (`Creature.ExtraFlagAlwaysRun`, `ExtraFlagNoAggro`,
+  `InstanceManager` bind) are not rewired in this step.
+- **Provenance**: columns and defaults from mangos-classic `sql/base/mangos.sql`
+  (creature_template, creature_ai_scripts, creature_ai_summons) and the classic-db z2815 dump
+  (broadcast_text, creature_ai_texts); loader semantics from mangos-classic
+  `CreatureEventAIMgr.cpp:211-279` and `ObjectMgr.cpp:7786-7821, 9978-10040`; flag enums from
+  mangos-classic `Entities/Creature.h:49-72`, `Entities/CreatureDefines.h:27-99` and vmangos
+  `Objects/CreatureDefines.h:98-176, 250-252`. The importer is checked against the real dump
+  with `ARCANECORE_CLASSICDB_DUMP` (see `CreatureBehaviourImportTests`); no dump data is committed.
 
 ## References
 

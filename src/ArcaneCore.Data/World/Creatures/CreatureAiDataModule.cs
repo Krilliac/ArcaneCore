@@ -10,7 +10,11 @@ public sealed class CreatureAiScriptRow
 {
     public uint Id { get; set; }
 
+    /// <summary>The creature entry (0 when the row is keyed by spawn guid, see <see cref="CreatureGuid"/>).</summary>
     public uint CreatureId { get; set; }
+
+    /// <summary>The spawn guid when the dump's <c>creature_id</c> was negative (cmangos CreatureEventAIMgr.cpp:233-252). Added by <see cref="CreatureBehaviourDataModule"/>.</summary>
+    public uint CreatureGuid { get; set; }
 
     public byte EventType { get; set; }
 
@@ -18,7 +22,11 @@ public sealed class CreatureAiScriptRow
 
     public byte EventChance { get; set; } = 100;
 
+    /// <summary>The low byte of the event flags: the column the world-8 step created. <see cref="EventFlags32"/> wins when set.</summary>
     public byte EventFlags { get; set; }
+
+    /// <summary>The full 32-bit <c>event_flags</c> (cmangos reads it with GetUInt32; classic-db carries 1024/1025). Added by <see cref="CreatureBehaviourDataModule"/>.</summary>
+    public uint EventFlags32 { get; set; }
 
     public int EventParam1 { get; set; }
 
@@ -27,6 +35,12 @@ public sealed class CreatureAiScriptRow
     public int EventParam3 { get; set; }
 
     public int EventParam4 { get; set; }
+
+    /// <summary>Added by <see cref="CreatureBehaviourDataModule"/> (cmangos reads event_param1-6).</summary>
+    public int EventParam5 { get; set; }
+
+    /// <summary>Added by <see cref="CreatureBehaviourDataModule"/>.</summary>
+    public int EventParam6 { get; set; }
 
     public byte Action1Type { get; set; }
 
@@ -67,6 +81,12 @@ public sealed class CreatureAiTextRow
     public uint Language { get; set; }
 
     public uint Emote { get; set; }
+
+    /// <summary>SoundEntries.dbc id (cmangos <c>sound</c>). Added by <see cref="CreatureBehaviourDataModule"/>.</summary>
+    public uint Sound { get; set; }
+
+    /// <summary>cmangos <c>broadcast_text_id</c>. Added by <see cref="CreatureBehaviourDataModule"/>.</summary>
+    public uint BroadcastTextId { get; set; }
 }
 
 /// <summary>
@@ -129,16 +149,22 @@ public sealed class CreatureAiDataModule : IDataModule
         CreatureId = r.CreatureId,
         EventType = r.EventType,
         InversePhaseMask = r.EventInversePhaseMask,
+        CreatureGuid = r.CreatureGuid,
         Chance = r.EventChance,
-        Flags = r.EventFlags,
+
+        // The 32-bit column wins; rows written by the world-8 importer only have the (clamped) byte.
+        Flags = r.EventFlags32 != 0 ? r.EventFlags32 : r.EventFlags,
         Param1 = r.EventParam1,
         Param2 = r.EventParam2,
         Param3 = r.EventParam3,
         Param4 = r.EventParam4,
+        Param5 = r.EventParam5,
+        Param6 = r.EventParam6,
         Action1 = new CreatureAiAction(r.Action1Type, r.Action1Param1, r.Action1Param2, r.Action1Param3),
         Action2 = new CreatureAiAction(r.Action2Type, r.Action2Param1, r.Action2Param2, r.Action2Param3),
         Action3 = new CreatureAiAction(r.Action3Type, r.Action3Param1, r.Action3Param2, r.Action3Param3),
     };
 
-    internal static CreatureAiText ToText(CreatureAiTextRow r) => new(r.Entry, r.Content, r.Type, r.Language, r.Emote);
+    internal static CreatureAiText ToText(CreatureAiTextRow r)
+        => new(r.Entry, r.Content, r.Type, r.Language, r.Emote) { Sound = r.Sound, BroadcastTextId = r.BroadcastTextId };
 }

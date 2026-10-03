@@ -105,6 +105,30 @@ public sealed class CreatureTemplateRow
 
     /// <summary>cmangos-classic AIName (vmangos ai_name). Added by <see cref="CreatureAiDataModule"/>.</summary>
     public string AIName { get; set; } = string.Empty;
+
+    /// <summary>Detection range in yards; <c>null</c> = the column was absent from the source (the content default, 18, applies). Added by <see cref="CreatureBehaviourDataModule"/>.</summary>
+    public float? Detection { get; set; }
+
+    /// <summary>Added by <see cref="CreatureBehaviourDataModule"/>.</summary>
+    public float CallForHelp { get; set; }
+
+    /// <summary>Added by <see cref="CreatureBehaviourDataModule"/>.</summary>
+    public uint Pursuit { get; set; }
+
+    /// <summary>Added by <see cref="CreatureBehaviourDataModule"/>.</summary>
+    public float Leash { get; set; }
+
+    /// <summary>Added by <see cref="CreatureBehaviourDataModule"/>.</summary>
+    public uint Timeout { get; set; }
+
+    /// <summary>Added by <see cref="CreatureBehaviourDataModule"/>.</summary>
+    public uint StaticFlags1 { get; set; }
+
+    /// <summary>Added by <see cref="CreatureBehaviourDataModule"/>.</summary>
+    public uint StaticFlags2 { get; set; }
+
+    /// <summary><see cref="Kernel.WorldData.Creatures.CreatureExtraFlagsDialect"/> of <see cref="ExtraFlags"/> (0 unknown, 1 cmangos, 2 vmangos). Added by <see cref="CreatureBehaviourDataModule"/>.</summary>
+    public byte ExtraFlagsDialect { get; set; }
 }
 
 /// <summary><c>creature_spawn</c>: one placed creature (cmangos/vmangos <c>creature</c>).</summary>
