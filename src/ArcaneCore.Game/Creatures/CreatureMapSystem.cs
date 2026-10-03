@@ -292,6 +292,11 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
             {
                 case CreatureDeathState.Alive:
                     creature.AdvanceSpline(_clockMs, now);
+                    if (creature.PacifiedMs > 0)
+                    {
+                        creature.PacifiedMs = creature.PacifiedMs <= diffMs ? 0 : creature.PacifiedMs - diffMs; // vmangos Creature::Update
+                    }
+
                     UpdateAi(creature, diffMs);
                     if (creature.DeathState != CreatureDeathState.Alive || !_creatures.ContainsKey(creature.Guid))
                     {

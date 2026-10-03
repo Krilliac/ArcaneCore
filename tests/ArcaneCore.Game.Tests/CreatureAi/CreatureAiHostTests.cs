@@ -17,12 +17,14 @@ public sealed class CreatureAiHostTests
 {
     private const uint OtherFactionEntry = 300;
 
+    // vmangos Creature::GetAttackDistance (Objects/Creature.cpp:2193-2240): the template detection range (18, not 20) minus the
+    // level difference, at most 25 levels below, never under min(detection, 5).
     [Theory]
-    [InlineData(10, 10, 20f)]
-    [InlineData(10, 15, 15f)]
+    [InlineData(10, 10, 18f)]
+    [InlineData(10, 15, 13f)]
     [InlineData(10, 30, 5f)]   // never below 5 yd
-    [InlineData(60, 1, 45f)]   // at most 25 levels counted below
-    [InlineData(20, 5, 35f)]
+    [InlineData(60, 1, 43f)]   // at most 25 levels counted below
+    [InlineData(20, 5, 33f)]
     public void AggroRadius_FollowsTheLevelDifference(byte creatureLevel, byte playerLevel, float expected)
     {
         CreatureContent content = Content([Template(configure: t => { t.MinLevel = creatureLevel; t.MaxLevel = creatureLevel; })], [Spawn(1, WolfEntry, 5, 0)]);
@@ -53,7 +55,7 @@ public sealed class CreatureAiHostTests
     [Fact]
     public void AggressorAggroesInsideItsRadius_AndChasesAtRunSpeed_ButNotOutside()
     {
-        // Wolf level 2 vs player level 1: 21 yd plus both bounding radii.
+        // Wolf level 2 vs player level 1: 19 yd (detection 18 + 1 level), measured without bounding radii.
         CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 15, 0), Spawn(2, WolfEntry, 0, 40)]);
         (WorldRuntime runtime, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new AlwaysHostile() });
         using WorldRuntime world = runtime;
@@ -61,7 +63,9 @@ public sealed class CreatureAiHostTests
         Creature near = system.Creatures.Single(c => c.Spawn!.Guid == 1);
         Creature far = system.Creatures.Single(c => c.Spawn!.Guid == 2);
 
-        world.RunTick(50);
+        // Proximity aggro is event driven: the creature joined the map and notifies players around it after the 1000 ms AI
+        // relocation delay (vmangos Unit::ScheduleAINotify, Objects/Unit.cpp:10151-10164; AIRelocationNotifyDelay 1000).
+        Run(world, 1000);
 
         Assert.Same(player, near.Combat.Victim);
         Assert.True(near.Combat.IsInCombat);
@@ -84,7 +88,6 @@ public sealed class CreatureAiHostTests
     {
         DefaultHostility,
         GameMaster,
-        Civilian,
         NoAggroFlag,
         TooHigh,
         NoLineOfSight,
@@ -95,7 +98,6 @@ public sealed class CreatureAiHostTests
     [Theory]
     [InlineData(NoAggroCase.DefaultHostility)]
     [InlineData(NoAggroCase.GameMaster)]
-    [InlineData(NoAggroCase.Civilian)]
     [InlineData(NoAggroCase.NoAggroFlag)]
     [InlineData(NoAggroCase.TooHigh)]
     [InlineData(NoAggroCase.NoLineOfSight)]
@@ -105,7 +107,6 @@ public sealed class CreatureAiHostTests
     {
         CreatureTemplate template = Template(configure: t =>
         {
-            t.Civilian = rule == NoAggroCase.Civilian;
             t.ExtraFlags = rule == NoAggroCase.NoAggroFlag ? Creature.ExtraFlagNoAggro : 0;
             t.AIName = rule == NoAggroCase.NullAi ? "NullAI" : string.Empty;
         });
@@ -134,11 +135,25 @@ public sealed class CreatureAiHostTests
         }
 
         Creature wolf = Assert.Single(system.Creatures);
-        Run(world, 500);
+        Run(world, 1500); // past the relocation notify delay: the creature has had its chance to look
 
         Assert.Null(wolf.Combat.Victim);
         Assert.Equal(rule != NoAggroCase.NullAi, !system.CanAggroOnSight(wolf, player)); // NullAI passes the checks but never looks
         Assert.Equal(MovementGeneratorType.Idle, wolf.Motion.CurrentType);
+    }
+
+    [Fact]
+    public void ACivilianTemplate_DoesNotChangeProximityAggro()
+    {
+        // The civilian column only affects stealth alerts, honor/XP and guard targeting, never proximity aggro (vmangos
+        // AI/CreatureAI.cpp:362, Objects/Player.cpp:21826); aggression comes from the react state and faction hostility.
+        CreatureContent content = Content([Template(configure: t => t.Civilian = true)], [Spawn(1, WolfEntry, 8, 0)]);
+        (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new AlwaysHostile() });
+        using WorldRuntime world = runtime;
+        (Player player, _) = AddPlayer(world, 1, 0, 0);
+        Creature wolf = Assert.Single(system.Creatures);
+
+        Assert.True(system.CanAggroOnSight(wolf, player));
     }
 
     [Fact]

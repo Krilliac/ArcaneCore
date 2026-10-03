@@ -27,6 +27,21 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// <summary>The aggro hook ran for the current fight (reset by evade, death and respawn).</summary>
     internal bool HasAggroed { get; set; }
 
+    /// <summary>
+    /// How the creature reacts to units around it (vmangos <c>m_reactState</c>): set from the template at creation and
+    /// again at every respawn (Creature::InitializeReactState); an AI may change it afterwards.
+    /// </summary>
+    public CreatureReactState ReactState { get; set; } = CreatureReactState.Aggressive;
+
+    /// <summary>
+    /// Milliseconds left of the temporary pacify (vmangos <c>m_pacifiedTimer</c>): the creature cannot initiate attacks while it is
+    /// above 0. Set at respawn, counted down while alive, cleared when it enters combat.
+    /// </summary>
+    internal uint PacifiedMs { get; set; }
+
+    /// <summary>Whether the creature is temporarily pacified (vmangos IsTempPacified).</summary>
+    public bool IsTempPacified => PacifiedMs > 0;
+
     /// <summary>The assistance call went out for the current fight (vmangos m_AlreadyCallAssistance).</summary>
     internal bool CalledAssistance { get; set; }
 

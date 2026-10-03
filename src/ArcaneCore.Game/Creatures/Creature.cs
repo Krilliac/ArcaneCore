@@ -202,6 +202,7 @@ public sealed partial class Creature : Unit, ICombatCreature
 
         SelectLevel();
         ApplyAddon();
+        ReactState = CreatureAggro.InitialReactState(t);
         SetUInt64(UpdateFields.UnitFieldTarget, 0);
     }
 

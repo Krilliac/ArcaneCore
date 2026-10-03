@@ -26,7 +26,7 @@ public sealed class CreatureAiCorrectnessTests
         player.MaxHealth = player.Health = 1000;
         Creature creature = Assert.Single(system.Creatures);
 
-        Run(world, 500);
+        Run(world, 1500); // aggro comes with the 1000 ms relocation notify, then 500 ms of fight
 
         Assert.Same(player, creature.Combat.Victim);
         Assert.True(player.Health < 1000);
@@ -48,7 +48,7 @@ public sealed class CreatureAiCorrectnessTests
         (Player player, FakeSession session) = AddPlayer(world, 1, 6, 0);
         player.MaxHealth = player.Health = 1000;
         Creature creature = Assert.Single(system.Creatures);
-        Run(world, 500);
+        Run(world, 1500); // aggro at the 1000 ms relocation notify, then 500 ms of fight
         Assert.True(player.Health < 1000); // Already faces east: the immutable baseline can hit here.
         uint healthBeforeTurn = player.Health;
         session.Clear();
@@ -75,7 +75,7 @@ public sealed class CreatureAiCorrectnessTests
         (Player player, FakeSession session) = AddPlayer(world, 1, 6, 0);
         player.MaxHealth = player.Health = 1000;
         Creature creature = Assert.Single(system.Creatures);
-        Run(world, 500);
+        Run(world, 1500); // aggro at the 1000 ms relocation notify, then 500 ms of fight
         Assert.True(player.Health < 1000);
         uint healthBeforeHold = player.Health;
         Guid operation = Guid.Parse("b2585a90-3f77-4dac-ab69-2038b244fa02");
@@ -209,7 +209,7 @@ public sealed class CreatureAiCorrectnessTests
         }
 
         Creature guard = Assert.Single(system.Creatures);
-        Run(world, 500);
+        Run(world, 1500); // aggro at the 1000 ms relocation notify, then 500 ms of fight
 
         Assert.Equal(ordinaryPvp, (player.UnitFlags & UnitFlags.Pvp) != 0);
         Assert.Equal(contestedPvp, (player.Flags & PlayerFlags.ContestedPvp) != 0);

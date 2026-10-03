@@ -189,6 +189,7 @@ public sealed class Map
 
         UpdateVisibility(player);
         player.NeedsVisibilityUpdate = false;
+        ObjectRelocated?.Invoke(player);
     }
 
     /// <summary>
@@ -250,6 +251,8 @@ public sealed class Map
         {
             _newObjects.Add(obj.Guid);
         }
+
+        ObjectRelocated?.Invoke(obj);
     }
 
     /// <summary>Take a non-player object out of the map; clients that see it get SMSG_DESTROY_OBJECT.</summary>
@@ -491,6 +494,12 @@ public sealed class Map
         _valuesQueue.Add(obj);
     }
 
+    /// <summary>
+    /// Raised when a unit's position changed or it joined this map (vmangos <c>Unit::OnRelocated</c>, called from Map.cpp:1407,
+    /// 1473 and 1531). The creature AI schedules its proximity-aggro scan from it (docs/areas/creature-ai.md).
+    /// </summary>
+    internal event Action<WorldObject>? ObjectRelocated;
+
     /// <summary>Re-file an object whose X/Y changed; non-player objects get a visibility pass this tick.</summary>
     internal void OnObjectMoved(WorldObject obj)
     {
@@ -498,6 +507,8 @@ public sealed class Map
         {
             return;
         }
+
+        ObjectRelocated?.Invoke(obj);
 
         if (obj is Player player)
         {

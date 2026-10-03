@@ -24,15 +24,21 @@ public sealed partial class CreatureMapSystem
         ArgumentNullException.ThrowIfNull(creature);
         ArgumentNullException.ThrowIfNull(target);
         if (!_creatures.ContainsKey(creature.Guid) || !creature.IsAlive || creature.IsEvading
-            || !target.IsAlive || !ReferenceEquals(target.Map, Map) || !Map.Combat.Hooks.CanAttack(creature, target))
+            || !target.IsAlive || !ReferenceEquals(target.Map, Map) || !Map.Combat.Hooks.CanAttack(creature, target)
+            || creature.ReactState == CreatureReactState.Passive) // vmangos CreatureAI::AttackStart (AI/CreatureAI.cpp:67-70)
         {
             return false;
         }
 
         bool melee = creature.AI?.MeleeEnabled ?? true;
-        if (!ReferenceEquals(creature.Combat.Victim, target) && !Map.Combat.Attack(creature, target, melee))
+        if (!ReferenceEquals(creature.Combat.Victim, target))
         {
-            return false;
+            if (!Map.Combat.Attack(creature, target, melee))
+            {
+                return false;
+            }
+
+            SendAiReaction(creature);
         }
 
         creature.Combat.Threat.AddThreat(target, 0f);
@@ -41,6 +47,7 @@ public sealed partial class CreatureMapSystem
         if (!creature.HasAggroed)
         {
             creature.HasAggroed = true;
+            creature.PacifiedMs = 0; // vmangos Creature::SetInCombatWith... enter combat clears the temporary pacify (Creature.cpp:3665)
             creature.CombatStart = new CreatureHome(creature.X, creature.Y, creature.Z, creature.Orientation);
             creature.AI?.OnAggro(target);
             if (!creature.IsAlive || creature.IsEvading)
@@ -53,6 +60,46 @@ public sealed partial class CreatureMapSystem
 
         ApplyCombatMovement(creature);
         return true;
+    }
+
+    /// <summary>
+    /// vmangos Creature::EnterCombatWithTarget (Objects/Creature.cpp:4078-4087), what proximity aggro calls: a creature without a victim
+    /// starts attacking <paramref name="target"/> through its AI; one that already fights somebody else only adds the target to its
+    /// threat list.
+    /// </summary>
+    public void EnterCombatWithTarget(Creature creature, Unit target)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        ArgumentNullException.ThrowIfNull(target);
+        if (creature.Combat.Victim is null)
+        {
+            if (creature.AI is { } ai)
+            {
+                ai.AttackStart(target);
+            }
+            else
+            {
+                AttackStart(creature, target);
+            }
+        }
+        else if (!ReferenceEquals(creature.Combat.Victim, target) && target.IsAlive && ReferenceEquals(target.Map, Map))
+        {
+            creature.Combat.Threat.AddThreat(target, 0f);
+            Map.Combat.SetInCombatState(target, 0);
+        }
+    }
+
+    /// <summary>
+    /// vmangos Creature::SendAIReaction(AI_REACTION_HOSTILE) from Unit::Attack (Objects/Unit.cpp:4535-4537): the creature tells everyone
+    /// who sees it that it attacks, and the client plays its aggro sound. SMSG_AI_REACTION: guid, u32 reaction (gtker wow_messages
+    /// smsg_ai_reaction.wowm).
+    /// </summary>
+    private void SendAiReaction(Creature creature)
+    {
+        if (_options.SendAiReaction)
+        {
+            Map.BroadcastToObservers(creature, WorldOpcode.SmsgAiReaction, CreatureAiReactionPackets.Build(creature.Guid, AiReaction.Hostile));
+        }
     }
 
     /// <summary>
@@ -82,9 +129,9 @@ public sealed partial class CreatureMapSystem
             return false;
         }
 
-        if (!ReferenceEquals(combat.Victim, victim))
+        if (!ReferenceEquals(combat.Victim, victim) && Map.Combat.Attack(creature, victim, creature.AI?.MeleeEnabled ?? true))
         {
-            Map.Combat.Attack(creature, victim, creature.AI?.MeleeEnabled ?? true);
+            SendAiReaction(creature);
         }
 
         ApplyCombatMovement(creature);

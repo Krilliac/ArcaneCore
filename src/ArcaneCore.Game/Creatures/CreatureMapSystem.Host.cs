@@ -21,6 +21,7 @@ public sealed partial class CreatureMapSystem
 
     private readonly HashSet<string> _reportedAi = [];
     private bool _combatSubscribed;
+    private AiRelocationNotifier _relocation = null!;
 
     /// <summary>The services this map's creature AI uses (hostility, spells, AI factory); paths and sight come from <c>Map.Collision</c>.</summary>
     public CreatureAiServices AiServices => _ai;
@@ -56,7 +57,31 @@ public sealed partial class CreatureMapSystem
         {
             spells.SpellHit += OnSpellHit;
         }
+
+        _relocation = new AiRelocationNotifier(this, _options);
+        Map.ObjectRelocated += OnObjectRelocated;
         TrySubscribeCombat();
+    }
+
+    private void OnObjectRelocated(WorldObject obj)
+    {
+        if (_options.AggroScanMode == AggroScanMode.Relocation)
+        {
+            _relocation.OnRelocated(obj, _clockMs);
+        }
+    }
+
+    /// <summary>
+    /// vmangos CallAIMoveLOS (Maps/GridNotifiersImpl.h:57-69): a creature that is alive, not evading, in control and has an AI
+    /// gets <c>MoveInLineOfSight</c> for the unit that moved near it.
+    /// </summary>
+    internal void CallAiMoveInLineOfSight(Creature creature, Unit moving)
+    {
+        if (creature.IsAlive && !creature.IsEvading && (creature.UnitFlags & LostControl) == 0
+            && _creatures.ContainsKey(creature.Guid) && creature.AI is { } ai)
+        {
+            ai.MoveInLineOfSight(moving);
+        }
     }
 
     private void TrySubscribeCombat()
@@ -96,7 +121,7 @@ public sealed partial class CreatureMapSystem
             return;
         }
 
-        if (ai.AggroesOnSight && !creature.IsEvading && creature.Combat.Victim is null && _options.AggroRate > 0)
+        if (_options.AggroScanMode == AggroScanMode.Poll && ai.AggroesOnSight && !creature.IsEvading && creature.Combat.Victim is null && _options.AggroRate > 0)
         {
             foreach (Player player in Map.Players)
             {
@@ -119,6 +144,11 @@ public sealed partial class CreatureMapSystem
     private void UpdatePendingAi()
     {
         TrySubscribeCombat();
+        if (_options.AggroScanMode == AggroScanMode.Relocation)
+        {
+            _relocation.Update(_clockMs);
+        }
+
         if (_pendingAssists.Count > 0)
         {
             PendingAssist[] due = [.. _pendingAssists.Where(p => p.DueMs <= _clockMs)];

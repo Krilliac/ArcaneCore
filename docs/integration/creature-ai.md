@@ -86,6 +86,15 @@ when it inspects a prefix.
 | Key | Default | Meaning (vmangos/cmangos config) |
 |---|---|---|
 | `AggroRate` | 1.0 | Rate.Creature.Aggro; 0 turns aggro on sight off |
+| `AggroScanMode` | `Relocation` | `Relocation` (retail: movement-driven AI notify) or `Poll` (every creature checks every player every tick, development) |
+| `AiRelocationNotifyDelayMs` | 1000 | Visibility.AIRelocationNotifyDelay |
+| `MaxCreatureAttackRadius` | 40 | MaxCreaturesAttackRadius (yd, times the aggro rate) |
+| `RespawnPacifyMs` | 5000 | A respawned creature cannot initiate attacks for this long (vmangos SetTempPacified) |
+| `SendAiReaction` | true | SMSG_AI_REACTION(hostile) on every attack start (the aggro sound) |
+| `AggroUsesBoundingRadius` | false | Development: add both bounding radii to the aggro range (retail measures the plain distance) |
+| `EventAi:UpdateIntervalMs` | 500 | cmangos EVENT_UPDATE_TIME: how often timer-driven EventAI events are evaluated |
+| `EventAi:DebugOnlyEvents` | false | Run EventAI rows flagged EFLAG_DEBUG_ONLY |
+| `EventAi:ReportUnsupported` | true | Log rows with unsupported events, actions or conditions once per creature entry |
 | `AssistanceRadius` | 10 | CreatureFamilyAssistanceRadius |
 | `AssistanceDelayMs` | 1500 | CreatureFamilyAssistanceDelay |
 | `FleeAssistanceRadius` | 30 | CreatureFamilyFleeAssistanceRadius |

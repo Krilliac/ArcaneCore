@@ -290,6 +290,9 @@ public sealed partial class CreatureMapSystem
         creature.InitializeFields();
         creature.DeathState = CreatureDeathState.Alive;
         creature.RespawnAtMs = 0;
+
+        // vmangos Creature::Update DEAD -> respawn (Objects/Creature.cpp:877-878): 5 s before it may initiate an attack.
+        creature.PacifiedMs = _options.RespawnPacifyMs;
         creature.ResetToHome(_serverTime());
 
         // Invisible until now, so nobody needs a values update for the re-initialization.

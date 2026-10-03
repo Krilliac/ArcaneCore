@@ -98,7 +98,7 @@ public abstract class CreatureAI
     {
         if (AggroesOnSight && System is { } system && system.CanAggroOnSight(Me, who))
         {
-            AttackStart(who);
+            system.EnterCombatWithTarget(Me, who);
         }
     }
 

@@ -18,6 +18,27 @@ public sealed class CreatureOptionsBindingTests
     }
 
     [Fact]
+    public void AggroOptions_DefaultToVmangosValues_AndBindFromTheSection()
+    {
+        var defaults = new CreatureOptions();
+        Assert.Equal(
+            (AggroScanMode.Relocation, 1000u, 40f, 5000u, true, false),
+            (defaults.AggroScanMode, defaults.AiRelocationNotifyDelayMs, defaults.MaxCreatureAttackRadius, defaults.RespawnPacifyMs, defaults.SendAiReaction, defaults.AggroUsesBoundingRadius));
+
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Creatures:AggroScanMode"] = "Poll",
+            ["Creatures:RespawnPacifyMs"] = "0",
+            ["Creatures:SendAiReaction"] = "false",
+            ["Creatures:AggroUsesBoundingRadius"] = "true",
+        }).Build();
+        var bound = new CreatureOptions();
+        configuration.GetSection(CreatureOptions.SectionName).Bind(bound);
+
+        Assert.Equal((AggroScanMode.Poll, 0u, false, true), (bound.AggroScanMode, bound.RespawnPacifyMs, bound.SendAiReaction, bound.AggroUsesBoundingRadius));
+    }
+
+    [Fact]
     public void TheEventAiSection_BindsIntoTheNestedOptions()
     {
         IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
