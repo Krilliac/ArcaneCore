@@ -52,7 +52,7 @@ vmangos `ENVIRONMENT_FLAG_HIGH_LIQUID` (`Player.cpp:20353-20419`, `Player.cpp:84
 `AURA_INTERRUPT_UNDER_WATER_CANCELS` (0x80, Travel Form, mounts, Food, Drink), leaving removes those with
 `ABOVE_WATER_CANCELS` (0x100, Aquatic Form). It is edge-triggered; the state before the first probe is "not in deep liquid" (vmangos m_environmentFlags starts at 0), so a player first probed in deep water gets the entering edge. Also
 `HighLiquidChanged` is raised for other systems (breath/fatigue timers belong to world-state-exploration).
-`AuraInterruptMasks`, `RemoveAurasWithInterruptFlags` and `InterruptChannelWithFlags` are reusable helpers built from
+`InterruptChannelWithFlags` is a reusable helper (the aura masks and `RemoveAurasWithInterruptFlags` are the rogue lane's `AuraInterruptMask` and `SpellSystem.RemoveAurasWithInterruptFlags`; the druid duplicates were removed at integration) built from
 the public `SpellSystem` API.
 
 ### Taxi interlock

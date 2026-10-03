@@ -46,7 +46,7 @@ public sealed class LiquidAuraInterruptUpdater(Func<SpellSystem?> spells, ILiqui
     {
         if (spells() is { } system)
         {
-            uint mask = entered ? AuraInterruptMasks.UnderWaterCancels : AuraInterruptMasks.AboveWaterCancels;
+            uint mask = entered ? AuraInterruptMask.UnderWater : AuraInterruptMask.AboveWater;
             system.InterruptChannelWithFlags(player, mask);
             system.RemoveAurasWithInterruptFlags(player, mask);
         }

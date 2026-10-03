@@ -49,14 +49,14 @@ public class LiquidAuraInterruptTests
         public Rig(bool startsHigh = false)
         {
             Kit = new SpellTestKit(
-                Buff(TravelLike, AuraInterruptMasks.UnderWaterCancels),
-                Buff(AquaLike, AuraInterruptMasks.AboveWaterCancels),
+                Buff(TravelLike, AuraInterruptMask.UnderWater),
+                Buff(AquaLike, AuraInterruptMask.AboveWater),
                 Buff(ControlBuff, 0),
                 SpellTestKit.Spell(ChannelUnderWater, SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy)) with
                 {
                     AttributesEx = SpellAttributesEx.IsChanneled,
                     Duration = new SpellDuration(5000, 0, 5000),
-                    ChannelInterruptFlags = (SpellAuraInterruptFlags)AuraInterruptMasks.UnderWaterCancels,
+                    ChannelInterruptFlags = (SpellAuraInterruptFlags)AuraInterruptMask.UnderWater,
                     SpellVisual = 1,
                 });
             Probe = new FakeProbe { High = startsHigh };
@@ -214,7 +214,7 @@ public class LiquidAuraInterruptTests
         rig.Apply(AquaLike);
         rig.Apply(ControlBuff);
 
-        rig.Kit.System.RemoveAurasWithInterruptFlags(rig.Player, AuraInterruptMasks.UnderWaterCancels | AuraInterruptMasks.AboveWaterCancels, exceptSpellId: AquaLike);
+        rig.Kit.System.RemoveAurasWithInterruptFlags(rig.Player, AuraInterruptMask.UnderWater | AuraInterruptMask.AboveWater, exceptSpellId: AquaLike);
 
         Assert.False(rig.Has(TravelLike));
         Assert.True(rig.Has(AquaLike));
@@ -222,12 +222,12 @@ public class LiquidAuraInterruptTests
     }
 
     [Fact]
-    public void AuraInterruptMasks_MatchVmangos()
+    public void AuraInterruptMask_MatchVmangos()
     {
-        Assert.Equal(0x80u, AuraInterruptMasks.UnderWaterCancels);
-        Assert.Equal(0x100u, AuraInterruptMasks.AboveWaterCancels);
-        Assert.Equal(0x8000u, AuraInterruptMasks.ShapeshiftingCancels);
-        Assert.Equal(0x4u, AuraInterruptMasks.ActionCancels);
-        Assert.Equal(0x10000u, AuraInterruptMasks.ActionCancelsLate);
+        Assert.Equal(0x80u, AuraInterruptMask.UnderWater);
+        Assert.Equal(0x100u, AuraInterruptMask.AboveWater);
+        Assert.Equal(0x8000u, AuraInterruptMask.Shapeshifting);
+        Assert.Equal(0x4u, AuraInterruptMask.Action);
+        Assert.Equal(0x10000u, AuraInterruptMask.ActionLate);
     }
 }
