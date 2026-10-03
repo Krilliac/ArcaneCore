@@ -60,6 +60,9 @@ public static class ItemPersistence
 
         db.RemoveRange(items.Values.Where(r => !keep.Contains(r.Guid)));
         db.RemoveRange(slots.Values.Where(r => !keep.Contains(r.ItemGuid)));
+
+        // The generated loot of container items commits with the inventory (same SaveChanges).
+        await ItemLootPersistence.StageReplaceAsync(db, snapshot.Items.Select(i => i.Item), [.. items.Keys], cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Stage the removal of every item a character owns (character deletion).</summary>
@@ -83,12 +86,14 @@ public sealed class EfItemStore(CharacterDbContext db) : IItemStore
         Dictionary<uint, ItemInstanceRow> items = await db.Set<ItemInstanceRow>().AsNoTracking()
             .Where(r => r.OwnerGuid == characterId).ToDictionaryAsync(r => r.Guid, cancellationToken).ConfigureAwait(false);
 
+        Dictionary<uint, ItemLootData> loot = await ItemLootPersistence.LoadAsync(db, [.. items.Keys], cancellationToken).ConfigureAwait(false);
+
         // vmangos _LoadInventory orders by bag, slot: the character's own slots (bag 0) first,
         // so every bag exists before its contents.
         return slots
             .Where(s => items.ContainsKey(s.ItemGuid))
             .OrderBy(s => s.Bag == 0 ? 0 : 1).ThenBy(s => s.Bag).ThenBy(s => s.Slot)
-            .Select(s => new InventoryItemData(s.Bag, s.Slot, items[s.ItemGuid].ToData()))
+            .Select(s => new InventoryItemData(s.Bag, s.Slot, items[s.ItemGuid].ToData() with { Loot = loot.GetValueOrDefault(s.ItemGuid) }))
             .ToList();
     }
 

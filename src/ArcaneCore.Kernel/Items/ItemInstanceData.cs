@@ -28,6 +28,9 @@ public sealed record ItemInstanceData
     public int RandomPropertyId { get; init; }
     public uint Durability { get; init; }
     public uint TextId { get; init; }
+
+    /// <summary>The generated, not yet taken loot of a container item, or null when none was generated (vmangos generated_loot + item_loot).</summary>
+    public ItemLootData? Loot { get; init; }
 }
 
 /// <summary>
