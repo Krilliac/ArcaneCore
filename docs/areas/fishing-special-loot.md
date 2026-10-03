@@ -59,7 +59,7 @@ file:line. Where vmangos and the other references disagree the choice is stated.
 **Disenchant** (`Game/Loot/DisenchantLoot.cs`, `DisenchantSpells.cs`)
 - Check (`Spell.cpp:7376-7392`: own item, no open window, `DisenchantID`, not `NO_DISENCHANT 0x8000`), effect (`SpellEffects.cpp:5059-5073`: bind, craft skill-up of the
   casting spell, `disenchant_loot_template` as temporary loot, wire type 4), release (`LootHandler.cpp:543-553`: everything left is auto-stored, lost without room, then the item is
-  destroyed). The quality/class gate is a template-load rule in vmangos (`ObjectMgr.cpp:4183-4195`) and is not repeated per cast.
+  destroyed). The quality/class gate is a template-load rule in vmangos (`ObjectMgr.cpp:4183-4195`: a `DisenchantID` on an item that is not uncommon..epic or not weapon/armor is cleared); the item template rows are mapped without that pass, so `DisenchantLoot.HasDisenchantLoot` applies it on the cast check and the effect.
 
 **Skinning lifecycle** (`LootService`, `Creature.Skinning.cs`, `GatheringSpells.CheckSkinning`)
 - Skinnable from death when the creature has a skinning template and a loot recipient (`Creature.cpp:2274-2277`; it used to be set only when looted out). The cast follows

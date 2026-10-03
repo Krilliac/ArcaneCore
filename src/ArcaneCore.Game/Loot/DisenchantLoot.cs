@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData.Loot;
 
 namespace ArcaneCore.Game.Loot;
@@ -12,8 +13,9 @@ namespace ArcaneCore.Game.Loot;
 /// spell, and shows the <c>disenchant_loot_template</c> of the id as temporary loot (wire type 4). Closing the window stores everything left
 /// (what does not fit is lost) and destroys the item.
 /// <para>
-/// vmangos checks the quality (uncommon to epic) and class (weapon or armor) of a disenchantable item once when item templates load
-/// (ObjectMgr.cpp:4183-4195, then clears the id); this class trusts the loaded templates and does not repeat that on every cast.
+/// vmangos clears a DisenchantID whose item is not uncommon to epic quality or not a weapon or armor when item templates load
+/// (ObjectMgr.cpp:4183-4195). The item template rows here are mapped without that pass, so <see cref="HasDisenchantLoot"/> applies the same
+/// rule at the point of use, on the cast check and on the effect: such an item answers CANT_BE_DISENCHANTED and is never destroyed.
 /// </para>
 /// </summary>
 public sealed class DisenchantLoot(LootService loot) : ILootReleaseHandler
@@ -26,6 +28,18 @@ public sealed class DisenchantLoot(LootService loot) : ILootReleaseHandler
     /// <summary>Items with an open disenchant window (vmangos Item::HasGeneratedLoot while LOOT_DISENCHANTING is open).</summary>
     public int ActiveItems => _active.Count;
 
+    /// <summary>
+    /// Whether the template keeps its DisenchantID after vmangos' load-time gate (ObjectMgr.cpp:4183-4195): quality uncommon (2) to epic (4)
+    /// and class weapon (2) or armor (4).
+    /// </summary>
+    public static bool HasDisenchantLoot(ItemTemplate template)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        return template.DisenchantId != 0
+            && template.Quality is >= 2 and <= 4
+            && template.Class is (uint)ItemClass.Weapon or (uint)ItemClass.Armor;
+    }
+
     /// <summary>Whether the item can be disenchanted now (the rules of Spell::CheckCast), as CAST_OK or CANT_BE_DISENCHANTED.</summary>
     public SpellCastResult CheckTarget(Player caster, Item? item)
     {
@@ -35,7 +49,7 @@ public sealed class DisenchantLoot(LootService loot) : ILootReleaseHandler
             return SpellCastResult.CantBeDisenchanted; // missing, in use, or not the caster's own (the trade window)
         }
 
-        return item.Template.DisenchantId == 0 || (item.Template.Flags & ItemFlagNoDisenchant) != 0
+        return !HasDisenchantLoot(item.Template) || (item.Template.Flags & ItemFlagNoDisenchant) != 0
             ? SpellCastResult.CantBeDisenchanted
             : SpellCastResult.CastOk;
     }
@@ -48,7 +62,7 @@ public sealed class DisenchantLoot(LootService loot) : ILootReleaseHandler
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(item);
-        if (item.Template.DisenchantId == 0)
+        if (!HasDisenchantLoot(item.Template))
         {
             return LootResult.NotLootable;
         }

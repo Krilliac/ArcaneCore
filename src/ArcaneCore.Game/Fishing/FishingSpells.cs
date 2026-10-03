@@ -14,12 +14,17 @@ public sealed class FishingSpells(Func<IEnumerable<FishingService>> services) : 
     public void Register(SpellSystem system)
     {
         ArgumentNullException.ThrowIfNull(system);
+        // RegisterEffect keeps one handler per effect, and vmangos EffectTransmitted also summons rituals and traps through TRANS_DOOR: keep
+        // whatever was installed first and hand it every transmitted object that is not a fishing node.
+        SpellEffectHandler? previous = system.GetEffectHandler(SpellEffectName.TransDoor);
         system.RegisterEffect(SpellEffectName.TransDoor, context =>
         {
-            if (context.Caster.Map is { } map)
+            if (context.Caster.Map is { } map && ServiceOf(map) is { } service && service.Transmit(context))
             {
-                ServiceOf(map)?.Transmit(context);
+                return;
             }
+
+            previous?.Invoke(context);
         });
         system.RegisterObserver(this);
     }

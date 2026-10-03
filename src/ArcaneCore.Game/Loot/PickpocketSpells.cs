@@ -15,6 +15,11 @@ public sealed class PickpocketSpells(Func<Map, PickpocketLoot?> pickpocketOf)
     public void Register(SpellSystem system)
     {
         ArgumentNullException.ThrowIfNull(system);
+        if (system.HasEffectHandler(SpellEffectName.Pickpocket))
+        {
+            throw new InvalidOperationException("the Pickpocket effect already has a handler; installing a second one would replace it");
+        }
+
         system.RegisterEffectCheck(SpellEffectName.Pickpocket, CheckTarget);
         system.RegisterEffect(SpellEffectName.Pickpocket, context => Effect(system, context));
     }

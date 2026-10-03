@@ -85,14 +85,19 @@ public sealed class FishingService : IMapUpdater, ILootReleaseHandler
     /// bobber lands, refuse land and shallow or unseen water with NOT_FISHABLE, summon the bobber owned by the caster, make it the
     /// channel object and schedule the bite. Other transmitted objects (rituals, traps) are not handled here.
     /// </summary>
-    public void Transmit(SpellEffectContext context)
+    /// <returns>False when the transmitted object is not a fishing node (the caller hands the effect to the handler installed before it).</returns>
+    public bool Transmit(SpellEffectContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
-        if (context.Caster is not Player caster || !ReferenceEquals(caster.Map, Map)
-            || _objects.FindTemplate((uint)context.Effect.MiscValue) is not { } template
+        if (_objects.FindTemplate((uint)context.Effect.MiscValue) is not { } template
             || (GameObjectType)template.Type != GameObjectType.FishingNode)
         {
-            return;
+            return false;
+        }
+
+        if (context.Caster is not Player caster || !ReferenceEquals(caster.Map, Map))
+        {
+            return true;
         }
 
         SpellSystem system = context.System;
@@ -109,7 +114,7 @@ public sealed class FishingService : IMapUpdater, ILootReleaseHandler
         {
             caster.Session.Send(WorldOpcode.SmsgCastResult, SpellPackets.BuildCastResult(spell.Id, SpellCastResult.NotFishable));
             system.FinishChannel(caster);
-            return;
+            return true;
         }
 
         fz = liquid.Level;
@@ -121,7 +126,7 @@ public sealed class FishingService : IMapUpdater, ILootReleaseHandler
         GameObject? go = _objects.Summon(template.Entry, fx, fy, fz, caster.Orientation);
         if (go is null)
         {
-            return;
+            return true;
         }
 
         go.SetOwner(caster.Guid);
@@ -135,6 +140,7 @@ public sealed class FishingService : IMapUpdater, ILootReleaseHandler
         int lastSec = LastSecondsChoices[system.Random.Next(LastSecondsChoices.Count)];
         long readyAt = _clockMs + Math.Max(0, context.Cast.Duration - (lastSec * 1000L));
         _bobbers[caster.Guid] = new Bobber(go, caster, spell.Id, readyAt, readyAt + BobberReadyTimeMs);
+        return true;
     }
 
     /// <summary>vmangos EffectTransmitted position: the explicit destination, else the effect radius ahead of the caster, else a random point in the spell range.</summary>

@@ -15,6 +15,11 @@ public sealed class DisenchantSpells(Func<Map, DisenchantLoot?> disenchantOf)
     public void Register(SpellSystem system)
     {
         ArgumentNullException.ThrowIfNull(system);
+        if (system.HasEffectHandler(SpellEffectName.Disenchant))
+        {
+            throw new InvalidOperationException("the Disenchant effect already has a handler; installing a second one would replace it");
+        }
+
         system.RegisterEffectCheck(SpellEffectName.Disenchant, CheckTarget);
         system.RegisterEffect(SpellEffectName.Disenchant, Effect);
     }

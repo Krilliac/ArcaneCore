@@ -23,6 +23,9 @@ public sealed class DisenchantLootTests
     private const uint GreenSword = 90101;
     private const uint NoDisenchantRing = 90102;
     private const uint PlainTrinket = 90103;
+    private const uint WhiteSword = 90104;
+    private const uint GreenPotion = 90105;
+    private const uint LegendaryBlade = 90106;
     private const uint LargeShard = 14344;
     private const uint NexusCrystal = 20725;
     private const uint SecondCrystal = 20726;
@@ -33,6 +36,9 @@ public sealed class DisenchantLootTests
         .. ItemTestData.Templates,
         new ItemTemplate { Entry = GreenSword, Class = 2, SubClass = 7, Name = "Green Sword", DisplayId = 10, Quality = 2, InventoryType = 21, DisenchantId = 48 },
         new ItemTemplate { Entry = NoDisenchantRing, Class = 4, SubClass = 0, Name = "Quest Ring", DisplayId = 11, Quality = 2, InventoryType = 11, DisenchantId = 49, Flags = DisenchantLoot.ItemFlagNoDisenchant },
+        new ItemTemplate { Entry = WhiteSword, Class = 2, SubClass = 7, Name = "White Sword", DisplayId = 16, Quality = 1, InventoryType = 21, DisenchantId = 48 },
+        new ItemTemplate { Entry = GreenPotion, Class = 0, SubClass = 0, Name = "Green Potion", DisplayId = 17, Quality = 2, DisenchantId = 48 },
+        new ItemTemplate { Entry = LegendaryBlade, Class = 2, SubClass = 7, Name = "Legendary Blade", DisplayId = 18, Quality = 5, InventoryType = 21, DisenchantId = 48 },
         new ItemTemplate { Entry = PlainTrinket, Class = 4, SubClass = 0, Name = "Plain Trinket", DisplayId = 12, Quality = 2, InventoryType = 12 },
         new ItemTemplate { Entry = LargeShard, Class = 7, Name = "Large Brilliant Shard", DisplayId = 13, Quality = 3, Stackable = 20 },
         new ItemTemplate { Entry = NexusCrystal, Class = 7, Name = "Nexus Crystal", DisplayId = 14, Quality = 4, Stackable = 10 },
@@ -106,6 +112,9 @@ public sealed class DisenchantLootTests
     [Theory]
     [InlineData(PlainTrinket)]       // no DisenchantID
     [InlineData(NoDisenchantRing)]   // ITEM_FLAG_NO_DISENCHANT 0x8000
+    [InlineData(WhiteSword)]         // quality common: vmangos clears DisenchantID at load (ObjectMgr.cpp:4183-4188)
+    [InlineData(LegendaryBlade)]     // quality above epic
+    [InlineData(GreenPotion)]        // class consumable, not weapon or armor (ObjectMgr.cpp:4189-4193)
     public void AnItemWithoutDisenchantLoot_OrFlaggedNoDisenchant_AnswersCantBeDisenchanted(uint entry)
     {
         using var rig = new Rig();

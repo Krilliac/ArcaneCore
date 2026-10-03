@@ -55,6 +55,9 @@ public sealed partial class SpellSystem
 
     public bool HasEffectHandler(SpellEffectName effect) => EffectHandlers.ContainsKey(effect);
 
+    /// <summary>The handler currently installed for <paramref name="effect"/>, or null; lets a module that shares an effect chain to the earlier one instead of replacing it.</summary>
+    public SpellEffectHandler? GetEffectHandler(SpellEffectName effect) => EffectHandlers.GetValueOrDefault(effect);
+
     /// <summary>
     /// Whether the handler of <paramref name="effect"/> is still the one this system installed itself
     /// (not replaced through <see cref="RegisterEffect"/>). Quest reward preflight models only the

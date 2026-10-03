@@ -22,6 +22,8 @@ literals. The characters module implements `ICharacterDataCleanup`. Provider the
 - **Equipped item check**: `EquippedItemCastCheck` is registered by `SpecialLootFeature` for every spell with `EquippedItemClass` (weapon/armor), passive spells excepted. If the class or item-mechanics lanes register
   an Equipment-phase check of their own the two agree; drop one.
 - **`CMSG_OPEN_ITEM`** opens lockboxes and clams when `SpecialLootFeature` is attached (it used to refuse them all).
+- **Effect handlers are one per effect** (`SpellSystem.RegisterEffect`, last registration wins). `FishingSpells` chains TRANS_DOOR to the handler installed before it (new `SpellSystem.GetEffectHandler`; `FishingService.Transmit` now returns false for a non-fishing object), so a ritual or trap lane that registers TRANS_DOOR first keeps working; one that registers after must chain the same way. `PickpocketSpells` and `DisenchantSpells` own effects 71 and 99 outright and throw if the effect already has a handler (`EffectHandlerSharingTests`).
+- **Disenchant quality/class gate** (`ObjectMgr.cpp:4183-4195`) is applied by `DisenchantLoot.HasDisenchantLoot` because the item template mapping does not clear `DisenchantID` at load.
 
 ## Shared files touched (narrow, additive)
 
