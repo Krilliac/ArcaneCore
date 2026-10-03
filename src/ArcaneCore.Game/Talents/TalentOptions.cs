@@ -1,5 +1,15 @@
 namespace ArcaneCore.Game.Talents;
 
+/// <summary>What the cost field of the "no talents spent" MSG_TALENT_WIPE_CONFIRM carries.</summary>
+public enum TalentEmptyConfirmCost
+{
+    /// <summary>The current respec price (vmangos SendTalentWipeConfirm(Empty), Player.cpp:8259-8265).</summary>
+    Current,
+
+    /// <summary>Zero (mangos-classic SkillHandler.cpp writes uint64(0) and uint32(0)).</summary>
+    Zero,
+}
+
 /// <summary>
 /// Talent tuning (configuration section <see cref="Section"/>). Every default reproduces vmangos
 /// (World.cpp:544-549 Rate.Talent, Rate.RespecBaseCost, Rate.RespecMultiplicativeCost,
@@ -39,4 +49,10 @@ public sealed class TalentOptions
     /// persisted by an actual respec.
     /// </summary>
     public bool IdempotentRespecDecay { get; set; }
+
+    /// <summary>
+    /// The cost field of the empty confirmation sent when a reset is refused (nothing spent, or not enough money). vmangos
+    /// fills it with the current price; mangos-classic sends zero. Default = vmangos, the primary reference.
+    /// </summary>
+    public TalentEmptyConfirmCost EmptyConfirmCost { get; set; } = TalentEmptyConfirmCost.Current;
 }

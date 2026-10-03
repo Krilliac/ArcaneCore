@@ -39,11 +39,26 @@ public sealed partial class TalentService : IDisposable
 
     public TalentOptions Options { get; }
 
+    /// <summary>Spell rank links, to find the higher ranks a respec must disable. Null: ranks are not followed (only the talents are removed).</summary>
+    public IRankChain? RankChain { get; set; }
+
+    /// <summary>Enumerates a player's known spells (the book itself only answers HasSpell). Null: higher ranks are not followed.</summary>
+    public Func<Player, IEnumerable<uint>>? KnownSpells { get; set; }
+
+    /// <summary>Persistence of the respec economy and the disabled set. Null: changes stay in memory.</summary>
+    public ITalentSink? Sink { get; set; }
+
     /// <summary>
     /// Raised after a talent rank spell was learned by any route (the pets lane re-casts the owner's talent auras on the
     /// pet here: mangos-classic SkillHandler.cpp:34).
     /// </summary>
     public event Action<Player>? TalentLearned;
+
+    /// <summary>
+    /// Raised after a successful <see cref="ResetTalents"/> (the pets lane removes the hunter pet here: vmangos
+    /// Player.cpp:4146 RemovePet(PET_SAVE_REAGENTS)).
+    /// </summary>
+    public event Action<Player>? TalentsReset;
 
     /// <summary>The talent state of a player (created empty on first use).</summary>
     public PlayerTalentState StateOf(Player player)
@@ -85,7 +100,7 @@ public sealed partial class TalentService : IDisposable
             player.Level, UsedPoints(player), Options.PointsRate, resetIfNeed, player.Security >= AccountSecurity.Administrator);
         if (decision.Reset)
         {
-            ResetTalentSpells(player);
+            ResetTalents(player, noCost: true);
         }
 
         if (decision.FreePoints is uint free)
@@ -180,6 +195,7 @@ public sealed partial class TalentService : IDisposable
 
         public void AfterLearn(Player player, uint spellId)
         {
+            owner.ClearDisabled(player, spellId);   // any learn of a hidden spell un-hides it (vmangos AddSpell, Player.cpp:3560-3585)
             if (!owner.Catalog.TryGetRankPosition(spellId, out _))
             {
                 return;
@@ -192,6 +208,7 @@ public sealed partial class TalentService : IDisposable
                 owner.Spells.CastSpell(player, spellId, SpellCastTargets.ForSelf(), triggered: true);
             }
 
+            owner.ReEnableHigherRanks(player, spellId);
             owner.TalentLearned?.Invoke(player);
         }
 
