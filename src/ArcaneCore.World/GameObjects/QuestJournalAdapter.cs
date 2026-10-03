@@ -4,9 +4,12 @@ using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
+using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.World.Npc;
+using ArcaneCore.World.Social;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.GameObjects;
 
@@ -20,37 +23,36 @@ internal sealed class QuestJournalAdapter(IServiceProvider services, WorldRuntim
 {
     private QuestNpcServices? Quests => services.GetService<QuestNpcFeature>()?.Services;
 
+    /// <summary>
+    /// vmangos Player::HasQuestForItem over the quest feature's journal (the raid-group rule needs the groups).
+    /// Fails closed: when the social feature is registered but not attached the raid fact is unknown, so the
+    /// item is not offered (logged), rather than showing quest items a raid member must not see.
+    /// </summary>
     public bool NeedsQuestItem(Player player, uint itemId)
+        => Quests is { } quests && InRaidGroup(player) is { } inRaid && quests.HasQuestForItem(player, itemId, inRaid);
+
+    /// <summary>True in a raid group; false when grouped otherwise or without the social feature; null when unknown.</summary>
+    private bool? InRaidGroup(Player player)
     {
-        if (Quests is not { } quests || quests.StateOf(player) is not { Loaded: true } state)
+        if (services.GetService<SocialFeature>() is not { } social)
         {
-            return false;
+            return false; // no social feature, so no groups exist
         }
 
-        foreach ((uint questId, QuestStatusData data) in state.Quests.Statuses)
+        SocialContext context;
+        try
         {
-            if (data.Status != QuestStatus.Incomplete || quests.Quests.Get(questId) is not { } quest)
-            {
-                continue;
-            }
-
-            for (int i = 0; i < QuestConstants.ObjectivesCount; i++)
-            {
-                if (quest.ReqItemId[i] == itemId && quest.ReqItemCount[i] > player.Inventory.GetItemCount(itemId, inBankAlso: true))
-                {
-                    return true;
-                }
-
-                if (quest.ReqSourceId[i] == itemId && quest.ReqSourceCount[i] > player.Inventory.GetItemCount(itemId, inBankAlso: true))
-                {
-                    return true;
-                }
-            }
+            context = social.Context;
+        }
+        catch (InvalidOperationException ex)
+        {
+            services.GetService<ILoggerFactory>()?.CreateLogger<QuestJournalAdapter>()
+                .LogWarning(ex, "Quest item visibility for {Player} unknown: social feature not attached", player.Guid);
+            return null;
         }
 
-        return false;
+        return context.Groups.GetGroup(player.Guid)?.IsRaid == true;
     }
-
     public bool IsQuestIncomplete(Player player, uint questId)
         => Quests?.StateOf(player) is { Loaded: true } state && state.Quests.GetStatus(questId) == QuestStatus.Incomplete;
 

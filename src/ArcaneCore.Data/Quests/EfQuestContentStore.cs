@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.World.GameObjects;
 using ArcaneCore.Kernel.Quests;
 using Microsoft.EntityFrameworkCore;
 
@@ -19,6 +20,17 @@ public sealed class EfQuestContentStore(WorldDbContext db) : IQuestContentStore
             .OrderBy(r => r.Id).ThenBy(r => r.Quest)
             .Select(r => new CreatureQuestRelation { Id = r.Id, Quest = r.Quest })
             .ToListAsync(cancellationToken).ConfigureAwait(false);
-        return new QuestContent(templates, starters, enders);
+
+        // The game object relations live in the game object world module (gameobject_questrelation /
+        // gameobject_involvedrelation, vmangos GetGOQuestRelationsMapBounds / GetGOQuestInvolvedRelationsMapBounds).
+        List<CreatureQuestRelation> goStarters = await db.Set<GameObjectQuestStarterRow>().AsNoTracking()
+            .OrderBy(r => r.Id).ThenBy(r => r.Quest)
+            .Select(r => new CreatureQuestRelation { Id = r.Id, Quest = r.Quest })
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<CreatureQuestRelation> goEnders = await db.Set<GameObjectQuestEnderRow>().AsNoTracking()
+            .OrderBy(r => r.Id).ThenBy(r => r.Quest)
+            .Select(r => new CreatureQuestRelation { Id = r.Id, Quest = r.Quest })
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        return new QuestContent(templates, starters, enders) { GameObjectStarters = goStarters, GameObjectEnders = goEnders };
     }
 }

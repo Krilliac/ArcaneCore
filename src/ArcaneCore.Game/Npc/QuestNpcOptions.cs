@@ -1,3 +1,5 @@
+using ArcaneCore.Game.Quests;
+
 namespace ArcaneCore.Game.Npc;
 
 /// <summary>
@@ -32,6 +34,18 @@ public sealed class QuestNpcOptions
 
     /// <summary>MaxPlayerLevel (quest XP turns into money at this level).</summary>
     public uint MaxPlayerLevel { get; set; } = 60;
+
+    /// <summary>
+    /// Quests:XpSource. <see cref="QuestXpSource.Auto"/> (default) uses the RewXP column when the loaded quests have one
+    /// (vmangos data) and derives the experience from RewMoneyMaxLevel otherwise (classic-db data).
+    /// </summary>
+    public QuestXpSource XpSource { get; set; } = QuestXpSource.Auto;
+
+    /// <summary>
+    /// Quests.IgnoreRaid (vmangos CONFIG_BOOL_QUEST_IGNORE_RAID, default off): every quest counts as allowed in raid groups
+    /// (<c>Quest::IsAllowedInRaid</c>); otherwise raid group members get no kill credit and no quest drops for ordinary quests.
+    /// </summary>
+    public bool IgnoreRaid { get; set; }
 
     /// <summary>Rate.XP.Quest.</summary>
     public float RateXpQuest { get; set; } = 1.0f;

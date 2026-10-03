@@ -52,7 +52,7 @@ public sealed partial class QuestNpcServices
         {
             if (data.Status != QuestStatus.Incomplete || !quest.HasSpecialFlag(QuestSpecialFlags.KillOrCast)
                 || (talking && !quest.HasSpecialFlag(QuestSpecialFlags.ExplorationOrEvent))
-                || (kill && inRaidGroup && quest.Template.Type != QuestTypeRaid)
+                || (kill && inRaidGroup && !IsAllowedInRaid(quest))
                 || (!originalCaster && !quest.HasFlag(QuestFlags.Sharable)))
             {
                 continue;

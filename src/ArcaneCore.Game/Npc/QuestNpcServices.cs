@@ -248,9 +248,19 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
         float dx = npc.X - player.X;
         float dy = npc.Y - player.Y;
         float dz = npc.Z - player.Z;
+        float distSq = (dx * dx) + (dy * dy) + (dz * dz);
+        if (npc.IsGameObject)
+        {
+            // vmangos GameObject::IsAtInteractDistance (GameObject.cpp:2584-2609), no-bounds branch:
+            // GetDistance3dToCenter <= GetInteractionDistance() (GameObjectDefines.h:759-785; 5.55556 for quest givers).
+            // The display-bounds oriented box branch is a documented limit (see GameObjectMapSystem.InteractionDistanceFor).
+            float reach = npc.GameObjectInteractionDistance;
+            return float.IsFinite(reach) && reach >= 0 && distSq <= reach * reach ? npc : null;
+        }
+
         // Object.cpp IsWithinDist: strict 3D radius-adjusted comparison.
         float range = InteractionDistance + npc.BoundingRadius + player.BoundingRadius;
-        return float.IsFinite(range) && range > 0 && (dx * dx) + (dy * dy) + (dz * dz) < range * range ? npc : null;
+        return float.IsFinite(range) && range > 0 && distSq < range * range ? npc : null;
     }
 
     /// <summary>A creature the player can see (vmangos GetObjectByTypeMask(TYPEMASK_CREATURE…)), without interaction checks.</summary>

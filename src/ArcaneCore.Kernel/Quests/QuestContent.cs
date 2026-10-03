@@ -22,6 +22,16 @@ public sealed record QuestContent(
 {
     /// <summary>No quests (no world-content database configured for quests).</summary>
     public static QuestContent Empty { get; } = new([], [], []);
+
+    /// <summary>
+    /// <c>gameobject_questrelation</c>: the game object entry <see cref="CreatureQuestRelation.Id"/> starts
+    /// <see cref="CreatureQuestRelation.Quest"/> (same row shape as the creature relations; the two entry
+    /// spaces are independent, vmangos keeps separate GO and creature relation maps).
+    /// </summary>
+    public IReadOnlyList<CreatureQuestRelation> GameObjectStarters { get; init; } = [];
+
+    /// <summary><c>gameobject_involvedrelation</c>: the game object entry ends the quest.</summary>
+    public IReadOnlyList<CreatureQuestRelation> GameObjectEnders { get; init; } = [];
 }
 
 /// <summary>

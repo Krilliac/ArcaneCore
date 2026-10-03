@@ -47,6 +47,11 @@ public enum TrainerType : byte
 /// <param name="IsNotSelectable">UNIT_FLAG_NOT_SELECTABLE is set.</param>
 /// <param name="GossipMenuId">creature_template.gossip_menu_id (vmangos GetDefaultGossipMenuId).</param>
 /// <param name="FactionId">Faction (Faction.dbc id) of the creature's faction template: reputation-ranked vendor items without their own faction use it.</param>
+/// <param name="IsGameObject">
+/// The source is a quest-giving game object (GAMEOBJECT_TYPE_QUESTGIVER), not a creature: <see cref="Entry"/> is a
+/// gameobject_template entry, quest relations come from the game object maps and <see cref="GossipMenuId"/> is the
+/// object's <c>questgiver.gossipID</c> (vmangos GameObject::GetDefaultGossipMenuId).
+/// </param>
 public sealed record NpcInfo(
     ObjectGuid Guid,
     uint Entry,
@@ -66,7 +71,9 @@ public sealed record NpcInfo(
     byte TrainerClass = 0,
     byte TrainerRace = 0,
     uint TrainerSpell = 0,
-    uint FactionId = 0);
+    uint FactionId = 0,
+    bool IsGameObject = false,
+    float GameObjectInteractionDistance = 0);
 
 /// <summary>
 /// Finds a creature in the player's map (owned by the creatures area). Returns null when no
@@ -140,6 +147,24 @@ public interface IItemService
 
     /// <summary>Store new items and tell the client (vmangos StoreNewItem + SendNewItem). False if it could not.</summary>
     bool StoreNewItem(Player player, uint itemId, uint count);
+
+    /// <summary>
+    /// The bag byte CMSG_BUY_ITEM_IN_SLOT's bag GUID names (vmangos HandleBuyItemInSlotOpcode,
+    /// ItemHandler.cpp:661-683): the player's own GUID is the backpack side, otherwise the slot of the
+    /// worn bag with that GUID, null when there is none. The default knows only the backpack.
+    /// </summary>
+    byte? FindBagSlot(Player player, ObjectGuid bagGuid) => bagGuid == player.Guid ? Items.InventorySlots.Bag0 : null;
+
+    /// <summary>
+    /// The placement checks of vmangos Player::BuyItemFromVendor (Player.cpp:18455-18496) for a client
+    /// position: an inventory position must be storable there, an equipment position needs a count of
+    /// one and a legal slot, anything else does not go to that slot. The default ignores the position
+    /// (CMSG_BUY_ITEM semantics).
+    /// </summary>
+    InventoryResult CanStoreNewItemAt(Player player, uint itemId, uint count, byte bag, byte slot) => CanStoreNewItem(player, itemId, count);
+
+    /// <summary>Store or equip the bought items at the position <see cref="CanStoreNewItemAt"/> accepted and tell the client. The default ignores the position.</summary>
+    bool StoreNewItemAt(Player player, uint itemId, uint count, byte bag, byte slot) => StoreNewItem(player, itemId, count);
 
     /// <summary>vmangos Player::DestroyItemCount(item, count, update=true).</summary>
     void DestroyItemCount(Player player, uint itemId, uint count);

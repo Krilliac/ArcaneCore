@@ -67,6 +67,49 @@ public sealed class QuestProgressionTests
         Assert.Equal(xp, plan.Experience);
     }
 
+    [Theory]
+    [InlineData(1, 40u)]
+    [InlineData(8, 24u)]
+    [InlineData(10, 8u)]
+    [InlineData(12, 4u)]
+    public void QuestXp_ForClassicDbData_IsDerivedFromRewMoneyMaxLevel(byte playerLevel, uint xp)
+    {
+        // classic-db has no RewXP column: cmangos derives the experience from RewMoneyMaxLevel (QuestDef.cpp:171-206).
+        var quest = new QuestTemplate { Entry = 910008, Method = 2, QuestLevel = 1, RewMoneyMaxLevel = 24 };
+        using var kit = new Kit([quest], level: playerLevel);
+        Assert.True(kit.Accept(910008));
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910008, 0, out QuestRewardPlan? plan));
+        Assert.Equal(xp, plan.Experience);
+    }
+
+    [Fact]
+    public void QuestXp_InAVmangosDataset_StaysTheRewXpColumn_EvenForAQuestThatOnlyHasMoney()
+    {
+        // Auto resolves per dataset: one quest with RewXP makes the whole set column-based, so a quest with only
+        // RewMoneyMaxLevel earns no XP there (vmangos Quest::XPValue reads RewXP only).
+        var withColumn = new QuestTemplate { Entry = 910009, Method = 2, QuestLevel = 1, RewXP = 100 };
+        var moneyOnly = new QuestTemplate { Entry = 910010, Method = 2, QuestLevel = 1, RewMoneyMaxLevel = 24 };
+        using var kit = new Kit([withColumn, moneyOnly]);
+        Assert.True(kit.Accept(910009));
+        Assert.True(kit.Accept(910010));
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910009, 0, out QuestRewardPlan? column));
+        Assert.Equal(100u, column.Experience);
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910010, 0, out QuestRewardPlan? money));
+        Assert.Equal(0u, money.Experience);
+    }
+
+    [Theory]
+    [InlineData(QuestXpSource.Derived, 40u)]
+    [InlineData(QuestXpSource.RewXpColumn, 0u)]
+    public void QuestXp_TheSourceCanBeForcedByConfiguration(QuestXpSource source, uint xp)
+    {
+        var quest = new QuestTemplate { Entry = 910011, Method = 2, QuestLevel = 1, RewMoneyMaxLevel = 24 };
+        using var kit = new Kit([quest], configure: o => o.XpSource = source);
+        Assert.True(kit.Accept(910011));
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910011, 0, out QuestRewardPlan? plan));
+        Assert.Equal(xp, plan.Experience);
+    }
+
     [Fact]
     public void QuestXp_AppliesRateXpQuest()
     {
@@ -171,8 +214,10 @@ public sealed class QuestProgressionTests
     }
 
     [Fact]
-    public void SourceItem_ThatIsAlsoRequired_IsKeptOnAbandon()
+    public void SourceItem_ThatIsAlsoRequired_IsDestroyedOnAbandon()
     {
+        // vmangos TakeOrReplaceQuestStartItems (Player.cpp:13696-13759) destroys SrcItemCount whenever the player owns it;
+        // there is no exception for items the quest also requires (the earlier "kept" rule was not in vmangos).
         var quest = new QuestTemplate { Entry = 910021, Method = 2, SrcItemId = ItemTestData.ToughJerky, SrcItemCount = 3,
             ReqItemId1 = ItemTestData.ToughJerky, ReqItemCount1 = 3 };
         using var kit = new Kit([quest]);
@@ -180,11 +225,11 @@ public sealed class QuestProgressionTests
         Assert.Equal(QuestStatus.Complete, kit.State.Quests.GetStatus(910021));
         Assert.DoesNotContain(kit.Session.Sent, p => p.Opcode == WorldOpcode.SmsgQuestupdateAddItem);
         Assert.True(kit.Services.AbandonQuest(kit.Player, 0));
-        Assert.Equal(3u, kit.Player.Inventory.GetItemCount(ItemTestData.ToughJerky));
+        Assert.Equal(0u, kit.Player.Inventory.GetItemCount(ItemTestData.ToughJerky));
     }
 
     [Fact]
-    public void SourceItem_WithAFullBackpack_RejectsAcceptWithAnEquipError()
+    public void SourceItem_WithAFullBackpack_RejectsAcceptWithQuestFailedInventoryFull()
     {
         var quest = new QuestTemplate { Entry = 910023, Method = 2, SrcItemId = ItemTestData.Hearthstone };
         using var kit = new Kit([quest]);
@@ -198,7 +243,11 @@ public sealed class QuestProgressionTests
         Assert.False(kit.Accept(910023));
         Assert.Equal(QuestStatus.None, kit.State.Quests.GetStatus(910023));
         Assert.Empty(kit.Sink.Rows);
-        Assert.Contains(InventoryResult.InventoryFull, ItemTestData.EquipErrors(kit.Session));
+        // CanGiveQuestSourceItemIfNeed (Player.cpp:13643-13676) answers EQUIP_ERR_INVENTORY_FULL with
+        // SMSG_QUESTGIVER_QUEST_FAILED (quest, INVALIDREASON_QUEST_FAILED_INVENTORY_FULL), not an equip error.
+        Assert.Empty(ItemTestData.EquipErrors(kit.Session));
+        Assert.Equal([0xC7, 0xE2, 0x0D, 0x00, 4, 0, 0, 0],
+            Assert.Single(kit.Session.Sent, p => p.Opcode == WorldOpcode.SmsgQuestgiverQuestFailed).Payload);
     }
 
     [Fact]

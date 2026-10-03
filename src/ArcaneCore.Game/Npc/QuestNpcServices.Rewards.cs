@@ -182,6 +182,9 @@ public sealed partial class QuestNpcServices
 
         Send(player, WorldOpcode.SmsgQuestgiverQuestComplete,
             QuestPackets.Complete(quest, plan.Experience, plan.SummaryMoney));
+
+        // vmangos HandleQuestgiverChooseRewardOpcode sends the next quest of the chain right after RewardQuest.
+        OfferNextQuest(player, plan.QuestGiver, quest);
     }
 
     /// <summary>
@@ -213,7 +216,7 @@ public sealed partial class QuestNpcServices
             && player.Inventory.IsLoaded && player.Inventory.GuidAllocator is not null
             && state.Quests.FindSlot(questId) < QuestConstants.MaxQuestLogSize
             && InteractableNpc(player, guid, NpcFlags.QuestGiver) is { } npc
-            && Quests.EndersOf(npc.Entry).Contains(questId);
+            && EndersOf(npc).Contains(questId);
     }
 
     /// <summary>
@@ -278,7 +281,8 @@ public sealed partial class QuestNpcServices
     {
         experience = 0;
         levelAfter = player.Level;
-        if (quest.Template.RewXP == 0)
+        QuestXpSource xpSource = QuestExperienceRules.Resolve(Options.XpSource, Quests.HasRewXpColumn);
+        if (QuestExperienceRules.FullXp(quest.Template, quest.QuestLevel, xpSource) <= 0)
         {
             return true;
         }
@@ -293,7 +297,7 @@ public sealed partial class QuestNpcServices
             return true;
         }
 
-        float scaled = quest.XpValue(player.Level) * Options.RateXpQuest;
+        float scaled = QuestExperienceRules.Xp(quest.Template, quest.QuestLevel, player.Level, xpSource) * Options.RateXpQuest;
         if (!float.IsFinite(scaled) || scaled < 0 || scaled >= uint.MaxValue)
         {
             return false;

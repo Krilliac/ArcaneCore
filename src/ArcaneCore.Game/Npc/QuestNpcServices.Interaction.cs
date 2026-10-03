@@ -23,7 +23,7 @@ public sealed partial class QuestNpcServices
         DialogStatus status = DialogStatus.None;
         if (!npc.IsHostile && (npc.NpcFlags & NpcFlags.QuestGiver) != 0)
         {
-            foreach (uint id in Quests.EndersOf(npc.Entry))
+            foreach (uint id in EndersOf(npc))
             {
                 if (Quests.Get(id) is not { IsActive: true } quest)
                 {
@@ -43,7 +43,7 @@ public sealed partial class QuestNpcServices
                 }
             }
 
-            foreach (uint id in Quests.StartersOf(npc.Entry))
+            foreach (uint id in StartersOf(npc))
             {
                 if (Quests.Get(id) is not { } quest || !CanTakeQuest(state, quest, [], visibilityOnly: true)
                     || (Options.HighLevelHideDiff >= 0 && (long)player.Level + Options.HighLevelHideDiff < quest.MinLevel))
@@ -74,7 +74,7 @@ public sealed partial class QuestNpcServices
     {
         if (Ready(player) is null || InteractableNpc(player, guid, NpcFlags.QuestGiver) is not { } npc
             || Quests.Get(questId) is not { IsActive: true } quest
-            || !(Quests.StartersOf(npc.Entry).Contains(questId) || Quests.EndersOf(npc.Entry).Contains(questId)))
+            || !(StartersOf(npc).Contains(questId) || EndersOf(npc).Contains(questId)))
         {
             return;
         }
@@ -83,7 +83,13 @@ public sealed partial class QuestNpcServices
             id => Deps.Items?.GetItem(id)?.DisplayId ?? player.Inventory.Templates.Find(id)?.DisplayId ?? 0));
     }
 
-    /// <summary>Returns true only after creating a journal entry and handing its delta to persistence.</summary>
+    /// <summary>
+    /// CMSG_QUESTGIVER_ACCEPT_QUEST (vmangos HandleQuestgiverAcceptQuestOpcode, QuestHandler.cpp:108-196). A
+    /// refusal from CanTakeQuest sends SMSG_QUESTGIVER_QUEST_INVALID with the reason of the first failing
+    /// check; a full log sends SMSG_QUESTLOG_FULL; a source item that cannot be given sends
+    /// SMSG_QUESTGIVER_QUEST_FAILED. The gossip window closes in every case. Returns true only after
+    /// creating a journal entry and handing its delta to persistence.
+    /// </summary>
     public bool AcceptQuest(Player player, ObjectGuid guid, uint questId)
     {
         if (Ready(player) is not { } state)
@@ -93,34 +99,43 @@ public sealed partial class QuestNpcServices
 
         bool accepted = false;
         if (InteractableNpc(player, guid, NpcFlags.QuestGiver) is { } npc && Quests.Get(questId) is { } quest
-            && Quests.StartersOf(npc.Entry).Contains(questId) && CanTakeQuest(state, quest, [])
-            && (state.Quests.Get(questId)?.Rewarded != true || quest.IsRepeatable) && AcceptableQuest(quest))
+            && StartersOf(npc).Contains(questId))
         {
-            int slot = state.Quests.FindSlot(0);
-            if (slot == QuestConstants.MaxQuestLogSize)
+            if (RefuseTakeQuest(state, quest, []) is { } refusal)
             {
-                player.Session.Send(WorldOpcode.SmsgQuestlogFull, []);
-            }
-            else if (CanReceiveSourceItem(player, quest))
-            {
-                QuestStatusData data = state.Quests.GetOrAdd(questId);
-                data.Status = QuestStatus.Incomplete;
-                data.Explored = false;
-                Array.Clear(data.CreatureOrGOCount);
-                Array.Clear(data.ItemCount);
-                data.TimerEndUnix = quest.HasSpecialFlag(QuestSpecialFlags.Timed) ? checked(UnixNow + quest.Template.LimitTime) : 0;
-                if (data.TimerEndUnix != 0)
+                if (refusal.Message is { } reason)
                 {
-                    state.Quests.AddTimed(questId);
+                    Send(player, WorldOpcode.SmsgQuestgiverQuestInvalid, QuestPackets.QuestInvalid(reason));
                 }
+            }
+            else if ((state.Quests.Get(questId)?.Rewarded != true || quest.IsRepeatable) && AcceptableQuest(quest))
+            {
+                int slot = state.Quests.FindSlot(0);
+                if (slot == QuestConstants.MaxQuestLogSize)
+                {
+                    player.Session.Send(WorldOpcode.SmsgQuestlogFull, []);
+                }
+                else if (CanReceiveSourceItem(player, quest))
+                {
+                    QuestStatusData data = state.Quests.GetOrAdd(questId);
+                    data.Status = QuestStatus.Incomplete;
+                    data.Explored = false;
+                    Array.Clear(data.CreatureOrGOCount);
+                    Array.Clear(data.ItemCount);
+                    data.TimerEndUnix = quest.HasSpecialFlag(QuestSpecialFlags.Timed) ? checked(UnixNow + quest.Template.LimitTime) : 0;
+                    if (data.TimerEndUnix != 0)
+                    {
+                        state.Quests.AddTimed(questId);
+                    }
 
-                state.Quests.SetSlot(slot, questId, (uint)Math.Clamp(data.TimerEndUnix, 0, uint.MaxValue));
-                state.Quests.MarkChanged(questId);
-                GiveSourceItem(player, quest);
-                AdjustRequiredItemCounts(state, quest, data);
-                RefreshCompletion(state, quest, data, slot);
-                Flush(state);
-                accepted = true;
+                    state.Quests.SetSlot(slot, questId, (uint)Math.Clamp(data.TimerEndUnix, 0, uint.MaxValue));
+                    state.Quests.MarkChanged(questId);
+                    GiveSourceItem(player, quest);
+                    AdjustRequiredItemCounts(state, quest, data);
+                    RefreshCompletion(state, quest, data, slot);
+                    Flush(state);
+                    accepted = true;
+                }
             }
         }
 
@@ -128,6 +143,11 @@ public sealed partial class QuestNpcServices
         return accepted;
     }
 
+    /// <summary>
+    /// CMSG_QUESTLOG_REMOVE_QUEST (vmangos RemoveQuestAtSlot, Player.cpp:13033-13066): the source item is taken
+    /// back first (and the abandon refused if it cannot come off), quest-bound required items are destroyed,
+    /// then the quest leaves the log.
+    /// </summary>
     public bool AbandonQuest(Player player, byte slot)
     {
         if (Ready(player) is not { } state || slot >= QuestConstants.MaxQuestLogSize
@@ -137,14 +157,42 @@ public sealed partial class QuestNpcServices
             return false;
         }
 
+        if (!TakeOrReplaceQuestStartItems(player, quest))
+        {
+            return false;
+        }
+
+        DestroyQuestBoundRequiredItems(player, quest);
         data.Status = QuestStatus.None;
         data.TimerEndUnix = 0;
         state.Quests.RemoveTimed(quest.Id);
         state.Quests.SetSlot(slot, 0);
         state.Quests.MarkChanged(quest.Id);
         Flush(state);
-        TakeSourceItem(player, quest);
         return true;
+    }
+
+    /// <summary>CMSG_QUESTGIVER_CANCEL (vmangos HandleQuestgiverCancel, QuestHandler.cpp:314-317): CloseGossip.</summary>
+    public void QuestgiverCancel(Player player)
+    {
+        if (Ready(player) is not null)
+        {
+            CloseGossip(player);
+        }
+    }
+
+    /// <summary>
+    /// CMSG_QUESTLOG_SWAP_QUEST (vmangos HandleQuestLogSwapQuest, QuestHandler.cpp:319-325): equal or
+    /// out-of-range slots are ignored; otherwise the three slot fields trade places.
+    /// </summary>
+    public void SwapQuestSlots(Player player, byte slot1, byte slot2)
+    {
+        if (Ready(player) is not { } state || slot1 == slot2 || slot1 >= QuestConstants.MaxQuestLogSize || slot2 >= QuestConstants.MaxQuestLogSize)
+        {
+            return;
+        }
+
+        state.Quests.SwapSlots(slot1, slot2);
     }
 
     // Source spells, loot-source counters, party confirmation, PvP activation and auto rewards

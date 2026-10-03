@@ -11,7 +11,7 @@ public sealed partial class QuestNpcServices
     private void PrepareQuestMenu(PlayerNpcState state, NpcInfo npc)
     {
         state.Menu.ClearQuestMenu();
-        foreach (uint id in Quests.EndersOf(npc.Entry))
+        foreach (uint id in EndersOf(npc))
         {
             if (Quests.Get(id) is not { IsActive: true } quest)
             {
@@ -31,7 +31,7 @@ public sealed partial class QuestNpcServices
             }
         }
 
-        foreach (uint id in Quests.StartersOf(npc.Entry))
+        foreach (uint id in StartersOf(npc))
         {
             if (Quests.Get(id) is { } quest && CanTakeQuest(state, quest, []))
             {
@@ -41,45 +41,122 @@ public sealed partial class QuestNpcServices
     }
 
     private bool CanTakeQuest(PlayerNpcState state, Quest quest, HashSet<uint> visited, bool visibilityOnly = false)
+        => RefuseTakeQuest(state, quest, visited, visibilityOnly) is null;
+
+    /// <summary>A refused CanTakeQuest: the message vmangos sends (SendCanTakeQuestResponse), or none.</summary>
+    private readonly record struct TakeRefusal(QuestInvalidReason? Message);
+
+    private static readonly TakeRefusal Silent = new(null);
+
+    private static TakeRefusal Refused(QuestInvalidReason reason) => new(reason);
+
+    /// <summary>
+    /// vmangos Player::CanTakeQuest (Player.cpp:12565-12577): null when the quest can be taken, otherwise
+    /// the first failing check in vmangos's order, with the message its SatisfyQuest* sends. MaxLevel and
+    /// IsActive refuse silently. <paramref name="visibilityOnly"/> skips the level and timed checks (the
+    /// quest-giver status icon applies its own level handling).
+    /// </summary>
+    private TakeRefusal? RefuseTakeQuest(PlayerNpcState state, Quest quest, HashSet<uint> visited, bool visibilityOnly = false)
     {
         Player player = state.Quests.Player;
         QuestTemplate t = quest.Template;
-        if (!visited.Add(quest.Id) || !quest.IsActive || state.Quests.GetStatus(quest.Id) != QuestStatus.None
-            || (!visibilityOnly && (player.Level < t.MinLevel || (t.MaxLevel != 0 && player.Level > t.MaxLevel)))
-            || (t.RequiredClasses != 0 && (t.RequiredClasses & Mask((byte)player.Class)) == 0)
-            || (t.RequiredRaces != 0 && (t.RequiredRaces & Mask((byte)player.Race)) == 0)
-            || (t.RequiredSkill != 0 && (Deps.Spells is not { } skills || skills.GetSkillValue(player, t.RequiredSkill) < t.RequiredSkillValue))
-            || (t.RequiredCondition != 0 && !(Deps.Conditions?.IsSatisfied(t.RequiredCondition, player, null) ?? false))
-            || (!visibilityOnly && quest.HasSpecialFlag(QuestSpecialFlags.Timed) && state.Quests.TimedQuests.Count > 0)
-            || (t.RequiredMinRepFaction != 0 && (Deps.Reputation is not { } minRep
+        if (!visited.Add(quest.Id))
+        {
+            return Silent;
+        }
+
+        if (!visibilityOnly && t.MaxLevel != 0 && t.MaxLevel < player.Level)
+        {
+            return Silent;
+        }
+
+        // SatisfyQuestStatus (13532-13545)
+        if (state.Quests.GetStatus(quest.Id) != QuestStatus.None)
+        {
+            return Refused(QuestInvalidReason.AlreadyOn);
+        }
+
+        // SatisfyQuestExclusiveGroup (13560-13592)
+        if (t.ExclusiveGroup > 0 && Quests.ExclusiveGroup(t.ExclusiveGroup).Any(id => id != quest.Id
+            && state.Quests.GetStatus(id) is QuestStatus.Incomplete or QuestStatus.Complete))
+        {
+            return Refused(QuestInvalidReason.DontHaveReq);
+        }
+
+        // SatisfyQuestClass (13473-13489), SatisfyQuestRace (13491-13507)
+        if (t.RequiredClasses != 0 && (t.RequiredClasses & Mask((byte)player.Class)) == 0)
+        {
+            return Refused(QuestInvalidReason.DontHaveReq);
+        }
+
+        if (t.RequiredRaces != 0 && (t.RequiredRaces & Mask((byte)player.Race)) == 0)
+        {
+            return Refused(QuestInvalidReason.WrongRace);
+        }
+
+        // SatisfyQuestLevel (13319-13330): the message is DONT_HAVE_REQ, not LOW_LEVEL.
+        if (!visibilityOnly && player.Level < t.MinLevel)
+        {
+            return Refused(QuestInvalidReason.DontHaveReq);
+        }
+
+        // SatisfyQuestSkill (13285-13303), SatisfyQuestCondition (13305-13317)
+        if (t.RequiredSkill != 0 && (Deps.Spells is not { } skills || skills.GetSkillValue(player, t.RequiredSkill) < t.RequiredSkillValue))
+        {
+            return Refused(QuestInvalidReason.DontHaveReq);
+        }
+
+        if (t.RequiredCondition != 0 && !(Deps.Conditions?.IsSatisfied(t.RequiredCondition, player, null) ?? false))
+        {
+            return Refused(QuestInvalidReason.DontHaveReq);
+        }
+
+        // SatisfyQuestReputation (13509-13530)
+        if ((t.RequiredMinRepFaction != 0 && (Deps.Reputation is not { } minRep
                 || minRep.GetReputation(player, t.RequiredMinRepFaction) < t.RequiredMinRepValue))
             || (t.RequiredMaxRepFaction != 0 && (Deps.Reputation is not { } maxRep
                 || maxRep.GetReputation(player, t.RequiredMaxRepFaction) >= t.RequiredMaxRepValue)))
         {
-            return false;
+            return Refused(QuestInvalidReason.DontHaveReq);
         }
 
-        if (t.ExclusiveGroup > 0 && Quests.ExclusiveGroup(t.ExclusiveGroup).Any(id => id != quest.Id
-            && state.Quests.GetStatus(id) is QuestStatus.Incomplete or QuestStatus.Complete))
-        {
-            return false;
-        }
-
-        if (quest.PrevChainQuests.Any(state.Quests.IsCurrent)
-            || (quest.NextQuestInChain != 0 && state.Quests.GetStatus(quest.NextQuestInChain) is QuestStatus.Incomplete or QuestStatus.Complete)
-            || quest.DependentBreadcrumbQuests.Any(id => state.Quests.Get(id) is { Rewarded: false,
-                Status: QuestStatus.Incomplete or QuestStatus.Complete or QuestStatus.Failed }))
-        {
-            return false;
-        }
-
+        // SatisfyQuestPreviousQuest (13345-13435)
         if (quest.PrevQuests.Count > 0 && !quest.PrevQuests.Any(signedId => PreviousQuestSatisfied(state, signedId)))
         {
-            return false;
+            return Refused(QuestInvalidReason.DontHaveReq);
         }
 
-        return quest.BreadcrumbForQuestId == 0 || (Quests.Get(quest.BreadcrumbForQuestId) is { } target
-            && CanTakeQuest(state, target, visited));
+        // SatisfyQuestTimed (13547-13558)
+        if (!visibilityOnly && quest.HasSpecialFlag(QuestSpecialFlags.Timed) && state.Quests.TimedQuests.Count > 0)
+        {
+            return Refused(QuestInvalidReason.OnlyOneTimed);
+        }
+
+        // SatisfyQuestNextChain (13594-13614), SatisfyQuestPrevChain (13616-13644)
+        if (quest.NextQuestInChain != 0 && state.Quests.GetStatus(quest.NextQuestInChain) is QuestStatus.Incomplete or QuestStatus.Complete)
+        {
+            return Refused(QuestInvalidReason.DontHaveReq);
+        }
+
+        if (quest.PrevChainQuests.Any(state.Quests.IsCurrent))
+        {
+            return Refused(QuestInvalidReason.DontHaveReq);
+        }
+
+        // SatisfyQuestBreadcrumbQuest (13437-13453), SatisfyQuestDependentBreadcrumbQuests (13455-13471)
+        if (quest.BreadcrumbForQuestId != 0 && !(Quests.Get(quest.BreadcrumbForQuestId) is { } target
+            && CanTakeQuest(state, target, visited)))
+        {
+            return Refused(QuestInvalidReason.DontHaveReq);
+        }
+
+        if (quest.DependentBreadcrumbQuests.Any(id => state.Quests.Get(id) is { Rewarded: false,
+            Status: QuestStatus.Incomplete or QuestStatus.Complete or QuestStatus.Failed }))
+        {
+            return Refused(QuestInvalidReason.DontHaveReq);
+        }
+
+        return quest.IsActive ? null : Silent;
     }
 
     private bool PreviousQuestSatisfied(PlayerNpcState state, int signedId)

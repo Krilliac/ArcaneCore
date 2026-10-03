@@ -11,6 +11,7 @@ using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Instances;
 using ArcaneCore.Data.Loot;
 using ArcaneCore.Data.Economy;
+using ArcaneCore.Data.Npc;
 using ArcaneCore.Data.Quests;
 using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Schema;
@@ -53,6 +54,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(QuestReputationRewardWorldModule), DatabaseComponent.World, QuestReputationRewardWorldModule.Version),
             (typeof(PlayerStatsDataModule), DatabaseComponent.World, PlayerStatsDataModule.Version),
             (typeof(CreatureBehaviourDataModule), DatabaseComponent.World, CreatureBehaviourDataModule.Version),
+            (typeof(ConditionsWorldModule), DatabaseComponent.World, ConditionsWorldModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),

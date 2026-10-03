@@ -12,6 +12,12 @@ public interface IItemTemplateStore
     IReadOnlyList<StartingItem> StartingItems(byte race, byte cls);
 
     int Count { get; }
+
+    /// <summary>
+    /// vmangos ObjectMgr::GetQuestStartingItemID (ObjectMgr.cpp:4224-4225, 6248-6256): the first item (lowest
+    /// entry) whose <c>startquest</c> is <paramref name="questId"/>, or 0.
+    /// </summary>
+    uint QuestStartingItem(uint questId) => 0;
 }
 
 /// <summary>An immutable in-memory <see cref="IItemTemplateStore"/> (ROADMAP: static content lives in memory).</summary>
@@ -19,11 +25,17 @@ public sealed class ItemTemplateStore : IItemTemplateStore
 {
     private readonly FrozenDictionary<uint, ItemTemplate> _templates;
     private readonly FrozenDictionary<(byte, byte), StartingItem[]> _startingItems;
+    private readonly FrozenDictionary<uint, uint> _questStartingItems;
 
     public ItemTemplateStore(IEnumerable<ItemTemplate> templates, IEnumerable<StartingItem>? startingItems = null)
     {
         ArgumentNullException.ThrowIfNull(templates);
         _templates = templates.ToFrozenDictionary(t => t.Entry, t => t.Normalized());
+        _questStartingItems = _templates.Values
+            .Where(t => t.StartQuest != 0)
+            .OrderBy(t => t.Entry)
+            .GroupBy(t => t.StartQuest)
+            .ToFrozenDictionary(g => g.Key, g => g.First().Entry);
         _startingItems = (startingItems ?? [])
             .GroupBy(s => (s.Race, s.Class))
             .ToFrozenDictionary(g => g.Key, g => g.ToArray());
@@ -34,6 +46,8 @@ public sealed class ItemTemplateStore : IItemTemplateStore
     public int Count => _templates.Count;
 
     public ItemTemplate? Find(uint entry) => _templates.GetValueOrDefault(entry);
+
+    public uint QuestStartingItem(uint questId) => _questStartingItems.GetValueOrDefault(questId);
 
     public IReadOnlyList<StartingItem> StartingItems(byte race, byte cls)
         => _startingItems.TryGetValue((race, cls), out StartingItem[]? items) ? items : [];

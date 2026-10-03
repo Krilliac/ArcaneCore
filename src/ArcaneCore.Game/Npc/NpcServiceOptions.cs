@@ -74,7 +74,7 @@ public sealed class NpcTemplateMetadataLookup : ICreatureLookup
     public NpcInfo? Find(Player player, ObjectGuid guid)
     {
         NpcInfo? npc = _inner.Find(player, guid);
-        if (npc is null || !_byEntry.TryGetValue(npc.Entry, out NpcTemplateMetadata? meta))
+        if (npc is null || npc.IsGameObject || !_byEntry.TryGetValue(npc.Entry, out NpcTemplateMetadata? meta))
         {
             return npc;
         }

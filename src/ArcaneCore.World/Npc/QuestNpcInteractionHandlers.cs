@@ -29,6 +29,8 @@ public sealed class QuestNpcInteractionHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgQuestgiverCompleteQuest, Complete);
         table.OnWorld(WorldOpcode.CmsgQuestgiverRequestReward, RequestReward);
         table.OnWorld(WorldOpcode.CmsgQuestgiverChooseReward, ChooseReward);
+        table.OnWorld(WorldOpcode.CmsgQuestgiverCancel, Cancel);
+        table.OnWorld(WorldOpcode.CmsgQuestlogSwapQuest, SwapSlots);
     }
 
     private static QuestNpcServices Services(WorldSession session) => session.Services.GetRequiredService<QuestNpcFeature>().Services;
@@ -59,6 +61,20 @@ public sealed class QuestNpcInteractionHandlers : IOpcodeHandlerGroup
     {
         RequireLength(payload, 1);
         Services(session).AbandonQuest(player, payload[0]);
+    }
+
+    /// <summary>CMSG_QUESTGIVER_CANCEL: no body (gtker/wow_messages cmsg_questgiver_cancel, versions "1 2 3").</summary>
+    private static void Cancel(WorldSession session, Player player, byte[] payload)
+    {
+        RequireLength(payload, 0);
+        Services(session).QuestgiverCancel(player);
+    }
+
+    /// <summary>CMSG_QUESTLOG_SWAP_QUEST: u8 slot1, u8 slot2 (cmsg_questlog_swap_quest.wowm).</summary>
+    private static void SwapSlots(WorldSession session, Player player, byte[] payload)
+    {
+        RequireLength(payload, 2);
+        Services(session).SwapQuestSlots(player, payload[0], payload[1]);
     }
 
     private static void Complete(WorldSession session, Player player, byte[] payload)

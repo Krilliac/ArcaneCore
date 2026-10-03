@@ -13,7 +13,10 @@ public sealed class QuestStore
     private readonly FrozenDictionary<uint, Quest> _quests;
     private readonly FrozenDictionary<uint, uint[]> _starters;
     private readonly FrozenDictionary<uint, uint[]> _enders;
+    private readonly FrozenDictionary<uint, uint[]> _gameObjectStarters;
+    private readonly FrozenDictionary<uint, uint[]> _gameObjectEnders;
     private readonly FrozenDictionary<int, uint[]> _exclusiveGroups;
+    private readonly bool _hasRewXp;
 
     public QuestStore(QuestContent content)
     {
@@ -83,15 +86,21 @@ public sealed class QuestStore
             }
         }
 
+        _hasRewXp = quests.Values.Any(q => q.Template.RewXP > 0);
         _quests = quests.ToFrozenDictionary();
         _exclusiveGroups = exclusive.ToFrozenDictionary(p => p.Key, p => p.Value.ToArray());
         _starters = Group(content.Starters, quests);
         _enders = Group(content.Enders, quests);
+        _gameObjectStarters = Group(content.GameObjectStarters, quests);
+        _gameObjectEnders = Group(content.GameObjectEnders, quests);
     }
 
     public static QuestStore Empty { get; } = new(QuestContent.Empty);
 
     public int Count => _quests.Count;
+
+    /// <summary>Whether any loaded quest carries a RewXP value (a vmangos-style dataset; classic-db has no such column).</summary>
+    public bool HasRewXpColumn => _hasRewXp;
 
     public Quest? Get(uint questId) => questId != 0 ? _quests.GetValueOrDefault(questId) : null;
 
@@ -100,6 +109,12 @@ public sealed class QuestStore
 
     /// <summary>Quests the creature entry ends (creature_involvedrelation), in table order.</summary>
     public IReadOnlyList<uint> EndersOf(uint creatureEntry) => _enders.GetValueOrDefault(creatureEntry) ?? [];
+
+    /// <summary>Quests the game object entry starts (gameobject_questrelation), in table order.</summary>
+    public IReadOnlyList<uint> GameObjectStartersOf(uint gameObjectEntry) => _gameObjectStarters.GetValueOrDefault(gameObjectEntry) ?? [];
+
+    /// <summary>Quests the game object entry ends (gameobject_involvedrelation), in table order.</summary>
+    public IReadOnlyList<uint> GameObjectEndersOf(uint gameObjectEntry) => _gameObjectEnders.GetValueOrDefault(gameObjectEntry) ?? [];
 
     /// <summary>vmangos Object::HasQuest for a creature.</summary>
     public bool Starts(uint creatureEntry, uint questId) => StartersOf(creatureEntry).Contains(questId);

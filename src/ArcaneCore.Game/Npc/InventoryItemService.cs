@@ -43,6 +43,14 @@ public sealed class InventoryItemService(
     public bool StoreNewItem(Player player, uint itemId, uint count)
         => player.Inventory.AddItem(itemId, count, out _, received: true) == ItemsResult.Ok;
 
+    public byte? FindBagSlot(Player player, ObjectGuid bagGuid) => player.Inventory.FindBagSlot(bagGuid);
+
+    public NpcResult CanStoreNewItemAt(Player player, uint itemId, uint count, byte bag, byte slot)
+        => (NpcResult)(byte)player.Inventory.CheckAddItemAt(bag, slot, itemId, count);
+
+    public bool StoreNewItemAt(Player player, uint itemId, uint count, byte bag, byte slot)
+        => player.Inventory.AddItemAt(bag, slot, itemId, count, out _, received: true) == ItemsResult.Ok;
+
     public void DestroyItemCount(Player player, uint itemId, uint count) => player.Inventory.DestroyItemCount(itemId, count);
 
     public ItemSale SellToVendor(Player player, ObjectGuid vendor, ObjectGuid item, byte count)
