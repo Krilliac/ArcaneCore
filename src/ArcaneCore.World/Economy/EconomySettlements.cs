@@ -5,6 +5,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
@@ -338,6 +339,12 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
 
                     player.EndQuestSettlement(operation.Id);
                     _saves!.ResumeCharacter(actor.Id);
+                    if (actor.Before.Money != actor.MoneyAfter)
+                    {
+                        // Cash objectives use the durable wallet after the live freeze ends.
+                        actor.Session.Services.GetService<QuestNpcFeature>()?.Services.MoneyChanged(player);
+                    }
+
                     break;
                 case EconomyOutcome.Before or EconomyOutcome.NotStarted when current:
                     player.EndQuestSettlement(operation.Id);

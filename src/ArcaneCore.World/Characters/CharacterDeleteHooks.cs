@@ -87,6 +87,13 @@ public static class CharacterDeletion
                 }
             }
 
+            // A successful detached settlement can still publish shared caches. Drain its
+            // storage and publication before deletion removes rows and invalidates those caches.
+            foreach (ICharacterSettlementBarrier barrier in session.Services.GetServices<ICharacterSettlementBarrier>())
+            {
+                await barrier.WaitForSettlementAsync(id).ConfigureAwait(false);
+            }
+
             // Queued snapshots of this character must not land after its rows are removed.
             if (session.Services.GetService<CharacterSaveQueue>() is { } saves)
             {
