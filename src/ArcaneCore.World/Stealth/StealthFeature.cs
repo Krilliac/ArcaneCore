@@ -31,6 +31,7 @@ public sealed class StealthFeature(SpellFeature spells, IServiceProvider service
         services.GetService<IConfiguration>()?.GetSection(StealthOptions.SectionName).Bind(Options);
 
         SpellSystem system = spells.System;
+        var stealthServices = new StealthServices(system, Registry, Options);
         system.RegisterAura(AuraType.ModStealth, StealthAuras.Handler(Registry));
         // Data auras: their amounts are read by the detection formula (SpellSystem.GetTotalAuraModifier), nothing happens at apply.
         system.RegisterAura(AuraType.ModStealthLevel, new AuraHandler(null, null));
@@ -38,6 +39,7 @@ public sealed class StealthFeature(SpellFeature spells, IServiceProvider service
 
         void Install(Map map)
         {
+            StealthServices.Install(map, stealthServices);
             map.AddVisibilityRule(new StealthVisibilityRule(system, Registry, Options));
             map.AddUpdater(new StealthDetectionUpdater(Registry, unit => !unit.IsInWorld && !system.IsInTransit(unit)));
         }

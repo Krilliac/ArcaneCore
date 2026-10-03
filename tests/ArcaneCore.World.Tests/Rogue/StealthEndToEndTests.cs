@@ -53,6 +53,7 @@ public sealed class StealthEndToEndTests
             Assert.True(spells.System.HasAuraHandler(AuraType.ModStealth));
             Assert.True(spells.System.HasAuraHandler(AuraType.ModStealthLevel));
             Assert.True(spells.System.HasAuraHandler(AuraType.ModStealthDetect));
+            Assert.NotNull(StealthServices.Find(host.World.GetMap(0)));
             spells.System.Store = new SpellStore([.. spells.System.Store.All, Stealth()], [], []);
             Assert.Contains(rogue.Guid, viewer.VisibleObjects);
             Assert.Equal(SpellCastResult.CastOk, spells.System.CastSpell(rogue, StealthSpell, SpellCastTargets.ForSelf(), triggered: true));
