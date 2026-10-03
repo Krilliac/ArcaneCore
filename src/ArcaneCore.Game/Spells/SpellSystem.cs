@@ -132,7 +132,9 @@ public sealed partial class SpellSystem
     /// <summary>
     /// CMSG_CANCEL_CAST (vmangos HandleCancelCastOpcode → InterruptNonMeleeSpells(false, spellId)):
     /// interrupt the cast in progress when it is <paramref name="spellId"/> (0 = any). Channels are
-    /// not interrupted by this packet (withDelayed = false keeps vmangos' channel slot).
+    /// not interrupted by this packet (withDelayed = false keeps vmangos' channel slot). A queued next-swing
+    /// spell is cancelled as well, whatever <paramref name="spellId"/> is (SpellHandler.cpp:329-330 has no id
+    /// filter on <c>InterruptSpell(CURRENT_MELEE_SPELL)</c>); this method is the only owner of that behaviour.
     /// </summary>
     public void CancelCast(Unit caster, uint spellId)
     {
@@ -142,6 +144,8 @@ public sealed partial class SpellSystem
         {
             Cancel(cast);
         }
+
+        CancelQueuedMeleeSpell(caster);
     }
 
     /// <summary>CMSG_CANCEL_CHANNELLING (vmangos HandleCancelChanneling): stop a non-triggered channel.</summary>
@@ -251,6 +255,12 @@ public sealed partial class SpellSystem
         }
 
         UnitSpellState state = GetOrCreateState(caster);
+        if (!triggered && spell.IsNextMeleeSwing)
+        {
+            // Own slot: neither blocked by nor interrupting a generic cast or a channel.
+            return QueueNextSwing(state, caster, spell, targets, ResolveUnitTarget(caster, targets));
+        }
+
         if (!triggered && state.CurrentCast is { } current)
         {
             if (current.State == SpellCastState.Preparing)
@@ -272,8 +282,8 @@ public sealed partial class SpellSystem
             return result;
         }
 
-        int castTime = triggered ? 0 : spell.GetCastTime(caster.Level, CastSpeed(caster));
-        var cast = new SpellCast(spell, caster, targets, triggered, castTime, CalculatePowerCost(caster, spell));
+        int castTime = triggered ? 0 : CastTimeFor(caster, spell);
+        var cast = new SpellCast(spell, caster, targets, triggered, castTime, PowerCostFor(caster, spell), DurationFor(caster, spell));
         if (!triggered)
         {
             state.CurrentCast = cast;
@@ -282,6 +292,7 @@ public sealed partial class SpellSystem
             AddGlobalCooldown(state, spell);
         }
 
+        NotifyPrepared(cast);
         if (castTime == 0)
         {
             return Cast(cast);
@@ -316,6 +327,8 @@ public sealed partial class SpellSystem
         AddCooldown(state, spell, cast.IsTriggered);
         TakePower(caster, spell, cast.PowerCost);
         SendCastResult(caster, spell, SpellCastResult.CastOk, cast.IsTriggered);
+        cast.Completed = true;
+        NotifyCast(cast);
 
         Dictionary<Unit, SpellTargetEntry> targetEffects = SelectTargets(cast, unitTarget);
         var hits = new List<ObjectGuid>();
@@ -337,7 +350,7 @@ public sealed partial class SpellSystem
         SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(
             caster.Guid, caster.Guid, spell.Id, SpellCastFlags.Unknown9, hits, misses, cast.Targets), includeSelf: true);
 
-        int duration = spell.GetDuration();
+        int duration = cast.Duration;
         if (spell.IsChanneled && duration > 0 && !cast.IsTriggered)
         {
             cast.State = SpellCastState.Casting;
@@ -365,10 +378,14 @@ public sealed partial class SpellSystem
                     Damage.DealSpellDamage(caster, target, spell, 0, periodic: false);
                 }
 
+                NotifyOutcome(cast, new SpellTargetOutcome(target, entry.Miss, 0, 0, false, entry.EffectMask));
                 continue;
             }
 
-            ApplyEffects(cast, target, entry.EffectMask, entry.Multipliers);
+            if (ApplyEffects(cast, target, entry.EffectMask, entry.Multipliers) is { } outcome)
+            {
+                NotifyOutcome(cast, outcome);
+            }
         }
 
         if (cast.State != SpellCastState.Casting)
@@ -467,21 +484,41 @@ public sealed partial class SpellSystem
 
     private void Finish(SpellCast cast)
     {
+        bool alreadyFinished = cast.State == SpellCastState.Finished;
         cast.State = SpellCastState.Finished;
-        if (_states.TryGetValue(cast.Caster.Guid, out UnitSpellState? state) && ReferenceEquals(state.CurrentCast, cast))
+        if (_states.TryGetValue(cast.Caster.Guid, out UnitSpellState? state))
         {
-            state.CurrentCast = null;
+            if (ReferenceEquals(state.CurrentCast, cast))
+            {
+                state.CurrentCast = null;
+            }
+
+            if (ReferenceEquals(state.MeleeCast, cast))
+            {
+                state.MeleeCast = null;
+            }
+        }
+
+        if (!alreadyFinished)
+        {
+            NotifyFinished(cast);
         }
     }
 
     private void Forget(UnitSpellState state)
     {
         RevokeAuraCaster(state.Unit);
-        if (state.CurrentCast is { } cast)
+        foreach (SpellCast? slot in new[] { state.CurrentCast, state.MeleeCast })
         {
-            cast.State = SpellCastState.Finished;
-            state.CurrentCast = null;
+            if (slot is { State: not SpellCastState.Finished } cast)
+            {
+                cast.State = SpellCastState.Finished;
+                NotifyFinished(cast);
+            }
         }
+
+        state.CurrentCast = null;
+        state.MeleeCast = null;
 
         foreach (SpellAuraHolder holder in state.Auras)
         {
@@ -508,6 +545,13 @@ public sealed partial class SpellSystem
             return SpellCastResult.NotReady;
         }
 
+        // Registered first checks (stand state): vmangos Spell.cpp:5309.
+        SpellCastResult start = RunCastChecks(SpellCheckPhase.Start, caster, spell, targets, unitTarget, triggered, strict);
+        if (start != SpellCastResult.CastOk)
+        {
+            return start;
+        }
+
         if (!caster.IsAlive && !spell.HasAttribute(SpellAttributes.AllowCastWhileDead))
         {
             return SpellCastResult.CasterDead;
@@ -518,18 +562,27 @@ public sealed partial class SpellSystem
             return SpellCastResult.NotReady;
         }
 
+        // Registered caster-state checks (shapeshift, caster aura state): vmangos Spell.cpp:5349-5392.
+        SpellCastResult casterState = RunCastChecks(SpellCheckPhase.Caster, caster, spell, targets, unitTarget, triggered, strict);
+        if (casterState != SpellCastResult.CastOk)
+        {
+            return casterState;
+        }
+
         if (!triggered && (caster.UnitFlags & UnitFlags.Stunned) != 0 && spell.InterruptFlags.HasFlag(SpellInterruptFlags.Stun))
         {
             return SpellCastResult.Stunned;
         }
 
-        if (!triggered && strict && caster is Player mover && spell.GetCastTime(caster.Level, CastSpeed(caster)) > 0
+        if (!triggered && strict && caster is Player mover && CastTimeFor(caster, spell) > 0
             && spell.InterruptFlags.HasFlag(SpellInterruptFlags.Movement) && IsMoving(mover))
         {
             return SpellCastResult.Moving;
         }
 
-        if (NeedsUnitTarget(spell))
+        bool needsUnit = NeedsUnitTarget(spell);
+        Unit? checkedTarget = null;
+        if (needsUnit)
         {
             Unit? target = unitTarget ?? (targets.Mask == SpellCastTargetFlags.Self ? caster : null);
             if (target is null)
@@ -549,6 +602,26 @@ public sealed partial class SpellSystem
                 return SpellCastResult.TargetsDead;
             }
 
+            checkedTarget = target;
+
+            // Registered target-state checks (target aura state): vmangos Spell.cpp:5636.
+            SpellCastResult targetState = RunCastChecks(SpellCheckPhase.Target, caster, spell, targets, target, triggered, strict);
+            if (targetState != SpellCastResult.CastOk)
+            {
+                return targetState;
+            }
+        }
+
+        // Registered equipment checks: vmangos CheckItems (Spell.cpp:5698), before CheckRange (:5707) and CheckPower (:5721).
+        SpellCastResult items = RunCastChecks(SpellCheckPhase.Items, caster, spell, targets, checkedTarget, triggered, strict);
+        if (items != SpellCastResult.CastOk)
+        {
+            return items;
+        }
+
+        if (needsUnit)
+        {
+            Unit target = checkedTarget!;
             SpellCastResult range = CheckRange(caster, spell, target, strict);
             if (range != SpellCastResult.CastOk)
             {
@@ -584,7 +657,26 @@ public sealed partial class SpellSystem
         }
 
         SpellCastResult effectChecks = CheckEffects(caster, spell, targets, unitTarget, triggered, strict);
-        return effectChecks != SpellCastResult.CastOk ? effectChecks : CheckPower(caster, spell);
+        if (effectChecks != SpellCastResult.CastOk)
+        {
+            return effectChecks;
+        }
+
+        // Registered checks inside vmangos CheckPower, before the amounts (combo points, Spell.cpp:7035-7038).
+        SpellCastResult beforePower = RunCastChecks(SpellCheckPhase.Power, caster, spell, targets, unitTarget, triggered, strict);
+        if (beforePower != SpellCastResult.CastOk)
+        {
+            return beforePower;
+        }
+
+        SpellCastResult power = CheckPower(caster, spell);
+        if (power != SpellCastResult.CastOk)
+        {
+            return power;
+        }
+
+        // Registered checks after power and caster auras: the target aura state (Spell.cpp:5733-5742).
+        return RunCastChecks(SpellCheckPhase.Final, caster, spell, targets, unitTarget, triggered, strict);
     }
 
     /// <summary>
@@ -604,6 +696,12 @@ public sealed partial class SpellSystem
         float reach = CombatReach(caster) + CombatReach(target);
         if (spell.RangeIndex == SpellConstants.RangeIndexCombat)
         {
+            // vmangos Spell::CheckRange (Spell.cpp:6882): a next-melee-swing spell passes; the swing itself checks reach.
+            if (spell.IsNextMeleeSwing)
+            {
+                return SpellCastResult.CastOk;
+            }
+
             // vmangos WorldObject::CanReachWithMeleeSpellAttack with Spell::CheckRange's range_mod
             // 1.0: reach = both combat reaches + 1.0 + BASE_MELEERANGE_OFFSET (4/3), at least
             // ATTACK_DISTANCE, compared in 2D ("melee spells ignore Z-axis checks").
@@ -645,7 +743,7 @@ public sealed partial class SpellSystem
     /// <summary>vmangos Spell::CheckPower: enough of the spell's power type (health costs must leave the caster alive).</summary>
     private SpellCastResult CheckPower(Unit caster, SpellInfo spell)
     {
-        uint cost = CalculatePowerCost(caster, spell);
+        uint cost = PowerCostFor(caster, spell);
         if (cost == 0)
         {
             return SpellCastResult.CastOk;
@@ -986,7 +1084,7 @@ public sealed partial class SpellSystem
     private static bool NeedsUnitTarget(SpellInfo spell)
         => spell.Effects.Any(e => !e.IsEmpty && IsExplicitUnitTarget(e.TargetA));
 
-    private static bool IsExplicitUnitTarget(SpellImplicitTarget target)
+    internal static bool IsExplicitUnitTarget(SpellImplicitTarget target)
         => target is SpellImplicitTarget.UnitEnemy or SpellImplicitTarget.UnitFriend or SpellImplicitTarget.Unit or SpellImplicitTarget.UnitParty
             or SpellImplicitTarget.UnitRaid or SpellImplicitTarget.UnitFriendChainHeal;
 

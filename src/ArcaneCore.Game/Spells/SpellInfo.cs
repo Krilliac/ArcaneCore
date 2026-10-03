@@ -61,7 +61,7 @@ public sealed record SpellEffectInfo
 /// names) with its cast-time, duration, range and radius indices already looked up. Built once
 /// at startup and shared by every map (read-only, so thread-safe).
 /// </summary>
-public sealed record SpellInfo
+public sealed partial record SpellInfo
 {
     private SpellEffectInfo[] _effects = [new(), new(), new()];
 
@@ -134,6 +134,33 @@ public sealed record SpellInfo
 
     /// <summary>Spell.dbc procCharges: charges a new aura holder starts with (0 = unlimited).</summary>
     public uint ProcCharges { get; init; }
+
+    /// <summary>Spell.dbc Stances: bit (form - 1) set = castable in that <see cref="ShapeshiftForm"/> (vmangos SpellEntry::Stances).</summary>
+    public uint Stances { get; init; }
+
+    /// <summary>Spell.dbc StancesNot: bit (form - 1) set = NOT castable in that form (vmangos SpellEntry::StancesNot).</summary>
+    public uint StancesNot { get; init; }
+
+    /// <summary>Spell.dbc CasterAuraState: the caster must be in this <see cref="AuraState"/> (vmangos SpellEntry::CasterAuraState).</summary>
+    public AuraState CasterAuraState { get; init; }
+
+    /// <summary>Spell.dbc TargetAuraState: the target must be in this <see cref="AuraState"/> (vmangos SpellEntry::TargetAuraState).</summary>
+    public AuraState TargetAuraState { get; init; }
+
+    /// <summary>Spell.dbc procFlags: the events this (aura) spell can proc on (vmangos SpellEntry::procFlags).</summary>
+    public ProcFlags ProcFlags { get; init; }
+
+    /// <summary>Spell.dbc procChance in percent (vmangos SpellEntry::procChance).</summary>
+    public uint ProcChance { get; init; }
+
+    /// <summary>Spell.dbc EquippedItemClass: required equipped item class, -1 = none (vmangos SpellEntry::EquippedItemClass).</summary>
+    public int EquippedItemClass { get; init; } = -1;
+
+    /// <summary>Spell.dbc EquippedItemSubClassMask: required item subclasses, as a bit mask over the class (vmangos SpellEntry::EquippedItemSubClassMask).</summary>
+    public int EquippedItemSubClassMask { get; init; }
+
+    /// <summary>Spell.dbc EquippedItemInventoryTypeMask: required inventory types, as a bit mask (vmangos SpellEntry::EquippedItemInventoryTypeMask).</summary>
+    public int EquippedItemInventoryTypeMask { get; init; }
 
     public uint StartRecoveryCategory { get; init; }
 
@@ -279,7 +306,14 @@ public sealed record SpellInfo
     /// scaled by UNIT_MOD_CAST_SPEED (build &gt; 1.11.2 branch); USES_RANGED_SLOT adds 500 ms.
     /// A spell without a SpellCastTimes entry is instant.
     /// </summary>
-    public int GetCastTime(byte casterLevel, float castSpeed = 1.0f)
+    public int GetCastTime(byte casterLevel, float castSpeed = 1.0f) => GetCastTime(casterLevel, castSpeed, null);
+
+    /// <summary>
+    /// <see cref="GetCastTime(byte, float)"/> with a cast-time modifier applied to the base time, after the
+    /// minimum and only when it is not 0, before the cast-speed scaling (vmangos SpellEntry.cpp:487-494,
+    /// SPELLMOD_CASTING_TIME).
+    /// </summary>
+    public int GetCastTime(byte casterLevel, float castSpeed, Func<int, int>? castTimeModifier)
     {
         if (CastTime == default)
         {
@@ -288,6 +322,11 @@ public sealed record SpellInfo
 
         int castTime = CastTime.Base + (CastTime.PerLevel * ((GetSpellRank(casterLevel) / 5) - (int)BaseLevel));
         castTime = Math.Max(castTime, CastTime.Minimum);
+        if (castTime != 0 && castTimeModifier is not null)
+        {
+            castTime = castTimeModifier(castTime);
+        }
+
         if (!HasAttribute(SpellAttributes.IsAbility | SpellAttributes.IsTradeskill))
         {
             castTime = (int)(castTime * castSpeed);

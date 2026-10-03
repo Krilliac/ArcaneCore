@@ -71,6 +71,7 @@ public sealed partial class SpellSystem
         amount -= resisted;
         uint dealt = Damage.DealSpellDamage(caster, target, spell, amount, periodic: false);
         OnDamageTaken(target, caster, dealt, periodic: false);
+        RecordDamage(caster, target, spell, dealt, crit);
         SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog, SpellPackets.BuildSpellNonMeleeDamageLog(
             target.Guid, caster.Guid, spell.Id, dealt, spell.School, resisted: resisted, hitInfo: crit ? SpellHitTypeCrit : 0), includeSelf: true);
         return new SpellDamageResult(dealt, resisted, crit);

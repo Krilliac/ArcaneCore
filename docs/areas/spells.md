@@ -172,11 +172,120 @@ Conflicts to resolve at integration: the stats area (`stats-combat-formulas`) ma
 the stat and resistance fields; `StatAuras` then moves onto it (it is the only writer of those fields from auras here).
 The skills area owns `PROFICIENCY`, `WEAPON`, `LANGUAGE` and the passive skill effects; `SpellInfo` carries no
 equipped-item class fields yet, which `PROFICIENCY` needs.
+`n## Combat spell data model (warrior-mechanics S02a)
+
+Additive data only; nothing reads these fields at cast time yet (the cast-time consumers are the later
+warrior-mechanics slices). Reference rule: only the `SUPPORTED_CLIENT_BUILD = 1.12.1` branch of vmangos
+(`src/shared/Progression.h:36`) counts.
+
+- `SpellInfo` now carries `Stances`, `StancesNot`, `CasterAuraState`, `TargetAuraState`, `ProcFlags`,
+  `ProcChance` and `EquippedItemClass` / `SubClassMask` / `InventoryTypeMask` (`SpellStoreFactory` copies them from
+  `spell_template`; `ProcCharges` already existed). `EquippedItemClass` defaults to -1 (Spell.dbc "none").
+- `SpellEnums.Combat.cs`: `ShapeshiftForm` (vmangos `SharedDefines.h:1421-1441`), `ShapeshiftFlags` (`:1467-1476`),
+  `AuraState` (`SpellDefines.h:642-656`; 9-11 are vmangos custom states), `ProcFlags` (`:1043-1081`), `ProcFlagsEx`
+  (`:1099-1120`), `SpellModOp` (`:602-631`, no value 13), and the combat attribute bits as `SpellAttributes*Combat`
+  enums (`:830-975`). `SpellDefines.cs` is deliberately untouched, so the legacy enums keep their (partial) members.
+- `SpellInfo.Combat.cs` helpers: `IsNextMeleeSwing` (`SpellEntry.h:887-890`: bit 0x4 **or** 0x400 - Heroic Strike and
+  Cleave use 0x4, so the legacy `SpellAttributes.OnNextSwing` alone misses them), `NeedsComboPoints`
+  (`SpellEntry.h:1082-1085`), `IsRemovedOnShapeLost` (`:1180-1186`, including the hard-coded spell 24864) and
+  `GetErrorAtShapeshiftedCast` (`SpellEntry.cpp:1032-1074`).
+- Limits: `GetErrorAtShapeshiftedCast` takes the form's `SpellShapeshiftForm.dbc` flags1 and the "talent that learns a
+  spell" exemption (`GetTalentSpellCost`) from the caller, because neither the shapeshift-form table nor the talent
+  tree is loaded by this core yet; an unknown form returns `CastOk` like vmangos (`SpellEntry.cpp:1051-1055`).
+
+## Combat spell seams (warrior-mechanics S02b)
+
+Registration points on `SpellSystem` for the stance, equipment, combo, aura-state, proc and spell-mod features.
+They are registered by calling `Register*`, not discovered. Callbacks run on the world thread; a throwing callback
+is not caught (same rule as `SpellHit`). Types are in `SpellCombatSeams.cs`, the registries in `SpellSystem.Seams.cs`,
+the melee slot in `SpellSystem.NextSwing.cs`.
+
+- `ISpellCastCheck` (`RegisterCastCheck`): may veto a cast with any `SpellCastResult`. Checks run by
+  `SpellCheckPhase` then `Order` (`SpellCastCheckOrder`), the line order of vmangos `Spell::CheckCast`: shapeshift
+  (`Spell.cpp:5349`) < caster aura state (`:5392`) < `CheckItems` (`:5698`) < the built-in range (`:5707`) and power (`:5721`) checks. Phases: Caster (after the cooldown check,
+  before stun), Target (once an explicit unit target exists and is alive; skipped for spells without one), Items
+  (before range). The context says whether the check is the strict cast-start one or the landing re-check.
+  `GetErrorAtShapeshiftedCast` is strict-only in vmangos (`:5349`); the check itself must honour `Strict`.
+  Two later phases cover the rest of `CheckCast`: Power (after range, line of sight and the target rules, before the
+  built-in power check: the combo point requirement, `Spell.cpp:7035-7038`) and Final (after power: the 20% target aura
+  state, `:5733-5742`; also run for triggered casts). Order values follow the source: shapeshift < caster aura state <
+  equipment < combo points < target aura state (`SpellCastCheckOrder`). The context's target is the explicit unit
+  target (null without one); in the Target and Items phases a self cast of a unit-target spell passes the caster.
+- `ISpellCastObserver` (`RegisterObserver`): `OnPrepared`, `OnCast` (power taken, before targets and effects),
+  `OnTargetOutcome` (miss reason, damage dealt, healing done, crit, effect mask; also for misses) and
+  `OnFinished(completed)`. Damage and healing are credited to the outcome of the cast and target being applied;
+  a nested triggered cast gets its own outcome.
+- `ISpellValueModifier` (`RegisterValueModifier`; the context carries the effect's target): adjusts the effect value (before chain multipliers), the
+  aura/channel duration (vmangos `CalculateDuration`, `SpellEntry.cpp:723-751`: never for permanent -1, floored at
+  0), the power cost, and the cast time (`SpellEntry.cpp:487-494`: after the minimum, only when not 0, before haste).
+  The duration is computed once per cast (`SpellCast.Duration`, like `m_duration`). Modifiers must be pure.
+- Next-swing spells (`SpellInfo.IsNextMeleeSwing`, non-triggered) wait in `UnitSpellState.MeleeCast` instead of
+  casting: SMSG_SPELL_START and the global cooldown at press, nothing else (vmangos `GetCurrentContainer`
+  `Spell.cpp:7607`, `SetCurrentCastedSpell`). A second next-swing spell interrupts the queued one; generic casts and
+  channels neither block nor cancel it; triggered next-swing spells cast at once. `CastQueuedMeleeSpell(caster,
+  victim)` is what the melee swing calls (`Unit::AttackerStateUpdate` `Unit.cpp:2250-2254`): it re-checks, takes the
+  power and applies the effects. `CancelCast` cancels the queued spell whatever spell id the client names
+  (`SpellHandler.cpp:329-330`); `CancelQueuedMeleeSpell` is the same for the combat area (target lost, `Unit.cpp:4604`).
+- `ISpellChainRangeProvider` (`RegisterChainRangeProvider`): replaces the fixed chain jump distance
+  (`SpellConstants.ChainJumpRadius`); the melee-chain rule (`Spell.cpp:2256-2265`) is its first consumer (later slice).
+- The melee swing calls `CastQueuedMeleeSpell` and `CancelQueuedMeleeSpell` through `IMeleeSpellHooks` (see combat.md,
+  "Melee spells and the swing").
+- Limit: the SMSG_ATTACKERSTATEUPDATE a swing spell sends (spell id, no-action flag) is not implemented; the spell's
+  damage goes through SMSG_SPELLNONMELEEDAMAGELOG only.
+
+## Warrior stances (warrior-mechanics S06)
+
+`ShapeshiftService` (`Spells/Stances/`), installed by the world's `StanceFeature`, follows vmangos
+`HandleAuraModShapeshift` (`SpellAuras.cpp:2420-2575`) and `HandleShapeshiftBoosts` (`:5433-5597`) at the 1.12.1 build.
+
+- **Handler** for `SPELL_AURA_MOD_SHAPESHIFT` with forms 17-19 (Battle, Defensive, Berserker): the previous
+  shapeshift aura is removed first; non-stance forms would also end `SHAPESHIFTING_CANCELS` auras; rage becomes
+  the Tactical Mastery cap (class-script auras 831-835 = 50/100/150/200/250 raw, else 0; creatures 0,
+  `:2528-2569`); `UNIT_FIELD_BYTES_1` byte 2 takes the form; the boost passive is added (21156 / 7376 / 7381,
+  `:5468-5476`) and every known passive bound to the form is cast again (`SpellInfo.IsNeedCastSpellAtFormApply`,
+  `SpellEntry.h:1141-1150`). Losing the form clears the byte, drops the boost, removes the self-cast auras bound
+  to a form (`SpellAuraHolder::m_isRemovedOnShapeLost`, `SpellAuras.cpp:6672`: caster is the target and
+  `IsRemovedOnShapeLost`) and interrupts a queued next-swing, preparing or channelled spell that is bound to it.
+- **Gate**: `StanceCastCheck` (phase Caster, order Shapeshift) runs `GetErrorAtShapeshiftedCast` for the caster's
+  form on the strict check of non-triggered casts only (`Spell.cpp:5349-5351`); the landing re-check and triggered
+  casts skip it.
+- **Persistence**: the stance aura is a normal permanent aura, so `character_aura` saves it and the restore
+  re-runs the handler (form byte, boost). Passives are not saved and come back from the handler.
+- **Death**: the real stance spells carry `ALLOW_AURA_WHILE_DEAD` (AttributesEx3 0x100000), and vmangos
+  `RemoveAuraTypeOnDeath(MOD_SHAPESHIFT)` (`Player.cpp:1525`, `Unit.cpp:3955-3967`) spares death-persistent holders,
+  so the stance outlives death; a stance without the bit is removed and the form cleared (both tested).
+- **Form table**: `ShapeshiftFormCatalog`. `Combat:ShapeshiftFormDbcPath` points at the client's
+  SpellShapeshiftForm.dbc (`ShapeshiftFormDbcReader`, 14 fields; a missing or malformed file stops the daemon).
+  Without it only forms 17-19 are known, with `flags1 = 1` inferred from vmangos' definition of the stance flag
+  (`SharedDefines.h:1471`), not read from a DBC; the result of the gate for warrior spells does not depend on it.
+- **Config** (`Combat:StanceShiftKeepsSelfBuffs`, default false): vmangos removes Retaliation, Recklessness and Shield
+  Wall with the old stance (the code above). vmangos also quotes patch 1.7.0 as saying they are no longer cancelled
+  (`SpellAuras.cpp:5537-5539`), but the code under that comment is compiled only for builds up to 1.6.1, so the code
+  is followed. With the option on, switching stances keeps them; cancelling a stance still removes them.
+- **Limits**: forms other than 17-19 (druid, priest, shaman) are logged and left unhandled; no model/display, speed or
+  rage/energy swap; the "talent that learns a spell" exemption of the gate needs the talent tree (not loaded);
+  Tactical Mastery only matters once talents exist (the aura is read, nothing grants it yet); the stance-change
+  cooldown and the quest-granted stance spells are spell data / quest rewards, not code.
+
+## Generic cast rules (warrior-mechanics S16)
+`GeneralCastChecks` (installed by `CastCheckFeature`) registers four of vmangos `Spell::CheckCast`'s generic rules as cast checks:
+
+- **Standing** (`Spell.cpp:5308-5309`, phase Start, before the cooldown check): a non-triggered cast needs a standing caster
+  unless the spell has ALLOW_WHILE_SITTING (`NOT_STANDING`); the dead stand state counts as standing (`Unit::IsStandingUp`).
+- **Combat-forbidden spells** (`:5343-5344`): `NOT_IN_COMBAT_ONLY_PEACEFUL` (Charge) fails with `AFFECTING_COMBAT` in combat; strict,
+  non-triggered casts only, ahead of the shapeshift gate.
+- **Stealth-only spells** (`:5353-5354`): `ONLY_STEALTHED` needs a `MOD_STEALTH` aura; strict, non-triggered, after the shapeshift gate.
+- **Facing** (`:5639-5649`, phase Target): a behind-only spell (`AttributesEx2 == 0x100000` and `AttributesEx & 0x200`; vmangos' database
+  custom flag is not available) fails with `NOT_BEHIND` unless the caster is behind the target, and a creature that fights the
+  caster and is not incapacitated always faces it on the strict check; a spell whose Attributes are exactly `0x150010` needs the
+  target to face the caster (`NOT_INFRONT`). vmangos also sends an interrupt packet with these two; that packet is not sent.
+- **Not covered**: indoor and outdoor (terrain), underwater and above-water, battleground, mounted and taxi, target level limits,
+  the other target flags, and the explicit-target mask check.
 
 ## What's left
 
 - Area, chain and cone target selection are implemented (`SpellSystem.Targeting.cs`, with a line-of-sight filter on area lists); only the remaining TargetB-based selections are missing.
-- Reagents, item casts, totems, spell focus, shapeshift and stance checks (no shapeshift or stance data is read at cast time), facing, area restrictions.
+- Reagents, item casts, totems, spell focus, non-warrior shapeshift forms, facing, area restrictions.
 - Talents, ranks, spell modifiers, proc system (aura holders carry `procCharges`, but nothing consumes them), diminishing returns, immunities. Hit, crit and resist rules (`SpellCombatRules`) and the dispel effect exist.
 - Complete spell combat modifiers. Integrated spell damage now uses map combat death/threat,
   and effective healing adds base distributed threat and enters combat.

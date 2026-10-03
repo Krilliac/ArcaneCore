@@ -79,6 +79,8 @@ with `GetMeleeMissChance`, `Unit::GetUnitCriticalChance` and the dodge/parry/blo
 - **Rage:** vmangos `Player::RewardRage`.
   - Conversion = 0.0091107836·L² + 3.225598133·L + 4.2652911.
   - Dealing damage gives damage/conv·7.5; taking it gives damage/conv·2.5; both ×10.
+  - Taken rage is ×1.3 under Berserker Rage (18499, effect 0), and the result is ×`Combat:RateRageIncome`
+    (`PowerRules.RageFromDamage`, `Player.cpp:2243-2267`).
 - **Combat state:** vmangos `Unit::SetInCombatState`. UNIT_FLAG_IN_COMBAT lasts 5.5 s
   after PvP, batched to the 1-second check (`BatchifyTimer`). Units stay in combat while
   attacking, being attacked or on a threat list. SMSG_CANCEL_COMBAT is sent on stop (vmangos
@@ -124,12 +126,83 @@ CMSG_TOGGLE_PVP: an optional u8 state (gtker `pvp/cmsg_toggle_pvp.wowm`, vmangos
 - Turning it off lets a 5-minute timer run out, paused during PvP combat (`Player::UpdatePvPFlagTimer`).
 - Attacking a flagged player flags the attacker (`TogglePlayerPvPFlagOnAttackVictim`).
 
+### Aura states and reactive abilities (warrior-mechanics S07)
+`AuraStateService` and `ReactiveService` (`Combat/Reactive/`, installed by `ReactiveFeature`), after vmangos
+`Unit::ModifyAuraState` (`Unit.cpp:4682-4745`) and `ProcSkillsAndReactives` (`:8834-8915`):
+
+- **States.** `UNIT_FIELD_AURASTATE` bit (state - 1). Setting a state casts the passives a player knows that need it as caster
+  state; clearing it removes the auras that need it. The 20% health state follows `health < 0.2 x max` every tick for players
+  and units in combat (`Unit.cpp:318-319`) and goes when the unit dies.
+- **Checks.** A spell's caster aura state is required (`CASTER_AURASTATE`, also for triggered casts, `Spell.cpp:5392`). The
+  only target state vmangos checks is the 20% one (Execute): no target is `BAD_IMPLICIT_TARGETS`, a healthy target `BAD_TARGETS`,
+  after the power check (`:5733-5742`).
+- **Windows.** A dodge, parry or block opens a 4 s window (`REACTIVE_TIMER_START`): the victim gets Defense (Revenge, Riposte;
+  a rogue's dodge excepted), a parrying hunter gets HunterParry and a combo point (Counterattack), and a warrior whose attack was
+  dodged gets the Overpower marker, a combo point on the victim. When the window ends the state or the marker goes; a death clears
+  every window. White swings report through `MapCombat.MeleeSwingResolved` (before the packet and the damage, like vmangos'
+  proc call); melee and ranged class spells report their per-target outcome through the spell observer.
+- **Limits.** The custom states 9-11 (health 15, 10, 5 percent) are not 1.12 data and are not implemented; the Berserking crit
+  state exists only for clients up to 1.8.4 and is omitted; the creature health states and speed changes are the creature area's;
+  melee spell Block outcomes appear once the spell hit table produces them; Overpower's "cannot be dodged, parried or blocked"
+  attribute is honoured by the hit table slice, not here.
+
+### Combo points (warrior-mechanics S09)
+`ComboPointService` (`Combat/Combo/`, installed by `ComboFeature`) follows vmangos `Player::AddComboPoints`,
+`ClearComboPoints` and `SetComboPoints` (`Player.cpp:19032-19093`):
+
+- **State.** Up to 5 points on one target; points on the current target add up, a new target restarts the count; negative
+  counts floor at 0. `PLAYER_FIELD_COMBO_TARGET` and `PLAYER_FIELD_BYTES` byte 1 are written only while the target can be found
+  (vmangos `SetComboPoints`). 1.12 has no combo point packet. Every change ends `SPELL_AURA_RETAIN_COMBO_POINTS` auras.
+- **Warriors.** A warrior holds at most the Overpower marker (see the aura state section); the client shows none and the
+  server uses it only to allow the cast (`Spell.cpp:7035-7038`).
+- **Finishing moves** (`NeedsComboPoints`): the check (spell cast check, phase Power) needs points on the explicit target:
+  `NO_COMBO_POINTS` for a rogue, `BAD_TARGETS` for a warrior; triggered casts and spells without an explicit unit target skip it.
+- **Scaling.** An effect adds `EffectPointsPerComboPoint x points` on the combo target (`SpellCaster.cpp:1190-1192`); a duration
+  stretches toward its maximum by points/5 (`SpellEntry.cpp:731-735`) for any spell whose base and maximum durations differ, as in
+  vmangos. The effect bonus is added to the truncated value (a fractional base plus a fractional bonus can differ by 1).
+- **Spending.** A finishing move that completes clears the points (`Spell.cpp:4374-4395`), except a harmful one that missed, was
+  dodged or parried on a target other than the caster. `SPELL_EFFECT_ADD_COMBO_POINTS` (80) adds its value.
+- **Gone.** The target dying, the owner dying and the owner logging out clear the points (`Unit.cpp:9410-9422`, `Player.cpp:1519`);
+  a unit that leaves the world without dying does not (limit).
+
+### Melee spells and the swing (warrior-mechanics S08b)
+The swing reaches the spell system through `IMeleeSpellHooks` (`CombatEnvironment.MeleeSpells`, installed by the
+world daemon's `MeleeSpellFeature` as `SpellSystemMeleeHooks`; without it nothing is cast from a swing):
+
+- **No swing while casting.** `MapCombat.AttackerStateUpdate` returns without a swing while the unit has a generic
+  cast or a channel in progress (vmangos `Unit::AttackerStateUpdate`, `Unit.cpp:2239-2240`). The attack timer still
+  restarts, so the swing is lost, not delayed. `Combat:MeleeCastingBlocksSwing` (default true, retail) turns it off.
+- **Queued next-swing spell.** The main-hand swing casts the spell queued in `UnitSpellState.MeleeCast` at the victim
+  instead of the white hit (`Unit.cpp:2249-2257`): power is taken, effects applied, SMSG_SPELL_GO sent. A cast that fails
+  (no rage left) drops the spell and the white hit is still lost, as vmangos returns when the slot is empty. The
+  off-hand never fires it; an out-of-range swing waits.
+- **Attack stop.** `AttackStop` (also a target switch and `CombatStop`) interrupts the queued spell
+  (`Unit.cpp:4604`).
+- **One environment per world.** `CombatEnvironment` carries the options and the links; `PowerFeature`,
+  `MeleeSpellFeature` and `StanceFeature` share it (`CombatEnvironments.GetOrCreate` binds `Combat` once).
+
+### Power economy (warrior-mechanics S03)
+The rates live in `CombatOptions` (config section `Combat`: `RateRageIncome`, `RateRageLoss`, `RateEnergy`,
+`RateMana`; defaults 1 = retail, `mangosd.conf.dist.in:2793-2799`). `Rate.Mana` and `Rate.Rage.Loss` fall back to 1 when
+negative (`World::setConfigPos`, `World.cpp:2959-2967`); the other two are not validated, like vmangos. The world
+daemon's `PowerFeature` binds them and registers a `CombatEnvironment` (options plus an aura source backed by the spell
+system) for the world; worlds without it use `CombatEnvironment.Default`.
+
+- **Refund.** `PowerRefundObserver` (a spell cast observer) returns `round(cost x 0.82)` of the power of an
+  `EX_DISCOUNT_POWER_ON_MISS` ability: energy on miss, dodge, parry or immune, rage on dodge or parry only
+  (`Spell.cpp:1267-1285`; the comment there says 80%, the code 0.82).
+- **Limits.** Health regeneration is unchanged (no `Rate.Health`, no regen-in-combat auras); the mana regen
+  ignores spirit-regen auras; rage from abilities is none (only white swings, as in both cores).
+
 ### Regeneration
 - **Players**, every 2 s (vmangos `Player::RegenerateAll` / `Regenerate`):
   - Out of combat: health by spirit per class (`GetRegenHPPerSpirit`, ×1.5 sitting) and rage
-    −2.
-  - Always: energy +20.
-  - Mana: `GetRegenMPPerSpirit`·2, or 0 within 5 s of spending mana.
+    −2 (×`Combat:RateRageLoss`, not while a SPELL_AURA_INTERRUPT_REGEN aura such as Bloodrage is on).
+  - Always: energy +20 (×`Combat:RateEnergy`).
+  - Mana: `GetRegenMPPerSpirit`·2·`Combat:RateMana`, or 0 within 5 s of spending mana.
+  - Rage and energy ticks are also scaled by MOD_POWER_REGEN_PERCENT auras for that power
+    (`Player.cpp:2323-2328`).
+  - See "Power economy" above.
 - **Creatures**, every 5 s out of combat: a third of max health/mana (vmangos
   `Creature::RegenerateHealth` / `RegenerateMana`).
 

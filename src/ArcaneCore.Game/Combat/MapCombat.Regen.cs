@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells;
 
 namespace ArcaneCore.Game.Combat;
 
@@ -23,14 +24,20 @@ public sealed partial class MapCombat
             return;
         }
 
+        CombatEnvironment power = CombatEnvironment.For(_world);
         if (!c.IsInCombat)
         {
             RegenerateHealth(player);
-            RegeneratePower(player, PowerType.Rage);
+
+            // vmangos Player::RegenerateAll (Player.cpp:2278): rage only decays without SPELL_AURA_INTERRUPT_REGEN (Bloodrage).
+            if (!power.HasAuraType(player, AuraType.InterruptRegen))
+            {
+                RegeneratePower(player, PowerType.Rage, power);
+            }
         }
 
-        RegeneratePower(player, PowerType.Energy);
-        RegeneratePower(player, PowerType.Mana);
+        RegeneratePower(player, PowerType.Energy, power);
+        RegeneratePower(player, PowerType.Mana, power);
         c.RegenTimer += CombatConstants.PlayerRegenIntervalMs;
     }
 
@@ -64,25 +71,31 @@ public sealed partial class MapCombat
     /// vmangos Player::Regenerate: mana GetRegenMPPerSpirit × 2 per tick (0 within five seconds
     /// of spending mana), rage −20 (2 rage) per tick, energy +20.
     /// </summary>
-    private static void RegeneratePower(Player player, PowerType power)
+    private static void RegeneratePower(Player player, PowerType power, CombatEnvironment environment)
     {
         uint cur = GetPower(player, power);
         uint max = GetMaxPower(player, power);
-        float add = power switch
+
+        // Rates and MOD_POWER_REGEN_PERCENT auras (not for mana): vmangos Player::Regenerate, Player.cpp:2292-2328.
+        CombatOptions options = environment.Options;
+        float regenFactor = power == PowerType.Mana ? 1.0f : environment.GetPowerRegenFactor(player, power);
+        uint add = power switch
         {
-            PowerType.Mana => player.Combat.LastManaUseTimer > 0 ? 0f : RegenManaPerSpirit(player.Class, player.GetUInt32(UpdateFields.UnitFieldStat0 + 4)) * 2.0f,
-            PowerType.Rage => 20f,
-            PowerType.Energy => 20f,
-            _ => 0f,
+            PowerType.Mana => player.Combat.LastManaUseTimer > 0
+                ? 0u
+                : PowerRules.ManaPerTick(RegenManaPerSpirit(player.Class, player.GetUInt32(UpdateFields.UnitFieldStat0 + 4)), options.RateMana),
+            PowerType.Rage => PowerRules.RageDecayPerTick(options.RateRageLoss, regenFactor),
+            PowerType.Energy => PowerRules.EnergyPerTick(options.RateEnergy, regenFactor),
+            _ => 0u,
         };
 
         if (power != PowerType.Rage)
         {
-            cur = Math.Min(max, cur + (uint)add);
+            cur = Math.Min(max, cur + add);
         }
         else
         {
-            cur = cur <= (uint)add ? 0 : cur - (uint)add;
+            cur = cur <= add ? 0 : cur - add;
         }
 
         SetPower(player, power, cur);

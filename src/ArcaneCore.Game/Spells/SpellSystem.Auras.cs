@@ -61,7 +61,7 @@ public sealed partial class SpellSystem
         context.PendingHolder ??= new SpellAuraHolder(
             context.Spell, context.Target, context.Caster,
             _auraCasterOwners.GetValue(context.Caster, static caster => new AuraCasterOwner(caster)),
-            context.Cast.State == SpellCastState.Casting ? context.Cast.Timer : context.Spell.GetDuration());
+            context.Cast.State == SpellCastState.Casting ? context.Cast.Timer : context.Cast.Duration);
         context.PendingHolder.SetAura(new SpellAura(context.EffectIndex, effect.AuraType, context.Value, effect.Amplitude, effect.MiscValue));
     }
 
