@@ -70,6 +70,26 @@ public sealed class LocomotionEnvironment
         s_registered.AddOrUpdate(world, environment);
     }
 
+    private static readonly ConditionalWeakTable<WorldRuntime, IEnvironmentalDamageMitigation> s_mitigations = new();
+
+    /// <summary>
+    /// Use <paramref name="mitigation"/> for the environmental damage of <paramref name="world"/> (the spell combat rules
+    /// feature registers it; independent of the order the features attach in).
+    /// </summary>
+    public static void RegisterMitigation(WorldRuntime world, IEnvironmentalDamageMitigation mitigation)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(mitigation);
+        s_mitigations.AddOrUpdate(world, mitigation);
+    }
+
+    /// <summary>The registered mitigation, or the pass-through one.</summary>
+    public static IEnvironmentalDamageMitigation MitigationFor(WorldRuntime world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        return s_mitigations.TryGetValue(world, out IEnvironmentalDamageMitigation? mitigation) ? mitigation : NoEnvironmentalMitigation.Instance;
+    }
+
     /// <summary>The environment registered for <paramref name="world"/>, or <see cref="Default"/>.</summary>
     public static LocomotionEnvironment For(WorldRuntime world)
     {

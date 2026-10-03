@@ -108,3 +108,29 @@ Only options whose rule is delivered exist; keys for undelivered rules would be 
 Limits: login restore of `PlayerFlags.Ghost` without the aura sends the order unconditionally (kept from the base);
 the 1.12 client's acceptance of the packed-GUID layouts is unverified (see slice 1). The stricter flag tests of
 vmangos' anticheat (`MovementAnticheat.cpp:750-870`) are not delivered (opt-in hardening, default off in vmangos).
+## Slice 3: environmental-damage (delivered)
+
+`EnvironmentalDamage.Apply(world, player, type, damage)` (`Locomotion/Hazards/EnvironmentalDamage.cs`) is vmangos
+`Player::EnvironmentalDamage` (`Player.cpp:713-775`). It is the primitive the fall observer, the void check and the
+(not delivered) breath/fatigue/lava pulses call; nothing else in this lane deals environmental damage yet.
+
+* A dead player or a game master takes nothing and gets no packet.
+* Immunity per school returns 0 without a packet: fire for lava and fire, nature for slime, physical for exhausted,
+  drowning and fall (`:719-758`). Only fire/lava and slime ask for absorb and resist; fall, drowning and fatigue are
+  never absorbed (client 1.7.0 and later). Damage becomes `damage + (resist < 0 ? |resist| : 0) - (resist > 0 ? absorb +
+  resist : absorb)`, floored at 0, exactly as vmangos writes it (`:752-755`).
+* `SMSG_ENVIRONMENTAL_DAMAGE_LOG` = u64 GUID, u8 type, u32 damage, u32 absorb, i32 resist (vmangos Combat.cpp:105-127,
+  gtker smsg_environmentaldamagelog.wowm) to the victim and its observers; `FALL_TO_VOID` (6) is logged as `FALL`
+  (`Unit.cpp:5147-5160`).
+* The damage is `MapCombat.DealDamage(player, player, ...)` (self damage: no combat, no threat). A player who dies loses
+  10% durability on worn items (`DurabilityLossAll(0.10, false)`) and receives the empty `SMSG_DURABILITY_DAMAGE_DEATH`
+  (`:760-766`, "confirmed on classic that dying from lava, fatigue and drowning causes durability loss").
+* vmangos quirk kept: a self kill has the player as its own tap, so `SetPvPDeath(true)` (`Unit.cpp:1180`); the base's
+  `MapCombat.Kill` already does the same. Whether retail marks an environmental death as PvP (corpse type, reclaim
+  delay) is not provable from the references: open question.
+
+**Limit (seam):** absorb, resist and immunity come from the spell combat rules (`IsImmuneToDamage`,
+`CalculateDamageAbsorbAndResist`), which are not on this branch. `IEnvironmentalDamageMitigation` is the seam
+(`LocomotionEnvironment.RegisterMitigation`); the default mitigates nothing, so lava is not reduced by fire resistance
+and fire immunity does not protect until that lane registers an implementation. `DealDamageMods` (`:763`) is not
+ported: it only changes damage for GM-like invulnerability states and game masters are excluded already.
