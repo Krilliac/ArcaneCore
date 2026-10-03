@@ -22,6 +22,17 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
 
     public NavMeshTile? GetTile(int x, int y) => _tiles.GetValueOrDefault((x, y));
 
+    /// <summary>
+    /// Whether the Detour tile under a Recast position is loaded (vmangos <c>PathInfo::HaveTiles</c>:
+    /// <c>calcTileLoc</c> then <c>getTileAt</c>, PathFinder.cpp:695-706).
+    /// </summary>
+    public bool HaveTileAt(Vector3 recast)
+    {
+        float tx = MathF.Floor((recast.X - Parameters.Origin.X) / Parameters.TileWidth);
+        float ty = MathF.Floor((recast.Z - Parameters.Origin.Z) / Parameters.TileHeight);
+        return tx is > int.MinValue and < int.MaxValue && ty is > int.MinValue and < int.MaxValue && GetTile((int)tx, (int)ty) is not null;
+    }
+
     public bool IsTerrainTileLoaded(int tileX, int tileY) => _byTerrainTile.ContainsKey((tileX, tileY));
 
     /// <summary>Add a tile read for a terrain tile; false when its Detour slot is taken (Detour <c>addTile</c> refuses too).</summary>

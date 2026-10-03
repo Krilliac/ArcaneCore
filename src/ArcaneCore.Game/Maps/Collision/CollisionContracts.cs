@@ -86,6 +86,17 @@ public interface IPathfinder
     PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null);
 }
 
+/// <summary>
+/// Optional: a pathfinder that knows whether it has navigation data for a map (vmangos
+/// <c>MMapManager</c> holds a navmesh per map or none, PathFinder.cpp:86-90). Maps it lacks are
+/// routed to <see cref="WorldCollision.Fallback"/>.
+/// </summary>
+public interface IMapAwarePathfinder : IPathfinder
+{
+    /// <summary>Whether a navmesh exists for <paramref name="mapId"/>.</summary>
+    bool HasNavigationData(uint mapId);
+}
+
 /// <summary>vmangos <c>PathType</c> (PathFinder.h).</summary>
 [Flags]
 public enum PathType

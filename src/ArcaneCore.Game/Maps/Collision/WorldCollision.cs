@@ -27,6 +27,28 @@ public sealed class WorldCollision
     /// <summary>Paths (default: <see cref="StraightLinePathfinder"/>).</summary>
     public IPathfinder Pathfinder { get; private set; } = StraightLinePathfinder.Instance;
 
+    /// <summary>
+    /// Paths for maps without navigation data (default: <see cref="StraightLinePathfinder"/>). vmangos
+    /// runs <c>BuildPathWithoutMMaps</c> there (PathFinder.cpp:86-90); the creature lane installs that
+    /// terrain-step search through <see cref="InstallFallback"/> so it never replaces the navmesh pathfinder.
+    /// </summary>
+    public IPathfinder Fallback { get; private set; } = StraightLinePathfinder.Instance;
+
+    /// <summary>
+    /// The pathfinder that answers for <paramref name="mapId"/>: <see cref="Pathfinder"/> when it has
+    /// data for the map (an <see cref="IMapAwarePathfinder"/> says so; any other enabled pathfinder is
+    /// taken to), else <see cref="Fallback"/>.
+    /// </summary>
+    public IPathfinder PathfinderFor(uint mapId)
+    {
+        IPathfinder primary = Pathfinder;
+        bool hasData = primary is IMapAwarePathfinder aware ? aware.HasNavigationData(mapId) : primary.Enabled;
+        return hasData ? primary : Fallback;
+    }
+
+    /// <summary>Register the no-navmesh pathfinder (null restores the straight line). Survives <see cref="Install"/>.</summary>
+    public void InstallFallback(IPathfinder? fallback) => Fallback = fallback ?? StraightLinePathfinder.Instance;
+
     /// <summary>The collision services of <paramref name="world"/> (created with the defaults on first use).</summary>
     public static WorldCollision Of(WorldRuntime world)
     {
