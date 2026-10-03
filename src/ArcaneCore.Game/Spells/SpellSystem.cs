@@ -69,6 +69,13 @@ public sealed partial class SpellSystem
     /// </summary>
     public uint MapUpdateIntervalMs { get; set; } = 50;
 
+    /// <summary>
+    /// Raised on the world thread after a cast applied its effects to a target (caster, target,
+    /// spell): vmangos Spell::DoAllEffectOnTarget → CreatureAI::SpellHit. Creature AI subscribes;
+    /// a throwing handler is not caught here.
+    /// </summary>
+    public event Action<Unit, Unit, SpellInfo>? SpellHit;
+
     /// <summary>Units with live spell state.</summary>
     public int TrackedUnitCount => _states.Count;
 
@@ -330,6 +337,7 @@ public sealed partial class SpellSystem
         foreach ((Unit target, int effectMask) in targetEffects)
         {
             ApplyEffects(cast, target, effectMask);
+            SpellHit?.Invoke(caster, target, spell);
         }
 
         if (cast.State != SpellCastState.Casting)
