@@ -161,3 +161,18 @@ ported: it only changes damage for GM-like invulnerability states and game maste
   reset (no knockback in this wave); transports do not exist, so the transport branches compare the block's transport
   fields but never meet a transport. Real clients report fall time and z in their own way: damage numbers were checked
   against the formula, not against a 1.12.1 client.
+## Slice 5: undermap-void (delivered)
+
+`UndermapObserver` (`Locomotion/Falling/UndermapObserver.cs`, `[MovementObserver(Order = 40)]`, an `After` observer because it
+reads the stored position) ports "Antiundermap2" (vmangos `HandleMoverRelocation`, `MovementHandler.cpp:1132-1161`): a
+non-GM player below z = -500 takes `FALL_TO_VOID` damage of half the current health (the whole health on a battleground
+map, `MapTemplate.IsBattleground`), logged as a fall. If that kills, `KillPlayer` and `RepopPlayer` run (vmangos
+`KillPlayer` + `BuildPlayerRepop`; this core's `RepopPlayer` already sends the ghost to the graveyard, so the graveyard hook
+is not called twice). A player that is already a ghost only takes `Hooks.RepopAtGraveyard` again, once per packet as
+vmangos does ("this is actually called many times while falling"). A 1-health player takes 0 damage (1 / 2 = 0) and is
+still sent to the graveyard. `RepopAtGraveyard` is the death lane's hook and is a no-op (returns false) on this base
+until that lane installs its implementation.
+
+Not delivered: antiundermap1 (`UndermapRecall`, `:1105-1127`: more than 100 yards below the ground height while
+falling, return to the last safe position, Warsong Gulch below z = 250). It needs a safe-position record and the ground
+height under the player from the collision and pathfinding lanes.

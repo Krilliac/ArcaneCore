@@ -60,4 +60,24 @@ public sealed class FallDamageEndToEndTests
         Assert.DoesNotContain(got, p => p.Opcode == WorldOpcode.SmsgEnvironmentaldamagelog);
         Assert.False(await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Faller")!.Locomotion.IsFalling));
     }
+
+    [Fact]
+    public async Task FallingBelowTheVoidHeight_TakesHalfTheHealth()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("VOID", "Voider");
+        await client.CollectAsync();
+        await host.OnWorldAsync(() =>
+        {
+            ArcaneCore.Game.Entities.Player p = host.World.FindOnlinePlayer("Voider")!;
+            p.MaxHealth = 2000;
+            p.Health = 2000;
+        });
+
+        await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, Block(MovementFlags.Jumping | MovementFlags.FallingFar, -501f, 5000));
+
+        byte[] log = await client.ReadUntilAsync(WorldOpcode.SmsgEnvironmentaldamagelog);
+        Assert.Equal(2, log[8]);
+        Assert.Equal(1000u, BitConverter.ToUInt32(log, 9));
+    }
 }
