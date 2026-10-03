@@ -96,45 +96,61 @@ public sealed partial class SpellSystem
     };
 
     /// <summary>vmangos Spell::DoAllEffectOnTarget → HandleEffects per effect, then the built aura holder is added.</summary>
-    private void ApplyEffects(SpellCast cast, Unit target, int effectMask, float[]? multipliers = null)
+    private SpellTargetOutcome? ApplyEffects(SpellCast cast, Unit target, int effectMask, float[]? multipliers = null)
     {
         if (IsQuestSettlementPending(cast.Caster) || IsQuestSettlementPending(target))
         {
-            return;
+            return null;
         }
 
-        SpellAuraHolder? holder = null;
-        for (int i = 0; i < SpellConstants.MaxEffects; i++)
+        // Damage and healing dealt by the effect handlers is credited to this target's outcome; a nested
+        // triggered cast builds its own and restores ours.
+        var outcome = new OutcomeBuilder(cast, target, effectMask);
+        OutcomeBuilder? outer = _outcome;
+        _outcome = outcome;
+        try
         {
-            if ((effectMask & (1 << i)) == 0)
+            SpellAuraHolder? holder = null;
+            for (int i = 0; i < SpellConstants.MaxEffects; i++)
             {
-                continue;
+                if ((effectMask & (1 << i)) == 0)
+                {
+                    continue;
+                }
+
+                SpellEffectInfo effect = cast.Spell.Effects[i];
+                if (!EffectHandlers.TryGetValue(effect.Effect, out SpellEffectHandler? handler))
+                {
+                    ReportUnsupported("effect", (uint)effect.Effect, cast.Spell.Id);
+                    continue;
+                }
+
+                // vmangos CalculateSpellEffectValue (spell mods) comes before the chain damage multiplier.
+                int value = ModifyValue(SpellValueKind.EffectValue, cast.Caster, cast.Spell, i, cast.Spell.CalculateEffectValue(i, cast.Caster.Level, Random));
+                if (multipliers is not null && multipliers[i] != 1.0f)
+                {
+                    value = (int)(value * multipliers[i]);
+                }
+
+                var context = new SpellEffectContext(this, cast, target, i, value) { EffectMask = effectMask, PendingHolder = holder };
+                handler(context);
+                holder = context.PendingHolder;
             }
 
-            SpellEffectInfo effect = cast.Spell.Effects[i];
-            if (!EffectHandlers.TryGetValue(effect.Effect, out SpellEffectHandler? handler))
+            if (holder is not null && !holder.IsEmpty)
             {
-                ReportUnsupported("effect", (uint)effect.Effect, cast.Spell.Id);
-                continue;
+                AddAuraHolder(holder);
             }
 
-            int value = cast.Spell.CalculateEffectValue(i, cast.Caster.Level, Random);
-            if (multipliers is not null && multipliers[i] != 1.0f)
-            {
-                value = (int)(value * multipliers[i]);
-            }
-            var context = new SpellEffectContext(this, cast, target, i, value) { EffectMask = effectMask, PendingHolder = holder };
-            handler(context);
-            holder = context.PendingHolder;
+            SpellHitTarget?.Invoke(cast.Caster, target, cast.Spell.Id);
+            SpellHit?.Invoke(cast.Caster, target, cast.Spell);
         }
-
-        if (holder is not null && !holder.IsEmpty)
+        finally
         {
-            AddAuraHolder(holder);
+            _outcome = outer;
         }
 
-        SpellHitTarget?.Invoke(cast.Caster, target, cast.Spell.Id);
-        SpellHit?.Invoke(cast.Caster, target, cast.Spell);
+        return outcome.Build();
     }
 
     /// <summary>
@@ -173,6 +189,7 @@ public sealed partial class SpellSystem
         }
 
         uint healed = Damage.Heal(context.Caster, context.Target, context.Spell, amount);
+        RecordHealing(context.Caster, context.Target, context.Spell, healed, crit);
         SendToSet(context.Caster, WorldOpcode.SmsgSpellheallog,
             SpellPackets.BuildSpellHealLog(context.Target.Guid, context.Caster.Guid, context.Spell.Id, healed, crit), includeSelf: true);
     }

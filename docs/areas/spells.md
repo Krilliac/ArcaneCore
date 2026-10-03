@@ -128,6 +128,40 @@ warrior-mechanics slices). Reference rule: only the `SUPPORTED_CLIENT_BUILD = 1.
   spell" exemption (`GetTalentSpellCost`) from the caller, because neither the shapeshift-form table nor the talent
   tree is loaded by this core yet; an unknown form returns `CastOk` like vmangos (`SpellEntry.cpp:1051-1055`).
 
+## Combat spell seams (warrior-mechanics S02b)
+
+Registration points on `SpellSystem` for the stance, equipment, combo, aura-state, proc and spell-mod features.
+They are registered by calling `Register*`, not discovered. Callbacks run on the world thread; a throwing callback
+is not caught (same rule as `SpellHit`). Types are in `SpellCombatSeams.cs`, the registries in `SpellSystem.Seams.cs`,
+the melee slot in `SpellSystem.NextSwing.cs`.
+
+- `ISpellCastCheck` (`RegisterCastCheck`): may veto a cast with any `SpellCastResult`. Checks run by
+  `SpellCheckPhase` then `Order` (`SpellCastCheckOrder`), the line order of vmangos `Spell::CheckCast`: shapeshift
+  (`Spell.cpp:5342`) < caster aura state (`:5392`) < target aura state (`:5636`) < `CheckItems` (`:5698`), the last
+  three before the built-in range (`:5707`) and power (`:5721`) checks. Phases: Caster (after the cooldown check,
+  before stun), Target (once an explicit unit target exists and is alive; skipped for spells without one), Items
+  (before range). The context says whether the check is the strict cast-start one or the landing re-check.
+  `GetErrorAtShapeshiftedCast` is strict-only in vmangos (`:5340`); the check itself must honour `Strict`.
+- `ISpellCastObserver` (`RegisterObserver`): `OnPrepared`, `OnCast` (power taken, before targets and effects),
+  `OnTargetOutcome` (miss reason, damage dealt, healing done, crit, effect mask; also for misses) and
+  `OnFinished(completed)`. Damage and healing are credited to the outcome of the cast and target being applied;
+  a nested triggered cast gets its own outcome.
+- `ISpellValueModifier` (`RegisterValueModifier`): adjusts the effect value (before chain multipliers), the
+  aura/channel duration (vmangos `CalculateDuration`, `SpellEntry.cpp:723-751`: never for permanent -1, floored at
+  0), the power cost, and the cast time (`SpellEntry.cpp:487-494`: after the minimum, only when not 0, before haste).
+  The duration is computed once per cast (`SpellCast.Duration`, like `m_duration`). Modifiers must be pure.
+- Next-swing spells (`SpellInfo.IsNextMeleeSwing`, non-triggered) wait in `UnitSpellState.MeleeCast` instead of
+  casting: SMSG_SPELL_START and the global cooldown at press, nothing else (vmangos `GetCurrentContainer`
+  `Spell.cpp:7607`, `SetCurrentCastedSpell`). A second next-swing spell interrupts the queued one; generic casts and
+  channels neither block nor cancel it; triggered next-swing spells cast at once. `CastQueuedMeleeSpell(caster,
+  victim)` is what the melee swing calls (`Unit::AttackerStateUpdate` `Unit.cpp:2250-2254`): it re-checks, takes the
+  power and applies the effects. `CancelCast` cancels the queued spell whatever spell id the client names
+  (`SpellHandler.cpp:329-330`); `CancelQueuedMeleeSpell` is the same for the combat area (target lost, `Unit.cpp:4604`).
+- `ISpellChainRangeProvider` (`RegisterChainRangeProvider`): replaces the fixed chain jump distance
+  (`SpellConstants.ChainJumpRadius`); the melee-chain rule (`Spell.cpp:2256-2265`) is its first consumer (later slice).
+- Limits: no swing loop calls `CastQueuedMeleeSpell` yet (the melee slice does); the queued spell is not cancelled
+  automatically when the unit stops attacking; the SMSG_ATTACKERSTATEUPDATE a swing spell sends is the melee slice's.
+
 ## What's left
 
 - Area, chain and cone target selection are implemented (`SpellSystem.Targeting.cs`, with a line-of-sight filter on area lists); only the remaining TargetB-based selections are missing.

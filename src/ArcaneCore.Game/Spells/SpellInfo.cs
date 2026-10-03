@@ -306,7 +306,14 @@ public sealed partial record SpellInfo
     /// scaled by UNIT_MOD_CAST_SPEED (build &gt; 1.11.2 branch); USES_RANGED_SLOT adds 500 ms.
     /// A spell without a SpellCastTimes entry is instant.
     /// </summary>
-    public int GetCastTime(byte casterLevel, float castSpeed = 1.0f)
+    public int GetCastTime(byte casterLevel, float castSpeed = 1.0f) => GetCastTime(casterLevel, castSpeed, null);
+
+    /// <summary>
+    /// <see cref="GetCastTime(byte, float)"/> with a cast-time modifier applied to the base time, after the
+    /// minimum and only when it is not 0, before the cast-speed scaling (vmangos SpellEntry.cpp:487-494,
+    /// SPELLMOD_CASTING_TIME).
+    /// </summary>
+    public int GetCastTime(byte casterLevel, float castSpeed, Func<int, int>? castTimeModifier)
     {
         if (CastTime == default)
         {
@@ -315,6 +322,11 @@ public sealed partial record SpellInfo
 
         int castTime = CastTime.Base + (CastTime.PerLevel * ((GetSpellRank(casterLevel) / 5) - (int)BaseLevel));
         castTime = Math.Max(castTime, CastTime.Minimum);
+        if (castTime != 0 && castTimeModifier is not null)
+        {
+            castTime = castTimeModifier(castTime);
+        }
+
         if (!HasAttribute(SpellAttributes.IsAbility | SpellAttributes.IsTradeskill))
         {
             castTime = (int)(castTime * castSpeed);

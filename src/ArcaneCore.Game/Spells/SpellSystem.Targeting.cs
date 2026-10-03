@@ -363,6 +363,7 @@ public sealed partial class SpellSystem
         bool hostile = selector == SpellImplicitTarget.UnitEnemy
             || (selector == SpellImplicitTarget.Unit && Relations.IsHostile(caster, primary));
         bool heal = selector == SpellImplicitTarget.UnitFriendChainHeal;
+        float jumpRadius = ChainJumpRadiusFor(cast, effect);
         float factor = effect.DamageMultiplier is > 0f and not 1.0f ? effect.DamageMultiplier : 1.0f;
         float multiplier = 1.0f;
         var used = new HashSet<Unit>(ReferenceEqualityComparer.Instance) { primary };
@@ -371,7 +372,7 @@ public sealed partial class SpellSystem
         {
             Unit? next = null;
             float best = float.MaxValue;
-            foreach (Unit unit in UnitsInRadius(map, last.X, last.Y, last.Z, SpellConstants.ChainJumpRadius))
+            foreach (Unit unit in UnitsInRadius(map, last.X, last.Y, last.Z, jumpRadius))
             {
                 if (used.Contains(unit) || !(hostile ? IsEnemy(caster, unit) : IsFriend(cast, unit)) || !IsInLineOfSight(cast.Spell, last, unit))
                 {

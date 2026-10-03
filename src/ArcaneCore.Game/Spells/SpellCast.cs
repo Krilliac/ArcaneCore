@@ -13,7 +13,7 @@ public enum SpellCastState : byte
 /// <summary>One cast in flight (vmangos Spell): preparing (cast bar) → casting (channel) → finished.</summary>
 public sealed class SpellCast
 {
-    internal SpellCast(SpellInfo spell, Unit caster, SpellCastTargets targets, bool triggered, int castTime, uint powerCost)
+    internal SpellCast(SpellInfo spell, Unit caster, SpellCastTargets targets, bool triggered, int castTime, uint powerCost, int duration)
     {
         Spell = spell;
         Caster = caster;
@@ -22,6 +22,7 @@ public sealed class SpellCast
         CastTime = castTime;
         Timer = castTime;
         PowerCost = powerCost;
+        Duration = duration;
         CastX = caster.X;
         CastY = caster.Y;
         CastZ = caster.Z;
@@ -44,6 +45,12 @@ public sealed class SpellCast
     public int Timer { get; internal set; }
 
     public uint PowerCost { get; }
+
+    /// <summary>The aura/channel duration in ms, computed once at prepare (vmangos Spell::m_duration; -1 = permanent).</summary>
+    public int Duration { get; }
+
+    /// <summary>Whether the cast got through its checks and reached its effects (false when cancelled or failed).</summary>
+    public bool Completed { get; internal set; }
 
     /// <summary>Damage pushbacks taken (cast bar or channel; vmangos m_delayAtDamageCount).</summary>
     public int PushbackCount { get; internal set; }
@@ -68,8 +75,11 @@ public sealed class UnitSpellState
 
     public Unit Unit { get; }
 
-    /// <summary>The cast in progress (one generic/channeled slot; melee/auto-repeat slots belong to combat).</summary>
+    /// <summary>The cast in progress (one generic/channeled slot; the auto-repeat slot belongs to combat).</summary>
     public SpellCast? CurrentCast { get; internal set; }
+
+    /// <summary>The queued next-swing spell (vmangos CURRENT_MELEE_SPELL); it casts when the melee swing fires, see <see cref="SpellSystem.CastQueuedMeleeSpell"/>.</summary>
+    public SpellCast? MeleeCast { get; internal set; }
 
     /// <summary>spell id → absolute expiry (WorldRuntime ms clock).</summary>
     internal Dictionary<uint, uint> SpellCooldowns { get; } = [];
@@ -87,6 +97,6 @@ public sealed class UnitSpellState
 
     public IReadOnlyList<SpellAuraHolder> AuraHolders => Auras;
 
-    internal bool IsIdle => CurrentCast is null && Auras.Count == 0 && SpellCooldowns.Count == 0
+    internal bool IsIdle => CurrentCast is null && MeleeCast is null && Auras.Count == 0 && SpellCooldowns.Count == 0
         && CategoryCooldowns.Count == 0 && GlobalCooldowns.Count == 0 && SchoolLockouts.Count == 0;
 }
