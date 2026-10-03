@@ -53,9 +53,15 @@ internal sealed class TestDatabases : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        SqliteConnection.ClearAllPools();
-        MySqlConnection.ClearAllPools();
-        NpgsqlConnection.ClearAllPools();
+        // Only this fixture's own pools. xunit runs test classes in parallel and each owns a
+        // TestDatabases, so ClearAllPools() here would dispose pooled handles another class is
+        // acquiring at that instant (ObjectDisposedException / "database is locked" in an
+        // unrelated test). Every connection string handed out is passed to the code under test
+        // unchanged, so it is also the pool key.
+        foreach (DatabaseConnectionOptions options in _created)
+        {
+            ClearPool(options);
+        }
 
         foreach (DatabaseConnectionOptions options in _created.Where(o => o.Provider != DatabaseProvider.Sqlite))
         {
@@ -75,6 +81,36 @@ internal sealed class TestDatabases : IAsyncDisposable
         catch (IOException)
         {
             // best effort
+        }
+    }
+
+    private static void ClearPool(DatabaseConnectionOptions options)
+    {
+        switch (options.Provider)
+        {
+            case DatabaseProvider.Sqlite:
+                using (var connection = new SqliteConnection(options.ConnectionString))
+                {
+                    SqliteConnection.ClearPool(connection);
+                }
+
+                break;
+            case DatabaseProvider.MariaDb or DatabaseProvider.MySql:
+                using (var connection = new MySqlConnection(options.ConnectionString))
+                {
+                    MySqlConnection.ClearPool(connection);
+                }
+
+                break;
+            case DatabaseProvider.PostgreSql:
+                using (var connection = new NpgsqlConnection(options.ConnectionString))
+                {
+                    NpgsqlConnection.ClearPool(connection);
+                }
+
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(options));
         }
     }
 
