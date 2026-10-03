@@ -74,6 +74,7 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
         if (_writes is not null)
         {
             await _writes.FlushAsync().ConfigureAwait(false);
+            _writes.ForgetCharacter(character.Id);
         }
 
         if (session.Services.GetService<ICharacterReputationStore>() is { } store)
@@ -82,14 +83,18 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
         }
     }
 
-    /// <summary>ReputationMgr::LoadFromDB on the session task, after earlier writes for anyone have drained.</summary>
+    /// <summary>
+    /// ReputationMgr::LoadFromDB on the session task, after earlier writes for anyone have drained.
+    /// Throws (refusing the login) while this character has reputation writes that are retained
+    /// and still cannot be persisted, so stale stored rows never become the live state.
+    /// </summary>
     public async Task OnPlayerLoadingAsync(WorldSession session, CharacterRecord character, Player player)
     {
         ArgumentNullException.ThrowIfNull(character);
         ArgumentNullException.ThrowIfNull(player);
         if (_writes is not null)
         {
-            await _writes.FlushAsync().ConfigureAwait(false);
+            await _writes.FlushCharacterAsync(character.Id).ConfigureAwait(false);
         }
 
         CharacterReputationData stored = session.Services.GetService<ICharacterReputationStore>() is { } store
@@ -99,13 +104,22 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
     }
 
     /// <summary>
-    /// Remove a deleted character's reputation. No character-delete seam exists on the
-    /// integration branch yet; the lead wires this into it (docs/integration/reputation.md).
+    /// Remove a deleted character's reputation (called by <see cref="ReputationCharacterDeleteHook"/>
+    /// after the deletion). Discards anything the queue retained for the character.
     /// </summary>
     public void DeleteCharacter(int characterId) => _writes?.DeleteCharacter(characterId);
 
-    /// <summary>Wait until every queued write has been attempted (tests, deletion ordering).</summary>
+    /// <summary>Wait until every queued write has been attempted (tests, deletion ordering). Never retries and never throws.</summary>
     public Task FlushAsync() => _writes?.FlushAsync() ?? Task.CompletedTask;
+
+    /// <summary>
+    /// <see cref="FlushAsync"/> plus one more attempt at this character's retained writes; faults
+    /// while they are still not durable (the login barrier).
+    /// </summary>
+    public Task FlushCharacterAsync(int characterId) => _writes?.FlushCharacterAsync(characterId) ?? Task.CompletedTask;
+
+    /// <summary>True while the character has reputation writes that failed all attempts and are retained.</summary>
+    public bool HasRetainedFailure(int characterId) => _writes?.HasRetainedFailure(characterId) ?? false;
 
     public async Task StopAsync()
     {
@@ -141,7 +155,15 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
         }
     }
 
-    private void OnPlayerLoggingOut(Player player) => Service.Untrack(player);
+    private void OnPlayerLoggingOut(Player player)
+    {
+        Service.Untrack(player);
+        int characterId = (int)player.Guid.Low;
+        if (_writes is { } writes && writes.HasRetainedFailure(characterId))
+        {
+            writes.RequestRetry(characterId); // an early retry; the login barrier and shutdown still retry
+        }
+    }
 
     private void OnMapUnloading(Map map)
     {

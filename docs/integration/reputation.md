@@ -72,9 +72,61 @@ New tables only; nothing existing changes.
 
 The watched faction lives in its own table rather than a new `characters` column so the
 module stays self-contained. Writes are upserts (last write per faction wins), skip a missing
-character, and run through a single ordered consumer (`ReputationWriteQueue`, 3 retries). Login
-and character creation flush the queue first; creation also clears rows left by a deleted
-character whose id was reused.
+character, and run through a single ordered consumer (`ReputationWriteQueue`). Character creation
+flushes the queue first and also clears rows left by a deleted character whose id was reused.
+No schema change was needed for failure durability (below).
+
+## Failure durability
+
+A reputation change is never dropped on a storage failure. `ReputationWriteQueue` merges every
+change (absolute faction rows, last value wins, plus the watched slot) into a per-character
+in-memory overlay and writes the whole overlay, so a write that fails its 3 attempts (200/400 ms
+backoff, fresh DI scope each attempt) is **retained** instead of lost, and the next write for that
+character carries it. The overlay is cleared only for the rows that were actually written and not
+changed since. Replaying a write is safe: every store call is an idempotent upsert or delete
+(`Replay_IsIdempotent_OnEveryProvider` covers SQLite, MariaDB and PostgreSQL). Writes queued for a
+character while one is already waiting are coalesced, so an outage does not grow the queue.
+
+Retry triggers, all per character:
+
+- the next reputation change for the character (it writes everything retained);
+- login: `FlushCharacterAsync` runs after every earlier write, retries once more, and **refuses the
+  login** (`CharLoginFailed`, the same fail-closed path as the quest and character-save queues)
+  while the character is still unrecovered, so stale stored rows never become the live state;
+- logout: a fire-and-forget retry is queued when a character with retained writes leaves;
+- shutdown: `StopAsync` runs a final retry of every retained character and throws an
+  `InvalidOperationException` naming the character ids if storage is still failing. That surfaces
+  through `WorldFeatures.StopWorldFeaturesAsync` (docs/integration/seams.md). `StopAsync` is
+  idempotent and returns the same failure to a second caller, so disposing the feature after
+  stopping it reports the failure again (as the quest feature does).
+
+`FlushAsync` stays a pure ordered barrier (character creation and deletion use it): it neither
+retries nor throws, so one character's persistent failure cannot stall unrelated creations or
+deletions. Deletion is never blocked by retained writes: `DeleteCharacter` discards whatever was
+retained and queues the delete (a failed delete is itself retained and retried; a later shutdown
+failure can therefore name a character whose deletion transaction already removed its rows).
+Creation drops anything retained for a reused id after its flush.
+
+Limits (honest):
+
+- Retention is in process only. A crash, or storage still down at graceful shutdown, loses the
+  retained gain; shutdown makes that loss loud, a crash cannot. No spill-to-disk journal exists.
+- There is no periodic background retry: an online player with a retained failure and no further
+  reputation change is retried only at logout, relog or shutdown.
+- A character with an unrecovered write cannot log in until storage recovers (user-visible refusal).
+- A change arriving after the queue stopped is only logged and held in memory; the host stops the
+  world before its features, so this does not happen in the daemon.
+- A host without an `ICharacterReputationStore` keeps the old tolerant no-op (the empty-catalog test
+  host); the quest persistence fails closed there instead.
+- Merging relies on rows being absolute values and the store being last-wins. A future delta-style
+  write (quest reputation inside a settlement transaction) must not reuse this path unchanged.
+- The retained-write retry on login and shutdown costs 3 attempts plus backoff (about 0.6 s) per
+  affected character.
+
+Proof: `ReputationWriteDurabilityTests`, `ReputationWriteRetentionTests` (queue over real EF/SQLite
+with injected failures, simulated restart), `ReputationWorldTests` (socket: refused relog until
+recovery then gain and watched faction restored, logout retry, deletion with a retained failure)
+and `ReputationStoreTests.Replay_IsIdempotent_OnEveryProvider`.
 
 ## Configuration
 
@@ -106,10 +158,10 @@ installed (requirements fail closed).
 
 ## Known gaps (honest limits)
 
-- **Character delete:** there is no character-delete hook on the integration branch, so
-  deleted characters' rows stay until the id is reused (creation clears them).
-  `ReputationFeature.DeleteCharacter(id)` exists for the lead to call from that hook. (The
-  spellbook cache has the same gap.)
+- **Character delete:** `ReputationCharacterDeleteHook` (docs/integration/character-delete.md)
+  drains the queue before the deletion transaction removes the rows and queues
+  `ReputationFeature.DeleteCharacter(id)` afterwards. Queued post-delete removal has no lifetime
+  fence against an explicitly reused id (claude-handoff-20261003.md priority 1).
 - **Kill data has no world schema slot.** Kill rewards read `IReputationOnKillSource`; no world
   module provides it in this round, so kill reputation is inactive in the daemon until the world
   data owner adds `creature_onkill_reputation` (or registers a source).
