@@ -196,7 +196,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        double discounted = MathF.Ceiling(total * PriceDiscount(player, npc)); // single precision as vmangos
+        double discounted = MathF.Ceiling(total * PriceDiscount(player, npc, taxi: true)); // single precision as vmangos
         uint cost = discounted >= uint.MaxValue ? uint.MaxValue : (uint)discounted;
         if (player.Money < cost)
         {

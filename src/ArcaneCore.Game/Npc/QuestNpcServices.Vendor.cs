@@ -105,8 +105,10 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        // PvP ranks belong to the honor owner, which this area has no seam to: rank items fail closed.
-        if (proto.RequiredHonorRank != 0)
+        // Player::BuyItemFromVendor (Player.cpp:18431-18439): the CURRENT honor rank (not the highest, unlike equipping) and the
+        // item's required level must both be met. Without an honor owner the rank items still fail closed.
+        if (proto.RequiredHonorRank != 0
+            && (Deps.Honor is not { } honor || honor.CurrentRank(player) < proto.RequiredHonorRank || player.Level < proto.RequiredLevel))
         {
             Send(player, WorldOpcode.SmsgBuyFailed, NpcPackets.BuyFailed(npc.Guid, itemId, BuyResult.RankRequire));
             return;
@@ -328,7 +330,16 @@ public sealed partial class QuestNpcServices
         return vendorItem.ConditionId == 0 || (Deps.Conditions?.IsSatisfied(vendorItem.ConditionId, player, npc) ?? false);
     }
 
-    private float PriceDiscount(Player player, NpcInfo npc) => Deps.Reputation?.GetPriceDiscount(player, npc) ?? 1.0f;
+    /// <summary>
+    /// Player::GetReputationPriceDiscount (Player.cpp:19470-19510): 1 minus the Honored discount minus, for the capital and
+    /// faction vendors, the honor rank discount (additive, so 0.8 and not 0.81). <paramref name="taxi"/> selects the
+    /// flight master variant.
+    /// </summary>
+    private float PriceDiscount(Player player, NpcInfo npc, bool taxi = false)
+    {
+        float discount = Deps.Reputation?.GetPriceDiscount(player, npc) ?? 1.0f;
+        return Deps.Honor is { } honor ? Honor.HonorPriceDiscount.Apply(discount, honor.VisualRank(player), npc.FactionId, taxi) : discount;
+    }
 
     /// <summary>vmangos uint32(floor(price × GetReputationPriceDiscount)) (vendors and trainers).</summary>
     private static uint Discounted(ulong price, float discount)

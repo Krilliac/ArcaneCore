@@ -105,7 +105,8 @@ public sealed record ItemInfo(
     uint Bonding,
     uint RequiredReputationFaction,
     uint RequiredReputationRank,
-    uint RequiredHonorRank);
+    uint RequiredHonorRank,
+    uint RequiredLevel = 0);
 
 /// <summary>vmangos SellResult (Player.h) — the reason byte of SMSG_SELL_ITEM.</summary>
 public enum SellResult : byte
