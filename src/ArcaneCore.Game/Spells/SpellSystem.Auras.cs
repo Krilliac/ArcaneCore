@@ -168,6 +168,13 @@ public sealed partial class SpellSystem
                 continue;
             }
 
+            if (holder.AreaParent is { } parent && (parent.IsRemoved || !ReferenceEquals(parent.Target.Map, holder.Target.Map)))
+            {
+                // vmangos AreaAura::Update: the aura goes with its source or when the owner left the map.
+                RemoveHolder(state, holder);
+                continue;
+            }
+
             if (IsQuestSettlementPending(holder.Target)
                 || IsQuestSettlementPending(ResolveAuraCaster(holder)))
             {
@@ -220,6 +227,22 @@ public sealed partial class SpellSystem
         {
             AuraHandlers.GetValueOrDefault(aura.Type)?.Apply?.Invoke(this, holder, aura, false);
         }
+
+        if (holder.AreaParent is { } parent && parent.AreaChildren.TryGetValue(holder.Target.Guid, out SpellAuraHolder? child)
+            && ReferenceEquals(child, holder))
+        {
+            parent.AreaChildren.Remove(holder.Target.Guid);
+        }
+
+        foreach (SpellAuraHolder areaChild in holder.AreaChildren.Values.ToArray())
+        {
+            if (GetState(areaChild.Target.Guid) is { } childState && ReferenceEquals(childState.Unit, areaChild.Target))
+            {
+                RemoveHolder(childState, areaChild);
+            }
+        }
+
+        holder.AreaChildren.Clear();
     }
 
     // --- update fields (vmangos SpellAuraHolder::SetAura / SetAuraFlag / SetAuraLevel / UpdateAuraApplication)
@@ -319,7 +342,8 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// vmangos Aura::PeriodicTick SPELL_AURA_PERIODIC_DAMAGE / _PERCENT: the amount (percent of the
-    /// target's maximum health for _PERCENT) goes to <see cref="IDamageSink"/>; SMSG_PERIODICAURALOG to the target's set.
+    /// target's maximum health for _PERCENT), less a partial resist, goes to <see cref="IDamageSink"/>;
+    /// channels on the target may be delayed; SMSG_PERIODICAURALOG to the target's set.
     /// </summary>
     private void TickPeriodicDamage(SpellAuraHolder holder, SpellAura aura)
     {
@@ -333,9 +357,12 @@ public sealed partial class SpellSystem
             ? (uint)((ulong)target.MaxHealth * (uint)aura.Amount / 100)
             : (uint)aura.Amount;
         Unit caster = ResolveAuraCaster(holder) ?? target;
+        uint resisted = Math.Min(amount, CombatRules.RollPartialResist(this, caster, target, holder.Spell, amount));
+        amount -= resisted;
         uint dealt = Damage.DealSpellDamage(caster, target, holder.Spell, amount, periodic: true);
+        OnDamageTaken(target, caster, dealt, periodic: true);
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
-            target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, dealt, (uint)holder.Spell.School)), includeSelf: true);
+            target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, dealt, (uint)holder.Spell.School, Resisted: resisted)), includeSelf: true);
     }
 
     /// <summary>
