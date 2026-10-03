@@ -180,6 +180,7 @@ public sealed class EconomyAuctionDeletionBarrierTests
         public Task<string?> GetItemTextAsync(uint id, CancellationToken ct = default) => inner.GetItemTextAsync(id, ct);
         public Task<IReadOnlyList<AuctionRecord>> GetAuctionsAsync(CancellationToken ct = default) => inner.GetAuctionsAsync(ct);
         public Task<IReadOnlyDictionary<uint, ItemInstanceData>> GetEscrowItemsAsync(IReadOnlyCollection<uint> ids, CancellationToken ct = default) => inner.GetEscrowItemsAsync(ids, ct);
+        public Task<AuctionSnapshot> GetAuctionSnapshotAsync(AuctionSnapshotFilter filter, CancellationToken ct = default) => inner.GetAuctionSnapshotAsync(filter, ct);
         public Task<EconomyIdSeed> GetIdSeedAsync(CancellationToken ct = default) => inner.GetIdSeedAsync(ct);
     }
 

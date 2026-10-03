@@ -29,20 +29,19 @@ public sealed partial class EconomyFeature : ICharacterDeleteHook
         int id = character.Id;
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(_readStop.Token);
         budget.CancelAfter(EconomySettlements.Budget);
-        IReadOnlyList<AuctionRecord> auctions;
-        IReadOnlyDictionary<uint, ItemInstanceData> items;
+        AuctionSnapshot sold;
         IReadOnlyList<MailRecord> letters;
         await using (AsyncServiceScope scope = _scopes.CreateAsyncScope())
         {
             IEconomyStore store = scope.ServiceProvider.GetRequiredService<IEconomyStore>();
-            auctions = [.. (await store.GetAuctionsAsync(budget.Token).ConfigureAwait(false)).Where(a => a.SellerId == id)];
-            items = await store.GetEscrowItemsAsync([.. auctions.Select(a => a.ItemGuid)], budget.Token).ConfigureAwait(false);
+            // The seller's rows and their escrow come from one snapshot. Letters are a separate read.
+            sold = await store.GetAuctionSnapshotAsync(new AuctionSnapshotFilter(SellerId: id), budget.Token).ConfigureAwait(false);
             letters = await store.GetMailsInvolvingAsync(id, budget.Token).ConfigureAwait(false);
         }
 
         await world.InvokeAsync(() =>
         {
-            ResyncDeletedCharacter(id, auctions, items, letters);
+            ResyncDeletedCharacter(id, sold.Auctions, sold.Escrow, letters);
             return true;
         }).WaitAsync(budget.Token).ConfigureAwait(false);
     }
@@ -59,9 +58,19 @@ public sealed partial class EconomyFeature : ICharacterDeleteHook
             AuctionRecord auction = view.Auction;
             if (auction.SellerId == id)
             {
-                if (stillSold.TryGetValue(auction.Id, out AuctionRecord? kept) && items.TryGetValue(kept.ItemGuid, out ItemInstanceData? item))
+                if (stillSold.TryGetValue(auction.Id, out AuctionRecord? kept))
                 {
-                    _auctions[auction.Id] = new AuctionView(kept, item);
+                    if (items.TryGetValue(kept.ItemGuid, out ItemInstanceData? item) && EscrowMatches(kept, item))
+                    {
+                        _auctions[auction.Id] = new AuctionView(kept, item);
+                    }
+                    else
+                    {
+                        // The row survived but its escrow does not match: reserve it (as at startup)
+                        // instead of dropping it from the cache while it stays in the database.
+                        _auctions.Remove(auction.Id);
+                        ReserveMismatchedAuction(kept);
+                    }
                 }
                 else
                 {

@@ -6,6 +6,7 @@ using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Economy;
 
@@ -16,6 +17,15 @@ public sealed partial class EconomyFeature
 
     private readonly Dictionary<uint, AuctionView> _auctions = [];
     private readonly HashSet<uint> _busyAuctions = [];
+
+    /// <summary>
+    /// Auctions whose last expiry settlement was refused (a conflict, a missing seller row): when to
+    /// try them again, so a poisoned auction cannot starve later ones. In memory only.
+    /// </summary>
+    private readonly Dictionary<uint, (int Failures, long NotBefore)> _expiryBackoff = [];
+
+    private const long ExpiryBackoffBaseSeconds = 60;
+    private const long ExpiryBackoffMaxSeconds = 86_400;
 
     /// <summary>The cached auctions (tests and GM tools).</summary>
     public IReadOnlyCollection<AuctionView> Auctions => _auctions.Values;
@@ -279,8 +289,10 @@ public sealed partial class EconomyFeature
             EconomyPackets.AuctionCommandResult(auctionId, AuctionAction.Removed, error));
 
         long now = Now;
+        // An expired auction belongs to the expiry sweep, which returns the item as Expired. Letting
+        // the seller cancel it first would race the sweep and hide a poisoned expiry behind a cancel.
         if (!_auctions.TryGetValue(auctionId, out AuctionView? view) || view.Auction.HouseId != house.Id
-            || view.Auction.SellerId != IdOf(player) || _busyAuctions.Contains(auctionId))
+            || view.Auction.SellerId != IdOf(player) || view.Auction.ExpireTime <= now || _busyAuctions.Contains(auctionId))
         {
             Fail(AuctionError.Database);
             return;
@@ -329,7 +341,13 @@ public sealed partial class EconomyFeature
     private void ExpireAuctions()
     {
         long now = Now;
-        foreach (AuctionView view in _auctions.Values.Where(v => v.Auction.ExpireTime <= now && !_busyAuctions.Contains(v.Auction.Id))
+        foreach (uint gone in _expiryBackoff.Keys.Where(id => !_auctions.ContainsKey(id)).ToList())
+        {
+            _expiryBackoff.Remove(gone);
+        }
+
+        foreach (AuctionView view in _auctions.Values.Where(v => v.Auction.ExpireTime <= now && !_busyAuctions.Contains(v.Auction.Id)
+                && !(_expiryBackoff.TryGetValue(v.Auction.Id, out var backoff) && backoff.NotBefore > now))
             .OrderBy(v => v.Auction.ExpireTime).Take(ExpiryBatch).ToList())
         {
             AuctionRecord auction = view.Auction;
@@ -351,13 +369,34 @@ public sealed partial class EconomyFeature
             }
 
             changes.AddRange(letters.Select(l => new InsertMail(l.Mail, LetterBody(l))));
+            bool refused = false;
             RunAuctionOperation([], changes, auction.Id, outcome =>
             {
+                if (outcome == EconomyOutcome.NotStarted)
+                {
+                    refused = true;
+                    return;
+                }
+
+                if (outcome == EconomyOutcome.Before)
+                {
+                    int failures = _expiryBackoff.TryGetValue(auction.Id, out var previous) ? previous.Failures + 1 : 1;
+                    long wait = Math.Min(ExpiryBackoffBaseSeconds << Math.Min(failures - 1, 11), ExpiryBackoffMaxSeconds);
+                    _expiryBackoff[auction.Id] = (failures, Now + wait);
+                    if (failures == 1)
+                    {
+                        _logger.LogWarning("expiry of auction {Auction} was refused; it is retried with backoff (next in {Seconds} s)", auction.Id, wait);
+                    }
+
+                    return;
+                }
+
                 if (outcome != EconomyOutcome.After)
                 {
                     return;
                 }
 
+                _expiryBackoff.Remove(auction.Id);
                 _auctions.Remove(auction.Id);
                 if (sold)
                 {
@@ -374,6 +413,12 @@ public sealed partial class EconomyFeature
 
                 DeliverAll(letters);
             });
+            if (refused)
+            {
+                // No settlement slot (the 16-operation cap) or shutdown: the rest of the batch would be
+                // refused the same way and log a warning each. The next sweep continues.
+                break;
+            }
         }
     }
 
@@ -429,8 +474,12 @@ public sealed partial class EconomyFeature
 
         bool started = Start(actors, changes, outcome =>
         {
-            if (outcome == EconomyOutcome.Unknown)
+            if (outcome == EconomyOutcome.Unknown || (outcome == EconomyOutcome.Before && ChangesExpectedAuction(changes, auctionId)))
             {
+                // Unknown: the commit may or may not have happened. Before on a same-ID update/delete:
+                // the row no longer matches the cached Expected (another writer, or a participant
+                // mismatch), so the cache is stale. Either way the ID stays reserved until a fresh
+                // authoritative read repairs it.
                 QuarantineAuction(auctionId, changes);
             }
             else
@@ -445,6 +494,10 @@ public sealed partial class EconomyFeature
             finished(EconomyOutcome.NotStarted);
         }
     }
+
+    /// <summary>Whether the changes expect to find (update or delete) the auction row the cache holds for this ID.</summary>
+    private static bool ChangesExpectedAuction(IReadOnlyList<EconomyChange> changes, uint auctionId)
+        => changes.Any(c => c is UpdateAuction u && u.Expected.Id == auctionId || c is DeleteAuction d && d.Expected.Id == auctionId);
 
     private IEnumerable<AuctionView> HouseAuctions(uint houseId, long now)
         => _auctions.Values.Where(v => v.Auction.HouseId == houseId && v.Auction.ExpireTime > now

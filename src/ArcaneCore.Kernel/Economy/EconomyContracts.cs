@@ -142,6 +142,16 @@ public enum EconomyCommitResult
 /// <summary>The highest ids in use, to seed in-memory allocators at startup.</summary>
 public readonly record struct EconomyIdSeed(uint MaxMailId, uint MaxAuctionId, uint MaxItemTextId);
 
+/// <summary>Which auctions an <see cref="AuctionSnapshot"/> covers: all, one by ID, or one seller's. Both set means both must match.</summary>
+public readonly record struct AuctionSnapshotFilter(uint? AuctionId = null, int? SellerId = null);
+
+/// <summary>
+/// Auction rows and their owner-0 escrow items read in one transaction. An auction whose item is
+/// not present in <see cref="Escrow"/> (or differs from the row) had no matching escrow at the
+/// moment of the read; callers decide what that means.
+/// </summary>
+public sealed record AuctionSnapshot(IReadOnlyList<AuctionRecord> Auctions, IReadOnlyDictionary<uint, ItemInstanceData> Escrow);
+
 /// <summary>
 /// Persistence of mail, item text and auctions (characters schema, economy module). Commits are
 /// serializable transactions in a dedicated context; failures propagate after rollback.
@@ -167,6 +177,12 @@ public interface IEconomyStore
 
     /// <summary>Escrowed (owner 0) items by GUID; missing GUIDs are absent from the result.</summary>
     Task<IReadOnlyDictionary<uint, ItemInstanceData>> GetEscrowItemsAsync(IReadOnlyCollection<uint> itemGuids, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The matching auction rows and their escrow items from one consistent snapshot, so a writer
+    /// that releases an escrow item and deletes its auction cannot be observed half-applied.
+    /// </summary>
+    Task<AuctionSnapshot> GetAuctionSnapshotAsync(AuctionSnapshotFilter filter, CancellationToken cancellationToken = default);
 
     Task<EconomyIdSeed> GetIdSeedAsync(CancellationToken cancellationToken = default);
 }
