@@ -30,7 +30,7 @@ public sealed class CharacterReputationWatchEntity
 /// Characters schema v7 (reputation, docs/integration/reputation.md): per-character faction
 /// standing/flags and the watched faction. Both tables are new; nothing existing changes.
 /// </summary>
-public sealed class CharacterReputationDataModule : IDataModule
+public sealed class CharacterReputationDataModule : IDataModule, ICharacterDataCleanup
 {
     public const int Version = 7;
     public const string FactionTable = "character_reputation";
@@ -69,6 +69,16 @@ public sealed class CharacterReputationDataModule : IDataModule
     }
 
     public void AddServices(IServiceCollection services) => services.AddScoped<ICharacterReputationStore, EfCharacterReputationStore>();
+
+    /// <summary>Faction standings and the watched faction (vmangos DeleteFromDB: character_reputation; docs/integration/character-delete.md).</summary>
+    public async Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        await db.Set<CharacterReputationEntity>().Where(r => r.CharacterId == characterId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<CharacterReputationWatchEntity>().Where(r => r.CharacterId == characterId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+    }
 }
 
 /// <summary>EF Core implementation of <see cref="ICharacterReputationStore"/>.</summary>
