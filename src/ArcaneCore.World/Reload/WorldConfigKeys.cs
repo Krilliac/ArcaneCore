@@ -103,6 +103,8 @@ public static class WorldConfigKeys
         LiveSocial("AllowTwoSideGroup", o => o.AllowTwoSideGroup, (o, v) => o.AllowTwoSideGroup = v),
         LiveSocial("AllowTwoSideGuild", o => o.AllowTwoSideGuild, (o, v) => o.AllowTwoSideGuild = v),
         LiveSocial("AllowTwoSideChannel", o => o.AllowTwoSideChannel, (o, v) => o.AllowTwoSideChannel = v),
+        // Not a vmangos key: the switch for its custom "World"/"China" channel names, read when a channel is created.
+        LiveSocial("VmangosChannelExtensions", o => o.VmangosChannelExtensions, (o, v) => o.VmangosChannelExtensions = v),
     ];
 
     private static string? NonNegative<T>(T value) where T : struct, IComparable<T>

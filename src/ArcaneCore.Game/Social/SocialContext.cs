@@ -65,6 +65,14 @@ public sealed class SocialOptions
 
     /// <summary>AllowTwoSide.Interaction.Channel.</summary>
     public bool AllowTwoSideChannel { get; set; }
+
+    /// <summary>
+    /// The vmangos-only custom channel names: "World" becomes a General-flagged channel without
+    /// join/leave announcements and "China" (or its Mandarin name) a Custom one without
+    /// announcements (vmangos Channel.cpp:63-71). Retail 1.12 has neither, so they are ordinary
+    /// custom channels unless this is on; it applies to channels created after the change.
+    /// </summary>
+    public bool VmangosChannelExtensions { get; set; }
 }
 
 /// <summary>
