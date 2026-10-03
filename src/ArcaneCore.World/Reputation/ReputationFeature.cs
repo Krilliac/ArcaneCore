@@ -101,6 +101,11 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
             ? await store.LoadAsync(character.Id).ConfigureAwait(false)
             : CharacterReputationData.Empty;
         Service.Track(player, Service.Create(player, stored));
+        if (Service.Factions.Count > 0)
+        {
+            // Item reputation gates read the real rank (Player.cpp:10045). Without a catalog the fail-closed default stays.
+            player.Inventory.Requirements = new ReputationItemRequirements(player.Inventory.Requirements, Service);
+        }
     }
 
     /// <summary>
