@@ -64,7 +64,12 @@ public sealed partial class SpellSystem
             context.Spell, context.Target, context.Caster,
             _auraCasterOwners.GetValue(context.Caster, static caster => new AuraCasterOwner(caster)),
             context.Cast.State == SpellCastState.Casting ? context.Cast.Timer : context.Cast.Duration);
-        context.PendingHolder.SetAura(new SpellAura(context.EffectIndex, effect.AuraType, context.Value, effect.Amplitude, effect.MiscValue));
+        if (context.Cast.State == SpellCastState.Casting && context.PendingHolder.ChannelTarget == default)
+        {
+            context.PendingHolder.ChannelTarget = new ObjectGuid(context.Caster.GetUInt64(UpdateFields.UnitFieldChannelObject));
+        }
+
+        context.PendingHolder.SetAura(new SpellAura(context.EffectIndex, effect.AuraType, SnapshotAuraAmount(context), effect.Amplitude, effect.MiscValue));
     }
 
     /// <summary>
@@ -375,6 +380,7 @@ public sealed partial class SpellSystem
             ? (uint)((ulong)target.MaxHealth * (uint)aura.Amount / 100)
             : (uint)aura.Amount;
         Unit caster = ResolveAuraCaster(holder) ?? target;
+        amount = ModifyTick(SpellAmountStage.DamageOverTimeTick, holder, aura, caster, amount);
         if (ImmunityRules.IsImmuneToDamage(this, target, holder.Spell.SchoolMask(), holder.Spell))
         {
             // vmangos Aura::PeriodicTick: an immune target takes nothing and the client is told (SpellAuras.cpp:5839-5841).
@@ -407,6 +413,7 @@ public sealed partial class SpellSystem
             ? (uint)((ulong)target.MaxHealth * (uint)aura.Amount / 100)
             : (uint)aura.Amount;
         Unit caster = ResolveAuraCaster(holder) ?? target;
+        amount = ModifyTick(SpellAmountStage.HealOverTimeTick, holder, aura, caster, amount);
         uint healed = Damage.Heal(caster, target, holder.Spell, amount);
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
             target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, healed, 0)), includeSelf: true);
@@ -439,9 +446,20 @@ public sealed partial class SpellSystem
     {
         uint triggerSpell = holder.Spell.Effects[aura.EffectIndex].TriggerSpell;
         Unit caster = ResolveAuraCaster(holder) ?? holder.Target;
+        Unit triggerTarget = holder.Target;
+
+        // vmangos Aura::TriggerSpell (SpellAuras.cpp:1519-1536): a channelled spell whose trigger aura sits on its
+        // own caster (Arcane Missiles: TARGET_UNIT_CASTER) casts the triggered spell at the CHANNEL TARGET. A trigger
+        // aura on the channel target casts from the caster at that target, which is the default below.
+        if (holder.Spell.IsChanneled && ReferenceEquals(holder.Target, caster)
+            && holder.ChannelTarget.Value != 0 && Units.Find(caster, holder.ChannelTarget) is { } channelTarget)
+        {
+            triggerTarget = channelTarget;
+        }
+
         if (Store.Get(triggerSpell) is not null)
         {
-            CastSpell(caster, triggerSpell, SpellCastTargets.ForUnit(holder.Target.Guid), triggered: true);
+            CastSpell(caster, triggerSpell, SpellCastTargets.ForUnit(triggerTarget.Guid), triggered: true);
         }
     }
 }

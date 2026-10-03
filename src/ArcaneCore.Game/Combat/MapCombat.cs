@@ -202,7 +202,21 @@ public sealed partial class MapCombat : IMapUpdater
         c.Tracker = this;
 
         // vmangos Unit::Update: five-second rule, combat timer, swing timers.
-        c.LastManaUseTimer = c.LastManaUseTimer > diff ? c.LastManaUseTimer - diff : 0;
+        // The timer does not run out while the unit still channels the spell that took the mana (vmangos
+        // Unit.cpp:235-253, patch 1.7 "mana was being regenerated while channelling spells that use mana").
+        if (c.LastManaUseTimer != 0)
+        {
+            if (diff < c.LastManaUseTimer)
+            {
+                c.LastManaUseTimer -= diff;
+            }
+            else if (c.LastManaUseSpellId == 0 || unit.GetUInt32(UpdateFields.UnitChannelSpell) != c.LastManaUseSpellId)
+            {
+                c.LastManaUseTimer = 0;
+                c.LastManaUseSpellId = 0;
+            }
+        }
+
         UpdateCombatTimer(unit, diff);
         c.TickAttackTimers(diff);
 

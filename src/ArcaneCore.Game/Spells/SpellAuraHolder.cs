@@ -107,6 +107,13 @@ public sealed class SpellAuraHolder
 
     public ObjectGuid CasterGuid { get; }
 
+    /// <summary>
+    /// The unit in the caster's UNIT_FIELD_CHANNEL_OBJECT when this holder's channelled spell started (empty for anything
+    /// else). A channel's final periodic tick runs in the same update that ends the channel, after the channel fields
+    /// were cleared (vmangos keeps them for one more second), so periodic trigger auras read it from here.
+    /// </summary>
+    internal ObjectGuid ChannelTarget { get; set; }
+
     public byte CasterLevel { get; }
 
     internal AuraCasterOwner CasterOwner { get; }

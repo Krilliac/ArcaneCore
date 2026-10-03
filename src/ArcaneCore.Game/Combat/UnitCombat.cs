@@ -103,8 +103,21 @@ public sealed class UnitCombat
     /// <summary>vmangos Unit::resetAttackTimer.</summary>
     public void ResetAttackTimer(WeaponAttackType type = WeaponAttackType.BaseAttack) => _attackTimers[(int)type] = GetAttackTime(type);
 
+    /// <summary>
+    /// The spell that last took mana (vmangos Unit::m_lastManaUseSpellId): while the unit still channels it, the
+    /// five second timer does not run out (Unit::Update, patch 1.7 fix). 0 when none.
+    /// </summary>
+    public uint LastManaUseSpellId { get; internal set; }
+
     /// <summary>Start the five second rule (vmangos Spell::TakePower → SetLastManaUse). For the spells area.</summary>
-    public void NoteManaUsed() => LastManaUseTimer = CombatConstants.ManaRegenInterruptMs;
+    public void NoteManaUsed() => NoteManaUsed(0);
+
+    /// <summary>Start the five second rule for <paramref name="spellId"/> (vmangos Unit::SetLastManaUse(spellId)).</summary>
+    public void NoteManaUsed(uint spellId)
+    {
+        LastManaUseTimer = CombatConstants.ManaRegenInterruptMs;
+        LastManaUseSpellId = spellId;
+    }
 
     internal void TickAttackTimers(uint diff)
     {

@@ -198,7 +198,7 @@ public sealed partial class SpellSystem
             return;
         }
 
-        DealDirectDamage(context.Caster, context.Target, context.Spell, (uint)context.Value, allowCrit: true);
+        DealDirectDamage(context.Caster, context.Target, context.Spell, ModifyDirect(SpellAmountStage.DirectDamage, context, (uint)context.Value), allowCrit: true);
     }
 
     /// <summary>vmangos Spell::EffectHeal → SpellCaster::DealHeal → SendHealSpellLog (to the set); a critical heal is +50% (SpellCriticalHealingBonus).</summary>
@@ -209,7 +209,7 @@ public sealed partial class SpellSystem
             return;
         }
 
-        DeliverHeal(context, (uint)context.Value);
+        DeliverHeal(context, ModifyDirect(SpellAmountStage.DirectHeal, context, (uint)context.Value));
     }
 
     /// <summary>
