@@ -87,6 +87,7 @@ public sealed partial class MapCombat
         c.GhostTime = NowSeconds;
         c.DeathTimer = 0;
         SetDeathState(player, DeathState.Dead);
+        player.NeedsVisibilityUpdate = true; // a ghost sees and is seen differently (GhostVisibilityRule)
 
         if (leaving)
         {
