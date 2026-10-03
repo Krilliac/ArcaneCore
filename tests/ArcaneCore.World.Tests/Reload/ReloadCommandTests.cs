@@ -105,12 +105,8 @@ public sealed class ReloadCommandTests
 
         await SayAsync(admin, ".reload status");
 
-        var lines = new List<string>();
-        for (int i = 0; i < 3; i++)
-        {
-            lines.Add((await admin.ReadChatAsync()).Text);
-        }
-
+        // One line per registered reloadable, in name order (other features register theirs too).
+        List<string> lines = await ReadLinesUntilAsync(admin, l => l.StartsWith("spell_template:", StringComparison.Ordinal));
         Assert.Contains(lines, l => l.StartsWith("config: not reloaded since start", StringComparison.Ordinal));
         Assert.Contains(lines, l => l.StartsWith("spell_template: Applied", StringComparison.Ordinal));
     }
@@ -125,9 +121,27 @@ public sealed class ReloadCommandTests
 
         Assert.Equal("Re-loading all...", (await admin.ReadChatAsync()).Text);
 
-        // item_template comes first (name order); this host has no item source, so it reports its failure.
-        Assert.StartsWith("item_template not reloaded (Failed):", (await admin.ReadChatAsync()).Text);
-        Assert.StartsWith("spell_template reloaded:", (await admin.ReadChatAsync()).Text);
+        // Name order; this host has no item source, so item_template reports its failure on the way.
+        List<string> lines = await ReadLinesUntilAsync(admin, l => l.StartsWith("spell_template reloaded:", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.StartsWith("item_template not reloaded (Failed):", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.StartsWith("config", StringComparison.Ordinal));
+    }
+
+    /// <summary>Chat lines up to and including the first that satisfies <paramref name="last"/> (at most 20).</summary>
+    private static async Task<List<string>> ReadLinesUntilAsync(WorldTestClient client, Func<string, bool> last)
+    {
+        var lines = new List<string>();
+        for (int i = 0; i < 20; i++)
+        {
+            string line = (await client.ReadChatAsync()).Text;
+            lines.Add(line);
+            if (last(line))
+            {
+                return lines;
+            }
+        }
+
+        throw new Xunit.Sdk.XunitException("the expected chat line never arrived: " + string.Join(" | ", lines));
     }
 
     [Fact]
