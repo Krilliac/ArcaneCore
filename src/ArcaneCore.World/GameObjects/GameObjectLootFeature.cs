@@ -54,6 +54,23 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
     /// <summary>The loaded game object content (immutable; safe to read from any thread).</summary>
     public GameObjectContent Content => Volatile.Read(ref _content);
 
+    /// <summary>
+    /// Replace the game object content (live reload, world thread): every map's object system looks up templates and locks in it from now
+    /// on and rebinds its live objects to the new templates (<see cref="GameObjectMapSystem.ReplaceContent"/>); systems created later take
+    /// it from here. Returns the content it replaced.
+    /// </summary>
+    public GameObjectContent ReplaceContent(GameObjectContent content)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        GameObjectContent previous = Interlocked.Exchange(ref _content, content);
+        foreach (GameObjectMapSystem system in _systems.Values)
+        {
+            system.ReplaceContent(content);
+        }
+
+        return previous;
+    }
+
     /// <summary>The loaded loot tables (immutable; replaced as a whole by the live reload, world thread).</summary>
     public LootContent LootContent => Volatile.Read(ref _lootContent);
 

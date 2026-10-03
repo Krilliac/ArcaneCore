@@ -75,7 +75,9 @@ creature sees the new template at once and takes its unit fields from it at its 
   their last known template). A world that started with no creature data takes the whole content,
   spawns included, through `CreatureWorldFeature.Install`; the shared `CreatureContent.Empty` is never
   mutated.
-- The vmangos `<entry>` argument (one template) is not supported; the whole table reloads.
+- The vmangos `<entry>` argument (one template) is not supported; the whole table reloads. The same holds for `gameobject_template`
+  (`ServerCommands.cpp:1779-1783`). Both would need an entry-aware reload contract (`IContentReloadable` has none) and, for creatures, a
+  per-entry definition swap in `CreatureContent`; left as a recorded limit.
 
 **`quest_template`** (`QuestContentReloadable`, `QuestNpcServices.ReplaceQuests`, `QuestStore.Templates`): the quest
 templates and the four relation tables (`creature_questrelation`, `creature_involvedrelation`,
@@ -131,6 +133,18 @@ commands `:1174-1254`, `LootStore::LoadLootTable` `LootMgr.cpp:94-189`; table en
   database tables would add nothing).
 - `mail_loot_template` has no counterpart (mail loot is not a table here). A change to a creature's loot id in `creature_template` reaches the
   loot module with `all_loot` (or `reload all`), not with `creature_template` alone, because the loot module reads that column from its own table.
+
+**`gameobject_template`** (`GameObjectContentReloadable`, `GameObjectContent.Spawns` / `Locks` / `QuestStarters` / `QuestEnders`,
+`GameObjectLootFeature.ReplaceContent`, `GameObjectMapSystem.ReplaceContent`, `GameObject.ReplaceTemplate`): the templates are read through
+`IGameObjectDataStore` off the world thread and put into a copy of the live `GameObjectContent` (spawns, locks and quest relations are
+not reloaded); the commit swaps it into the object system of every map and rebinds every live object to the template of its entry
+(vmangos `HandleReloadGameObjectTemplatesCommand` `ServerCommands.cpp:1775-1790` -> `LoadGameObjectTemplates` `ObjectMgr.cpp:8140`; table
+entry `Chat.cpp:845`; not in `reload all`). What is read through the template from then on (data fields, loot id, lock id, ...) changes at
+once; the update fields written when an object was created (display id, flags, faction) change only when it is created again, which is what
+vmangos does too (its objects point at the record the loader overwrites, and `GameObject::Create` filled the fields once).
+- An empty table keeps the loaded templates (`ObjectMgr.cpp:8145-8146` returns before touching anything), whatever `HotReload:EmptyTables`
+  says; a template whose row has left the table stays loaded until the next restart and is listed in the result (`ObjectMgr.cpp:8148-8153`
+  inserts or overwrites and never removes). Retail, so no switch.
 
 **`game_tele`, `areatrigger_teleport`** (`MapContentReloadables`, `WorldMaps.ReplaceGameTeles` /
 `BuildAreaTriggerTables` / `ReplaceAreaTriggerTables`): the `.tele` locations, and the area triggers with
@@ -201,7 +215,7 @@ table or catalog from the database).
 | `mail_loot_template` (863) | yes, via all_loot | none | no store |
 | `skill_fishing_base_level` (889) | yes (:887) | `skill_fishing_base_level` (the base levels live in the loot content object, so `all` reaches them through `all_loot`, not on their own) | delivered |
 | `item_enchantment_template` (852), `page_text` (871), `item_required_target` (854) | yes, via all_item (:996-1002) | none | no store |
-| `gameobject_template` (845) | no | none yet | planned |
+| `gameobject_template` (845) | no | `gameobject_template` | delivered |
 | `gameobject` (838), `gameobject_requirement` (843) | no | none | owner lane (gameobject-types) |
 | `command` (817), `reserved_name` (888), `mangos_string` (864) | yes (:899-901) | none | no store |
 | `creature` (819), `creature_groups` (823), `creature_display_info_addon` (822), `cinematic_waypoints` (816) | no | none | owner lane (creature-movement-spawns) |

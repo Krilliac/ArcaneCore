@@ -59,6 +59,7 @@ public sealed class ReloadAllMembershipTests
         // registers it on its own), item_template (all_item :996-1002 only reloads page_text, item_enchantment and
         // item_required_target) and creature_template (all_npc :925-933 leaves it out).
         ["npc_text"] = false,
+        ["gameobject_template"] = false,
         ["config"] = false,
         ["item_template"] = false,
         ["creature_template"] = false,
@@ -74,7 +75,7 @@ public sealed class ReloadAllMembershipTests
         "npc_gossip", "npc_text", "npc_trainer", "npc_vendor", "points_of_interest", "gossip_menu", "gossip_menu_option",
         "all_loot", "creature_loot_template", "gameobject_loot_template", "item_loot_template", "skinning_loot_template",
         "reference_loot_template", "fishing_loot_template", "pickpocketing_loot_template", "disenchant_loot_template",
-        "skill_fishing_base_level",
+        "skill_fishing_base_level", "gameobject_template",
     };
 
     /// <summary>Names with no vmangos counterpart (none yet; each needs a reason in docs/areas/hot-reload.md).</summary>

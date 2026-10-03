@@ -36,7 +36,24 @@ public sealed partial class GameObject : WorldObject
     /// <summary>DEFAULT_WORLD_OBJECT_SIZE scaled by the template size (vmangos GameObject::GetObjectBoundingRadius).</summary>
     public override float BoundingRadius => base.BoundingRadius * (Template.Size > 0 ? Template.Size : 1.0f);
 
-    public GameObjectTemplate Template { get; }
+    public GameObjectTemplate Template { get; private set; }
+
+    /// <summary>
+    /// Rebind to the reloaded template of the same entry (live reload, world thread). vmangos reloads <c>gameobject_template</c> into the
+    /// <c>GameObjectInfo</c> record live objects point to (ObjectMgr.cpp:8148-8153), so what is read through it from then on (data fields,
+    /// loot id, lock id, ...) changes at once; the update fields filled when the object was created (display id, flags, faction) change
+    /// only when it is created again.
+    /// </summary>
+    internal void ReplaceTemplate(GameObjectTemplate template)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        if (template.Entry != Template.Entry)
+        {
+            throw new ArgumentException("a game object keeps its entry", nameof(template));
+        }
+
+        Template = template;
+    }
 
     /// <summary>The database spawn, or null for a runtime object (GM add, summoned chest).</summary>
     public GameObjectSpawn? Spawn { get; }

@@ -46,7 +46,7 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
     /// <summary>How often quest dynamic flags are re-evaluated for viewers (the quest journal has no change events yet).</summary>
     public const uint QuestFlagRefreshMs = 1000;
 
-    private readonly GameObjectContent _content;
+    private GameObjectContent _content;
     private readonly ILogger _logger;
     private readonly Dictionary<GridCoord, List<GameObjectSpawn>> _spawnsByGrid = [];
     private readonly Dictionary<GridCoord, List<GameObject>> _grids = [];
@@ -100,6 +100,24 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
             if (grid.ObjectDataLoaded)
             {
                 LoadGrid(new GridCoord(grid.Coord.X, grid.Coord.Y));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Use reloaded content (live reload, world thread): templates and locks looked up from now on come from it, and every object
+    /// this system tracks is rebound to the new template of its entry (an object whose entry the content no longer lists keeps the one it has).
+    /// The spawns are not reloaded, so the grids and respawn bookkeeping stay as they are.
+    /// </summary>
+    public void ReplaceContent(GameObjectContent content)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        _content = content;
+        foreach (GameObject go in _objects.Values)
+        {
+            if (content.FindTemplate(go.Entry) is { } template)
+            {
+                go.ReplaceTemplate(template);
             }
         }
     }
