@@ -4,14 +4,16 @@ using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Instances;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace ArcaneCore.Data.Tests;
 
 /// <summary>
 /// The instance tables (<see cref="InstanceDataModule"/>) on every engine: instances, binds,
-/// raid reset times and last instances round trip, update in place, and the startup load drops
-/// binds of deleted characters and of missing instances (vmangos CleanupInstances).
+/// raid reset times and last instances round trip, update in place, character deletion removes
+/// the character's rows, and the startup load drops binds of deleted characters and of missing
+/// instances (vmangos CleanupInstances).
 /// </summary>
 public sealed class InstanceStoreTests : IAsyncLifetime
 {
@@ -109,7 +111,7 @@ public sealed class InstanceStoreTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
-    public async Task Load_DropsRowsOfDeletedCharacters_AndBindsOfMissingInstances(DatabaseProvider provider)
+    public async Task CharacterDelete_RemovesItsRows_AndLoadDropsOrphans(DatabaseProvider provider)
     {
         (DatabaseConnectionOptions cs, int alice, int bob) = await CreateAsync(provider);
         await WithStore(cs, async store =>
@@ -122,10 +124,17 @@ public sealed class InstanceStoreTests : IAsyncLifetime
             await store.SaveLastInstanceAsync(new CharacterLastInstanceRecord(bob, 36, 101));
         });
 
-        // Bob is deleted by the character flow, which knows nothing about instances.
+        // Bob is deleted by the character flow; InstanceDataModule's cleanup removes his rows in its transaction.
         await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
         {
             Assert.True(await new EfCharacterStore(db).DeleteAsync(bob, 77));
+        }
+
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            Assert.Equal(0, await db.Set<CharacterInstanceRow>().CountAsync(r => r.CharacterId == bob));
+            Assert.Equal(0, await db.Set<CharacterLastInstanceRow>().CountAsync(r => r.CharacterId == bob));
+            Assert.Equal(3, await db.Set<CharacterInstanceRow>().CountAsync()); // the load cleans up the rest
         }
 
         await WithStore(cs, async store =>

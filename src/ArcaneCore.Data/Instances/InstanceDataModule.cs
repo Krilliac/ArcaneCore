@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.Instances;
 using Microsoft.EntityFrameworkCore;
@@ -42,8 +43,10 @@ public sealed class CharacterLastInstanceRow
 /// schema composer refuses version gaps and the integration base ends at v6, so on this branch
 /// the module claims the next free version. The integration lead renumbers it to 9 once v7
 /// and v8 are merged. The tables are new; nothing existing changes.
+/// <para>Character deletion (<see cref="ICharacterDataCleanup"/>) removes the character's binds and
+/// last-instance row; an instance nobody is bound to any more is dropped at the next load.</para>
 /// </summary>
-public sealed class InstanceDataModule : IDataModule
+public sealed class InstanceDataModule : IDataModule, ICharacterDataCleanup
 {
     /// <summary>The characters schema version reserved for instances in the fleet plan.</summary>
     public const int ReservedSchemaVersion = 9;
@@ -96,4 +99,14 @@ public sealed class InstanceDataModule : IDataModule
     }
 
     public void AddServices(IServiceCollection services) => services.AddScoped<IInstanceStore, EfInstanceStore>();
+
+    /// <summary>The character's binds and last instance (vmangos DeleteFromDB: character_instance).</summary>
+    public async Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        await db.Set<CharacterInstanceRow>().Where(r => r.CharacterId == characterId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<CharacterLastInstanceRow>().Where(r => r.CharacterId == characterId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+    }
 }

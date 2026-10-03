@@ -43,7 +43,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
     public void PlayerEnteredInstance(uint characterId, uint mapId, uint instanceId)
         => Enqueue(store => store.SaveLastInstanceAsync(new CharacterLastInstanceRecord((int)characterId, mapId, instanceId)));
 
-    /// <summary>Delete a character's binds (for a character delete hook; see docs/integration/instances.md).</summary>
+    /// <summary>Delete a character's binds and last instance (queued by the character delete hook).</summary>
     public void CharacterDeleted(int characterId) => Enqueue(store => store.DeleteCharacterAsync(characterId));
 
     /// <summary>Wait until every write queued so far has been attempted (tests).</summary>

@@ -1,9 +1,13 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Instances;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Teleport;
@@ -19,12 +23,18 @@ namespace ArcaneCore.World.Instances;
 /// binds from <see cref="IInstanceStore"/>, wires it to the group manager (binds follow group
 /// changes), to the teleport service (homebind) and to system chat, runs the reset schedule
 /// on a timer and persists changes through an ordered write queue drained at shutdown.
+/// <para>Character deletion (<see cref="ICharacterDeleteHook"/>): queued instance writes drain before
+/// the rows go (<c>InstanceDataModule</c> removes them), then the character's in-memory binds and
+/// last instance are dropped and a purge of its rows is queued after any later write.</para>
 /// <para>Options come from the <c>World:Instances</c> configuration section (<see cref="InstanceOptions"/>).</para>
 /// </summary>
-public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers) : IWorldFeature, IAsyncDisposable
+public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers) : IWorldFeature, ICharacterDeleteHook, IAsyncDisposable
 {
     /// <summary>How often the reset schedule runs (vmangos checks it every world update; resets are minute-granular).</summary>
     public const int ScheduleIntervalMs = 5000;
+
+    /// <summary>Upper bound for draining the write queue or one world-thread round trip during a character deletion.</summary>
+    public static readonly TimeSpan DeleteTimeout = TimeSpan.FromSeconds(10);
 
     private readonly ILogger _logger = loggers.CreateLogger<InstanceFeature>();
     private InstanceManager? _manager;
@@ -89,6 +99,30 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         });
         _scheduleTimer = new Timer(_ => world.Post(manager.UpdateSchedule), null, ScheduleIntervalMs, ScheduleIntervalMs);
         _logger.LogInformation("instances: {Instances} stored, {Binds} character binds", snapshot.Instances.Count, snapshot.Binds.Count);
+    }
+
+    /// <summary>Queued binds of the character must not land after its rows are removed.</summary>
+    public Task OnCharacterDeletingAsync(WorldSession session, CharacterRecord character)
+        => _writes is { } writes ? writes.FlushAsync().WaitAsync(DeleteTimeout) : Task.CompletedTask;
+
+    /// <summary>Drop the deleted character's binds and last instance (vmangos Player::DeleteFromDB: character_instance).</summary>
+    public async Task OnCharacterDeletedAsync(WorldSession session, CharacterRecord character)
+    {
+        ArgumentNullException.ThrowIfNull(character);
+        if (_world is not { } world || _manager is not { } manager)
+        {
+            return;
+        }
+
+        var guid = ObjectGuid.Player((uint)character.Id);
+        await world.InvokeAsync(() =>
+        {
+            manager.DeleteCharacter(guid);
+
+            // After the unbind writes just queued and anything earlier that still names the character.
+            _writes?.CharacterDeleted(character.Id);
+            return true;
+        }).WaitAsync(DeleteTimeout).ConfigureAwait(false);
     }
 
     public Task StopAsync()
