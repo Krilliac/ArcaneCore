@@ -71,8 +71,21 @@ public sealed class GameObject : WorldObject
     /// <summary>Respawn time on the owning system's clock (ms) while despawned.</summary>
     internal long RespawnAtMs { get; set; }
 
-    /// <summary>When an activated door/button returns to ready (system clock, ms; 0 = never).</summary>
-    internal long ResetAtMs { get; set; }
+    /// <summary>
+    /// vmangos m_cooldownTime of an activated door/button/goober: the whole second (system clock) at which the
+    /// auto-close window ends; the object resets at the first second strictly greater than it (GameObject.cpp:572-590,
+    /// <c>m_cooldownTime &lt; time(nullptr)</c>). Null = no auto-close.
+    /// </summary>
+    internal long? ResetAfterSecond { get; set; }
+
+    /// <summary>vmangos m_respawnDelayTime: the respawn delay in seconds rolled between spawntimesecsmin and max when the spawn loaded.</summary>
+    internal uint RolledRespawnSeconds { get; set; }
+
+    /// <summary>
+    /// A database spawn that never despawns (GameObject.cpp:985-991): it carries GO_FLAG_NODESPAWN and keeps
+    /// no respawn delay. Runtime objects (summons, GM adds) never get the flag.
+    /// </summary>
+    public bool NeverDespawns => Spawn is { } spawn && Template.NeverDespawns(spawn.SpawnTimeSeconds);
 
     /// <summary>When a goober/trap may be used again (system clock, ms).</summary>
     internal long CooldownUntilMs { get; set; }
@@ -113,7 +126,7 @@ public sealed class GameObject : WorldObject
         SetUInt32(UpdateFields.ObjectFieldEntry, Template.Entry);
         SetFloat(UpdateFields.ObjectFieldScaleX, Template.Size > 0 ? Template.Size : 1.0f);
         SetUInt32(UpdateFields.GameobjectDisplayid, Template.DisplayId);
-        SetUInt32(UpdateFields.GameobjectFlags, Template.Flags);
+        SetUInt32(UpdateFields.GameobjectFlags, Template.Flags | (NeverDespawns ? (uint)GameObjectFlags.NoDespawn : 0u));
         (float rx, float ry, float rz, float rw) = ComputeRotation(
             Orientation, Spawn?.Rotation0 ?? 0, Spawn?.Rotation1 ?? 0, Spawn?.Rotation2 ?? 0, Spawn?.Rotation3 ?? 0);
         SetFloat(UpdateFields.GameobjectRotation, rx);
@@ -132,7 +145,7 @@ public sealed class GameObject : WorldObject
         LootState = GameObjectLootState.Ready;
         Loot = null;
         User = default;
-        ResetAtMs = 0;
+        ResetAfterSecond = null;
         UseCount = 0;
         SkillupSet.Clear();
     }
@@ -148,3 +161,4 @@ public sealed class GameObject : WorldObject
         return d > 0 ? d : 0;
     }
 }
+

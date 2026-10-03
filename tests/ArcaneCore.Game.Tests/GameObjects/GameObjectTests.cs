@@ -59,7 +59,7 @@ public sealed class GameObjectTests
     {
         GameObjectTemplate[] templates =
         [
-            GoTemplate(DoorEntry, GameObjectType.Door, (2, 3000)),
+            GoTemplate(DoorEntry, GameObjectType.Door, (2, 3 * 65536)), // data2 is seconds * 0x10000 (vmangos GetAutoCloseTime)
             GoTemplate(ChestEntry, GameObjectType.Chest, (1, ChestLoot)),
             GoTemplate(HerbEntry, GameObjectType.Chest, (0, HerbLock), (1, ChestLoot), (3, 1)),
             GoTemplate(GooberEntry, GameObjectType.Goober, (1, QuestId), (4, 2), (5, 0), (6, 10), (7, 33)),
@@ -156,7 +156,7 @@ public sealed class GameObjectTests
         ParsedBlock opened = Assert.Single(DrainBlocks(session), b => b.Type == ObjectUpdateType.Values);
         Assert.Equal((uint)GameObjectState.Active, opened.Values[UpdateFields.GameobjectState]);
 
-        rig.World.RunTick(3000);
+        rig.World.RunTick(4000); // whole-second clock: closes 3 to 4 seconds after use
         Assert.Equal(GameObjectState.Ready, door.State);
         Assert.False(door.Flags.HasFlag(GameObjectFlags.InUse));
         Assert.Equal(GameObjectLootState.Ready, door.LootState);
