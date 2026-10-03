@@ -25,6 +25,9 @@ public sealed partial class CreatureMapSystem
     /// <summary>The services this map's creature AI uses (hostility, spells, AI factory); paths and sight come from <c>Map.Collision</c>.</summary>
     public CreatureAiServices AiServices => _ai;
 
+    /// <summary>The creature options this map's system runs with (including <see cref="CreatureOptions.EventAi"/>).</summary>
+    public CreatureOptions Options => _options;
+
     // --- spells, texts, summons ----------------------------------------------------------------
 
     public CreatureCastResult CastSpell(Creature creature, uint spellId, Unit? target, bool triggered)
@@ -76,7 +79,7 @@ public sealed partial class CreatureMapSystem
             _logger.LogWarning("creature_template {Entry} uses unknown AIName '{AIName}'; using the default AI", creature.Template.Entry, aiName);
         }
 
-        if (ai is CreatureEventAI eventAi && eventAi.Unsupported.Count > 0 && _reportedAi.Add($"eventai:{creature.Template.Entry}"))
+        if (ai is CreatureEventAI eventAi && _options.EventAi.ReportUnsupported && eventAi.Unsupported.Count > 0 && _reportedAi.Add($"eventai:{creature.Template.Entry}"))
         {
             _logger.LogWarning("creature_ai_scripts for creature {Entry} use unsupported {Unsupported}; those parts are skipped",
                 creature.Template.Entry, string.Join(", ", eventAi.Unsupported));

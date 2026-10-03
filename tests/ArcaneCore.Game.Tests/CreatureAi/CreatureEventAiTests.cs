@@ -72,14 +72,21 @@ public sealed class CreatureEventAiTests
         Assert.Equal("Grr, P1!", say.Message);
         Assert.Equal([(500u, (Unit?)player, false)], spells.Casts);
 
+        // EventAI evaluates its timers in 500 ms batches (cmangos EVENT_UPDATE_TIME, CreatureEventAI.h:32;
+        // UpdateEventTimers, CreatureEventAI.cpp:1929). With 100 ms ticks a batch lands every 600 ms (the
+        // remaining update time must be strictly less than the tick, :1931), so the 1000 ms timer fires at the
+        // second batch, 1200 ms after the aggro, not at 1000 ms.
         Run(world, 900);
         Assert.Equal(0, ai.Phase);
         Assert.DoesNotContain(spells.Casts, c => c.Spell == 501);
 
-        Run(world, 200);
+        Run(world, 300);
         Assert.Equal(1, ai.Phase);
-        Run(world, 1000);
-        Assert.InRange(spells.Casts.Count(c => c.Spell == 501), 2, 3);
+
+        // The phase-gated repeating cast was hidden at the batch that set the phase, so it casts at the next two
+        // batches (1800 and 2400 ms).
+        Run(world, 1500);
+        Assert.Equal(2, spells.Casts.Count(c => c.Spell == 501));
         Assert.All(spells.Casts.Where(c => c.Spell == 501), c => Assert.True(c.Triggered && ReferenceEquals(c.Target, wolf)));
     }
 
@@ -120,7 +127,8 @@ public sealed class CreatureEventAiTests
         CreatureContent content = EventContent(
         [
             Row(1, EventAiEventType.TimerOutOfCombat, 500, 500, 500, 500, flags: CreatureEventAI.FlagRepeatable, a1: Act(EventAiActionType.Cast, 600)),
-            Row(2, EventAiEventType.SpellHit, 4242, 0, 1000, 1000, flags: CreatureEventAI.FlagRepeatable,
+            // A spell id AND a school mask must both match (cmangos SpellHit, CreatureEventAI.cpp:1667-1678); -1 is the full mask.
+            Row(2, EventAiEventType.SpellHit, 4242, -1, 1000, 1000, flags: CreatureEventAI.FlagRepeatable,
                 a1: Act(EventAiActionType.Cast, 601, (int)EventAiTarget.Invoker)),
             Row(3, EventAiEventType.SpellHit, 0, 1 << (int)SpellSchool.Fire, 0, 0, flags: CreatureEventAI.FlagRandomAction,
                 a1: Act(EventAiActionType.Cast, 700), a2: Act(EventAiActionType.Cast, 701)),
@@ -131,14 +139,19 @@ public sealed class CreatureEventAiTests
         (Player player, _) = AddPlayer(world, 1, 0, 0);
         Creature wolf = Assert.Single(system.Creatures);
 
-        Run(world, 1100);
+        // 500 ms out-of-combat timer, evaluated in 600 ms batches with 100 ms ticks (cmangos UpdateEventTimers,
+        // CreatureEventAI.cpp:1929): casts at 600 and 1200 ms.
+        Run(world, 1300);
         Assert.Equal(2, spells.Casts.Count(c => c.Spell == 600));
 
         SpellInfo frost = SpellTestKit.Spell(4242) with { School = SpellSchool.Frost };
         spells.RaiseHit(player, wolf, frost);
         spells.RaiseHit(player, wolf, frost); // inside the 1 s cooldown
         Assert.Single(spells.Casts, c => c.Spell == 601 && ReferenceEquals(c.Target, player));
-        Run(world, 1000);
+
+        // The cooldown is the event's repeat timer (parameters 3 and 4 for a spell hit) and counts down by whole
+        // batches: two batches (1200 ms) are needed to get from 1000 ms to 0.
+        Run(world, 1300);
         spells.RaiseHit(player, wolf, frost);
         Assert.Equal(2, spells.Casts.Count(c => c.Spell == 601));
 
@@ -200,9 +213,10 @@ public sealed class CreatureEventAiTests
         Assert.Same(player, add.Combat.Victim);
         Assert.Equal(2, system.Creatures.Count); // the missing template summoned nothing
 
-        Run(world, 400);
-        Assert.False(wolf.IsAlive);
+        // The 300 ms in-combat timer fires at the first 600 ms batch (cmangos UpdateEventTimers).
         Run(world, 700);
+        Assert.False(wolf.IsAlive);
+        Run(world, 400);
         Assert.Null(system.FindCreature(add.Guid));
     }
 

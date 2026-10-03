@@ -32,16 +32,38 @@ docs/integration/creature-ai.md.
   `PassiveAI` (= reactor), `AggressorAI` and `EventAI`, plus registered C# scripts. An empty
   name gives Reactor for civilians and Aggressor otherwise. Unknown names are reported once
   and get the default.
-- **EventAI** (re-implemented from cmangos-classic `doc/EventAI.txt` semantics; no code
-  copied):
-  - Events: in-combat and out-of-combat timers, health percent, aggro, kill, death, evade, spell
-    hit, spawned, reached home.
-  - Actions: text, cast (with the interrupt-previous, triggered and aura-not-present flags),
-    summon, auto attack, combat movement, set and increment phase, evade, flee for assist, die,
-    call for help.
-  - Phases use the inverse phase mask. Chance, the repeatable flag and the random-action flag
-    are honoured. Rows using anything else are reported once per entry, and only their
-    unsupported parts are skipped.
+- **EventAI** (`CreatureEventAI` + `Creatures/AI/EventAi/`, re-implemented from mangos-classic
+  `src/game/AI/EventAI/CreatureEventAI.cpp`; no code copied). `CreatureEventAI` only forwards the AI hooks
+  to an `EventAiEngine`; the engine owns the machinery and the event/action types are handler classes
+  found by reflection (`EventAiRegistry`; a duplicate type id fails at startup), so a new event or action
+  is one new file.
+  - **Engine** (cmangos citations): holders per row, entry rows then spawn-guid rows (`InitAI`
+    :102-163); timer-driven events evaluated in batches every `Creatures:EventAi:UpdateIntervalMs`
+    (500, `EVENT_UPDATE_TIME` CreatureEventAI.h:32) with the strict `<` of `UpdateEventTimers`
+    (:1929), so with 100 ms ticks a batch lands every 600 ms; timers do not count down while the inverse
+    phase mask hides the event; `CheckEvent` generic gates (:255); `ProcessEvent` (:598): a failed chance
+    roll runs `ResetEvent` (re-arms the repeat timer, disables a non-repeating row), RANDOM_ACTION (0x20)
+    runs one action, COMBAT_ACTION (0x400) keeps the timer when the first action fails so the row retries
+    (the first action must succeed, otherwise the others are skipped); `ResetEvent` (:575); ready lists
+    with a nesting depth so an action can trigger events; the lifecycle order of `JustRespawned` (fresh
+    holders), `Reset`, `JustReachedHome` (events, then reset), `EnterEvadeMode`, `JustDied` (reset,
+    events, phase 0) and `EnterCombat`. The phase only returns to 0 on death. Rows flagged DEBUG_ONLY
+    (0x80) are skipped unless `Creatures:EventAi:DebugOnlyEvents`.
+  - **Events with a handler**: 0 timer in combat, 1 timer out of combat, 2 health percent (with the
+    allow-out-of-combat parameter), 4 aggro, 5 kill (parameters: repeat min, repeat max, player only;
+    the old implementation read the wrong columns), 6 death, 7 evade, 8 spell hit (spell id and school mask
+    must both match), 11 spawned (always, or map id), 21 reached home.
+  - **Actions with a handler**: 1 text (the 1/2/3-way choice by `rnd % 3` / `rnd % 2`), 11 cast (aura-not-
+    present, triggered and interrupt flags; a creature that is casting only casts again when the spell is
+    triggered or interrupts; success is the cast being accepted), 12 summon, 20 auto attack, 21 combat
+    movement (no change or casting fails), 22 and 23 phases, 24 evade (with the combat-only parameter), 25
+    flee for assistance, 37 die, 39 call for help.
+  - **Targets**: 0-6, 7 (the invoker; there are no pets), 10, 12 and 15 (no unit). Others fail the action.
+  - **Not supported, reported once per entry** (`CreatureEventAI.Unsupported`): every other event and action
+    type; a death event with a condition id (no conditions system); a spawned event with the zone condition
+    (no zone lookup); cast flags beyond the three above, SET_RANGED_MODE and caster mode (ranged mode is
+    always off, so RANGED_MODE_ONLY rows never run); the combat-movement melee packet parameter.
+  - Summons still despawn on a flat timer (cmangos `TEMPSPAWN_TIMED_OOC_OR_DEAD_DESPAWN` is a later slice).
 - **Texts** (`creature_ai_texts`): say 25 yd, yell 300 yd, text emote 25 yd, boss emote and
   zone yell map-wide, whisper to the target. `$N` becomes the target name, and the text can
   carry an emote (SMSG_EMOTE).
