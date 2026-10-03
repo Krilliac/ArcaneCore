@@ -49,11 +49,22 @@ A start or end on a Detour tile that is not loaded answers a straight line typed
 (`PathInfo::HaveTiles`, `PathFinder.cpp:99-105`, `695-706`) instead of `NoPath`. `NoPath` stays for a loaded
 tile without a usable polygon.
 
+### Fliers (NavMeshPathfinder.FindPath)
+
+A mover with `CanFly` goes straight, typed `Normal | NotUsingPath | FlyPath`, when no collision model blocks the
+segment (`PathFinder.cpp:172-186`; the model test is `ILineOfSight.IsInLineOfSight(ignoreM2: false)`, the
+equivalent of `Map::FindCollisionModel`, which does not skip doodads). When a model blocks, it follows the mesh
+and the destination is forced as vmangos does (`PathFinder.cpp:451-472`: partial subpath kept if it covers 70%
+of the way, else a shortcut; `DestForced | FlyPath`). A hole in the mesh answers the flying shortcut instead of
+`NoPath` (`PathFinder.cpp:190-198`). `WorldCollision.Install` hands the line-of-sight service to the navmesh
+pathfinder in either install order. Swim and underwater shortcuts (`PathFinder.cpp:160-170`, `BuildUnderwaterPath`)
+are still not implemented; a swimmer takes the mesh path.
+
 ## Limits (not done in this lane run)
 
 See the open questions of the lane report for the reasons. Not implemented: the `MapCollision` partial split,
 `PathMoverFactory` (needs a Creature-to-template `InhabitType` accessor from the creature-ai lane),
-FindWalkPoly extents / `farFromPoly` rules, swim/fly/underwater paths, forced destination, smooth path,
+FindWalkPoly extents / `farFromPoly` rules, swim/underwater paths, smooth path,
 navmesh raycast and random points, BV tree and off-mesh links, vmap/mmap tile lifecycle shared across instances,
 model-aware `GetHeightStatic`, WMO liquids, indoor check, dynamic gameobject LOS, DBC-fed WMO areas and
 collision heights, async tile loading, the data-directory inspector. Transports and boats, cMaNGOS mmaps

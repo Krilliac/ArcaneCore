@@ -8,7 +8,8 @@ namespace ArcaneCore.Game.Maps.Collision;
 /// </summary>
 /// <param name="CanWalk">Ground movement (creature <c>InhabitType</c> ground bit; always true for players).</param>
 /// <param name="CanSwim">Swimming (creature <c>InhabitType</c> water bit; players always).</param>
-/// <param name="CanFly">Flying (creature <c>InhabitType</c> air bit); fliers path in the air, not on the mesh.</param>
+/// <param name="CanFly">Flying (creature <c>InhabitType</c> air bit); a flier goes straight through the air unless a collision model blocks the segment
+/// (vmangos PathFinder.cpp:172-186; <c>NavMeshPathfinder.FindPath</c>). It contributes no mesh include flags.</param>
 /// <param name="IsPlayer">Players take environmental damage, so they never path through magma or slime.</param>
 public readonly record struct PathMover(bool CanWalk, bool CanSwim, bool CanFly, bool IsPlayer)
 {

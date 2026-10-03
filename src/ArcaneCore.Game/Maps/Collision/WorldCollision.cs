@@ -71,5 +71,11 @@ public sealed class WorldCollision
         {
             Pathfinder = pathfinder;
         }
+
+        // The navmesh pathfinder needs the model line test for fliers, whichever was installed last.
+        if (Pathfinder is MMaps.NavMeshPathfinder nav)
+        {
+            nav.LineOfSight = LineOfSight;
+        }
     }
 }
