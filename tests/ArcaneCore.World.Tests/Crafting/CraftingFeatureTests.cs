@@ -29,6 +29,7 @@ public sealed class CraftingFeatureTests
 
         Assert.Equal(1, checks);
         Assert.Equal(1, takers);
+        Assert.Equal(1, await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.Observers.OfType<FirstAidObserver>().Count()));
         Assert.True(await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.HasEffectHandler(ArcaneCore.Game.Spells.SpellEffectName.CreateItem)));
     }
 

@@ -32,5 +32,6 @@ public sealed class CraftingFeature(IServiceProvider services) : IWorldFeature
         SpellSystem system = services.GetRequiredService<Spells.SpellFeature>().System;
         ReagentRules.Install(system);
         CreateItemSpells.Install(system);   // after the reagent pair: a craft must never be free
+        FirstAidObserver.Install(system);
     }
 }

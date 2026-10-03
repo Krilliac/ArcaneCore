@@ -365,7 +365,11 @@ public sealed partial class SpellSystem
         foreach ((Unit target, SpellTargetEntry entry) in targetEffects)
         {
             // vmangos Spell::AddUnitTarget → Unit::SpellHitResult, once per target.
-            entry.Miss = ReferenceEquals(target, caster) ? SpellMissInfo.None : CombatRules.RollHit(this, caster, target, spell);
+            // A self cast skips the roll but not the immunity test: vmangos SpellHitResult asks IsImmuneToSpell(spell, victim == this) before the
+            // "victim == this" return (SpellCaster.cpp:175-180), so a self bandage on a Recently Bandaged player lands immune (crafting lane).
+            entry.Miss = ReferenceEquals(target, caster)
+                ? (Rules.Immunity.ImmunityRules.IsImmuneToSpell(this, target, spell, castOnSelf: true) ? SpellMissInfo.Immune : SpellMissInfo.None)
+                : CombatRules.RollHit(this, caster, target, spell);
             if (entry.Miss == SpellMissInfo.None)
             {
                 hits.Add(target.Guid);
