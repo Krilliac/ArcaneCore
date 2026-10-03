@@ -56,6 +56,9 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
 
     public LootOptions Options { get; } = new();
 
+    /// <summary>Behaviour switches of the game objects (configuration section <see cref="GameObjectOptions.SectionName"/>); defaults are retail.</summary>
+    public GameObjectOptions ObjectOptions { get; } = new();
+
     /// <summary>Quest checks used by loot and game objects (adapts the quest feature).</summary>
     public ILootQuestJournal Quests { get; private set; } = NullQuestJournal.Instance;
 
@@ -64,6 +67,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
         services.GetService<IConfiguration>()?.GetSection(SectionName).Bind(Options);
+        services.GetService<IConfiguration>()?.GetSection(GameObjectOptions.SectionName).Bind(ObjectOptions);
 
         GameObjectContent content = GameObjectContent.Empty;
         LootContent loot = LootContent.Empty;
@@ -163,7 +167,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             CreatureOptions = services.GetService<CreatureWorldFeature>()?.Options ?? new CreatureOptions(),
             Durable = _settlements,
         };
-        var system = new GameObjectMapSystem(map, Content, loot, Quests, logger);
+        var system = new GameObjectMapSystem(map, Content, loot, Quests, logger) { Options = ObjectOptions, Random = new Random() };
         map.AddUpdater(system);
         _systems.Add(map, system);
         map.Combat.UnitKilled += OnUnitKilled;

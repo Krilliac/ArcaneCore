@@ -2,6 +2,8 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Loot;
 using ArcaneCore.Kernel.WorldData.GameObjects;
@@ -117,6 +119,18 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
 
     public long ClockMs => _clockMs;
 
+    /// <summary>
+    /// The whole-second clock of the retail door/goober timers (vmangos reads <c>time(nullptr)</c>, GameObject.cpp:572-590):
+    /// an auto-close of R seconds resets at the first whole second after use + R, so the observed delay is in (R, R+1].
+    /// </summary>
+    public long ClockSeconds => _clockMs / 1000;
+
+    /// <summary>Behaviour switches (section <c>GameObjects</c>); defaults are retail.</summary>
+    public GameObjectOptions Options { get; set; } = new();
+
+    /// <summary>The random source of respawn delays (injectable for tests).</summary>
+    public Random Random { get; set; } = Random.Shared;
+
     public int LoadedGridCount => _grids.Count;
 
     /// <summary>Every tracked object: spawned ones and despawned ones waiting to respawn.</summary>
@@ -155,7 +169,7 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
                 continue;
             }
 
-            if (go.ResetAtMs > 0 && go.ResetAtMs <= _clockMs)
+            if (go.ResetAfterSecond is { } resetAfter && resetAfter < ClockSeconds)
             {
                 ResetToReady(go);
             }
@@ -211,6 +225,8 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
             GameObjectType.Chest => UseChest(player, go),
             GameObjectType.Goober => UseGoober(player, go),
             GameObjectType.Text => UseText(player, go),
+            GameObjectType.Chair => UseChair(player, go),
+            GameObjectType.Camera => UseCamera(player, go),
             GameObjectType.QuestGiver => QuestGiver is { } giver && giver.OpenQuestMenu(player, go) ? GameObjectUseResult.Ok : GameObjectUseResult.Unsupported,
             GameObjectType.Mailbox => GameObjectUseResult.Ok,
             GameObjectType.Generic or GameObjectType.SpellFocus or GameObjectType.Trap or GameObjectType.Binder
@@ -255,7 +271,7 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
         result = go.Type switch
         {
             GameObjectType.Chest => OpenChest(player, go),
-            GameObjectType.Door or GameObjectType.Button => ActivateDoorOrButton(go, go.Template.GetData(2)),
+            GameObjectType.Door or GameObjectType.Button => ActivateDoorOrButton(go, go.Template.AutoCloseSeconds()),
             GameObjectType.Goober => UseGoober(player, go, lockChecked: true),
             _ => GameObjectUseResult.NotUsable,
         };
@@ -280,22 +296,42 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
     }
 
     /// <summary>
-    /// vmangos Spell::CheckCast spell focus search: a spawned GAMEOBJECT_TYPE_SPELL_FOCUS whose
-    /// data0 is <paramref name="focusId"/> within its data1 radius (yards, 2D+Z as 3D) of the player.
+    /// vmangos GameObjectFocusCheck (GridNotifiers.h:586-606): the spawned GAMEOBJECT_TYPE_SPELL_FOCUS object whose data0
+    /// is <paramref name="focusId"/> and whose data1 radius reaches <paramref name="caster"/>: the 3D distance between the
+    /// centres is strictly below data1 plus both bounding radii (WorldObject::IsWithinDistInMap with SizeFactor::BoundingRadius,
+    /// Object.cpp:1738-1752), in the caster's map. Deterministic: the lowest spawn guid wins when several match.
+    /// Limit: vmangos first narrows the search with a 10 yard grid visit (Spell.cpp:7236-7240), which covers whole cells and so
+    /// never excludes an object that the distance test accepts for the focus distances in the data (at most 7); it is not modelled.
     /// </summary>
-    public bool HasSpellFocusNearby(Player player, uint focusId)
+    public GameObject? FindSpellFocus(WorldObject caster, uint focusId)
     {
-        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(caster);
+        GameObject? best = null;
         foreach (GameObject go in _objects.Values)
         {
-            if (go.IsSpawned && go.Type == GameObjectType.SpellFocus && go.Template.GetData(0) == focusId
-                && LootService.Distance3D(player, go) <= Math.Max(1u, go.Template.GetData(1)))
+            if (!go.IsSpawned || go.Type != GameObjectType.SpellFocus || go.Template.GetData(0) != focusId || !ReferenceEquals(go.Map, caster.Map))
             {
-                return true;
+                continue;
+            }
+
+            float dx = go.X - caster.X;
+            float dy = go.Y - caster.Y;
+            float dz = go.Z - caster.Z;
+            float reach = go.Template.GetData(1) + go.BoundingRadius + caster.BoundingRadius;
+            if (((dx * dx) + (dy * dy) + (dz * dz)) < reach * reach && (best is null || go.Guid.Counter < best.Guid.Counter))
+            {
+                best = go;
             }
         }
 
-        return false;
+        return best;
+    }
+
+    /// <summary>Whether <see cref="FindSpellFocus"/> finds a focus object for <paramref name="player"/>.</summary>
+    public bool HasSpellFocusNearby(Player player, uint focusId)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        return FindSpellFocus(player, focusId) is not null;
     }
 
     private GameObjectUseResult CheckUsable(Player player, GameObject? go)
@@ -326,7 +362,7 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
     private GameObjectUseResult UseDoorOrButton(Player player, GameObject go)
     {
         GameObjectUseResult locked = CheckDirectLock(player, go);
-        return locked != GameObjectUseResult.Ok ? locked : ActivateDoorOrButton(go, go.Template.GetData(2));
+        return locked != GameObjectUseResult.Ok ? locked : ActivateDoorOrButton(go, go.Template.AutoCloseSeconds());
     }
 
     private GameObjectUseResult CheckDirectLock(Player player, GameObject go)
@@ -338,10 +374,11 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
     }
 
     /// <summary>
-    /// vmangos UseDoorOrButton: only a ready object activates; its state flips (ready ↔ active)
-    /// with GO_FLAG_IN_USE set, and it returns after <paramref name="autoCloseMs"/> (none: stays).
+    /// vmangos UseDoorOrButton (GameObject.cpp:1370-1383): only a ready object activates; its state flips (ready ↔ active)
+    /// with GO_FLAG_IN_USE set, and it returns after <paramref name="autoCloseSeconds"/> whole seconds (none: stays).
+    /// The template column holds seconds * 0x10000 and is converted by <see cref="GameObjectInfoView.AutoCloseSeconds"/>.
     /// </summary>
-    private GameObjectUseResult ActivateDoorOrButton(GameObject go, uint autoCloseMs)
+    private GameObjectUseResult ActivateDoorOrButton(GameObject go, uint autoCloseSeconds)
     {
         if (go.LootState != GameObjectLootState.Ready)
         {
@@ -351,7 +388,7 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
         go.State = go.State == GameObjectState.Ready ? GameObjectState.Active : GameObjectState.Ready;
         go.Flags |= GameObjectFlags.InUse;
         go.LootState = GameObjectLootState.Activated;
-        go.ResetAtMs = autoCloseMs > 0 ? _clockMs + autoCloseMs : 0;
+        go.ResetAfterSecond = autoCloseSeconds > 0 ? ClockSeconds + autoCloseSeconds : null;
         return GameObjectUseResult.Ok;
     }
 
@@ -361,7 +398,7 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
         go.State = (GameObjectState)(go.Spawn?.State ?? (byte)GameObjectState.Ready);
         go.Flags &= ~GameObjectFlags.InUse;
         go.LootState = GameObjectLootState.Ready;
-        go.ResetAtMs = 0;
+        go.ResetAfterSecond = null;
     }
 
     private GameObjectUseResult UseChest(Player player, GameObject go)
@@ -469,8 +506,8 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
             return GameObjectUseResult.NeedsQuest;
         }
 
-        uint autoCloseMs = go.Template.GetData(3);
-        if (autoCloseMs > 0 && go.LootState != GameObjectLootState.Ready)
+        uint autoCloseSeconds = go.Template.AutoCloseSeconds();
+        if (autoCloseSeconds > 0 && go.LootState != GameObjectLootState.Ready)
         {
             return GameObjectUseResult.InUse;
         }
@@ -496,9 +533,60 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
         {
             go.LootState = GameObjectLootState.JustDeactivated; // consumable
         }
-        else if (autoCloseMs > 0)
+        else if (autoCloseSeconds > 0)
         {
-            ActivateDoorOrButton(go, autoCloseMs);
+            ActivateDoorOrButton(go, autoCloseSeconds);
+        }
+
+        return GameObjectUseResult.Ok;
+    }
+
+    /// <summary>
+    /// Where a chair user is moved when they sit (same-map teleport). Defaults to <see cref="NearTeleportSink"/> (vmangos
+    /// <c>Unit::NearTeleportTo</c>: the player is relocated at once and the client is told with MSG_MOVE_TELEPORT_ACK).
+    /// </summary>
+    public ITeleportSink Teleports { get; set; } = new NearTeleportSink();
+
+    /// <summary>
+    /// GAMEOBJECT_TYPE_CHAIR (GameObject.cpp:1515-1533 with PlayerCanUse :2229-2236): the user must be within 3 yards (3D) of the
+    /// nearest slot, then needs line of sight to the chair; they are moved to the slot at the chair orientation and sit with
+    /// SIT_LOW_CHAIR plus the chair height. A refused use is silent for the client. Limit: a mounted user is not dismounted
+    /// first and an occupied slot is not refused (neither does vmangos refuse it).
+    /// </summary>
+    private GameObjectUseResult UseChair(Player player, GameObject go)
+    {
+        (float slotX, float slotY) = GameObjectChairs.ClosestSlot(go, player.X, player.Y);
+        float dx = slotX - player.X;
+        float dy = slotY - player.Y;
+        float dz = go.Z - player.Z;
+        if (MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz)) > GameObjectChairs.MaxSitDistance)
+        {
+            return GameObjectUseResult.TooFar;
+        }
+
+        if (!player.IsWithinLineOfSight(go))
+        {
+            return GameObjectUseResult.LineOfSight;
+        }
+
+        if (!Teleports.Teleport(player, Map.MapId, slotX, slotY, go.Z, go.Orientation))
+        {
+            return GameObjectUseResult.NotUsable;
+        }
+
+        player.SetStandState(GameObjectChairs.SeatedState(go.Template));
+        return GameObjectUseResult.Ok;
+    }
+
+    /// <summary>
+    /// GAMEOBJECT_TYPE_CAMERA (GameObject.cpp:1613-1634): SMSG_TRIGGER_CINEMATIC with data1 when it is set. The event id (data2)
+    /// needs the scripts engine, which this codebase does not have, so it is not run. Cinematic ids are not validated against CinematicSequences.dbc.
+    /// </summary>
+    private static GameObjectUseResult UseCamera(Player player, GameObject go)
+    {
+        if (go.Template.GetData(1) is var cinematic and not 0)
+        {
+            player.Session.Send(WorldOpcode.SmsgTriggerCinematic, CinematicPackets.TriggerCinematic(cinematic));
         }
 
         return GameObjectUseResult.Ok;
@@ -587,14 +675,31 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
         }
 
         Loot?.ForgetLoot(go);
+        if (go.NeverDespawns)
+        {
+            // GameObject.cpp:671 (<c>if (!m_respawnDelayTime) return;</c>): a NODESPAWN spawn stays in the world, only its loot and state reset.
+            go.LootState = GameObjectLootState.Ready;
+            return;
+        }
+
         if (go.IsSpawned)
         {
+            // GameObject.cpp:654-657: despawn-at-action objects and anything with animprogress > 0 play the despawn animation first.
+            if (go.Template.IsDespawnAtAction() || go.GetUInt32(UpdateFields.GameobjectAnimprogress) > 0)
+            {
+                byte[] anim = GameObjectPackets.DespawnAnim(go.Guid);
+                foreach (Player observer in Map.ObserversOf(go))
+                {
+                    observer.Session.Send(WorldOpcode.SmsgGameobjectDespawnAnim, anim);
+                }
+            }
+
             Map.RemoveObject(go);
         }
 
         _questFlagsSent.Remove(go.Guid);
         go.LootState = GameObjectLootState.JustDeactivated;
-        go.RespawnAtMs = go.Spawn.SpawnTimeSeconds >= 0 ? _clockMs + Math.Max(1000L, go.Spawn.SpawnTimeSeconds * 1000L) : 0;
+        go.RespawnAtMs = go.Spawn.SpawnTimeSeconds >= 0 ? _clockMs + RespawnDelayMs(go) : 0;
     }
 
     /// <summary>Respawn a despawned object now (GM command, script, event spawn of a negative spawntimesecs object).</summary>
@@ -605,6 +710,29 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
         {
             Respawn(go);
         }
+    }
+
+    /// <summary>
+    /// vmangos ComputeRespawnDelay (GameObject.cpp:698-704, GameObject.cpp:694) of the delay rolled at load: spawn flag 0x04 scales it by
+    /// urand(90,110)/100; the dynamic flag (0x08, realm population scaling) is not modelled. At least one second.
+    /// </summary>
+    private long RespawnDelayMs(GameObject go)
+    {
+        uint seconds = go.RolledRespawnSeconds;
+        if (go.Spawn is { } spawn && (spawn.SpawnFlags & 0x04) != 0)
+        {
+            seconds = (uint)((float)(seconds * (uint)Random.Next(90, 111)) / 100f);
+        }
+
+        return Math.Max(1000L, seconds * 1000L);
+    }
+
+    /// <summary>vmangos GetRandomRespawnTime (GameObject.cpp:706-709), rolled once when the spawn loads (GameObject.cpp:1002).</summary>
+    private uint RollRespawnSeconds(GameObjectSpawn spawn)
+    {
+        uint min = (uint)Math.Abs((long)spawn.SpawnTimeSeconds);
+        uint max = spawn.SpawnTimeMaxSeconds is { } m ? (uint)Math.Abs((long)m) : min;
+        return Options.RandomRespawn && max > min ? (uint)Random.NextInt64(min, (long)max + 1) : min;
     }
 
     private bool Tracks(GameObject go)
@@ -635,6 +763,11 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
 
         foreach (GameObjectSpawn spawn in spawns)
         {
+            if ((spawn.SpawnFlags & 0x02) != 0)
+            {
+                continue; // SPAWN_FLAG_DISABLED: GameObject::LoadFromDB refuses it (GameObject.cpp:969, ObjectDefines.h:128)
+            }
+
             GameObjectTemplate? template = _content.FindTemplate(spawn.Entry);
             if (template is null)
             {
@@ -647,6 +780,7 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
             }
 
             var go = new GameObject(spawn.Guid, template, spawn);
+            go.RolledRespawnSeconds = RollRespawnSeconds(spawn);
             go.System = this;
             _objects[go.Guid] = go;
             list.Add(go);

@@ -26,7 +26,8 @@ public sealed record GameObjectLootImportReport(
 /// committed; tests use hand-written rows in each layout.
 /// <para>
 /// cmangos columns: <c>gameobject_template.entry,type,displayId,name,faction,flags,size,data0..23</c>,
-/// <c>gameobject.guid,id,map,position_*,orientation,rotation0..3,spawntimesecs[min],animprogress,state</c>,
+/// <c>gameobject.guid,id,map,position_*,orientation,rotation0..3,spawntimesecs[min],spawntimesecsmax,animprogress,state</c>
+/// (cmangos classic-db keeps <c>animprogress</c> and <c>state</c> in <c>gameobject_addon</c>; vmangos adds <c>spawn_flags</c>),
 /// <c>*_loot_template.entry,item,ChanceOrQuestChance,groupid,mincountOrRef,maxcount,condition_id</c> and the
 /// <c>creature_template.LootId,SkinningLootId,MinLootGold,MaxLootGold</c> columns. vmangos uses
 /// <c>loot_id,skinning_loot_id,gold_min,gold_max</c> and patch-versioned rows: the template with the
@@ -52,6 +53,12 @@ public sealed class GameObjectLootDumpImporter
 
     private readonly Dictionary<uint, (int Patch, GameObjectTemplateRow Row)> _templates = [];
     private readonly Dictionary<uint, GameObjectSpawnRow> _spawns = [];
+
+    /// <summary>The state and animprogress a <c>gameobject</c> row itself carried (vmangos world dumps); the addon and the template default are applied over them at write time.</summary>
+    private readonly Dictionary<uint, (int State, uint? AnimProgress)> _ownSpawnData = [];
+
+    /// <summary><c>gameobject_addon</c> rows (cmangos classic-db): animprogress and state (-1 = unset) by spawn guid.</summary>
+    private readonly Dictionary<uint, (uint AnimProgress, int State)> _addons = [];
     private readonly HashSet<(uint, uint)> _starters = [];
     private readonly HashSet<(uint, uint)> _enders = [];
     private readonly Dictionary<uint, LockTemplateRow> _locks = [];
@@ -79,6 +86,9 @@ public sealed class GameObjectLootDumpImporter
                     break;
                 case "gameobject":
                     ReadSpawn(row);
+                    break;
+                case "gameobject_addon":
+                    ReadAddon(row);
                     break;
                 case "gameobject_questrelation":
                     ReadRelation(row, _starters);
@@ -137,6 +147,7 @@ public sealed class GameObjectLootDumpImporter
     public async Task<GameObjectLootImportReport> WriteAsync(WorldDbContext db, bool replace, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(db);
+        ResolveSpawnData();
         if (db.ChangeTracker.Entries().Any())
         {
             throw new InvalidOperationException("Game object/loot imports require an empty change tracker; save caller changes and clear tracking, or use a dedicated context.");
@@ -236,7 +247,14 @@ public sealed class GameObjectLootDumpImporter
     public IReadOnlyCollection<LootTemplateRowBase> LootRows => _loot.Values;
 
     /// <summary>The spawn rows that would be written.</summary>
-    public IReadOnlyCollection<GameObjectSpawnRow> SpawnRows => _spawns.Values;
+    public IReadOnlyCollection<GameObjectSpawnRow> SpawnRows
+    {
+        get
+        {
+            ResolveSpawnData();
+            return _spawns.Values;
+        }
+    }
 
     private static async Task InsertBatchedAsync<T>(WorldDbContext db, IEnumerable<T> rows, CancellationToken ct)
         where T : class
@@ -327,9 +345,60 @@ public sealed class GameObjectLootDumpImporter
             Rotation2 = F32(row, 0f, "rotation2"),
             Rotation3 = F32(row, 0f, "rotation3"),
             SpawnTimeSeconds = I32(row, 300, "spawntimesecs", "spawntimesecsmin"),
-            AnimProgress = U32Or(row, 100, "animprogress"),
-            State = (byte)Math.Min(U32Or(row, 1, "state"), 2u),
+            SpawnFlags = U32(row, "spawn_flags"),
         };
+        _ownSpawnData[guid] = (
+            row.Has("state") ? I32(row, -1, "state") : -1,
+            row.Has("animprogress") ? U32Or(row, 100, "animprogress") : null);
+
+        // cmangos ObjectMgr.cpp:2188-2192: a max below the min is raised to the min.
+        if (row.Has("spawntimesecsmax"))
+        {
+            GameObjectSpawnRow spawn = _spawns[guid];
+            spawn.SpawnTimeMaxSeconds = Math.Max(spawn.SpawnTimeSeconds, I32(row, spawn.SpawnTimeSeconds, "spawntimesecsmax"));
+        }
+    }
+
+    /// <summary>
+    /// cmangos <c>gameobject_addon</c> (ObjectMgr.cpp:2245-2282): <c>animprogress</c> and <c>state</c>, where state -1 means unset.
+    /// A state at or above MAX_GO_STATE (3) is an error row the server skips.
+    /// </summary>
+    private void ReadAddon(DumpRow row)
+    {
+        uint guid = U32(row, "guid");
+        int state = I32(row, -1, "state");
+        if (state >= 3)
+        {
+            _warnings.Add($"gameobject_addon guid {guid} has invalid state {state}; skipped");
+            _skipped++;
+            return;
+        }
+
+        _addons[guid] = (U32Or(row, 100, "animprogress"), state);
+    }
+
+    /// <summary>
+    /// The initial state and animprogress of every spawn, as retail resolves them: the addon state wins when it is not -1
+    /// (cmangos LoadFromDB :925-927), else a state column of the <c>gameobject</c> row itself (vmangos world dumps, where
+    /// <c>go_state</c> is authoritative and only transports read startOpen, GameObject.cpp:239-248), else a door or button
+    /// whose template says startOpen (data0) starts active/open (cmangos Create, Entities/GameObject.cpp:226-250), else ready (closed). animprogress is the addon
+    /// value, else the row value, else 100 (GO_ANIMPROGRESS_DEFAULT). Idempotent: derived from the stored sources each time.
+    /// </summary>
+    private void ResolveSpawnData()
+    {
+        foreach ((uint guid, GameObjectSpawnRow spawn) in _spawns)
+        {
+            (int ownState, uint? ownAnim) = _ownSpawnData.GetValueOrDefault(guid, (-1, null));
+            bool hasAddon = _addons.TryGetValue(guid, out (uint AnimProgress, int State) addon);
+            bool startOpen = _templates.TryGetValue(spawn.Entry, out var template)
+                && template.Row.Type is 0 or 1 && template.Row.Data0 != 0;
+            int state = hasAddon && addon.State != -1 ? addon.State
+                : ownState != -1 ? ownState
+                : startOpen ? 0
+                : 1;
+            spawn.State = (byte)Math.Clamp(state, 0, 2);
+            spawn.AnimProgress = hasAddon ? addon.AnimProgress : ownAnim ?? 100;
+        }
     }
 
     private void ReadRelation(DumpRow row, HashSet<(uint, uint)> into)

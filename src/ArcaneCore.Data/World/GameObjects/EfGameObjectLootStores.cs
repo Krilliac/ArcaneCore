@@ -42,6 +42,8 @@ public sealed class EfGameObjectDataStore(WorldDbContext db) : IGameObjectDataSt
                 Rotation2 = s.Rotation2,
                 Rotation3 = s.Rotation3,
                 SpawnTimeSeconds = s.SpawnTimeSeconds,
+                SpawnTimeMaxSeconds = s.SpawnTimeMaxSeconds,
+                SpawnFlags = s.SpawnFlags,
                 AnimProgress = s.AnimProgress,
                 State = s.State,
             }),

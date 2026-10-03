@@ -68,6 +68,18 @@ public sealed record GameObjectSpawn
     /// </summary>
     public int SpawnTimeSeconds { get; init; } = 300;
 
+    /// <summary>
+    /// The upper bound of the respawn delay (vmangos <c>spawntimesecsmax</c>; the lower bound is
+    /// <see cref="SpawnTimeSeconds"/>). Null means the same as the minimum, so rows imported before the column existed keep a fixed delay.
+    /// </summary>
+    public int? SpawnTimeMaxSeconds { get; init; }
+
+    /// <summary>
+    /// vmangos <c>spawn_flags</c> (GameObjectDefines.h SPAWN_FLAG_*): 0x01 active, 0x02 disabled,
+    /// 0x04 random respawn time (plus or minus 10 percent), 0x08 dynamic respawn time.
+    /// </summary>
+    public uint SpawnFlags { get; init; }
+
     /// <summary>GAMEOBJECT_ANIMPROGRESS at spawn (vmangos animprogress, 100 by default).</summary>
     public uint AnimProgress { get; init; } = 100;
 
@@ -150,3 +162,4 @@ public interface IGameObjectDataStore
 {
     Task<GameObjectContent> LoadAsync(CancellationToken cancellationToken = default);
 }
+

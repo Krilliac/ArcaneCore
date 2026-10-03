@@ -126,6 +126,9 @@ public enum GameObjectUseResult
     OnCooldown,
     Dead,
     Unsupported,
+
+    /// <summary>The object needs line of sight to the user and has none (chairs).</summary>
+    LineOfSight,
 }
 
 /// <summary>LockKeyType (Lock.dbc Type[i]).</summary>

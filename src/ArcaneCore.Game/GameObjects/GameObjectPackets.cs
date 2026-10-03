@@ -56,4 +56,16 @@ public static class GameObjectPackets
         writer.WriteUInt64(guid.Value);
         return writer.ToArray();
     }
+
+    /// <summary>
+    /// SMSG_GAMEOBJECT_DESPAWN_ANIM: u64 guid (D:\refs\wow_messages ...\smsg_gameobject_despawn_anim.wowm, opcode 0x0215);
+    /// vmangos GameObject::SendObjectDeSpawnAnim sends it before the object is destroyed so the client plays the despawn animation.
+    /// </summary>
+    public static byte[] DespawnAnim(ObjectGuid guid)
+    {
+        var writer = new PacketWriter(8);
+        writer.WriteUInt64(guid.Value);
+        return writer.ToArray();
+    }
 }
+
