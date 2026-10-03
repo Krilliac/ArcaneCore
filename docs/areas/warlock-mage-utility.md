@@ -145,3 +145,25 @@ Transform aura and the mage polymorph classification (mage family, first effect 
 (2) `Rate.Health` does not exist in `CombatOptions` (the health regen never had it) and is not added; (3) the heal-on-tick regen of creatures and pets is untouched.
 
 Tests: `tests/ArcaneCore.Game.Tests/CombatMechanics/RegenAuraTests.cs` (11 tests; RED first: 9 failed, the two baseline tests proving the harness passed).
+
+## wlm-22 Invisibility and Detect Invisibility (`Game/Stealth/Invisibility*.cs`, `World/Stealth/InvisibilityFeature.cs`)
+
+Invisibility (aura 18: Lesser Invisibility 7870, the Invisibility potions, Greater Invisibility) and its detection (aura 19: the three warlock
+Detect Invisibility ranks 132, 2970, 11743) had no handlers and no visibility rule ("invisibility masks are not modelled", docs/areas/rogue.md).
+
+* `InvisibilityVisibilityRule` (an `IVisibilityRule`, attached per map by `InvisibilityFeature`, rules combine so stealth plus invisibility must pass both)
+  is the invisibility half of vmangos `Unit::IsVisibleForOrDetect` (Unit.cpp:6321-6461): a unit with MOD_INVISIBILITY auras is hidden unless the viewer is
+  a game master, the unit's owner or charmer, a Hunter's Mark caster on it, under the same invisibility type (shared mask bit), able to detect it
+  (`CanDetectInvisibilityOf`, Unit.cpp:6502-6540: per type the viewer's strongest detection amount must reach the unit's strongest invisibility amount:
+  Lesser 100 <= Detect Lesser 100, Greater 300 needs Detect Greater 300), or, for a player target, a non-hostile group mate (same group, raid or team
+  by `World:Stealth` group mode, as the stealth rule does).
+* `InvisibilityAuras` (a discovered `ISpellHandlerModule`) is `HandleInvisibility` / `HandleInvisibilityDetect` (SpellAuras.cpp:3708-3780): applying 18
+  removes the auras that break on it (`AuraInterruptMask.StealthInvisibility`), raises the player invisibility glow (`PLAYER_FIELD_BYTES_2` byte 1, 0x40)
+  and re-evaluates the unit for everyone; removing the last 18 aura clears the glow; 19 re-evaluates what the viewer sees.
+
+Limits: the drunk detection special case (invisibility type 6), world bosses detecting everything, creatures seeing invisibility (the rule is for player
+viewers like the stealth rule; creature target selection is not changed), the ghost "invisible for alive" state, and the restore-invisibility branch of the
+stealth removal handler. The aura values in the test are the classic-db z2815 rows quoted as constants.
+
+Tests: `tests/ArcaneCore.Game.Tests/Rogue/InvisibilityTests.cs` (12 tests; RED first against a rule that sees everything and no handlers: 7 failed, the
+5 cases that expect "seen" or no rule passed by design).
