@@ -177,8 +177,8 @@ Behaviour (`CreatureMapSystem.RespawnPersistence.cs`, `ICreatureRespawnPersisten
 * A database spawn that dies saves `now + respawn delay` at once (vmangos `SaveRespawnTimeImmediately = 1`, `mangosd.conf.dist.in:397`;
   `Creature::SetDeathState`, `:2262-2263`); a world boss is saved at death whatever the option says. With
   `Creatures:Respawn:SaveImmediately=false` a normal creature is saved when it leaves the map (grid unload, instance unload) or at shutdown
-  (`Map.cpp:1319-1322`): dead without a corpse saves its respawn time, one with a corpse `now + delay + corpse time left`
-  (`Creature::SaveRespawnTime`, `:2785-2794`; vmangos' own formula, kept).
+  (`Map.cpp:1319-1322`): a respawn time still in the future is saved as it is, corpse or not; only a passed respawn time with a corpse left saves `now + delay + corpse time left`
+  (`Creature::SaveRespawnTime`, `:2785-2794`).
 * At load a pending time makes the creature dead for what is left (`Creature.cpp:1972-1989`); an expired one spawns it alive and deletes the row
   (`:1984-1989`). The row is also deleted when the creature respawns, naturally or by hand.
 * The world side (`CreatureRespawnFeature`, `CreatureRespawnQueue`): reads answer from memory, writes are queued to one consumer off the world

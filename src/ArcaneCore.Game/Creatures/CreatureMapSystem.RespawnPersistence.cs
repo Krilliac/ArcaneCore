@@ -72,12 +72,12 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>
-    /// vmangos Creature::SaveRespawnTime (Objects/Creature.cpp:2785-2794): a dead creature without a corpse saves its respawn time; one that
-    /// still has its corpse saves <c>now + respawn delay + the corpse time left</c>.
+    /// vmangos Creature::SaveRespawnTime (Objects/Creature.cpp:2785-2794): when the respawn time is still in the future it is saved as it is
+    /// (<c>m_respawnTime</c>, corpse or not); only when it has passed but the corpse remains is <c>now + respawn delay + the corpse time left</c> saved.
     /// </summary>
     private void SaveRespawnTime(Creature creature)
     {
-        if (creature.Spawn is null || creature.Summon is not null)
+        if (creature.Spawn is null || creature.Summon is not null || creature.DeathState == CreatureDeathState.Alive)
         {
             return;
         }
@@ -85,11 +85,11 @@ public sealed partial class CreatureMapSystem
         long now = _respawnClock.UnixSeconds;
         long remainingMs = creature.RespawnAtMs - _clockMs;
         long at;
-        if (creature.DeathState == CreatureDeathState.Dead && remainingMs > 0)
+        if (remainingMs > 0)
         {
             at = now + (remainingMs / 1000);
         }
-        else if (creature.DeathState == CreatureDeathState.Corpse && creature.CorpseDecayMs > 0)
+        else if (creature.CorpseDecayMs > 0)
         {
             at = now + creature.RespawnDelaySeconds + (creature.CorpseDecayMs / 1000);
         }
@@ -100,7 +100,6 @@ public sealed partial class CreatureMapSystem
 
         _persistence!.Save(Map.MapId, Map.InstanceId, creature.Spawn.Guid, at);
     }
-
     /// <summary>
     /// Save the respawn time of every dead creature on this map that is still held in memory: shutdown, or an unloading instance. Only with
     /// <c>Creatures:Respawn:SaveImmediately</c> off: with the default every death was saved when it happened, and vmangos saves nothing more when the

@@ -80,9 +80,9 @@ public sealed class RespawnPersistenceTests
         system.KillCreature(Assert.Single(system.Creatures));
         Assert.Empty(persistence.Calls);
 
-        // vmangos Creature::SaveRespawnTime for a creature that still has a corpse: now + respawn delay + the corpse time left.
+        // vmangos Creature::SaveRespawnTime (Creature.cpp:2790-2791): the respawn time is still in the future, so m_respawnTime is saved as it is;
         system.SaveRespawnTimes();
-        Assert.Equal([$"save:0:0:7:{StartUnix + 600 + 300}"], persistence.Calls); // the corpse of a normal creature lasts 300 s
+        Assert.Equal([$"save:0:0:7:{StartUnix + 600}"], persistence.Calls); // the corpse formula (+ corpse time left) is only for a passed respawn time
 
         var bossPersistence = new FakePersistence();
         (WorldRuntime w2, CreatureMapSystem bossSystem) = Start(One(600, rank: 3), bossPersistence, new FakeClock(), options);
