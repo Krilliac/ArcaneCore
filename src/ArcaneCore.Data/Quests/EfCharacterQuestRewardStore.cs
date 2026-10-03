@@ -10,7 +10,10 @@ using Microsoft.EntityFrameworkCore;
 namespace ArcaneCore.Data.Quests;
 
 /// <summary>
-/// A single local database transaction for an ordinary nonrepeatable quest reward.
+/// A single local database transaction for an ordinary quest reward. A nonrepeatable reward
+/// keeps status COMPLETE and is refused once its durable row is rewarded; a repeatable reward
+/// (requested with status NONE, vmangos RewardQuest) may follow earlier rewards but still only
+/// claims the exact completed row it observed, so a duplicate claim conflicts.
 /// Serializable isolation makes concurrent claims contend on the same quest history;
 /// a provider serialization failure rolls back and a retry checks the durable guard.
 /// Character and quest queues must be drained by the caller before invoking this store.
@@ -47,7 +50,8 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
             CharacterQuestStatusRow? row = await db.Set<CharacterQuestStatusRow>()
                 .FirstOrDefaultAsync(r => r.CharacterId == id && r.Quest == request.ExpectedQuest.Quest, cancellationToken)
                 .ConfigureAwait(false);
-            if (row?.Rewarded == true)
+            bool repeatable = request.RewardedQuest.Status == 0;
+            if (row?.Rewarded == true && (!repeatable || row.Status != 1))
             {
                 return QuestRewardCommitResult.AlreadyRewarded;
             }
@@ -122,13 +126,16 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
         ArgumentNullException.ThrowIfNull(request.ExpectedQuest);
         ArgumentNullException.ThrowIfNull(request.RewardedQuest);
         int id = request.Before.Id;
+        // Status 0 (NONE) marks a repeatable reward, which may already carry an older reward.
+        bool repeatable = request.RewardedQuest.Status == 0;
         if (id <= 0 || request.After.Id != id || request.ExpectedQuest.CharacterId != id
             || request.RewardedQuest.CharacterId != id || request.ExpectedQuest.Quest == 0
-            || request.ExpectedQuest.Status != 1 || request.ExpectedQuest.Rewarded
-            || request.RewardedQuest.Status != 1 || !request.RewardedQuest.Rewarded || request.RewardedQuest.Timer != 0
+            || request.ExpectedQuest.Status != 1 || (request.ExpectedQuest.Rewarded && !repeatable)
+            || request.RewardedQuest.Status is not (0 or 1) || !request.RewardedQuest.Rewarded || request.RewardedQuest.Timer != 0
             || (request.RewardedQuest with
             {
-                Rewarded = false, Timer = request.ExpectedQuest.Timer, RewardChoice = request.ExpectedQuest.RewardChoice,
+                Status = 1, Rewarded = request.ExpectedQuest.Rewarded, Timer = request.ExpectedQuest.Timer,
+                RewardChoice = request.ExpectedQuest.RewardChoice,
             }) != request.ExpectedQuest)
         {
             throw new ArgumentException("A reward must preserve a completed quest's identity and counters and set its rewarded history.", nameof(request));

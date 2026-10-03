@@ -148,7 +148,7 @@ public sealed partial class QuestNpcServices
         for (int i = 0; i < QuestConstants.ObjectivesCount; i++)
         {
             if (quest.ReqItemId[i] != 0
-                && (Deps.Items?.GetItemCount(state.Quests.Player, quest.ReqItemId[i], false) ?? 0) < quest.ReqItemCount[i])
+                && InventoryCount(state.Quests.Player, quest.ReqItemId[i]) < quest.ReqItemCount[i])
             {
                 return false;
             }

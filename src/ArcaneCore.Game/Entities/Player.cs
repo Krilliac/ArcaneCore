@@ -57,7 +57,7 @@ public sealed partial class Player : Unit
 
     private readonly uint[] _actionButtons = new uint[ActionButtonCount];
     private readonly uint _playedTimeAtLogin;
-    private readonly uint _levelPlayedTimeAtLogin;
+    private uint _levelPlayedTimeAtLogin;
     private readonly uint _raceFactionTemplate;
     private uint _loginTimeMs;
     private uint _levelStartMs;
@@ -379,6 +379,13 @@ public sealed partial class Player : Unit
 
     /// <summary>Played seconds at the current level, at the given world time.</summary>
     public uint LevelPlayedTimeAt(uint nowMs) => _levelPlayedTimeAtLogin + ((nowMs - _levelStartMs) / 1000);
+
+    /// <summary>A level-up restarts the played time at the new level (vmangos GiveLevel: m_playedTime[PLAYED_TIME_LEVEL] = 0).</summary>
+    public void ResetLevelPlayedTime(uint nowMs)
+    {
+        _levelPlayedTimeAtLogin = 0;
+        _levelStartMs = nowMs;
+    }
 
     /// <summary>Start counting played time from this world time (called when the player enters the world).</summary>
     internal void StartPlayedTime(uint nowMs)

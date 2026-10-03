@@ -3,6 +3,7 @@ using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
@@ -38,7 +39,8 @@ public sealed class TeleportHandlers : IOpcodeHandlerGroup
         => Feature(session).Teleports.HandleWorldportAck(player);
 
     // vmangos WorldSession::HandleAreaTriggerOpcode (the parts ArcaneCore has systems for:
-    // the zone check, then the teleport with its level requirement).
+    // the zone check, area trigger listeners such as quest exploration, then the teleport with
+    // its level requirement).
     private static void HandleAreaTrigger(WorldSession session, Player player, byte[] payload)
     {
         uint triggerId = TeleportPackets.ReadAreaTrigger(payload);
@@ -54,6 +56,13 @@ public sealed class TeleportHandlers : IOpcodeHandlerGroup
         if (!AreaTriggerZone.Contains(trigger, player.MapId, player.X, player.Y, player.Z, AreaTriggerZone.ClientDelta))
         {
             return;
+        }
+
+        // vmangos handles the quest relation (areatrigger_involvedrelation) before teleports.
+        // Listeners are world features (discovered, no shared registration edit).
+        foreach (IAreaTriggerListener listener in session.Services.GetServices<IWorldFeature>().OfType<IAreaTriggerListener>())
+        {
+            listener.OnAreaTrigger(player, triggerId);
         }
 
         AreaTriggerTeleport? teleport = maps.FindAreaTriggerTeleport(triggerId);

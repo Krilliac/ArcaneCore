@@ -123,7 +123,15 @@ public sealed partial class SpellSystem
         {
             AddAuraHolder(holder);
         }
+
+        SpellHitTarget?.Invoke(cast.Caster, target, cast.Spell.Id);
+        SpellHit?.Invoke(cast.Caster, target, cast.Spell);
     }
+
+    /// <summary>
+    /// Raised after a cast effect reaches a unit for quest objectives.
+    /// </summary>
+    public event Action<Unit, Unit, uint>? SpellHitTarget;
 
     /// <summary>
     /// vmangos Spell::EffectSchoolDMG + Unit::DealDamage path: armor (physical), crit and partial

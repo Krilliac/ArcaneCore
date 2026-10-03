@@ -91,8 +91,13 @@ public sealed partial class QuestNpcFeature
 
             Guid operationId = Guid.NewGuid();
             CharacterState before = player.CreateSnapshot(world.NowMs) with { Inventory = plan.BeforeInventory };
+            // A quest level-up is part of the reward transaction (its played-time-at-level restarts).
             var request = new CharacterQuestRewardRequest(before,
-                before with { Money = plan.MoneyAfter, Inventory = plan.InventoryAfter },
+                before with
+                {
+                    Money = plan.MoneyAfter, Inventory = plan.InventoryAfter, Level = plan.LevelAfter,
+                    LevelPlayedTime = plan.LevelAfter != plan.LevelBefore ? 0 : before.LevelPlayedTime,
+                },
                 plan.ExpectedQuest, plan.RewardedQuest);
             saves.HoldCharacter(id);
             if (!player.BeginQuestSettlement(operationId))
@@ -199,6 +204,8 @@ public sealed partial class QuestNpcFeature
                     player.EndQuestSettlement(operation.OperationId);
                     Persistence.ResumeCharacter(id);
                     operation.Saves.ResumeCharacter(id);
+                    // Reward spells and reputation need the released character.
+                    Services.PublishRewardEffects(operation.Plan);
                 }
             }
             else if (operation.Outcome is RewardOutcome.Before or RewardOutcome.NotStarted)
@@ -287,13 +294,13 @@ public sealed partial class QuestNpcFeature
             return RewardOutcome.Unknown;
         }
 
-        if (quest == request.ExpectedQuest && character.Money == request.Before.Money
+        if (quest == request.ExpectedQuest && character.Money == request.Before.Money && character.Level == request.Before.Level
             && SameInventory(inventory, request.Before.Inventory!.Items))
         {
             return RewardOutcome.Before;
         }
 
-        return quest == request.RewardedQuest && character.Money == request.After.Money
+        return quest == request.RewardedQuest && character.Money == request.After.Money && character.Level == request.After.Level
             && SameInventory(inventory, request.After.Inventory!.Items) ? RewardOutcome.After : RewardOutcome.Unknown;
     }
 

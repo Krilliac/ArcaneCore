@@ -1,17 +1,20 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Protocol;
+using Microsoft.Extensions.Logging;
 using ItemInventoryResult = ArcaneCore.Game.Items.InventoryResult;
 
 namespace ArcaneCore.Game.Npc;
 
 /// <summary>
-/// The ordinary creature kill quest item/money settlement slice. vmangos/core
-/// 4b3d241cffe245a1f68da11380bce96c23db48c0 QuestHandler.cpp and Player.cpp
-/// HandleQuestgiverCompleteQuestOpcode, HandleQuestgiverRequestRewardOpcode,
-/// CanRewardQuest and RewardQuest. Unsupported rewards fail closed.
+/// Ordinary quest settlement: items, money, delivery-item removal, XP/level, repeatable history
+/// and post-settlement reward effects. vmangos/core 4b3d241cffe245a1f68da11380bce96c23db48c0
+/// QuestHandler.cpp and Player.cpp HandleQuestgiverCompleteQuestOpcode,
+/// HandleQuestgiverRequestRewardOpcode, CanRewardQuest and RewardQuest. Only allowlisted quests
+/// whose every requirement and reward has an adapter are offered; everything else fails closed.
 /// </summary>
 public sealed partial class QuestNpcServices
 {
@@ -19,7 +22,7 @@ public sealed partial class QuestNpcServices
     public void CompleteQuest(Player player, ObjectGuid guid, uint questId)
     {
         if (!TryRewardQuest(player, guid, questId, out PlayerNpcState? state, out Quest? quest)
-            || state.Quests.Get(questId) is not { Rewarded: false, Status: QuestStatus.Incomplete or QuestStatus.Complete } data)
+            || state.Quests.Get(questId) is not { } data || !Pending(quest, data))
         {
             return;
         }
@@ -34,8 +37,8 @@ public sealed partial class QuestNpcServices
     public void RequestReward(Player player, ObjectGuid guid, uint questId)
     {
         if (TryRewardQuest(player, guid, questId, out PlayerNpcState? state, out Quest? quest)
-            && state.Quests.Get(questId) is { Rewarded: false, Status: QuestStatus.Complete } data
-            && ObjectivesComplete(player, quest, data))
+            && state.Quests.Get(questId) is { Status: QuestStatus.Complete } data
+            && Pending(quest, data) && ObjectivesComplete(player, quest, data))
         {
             Send(player, WorldOpcode.SmsgQuestgiverOfferReward,
                 QuestPackets.OfferReward(guid, quest, Options.RateDropMoney, RewardDisplayOf(player)));
@@ -48,14 +51,16 @@ public sealed partial class QuestNpcServices
     {
         plan = null;
         if (!TryRewardQuest(player, guid, questId, out PlayerNpcState? state, out Quest? quest)
-            || state.Quests.Get(questId) is not { Rewarded: false, Status: QuestStatus.Complete } data
+            || state.Quests.Get(questId) is not { Status: QuestStatus.Complete } data || !Pending(quest, data)
             || !ObjectivesComplete(player, quest, data) || !TryRewardGrants(quest, choice, out List<InventoryRewardGrant> grants,
-                out uint chosenItem) || !TryRewardMoney(player, quest, out uint moneyAfter, out uint summaryMoney))
+                out uint chosenItem) || !TryRewardMoney(player, quest, out uint moneyAfter, out uint summaryMoney)
+            || !TryRewardExperience(player, quest, out uint experience, out byte levelAfter))
         {
             return false;
         }
 
-        ItemInventoryResult result = player.Inventory.TryStageQuestRewards(grants, out InventoryRewardStage? stage, out uint failedEntry);
+        ItemInventoryResult result = player.Inventory.TryStageQuestRewards(grants, RequiredItemRemovals(quest),
+            out InventoryRewardStage? stage, out uint failedEntry);
         if (result != ItemInventoryResult.Ok || stage is null)
         {
             player.Inventory.SendEquipError(result, null, null, entry: failedEntry);
@@ -63,8 +68,14 @@ public sealed partial class QuestNpcServices
         }
 
         CharacterQuestStatus expected = RewardRow(player, questId, data);
-        plan = new QuestRewardPlan(this, player, choice, moneyAfter, summaryMoney, expected,
-            expected with { Rewarded = true, Timer = 0, RewardChoice = chosenItem }, stage);
+        // vmangos RewardQuest: a repeatable returns to QUEST_STATUS_NONE (it may be taken again),
+        // anything else stays COMPLETE; both remember that they were rewarded.
+        plan = new QuestRewardPlan(this, player, guid, choice, moneyAfter, summaryMoney, experience, levelAfter, expected,
+            expected with
+            {
+                Status = quest.IsRepeatable ? (byte)QuestStatus.None : expected.Status,
+                Rewarded = true, Timer = 0, RewardChoice = chosenItem,
+            }, stage);
         return true;
     }
 
@@ -76,7 +87,7 @@ public sealed partial class QuestNpcServices
         if (!ReferenceEquals(plan.Services, this) || Ready(player) is not { } state
             || Quests.Get(plan.QuestId) is not { } quest || state.Quests.Get(plan.QuestId) is not { } data
             || RewardRow(player, plan.QuestId, data) != plan.ExpectedQuest || player.Money != plan.MoneyBefore
-            || !plan.Stage.MatchesBefore())
+            || player.Level != plan.LevelBefore || !plan.Stage.MatchesBefore())
         {
             throw new InvalidOperationException("the quest reward plan no longer matches its live character");
         }
@@ -89,6 +100,7 @@ public sealed partial class QuestNpcServices
 
         player.Inventory.ApplyQuestRewardInventory(plan.Stage);
         player.Money = plan.MoneyAfter;
+        data.Status = (QuestStatus)plan.RewardedQuest.Status;
         data.Rewarded = true;
         data.TimerEndUnix = 0;
         data.RewardChoice = plan.RewardedQuest.RewardChoice;
@@ -99,8 +111,35 @@ public sealed partial class QuestNpcServices
         player.Inventory.NotifyQuestRewardInventory(plan.Stage);
         MoneyChanged(state, player.Money);
         Flush(state);
+        if (plan.Experience > 0 && Deps.Experience is { } experience)
+        {
+            // The committed level is authoritative; the live grant reproduces the preview.
+            experience.GiveXp(player, plan.Experience);
+            if (player.Level != plan.LevelAfter)
+            {
+                _logger.LogWarning("quest {Quest} XP produced level {Live}, settlement committed {Committed}",
+                    quest.Id, player.Level, plan.LevelAfter);
+            }
+        }
+
         Send(player, WorldOpcode.SmsgQuestgiverQuestComplete,
-            QuestPackets.Complete(quest, plan.SummaryMoney));
+            QuestPackets.Complete(quest, plan.Experience, plan.SummaryMoney));
+    }
+
+    /// <summary>
+    /// Effects that need a released character (spells skip settlement-held units): run after
+    /// <see cref="Player.EndQuestSettlement"/>, once per published plan.
+    /// </summary>
+    public void PublishRewardEffects(QuestRewardPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        if (ReferenceEquals(plan.Services, this) && plan.Stage.Applied && !plan.EffectsPublished
+            && Deps.RewardEffects is { } effects && Quests.Get(plan.QuestId) is { } quest
+            && plan.Player.CanMutateQuestSettlementState)
+        {
+            plan.EffectsPublished = true;
+            effects.QuestRewarded(plan.Player, quest, plan.QuestGiver);
+        }
     }
 
     private bool TryRewardQuest(Player player, ObjectGuid guid, uint questId,
@@ -116,21 +155,96 @@ public sealed partial class QuestNpcServices
             && Quests.EndersOf(npc.Entry).Contains(questId);
     }
 
+    /// <summary>
+    /// The allowlist stays the opt-in: a listed quest is rewarded only when every requirement and
+    /// reward it carries has an adapter (XP needs <see cref="IQuestExperience"/>, reward spells need
+    /// <see cref="IQuestRewardEffects"/>, reputation gates need a reputation owner).
+    /// </summary>
     private bool SupportedRewardQuest(Quest quest) => Options.OrdinaryRewardQuestIds.Contains(quest.Id)
-        && quest.IsActive && quest.Template.Method == 2 && JournalOnlyQuest(quest)
-        && !quest.HasSpecialFlag(QuestSpecialFlags.ExplorationOrEvent | QuestSpecialFlags.Timed)
-        && !quest.HasFlag(QuestFlags.Exploration | QuestFlags.PartyAccept | QuestFlags.AutoRewarded)
-        && quest.Template.RequiredMinRepFaction == 0 && quest.Template.RequiredMaxRepFaction == 0
-        && quest.Template.RewXP == 0 && quest.Template.RewMoneyMaxLevel == 0
-        && quest.Template.RewSpell == 0 && quest.Template.RewSpellCast == 0
-        && quest.ReqCreatureOrGOCountTotal > 0 && quest.ReqItemCount.All(count => count == 0)
-        && quest.ReqSourceCount.All(count => count == 0)
-        && quest.ReqSpell.All(id => id == 0) && quest.ReqCreatureOrGOId.All(id => id >= 0)
-        && quest.ReqCreatureOrGOId.Where((id, i) => id != 0 || quest.ReqCreatureOrGOCount[i] != 0)
-            .All(id => id > 0)
-        && quest.ReqCreatureOrGOId.Select((id, i) => id == 0 || quest.ReqCreatureOrGOCount[i] is > 0 and <= 63).All(valid => valid)
+        && quest.IsActive && quest.Template.Method == 2 && AcceptableQuest(quest)
+        && ((quest.Template.RequiredMinRepFaction == 0 && quest.Template.RequiredMaxRepFaction == 0) || Deps.Reputation is not null)
+        && ((quest.Template.RewXP == 0 && quest.Template.RewMoneyMaxLevel == 0) || Deps.Experience is IQuestExperience)
+        && (RewardSpell(quest) == 0 || Deps.RewardEffects?.CanCastRewardSpell(RewardSpell(quest)) == true)
+        && CoherentObjectives(quest)
         && CoherentRewards(quest.RewItemId, quest.RewItemCount, dense: false)
         && CoherentRewards(quest.RewChoiceItemId, quest.RewChoiceItemCount, dense: true);
+
+    /// <summary>vmangos RewardQuest: RewSpellCast wins over RewSpell.</summary>
+    public static uint RewardSpell(Quest quest) => quest.Template.RewSpellCast != 0 ? quest.Template.RewSpellCast : quest.Template.RewSpell;
+
+    /// <summary>Objective slots are either empty or complete; creature/GO counters fit the 6-bit slot field.</summary>
+    private static bool CoherentObjectives(Quest quest)
+    {
+        for (int i = 0; i < QuestConstants.ObjectivesCount; i++)
+        {
+            if ((quest.ReqItemId[i] == 0) != (quest.ReqItemCount[i] == 0) || quest.ReqItemCount[i] > int.MaxValue)
+            {
+                return false;
+            }
+
+            int target = quest.ReqCreatureOrGOId[i];
+            if (target == 0 ? quest.ReqCreatureOrGOCount[i] != 0 || quest.ReqSpell[i] != 0
+                : quest.ReqCreatureOrGOCount[i] is 0 or > 63)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>vmangos RewardQuest destroys ReqItemId × ReqItemCount from the bags (not the bank) first.</summary>
+    private static List<InventoryRewardGrant> RequiredItemRemovals(Quest quest)
+    {
+        var removals = new List<InventoryRewardGrant>();
+        for (int i = 0; i < QuestConstants.ObjectivesCount; i++)
+        {
+            if (quest.ReqItemId[i] != 0 && quest.ReqItemCount[i] != 0)
+            {
+                removals.Add(new InventoryRewardGrant(quest.ReqItemId[i], quest.ReqItemCount[i]));
+            }
+        }
+
+        return removals;
+    }
+
+    /// <summary>
+    /// vmangos RewardQuest XP: XPValue × Rate.XP.Quest below the maximum level (every completion,
+    /// repeatables included), otherwise nothing (RewMoneyMaxLevel pays instead).
+    /// </summary>
+    private bool TryRewardExperience(Player player, Quest quest, out uint experience, out byte levelAfter)
+    {
+        experience = 0;
+        levelAfter = player.Level;
+        if (quest.Template.RewXP == 0)
+        {
+            return true;
+        }
+
+        if (Deps.Experience is not IQuestExperience progression)
+        {
+            return false;
+        }
+
+        if (player.Level >= progression.MaxPlayerLevel)
+        {
+            return true;
+        }
+
+        float scaled = quest.XpValue(player.Level) * Options.RateXpQuest;
+        if (!float.IsFinite(scaled) || scaled < 0 || scaled >= uint.MaxValue)
+        {
+            return false;
+        }
+
+        experience = (uint)scaled;
+        levelAfter = progression.Preview(player.Level, progression.GetCurrentXp(player), experience).Level;
+        return true;
+    }
+
+    private byte MaxQuestLevel => Deps.Experience is IQuestExperience progression
+        ? progression.MaxPlayerLevel
+        : (byte)Math.Min(Options.MaxPlayerLevel, byte.MaxValue);
 
     private static bool CoherentRewards(IReadOnlyList<uint> ids, IReadOnlyList<uint> counts, bool dense)
     {
@@ -195,6 +309,17 @@ public sealed partial class QuestNpcServices
             }
 
             delta = (long)scaled;
+        }
+
+        if (quest.Template.RewMoneyMaxLevel != 0 && player.Level >= MaxQuestLevel)
+        {
+            float scaled = quest.Template.RewMoneyMaxLevel * Options.RateDropMoney;
+            if (!float.IsFinite(scaled) || scaled < 0 || scaled > (double)int.MaxValue)
+            {
+                return false;
+            }
+
+            delta += (long)scaled;
         }
 
         if (player.Money > MaxMoneyAmount || (delta < 0 && player.Money < -delta))
