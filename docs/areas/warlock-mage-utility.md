@@ -84,7 +84,7 @@ Absorb shields got no spell power: `SnapshotAuraAmount` skipped `SPELL_AURA_SCHO
 `SpellSystem.Persistence.cs` and never re-snapshotted, so there is no double bonus). `SpellBonusModule` implements vmangos
 `Aura::HandleSchoolAbsorb` (SpellAuras.cpp:5750-5810):
 
-* Fire Ward and Frost Ward (mage family flags 3 and 8, `SpellClassMask.h`) and Shadow Ward (warlock family, icon 207, category 56): 10 percent of
+* Fire Ward and Frost Ward (mage family flags 3 and 8, `SpellClassMask.h`) and Shadow Ward (icon 207, category 56; the real classic-db z2815 rows 6229, 11739, 11740 and 28610 carry family 0 although vmangos's own database has 5, so family 0 and 5 are both accepted): 10 percent of
   `SpellBaseDamageBonusDone` for the spell's school (ModDamageDone for the school plus the per-aura truncated spirit part, players only);
 * Power Word: Shield (priest family flag 0) in the same function: 10 percent of `SpellBaseHealingBonusDone` (the design listed only the three
   wards; retail does the same for Power Word: Shield and no other lane owns it);
@@ -106,7 +106,7 @@ unchanged non-ward shield, module not installed, other-school shield). The absor
   lane) and the SMSG_SPELLLOGEXECUTE power-drain entry are missing.
 * **Per-second power cost** (`Spells/SpellSystem.PerSecondCosts.cs`, hook in `UpdateAuras`, `SpellAuraHolder.PerSecondTimer`): `ManaPerSecond` was carried
   and never charged. After the duration step of a running holder, once a second the caster pays `manaPerSecond + perLevel * level` of the spell's
-  power type (health for Health Funnel); the "no target per second costs" attribute (0x800) restricts it to a caster that targets itself; a caster that
+  power type (health for Health Funnel); the "no target per second costs" attribute (0x800) makes only one holder pay (vmangos tests `GetCasterGuid() == target->GetTargetGuid()`, which never holds for the real Health Funnel here because `Unit.Target` is only a melee victim or a player selection, so the holder on the caster itself, aura 88, pays when the spell has one; a spell without such a holder keeps the vmangos test); a caster that
   cannot pay loses the aura and the channel and a player gets FIZZLE (vmangos SpellAuras.cpp:7296-7330). Deliberate limit: for a health cost at or below
   the amount vmangos falls into `GetPower(POWER_HEALTH)` (an unrelated update field); the evident intent, a fizzle, is implemented. The Health Funnel heal
   tick needs no exception here: the base periodic heal never damages the caster (the vmangos damage-the-caster branch for visual 163 is not ported).

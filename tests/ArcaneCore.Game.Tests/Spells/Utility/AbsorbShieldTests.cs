@@ -24,6 +24,8 @@ public sealed class AbsorbShieldTests
     private const uint ShadowDamage = 963_103;
     private const uint Healing = 963_104;
     private const uint OddFrostDamage = 963_105;
+    private const uint RetailShadowWard = 963_007;
+    private const uint SameIconOtherCategory = 963_008;
 
     private const int FrostMask = 0x10;
     private const int FireMask = 0x04;
@@ -64,6 +66,9 @@ public sealed class AbsorbShieldTests
             Shield(FrostWard, 164, FrostMask, Mage, 8),
             Shield(FireWard, 164, FireMask, Mage, 3),
             Shield(ShadowWard, 290, ShadowMask, Warlock, 20, icon: 207, category: 56),
+            // The real classic-db z2815 rows of Shadow Ward (6229, 11739, 11740, 28610): SpellFamilyName 0, icon 207, category 56.
+            Shield(RetailShadowWard, 290, ShadowMask, 0, 0, icon: 207, category: 56) with { SpellFamilyFlags = 0 },
+            Shield(SameIconOtherCategory, 290, ShadowMask, 0, 0, icon: 207, category: 0) with { SpellFamilyFlags = 0 },
             Shield(IceBarrierLike, 438, FrostMask, Mage, 10),
             Shield(PowerWordShield, 44, HolyMask, Priest, 0),
             Shield(LowLevelFrostWard, 164, FrostMask, Mage, 8, level: 12),
@@ -122,6 +127,30 @@ public sealed class AbsorbShieldTests
         Cast(kit, caster, ShadowWard);
 
         Assert.Equal(305, ShieldAmount(kit, caster, ShadowWard)); // 290 + 0.1 * 150
+    }
+
+    [Fact]
+    public void ShadowWard_WithTheRealDataRow_FamilyZero_StillGetsTheSpellPower()
+    {
+        using SpellTestKit kit = NewKit();
+        (Player caster, _) = kit.AddPlayer(1);
+        Cast(kit, caster, ShadowDamage);
+
+        Cast(kit, caster, RetailShadowWard);
+
+        Assert.Equal(305, ShieldAmount(kit, caster, RetailShadowWard)); // 290 + 0.1 * 150
+    }
+
+    [Fact]
+    public void ShadowWardRule_DoesNotMatchAShieldWithTheIconButNotTheCategory()
+    {
+        using SpellTestKit kit = NewKit();
+        (Player caster, _) = kit.AddPlayer(1);
+        Cast(kit, caster, ShadowDamage);
+
+        Cast(kit, caster, SameIconOtherCategory);
+
+        Assert.Equal(290, ShieldAmount(kit, caster, SameIconOtherCategory));
     }
 
     [Fact]

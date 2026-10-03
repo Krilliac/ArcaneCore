@@ -38,7 +38,7 @@ public sealed partial class SpellSystem
         holder.PerSecondTimer = 1000;
         int perSecond = (int)spell.ManaPerSecond + ((int)spell.ManaPerSecondPerLevel * caster.Level);
         Unit target = holder.Target;
-        if (perSecond == 0 || ((uint)spell.AttributesEx2 & NoTargetPerSecondCostsFlag) != 0 && holder.CasterGuid != target.Target)
+        if (perSecond == 0 || !PaysPerSecondCost(holder, spell, target))
         {
             return;
         }
@@ -67,5 +67,25 @@ public sealed partial class SpellSystem
         {
             player.Session.Send(WorldOpcode.SmsgCastResult, SpellPackets.BuildCastResult(spell.Id, SpellCastResult.Fizzle));
         }
+    }
+
+    /// <summary>
+    /// Whether this holder is the one that pays a spell's per-second cost. Only a spell without the no-target-costs attribute pays on every holder.
+    /// For one with it vmangos reads <c>GetCasterGuid() == target->GetTargetGuid()</c> (SpellAuras.cpp:7314), whose purpose is one payment for the
+    /// several holders of Health Funnel ("avoid double cost for health funnel"). The real spell (classic-db z2815 755, 3698-3700, 11693-11695; Ex2
+    /// 0x808) has a periodic heal on the pet and aura 88 on the caster; neither holder's unit has the caster's guid as its own selection here
+    /// (<see cref="Unit.Target"/> is only a melee victim or a player's selection), so the literal test would let the channel heal for free. The
+    /// retail result is one payment by the caster per second, so the holder on the caster itself pays when the spell puts an aura on the caster;
+    /// a spell with no such holder keeps the vmangos test.
+    /// </summary>
+    private static bool PaysPerSecondCost(SpellAuraHolder holder, SpellInfo spell, Unit target)
+    {
+        if (((uint)spell.AttributesEx2 & NoTargetPerSecondCostsFlag) == 0)
+        {
+            return true;
+        }
+
+        bool auraOnCaster = spell.Effects.Any(e => e.Effect == SpellEffectName.ApplyAura && e.TargetA == SpellImplicitTarget.UnitCaster);
+        return auraOnCaster ? target.Guid == holder.CasterGuid : holder.CasterGuid == target.Target;
     }
 }

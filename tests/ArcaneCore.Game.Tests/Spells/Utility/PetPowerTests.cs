@@ -27,6 +27,7 @@ public sealed class PetPowerTests
     private const uint ImprovedLifeTap = 964_005;
     private const uint ShadowPower = 964_006;
     private const uint SlowFunnel = 964_007;
+    private const uint RealFunnel = 964_008;
 
     private static SpellInfo Instant(uint id, params SpellEffectInfo[] effects)
         => Spell(id, effects) with { StartRecoveryCategory = 0, StartRecoveryTime = 0 };
@@ -56,6 +57,21 @@ public sealed class PetPowerTests
             PowerType = SpellMath.PowerHealth,
             ManaPerSecond = 5,
             SpellVisual = 1,
+        },
+        // The real classic-db z2815 shape of Health Funnel 755: AttributesEx2 2056 (0x808), a periodic heal on the pet (target 5) and aura 88
+        // (MOD_HEALTH_REGEN_PERCENT -101) on the caster (target 1), 5 health per second.
+        Instant(RealFunnel,
+            Effect(SpellEffectName.ApplyAura, 12, (SpellImplicitTarget)5, AuraType.PeriodicHeal, amplitude: 1000),
+            Effect(SpellEffectName.ApplyAura, -101, SpellImplicitTarget.UnitCaster, AuraType.ModHealthRegenPercent)) with
+        {
+            AttributesEx = SpellAttributesEx.IsChanneled,
+            AttributesEx2 = (SpellAttributesEx2)0x808,
+            Duration = new SpellDuration(10_000, 0, 10_000),
+            PowerType = SpellMath.PowerHealth,
+            ManaCost = 11,
+            ManaPerSecond = 5,
+            SpellVisual = 1,
+            School = SpellSchool.Shadow,
         },
         Instant(LifeTapRank1, Effect(SpellEffectName.Dummy, 30)) with { School = SpellSchool.Shadow },
         Instant(ImprovedLifeTap, Effect(SpellEffectName.ApplyAura, 10, aura: AuraType.Dummy)) with
@@ -216,6 +232,27 @@ public sealed class PetPowerTests
         Assert.Equal(46u, pet.Health); // three heals landed before it stopped
         Assert.Contains(SpellTestKit.Packets(session, WorldOpcode.SmsgCastResult),
             p => BitConverter.ToUInt32(p, 0) == HealthFunnel && p[4] == 2 && p[5] == (byte)SpellCastResult.Fizzle);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ChannelPerSecondCost_RealHealthFunnelShape_IsPaidExactlyOncePerSecond_WhateverTheWarlockHasSelected(bool petSelected)
+    {
+        using PetTestKit kit = Prepared();
+        (Player warlock, Creature pet, _) = WarlockWithPet(kit);
+        warlock.Health = 100;
+        pet.Health = 10;
+        warlock.Target = petSelected ? pet.Guid : default;
+        kit.Spells.Spellbook.Teach(warlock, RealFunnel);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.Spells.System.HandleCastRequest(warlock, RealFunnel, SpellCastTargets.ForSelf()));
+        Assert.Equal(89u, warlock.Health);
+        kit.Spells.Advance(3000);
+
+        // vmangos pays once for the two holders (its comment "avoid double cost for health funnel"); retail charges the caster 5 per second.
+        Assert.Equal(74u, warlock.Health);
+        Assert.Equal(46u, pet.Health);
     }
 
     [Fact]

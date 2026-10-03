@@ -29,7 +29,7 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
     private const int SpiritStat = 4;
 
     // vmangos SpellDefines.h SPELLFAMILY_*, SpellClassMask.h CF_MAGE_FIRE_WARD (3), CF_MAGE_FROST_WARD (8), CF_PRIEST_POWER_WORD_SHIELD (0); Shadow Ward is
-    // identified by icon 207 and category 56 (SpellAuras.cpp:5782).
+    // identified by icon 207 and category 56 (SpellAuras.cpp:5782, inside a SPELLFAMILY_WARLOCK case; the real rows carry family 0).
     private const uint MageFamily = 3;
     private const uint WarlockFamily = 5;
     private const uint PriestFamily = 6;
@@ -78,7 +78,7 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
 
     /// <summary>
     /// vmangos Aura::HandleSchoolAbsorb (SpellAuras.cpp:5750-5810): Power Word: Shield adds 10 percent of the caster's +healing for the school
-    /// (SpellBaseHealingBonusDone), Fire Ward and Frost Ward (mage family flags 3 and 8) and Shadow Ward (warlock family, icon 207, category 56)
+    /// (SpellBaseHealingBonusDone), Fire Ward and Frost Ward (mage family flags 3 and 8) and Shadow Ward (icon 207, category 56; family 5 in the vmangos database, but 0 in every real classic-db z2815 row 6229, 11739, 11740, 28610, so both are accepted)
     /// 10 percent of the +damage for the school (SpellBaseDamageBonusDone); the bonus is multiplied by CalculateLevelPenalty. Ice Barrier, Mana
     /// Shield, Spellstone and every other shield get nothing. The caller truncates to int like the int32 modifier of vmangos (rand_dither of an
     /// integer is the integer).
@@ -92,7 +92,7 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
             benefit = BaseHealingBonusDone(caster, mask) * 0.1f;
         }
         else if (spell.IsFitToFamily(MageFamily, FireWardFlag) || spell.IsFitToFamily(MageFamily, FrostWardFlag)
-            || (spell.SpellFamilyName == WarlockFamily && spell.SpellIconId == ShadowWardIcon && spell.Category == ShadowWardCategory))
+            || (spell.SpellFamilyName is 0 or WarlockFamily && spell.SpellIconId == ShadowWardIcon && spell.Category == ShadowWardCategory))
         {
             benefit = BaseDamageBonusDone(caster, mask) * 0.1f;
         }
