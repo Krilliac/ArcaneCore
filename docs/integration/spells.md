@@ -81,3 +81,10 @@ fallback actor. This adds no saved aura state or broader offline gameplay. Twent
 new Game/World cases and full native/provider suites cover the bounded contract.
 Actual two-session/client aura behavior remains pending in the user's selected
 chat; source-only weak-lifetime reasoning does not claim a forced-GC measurement.
+
+## Follow-up: persistence, targeting, effects and combat rules
+
+Round 2 (`feat/spells-persistence`) adds cooldown/aura persistence across logout (characters
+schema reserved v8), area/cone/chain/party targeting with a line-of-sight seam, weapon, leech,
+dispel, interrupt, summon and party area aura effects, vanilla hit/crit/resist rules and
+pushback/channel interrupts. See [spells-persistence.md](spells-persistence.md).
