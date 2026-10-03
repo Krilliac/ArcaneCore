@@ -18,8 +18,10 @@ verify behaviour; nothing is copied. `D:\refs\vmangos` is the primary reference.
 - `PerformanceLog` section (`SlowWorldUpdate`, `SlowMapUpdate`, `SlowPackets`, milliseconds, 0
   disables): defaults 100/100/20 from vmangos `mangosd.conf.dist.in:898-906`. Entries carry
   `EventId` name `Perf` (`PerformanceLogOptions.PerfEventId`) so a file sink can route them to a
-  Perf log. Deliberate difference: vmangos logs the interval between two frames
-  (`WorldRunnable.cpp:73-74`, one frame late); ArcaneCore logs the measured tick duration.
+  Perf log. SlowWorldUpdate defaults to retail: the interval between two frames,
+  sleep included, checked at the start of the next frame, text "Slow world update: Nms"
+  (`WorldRunnable.cpp:60-74`). `PerformanceLog:SlowWorldUpdateMeasure=TickDuration` is the
+  opt-in deviation that logs only the tick body's duration (and the tick interval).
   Slow packets are timed around the in-world handler call (`WorldSession.cs`,
   vmangos `WorldSession.cpp:620`).
 
@@ -43,6 +45,12 @@ verify behaviour; nothing is copied. `D:\refs\vmangos` is the primary reference.
   queue) runs, so no second shutdown path exists. `Program.cs` returns `ExitCodes.Current`.
 - `HostOptions` is now bound from configuration; the shipped `HostOptions:ShutdownTimeout` is one
   minute so a large save drain is not cut short by the host default.
+- Timer lifetime: the one second timer runs only while a countdown is pending. Start and end
+  are decided on the world thread alone (`AfterChange`; `Cancel` also ends the timer), each run
+  has an id and a tick from an ended or replaced run is ignored, so cancel followed at once by a
+  new request cannot leave a countdown without a timer. Tested on a real world thread with the
+  real timer (`RealTimer_*`, `CancelThenRestart_*` in `ServerLifecycleTests`). The process exit
+  code of the built executable after a restart countdown is still not run end to end.
 
 ### 3. Configuration validation
 

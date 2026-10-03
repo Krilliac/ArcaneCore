@@ -65,6 +65,14 @@ public sealed class ConfigValidationTests
     }
 
     [Fact]
+    public void SlowWorldUpdateMeasure_UnknownValue_IsAnError_AndKnownValuesAreFine()
+    {
+        Assert.Contains(Run(Config(("PerformanceLog:SlowWorldUpdateMeasure", "Sometimes"))).Issues, i => i.Key == "PerformanceLog:SlowWorldUpdateMeasure" && i.Severity == ConfigSeverity.Error);
+        Assert.Empty(Run(Config(("PerformanceLog:SlowWorldUpdateMeasure", "tickduration"))).Issues);
+        Assert.Empty(Run(Config(("PerformanceLog:SlowWorldUpdateMeasure", "FrameInterval"))).Issues);
+    }
+
+    [Fact]
     public void CharactersPerRealm_11_IsAnError()
         => Assert.Contains(Run(Config(("World:CharactersPerRealm", "11"))).Issues, i => i.Key == "World:CharactersPerRealm");
 

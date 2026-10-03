@@ -429,12 +429,20 @@ public sealed class WorldRuntime : IDisposable
             uint diff = (uint)Math.Clamp(tickStart - last, 0, uint.MaxValue);
             last = tickStart;
 
+            // vmangos WorldRunnable.cpp:73-74: the frame interval (sleep included), checked before the update.
+            if (Options.Perf.SlowWorldUpdateMeasure == SlowWorldUpdateMeasure.FrameInterval
+                && Options.Perf.SlowWorldUpdate > 0 && diff > (uint)Options.Perf.SlowWorldUpdate)
+            {
+                _logger.LogWarning(PerformanceLogOptions.PerfEventId, "Slow world update: {DurationMs}ms", diff);
+            }
+
             long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
             long stampBefore = Stopwatch.GetTimestamp();
             RunTick(diff);
             long durationMicros = (Stopwatch.GetTimestamp() - stampBefore) * 1_000_000 / Stopwatch.Frequency;
             Stats.Record(durationMicros, GC.GetAllocatedBytesForCurrentThread() - allocatedBefore, interval * 1000L);
-            if (Options.Perf.SlowWorldUpdate > 0 && durationMicros > Options.Perf.SlowWorldUpdate * 1000L)
+            if (Options.Perf.SlowWorldUpdateMeasure == SlowWorldUpdateMeasure.TickDuration
+                && Options.Perf.SlowWorldUpdate > 0 && durationMicros > Options.Perf.SlowWorldUpdate * 1000L)
             {
                 _logger.LogWarning(PerformanceLogOptions.PerfEventId, "Slow world update: {DurationMs} ms (interval {IntervalMs} ms)",
                     durationMicros / 1000, interval);

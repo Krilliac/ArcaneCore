@@ -74,6 +74,73 @@ public sealed class ServerLifecycleTests
         ExitCodes.Current = ExitCodes.Success;
     }
 
+    // The real one second timer, the elapsed-seconds arithmetic and the stop hand-off: no Advance call.
+    [Fact]
+    public async Task RealTimer_CountsDownAnnouncesAndStopsWithExitCode2()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        ServerLifecycleFeature feature = host.WorldServices.GetRequiredService<ServerLifecycleFeature>();
+        var stopped = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        feature.StopRequested += code => stopped.TrySetResult(code);
+        try
+        {
+            await admin.CollectAsync();
+            await admin.SendChatAsync(ChatType.Say, Language.Common, ".server restart 2");
+
+            Task winner = await Task.WhenAny(stopped.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+            Assert.Same(stopped.Task, winner);
+            Assert.Equal(ExitCodes.Restart, await stopped.Task);
+            Assert.Equal(ExitCodes.Restart, ExitCodes.Current);
+
+            List<byte[]> messages = [.. (await admin.CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgServerMessage).Select(p => p.Payload)];
+            Assert.Equal(
+                [Expected(ServerMessageType.RestartTime, "2 Seconds."), Expected(ServerMessageType.RestartTime, "1 Second.")],
+                messages);
+        }
+        finally
+        {
+            ExitCodes.Current = ExitCodes.Success;
+        }
+    }
+
+    // Cancel then restart around the moment the previous timer would see the empty countdown.
+    [Theory]
+    [InlineData(950)]
+    [InlineData(1000)]
+    [InlineData(1010)]
+    [InlineData(1030)]
+    public async Task CancelThenRestart_AroundTheTimerTick_StillCountsDown(int cancelAfterMs)
+    {
+        await using var host = WorldTestHost.Start();
+        ServerLifecycleFeature feature = host.WorldServices.GetRequiredService<ServerLifecycleFeature>();
+        var stopped = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        feature.StopRequested += code => stopped.TrySetResult(code);
+        try
+        {
+            await host.World.InvokeAsync(() =>
+            {
+                feature.Request(60, ShutdownMask.None, ExitCodes.Success);
+                return 0;
+            });
+            await Task.Delay(cancelAfterMs);
+            await host.World.InvokeAsync(() =>
+            {
+                feature.Cancel();
+                feature.Request(2, ShutdownMask.Restart, ExitCodes.Restart);
+                return 0;
+            });
+
+            Task winner = await Task.WhenAny(stopped.Task, Task.Delay(TimeSpan.FromSeconds(15)));
+            Assert.Same(stopped.Task, winner);
+            Assert.Equal(ExitCodes.Restart, await stopped.Task);
+        }
+        finally
+        {
+            ExitCodes.Current = ExitCodes.Success;
+        }
+    }
+
     [Fact]
     public async Task Commands_RequireAdministrator_AndRejectBadArguments()
     {

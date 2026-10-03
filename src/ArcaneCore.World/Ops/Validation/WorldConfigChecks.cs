@@ -46,6 +46,12 @@ public sealed class WorldConfigChecks : IConfigCheck
             Range(issues, configuration, $"PerformanceLog:{key}", 0, 0, int.MaxValue, "0 to disable, or a threshold in milliseconds");
         }
 
+        string? measure = configuration["PerformanceLog:SlowWorldUpdateMeasure"];
+        if (!string.IsNullOrWhiteSpace(measure) && !Enum.TryParse<ArcaneCore.Game.Maps.SlowWorldUpdateMeasure>(measure, ignoreCase: true, out _))
+        {
+            issues.Add(Error("PerformanceLog:SlowWorldUpdateMeasure", $"'{measure}' is not a known measure.", "use FrameInterval (retail) or TickDuration"));
+        }
+
         foreach (string key in new[] { "World:Maps:DataDirectory", "World:Collision:VMapDirectory", "World:Collision:MMapDirectory" })
         {
             string? path = configuration[key];

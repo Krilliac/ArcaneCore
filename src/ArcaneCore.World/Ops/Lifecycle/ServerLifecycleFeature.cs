@@ -23,7 +23,8 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
     private readonly ShutdownCountdown _countdown = new();
     private readonly CancellationTokenSource _stopTimer = new();
     private WorldRuntime? _world;
-    private Task _timer = Task.CompletedTask;
+    private TimerRun? _run; // world thread decides start and end; StopAsync only reads it
+    private int _runIds;
     private bool _stopIssued;
 
     /// <summary>A countdown is pending or the stop has been issued (readiness probes report draining).</summary>
@@ -39,7 +40,11 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
         await _stopTimer.CancelAsync().ConfigureAwait(false);
         try
         {
-            await _timer.ConfigureAwait(false);
+            TimerRun? run = Volatile.Read(ref _run);
+        if (run is not null)
+        {
+            await run.Task.ConfigureAwait(false);
+        }
         }
         catch (OperationCanceledException)
         {
@@ -56,7 +61,11 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
     }
 
     /// <summary>vmangos HandleServerShutDownCancelCommand; world thread.</summary>
-    public void Cancel() => Publish(_countdown.Cancel());
+    public void Cancel()
+    {
+        Publish(_countdown.Cancel());
+        AfterChange();
+    }
 
     /// <summary>Advance the countdown by whole seconds (world thread; the timer and tests call it).</summary>
     public void Advance(uint elapsedSeconds)
@@ -80,6 +89,10 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
         logger.LogInformation("Server message {Type}: {Text}", value.Type, value.Text);
     }
 
+    // The timer's lifetime is decided here, on the world thread only: a countdown that is pending
+    // always has exactly one timer run, and a run ends only through EndTimer. The timer thread
+    // never judges whether it should exit, so a cancel followed at once by a new request cannot
+    // leave a pending countdown without a timer.
     private void AfterChange()
     {
         if (_countdown.StopRequested && !_stopIssued)
@@ -91,38 +104,76 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
             StopRequested?.Invoke(code);
             services.GetService<IHostApplicationLifetime>()?.StopApplication();
         }
-        else if (_countdown.IsPending && _timer.IsCompleted && _world is not null)
+
+        if (_countdown.IsPending)
         {
-            _timer = Task.Run(() => RunTimerAsync(_world, _stopTimer.Token));
+            if (_run is null && _world is not null)
+            {
+                _run = StartTimer(_world, ++_runIds);
+            }
+        }
+        else if (_run is { } run)
+        {
+            _run = null;
+            run.Cancel();
         }
     }
 
-    private async Task RunTimerAsync(WorldRuntime world, CancellationToken cancel)
+    private TimerRun StartTimer(WorldRuntime world, int id)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        var cancel = CancellationTokenSource.CreateLinkedTokenSource(_stopTimer.Token);
+        return new TimerRun(id, cancel, Task.Run(() => RunTimerAsync(world, id, cancel)));
+    }
+
+    // A tick from a timer run that has since been ended (or replaced) is ignored.
+    private void AdvanceFromTimer(int runId, uint elapsedSeconds)
+    {
+        if (_run is { } run && run.Id == runId)
+        {
+            Advance(elapsedSeconds);
+        }
+    }
+
+    private async Task RunTimerAsync(WorldRuntime world, int runId, CancellationTokenSource cancel)
+    {
         long last = Stopwatch.GetTimestamp();
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
         try
         {
-            while (await timer.WaitForNextTickAsync(cancel).ConfigureAwait(false))
+            while (await timer.WaitForNextTickAsync(cancel.Token).ConfigureAwait(false))
             {
                 // Whole elapsed seconds since the last post (a stalled timer thread may owe several).
-                long now = Stopwatch.GetTimestamp();
-                long seconds = (now - last) / Stopwatch.Frequency;
+                long seconds = (Stopwatch.GetTimestamp() - last) / Stopwatch.Frequency;
                 if (seconds == 0)
                 {
                     continue;
                 }
 
                 last += seconds * Stopwatch.Frequency;
-                world.Post(() => Advance((uint)seconds));
-                if (!IsDraining)
-                {
-                    return;
-                }
+                world.Post(() => AdvanceFromTimer(runId, (uint)seconds));
             }
         }
         catch (OperationCanceledException)
         {
+        }
+        finally
+        {
+            cancel.Dispose();
+        }
+    }
+
+    private sealed record TimerRun(int Id, CancellationTokenSource Source, Task Task)
+    {
+        // The timer disposes its source when it exits; a cancel that races a dispose is harmless.
+        public void Cancel()
+        {
+            try
+            {
+                Source.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
         }
     }
 }

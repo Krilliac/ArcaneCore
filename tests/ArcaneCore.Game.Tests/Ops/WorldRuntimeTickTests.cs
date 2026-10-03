@@ -69,6 +69,47 @@ public sealed class WorldRuntimeTickTests
     }
 
     [Fact]
+    public void SlowWorldUpdate_DefaultsToTheRetailFrameInterval()
+        => Assert.Equal(SlowWorldUpdateMeasure.FrameInterval, new PerformanceLogOptions().SlowWorldUpdateMeasure);
+
+    // vmangos WorldRunnable.cpp:73-74: the frame interval includes the sleep, so a 60 ms tick
+    // length trips a 40 ms threshold with no slow work at all, and the line reads "N ms" only.
+    [Fact]
+    public void SlowWorldUpdate_FrameInterval_IncludesTheSleep_AndUsesTheRetailText()
+    {
+        var log = new CapturingLogger();
+        using WorldRuntime world = Create(log, o =>
+        {
+            o.TickIntervalMs = 60;
+            o.Perf.SlowWorldUpdate = 40;
+        });
+        world.Start();
+        WaitFor(() => log.Entries.Any(e => e.EventName == PerformanceLogOptions.EventName));
+
+        CapturingLogger.Entry entry = log.Entries.First(e => e.EventName == PerformanceLogOptions.EventName);
+        Assert.Matches(@"^Slow world update: \d+ms$", entry.Message);
+    }
+
+    [Fact]
+    public void SlowWorldUpdate_TickDuration_IgnoresTheSleep_ButCatchesASlowTick()
+    {
+        var log = new CapturingLogger();
+        using WorldRuntime world = Create(log, o =>
+        {
+            o.TickIntervalMs = 60;
+            o.Perf.SlowWorldUpdate = 40;
+            o.Perf.SlowWorldUpdateMeasure = SlowWorldUpdateMeasure.TickDuration;
+        });
+        world.Start();
+        WaitFor(() => world.Stats.Snapshot().TotalTicks >= 4);
+        Assert.DoesNotContain(log.Entries, e => e.EventName == PerformanceLogOptions.EventName);
+
+        world.Post(() => Thread.Sleep(70));
+        WaitFor(() => log.Entries.Any(e => e.EventName == PerformanceLogOptions.EventName));
+        Assert.Contains("interval", log.Entries.First(e => e.EventName == PerformanceLogOptions.EventName).Message);
+    }
+
+    [Fact]
     public void SlowWorldUpdate_ThresholdZero_LogsNothing()
     {
         var log = new CapturingLogger();
