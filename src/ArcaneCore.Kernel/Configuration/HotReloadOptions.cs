@@ -15,7 +15,7 @@ public sealed class HotReloadOptions
     /// reload machinery (vmangos registers the <c>reload</c> root, Chat.cpp:1212, but ArcaneCore's
     /// operator-initiated hot reload is a development tool, so it is opt-in). When false the
     /// reload coordinator is not built, no reloadable is registered and the <c>.reload</c> root does
-    /// not exist (the chat reply is "There is no such command."). A development server turns it on
+    /// not exist (the chat reply is "There is no such command"). A development server turns it on
     /// with <c>HotReload:Commands=true</c>. Read once when the world starts.
     /// </summary>
     public bool Commands { get; set; }

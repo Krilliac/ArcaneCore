@@ -20,7 +20,7 @@ public interface ICommandGroup
     /// <summary>
     /// Whether this group's roots are registered at all. Default true. A group behind a
     /// configuration switch returns false when the switch is off, so its roots do not exist
-    /// (the chat reply is the same "There is no such command." as for any unknown root).
+    /// (the chat reply is the same "There is no such command" as for any unknown root).
     /// <paramref name="services"/> is null when the table is built without a host.
     /// </summary>
     bool IsEnabled(IServiceProvider? services) => true;

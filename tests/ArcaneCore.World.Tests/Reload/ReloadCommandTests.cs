@@ -171,7 +171,7 @@ public sealed class ReloadCommandTests
 
         await SayAsync(admin, ".reload spell_template");
 
-        Assert.Equal("There is no such command.", (await admin.ReadChatAsync()).Text);
+        Assert.Equal("There is no such command", (await admin.ReadChatAsync()).Text);
         Assert.Same(before, host.WorldServices.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>().System.Store);
         Assert.False(feature.Enabled);
         Assert.Throws<InvalidOperationException>(() => feature.Coordinator);
