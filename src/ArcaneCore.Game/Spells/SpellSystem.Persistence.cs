@@ -218,7 +218,7 @@ public sealed partial class SpellSystem
 
                 var aura = new SpellAura(i, effect.AuraType, saved.Amounts.ElementAtOrDefault(i), effect.Amplitude, effect.MiscValue);
                 int timer = saved.PeriodicTimers.ElementAtOrDefault(i);
-                if (aura.IsPeriodic && timer > 0 && timer <= (int)aura.Amplitude)
+                if (aura.IsPeriodic && timer > 0 && timer <= (int)aura.Period)
                 {
                     aura.PeriodicTimer = timer;
                 }

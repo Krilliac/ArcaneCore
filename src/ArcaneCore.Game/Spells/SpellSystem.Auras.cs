@@ -69,7 +69,9 @@ public sealed partial class SpellSystem
             context.PendingHolder.ChannelTarget = new ObjectGuid(context.Caster.GetUInt64(UpdateFields.UnitFieldChannelObject));
         }
 
-        context.PendingHolder.SetAura(new SpellAura(context.EffectIndex, effect.AuraType, SnapshotAuraAmount(context), effect.Amplitude, effect.MiscValue));
+        var aura = new SpellAura(context.EffectIndex, effect.AuraType, SnapshotAuraAmount(context), effect.Amplitude, effect.MiscValue);
+        aura.PeriodicTimer = PeriodicTiming.InitialTimer(context.Spell, aura);
+        context.PendingHolder.SetAura(aura);
     }
 
     /// <summary>
@@ -151,6 +153,9 @@ public sealed partial class SpellSystem
         }
     }
 
+    /// <summary>The <c>Auras</c> options (docs/areas/aura-engine.md); retail defaults until the world feature binds the configuration.</summary>
+    public AuraOptions AuraOptions { get; set; } = new();
+
     /// <summary>The aura holders on a unit (world thread).</summary>
     public IReadOnlyList<SpellAuraHolder> GetAuras(Unit unit)
     {
@@ -212,10 +217,10 @@ public sealed partial class SpellSystem
                     continue;
                 }
 
-                aura.PeriodicTimer -= (int)diffMs;
-                while (aura.PeriodicTimer <= 0 && !holder.IsRemoved)
+                // vmangos Aura::Update: at most one tick per update (Auras:PeriodicCatchUp restores the burst).
+                int due = PeriodicTiming.Advance(aura, diffMs, AuraOptions.PeriodicCatchUp);
+                for (int tick = 0; tick < due && !holder.IsRemoved; tick++)
                 {
-                    aura.PeriodicTimer += (int)aura.Amplitude;
                     aura.TickCount++;
                     AuraHandlers.GetValueOrDefault(aura.Type)?.Tick?.Invoke(this, holder, aura);
                 }
@@ -256,7 +261,7 @@ public sealed partial class SpellSystem
                 continue;
             }
 
-            aura.PeriodicTimer = (int)aura.Amplitude;
+            aura.PeriodicTimer = PeriodicTiming.InitialTimer(existing.Spell, aura);
             aura.TickCount = 0;
             if (source.Amount != aura.Amount)
             {

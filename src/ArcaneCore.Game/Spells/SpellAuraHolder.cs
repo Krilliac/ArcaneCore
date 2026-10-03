@@ -39,7 +39,7 @@ public sealed class SpellAura
         UnitAmount = amount;
         Amplitude = amplitude;
         MiscValue = miscValue;
-        PeriodicTimer = (int)amplitude;
+        PeriodicTimer = (int)Period;
     }
 
     /// <summary>
@@ -67,7 +67,12 @@ public sealed class SpellAura
     /// <summary>Spell.dbc EffectMiscValue (power type for energize/mana auras).</summary>
     public int MiscValue { get; }
 
-    public bool IsPeriodic => Amplitude > 0;
+    /// <summary>
+    /// The tick interval: the amplitude, or the type's default when it has none (<see cref="PeriodicTiming.PeriodFor"/>).
+    /// </summary>
+    public uint Period => PeriodicTiming.PeriodFor(Type, Amplitude);
+
+    public bool IsPeriodic => Period > 0;
 
     /// <summary>Time to the next tick (vmangos Aura::m_periodicTimer, first tick one amplitude after application).</summary>
     internal int PeriodicTimer { get; set; }
