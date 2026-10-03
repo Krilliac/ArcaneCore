@@ -395,15 +395,20 @@ public sealed class AuctionRecoveryTests
     public async Task Auction_id_collision_with_an_external_insert_refuses_that_operation_and_reseeds_the_allocator()
     {
         await using var fixture = await Fixture.CreateAsync(true, false, loseAcknowledgement: false);
-        // Another writer takes ID 3 (it is not in the cache, which only the startup load fills).
+        // Another writer takes IDs 3..6 (they are not in the cache, which only the startup load fills).
         await using (CharacterDbContext db = fixture.NewContext())
         {
-            var item = new ItemInstanceRow { Guid = 300 };
-            item.CopyFrom(0, new ItemInstanceData { Guid = 300, Entry = 4002, Count = 1 });
-            db.Add(item);
-            var row = new AuctionRow();
-            row.CopyFrom(fixture.Primary with { Id = 3, ItemGuid = 300, ItemEntry = 4002, ItemCount = 1, SellerId = 30 });
-            db.Add(row);
+            for (uint id = 3; id <= 6; id++)
+            {
+                uint guid = 300 + id;
+                var item = new ItemInstanceRow { Guid = guid };
+                item.CopyFrom(0, new ItemInstanceData { Guid = guid, Entry = 4002, Count = 1 });
+                db.Add(item);
+                var row = new AuctionRow();
+                row.CopyFrom(fixture.Primary with { Id = id, ItemGuid = guid, ItemEntry = 4002, ItemCount = 1, SellerId = 30 });
+                db.Add(row);
+            }
+
             await db.SaveChangesAsync();
         }
 
@@ -418,10 +423,48 @@ public sealed class AuctionRecoveryTests
         });
         Assert.Equal(EconomyOutcome.Before, await outcome.Task.WaitAsync(Fixture.Budget));
         await fixture.Feature.DrainAsync().WaitAsync(Fixture.Budget);
-        Assert.True(await fixture.TryWaitUntilAsync(() => fixture.Feature.NextAuctionId() >= 5),
-            "the allocator was not raised past the externally inserted ID");
+        // Peek without allocating: polling NextAuctionId() would itself walk the counter past the external IDs.
+        Assert.True(await fixture.TryWaitUntilAsync(() => fixture.Feature.LastAllocatedIds().Auction >= 6),
+            "the allocator was not raised past the externally inserted IDs");
+        Assert.Equal(7u, await fixture.OnWorld(() => fixture.Feature.NextAuctionId()));
         // Only the colliding operation was refused: its ID is released, not quarantined.
         Assert.False(await fixture.OnWorld(() => fixture.Feature.IsAuctionQuarantined(allocated)));
+    }
+
+    [Fact]
+    public async Task Mail_id_collision_with_an_external_insert_refuses_that_operation_and_reseeds_mail_and_text_allocators()
+    {
+        await using var fixture = await Fixture.CreateAsync(true, false, loseAcknowledgement: false);
+        // Another writer takes mail IDs 1..5 and item-text IDs 1..7.
+        await using (CharacterDbContext db = fixture.NewContext())
+        {
+            for (uint id = 1; id <= 5; id++)
+            {
+                var row = new MailRow();
+                row.CopyFrom(new MailRecord { Id = id, ReceiverId = 10, Subject = "external", ItemTextId = id == 5 ? 7u : 0u });
+                db.Add(row);
+            }
+
+            for (uint id = 1; id <= 7; id++)
+            {
+                db.Add(new ItemTextRow { Id = id, Text = "external" });
+            }
+
+            await db.SaveChangesAsync();
+        }
+
+        Assert.Equal((0u, 2u, 0u), await fixture.OnWorld(() => fixture.Feature.LastAllocatedIds()));
+        var outcome = NewCompletion<EconomyOutcome>();
+        var mine = new MailRecord { Id = 1, ReceiverId = 10, Subject = "mine", ItemTextId = 1 };
+        await fixture.OnWorld(() =>
+        {
+            fixture.Feature.RunAuctionOperation([], [new InsertMail(mine, "body")], 0, result => outcome.TrySetResult(result));
+            return true;
+        });
+        Assert.Equal(EconomyOutcome.Before, await outcome.Task.WaitAsync(Fixture.Budget));
+        await fixture.Feature.DrainAsync().WaitAsync(Fixture.Budget);
+        Assert.True(await fixture.TryWaitUntilAsync(() => fixture.Feature.LastAllocatedIds() is { Mail: >= 5, Text: >= 7 }),
+            "the mail and item-text allocators were not raised past the externally inserted IDs");
     }
 
     [Fact]

@@ -195,6 +195,10 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
     /// <summary>World thread. Internal so tests can observe the allocator after a reseed.</summary>
     internal uint NextAuctionId() => Interlocked.Increment(ref _lastAuctionId);
 
+    /// <summary>The highest IDs handed out or seeded so far, read without allocating. Internal so tests can observe a reseed.</summary>
+    internal (uint Mail, uint Auction, uint Text) LastAllocatedIds()
+        => (Volatile.Read(ref _lastMailId), Volatile.Read(ref _lastAuctionId), Volatile.Read(ref _lastTextId));
+
     private uint NextTextId() => Interlocked.Increment(ref _lastTextId);
 
     private IMailboxAccess MailboxAccess => _services.GetService<IMailboxAccess>() ?? new DefaultMailboxAccess();
