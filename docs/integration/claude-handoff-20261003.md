@@ -166,6 +166,73 @@ Schema after this wave (one named constant each; tests use constants and `Schema
 conditions 13, on-kill reputation 14. The lanes had allocated 14/14 (Characters) and 11/11/11/11 (World) in parallel;
 they were renumbered in merge order. Remaining work from the list below is unchanged unless an area document above says
 otherwise. This wave has no real-client evidence; do not read it as client-accepted.
+## Wave 2 (twenty branches; local verification only; hosted CI pending)
+
+Integrated on `claude/vw2-integration` on top of `claude/vw-integration` (wave 1, head `41babaf`), in this order: security hardening,
+codex findings, inbound queue cap, game-logic security, code hot reload, GM commands, combat/CC/spell rules, rogue, druid,
+hunter, casters, shaman/paladin, pets, talents, item mechanics, group loot/XP, instances/bosses, world state, pathfinding/collision,
+ops/perf. `claude/vw3-live-dev-runner` was not merged (its branch had no commits of its own when the integration ran).
+`claude/ci-fix-providers` is deliberately left to the coordinator. Same standing rule as wave 1: retail 1.12.1 behaviour by
+default, deviations behind options that default to retail. **Nothing here has been run against a real 1.12.1 client, and
+MariaDB/PostgreSQL provider tests only run on hosted CI: this wave is verified locally on SQLite only.**
+
+### What each lane delivered, with its exact limits (the area documents remain the authority)
+
+| Lane | Delivered | Limits (topics; details in the document) |
+|---|---|---|
+| security-hardening | Logon connection state, SRP degenerate verifier/salt, world auth enforces account status, stalled-writer teardown, logon limits and validation, connection admission, movement validation, channel cap (`World:Social:MaxJoinedChannels`, default 0 = retail unlimited) | `docs/security/hardening.md` "Not delivered": ban tables/IP bans and the wrong-password throttle, session-key age, char-screen idle kick, malformed-packet strikes, AddonInfo cap, `IPacketGate`/antiflood, chat hygiene, fuzz harness, reconnect commands |
+| sec-codex-findings | WMO liquid grid overflow, `MySqlDumpReader` column-list spin and bounds, account tool password source, sweep fixes | `docs/security/codex-findings.md` |
+| inbound-queue-cap | Inbound world packet queue cap, pre-auth deadline, cross-check tests | `docs/security/codex-net-auth.md` (banned live sessions are closed for new logins only) |
+| sec-game-logic | `Economy:MailboxAccess` (Retail default, Permissive option), social write queue coalesce/bound/retain (`World:Social:WriteQueue:*`) | `docs/security/codex-game-logic.md` |
+| code-hot-reload | `HotCodeGuard` launch gate, `CommandTableSource` live command table, `.hotcode`, module host `.hotmodule`, audit log | `docs/areas/code-hot-reload.md` "Not built": no hot replace of server code on a Release build, modules extend only opcode groups and chat command groups, no file watcher, no guaranteed unload |
+| gm-commands | Vanilla GM command set with the retail security scale and texts, `World:GmCommands` | `docs/integration/gm-commands.md` "Not delivered": `.die/.revive/.setskill/.pet`, `.tele group/add/del`, most `.lookup` kinds, gm-spells/npc/gobject/quest/cheats, `.additemset`, speed and modify extras, bans/mutes/tickets (need schema), `.server plimit/corpses/log/exit`; GM state is not persisted |
+| combat-cc-spell-rules | Hit/crit/resist rules, mechanics, crowd-control state, diminishing returns, immunities, dispel, pushback/lockout, absorb, caster-state gate | `docs/areas/spell-rules.md` "Limits": reflection/deflect, creature immunity data import, `spell_bonus`, melee call sites for `AbsorbDamage`, talents' `ISpellModifiers` implementation |
+| class-rogue | Stealth/aura-interrupt dispatch, detection formula and updater, visibility rules, creature detection, group visibility mode | `docs/areas/rogue.md`: no form 30/slow, no Vanish/Preparation/Distract/Pick Pocket/poisons, no talent consumers, no energy modifiers, no proc-flag skip in the damage break, no creature stealth alert behaviour |
+| class-druid | Pure form tables, feral formulas, Furor, Rip, Frenzied Regeneration, form-effect 9033 rules, power-type switch and feral caps, high-liquid interrupts, taxi interlock | `docs/areas/druid.md`: **aura 36 (ModShapeshift) for druid forms is not wired** (the warrior `ShapeshiftService` leaves druid forms unhandled), no cat/bear abilities, no nature spells, no `Druid:*` options; the liquid probe is terrain liquid only |
+| class-hunter | Ranged weapon/ammo cast checks, ammo trailer packets, range leeway, traps and spell objects, tracking auras, Feign Death, Hunter's Mark target rule | `docs/areas/hunter.md`: no Auto Shot/wand/Throw (needs the auto-repeat slot), `RangedAttackSpeedPct` neutral, no aspect/sting stacking, no hunter pets, Feign Death consumers pending |
+| class-casters | Spell power/bonus module, power-cost auras, drain/leech auras, channel trigger target, five-second timer, Improved Drain Mana | `docs/areas/casters.md`: formula-only coefficients (no `spell_bonus` table), no soul shards/portals/rituals/blink, five-second-rule consumers pending, no Health Funnel |
+| class-shaman-paladin | Implicit target selectors (41-47, 61), totem system (effects 74, 87-90, 110) with `totem_spell` data and importer, shared shock cooldown guard | `docs/areas/class-shaman-paladin.md`: no active (Searing) totems, no totem immunity, no weapon imbues, no seals/judgement/blessings/auras/bubbles, no consecration/resurrect effects |
+| pets | Summon model, pets/guardians/mini pets/wild summons, pet AI, charm info and action bar, pet tables (`pet_levelstats`, `petcreateinfo_spell`) | `docs/integration/pets.md` "Limits": placement uses the primary candidate only, pet stats and name generation (`InitStatsForLevel`) pending, a pet is unsummoned when its owner leaves the map. Its totem part was removed (see decisions) |
+| talents | Talent catalogue (DBC), point accounting, learning, respec with cost, disabled-rank spells, persistence, coverage report | `docs/areas/talents.md`: no talent effects (needs the spell-modifier engine, aura 107/108, and procs), no `.reset talents` commands, no pet interaction, no supersede packets |
+| item-mechanics | Load/trade/durability fixes, misc handlers, timed items and area limits, `CreateItem` spells, ammo (the single implementation), item maintenance | `docs/areas/items.md`: permissive requirements until registered, no `CMSG_USE_ITEM`/charges, no item sets/enchants/random properties, no item loot containers, no gift wrap, no buyback |
+| group-loot-xp | Looter selection, group reward range, group loot packets and roll types, durable chest loot adjustments | `docs/areas/group-loot-xp.md`: no master-give, the loot recipient is the killer's group (no tap list), the money split uses the 3D 74 yd rule, XP/quest credit still use their own range |
+| instances-bosses | Enter limiter, bind credit and resolvers, saved-instance packets, instance lookups | `docs/areas/instances.md`: no encounter mask/doors/variables, no area-trigger requirements, group binds do not survive a restart, packets need real-client confirmation |
+| world-state-exploration | Server-derived zones/areas, world states, game-time options, weather, exploration XP, explored-zones persistence | `docs/areas/world-state.md`: game events beyond the schedule maths, rest, zone-entry consumers owned elsewhere, no BG/taxi/capture points, WMO indoor flag bit unconfirmed |
+| pathfinding-collision | Path contracts, vmangos-compatible navmesh query rules, fallback seam, flier paths | `docs/areas/collision-pathing.md`: no swim/smooth paths, no raycast/random points, no BV tree/off-mesh links, no model-aware height, no WMO liquids, no transports |
+| ops-perf | `check-config`, fail-fast validation, `.server shutdown/restart/idle*` with exit codes, `HostOptions` shutdown timeout, slow-update logging | `docs/areas/ops-perf.md`: no remote console/metrics/health endpoint, no login queue, no staggered autosave, no perf baselines; the restart exit code was not run end to end through a real host stop |
+
+### Duplicate primitives resolved at integration (one implementation each)
+
+- **Totems**: the shaman lane's `TotemSystem` owns effects 74/87-90/110; the pets lane's totem code and tests were removed. `Creature.IsTotem` asks `TotemQuery`.
+- **Ammunition**: the item-mechanics lane (`PlayerInventory`, `character_item_state`, CMSG_SET_AMMO, starting ammo); the hunter lane's `character_ammo` module, feature, handler and persistence were removed; `PlayerAmmo` is a facade; ammo and wear consumption go through `PlayerInventory.ConsumeRangedAmmo`.
+- **Dispel**: the combat/CC lane's; the casters lane's dispel partial and packets were removed (its tests run against the merged code, resist chance through `ISpellModifiers`).
+- **Drain/leech auras (53, 64)**: registered once by the built-in `LeechAuras` module, which delegates to the casters lane's `DrainAuras`; the spell-breadth ticks were removed.
+- **Server shutdown**: the ops lane's (`ServerLifecycleFeature`, exit codes); the GM lane's scheduler, feature and commands were removed, `.server set motd` stays.
+- **Aura-interrupt helpers**: the rogue lane's `AuraInterruptMask` and `SpellSystem.RemoveAurasWithInterruptFlags`; the druid constants and extension were removed. The rogue swing event is `MeleeSwingFinished` (the warrior's `MeleeSwingResolved` is unchanged).
+- **Spell modifier operations**: `Spells.SpellModOp` (spell-breadth) is the only enum; the combat lane's subset enum was removed. `ISpellModifiers` (combat) and `ISpellValueModifier` (spell-breadth) are still two seams and **nothing implements aura 107/108 yet** (talent effects stay inert).
+- **Command table**: only the code-hot-reload lane introduced a live source (`CommandTableSource`); the wave-1 `.reload` command is an ordinary command in that table. GM `ChatCommands.CreateTable(configuration)` feeds it.
+- **Combo points, shapeshift forms, area auras**: no second implementation exists. Combo points are the wave-1 `ComboPointService`; druid forms are not wired (see limits); the shaman lane leaves area auras to spell-breadth.
+- **Configuration namespaces**: kept as each lane defined them except `Social`: the hardening and game-logic lanes used a bare `Social` section while wave 1 had `World:Social`; their keys moved under it (`World:Social:MaxJoinedChannels`, `World:Social:WriteQueue:*`) so one section is bound and reload-classified. No other collisions.
+
+### Schema allocation after wave 2
+
+One named constant each; tests reference the constants and `Schema.CurrentVersion`. **Auth 2 / World 17 / Characters 18.**
+Characters: skills 14, life 15, item state 16 (`CharacterItemStateDataModule`, table `character_item_state`), talents 17
+(`CharacterTalentDataModule`, `character_talent`, `character_spell_disabled`), explored zones 18 (`ExploredZonesDataModule`).
+World: totems 15 (`TotemWorldDataModule`, `totem_spell`), pets 16 (`PetWorldDataModule`, `pet_levelstats`, `petcreateinfo_spell`),
+world state 17 (`WorldStateDataModule`). The lanes built these as Characters 14/14/14/14 and World 11/11/11/11 in parallel and
+were renumbered contiguously; the hunter lane's `character_ammo` module no longer exists. Every Characters module implements
+`ICharacterDataCleanup`. The new stores (item state, talents, explored zones, totems, pets, world state) each have
+`Providers()` theories, but those have only run on SQLite here.
+
+### Not done / unverified (wave 2)
+
+Everything in the limits column above, plus: druid forms (aura 36) and the cat/bear kit; the spell-modifier engine behind talents
+and `ISpellModifiers`; auto-repeat shots; ranged haste wiring (`RangedAttackSpeedPct`); `spell_bonus` data for casters; creature
+immunity data; items' `CMSG_USE_ITEM`; GM commands that need other lanes; group loot master-give and tap lists. Local verification
+only; hosted CI pending, including every MariaDB/PostgreSQL provider theory. The `claude/vw3-live-dev-runner` branch is not part of
+this wave.
+
 ## Remaining work, in priority order
 
 Items 1-6 were delivered by the 2026-10-03 integration (`claude/ac-integration`). That is local

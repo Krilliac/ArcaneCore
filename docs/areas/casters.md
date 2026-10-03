@@ -66,3 +66,12 @@ real-client pass and a movement-change ledger), `caster-acceptance-and-docs` bey
 ## Schema
 
 None. No Characters or World table is added by this lane.
+
+## Wave-2 integration note
+Two primitives were implemented twice and unified: (1) **dispel** stays the combat/CC lane's implementation
+(`SpellSystem.Dispel.cs`, `SpellModifiers`/`ISpellModifiers` resist chance, charm priority, spellstone); this lane's dispel partial
+and `DispelPackets` were removed and its dispel tests now run against the merged code; `SpellSystem.DispelResistChance` no longer
+exists. (2) **Drain/leech auras (53, 64)** are registered once by the built-in `LeechAuras` module, which delegates to this lane's
+`Drain.DrainAuras` (spell power, Improved Drain Mana); the spell-breadth lane's duplicate ticks were removed. `CasterSpellModules`
+no longer registers the drain auras itself. The spell-power amount seam (`AmountModifier`) and the combat lane's `ISpellModifiers`
+are different seams and coexist.

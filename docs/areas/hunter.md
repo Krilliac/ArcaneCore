@@ -75,3 +75,14 @@ Not possible from the references; to run against the developer's 5875 client dat
 - `tests/ArcaneCore.Game.Tests/Ranged/`: `RangedRulesTests` (item and attribute facts), `PlayerAmmoTests`, `RangedCastPipelineTests` (checks, ammo use, packets, cooldown, cast time), `RangeLeewayTests`, `TrackingAuraTests`, `FeignDeathTests`, `SpellObjectOwnershipTests`, `TrapSystemTests`.
 - `tests/ArcaneCore.Data.Tests/Ranged/CharacterAmmoStoreTests.cs`: round trip, replacement, zero removes, deletion cleanup, conditional queued removal.
 - `tests/ArcaneCore.World.Tests/Ranged/`: `SetAmmoLoopbackTests` (CMSG_SET_AMMO, owner-only field update, persistence across relog, starting ammo, character delete), `RangedFeatureTests` (configuration binding, handler and map system installation).
+
+## Wave-2 integration note: ammo
+
+Ammunition state was implemented twice (this lane and item-mechanics). One implementation remains: the **item-mechanics lane's**
+`PlayerInventory` (PLAYER_AMMO_ID, `CanUseAmmo`/`SetAmmo`/`RemoveAmmo`, `AmmoDps`, `ConsumeRangedAmmo`, `TryGetAmmoVisual`,
+CMSG_SET_AMMO, the starting ammo, persistence in `character_item_state`, Characters schema 16). Removed from this lane: the
+`character_ammo` module (`CharacterAmmoDataModule`), `AmmoFeature`, `AmmoHandlers`, `AmmoPersistence`, `PlayerAmmo.SelectStartingAmmo`
+and their store/loopback tests; `EquipSlotDurabilityLoss` (the wear is `PlayerInventory.DurabilityPointLossForEquipSlot`).
+`PlayerAmmo` is now a facade over the inventory. Kept here: the ranged weapon/ammo cast checks, Hunter's Mark target rule,
+ammo trailer packets, range leeway, traps, tracking, Feign Death. `RangedAttackSpeedPct` is still the neutral default (not wired
+to the stats lane's ranged haste).

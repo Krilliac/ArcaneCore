@@ -259,3 +259,15 @@ lane's file, listed here so the integrator can apply it where the lane that owns
   the pet store (P7). **SUMMON_POSSESSED** and charm are also outside this build.
 * Hunter taming, feeding, loyalty, stable and talents belong to the class-hunter and talents lanes;
   warlock summon kits to class-casters.
+
+## Wave-2 integration note: totems
+
+The totem implementation of this lane (effects 74 and 87-90, the slot table, `PetMapSystem` totem update, `ITotemSpellSource`,
+`SummonKind.Totem`) was **removed** at integration: the shaman lane's `Game/Totems/TotemSystem` is the single totem
+implementation (it owns effects 74, 87-90 and 110, the `totem_spell` world table, the passive totem spell and its auras
+incl. party removal, and no kill XP/credit for totems). This lane keeps pets, guardians, mini pets and wild summons.
+`Creature.IsTotem` asks `TotemQuery`. Owner links (`OwnerLinks`) work for totems because both lanes use the same update
+fields. The limits above that mention totem spells, placement radii and `ITotemSpellSource` therefore no longer apply to this
+lane; see `docs/areas/class-shaman-paladin.md` for the totem limits. The lane's `TotemTests` were deleted with the code;
+the same behaviours (placement, slots, duration, ownership) are covered by `tests/ArcaneCore.Game.Tests/ClassSpells/Totems`.
+`pet_levelstats` / `petcreateinfo_spell` is World schema 16.

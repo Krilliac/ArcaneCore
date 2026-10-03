@@ -39,3 +39,8 @@ Everything else is new files: `Game/Ranged/*`, `Game/Spells/SpellSystem.{Ranged,
 - **Environmental traps** (555 spawn rows in classic-db: Rookery Egg, Onyxia Egg, Roaring Flame, Suppression Device) need a game-object spell caster.
 - **Hunter's Mark** needs the visibility owner (always visible to the caster) and the single-cast-per-caster registry (ends on caster death, `Unit.cpp:3969-4004`).
 - **MockClient scenario.** The harness has no hunter character: its in-memory world data allows human / orc warriors only. A `MockScenarios.Hunter.cs` plus a call-site line in `MockScenarios.cs` needs that data first.
+
+## Wave-2 integration note
+`CharacterAmmoDataModule` and `character_ammo` no longer exist (see docs/areas/hunter.md, "Wave-2 integration note: ammo"); the
+Characters allocation is in docs/integration/seams.md. `SpellInfo.GetCastTime` now has one signature carrying both this lane's
+`autoRepeat`/`rangedHaste` and the spell-breadth cast-time modifier: `GetCastTime(level, castSpeed, autoRepeat, rangedHaste, castTimeModifier)`.

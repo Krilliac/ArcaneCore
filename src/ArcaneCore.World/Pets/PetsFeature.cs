@@ -13,11 +13,11 @@ using Microsoft.Extensions.Logging;
 namespace ArcaneCore.World.Pets;
 
 /// <summary>
-/// Pets, guardians, mini pets and totems in the world daemon (a discovered <see cref="IWorldFeature"/>,
+/// Pets, guardians, mini pets and wild summons in the world daemon (totems are the shaman lane's TotemFeature) (a discovered <see cref="IWorldFeature"/>,
 /// docs/integration/pets.md). It owns the <see cref="SummonService"/> and is itself the
 /// <see cref="ISpellSummonSink"/> the spell feature picks up from the container (the seam list in
 /// <see cref="WorldFeatures"/> registers it), so SPELL_EFFECT_SUMMON and the quest reward preflight
-/// reach the same code as a cast. On attach it installs the totem effects on the spell system and
+/// reach the same code as a cast. On attach it installs the summon effects on the spell system and
 /// hands the <c>Pets</c> configuration (<see cref="PetOptions"/>) to every map's pet system.
 /// <para>The service exists from construction, so the order in which features attach does not matter.</para>
 /// </summary>

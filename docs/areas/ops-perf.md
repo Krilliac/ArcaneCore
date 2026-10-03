@@ -90,3 +90,9 @@ verify behaviour; nothing is copied. `D:\refs\vmangos` is the primary reference.
   performance numbers are claimed by this lane.
 - Database reachability is not probed by `check-config`.
 - Real 1.12.1 client display of the countdown was not checked.
+
+## Wave-2 integration note
+The GM-commands lane had a second shutdown implementation (`ShutdownScheduler`, `ShutdownFeature`, `.server shutdown|restart|idle*`).
+This lane's `ServerLifecycleFeature`/`ShutdownCountdown`/`ExitCodes` is the single implementation (it owns the process exit code).
+The GM lane keeps `.server set motd` and `ServerStats`. `Program.cs` runs the ops verbs and config validation first, then the
+code hot-reload launch gate. The retail `.server`/`.announce` texts live in `BuiltinCommands` (GM lane) as before.

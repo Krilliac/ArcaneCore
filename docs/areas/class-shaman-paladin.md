@@ -30,7 +30,7 @@ References (read only, never copied): **vmangos** `D:\refs\vmangos` (primary), *
   by a SUMMON_TOTEM / SLOT1-4 effect (`spell_template.EffectMiscValueN`) or with `AIName = TotemAI`.
 - Measured on `ClassicDB_1_12_1_z2815` (the env-gated test `RealClassicDb_TotemSpellCounts_AreMeasured_AndSentryHasNone`):
   95 totem creatures get a spell (none needs the list fallback) and 8 have none, Sentry Totem 3968 among them.
-- **Schema constant:** `TotemWorldDataModule.Version = 15` (World; table `totem_spell`; built as 11, renumbered by the wave-2 integrator;
+- **Schema constant:** `TotemWorldDataModule.Version = 15` (World; table `totem_spell`; built as 11, renumbered by the wave-2 integrator);
   tests use the constant. No Characters schema change (totems are never persisted: vmangos unsummons them on logout).
 - **The `totem_spell` table stays empty until the import is run.** `TotemSpellDumpImporter` is a library class used by
   tests only (like the other dump importers, no tool invokes it yet). With an empty table every totem is summoned

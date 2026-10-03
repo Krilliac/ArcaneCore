@@ -72,3 +72,9 @@ Every formula cites its vmangos `file:line` in the code comments; the test class
 (`AuraInterruptTests`, `StealthDetectionFormulaTests`, `PositionalRulesTests`, `StealthVisibilityTests`, `CreatureStealthTests`, `EnergyTests`).
 Citation corrections made while reviewing the lane design: the cancel-Stealth-removes-Vanish rule is `SpellAuras.cpp:3675-3682`; the rogue-only pickpocket loot window is
 `LootHandler.cpp:110` and `285-287`; pickpocketing a creature in combat has no 1.12 check (`Spell.cpp:5466-5471` is `#if <= 1.11.2`).
+
+## Wave-2 integration note
+The aura-interrupt machinery (`AuraInterruptMask`, `SpellSystem.RemoveAurasWithInterruptFlags`) is the single implementation; the druid
+lane's duplicate constants/extension were removed. The rogue swing event is named `MapCombat.MeleeSwingFinished` (the warrior lane
+already owns `MeleeSwingResolved(MeleeDamageInfo)`). Combo points: this lane delivers none; the single combo implementation is
+the wave-1 `Combat/Combo/ComboPointService` (warrior lane), which the druid and rogue abilities should use.
