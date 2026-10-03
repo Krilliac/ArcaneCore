@@ -19,6 +19,7 @@ internal sealed class DuelRig : IDisposable
     public const uint DebuffA = 930301;
     public const uint DebuffB = 930302;
     public const uint Buff = 930303;
+    public const uint DuelSpell = 7266;
 
     public Spells.SpellTestKit Kit { get; }
 
@@ -41,9 +42,19 @@ internal sealed class DuelRig : IDisposable
     /// <summary>The service clock: whole Unix seconds.</summary>
     public long Now { get; set; } = 1_800_000_000;
 
-    public DuelRig(DuelOptions? options = null)
+    public DuelRig(DuelOptions? options = null, bool withFlagTemplate = true)
     {
         Kit = new Spells.SpellTestKit(
+            // classic-db spell_template 7266: Effect1 83, TargetA 25 (TARGET_UNIT), EffectMiscValue 21680. Range and duration are synthetic: SpellRange/SpellDuration
+            // rows are client DBC data that is not on this machine.
+            Spell(DuelSpell, Effect(SpellEffectName.Duel, 0, SpellImplicitTarget.Unit, misc: 21680)) with
+            {
+                RangeIndex = 4,
+                Range = new SpellRange(0, 30),
+                Duration = new SpellDuration(5000, 0, 5000),
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
+            },
             Spell(GrovelSpell, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.ModStun)) with
             {
                 Duration = new SpellDuration(10000, 0, 10000),
@@ -73,7 +84,10 @@ internal sealed class DuelRig : IDisposable
         A.MaxHealth = B.MaxHealth = 1000;
         A.Health = B.Health = 1000;
         Kit.System.UnixSecondsClock = () => Now;
-        Service = new DuelService(options ?? new DuelOptions(), () => Now) { Spells = Kit.System };
+        Service = new DuelService(options ?? new DuelOptions(), () => Now);
+        Service.Install(Kit.System);
+        Kit.Spellbook.Teach(A, DuelSpell);
+        Kit.Spellbook.Teach(B, DuelSpell);
         DuelService.Register(World, Service);
         var flagTemplate = new GameObjectTemplate
         {
@@ -83,7 +97,7 @@ internal sealed class DuelRig : IDisposable
             Name = "Duel Flag",
             Data = new uint[GameObjectTemplate.DataCount],
         };
-        Objects = new GameObjectMapSystem(Map, new GameObjectContent([flagTemplate], [], [], [], []));
+        Objects = new GameObjectMapSystem(Map, new GameObjectContent(withFlagTemplate ? [flagTemplate] : [], [], [], [], []));
         Map.AddUpdater(Objects);
     }
 
