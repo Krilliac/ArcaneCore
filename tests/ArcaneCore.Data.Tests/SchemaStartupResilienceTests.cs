@@ -147,6 +147,41 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(ProviderComponents))]
+    public async Task ExistingEmptyDatabase_StartsLikeAFreshOne(DatabaseProvider provider, string component)
+    {
+        // The state a startup that died right after CREATE DATABASE leaves: the database exists, nothing in it.
+        // (The fault harness does not count CREATE DATABASE as an injectable statement, so this is where that crash point is covered.)
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using (DbContext empty = SchemaProbe.CreateContext(component, connection))
+        {
+            var creator = (IRelationalDatabaseCreator)empty.GetService<IDatabaseCreator>();
+            Assert.False(await creator.ExistsAsync(), "the database should not exist yet");
+            await creator.CreateAsync();
+            Assert.True(await creator.ExistsAsync(), "the database should exist now");
+            Assert.False(await creator.HasTablesAsync(), "the database should be empty");
+        }
+
+        var tap = new CommandTap();
+        await SchemaProbe.EnsureCurrentAsync(component, connection, tap);
+        Assert.True(tap.Ddl > 0, component + " issued no DDL against an empty database");
+        await AssertConvergedAsync(component, connection, component + " restart over an existing empty database");
+
+        // Same schema as an uninterrupted fresh start of a database that did not exist.
+        DatabaseConnectionOptions fresh = await _databases.CreateAsync(provider);
+        await SchemaProbe.EnsureCurrentAsync(component, fresh);
+        await using DbContext restarted = SchemaProbe.CreateContext(component, connection);
+        await using DbContext uninterrupted = SchemaProbe.CreateContext(component, fresh);
+        Assert.Equal(
+            await SchemaProbe.ActualIndexesAsync(uninterrupted, SchemaProbe.ModelTables(uninterrupted)),
+            await SchemaProbe.ActualIndexesAsync(restarted, SchemaProbe.ModelTables(restarted)));
+        foreach (string table in SchemaProbe.ModelTables(restarted))
+        {
+            Assert.Equal(await SchemaProbe.ActualColumnsAsync(uninterrupted, table), await SchemaProbe.ActualColumnsAsync(restarted, table));
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(ProviderComponents))]
     public async Task DatabaseLeftByHistoricFreshCreate_WithNoVersionRow_ResumesOnRestart(DatabaseProvider provider, string component)
     {
         // What the historic bootstrapper left when it died between CreateTables and the version
@@ -251,6 +286,16 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         Assert.Equal(60u, (await afterWorld.ClassInfo.SingleAsync()).BaseHealth);
     }
 
+    [Fact]
+    public void Shorten_TakesTheLengthAfterLineEndingsShrink()
+    {
+        // "\r\n" becomes one space, so the replaced text is shorter than the original: slicing it with the
+        // original length throws ArgumentOutOfRangeException and hides the failure being reported.
+        Assert.Equal("a b", Shorten("a\r\nb", 90));
+        Assert.Equal("a b c", Shorten("a\r\nb\r\nc", 90));
+        Assert.Equal("a b", Shorten("a\r\nb\r\ncdefgh", 3));
+    }
+
     public Task InitializeAsync() => Task.CompletedTask;
 
     public Task DisposeAsync() => _databases.DisposeAsync().AsTask();
@@ -272,7 +317,7 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         {
             throw new Xunit.Sdk.XunitException(
                 $"{label}: startup completed without the injected fault. EF commands seen ({tap.Commands.Count}): " +
-                string.Join(" || ", tap.Commands.Select(c => c.ReplaceLineEndings(" ")[..Math.Min(90, c.Length)])));
+                string.Join(" || ", tap.Commands.Select(c => Shorten(c, 90))));
         }
 
         for (Exception? e = thrown; e is not null; e = e.InnerException)
@@ -284,6 +329,13 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         }
 
         throw new Xunit.Sdk.XunitException("startup failed, but not of the injected fault: " + thrown);
+    }
+
+    /// <summary>One line, at most <paramref name="max"/> characters. The length is taken after the line endings are replaced: they can change it.</summary>
+    internal static string Shorten(string text, int max)
+    {
+        string line = text.ReplaceLineEndings(" ");
+        return line[..Math.Min(max, line.Length)];
     }
 
     private static async Task AssertConvergedAsync(string component, DatabaseConnectionOptions connection, string label)

@@ -145,7 +145,7 @@ public static class SchemaBootstrapper
         await db.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await using SchemaLock schemaLock = await SchemaLock.AcquireAsync(db, definition.Component, lockTimeout, cancellationToken)
+            await using SchemaLock schemaLock = await SchemaLock.AcquireAsync(db, definition.Component, lockTimeout, cancellationToken, logger)
                 .ConfigureAwait(false);
             await RunAsync(db, definition, logger, cancellationToken).ConfigureAwait(false);
             await schemaLock.CompleteAsync(cancellationToken).ConfigureAwait(false);

@@ -154,6 +154,8 @@ docker run -d --name ac-mariadb -e MARIADB_ROOT_PASSWORD=arcane -p 3306:3306 mar
 docker run -d --name ac-postgres -e POSTGRES_USER=arcane -e POSTGRES_PASSWORD=arcane -p 5432:5432 postgres:16
 ```
 
+These commands do not wait for the servers to accept connections, which CI's health checks do (`healthcheck.sh --connect --innodb_initialized` for MariaDB, `pg_isready -U arcane` for PostgreSQL). Wait for the containers to be ready (for example `docker logs ac-mariadb`, or the same health commands through `docker exec`) before running the tests, or the first provider tests fail on connect.
+
 Provider semantics the tests must respect: MariaDB DDL is not transactional (implicit commit) while
 PostgreSQL DDL is; `GET_LOCK` locks belong to one connection; `pg_advisory_lock` returns void and is
 re-entrant within a session (use `pg_try_advisory_lock` to learn whether a lock was taken, and take
@@ -162,12 +164,14 @@ before it holds a connection to the database.
 
 Provider-gated tests must be run locally, or the CI run watched to green, before schema work is merged.
 A SQLite-only pass is not evidence for the other two engines.
+
 ## Limits (not delivered, and why)
 
-- **MariaDB and PostgreSQL were not run on this machine** (no server, no `ARCANECORE_TEST_*` variables). Their lock SQL
+- **MariaDB and PostgreSQL cannot be run on the development machine** (no server, no `ARCANECORE_TEST_*` variables); hosted CI
+  run 37140080469 passed the provider tests on both engines (MariaDB 10.11 and PostgreSQL 16 service containers). Their lock SQL
   (`GET_LOCK`, `pg_try_advisory_lock`), their catalog queries (`information_schema.statistics`,
   `pg_index`/`pg_attribute` with `unnest ... WITH ORDINALITY`) and the non-transactional resume of interrupted DDL are
-  written for them and covered by the same provider-parametrized tests, but **proof comes only from hosted CI**.
+  written for them and covered by the same provider-parametrized tests; **proof comes from hosted CI**, so watch it for any schema change.
   What *is* proved offline for them: the differ operation set and the generated DDL (see above).
 - **Actual MySQL 8 server support remains unqualified**, separately from MariaDB, as the handoff says.
 - **The frozen baseline is SQLite only.** No per-provider `mysqldump`/`pg_dump` capture was possible without servers, so
