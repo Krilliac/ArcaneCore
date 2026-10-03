@@ -108,11 +108,10 @@ File name: `%03u%02u%02u.map` of map id, tile X, tile Y, where tile X =
 
 - `MapRegistry`: `map_template` rows; with an empty table the two continents (0 Eastern
   Kingdoms, 1 Kalimdor) so a fresh world database still works.
-- `InstanceRegistry` (instance-creation stub): a dungeon/raid/battleground teleport gets an
-  instance id (from 101, after vmangos `RESERVED_INSTANCES_LAST = 100`) and a per-player
-  binding that is reused on the next entry. All instances of a map still share that map's
-  single `Map` object (see What is left).
-- `WorldMaps`: the per-world bundle (registry, terrain, area table, instances, area triggers,
+- Instances: the `InstanceRegistry` stub is gone. `Game/Instances/InstanceManager` is the
+  `IMapResolver` that picks or creates the instance, each instance has its own `Map`, and binds
+  are persisted (see [instances](../integration/instances.md)).
+- `WorldMaps`: the per-world bundle (registry, terrain, area table, area triggers,
   `areatrigger_teleport`, `game_tele`) attached to the `WorldRuntime` through a weak side
   table, so `WorldRuntime.cs` is untouched. `Load(MapContent)` applies the vmangos loader
   rules and returns what it skipped: a teleport row without an `areatrigger_template` row,
@@ -224,8 +223,9 @@ rows are kept. The tables start empty: fill them from a vmangos world database e
 
 ## What is left (outside this area's shipped scope)
 
-- One `Map` object per instance (instances currently share their map's `Map`); instance
-  resets, player limits and `SMSG_TRANSFER_ABORTED` paths (max players, not found).
+- Instance maps, resets, player limits and `SMSG_TRANSFER_ABORTED` paths are implemented by
+  the instances area (see [instances](../integration/instances.md)); nothing instance-specific
+  is left in this area.
 - vmaps (WMO/model heights, line of sight, indoor areas) and mmaps (pathfinding).
 - Server-side zone updates from terrain on movement (currently on teleport only; the client's
   `CMSG_ZONEUPDATE` is still trusted).

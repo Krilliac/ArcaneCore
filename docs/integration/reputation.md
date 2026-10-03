@@ -122,8 +122,10 @@ installed (requirements fail closed).
   Diplomacy racial: the spells owner sets `ReputationService.GainModifier`).
 - No group, pet or tapped-kill credit: only direct player kills reward reputation.
 - No honor-rank vendor discounts (vanilla PvP rank), only the 10 % Honored discount.
-- Combat hostility (`CombatHooks`) is not wired to reputation reactions; combat still uses
-  template relations. NPCs are not made visible on interaction or attack (only on change), and
+- Combat hostility (`CombatHooks`) is not wired to reputation reactions, and nothing registers
+  production hooks: player attacks use the defaults (only same-team players are friendly, any
+  non-player unit is attackable). Faction templates drive only creature aggro on sight
+  (`ICreatureHostility`) and interaction checks. NPCs are not made visible on interaction or attack (only on change), and
   SMSG_SET_FACTION_ATWAR (server-forced war) is not sent.
 - The u16/u32 CMSG question above is decided from server sources, not a client capture.
 

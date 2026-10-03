@@ -19,7 +19,7 @@ Source `838dbc952a8126fee8f7d2ef5d5e7761cbb2e40d` was qualified before preservin
 | Final canonical documentation head | Recorded on [draft #11](https://github.com/Krilliac/ArcaneCore/pull/11) and the integration outcome |
 | Final canonical full-provider CI run and conclusion | Exact links/results recorded on [draft #11](https://github.com/Krilliac/ArcaneCore/pull/11) and the integration outcome |
 | Draft PR #11 head/accounting update | Canonical candidate remains [draft #11](https://github.com/Krilliac/ArcaneCore/pull/11); source accounting is in [the fleet ledger](fleet-20261003.md) |
-| Schema/module changes in this slice | None; existing auth/characters/world versions remain `2/6/6` |
+| Schema/module changes in this slice | None; the integrated allocation (auth 2, world 8, characters 10, see [the handoff](claude-handoff-20261003.md)) is unchanged. This slice originally recorded `2/6/6`, a pre-integration number |
 
 Before the change, holders retained the caster GUID and resolved that GUID in the target's map when checking settlement or executing periodic effects. Corrected baseline regressions reproduced wrong actor attribution, replacement healing threat, settlement pauses, stale stacking and late cleanup. Against exact retained production, 13 cases failed for the ownership gaps and seven compatibility cases passed; all 20 passed on the fix. This document does not claim that previously stored character data was corrupted.
 

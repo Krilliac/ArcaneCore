@@ -69,7 +69,9 @@ No GPL text was copied.
 - Spell-cast credit: `SpellSystem.SpellHitTarget` → `CastedCreatureOrGo`. When the
   caster is not the original caster, only `QUEST_FLAGS_SHARABLE` quests get credit.
 - Gameobject use: `QuestNpcServices.CastedCreatureOrGo(player, goEntry, goGuid,
-  isCreature: false, spellId, originalCaster)` is the hook. No gameobject feature exists yet.
+  isCreature: false, spellId, originalCaster)` is the hook. The gameobject feature now calls it:
+  `GameObjectMapSystem` raises `GameObjectUsed` on use and `QuestJournalAdapter.GameObjectUsed`
+  forwards it with `spellId: 0`.
 - Group kill credit: every eligible group member (same map, within distance, alive
   or not yet a ghost) gets `KilledMonsterCredit`. Raid groups credit only raid quests
   (type 62).
@@ -144,6 +146,6 @@ persisted). Fixing this needs a reserved characters migration that adds `xp` (an
 - These remain denied: `SrcSpell`, `ReqSource*`, PartyAccept, StayAlive and the PvP
   quest type. Timed quests keep the existing quest-log timer.
 - Area trigger relations come from config only, with no world-DB table/loader yet.
-- Gameobject use has only the hook. Nothing calls it until a gameobject feature exists.
+- Gameobject-use credit is wired (see above). Quest-giver gameobjects (`gameobject_questrelation` rows are stored but not consumed by the quest area) are not.
 - The native mock-client scenario isn't extended. It still passes, but there are no
   new XP/exploration wire checks.

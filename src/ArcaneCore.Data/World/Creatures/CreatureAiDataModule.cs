@@ -73,10 +73,10 @@ public sealed class CreatureAiTextRow
 /// The creature AI world-schema step (<see cref="IDataModule"/>): EventAI scripts and texts,
 /// the <c>creature_template.AIName</c> selector and the <c>creature_movement.Run</c> flag.
 /// <para>
-/// <b>Reserved world version 8</b> (fleet round 2 brief). Versions must be contiguous, and
-/// world 7 (game objects + loot) is not on this branch's base, so the step declares
-/// <see cref="Version"/> = 7 here; the lead renumbers it to 8 when the world-7 module merges
-/// first (docs/integration/creature-ai.md). Nothing else depends on the number.
+/// <b>World version 8</b>, the integrated allocation after game objects + loot (world 7);
+/// <see cref="ReservedVersion"/> and <see cref="Version"/> are both 8. Source branch heads that
+/// lack the world-7 module kept a provisional 7 (docs/integration/creature-ai.md). Nothing else
+/// depends on the number.
 /// </para>
 /// </summary>
 public sealed class CreatureAiDataModule : IDataModule
@@ -84,7 +84,7 @@ public sealed class CreatureAiDataModule : IDataModule
     /// <summary>The reserved number for this step (fleet round 2).</summary>
     public const int ReservedVersion = 8;
 
-    /// <summary>The number used on this branch: the next free world version at its base.</summary>
+    /// <summary>The number used in the integrated tree: the next free world version after game objects + loot (7).</summary>
     public const int Version = 8;
 
     public DatabaseComponent Component => DatabaseComponent.World;

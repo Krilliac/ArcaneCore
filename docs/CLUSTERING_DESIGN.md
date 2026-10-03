@@ -79,8 +79,10 @@ Important current constraints:
   it cannot be trusted as a new routing authority.
 - Maps are keyed by map ID and all run on one `WorldRuntime` thread. Mutable
   visibility, grids, objects and queues contain direct references. The current
-  `InstanceRegistry` assigns memory-only bindings and shares a Map among dungeon
-  instances. Distinct instance authority must be implemented before placing them.
+  `WorldRuntime` keys maps by `(mapId, instanceId)` and `InstanceManager` creates a
+  separate `Map` per instance; binds persist through the instance write queue, but instance ids and
+  lockout state have no cross-process authority. That authority must exist before instances are placed
+  on different workers.
 - Auth storage is shared across realms; characters storage is explicitly one
   database per realm; world content is read-only during runtime. Character and
   social rows have no realm discriminator. Keep per-realm characters databases
@@ -90,7 +92,9 @@ Important current constraints:
   allocators require durable authority or reserved disjoint ranges.
 - Core state/inventory save together, but quest, spell and social queues have
   separate barriers. Local revisions and FIFO ordering provide no distributed
-  fencing. Core/social queues can exhaust retries and drop writes. Recoverable
+  fencing. The core `CharacterSaveQueue` retains the failed snapshot after three
+  attempts and surfaces the failure on flush and stop, but the reputation, instance and social
+  write queues log and drop a write after three attempts. Recoverable
   acknowledgements and a complete handoff barrier are prerequisites.
 - Social context, name cache, groups, guilds and channels refer to local players.
   A fleet must have one realm-wide social authority and routed presence.
