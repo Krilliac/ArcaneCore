@@ -110,6 +110,12 @@ public sealed class GameObjectSpawnRow
 
     public int SpawnTimeSeconds { get; set; } = 300;
 
+    /// <summary><c>spawntimesecsmax</c>: the upper bound of the respawn delay; null means the same as <see cref="SpawnTimeSeconds"/> (world schema 15, <see cref="GameObjectSpawnDataModule"/>).</summary>
+    public int? SpawnTimeMaxSeconds { get; set; }
+
+    /// <summary>vmangos <c>spawn_flags</c> (world schema 15); 0 when the dump has none.</summary>
+    public uint SpawnFlags { get; set; }
+
     public uint AnimProgress { get; set; } = 100;
 
     public byte State { get; set; } = 1;

@@ -37,6 +37,20 @@ The GM no-check-cast cheat exemption (Spell.cpp:5304) is not modelled (ArcaneCor
 
 Tests: `SpellFocusCastCheckTests` (Game.Tests), `SpellFocusWorldTests` (World.Tests).
 
+### GO3 spawn data import (world schema step)
+
+| Item | Where | Reference |
+|---|---|---|
+| World schema **15** (`GameObjectSpawnDataModule.Version`, the integrator renumbers): `gameobject_spawn.SpawnTimeMaxSeconds` (nullable int, null = same as the minimum) and `SpawnFlags` (uint, default 0), both `AddColumnChange`; the step is rerunnable after a partial application | `src/ArcaneCore.Data/World/GameObjects/GameObjectSpawnDataModule.cs` | `D:\refs\vmangos\src\game\Objects\GameObjectDefines.h:814-832` |
+| Importer reads `spawntimesecsmax` (a max below the min is raised to the min), `spawn_flags`, and the cmangos `gameobject_addon` table (`animprogress`, `state`, -1 = unset; state >= 3 is an invalid row, skipped with a warning) in any table order | `GameObjectLootDumpImporter` | `D:\refs\mangos-classic\src\game\Globals\ObjectMgr.cpp:2188-2192, 2252-2282` |
+| Initial state: addon state if not -1, else the `gameobject` row own state column (vmangos), else a door/button with template `startOpen` (data0) starts active/open, else ready; animprogress addon, else row, else 100 | `ResolveSpawnData` | `D:\refs\mangos-classic\src\game\Entities\GameObject.cpp:226-250, 920-927`, `D:\refs\vmangos\src\game\Objects\GameObject.cpp:239-248` |
+| `EfGameObjectDataStore` maps both columns into `GameObjectSpawn` | `EfGameObjectLootStores.cs` | |
+
+Verified against the real classic-db z2815 dump (opt-in test, `ARCANECORE_CLASSICDB_DUMP`): 47827 spawns, 6056 with min != max, all states within 0..2; the numbers were counted independently with a python scan.
+Provider coverage: the schema tests (`GameObjectSpawnDataTests`, `IntegratedSchemaTests`) are provider theories over `TestDatabases.AvailableProviders` written for MariaDB (non-transactional DDL: a partly applied step is completed by the rerun) and PostgreSQL
+(quoted identifiers through `ISqlGenerationHelper`), but **only SQLite was available on this machine**; the MariaDB and PostgreSQL runs happen on hosted CI.
+Not modelled: the `spawnMask` column, vmangos `visibility_mod` (cannot be verified, no vmangos world dump in the references), `gameobject_spawn_entry`/pools/game events (no lane owns them).
+
 ## Limits (not delivered, documented)
 
 * Goober Use semantics (page before the quest gate, group quest credit, IN_USE/ACTIVATED machine, use spell, linked trap,
