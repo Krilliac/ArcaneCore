@@ -310,9 +310,10 @@ public sealed class TalentWorldTests
 
         await client.SendAsync(WorldOpcode.MsgTalentWipeConfirm, GuidBody(Trainer));
 
-        List<(WorldOpcode Opcode, byte[] Payload)> packets = await client.CollectAsync();
-        Assert.Equal(BitConverter.GetBytes((ushort)T1R1), Assert.Single(packets, p => p.Opcode == WorldOpcode.SmsgRemovedSpell).Payload);
-        Assert.Contains(packets, p => p.Opcode == WorldOpcode.SmsgSpellGo && CastBy(p.Payload, Trainer, UntalentVisual));
+        // Reads wait for the packets (a quiet-period collect can end before a loaded world thread answers); the server sends the
+        // removal first and the trainer's cast after it.
+        Assert.Equal(BitConverter.GetBytes((ushort)T1R1), await client.ReadUntilAsync(WorldOpcode.SmsgRemovedSpell));
+        Assert.True(CastBy(await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo), Trainer, UntalentVisual));
         Assert.Equal(99 * Gold, await host.OnWorldAsync(() => host.World.FindOnlinePlayer("WIPER")!.Money));
         Assert.Equal(1u, await host.OnWorldAsync(() => FreePoints(host, "WIPER")));
         Assert.False(await host.OnWorldAsync(() => Knows(host, "WIPER", T1R1)));
@@ -363,9 +364,9 @@ public sealed class TalentWorldTests
 
         await client.SendAsync(WorldOpcode.MsgTalentWipeConfirm, GuidBody(Trainer));
 
-        List<WorldOpcode> order = [.. (await client.CollectAsync()).Select(p => p.Opcode)
-            .Where(o => o is WorldOpcode.SmsgBuyFailed or WorldOpcode.MsgTalentWipeConfirm or WorldOpcode.SmsgRemovedSpell)];
-        Assert.Equal([WorldOpcode.SmsgBuyFailed, WorldOpcode.MsgTalentWipeConfirm], order);
+        // BUY_FAILED first, then the empty confirmation (reading in that order proves the order).
+        await client.ReadUntilAsync(WorldOpcode.SmsgBuyFailed);
+        Assert.Equal(TalentPackets.WipeConfirm(ObjectGuid.Empty, Gold).ToArray(), await client.ReadUntilAsync(WorldOpcode.MsgTalentWipeConfirm));
         Assert.True(await host.OnWorldAsync(() => Knows(host, "BROKE", T1R1)));
     }
 
@@ -384,9 +385,8 @@ public sealed class TalentWorldTests
 
         await client.SendAsync(WorldOpcode.MsgTalentWipeConfirm, GuidBody(Trainer));
 
-        List<WorldOpcode> opcodes = [.. (await client.CollectAsync()).Select(p => p.Opcode)];
-        Assert.Contains(WorldOpcode.SmsgBuyFailed, opcodes);
-        Assert.DoesNotContain(WorldOpcode.MsgTalentWipeConfirm, opcodes);
+        await client.ReadUntilAsync(WorldOpcode.SmsgBuyFailed);
+        Assert.DoesNotContain((await client.CollectAsync()).Select(p => p.Opcode), op => op == WorldOpcode.MsgTalentWipeConfirm);
     }
 
     [Theory]
@@ -406,8 +406,15 @@ public sealed class TalentWorldTests
 
         await client.SendAsync(WorldOpcode.MsgTalentWipeConfirm, GuidBody(Trainer));
 
-        List<WorldOpcode> opcodes = [.. (await client.CollectAsync()).Select(p => p.Opcode)];
-        Assert.Equal(expectReset, opcodes.Contains(WorldOpcode.SmsgRemovedSpell));
+        if (expectReset)
+        {
+            await client.ReadUntilAsync(WorldOpcode.SmsgRemovedSpell);
+        }
+        else
+        {
+            Assert.DoesNotContain((await client.CollectAsync()).Select(p => p.Opcode), op => op == WorldOpcode.SmsgRemovedSpell);
+        }
+
         Assert.Equal(!expectReset, await host.OnWorldAsync(() => Knows(host, "WRONGCLASS", T1R1)));
     }
 
@@ -445,9 +452,8 @@ public sealed class TalentWorldTests
 
         await client.SendAsync(WorldOpcode.CmsgGossipSelectOption, [.. GuidBody(Trainer), .. BitConverter.GetBytes(0u)]);
 
-        List<(WorldOpcode Opcode, byte[] Payload)> packets = await client.CollectAsync();
-        Assert.Contains(packets, p => p.Opcode == WorldOpcode.SmsgGossipComplete);
-        Assert.Equal(TalentPackets.WipeConfirm(Trainer, Gold).ToArray(), Assert.Single(packets, p => p.Opcode == WorldOpcode.MsgTalentWipeConfirm).Payload);
+        await client.ReadUntilAsync(WorldOpcode.SmsgGossipComplete);                    // the gossip closes first, then the confirmation
+        Assert.Equal(TalentPackets.WipeConfirm(Trainer, Gold).ToArray(), await client.ReadUntilAsync(WorldOpcode.MsgTalentWipeConfirm));
 
         // Below level 10 the option is not offered (the positive control above shows it is wired).
         await host.OnWorldAsync(() => host.World.FindOnlinePlayer("GOSSIPER")!.Level = 9);
@@ -505,6 +511,8 @@ public sealed class TalentWorldTests
         await client.CollectAsync();
 
         await client.SendAsync(WorldOpcode.MsgTalentWipeConfirm, GuidBody(Trainer));
+        await client.ReadUntilAsync(WorldOpcode.SmsgRemovedSpell);
+        await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo);                           // the trainer's visual ends the reset's packets
         await client.CollectAsync();
         await Talents(host).Persistence.FlushAsync();
 

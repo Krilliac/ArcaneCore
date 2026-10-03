@@ -111,7 +111,7 @@ Deliberate limits:
 
 - Area, chain and cone target selection are implemented (`SpellSystem.Targeting.cs`, with a line-of-sight filter on area lists); only the remaining TargetB-based selections are missing.
 - Reagents, item casts, totems, spell focus, shapeshift and stance checks (no shapeshift or stance data is read at cast time), facing, area restrictions.
-- Talents, ranks, spell modifiers, proc system (aura holders carry `procCharges`, but nothing consumes them), diminishing returns, immunities. Hit, crit and resist rules (`SpellCombatRules`) and the dispel effect exist.
+- Talent spell effects (point accounting, learning, respec and persistence exist: [talents](talents.md)), ranks, spell modifiers, proc system (aura holders carry `procCharges`, but nothing consumes them), diminishing returns, immunities. Hit, crit and resist rules (`SpellCombatRules`) and the dispel effect exist.
 - Complete spell combat modifiers. Integrated spell damage now uses map combat death/threat,
   and effective healing adds base distributed threat and enters combat.
 - Non-player far teleports. Player far teleports and shared creature lookup are connected in
