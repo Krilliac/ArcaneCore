@@ -12,7 +12,9 @@ internal sealed class InventoryRewardStage(
     InventorySnapshot after,
     IReadOnlyList<(Item Existing, uint Count, ItemDynFlags Flags)> stacks,
     IReadOnlyList<(byte Bag, byte Slot, Item Item)> additions,
-    IReadOnlyList<(InventoryRewardGrant Grant, Item Result)> grants)
+    IReadOnlyList<(InventoryRewardGrant Grant, Item Result)> grants,
+    IReadOnlyList<Item>? removed = null,
+    IReadOnlyList<InventoryRewardGrant>? removals = null)
 {
     internal PlayerInventory Inventory { get; } = inventory;
     internal InventorySnapshot Before { get; } = before;
@@ -20,10 +22,18 @@ internal sealed class InventoryRewardStage(
     internal IReadOnlyList<(Item Existing, uint Count, ItemDynFlags Flags)> Stacks { get; } = stacks;
     internal IReadOnlyList<(byte Bag, byte Slot, Item Item)> Additions { get; } = additions;
     internal IReadOnlyList<(InventoryRewardGrant Grant, Item Result)> Grants { get; } = grants;
+
+    /// <summary>Live items the reward destroys completely (required delivery items).</summary>
+    internal IReadOnlyList<Item> Removed { get; } = removed ?? [];
+
+    /// <summary>The requested destruction batch (entry, count), notified before the grants.</summary>
+    internal IReadOnlyList<InventoryRewardGrant> Removals { get; } = removals ?? [];
+
     internal bool Applied { get; set; }
 
     internal bool MatchesBefore() => !Applied && PlayerInventory.SameRewardSnapshot(Before, Inventory.CreateSnapshot())
-        && Stacks.All(s => ReferenceEquals(Inventory.GetItemByGuid(s.Existing.Guid), s.Existing));
+        && Stacks.All(s => ReferenceEquals(Inventory.GetItemByGuid(s.Existing.Guid), s.Existing))
+        && Removed.All(r => ReferenceEquals(Inventory.GetItemByGuid(r.Guid), r));
 }
 
 public sealed partial class PlayerInventory
@@ -31,6 +41,14 @@ public sealed partial class PlayerInventory
     /// <summary>Plan all reward grants together, using the ordinary storage/stack/bag/unique-item rules in a detached inventory.</summary>
     internal InventoryResult TryStageQuestRewards(IReadOnlyList<InventoryRewardGrant> grants,
         out InventoryRewardStage? stage, out uint failedEntry)
+        => TryStageQuestRewards(grants, [], out stage, out failedEntry);
+
+    /// <summary>
+    /// Plan the destruction of required delivery items (vmangos RewardQuest DestroyItemCount,
+    /// outside the bank) followed by every reward grant, all in one detached inventory.
+    /// </summary>
+    internal InventoryResult TryStageQuestRewards(IReadOnlyList<InventoryRewardGrant> grants,
+        IReadOnlyList<InventoryRewardGrant> removals, out InventoryRewardStage? stage, out uint failedEntry)
     {
         stage = null;
         failedEntry = 0;
@@ -46,6 +64,18 @@ public sealed partial class PlayerInventory
             GuidAllocator = GuidAllocator,
         };
         shadow.Load(before.Items);
+        foreach (InventoryRewardGrant removal in removals)
+        {
+            failedEntry = removal.Entry;
+            if (removal.Entry == 0 || removal.Count is 0 or > int.MaxValue
+                || shadow.GetItemCount(removal.Entry) < removal.Count
+                || shadow.AllItems.Any(i => i.Entry == removal.Entry && i is Container)
+                || shadow.DestroyItemCount(removal.Entry, removal.Count) != removal.Count)
+            {
+                return InventoryResult.ItemNotFound;
+            }
+        }
+
         var stored = new List<(InventoryRewardGrant Grant, uint Guid)>();
         foreach (InventoryRewardGrant grant in grants)
         {
@@ -101,8 +131,15 @@ public sealed partial class PlayerInventory
             }
         }
 
+        var shadowGuids = shadow.AllItems.Select(i => i.Guid).ToHashSet();
+        Item[] removed = AllItems.Where(i => !shadowGuids.Contains(i.Guid)).ToArray();
+        if (removed.Any(i => i is Container))
+        {
+            return InventoryResult.CantDoRightNow;
+        }
+
         stage = new InventoryRewardStage(this, before, after, stacks, additions,
-            stored.Select(s => (s.Grant, results[s.Guid])).ToArray());
+            stored.Select(s => (s.Grant, results[s.Guid])).ToArray(), removed, removals.ToArray());
         failedEntry = 0;
         return InventoryResult.Ok;
     }
@@ -114,6 +151,12 @@ public sealed partial class PlayerInventory
         if (!ReferenceEquals(stage.Inventory, this) || !stage.MatchesBefore())
         {
             throw new InvalidOperationException("the inventory changed while its quest reward was settling");
+        }
+
+        foreach (Item removed in stage.Removed)
+        {
+            RemoveItem(removed.BagSlot, removed.Slot);
+            Discard(removed);
         }
 
         foreach ((Item existing, uint count, ItemDynFlags flags) in stage.Stacks)
@@ -143,6 +186,11 @@ public sealed partial class PlayerInventory
     /// <summary>Objective callbacks and item notifications follow the rewarded journal mutation and durable commit.</summary>
     internal void NotifyQuestRewardInventory(InventoryRewardStage stage)
     {
+        foreach (InventoryRewardGrant removal in stage.Removals)
+        {
+            ItemCountChanged?.Invoke(removal.Entry, -(int)removal.Count);
+        }
+
         foreach ((InventoryRewardGrant grant, Item result) in stage.Grants)
         {
             ItemCountChanged?.Invoke(grant.Entry, (int)grant.Count);

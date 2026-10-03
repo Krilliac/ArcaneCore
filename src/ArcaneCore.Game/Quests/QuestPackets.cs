@@ -92,19 +92,23 @@ public static partial class QuestPackets
     }
 
     /// <summary>
-    /// Ordinary item/money SMSG_QUESTGIVER_QUEST_COMPLETE (5875): quest, 3, zero XP,
-    /// configured money, then fixed item/count pairs. Choice rewards are excluded.
+    /// SMSG_QUESTGIVER_QUEST_COMPLETE (5875): quest, 3, XP (0 at the maximum level), configured
+    /// money (plus RewMoneyMaxLevel at the maximum level), then fixed item/count pairs. Choice
+    /// rewards are excluded.
     /// vmangos/core 4b3d241cffe245a1f68da11380bce96c23db48c0 Quest.cpp 123–135,
     /// Player.cpp 14336–14363; gtker/wow_messages 70abb9deff0bb63440d8aeb4386b820653e8a176
     /// smsg_questgiver_quest_complete.wowm. Money retains its configured 32-bit pattern,
     /// including a negative required-money amount; it is not the clamped balance delta.
     /// </summary>
-    public static PacketWriter Complete(Quest quest, uint money)
+    public static PacketWriter Complete(Quest quest, uint money) => Complete(quest, 0, money);
+
+    /// <inheritdoc cref="Complete(Quest, uint)"/>
+    public static PacketWriter Complete(Quest quest, uint experience, uint money)
     {
         var w = new PacketWriter(20 + (quest.RewItemsCount * 8));
         w.WriteUInt32(quest.Id);
         w.WriteUInt32(3);
-        w.WriteUInt32(0);
+        w.WriteUInt32(experience);
         w.WriteUInt32(money);
         w.WriteUInt32((uint)quest.RewItemsCount);
         for (int i = 0; i < QuestConstants.RewardsCount; i++)
