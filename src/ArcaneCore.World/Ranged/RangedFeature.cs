@@ -72,5 +72,6 @@ public sealed class RangedFeature : IWorldFeature
         }
 
         map.AddUpdater(new SpellObjectSystem(_spells));
+        map.AddUpdater(new TrapSystem(_spells));
     }
 }

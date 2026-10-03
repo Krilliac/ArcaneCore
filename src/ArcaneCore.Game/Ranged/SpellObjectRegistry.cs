@@ -32,6 +32,9 @@ public sealed class SpellCreatedObject
     internal int Age { get; set; }
 
     internal bool SpawnAnimSent { get; set; }
+
+    /// <summary>Whether the trap system has applied the arming delay (a trap is armed on its first update).</summary>
+    internal bool Armed { get; set; }
 }
 
 /// <summary>

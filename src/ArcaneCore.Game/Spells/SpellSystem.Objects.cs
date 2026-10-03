@@ -18,6 +18,27 @@ public sealed partial class SpellSystem
     /// <summary>The objects spells created and their owners.</summary>
     public SpellObjectRegistry SpellObjects { get; } = new();
 
+    /// <summary>Depth of casts made on behalf of a game object (trap): they skip the range check and the caster-alive check.</summary>
+    private int _objectCastDepth;
+
+    /// <summary>
+    /// A trap's spell (vmangos GameObject::Update: <c>owner->CastSpell(target, spellId, true, ..., trapGuid)</c>, a triggered
+    /// cast, which neither checks range nor needs a living caster). Runs synchronously: a triggered cast has no cast time.
+    /// The original-caster marker (no combat for a player a trap hits, Spell.cpp:1650) is not modelled.
+    /// </summary>
+    internal SpellCastResult CastFromObject(Unit owner, uint spellId, Unit target)
+    {
+        _objectCastDepth++;
+        try
+        {
+            return CastSpell(owner, spellId, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+        }
+        finally
+        {
+            _objectCastDepth--;
+        }
+    }
+
     /// <summary>SPELL_EFFECT_SUMMON_OBJECT_SLOT1-4 (the slot is the effect: 0x68-0x6B).</summary>
     internal void EffectSummonObject(SpellEffectContext context)
     {

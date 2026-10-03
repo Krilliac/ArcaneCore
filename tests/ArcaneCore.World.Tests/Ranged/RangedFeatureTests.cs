@@ -44,7 +44,7 @@ public sealed class RangedFeatureTests
         await using WorldTestHost host = WorldTestHost.Start();
         await using WorldTestClient client = await host.EnterWorldAsync("RANGEDMAP", "Mapper");
 
-        await host.WaitForWorldAsync(() => host.World.Maps.All(m => m.FindUpdater<SpellObjectSystem>() is not null) && host.World.Maps.Any(), "the spell object system on every map");
+        await host.WaitForWorldAsync(() => host.World.Maps.All(m => m.FindUpdater<SpellObjectSystem>() is not null && m.FindUpdater<TrapSystem>() is not null) && host.World.Maps.Any(), "the spell object and trap systems on every map");
     }
 
     [Fact]

@@ -518,7 +518,7 @@ public sealed partial class SpellSystem
             return SpellCastResult.NotReady;
         }
 
-        if (!caster.IsAlive && !spell.HasAttribute(SpellAttributes.AllowCastWhileDead))
+        if (!caster.IsAlive && !spell.HasAttribute(SpellAttributes.AllowCastWhileDead) && _objectCastDepth == 0)
         {
             return SpellCastResult.CasterDead;
         }
@@ -573,7 +573,8 @@ public sealed partial class SpellSystem
                 return SpellCastResult.TargetsDead;
             }
 
-            SpellCastResult range = CheckRange(caster, spell, target, strict, RangedOptions.Range.Leeway == RangeLeewayMode.Retail);
+            // ranged (hunter lane): a cast from a game object (trap) ignores range and the owner being far or dead (vmangos triggered casts).
+            SpellCastResult range = _objectCastDepth > 0 ? SpellCastResult.CastOk : CheckRange(caster, spell, target, strict, RangedOptions.Range.Leeway == RangeLeewayMode.Retail);
             if (range != SpellCastResult.CastOk)
             {
                 return range;
