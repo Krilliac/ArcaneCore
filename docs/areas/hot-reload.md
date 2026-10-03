@@ -41,6 +41,19 @@ root 1212), `src/game/Commands/ServerCommands.cpp` (config 1016, spell_template 
   `ObjectMgr.cpp:3814-3832`).
 - Duplicate spell ids are rejected with the ids listed (the store is keyed by id).
 
+**`item_template`** (`ItemContentReloadable`, `LiveItemTemplateStore`): `IItemTemplateSource` ->
+`ItemTemplateStore` (templates plus `playercreateinfo_item`) off the world thread, then
+`ItemsFeature.ReplaceTemplates`. `ItemsFeature.Templates` and the value `EnsureLoadedAsync` returns are now a
+stable `LiveItemTemplateStore` that forwards to the current immutable store, so every holder of the
+reference (each online `PlayerInventory.Templates`, the economy, vendors, loot) sees the reload on its
+next lookup by entry, without re-wiring. The first reload on a feature nobody has used yet performs the
+initial load first, so the item GUID allocator is still seeded.
+- Empty `item_template` keeps the loaded content. vmangos clears the map first and only then notices the
+  empty result (`ObjectMgr.cpp:3817`, `3822-3830`), leaving no items; the loaders for spells
+  (`SpellMgr.cpp:3724-3732`) and creatures (`ObjectMgr.cpp:1192-1196`) return before touching anything,
+  and that is the behaviour taken.
+- Duplicate entries are rejected with the entries listed.
+
 **`config`** (`ConfigContentReloadable`, `WorldConfigKeys`): the configuration source list is rebuilt
 into a throwaway configuration (the live root is never reloaded: a broken file would empty it), the
 `World` section is bound to a candidate, and the live `WorldRuntimeOptions` object is updated in place
@@ -75,13 +88,14 @@ on the world thread, so every reader sees the new value on its next read.
 | vmangos splits `reload` (`SEC_DEVELOPER`, Chat.cpp:1212) from `config`/`all` (`SEC_ADMINISTRATOR`, Chat.cpp:796,808); ArcaneCore's scale ends at Administrator so both are Administrator (cmangos-classic Chat.cpp:942). | none |
 | `.reload status` and prefix matching of reloadable names are ArcaneCore additions. | none |
 | `TickIntervalMs` is restart-only here; vmangos `MapUpdateInterval` is live (World.cpp:592-594). ArcaneCore's world thread captures its sleep once and `SpellFeature` its timer. | none |
+| An `Item` a player already holds keeps the `ItemTemplate` it was created with until that character logs in again; vmangos resolves `Item::GetProto` by entry on every call (`Item.cpp:567-570`), so a changed sell price applies to held items at once there. True parity needs `Item.Template` late-bound, which edits `Item.cs` and `PlayerInventory.*` that the economy, loot and quest-reward work also changes. Left to a later slice. Lookups by entry (vendor lists, new items, starting outfit) are live. | none (unobservable difference is limited to held items) |
 | `.reload spell_template` does not reload `spell_mod` (no such table here; vmangos ServerCommands.cpp:1414). | none |
 | The commands can be switched off. Retail has no such switch. | `HotReload:Commands` (default true = retail) |
 
 ## Limits (not delivered, by design of this slice)
 
-- Only `config` and `spell_template` are reloadable. Items, creatures, quests, NPC data, gameobject
-  loot, catalogs, maps and collision are separate slices (hr-items-lookup, hr-creatures, ...), several
+- Only `config`, `spell_template` and `item_template` are reloadable. Creatures, quests, NPC data, gameobject
+  loot, catalogs, maps and collision are separate slices (hr-creatures, ...), several
   gated behind other lanes' work on the files they touch.
 - No file watcher, no database revision polling, no automatic apply, no assembly (code) reload and no
   cluster rollout. The `HotReload` section itself is read when the world starts.
@@ -94,7 +108,8 @@ on the world thread, so every reader sees the new value on its next read.
 
 ## Tests
 
-`tests/ArcaneCore.World.Tests/Reload` (coordinator, config, spell, command end-to-end over loopback) and
+`tests/ArcaneCore.World.Tests/Reload` (coordinator, config, social config, spell, item, command end-to-end over loopback) and
 `tests/ArcaneCore.Game.Tests/Reload` (transaction). The three safety behaviours were proven load-bearing
 by disabling each guard and watching its test fail: the empty-table guard, the restart-only message, and
-the unreadable-source rejection.
+the unreadable-source rejection. The same was done for the social startup binding and for the live item
+store (without it the online inventory test and the held-item test fail).

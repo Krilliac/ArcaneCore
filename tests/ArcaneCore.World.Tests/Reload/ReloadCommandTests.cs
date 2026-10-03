@@ -106,7 +106,7 @@ public sealed class ReloadCommandTests
         await SayAsync(admin, ".reload status");
 
         var lines = new List<string>();
-        for (int i = 0; i < 2; i++)
+        for (int i = 0; i < 3; i++)
         {
             lines.Add((await admin.ReadChatAsync()).Text);
         }
@@ -124,6 +124,9 @@ public sealed class ReloadCommandTests
         await SayAsync(admin, ".reload all");
 
         Assert.Equal("Re-loading all...", (await admin.ReadChatAsync()).Text);
+
+        // item_template comes first (name order); this host has no item source, so it reports its failure.
+        Assert.StartsWith("item_template not reloaded (Failed):", (await admin.ReadChatAsync()).Text);
         Assert.StartsWith("spell_template reloaded:", (await admin.ReadChatAsync()).Text);
     }
 
