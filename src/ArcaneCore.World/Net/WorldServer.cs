@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Net;
 using ArcaneCore.World.Handlers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -36,12 +37,37 @@ public sealed class WorldServer(
 
         try
         {
-            while (!stoppingToken.IsCancellationRequested)
-            {
-                TcpClient client = await listener.AcceptTcpClientAsync(stoppingToken).ConfigureAwait(false);
-                sessions.RemoveWhere(static session => session.IsCompleted);
-                sessions.Add(HandleClientAsync(client, sessionStop.Token));
-            }
+            var limiter = new ConnectionLimiter(() => config.MaxConnections, () => config.MaxConnectionsPerIp);
+            await AcceptLoop.RunAsync(
+                ct => listener.AcceptTcpClientAsync(ct),
+                client =>
+                {
+                    // Admission control runs before a DI scope or WorldSession exists.
+                    IDisposable? lease = null;
+                    try
+                    {
+                        if (client.Client.RemoteEndPoint is IPEndPoint remote)
+                        {
+                            lease = limiter.TryAcquire(remote.Address);
+                            if (lease is null)
+                            {
+                                logger.LogDebug("[{Endpoint}] world connection refused (connection limit)", remote);
+                                client.Dispose();
+                                return;
+                            }
+                        }
+                    }
+                    catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
+                    {
+                        client.Dispose(); // the peer already went away
+                        return;
+                    }
+
+                    sessions.RemoveWhere(static session => session.IsCompleted);
+                    sessions.Add(HandleClientAsync(client, lease, sessionStop.Token));
+                },
+                logger,
+                stoppingToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -73,13 +99,14 @@ public sealed class WorldServer(
         }
     }
 
-    private async Task HandleClientAsync(TcpClient client, CancellationToken stoppingToken)
+    private async Task HandleClientAsync(TcpClient client, IDisposable? lease, CancellationToken stoppingToken)
     {
-        string endpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
-        logger.LogInformation("[{Endpoint}] connected", endpoint);
-
+        string endpoint = "unknown";
         try
         {
+            // RemoteEndPoint throws on a socket the peer already reset; it must not escape unobserved.
+            endpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
+            logger.LogInformation("[{Endpoint}] connected", endpoint);
             client.NoDelay = true;
             using (client)
             await using (NetworkStream stream = client.GetStream())
@@ -94,6 +121,11 @@ public sealed class WorldServer(
         catch (Exception ex)
         {
             logger.LogError(ex, "[{Endpoint}] session error", endpoint);
+        }
+        finally
+        {
+            client.Dispose(); // idempotent; covers a failure before the using block was entered
+            lease?.Dispose();
         }
     }
 }

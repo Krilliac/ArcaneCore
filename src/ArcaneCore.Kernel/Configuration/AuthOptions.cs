@@ -36,4 +36,10 @@ public sealed class AuthOptions
     /// vmangos only escapes the name for SQL. A 1.12 client cannot type other characters.
     /// </summary>
     public bool StrictUsernameCharset { get; set; } = true;
+
+    /// <summary>Global cap on simultaneous logon connections; 0 = unlimited. Hardening (no vmangos equivalent).</summary>
+    public int MaxConnections { get; set; } = 4096;
+
+    /// <summary>Cap per client IP address; 0 = unlimited. Hardening: a retail client holds one connection.</summary>
+    public int MaxConnectionsPerIp { get; set; } = 64;
 }

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Net;
 using ArcaneCore.Kernel.Realms;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -30,11 +31,12 @@ public sealed class LogonServer(
 
         try
         {
-            while (!stoppingToken.IsCancellationRequested)
-            {
-                TcpClient client = await listener.AcceptTcpClientAsync(stoppingToken).ConfigureAwait(false);
-                _ = HandleClientAsync(client, config, stoppingToken);
-            }
+            var limiter = new ConnectionLimiter(() => config.MaxConnections, () => config.MaxConnectionsPerIp);
+            await AcceptLoop.RunAsync(
+                ct => listener.AcceptTcpClientAsync(ct),
+                client => Admit(client, limiter, config, stoppingToken),
+                logger,
+                stoppingToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -47,7 +49,33 @@ public sealed class LogonServer(
         }
     }
 
-    private async Task HandleClientAsync(TcpClient client, AuthOptions config, CancellationToken stoppingToken)
+    /// <summary>Enforce the connection caps before any scope or session is created.</summary>
+    private void Admit(TcpClient client, ConnectionLimiter limiter, AuthOptions config, CancellationToken stoppingToken)
+    {
+        IDisposable? lease = null;
+        try
+        {
+            if (client.Client.RemoteEndPoint is IPEndPoint remote)
+            {
+                lease = limiter.TryAcquire(remote.Address);
+                if (lease is null)
+                {
+                    logger.LogDebug("[{Endpoint}] logon connection refused (connection limit)", remote);
+                    client.Dispose();
+                    return;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
+        {
+            client.Dispose(); // the peer already went away
+            return;
+        }
+
+        _ = HandleClientAsync(client, config, lease, stoppingToken);
+    }
+
+    private async Task HandleClientAsync(TcpClient client, AuthOptions config, IDisposable? lease, CancellationToken stoppingToken)
     {
         string endpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
         logger.LogInformation("[{Endpoint}] connected", endpoint);
@@ -86,6 +114,8 @@ public sealed class LogonServer(
         }
         finally
         {
+            client.Dispose();
+            lease?.Dispose();
             logger.LogInformation("[{Endpoint}] disconnected", endpoint);
         }
     }
