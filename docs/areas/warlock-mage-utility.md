@@ -1,6 +1,6 @@
 # Warlock, mage and utility spells (wave 4 lane "warlock-mage-utility")
 
-Status: in progress on branch `claude/vw5-warlock-mage-utility` (base `claude/vw4-integration` 7313b9e). Each section below is one
+Status: delivered on branch `claude/vw5-warlock-mage-utility` (base `claude/vw4-integration` 7313b9e). Each section below is one
 delivered slice with its scope, limits, provenance and the file list. Nothing is copied from the reference servers; every formula
 cites the vmangos source it was checked against (`D:\refs\vmangos`, GPL, read-only).
 
@@ -198,3 +198,24 @@ Ritual of Doom summons (SUMMON_DEMON) are not built.
 
 Tests: `tests/ArcaneCore.Game.Tests/Pets/WarlockDemonTests.cs` (13 tests; RED first with an empty `InstallDemons` and no script: 12 failed, the "without the install"
 control passed) and two dispatcher tests for `ExecuteEffects` in `SpellScriptTests.cs`.
+
+## Not delivered (and why)
+
+| Design slice | Reason |
+|---|---|
+| wlm-01 reagents and tools | already built by the crafting-professions lane (`SpellInfo.Items`, `ReagentCastCheck`, `ISpellCostTaker`); not duplicated. Review note for the integrator: that lane's check answers `ITEM_NOT_READY` (vmangos Spell.cpp:7279); retail and mangos-classic answer `SPELL_FAILED_REAGENTS` 0x5C (wow_messages smsg_cast_result.wowm:194) |
+| wlm-05 CREATE_ITEM and conjure, wlm-06 item use | owned by crafting-professions (CreateItem, `CastItem`); the lane brief marks both as cross-lane primitives. The Soul Shard code here already stores items through `PlayerInventory` directly |
+| wlm-09 SUMMON_DEMON, Curse of Doom | needs the demon summon with a ritual object and the Doomguard follow-up; not started |
+| wlm-10 pet store, wlm-11 pet names | schema slices (Characters 21 / World 21); not started, so no provider theories were written and no store was exercised on any provider. Everything delivered here is Game-layer code with no schema change |
+| wlm-12 rituals and player summon, wlm-14 mage portals | both need the reagent check and one shared TRANS_DOOR dispatcher (with fishing); blocked on crafting-professions |
+| wlm-13 soulstone and self resurrection | needs the item-use path (wlm-06) and the graveyards lane |
+| wlm-17 ward reflect | in vmangos the reflect is only half the work (the reflected cast back at the caster) and the Frost/Fire Warding chance needs the spell-modifier engine; low payoff before that lane lands |
+| wlm-18 polymorph, wlm-21 stacking, wlm-19 persistent area auras | overlap aura-engine-completeness (Transform, stacking, persistent area auras); the regen and Health Funnel pieces they feed (wlm-15, wlm-04) are delivered |
+| wlm-20 Blink | needs a navmesh raycast primitive (vmangos `Map::GetWalkHitPosition`) that `IPathfinder` does not offer on this base; designing it as a seam without an implementation was not worth a half slice |
+| wlm-23 charm / Enslave Demon | no charm primitive on the base (as the design said) |
+| wlm-24 acceptance | the classic-db count assertions were replaced by oracle values quoted from the dump in each slice's tests (Drink, Evocation, Mage Armor, Demon Armor, Health Funnel, Life Tap, Lesser/Greater Invisibility, the Detect ranks, the demon spells); no opt-in dump test or mock-client scenario was added |
+
+Integration notes: the shared files touched are `SpellAuraHolder.cs` (two internal members), `SpellSystem.Death.cs` (one line), `SpellSystem.Auras.cs` (the per-second cost call),
+`SpellSystem.Amounts.cs` and `ISpellAmountModifier.cs` (the absorb stage), `SpellBonusModule.cs`, `MapCombat.Regen.cs`, `Combat/Power/CombatOptions.cs`. Everything else is new files.
+New startup claims (a duplicate fails the world at start): spell effects 8 (POWER_DRAIN) and 56 (SUMMON_PET), aura types 18, 19 and 86, implicit targets 5, 27 and 32,
+and the spell script dispatcher's chains on DUMMY, SCRIPT_EFFECT, DISPEL and INSTAKILL.
