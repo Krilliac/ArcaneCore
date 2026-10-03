@@ -11,7 +11,7 @@ public sealed partial class QuestNpcServices
     private void PrepareQuestMenu(PlayerNpcState state, NpcInfo npc)
     {
         state.Menu.ClearQuestMenu();
-        foreach (uint id in Quests.EndersOf(npc.Entry))
+        foreach (uint id in EndersOf(npc))
         {
             if (Quests.Get(id) is not { IsActive: true } quest)
             {
@@ -31,7 +31,7 @@ public sealed partial class QuestNpcServices
             }
         }
 
-        foreach (uint id in Quests.StartersOf(npc.Entry))
+        foreach (uint id in StartersOf(npc))
         {
             if (Quests.Get(id) is { } quest && CanTakeQuest(state, quest, []))
             {

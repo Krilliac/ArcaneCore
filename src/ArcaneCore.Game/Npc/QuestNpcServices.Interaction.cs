@@ -23,7 +23,7 @@ public sealed partial class QuestNpcServices
         DialogStatus status = DialogStatus.None;
         if (!npc.IsHostile && (npc.NpcFlags & NpcFlags.QuestGiver) != 0)
         {
-            foreach (uint id in Quests.EndersOf(npc.Entry))
+            foreach (uint id in EndersOf(npc))
             {
                 if (Quests.Get(id) is not { IsActive: true } quest)
                 {
@@ -43,7 +43,7 @@ public sealed partial class QuestNpcServices
                 }
             }
 
-            foreach (uint id in Quests.StartersOf(npc.Entry))
+            foreach (uint id in StartersOf(npc))
             {
                 if (Quests.Get(id) is not { } quest || !CanTakeQuest(state, quest, [], visibilityOnly: true)
                     || (Options.HighLevelHideDiff >= 0 && (long)player.Level + Options.HighLevelHideDiff < quest.MinLevel))
@@ -74,7 +74,7 @@ public sealed partial class QuestNpcServices
     {
         if (Ready(player) is null || InteractableNpc(player, guid, NpcFlags.QuestGiver) is not { } npc
             || Quests.Get(questId) is not { IsActive: true } quest
-            || !(Quests.StartersOf(npc.Entry).Contains(questId) || Quests.EndersOf(npc.Entry).Contains(questId)))
+            || !(StartersOf(npc).Contains(questId) || EndersOf(npc).Contains(questId)))
         {
             return;
         }
@@ -99,7 +99,7 @@ public sealed partial class QuestNpcServices
 
         bool accepted = false;
         if (InteractableNpc(player, guid, NpcFlags.QuestGiver) is { } npc && Quests.Get(questId) is { } quest
-            && Quests.StartersOf(npc.Entry).Contains(questId))
+            && StartersOf(npc).Contains(questId))
         {
             if (RefuseTakeQuest(state, quest, []) is { } refusal)
             {

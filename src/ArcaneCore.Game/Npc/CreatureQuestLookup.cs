@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Npc;
 
@@ -17,6 +18,11 @@ public sealed class CreatureQuestLookup(FactionTemplateCatalog factions, INpcRea
 {
     public NpcInfo? Find(Player player, ObjectGuid guid)
     {
+        if (guid.High == HighGuid.GameObject)
+        {
+            return FindGameObject(player, guid);
+        }
+
         if (!player.IsInWorld || player.Map is not { } map || !player.VisibleObjects.Contains(guid)
             || map.FindObject(guid) is not Creature creature || !creature.IsInWorld
             || !ReferenceEquals(creature.Map, map)
@@ -32,6 +38,30 @@ public sealed class CreatureQuestLookup(FactionTemplateCatalog factions, INpcRea
             (creature.UnitFlags & UnitFlags.NotSelectable) != 0, 0,
             FactionId: factions.Find(creature.FactionTemplate)?.Faction ?? 0);
     }
+
+    /// <summary>
+    /// A quest-giving game object the player can see (vmangos GetObjectByTypeMask(TYPEMASK_CREATURE_OR_GAMEOBJECT) +
+    /// CanInteractWithGameObject, Player.cpp:2540-2565): spawned in the player's map and interactable. A game object
+    /// is never hostile, alive-checked or reputation-gated; the distance rule is applied by the caller (the object's
+    /// own interaction distance, <see cref="QuestNpcServices.InteractableNpc"/>).
+    /// </summary>
+    private static NpcInfo? FindGameObject(Player player, ObjectGuid guid)
+    {
+        if (!player.IsInWorld || player.Map is not { } map || !player.VisibleObjects.Contains(guid)
+            || map.FindObject(guid) is not GameObject go || !go.IsSpawned || !ReferenceEquals(go.Map, map)
+            || (go.Flags & GameObjectFlags.NoInteract) != 0)
+        {
+            return null;
+        }
+
+        bool giver = go.Type == GameObjectType.QuestGiver;
+        return new NpcInfo(go.Guid, go.Entry, go.Spawn?.Guid ?? go.Guid.Low, giver ? NpcFlags.QuestGiver : NpcFlags.None,
+            go.MapId, go.X, go.Y, go.Z, go.BoundingRadius, true, false, false, false,
+            giver ? go.Template.GetData(QuestGiverGossipIdIndex) : 0, IsGameObject: true);
+    }
+
+    /// <summary>questgiver.gossipID, data3 of GAMEOBJECT_TYPE_QUESTGIVER (vmangos GameObjectDefines.h:245-258).</summary>
+    public const int QuestGiverGossipIdIndex = 3;
 
     private bool TryHostility(Creature creature, Player player, out bool hostile)
     {

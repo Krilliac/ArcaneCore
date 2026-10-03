@@ -248,8 +248,9 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
         float dx = npc.X - player.X;
         float dy = npc.Y - player.Y;
         float dz = npc.Z - player.Z;
-        // Object.cpp IsWithinDist: strict 3D radius-adjusted comparison.
-        float range = InteractionDistance + npc.BoundingRadius + player.BoundingRadius;
+        // Object.cpp IsWithinDist: strict 3D radius-adjusted comparison. A game object is measured to its centre
+        // within INTERACTION_DISTANCE, as GameObjectMapSystem does (vmangos GameObject::IsAtInteractDistance).
+        float range = npc.IsGameObject ? InteractionDistance : InteractionDistance + npc.BoundingRadius + player.BoundingRadius;
         return float.IsFinite(range) && range > 0 && (dx * dx) + (dy * dy) + (dz * dz) < range * range ? npc : null;
     }
 

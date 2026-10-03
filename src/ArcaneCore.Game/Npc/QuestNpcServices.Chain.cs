@@ -18,7 +18,7 @@ public sealed partial class QuestNpcServices
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(completed);
         uint nextId = completed.NextQuestInChain;
-        if (nextId == 0 || FindNpc(player, giver) is not { } npc || !Quests.StartersOf(npc.Entry).Contains(nextId)
+        if (nextId == 0 || FindNpc(player, giver) is not { } npc || !StartersOf(npc).Contains(nextId)
             || Quests.Get(nextId) is not { } next)
         {
             return false;

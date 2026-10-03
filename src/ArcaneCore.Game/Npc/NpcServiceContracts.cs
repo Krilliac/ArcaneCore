@@ -47,6 +47,11 @@ public enum TrainerType : byte
 /// <param name="IsNotSelectable">UNIT_FLAG_NOT_SELECTABLE is set.</param>
 /// <param name="GossipMenuId">creature_template.gossip_menu_id (vmangos GetDefaultGossipMenuId).</param>
 /// <param name="FactionId">Faction (Faction.dbc id) of the creature's faction template: reputation-ranked vendor items without their own faction use it.</param>
+/// <param name="IsGameObject">
+/// The source is a quest-giving game object (GAMEOBJECT_TYPE_QUESTGIVER), not a creature: <see cref="Entry"/> is a
+/// gameobject_template entry, quest relations come from the game object maps and <see cref="GossipMenuId"/> is the
+/// object's <c>questgiver.gossipID</c> (vmangos GameObject::GetDefaultGossipMenuId).
+/// </param>
 public sealed record NpcInfo(
     ObjectGuid Guid,
     uint Entry,
@@ -66,7 +71,8 @@ public sealed record NpcInfo(
     byte TrainerClass = 0,
     byte TrainerRace = 0,
     uint TrainerSpell = 0,
-    uint FactionId = 0);
+    uint FactionId = 0,
+    bool IsGameObject = false);
 
 /// <summary>
 /// Finds a creature in the player's map (owned by the creatures area). Returns null when no

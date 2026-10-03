@@ -20,7 +20,9 @@ public sealed partial class QuestNpcServices
     /// <summary>CMSG_GOSSIP_HELLO (vmangos HandleGossipHelloOpcode, no script hooks).</summary>
     public void GossipHello(Player player, ObjectGuid guid)
     {
-        if (Ready(player) is not { } s || InteractableNpc(player, guid, NpcFlags.None) is not { } npc)
+        // CMSG_GOSSIP_HELLO and CMSG_QUESTGIVER_HELLO are creature requests (GetNPCIfCanInteractWith); a game
+        // object opens its menu through CMSG_GAMEOBJ_USE (OpenGameObjectQuestMenu).
+        if (Ready(player) is not { } s || InteractableNpc(player, guid, NpcFlags.None) is not { IsGameObject: false } npc)
         {
             LogMissing("GossipHello", guid);
             return;
@@ -106,12 +108,14 @@ public sealed partial class QuestNpcServices
                 }
             }
 
-            if ((option.NpcOptionNpcFlag & (uint)npc.NpcFlags) == 0)
+            // A game object has no NPC flags: only plain gossip lines show, and only on quest givers and goobers
+            // (Player.cpp:12067-12086); everything else, the quest-giver option included, adds no line.
+            if (!npc.IsGameObject && (option.NpcOptionNpcFlag & (uint)npc.NpcFlags) == 0)
             {
                 continue;
             }
 
-            bool hasMenuItem = (GossipOption)option.OptionId switch
+            bool hasMenuItem = npc.IsGameObject ? (GossipOption)option.OptionId == GossipOption.Gossip : (GossipOption)option.OptionId switch
             {
                 GossipOption.Gossip => true,
                 GossipOption.QuestGiver or GossipOption.Armorer => false,
@@ -147,23 +151,42 @@ public sealed partial class QuestNpcServices
         }
     }
 
-    /// <summary>vmangos Player::SendPreparedGossip (creature source).</summary>
+    /// <summary>vmangos Player::SendPreparedGossip (Player.cpp:12134-12177).</summary>
     internal void SendPreparedGossip(PlayerNpcState s, NpcInfo npc)
     {
         PlayerMenu menu = s.Menu;
-        if (menu.DiscoveredNode && menu.QuestItems.Count == 0)
+        if (npc.IsGameObject)
         {
-            return;
+            // "probably need to find a better way here": a menu-less game object with quests opens the quest menu.
+            if (menu.MenuId == 0 && menu.QuestItems.Count > 0)
+            {
+                SendPreparedQuest(s, npc);
+                return;
+            }
         }
-
-        // No gossip flag but quests: open the quest menu (vendors with quests keep the gossip window).
-        if ((npc.NpcFlags & NpcFlags.Gossip) == 0 && menu.QuestItems.Count > 0 && (npc.NpcFlags & NpcFlags.Vendor) == 0)
+        else
         {
-            SendPreparedQuest(s, npc);
-            return;
+            if (menu.DiscoveredNode && menu.QuestItems.Count == 0)
+            {
+                return;
+            }
+
+            // No gossip flag but quests: open the quest menu (vendors with quests keep the gossip window).
+            if ((npc.NpcFlags & NpcFlags.Gossip) == 0 && menu.QuestItems.Count > 0 && (npc.NpcFlags & NpcFlags.Vendor) == 0)
+            {
+                SendPreparedQuest(s, npc);
+                return;
+            }
         }
 
         uint textId = menu.MenuId != 0 ? GossipTextId(s, menu.MenuId, npc) : GossipTextId(npc);
+
+        // Gameobjects should not greet players.
+        if (npc.IsGameObject && menu.QuestItems.Count == 0 && menu.GossipItems.Count == 0 && textId == DefaultGossipMessage)
+        {
+            return;
+        }
+
         SendGossipMenu(s, npc.Guid, textId);
     }
 
@@ -178,6 +201,13 @@ public sealed partial class QuestNpcServices
 
         Player p = s.Quests.Player;
         GossipMenuItem item = menu.GossipItems[(int)listId];
+
+        // A game object only offers plain gossip and the quest list (Player.cpp:12185-12192).
+        if (npc.IsGameObject && item.OptionId > GossipOption.QuestGiver)
+        {
+            return;
+        }
+
         switch (item.OptionId)
         {
             case GossipOption.Gossip:
@@ -253,7 +283,8 @@ public sealed partial class QuestNpcServices
     }
 
     /// <summary>vmangos Player::GetGossipTextId(source): npc_gossip for the spawn, else DEFAULT_GOSSIP_MESSAGE.</summary>
-    private uint GossipTextId(NpcInfo npc) => Npcs.NpcGossipText(npc.SpawnId) is var id and not 0 ? id : DefaultGossipMessage;
+    private uint GossipTextId(NpcInfo npc)
+        => !npc.IsGameObject && Npcs.NpcGossipText(npc.SpawnId) is var id and not 0 ? id : DefaultGossipMessage;
 
     /// <summary>
     /// vmangos Player::GetGossipTextId(menuId, source): of the menu's texts, the one with the highest

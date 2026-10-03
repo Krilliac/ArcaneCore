@@ -216,7 +216,7 @@ public sealed partial class QuestNpcServices
             && player.Inventory.IsLoaded && player.Inventory.GuidAllocator is not null
             && state.Quests.FindSlot(questId) < QuestConstants.MaxQuestLogSize
             && InteractableNpc(player, guid, NpcFlags.QuestGiver) is { } npc
-            && Quests.EndersOf(npc.Entry).Contains(questId);
+            && EndersOf(npc).Contains(questId);
     }
 
     /// <summary>

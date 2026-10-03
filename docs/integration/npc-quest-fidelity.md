@@ -170,3 +170,39 @@ Needs the real client: the Llane Beshere (Northshire) class-variant gossip once 
   fail-closed deviation from retail, not a switch yet; NQ5 removes the cases it implements. Quests refused
   that way never send the invalid packet.
 * `GameObject` quest givers are not covered (slice NQ7).
+
+## Slice NQ7: quest-giving game objects (GAMEOBJECT_TYPE_QUESTGIVER)
+
+### Delivered
+
+* **Relations.** `QuestContent` carries `GameObjectStarters` / `GameObjectEnders` (init-only, default empty, so
+  existing callers compile); `EfQuestContentStore` reads them from `gameobject_questrelation` /
+  `gameobject_involvedrelation` (the game object world module's tables); `QuestStore.GameObjectStartersOf` /
+  `GameObjectEndersOf` are separate maps from the creature ones (vmangos `GetGOQuestRelationsMapBounds` /
+  `GetCreatureQuestRelationsMapBounds`, `Player.cpp:12349-12418`). A creature and an object with the same entry
+  number never share relations.
+* **Source.** `NpcInfo.IsGameObject` marks a game object source. `CreatureQuestLookup` resolves
+  `HighGuid.GameObject` GUIDs the player can see, spawned in its map and not `NoInteract`
+  (`CanInteractWithGameObject`, `Player.cpp:2540-2565`); the interaction distance is the object's centre within
+  `INTERACTION_DISTANCE`, the rule `GameObjectMapSystem` already uses. `NpcFlags` carries `QuestGiver` only for
+  type-2 objects.
+* **Use.** `GameObjectQuestGiverFeature` fills the existing `GameObjectMapSystem.QuestGiver` seam on every map, so
+  `CMSG_GAMEOBJ_USE` runs `QuestNpcServices.OpenGameObjectQuestMenu`: `PrepareGossipMenu(go, questgiver.gossipID)`
+  (data3, `GameObjectDefines.h:245-258`) and `SendPreparedGossip` (`GameObject.cpp:1457-1471`, `Player.cpp:12134-12177`).
+  A menu-less object with quests opens the quest list or the single quest's window; an object with nothing to say
+  stays silent ("Gameobjects should not greet players"). Only plain gossip lines show for a game object
+  (`Player.cpp:12067-12086`); any other option id is ignored on select (`Player.cpp:12185-12192`); the object never
+  uses `npc_gossip` (creature spawn ids).
+* **The rest of the quest flow is the creature flow** over that source: status query (`QuestHandler.cpp:34-70`),
+  query/accept/complete/request-reward/choose-reward through `InteractableNpc` + the source-aware
+  `StartersOf` / `EndersOf`, the next-quest-in-chain offer, refusal packets.
+* `CMSG_GOSSIP_HELLO` / `CMSG_QUESTGIVER_HELLO` stay creature-only (`GetNPCIfCanInteractWith`).
+
+### Limits
+
+* Game object quest-giver status icons in the object's own update fields (dynamic flags / sparkle,
+  `UpdateForQuestWorldObjects`) are not sent; the client asks `CMSG_QUESTGIVER_STATUS_QUERY` (answered) but the
+  sparkle is the game object area's.
+* Objects with a lock (`questgiver.lockId`) go through `GameObjectMapSystem`'s existing checks only.
+* Needs the real client: clicking the Wanted poster (GO 68 -> quest 176) and Rolf's corpse (GO 56 ends 45 and
+  starts 71) once the content import (NQ0) supplies the relations.
