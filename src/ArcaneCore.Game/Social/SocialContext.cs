@@ -51,8 +51,14 @@ public interface ISocialPersistence
 /// </summary>
 public sealed class SocialOptions
 {
-    /// <summary>The configuration section these options are bound from.</summary>
+    /// <summary>The configuration section these options are bound from (live, via the config reload coordinator).</summary>
     public const string SectionName = "World:Social";
+
+    /// <summary>
+    /// Most channels one player may be in; 0 = unlimited. vmangos has no cap (ChannelMgr.cpp:52-69),
+    /// so the retail default is 0; a positive value is opt-in hardening (World:Social:MaxJoinedChannels).
+    /// </summary>
+    public int MaxJoinedChannels { get; set; }
 
     /// <summary>AllowTwoSide.AddFriend.</summary>
     public bool AllowTwoSideAddFriend { get; set; }

@@ -54,7 +54,11 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        EnsureFinite(movement);
+        if (!MovementValidator.IsValid(movement, session.StrictMovementFiniteness))
+        {
+            return; // dropped like vmangos VerifyMovementInfo failures (MovementHandler.cpp:596,:690)
+        }
+
         player.ApplyClientMovement(movement, session.World.NowMs);
         var packet = new PacketWriter(payload.Length + 9);
         packet.WritePackedGuid(player.Guid.Value);
@@ -96,7 +100,13 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         var reader = new PacketReader(payload);
         MovementInfo movement = MovementInfo.Read(ref reader);
 
-        EnsureFinite(movement);
+        // An invalid packet is dropped, not stored, relayed or punished with a kick
+        // (vmangos HandleMovementOpcodes: VerifyMovementInfo, MovementHandler.cpp:315,:489,:1042-1061).
+        if (!MovementValidator.IsValid(movement, session.StrictMovementFiniteness))
+        {
+            return;
+        }
+
         player.ApplyClientMovement(movement, session.World.NowMs);
         if (!relay)
         {
@@ -109,14 +119,5 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         packet.WritePackedGuid(player.Guid.Value);
         player.Movement.Write(packet);
         player.Map?.BroadcastToObservers(player, opcode, packet.AsSpan());
-    }
-
-    /// <summary>A non-finite position is a malformed packet (the session disconnects the client).</summary>
-    private static void EnsureFinite(in MovementInfo movement)
-    {
-        if (!float.IsFinite(movement.X) || !float.IsFinite(movement.Y) || !float.IsFinite(movement.Z) || !float.IsFinite(movement.Orientation))
-        {
-            throw new ArgumentOutOfRangeException(nameof(movement), "non-finite position");
-        }
     }
 }

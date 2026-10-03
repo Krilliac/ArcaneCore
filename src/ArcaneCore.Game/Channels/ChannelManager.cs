@@ -14,6 +14,16 @@ public sealed class ChannelManager(SocialContext context)
     private readonly Dictionary<Team, Dictionary<string, Channel>> _byTeam = [];
     private readonly Dictionary<ObjectGuid, HashSet<Channel>> _joined = [];
 
+    /// <summary>
+    /// Most channels one player may be in; 0 = unlimited (retail, the default). Opt-in hardening:
+    /// vmangos has no cap (ChannelMgr.cpp:52-69). Backed by World:Social:MaxJoinedChannels.
+    /// </summary>
+    public int MaxJoinedChannels
+    {
+        get => context.Options.MaxJoinedChannels;
+        set => context.Options.MaxJoinedChannels = value;
+    }
+
     /// <summary>The channel called <paramref name="name"/> for <paramref name="team"/>, if it exists (case-insensitive).</summary>
     public Channel? Find(Team team, string name) => Channels(team).GetValueOrDefault(name.ToLowerInvariant());
 
@@ -35,6 +45,15 @@ public sealed class ChannelManager(SocialContext context)
 
         Dictionary<string, Channel> channels = Channels(player.Team);
         string key = name.ToLowerInvariant();
+        if (MaxJoinedChannels > 0
+            && JoinedBy(player).Count >= MaxJoinedChannels
+            && !(channels.TryGetValue(key, out Channel? existing) && JoinedBy(player).Contains(existing)))
+        {
+            // refused before any Channel object is created
+            player.Session.Send(WorldOpcode.SmsgChannelNotify, ChannelPackets.BuildNotify(ChatNotify.InvalidName, name));
+            return;
+        }
+
         if (!channels.TryGetValue(key, out Channel? channel))
         {
             channel = new Channel(context, name);

@@ -26,4 +26,7 @@ public enum AuthResult : byte
     IncorrectPassword = 0x05,
     VersionInvalid = 0x09,
     Suspended = 0x0C,
+
+    /// <summary>WOW_FAIL_NOACCESS: used when the stored credentials are unusable (vmangos AuthCodes.h).</summary>
+    FailNoAccess = 0x0D,
 }

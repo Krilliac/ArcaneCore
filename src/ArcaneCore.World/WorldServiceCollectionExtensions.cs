@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Social;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.Characters;
@@ -40,6 +41,7 @@ public static class WorldServiceCollectionExtensions
         services.Configure<WorldOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<WorldRuntimeOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<WorldSessionOptions>(configuration.GetSection(WorldOptions.SectionName));
+        services.Configure<SocialOptions>(configuration.GetSection(SocialOptions.SectionName));
 
         services.AddSingleton(_ => BuildOpcodeTable());
         services.AddSingleton(_ => ChatCommands.CreateTable());

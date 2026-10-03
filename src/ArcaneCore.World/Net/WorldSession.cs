@@ -23,6 +23,22 @@ public sealed class WorldSessionOptions
 
     /// <summary>In-world packets handled per session per tick; the rest wait for the next tick.</summary>
     public int MaxWorldPacketsPerTick { get; set; } = 150;
+
+    /// <summary>
+    /// How long a closing session lets the writer flush queued frames (for example a refusal
+    /// reply) before the stream is torn down so a client that stopped reading cannot hold the
+    /// connection, its DI scope and its queued frames forever. Hardening (vmangos has no
+    /// equivalent): <see cref="TimeSpan.Zero"/>, the default, waits indefinitely as retail does.
+    /// Bound from World:WriterDrainGrace (for example "00:00:05").
+    /// </summary>
+    public TimeSpan WriterDrainGrace { get; set; } = TimeSpan.Zero;
+
+    /// <summary>
+    /// Hardening beyond retail: also require pitch, jump speeds/angles and spline elevation to be
+    /// finite before a movement block is stored and relayed. Retail (vmangos VerifyMovementInfo)
+    /// does not check them, so the default is off. Bound from World:StrictMovementFiniteness.
+    /// </summary>
+    public bool StrictMovementFiniteness { get; set; }
 }
 
 /// <summary>
@@ -55,6 +71,7 @@ public sealed class WorldSession : IPlayerSession
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly ConcurrentQueue<QueuedPacket> _worldQueue = new();
     private readonly CancellationTokenSource _kick = new();
+    private readonly CancellationTokenSource _writerAbort = new();
     private long _outboundBytes;
     private volatile SessionState _state = SessionState.Connected;
     private uint _serverSeed;
@@ -85,6 +102,9 @@ public sealed class WorldSession : IPlayerSession
     public IServiceProvider Services { get; }
 
     public WorldRuntime World { get; }
+
+    /// <summary>World:StrictMovementFiniteness (default off, retail).</summary>
+    public bool StrictMovementFiniteness => _options.StrictMovementFiniteness;
 
     public SessionState State => _state;
 
@@ -127,7 +147,7 @@ public sealed class WorldSession : IPlayerSession
         finally
         {
             Close();
-            await writer.ConfigureAwait(false);
+            await DrainWriterAsync(writer).ConfigureAwait(false);
         }
     }
 
@@ -430,6 +450,17 @@ public sealed class WorldSession : IPlayerSession
             return false;
         }
 
+        // Account status is enforced here too: the logon server only gates the SRP exchange, and
+        // a session key may have been issued before the ban. vmangos has a single ban reply,
+        // AUTH_BANNED, for any banned account (WorldSocket.cpp:333-345) after the digest check;
+        // it also refuses IP-banned addresses there (not implemented).
+        if (stored.Status != AccountStatus.Active)
+        {
+            _logger.LogInformation("[{Endpoint}] refused world login for {Status} account", RemoteEndpoint, stored.Status);
+            SendAuthResponse(AuthResponseCode.Banned);
+            return false;
+        }
+
         AccountSettings settings = await Services.GetRequiredService<IAccountDataStore>()
             .GetAsync(stored.Id).ConfigureAwait(false);
 
@@ -456,6 +487,47 @@ public sealed class WorldSession : IPlayerSession
     private void SendAuthResponse(AuthResponseCode code) => Send(WorldOpcode.SmsgAuthResponse, [(byte)code]);
 
     // --- teardown ------------------------------------------------------------------
+
+    /// <summary>
+    /// Wait for the writer to flush what is queued. A client that stopped reading parks the writer
+    /// inside WriteAsync forever, so after the grace period the write is cancelled and the stream
+    /// disposed; that releases the socket, the DI scope and the queued frames.
+    /// </summary>
+    private async Task DrainWriterAsync(Task writer)
+    {
+        TimeSpan grace = _options.WriterDrainGrace;
+        if (grace <= TimeSpan.Zero)
+        {
+            await writer.ConfigureAwait(false); // retail: wait for the writer however long it takes
+            return;
+        }
+
+        if (await Task.WhenAny(writer, Task.Delay(grace)).ConfigureAwait(false) == writer)
+        {
+            await writer.ConfigureAwait(false);
+            return;
+        }
+
+        _logger.LogWarning("[{Endpoint}] writer did not drain within {Grace}; tearing the connection down", RemoteEndpoint, grace);
+        _writerAbort.Cancel();
+        try
+        {
+            await _stream.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+        {
+            // the socket is already gone
+        }
+
+        if (await Task.WhenAny(writer, Task.Delay(grace)).ConfigureAwait(false) == writer)
+        {
+            await writer.ConfigureAwait(false);
+        }
+        else
+        {
+            _logger.LogError("[{Endpoint}] writer ignored cancellation and stream disposal; abandoning it", RemoteEndpoint);
+        }
+    }
 
     private void Close()
     {
@@ -500,13 +572,13 @@ public sealed class WorldSession : IPlayerSession
                     {
                         if (used > 0)
                         {
-                            await _stream.WriteAsync(buffer.AsMemory(0, used)).ConfigureAwait(false);
+                            await _stream.WriteAsync(buffer.AsMemory(0, used), _writerAbort.Token).ConfigureAwait(false);
                             used = 0;
                         }
 
                         if (frame.Length > buffer.Length)
                         {
-                            await _stream.WriteAsync(frame).ConfigureAwait(false);
+                            await _stream.WriteAsync(frame, _writerAbort.Token).ConfigureAwait(false);
                             continue;
                         }
                     }
@@ -517,7 +589,7 @@ public sealed class WorldSession : IPlayerSession
 
                 if (used > 0)
                 {
-                    await _stream.WriteAsync(buffer.AsMemory(0, used)).ConfigureAwait(false);
+                    await _stream.WriteAsync(buffer.AsMemory(0, used), _writerAbort.Token).ConfigureAwait(false);
                 }
             }
         }

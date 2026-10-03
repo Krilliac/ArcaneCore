@@ -36,12 +36,18 @@ public enum CharResult : byte
 
 /// <summary>
 /// SMSG_AUTH_RESPONSE result codes. Values verified against vmangos SharedDefines.h
-/// (enum ResponseCodes — AUTH_OK is the 13th entry = 0x0C).
+/// (enum ResponseCodes — AUTH_OK is the 13th entry = 0x0C); the 0x10, 0x1C, 0x1D, 0x1F and 0x20
+/// values are confirmed against wow_messages world/enums/world_result.wowm.
 /// </summary>
 public enum AuthResponseCode : byte
 {
     Ok = 0x0C,
     Failed = 0x0D,
+    Unavailable = 0x10,
     VersionMismatch = 0x14,
     UnknownAccount = 0x15,
+    Banned = 0x1C,
+    AlreadyOnline = 0x1D,
+    DbBusy = 0x1F,
+    Suspended = 0x20,
 }
