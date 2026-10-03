@@ -61,6 +61,25 @@ public sealed class WorldRuntime : IDisposable
     /// <summary>Every player in the world (world thread).</summary>
     public IEnumerable<Player> OnlinePlayers => _online.Values;
 
+    /// <summary>
+    /// Raised on the world thread once a player has entered the world and its client has the
+    /// full login sequence, i.e. after vmangos' <c>SendInitialPacketsAfterAddToMap</c> — where
+    /// vmangos <c>HandlePlayerLogin</c> announces the member to its group and sends friend
+    /// status. Raised by the login path through <see cref="NotifyLoggedIn"/>. A failing handler
+    /// is logged and does not stop the others.
+    /// </summary>
+    public event Action<Player>? PlayerLoggedIn;
+
+    /// <summary>
+    /// Raised on the world thread when a player is about to leave the world (logout completion
+    /// or disconnect), while it is still in its map and the online registry, before it is
+    /// saved. A failing handler is logged and does not stop the others or the removal.
+    /// </summary>
+    public event Action<Player>? PlayerLoggingOut;
+
+    /// <summary>Announce that <paramref name="player"/> finished entering the world (world thread).</summary>
+    public void NotifyLoggedIn(Player player) => Raise(PlayerLoggedIn, player, nameof(PlayerLoggedIn));
+
     /// <summary>Queue one player's current state for saving (world thread).</summary>
     public void SavePlayer(Player player) => _saveQueue.Enqueue(player.CreateSnapshot(NowMs));
 
@@ -155,11 +174,13 @@ public sealed class WorldRuntime : IDisposable
     /// <summary>Take a player out of the world and queue its state for saving (world thread).</summary>
     public void RemovePlayer(Player player)
     {
-        if (!_online.TryRemove(player.Guid, out _))
+        if (!_online.ContainsKey(player.Guid))
         {
             return;
         }
 
+        Raise(PlayerLoggingOut, player, nameof(PlayerLoggingOut));
+        _online.TryRemove(player.Guid, out _);
         _onlineByName.TryRemove(new KeyValuePair<string, Player>(player.Name, player));
         player.Map?.RemovePlayer(player);
         _saveQueue.Enqueue(player.CreateSnapshot(NowMs));
@@ -212,6 +233,26 @@ public sealed class WorldRuntime : IDisposable
     {
         Stop();
         _stopSignal.Dispose();
+    }
+
+    private void Raise(Action<Player>? handlers, Player player, string name)
+    {
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (Action<Player> handler in handlers.GetInvocationList().Cast<Action<Player>>())
+        {
+            try
+            {
+                handler(player);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "{Event} handler failed for {Player}", name, player.Name);
+            }
+        }
     }
 
     private void RunCommands()

@@ -41,12 +41,12 @@ public sealed class ClassInfoRow
 public sealed class WorldDbContext(DbContextOptions<WorldDbContext> options) : DbContext(options)
 {
     /// <summary>Schema history of the world-content database.</summary>
-    public static readonly SchemaDefinition Schema = new()
-    {
-        Component = "world",
-        CurrentVersion = 1,
-        Version1Tables = ["player_create_info", "race_info", "class_info"],
-    };
+    /// <remarks>Versions 2+ come from <see cref="IDataModule"/>s of <see cref="DatabaseComponent.World"/>.</remarks>
+    public static readonly SchemaDefinition Schema = DataModules.Compose(
+        DatabaseComponent.World,
+        "world",
+        ["player_create_info", "race_info", "class_info"],
+        []);
 
     public DbSet<PlayerCreateInfoRow> PlayerCreateInfo => Set<PlayerCreateInfoRow>();
 
@@ -75,5 +75,7 @@ public sealed class WorldDbContext(DbContextOptions<WorldDbContext> options) : D
             entity.ToTable("class_info");
             entity.HasKey(r => r.Class);
         });
+
+        DataModules.ConfigureModel(modelBuilder, DatabaseComponent.World);
     }
 }
