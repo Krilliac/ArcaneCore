@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
 
@@ -50,6 +51,7 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore
 
         db.Characters.Remove(character);
         db.ActionButtons.RemoveRange(db.ActionButtons.Where(b => b.CharacterId == id));
+        await ItemPersistence.StageDeleteAllAsync(db, id, cancellationToken).ConfigureAwait(false);
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         db.ChangeTracker.Clear();
         return true;
@@ -96,6 +98,11 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore
                     CharacterId = state.Id, Button = button.Button, Action = button.Action, Type = button.Type,
                 });
             }
+        }
+
+        if (state.Inventory is { } inventory)
+        {
+            await ItemPersistence.StageReplaceAsync(db, state.Id, inventory, cancellationToken).ConfigureAwait(false);
         }
 
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
