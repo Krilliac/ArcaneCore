@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules.CrowdControl;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells;
@@ -28,9 +29,10 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// The first aura set (vmangos SpellAuras.cpp AuraHandler table): periodic damage/heal/energize,
-    /// OBS_MOD_HEALTH/MANA, PERIODIC_TRIGGER_SPELL, DUMMY, MOD_ROOT and MOD_STUN.
+    /// OBS_MOD_HEALTH/MANA, PERIODIC_TRIGGER_SPELL and DUMMY, plus the crowd-control handlers installed by
+    /// <see cref="CcAuraHandlers"/> (root, stun, silence, pacify, disarm, fear, confuse).
     /// </summary>
-    private static Dictionary<AuraType, AuraHandler> CreateAuraHandlers() => new()
+    private static Dictionary<AuraType, AuraHandler> CreateAuraHandlers() => CcAuraHandlers.Install(new()
     {
         [AuraType.Dummy] = new AuraHandler(null, null),
         [AuraType.PeriodicDamage] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicDamage(h, a)),
@@ -40,9 +42,7 @@ public sealed partial class SpellSystem
         [AuraType.PeriodicEnergize] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicEnergize(h, a)),
         [AuraType.ObsModMana] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicEnergize(h, a)),
         [AuraType.PeriodicTriggerSpell] = new AuraHandler(null, static (s, h, a) => s.TickTriggerSpell(h, a)),
-        [AuraType.ModRoot] = new AuraHandler(static (s, h, a, apply) => s.ApplyRoot(h, apply), null),
-        [AuraType.ModStun] = new AuraHandler(static (s, h, a, apply) => s.ApplyStun(h, apply), null),
-    };
+    });
 
     /// <summary>vmangos Spell::EffectApplyAura: add this effect's aura to the target's pending holder.</summary>
     private void EffectApplyAura(SpellEffectContext context)
@@ -420,51 +420,5 @@ public sealed partial class SpellSystem
         {
             CastSpell(caster, triggerSpell, SpellCastTargets.ForUnit(holder.Target.Guid), triggered: true);
         }
-    }
-
-    /// <summary>
-    /// vmangos Aura::HandleAuraModRoot → Unit::SetRooted: players get SMSG_FORCE_MOVE_ROOT/UNROOT
-    /// through <see cref="Player.SetRooted"/>; the root lifts when the last root/stun aura goes,
-    /// except on a dead player, whose root belongs to MapCombat (set on JUST_DIED, lifted by release
-    /// or resurrection).
-    /// </summary>
-    private void ApplyRoot(SpellAuraHolder holder, bool apply)
-    {
-        if (holder.Target is not Player player)
-        {
-            return;
-        }
-
-        if (apply)
-        {
-            player.SetRooted(true);
-        }
-        else if (player.IsAlive && !GetAuras(player).Any(h => !h.IsRemoved && (h.HasAura(AuraType.ModRoot) || h.HasAura(AuraType.ModStun))))
-        {
-            player.SetRooted(false);
-        }
-    }
-
-    /// <summary>
-    /// vmangos Aura::HandleAuraModStun → Unit::SetStunned (subset): UNIT_FLAG_STUNNED, rooted,
-    /// and the cast in progress is interrupted; lifted with the last stun aura.
-    /// </summary>
-    private void ApplyStun(SpellAuraHolder holder, bool apply)
-    {
-        Unit target = holder.Target;
-        if (apply)
-        {
-            target.UnitFlags |= UnitFlags.Stunned;
-            if (GetState(target.Guid)?.CurrentCast is { } cast)
-            {
-                Cancel(cast);
-            }
-        }
-        else if (!GetAuras(target).Any(h => !h.IsRemoved && h.HasAura(AuraType.ModStun)))
-        {
-            target.UnitFlags &= ~UnitFlags.Stunned;
-        }
-
-        ApplyRoot(holder, apply);
     }
 }

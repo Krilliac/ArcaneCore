@@ -1,0 +1,93 @@
+using ArcaneCore.Game.Entities;
+
+namespace ArcaneCore.Game.Spells.Rules.CrowdControl;
+
+/// <summary>
+/// Crowd-control state derived from the live auras of a unit: the unit flags (stunned, silenced, pacified,
+/// disarmed, fleeing, confused) and the root of a player. Every flag is recomputed from the auras that are
+/// still on the unit rather than toggled, so overlapping auras and a held logout stun cannot desynchronise it
+/// (vmangos checks <c>HasAuraType</c> before clearing a flag, SpellAuras.cpp:3535,3631,3881,9132-9146).
+/// </summary>
+internal static class CcState
+{
+    /// <summary>CreatureType.dbc totem (11) as a creature-type mask bit (vmangos Creature::IsTotem, Unit::ModConfuseSpell Unit.cpp:9140).</summary>
+    private const uint TotemTypeMask = 1u << 10;
+
+    public static bool IsTotem(Unit unit) => unit is Creatures.Creature && unit.CreatureTypeMask() == TotemTypeMask;
+
+    public static bool IsMounted(Unit unit) => unit.GetUInt32(UpdateFields.UnitFieldMountdisplayid) != 0;
+
+    private static void SetFlag(Unit unit, UnitFlags flag, bool on)
+    {
+        if (on)
+        {
+            unit.UnitFlags |= flag;
+        }
+        else
+        {
+            unit.UnitFlags &= ~flag;
+        }
+    }
+
+    /// <summary>UNIT_FLAG_STUNNED: a live stun aura (not while on a taxi, SpellAuras.cpp:3556) or a requested logout.</summary>
+    public static void RefreshStun(SpellSystem system, Unit unit)
+    {
+        bool byAura = system.HasLiveAura(unit, AuraType.ModStun) && (unit.UnitFlags & UnitFlags.TaxiFlight) == 0;
+        if (unit is Player player)
+        {
+            player.StunnedByAura = byAura;
+        }
+
+        SetFlag(unit, UnitFlags.Stunned, byAura || unit is Player { IsLoggingOut: true });
+    }
+
+    /// <summary>
+    /// A player's root: rooted while a root or stun aura (or a requested logout) holds it; lifted otherwise,
+    /// except on a dead player whose root belongs to the combat death flow (set on JUST_DIED, lifted by release or resurrection).
+    /// </summary>
+    public static void RefreshRoot(SpellSystem system, Unit unit)
+    {
+        if (unit is not Player player)
+        {
+            return;
+        }
+
+        bool byAura = system.IsRooted(player);
+        player.RootedByAura = byAura;
+        if (byAura || player.IsLoggingOut)
+        {
+            player.SetRooted(true);
+        }
+        else if (player.IsAlive)
+        {
+            player.SetRooted(false);
+        }
+    }
+
+    /// <summary>UNIT_FLAG_SILENCED: any live silence or pacify-and-silence aura.</summary>
+    public static void RefreshSilence(SpellSystem system, Unit unit) =>
+        SetFlag(unit, UnitFlags.Silenced, system.HasLiveAura(unit, AuraType.ModSilence, AuraType.ModPacifySilence));
+
+    /// <summary>UNIT_FLAG_PACIFIED: any live pacify or pacify-and-silence aura.</summary>
+    public static void RefreshPacify(SpellSystem system, Unit unit) =>
+        SetFlag(unit, UnitFlags.Pacified, system.HasLiveAura(unit, AuraType.ModPacify, AuraType.ModPacifySilence));
+
+    /// <summary>UNIT_FLAG_DISARMED: any live disarm aura.</summary>
+    public static void RefreshDisarm(SpellSystem system, Unit unit) =>
+        SetFlag(unit, UnitFlags.Disarmed, system.HasLiveAura(unit, AuraType.ModDisarm));
+
+    /// <summary>
+    /// UNIT_FLAG_CONFUSED / UNIT_FLAG_FLEEING (vmangos Unit::ModConfuseSpell, Unit.cpp:9132-9146): a live
+    /// confuse aura, and a live fear aura unless the unit prevents fleeing. Totems never get either.
+    /// </summary>
+    public static void RefreshFear(SpellSystem system, Unit unit)
+    {
+        if (IsTotem(unit))
+        {
+            return;
+        }
+
+        SetFlag(unit, UnitFlags.Confused, system.HasLiveAura(unit, AuraType.ModConfuse));
+        SetFlag(unit, UnitFlags.Fleeing, system.HasLiveAura(unit, AuraType.ModFear) && !system.HasLiveAura(unit, AuraType.PreventsFleeing));
+    }
+}

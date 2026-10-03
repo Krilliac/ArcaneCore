@@ -189,6 +189,12 @@ public sealed partial class Player : Unit
 
     public bool IsLoggingOut => _logoutRequestedAtMs is not null;
 
+    /// <summary>A live stun aura holds UNIT_FLAG_STUNNED (kept by the spell system); a logout cancel must not lift it.</summary>
+    internal bool StunnedByAura { get; set; }
+
+    /// <summary>A live root or stun aura holds the root (kept by the spell system); a logout cancel must not lift it.</summary>
+    internal bool RootedByAura { get; set; }
+
     public ReadOnlySpan<uint> ActionButtons => _actionButtons;
 
     /// <summary>Update blocks queued for this player's client, flushed at the end of each map tick.</summary>
@@ -355,17 +361,21 @@ public sealed partial class Player : Unit
         SetByte(UpdateFields.PlayerFieldBytes, 0, (byte)(GetByte(UpdateFields.PlayerFieldBytes, 0) | FieldByteLoggingOut));
     }
 
-    /// <summary>Undo <see cref="BeginLogout"/> (vmangos HandleLogoutCancelOpcode): unroot, stand up, unstun, clear the flag.</summary>
+    /// <summary>Undo <see cref="BeginLogout"/> (vmangos HandleLogoutCancelOpcode): unroot, stand up, unstun, clear the flag, except what a crowd-control aura still holds.</summary>
     public void CancelLogout()
     {
         _logoutRequestedAtMs = null;
-        SetRooted(false);
+        SetRooted(RootedByAura); // a root or stun aura keeps the root (spell system)
         if (StandState == StandState.Sit)
         {
             SetStandState(StandState.Stand);
         }
 
-        UnitFlags &= ~UnitFlags.Stunned;
+        if (!StunnedByAura)
+        {
+            UnitFlags &= ~UnitFlags.Stunned;
+        }
+
         SetByte(UpdateFields.PlayerFieldBytes, 0, (byte)(GetByte(UpdateFields.PlayerFieldBytes, 0) & ~FieldByteLoggingOut));
     }
 
