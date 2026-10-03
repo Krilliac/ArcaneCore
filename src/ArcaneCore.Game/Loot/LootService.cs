@@ -23,7 +23,7 @@ namespace ArcaneCore.Game.Loot;
 /// logical instance save through <see cref="Durable"/>; everything else lives in memory only.
 /// Thread affinity: world thread only.
 /// </summary>
-public sealed class LootService : IViewerFieldFilter
+public sealed partial class LootService : IViewerFieldFilter
 {
     /// <summary>UNIT_DYNFLAG_LOOTABLE.</summary>
     public const uint UnitDynFlagLootable = 0x0001;
@@ -710,6 +710,11 @@ public sealed class LootService : IViewerFieldFilter
     public LootResult Open(Player player, ObjectGuid guid)
     {
         ArgumentNullException.ThrowIfNull(player);
+        if (SpecialOpen?.Invoke(player, guid) is { } special)
+        {
+            return special; // a source the corpse path does not know (a pickpocketed live creature)
+        }
+
         if (!_bags.TryGetValue(guid, out var entry) || entry.Source is not Creature creature
             || !ReferenceEquals(creature.Map, player.Map) || entry.Bag.Kind != LootSourceKind.Creature
             || creature.DeathState != CreatureDeathState.Corpse)
@@ -851,7 +856,7 @@ public sealed class LootService : IViewerFieldFilter
 
         _bags.TryGetValue(bag.Source, out var entry);
         var sharers = new List<Player>();
-        if (bag.Kind == LootSourceKind.Creature && bag.Recipients.Count > 1 && player.Map is { } map && entry.Source is { } source)
+        if (bag.Kind == LootSourceKind.Creature && bag.ShareMoney && bag.Recipients.Count > 1 && player.Map is { } map && entry.Source is { } source)
         {
             foreach (ObjectGuid guid in bag.Recipients)
             {
@@ -925,6 +930,12 @@ public sealed class LootService : IViewerFieldFilter
             return;
         }
 
+        if (bag.ReleaseHandler is { } handler)
+        {
+            handler.OnReleased(player, bag); // special source (fishing bobber/hole, pickpocket, disenchant): see LootService.Special.cs
+            return;
+        }
+
         switch (entry.Source)
         {
             case Creature creature when bag.Kind == LootSourceKind.Creature:
@@ -994,10 +1005,15 @@ public sealed class LootService : IViewerFieldFilter
             return false;
         }
 
+        if (bag.SourceCheck is { } custom)
+        {
+            return custom(player);
+        }
+
         return entry.Source switch
         {
             Creature creature => creature.DeathState == CreatureDeathState.Corpse && CheckLooter(player, creature) == LootResult.Ok,
-            GameObject go => go.IsSpawned && CheckLooter(player, go) == LootResult.Ok,
+            GameObject go => go.IsSpawned && (bag.IgnoreDistance ? IsAliveInSameMap(player, go) : CheckLooter(player, go) == LootResult.Ok),
             Item item => player.Inventory.GetItemByGuid(item.Guid) is not null,
             _ => false,
         };

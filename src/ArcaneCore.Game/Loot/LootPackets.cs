@@ -20,7 +20,7 @@ public static class LootPackets
         ArgumentNullException.ThrowIfNull(viewer);
         var writer = new PacketWriter(14 + (bag.Items.Count * 22));
         writer.WriteUInt64(bag.Source.Value);
-        writer.WriteByte((byte)bag.Type);
+        writer.WriteByte(LootTypes.ToWire(bag.Type)); // skinning/insignia go out as 2, fishing hole/fail as 3 (vmangos Player.cpp:7980-7995)
         bool money = bag.Owner.IsEmpty || bag.Owner == viewer.Guid;
         writer.WriteUInt32(money && bag.IsRecipient(viewer) ? bag.Gold : 0);
         int countAt = writer.Length;

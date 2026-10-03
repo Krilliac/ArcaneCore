@@ -16,6 +16,30 @@ public enum LootType : byte
     Fishing = 3,
     Disenchanting = 4,
     Skinning = 6,
+
+    /// <summary>Server-side only (vmangos LOOT_FISHINGHOLE): the client is sent <see cref="Fishing"/> (<see cref="LootTypes.ToWire"/>).</summary>
+    FishingHole = 20,
+
+    /// <summary>Server-side only (vmangos LOOT_FISHING_FAIL): the client is sent <see cref="Fishing"/>.</summary>
+    FishingFail = 21,
+
+    /// <summary>Server-side only (vmangos LOOT_INSIGNIA): the client is sent <see cref="Pickpocketing"/> (Player.cpp:7987-7989).</summary>
+    Insignia = 22,
+}
+
+/// <summary>
+/// The loot type the 1.12 client understands. vmangos Player::SendLoot (Player.cpp:7980-7995): "LOOT_SKINNING,
+/// LOOT_PROSPECTING, LOOT_INSIGNIA and LOOT_FISHINGHOLE unsupported by client", so skinning and insignia loot is shown as
+/// LOOT_PICKPOCKETING (2) and the fishing hole / failed-fishing types as LOOT_FISHING (3).
+/// </summary>
+public static class LootTypes
+{
+    public static byte ToWire(LootType type) => type switch
+    {
+        LootType.Skinning or LootType.Insignia => (byte)LootType.Pickpocketing,
+        LootType.FishingHole or LootType.FishingFail => (byte)LootType.Fishing,
+        _ => (byte)type,
+    };
 }
 
 /// <summary>LootSlotType: per-viewer slot state in SMSG_LOOT_RESPONSE.</summary>
@@ -101,6 +125,27 @@ public sealed class LootBag
     public LootSourceKind Kind { get; }
 
     public LootType Type { get; }
+
+    /// <summary>
+    /// The loot is not distance-checked when taken (vmangos LootHandler.cpp:56-70: an owned fishing bobber and every fishing
+    /// hole are exempt from the interaction distance of the autostore handler).
+    /// </summary>
+    public bool IgnoreDistance { get; set; }
+
+    /// <summary>
+    /// Whether corpse money is split between the recipients (vmangos LootHandler.cpp:274-290 sets shareMoneyWithGroup false
+    /// for a rogue's pickpocketed creature and for item loot). Only creature loot is ever split.
+    /// </summary>
+    public bool ShareMoney { get; set; } = true;
+
+    /// <summary>What happens when the last viewer's window closes; null keeps the corpse / chest / item behaviour.</summary>
+    public ILootReleaseHandler? ReleaseHandler { get; set; }
+
+    /// <summary>
+    /// Replaces the source validity test of item and money takes (the default checks the source type and the loot distance).
+    /// Special sources (a pickpocketed creature, a fishing bobber) answer for themselves.
+    /// </summary>
+    public Func<Player, bool>? SourceCheck { get; set; }
 
     public uint Gold { get; internal set; }
 

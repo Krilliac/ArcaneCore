@@ -420,7 +420,8 @@ public sealed class LootServiceTests
         Assert.Equal(LootResult.Ok, rig.Loot.OpenSkinning(player, wolf));
         Assert.False(wolf.UnitFlags.HasFlag(UnitFlags.Skinnable));
         ParsedLoot skin = LootResponse(session);
-        Assert.Equal(LootType.Skinning, skin.Type);
+        // vmangos Player::SendLoot (Player.cpp:7980-7995): the client does not know LOOT_SKINNING, so it is sent as LOOT_PICKPOCKETING.
+        Assert.Equal(LootType.Pickpocketing, skin.Type);
         Assert.Equal(Hide, Assert.Single(skin.Items).ItemId);
         Assert.Equal(InventoryResult.Ok, rig.Loot.TakeItem(player, 0));
         rig.Loot.Release(player, wolf.Guid);
