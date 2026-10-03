@@ -263,9 +263,8 @@ public sealed class LootService : IViewerFieldFilter
         LootBag bag = Generate(creature.Guid, LootSourceKind.Creature, LootType.Corpse, LootTableKind.Creature, info?.LootId ?? 0, recipients);
         if (info is not null && info.MaxGold > 0)
         {
-            uint min = Math.Min(info.MinGold, info.MaxGold);
-            uint gold = min == info.MaxGold ? min : (uint)_random.NextInt64(min, (long)info.MaxGold + 1);
-            bag.Gold = (uint)Math.Min(gold * (double)Options.MoneyRate, MaxMoneyAmount);
+            // vmangos Loot::GenerateMoneyLoot (LootMgr.cpp:735-746), including the 8-bit shifted boss range.
+            bag.Gold = Math.Min(LootMoneyRules.Generate(info.MinGold, info.MaxGold, Options.MoneyRate, _random), MaxMoneyAmount);
         }
 
         AssignOwner(bag, group, recipients);

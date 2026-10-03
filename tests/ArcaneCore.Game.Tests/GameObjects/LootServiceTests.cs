@@ -77,6 +77,24 @@ public sealed class LootServiceTests
             .Values[UpdateFields.UnitDynamicFlags];
 
     [Fact]
+    public void BossGold_UsesTheVmangosShiftedFormula_AndMaxBelowMinUsesMax()
+    {
+        // Onyxia-sized range (937551..1273511): vmangos GenerateMoneyLoot shifts by 8 bits (LootMgr.cpp:735-746).
+        Rig boss = CreateRig(minGold: 937551, maxGold: 1273511);
+        (Player killer, _) = boss.Join(1);
+        Creature wolf = boss.KillWolf(killer);
+        uint gold = boss.Loot.FindLoot(wolf.Guid)!.Gold;
+        Assert.Equal(0u, gold % 256);
+        Assert.InRange(gold, 937551u >> 8 << 8, 1273511u);
+
+        // max < min (3 real classic-db rows): vmangos pays maxAmount, not min.
+        Rig inverted = CreateRig(minGold: 20000, maxGold: 16194);
+        (Player killer2, _) = inverted.Join(1);
+        Creature wolf2 = inverted.KillWolf(killer2);
+        Assert.Equal(16194u, inverted.Loot.FindLoot(wolf2.Guid)!.Gold);
+    }
+
+    [Fact]
     public void Kill_MakesTheCorpseLootableForTheKillerOnly()
     {
         Rig rig = CreateRig();
