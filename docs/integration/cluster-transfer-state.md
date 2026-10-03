@@ -53,7 +53,7 @@ learns whether a snapshot reached storage.
 | Quest rows and taxi mask | `World/Npc/QuestNpcPersistence.cs` | Failure recorded and the authoritative snapshot retained (`:313-324`); login refuses to load until it is retried (`:50-53`) | Login barrier |
 | Spellbook | `World/Spells/SpellbookCache.cs` | Failed characters are marked and retried; "the cache stays authoritative until restart" (`:325-338`, `:250-299`) | Logged |
 | Spell state (auras, cooldowns) | `World/Spells/SpellStatePersistence.cs` | Failed save stays in memory so the same process can still restore it (`:188-190`, header `:9-15`); lost if the process dies | Logged |
-| Social (friends, guilds) | `World/Social/SocialWriteQueue.cs` | 3 attempts, then **dropped** ("write failed; lost", `:79-82`) | Logged |
+| Social (friends, guilds) | `World/Social/SocialWriteQueue.cs` | 3 attempts, then **retained** and retried at the next write, login, logout and shutdown (like reputation); pending writes coalesced and bounded | Logged; shutdown throws naming what is not durable |
 | Reputation | `World/Reputation/ReputationWriteQueue.cs` | 3 attempts, then **dropped** (`:97-100`) | Logged |
 | Instance saves/binds | `World/Instances/InstanceWriteQueue.cs` | 3 attempts, then **dropped** (`:99-102`) | Logged |
 
@@ -143,7 +143,7 @@ and the core queue (`World/Handlers/CharacterHandlers.cs:198-212`). There is no
 
 | State | Class | Evidence | Note |
 |---|---|---|---|
-| Friend/ignore entries | D, per change via `SocialWriteQueue` (drops after 3) | `SocialWriteQueue.cs:28-29,79-82`; `FriendsService.cs:49,82` | Loaded after login on a background task (`SocialFeature.cs:191-239`) |
+| Friend/ignore entries | D, per change via `SocialWriteQueue` (coalesced per row, bounded, retained on failure) | `SocialWriteQueue.cs:28-29,79-82`; `FriendsService.cs:49,82` | Loaded after login on a background task (`SocialFeature.cs:191-239`) |
 | Guild, ranks, members, MOTD | D via the same queue; all guilds loaded once at startup into one manager | `GuildManager.cs:31-34,98,627`; `SocialFeature.cs:315-330` | P: one process owns the guild cache and the guild id counter |
 | Group membership, leader, loot settings, invites, raid subgroups | M. "Group membership is kept in memory (not persisted)" | `GroupManager.cs:17-20,104`; `Group.cs:37-38`; `docs/integration/social.md` | P: group id counter starts at 1 every process start |
 | Chat channels, members, bans | M, realm-wide structure | `ChannelManager.cs:14-15`; `Channel.cs:15-16` | P |

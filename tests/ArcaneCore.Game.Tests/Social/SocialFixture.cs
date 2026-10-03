@@ -32,7 +32,21 @@ internal sealed class FakePersistence : ISocialPersistence
 
     public List<int> Deleted { get; } = [];
 
+    /// <summary>When set, <see cref="TrySetSocial"/> refuses (the write queue reached a bound) and records nothing.</summary>
+    public bool RefuseSocial { get; set; }
+
     public void SetSocial(int characterId, int otherId, SocialFlags flags) => Social.Add((characterId, otherId, flags));
+
+    public bool TrySetSocial(int characterId, int otherId, SocialFlags flags)
+    {
+        if (RefuseSocial)
+        {
+            return false;
+        }
+
+        SetSocial(characterId, otherId, flags);
+        return true;
+    }
 
     public void SaveGuild(GuildData guild) => Guilds[guild.Id] = guild;
 

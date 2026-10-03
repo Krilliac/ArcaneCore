@@ -52,3 +52,15 @@ Not edited: `WorldServiceCollectionExtensions.cs`, `ChatHandlers.cs`, `Character
   login reads are canceled and awaited with their scopes, then guild/social writes drain.
   Disposal awaits the same idempotent stop operation. Regression tests prevent a deferred
   login callback or storage scope from outliving host shutdown.
+- The write queue is bounded and never drops a write (Codex game-logic finding 2, docs/security/codex-game-logic.md).
+  Pending writes are coalesced per key (a friend/ignore row, a guild, a purge): the last value
+  wins, which equals applying them in order because every write sets one absolute value; a purge
+  is a barrier a later write is never merged across. New friend/ignore rows waiting for storage
+  are capped per character (`Social:WriteQueue:MaxPendingPerCharacter`, default 256) and in
+  total (`MaxPendingTotal`, default 25000; 0 or less means unlimited); beyond the cap
+  `ISocialPersistence.TrySetSocial` refuses and the friend handler kicks the session. A write that
+  fails all three attempts is retained, as in the reputation queue: retried at the next write
+  of that character, at login (`FlushCharacterAsync`; the loaded list has the retained rows applied
+  when they still cannot be stored), at logout, and at shutdown (`StopAsync` retries once and throws
+  naming the characters and guilds still not durable). `FlushAsync` stays a pure barrier. Retention
+  is in process only. Tests: `SocialWriteQueueBoundsTests`, `SocialWriteQueueRetentionTests`.
