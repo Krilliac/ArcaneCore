@@ -69,6 +69,19 @@ creature sees the new template at once and takes its unit fields from it at its 
   mutated.
 - The vmangos `<entry>` argument (one template) is not supported; the whole table reloads.
 
+**`game_tele`, `areatrigger_teleport`** (`MapContentReloadables`, `WorldMaps.ReplaceGameTeles` /
+`BuildAreaTriggerTables` / `ReplaceAreaTriggerTables`): the `.tele` locations, and the area triggers with
+their teleports, are read via `IMapDataStore` off the world thread and swapped on it (vmangos
+`HandleReloadGameTeleCommand` `ServerCommands.cpp:1638` -> `ObjectMgr::LoadGameTele` `ObjectMgr.cpp:10466`;
+`HandleReloadAreaTriggerTeleportCommand` `ServerCommands.cpp:1032` -> `LoadAreaTriggerTeleports`
+`ObjectMgr.cpp:7706`; table entries `Chat.cpp:836`, `:813`). The teleport rows go through the same
+loader rules as at startup (a trigger row, a known target map, a non-zero position); rejected rows are
+listed in the result. `WorldMaps.Load` now builds the trigger tables through the same function.
+- vmangos clears both tables before looking at the query result (`ObjectMgr.cpp:10468`, `7708`), so an empty
+  table empties them; here an empty (or, for triggers, unusable) table keeps the loaded rows.
+- The map registry, area table, terrain and collision data are not reloaded: they are read when the
+  daemon starts (`DataDir` is restart-only in vmangos too, `World.cpp:932-935`).
+
 **`config`** (`ConfigContentReloadable`, `WorldConfigKeys`): the configuration source list is rebuilt
 into a throwaway configuration (the live root is never reloaded: a broken file would empty it), the
 `World` section is bound to a candidate, and the live `WorldRuntimeOptions` object is updated in place
@@ -105,13 +118,14 @@ on the world thread, so every reader sees the new value on its next read.
 | `TickIntervalMs` is restart-only here; vmangos `MapUpdateInterval` is live (World.cpp:592-594). ArcaneCore's world thread captures its sleep once and `SpellFeature` its timer. | none |
 | An `Item` a player already holds keeps the `ItemTemplate` it was created with until that character logs in again; vmangos resolves `Item::GetProto` by entry on every call (`Item.cpp:567-570`), so a changed sell price applies to held items at once there. True parity needs `Item.Template` late-bound, which edits `Item.cs` and `PlayerInventory.*` that the economy, loot and quest-reward work also changes. Left to a later slice. Lookups by entry (vendor lists, new items, starting outfit) are live. | none (unobservable difference is limited to held items) |
 | A live creature keeps the unit fields it copied from its template (faction, flags, health, speeds ...) until it respawns; what is read through `Creature.Template` (rank, corpse delay, AI name, speeds, loot ids ...) changes at once. vmangos behaves the same way: the reload replaces the table, `Creature::UpdateEntry` re-copies at respawn. | none |
+| Reloads never leave a table empty: an empty `spell_template`, `item_template`, `creature_template`, `game_tele` or unusable `areatrigger_teleport` result keeps what is loaded. vmangos is inconsistent: spells and creatures return early, items, `game_tele` and `areatrigger_teleport` clear first. | none |
 | `.reload spell_template` does not reload `spell_mod` (no such table here; vmangos ServerCommands.cpp:1414). | none |
 | The commands can be switched off. Retail has no such switch. | `HotReload:Commands` (default true = retail) |
 
 ## Limits (not delivered, by design of this slice)
 
 - Only `config`, `spell_template`, `item_template` and `creature_template` are reloadable. Quests, NPC data, gameobject
-  loot, catalogs, maps and collision are separate slices (hr-quest-npc, ...), several
+  loot, catalogs, the map registry/areas/terrain and collision are separate slices (hr-quest-npc, ...), several
   gated behind other lanes' work on the files they touch.
 - No file watcher, no database revision polling, no automatic apply, no assembly (code) reload and no
   cluster rollout. The `HotReload` section itself is read when the world starts.
@@ -124,7 +138,7 @@ on the world thread, so every reader sees the new value on its next read.
 
 ## Tests
 
-`tests/ArcaneCore.World.Tests/Reload` (coordinator, config, social config, spell, item, creature, command end-to-end over loopback) and
+`tests/ArcaneCore.World.Tests/Reload` (coordinator, config, social config, spell, item, creature, map, command end-to-end over loopback) and
 `tests/ArcaneCore.Game.Tests/Reload` (transaction, creature definitions). The three safety behaviours were proven load-bearing
 by disabling each guard and watching its test fail: the empty-table guard, the restart-only message, and
 the unreadable-source rejection. The same was done for the social startup binding and for the live item
