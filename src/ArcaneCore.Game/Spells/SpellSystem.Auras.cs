@@ -530,7 +530,7 @@ public sealed partial class SpellSystem
         uint absorbed = AbsorbDamage(caster, target, holder.Spell.SchoolMask(), amount, holder.Spell);
         amount -= absorbed;
         uint dealt = Damage.DealSpellDamage(caster, target, holder.Spell, amount, periodic: true);
-        OnDamageTaken(target, caster, dealt, periodic: true, absorbed);
+        OnDamageTaken(target, caster, dealt, periodic: true, absorbed, holder.Spell.Id);
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
             target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, dealt, (uint)holder.Spell.School, Absorbed: absorbed, Resisted: resisted)), includeSelf: true);
     }

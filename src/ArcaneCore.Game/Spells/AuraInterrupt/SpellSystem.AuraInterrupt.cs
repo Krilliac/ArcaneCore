@@ -21,11 +21,12 @@ public sealed partial class SpellSystem
     /// stealth auras (Dispel type 5) when <paramref name="skipStealth"/> and invisibility auras (Dispel type 6)
     /// when <paramref name="skipInvisibility"/>. Returns how many auras were removed.
     /// <para>
-    /// Not modelled: vmangos' <c>checkProcFlags</c> argument (the damage break skips auras whose spell has
-    /// procFlags): <see cref="SpellInfo"/> carries no proc flags until the proc engine lands (docs/areas/rogue.md).
+    /// <paramref name="checkProcFlags"/> (vmangos <c>checkProcFlags</c>): leave auras whose spell has procFlags alone. The damage
+    /// break passes it, so Wyvern Sting, Prowl and the like survive the hit that their own proc causes.
     /// </para>
     /// </summary>
-    public int RemoveAurasWithInterruptFlags(Unit unit, uint flags, uint exceptSpellId = 0, bool skipStealth = false, bool skipInvisibility = false)
+    public int RemoveAurasWithInterruptFlags(Unit unit, uint flags, uint exceptSpellId = 0, bool skipStealth = false, bool skipInvisibility = false,
+        bool checkProcFlags = false)
     {
         ArgumentNullException.ThrowIfNull(unit);
         if (GetState(unit.Guid) is not { } state || !ReferenceEquals(state.Unit, unit))
@@ -37,6 +38,7 @@ public sealed partial class SpellSystem
 
         // vmangos restarts from the first holder after every removal: a removal can cascade into other auras.
         while (state.Auras.FirstOrDefault(h => !h.IsRemoved
+            && (!checkProcFlags || h.Spell.ProcFlags == ProcFlags.None)
             && (!skipStealth || h.Spell.Dispel != StealthBreakRules.DispelStealth)
             && (!skipInvisibility || h.Spell.Dispel != StealthBreakRules.DispelInvisibility)
             && ((uint)h.Spell.AuraInterruptFlags & flags) != 0

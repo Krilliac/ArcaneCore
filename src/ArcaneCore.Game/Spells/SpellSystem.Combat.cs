@@ -75,7 +75,7 @@ public sealed partial class SpellSystem
         uint absorbed = AbsorbDamage(caster, target, spell.SchoolMask(), amount, spell); // shields, mana shield, split (Unit.cpp:1920-2200)
         amount -= absorbed;
         uint dealt = Damage.DealSpellDamage(caster, target, spell, amount, periodic: false, startsCombat: StartsCombat(caster, target));
-        OnDamageTaken(target, caster, dealt, periodic: false, absorbed);
+        OnDamageTaken(target, caster, dealt, periodic: false, absorbed, spell.Id);
         RecordDamage(caster, target, spell, dealt, crit);
         SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog, SpellPackets.BuildSpellNonMeleeDamageLog(
             target.Guid, caster.Guid, spell.Id, dealt, spell.School, absorbed: absorbed, resisted: resisted, hitInfo: crit ? SpellHitTypeCrit : 0), includeSelf: true);
@@ -114,7 +114,7 @@ public sealed partial class SpellSystem
     /// (Unit.cpp:733-746): damage-cancels auras still break and a player's damage-cancels cast is interrupted
     /// (not by damage over time), but nothing is pushed back or delayed.
     /// </summary>
-    public void OnDamageTaken(Unit victim, Unit? attacker, uint damage, bool periodic, uint absorbed = 0)
+    public void OnDamageTaken(Unit victim, Unit? attacker, uint damage, bool periodic, uint absorbed = 0, uint sourceSpellId = 0)
     {
         ArgumentNullException.ThrowIfNull(victim);
         if ((damage == 0 && absorbed == 0) || !victim.IsAlive || GetState(victim.Guid) is not { } state
@@ -123,12 +123,12 @@ public sealed partial class SpellSystem
             return;
         }
 
+        // vmangos Unit.cpp:735-745 / 895-906: RemoveAurasWithInterruptFlags(DAMAGE_CANCELS, damaging spell, checkProcFlags). The aura
+        // of the spell that did the damage stays (a DoT with the flag does not cancel itself) and so does any aura whose spell
+        // has procFlags (Wyvern Sting, Prowl).
         if (damage == 0)
         {
-            foreach (SpellAuraHolder holder in state.Auras.Where(h => (h.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.Damage) != 0).ToArray())
-            {
-                RemoveHolder(state, holder);
-            }
+            RemoveAurasWithInterruptFlags(victim, (uint)SpellAuraInterruptFlags.Damage, sourceSpellId, checkProcFlags: true);
 
             if (!periodic && victim is Player && state.CurrentCast is { State: SpellCastState.Preparing } preparing
                 && preparing.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.DamageCancels))
@@ -139,11 +139,7 @@ public sealed partial class SpellSystem
             return;
         }
 
-        SpellAuraInterruptFlags breaking = SpellAuraInterruptFlags.Damage | (periodic ? 0 : SpellAuraInterruptFlags.NonPeriodicDamage);
-        foreach (SpellAuraHolder holder in state.Auras.Where(h => (h.Spell.AuraInterruptFlags & breaking) != 0).ToArray())
-        {
-            RemoveHolder(state, holder);
-        }
+        RemoveAurasWithInterruptFlags(victim, (uint)SpellAuraInterruptFlags.Damage, sourceSpellId, checkProcFlags: true);
 
         // The cast or channel in progress: pushback, delay and damage cancels (retail rules in SpellSystem.Pushback.cs).
         // Self damage never pushes back or interrupts.
