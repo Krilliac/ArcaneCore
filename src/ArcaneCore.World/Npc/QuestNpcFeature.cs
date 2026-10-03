@@ -88,6 +88,8 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
         if (_services.GetService<SpellFeature>() is { } spells)
         {
             _objectives.Attach(spells.System);
+            // SPELL_EFFECT_QUEST_COMPLETE credits the quest of its misc value (vmangos SpellEffects.cpp:5324-5331).
+            QuestSpellEvents.Install(spells.System, (player, questId) => Services.AreaExploredOrEventHappens(player, questId));
         }
 
         Persistence.Start();
@@ -101,7 +103,10 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
         world.PlayerLoggedIn += OnPlayerLoggedIn;
         world.PlayerLoggingOut += OnPlayerLoggingOut;
         _logger.LogInformation("Loaded {Quests} quest templates for persisted journals and queries", Services.Quests.Count);
-        LogSupportSummary();
+        // Duplicate adapter providers fail here, at startup; the report itself waits for the first tick because features that
+        // attach later (the spell system) supply part of what the quests need.
+        _ = Services.ProvidedAdapters;
+        world.Post(LogSupportSummary);
     }
 
     /// <summary>

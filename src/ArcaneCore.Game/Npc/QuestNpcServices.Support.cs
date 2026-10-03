@@ -141,14 +141,10 @@ public sealed partial class QuestNpcServices
 {
     private static readonly Lazy<IReadOnlyList<IQuestAdapterModule>> s_adapterModules = new(DiscoverAdapterModules);
 
-    private (QuestAdapter Provided, HashSet<uint> EventCovered)? _support;
+    private QuestAdapter? _provided;
 
     /// <summary>The adapters in place: the reputation owner for reputation objectives plus every discovered module.</summary>
-    public QuestAdapter ProvidedAdapters => Support.Provided;
-
-    private (QuestAdapter Provided, HashSet<uint> EventCovered) Support => _support ??= ComputeSupport();
-
-    private (QuestAdapter, HashSet<uint>) ComputeSupport() => MergeProviders(s_adapterModules.Value);
+    public QuestAdapter ProvidedAdapters => _provided ??= MergeProviders(s_adapterModules.Value).Provided;
 
     /// <summary>
     /// The union of what <paramref name="modules"/> provide plus the reputation owner's adapter. Two providers of one
@@ -191,8 +187,10 @@ public sealed partial class QuestNpcServices
     /// <summary>The adapters this quest still lacks (empty when every need is provided).</summary>
     public QuestAdapter MissingAdapters(Quest quest)
     {
-        (QuestAdapter provided, HashSet<uint> covered) = Support;
-        if (HasAreaTrigger(quest.Id) || covered.Contains(quest.Id))
+        QuestAdapter provided = ProvidedAdapters;
+        // Read per query, never cached: a module's coverage may depend on content that loads after this service is built
+        // (the spell store attaches after the quest feature).
+        if (HasAreaTrigger(quest.Id) || s_adapterModules.Value.Any(module => module.EventQuestsCovered(this).Contains(quest.Id)))
         {
             provided |= QuestAdapter.EventCredit;
         }
@@ -203,7 +201,7 @@ public sealed partial class QuestNpcServices
     /// <summary>Every behaviour the quest needs is delivered, so it may be accepted and abandoned.</summary>
     public bool Supported(Quest quest) => MissingAdapters(quest) == QuestAdapter.None;
 
-    /// <summary>Per-reason counts of the active quests this server withholds; the first call also validates the adapter modules.</summary>
+    /// <summary>Per-reason counts of the active quests this server withholds (adapter coverage is read at call time).</summary>
     public QuestSupportSummary SupportSummary()
     {
         var byReason = new Dictionary<QuestAdapter, int>();
