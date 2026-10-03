@@ -50,7 +50,9 @@ jobs:
         run: dotnet build ArcaneCore.slnx -c Release --no-restore
 
       - name: Test
-        run: dotnet test ArcaneCore.slnx -c Release --no-build --verbosity normal
+        # Run test projects serially: first-time EF fixture startup has a bounded
+        # deadline and must not compete with the crypto suite and provider matrix.
+        run: dotnet test ArcaneCore.slnx -c Release --no-build -m:1 --verbosity normal
 
       - name: Native mock-client scenario
         run: dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-test

@@ -213,8 +213,17 @@ public sealed class SocialShutdownTests
                 return [];
             }
 
-            using CancellationTokenRegistration canceled = cancellationToken.Register(() => probe.GuildReadCanceled.TrySetResult());
-            return await probe.ReleaseGuildRead.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return await probe.ReleaseGuildRead.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Observe the awaited read itself. A separate token callback can be
+                // unregistered by this continuation before cancellation invokes it.
+                probe.GuildReadCanceled.TrySetResult();
+                throw;
+            }
         }
 
         public async Task<IReadOnlyList<SocialEntry>> GetSocialAsync(int characterId, CancellationToken cancellationToken = default)
