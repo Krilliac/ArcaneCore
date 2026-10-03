@@ -74,3 +74,15 @@ Not delivered here (documented limits): spawn flags (`RANDOM_RESPAWN_TIME` x ura
 schema module (slice `waypoint-path-data`, not done); the config-driven dynamic respawn formula (`Creature.cpp:2703-2783`, off by
 default in vmangos: `DynamicRespawn.Range=-1`); `ForcedDespawn`; persistence of respawn timers across restarts (`creature_respawn`,
 needs a Characters schema module).
+
+### 4. Evade no longer heals (slice `evade-home-health`)
+
+* vmangos `CreatureAI::EnterEvadeMode` (`AI/CreatureAI.cpp:323-346`) never sets health or mana. The creature, now out of combat, gets
+  them back through `Creature::RegenerateAll`: a third of the maximum every 5 s (`Objects/Creature.cpp:1087-1100`, `:1127-1160`,
+  `:1122` for mana; ArcaneCore's `MapCombat.UpdateCreatureRegen` already implements that cadence). `EnterEvadeMode` used to set both
+  to the maximum at once.
+* `Creatures:Movement:EvadeRestoresFullHealth=true` restores the old instant reset (not retail).
+
+Limits: the Home leg still goes straight when the pathfinder finds no path (vmangos teleports with `NearTeleportTo`,
+`HomeMovementGenerator.cpp:71-72`; no creature teleport primitive exists to reuse); `RemoveAurasAtReset`, the low-health aura-state
+reset (`:39-42`) and `LoadCreatureAddon(true)` on arrival (`:94`) are not done (aura lane / addon reload).

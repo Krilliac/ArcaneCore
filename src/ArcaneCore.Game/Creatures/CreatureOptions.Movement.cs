@@ -37,4 +37,11 @@ public sealed class CreatureMovementOptions
     /// vmangos has no such flag (its 0x20 is NO_MOVEMENT_PAUSE), so the setting only reaches creatures imported in the cmangos dialect.
     /// </summary>
     public uint RunDuringWanderChancePercent { get; set; } = 15;
+
+    /// <summary>
+    /// <c>Creatures:Movement:EvadeRestoresFullHealth</c>: a creature entering evade mode gets full health and mana at once. Retail (false):
+    /// vmangos CreatureAI::EnterEvadeMode sets neither (AI/CreatureAI.cpp:323-346); health and mana return through the creature's own
+    /// regeneration, a third of the maximum every 5 s (Objects/Creature.cpp:1087-1160).
+    /// </summary>
+    public bool EvadeRestoresFullHealth { get; set; }
 }

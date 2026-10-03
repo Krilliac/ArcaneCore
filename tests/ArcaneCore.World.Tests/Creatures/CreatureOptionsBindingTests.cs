@@ -62,17 +62,18 @@ public sealed class CreatureOptionsBindingTests
     [Fact]
     public void MovementOptions_DefaultToRetail_AndBindFromTheSection()
     {
-        Assert.Equal((MonsterMoveOffsetBase.Destination, 15u), (new CreatureOptions().Movement.MonsterMoveOffsetBase, new CreatureOptions().Movement.RunDuringWanderChancePercent));
+        Assert.Equal((MonsterMoveOffsetBase.Destination, 15u, false), (new CreatureOptions().Movement.MonsterMoveOffsetBase, new CreatureOptions().Movement.RunDuringWanderChancePercent, new CreatureOptions().Movement.EvadeRestoresFullHealth));
 
         IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Creatures:Movement:MonsterMoveOffsetBase"] = "Midpoint",
             ["Creatures:Movement:RunDuringWanderChancePercent"] = "40",
+            ["Creatures:Movement:EvadeRestoresFullHealth"] = "true",
         }).Build();
         var bound = new CreatureOptions();
         configuration.GetSection(CreatureOptions.SectionName).Bind(bound);
 
-        Assert.Equal((MonsterMoveOffsetBase.Midpoint, 40u), (bound.Movement.MonsterMoveOffsetBase, bound.Movement.RunDuringWanderChancePercent));
+        Assert.Equal((MonsterMoveOffsetBase.Midpoint, 40u, true), (bound.Movement.MonsterMoveOffsetBase, bound.Movement.RunDuringWanderChancePercent, bound.Movement.EvadeRestoresFullHealth));
     }
 
     [Fact]
