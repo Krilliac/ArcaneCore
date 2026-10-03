@@ -177,8 +177,14 @@ internal sealed class InMemoryBanStore(AccountStatusEvents? events = null, TimeP
         }
     }
 
+    /// <summary>How many times <see cref="PurgeExpiredAsync"/> ran.</summary>
+    public int PurgeCalls => Volatile.Read(ref _purgeCalls);
+
+    private int _purgeCalls;
+
     public Task<int> PurgeExpiredAsync(CancellationToken cancellationToken = default)
     {
+        Interlocked.Increment(ref _purgeCalls);
         lock (_gate)
         {
             int removed = _ipRows.RemoveAll(r => !AccountBanEvaluator.IsActive(r, Now));
