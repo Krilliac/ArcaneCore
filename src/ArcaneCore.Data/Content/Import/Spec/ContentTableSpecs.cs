@@ -42,6 +42,8 @@ public static class ContentTableSpecs
         "damage_multiplier", "damage_variance",
         // GameObjectLootDumpImporter.ReadCreatureLoot
         "LootId", "loot_id", "SkinningLootId", "skinning_loot_id", "MinLootGold", "gold_min", "MaxLootGold", "gold_max",
+        // GameObjectLootDumpImporter.ReadPickpocketId (classic-db PickpocketLootId, vmangos pickpocket_loot_id)
+        "PickpocketLootId", "pickpocket_loot_id",
     ];
 
     private static readonly string[] s_spawnColumns =
@@ -160,6 +162,10 @@ public static class ContentTableSpecs
         new("item_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),
         new("skinning_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),
         new("reference_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),
+        new("fishing_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),
+        new("pickpocketing_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),
+        new("disenchant_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),
+        new("skill_fishing_base_level", [new KeyColumn("entry")], ["skill"], []),
         new("item_template", [new KeyColumn("entry")], [], s_itemSignatures, ItemQuestDumpImporter.ReadsItemColumn),
         new("quest_template", [new KeyColumn("entry")], [], s_questSignatures, ItemQuestDumpImporter.ReadsQuestColumn),
         new("creature_questrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], s_relationSignatures),
