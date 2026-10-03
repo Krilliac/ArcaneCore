@@ -83,7 +83,8 @@ public sealed class EfCharacterSpellStore(CharacterDbContext db) : ICharacterSpe
             return;
         }
 
-        uint[] wanted = [.. spells.Distinct()];
+        // A List, not an array: with C# 14 an array's Contains binds to the span overload, which EF cannot translate.
+        List<uint> wanted = [.. spells.Distinct()];
         List<uint> known = await db.Set<CharacterSpellRow>().AsNoTracking()
             .Where(r => r.CharacterId == characterId && wanted.Contains(r.Spell))
             .Select(r => r.Spell)

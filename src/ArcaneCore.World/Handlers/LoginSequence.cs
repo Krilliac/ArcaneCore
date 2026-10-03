@@ -4,6 +4,8 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
+using ArcaneCore.World.Spells;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Handlers;
 
@@ -41,7 +43,9 @@ public static class LoginSequence
         session.Send(WorldOpcode.SmsgSetRestStart, LoginPackets.BuildSetRestStart());
         session.Send(WorldOpcode.SmsgBindpointupdate, LoginPackets.BuildBindPointUpdate(player.Home));
         session.Send(WorldOpcode.SmsgTutorialFlags, tutorialFlags);
-        session.Send(WorldOpcode.SmsgInitialSpells, CharacterPackets.BuildInitialSpells());
+        // Spells (docs/integration/spells.md): the known spells and running cooldowns.
+        session.Send(WorldOpcode.SmsgInitialSpells,
+            session.Services.GetService<SpellFeature>()?.BuildInitialSpells(player) ?? CharacterPackets.BuildInitialSpells());
         session.Send(WorldOpcode.SmsgActionButtons, LoginPackets.BuildActionButtons(player.ActionButtons));
         session.Send(WorldOpcode.SmsgInitializeFactions, LoginPackets.BuildInitializeFactions());
         session.Send(WorldOpcode.SmsgLoginSettimespeed, CharacterPackets.BuildTimeSpeed(DateTime.UtcNow));
