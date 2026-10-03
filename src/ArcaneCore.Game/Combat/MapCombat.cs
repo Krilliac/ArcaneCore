@@ -75,6 +75,34 @@ public sealed partial class MapCombat : IMapUpdater
         set => _hooks = value;
     }
 
+    /// <summary>
+    /// The equipment and ability answers of the player stat system (docs/integration/stats.md). Null
+    /// keeps the <see cref="Hooks"/> defaults, which is what a map without the stats feature uses.
+    /// </summary>
+    public ICombatStatSource? Stats { get; set; }
+
+    /// <summary>vmangos Unit::HaveOffhandWeapon: the stat source for players, otherwise the hooks.</summary>
+    internal bool HasOffhandWeapon(Unit unit) => Stats?.HasOffhandWeapon(unit) ?? Hooks.HasOffhandWeapon(unit);
+
+    /// <summary>Whether a player can parry now (vmangos GetUnitParryChance: CanParry() and a weapon to parry with).</summary>
+    internal bool PlayerCanParry(Player player) => Stats?.PlayerCanParry(player) ?? Hooks.PlayerCanParry(player);
+
+    /// <summary>Whether a player can block now (vmangos GetUnitBlockChance: ability, usable off-hand, intact shield).</summary>
+    internal bool PlayerCanBlock(Player player) => Stats?.PlayerCanBlock(player) ?? Hooks.PlayerCanBlock(player);
+
+    /// <summary>vmangos Unit::GetShieldBlockValue: the stat source for players, otherwise the hooks.</summary>
+    internal uint ShieldBlockValue(Unit unit) => Stats?.ShieldBlockValue(unit) ?? Hooks.GetShieldBlockValue(unit);
+
+    /// <summary>
+    /// vmangos SpellCaster::GetWeaponSkillValue. A player's off-hand skill is 0 without an off-hand weapon;
+    /// the hooks only learn about the weapon through <see cref="CombatHooks.HasOffhandWeapon"/>, so a stat
+    /// source that sees one answers for it with the level maximum (the hooks' own value until skills exist).
+    /// </summary>
+    internal int WeaponSkill(Unit unit, WeaponAttackType attackType, Unit? victim)
+        => unit is Player && attackType == WeaponAttackType.OffAttack && Stats?.HasOffhandWeapon(unit) == true
+            ? MeleeHitTable.SkillMaxForLevel(unit, victim)
+            : Hooks.GetWeaponSkill(unit, attackType, victim);
+
     public ICombatRandom Random { get; set; } = SharedCombatRandom.Instance;
 
     /// <summary>One authoritative death, after its state transition (world thread). Objective adapters subscribe without replacing combat hooks.</summary>

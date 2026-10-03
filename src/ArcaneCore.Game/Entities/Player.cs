@@ -103,6 +103,9 @@ public sealed partial class Player : Unit
     /// <summary>Equipment, bags, bank and keyring (items area, <see cref="Items.PlayerInventory"/>).</summary>
     public Items.PlayerInventory Inventory { get; }
 
+    /// <summary>Weapon damage entries and combat abilities that have no update field (docs/areas/stats.md).</summary>
+    public global::ArcaneCore.Game.Stats.PlayerStatState StatState => field ??= new global::ArcaneCore.Game.Stats.PlayerStatState(this);
+
     public int AccountId { get; }
 
     public string Name { get; }

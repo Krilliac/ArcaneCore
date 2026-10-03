@@ -31,10 +31,22 @@ public sealed class PlayerProgression : IQuestExperience
 
     public ProgressionOptions Options { get; }
 
-    public IPlayerLevelStatsSource Stats { get; }
+    public IPlayerLevelStatsSource Stats { get; private set; }
+
+    /// <summary>
+    /// Replace the level stats source (the stats feature installs the imported world data when no developer file is
+    /// configured). Call before players are initialised; a player already initialised keeps the values it has.
+    /// </summary>
+    public void UseLevelStats(IPlayerLevelStatsSource source) => Stats = source ?? throw new ArgumentNullException(nameof(source));
 
     /// <summary>Raised on the world thread after a level-up has been applied (persistence requests a save).</summary>
     public event Action<Player>? LevelChanged;
+
+    /// <summary>
+    /// Raised after the base values of a level were applied to a player (login and level-up), so the derived combat
+    /// stats (attack power, crit, dodge, armor) can be recomputed from the new stat fields.
+    /// </summary>
+    public event Action<Player>? BaseValuesApplied;
 
     /// <summary>
     /// Prepare a loaded player before it enters the world: the next-level requirement for its
@@ -53,6 +65,7 @@ public sealed class PlayerProgression : IQuestExperience
         }
 
         SetRestBonus(player, state.RestBonus);
+        BaseValuesApplied?.Invoke(player);
     }
 
     /// <summary>The XP currently shown (PLAYER_XP).</summary>
@@ -188,6 +201,7 @@ public sealed class PlayerProgression : IQuestExperience
         player.SetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Focus, 0);
         player.SetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Happiness, 0);
         SetRestBonus(player, state.RestBonus);
+        BaseValuesApplied?.Invoke(player);
     }
 
     /// <summary>vmangos Player::GetRestBonus (rested XP pool; not persisted and not accumulated by this slice).</summary>

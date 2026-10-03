@@ -8,6 +8,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Stats;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -61,12 +62,19 @@ public sealed class ProgressionFeature : IWorldFeature, ICharacterHooks, IDispos
             Progression.Options.MaxPlayerLevel, (Progression.Stats as PlayerLevelStatsTable)?.Count ?? 0);
     }
 
-    /// <summary>Before the player is visible: next-level XP for its level and its level base values.</summary>
-    public Task OnPlayerLoadingAsync(WorldSession session, CharacterRecord character, Player player)
+    /// <summary>
+    /// Before the player is visible: next-level XP for its level and its level base values. The stats feature loads
+    /// the imported player base data first, because it supplies the level base values when no file is configured.
+    /// </summary>
+    public async Task OnPlayerLoadingAsync(WorldSession session, CharacterRecord character, Player player)
     {
         ArgumentNullException.ThrowIfNull(player);
+        if (_services.GetService<StatsFeature>() is { } stats)
+        {
+            await stats.EnsureLoadedAsync().ConfigureAwait(false);
+        }
+
         Progression.InitializeLoadedPlayer(player);
-        return Task.CompletedTask;
     }
 
     public void Dispose()
