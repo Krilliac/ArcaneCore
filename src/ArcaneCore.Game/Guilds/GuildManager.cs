@@ -26,8 +26,22 @@ public enum GuildAdminResult
 /// officer chat, and the GM create/delete/invite/uninvite/rank commands. The rules follow
 /// vmangos GuildHandler.cpp and Guild.cpp (citations per method). World thread.
 /// </summary>
-public sealed class GuildManager(SocialContext context)
+public sealed partial class GuildManager(SocialContext context)
 {
+    /// <summary>
+    /// Raised after every membership addition (accept, GM invite, founding, petition turn-in):
+    /// guild, character and the petition id that is being completed (0 for none). vmangos
+    /// Guild::AddMember strips the joiner's other petitions and signatures here (Guild.cpp:213,
+    /// Player::RemovePetitionsAndSigns, Player.cpp:17796-17806).
+    /// </summary>
+    public event Action<Guild, uint, int>? MemberJoined;
+
+    /// <summary>Raised after a member leaves a guild by any path (leave, kick, GM uninvite, disband): guild and character.</summary>
+    public event Action<Guild, uint>? MemberLeft;
+
+    /// <summary>Guild, charter and petition rules (World:Guild); defaults are the retail values.</summary>
+    public GuildOptions Options { get; set; } = new();
+
     private readonly Dictionary<int, Guild> _guilds = [];
     private readonly Dictionary<uint, Guild> _memberOf = [];
     private readonly Dictionary<ObjectGuid, (int GuildId, ObjectGuid Inviter)> _invites = [];
@@ -61,6 +75,9 @@ public sealed class GuildManager(SocialContext context)
                 // vmangos Guild::LoadRanksFromDB: too few ranks → recreate the defaults.
                 guild.CreateDefaultRanks();
             }
+
+            // vmangos Guild.cpp:396-398: the first rank is the guild master's, "prevent loss leader rights".
+            guild.Ranks[0].Rights |= GuildRights.All;
 
             foreach (GuildMember member in guild.Members.ToList())
             {
@@ -403,9 +420,8 @@ public sealed class GuildManager(SocialContext context)
     /// <summary>CMSG_GUILD_MOTD (vmangos HandleGuildMOTDOpcode): SETMOTD right; GE_MOTD to the guild.</summary>
     public void SetMotd(Player player, string motd)
     {
-        if (motd.Length > Guild.MaxMotdLength)
+        if (RejectOversized(player, motd, Guild.MaxMotdLength))
         {
-            // vmangos kicks (anticheat); the client never sends this.
             return;
         }
 
@@ -438,7 +454,7 @@ public sealed class GuildManager(SocialContext context)
     /// </summary>
     public void SetRank(Player player, uint rankId, uint rights, string name)
     {
-        if (!TryGetLedGuild(player, out Guild? guild) || name.Length > Guild.MaxRankNameLength)
+        if (!TryGetLedGuild(player, out Guild? guild) || RejectOversized(player, name, Guild.MaxRankNameLength))
         {
             return;
         }
@@ -456,7 +472,8 @@ public sealed class GuildManager(SocialContext context)
     /// <summary>CMSG_GUILD_ADD_RANK (vmangos HandleGuildAddRankOpcode): leader only, at most 10 ranks.</summary>
     public void AddRank(Player player, string name)
     {
-        if (name.Length > Guild.MaxRankNameLength || !TryGetLedGuild(player, out Guild? guild) || guild.Ranks.Count >= Guild.MaxRanks)
+        // vmangos HandleGuildAddRankOpcode checks the length before anything else (GuildHandler.cpp:600-604).
+        if (RejectOversized(player, name, Guild.MaxRankNameLength) || !TryGetLedGuild(player, out Guild? guild) || guild.Ranks.Count >= Guild.MaxRanks)
         {
             return;
         }
@@ -468,8 +485,9 @@ public sealed class GuildManager(SocialContext context)
 
     /// <summary>
     /// CMSG_GUILD_DEL_RANK (vmangos HandleGuildDelRankOpcode → Guild::DelRank): leader only;
-    /// the lowest rank goes unless only the minimum (5) remain. vmangos leaves members of the
-    /// deleted rank with an out-of-range rank id; here they move to the new lowest rank.
+    /// the lowest rank goes unless only the minimum (5) remain. Members of the deleted rank keep
+    /// the out-of-range id like vmangos (Guild.cpp:696-707; "&lt;unknown&gt;", no rights, clamped at the
+    /// next load, :458-460) unless <see cref="GuildOptions.DeleteRankMovesMembers"/> moves them.
     /// </summary>
     public void DeleteRank(Player player)
     {
@@ -481,9 +499,12 @@ public sealed class GuildManager(SocialContext context)
         if (guild.Ranks.Count > Guild.MinRanks)
         {
             guild.RemoveLowestRank();
-            foreach (GuildMember member in guild.Members.Where(m => m.Rank > guild.LowestRank).ToList())
+            if (Options.DeleteRankMovesMembers)
             {
-                ChangeRank(guild, member, guild.LowestRank);
+                foreach (GuildMember member in guild.Members.Where(m => m.Rank > guild.LowestRank).ToList())
+                {
+                    ChangeRank(guild, member, guild.LowestRank);
+                }
             }
 
             Save(guild);
@@ -495,7 +516,7 @@ public sealed class GuildManager(SocialContext context)
     /// <summary>CMSG_GUILD_INFO_TEXT (vmangos HandleGuildChangeInfoTextOpcode): MODIFY_GUILD_INFO right; no reply.</summary>
     public void SetInfo(Player player, string info)
     {
-        if (info.Length > Guild.MaxInfoLength)
+        if (RejectOversized(player, info, Guild.MaxInfoLength))
         {
             return;
         }
@@ -779,7 +800,7 @@ public sealed class GuildManager(SocialContext context)
             return;
         }
 
-        if (note.Length > Guild.MaxNoteLength)
+        if (RejectOversized(player, note, Guild.MaxNoteLength))
         {
             return;
         }
@@ -866,18 +887,28 @@ public sealed class GuildManager(SocialContext context)
 
     private static byte RankOf(Guild guild, Player player) => guild.Find(player.Guid.Low)?.Rank ?? guild.LowestRank;
 
-    private void AddMember(Guild guild, uint characterId, byte rank)
+    private void AddMember(Guild guild, uint characterId, byte rank, int exceptPetitionId = 0)
     {
-        guild.AddMember(characterId, rank);
+        GuildMember member = guild.AddMember(characterId, rank);
         _memberOf[characterId] = guild;
+
+        // vmangos Guild::AddMember (Guild.cpp:230-256): level/zone from the player, or from the
+        // player cache for an offline character, and LogoutTime = now (:250) either way.
+        member.LogoutTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         if (context.World.FindOnlinePlayer(ObjectGuid.Player(characterId)) is { } online)
         {
-            GuildMember member = guild.Find(characterId)!;
             member.Level = online.Level;
             member.ZoneId = online.ZoneId;
             SetFields(online, guild.Id, rank);
             _invites.Remove(online.Guid);
         }
+        else if (context.Characters.Find(characterId) is { } cached)
+        {
+            member.Level = cached.Level;
+            member.ZoneId = cached.ZoneId;
+        }
+
+        MemberJoined?.Invoke(guild, characterId, exceptPetitionId);
     }
 
     /// <summary>
@@ -907,6 +938,7 @@ public sealed class GuildManager(SocialContext context)
             SetFields(online, 0, 0);
         }
 
+        MemberLeft?.Invoke(guild, characterId);
         return guild.MemberCount == 0;
     }
 
@@ -941,6 +973,27 @@ public sealed class GuildManager(SocialContext context)
 
         _guilds.Remove(guild.Id);
         context.Persistence.DeleteGuild(guild.Id);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="text"/> is longer than <paramref name="maxLength"/> code points (vmangos
+    /// utf8length, GuildHandler.cpp:58-62 and the other handlers); the session is disconnected as
+    /// vmangos' passive anticheat does unless <see cref="GuildOptions.KickOnOversizedText"/> is off.
+    /// The retail client never sends such text.
+    /// </summary>
+    public bool RejectOversized(Player player, string text, int maxLength)
+    {
+        if (CharterNameRules.CodePointCount(text) <= maxLength)
+        {
+            return false;
+        }
+
+        if (Options.KickOnOversizedText)
+        {
+            player.Session.Kick();
+        }
+
+        return true;
     }
 
     private void Save(Guild guild) => context.Persistence.SaveGuild(guild.ToData());

@@ -65,6 +65,17 @@ public sealed class EfSocialStore(CharacterDbContext db) : ISocialStore
     /// <summary>Replace the stored guild with <paramref name="guild"/> in one SaveChanges (one transaction).</summary>
     public async Task SaveGuildAsync(GuildData guild, CancellationToken cancellationToken = default)
     {
+        await StageGuildAsync(db, guild, cancellationToken).ConfigureAwait(false);
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        db.ChangeTracker.Clear();
+    }
+
+    /// <summary>
+    /// Track the changes that make the stored guild equal <paramref name="guild"/> (row, ranks, members)
+    /// without saving, so a caller can add more changes to the same transaction (petition turn-in).
+    /// </summary>
+    internal static async Task StageGuildAsync(CharacterDbContext db, GuildData guild, CancellationToken cancellationToken)
+    {
         GuildRow? row = await db.Set<GuildRow>().FirstOrDefaultAsync(g => g.Id == guild.Id, cancellationToken).ConfigureAwait(false);
         if (row is null)
         {
@@ -122,9 +133,6 @@ public sealed class EfSocialStore(CharacterDbContext db) : ISocialStore
             memberRow.ZoneId = member.ZoneId;
             memberRow.LogoutTime = member.LogoutTime;
         }
-
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        db.ChangeTracker.Clear();
     }
 
     public async Task DeleteGuildAsync(int guildId, CancellationToken cancellationToken = default)

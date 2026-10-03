@@ -48,7 +48,7 @@ public sealed class SocialWriteQueueOptions
 /// store that is still down at exit, loses what is retained (loudly).
 /// </para>
 /// </summary>
-public sealed class SocialWriteQueue : ISocialPersistence
+public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
 {
     private const int MaxAttempts = 3;
 
@@ -84,6 +84,9 @@ public sealed class SocialWriteQueue : ISocialPersistence
         Row,
         Guild,
         Purge,
+        Petition,
+        PetitionComplete,
+        PetitionPurge,
     }
 
     private enum WorkKind
@@ -182,6 +185,33 @@ public sealed class SocialWriteQueue : ISocialPersistence
         }
     }
 
+    public void SavePetition(PetitionData petition)
+    {
+        ArgumentNullException.ThrowIfNull(petition);
+        lock (_gate)
+        {
+            EnqueueWrite(new Key(KeyKind.Petition, petition.Id, 0), new Payload(SocialFlags.None, null, petition));
+        }
+    }
+
+    public void DeletePetition(int petitionId)
+    {
+        lock (_gate)
+        {
+            EnqueueWrite(new Key(KeyKind.Petition, petitionId, 0), new Payload(SocialFlags.None, null));
+        }
+    }
+
+    /// <summary>The founded guild and the petition's deletion commit together; the guild snapshot rides in the payload.</summary>
+    public void CompletePetition(GuildData guild, int petitionId)
+    {
+        ArgumentNullException.ThrowIfNull(guild);
+        lock (_gate)
+        {
+            EnqueueWrite(new Key(KeyKind.PetitionComplete, petitionId, 0), new Payload(SocialFlags.None, guild));
+        }
+    }
+
     /// <summary>
     /// Queue a deleted character's purge after every earlier write. Friend/ignore writes that
     /// failed earlier and are retained for the character (or about it) are discarded first: the purge
@@ -199,6 +229,7 @@ public sealed class SocialWriteQueue : ISocialPersistence
             }
 
             EnqueueWrite(new Key(KeyKind.Purge, characterId, 0), default);
+            EnqueueWrite(new Key(KeyKind.PetitionPurge, characterId, 0), default); // the character's petition rows, after the social rows
         }
     }
 
@@ -322,6 +353,8 @@ public sealed class SocialWriteQueue : ISocialPersistence
                 {
                     KeyKind.Row => $"character {f.Key.A}",
                     KeyKind.Guild => $"guild {f.Key.A}",
+                    KeyKind.Petition or KeyKind.PetitionComplete => $"petition {f.Key.A}",
+                    KeyKind.PetitionPurge => $"petition purge of character {f.Key.A}",
                     _ => $"purge of character {f.Key.A}",
                 }).Distinct(),
             ];
@@ -617,6 +650,32 @@ public sealed class SocialWriteQueue : ISocialPersistence
             try
             {
                 await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
+                if (key.Kind is KeyKind.Petition or KeyKind.PetitionComplete or KeyKind.PetitionPurge)
+                {
+                    if (scope.ServiceProvider.GetService<IPetitionStore>() is not { } petitions)
+                    {
+                        return null; // hosts without persistence keep nothing
+                    }
+
+                    switch (key.Kind)
+                    {
+                        case KeyKind.Petition when value.Petition is { } petition:
+                            await petitions.SavePetitionAsync(petition).ConfigureAwait(false);
+                            break;
+                        case KeyKind.Petition:
+                            await petitions.DeletePetitionAsync(key.A).ConfigureAwait(false);
+                            break;
+                        case KeyKind.PetitionComplete when value.Guild is { } founded:
+                            await petitions.CompletePetitionAsync(founded, key.A).ConfigureAwait(false);
+                            break;
+                        default:
+                            await petitions.PurgeCharacterAsync(key.A).ConfigureAwait(false);
+                            break;
+                    }
+
+                    return null;
+                }
+
                 if (scope.ServiceProvider.GetService<ISocialStore>() is not { } store)
                 {
                     return null; // hosts without persistence keep nothing
@@ -656,7 +715,7 @@ public sealed class SocialWriteQueue : ISocialPersistence
     private readonly record struct Key(KeyKind Kind, int A, int B);
 
     /// <summary>The absolute value a key is set to: row flags, or a guild snapshot (null: delete the guild).</summary>
-    private readonly record struct Payload(SocialFlags Flags, GuildData? Guild);
+    private readonly record struct Payload(SocialFlags Flags, GuildData? Guild, PetitionData? Petition = null);
 
     private sealed class Work(WorkKind kind, Key key, Payload value, long epoch, int characterId, TaskCompletionSource? done)
     {

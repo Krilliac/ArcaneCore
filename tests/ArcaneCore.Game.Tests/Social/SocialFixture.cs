@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Guilds;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Accounts;
@@ -24,8 +25,37 @@ internal sealed class FakeCharacters : ICharacterLookup
 }
 
 /// <summary>Records social writes.</summary>
-internal sealed class FakePersistence : ISocialPersistence
+internal sealed class FakePersistence : ISocialPersistence, IPetitionPersistence
 {
+    /// <summary>Every petition write in order: "save:id:signatures", "delete:id", "complete:guildId:petitionId".</summary>
+    public List<string> PetitionWrites { get; } = [];
+
+    /// <summary>The last saved state of each stored petition.</summary>
+    public Dictionary<int, PetitionData> Petitions { get; } = [];
+
+    /// <summary>The guilds stored by a turn-in.</summary>
+    public List<GuildData> Completed { get; } = [];
+
+    public void SavePetition(PetitionData petition)
+    {
+        Petitions[petition.Id] = petition;
+        PetitionWrites.Add($"save:{petition.Id}:{petition.Signatures.Count}");
+    }
+
+    public void DeletePetition(int petitionId)
+    {
+        Petitions.Remove(petitionId);
+        PetitionWrites.Add($"delete:{petitionId}");
+    }
+
+    public void CompletePetition(GuildData guild, int petitionId)
+    {
+        Petitions.Remove(petitionId);
+        Completed.Add(guild);
+        Guilds[guild.Id] = guild;
+        PetitionWrites.Add($"complete:{guild.Id}:{petitionId}");
+    }
+
     public List<(int CharacterId, int OtherId, SocialFlags Flags)> Social { get; } = [];
 
     public Dictionary<int, GuildData> Guilds { get; } = [];
@@ -77,20 +107,20 @@ internal sealed class SocialFixture : IDisposable
     public SocialContext Context { get; }
 
     /// <summary>A known character that is not online.</summary>
-    public CharacterInfo AddOffline(uint guid, Race race = Race.Human)
+    public CharacterInfo AddOffline(uint guid, Race race = Race.Human, byte level = 1, uint zoneId = 0)
     {
-        var info = new CharacterInfo(guid, (int)guid, $"P{guid}", race, Class.Warrior);
+        var info = new CharacterInfo(guid, (int)guid, $"P{guid}", race, Class.Warrior, level, zoneId);
         Characters.Add(info);
         return info;
     }
 
     /// <summary>An online player named P{guid}; far-apart coordinates keep players out of each other's sight.</summary>
-    public Player AddPlayer(uint guid, Race race = Race.Human, AccountSecurity security = AccountSecurity.Player, float x = 0, float y = 0)
+    public Player AddPlayer(uint guid, Race race = Race.Human, AccountSecurity security = AccountSecurity.Player, float x = 0, float y = 0, int accountId = 0)
     {
-        var session = new FakeSession((int)guid, security);
+        var session = new FakeSession(accountId == 0 ? (int)guid : accountId, security);
         Player player = TestWorld.CreatePlayer(guid, x, y, session, race: race);
         World.AddPlayer(player);
-        Characters.Add(new CharacterInfo(guid, (int)guid, player.Name, race, player.Class));
+        Characters.Add(new CharacterInfo(guid, session.AccountId, player.Name, race, player.Class));
         _sessions[player.Guid] = session;
         Context.Friends.Load(player, []);
         return player;

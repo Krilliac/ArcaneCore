@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Guilds;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Social;
@@ -58,6 +59,9 @@ public sealed class SocialFeature(
     /// <summary>Bounds of the write queue (configuration section <c>World:Social:WriteQueue</c>).</summary>
     public SocialWriteQueueOptions WriteQueueOptions { get; } = new();
 
+    /// <summary>Guild, charter and petition rules (World:Guild, bound at startup; restart-only).</summary>
+    public GuildOptions GuildOptions { get; } = new();
+
     /// <summary>Completes when the stored guilds are installed (world thread).</summary>
     public Task GuildsLoaded => _guildsLoaded;
 
@@ -109,9 +113,11 @@ public sealed class SocialFeature(
     {
         _world = world;
         configuration?.GetSection(SocialOptions.SectionName).Bind(Options);
+        configuration?.GetSection(GuildOptions.SectionName).Bind(GuildOptions);
         configuration?.GetSection(SocialOptions.SectionName + ":WriteQueue").Bind(WriteQueueOptions);
         _writes = new SocialWriteQueue(scopes, loggers.CreateLogger<SocialWriteQueue>(), WriteQueueOptions);
         _context = new SocialContext(world, new CharacterLookup(directory), _writes, Options);
+        _context.Guilds.Options = GuildOptions;
         _writes.Start();
         world.PlayerLoggedIn += OnLoggedIn;
         world.PlayerLoggingOut += OnLoggingOut;
@@ -333,6 +339,14 @@ public sealed class SocialFeature(
         _pendingCommands.Remove(player);
         _rejectedCommands.Remove(player);
         SocialContext context = Context;
+
+        // Keep the character directory's level and zone current: an offline guild member's roster
+        // line and a later Guild::AddMember read them (vmangos PlayerCacheData, Guild.cpp:230-256).
+        if (directory.Find((int)player.Guid.Low) is { } identity)
+        {
+            directory.Add(identity with { Level = player.Level, ZoneId = player.ZoneId });
+        }
+
         bool ready = _ready.Remove(player.Guid);
         if (ready)
         {

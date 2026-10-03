@@ -7,6 +7,7 @@ using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
+using ArcaneCore.World.Social;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -384,7 +385,10 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
             }
 
             string name = other.Name.ToLowerInvariant();
-            const string guild = ""; // guilds arrive in M14
+            // The member's guild name (vmangos sGuildMgr.GetGuildNameById, MiscHandler.cpp:147-158,
+            // :201-203); empty without a guild or when the social feature is not installed.
+            string guildDisplay = session.Services.GetService<SocialFeature>()?.Context.Guilds.GetGuildOf(other)?.Name ?? string.Empty;
+            string guild = guildDisplay.ToLowerInvariant();
             if ((playerName.Length > 0 && !name.Contains(playerName, StringComparison.Ordinal))
                 || (guildName.Length > 0 && !guild.Contains(guildName, StringComparison.Ordinal))
                 || (zones.Length > 0 && Array.IndexOf(zones, other.ZoneId) < 0)
@@ -393,7 +397,7 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
                 continue;
             }
 
-            entries.Add(new WhoEntry(other.Name, guild, level, cls, race, other.ZoneId));
+            entries.Add(new WhoEntry(other.Name, guildDisplay, level, cls, race, other.ZoneId));
             if (entries.Count == WhoMaxEntries)
             {
                 break;

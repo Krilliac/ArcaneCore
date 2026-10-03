@@ -35,6 +35,12 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
 | SMSG_GUILD_INFO, SMSG_GUILD_QUERY_RESPONSE, SMSG_GUILD_COMMAND_RESULT | `GuildPackets.cs` | `Server/Packets/Guild.cpp` | `GuildHandler.cpp` | `guild/smsg_guild_info.wowm`, `queries/smsg_guild_query_response.wowm`, `guild/smsg_guild_command_result.wowm` |
 | Guild / officer chat | `SocialFeature.cs` | `ChatHandler.cpp`, `Guild.cpp` BroadcastToGuild/BroadcastToOfficers | — | `smsg_messagechat.wowm` |
 | Guild tables (guild, guild_rank, guild_member) | `SocialDataModule.cs`, `EfSocialStore.cs` | `Guild.cpp` LoadGuildFromDB / LoadRanksFromDB / LoadMembersFromDB | — | — |
+| Guild charters: show list, buy, show signatures, query, rename, sign, decline, offer, turn in | `Game/Guilds/PetitionManager.cs`, `PetitionPackets.cs`, `PetitionTypes.cs`, `GuildManager.Petitions.cs`, `World/Social/PetitionHandlers.cs`, `SocialPetitionFeature.cs` | `Handlers/PetitionsHandler.cpp:41-507`, `Server/Packets/Petition.cpp:3-186`, `Guild/GuildMgr.cpp:168-546` (Petition), `Guild/Guild.cpp:104-119,197-278` | `Entities/PetitionsHandler.cpp` (same constants, `MinPetitionSigns`) | `guild/cmsg_petition_buy`, `smsg_petition_showlist`, `smsg_petition_show_signatures`, `smsg_petition_sign_results`, `cmsg_offer_petition`, `cmsg_turn_in_petition`, `smsg_turn_in_petition_results`, `msg_petition_rename`, `msg_petition_decline`, `queries/smsg_petition_query_response.wowm` (client 1.12) |
+| Petition tables (petition, petition_sign) and character deletion | `Data/Social/PetitionDataModule.cs`, `Kernel/Social/PetitionRecords.cs` | `GuildMgr.cpp:168-246` (LoadPetitions), `Objects/Player.cpp:4353-4354,17796-17806` (RemovePetitionsAndSigns) | — | — |
+| Charter names | `Game/Guilds/CharterNameRules.cs` | `ObjectMgr.cpp:9496-9616` (IsReservedName, isValidString, IsValidCharterName), `shared/Util.h:115-231` | — | — |
+| Tabard designer and guild emblem | `Game/Guilds/GuildManager.Emblem.cs`, `GuildEmblemPackets.cs`, `World/Social/TabardHandlers.cs` | `Handlers/GuildHandler.cpp:684-735`, `Handlers/NPCHandler.cpp:49-69`, `Objects/Player.cpp:12268-12271`, `Guild/Guild.cpp:883-892` | `Guilds/GuildHandler.cpp:716-767` (same 10 gold and results) | `guild/msg_save_guild_emblem_client/server`, `msg_tabardvendor_activate` |
+| Chat mute and anti-flood | `Game/Social/ChatRestrictionService.cs`, `World/Social/ChatRestrictionFeature.cs` | `Handlers/ChatHandler.cpp:221-247,417-430`, `Chat/MasterPlayerChat.cpp:10-37`, `shared/Util.cpp:197-250`, `mangosd.conf.dist.in:1666-1668`, classic-db `mangos_string` 705 | — | — |
+| /who guild name and guild filter | `World/Handlers/ChatHandlers.cs` (HandleWho) | `Handlers/MiscHandler.cpp:147-158,180-196,201-203` | — | `cmsg_who`, `smsg_who` |
 | Channel join / leave, password, built-ins (General, Trade, LocalDefense, WorldDefense, LookingForGroup, GuildRecruitment) | `Game/Channels/ChannelManager.cs`, `Channel.cs`, `ChannelTypes.cs` | `Chat/Channel.cpp/.h`, `Chat/ChannelMgr.cpp/.h`, `Handlers/ChannelHandler.cpp`, `DBCStores.cpp`/`DBCStructure.h` (ChatChannelsEntry) | `Chat/Channel.cpp/.h`, `Chat/ChannelMgr.cpp`, `Chat/ChannelHandler.cpp` | `chat/cmsg_join_channel.wowm` |
 | SMSG_CHANNEL_NOTIFY and the moderation commands (owner, moderator, mute, kick, ban, announce, moderate, invite) | `Channel.cs`, `ChannelPackets.cs` | `Channel.cpp` Make* | `Channel.cpp` | `chat/smsg_channel_notify.wowm` |
 | SMSG_CHANNEL_LIST | `ChannelPackets.BuildList` | `Channel.cpp` List, `Server/Packets/Channel.cpp` | `Channel.cpp` List | `chat/smsg_channel_list.wowm` |
@@ -61,15 +67,21 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
   lists are resent after `PlayerLoggedIn`, and only when non-empty.
 - **Guild MOTD order.** The MOTD and SIGNED_ON events go out after the player is added to the
   map (vmangos sends them during HandlePlayerLogin before the map add).
-- **No character-delete hook.** Social rows and guild memberships of deleted characters are
-  skipped on load instead of deleted.
-- **Options are not bound to configuration.** `SocialFeature.Options` (two-side friend/group/
-  guild/channel, GM visibility of channels) use code defaults.
+- **Character deletion** is handled: `SocialCharacterDeleteHook` and `SocialDataModule` remove
+  friend/ignore rows and guild membership, `SocialPetitionFeature` and `PetitionDataModule` the
+  character's petition and signatures (docs/integration/character-delete.md).
+- **Options.** `SocialFeature.Options` (`World:Social`: two-side friend/group/guild/channel) is bound at
+  startup and reloadable; the guild, charter and chat options are bound from `World:Guild` and `World:Chat`
+  and are restart-only (see [social-guild-petitions](../integration/social-guild-petitions.md)).
 - **WorldDefense is muted.** vmangos `Channel::Say` lets only honor rank 15 and up speak there;
   honor ranks are not implemented (always 0), so nobody can talk in WorldDefense.
+- **Client guild create.** `CMSG_GUILD_CREATE` is honoured as in vmangos (`GuildHandler.cpp:47-72`);
+  `World:Guild:AllowClientGuildCreate=false` ignores it (charter-only), an operator opt-out.
 - **Deleting a rank (DelRank).** vmangos `Guild::DelRank` drops the lowest rank (never below
-  the minimum of 5) and leaves its members with an out-of-range rank id; here they are moved
-  to the new lowest rank.
+  the minimum of 5) and leaves its members with an out-of-range rank id (name `<unknown>`, no
+  rights) until the next load clamps them (`Guild.cpp:696-723,458-460`). That is the default;
+  `World:Guild:DeleteRankMovesMembers=true` moves them to the new lowest rank instead (a deliberate,
+  not retail-proven deviation).
 - **Roster broadcast omits officer notes.** A roster sent to one viewer includes officer notes
   when that viewer has the view-officer-note right; the roster broadcast to the whole guild
   after a change never includes them.
@@ -78,7 +90,13 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
 - **Whisper ignore is client-side.** The server still delivers whispers from ignored players;
   the 1.12 client drops them and sends `CMSG_CHAT_IGNORED`, and the whisperer then gets
   CHAT_MSG_IGNORED (vmangos HandleChatIgnoredOpcode).
-- **/who guild name** is not wired (`ChatHandlers.cs` is outside this area).
+- **/who** shows the member's guild and matches the guild filter and the search strings against it
+  (`MiscHandler.cpp:147-158,180-196`). The search strings still do not match area names (needs
+  AreaTable.dbc, `MiscHandler.cpp:115-130`).
+- **Charters, tabard, mute and flood: see the limits list in
+  [social-guild-petitions](../integration/social-guild-petitions.md#limits)**: no antispam name filter,
+  the Undercity guild master has no gossip option rows in classic-db, no `GE_TABARDCHANGE`, no emblem range
+  validation, no mute aura and no persistent `.mute`, commands are not counted by the flood gate.
 - **GM cross-faction group invites** need GM mode (`.gm on`), matching vmangos
   `IsGameMaster()`; the account level alone is not enough.
 
@@ -92,3 +110,8 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
   member list.
 - `tests/ArcaneCore.Data.Tests/SocialStoreTests.cs` — the social tables on SQLite, MariaDB
   and PostgreSQL.
+- Petitions, emblem, parity and chat gate (see the integration doc for the full list): Game
+  `PetitionManagerTests`, `GuildEmblemTests`, `GuildParityTests`, `CharterNameRulesTests`,
+  `ChatRestrictionServiceTests`, `FriendsParityTests`; World `PetitionEndToEndTests`,
+  `WhoGuildTests`, `GuildCreateGateTests`, `ChatRestrictionEndToEndTests`; Data `PetitionStoreTests`,
+  `PetitionSchemaUpgradeTests`, `GuildRankRightsStoreTests` (provider theories: only SQLite executes locally).

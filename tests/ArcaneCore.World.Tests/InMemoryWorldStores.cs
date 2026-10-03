@@ -96,7 +96,7 @@ internal sealed class InMemoryCharacterStore : ICharacterStore, ICharacterLifeSt
 
     public Task<IReadOnlyList<CharacterIdentity>> GetAllIdentitiesAsync(CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyList<CharacterIdentity>>(
-            _characters.Values.Select(c => new CharacterIdentity(c.Id, c.AccountId, c.Name, c.Race, c.Gender, c.Class)).ToList());
+            _characters.Values.Select(c => new CharacterIdentity(c.Id, c.AccountId, c.Name, c.Race, c.Gender, c.Class, c.Level, c.ZoneId)).ToList());
 
     /// <summary>Number of state saves received.</summary>
     public int SaveCount => Volatile.Read(ref _saves);
