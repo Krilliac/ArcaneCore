@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Schema.Upgrade;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -64,7 +65,7 @@ public sealed class WorldDbInitializer(IServiceProvider services, ILogger<WorldD
         using IServiceScope scope = services.CreateScope();
         WorldDbContext db = scope.ServiceProvider.GetRequiredService<WorldDbContext>();
 
-        await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema, logger, cancellationToken).ConfigureAwait(false);
+        await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema, DatabaseStartup.OptionsFrom(services), logger, cancellationToken).ConfigureAwait(false);
 
         if (!await db.PlayerCreateInfo.AnyAsync(cancellationToken).ConfigureAwait(false))
         {

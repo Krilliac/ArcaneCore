@@ -2,6 +2,8 @@ using System.Numerics;
 using ArcaneCore.Cryptography;
 using ArcaneCore.Data;
 using ArcaneCore.Data.Auth;
+using ArcaneCore.Data.Schema.Upgrade;
+using ArcaneCore.Data.Schema.Upgrade.Cli;
 using ArcaneCore.Kernel.Accounts;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -15,10 +17,24 @@ if (args.Length == 0)
 }
 
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
+
+// "arcane-account db <command>" is arcane-db (the database upgrade tool) on this tool's configuration. It runs before
+// the auth schema is initialized below: status, plan and check must not upgrade the database they report on.
+if (string.Equals(args[0], "db", StringComparison.OrdinalIgnoreCase))
+{
+    DatabaseOptions database = builder.Configuration.GetSection(DatabaseOptions.SectionName).Get<DatabaseOptions>() ?? new DatabaseOptions();
+    return await DbUpgradeCli.RunAsync(args[1..], database, Console.Out, Console.Error, CancellationToken.None).ConfigureAwait(false);
+}
+
 builder.Services.AddAuthDatabase(builder.Configuration);
 using IHost host = builder.Build();
 
-await host.Services.GetRequiredService<AuthDbInitializer>().InitializeAsync().ConfigureAwait(false);
+int startup = await DatabaseStartup.InitializeAsync(
+    () => host.Services.GetRequiredService<AuthDbInitializer>().InitializeAsync(), host.Services, Console.Error).ConfigureAwait(false);
+if (startup != 0)
+{
+    return startup;
+}
 
 using IServiceScope scope = host.Services.CreateScope();
 IAccountStore accounts = scope.ServiceProvider.GetRequiredService<IAccountStore>();
@@ -156,4 +172,5 @@ static void PrintUsage()
     Console.Error.WriteLine("  arcane-account set-password <username> <password>");
     Console.Error.WriteLine("  arcane-account set-gmlevel <username> <0-3|player|moderator|gamemaster|administrator>");
     Console.Error.WriteLine("  arcane-account list");
+    Console.Error.WriteLine("  arcane-account db <status|plan|check|upgrade|backup-info> [options]   (database upgrade tool, see arcane-db --help)");
 }

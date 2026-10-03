@@ -53,6 +53,9 @@ public sealed class DatabaseOptions
 
     public DatabaseConnectionOptions? World { get; set; }
 
+    /// <summary>What start-up may do to the schema (<c>Database:Upgrade</c>); the historic create-and-upgrade by default.</summary>
+    public ArcaneCore.Data.Schema.Upgrade.DatabaseUpgradeOptions Upgrade { get; set; } = new();
+
     public DatabaseConnectionOptions Resolve(DatabaseComponent component)
     {
         DatabaseConnectionOptions? specific = component switch

@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Realms;
 using Microsoft.EntityFrameworkCore;
@@ -16,7 +17,7 @@ public sealed class AuthDbInitializer(IServiceProvider services, ILogger<AuthDbI
         using IServiceScope scope = services.CreateScope();
         AuthDbContext db = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
 
-        await SchemaBootstrapper.EnsureAsync(db, AuthDbContext.Schema, logger, cancellationToken).ConfigureAwait(false);
+        await SchemaBootstrapper.EnsureAsync(db, AuthDbContext.Schema, DatabaseStartup.OptionsFrom(services), logger, cancellationToken).ConfigureAwait(false);
 
         RealmSeedOptions? seed = scope.ServiceProvider.GetService<IOptions<RealmSeedOptions>>()?.Value;
         if (seed is { Seed.Count: > 0 } && !await db.Realms.AnyAsync(cancellationToken).ConfigureAwait(false))
