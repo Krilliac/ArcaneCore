@@ -20,7 +20,8 @@ public sealed record QuestNpcDependencies(
     IResurrection? Resurrection = null,
     Progression.IQuestRewardEffects? RewardEffects = null,
     IQuestReputationSettlement? ReputationRewards = null,
-    IQuestSpellCaster? SpellCaster = null);
+    IQuestSpellCaster? SpellCaster = null,
+    IQuestParty? Party = null);
 
 /// <summary>Where quest/NPC state changes go (the world daemon's save queue). World thread.</summary>
 public interface IQuestNpcSink

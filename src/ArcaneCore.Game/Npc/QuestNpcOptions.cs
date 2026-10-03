@@ -26,6 +26,13 @@ public sealed class QuestNpcOptions
     /// </summary>
     public QuestRewardMode RewardMode { get; set; } = QuestRewardMode.AllSupported;
 
+    /// <summary>
+    /// Quests:SharePushRequiresQuest (default false, retail): vmangos HandlePushQuestToParty (QuestHandler.cpp:403-459) offers any
+    /// quest id to the party without checking that the pusher holds it; the receiver's accept does check (Player::CanShareQuest).
+    /// Switch on to refuse such pushes up front.
+    /// </summary>
+    public bool SharePushRequiresQuest { get; set; }
+
     /// <summary>Quests:LogWithheld (default true): log at startup how many quests are withheld and why.</summary>
     public bool LogWithheld { get; set; } = true;
 

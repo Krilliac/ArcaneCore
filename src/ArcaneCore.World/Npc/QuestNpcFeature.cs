@@ -173,7 +173,8 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
                 ? new QuestRewardEffects(spells.System, _logger)
                 : null,
             ReputationRewards: reputation is { Factions.Count: > 0 } ? reputation : null,
-            SpellCaster: progression && _services.GetService<SpellFeature>() is { } caster ? new SpellSystemQuestCaster(caster.System) : null), npcs),
+            SpellCaster: progression && _services.GetService<SpellFeature>() is { } caster ? new SpellSystemQuestCaster(caster.System) : null,
+            Party: progression ? new WorldQuestParty(_services, () => _world) : null), npcs),
         Options, new PersistenceSink(this), () => _clock.GetUtcNow().ToUnixTimeSeconds(), _logger);
 
     private QuestNpcDependencies ExtendDependencies(QuestNpcDependencies dependencies, NpcStore npcs)
