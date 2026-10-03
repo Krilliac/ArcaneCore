@@ -15,7 +15,74 @@ namespace ArcaneCore.World.Progression;
 public sealed class QuestRewardEffects(SpellSystem spells, Func<IEnumerable<IQuestReputationRewards>> reputation, ILogger logger)
     : IQuestRewardEffects
 {
-    public bool CanCastRewardSpell(uint spellId) => spells.Store.Get(spellId) is not null;
+    /// <summary>
+    /// Only transient, executable effects may use post-commit publication. Permanent rewards
+    /// need an atomic grant or a durable recovery intent before their quests can be consumed.
+    /// Handler registration alone does not provide that settlement contract.
+    /// </summary>
+    public bool CanCastRewardSpell(uint spellId) => CanPublish(spellId, []);
+
+    private bool CanPublish(uint spellId, HashSet<uint> visiting)
+    {
+        if (spells.Store.Get(spellId) is not { } spell || !visiting.Add(spellId))
+        {
+            return false;
+        }
+
+        try
+        {
+            bool hasEffect = false;
+            foreach (SpellEffectInfo effect in spell.Effects)
+            {
+                if (effect.IsEmpty)
+                {
+                    continue;
+                }
+
+                hasEffect = true;
+                // These handlers also need destination/spawn-owner preflight. Handler
+                // registration cannot prove that a post-commit reward will be delivered.
+                if (!spells.HasEffectHandler(effect.Effect) || RequiresDurableGrant(effect.Effect)
+                    || effect.Effect is (SpellEffectName.TeleportUnits or SpellEffectName.Summon)
+                    || effect.TargetA is not (SpellImplicitTarget.None or SpellImplicitTarget.UnitCaster
+                        or SpellImplicitTarget.Unit or SpellImplicitTarget.UnitFriend
+                        or SpellImplicitTarget.UnitEnemy or SpellImplicitTarget.UnitParty))
+                {
+                    return false;
+                }
+
+                if (effect.Effect == SpellEffectName.ApplyAura
+                    && (!spells.HasAuraHandler(effect.AuraType) || spell.IsPassive || spell.GetDuration() <= 0))
+                {
+                    return false;
+                }
+
+                if ((effect.Effect is (SpellEffectName.TriggerSpell or SpellEffectName.TriggerMissile)
+                        || effect.AuraType == AuraType.PeriodicTriggerSpell)
+                    && !CanPublish(effect.TriggerSpell, visiting))
+                {
+                    return false;
+                }
+            }
+
+            return hasEffect;
+        }
+        finally
+        {
+            visiting.Remove(spellId);
+        }
+    }
+
+    private static bool RequiresDurableGrant(SpellEffectName effect) => effect is
+        SpellEffectName.LearnSpell or SpellEffectName.LearnPetSpell or SpellEffectName.CreateItem
+        or SpellEffectName.QuestComplete or SpellEffectName.Skill or SpellEffectName.SkillStep
+        or SpellEffectName.TradeSkill or SpellEffectName.Proficiency or SpellEffectName.Language
+        or SpellEffectName.DualWield or SpellEffectName.Reputation or SpellEffectName.Bind
+        or SpellEffectName.EnchantItem or SpellEffectName.EnchantHeldItem
+        or SpellEffectName.DurabilityDamage or SpellEffectName.DurabilityDamagePct
+        or SpellEffectName.Disenchant or SpellEffectName.Pickpocket
+        // Opaque scripted effects cannot prove that all their grants are transient.
+        or SpellEffectName.Dummy or SpellEffectName.ScriptEffect or SpellEffectName.SendEvent;
 
     public void QuestRewarded(Player player, Quest quest, ObjectGuid questGiver)
     {

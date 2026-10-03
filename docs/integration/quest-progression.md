@@ -42,9 +42,17 @@ No GPL text was copied.
   slots for its own reward works. If a required item is missing, the whole reward
   fails.
 - Reward spells (`RewSpellCast`, else `RewSpell`) and reputation run through
-  `IQuestRewardEffects.QuestRewarded`. That happens exactly once, after the
-  settlement is durable and released (`PublishRewardEffects`). Recovery paths never
-  re-publish.
+  `IQuestRewardEffects.QuestRewarded` after settlement is durable and released
+  (`PublishRewardEffects`). Transient spell publication happens at most once for the
+  original online player; disconnect/recovery does not replay it to a replacement.
+  The daemon refuses permanent reward spell grants, including LearnSpell and
+  CreateItem, until they have an atomic settlement or durable recovery intent. A
+  registered spell handler alone does not supply that contract. Nested triggers
+  must also be supported and transient; cyclic/unknown chains are refused.
+  Executable effects and finite auras are checked against the active handler
+  registries, so supported transient adapters can extend this partial scope.
+  TeleportUnits and Summon rewards are also refused until their destination and
+  spawn-owner prerequisites can be checked before settlement.
 - Reputation: any world feature that implements `IQuestReputationRewards` gets
   `RewardQuestReputation(player, quest)`. It is found among the registered
   `IWorldFeature`s, so `WorldFeatures.cs` is not edited. This branch stores no
