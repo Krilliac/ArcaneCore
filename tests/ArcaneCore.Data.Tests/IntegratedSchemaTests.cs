@@ -16,6 +16,7 @@ using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Social;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
+using ArcaneCore.Data.World.PlayerStats;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
@@ -48,6 +49,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(GameObjectLootDataModule), DatabaseComponent.World, 7),
             (typeof(CreatureAiDataModule), DatabaseComponent.World, CreatureAiDataModule.Version),
             (typeof(QuestReputationRewardWorldModule), DatabaseComponent.World, QuestReputationRewardWorldModule.Version),
+            (typeof(PlayerStatsDataModule), DatabaseComponent.World, PlayerStatsDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
