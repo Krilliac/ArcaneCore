@@ -74,6 +74,10 @@ internal sealed class FakeSummons : ISpellSummonSink
 
     public bool Fail { get; set; }
 
+    public bool Refuse { get; set; }
+
+    public bool CanSummon(Unit owner, uint entry) => !Refuse;
+
     public Unit? Summon(Unit caster, uint entry, float x, float y, float z, float orientation, int durationMs)
     {
         Calls.Add((caster, entry, x, y, z, durationMs));

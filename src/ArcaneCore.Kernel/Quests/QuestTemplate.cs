@@ -6,7 +6,7 @@ namespace ArcaneCore.Kernel.Quests;
 /// ROADMAP § Content). Immutable once loaded; the Game layer derives a runtime quest from it.
 /// </summary>
 /// <remarks>
-/// Not carried (no consumer yet): RewRepFaction/RewRepValue (reputation), RewMailTemplateId,
+/// Not carried (no consumer yet): RewMailTemplateId,
 /// StartScript/CompleteScript, Required*Script. See docs/areas/quests-npc.md.
 /// </remarks>
 public sealed class QuestTemplate
@@ -286,6 +286,36 @@ public sealed class QuestTemplate
 
     /// <summary>quest_template.RewSpellCast.</summary>
     public uint RewSpellCast { get; init; }
+
+    /// <summary>quest_template.RewRepFaction1 (Faction.dbc id; zero = no reward in this slot).</summary>
+    public uint RewRepFaction1 { get; init; }
+
+    /// <summary>quest_template.RewRepValue1 (signed reputation points before rate and level scaling).</summary>
+    public int RewRepValue1 { get; init; }
+
+    /// <summary>quest_template.RewRepFaction2 (Faction.dbc id; zero = no reward in this slot).</summary>
+    public uint RewRepFaction2 { get; init; }
+
+    /// <summary>quest_template.RewRepValue2 (signed reputation points before rate and level scaling).</summary>
+    public int RewRepValue2 { get; init; }
+
+    /// <summary>quest_template.RewRepFaction3 (Faction.dbc id; zero = no reward in this slot).</summary>
+    public uint RewRepFaction3 { get; init; }
+
+    /// <summary>quest_template.RewRepValue3 (signed reputation points before rate and level scaling).</summary>
+    public int RewRepValue3 { get; init; }
+
+    /// <summary>quest_template.RewRepFaction4 (Faction.dbc id; zero = no reward in this slot).</summary>
+    public uint RewRepFaction4 { get; init; }
+
+    /// <summary>quest_template.RewRepValue4 (signed reputation points before rate and level scaling).</summary>
+    public int RewRepValue4 { get; init; }
+
+    /// <summary>quest_template.RewRepFaction5 (Faction.dbc id; zero = no reward in this slot).</summary>
+    public uint RewRepFaction5 { get; init; }
+
+    /// <summary>quest_template.RewRepValue5 (signed reputation points before rate and level scaling).</summary>
+    public int RewRepValue5 { get; init; }
 
     /// <summary>quest_template.PointMapId.</summary>
     public uint PointMapId { get; init; }

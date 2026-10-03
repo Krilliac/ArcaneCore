@@ -43,6 +43,9 @@ CharacterHandlers, WorldRuntime, DbContexts, WorldTestHost).
 | Teaching spells (trainers, quests, items) | `SpellFeature.System.LearnSpell(player, spellId)`. It persists the spell, sends SMSG_LEARNED_SPELL, and applies passives. |
 | Casting from other systems (items, procs, scripts) | `SpellFeature.System.CastSpell(caster, spellId, targets, triggered)` |
 | Interrupting (combat damage, movement) | `SpellFeature.System.CancelCast` / `CancelChannel` |
+| Preflighting a teleport or a summon (quest rewards) | `ITeleportSink.CanTeleport` and `ISpellSummonSink.CanSummon` ask, without side effects, whether the effect would be accepted now. A sink implementation must answer both; the daemon's `WorldSpellTeleportSink` delegates players to `TeleportService.CanTeleportTo`. `SpellSystem.TryResolveTeleportDestination` is the destination lookup of `EffectTeleportUnits`, shared so that preflight and effect agree. |
+| Is an effect handler still the built-in one? | `SpellSystem.HasBuiltInEffectHandler(effect)` is true until `RegisterEffect` replaces it. Quest reward preflight models only the built-in `TeleportUnits` and `Summon` handlers, so a replaced handler makes such a reward unsupported. |
+| Announcing a spell the book already holds | `SpellSystem.AnnounceLearnedSpell` (SMSG_LEARNED_SPELL) and `CastLearnedPassive`; `LearnSpell` is these two plus the book write. Quest rewards persist the spell with the journal and call them from the publication step. |
 
 ## Integration status and remaining work
 
@@ -88,3 +91,12 @@ Round 2 (`feat/spells-persistence`) adds cooldown/aura persistence across logout
 schema reserved v8), area/cone/chain/party targeting with a line-of-sight seam, weapon, leech,
 dispel, interrupt, summon and party area aura effects, vanilla hit/crit/resist rules and
 pushback/channel interrupts. See [spells-persistence.md](spells-persistence.md).
+
+## Quest reward spells (handoff item 5)
+
+Quest settlement now accepts reward spells that only teach spells or create items (persisted
+atomically with the journal, never cast) and transient spells (cast once after the commit), with
+the player-aware preflight above. See [quest-progression.md](quest-progression.md). The
+quest-hold guards also reach this area: `SpellbookCache.ForgetSpell` and `.unlearn` refuse a
+character held by a quest settlement, and `SpellbookCache.AdoptCommitted` adds committed spells
+to an existing cached book without queueing a write.

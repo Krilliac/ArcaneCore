@@ -21,6 +21,7 @@ public sealed partial class SpellSystem
     private readonly Func<uint> _clock;
     private readonly ILogger _logger;
     private readonly HashSet<(string Kind, uint Value)> _reportedUnsupported = [];
+    private readonly Dictionary<SpellEffectName, SpellEffectHandler> _builtInEffectHandlers;
 
     public SpellSystem(
         SpellStore store,
@@ -41,6 +42,7 @@ public sealed partial class SpellSystem
         Random = random ?? Random.Shared;
         _logger = logger ?? NullLogger.Instance;
         EffectHandlers = CreateEffectHandlers();
+        _builtInEffectHandlers = new Dictionary<SpellEffectName, SpellEffectHandler>(EffectHandlers);
         AuraHandlers = CreateAuraHandlers();
     }
 

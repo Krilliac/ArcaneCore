@@ -46,6 +46,23 @@ public sealed class PlayerReputation
         }
     }
 
+    private PlayerReputation(PlayerReputation source)
+    {
+        Factions = source.Factions;
+        RaceMask = source.RaceMask;
+        ClassMask = source.ClassMask;
+        WatchedFaction = source.WatchedFaction;
+        foreach ((int listId, FactionState state) in source._states)
+        {
+            _states[listId] = new FactionState(state.Faction, state.Flags)
+            {
+                Standing = state.Standing, NeedSend = state.NeedSend, NeedSave = state.NeedSave,
+            };
+        }
+
+        _newlyVisible.AddRange(source._newlyVisible);
+    }
+
     public FactionCatalog Factions { get; }
 
     public uint RaceMask { get; }
@@ -176,6 +193,12 @@ public sealed class PlayerReputation
         WatchedFaction = listId;
         return true;
     }
+
+    /// <summary>
+    /// A deep copy (states, flags, pending-send and pending-save marks, watched slot, pending visibility
+    /// announcements) for staging a change without touching the live standings.
+    /// </summary>
+    internal PlayerReputation Clone() => new(this);
 
     /// <summary>List slots made visible since the last call (SMSG_SET_FACTION_VISIBLE once each).</summary>
     public IReadOnlyList<int> TakeNewlyVisible()

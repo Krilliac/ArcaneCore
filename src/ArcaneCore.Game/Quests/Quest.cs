@@ -30,6 +30,8 @@ public sealed class Quest
         RewChoiceItemCount = [t.RewChoiceItemCount1, t.RewChoiceItemCount2, t.RewChoiceItemCount3, t.RewChoiceItemCount4, t.RewChoiceItemCount5, t.RewChoiceItemCount6];
         RewItemId = [t.RewItemId1, t.RewItemId2, t.RewItemId3, t.RewItemId4];
         RewItemCount = [t.RewItemCount1, t.RewItemCount2, t.RewItemCount3, t.RewItemCount4];
+        RewRepFaction = [t.RewRepFaction1, t.RewRepFaction2, t.RewRepFaction3, t.RewRepFaction4, t.RewRepFaction5];
+        RewRepValue = [t.RewRepValue1, t.RewRepValue2, t.RewRepValue3, t.RewRepValue4, t.RewRepValue5];
         DetailsEmote = [t.DetailsEmote1, t.DetailsEmote2, t.DetailsEmote3, t.DetailsEmote4];
         DetailsEmoteDelay = [t.DetailsEmoteDelay1, t.DetailsEmoteDelay2, t.DetailsEmoteDelay3, t.DetailsEmoteDelay4];
         OfferRewardEmote = [t.OfferRewardEmote1, t.OfferRewardEmote2, t.OfferRewardEmote3, t.OfferRewardEmote4];
@@ -120,6 +122,12 @@ public sealed class Quest
     public IReadOnlyList<uint> RewItemId { get; }
 
     public IReadOnlyList<uint> RewItemCount { get; }
+
+    /// <summary>quest_template.RewRepFaction1..5 (vmangos QUEST_REPUTATIONS_COUNT).</summary>
+    public IReadOnlyList<uint> RewRepFaction { get; }
+
+    /// <summary>quest_template.RewRepValue1..5, parallel to <see cref="RewRepFaction"/>.</summary>
+    public IReadOnlyList<int> RewRepValue { get; }
 
     public IReadOnlyList<uint> DetailsEmote { get; }
 

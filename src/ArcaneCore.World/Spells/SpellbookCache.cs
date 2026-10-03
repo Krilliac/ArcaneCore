@@ -116,9 +116,37 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         return true;
     }
 
-    /// <summary>Forget a spell (vmangos Player::removeSpell); false when it was not known.</summary>
+    /// <summary>
+    /// Add spells a quest reward transaction already persisted to a book that is cached; queues no write
+    /// and never creates a book (a partial book would be mistaken for an initialized one; login reloads
+    /// storage in any case). Returns false when the character has no cached book.
+    /// </summary>
+    public bool AdoptCommitted(int characterId, IReadOnlyCollection<uint> spells)
+    {
+        ArgumentNullException.ThrowIfNull(spells);
+        lock (_lock)
+        {
+            if (!_spells.TryGetValue(characterId, out HashSet<uint>? book))
+            {
+                return false;
+            }
+
+            book.UnionWith(spells);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Forget a spell (vmangos Player::removeSpell); false when it was not known, or while a quest
+    /// reward settlement holds the character (a queued removal could race the reward's own rows).
+    /// </summary>
     public bool ForgetSpell(Player player, uint spellId)
     {
+        if (!player.CanMutateQuestSettlementState)
+        {
+            return false;
+        }
+
         int id = CharacterId(player);
         lock (_lock)
         {

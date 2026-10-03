@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.Reputation;
 /// client notifications, kill/quest rewards and reaction resolution. Also serves the NPC
 /// services' <see cref="IPlayerReputation"/> seam.
 /// </summary>
-public sealed class ReputationService : IReputationService, IPlayerReputation
+public sealed class ReputationService : IReputationService, IPlayerReputation, IQuestReputationSettlement
 {
     private readonly ConditionalWeakTable<Player, PlayerReputation> _players = new();
     private readonly Dictionary<uint, ReputationOnKillEntry> _onKill;
@@ -143,7 +143,9 @@ public sealed class ReputationService : IReputationService, IPlayerReputation
     /// <summary>CMSG_SET_FACTION_ATWAR after the handler's combat check; persisted, not echoed (the client toggled it).</summary>
     public bool SetAtWar(Player player, int listId, bool atWar)
     {
-        if (For(player) is not { } rep || !rep.SetAtWarByClient(listId, atWar))
+        // Held by a quest settlement: the settlement writes full standing rows, so a flag change now could
+        // be queued behind (and revert) the committed reward. A refused toggle is not echoed to the client.
+        if (!player.CanMutateQuestSettlementState || For(player) is not { } rep || !rep.SetAtWarByClient(listId, atWar))
         {
             return false;
         }
@@ -155,7 +157,7 @@ public sealed class ReputationService : IReputationService, IPlayerReputation
     /// <summary>CMSG_SET_FACTION_INACTIVE; persisted, not echoed.</summary>
     public bool SetInactive(Player player, int listId, bool inactive)
     {
-        if (For(player) is not { } rep || !rep.SetInactiveByClient(listId, inactive))
+        if (!player.CanMutateQuestSettlementState || For(player) is not { } rep || !rep.SetInactiveByClient(listId, inactive))
         {
             return false;
         }
@@ -206,10 +208,27 @@ public sealed class ReputationService : IReputationService, IPlayerReputation
         }
     }
 
+    /// <summary>
+    /// ReputationMgr::SetOneFactionReputation and the client updates, persisted through the sink. Refused
+    /// while a quest settlement holds the character (only its own publication step may change standings).
+    /// </summary>
     private bool Change(Player player, uint factionId, int value, bool incremental)
     {
         ArgumentNullException.ThrowIfNull(player);
-        if (For(player) is not { } rep || Factions.Find(factionId) is not { } faction || rep.State(faction) is not { } state
+        if (!player.CanMutateQuestSettlementState || !ApplyAndNotify(player, factionId, value, incremental, out PlayerReputation? rep))
+        {
+            return false;
+        }
+
+        Persist(player, rep);
+        return true;
+    }
+
+    private bool ApplyAndNotify(Player player, uint factionId, int value, bool incremental,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out PlayerReputation? rep)
+    {
+        rep = For(player);
+        if (rep is null || Factions.Find(factionId) is not { } faction || rep.State(faction) is not { } state
             || !rep.Apply(faction, value, incremental))
         {
             return false;
@@ -221,8 +240,80 @@ public sealed class ReputationService : IReputationService, IPlayerReputation
         }
 
         player.Session.Send(WorldOpcode.SmsgSetFactionStanding, ReputationPackets.SetFactionStanding(rep.TakeStandingUpdate(state)));
-        Persist(player, rep);
         return true;
+    }
+
+    public bool TryStage(Player player, int questLevel, IReadOnlyList<QuestReputationReward> rewards, out QuestReputationStage stage)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(rewards);
+        stage = QuestReputationStage.Empty;
+        uint level = questLevel > 0 ? (uint)questLevel : player.Level;
+        PlayerReputation? live = For(player);
+        PlayerReputation? copy = null;
+        var gains = new List<(uint Faction, int Gain)>();
+        foreach (QuestReputationReward reward in rewards)
+        {
+            // The same skip rules as RewardQuest (vmangos RewardReputation ignores a pair with a zero value).
+            if (reward.FactionId == 0 || reward.Value == 0 || Factions.Find(reward.FactionId) is not { } faction)
+            {
+                continue;
+            }
+
+            if (live is null)
+            {
+                return false;
+            }
+
+            copy ??= live.Clone();
+            int gain = Gain(ReputationSource.Quest, player, reward.Value, reward.FactionId, level);
+            if (copy.Apply(faction, gain, incremental: true))
+            {
+                gains.Add((reward.FactionId, gain));
+            }
+        }
+
+        if (copy is not null && gains.Count > 0)
+        {
+            stage = new QuestReputationStage(gains, copy.TakeDirty((int)player.Guid.Low));
+        }
+
+        return true;
+    }
+
+    public bool Publish(Player player, QuestReputationStage stage)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(stage);
+        if (stage.Gains.Count == 0)
+        {
+            return true;
+        }
+
+        PlayerReputation? rep = For(player);
+        foreach ((uint faction, int gain) in stage.Gains)
+        {
+            // The publication scope lifts the settlement hold; no sink call, the transaction persisted the rows.
+            ApplyAndNotify(player, faction, gain, incremental: true, out rep);
+        }
+
+        if (rep is null)
+        {
+            return false;
+        }
+
+        IReadOnlyList<CharacterReputationRow> live = rep.TakeDirty((int)player.Guid.Low);
+        if (live.SequenceEqual(stage.After))
+        {
+            return true;
+        }
+
+        if (live.Count > 0)
+        {
+            _sink?.FactionsChanged(player, live);
+        }
+
+        return false;
     }
 
     private void Persist(Player player, PlayerReputation rep)

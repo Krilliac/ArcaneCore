@@ -63,6 +63,11 @@ v6 social. Auth remains v2. See [fleet accounting](fleet-20261003.md) for the
 exact source heads, schema lineage, and validation. These assignments apply to
 this candidate; the original feature branches retain their draft allocations.
 
+Handoff item 5 (reward collaborators) allocates **world v9** (`QuestReputationRewardWorldModule.Version`):
+the quest reputation reward columns of `quest_template`. It was allocated in an isolated worktree;
+the integrator renumbers it (to v10 after the v9 taken by another lane) and updates
+`IntegratedSchemaTests`, which references the constant. No characters or auth version is added.
+
 ## Local build and test (box)
 
 ```

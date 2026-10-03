@@ -5,19 +5,23 @@ using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Quests;
+using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.MockClient.Hosting;
 using ArcaneCore.MockClient.Protocol;
 using ArcaneCore.MockClient.Scenarios;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Persistence;
+using ArcaneCore.World.Reputation;
 using ArcaneCore.World.Spells;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -38,7 +42,7 @@ public sealed class QuestRewardAsyncRecoveryTests
     [Theory]
     [InlineData(SpellEffectName.LearnSpell)]
     [InlineData(SpellEffectName.CreateItem)]
-    public async Task PermanentRewardSpell_IsRefusedBeforeSettlementAndRemainsAvailableAfterDisconnect(SpellEffectName effect)
+    public async Task PermanentRewardSpell_SettlesAtomicallyWithTheJournal(SpellEffectName effect)
     {
         using var deadline = TestDeadline();
         CancellationToken token = deadline.Token;
@@ -47,35 +51,349 @@ public sealed class QuestRewardAsyncRecoveryTests
         await InstallRewardSpellAsync(server, effect, token);
         await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
         QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
-        bool prepared = await server.World.InvokeAsync(() => feature.Services.TryPrepareReward(
-            server.World.FindOnlinePlayer(new ObjectGuid(original.Guid))!,
-            new ObjectGuid(SyntheticArcaneServer.NpcGuid), SyntheticArcaneServer.RewardQuestId, 1, out _)).WaitAsync(token);
-        Assert.False(prepared); // Baseline fails here without waiting for a missing packet.
+        int id = checked((int)original.Guid);
+        Assert.True(await CanPrepareAsync(server, feature, original.Guid, token)); // fails fast instead of waiting for a missing packet
         await MockScenarios.ChooseRewardAsync(original.Connection, 1, token);
-        await original.Connection.SendAsync(WorldOpcode.CmsgQuestgiverStatusQuery, ScenarioWire.Guid(SyntheticArcaneServer.NpcGuid), token);
-        while (true)
+        RewardFrames frames = await ReadRewardFramesAsync(original.Connection, feature, id, 0x90000440, token);
+        Assert.Equal(1, control.Attempts);
+        await using AsyncServiceScope scope = server.Services.CreateAsyncScope();
+        IReadOnlyList<uint> spells = await scope.ServiceProvider.GetRequiredService<ICharacterSpellStore>().GetAsync(id, token);
+        if (effect == SpellEffectName.LearnSpell)
         {
-            WorldFrame frame = await original.Connection.ReadAsync(token);
-            Assert.NotEqual((ushort)WorldOpcode.SmsgQuestgiverQuestComplete, frame.Opcode);
-            Assert.NotEqual((ushort)WorldOpcode.SmsgItemPushResult, frame.Opcode);
-            Assert.NotEqual((ushort)WorldOpcode.SmsgLearnedSpell, frame.Opcode);
-            if (frame.Opcode == (ushort)WorldOpcode.SmsgQuestgiverStatus) break;
+            Assert.Contains(LearnedSpellId, spells);
+            Assert.Equal([LearnedSpellId], frames.LearnedSpells);
+            Player player = await FindPlayerAsync(server, original.Guid, token);
+            Assert.True(await server.World.InvokeAsync(() => server.Services.GetRequiredService<SpellFeature>().Spellbook
+                .HasSpell(player, LearnedSpellId)).WaitAsync(token));
+            await AssertLiveAsync(server, original.Guid, rewarded: true, token);
+            await AssertStoredAsync(server, original.Guid, rewarded: true, token);
         }
+        else
+        {
+            Assert.DoesNotContain(LearnedSpellId, spells);
+            Assert.Empty(frames.LearnedSpells);
+            await server.FlushCharacterAsync(id, token);
+            CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+            IReadOnlyList<InventoryItemData> items = await new EfItemStore(db).GetInventoryAsync(id, token);
+            // The quest's own fixed grant (1) plus the created stack (BasePoints 19 + one 1-sided die).
+            Assert.Equal(1u + CreatedItemCount, (uint)items.Where(i => i.Item.Entry == SyntheticArcaneServer.FixedRewardItem).Sum(i => i.Item.Count));
+            Assert.Single(items, i => i.Item.Entry == SyntheticArcaneServer.ChosenRewardItem && i.Item.Count == 1);
+            Assert.Equal(2, frames.Pushes.Count(p => !p.Created));
+            ItemPush created = Assert.Single(frames.Pushes, p => p.Created);
+            Assert.Equal(SyntheticArcaneServer.FixedRewardItem, created.Entry);
+            Assert.Equal(CreatedItemCount, created.Count);
+        }
+    }
 
+    [Fact]
+    public async Task PermanentGrant_CommittedWhileDisconnected_ReplacementLoadsItWithoutReplay()
+    {
+        using var deadline = TestDeadline();
+        CancellationToken token = deadline.Token;
+        var control = new RewardControl(holdAfterSave: false, holdSuccessfulReturn: true);
+        await using SyntheticArcaneServer server = await StartAsync(control, token, RewardSpellId);
+        await InstallRewardSpellAsync(server, SpellEffectName.LearnSpell, token);
+        await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
+        QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
+        int id = checked((int)original.Guid);
+        Assert.True(await CanPrepareAsync(server, feature, original.Guid, token));
+        Player oldPlayer = await FindPlayerAsync(server, original.Guid, token);
+        Task<MockLogin>? login = null;
+        WorldClient? replacementClient = null;
+        try
+        {
+            await MockScenarios.ChooseRewardAsync(original.Connection, 1, token);
+            await control.Committed.Task.WaitAsync(token);
+            await original.Client.DisposeAsync();
+            await WaitUntilOfflineAsync(server, token);
+            replacementClient = await AuthenticateAsync(server, token);
+            var replacement = new ScenarioConnection(replacementClient);
+            login = replacement.LoginAsync(original.Guid, token);
+            await Task.Delay(150, token);
+            Assert.False(login.IsCompleted);
+
+            control.AcknowledgementRelease.TrySetResult(true);
+            await feature.WaitForSettlementAsync(id, token);
+            await login.WaitAsync(token);
+            Player replacementPlayer = await FindPlayerAsync(server, original.Guid, token);
+            Assert.NotSame(oldPlayer, replacementPlayer);
+            SpellbookCache book = server.Services.GetRequiredService<SpellFeature>().Spellbook;
+            Assert.True(await server.World.InvokeAsync(() => book.HasSpell(replacementPlayer, LearnedSpellId)).WaitAsync(token));
+            Assert.Equal(1, await server.World.InvokeAsync(() => book.GetSpells(replacementPlayer).Count(s => s == LearnedSpellId)).WaitAsync(token));
+            RewardFrames after = await ReadFramesUntilPongAsync(replacement, 0x90000441, token);
+            Assert.Empty(after.LearnedSpells); // loaded from storage, never replayed
+            await AssertStoredAsync(server, original.Guid, rewarded: true, token);
+            Assert.Equal(1, control.Attempts);
+        }
+        finally
+        {
+            control.ReleaseAll();
+            await ObserveCompletionAsync(login);
+            if (replacementClient is not null) await replacementClient.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task TeleportReward_KnownDestinationPublishedOnceToOriginalPlayer_UnknownMapRefusedBeforeHold()
+    {
+        using var deadline = TestDeadline();
+        CancellationToken token = deadline.Token;
+        var control = new RewardControl(holdAfterSave: false);
+        await using SyntheticArcaneServer server = await StartAsync(control, token, RewardSpellId);
+        await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
+        QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
+        int id = checked((int)original.Guid);
+        Player player = await FindPlayerAsync(server, original.Guid, token);
+
+        // Unknown map: refused at preparation, so nothing is held, written or answered.
+        await InstallTeleportSpellAsync(server, player, mapId: 9999, token);
+        Assert.False(await CanPrepareAsync(server, feature, original.Guid, token));
+        await MockScenarios.ChooseRewardAsync(original.Connection, 1, token);
+        await original.Connection.AssertNoRewardUntilPongAsync(0x90000442, token);
         Assert.Equal(0, control.Attempts);
         Assert.Equal(0, feature.PendingSettlementCount);
         await AssertStoredAsync(server, original.Guid, rewarded: false, token);
+
+        // Known map: the same reward now settles and the teleport reaches the original player once.
+        await InstallTeleportSpellAsync(server, player, mapId: player.MapId, token);
+        Assert.True(await CanPrepareAsync(server, feature, original.Guid, token));
+        await MockScenarios.ChooseRewardAsync(original.Connection, 1, token);
+        RewardFrames frames = await ReadRewardFramesAsync(original.Connection, feature, id, 0x90000443, token);
+        Assert.Equal(1, control.Attempts);
+        Assert.Equal(1, frames.Count(WorldOpcode.MsgMoveTeleportAck));
+        await AssertStoredAsync(server, original.Guid, rewarded: true, token);
+    }
+
+    [Theory]
+    [InlineData(Tamper.None)]
+    [InlineData(Tamper.SpellRow)]
+    [InlineData(Tamper.ReputationRow)]
+    public async Task LostAcknowledgement_WithLearnedSpellAndReputation_ReconcilesAfterOnlyWhenEveryRowIsPresent(Tamper tamper)
+    {
+        using var deadline = TestDeadline();
+        CancellationToken token = deadline.Token;
+        var control = new RewardControl(holdAfterSave: false, loseAcknowledgement: true) { Tamper = tamper };
+        await using SyntheticArcaneServer server = await StartAsync(control, token, RewardSpellId, ReputationFaction, ReputationValue);
+        await InstallRewardSpellAsync(server, SpellEffectName.LearnSpell, token);
+        await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
+        QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
+        int id = checked((int)original.Guid);
+        Assert.True(await CanPrepareAsync(server, feature, original.Guid, token));
+        try
+        {
+            await MockScenarios.ChooseRewardAsync(original.Connection, 1, token);
+            await control.Committed.Task.WaitAsync(token);
+            // The commit is durable but its acknowledgement is lost: reconciliation reads every row back.
+            control.AcknowledgementRelease.TrySetResult(true);
+            await using AsyncServiceScope scope = server.Services.CreateAsyncScope();
+            if (tamper == Tamper.None)
+            {
+                RewardFrames frames = await ReadRewardFramesAsync(original.Connection, feature, id, 0x90000444, token);
+                Assert.Equal([LearnedSpellId], frames.LearnedSpells);
+                Assert.True(frames.Count(WorldOpcode.SmsgSetFactionStanding) >= 1);
+                await AssertLiveAsync(server, original.Guid, rewarded: true, token);
+            }
+            else
+            {
+                // A row the reward wrote is missing: the outcome is Unknown, nothing is published, the
+                // session is kicked and only a fresh login (which loads storage) may continue.
+                await feature.WaitForSettlementAsync(id, token);
+                await WaitUntilOfflineAsync(server, token);
+            }
+
+            Assert.Equal(1, control.Attempts);
+            await AssertStoredAsync(server, original.Guid, rewarded: true, token);
+            bool spellStored = (await scope.ServiceProvider.GetRequiredService<ICharacterSpellStore>().GetAsync(id, token)).Contains(LearnedSpellId);
+            bool factionStored = (await scope.ServiceProvider.GetRequiredService<ICharacterReputationStore>().LoadAsync(id, token))
+                .Factions.Any(row => row.Faction == ReputationFaction);
+            Assert.Equal(tamper != Tamper.SpellRow, spellStored);
+            Assert.Equal(tamper != Tamper.ReputationRow, factionStored);
+        }
+        finally
+        {
+            control.ReleaseAll();
+        }
+    }
+
+    [Fact]
+    public async Task ReputationQuestReward_PersistsWithTheJournal_AndSurvivesRelog()
+    {
+        using var deadline = TestDeadline();
+        CancellationToken token = deadline.Token;
+        var control = new RewardControl(holdAfterSave: false);
+        await using SyntheticArcaneServer server = await StartAsync(control, token, 0, ReputationFaction, ReputationValue);
+        await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
+        QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
+        int id = checked((int)original.Guid);
+        ReputationService reputation = server.Services.GetRequiredService<ReputationFeature>().Service;
+        Assert.True(await CanPrepareAsync(server, feature, original.Guid, token));
+
+        await MockScenarios.ChooseRewardAsync(original.Connection, 1, token);
+        RewardFrames frames = await ReadRewardFramesAsync(original.Connection, feature, id, 0x90000445, token);
+        Assert.Equal(1, control.Attempts);
+        List<ushort> order = [.. frames.Frames.Select(f => f.Opcode)];
+        Assert.True(order.IndexOf((ushort)WorldOpcode.SmsgSetFactionStanding) is var standing and >= 0
+            && order.IndexOf((ushort)WorldOpcode.SmsgQuestgiverQuestComplete) > standing);
+        await AssertStoredAsync(server, original.Guid, rewarded: true, token);
+
+        int live = await server.World.InvokeAsync(() => reputation.GetReputation(
+            server.World.FindOnlinePlayer(new ObjectGuid(original.Guid))!, ReputationFaction)).WaitAsync(token);
+        Assert.True(live > 0);
+        await using (AsyncServiceScope scope = server.Services.CreateAsyncScope())
+        {
+            CharacterReputationRow stored = Assert.Single((await scope.ServiceProvider.GetRequiredService<ICharacterReputationStore>()
+                .LoadAsync(id, token)).Factions, row => row.Faction == ReputationFaction);
+            Assert.Equal(live, stored.Standing); // the committed row is exactly what the live player shows
+        }
+
+        // A fresh login builds its standings from storage alone, and the old callbacks never replay.
         await original.Client.DisposeAsync();
         await WaitUntilOfflineAsync(server, token);
         await using WorldClient nextClient = await AuthenticateAsync(server, token);
         var next = new ScenarioConnection(nextClient);
         await next.LoginAsync(original.Guid, token);
-        await AssertLiveAsync(server, original.Guid, rewarded: false, token);
-        await AssertStoredAsync(server, original.Guid, rewarded: false, token);
-        Assert.Equal(0, control.Attempts);
-        await using AsyncServiceScope scope = server.Services.CreateAsyncScope();
-        Assert.DoesNotContain(LearnedSpellId, await scope.ServiceProvider.GetRequiredService<ICharacterSpellStore>()
-            .GetAsync(checked((int)original.Guid), token));
+        Assert.Equal(live, await server.World.InvokeAsync(() => reputation.GetReputation(
+            server.World.FindOnlinePlayer(new ObjectGuid(original.Guid))!, ReputationFaction)).WaitAsync(token));
+        await AssertLiveAsync(server, original.Guid, rewarded: true, token);
+    }
+
+    [Fact]
+    public async Task SpellbookFailedRetry_BlocksSettlementWithoutTouchingRows_ThenSettlesAfterRecovery()
+    {
+        using var deadline = TestDeadline();
+        CancellationToken token = deadline.Token;
+        var control = new RewardControl(holdAfterSave: false);
+        await using SyntheticArcaneServer server = await StartAsync(control, token, RewardSpellId);
+        await InstallRewardSpellAsync(server, SpellEffectName.LearnSpell, token);
+        await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
+        QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
+        SpellbookCache book = server.Services.GetRequiredService<SpellFeature>().Spellbook;
+        int id = checked((int)original.Guid);
+        const uint earlierSpell = 990003;
+        Assert.True(await CanPrepareAsync(server, feature, original.Guid, token));
+
+        // A spellbook write fails: the character is in the writer's failed set until a retry succeeds.
+        Volatile.Write(ref control.FailSpellWrites, 1);
+        Player player = await FindPlayerAsync(server, original.Guid, token);
+        Assert.True(await server.World.InvokeAsync(() => book.LearnSpell(player, earlierSpell)).WaitAsync(token));
+        await book.FlushAsync(); // the failing write has been attempted
+
+        int failuresBefore = Volatile.Read(ref control.SpellFailureCount);
+        await MockScenarios.ChooseRewardAsync(original.Connection, 1, token);
+        // The settlement's own pre-commit flush hits the failing store (requests are dropped while it runs,
+        // so the barrier below may only be used once it has ended).
+        while (Volatile.Read(ref control.SpellFailureCount) <= failuresBefore)
+        {
+            await Task.Delay(10, token);
+        }
+
+        await feature.WaitForSettlementAsync(id, token);
+        await original.Connection.AssertNoRewardUntilPongAsync(0x90000446, token);
+        Assert.Equal(0, control.Attempts); // no transaction started
+        Assert.Equal(0, feature.PendingSettlementCount);
+        Assert.False(await server.World.InvokeAsync(() => player.IsQuestSettlementPending).WaitAsync(token));
+        await AssertStoredAsync(server, original.Guid, rewarded: false, token, flush: false);
+        await using (AsyncServiceScope scope = server.Services.CreateAsyncScope())
+        {
+            IReadOnlyList<uint> rows = await new EfCharacterSpellStore(scope.ServiceProvider.GetRequiredService<CharacterDbContext>()).GetAsync(id, token);
+            Assert.DoesNotContain(LearnedSpellId, rows);
+            Assert.DoesNotContain(earlierSpell, rows);
+        }
+
+        // Storage recovers: the same reward is still available and the retry reconciles the earlier write first.
+        Volatile.Write(ref control.FailSpellWrites, 0);
+        Assert.True(await CanPrepareAsync(server, feature, original.Guid, token));
+        await MockScenarios.ChooseRewardAsync(original.Connection, 1, token);
+        RewardFrames frames = await ReadRewardFramesAsync(original.Connection, feature, id, 0x90000447, token);
+        Assert.Equal([LearnedSpellId], frames.LearnedSpells);
+        Assert.Equal(1, control.Attempts);
+        await using AsyncServiceScope after = server.Services.CreateAsyncScope();
+        IReadOnlyList<uint> stored = await after.ServiceProvider.GetRequiredService<ICharacterSpellStore>().GetAsync(id, token);
+        Assert.Contains(LearnedSpellId, stored);
+        Assert.Contains(earlierSpell, stored);
+        await AssertStoredAsync(server, original.Guid, rewarded: true, token);
+    }
+
+    private const uint ReputationFaction = 21;
+    private const int ReputationValue = 250;
+
+    public enum Tamper { None, SpellRow, ReputationRow }
+
+    // BasePoints 19 plus one 1-sided die: the frozen CreateItem count of the installed reward spell.
+    private const uint CreatedItemCount = 20;
+
+    private static Task<bool> CanPrepareAsync(SyntheticArcaneServer server, QuestNpcFeature feature, ulong guid, CancellationToken token)
+        => server.World.InvokeAsync(() => feature.Services.TryPrepareReward(
+            server.World.FindOnlinePlayer(new ObjectGuid(guid))!,
+            new ObjectGuid(SyntheticArcaneServer.NpcGuid), SyntheticArcaneServer.RewardQuestId, 1, out _)).WaitAsync(token);
+
+    private static Task InstallTeleportSpellAsync(SyntheticArcaneServer server, Player player, uint mapId, CancellationToken token)
+        => server.World.InvokeAsync(() =>
+        {
+            SpellSystem system = server.Services.GetRequiredService<SpellFeature>().System;
+            system.Store = new SpellStore(system.Store.All.Where(s => s.Id != RewardSpellId).Append(new SpellInfo
+            {
+                Id = RewardSpellId, RangeIndex = SpellConstants.RangeIndexSelfOnly,
+                Effects = [new SpellEffectInfo
+                {
+                    Effect = SpellEffectName.TeleportUnits, TargetA = SpellImplicitTarget.UnitCaster,
+                    TargetB = SpellImplicitTarget.LocationDatabase,
+                }],
+            }), [], [(RewardSpellId, new SpellTargetPosition(mapId, player.X + 1, player.Y, player.Z, player.Orientation))]);
+            return true;
+        }).WaitAsync(token);
+
+    private sealed record ItemPush(bool Created, uint Entry, uint Count);
+
+    private sealed class RewardFrames(IReadOnlyList<WorldFrame> frames)
+    {
+        public IReadOnlyList<WorldFrame> Frames { get; } = frames;
+
+        public int Count(WorldOpcode opcode) => Frames.Count(f => f.Opcode == (ushort)opcode);
+
+        public IReadOnlyList<uint> LearnedSpells => Frames.Where(f => f.Opcode == (ushort)WorldOpcode.SmsgLearnedSpell)
+            .Select(f => BitConverter.ToUInt32(f.Payload, 0)).ToArray();
+
+        public IReadOnlyList<ItemPush> Pushes => Frames.Where(f => f.Opcode == (ushort)WorldOpcode.SmsgItemPushResult)
+            .Select(f => new ItemPush(BitConverter.ToUInt32(f.Payload, 12) == 1, BitConverter.ToUInt32(f.Payload, 25),
+                BitConverter.ToUInt32(f.Payload, 37))).ToArray();
+    }
+
+    /// <summary>Everything up to the quest completion, then (once the settlement fully published) everything up to a pong.</summary>
+    private static async Task<RewardFrames> ReadRewardFramesAsync(ScenarioConnection connection, QuestNpcFeature feature,
+        int characterId, uint sequence, CancellationToken token)
+    {
+        var frames = new List<WorldFrame>();
+        while (true)
+        {
+            WorldFrame frame = await connection.ReadAsync(token);
+            frames.Add(frame);
+            if (frame.Opcode == (ushort)WorldOpcode.SmsgQuestgiverQuestComplete)
+            {
+                break;
+            }
+        }
+
+        // Publication is one synchronous world-thread step; the ping below is sent after it finished.
+        await feature.WaitForSettlementAsync(characterId, token);
+        frames.AddRange((await ReadFramesUntilPongAsync(connection, sequence, token)).Frames);
+        return new RewardFrames(frames);
+    }
+
+    private static async Task<RewardFrames> ReadFramesUntilPongAsync(ScenarioConnection connection, uint sequence, CancellationToken token)
+    {
+        await connection.SendAsync(WorldOpcode.CmsgPing, ScenarioWire.Ping(sequence, 0), token);
+        var frames = new List<WorldFrame>();
+        while (true)
+        {
+            WorldFrame frame = await connection.ReadAsync(token);
+            if (frame.Opcode == (ushort)WorldOpcode.SmsgPong)
+            {
+                return new RewardFrames(frames);
+            }
+
+            frames.Add(frame);
+        }
     }
 
     [Theory]
@@ -462,7 +780,8 @@ public sealed class QuestRewardAsyncRecoveryTests
         }
     }
 
-    private static Task<SyntheticArcaneServer> StartAsync(RewardControl control, CancellationToken token, uint rewardSpell = 0)
+    private static Task<SyntheticArcaneServer> StartAsync(RewardControl control, CancellationToken token, uint rewardSpell = 0,
+        uint reputationFaction = 0, int reputationValue = 0)
         => SyntheticArcaneServer.StartAsync(services =>
         {
             services.AddScoped<ICharacterQuestRewardStore>(provider => new ControlledRewardStore(
@@ -471,14 +790,24 @@ public sealed class QuestRewardAsyncRecoveryTests
                 new EfCharacterStore(provider.GetRequiredService<CharacterDbContext>()), control));
             services.AddScoped<ICharacterQuestStore>(provider => new QuestFlushFaultStore(
                 new EfCharacterQuestStore(provider.GetRequiredService<CharacterDbContext>()), control));
-            if (rewardSpell != 0)
+            services.AddScoped<ICharacterSpellStore>(provider => new FaultSpellStore(
+                new EfCharacterSpellStore(provider.GetRequiredService<CharacterDbContext>()), control));
+            if (reputationFaction != 0)
+            {
+                // Faction.dbc content: without it the daemon has no reputation owner and such quests stay unsupported.
+                services.AddSingleton(new FactionCatalog([new FactionRecord(reputationFaction, 0, [0, 0, 0, 0], [0, 0, 0, 0],
+                    [0, 0, 0, 0], [0, 0, 0, 0], 0, "Synthetic faction")]));
+            }
+
+            if (rewardSpell != 0 || reputationFaction != 0)
             {
                 services.AddScoped<IQuestContentStore>(provider => new RewardSpellContentStore(
-                    new EfQuestContentStore(provider.GetRequiredService<WorldDbContext>()), rewardSpell));
+                    new EfQuestContentStore(provider.GetRequiredService<WorldDbContext>()), rewardSpell, reputationFaction, reputationValue));
             }
         }, token);
 
-    private sealed class RewardSpellContentStore(IQuestContentStore inner, uint spell) : IQuestContentStore
+    private sealed class RewardSpellContentStore(IQuestContentStore inner, uint spell, uint reputationFaction, int reputationValue)
+        : IQuestContentStore
     {
         public async Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default)
         {
@@ -493,7 +822,7 @@ public sealed class QuestRewardAsyncRecoveryTests
                     RewOrReqMoney = quest.RewOrReqMoney, RewItemId1 = quest.RewItemId1, RewItemCount1 = quest.RewItemCount1,
                     RewChoiceItemId1 = quest.RewChoiceItemId1, RewChoiceItemCount1 = quest.RewChoiceItemCount1,
                     RewChoiceItemId2 = quest.RewChoiceItemId2, RewChoiceItemCount2 = quest.RewChoiceItemCount2,
-                    RewSpell = spell,
+                    RewSpell = spell, RewRepFaction1 = reputationFaction, RewRepValue1 = reputationValue,
                 }).ToArray() };
         }
     }
@@ -693,6 +1022,23 @@ public sealed class QuestRewardAsyncRecoveryTests
                         Interlocked.Exchange(ref control.ArmedReadFailure, 1);
                     }
 
+                    if (control.Tamper != Tamper.None)
+                    {
+                        // Something removed a row the reward wrote before reconciliation could read it back.
+                        await using var tamper = new CharacterDbContext(options);
+                        int characterId = request.Before.Id;
+                        if (control.Tamper == Tamper.SpellRow)
+                        {
+                            await tamper.Set<CharacterSpellRow>().Where(r => r.CharacterId == characterId && r.Spell == LearnedSpellId)
+                                .ExecuteDeleteAsync(CancellationToken.None);
+                        }
+                        else
+                        {
+                            await tamper.Set<CharacterReputationEntity>().Where(r => r.CharacterId == characterId && r.Faction == ReputationFaction)
+                                .ExecuteDeleteAsync(CancellationToken.None);
+                        }
+                    }
+
                     throw new IOException("Synthetic asynchronous acknowledgement lost after the real SQLite commit.");
                 }
             }
@@ -785,6 +1131,43 @@ public sealed class QuestRewardAsyncRecoveryTests
             => inner.SaveTaxiMaskAsync(characterId, mask, cancellationToken);
     }
 
+    /// <summary>Delegates to the real spell store, except that reads and writes fail while the control says so.</summary>
+    private sealed class FaultSpellStore(ICharacterSpellStore inner, RewardControl control) : ICharacterSpellStore
+    {
+        private void Check()
+        {
+            if (Volatile.Read(ref control.FailSpellWrites) != 0)
+            {
+                Interlocked.Increment(ref control.SpellFailureCount);
+                throw new IOException("Synthetic spell store failure.");
+            }
+        }
+
+        public Task<IReadOnlyList<CharacterSpellRow>> GetAllAsync(CancellationToken cancellationToken = default)
+            => inner.GetAllAsync(cancellationToken);
+
+        public Task<IReadOnlyList<uint>> GetAsync(int characterId, CancellationToken cancellationToken = default)
+        {
+            Check();
+            return inner.GetAsync(characterId, cancellationToken);
+        }
+
+        public Task AddAsync(int characterId, IReadOnlyCollection<uint> spells, CancellationToken cancellationToken = default)
+        {
+            Check();
+            return inner.AddAsync(characterId, spells, cancellationToken);
+        }
+
+        public Task RemoveAsync(int characterId, uint spell, CancellationToken cancellationToken = default)
+        {
+            Check();
+            return inner.RemoveAsync(characterId, spell, cancellationToken);
+        }
+
+        public Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default)
+            => inner.DeleteCharacterAsync(characterId, cancellationToken);
+    }
+
     private sealed class RewardControl(bool holdAfterSave, bool loseAcknowledgement = false, bool unreadable = false,
         bool holdSuccessfulReturn = false)
     {
@@ -798,6 +1181,9 @@ public sealed class QuestRewardAsyncRecoveryTests
         internal int ReadFailureCount;
         internal int PostCommitSaveCount;
         internal int FailQuestWrites;
+        internal int FailSpellWrites;
+        internal int SpellFailureCount;
+        internal Tamper Tamper { get; init; }
         internal int Attempts => Volatile.Read(ref AttemptCount);
         internal int FailedReads => Volatile.Read(ref ReadFailureCount);
         internal int PostCommitSaveCalls => Volatile.Read(ref PostCommitSaveCount);
