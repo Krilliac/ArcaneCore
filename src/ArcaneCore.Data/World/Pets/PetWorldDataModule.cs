@@ -50,14 +50,13 @@ public sealed class PetCreateSpellRow
 
 /// <summary>
 /// The pet world-schema step (<see cref="IDataModule"/>): <c>pet_levelstats</c> and
-/// <c>petcreateinfo_spell</c> (docs/integration/pets.md). <see cref="Version"/> is the next free
-/// world version of this tree (10 is the quest reputation columns); the integrator renumbers it in
-/// merge order, nothing else depends on the number.
+/// <c>petcreateinfo_spell</c> (docs/integration/pets.md). <see cref="Version"/> is World 16 (built as 11,
+/// renumbered by the wave-2 integrator in merge order; nothing else depends on the number).
 /// </summary>
 public sealed class PetWorldDataModule : IDataModule
 {
     /// <summary>The world schema version of the pet tables.</summary>
-    public const int Version = 11;
+    public const int Version = 16;
 
     public DatabaseComponent Component => DatabaseComponent.World;
 

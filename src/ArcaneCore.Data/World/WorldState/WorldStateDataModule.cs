@@ -68,8 +68,8 @@ public sealed class ExplorationBaseXpRow
 /// </summary>
 public sealed class WorldStateDataModule : IDataModule
 {
-    /// <summary>The world schema version this module's tables arrive in (built as 11 after the quest reputation columns; renumbered to 16 by the wave-2 integrator).</summary>
-    public const int Version = 16;
+    /// <summary>The world schema version this module's tables arrive in (built as 11 after the quest reputation columns; renumbered to 17 by the wave-2 integrator).</summary>
+    public const int Version = 17;
 
     public const string GameWeatherTable = "game_weather";
     public const string ExplorationBaseXpTable = "exploration_basexp";
