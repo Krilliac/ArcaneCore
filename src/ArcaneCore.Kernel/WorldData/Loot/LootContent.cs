@@ -17,6 +17,15 @@ public enum LootTableKind : byte
 
     /// <summary><c>reference_loot_template</c> (shared sub-tables reached through negative mincountOrRef).</summary>
     Reference = 4,
+
+    /// <summary><c>fishing_loot_template</c> (keyed by area id: a sub-zone, else its zone; entry 0 holds the failed-cast junk).</summary>
+    Fishing = 5,
+
+    /// <summary><c>pickpocketing_loot_template</c> (keyed by creature_template pickpocket loot id).</summary>
+    Pickpocketing = 6,
+
+    /// <summary><c>disenchant_loot_template</c> (keyed by item_template DisenchantID).</summary>
+    Disenchant = 7,
 }
 
 /// <summary>
@@ -44,16 +53,32 @@ public sealed class LootContent
 {
     public static readonly LootContent Empty = new([], []);
 
+    private readonly Dictionary<uint, int> _fishingBase;
+    private readonly Dictionary<uint, uint> _pickpocket;
+
     private readonly Dictionary<(LootTableKind, uint), IReadOnlyList<LootStoreRow>> _rows;
     private readonly Dictionary<uint, CreatureLootInfo> _creatures;
 
     public LootContent(IEnumerable<(LootTableKind Kind, LootStoreRow Row)> rows, IEnumerable<CreatureLootInfo> creatures)
+        : this(rows, creatures, [], [])
+    {
+    }
+
+    /// <param name="fishingBaseSkills"><c>skill_fishing_base_level</c>: area id to the base skill the area needs (signed: -70 and -20 exist).</param>
+    /// <param name="pickpocketLootIds"><c>creature_template</c> pickpocket loot id per creature entry.</param>
+    public LootContent(
+        IEnumerable<(LootTableKind Kind, LootStoreRow Row)> rows,
+        IEnumerable<CreatureLootInfo> creatures,
+        IEnumerable<KeyValuePair<uint, int>> fishingBaseSkills,
+        IEnumerable<KeyValuePair<uint, uint>> pickpocketLootIds)
     {
         (LootTableKind Kind, LootStoreRow Row)[] all = [.. rows];
         RowCount = all.Length;
         _rows = all.GroupBy(r => (r.Kind, r.Row.Entry))
             .ToDictionary(g => g.Key, g => (IReadOnlyList<LootStoreRow>)[.. g.Select(r => r.Row).OrderBy(r => r.GroupId).ThenBy(r => r.Item)]);
         _creatures = creatures.ToDictionary(c => c.Entry);
+        _fishingBase = fishingBaseSkills.ToDictionary(p => p.Key, p => p.Value);
+        _pickpocket = pickpocketLootIds.ToDictionary(p => p.Key, p => p.Value);
     }
 
     public int RowCount { get; }
@@ -66,6 +91,20 @@ public sealed class LootContent
     public bool HasEntry(LootTableKind kind, uint entry) => _rows.ContainsKey((kind, entry));
 
     public CreatureLootInfo? FindCreature(uint entry) => _creatures.GetValueOrDefault(entry);
+
+    public int FishingBaseSkillCount => _fishingBase.Count;
+
+    public int PickpocketCreatureCount => _pickpocket.Count;
+
+    /// <summary>
+    /// The base fishing skill of an area (<c>skill_fishing_base_level</c>); 0 when the area has no row,
+    /// which vmangos treats as "missing" (a zero row is indistinguishable from none: GameObject.cpp:1657,
+    /// ObjectMgr::GetFishingBaseSkillLevel). Signed.
+    /// </summary>
+    public int FishingBaseSkill(uint areaId) => _fishingBase.GetValueOrDefault(areaId);
+
+    /// <summary>The creature's pickpocket loot id (<c>creature_template.pickpocket_loot_id</c>), 0 when it has none.</summary>
+    public uint FindPickpocketLootId(uint creatureEntry) => _pickpocket.GetValueOrDefault(creatureEntry);
 }
 
 /// <summary>Loads the loot content from the world database.</summary>

@@ -10,7 +10,7 @@ namespace ArcaneCore.Game.GameObjects;
 /// Re-implemented from vmangos GameObject::Create / Update (behaviour only, no code copied).
 /// Thread affinity: world thread only.
 /// </summary>
-public sealed class GameObject : WorldObject
+public sealed partial class GameObject : WorldObject
 {
     internal GameObject(uint counter, GameObjectTemplate template, GameObjectSpawn? spawn)
         : base(ObjectGuid.WithEntry(HighGuid.GameObject, template.Entry, counter),

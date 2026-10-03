@@ -113,6 +113,12 @@ public class Item : WorldObject
 
     public bool IsBag => Template.IsBag();
 
+    /// <summary>
+    /// The generated, not yet taken loot of a container item (vmangos <c>item-&gt;loot</c> with <c>generated_loot</c>): rolled once by the first open and
+    /// kept (and saved with the inventory) until it is taken completely. Null while nothing was generated. See <c>ItemLootSource</c>.
+    /// </summary>
+    public ItemLootData? Loot { get; set; }
+
     /// <summary>The bag holding this item, or null when it sits in the player's own slots.</summary>
     public Container? Container { get; internal set; }
 
@@ -165,6 +171,7 @@ public class Item : WorldObject
             RandomPropertyId = RandomPropertyId,
             Durability = Durability,
             TextId = GetUInt32(UpdateFields.ItemFieldItemTextId),
+            Loot = Loot,
         };
     }
 
@@ -205,6 +212,7 @@ public class Item : WorldObject
         SetInt32(UpdateFields.ItemFieldRandomPropertiesId, data.RandomPropertyId);
         SetUInt32(UpdateFields.ItemFieldDurability, Math.Min(data.Durability, MaxDurability));
         SetUInt32(UpdateFields.ItemFieldItemTextId, data.TextId);
+        Loot = data.Loot;
     }
 
     /// <summary>A copy holding <paramref name="count"/> of this item (vmangos Item::CloneItem).</summary>

@@ -7,6 +7,7 @@ using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
+using ArcaneCore.Data.World.SpecialLoot;
 using ArcaneCore.Kernel.Quests;
 using Microsoft.EntityFrameworkCore;
 
@@ -334,6 +335,8 @@ public static class ContentImporterCli
             ["lock_template"] = objects.Locks,
             ["loot_template_rows"] = objects.LootRows,
             ["creature_loot_info"] = objects.CreatureLootInfos,
+            ["skill_fishing_base_level"] = objects.FishingBaseLevels,
+            ["creature_pickpocket_loot"] = objects.PickpocketLootIds,
             ["item_template"] = itemsAndQuests.Items,
             ["quest_template"] = itemsAndQuests.Quests,
             ["creature_questrelation"] = itemsAndQuests.QuestStarters,
@@ -439,6 +442,11 @@ public static class ContentImporterCli
                 ("item_loot_template", await db.Set<ItemLootTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("skinning_loot_template", await db.Set<SkinningLootTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("reference_loot_template", await db.Set<ReferenceLootTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("fishing_loot_template", await db.Set<FishingLootTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("pickpocketing_loot_template", await db.Set<PickpocketingLootTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("disenchant_loot_template", await db.Set<DisenchantLootTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("skill_fishing_base_level", await db.Set<SkillFishingBaseLevelRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("creature_pickpocket_loot", await db.Set<CreaturePickpocketLootRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_loot_info", await db.Set<CreatureLootInfoRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("item_template", await db.Set<ItemTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("quest_template", await db.Set<QuestTemplate>().CountAsync(ct).ConfigureAwait(false)),

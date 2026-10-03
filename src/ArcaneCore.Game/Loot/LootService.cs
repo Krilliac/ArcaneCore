@@ -23,7 +23,7 @@ namespace ArcaneCore.Game.Loot;
 /// logical instance save through <see cref="Durable"/>; everything else lives in memory only.
 /// Thread affinity: world thread only.
 /// </summary>
-public sealed class LootService : IViewerFieldFilter
+public sealed partial class LootService : IViewerFieldFilter
 {
     /// <summary>UNIT_DYNFLAG_LOOTABLE.</summary>
     public const uint UnitDynFlagLootable = 0x0001;
@@ -101,7 +101,12 @@ public sealed class LootService : IViewerFieldFilter
     /// (vmangos Loot::FillLoot): normal items first (at most 16), then quest items only some
     /// recipient needs (at most 32), each visible only to those recipients.
     /// </summary>
-    public LootBag Generate(ObjectGuid source, LootSourceKind kind, LootType type, LootTableKind table, uint entry, IReadOnlyList<Player> recipients)
+    /// <param name="zeroEntryIsATable">
+    /// Entry 0 normally means "no loot id" and yields an empty bag; fishing_loot_template entry 0 is the failed-cast junk table
+    /// (vmangos Player.cpp:7692 FillLoot(0, LootTemplates_Fishing)), so the fishing area asks for it explicitly.
+    /// </param>
+    public LootBag Generate(ObjectGuid source, LootSourceKind kind, LootType type, LootTableKind table, uint entry, IReadOnlyList<Player> recipients,
+        bool zeroEntryIsATable = false)
     {
         ArgumentNullException.ThrowIfNull(recipients);
         var bag = new LootBag(source, kind, type);
@@ -110,7 +115,7 @@ public sealed class LootService : IViewerFieldFilter
             bag.Recipients.Add(player.Guid);
         }
 
-        if (entry == 0)
+        if (entry == 0 && !zeroEntryIsATable)
         {
             return bag;
         }
@@ -297,15 +302,21 @@ public sealed class LootService : IViewerFieldFilter
         LootBag bag = Generate(creature.Guid, LootSourceKind.Creature, LootType.Corpse, LootTableKind.Creature, info?.LootId ?? 0, recipients);
         if (info is not null && info.MaxGold > 0)
         {
-            uint min = Math.Min(info.MinGold, info.MaxGold);
-            uint gold = min == info.MaxGold ? min : (uint)_random.NextInt64(min, (long)info.MaxGold + 1);
-            bag.Gold = (uint)Math.Min(gold * (double)Options.MoneyRate, MaxMoneyAmount);
+            // vmangos Loot::GenerateMoneyLoot (LootMgr.cpp:735-746), including the 8-bit shifted boss range.
+            bag.Gold = Math.Min(LootMoneyRules.Generate(info.MinGold, info.MaxGold, Options.MoneyRate, _random), MaxMoneyAmount);
         }
 
         EnsureMasterLooterAvailable(group);
         ApplyLooterPlan(bag, group, PlanLooter(group, recipients, bag.Recipients));
+        CloseReplacedBag(creature.Guid, bag);
         _bags[creature.Guid] = (creature, bag);
         creature.ViewerFieldFilter = this;
+        if (HasSkinningLoot(creature))
+        {
+            // vmangos Creature::SetDeathState (Creature.cpp:2274-2277): skinnable from the moment it dies with a loot recipient and a skinning template.
+            creature.UnitFlags |= UnitFlags.Skinnable;
+        }
+
         if (bag.IsEmpty)
         {
             CreatureLootedOut(creature, bag);
@@ -340,13 +351,19 @@ public sealed class LootService : IViewerFieldFilter
     {
         bag.IsClosed = true;
         creature.SetUInt32(UpdateFields.UnitDynamicFlags, creature.GetUInt32(UpdateFields.UnitDynamicFlags) & ~UnitDynFlagLootable);
-        if (Content.FindCreature(creature.Entry) is { SkinningLootId: not 0 })
+        AllLootRemovedFromCorpse(creature);
+    }
+
+    /// <summary>
+    /// vmangos Creature::AllLootRemovedFromCorpse (Creature.cpp:3355-3395): the tapper's skinning head start restarts; a corpse that is not
+    /// (or no longer) skinnable decays sooner: a skinned one at once, an unskinned one after <see cref="LootOptions.LootedCorpseDecayRate"/> of its time.
+    /// </summary>
+    private void AllLootRemovedFromCorpse(Creature creature)
+    {
+        creature.SkinningForOthersMs = Creature.SkinningForOthersDefaultMs;
+        if ((creature.UnitFlags & UnitFlags.Skinnable) == 0 && creature.DeathState == CreatureDeathState.Corpse)
         {
-            creature.UnitFlags |= UnitFlags.Skinnable;
-        }
-        else if (creature.DeathState == CreatureDeathState.Corpse)
-        {
-            uint looted = (uint)(creature.CorpseDecaySeconds(CreatureOptions) * 1000.0 * Options.LootedCorpseDecayRate);
+            uint looted = creature.LootedForSkin ? 0 : (uint)(creature.CorpseDecaySeconds(CreatureOptions) * 1000.0 * Options.LootedCorpseDecayRate);
             creature.CorpseDecayMs = Math.Min(creature.CorpseDecayMs, looted);
         }
     }
@@ -372,8 +389,15 @@ public sealed class LootService : IViewerFieldFilter
         }
 
         creature.UnitFlags &= ~UnitFlags.Skinnable;
+        creature.LootedForSkin = true;
         LootBag bag = Generate(creature.Guid, LootSourceKind.Skinning, LootType.Skinning, LootTableKind.Skinning, info.SkinningLootId, [player]);
         _bags[creature.Guid] = (creature, bag);
+        if (!bag.IsEmpty)
+        {
+            // Player.cpp:7914-7928: "let reopen skinning loot if will closed".
+            creature.SetUInt32(UpdateFields.UnitDynamicFlags, creature.GetUInt32(UpdateFields.UnitDynamicFlags) | UnitDynFlagLootable);
+        }
+
         return Show(player, bag);
     }
 
@@ -704,9 +728,9 @@ public sealed class LootService : IViewerFieldFilter
     // --- items -----------------------------------------------------------------------------
 
     /// <summary>
-    /// CMSG_OPEN_ITEM (vmangos HandleOpenItemOpcode): an ITEM_FLAG_LOOTABLE item that is not
-    /// locked is refused until item loot has a durable consumed/remaining-state collaborator.
-    /// Ordinary inventory snapshots cannot preserve generated loot across a fresh login.
+    /// CMSG_OPEN_ITEM (vmangos HandleOpenItemOpcode): with an <see cref="ItemLoot"/> collaborator (the item loot area, whose generated loot is saved
+    /// with the inventory) the item opens into its loot window; without one an ITEM_FLAG_LOOTABLE item is refused (fail closed), because loot that
+    /// cannot be kept across a login would be rerolled.
     /// </summary>
     public LootResult OpenItem(Player player, Item item)
     {
@@ -720,6 +744,11 @@ public sealed class LootService : IViewerFieldFilter
         if ((item.Template.Flags & ItemFlagLootable) == 0)
         {
             return LootResult.NotLootable;
+        }
+
+        if (ItemLoot is { } source)
+        {
+            return source.Open(player, item);
         }
 
         if (item.Template.LockId != 0)
@@ -742,8 +771,9 @@ public sealed class LootService : IViewerFieldFilter
     public LootResult Open(Player player, ObjectGuid guid)
     {
         ArgumentNullException.ThrowIfNull(player);
+
         if (!_bags.TryGetValue(guid, out var entry) || entry.Source is not Creature creature
-            || !ReferenceEquals(creature.Map, player.Map) || entry.Bag.Kind != LootSourceKind.Creature
+            || !ReferenceEquals(creature.Map, player.Map) || entry.Bag.Kind is not (LootSourceKind.Creature or LootSourceKind.Skinning)
             || creature.DeathState != CreatureDeathState.Corpse)
         {
             Refuse(player, guid);
@@ -852,6 +882,7 @@ public sealed class LootService : IViewerFieldFilter
 
         Quests?.ItemLooted(player, item.ItemId, item.Count);
         RefreshLootable(bag);
+        bag.Changed?.Invoke(bag);
         return InventoryResult.Ok;
     }
 
@@ -883,7 +914,7 @@ public sealed class LootService : IViewerFieldFilter
 
         _bags.TryGetValue(bag.Source, out var entry);
         var sharers = new List<Player>();
-        if (bag.Kind == LootSourceKind.Creature && bag.Recipients.Count > 1 && player.Map is { } map && entry.Source is { } source)
+        if (bag.Kind == LootSourceKind.Creature && bag.ShareMoney && bag.Recipients.Count > 1 && player.Map is { } map && entry.Source is { } source)
         {
             foreach (ObjectGuid guid in bag.Recipients)
             {
@@ -923,6 +954,7 @@ public sealed class LootService : IViewerFieldFilter
         }
 
         RefreshLootable(bag);
+        bag.Changed?.Invoke(bag);
         return true;
     }
 
@@ -957,6 +989,12 @@ public sealed class LootService : IViewerFieldFilter
             return;
         }
 
+        if (bag.ReleaseHandler is { } handler)
+        {
+            handler.OnReleased(player, bag); // special source (fishing bobber/hole, pickpocket, disenchant): see LootService.Special.cs
+            return;
+        }
+
         switch (entry.Source)
         {
             case Creature creature when bag.Kind == LootSourceKind.Creature:
@@ -972,9 +1010,13 @@ public sealed class LootService : IViewerFieldFilter
 
                 break;
 
-            case Creature when bag.Kind == LootSourceKind.Skinning:
+            case Creature skinned when bag.Kind == LootSourceKind.Skinning:
                 if (bag.IsEmpty)
                 {
+                    // DoLootRelease (LootHandler.cpp:574-580): nothing left, the corpse stops being lootable and, skinned, goes at once.
+                    bag.IsClosed = true;
+                    skinned.SetUInt32(UpdateFields.UnitDynamicFlags, skinned.GetUInt32(UpdateFields.UnitDynamicFlags) & ~UnitDynFlagLootable);
+                    AllLootRemovedFromCorpse(skinned);
                     _bags.Remove(guid);
                 }
 
@@ -1026,10 +1068,15 @@ public sealed class LootService : IViewerFieldFilter
             return false;
         }
 
+        if (bag.SourceCheck is { } custom)
+        {
+            return custom(player);
+        }
+
         return entry.Source switch
         {
             Creature creature => creature.DeathState == CreatureDeathState.Corpse && CheckLooter(player, creature) == LootResult.Ok,
-            GameObject go => go.IsSpawned && CheckLooter(player, go) == LootResult.Ok,
+            GameObject go => go.IsSpawned && (bag.IgnoreDistance ? IsAliveInSameMap(player, go) : CheckLooter(player, go) == LootResult.Ok),
             Item item => player.Inventory.GetItemByGuid(item.Guid) is not null,
             _ => false,
         };
@@ -1064,7 +1111,8 @@ public sealed class LootService : IViewerFieldFilter
         {
             bool gone = source switch
             {
-                Creature c => !c.IsInWorld || c.DeathState != CreatureDeathState.Corpse,
+                // A special bag (a pickpocketed live creature) is kept by its own area, never swept as a stale corpse.
+                Creature c when bag.ReleaseHandler is null => !c.IsInWorld || c.DeathState != CreatureDeathState.Corpse,
                 _ => false,
             };
             if (gone)

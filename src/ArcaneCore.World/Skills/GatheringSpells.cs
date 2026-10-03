@@ -3,6 +3,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Skills;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Skills;
@@ -22,12 +23,14 @@ namespace ArcaneCore.World.Skills;
 /// </summary>
 /// <remarks>
 /// Not modelled: opening with a key item (no item-cast path exists, so key locks never open), the per-object use
-/// requirement table, battleground flags, the play-time flag, immune users, the "target needs to be looted first"
-/// message (a corpse only becomes skinnable once it is looted out, so an unlooted one reads as unskinnable) and
-/// multi-use veins (the object system despawns an emptied chest).
+/// requirement table, battleground flags, the play-time flag, immune users, multi-use veins (the object system despawns an emptied chest). Skinning follows Spell.cpp:5940-5969 including the tapper's head start; the
+/// tap list is approximated by the corpse loot's recipients (see <see cref="LootService.IsSkinnableBy"/>).
 /// </remarks>
 internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature skills)
 {
+    /// <summary>CREATURE_TYPE_CRITTER (vmangos SharedDefines.h): the creature type that may be skinned without looting.</summary>
+    private const uint CreatureTypeCritter = 8;
+
     /// <summary>vmangos Spell::CheckRange leeway for players (Spell.cpp:6908): 1.25 yd when the cast starts, 6.25 yd when it lands.</summary>
     private const float StrictLeeway = 1.25f;
 
@@ -183,9 +186,14 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
         }
     }
 
+    /// <summary>
+    /// Spell::CheckCast for SPELL_EFFECT_SKINNING (Spell.cpp:5940-5969), in its order: BAD_TARGETS, TARGET_UNSKINNABLE (no skinnable flag),
+    /// TARGET_NOT_LOOTED for a non-tapper inside the tapper's 5 s head start, LOW_CASTLEVEL, TARGET_NOT_LOOTED again unless the creature is a
+    /// critter and the corpse is looted out and not yet skinned, then the orange TRY_AGAIN roll.
+    /// </summary>
     private SpellCastResult CheckSkinning(SpellEffectCheckContext context)
     {
-        if (context.Caster is not Player { Skills: { } playerSkills } || context.UnitTarget is not Creature creature)
+        if (context.Caster is not Player { Skills: { } playerSkills } player || context.UnitTarget is not Creature creature)
         {
             return SpellCastResult.BadTargets;
         }
@@ -195,11 +203,23 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
             return SpellCastResult.TargetUnskinnable;
         }
 
+        LootService? loot = player.Map is { } map ? Objects?.FindSystem(map)?.Loot : null;
+        if (loot is not null && !loot.IsSkinnableBy(player, creature))
+        {
+            return SpellCastResult.TargetNotLooted;
+        }
+
         int skillValue = playerSkills.GetValue(SkillIds.Skinning);
         int required = GatheringRules.SkinningRequiredSkill(skillValue, creature.Level);
         if (required > skillValue)
         {
             return SpellCastResult.LowCastlevel;
+        }
+
+        // CREATURE_TYPE_CRITTER (8) can be skinned without looting; anything else needs the corpse looted out and not skinned yet.
+        if (creature.Template.CreatureType != CreatureTypeCritter && (creature.LootedForSkin || (loot is not null && !loot.IsCorpseLooted(creature))))
+        {
+            return SpellCastResult.TargetNotLooted;
         }
 
         return !context.Strict

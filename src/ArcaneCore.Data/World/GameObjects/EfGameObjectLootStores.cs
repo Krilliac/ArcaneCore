@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.World.SpecialLoot;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
 using Microsoft.EntityFrameworkCore;
@@ -57,7 +58,11 @@ public sealed class EfGameObjectDataStore(WorldDbContext db) : IGameObjectDataSt
     }
 }
 
-/// <summary>Reads the five loot tables and <c>creature_loot_info</c> into an immutable <see cref="LootContent"/>.</summary>
+/// <summary>
+/// Reads the loot tables (the five original ones plus the special-loot module's fishing, pickpocketing and disenchant
+/// tables), <c>creature_loot_info</c>, <c>skill_fishing_base_level</c> and <c>creature_pickpocket_loot</c> into an
+/// immutable <see cref="LootContent"/>.
+/// </summary>
 public sealed class EfLootDataStore(WorldDbContext db) : ILootDataStore
 {
     public async Task<LootContent> LoadAsync(CancellationToken cancellationToken = default)
@@ -68,8 +73,17 @@ public sealed class EfLootDataStore(WorldDbContext db) : ILootDataStore
         await AddAsync<ItemLootTemplateRow>(LootTableKind.Item).ConfigureAwait(false);
         await AddAsync<SkinningLootTemplateRow>(LootTableKind.Skinning).ConfigureAwait(false);
         await AddAsync<ReferenceLootTemplateRow>(LootTableKind.Reference).ConfigureAwait(false);
+        await AddAsync<FishingLootTemplateRow>(LootTableKind.Fishing).ConfigureAwait(false);
+        await AddAsync<PickpocketingLootTemplateRow>(LootTableKind.Pickpocketing).ConfigureAwait(false);
+        await AddAsync<DisenchantLootTemplateRow>(LootTableKind.Disenchant).ConfigureAwait(false);
         List<CreatureLootInfoRow> creatures = await db.Set<CreatureLootInfoRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
-        return new LootContent(rows, creatures.Select(c => new CreatureLootInfo(c.Entry, c.LootId, c.SkinningLootId, c.MinGold, c.MaxGold)));
+        List<SkillFishingBaseLevelRow> fishingBase = await db.Set<SkillFishingBaseLevelRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<CreaturePickpocketLootRow> pickpocket = await db.Set<CreaturePickpocketLootRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        return new LootContent(
+            rows,
+            creatures.Select(c => new CreatureLootInfo(c.Entry, c.LootId, c.SkinningLootId, c.MinGold, c.MaxGold)),
+            fishingBase.Select(f => KeyValuePair.Create(f.Entry, f.Skill)),
+            pickpocket.Select(p => KeyValuePair.Create(p.Entry, p.LootId)));
 
         async Task AddAsync<T>(LootTableKind kind)
             where T : LootTemplateRowBase

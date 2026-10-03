@@ -22,6 +22,7 @@ using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
 using ArcaneCore.Data.World.PlayerStats;
 using ArcaneCore.Data.World.Pets;
+using ArcaneCore.Data.World.SpecialLoot;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
@@ -62,6 +63,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(PetWorldDataModule), DatabaseComponent.World, PetWorldDataModule.Version),
             (typeof(ArcaneCore.Data.World.WorldState.WorldStateDataModule), DatabaseComponent.World, ArcaneCore.Data.World.WorldState.WorldStateDataModule.Version),
             (typeof(GameObjectSpawnDataModule), DatabaseComponent.World, GameObjectSpawnDataModule.Version),
+            (typeof(SpecialLootDataModule), DatabaseComponent.World, SpecialLootDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -77,6 +79,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(CharacterItemStateDataModule), DatabaseComponent.Characters, CharacterItemStateDataModule.Version),
             (typeof(CharacterTalentDataModule), DatabaseComponent.Characters, CharacterTalentDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.WorldState.ExploredZonesDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ExploredZonesDataModule.Version),
+            (typeof(ItemLootDataModule), DatabaseComponent.Characters, ItemLootDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),

@@ -77,6 +77,24 @@ public sealed class LootServiceTests
             .Values[UpdateFields.UnitDynamicFlags];
 
     [Fact]
+    public void BossGold_UsesTheVmangosShiftedFormula_AndMaxBelowMinUsesMax()
+    {
+        // Onyxia-sized range (937551..1273511): vmangos GenerateMoneyLoot shifts by 8 bits (LootMgr.cpp:735-746).
+        Rig boss = CreateRig(minGold: 937551, maxGold: 1273511);
+        (Player killer, _) = boss.Join(1);
+        Creature wolf = boss.KillWolf(killer);
+        uint gold = boss.Loot.FindLoot(wolf.Guid)!.Gold;
+        Assert.Equal(0u, gold % 256);
+        Assert.InRange(gold, 937551u >> 8 << 8, 1273511u);
+
+        // max < min (3 real classic-db rows): vmangos pays maxAmount, not min.
+        Rig inverted = CreateRig(minGold: 20000, maxGold: 16194);
+        (Player killer2, _) = inverted.Join(1);
+        Creature wolf2 = inverted.KillWolf(killer2);
+        Assert.Equal(16194u, inverted.Loot.FindLoot(wolf2.Guid)!.Gold);
+    }
+
+    [Fact]
     public void Kill_MakesTheCorpseLootableForTheKillerOnly()
     {
         Rig rig = CreateRig();
@@ -153,7 +171,7 @@ public sealed class LootServiceTests
     [Fact]
     public void CreatureWithNothingToDrop_IsNeverLootable_AndImmediatelySkinnableWhenItHasSkinLoot()
     {
-        Rig rig = CreateRig(rows: [], minGold: 0, maxGold: 0);
+        Rig rig = CreateRig(rows: [(LootTableKind.Skinning, Row(SkinLoot, Hide, 100))], minGold: 0, maxGold: 0);
         (Player player, _) = rig.Join(1);
         Creature wolf = rig.KillWolf(player);
         Assert.Equal(0u, wolf.GetUInt32(UpdateFields.UnitDynamicFlags) & LootService.UnitDynFlagLootable);
@@ -466,7 +484,9 @@ public sealed class LootServiceTests
         Rig rig = CreateRig();
         (Player player, FakeSession session) = rig.Join(1);
         Creature wolf = rig.KillWolf(player);
-        Assert.Equal(LootResult.NotLootable, rig.Loot.OpenSkinning(player, wolf));
+        // vmangos Creature::SetDeathState (Creature.cpp:2274-2277): skinnable from death on; "loot first" is the spell's TARGET_NOT_LOOTED check.
+        Assert.True(wolf.UnitFlags.HasFlag(UnitFlags.Skinnable));
+        Assert.False(rig.Loot.IsCorpseLooted(wolf));
 
         rig.Loot.Open(player, wolf.Guid);
         rig.Loot.TakeItem(player, 0);
@@ -476,7 +496,8 @@ public sealed class LootServiceTests
         Assert.Equal(LootResult.Ok, rig.Loot.OpenSkinning(player, wolf));
         Assert.False(wolf.UnitFlags.HasFlag(UnitFlags.Skinnable));
         ParsedLoot skin = LootResponse(session);
-        Assert.Equal(LootType.Skinning, skin.Type);
+        // vmangos Player::SendLoot (Player.cpp:7980-7995): the client does not know LOOT_SKINNING, so it is sent as LOOT_PICKPOCKETING.
+        Assert.Equal(LootType.Pickpocketing, skin.Type);
         Assert.Equal(Hide, Assert.Single(skin.Items).ItemId);
         Assert.Equal(InventoryResult.Ok, rig.Loot.TakeItem(player, 0));
         rig.Loot.Release(player, wolf.Guid);

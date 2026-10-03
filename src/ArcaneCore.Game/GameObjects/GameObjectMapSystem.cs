@@ -58,6 +58,7 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
     private readonly HashSet<uint> _warnedMissingTemplates = [];
     private readonly Dictionary<ObjectGuid, long> _despawnAt = [];
     private readonly Dictionary<uint, uint> _spawnEntries = [];
+    private readonly Dictionary<GameObjectType, Func<Player, GameObject, GameObjectUseResult>> _useHandlers = [];
     private long _clockMs;
     private long _nextQuestRefreshMs;
     private uint _nextTemporaryCounter;
@@ -219,7 +220,8 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
             return result;
         }
 
-        result = go!.Type switch
+        // An area owns a type (fishing bobbers: ArcaneCore.Game.Fishing) and registers its handler instead of editing this switch.
+        result = _useHandlers.TryGetValue(go!.Type, out Func<Player, GameObject, GameObjectUseResult>? useHandler) ? useHandler(player, go) : go.Type switch
         {
             GameObjectType.Door or GameObjectType.Button => UseDoorOrButton(player, go),
             GameObjectType.Chest => UseChest(player, go),
@@ -242,6 +244,19 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
 
         return result;
     }
+
+    /// <summary>
+    /// Take over the use of every object of <paramref name="type"/> (after the common checks: spawned, same map, alive, interactable,
+    /// in reach). A later registration replaces the earlier one. The handler's result is the use result; <see cref="Used"/> fires on Ok.
+    /// </summary>
+    public void RegisterUseHandler(GameObjectType type, Func<Player, GameObject, GameObjectUseResult> handler)
+        => _useHandlers[type] = handler ?? throw new ArgumentNullException(nameof(handler));
+
+    /// <summary>The Lock.dbc entry <paramref name="lockId"/>, or null (lockable items ask the object system, which owns the lock content).</summary>
+    public LockEntry? FindLock(uint lockId) => _content.FindLock(lockId);
+
+    /// <summary>The template of <paramref name="entry"/>, or null (runtime summons of spell effects check the object type with it).</summary>
+    public GameObjectTemplate? FindTemplate(uint entry) => _content.FindTemplate(entry);
 
     /// <summary>
     /// The spells area's open-lock effect (herb gathering, mining, lockpicking, opening with a

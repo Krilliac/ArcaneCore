@@ -37,7 +37,11 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
         return result;
     }
 
-    private void Process(LootTableKind kind, uint entry, List<RolledLoot> result, int depth)
+    // vmangos LootTemplate::AddEntry/Process (LootMgr.cpp:1193-1244). A row joins a group only when
+    // groupid > 0 AND mincountOrRef > 0; reference rows (mincountOrRef < 0) are stored with the ungrouped
+    // entries and roll independently, whatever their groupid. A reference row's groupid instead selects
+    // the single group of the REFERENCED template that is processed (0 = the whole template).
+    private void Process(LootTableKind kind, uint entry, List<RolledLoot> result, int depth, byte groupFilter = 0)
     {
         if (depth > MaxReferenceDepth)
         {
@@ -45,38 +49,35 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
         }
 
         IReadOnlyList<LootStoreRow> rows = Content.GetRows(kind, entry);
-        int i = 0;
-        while (i < rows.Count)
+        if (groupFilter != 0)
         {
-            byte group = rows[i].GroupId;
-            int end = i;
-            while (end < rows.Count && rows[end].GroupId == group)
+            // Group reference: only that group of this template (vmangos: Groups[groupId - 1].Process).
+            // Built by group id, never by row order or adjacency.
+            List<LootStoreRow> members = [.. rows.Where(r => r.GroupId == groupFilter && r.MinCountOrRef > 0)];
+            if (members.Count > 0 && PickFromGroup(members) is { } picked)
             {
-                end++;
+                Emit(picked, result, depth);
             }
 
-            if (group == 0)
-            {
-                for (int r = i; r < end; r++)
-                {
-                    LootStoreRow row = rows[r];
-                    if (!RollChance(Math.Abs(row.ChanceOrQuestChance)))
-                    {
-                        continue;
-                    }
+            return;
+        }
 
-                    Emit(row, result, depth);
-                }
-            }
-            else
+        foreach (LootStoreRow row in rows)
+        {
+            if ((row.GroupId > 0 && row.MinCountOrRef > 0) || !RollChance(Math.Abs(row.ChanceOrQuestChance)))
             {
-                if (PickFromGroup(rows, i, end) is { } picked)
-                {
-                    Emit(picked, result, depth);
-                }
+                continue;
             }
 
-            i = end;
+            Emit(row, result, depth);
+        }
+
+        foreach (IGrouping<byte, LootStoreRow> group in rows.Where(r => r.GroupId > 0 && r.MinCountOrRef > 0).GroupBy(r => r.GroupId).OrderBy(g => g.Key))
+        {
+            if (PickFromGroup([.. group]) is { } picked)
+            {
+                Emit(picked, result, depth);
+            }
         }
     }
 
@@ -84,10 +85,10 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
     {
         if (row.MinCountOrRef < 0)
         {
-            uint repeats = Math.Max(1u, row.MaxCount);
-            for (uint n = 0; n < repeats; n++)
+            // vmangos LootMgr.cpp:1234: `loop < maxcount`, so maxcount 0 processes the reference zero times.
+            for (uint n = 0; n < row.MaxCount; n++)
             {
-                Process(LootTableKind.Reference, (uint)-row.MinCountOrRef, result, depth + 1);
+                Process(LootTableKind.Reference, (uint)-row.MinCountOrRef, result, depth + 1, row.GroupId);
             }
 
             return;
@@ -98,13 +99,12 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
         uint count = min == max ? min : (uint)_random.NextInt64(min, (long)max + 1);
         result.Add(new RolledLoot(row.Item, count, row.ChanceOrQuestChance < 0, row.ConditionId));
     }
-
     /// <summary>vmangos LootGroup::Roll: explicit chances against one shrinking roll, then the equal-chance pool.</summary>
-    private LootStoreRow? PickFromGroup(IReadOnlyList<LootStoreRow> rows, int start, int end)
+    private LootStoreRow? PickFromGroup(IReadOnlyList<LootStoreRow> rows)
     {
         double roll = _random.NextDouble() * 100.0;
         List<LootStoreRow>? equal = null;
-        for (int r = start; r < end; r++)
+        for (int r = 0; r < rows.Count; r++)
         {
             LootStoreRow row = rows[r];
             float chance = Math.Abs(row.ChanceOrQuestChance);
@@ -131,3 +131,4 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
 
     private bool RollChance(float chance) => chance >= 100.0f || (chance > 0 && _random.NextDouble() * 100.0 < chance);
 }
+

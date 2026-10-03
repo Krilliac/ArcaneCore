@@ -95,6 +95,7 @@ public sealed partial class SpellSystem
             case SpellImplicitTarget.LocationCasterDest:
             case SpellImplicitTarget.LocationCasterSrc:
             case SpellImplicitTarget.LocationCasterTargetPosition:
+            case SpellImplicitTarget.LocationCasterFishingSpot: // vmangos Spell.cpp:2859: the caster
                 // A location-only effect (teleport, summon) acts on the caster.
                 return [(caster, 1.0f)];
             case SpellImplicitTarget.GameObject:

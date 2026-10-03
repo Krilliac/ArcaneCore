@@ -2,6 +2,7 @@ using System.Globalization;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.World.Creatures;
+using ArcaneCore.Data.World.SpecialLoot;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -17,7 +18,9 @@ public sealed record GameObjectLootImportReport(
     int LootRows,
     int CreatureLootInfos,
     int SkippedRows,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    int FishingBaseLevels = 0,
+    int PickpocketLootIds = 0);
 
 /// <summary>
 /// Maps the game object and loot tables of a cmangos classic-db or vmangos world dump into the
@@ -49,6 +52,9 @@ public sealed class GameObjectLootDumpImporter
         ["item_loot_template"] = () => new ItemLootTemplateRow(),
         ["skinning_loot_template"] = () => new SkinningLootTemplateRow(),
         ["reference_loot_template"] = () => new ReferenceLootTemplateRow(),
+        ["fishing_loot_template"] = () => new FishingLootTemplateRow(),
+        ["pickpocketing_loot_template"] = () => new PickpocketingLootTemplateRow(),
+        ["disenchant_loot_template"] = () => new DisenchantLootTemplateRow(),
     };
 
     private readonly Dictionary<uint, (int Patch, GameObjectTemplateRow Row)> _templates = [];
@@ -64,6 +70,8 @@ public sealed class GameObjectLootDumpImporter
     private readonly Dictionary<uint, LockTemplateRow> _locks = [];
     private readonly Dictionary<(Type, uint, uint), LootTemplateRowBase> _loot = [];
     private readonly Dictionary<uint, (int Patch, CreatureLootInfoRow Row)> _creatureLoot = [];
+    private readonly Dictionary<uint, SkillFishingBaseLevelRow> _fishingBase = [];
+    private readonly Dictionary<uint, (int Patch, CreaturePickpocketLootRow Row)> _pickpocket = [];
     private readonly List<string> _warnings = [];
     private int _skipped;
 
@@ -98,6 +106,10 @@ public sealed class GameObjectLootDumpImporter
                     break;
                 case "creature_template":
                     ReadCreatureLoot(row);
+                    ReadPickpocketId(row);
+                    break;
+                case "skill_fishing_base_level":
+                    ReadFishingBase(row);
                     break;
                 default:
                     if (s_lootTables.TryGetValue(table, out Func<LootTemplateRowBase>? create))
@@ -191,6 +203,11 @@ public sealed class GameObjectLootDumpImporter
                 await db.Set<SkinningLootTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<ReferenceLootTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureLootInfoRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<FishingLootTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<PickpocketingLootTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<DisenchantLootTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<SkillFishingBaseLevelRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<CreaturePickpocketLootRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
             }
 
             await InsertBatchedAsync(db, _templates.Values.Select(t => t.Row), cancellationToken).ConfigureAwait(false);
@@ -200,6 +217,8 @@ public sealed class GameObjectLootDumpImporter
             await InsertBatchedAsync(db, _locks.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync<LootTemplateRowBase>(db, _loot.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _creatureLoot.Values.Select(c => c.Row), cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _fishingBase.Values, cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _pickpocket.Values.Select(p => p.Row), cancellationToken).ConfigureAwait(false);
 
             if (savepoint is not null)
             {
@@ -241,10 +260,16 @@ public sealed class GameObjectLootDumpImporter
     }
 
     public GameObjectLootImportReport BuildReport() => new(
-        _templates.Count, _spawns.Count, _starters.Count, _enders.Count, _locks.Count, _loot.Count, _creatureLoot.Count, _skipped, [.. _warnings]);
+        _templates.Count, _spawns.Count, _starters.Count, _enders.Count, _locks.Count, _loot.Count, _creatureLoot.Count, _skipped, [.. _warnings], _fishingBase.Count, _pickpocket.Count);
 
     /// <summary>The loot rows that would be written (for inspection and tests).</summary>
     public IReadOnlyCollection<LootTemplateRowBase> LootRows => _loot.Values;
+
+    /// <summary>The <c>skill_fishing_base_level</c> rows that would be written.</summary>
+    public IReadOnlyCollection<SkillFishingBaseLevelRow> FishingBaseRows => _fishingBase.Values;
+
+    /// <summary>The creature pickpocket loot ids that would be written.</summary>
+    public IReadOnlyCollection<CreaturePickpocketLootRow> PickpocketRows => [.. _pickpocket.Values.Select(p => p.Row)];
 
     /// <summary>The spawn rows that would be written.</summary>
     public IReadOnlyCollection<GameObjectSpawnRow> SpawnRows
@@ -444,6 +469,39 @@ public sealed class GameObjectLootDumpImporter
 
         _creatureLoot[entry] = (patch, info);
     }
+
+    /// <summary>
+    /// creature_template pickpocket loot id: classic-db <c>PickpocketLootId</c>, vmangos <c>pickpocket_loot_id</c>
+    /// (ObjectMgr.cpp:1286). vmangos creature templates are patch-versioned like the loot columns above.
+    /// </summary>
+    private void ReadPickpocketId(DumpRow row)
+    {
+        bool vmangos = row.Has("loot_id") || row.Has("level_min");
+        int patch = vmangos && row.Has("patch") ? (int)U32(row, "patch") : 0;
+        if (patch > MaxPatch)
+        {
+            return;
+        }
+
+        uint entry = U32(row, "Entry");
+        if (_pickpocket.TryGetValue(entry, out var existing) && existing.Patch > patch)
+        {
+            return;
+        }
+
+        uint lootId = U32(row, "PickpocketLootId", "pickpocket_loot_id");
+        if (lootId == 0)
+        {
+            _pickpocket.Remove(entry);
+            return;
+        }
+
+        _pickpocket[entry] = (patch, new CreaturePickpocketLootRow { Entry = entry, LootId = lootId });
+    }
+
+    /// <summary>skill_fishing_base_level (entry = area id, skill signed): identical in both dialects.</summary>
+    private void ReadFishingBase(DumpRow row)
+        => _fishingBase[U32(row, "entry")] = new SkillFishingBaseLevelRow { Entry = U32(row, "entry"), Skill = I32(row, 0, "skill") };
 
     private void ReadLoot(DumpRow row, LootTemplateRowBase target)
     {

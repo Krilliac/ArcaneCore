@@ -319,6 +319,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
                 case CreatureDeathState.Corpse:
                     // vmangos Creature::Update CORPSE: decay over, or a DB spawn's respawn time reached.
                     bool respawnDue = creature.Spawn is not null && creature.RespawnAtMs <= _clockMs;
+                    creature.SkinningForOthersMs = creature.SkinningForOthersMs <= diffMs ? 0 : creature.SkinningForOthersMs - diffMs; // Creature.cpp:911-914
                     if (creature.CorpseDecayMs <= diffMs || respawnDue)
                     {
                         RemoveCorpse(creature);

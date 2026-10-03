@@ -174,6 +174,8 @@ public sealed class GatheringWorldTests
 
         Assert.Equal(SpellCastResult.TargetUnskinnable, Cast());            // not skinnable yet
         boar.UnitFlags |= UnitFlags.Skinnable;
+        Assert.Equal(SpellCastResult.TargetNotLooted, Cast());              // nobody tapped it and the 5 s head start of a tapper has not run out (IsSkinnableBy)
+        boar.SkinningForOthersMs = 0;
         Assert.Equal(SpellCastResult.LowCastlevel, Cast());                 // skill 40 < (20 - 10) * 10 = 100
 
         await host.OnWorldAsync(() => player.Skills!.Set(SkillIds.Skinning, 120, 150, 2));   // skill >= 100: needs level * 5 = 100

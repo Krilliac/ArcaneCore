@@ -35,6 +35,7 @@ public sealed class TableSpecDriftTests
             "creature_template", "creature", "creature_movement", "creature_model_info", "creature_display_info_addon",
             "creature_addon", "gameobject", "creature_loot_template", "gameobject_loot_template", "item_loot_template",
             "skinning_loot_template", "reference_loot_template",
+            "fishing_loot_template", "pickpocketing_loot_template", "disenchant_loot_template",
         })
         {
             yield return [table];
