@@ -41,11 +41,11 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ItemWorldDataModule), DatabaseComponent.World, 4),
             (typeof(SpellWorldDataModule), DatabaseComponent.World, 5),
             (typeof(QuestNpcWorldModule), DatabaseComponent.World, 6),
+            (typeof(InstanceDataModule), DatabaseComponent.Characters, InstanceDataModule.BranchSchemaVersion),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
             (typeof(SocialDataModule), DatabaseComponent.Characters, 6),
-            (typeof(InstanceDataModule), DatabaseComponent.Characters, InstanceDataModule.BranchSchemaVersion), // reserved v9; next free on this branch
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
