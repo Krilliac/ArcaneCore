@@ -37,7 +37,9 @@ public sealed class ItemLootWorldTests
         await using WorldTestClient client = await host.EnterWorldAsync("PICKER", "Lockpicker");
         Player player = await host.PlayerAsync("Lockpicker");
         await host.WaitForWorldAsync(() => player.Skills is not null, "skills attached");
-        await host.OnWorldAsync(() => player.Skills!.Set(SkillIds.Lockpicking, 1, 300, 1));
+        // Skill 100 against a lock needing 1: the orange-failure roll (required > irand(skill-25, skill+37), TRY_AGAIN) can never fire.
+        // At skill 1 it fires about 40% of casts (Random.Shared), which made this test flaky.
+        await host.OnWorldAsync(() => player.Skills!.Set(SkillIds.Lockpicking, 100, 300, 1));
         Item box = await GiveAsync(host, player, Lockbox);
 
         // Before the pick: ITEM_LOCKED.

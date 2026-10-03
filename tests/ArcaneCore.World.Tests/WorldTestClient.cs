@@ -174,13 +174,25 @@ internal sealed class WorldTestClient : IAsyncDisposable
     /// <summary>Read packets until one with <paramref name="opcode"/> arrives; fails on timeout.</summary>
     public async Task<byte[]> ReadUntilAsync(WorldOpcode opcode)
     {
+        List<(WorldOpcode Op, byte[] Payload)> skipped = [];
         while (true)
         {
-            (WorldOpcode op, byte[] payload) = await ReadAsync();
-            if (op == opcode)
+            (WorldOpcode op, byte[] payload) packet;
+            try
             {
-                return payload;
+                packet = await ReadAsync();
             }
+            catch (OperationCanceledException ex)
+            {
+                throw new TimeoutException($"timed out waiting for {opcode}; skipped {skipped.Count} packets: {string.Join(", ", skipped.TakeLast(12).Select(s => $"{s.Op}[{Convert.ToHexString(s.Payload.AsSpan(0, Math.Min(s.Payload.Length, 16)))}]"))}", ex);
+            }
+
+            if (packet.op == opcode)
+            {
+                return packet.payload;
+            }
+
+            skipped.Add((packet.op, packet.payload));
         }
     }
 

@@ -89,6 +89,11 @@ the lane's final fix commit, not the lane as a whole.
   level. Tests updated to main's texts; the ban commands themselves are unchanged.
 - **StartActionsWorldTests**: asserted `PlayedTime == 0` after create+login; played time is now persisted from the
   wall clock, so it read 1 on a slow run. The test pins level and money only.
+- **ItemLootWorldTests.PickLock** (fishing lane): set Lockpicking to 1 against a lock needing 1, so the vmangos
+  orange-failure roll (`required > irand(skill-25, skill+37)`, TRY_AGAIN, `Random.Shared`) failed about 40% of
+  casts; it failed consistently in some test mixes. The test now uses skill 100 (the roll cannot fire).
+  `WorldTestClient.ReadUntilAsync` now throws a `TimeoutException` naming the packets it skipped (this is how the
+  cause was found).
 - **live-ban-enforcement / WorldServiceCollectionExtensions.cs, WorldTestHost.cs, AccountTool**: all
   option bindings kept; `WorldTestHost.Start` takes both `configureServices` and `banOptions`; the
   account tool keeps main's no-echo credential reader and the lane's ban/unban/baninfo/banlist commands.
@@ -97,6 +102,15 @@ the lane's final fix commit, not the lane as a whole.
 
 Command-group roots: no two groups register the same root (the table builder throws at startup on a
 duplicate and the World command tests build the real table).
+
+## Verification (local, SQLite; Release, `-m:1`)
+
+Build 0 warnings / 0 errors. Tests: Cryptography 8017/8017, Data 765 passed + 5 skipped (real-dump and
+provider gated), Game 3658/3658, Realm 37/37, World 1287 passed + 1 skipped, MockClient 195/195,
+self-test 59/59 checks. Load-sensitive tests seen failing once in full runs and passing alone or on rerun:
+`QuestSettlementResponsivenessTests.SettlementCapacity_EightHeld...` (known) and
+`ServerLifecycleTests.RealTimer_CountsDownAnnouncesAndStopsWithExitCode2` (main's own real-timer test; no
+lane touched it). MariaDB/PostgreSQL provider tests were not run (hosted CI only).
 
 ## Deviations (all behind config, default retail)
 
