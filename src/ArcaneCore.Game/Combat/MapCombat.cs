@@ -28,7 +28,6 @@ public sealed partial class MapCombat : IMapUpdater
     private readonly List<Corpse> _corpses = [];
     private readonly Dictionary<Corpse, MapGrid> _corpseGrids = [];
     private CombatHooks? _hooks;
-    private long _elapsedMs;
 
     internal MapCombat(Map map, WorldRuntime world)
     {
@@ -86,8 +85,12 @@ public sealed partial class MapCombat : IMapUpdater
     /// <summary>Non-player units currently updated by combat.</summary>
     public IReadOnlyCollection<Unit> TrackedUnits => _units;
 
-    /// <summary>Combat time of this map in seconds (drives the recent-death window).</summary>
-    internal long NowSeconds => _elapsedMs / 1000;
+    /// <summary>
+    /// Unix seconds from the world's <see cref="Death.DeathClock"/> (vmangos <c>time(nullptr)</c>):
+    /// the recent-death window and the ghost time are wall-clock timestamps shared by every map,
+    /// not this map's uptime, so they stay consistent when a ghost changes map or logs out.
+    /// </summary>
+    internal long NowSeconds => Death.DeathHooks.For(_world).Clock.UnixSeconds;
 
     /// <summary>Start updating a non-player unit (swing timers, regeneration, combat timer).</summary>
     public void Track(Unit unit)
@@ -135,8 +138,6 @@ public sealed partial class MapCombat : IMapUpdater
     /// <summary>One combat step (run by <see cref="Map.Update"/> through <see cref="IMapUpdater"/>).</summary>
     public void Update(uint diffMs)
     {
-        _elapsedMs += diffMs;
-
         foreach (Player player in _map.Players.ToArray())
         {
             if (ReferenceEquals(player.Map, _map))

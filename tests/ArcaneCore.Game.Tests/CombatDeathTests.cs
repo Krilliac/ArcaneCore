@@ -1,7 +1,9 @@
 using System.Buffers.Binary;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Tests.Death;
 using ArcaneCore.Protocol;
 using Xunit;
 
@@ -10,11 +12,16 @@ namespace ArcaneCore.Game.Tests;
 /// <summary>Death, release (repop), corpses, reclaim, auto release and logout cleanup.</summary>
 public sealed class CombatDeathTests
 {
-    private sealed record Setup(WorldRuntime World, Map Map, TestCombatHooks Hooks, Player A, FakeSession SA, Player V, FakeSession SV);
+    /// <summary>An arbitrary wall-clock start (Unix seconds) far from any map's uptime counter.</summary>
+    private const long ClockStart = 1_700_000_000;
 
-    private static Setup Create(uint mapId = 0)
+    private sealed record Setup(WorldRuntime World, Map Map, TestCombatHooks Hooks, Player A, FakeSession SA, Player V, FakeSession SV, FixedDeathClock Clock);
+
+    private static Setup Create(uint mapId = 0, DeathOptions? options = null)
     {
         WorldRuntime world = TestWorld.CreateRuntime();
+        var clock = new FixedDeathClock(ClockStart);
+        DeathHooks.Register(world, new DeathHooks(options ?? new DeathOptions(), clock));
         Map map = world.GetMap(mapId);
         var hooks = new TestCombatHooks();
         map.Combat.Random = new ScriptedRandom();
@@ -28,7 +35,7 @@ public sealed class CombatDeathTests
         world.RunTick(1);
         sa.Clear();
         sv.Clear();
-        return new Setup(world, map, hooks, a, sa, v, sv);
+        return new Setup(world, map, hooks, a, sa, v, sv, clock);
     }
 
     /// <summary>A swings once at a 40-health victim: the victim dies, and (updated after A) becomes a corpse in the same tick.</summary>
@@ -41,11 +48,13 @@ public sealed class CombatDeathTests
 
     private static List<(WorldOpcode Opcode, byte[] Payload)> Drain(FakeSession session) => [.. CombatTestKit.Drain(session)];
 
-    private static void Advance(WorldRuntime world, int seconds)
+    /// <summary>Wall-clock seconds pass; the world ticks along (death state reads the clock, not the map's uptime).</summary>
+    private static void Advance(Setup s, int seconds)
     {
         for (int i = 0; i < seconds; i++)
         {
-            world.RunTick(1000);
+            s.Clock.Now++;
+            s.World.RunTick(1000);
         }
     }
 
@@ -101,7 +110,7 @@ public sealed class CombatDeathTests
         using WorldRuntime world = s.World;
         KillVictim(s);
         Drain(s.SV);
-        Advance(world, 5);
+        Advance(s, 5);
         Drain(s.SV);
 
         Assert.True(s.Map.Combat.RepopPlayer(s.V));
@@ -143,15 +152,15 @@ public sealed class CombatDeathTests
         Setup s = Create();
         using WorldRuntime world = s.World;
         KillVictim(s);
-        Advance(world, 5);
+        Advance(s, 5);
         s.Map.Combat.RepopPlayer(s.V);
         world.RunTick(1);
         ObjectGuid corpseGuid = s.V.Combat.Corpse!.Guid;
 
         Assert.False(s.Map.Combat.TryReclaimCorpse(s.V));
-        Advance(world, 29);
+        Advance(s, 29);
         Assert.False(s.Map.Combat.TryReclaimCorpse(s.V));
-        Advance(world, 1);
+        Advance(s, 1);
 
         s.V.Relocate(100, 0, 83.5f, 0, 0);
         Assert.False(s.Map.Combat.TryReclaimCorpse(s.V)); // 39 yd + radii
@@ -190,23 +199,92 @@ public sealed class CombatDeathTests
         Setup s = Create();
         using WorldRuntime world = s.World;
         KillVictim(s);                         // t = 0: window until 300
-        Advance(world, 5);
+        Advance(s, 5);
         s.Map.Combat.RepopPlayer(s.V);         // (300 − 5) / 300 = 0 → 30 s
-        Advance(world, 30);
+        Advance(s, 30);
         Assert.True(s.Map.Combat.TryReclaimCorpse(s.V));
-        Advance(world, 5);
+        Advance(s, 5);
         Drain(s.SV);
 
         s.V.Health = 40;
-        s.Map.Combat.Attack(s.A, s.V);         // t ≈ 40: window until 40 + 600
+        s.Map.Combat.Attack(s.A, s.V);         // t = 40: window until 40 + 600
         world.RunTick(2000);
         Assert.Equal(DeathState.Corpse, s.V.Combat.DeathState);
-        Advance(world, 5);
+        Assert.Equal(ClockStart + 40 + 600, s.V.Combat.DeathExpireTime);
+        Advance(s, 5);
         Drain(s.SV);
-        s.Map.Combat.RepopPlayer(s.V);         // (640 − 47) / 300 = 1 → 60 s
+        s.Map.Combat.RepopPlayer(s.V);         // (640 − 45) / 300 = 1 → 60 s
 
         byte[] delay = Assert.Single(Drain(s.SV), p => p.Opcode == WorldOpcode.SmsgCorpseReclaimDelay).Payload;
         Assert.Equal(60000u, BinaryPrimitives.ReadUInt32LittleEndian(delay));
+    }
+
+    // --- the death clock is the wall clock (Unix seconds), not the map's uptime ------------
+
+    [Fact]
+    public void GhostTimeAndTheDeathWindow_AreUnixSeconds()
+    {
+        Setup s = Create();
+        using WorldRuntime world = s.World;
+        KillVictim(s);
+        Assert.Equal(ClockStart + 300, s.V.Combat.DeathExpireTime); // vmangos Player.cpp:20212 (now + DEATH_EXPIRE_STEP)
+        Advance(s, 7);
+        s.Map.Combat.RepopPlayer(s.V);
+        Assert.Equal(ClockStart + 7, s.V.Combat.GhostTime);          // Corpse::m_time = time(nullptr)
+    }
+
+    [Fact]
+    public void Reclaim_IsDecidedByTheClockAlone_WhateverTheMapUptimeIs()
+    {
+        Setup s = Create();
+        using WorldRuntime world = s.World;
+        KillVictim(s);
+        s.Map.Combat.RepopPlayer(s.V);
+        Assert.False(s.Map.Combat.TryReclaimCorpse(s.V));   // the 30 s delay has not passed
+        s.Clock.Now += 30;                                  // 30 wall seconds, no map tick at all
+        Assert.True(s.Map.Combat.TryReclaimCorpse(s.V));
+    }
+
+    [Fact]
+    public void ReclaimDelay_ScalesWithTheRecentDeathWindowOnTheWallClock()
+    {
+        Setup s = Create();
+        using WorldRuntime world = s.World;
+        // Two deaths ago: 400 s of window left → (400 / 300) = 1 → 60 s. A per-map uptime
+        // counter (a few ms here) would read this timestamp as "centuries left" → 120 s.
+        s.V.Combat.DeathExpireTime = ClockStart + 400;
+        Assert.Equal(60u, s.Map.Combat.GetCorpseReclaimDelay(s.V, pvp: false));
+        s.V.Combat.DeathExpireTime = ClockStart - 1;           // window over
+        Assert.Equal(30u, s.Map.Combat.GetCorpseReclaimDelay(s.V, pvp: false));
+        s.V.Combat.DeathExpireTime = ClockStart + 900;         // capped at the third step
+        Assert.Equal(120u, s.Map.Combat.GetCorpseReclaimDelay(s.V, pvp: false));
+    }
+
+    // --- Death.CorpseReclaimDelay.PvP / .PvE (vmangos Player.cpp:20184-20215) ---------------
+
+    [Fact]
+    public void PvpDelayOff_MakesPvpReclaimAlwaysThirtySeconds_AndDoesNotExtendTheWindow()
+    {
+        Setup s = Create(options: new DeathOptions { CorpseReclaimDelayPvP = false });
+        using WorldRuntime world = s.World;
+        s.V.Combat.DeathExpireTime = ClockStart + 700;
+        Assert.Equal(30u, s.Map.Combat.GetCorpseReclaimDelay(s.V, pvp: true));
+        Assert.Equal(120u, s.Map.Combat.GetCorpseReclaimDelay(s.V, pvp: false)); // PvE still scales
+
+        s.V.Combat.DeathExpireTime = 0;
+        KillVictim(s);                                       // a PvP death: UpdateCorpseReclaimDelay returns early
+        Assert.True(s.V.Combat.PvpDeath);
+        Assert.Equal(0L, s.V.Combat.DeathExpireTime);
+    }
+
+    [Fact]
+    public void PveDelayOff_MakesPveReclaimAlwaysThirtySeconds_AndPvpStillScales()
+    {
+        Setup s = Create(options: new DeathOptions { CorpseReclaimDelayPvE = false });
+        using WorldRuntime world = s.World;
+        s.V.Combat.DeathExpireTime = ClockStart + 700;
+        Assert.Equal(30u, s.Map.Combat.GetCorpseReclaimDelay(s.V, pvp: false));
+        Assert.Equal(120u, s.Map.Combat.GetCorpseReclaimDelay(s.V, pvp: true));
     }
 
     [Fact]

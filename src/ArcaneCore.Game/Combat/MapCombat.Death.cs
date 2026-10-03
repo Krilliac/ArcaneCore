@@ -184,7 +184,12 @@ public sealed partial class MapCombat
     /// </summary>
     public uint GetCorpseReclaimDelay(Player player, bool pvp)
     {
-        _ = pvp; // both kinds use the scaling delay by default
+        // Player.cpp:20186-20188: with the option off for this kind of death the delay is the first step.
+        if (!ReclaimDelayScales(pvp))
+        {
+            return CombatConstants.CorpseReclaimDelaySeconds[0];
+        }
+
         long now = NowSeconds;
         long expire = player.Combat.DeathExpireTime;
         uint count = now < expire ? (uint)((expire - now) / CombatConstants.DeathExpireStepSeconds) : 0;
@@ -196,10 +201,25 @@ public sealed partial class MapCombat
         return CombatConstants.CorpseReclaimDelaySeconds[(int)count];
     }
 
-    /// <summary>vmangos Player::UpdateCorpseReclaimDelay: extend the recent-death window by one 5-minute step (max 3).</summary>
+    /// <summary>Death.CorpseReclaimDelay.PvP / .PvE (<see cref="Death.DeathOptions"/>) for this kind of death.</summary>
+    private bool ReclaimDelayScales(bool pvp)
+    {
+        Death.DeathOptions options = Death.DeathHooks.For(_world).Options;
+        return pvp ? options.CorpseReclaimDelayPvP : options.CorpseReclaimDelayPvE;
+    }
+
+    /// <summary>
+    /// vmangos Player::UpdateCorpseReclaimDelay (Player.cpp:20197-20218): extend the recent-death
+    /// window by one 5-minute step (max 3); nothing when the delay option is off for this death.
+    /// </summary>
     private void UpdateCorpseReclaimDelay(Player player)
     {
         UnitCombat c = player.Combat;
+        if (!ReclaimDelayScales(c.PvpDeath))
+        {
+            return;
+        }
+
         long now = NowSeconds;
         uint step = CombatConstants.DeathExpireStepSeconds;
         if (now < c.DeathExpireTime)
