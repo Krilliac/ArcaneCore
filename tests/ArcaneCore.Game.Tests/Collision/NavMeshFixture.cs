@@ -21,7 +21,7 @@ internal sealed class NavMeshFixture : IDisposable
 
     public string PathOf(string fileName) => Path.Combine(Directory, fileName);
 
-    public void WriteParams(uint mapId)
+    public void WriteParams(uint mapId, int maxPolys = 1 << 16, int maxTiles = 4096)
     {
         using var writer = new BinaryWriter(File.Create(PathOf(NavMeshFormat.ParamsFileName(mapId))));
         writer.Write(0f);
@@ -29,8 +29,8 @@ internal sealed class NavMeshFixture : IDisposable
         writer.Write(0f);
         writer.Write(533.3333f);
         writer.Write(533.3333f);
-        writer.Write(4096);
-        writer.Write(1 << 16);
+        writer.Write(maxTiles);
+        writer.Write(maxPolys);
     }
 
     public void WriteTile(uint mapId, int tileX, int tileY, CellTile tile, uint mmapVersion = NavMeshFormat.MmapVersion)

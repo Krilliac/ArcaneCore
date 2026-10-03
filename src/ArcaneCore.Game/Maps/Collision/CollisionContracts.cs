@@ -55,8 +55,11 @@ public interface ILineOfSight
 /// <param name="GroundZ">The world height of the group floor under the point.</param>
 public readonly record struct ModelAreaInfo(uint MogpFlags, int AdtId, int RootId, int GroupId, float GroundZ)
 {
-    /// <summary>MOGP flag 0x8: the group is exterior (vmangos <c>IsOutdoorWMO</c> without WMOAreaTable.dbc).</summary>
-    public const uint MogpExterior = 0x8;
+    /// <summary>
+    /// MOGP flag 0x8000: the group is outdoors (vmangos GridMap.cpp:875-878 <c>IsOutdoorWMO</c>;
+    /// mangos-classic GridMap.cpp:887-890). Without WMOAreaTable.dbc this is the whole test.
+    /// </summary>
+    public const uint MogpExterior = 0x8000;
 
     /// <summary>MOGP flag 0x2000: the group is interior.</summary>
     public const uint MogpInterior = 0x2000;
@@ -83,6 +86,17 @@ public interface IPathfinder
     PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null);
 }
 
+/// <summary>
+/// Optional: a pathfinder that knows whether it has navigation data for a map (vmangos
+/// <c>MMapManager</c> holds a navmesh per map or none, PathFinder.cpp:86-90). Maps it lacks are
+/// routed to <see cref="WorldCollision.Fallback"/>.
+/// </summary>
+public interface IMapAwarePathfinder : IPathfinder
+{
+    /// <summary>Whether a navmesh exists for <paramref name="mapId"/>.</summary>
+    bool HasNavigationData(uint mapId);
+}
+
 /// <summary>vmangos <c>PathType</c> (PathFinder.h).</summary>
 [Flags]
 public enum PathType
@@ -104,8 +118,23 @@ public enum PathType
     /// <summary>No navigation data was used (the straight-line default, or a disabled map).</summary>
     NotUsingPath = 0x10,
 
-    /// <summary>The path was cut to <see cref="PathOptions.MaxPoints"/>.</summary>
-    Short = 0x20,
+    /// <summary>vmangos <c>PATHFIND_DEST_FORCED</c>: the destination was forced onto the path end.</summary>
+    DestForced = 0x20,
+
+    /// <summary>vmangos <c>PATHFIND_FLYPATH</c>.</summary>
+    FlyPath = 0x40,
+
+    /// <summary>vmangos <c>PATHFIND_UNDERWATER</c>.</summary>
+    Underwater = 0x80,
+
+    /// <summary>vmangos <c>PATHFIND_CASTER</c>.</summary>
+    Caster = 0x100,
+
+    /// <summary>
+    /// ArcaneCore extension (not a vmangos value): the path was cut to <see cref="PathOptions.MaxPoints"/>.
+    /// Kept clear of vmangos' bits (<c>PathFinder.h:45-57</c>) so numeric comparisons match.
+    /// </summary>
+    Short = 0x200,
 }
 
 /// <summary>Navigation mesh polygon flags written by the vmangos/cmangos mmap generator (<c>NavTerrain</c>).</summary>
@@ -125,17 +154,33 @@ public enum NavTerrain : ushort
 /// <summary>Query options for <see cref="IPathfinder.FindPath"/>.</summary>
 public sealed record PathOptions
 {
-    /// <summary>vmangos <c>MAX_POINT_PATH_LENGTH</c>.</summary>
-    public const int DefaultMaxPoints = 74;
+    /// <summary>vmangos <c>MAX_POINT_PATH_LENGTH</c> (PathFinder.h:39).</summary>
+    public const int DefaultMaxPoints = 256;
+
+    /// <summary>vmangos nav query node pool (<c>navMeshQuery->init(navMesh, 2048)</c>, MoveMap.cpp:350).</summary>
+    public const int DefaultMaxSearchNodes = 2048;
 
     /// <summary>Shared default instance.</summary>
     public static PathOptions Default { get; } = new();
 
-    /// <summary>Polygons must have at least one of these flags (vmangos filter include flags).</summary>
+    /// <summary>
+    /// The unit the path is for. When set, the include flags come from its capabilities
+    /// (<see cref="PathMover.IncludeFlags"/>, vmangos <c>createFilter</c>) and <see cref="IncludeFlags"/> is ignored.
+    /// </summary>
+    public PathMover? Mover { get; init; }
+
+    /// <summary>Polygons must have at least one of these flags when no <see cref="Mover"/> is given (a swimming creature).</summary>
     public NavTerrain IncludeFlags { get; init; } = NavTerrain.Ground | NavTerrain.Water | NavTerrain.Magma | NavTerrain.Slime;
 
-    /// <summary>Polygons with any of these flags are avoided.</summary>
-    public NavTerrain ExcludeFlags { get; init; } = NavTerrain.SteepSlopes;
+    /// <summary>The include flags a query uses: the mover's when there is one, else <see cref="IncludeFlags"/>.</summary>
+    public NavTerrain EffectiveIncludeFlags => Mover?.IncludeFlags ?? IncludeFlags;
+
+    /// <summary>
+    /// Polygons with any of these flags are avoided. vmangos excludes nothing by default
+    /// (PathFinder.cpp:657-675); fear, flee, confused and random movement exclude
+    /// <see cref="NavTerrain.SteepSlopes"/> (FearMovementGenerator.cpp:38, RandomMovementGenerator.cpp:52).
+    /// </summary>
+    public NavTerrain ExcludeFlags { get; init; } = NavTerrain.Empty;
 
     /// <summary>Most points in a result (start included); longer paths are cut and flagged <see cref="PathType.Short"/>.</summary>
     public int MaxPoints { get; init; } = DefaultMaxPoints;
@@ -147,7 +192,7 @@ public sealed record PathOptions
     public bool AllowPartial { get; init; } = true;
 
     /// <summary>Upper bound on search work (polygons or grid cells expanded) before the query gives up.</summary>
-    public int MaxSearchNodes { get; init; } = 4096;
+    public int MaxSearchNodes { get; init; } = DefaultMaxSearchNodes;
 }
 
 /// <summary>A path answer: its classification and its corner points (world coordinates).</summary>

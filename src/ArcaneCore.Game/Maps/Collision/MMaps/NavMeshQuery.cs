@@ -22,6 +22,17 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
 
     public NavMeshTile? GetTile(int x, int y) => _tiles.GetValueOrDefault((x, y));
 
+    /// <summary>
+    /// Whether the Detour tile under a Recast position is loaded (vmangos <c>PathInfo::HaveTiles</c>:
+    /// <c>calcTileLoc</c> then <c>getTileAt</c>, PathFinder.cpp:695-706).
+    /// </summary>
+    public bool HaveTileAt(Vector3 recast)
+    {
+        float tx = MathF.Floor((recast.X - Parameters.Origin.X) / Parameters.TileWidth);
+        float ty = MathF.Floor((recast.Z - Parameters.Origin.Z) / Parameters.TileHeight);
+        return tx is > int.MinValue and < int.MaxValue && ty is > int.MinValue and < int.MaxValue && GetTile((int)tx, (int)ty) is not null;
+    }
+
     public bool IsTerrainTileLoaded(int tileX, int tileY) => _byTerrainTile.ContainsKey((tileX, tileY));
 
     /// <summary>Add a tile read for a terrain tile; false when its Detour slot is taken (Detour <c>addTile</c> refuses too).</summary>
@@ -49,7 +60,7 @@ public sealed class NavMesh(uint mapId, NavMeshParams parameters)
         foreach (NavMeshTile tile in _tiles.Values)
         {
             if (tile.Overlaps(center, extents)
-                && tile.TryFindNearestPoly(center, extents, options.IncludeFlags, options.ExcludeFlags, out int index, out Vector3 point, out float d)
+                && tile.TryFindNearestPoly(center, extents, options.EffectiveIncludeFlags, options.ExcludeFlags, out int index, out Vector3 point, out float d)
                 && d < best)
             {
                 best = d;
@@ -193,7 +204,7 @@ public static class NavMeshQuery
 
             foreach ((NavPolyRef next, Vector3 left, Vector3 right) in mesh.Neighbours(node.Poly))
             {
-                if (!next.Tile.Passes(next.Poly, options.IncludeFlags, options.ExcludeFlags))
+                if (!next.Tile.Passes(next.Poly, options.EffectiveIncludeFlags, options.ExcludeFlags))
                 {
                     continue;
                 }

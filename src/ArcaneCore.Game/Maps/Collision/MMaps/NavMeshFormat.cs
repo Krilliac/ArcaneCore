@@ -65,6 +65,10 @@ public readonly record struct NavMeshParams(Vector3 Origin, float TileWidth, flo
 {
     public const int Size = 28;
 
+    // MaxPolys may legitimately be 0: vmangos' generator builds Detour with 64-bit polygon references
+    // and writes maxPolys = 0 ("Unused if DT_POLYREF64 set", contrib/mmap/src/MapBuilder.cpp:462); the
+    // server reads the struct raw (src/game/Maps/MoveMap.cpp:86-92). The value is not used here either.
+
     public static NavMeshParams Parse(ReadOnlySpan<byte> data)
     {
         if (data.Length != Size)
@@ -75,7 +79,7 @@ public readonly record struct NavMeshParams(Vector3 Origin, float TileWidth, flo
         var reader = new CollisionDataReader(data);
         var result = new NavMeshParams(reader.ReadVector3(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadInt32(), reader.ReadInt32());
         if (!float.IsFinite(result.Origin.X) || !float.IsFinite(result.Origin.Y) || !float.IsFinite(result.Origin.Z)
-            || !(result.TileWidth > 0) || !(result.TileHeight > 0) || result.MaxTiles <= 0 || result.MaxPolys <= 0)
+            || !(result.TileWidth > 0) || !(result.TileHeight > 0) || result.MaxTiles <= 0 || result.MaxPolys < 0)
         {
             throw new InvalidDataException("navmesh parameters are out of range");
         }

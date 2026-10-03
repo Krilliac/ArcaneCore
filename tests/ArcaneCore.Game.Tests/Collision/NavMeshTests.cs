@@ -78,11 +78,11 @@ public sealed class NavMeshTests
         var steep = new CellTile(0, 0, 0, 0, 4, 4, Size: 5) { Flags = (i, j) => i == 2 && j < 3 ? NavTerrain.Ground | NavTerrain.SteepSlopes : NavTerrain.Ground };
         NavMeshPathfinder nav = Load(fixture, (31, 31, steep));
 
-        PathResult around = nav.FindPath(MapId, WallStart, WallEnd);
+        PathResult around = nav.FindPath(MapId, WallStart, WallEnd, new PathOptions { ExcludeFlags = NavTerrain.SteepSlopes }); // vmangos excludes steep slopes only on request
         Assert.Equal(4, around.Points.Count);
         Near(new Vector3(10, 15, 0), around.Points[1]);
 
-        PathResult straight = nav.FindPath(MapId, WallStart, WallEnd, new PathOptions { ExcludeFlags = NavTerrain.Empty });
+        PathResult straight = nav.FindPath(MapId, WallStart, WallEnd, new PathOptions());
         Assert.Equal(2, straight.Points.Count);
     }
 
@@ -209,11 +209,11 @@ public sealed class NavMeshTests
         PathResult straight = nav.FindPath(MapId, new Vector3(1, 2, 3), new Vector3(4, 5, 6));
         Assert.Equal(PathType.Normal | PathType.NotUsingPath, straight.Type);
 
-        // A navmesh without the tile: points are off the mesh.
+        // A navmesh without the tile: an unloaded .mmtile is a straight shortcut, not an error (vmangos PathFinder.cpp:99-105).
         fixture.WriteParams(1);
         Assert.NotNull(nav.GetNavMesh(1));
         Assert.False(nav.LoadTile(1, 31, 31));
-        Assert.Equal(PathType.NoPath, nav.FindPath(1, new Vector3(5, 5, 0), new Vector3(15, 5, 0)).Type);
+        Assert.Equal(PathType.Normal | PathType.NotUsingPath, nav.FindPath(1, new Vector3(5, 5, 0), new Vector3(15, 5, 0)).Type);
         Assert.Equal(PathType.NoPath, nav.FindPath(1, new Vector3(float.NaN, 5, 0), new Vector3(15, 5, 0)).Type);
     }
 
@@ -248,7 +248,7 @@ public sealed class NavMeshTests
         var nav = new NavMeshPathfinder(fixture.Directory);
         Assert.False(nav.LoadTile(MapId, 31, 31));
         PathResult path = nav.FindPath(MapId, WallStart, WallEnd);
-        Assert.Equal(damage == "params" ? PathType.Normal | PathType.NotUsingPath : PathType.NoPath, path.Type);
+        Assert.Equal(PathType.Normal | PathType.NotUsingPath, path.Type); // no usable tile: straight (vmangos HaveTiles)
     }
 
     [Fact]
