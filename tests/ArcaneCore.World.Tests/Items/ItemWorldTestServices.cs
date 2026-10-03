@@ -21,6 +21,7 @@ internal sealed class ItemWorldTestServices : IWorldTestServices
 
         services.AddSingleton<IItemTemplateSource>(content.Templates);
         services.AddSingleton<IItemStore>(content.Items);
+        services.AddSingleton<IItemStateStore>(content.Items);
 
         // The in-memory character store ignores inventories; save them through to the item store.
         var inner = (ICharacterStore)services.Last(d => d.ServiceType == typeof(ICharacterStore)).ImplementationInstance!;
@@ -65,8 +66,10 @@ internal sealed class InMemoryItemTemplateSource : IItemTemplateSource
         => Task.FromResult<IReadOnlyList<StartingItem>>([.. StartingItems]);
 }
 
-internal sealed class InMemoryItemStore : IItemStore
+internal sealed class InMemoryItemStore : IItemStore, IItemStateStore
 {
+    private readonly ConcurrentDictionary<int, uint> _ammo = new();
+
     private readonly ConcurrentDictionary<int, IReadOnlyList<InventoryItemData>> _inventories = new();
 
     public int SaveCount { get; private set; }
@@ -79,6 +82,11 @@ internal sealed class InMemoryItemStore : IItemStore
     public Task SaveInventoryAsync(int characterId, InventorySnapshot snapshot, CancellationToken cancellationToken = default)
     {
         _inventories[characterId] = [.. snapshot.Items];
+        if (snapshot.AmmoId is { } ammo)
+        {
+            _ammo[characterId] = ammo;
+        }
+
         SaveCount++;
         return Task.CompletedTask;
     }
@@ -98,7 +106,14 @@ internal sealed class InMemoryItemStore : IItemStore
     public Task<uint> GetMaxItemGuidAsync(CancellationToken cancellationToken = default)
         => Task.FromResult(_inventories.Values.SelectMany(i => i).Select(r => r.Item.Guid).DefaultIfEmpty(0u).Max());
 
-    public void Delete(int characterId) => _inventories.TryRemove(characterId, out _);
+    public Task<uint> GetAmmoAsync(int characterId, CancellationToken cancellationToken = default)
+        => Task.FromResult(_ammo.GetValueOrDefault(characterId));
+
+    public void Delete(int characterId)
+    {
+        _inventories.TryRemove(characterId, out _);
+        _ammo.TryRemove(characterId, out _);
+    }
 }
 
 /// <summary>Decorates the host's character store so inventory snapshots and deletes reach the item store (as EfCharacterStore does).</summary>

@@ -23,6 +23,36 @@ public sealed class ItemMiscHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgAutobankItem, HandleAutoBankItem);
         table.OnWorld(WorldOpcode.CmsgAutostoreBankItem, HandleAutoStoreBankItem);
         table.OnWorld(WorldOpcode.CmsgAutoequipItemSlot, HandleAutoEquipItemSlot);
+        table.OnWorld(WorldOpcode.CmsgSetAmmo, HandleSetAmmo);
+    }
+
+    /// <summary>
+    /// CMSG_SET_AMMO: u32 item entry (0 removes the ammo). A dead player is refused, an entry the
+    /// player does not carry is ITEM_NOT_FOUND (WorldSession::HandleSetAmmoOpcode, ItemHandler.cpp:988-1008).
+    /// </summary>
+    private static void HandleSetAmmo(WorldSession session, Player player, byte[] payload)
+    {
+        var reader = new PacketReader(payload);
+        uint entry = reader.ReadUInt32();
+        PlayerInventory inventory = player.Inventory;
+        if (!player.IsAlive)
+        {
+            inventory.SendEquipError(InventoryResult.YouAreDead, null, null);
+            return;
+        }
+
+        if (entry == 0)
+        {
+            inventory.RemoveAmmo();
+        }
+        else if (inventory.GetItemCount(entry) == 0)
+        {
+            inventory.SendEquipError(InventoryResult.ItemNotFound, null, null);
+        }
+        else
+        {
+            inventory.SetAmmo(entry);
+        }
     }
 
     /// <summary>CMSG_ITEM_NAME_QUERY: u32 entry, u64 guid (unused). An unknown entry gets no reply (vmangos).</summary>

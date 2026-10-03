@@ -37,8 +37,12 @@ public sealed record ItemInstanceData
 /// </summary>
 public sealed record InventoryItemData(uint ContainerGuid, byte Slot, ItemInstanceData Item);
 
-/// <summary>A character's complete inventory, saved as a whole (replaces every stored row of the character).</summary>
-public sealed record InventorySnapshot(IReadOnlyList<InventoryItemData> Items);
+/// <summary>
+/// A character's complete inventory, saved as a whole (replaces every stored row of the character).
+/// <see cref="AmmoId"/> is the selected ammo (PLAYER_AMMO_ID); null means the snapshot does not carry it and the
+/// stored selection is left alone.
+/// </summary>
+public sealed record InventorySnapshot(IReadOnlyList<InventoryItemData> Items, uint? AmmoId = null);
 
 /// <summary>Character-database access for items (characters DB, M-items tables).</summary>
 public interface IItemStore

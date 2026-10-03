@@ -60,6 +60,21 @@ public static class ItemPersistence
 
         db.RemoveRange(items.Values.Where(r => !keep.Contains(r.Guid)));
         db.RemoveRange(slots.Values.Where(r => !keep.Contains(r.ItemGuid)));
+
+        // The selected ammo rides with the inventory (a null selection means "not carried": leave the stored one alone).
+        if (snapshot.AmmoId is { } ammo)
+        {
+            CharacterItemStateRow? state = await db.Set<CharacterItemStateRow>()
+                .FirstOrDefaultAsync(r => r.CharacterId == characterId, cancellationToken).ConfigureAwait(false);
+            if (state is null)
+            {
+                db.Add(new CharacterItemStateRow { CharacterId = characterId, AmmoId = ammo });
+            }
+            else
+            {
+                state.AmmoId = ammo;
+            }
+        }
     }
 
     /// <summary>Stage the removal of every item a character owns (character deletion).</summary>

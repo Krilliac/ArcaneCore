@@ -152,5 +152,10 @@ public sealed class ItemsFeature(IServiceScopeFactory scopes, ILogger<ItemsFeatu
         {
             player.Inventory.Load(await store.GetInventoryAsync(character.Id).ConfigureAwait(false));
         }
+
+        if (session.Services.GetService<IItemStateStore>() is { } states)
+        {
+            player.Inventory.RestoreAmmo(await states.GetAmmoAsync(character.Id).ConfigureAwait(false));
+        }
     }
 }

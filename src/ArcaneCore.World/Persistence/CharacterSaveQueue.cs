@@ -346,7 +346,7 @@ public sealed class CharacterSaveQueue(IServiceScopeFactory scopes, ILogger<Char
                 Charges = Array.AsReadOnly(row.Item.Charges.ToArray()),
                 Enchantments = Array.AsReadOnly(row.Item.Enchantments.ToArray()),
             },
-        }).ToArray())) : null,
+        }).ToArray()), inventory.AmmoId) : null,
     };
 
     private sealed record FailedSave(CharacterState State, Exception Failure);

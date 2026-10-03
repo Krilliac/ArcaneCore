@@ -269,7 +269,7 @@ public sealed partial class PlayerInventory
         }
 
         rows.AddRange(_unloadable);
-        return new InventorySnapshot(rows);
+        return new InventorySnapshot(rows, AmmoId);
     }
 
     /// <summary>

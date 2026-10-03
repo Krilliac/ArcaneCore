@@ -211,8 +211,8 @@ public sealed partial class PlayerInventory
     /// <summary>
     /// vmangos Player::AddStartingItems: every playercreateinfo_item row through
     /// StoreNewItemInBestSlots (equip one by one, else store in the backpack), then a pass over
-    /// the backpack equipping what could not be worn before and re-storing the rest. vmangos then
-    /// sets PLAYER_AMMO_ID; ammo belongs to the combat area and is not set here.
+    /// the backpack equipping what could not be worn before and re-storing the rest; a piece of
+    /// ammo found there becomes the selected ammo (Player.cpp:570-575).
     /// </summary>
     public void AddStartingItems()
     {
@@ -242,6 +242,12 @@ public sealed partial class PlayerInventory
                 {
                     RemoveItem(InventorySlots.Bag0, i);
                     StoreItem(dest, item);
+                }
+
+                // "if this is ammo then use it" (Player.cpp:570-575).
+                if (CanUseAmmo(item.Entry) == InventoryResult.Ok)
+                {
+                    SetAmmo(item.Entry);
                 }
             }
         }
