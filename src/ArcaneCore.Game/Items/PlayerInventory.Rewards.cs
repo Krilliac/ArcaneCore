@@ -3,7 +3,8 @@ using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Items;
 
-internal readonly record struct InventoryRewardGrant(uint Entry, uint Count);
+/// <summary>One item grant; <paramref name="Created"/> marks a spell-created item (vmangos Spell::DoCreateItem reports it as created).</summary>
+internal readonly record struct InventoryRewardGrant(uint Entry, uint Count, bool Created = false);
 
 /// <summary>A detached reward inventory. Preparation consumes GUIDs, but never changes the owner's fields or sends packets.</summary>
 internal sealed class InventoryRewardStage(
@@ -197,7 +198,7 @@ public sealed partial class PlayerInventory
             if (Player is { IsInWorld: true } player)
             {
                 player.Session.Send(WorldOpcode.SmsgItemPushResult,
-                    ItemPackets.ItemPushResult(player.Guid, result, grant.Count, received: true, created: false, showInChat: true));
+                    ItemPackets.ItemPushResult(player.Guid, result, grant.Count, received: true, created: grant.Created, showInChat: true));
             }
         }
     }

@@ -5,13 +5,17 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Quests;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using InventoryResult = ArcaneCore.Game.Items.InventoryResult;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using Fx = ArcaneCore.Game.Tests.Reputation.ReputationFixtures;
+using ArcaneCore.Game.Tests.Reputation;
 
 namespace ArcaneCore.Game.Tests.Progression;
 
@@ -457,6 +461,66 @@ public sealed class QuestProgressionTests
         Assert.False(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910093, 0, out _));
     }
 
+    [Fact]
+    public void ReputationRewardQuest_WithoutSettlementOwner_FailsClosed()
+    {
+        // Previously such a quest was paid silently with no reputation at all.
+        var quest = new QuestTemplate { Entry = 910095, Method = 2, RewRepFaction1 = Fx.BootyBay, RewRepValue1 = 250 };
+        using var kit = new Kit([quest]);
+        Assert.True(kit.Accept(910095));
+        Assert.False(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910095, 0, out _));
+    }
+
+    [Fact]
+    public void ReputationPairWithAZeroValueOrFaction_IsIgnoredLikeVmangos()
+    {
+        var quest = new QuestTemplate
+        {
+            Entry = 910096, Method = 2, RewRepFaction1 = Fx.BootyBay, RewRepValue1 = 0, RewRepFaction2 = 0, RewRepValue2 = 50,
+        };
+        using var kit = new Kit([quest]); // no owner needed: nothing is rewarded
+        Assert.True(kit.Accept(910096));
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910096, 0, out QuestRewardPlan? plan));
+        Assert.Empty(plan.Reputation.After);
+    }
+
+    [Fact]
+    public void ReputationReward_IsStagedOnACopy_PersistedAsRows_AndPublishedInsideApplyReward()
+    {
+        var quest = new QuestTemplate
+        {
+            Entry = 910097, Method = 2, RewRepFaction1 = Fx.BootyBay, RewRepValue1 = 250, RewRepFaction2 = Fx.Stormwind, RewRepValue2 = 100,
+        };
+        var sink = new RecordingReputationSink();
+        var service = new ReputationService(Fx.Factions, sink: sink, roll: () => 0.999);
+        using var kit = new Kit([quest], reputationRewards: service);
+        service.Track(kit.Player, service.Create(kit.Player, new CharacterReputationData([], -1)));
+        service.BuildInitializeFactions(kit.Player);
+        Assert.True(kit.Accept(910097));
+        kit.Session.Clear();
+
+        Assert.True(kit.Services.TryPrepareReward(kit.Player, kit.Creature.Guid, 910097, 0, out QuestRewardPlan? plan));
+        // Preparation touched nothing: no standing, no packet, no queued write.
+        Assert.Equal(0, service.GetReputation(kit.Player, Fx.BootyBay));
+        Assert.Empty(kit.Session.Sent);
+        Assert.Empty(sink.Rows);
+        Assert.Equal([Fx.BootyBay, Fx.Stormwind], plan.Reputation.After.Select(r => r.Faction).Order());
+
+        kit.Settle(plan);
+
+        foreach (CharacterReputationRow row in plan.Reputation.After)
+        {
+            Assert.Equal(row.Standing, service.GetReputation(kit.Player, row.Faction) - service.For(kit.Player)!.BaseReputation(Fx.Factions.Find(row.Faction)!));
+        }
+
+        Assert.Empty(sink.Rows); // the reward transaction persisted them; the queue is not used
+        Assert.Empty(service.For(kit.Player)!.TakeDirty(1));
+        var opcodes = kit.Session.Sent.Select(p => p.Opcode).ToList();
+        int standing = opcodes.IndexOf(WorldOpcode.SmsgSetFactionStanding);
+        int complete = opcodes.IndexOf(WorldOpcode.SmsgQuestgiverQuestComplete);
+        Assert.True(standing >= 0 && complete > standing, "reputation updates precede the quest completion packet");
+    }
+
     private sealed class RecordingEffects(bool canCast) : IQuestRewardEffects
     {
         public List<(uint Quest, ObjectGuid Giver)> Calls { get; } = [];
@@ -468,7 +532,21 @@ public sealed class QuestProgressionTests
             return canCast;
         }
 
-        public void QuestRewarded(Player player, Quest quest, ObjectGuid questGiver) => Calls.Add((quest.Id, questGiver));
+        public List<uint> Prepared { get; } = [];
+
+        public bool TryPrepareRewardSpell(Player player, ObjectGuid questGiver, uint spellId, out QuestRewardSpellGrant grant)
+        {
+            Prepared.Add(spellId);
+            grant = new QuestRewardSpellGrant(true, [], []);
+            return canCast;
+        }
+
+        public void AnnounceLearnedSpells(Player player, QuestRewardSpellGrant grant)
+        {
+        }
+
+        public void PublishRewardSpell(Player player, Quest quest, ObjectGuid questGiver, QuestRewardSpellGrant grant)
+            => Calls.Add((quest.Id, questGiver));
     }
 
     internal sealed class RecordingSink : IQuestNpcSink
@@ -482,7 +560,8 @@ public sealed class QuestProgressionTests
     private sealed class Kit : IDisposable
     {
         public Kit(IReadOnlyList<QuestTemplate> quests, byte level = 1, bool progression = true, IQuestRewardEffects? effects = null,
-            Action<QuestNpcOptions>? configure = null, IReadOnlyList<CharacterQuestStatus>? rows = null, Action<Player>? beforeLoad = null)
+            Action<QuestNpcOptions>? configure = null, IReadOnlyList<CharacterQuestStatus>? rows = null, Action<Player>? beforeLoad = null,
+            IQuestReputationSettlement? reputationRewards = null)
         {
             Player = TestWorld.CreatePlayer(1, 0, 0, Session);
             Player.Level = level;
@@ -502,7 +581,8 @@ public sealed class QuestProgressionTests
             var factions = new FactionTemplateCatalog([new(1, 1, 0, 1, 0, 0), new(2, 0, 0, 8, 0, 0)]);
             CreatureQuestRelation[] relations = quests.Select(q => new CreatureQuestRelation { Id = Giver, Quest = q.Entry }).ToArray();
             Services = new QuestNpcServices(new QuestStore(new QuestContent(quests, relations, relations)), NpcStore.Empty,
-                new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions), Experience: Progression, RewardEffects: effects),
+                new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions), Experience: Progression, RewardEffects: effects,
+                    ReputationRewards: reputationRewards),
                 options, Sink, () => 100, NullLogger.Instance);
             beforeLoad?.Invoke(Player);
             State = Services.Track(Player);

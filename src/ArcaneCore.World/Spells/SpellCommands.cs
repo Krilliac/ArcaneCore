@@ -81,6 +81,12 @@ public sealed class SpellCommands : ICommandGroup
         }
 
         SpellFeature feature = Feature(context);
+        if (!target.CanMutateQuestSettlementState)
+        {
+            context.Reply($"{target.Name} is settling a quest reward; try again in a moment.");
+            return true;
+        }
+
         if (!feature.Spellbook.ForgetSpell(target, spellId))
         {
             context.Reply($"{target.Name} does not know spell {spellId}.");

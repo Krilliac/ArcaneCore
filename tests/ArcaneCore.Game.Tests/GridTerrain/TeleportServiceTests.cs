@@ -93,6 +93,47 @@ public sealed class TeleportServiceTests
     }
 
     [Fact]
+    public void CanTeleportTo_AnswersLikeTeleportTo_AndChangesNothing()
+    {
+        using var f = new Fixture();
+        var session = new FakeSession(1);
+        Player player = TestWorld.CreatePlayer(1, 0, 0, session);
+        f.World.AddPlayer(player);
+        f.World.RunTick(50);
+        session.Clear();
+
+        (uint Map, float X, float Y, float Z, float O)[] accepted = [(0, 500, 0, 90, 1.5f), (1, 10, 10, 10, 0f)];
+        (uint Map, float X, float Y, float Z, float O)[] refused =
+        [
+            (0, float.NaN, 0, 90, 0),   // invalid coordinates
+            (99, 0, 0, 0, 0),           // not in the map registry
+            (30, 0, 0, 0, 0),           // battleground
+        ];
+        foreach ((uint map, float x, float y, float z, float o) in accepted)
+        {
+            Assert.True(f.Teleports.CanTeleportTo(player, map, x, y, z, o));
+        }
+
+        foreach ((uint map, float x, float y, float z, float o) in refused)
+        {
+            Assert.False(f.Teleports.CanTeleportTo(player, map, x, y, z, o));
+            Assert.False(f.Teleports.TeleportTo(player, map, x, y, z, o)); // the same answer, from the mutating path
+        }
+
+        Assert.False(f.Teleports.IsBeingTeleported(player));
+        Assert.Empty(session.Sent); // asking changed nothing and told nobody
+        Assert.Equal(0f, player.X);
+
+        Guid operation = Guid.NewGuid();
+        Assert.True(player.BeginQuestSettlement(operation));
+        Assert.False(f.Teleports.CanTeleportTo(player, 0, 500, 0, 90, 1.5f)); // held by a quest settlement
+        Assert.True(player.EndQuestSettlement(operation));
+
+        Assert.True(f.Teleports.TeleportTo(player, 1, 10, 10, 10, 0f)); // far teleport scheduled
+        Assert.False(f.Teleports.CanTeleportTo(player, 0, 500, 0, 90, 1.5f)); // one is already under way
+    }
+
+    [Fact]
     public void FarTeleport_RunsAfterTheMapUpdate_AndCompletesOnTheWorldportAck()
     {
         using var f = new Fixture();

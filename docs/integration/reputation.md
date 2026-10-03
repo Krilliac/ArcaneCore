@@ -165,10 +165,18 @@ installed (requirements fail closed).
 - **Kill data has no world schema slot.** Kill rewards read `IReputationOnKillSource`; no world
   module provides it in this round, so kill reputation is inactive in the daemon until the world
   data owner adds `creature_onkill_reputation` (or registers a source).
-- **Quest reputation rewards** are exposed as `IQuestReputationRewards.RewardQuest`, but
-  `QuestTemplate` does not carry `RewRepFaction1..5`/`RewRepValue1..5` yet and quest settlement
-  does not call the hook. When wired, the reputation write is a separate queued write, not part
-  of the quest settlement transaction.
+- **Quest reputation rewards** are part of the quest reward transaction
+  ([quest-progression.md](quest-progression.md)). `QuestTemplate` carries
+  `RewRepFaction1..5`/`RewRepValue1..5` (world schema v9). The quest owner stages the gains
+  through `IQuestReputationSettlement` (implemented by `ReputationService`): the gains and dither
+  roll are frozen on a copy of the player's standings, the resulting faction rows are written by
+  the reward transaction, and the live player replays the same gains without queueing a write.
+  `IQuestReputationRewards.RewardQuest` (the post-commit, queued path) is no longer called by
+  quest settlement; it remains for other callers and still persists through the queue.
+  While a quest settlement holds a character, `ModifyReputation`, `SetReputation`, kill/quest
+  rewards, `SetAtWar` and `SetInactive` are refused; `SetWatchedFaction` (its own table) is not.
+  This does not fix the queue's drop-after-three-retries behaviour: only the factions a reward
+  writes converge to the live state.
 - No spillover templates (`reputation_spillover_template`), no `reputation_reward_rate`, no
   forced reactions (`SPELL_AURA_FORCE_REACTION`), no aura gain modifiers (e.g. the human
   Diplomacy racial: the spells owner sets `ReputationService.GainModifier`).

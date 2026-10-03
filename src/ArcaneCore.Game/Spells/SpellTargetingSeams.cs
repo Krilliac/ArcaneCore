@@ -62,4 +62,10 @@ public interface ISpellSummonSink
 {
     /// <summary>Summon creature <paramref name="entry"/> for <paramref name="durationMs"/> (-1/0 = until dismissed); returns the summon or null.</summary>
     Unit? Summon(Unit caster, uint entry, float x, float y, float z, float orientation, int durationMs);
+
+    /// <summary>
+    /// Whether <paramref name="owner"/> could summon creature <paramref name="entry"/> right now, without
+    /// creating anything. Quest reward preflight asks this before a summon reward may consume the quest.
+    /// </summary>
+    bool CanSummon(Unit owner, uint entry);
 }

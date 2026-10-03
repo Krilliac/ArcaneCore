@@ -163,8 +163,9 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             Reputation: reputation is { Factions.Count: > 0 } ? reputation : null,
             Experience: progression ? _services.GetService<ProgressionFeature>()?.Progression : null,
             RewardEffects: progression && _services.GetService<SpellFeature>() is { } spells
-                ? new QuestRewardEffects(spells.System, () => _services.GetServices<IWorldFeature>().OfType<IQuestReputationRewards>(), _logger)
-                : null), npcs),
+                ? new QuestRewardEffects(spells.System, _logger)
+                : null,
+            ReputationRewards: reputation is { Factions.Count: > 0 } ? reputation : null), npcs),
         Options, new PersistenceSink(this), () => _clock.GetUtcNow().ToUnixTimeSeconds(), _logger);
 
     private QuestNpcDependencies ExtendDependencies(QuestNpcDependencies dependencies, NpcStore npcs)

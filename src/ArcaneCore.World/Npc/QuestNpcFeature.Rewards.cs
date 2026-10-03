@@ -1,12 +1,16 @@
+using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
+using ArcaneCore.World.Reputation;
+using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -98,7 +102,7 @@ public sealed partial class QuestNpcFeature
                     Money = plan.MoneyAfter, Inventory = plan.InventoryAfter, Level = plan.LevelAfter,
                     LevelPlayedTime = plan.LevelAfter != plan.LevelBefore ? 0 : before.LevelPlayedTime,
                 },
-                plan.ExpectedQuest, plan.RewardedQuest);
+                plan.ExpectedQuest, plan.RewardedQuest, plan.SpellGrant.LearnedSpells.ToArray(), plan.Reputation.After.ToArray());
             saves.HoldCharacter(id);
             if (!player.BeginQuestSettlement(operationId))
             {
@@ -125,6 +129,22 @@ public sealed partial class QuestNpcFeature
             await operation.Saves.SaveForSettlementAsync(operation.Request.Before, budget.Token).ConfigureAwait(false);
             budget.Token.ThrowIfCancellationRequested();
             await Persistence.FlushCharacterAsync(id).ConfigureAwait(false);
+            budget.Token.ThrowIfCancellationRequested();
+            // Drain the owners whose rows the reward transaction also writes. Anything queued for this
+            // character is behind us, and the hold guards keep new writes out. A failed spellbook
+            // retry throws here: no transaction starts and the journal stays intact.
+            if (operation.Request.LearnedSpells is { Count: > 0 } && _services.GetService<SpellFeature>() is { } spellFeature)
+            {
+                await spellFeature.Spellbook.FlushCharacterAsync(id).WaitAsync(budget.Token).ConfigureAwait(false);
+            }
+
+            if (operation.Request.ReputationAfter is { Count: > 0 } && _services.GetService<ReputationFeature>() is { } reputationFeature)
+            {
+                // Completes even after queued writes were dropped (docs/integration/reputation.md): only the
+                // factions this reward writes are converged, not the rest of the character's standings.
+                await reputationFeature.FlushAsync().WaitAsync(budget.Token).ConfigureAwait(false);
+            }
+
             budget.Token.ThrowIfCancellationRequested();
             operation.Saves.QuarantineCharacter(id);
             Persistence.QuarantineCharacter(id);
@@ -191,6 +211,14 @@ public sealed partial class QuestNpcFeature
                 // Durable history is adopted even after disconnect; the detached old Player
                 // must never be applied to a replacement or written back during shutdown.
                 Persistence.AdoptRewarded(operation.Plan.RewardedQuest);
+                if (operation.Plan.SpellGrant.LearnedSpells is { Count: > 0 } learned
+                    && _services.GetService<SpellFeature>() is { } spellFeature)
+                {
+                    // The rows are committed: the cached book follows without queueing a write. A replacement
+                    // Player (or a later login) loads the same rows from storage, so nothing is replayed to it.
+                    spellFeature.Spellbook.AdoptCommitted(id, learned.ToArray());
+                }
+
                 if (current)
                 {
                     using (player.BeginQuestSettlementPublication(operation.OperationId))
@@ -294,13 +322,31 @@ public sealed partial class QuestNpcFeature
             return RewardOutcome.Unknown;
         }
 
+        // The spell and faction rows commit with the journal in one transaction, so Before needs no
+        // check of them; After additionally requires every row the reward writes to be present as written.
+        bool grantsPresent = true;
+        if (request.LearnedSpells is { Count: > 0 } learned)
+        {
+            IReadOnlyList<uint> spells = await scope.ServiceProvider.GetRequiredService<ICharacterSpellStore>()
+                .GetAsync(id, budget.Token).ConfigureAwait(false);
+            grantsPresent = learned.All(spells.Contains);
+        }
+
+        if (grantsPresent && request.ReputationAfter is { Count: > 0 } factions)
+        {
+            CharacterReputationData stored = await scope.ServiceProvider.GetRequiredService<ICharacterReputationStore>()
+                .LoadAsync(id, budget.Token).ConfigureAwait(false);
+            grantsPresent = factions.All(expected => stored.Factions.Any(row => row.Faction == expected.Faction
+                && row.Standing == expected.Standing && row.Flags == expected.Flags));
+        }
+
         if (quest == request.ExpectedQuest && character.Money == request.Before.Money && character.Level == request.Before.Level
             && SameInventory(inventory, request.Before.Inventory!.Items))
         {
             return RewardOutcome.Before;
         }
 
-        return quest == request.RewardedQuest && character.Money == request.After.Money && character.Level == request.After.Level
+        return grantsPresent && quest == request.RewardedQuest && character.Money == request.After.Money && character.Level == request.After.Level
             && SameInventory(inventory, request.After.Inventory!.Items) ? RewardOutcome.After : RewardOutcome.Unknown;
     }
 

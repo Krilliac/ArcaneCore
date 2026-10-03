@@ -79,12 +79,14 @@ public sealed class TeleportService
     public TeleportDestination? DestinationOf(Player player) => _pending.TryGetValue(player.Guid, out Pending? p) ? p.Destination : null;
 
     /// <summary>
-    /// Start a teleport (vmangos <c>Player::TeleportTo</c>). Fails — returns false and changes
-    /// nothing — for invalid coordinates (<c>MapManager::IsValidMapCoord</c>), a map that is not
-    /// in the registry, a battleground map (entered only through the battleground system, which
-    /// ArcaneCore has not got yet), a player in no map, or a far teleport already under way.
+    /// Whether <see cref="TeleportTo"/> would start this teleport right now: the same checks, in the
+    /// same order, with nothing changed (quest reward preflight). A later call may still be refused
+    /// because the player or the target instance changed in between.
     /// </summary>
-    public bool TeleportTo(Player player, uint mapId, float x, float y, float z, float orientation)
+    public bool CanTeleportTo(Player player, uint mapId, float x, float y, float z, float orientation)
+        => Check(player, mapId, x, y, z, orientation, log: false);
+
+    private bool Check(Player player, uint mapId, float x, float y, float z, float orientation, bool log)
     {
         if (player.IsQuestSettlementPending)
         {
@@ -93,7 +95,11 @@ public sealed class TeleportService
 
         if (!GridDefines.IsValidMapCoord(x, y, z, orientation))
         {
-            _logger.LogWarning("teleport of {Player} to invalid coordinates {X} {Y} {Z} {O} on map {MapId}", player.Name, x, y, z, orientation, mapId);
+            if (log)
+            {
+                _logger.LogWarning("teleport of {Player} to invalid coordinates {X} {Y} {Z} {O} on map {MapId}", player.Name, x, y, z, orientation, mapId);
+            }
+
             return false;
         }
 
@@ -101,7 +107,11 @@ public sealed class TeleportService
         MapTemplate? target = maps.Registry.Find(mapId);
         if (target is null)
         {
-            _logger.LogWarning("teleport of {Player} to unknown map {MapId}", player.Name, mapId);
+            if (log)
+            {
+                _logger.LogWarning("teleport of {Player} to unknown map {MapId}", player.Name, mapId);
+            }
+
             return false;
         }
 
@@ -118,7 +128,18 @@ public sealed class TeleportService
 
         // vmangos TeleportTo → MapManager::CanPlayerEnter: the instance rules may refuse a far
         // teleport (raid group, full or resetting instance) before anything changes.
-        if (current.MapId != mapId && _world.MapResolver is { } resolver && !resolver.CanEnter(player, mapId))
+        return current.MapId == mapId || _world.MapResolver is not { } resolver || resolver.CanEnter(player, mapId);
+    }
+
+    /// <summary>
+    /// Start a teleport (vmangos <c>Player::TeleportTo</c>). Fails — returns false and changes
+    /// nothing — for invalid coordinates (<c>MapManager::IsValidMapCoord</c>), a map that is not
+    /// in the registry, a battleground map (entered only through the battleground system, which
+    /// ArcaneCore has not got yet), a player in no map, or a far teleport already under way.
+    /// </summary>
+    public bool TeleportTo(Player player, uint mapId, float x, float y, float z, float orientation)
+    {
+        if (!Check(player, mapId, x, y, z, orientation, log: true) || player.Map is not { } current)
         {
             return false;
         }

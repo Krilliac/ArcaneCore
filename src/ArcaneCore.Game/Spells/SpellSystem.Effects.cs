@@ -56,6 +56,15 @@ public sealed partial class SpellSystem
     public bool HasEffectHandler(SpellEffectName effect) => EffectHandlers.ContainsKey(effect);
 
     /// <summary>
+    /// Whether the handler of <paramref name="effect"/> is still the one this system installed itself
+    /// (not replaced through <see cref="RegisterEffect"/>). Quest reward preflight models only the
+    /// built-in teleport and summon handlers; replacement code cannot be modelled.
+    /// </summary>
+    public bool HasBuiltInEffectHandler(SpellEffectName effect)
+        => _builtInEffectHandlers.TryGetValue(effect, out SpellEffectHandler? builtIn)
+            && EffectHandlers.TryGetValue(effect, out SpellEffectHandler? active) && ReferenceEquals(builtIn, active);
+
+    /// <summary>
     /// The effect set, after vmangos SpellEffects.cpp: SCHOOL_DAMAGE (EffectSchoolDMG),
     /// TELEPORT_UNITS (EffectTeleportUnits), APPLY_AURA (EffectApplyAura), HEAL (EffectHeal),
     /// ENERGIZE (EffectEnergize), LEARN_SPELL (EffectLearnSpell), TRIGGER_SPELL
@@ -194,17 +203,8 @@ public sealed partial class SpellSystem
     /// </summary>
     private void EffectTeleportUnits(SpellEffectContext context)
     {
-        SpellTargetPosition? destination = context.Effect.TargetB switch
-        {
-            SpellImplicitTarget.LocationDatabase => Store.GetTargetPosition(context.Spell.Id),
-            SpellImplicitTarget.LocationCasterHomeBind when context.Target is Player player && !player.Home.IsUnset
-                => new SpellTargetPosition(player.Home.MapId, player.Home.X, player.Home.Y, player.Home.Z, player.Orientation),
-            SpellImplicitTarget.LocationCasterDest when context.Cast.Targets.HasDest
-                => new SpellTargetPosition(context.Target.MapId, context.Cast.Targets.Dest.X, context.Cast.Targets.Dest.Y, context.Cast.Targets.Dest.Z, context.Target.Orientation),
-            _ => null,
-        };
-
-        if (destination is not { } d)
+        if (!TryResolveTeleportDestination(context.Spell, context.EffectIndex, context.Target, context.Cast.Targets,
+                out SpellTargetPosition d))
         {
             ReportUnsupported("teleport destination", (uint)context.Effect.TargetB, context.Spell.Id);
             return;
@@ -214,6 +214,30 @@ public sealed partial class SpellSystem
         {
             ReportUnsupported("teleport to map", d.MapId, context.Spell.Id);
         }
+    }
+
+    /// <summary>
+    /// The destination <see cref="EffectTeleportUnits"/> would use for <paramref name="target"/>
+    /// (implicit target B of effect <paramref name="effectIndex"/>); no side effects. Quest reward
+    /// preflight shares it so that what is checked before the commit is what runs after it.
+    /// </summary>
+    public bool TryResolveTeleportDestination(SpellInfo spell, int effectIndex, Unit target, SpellCastTargets targets,
+        out SpellTargetPosition destination)
+    {
+        ArgumentNullException.ThrowIfNull(spell);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(targets);
+        SpellTargetPosition? resolved = spell.Effects[effectIndex].TargetB switch
+        {
+            SpellImplicitTarget.LocationDatabase => Store.GetTargetPosition(spell.Id),
+            SpellImplicitTarget.LocationCasterHomeBind when target is Player player && !player.Home.IsUnset
+                => new SpellTargetPosition(player.Home.MapId, player.Home.X, player.Home.Y, player.Home.Z, player.Orientation),
+            SpellImplicitTarget.LocationCasterDest when targets.HasDest
+                => new SpellTargetPosition(target.MapId, targets.Dest.X, targets.Dest.Y, targets.Dest.Z, target.Orientation),
+            _ => null,
+        };
+        destination = resolved.GetValueOrDefault();
+        return resolved.HasValue;
     }
 
     /// <summary>
@@ -253,13 +277,31 @@ public sealed partial class SpellSystem
             return false;
         }
 
+        AnnounceLearnedSpell(player, spellId);
+        CastLearnedPassive(player, spellId);
+        return true;
+    }
+
+    /// <summary>
+    /// SMSG_LEARNED_SPELL for a spell the player's book already contains (quest rewards commit the
+    /// spell with the journal and announce it from the publication step, which must not mutate the book).
+    /// </summary>
+    public void AnnounceLearnedSpell(Player player, uint spellId)
+    {
+        ArgumentNullException.ThrowIfNull(player);
         player.Session.Send(WorldOpcode.SmsgLearnedSpell, SpellPackets.BuildLearnedSpell(spellId));
+    }
+
+    /// <summary>
+    /// vmangos Player::AddSpell casts learned passive spells on the player (CastSpell(this, spellId, true)).
+    /// Refused, like every cast, while the player is held by a quest settlement.
+    /// </summary>
+    public void CastLearnedPassive(Player player, uint spellId)
+    {
+        ArgumentNullException.ThrowIfNull(player);
         if (Store.Get(spellId) is { IsPassive: true } passive)
         {
-            // vmangos Player::AddSpell casts learned passive spells on the player (CastSpell(this, spellId, true)).
             CastSpell(player, passive.Id, SpellCastTargets.ForSelf(), triggered: true);
         }
-
-        return true;
     }
 }

@@ -7,10 +7,52 @@ namespace ArcaneCore.World.Tests.Progression;
 
 public sealed class QuestRewardEffectCapabilityTests
 {
+    [Fact]
+    public void PureGrantsAreAcceptedWithoutAnyEffectHandler_WhenTheirGrantCanBeResolved()
+    {
+        // Pure grants are never cast, so no handler is needed; they settle atomically with the journal.
+        SpellSystem system = System(
+            Spell(1, SpellEffectName.LearnSpell, trigger: 2), Spell(2, SpellEffectName.Heal),
+            Spell(3, SpellEffectName.CreateItem) with { Effects = [new SpellEffectInfo
+            {
+                Effect = SpellEffectName.CreateItem, TargetA = SpellImplicitTarget.UnitCaster, ItemType = 77,
+            }] });
+        Assert.False(system.HasEffectHandler(SpellEffectName.CreateItem));
+        Assert.True(Effects(system).CanCastRewardSpell(1));
+        Assert.True(Effects(system).CanCastRewardSpell(3));
+    }
+
     [Theory]
     [InlineData(SpellEffectName.LearnSpell)]
     [InlineData(SpellEffectName.CreateItem)]
-    public void PermanentRewardNeedsSettlementRecoveryEvenWithARegisteredHandler(SpellEffectName effect)
+    public void PureGrantWhoseGrantCannotBeResolvedStaysUnsupported(SpellEffectName effect)
+    {
+        // No spell to learn (trigger 0 / unknown) and no item type: refused instead of failing at turn-in.
+        SpellSystem system = System(Spell(1, effect), Spell(2, effect, trigger: 999));
+        Assert.False(Effects(system).CanCastRewardSpell(1));
+        Assert.False(Effects(system).CanCastRewardSpell(2));
+    }
+
+    [Fact]
+    public void MixedGrantAndTransientSpellIsRefused()
+    {
+        // Regression guard (passes before and after): the transient half could not be cast without repeating the grant.
+        SpellSystem system = System(Spell(1, SpellEffectName.LearnSpell, trigger: 2) with
+        {
+            Effects = [
+                new SpellEffectInfo { Effect = SpellEffectName.LearnSpell, TargetA = SpellImplicitTarget.UnitCaster, TriggerSpell = 2 },
+                new SpellEffectInfo { Effect = SpellEffectName.Heal, TargetA = SpellImplicitTarget.UnitCaster },
+            ],
+        }, Spell(2, SpellEffectName.Heal));
+        Assert.False(Effects(system).CanCastRewardSpell(1));
+    }
+
+    [Theory]
+    [InlineData(SpellEffectName.LearnPetSpell)]
+    [InlineData(SpellEffectName.Skill)]
+    [InlineData(SpellEffectName.Reputation)]
+    [InlineData(SpellEffectName.EnchantItem)]
+    public void OtherPermanentEffectsStayRefusedEvenWithARegisteredHandler(SpellEffectName effect)
     {
         SpellSystem system = System(Spell(1, effect));
         system.RegisterEffect(effect, static _ => { });
@@ -31,11 +73,24 @@ public sealed class QuestRewardEffectCapabilityTests
     [Theory]
     [InlineData(SpellEffectName.TeleportUnits)]
     [InlineData(SpellEffectName.Summon)]
-    public void DestinationAndSummonOwnerNeedPreflightBeyondHandlerRegistration(SpellEffectName effect)
+    public void BuiltInTeleportAndSummonPassTheStaticGate_ReplacedHandlersDoNot(SpellEffectName effect)
     {
+        // The static gate only says the shape is one the player-aware preflight models; the preflight
+        // itself is covered by QuestRewardCollaboratorTests.
         SpellSystem system = System(Spell(1, effect));
+        Assert.True(system.HasBuiltInEffectHandler(effect));
+        Assert.True(Effects(system).CanCastRewardSpell(1));
         system.RegisterEffect(effect, static _ => { });
         Assert.True(system.HasEffectHandler(effect));
+        Assert.False(system.HasBuiltInEffectHandler(effect));
+        Assert.False(Effects(system).CanCastRewardSpell(1));
+    }
+
+    [Fact]
+    public void NestedTeleportOrSummonIsRefused_BecausePreflightOnlyModelsTheRewardSpellItself()
+    {
+        SpellSystem system = System(Spell(1, SpellEffectName.TriggerSpell, trigger: 2), Spell(2, SpellEffectName.TeleportUnits));
+        Assert.True(Effects(system).CanCastRewardSpell(2));
         Assert.False(Effects(system).CanCastRewardSpell(1));
     }
 
@@ -105,7 +160,49 @@ public sealed class QuestRewardEffectCapabilityTests
         Assert.False(Effects(System(unsupported)).CanCastRewardSpell(2));
     }
 
-    private static QuestRewardEffects Effects(SpellSystem system) => new(system, () => [], NullLogger.Instance);
+
+    [Theory]
+    [InlineData(SpellEffectName.ApplyAreaAuraPet)]
+    [InlineData(SpellEffectName.ApplyAreaAuraFriend)]
+    [InlineData(SpellEffectName.ApplyAreaAuraEnemy)]
+    [InlineData(SpellEffectName.ApplyAreaAuraRaid)]
+    [InlineData(SpellEffectName.ApplyAreaAuraOwner)]
+    [InlineData(SpellEffectName.PersistentAreaAura)]
+    public void AreaAuraFamilySharesFiniteNonpassiveGuard(SpellEffectName effect)
+    {
+        // Latent today: no area-aura handler besides party is installed, but a feature may register one.
+        AuraType aura = (AuraType)255;
+        SpellInfo finite = Spell(1, effect, aura: aura) with
+        {
+            Duration = new SpellDuration(5_000, 0, 5_000),
+        };
+        SpellSystem system = System(finite,
+            finite with { Id = 2, Duration = new SpellDuration(-1, 0, -1) },
+            finite with { Id = 3, Attributes = SpellAttributes.Passive });
+        system.RegisterEffect(effect, static _ => { });
+        system.RegisterAura(aura, new AuraHandler(null, null));
+        Assert.True(Effects(system).CanCastRewardSpell(1));
+        Assert.False(Effects(system).CanCastRewardSpell(2));
+        Assert.False(Effects(system).CanCastRewardSpell(3));
+    }
+
+    [Theory]
+    [InlineData(SpellEffectName.TeleportUnitsFaceCaster)]
+    [InlineData(SpellEffectName.SummonWild)]
+    [InlineData(SpellEffectName.SummonGuardian)]
+    [InlineData(SpellEffectName.SummonTotem)]
+    [InlineData(SpellEffectName.SummonCritter)]
+    [InlineData(SpellEffectName.SummonObjectWild)]
+    [InlineData(SpellEffectName.SummonChangeItem)]
+    public void NonBuiltInTeleportAndSummonFamiliesAreRefused(SpellEffectName effect)
+    {
+        SpellSystem system = System(Spell(1, effect));
+        system.RegisterEffect(effect, static _ => { });
+        Assert.True(system.HasEffectHandler(effect));
+        Assert.False(Effects(system).CanCastRewardSpell(1));
+    }
+
+    private static QuestRewardEffects Effects(SpellSystem system) => new(system, NullLogger.Instance);
     private static SpellSystem System(params SpellInfo[] spells) => new(new SpellStore(spells, [], []), () => 0);
     private static SpellInfo Spell(uint id, SpellEffectName effect, uint trigger = 0, AuraType aura = AuraType.None)
         => new()

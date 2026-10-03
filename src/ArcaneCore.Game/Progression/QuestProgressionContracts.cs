@@ -21,24 +21,30 @@ public interface IQuestExperience : IPlayerExperience
 }
 
 /// <summary>
-/// Reward side effects that may only run after the settlement released the character: reward
-/// spells (vmangos RewardQuest RewSpellCast/RewSpell) and the optional reputation owner hook.
-/// World thread.
+/// The reward spell of an ordinary quest (vmangos RewardQuest RewSpellCast/RewSpell) as seen by
+/// quest settlement. Permanent grants (LearnSpell, CreateItem) are persisted atomically with the
+/// journal; transient effects are cast once after the commit. World thread.
 /// </summary>
 public interface IQuestRewardEffects
 {
-    /// <summary>Whether this reward spell can be cast (unknown spells keep the quest unsupported).</summary>
+    /// <summary>
+    /// The static gate: whether this reward spell has a shape settlement can honour (unknown spells and
+    /// everything that is neither a pure grant nor a transient, preflightable spell keep the quest unsupported).
+    /// </summary>
     bool CanCastRewardSpell(uint spellId);
 
-    /// <summary>The reward was durably committed and published; <paramref name="questGiver"/> may have despawned.</summary>
-    void QuestRewarded(Player player, Quest quest, ObjectGuid questGiver);
-}
+    /// <summary>
+    /// The player-aware gate, before anything is held or mutated: resolves the grants, freezes created-item
+    /// counts and preflights teleport destinations and summon owners. False keeps the quest unrewarded.
+    /// </summary>
+    bool TryPrepareRewardSpell(Player player, ObjectGuid questGiver, uint spellId, out QuestRewardSpellGrant grant);
 
-/// <summary>
-/// Optional reputation owner hook (feat/reputation): vmangos RewardQuest → RewardReputation.
-/// This branch stores no reputation; every world feature implementing it is called when present.
-/// </summary>
-public interface IQuestReputationRewards
-{
-    void RewardQuestReputation(Player player, Quest quest);
+    /// <summary>SMSG_LEARNED_SPELL for the committed learned spells, inside the settlement's publication step.</summary>
+    void AnnounceLearnedSpells(Player player, QuestRewardSpellGrant grant);
+
+    /// <summary>
+    /// After the character was released: passive self-casts of the learned spells and the transient reward cast.
+    /// The transient effect was never durable; a failure now is logged and lost. <paramref name="questGiver"/> may have despawned.
+    /// </summary>
+    void PublishRewardSpell(Player player, Quest quest, ObjectGuid questGiver, QuestRewardSpellGrant grant);
 }

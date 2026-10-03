@@ -1,5 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Progression;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Quests;
 
@@ -14,7 +16,8 @@ public sealed class QuestRewardPlan
 {
     internal QuestRewardPlan(QuestNpcServices services, Player player, ObjectGuid questGiver, uint choice, uint moneyAfter,
         uint summaryMoney, uint experience, byte levelAfter, CharacterQuestStatus expectedQuest,
-        CharacterQuestStatus rewardedQuest, InventoryRewardStage stage)
+        CharacterQuestStatus rewardedQuest, InventoryRewardStage stage, QuestRewardSpellGrant spellGrant,
+        QuestReputationStage reputation)
     {
         Services = services;
         Player = player;
@@ -29,6 +32,8 @@ public sealed class QuestRewardPlan
         ExpectedQuest = expectedQuest;
         RewardedQuest = rewardedQuest;
         Stage = stage;
+        SpellGrant = spellGrant;
+        Reputation = reputation;
     }
 
     public Player Player { get; }
@@ -51,6 +56,12 @@ public sealed class QuestRewardPlan
     public ObjectGuid QuestGiver { get; }
     public CharacterQuestStatus ExpectedQuest { get; }
     public CharacterQuestStatus RewardedQuest { get; }
+
+    /// <summary>The reward spell's share of the settlement: the spells to learn (persisted with the reward), created-item counts, and whether a transient cast follows.</summary>
+    public QuestRewardSpellGrant SpellGrant { get; }
+
+    /// <summary>The reputation reward staged on a copy of the player's standings; <see cref="QuestReputationStage.After"/> is persisted with the reward.</summary>
+    public QuestReputationStage Reputation { get; }
     internal QuestNpcServices Services { get; }
     internal InventoryRewardStage Stage { get; }
     internal uint SummaryMoney { get; }

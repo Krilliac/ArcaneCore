@@ -3,6 +3,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 using ItemInventoryResult = ArcaneCore.Game.Items.InventoryResult;
@@ -54,11 +55,17 @@ public sealed partial class QuestNpcServices
             || state.Quests.Get(questId) is not { Status: QuestStatus.Complete } data || !Pending(quest, data)
             || !ObjectivesComplete(player, quest, data) || !TryRewardGrants(quest, choice, out List<InventoryRewardGrant> grants,
                 out uint chosenItem) || !TryRewardMoney(player, quest, out uint moneyAfter, out uint summaryMoney)
-            || !TryRewardExperience(player, quest, out uint experience, out byte levelAfter))
+            || !TryRewardExperience(player, quest, out uint experience, out byte levelAfter)
+            // Preflight refusals keep the reward available and mutate nothing: no hold, no journal change, and
+            // the client simply keeps its offer window (no standard error packet exists for them).
+            || !TryRewardSpell(player, guid, quest, out QuestRewardSpellGrant spellGrant)
+            || !TryRewardReputation(player, quest, out QuestReputationStage reputation))
         {
             return false;
         }
 
+        // vmangos RewardQuest stores the quest items first; items a reward spell creates follow them.
+        grants.AddRange(spellGrant.CreatedItems.Select(item => new InventoryRewardGrant(item.Entry, item.Count, Created: true)));
         ItemInventoryResult result = player.Inventory.TryStageQuestRewards(grants, RequiredItemRemovals(quest),
             out InventoryRewardStage? stage, out uint failedEntry);
         if (result != ItemInventoryResult.Ok || stage is null)
@@ -75,8 +82,47 @@ public sealed partial class QuestNpcServices
             {
                 Status = quest.IsRepeatable ? (byte)QuestStatus.None : expected.Status,
                 Rewarded = true, Timer = 0, RewardChoice = chosenItem,
-            }, stage);
+            }, stage, spellGrant, reputation);
         return true;
+    }
+
+    /// <summary>The reward spell (RewSpellCast, else RewSpell): grants resolved and preflight passed, or false.</summary>
+    private bool TryRewardSpell(Player player, ObjectGuid questGiver, Quest quest, out QuestRewardSpellGrant grant)
+    {
+        grant = QuestRewardSpellGrant.None;
+        uint spellId = RewardSpell(quest);
+        return spellId == 0 || Deps.RewardEffects?.TryPrepareRewardSpell(player, questGiver, spellId, out grant) == true;
+    }
+
+    /// <summary>vmangos RewardReputation: only pairs with both a faction and a value count; they need the reputation owner.</summary>
+    private static bool HasReputationReward(Quest quest)
+    {
+        for (int i = 0; i < quest.RewRepFaction.Count; i++)
+        {
+            if (quest.RewRepFaction[i] != 0 && quest.RewRepValue[i] != 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool TryRewardReputation(Player player, Quest quest, out QuestReputationStage stage)
+    {
+        stage = QuestReputationStage.Empty;
+        if (!HasReputationReward(quest))
+        {
+            return true;
+        }
+
+        var rewards = new List<QuestReputationReward>(quest.RewRepFaction.Count);
+        for (int i = 0; i < quest.RewRepFaction.Count; i++)
+        {
+            rewards.Add(new QuestReputationReward(quest.RewRepFaction[i], quest.RewRepValue[i]));
+        }
+
+        return Deps.ReputationRewards?.TryStage(player, quest.Template.QuestLevel, rewards, out stage) == true;
     }
 
     /// <summary>Publish a successfully committed plan. The caller must settle persistence while the world thread excludes intervening mutations.</summary>
@@ -122,6 +168,18 @@ public sealed partial class QuestNpcServices
             }
         }
 
+        // Durable-state publications of the reward spell and the reputation reward: the rows were
+        // committed with the journal, so these only update the live player and its client.
+        if (plan.SpellGrant.LearnedSpells.Count > 0)
+        {
+            Deps.RewardEffects?.AnnounceLearnedSpells(player, plan.SpellGrant);
+        }
+
+        if (Deps.ReputationRewards is { } reputation && !reputation.Publish(player, plan.Reputation))
+        {
+            _logger.LogWarning("quest {Quest} reputation reward differed from its committed rows; the live rows were queued", quest.Id);
+        }
+
         Send(player, WorldOpcode.SmsgQuestgiverQuestComplete,
             QuestPackets.Complete(quest, plan.Experience, plan.SummaryMoney));
     }
@@ -138,7 +196,10 @@ public sealed partial class QuestNpcServices
             && plan.Player.CanMutateQuestSettlementState)
         {
             plan.EffectsPublished = true;
-            effects.QuestRewarded(plan.Player, quest, plan.QuestGiver);
+            if (plan.SpellGrant.HasPostReleaseEffects)
+            {
+                effects.PublishRewardSpell(plan.Player, quest, plan.QuestGiver, plan.SpellGrant);
+            }
         }
     }
 
@@ -165,6 +226,7 @@ public sealed partial class QuestNpcServices
         && ((quest.Template.RequiredMinRepFaction == 0 && quest.Template.RequiredMaxRepFaction == 0) || Deps.Reputation is not null)
         && ((quest.Template.RewXP == 0 && quest.Template.RewMoneyMaxLevel == 0) || Deps.Experience is IQuestExperience)
         && (RewardSpell(quest) == 0 || Deps.RewardEffects?.CanCastRewardSpell(RewardSpell(quest)) == true)
+        && (!HasReputationReward(quest) || Deps.ReputationRewards is not null)
         && CoherentObjectives(quest)
         && CoherentRewards(quest.RewItemId, quest.RewItemCount, dense: false)
         && CoherentRewards(quest.RewChoiceItemId, quest.RewChoiceItemCount, dense: true);

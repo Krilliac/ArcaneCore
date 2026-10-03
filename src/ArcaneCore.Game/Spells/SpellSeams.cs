@@ -33,6 +33,13 @@ public interface ITeleportSink
 {
     /// <summary>Teleport <paramref name="unit"/>; false when the destination is not supported.</summary>
     bool Teleport(Unit unit, uint mapId, float x, float y, float z, float orientation);
+
+    /// <summary>
+    /// Whether <see cref="Teleport"/> would be accepted right now, without moving anything. Quest reward
+    /// preflight asks this before a transient teleport reward may consume the quest; the answer can
+    /// still change before publication, which asks again.
+    /// </summary>
+    bool CanTeleport(Unit unit, uint mapId, float x, float y, float z, float orientation);
 }
 
 /// <summary>A player's known spells (the spellbook). Implemented by the world daemon, which persists it.</summary>
@@ -103,6 +110,12 @@ public sealed class HealthOnlyDamageSink : IDamageSink
 /// </summary>
 public sealed class NearTeleportSink : ITeleportSink
 {
+    public bool CanTeleport(Unit unit, uint mapId, float x, float y, float z, float orientation)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        return unit.Map is { } map && map.MapId == mapId;
+    }
+
     public bool Teleport(Unit unit, uint mapId, float x, float y, float z, float orientation)
     {
         ArgumentNullException.ThrowIfNull(unit);

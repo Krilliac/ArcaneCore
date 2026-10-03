@@ -68,6 +68,11 @@ internal sealed class WorldSpellTeleportSink(Func<TeleportService> teleports) : 
 {
     private readonly NearTeleportSink _near = new();
 
+    public bool CanTeleport(Unit unit, uint mapId, float x, float y, float z, float orientation)
+        => unit is Player player
+            ? teleports().CanTeleportTo(player, mapId, x, y, z, orientation)
+            : _near.CanTeleport(unit, mapId, x, y, z, orientation);
+
     public bool Teleport(Unit unit, uint mapId, float x, float y, float z, float orientation)
         => unit is Player player
             ? teleports().TeleportTo(player, mapId, x, y, z, orientation)

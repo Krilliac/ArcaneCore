@@ -2,12 +2,15 @@ using System.Data.Common;
 using System.Transactions;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
+using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Data.Quests;
+using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Kernel.Reputation;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Xunit;
@@ -269,6 +272,195 @@ public sealed class QuestRewardStoreTests : IAsyncLifetime
         }
 
         await AssertPersistedAsync(seed, rewarded: false);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Commit_PersistsLearnedSpellsAndReputationRowsAtomically(DatabaseProvider provider)
+    {
+        Seed seed = await CreateAsync(provider);
+        int id = seed.Request.Before.Id;
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(seed.Connection))
+        {
+            // One learned spell is already stored (not duplicated), one faction already has a row (overwritten);
+            // the other character holds look-alike rows that must stay untouched.
+            db.Set<CharacterSpellRow>().AddRange(
+                new CharacterSpellRow { CharacterId = id, Spell = 900 }, new CharacterSpellRow { CharacterId = seed.OtherId, Spell = 901 });
+            db.Set<CharacterReputationEntity>().AddRange(
+                new CharacterReputationEntity { CharacterId = id, Faction = 72, Standing = 5, Flags = 1 },
+                new CharacterReputationEntity { CharacterId = seed.OtherId, Faction = 72, Standing = 7, Flags = 1 });
+            await db.SaveChangesAsync();
+        }
+
+        CharacterQuestRewardRequest request = Granting(seed);
+        Assert.Equal(QuestRewardCommitResult.Committed, await CommitAsync(seed.Connection, request));
+        await AssertPersistedAsync(seed, rewarded: true);
+        await AssertGrantsAsync(seed, committed: true);
+
+        // A retry observes the rewarded history before it could grant anything again.
+        Assert.Equal(QuestRewardCommitResult.AlreadyRewarded, await CommitAsync(seed.Connection, request));
+        await AssertGrantsAsync(seed, committed: true);
+    }
+
+    [Theory]
+    [MemberData(nameof(Interruptions))]
+    public async Task ConflictOrCancellation_RollsBackSpellAndReputationRows(DatabaseProvider provider, bool cancel)
+    {
+        Seed seed = await CreateAsync(provider);
+        CharacterQuestRewardRequest request = Granting(seed);
+        using var cancellation = new CancellationTokenSource();
+        var interceptor = new AfterRewardSave(() =>
+        {
+            if (cancel)
+            {
+                cancellation.Cancel();
+            }
+            else
+            {
+                throw new IOException("Synthetic interruption after reward rows were saved.");
+            }
+        });
+        await using (CharacterDbContext db = Context(seed.Connection, interceptor))
+        {
+            ICharacterQuestRewardStore store = new EfCharacterQuestRewardStore(db);
+            if (cancel)
+            {
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.CommitAsync(request, cancellation.Token));
+            }
+            else
+            {
+                await Assert.ThrowsAsync<IOException>(() => store.CommitAsync(request));
+            }
+
+            Assert.True(interceptor.Fired);
+            Assert.Empty(db.ChangeTracker.Entries());
+            Assert.Null(db.Database.CurrentTransaction);
+        }
+
+        await AssertPersistedAsync(seed, rewarded: false);
+        await AssertGrantsAsync(seed, committed: false);
+
+        // A stale precondition refuses the whole reward, grants included.
+        CharacterQuestRewardRequest stale = request with { Before = request.Before with { Money = request.Before.Money + 1 } };
+        Assert.Equal(QuestRewardCommitResult.Conflict, await CommitAsync(seed.Connection, stale));
+        await AssertGrantsAsync(seed, committed: false);
+
+        Assert.Equal(QuestRewardCommitResult.Committed, await CommitAsync(seed.Connection, request));
+        await AssertGrantsAsync(seed, committed: true);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Commit_DoesNotIssueIntermediateSaveChanges(DatabaseProvider provider)
+    {
+        // The module stores save and clear the tracker; the reward must stay one save in one transaction.
+        Seed seed = await CreateAsync(provider);
+        var counter = new SaveCounter();
+        await using (CharacterDbContext db = Context(seed.Connection, counter))
+        {
+            Assert.Equal(QuestRewardCommitResult.Committed, await new EfCharacterQuestRewardStore(db).CommitAsync(Granting(seed)));
+        }
+
+        Assert.Equal(1, counter.Saves);
+        await AssertGrantsAsync(seed, committed: true);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task InvalidGrants_AreRejectedBeforeAnyWrite(DatabaseProvider provider)
+    {
+        Seed seed = await CreateAsync(provider);
+        int id = seed.Request.Before.Id;
+        CharacterReputationRow Row(int character, uint faction) => new(character, faction, 1, 1);
+        CharacterQuestRewardRequest[] invalid =
+        [
+            seed.Request with { LearnedSpells = [0u] },
+            seed.Request with { LearnedSpells = [900u, 900u] },
+            seed.Request with { ReputationAfter = [Row(seed.OtherId, 21)] },
+            seed.Request with { ReputationAfter = [Row(id, 0)] },
+            seed.Request with { ReputationAfter = [Row(id, 21), Row(id, 21)] },
+        ];
+        foreach (CharacterQuestRewardRequest request in invalid)
+        {
+            await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(seed.Connection);
+            await Assert.ThrowsAsync<ArgumentException>(() => new EfCharacterQuestRewardStore(db).CommitAsync(request));
+        }
+
+        await AssertPersistedAsync(seed, rewarded: false);
+        await AssertGrantsAsync(seed, committed: false);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task GrantLists_AreDetachedBeforeDatabaseWork(DatabaseProvider provider)
+    {
+        Seed seed = await CreateAsync(provider);
+        uint[] spells = [900, 902];
+        CharacterReputationRow[] factions = [.. Granting(seed).ReputationAfter!];
+        var interceptor = new BeforeFirstRead(() =>
+        {
+            spells[1] = 12345;
+            factions[0] = factions[0] with { Standing = 999_999 };
+        });
+        await using (CharacterDbContext db = Context(seed.Connection, interceptor))
+        {
+            CharacterQuestRewardRequest request = seed.Request with { LearnedSpells = spells, ReputationAfter = factions };
+            // The first read happens after the store copied the lists: the committed rows are the originals.
+            Assert.Equal(QuestRewardCommitResult.Committed, await new EfCharacterQuestRewardStore(db).CommitAsync(request));
+            Assert.True(interceptor.Fired);
+        }
+
+        await AssertGrantsAsync(seed, committed: true);
+    }
+
+    private static CharacterQuestRewardRequest Granting(Seed seed) => seed.Request with
+    {
+        LearnedSpells = [900u, 902u],
+        ReputationAfter = [new(seed.Request.Before.Id, 21, 150, 1), new(seed.Request.Before.Id, 72, -20, 17)],
+    };
+
+    /// <summary>Spell 900 may pre-exist, 901 belongs to the other character; faction 72 may pre-exist for both characters.</summary>
+    private static async Task AssertGrantsAsync(Seed seed, bool committed)
+    {
+        int id = seed.Request.Before.Id;
+        await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(seed.Connection);
+        List<uint> own = await db.Set<CharacterSpellRow>().AsNoTracking().Where(r => r.CharacterId == id)
+            .Select(r => r.Spell).OrderBy(s => s).ToListAsync();
+        List<CharacterReputationEntity> factions = await db.Set<CharacterReputationEntity>().AsNoTracking()
+            .Where(r => r.CharacterId == id).OrderBy(r => r.Faction).ToListAsync();
+        if (committed)
+        {
+            Assert.Contains(900u, own);
+            Assert.Contains(902u, own);
+            Assert.DoesNotContain(12345u, own);
+            Assert.Equal(own.Distinct().Count(), own.Count);
+            Assert.Equal((150, 1u), factions.Where(f => f.Faction == 21).Select(f => (f.Standing, f.Flags)).Single());
+            Assert.Equal((-20, 17u), factions.Where(f => f.Faction == 72).Select(f => (f.Standing, f.Flags)).Single());
+        }
+        else
+        {
+            Assert.DoesNotContain(902u, own);
+            Assert.DoesNotContain(factions, f => f.Faction == 21);
+            Assert.DoesNotContain(factions, f => f.Faction == 72 && f.Standing == -20);
+        }
+
+        // The other character's rows are never touched by this reward.
+        Assert.DoesNotContain(902u, await db.Set<CharacterSpellRow>().AsNoTracking().Where(r => r.CharacterId == seed.OtherId)
+            .Select(r => r.Spell).ToListAsync());
+        Assert.DoesNotContain(await db.Set<CharacterReputationEntity>().AsNoTracking().Where(r => r.CharacterId == seed.OtherId)
+            .ToListAsync(), r => r.Faction == 72 && r.Standing == -20);
+    }
+
+    private sealed class SaveCounter : SaveChangesInterceptor
+    {
+        public int Saves { get; private set; }
+
+        public override ValueTask<int> SavedChangesAsync(SaveChangesCompletedEventData eventData, int result,
+            CancellationToken cancellationToken = default)
+        {
+            Saves++;
+            return ValueTask.FromResult(result);
+        }
     }
 
     public Task InitializeAsync() => Task.CompletedTask;

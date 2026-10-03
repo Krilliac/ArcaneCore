@@ -45,7 +45,8 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(SpellWorldDataModule), DatabaseComponent.World, 5),
             (typeof(QuestNpcWorldModule), DatabaseComponent.World, 6),
             (typeof(GameObjectLootDataModule), DatabaseComponent.World, 7),
-            (typeof(CreatureAiDataModule), DatabaseComponent.World, 8),
+            (typeof(CreatureAiDataModule), DatabaseComponent.World, CreatureAiDataModule.Version),
+            (typeof(QuestReputationRewardWorldModule), DatabaseComponent.World, QuestReputationRewardWorldModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -143,6 +144,49 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         await EnsureAndInspectAsync(characters, CharacterDbContext.Schema);
         await EnsureAndInspectAsync(world, WorldDbContext.Schema);
         Assert.Equal(0u, (await characters.Characters.SingleAsync()).Money);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task WorldDatabaseBeforeTheQuestReputationStep_UpgradesWithZeroDefaultsAndKeepsRows(DatabaseProvider provider)
+    {
+        // The v6 step creates quest_template from the current model, so the upgrade chain above already
+        // has the columns. A database that predates them is rebuilt here: a complete schema whose
+        // quest_template loses the ten columns and whose version row reads one step earlier.
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        int previous = QuestReputationRewardWorldModule.Version - 1;
+        string[] columns =
+        [
+            .. Enumerable.Range(1, 5).Select(i => $"RewRepFaction{i}"),
+            .. Enumerable.Range(1, 5).Select(i => $"RewRepValue{i}"),
+        ];
+        await using (WorldDbContext world = TestContexts.Create<WorldDbContext>(connection))
+        {
+            await SchemaBootstrapper.EnsureAsync(world, WorldDbContext.Schema);
+            world.Set<ArcaneCore.Kernel.Quests.QuestTemplate>().Add(new ArcaneCore.Kernel.Quests.QuestTemplate { Entry = 4242, Method = 2 });
+            await world.SaveChangesAsync();
+            ISqlGenerationHelper sql = world.GetService<ISqlGenerationHelper>();
+            foreach (string column in columns)
+            {
+                string statement = $"ALTER TABLE {sql.DelimitIdentifier("quest_template")} DROP COLUMN {sql.DelimitIdentifier(column)}";
+                await world.Database.ExecuteSqlRawAsync(statement);
+            }
+
+            SchemaVersionRow row = await world.Set<SchemaVersionRow>().SingleAsync();
+            row.Version = previous;
+            await world.SaveChangesAsync();
+            world.ChangeTracker.Clear();
+        }
+
+        // Two startups: the step runs once and a repeat has nothing left to add.
+        for (int pass = 0; pass < 2; pass++)
+        {
+            await using WorldDbContext world = TestContexts.Create<WorldDbContext>(connection);
+            await EnsureAndInspectAsync(world, WorldDbContext.Schema);
+            ArcaneCore.Kernel.Quests.QuestTemplate quest = await world.Set<ArcaneCore.Kernel.Quests.QuestTemplate>().SingleAsync(q => q.Entry == 4242);
+            Assert.Equal((0u, 0u, 0u, 0u, 0u), (quest.RewRepFaction1, quest.RewRepFaction2, quest.RewRepFaction3, quest.RewRepFaction4, quest.RewRepFaction5));
+            Assert.Equal((0, 0, 0, 0, 0), (quest.RewRepValue1, quest.RewRepValue2, quest.RewRepValue3, quest.RewRepValue4, quest.RewRepValue5));
+        }
     }
 
     public Task InitializeAsync() => Task.CompletedTask;

@@ -1,10 +1,13 @@
 using System.Data;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
+using ArcaneCore.Data.Characters.Spells;
+using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Kernel.Reputation;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArcaneCore.Data.Quests;
@@ -32,8 +35,21 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
         }
 
         // Copy before the first await: callers may subsequently reuse their lists.
-        request = request with { Before = Copy(request.Before), After = Copy(request.After) };
+        request = request with
+        {
+            Before = Copy(request.Before),
+            After = Copy(request.After),
+            // Detached copies: the caller may reuse its lists, and the loops below must not see them change.
+            LearnedSpells = request.LearnedSpells is { } spells ? [.. spells] : [],
+            ReputationAfter = request.ReputationAfter is { } rows ? [.. rows] : [],
+        };
         Validate(request);
+        if ((request.LearnedSpells!.Count > 0 && db.Model.FindEntityType(typeof(CharacterSpellRow)) is null)
+            || (request.ReputationAfter!.Count > 0 && db.Model.FindEntityType(typeof(CharacterReputationEntity)) is null))
+        {
+            throw new InvalidOperationException("The reward carries spell or reputation grants but the character model has no such table.");
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
         await using var transaction = await db.Database.BeginTransactionAsync(
             IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
@@ -79,8 +95,50 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
                 return QuestRewardCommitResult.Conflict;
             }
 
+            // The spell and faction rows are read and written through the context's sets, never through
+            // their module stores: those call SaveChanges and clear the tracker, which would flush or
+            // drop the staged character, inventory and quest changes before the single save below.
+            List<uint> learned = [.. request.LearnedSpells!];
+            Dictionary<uint, CharacterReputationEntity> factions = [];
+            HashSet<uint> known = [];
+            if (learned.Count > 0)
+            {
+                known = [.. await db.Set<CharacterSpellRow>().AsNoTracking()
+                    .Where(r => r.CharacterId == id && learned.Contains(r.Spell))
+                    .Select(r => r.Spell).ToListAsync(cancellationToken).ConfigureAwait(false)];
+            }
+
+            List<uint> touched = [.. request.ReputationAfter!.Select(r => r.Faction)];
+            if (touched.Count > 0)
+            {
+                factions = await db.Set<CharacterReputationEntity>()
+                    .Where(r => r.CharacterId == id && touched.Contains(r.Faction))
+                    .ToDictionaryAsync(r => r.Faction, cancellationToken).ConfigureAwait(false);
+            }
+
             await new EfCharacterStore(db).StageStateAsync(request.After, cancellationToken).ConfigureAwait(false);
             CopyStatus(row, request.RewardedQuest);
+            foreach (uint spell in learned.Where(spell => !known.Contains(spell)))
+            {
+                db.Set<CharacterSpellRow>().Add(new CharacterSpellRow { CharacterId = id, Spell = spell });
+            }
+
+            foreach (CharacterReputationRow faction in request.ReputationAfter!)
+            {
+                if (factions.TryGetValue(faction.Faction, out CharacterReputationEntity? entity))
+                {
+                    entity.Standing = faction.Standing;
+                    entity.Flags = faction.Flags;
+                }
+                else
+                {
+                    db.Set<CharacterReputationEntity>().Add(new CharacterReputationEntity
+                    {
+                        CharacterId = id, Faction = faction.Faction, Standing = faction.Standing, Flags = faction.Flags,
+                    });
+                }
+            }
+
             db.ChangeTracker.DetectChanges();
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
@@ -143,6 +201,14 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
 
         ValidateInventory(request.Before.Inventory);
         ValidateInventory(request.After.Inventory);
+        IReadOnlyList<uint> spells = request.LearnedSpells ?? [];
+        IReadOnlyList<CharacterReputationRow> factions = request.ReputationAfter ?? [];
+        if (spells.Any(s => s == 0) || spells.Distinct().Count() != spells.Count
+            || factions.Any(f => f is null || f.CharacterId != id || f.Faction == 0)
+            || factions.Select(f => f.Faction).Distinct().Count() != factions.Count)
+        {
+            throw new ArgumentException("Learned spells must be positive and distinct; faction rows must belong to the character, one per faction.", nameof(request));
+        }
     }
 
     private static void ValidateInventory(InventorySnapshot? inventory)
