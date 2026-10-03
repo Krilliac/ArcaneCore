@@ -171,6 +171,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
 
     bool ICreatureMover.IsCasting(Creature creature) => _ai.Spells?.IsCasting(creature) ?? false;
 
+    CreatureMovementOptions ICreatureMover.MovementOptions => _options.Movement;
+
     void ICreatureMover.OnMovementFinished(Creature creature, MovementGeneratorType type, uint pointId)
         => OnMovementFinished(creature, type, pointId);
 

@@ -30,4 +30,11 @@ public sealed class CreatureMovementOptions
     /// midpoint layout is the pre-fidelity ArcaneCore behaviour, kept only as a rollback switch.
     /// </summary>
     public MonsterMoveOffsetBase MonsterMoveOffsetBase { get; set; } = MonsterMoveOffsetBase.Destination;
+
+    /// <summary>
+    /// <c>Creatures:Movement:RunDuringWanderChancePercent</c>: for a creature with the cmangos RUN_DURING_WANDER flag, the percent of
+    /// random-movement legs that run (cmangos MotionGenerators/RandomMovementGenerator.cpp:135-136: <c>SetWalk(urand(0, 99) >= 15)</c>).
+    /// vmangos has no such flag (its 0x20 is NO_MOVEMENT_PAUSE), so the setting only reaches creatures imported in the cmangos dialect.
+    /// </summary>
+    public uint RunDuringWanderChancePercent { get; set; } = 15;
 }

@@ -30,3 +30,26 @@ confirmed multi-point splines or the toggle packets.**
 Limits: `MOVEFLAG_SPLINE_ENABLED | FORWARD` are not maintained on the creature's movement block (the create block clears
 `SplineEnabled` anyway, `UpdateBlockWriter.cs`); a late observer still gets a one-tick catch-up move instead of vmangos'
 live spline inside the create block (`packet_builder.cpp:152-200`).
+
+### 2. Random wander parity and generator type numbers (slice `random-wander`)
+
+* `RandomMovementGenerator` moved to `Movement/RandomMovementGenerator.cs` (no behaviour change to its timing: 1 s first move, 50 ms
+  steps, urand(4,10) s pauses, urand(0, wander<=1 ? 2 : 8) steps; `Movement/RandomMovementGenerator.cpp:56-76`).
+* Legs run only for ALWAYS_RUN (`:53`), now read through the dialect table (`Template.Behaviour`), not raw `ExtraFlags & 0x40`: the
+  same bit is meaningless in the cmangos dialect, so cmangos-imported creatures walk. The raw constant `Creature.ExtraFlagAlwaysRun`
+  is gone; waypoint legs use the same decoded flag.
+* cmangos RUN_DURING_WANDER (0x20 in the cmangos dialect only; vmangos' 0x20 is NO_MOVEMENT_PAUSE): a per-leg draw
+  `urand(0,99) < Creatures:Movement:RunDuringWanderChancePercent` (default 15; cmangos `RandomMovementGenerator.cpp:135-136`).
+* `GetResetPosition` (`:131-144`): the creature's own position when within the wander distance of its spawn point, else the spawn
+  point. Evade already consults the default generator (`CreatureMapSystem.Evade.cs`), so a wanderer evading from inside its disc no
+  longer runs back to the spawn point.
+* UpdateAsync gates (`:113-128`): stunned/rooted/confused/fleeing zero the move timer and start no leg; casting stops the creature and
+  freezes the timer.
+* `MovementGeneratorType` numbers follow `Movement/MotionMaster.h:36-59` (Chase 6, Home 7, Point 9, Fleeing 10, Follow 15); the
+  values are internal (never persisted or sent; grep of casts found none).
+
+Limits: no navmesh random point and no steep-slope exclusion (vmangos `MOVE_PATHFINDING | MOVE_EXCLUDE_STEEP_SLOPES`; the pathfinder
+has no random-point query, so the point is uniform over the disc at the height provider's Z); no flying circle path (`:28-44`: needs
+the Flying spline flag plumbed through `ICreatureMover.MovePath`); no timed random / pause-time API (nothing consumes it until waypoint
+node wander exists); vmangos' `Interrupt`/`Finalize` walk-mode reset (`:83-93`) is not sent separately because every spline launch
+already syncs the mode.

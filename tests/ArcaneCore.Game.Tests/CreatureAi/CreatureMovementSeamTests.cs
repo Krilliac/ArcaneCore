@@ -9,7 +9,7 @@ namespace ArcaneCore.Game.Tests.CreatureAi;
 
 /// <summary>
 /// The two default members the movement generators gained (vmangos MovementGenerator::GetResetPosition and
-/// IsReachable, MovementGenerator.h:61-64): neutral by default, and evade consults the default generator.
+/// IsReachable, MovementGenerator.h:61-64): neutral by default (the idle generator; random movement overrides it), and evade consults the default generator.
 /// </summary>
 public sealed class CreatureMovementSeamTests
 {
@@ -42,7 +42,7 @@ public sealed class CreatureMovementSeamTests
         Assert.True(idle.IsReachable);
         Assert.True(wolf.Motion.IsReachable);
         ICreatureMovementGenerator random = new RandomMovementGenerator();
-        Assert.Null(random.GetResetPosition(wolf));
+        Assert.NotNull(random.GetResetPosition(wolf)); // the random generator overrides it (RandomMovementGenerator.cpp:131); see RandomWanderTests
         Assert.True(random.IsReachable);
     }
 

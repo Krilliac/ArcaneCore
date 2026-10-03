@@ -28,9 +28,6 @@ public sealed partial class Creature : Unit, ICombatCreature
     public const uint CreateRage = 1000;
     public const uint CreateEnergy = 100;
 
-    /// <summary>vmangos/cmangos CREATURE_FLAG_EXTRA_ALWAYS_RUN.</summary>
-    public const uint ExtraFlagAlwaysRun = 0x00000040;
-
     /// <summary>vmangos CREATURE_FLAG_EXTRA_NO_AGGRO / cmangos CREATURE_EXTRA_FLAG_NO_AGGRO_ON_SIGHT.</summary>
     public const uint ExtraFlagNoAggro = 0x00000002;
 
