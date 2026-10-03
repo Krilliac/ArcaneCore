@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\ArcaneCore.Data\ArcaneCore.Data.csproj" />
+    <ProjectReference Include="..\..\tools\ArcaneCore.AccountTool\ArcaneCore.AccountTool.csproj" />
   </ItemGroup>
 
 </Project>

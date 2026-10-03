@@ -526,7 +526,10 @@ public sealed class TerrainTile
     private ref struct Reader(ReadOnlySpan<byte> file, uint offset)
     {
         private readonly ReadOnlySpan<byte> _file = file;
-        private int _position = checked((int)offset);
+
+        // A header offset beyond int range is a truncated-section error like any other (it used to
+        // surface as an OverflowException that TerrainManager does not catch).
+        private int _position = offset > int.MaxValue ? throw new ArgumentOutOfRangeException(nameof(offset), "section offset is outside the file") : (int)offset;
 
         public uint U32() => BinaryPrimitives.ReadUInt32LittleEndian(Take(4));
 

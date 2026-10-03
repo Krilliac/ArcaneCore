@@ -103,7 +103,10 @@ dotnet test  ArcaneCore.slnx -c Release
    `MariaDb`, `MySql` or `PostgreSql`).
 2. Create a test account (or enable `Auth:AutocreateAccounts`):
    ```bash
-   dotnet run --project tools/ArcaneCore.AccountTool -- create MYUSER MYPASS
+   dotnet run --project tools/ArcaneCore.AccountTool -- create MYUSER
+   # prompts (no echo); or pipe it: echo ... | dotnet run ... -- create MYUSER --password-stdin
+   # or set ARCANE_ACCOUNT_PASSWORD. A password on the command line still works but is
+   # visible in process listings and shell history, and prints a warning.
    ```
 3. Start the daemon:
    ```bash

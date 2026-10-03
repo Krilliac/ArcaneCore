@@ -36,6 +36,23 @@ public sealed record DumpRow(string Table, IReadOnlyList<string> Columns, IReadO
 }
 
 /// <summary>
+/// Size ceilings for <see cref="MySqlDumpReader"/>; a dump that exceeds one fails with a
+/// <see cref="FormatException"/> instead of exhausting memory. Defaults are far above any real
+/// content dump (MySQL itself allows at most 4096 columns).
+/// </summary>
+public sealed record MySqlDumpLimits
+{
+    /// <summary>Most identifiers in an INSERT column list and most values in one VALUES tuple.</summary>
+    public int MaxColumns { get; init; } = 4096;
+
+    /// <summary>Most characters buffered for one statement that the reader has to keep (CREATE TABLE).</summary>
+    public int MaxStatementChars { get; init; } = 16 * 1024 * 1024;
+
+    /// <summary>Most characters in one string literal, identifier or bare value.</summary>
+    public int MaxTokenChars { get; init; } = 16 * 1024 * 1024;
+}
+
+/// <summary>
 /// Streams a MySQL/MariaDB dump (<c>mysqldump</c> output, as the cmangos classic-db and
 /// vmangos world databases ship) and yields its table definitions and inserted rows without
 /// loading the file into memory. Only what such dumps contain is understood: comments
@@ -43,9 +60,10 @@ public sealed record DumpRow(string Table, IReadOnlyList<string> Columns, IReadO
 /// <c>INSERT</c>/<c>REPLACE</c> with or without a column list and with extended (multi-row)
 /// values, MySQL string escapes, and <c>NULL</c>. Other statements are skipped.
 /// </summary>
-public sealed partial class MySqlDumpReader(TextReader input)
+public sealed partial class MySqlDumpReader(TextReader input, MySqlDumpLimits? limits = null)
 {
-    private readonly Dictionary<string, IReadOnlyList<string>> _tables = NewTableRegistry();
+    private readonly MySqlDumpLimits _limits = limits ?? new MySqlDumpLimits();
+    private Dictionary<string, IReadOnlyList<string>> _tables = NewTableRegistry();
     private readonly Dictionary<string, int> _unapplied = new(StringComparer.Ordinal);
     private readonly StringBuilder _token = new();
 
@@ -55,8 +73,8 @@ public sealed partial class MySqlDumpReader(TextReader input)
     /// an earlier one (the real classic-db dumps use column-less INSERTs). Tables this reader
     /// defines are added to the shared registry.
     /// </summary>
-    public MySqlDumpReader(TextReader input, Dictionary<string, IReadOnlyList<string>> sharedTables)
-        : this(input)
+    public MySqlDumpReader(TextReader input, Dictionary<string, IReadOnlyList<string>> sharedTables, MySqlDumpLimits? limits = null)
+        : this(input, limits)
     {
         ArgumentNullException.ThrowIfNull(sharedTables);
         _tables = sharedTables;
@@ -98,7 +116,7 @@ public sealed partial class MySqlDumpReader(TextReader input)
             switch (keyword)
             {
                 case "CREATE":
-                    string statement = ReadStatement();
+                    string statement = ReadStatement(keep: true);
                     if (TryParseCreateTable(statement, out DumpTable? table))
                     {
                         _tables[table.Name] = table.Columns;
@@ -119,15 +137,19 @@ public sealed partial class MySqlDumpReader(TextReader input)
                 case "":
                     // Not a statement we know how to start (stray symbol): skip to its end.
                     input.Read();
-                    ReadStatement();
+                    ReadStatement(keep: false);
                     break;
 
                 default:
-                    RecordUnapplied(keyword, ReadStatement());
+                    // Only the head of the statement (verb + target table) is kept; the rest streams past unbuffered.
+                    RecordUnapplied(keyword, ReadStatement(keep: false, head: UnappliedHeadChars));
                     break;
             }
         }
     }
+
+    /// <summary>How much of an unapplied statement is kept to name its target table.</summary>
+    private const int UnappliedHeadChars = 256;
 
     private void RecordUnapplied(string verb, string statement)
     {
@@ -155,6 +177,11 @@ public sealed partial class MySqlDumpReader(TextReader input)
             if (input.Peek() == '`')
             {
                 table = ReadQuotedIdentifier();
+                if (table.Length == 0)
+                {
+                    throw new FormatException("INSERT with an empty table name");
+                }
+
                 break;
             }
 
@@ -192,7 +219,26 @@ public sealed partial class MySqlDumpReader(TextReader input)
                     continue;
                 }
 
-                list.Add(c == '`' ? ReadQuotedIdentifier() : ReadWord());
+                if (c < 0)
+                {
+                    throw new FormatException($"dump ended inside the column list of `{table}`");
+                }
+
+                // Every iteration must consume input: an identifier is a quoted name or a word.
+                string name = c == '`' ? ReadQuotedIdentifier() : ReadWord();
+                if (name.Length == 0)
+                {
+                    throw new FormatException(c == '`'
+                        ? $"empty column name in the column list of `{table}`"
+                        : $"unexpected '{(char)c}' in the column list of `{table}`");
+                }
+
+                if (list.Count >= _limits.MaxColumns)
+                {
+                    throw new FormatException($"more than {_limits.MaxColumns} columns in the column list of `{table}`");
+                }
+
+                list.Add(name);
             }
 
             columns = list;
@@ -203,7 +249,7 @@ public sealed partial class MySqlDumpReader(TextReader input)
         if (!values.Equals("VALUES", StringComparison.OrdinalIgnoreCase) && !values.Equals("VALUE", StringComparison.OrdinalIgnoreCase))
         {
             // INSERT … SELECT / SET forms do not occur in content dumps.
-            ReadStatement();
+            ReadStatement(keep: false);
             yield break;
         }
 
@@ -254,24 +300,52 @@ public sealed partial class MySqlDumpReader(TextReader input)
                 case '\'':
                 case '"':
                     input.Read();
-                    values.Add(ReadString((char)c));
+                    AddValue(values, ReadString((char)c, keep: true));
                     continue;
                 default:
                     _token.Clear();
                     while ((c = input.Peek()) >= 0 && c != ',' && c != ')' && !char.IsWhiteSpace((char)c))
                     {
-                        _token.Append((char)input.Read());
+                        AppendToken((char)input.Read());
                     }
 
                     string raw = _token.ToString();
-                    values.Add(raw.Equals("NULL", StringComparison.OrdinalIgnoreCase) ? null : raw);
+                    AddValue(values, raw.Equals("NULL", StringComparison.OrdinalIgnoreCase) ? null : raw);
                     continue;
             }
         }
     }
 
-    /// <summary>A quoted string after its opening quote; MySQL escapes and doubled quotes.</summary>
-    private string ReadString(char quote)
+    private void AddValue(List<string?> values, string? value)
+    {
+        if (values.Count >= _limits.MaxColumns)
+        {
+            throw new FormatException($"more than {_limits.MaxColumns} values in one VALUES tuple");
+        }
+
+        values.Add(value);
+    }
+
+    private void AppendTokenIf(bool keep, char c)
+    {
+        if (keep)
+        {
+            AppendToken(c);
+        }
+    }
+
+    private void AppendToken(char c)
+    {
+        if (_token.Length >= _limits.MaxTokenChars)
+        {
+            throw new FormatException($"a token is longer than {_limits.MaxTokenChars} characters");
+        }
+
+        _token.Append(c);
+    }
+
+    /// <summary>A quoted string after its opening quote; MySQL escapes and doubled quotes. Nothing is stored when <paramref name="keep"/> is false.</summary>
+    private string ReadString(char quote, bool keep)
     {
         _token.Clear();
         while (true)
@@ -285,7 +359,7 @@ public sealed partial class MySqlDumpReader(TextReader input)
             if (c == '\\')
             {
                 int e = input.Read();
-                _token.Append(e switch
+                AppendTokenIf(keep, e switch
                 {
                     '0' => '\0',
                     'b' => '\b',
@@ -304,14 +378,14 @@ public sealed partial class MySqlDumpReader(TextReader input)
                 if (input.Peek() == quote)
                 {
                     input.Read();
-                    _token.Append(quote);
+                    AppendTokenIf(keep, quote);
                     continue;
                 }
 
                 return _token.ToString();
             }
 
-            _token.Append((char)c);
+            AppendTokenIf(keep, (char)c);
         }
     }
 
@@ -332,14 +406,14 @@ public sealed partial class MySqlDumpReader(TextReader input)
                 if (input.Peek() == '`')
                 {
                     input.Read();
-                    _token.Append('`');
+                    AppendToken('`');
                     continue;
                 }
 
                 return _token.ToString();
             }
 
-            _token.Append((char)c);
+            AppendToken((char)c);
         }
     }
 
@@ -349,14 +423,14 @@ public sealed partial class MySqlDumpReader(TextReader input)
         int c;
         while ((c = input.Peek()) >= 0 && (char.IsLetterOrDigit((char)c) || c == '_' || c == '.' || c == '$'))
         {
-            _token.Append((char)input.Read());
+            AppendToken((char)input.Read());
         }
 
         return _token.ToString();
     }
 
     /// <summary>The rest of a statement up to (not including) its ';', honouring quotes and comments.</summary>
-    private string ReadStatement()
+    private string ReadStatement(bool keep, int head = 0)
     {
         var text = new StringBuilder();
         while (true)
@@ -369,26 +443,41 @@ public sealed partial class MySqlDumpReader(TextReader input)
 
             if (c is '\'' or '"')
             {
-                text.Append((char)c).Append(ReadString((char)c).Replace("'", "''", StringComparison.Ordinal)).Append((char)c);
+                string literal = ReadString((char)c, keep);
+                if (keep)
+                {
+                    Append(text, (char)c);
+                    foreach (char ch in literal)
+                    {
+                        Append(text, ch);
+                        if (ch == '\'')
+                        {
+                            Append(text, ch);
+                        }
+                    }
+
+                    Append(text, (char)c);
+                }
+
                 continue;
             }
 
             if (c == '`')
             {
-                text.Append('`');
+                Append(text, '`');
                 while ((c = input.Read()) >= 0 && c != '`')
                 {
-                    text.Append((char)c);
+                    Append(text, (char)c);
                 }
 
-                text.Append('`');
+                Append(text, '`');
                 continue;
             }
 
             if (c == '-' && input.Peek() == '-')
             {
                 SkipLine();
-                text.Append('\n');
+                Append(text, '\n');
                 continue;
             }
 
@@ -399,7 +488,27 @@ public sealed partial class MySqlDumpReader(TextReader input)
                 continue;
             }
 
-            text.Append((char)c);
+            Append(text, (char)c);
+        }
+
+        void Append(StringBuilder sb, char ch)
+        {
+            if (!keep)
+            {
+                if (sb.Length < head)
+                {
+                    sb.Append(ch);
+                }
+
+                return;
+            }
+
+            if (sb.Length >= _limits.MaxStatementChars)
+            {
+                throw new FormatException($"a statement is longer than {_limits.MaxStatementChars} characters");
+            }
+
+            sb.Append(ch);
         }
     }
 
@@ -522,6 +631,11 @@ public sealed partial class MySqlDumpReader(TextReader input)
             if (trimmed[0] == '`')
             {
                 int end = trimmed.IndexOf('`', 1);
+                if (end < 0)
+                {
+                    throw new FormatException("unterminated column name in CREATE TABLE");
+                }
+
                 columns.Add(trimmed[1..end]);
                 continue;
             }
