@@ -667,6 +667,13 @@ public sealed partial class MapCombat
         // Duels end at 1 hp (MapCombat.Duel.cs; vmangos Unit.cpp:762-779).
         bool duelEnded = ApplyDuelClamp(attacker, victim, ref damage);
 
+        // The per-attacker damage history is recorded before the lethal check, so the killing blow counts
+        // (vmangos Unit::UnitDamaged, Unit.cpp:788-796; the kill is at :825). Never for self damage.
+        if (!ReferenceEquals(attacker, victim))
+        {
+            DamageTaken?.Invoke(attacker, victim, damage);
+        }
+
         if (combatLink)
         {
             SetInCombatWithAggressor(victim, attacker);

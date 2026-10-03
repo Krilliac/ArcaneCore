@@ -26,6 +26,9 @@ public sealed class HonorState
         Rank = HonorRanks.None;
     }
 
+    /// <summary>The damage this player took recently, by attacking player (the PvP kill credit input).</summary>
+    public PvpDamageLedger Ledger { get; } = new();
+
     /// <summary>Every contribution row, oldest first.</summary>
     public IReadOnlyList<HonorCpRecord> Rows => _rows;
 

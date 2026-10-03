@@ -9,8 +9,11 @@ public class HonorClock
     /// <summary>The real clock.</summary>
     public static HonorClock System { get; } = new();
 
+    /// <summary>Milliseconds since 1970-01-01T00:00:00Z (the PvP damage history ages in milliseconds).</summary>
+    public virtual long UnixMilliseconds => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
     /// <summary>Seconds since 1970-01-01T00:00:00Z.</summary>
-    public virtual long UnixSeconds => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+    public virtual long UnixSeconds => UnixMilliseconds / 1000;
 
     /// <summary>The game day for the given offset in seconds.</summary>
     public uint GameDay(int timeZoneOffsetSeconds) => HonorMaintenancePlanner.GameDay(UnixSeconds, timeZoneOffsetSeconds);

@@ -14,6 +14,7 @@ namespace ArcaneCore.Game.Honor;
 /// </summary>
 public sealed class HonorService : IPlayerHonor, IHonorAwards
 {
+    private static readonly ConditionalWeakTable<ArcaneCore.Game.Spells.SpellSystem, HonorService> s_spellLinks = new();
     private readonly ConditionalWeakTable<Player, HonorState> _players = new();
     private readonly Func<uint> _weekBeginDay;
     private readonly IHonorSink? _sink;
@@ -33,6 +34,20 @@ public sealed class HonorService : IPlayerHonor, IHonorAwards
     public HonorOptions Options { get; }
 
     public HonorClock Clock { get; }
+
+    /// <summary>Let the honor spell effect (<see cref="HonorSpellEffects"/>) find this service from <paramref name="spells"/>.</summary>
+    public void InstallForSpells(ArcaneCore.Game.Spells.SpellSystem spells)
+    {
+        ArgumentNullException.ThrowIfNull(spells);
+        s_spellLinks.AddOrUpdate(spells, this);
+    }
+
+    /// <summary>The service installed for a spell system, or null.</summary>
+    public static HonorService? ForSpells(ArcaneCore.Game.Spells.SpellSystem spells)
+    {
+        ArgumentNullException.ThrowIfNull(spells);
+        return s_spellLinks.TryGetValue(spells, out HonorService? service) ? service : null;
+    }
 
     /// <summary>World::m_gameDay with the configured time zone offset.</summary>
     public uint GameDay => Clock.GameDay(Options.TimeZoneOffsetHours * 3600);

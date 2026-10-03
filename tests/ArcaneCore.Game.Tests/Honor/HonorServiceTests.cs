@@ -285,7 +285,10 @@ internal sealed class FixedHonorClock(uint day) : HonorClock
 
     public long SecondsIntoDay { get; set; } = 100;
 
-    public override long UnixSeconds => (Day * 86_400L) + SecondsIntoDay;
+    /// <summary>Extra milliseconds on top (the PvP damage history ages in milliseconds).</summary>
+    public long ExtraMs { get; set; }
+
+    public override long UnixMilliseconds => (((Day * 86_400L) + SecondsIntoDay) * 1000) + ExtraMs;
 }
 
 internal sealed class RecordingHonorSink : IHonorSink
