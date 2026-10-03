@@ -66,6 +66,12 @@ public sealed class WorldRuntimeOptions
     /// </summary>
     public bool PlayerCommands { get; set; } = true;
 
+    /// <summary>
+    /// Slow-update thresholds (the top-level "PerformanceLog" section, copied in by
+    /// AddWorldDaemon; vmangos mangosd.conf.dist.in:898-906). 0 disables each.
+    /// </summary>
+    public PerformanceLogOptions Perf { get; set; } = new();
+
     /// <summary>Grid lifecycle and terrain data (the <c>World:Maps</c> section; docs/areas/grid-terrain.md).</summary>
     public MapOptions Maps { get; set; } = new();
 }

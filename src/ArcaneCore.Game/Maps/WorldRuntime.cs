@@ -37,6 +37,12 @@ public sealed class WorldRuntime : IDisposable
     public WorldRuntimeOptions Options { get; }
 
     /// <summary>
+    /// Tick duration, allocation and overrun statistics recorded by the world loop (docs/areas/ops-perf.md).
+    /// Safe to read from any thread; only <see cref="Run"/> records into it.
+    /// </summary>
+    public TickStats Stats { get; } = new();
+
+    /// <summary>
     /// Milliseconds since the world started, wrapping like vmangos WorldTimer::getMSTime.
     /// This is the clock movement timestamps and create blocks carry.
     /// </summary>
@@ -276,6 +282,7 @@ public sealed class WorldRuntime : IDisposable
         // A snapshot: a map system may create another map (an instance) during its update.
         foreach (Map map in _maps.Values.ToArray())
         {
+            long mapStart = Stopwatch.GetTimestamp();
             try
             {
                 map.Update(diffMs);
@@ -284,6 +291,8 @@ public sealed class WorldRuntime : IDisposable
             {
                 _logger.LogError(ex, "map {MapId} update failed", map.MapId);
             }
+
+            LogIfSlow(Options.Perf.SlowMapUpdate, mapStart, "Slow map update", map);
         }
 
         UnloadRequestedMaps();
@@ -303,6 +312,21 @@ public sealed class WorldRuntime : IDisposable
     {
         Stop();
         _stopSignal.Dispose();
+    }
+
+    private void LogIfSlow(int thresholdMs, long startTimestamp, string what, Map map)
+    {
+        if (thresholdMs <= 0)
+        {
+            return;
+        }
+
+        long micros = (Stopwatch.GetTimestamp() - startTimestamp) * 1_000_000 / Stopwatch.Frequency;
+        if (micros > thresholdMs * 1000L)
+        {
+            _logger.LogWarning(PerformanceLogOptions.PerfEventId, "{What}: map {MapId} instance {InstanceId} took {DurationMs} ms",
+                what, map.MapId, map.InstanceId, micros / 1000);
+        }
     }
 
     private void Raise<T>(Action<T>? handlers, T subject, string name)
@@ -405,7 +429,16 @@ public sealed class WorldRuntime : IDisposable
             uint diff = (uint)Math.Clamp(tickStart - last, 0, uint.MaxValue);
             last = tickStart;
 
+            long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+            long stampBefore = Stopwatch.GetTimestamp();
             RunTick(diff);
+            long durationMicros = (Stopwatch.GetTimestamp() - stampBefore) * 1_000_000 / Stopwatch.Frequency;
+            Stats.Record(durationMicros, GC.GetAllocatedBytesForCurrentThread() - allocatedBefore, interval * 1000L);
+            if (Options.Perf.SlowWorldUpdate > 0 && durationMicros > Options.Perf.SlowWorldUpdate * 1000L)
+            {
+                _logger.LogWarning(PerformanceLogOptions.PerfEventId, "Slow world update: {DurationMs} ms (interval {IntervalMs} ms)",
+                    durationMicros / 1000, interval);
+            }
 
             long elapsed = _clock.ElapsedMilliseconds - tickStart;
             if (elapsed < interval)

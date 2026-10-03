@@ -40,6 +40,8 @@ public static class WorldServiceCollectionExtensions
         services.Configure<WorldOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<WorldRuntimeOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<WorldSessionOptions>(configuration.GetSection(WorldOptions.SectionName));
+        // Slow-update thresholds live in their own vmangos-named section (docs/areas/ops-perf.md).
+        services.PostConfigure<WorldRuntimeOptions>(o => configuration.GetSection(PerformanceLogOptions.SectionName).Bind(o.Perf));
 
         services.AddSingleton(_ => BuildOpcodeTable());
         services.AddSingleton(_ => ChatCommands.CreateTable());

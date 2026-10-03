@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
@@ -198,9 +199,11 @@ public sealed class WorldSession : IPlayerSession
                 continue;
             }
 
+            long handlerStart = Stopwatch.GetTimestamp();
             try
             {
                 packet.Handler.World!(this, player, packet.Payload);
+                LogIfSlowPacket(packet.Handler.Opcode, handlerStart);
             }
             catch (ArgumentOutOfRangeException)
             {
@@ -209,6 +212,23 @@ public sealed class WorldSession : IPlayerSession
                 Kick();
                 return;
             }
+        }
+    }
+
+    /// <summary>vmangos PerformanceLog.SlowPackets (WorldSession.cpp:620): a handler over the threshold is logged; 0 disables.</summary>
+    private void LogIfSlowPacket(WorldOpcode opcode, long startTimestamp)
+    {
+        int threshold = World.Options.Perf.SlowPackets;
+        if (threshold <= 0)
+        {
+            return;
+        }
+
+        long micros = (Stopwatch.GetTimestamp() - startTimestamp) * 1_000_000 / Stopwatch.Frequency;
+        if (micros > threshold * 1000L)
+        {
+            _logger.LogWarning(PerformanceLogOptions.PerfEventId, "[{Endpoint}] Slow packet {Opcode}: {DurationMs} ms",
+                RemoteEndpoint, WorldOpcodeNames.GetName(opcode), micros / 1000);
         }
     }
 
