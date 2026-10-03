@@ -104,6 +104,22 @@ decided; the clock is an injectable `IGameTime`.
 | `UseServerLocalTime` | `true` | `true` = retail (machine local time); `false` = UTC. |
 | `TimeZoneId` | empty | Optional IANA/Windows zone id used as "server local time" (an unknown id fails startup). |
 
+### World-state data (`world-state-data`)
+
+World schema module `WorldStateDataModule` (constant `Version = 11`, the next free world version at
+this base; the integrator renumbers) creates `game_weather` (zone plus the 12 chances, named like
+the vmangos / classic-db columns) and `exploration_basexp` (level, base XP). `IWorldStateDataStore`
+(Kernel) / `EfWorldStateDataStore` load them. `WorldStateDumpImporter` reads the two tables out of a
+mysqldump-style SQL file BY COLUMN NAME from the dump's own `CREATE TABLE` (so reordered or extra
+columns do not shift values), rejects anything malformed (non-numeric values, wrong column count,
+duplicate keys, INSERT without CREATE) before touching the database, and `ImportAsync` replaces
+both tables in one transaction. No data is bundled; point the importer at your own dump. Verified
+against the real classic-db dump: 33 `game_weather` rows (zone 12 spring rain 20, zone 1377 spring
+storm 20, zones 1/12/1377/3429 present) and 61 `exploration_basexp` rows (level 0..60, level 60 =
+660); that test is skipped, with a visible reason, when the dump is not available.
+No command-line importer entry point is delivered; the content-import-full lane owns
+`tools/ArcaneCore.ContentImporter` and can call `Parse` / `ImportAsync`.
+
 ## Deviations from retail (all documented, none silent)
 
 - `ClientZoneTrust=Auto` is a development-world allowance, not retail. Retail is `Never`.

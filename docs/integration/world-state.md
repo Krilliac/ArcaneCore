@@ -12,7 +12,7 @@ Seams added: `WorldStateHooks.For(world)` (options, clock, zone locator, locatio
 `IPlayerLocationListener`, `IZoneLocator`, `IGameTime`. Rest/tavern, PvP-enforced-area and
 channel logic from other lanes should use `IPlayerLocationListener` instead of polling zones.
 
-Schema: none so far.
+Schema: World `WorldStateDataModule.Version` (11 at this base; tests reference the constant). No characters modules yet.
 
 ## game-time slice
 
@@ -20,3 +20,11 @@ Schema: none so far.
 |---|---|---|
 | `src/ArcaneCore.World/Packets/CharacterPackets.cs` | `BuildTimeSpeed` gains a `DateTimeOffset` (local) overload; the old `DateTime` overload delegates; the private packer moved to `GameTimePacker`. | Pack local time. |
 | `src/ArcaneCore.World/Handlers/LoginSequence.cs` | `SendInitialPacketsBeforeAddToMap` passes `WorldStateHooks.For(session.World).LocalNow()`. | vmangos `Player.cpp:19141-19145`. |
+
+## world-state-data slice
+
+| File | Change | Why |
+|---|---|---|
+| `tests/ArcaneCore.Data.Tests/IntegratedSchemaTests.cs` | One tuple appended to the expected module list (through the constant). | Every data module is listed there; append only. |
+
+Renumbering: change `WorldStateDataModule.Version` only; the tests use the constant.
