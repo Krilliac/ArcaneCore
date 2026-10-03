@@ -81,8 +81,9 @@ stat-aura work, not a hidden gap.
 | `WipeRefusalAlsoSendsEmptyConfirm` | true | vmangos sends the empty confirm after any refused reset. Not verified against a real client. |
 | `RequireClassTrainerForWipe` | true | mangos-classic requires a class trainer of the player's class (`SkillHandler.cpp:51`); vmangos accepts any reachable trainer. The gossip offer already enforces the class, so a real client never notices. |
 
-Class trainers get their `trainer_type` and `trainer_class` from `NpcServices:NpcTemplates` today (the creature import has no
-such columns), so without that configuration every trainer refuses everyone and the unlearn option never appears.
+Class trainers get `trainer_type` and `trainer_class` from imported `creature_template` metadata
+(World schema v21), with `NpcServices:NpcTemplates` available as an override. The unlearn option
+appears when a class trainer is interactable and the talent feature is active.
 
 ## Schema
 

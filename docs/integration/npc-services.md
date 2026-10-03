@@ -2,8 +2,9 @@
 
 Base: `codex/integrate-feature-fleet-20261003` (draft PR #11, `0d32fba`). Fleet round 2 area:
 gossip, vendor, repair, trainer, innkeeper, banker, spirit healer and flight master
-interactions that the #11 ledger listed as missing. There is **no schema change and no
-schema version**. The world v6 quests/NPC module is used as it is.
+interactions that the #11 ledger listed as missing. The original lane had no schema
+change. The vendor/trainer fidelity follow-up adds Characters v21 for bank bag slots
+and World v21 for trainer/gossip metadata; the world v6 quests/NPC module is unchanged.
 
 Provenance: behaviour follows vmangos/core (`ItemHandler.cpp`, `NPCHandler.cpp`,
 `TaxiHandler.cpp`, `Player.cpp`, `FlightPathMovementGenerator`, `DBCfmt.h`), cross-checked
@@ -22,7 +23,7 @@ linear form.
 | Repair | CMSG_REPAIR_ITEM | Repairs one item or all of them (equipment, backpack and the contents of equipped bags). Cost is `uint(lost × DurabilityCosts[ilvl][subclass] × DurabilityQuality[(q+1)×2])`, discounted, with a minimum of 1. It is paid item by item and stops at the first item the player can't afford. Repairing restores the item's mods when a worn item was broken. |
 | Trainers | CMSG_TRAINER_LIST, CMSG_TRAINER_BUY_SPELL | `npc_trainer` rows. Class, mount, trade-skill and pet trainer types follow vmangos `IsTrainerOf`, including the refusal gossip texts. States: green, red (level, missing rank, class/race via SkillLineAbility, skill) and gray (known). Learning goes through `SpellSystem.LearnSpell` (the existing spellbook): the teaching spell's LEARN_SPELL triggers, otherwise the spell itself. Money is taken only after the spell is learned. |
 | Innkeeper | CMSG_BINDER_ACTIVATE | Not allowed in instances. Updates `Player.Home` (saved with the character), sends SMSG_BINDPOINTUPDATE and SMSG_PLAYERBOUND, and closes the gossip. The hearthstone keeps using the existing spell teleport and ack flow (`ITeleportSink`, home bind). |
-| Banker | CMSG_BANKER_ACTIVATE, CMSG_BUY_BANK_SLOT | SMSG_SHOW_BANK. `PlayerInventory.CanUseBank` re-checks that the banker is still interactable. Buying a bag slot needs a BankBagSlotPrices price, enough money and a persistence callback; **without the callback the purchase is refused** (see Limits). |
+| Banker | CMSG_BANKER_ACTIVATE, CMSG_BUY_BANK_SLOT | SMSG_SHOW_BANK. `PlayerInventory.CanUseBank` re-checks that the banker is still interactable. A priced slot purchase saves the count and money in one character snapshot; failed purchases send SMSG_BUY_BANK_SLOT_RESULT. See [vendor and trainer area](../areas/vendors-trainers.md). |
 | Spirit healer | CMSG_SPIRIT_HEALER_ACTIVATE | Ghosts only. Uses the combat death/corpse flow: `MapCombat.ResurrectAtSpiritHealer` restores 50% health and mana and removes the corpse. Then resurrection sickness (15007) from level 11, shortened to (level − 10) minutes below level 20 and sent as SMSG_UPDATE_AURA_DURATION; 25% durability loss on equipment and bags; and a save. Ghosts can use only spirit healers and guides; the living can't use those. |
 | Flight masters | CMSG_TAXINODE_STATUS_QUERY, CMSG_TAXIQUERYAVAILABLENODES, CMSG_ACTIVATETAXI, CMSG_ACTIVATETAXIEXPRESS, CMSG_MOVE_SPLINE_DONE (ignored) | Node discovery (SMSG_NEW_TAXI_PATH and SMSG_TAXINODE_STATUS, stored in the characters v5 taxi mask) and SMSG_SHOWTAXINODES. Activation checks run in vmangos order: busy, already flying, every node known, mounted, too far, a path per hop, a team mount, and money (`ceil(total × discount)`). **Real flight:** `TaxiFlightSystem` sets the mount display and RemoveClientControl plus TaxiFlight, sends SMSG_ACTIVATETAXIREPLY OK and a flying SMSG_MONSTER_MOVE through the TaxiPathNode waypoints (a straight line when the DBC isn't supplied), moves the player at 32 yd/s on every map update, chains the hops of multi-hop routes (express), then dismounts and sends a stop spline at the destination. Money is charged only after the flight starts. Client movement packets are ignored during a flight. A teleport (position drift), a map change or leaving the map aborts the flight; logging out lands the player at the destination first. |
 
@@ -30,7 +31,7 @@ Reputation: when an `IPlayerReputation` is registered in DI, its `GetPriceDiscou
 are used. Otherwise prices are undiscounted. Nothing depends on a reputation service.
 
 Rounding follows vmangos single-precision maths: vendor and trainer prices use
-`floor(price × discount)`, taxi uses `ceil`, and repair uses `uint(cost × discount)` with a
+`uint(price × discount + 0.5f)`, taxi uses `ceil`, and repair uses `uint(cost × discount + 0.5f)` with a
 minimum of 1.
 
 ## Configuration (`NpcServices` section, all optional)
@@ -50,9 +51,8 @@ The DBC files are build-5875 files supplied by the developer and are never downl
 reader checks the exact field count and record size (`DBCfmt.h`) and throws
 `InvalidDataException` on a mismatch. When a table is missing, the matching feature degrades:
 flights use straight lines, repair repairs nothing, bank slots are not sold, and trainers have
-no rank chain while every class fits. `NpcTemplates` supplies the creature_template columns
-that the world v6 schema doesn't have (gossip_menu_id and trainer_*) until a schema version
-adds them.
+no rank chain while every class fits. World schema v21 imports the creature_template
+gossip and trainer columns; `NpcTemplates` can override them.
 
 ## Registrations (discovered, no shared list touched)
 
@@ -87,9 +87,8 @@ adds them.
   content (or in `Skills:Mode=Legacy`) players have no `Skills`, every skill value reads 0 for trainers, and
   the skill conditions fail closed. spell_chain `req_spell`
   (talent-dependent ranks) is not modelled; only the SkillLineAbility forward chain is.
-- **Bank bag slots:** the count isn't persisted (no characters column), so CMSG_BUY_BANK_SLOT
-  is refused unless a persistence callback is wired. That needs a characters schema version.
-- **CMSG_BUY_ITEM_IN_SLOT** buys into the first free slot and ignores the requested bag and slot.
+- **Bank bag slots:** Characters schema v21 adds `bank_bag_slots`. Missing BankBagSlotPrices data still prevents purchase.
+- **CMSG_BUY_ITEM_IN_SLOT** resolves the requested bag and slot before storage.
 - **Mount:** only UNIT_FIELD_MOUNTDISPLAYID is set. UNIT_FLAG_MOUNT is not set because its 1.12
   value isn't verified here.
 - **Flights:** logging out mid-flight lands the player at the destination instead of resuming
@@ -123,10 +122,8 @@ adds them.
 - `tests/ArcaneCore.World.Tests/Npc/NpcServiceWorldTests.cs`: 24 tests covering handler
   registration, malformed payloads disconnecting, and innkeeper/banker flows over the socket.
 
-## Schema requests for the lead (not taken)
+## Schema follow-up
 
-- World overflow (v9 or the next free version): `creature_template.gossip_menu_id`,
-  `trainer_type`, `trainer_class`, `trainer_race` and `trainer_spell`. These would replace
-  `NpcServices:NpcTemplates`.
-- Characters overflow (a new version after 13): a bank bag slot count column
-  (PLAYER_BYTES_2 byte 2), which enables CMSG_BUY_BANK_SLOT.
+- World v21 stores `creature_template.gossip_menu_id`, `trainer_type`, `trainer_class`,
+  `trainer_race` and `trainer_spell`; `NpcServices:NpcTemplates` remains an override.
+- Characters bank bag slot count was added in v21 by the vendor/trainer fidelity lane.
