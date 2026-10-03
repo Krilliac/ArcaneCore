@@ -86,5 +86,7 @@ public sealed class BanDataModule : IDataModule
             sp.GetRequiredService<AuthDbContext>(),
             sp.GetService<TimeProvider>(),
             sp.GetService<AccountStatusEvents>()));
+        services.AddScoped<IAccountAdmin>(sp => new EfAccountStore(
+            sp.GetRequiredService<AuthDbContext>(), sp.GetService<AccountStatusEvents>()));
     }
 }
