@@ -20,6 +20,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="ArcaneCore.Data.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\ArcaneCore.Kernel\ArcaneCore.Kernel.csproj" />
   </ItemGroup>
 
