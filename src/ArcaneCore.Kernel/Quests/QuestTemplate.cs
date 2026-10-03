@@ -6,7 +6,7 @@ namespace ArcaneCore.Kernel.Quests;
 /// ROADMAP § Content). Immutable once loaded; the Game layer derives a runtime quest from it.
 /// </summary>
 /// <remarks>
-/// Not carried (no consumer yet): RewMailTemplateId,
+/// Not carried (no consumer yet):
 /// StartScript/CompleteScript, Required*Script. See docs/areas/quests-npc.md.
 /// </remarks>
 public sealed class QuestTemplate
@@ -385,4 +385,10 @@ public sealed class QuestTemplate
 
     /// <summary>quest_template.RequiredCondition.</summary>
     public uint RequiredCondition { get; init; }
+
+    /// <summary>quest_template.RewMailTemplateId: the mail template mailed on turn-in; negative = sent by the quest giver instead of the ender (vmangos Player.cpp:13147-13163, ObjectMgr.cpp:6107-6123 uses abs); 0 = none.</summary>
+    public int RewMailTemplateId { get; init; }
+
+    /// <summary>quest_template.RewMailDelaySecs: seconds the reward mail is delayed (vmangos Player.cpp:13145-13163).</summary>
+    public uint RewMailDelaySecs { get; init; }
 }
