@@ -158,6 +158,47 @@ public sealed class HonorService : IPlayerHonor, IHonorAwards
         Refresh(player, state);
     }
 
+    /// <summary>
+    /// Apply the weekly calculation to an online player exactly as the store transaction applied it
+    /// (HonorMaintenancer::FlushRankPoints, HonorMgr.cpp:238-268): the new rank points, standing and highest rank, last week's
+    /// kills and contribution, the week's kills added to the stored totals, rows older than <paramref name="deleteCpBefore"/> dropped.
+    /// A null <paramref name="update"/> is a player the week did not rank: only the standing clears and the old rows go.
+    /// The honor tab is refreshed and the state queued again so a write still waiting cannot bring the old numbers back.
+    /// <paramref name="cityProtector"/> null leaves the City Protector title alone.
+    /// </summary>
+    public void ApplyMaintenance(Player player, HonorRankUpdate? update, uint deleteCpBefore, bool? cityProtector)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (For(player) is not { } state)
+        {
+            return;
+        }
+
+        if (update is not null)
+        {
+            state.RankPoints = HonorRounding.OneDecimal(update.RankPoints);
+            state.Standing = update.Standing;
+            state.HighestRank = HonorRanks.Describe(update.HighestRank, true);
+            state.LastWeekHk = update.WeekHk;
+            state.LastWeekCp = HonorRounding.OneDecimal(update.WeekCp);
+            state.StoredHk += (int)update.WeekHk;
+            state.StoredDk += (int)update.WeekDk;
+        }
+        else
+        {
+            state.Standing = 0; // a player outside the week's result loses last week's standing (HonorMgr.cpp:243)
+        }
+
+        state.RemoveRowsBefore(deleteCpBefore);
+        if (cityProtector is { } title)
+        {
+            state.CityProtector = title;
+        }
+
+        Refresh(player, state);
+        _sink?.StateChanged(player, state.Snapshot());
+    }
+
     /// <summary>Set the rank points directly (GM command) and persist them.</summary>
     public void SetRankPoints(Player player, float rankPoints)
     {
@@ -359,6 +400,10 @@ public sealed class HonorService : IPlayerHonor, IHonorAwards
 
         player.SetByte(UpdateFields.PlayerFieldBytes, 3, state.HighestRank.Rank);
         player.SetByte(UpdateFields.PlayerBytes3, 3, state.Rank.Rank);
+
+        // The City Protector title carries the race in PLAYER_BYTES_3 byte 2 (Player::SetCityTitle, Player.cpp:1090-1102); it is
+        // only worn while the option is on, as at login (Player.cpp:15152).
+        player.SetByte(UpdateFields.PlayerBytes3, 2, state.CityProtector && Options.CityProtector ? (byte)player.Race : (byte)0);
         player.SetByte(UpdateFields.PlayerFieldBytes2, 0, HonorRanks.RankBar(state.RankPoints, state.Rank));
         player.SetUInt16(UpdateFields.PlayerFieldSessionKills, 0, (ushort)todayHk);
         player.SetUInt16(UpdateFields.PlayerFieldSessionKills, 1, (ushort)todayDk);

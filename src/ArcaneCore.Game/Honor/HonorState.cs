@@ -63,6 +63,8 @@ public sealed class HonorState
 
     internal void ClearRows() => _rows.Clear();
 
+    internal void RemoveRowsBefore(uint day) => _rows.RemoveAll(r => r.Date < day);
+
     internal CharacterHonorState Snapshot()
         => new(RankPoints, HighestRank.Rank, Standing, LastWeekHk, LastWeekCp, StoredHk, StoredDk, PvpFlags, CityProtector);
 }

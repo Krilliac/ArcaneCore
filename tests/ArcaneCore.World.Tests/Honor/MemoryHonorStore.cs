@@ -181,9 +181,103 @@ internal sealed class MemoryHonorStore : IHonorStore
         return Task.CompletedTask;
     }
 
+    // --- weekly maintenance (the same rules as EfHonorStore, over the in-memory rows) ----------------
+
+    private readonly Dictionary<int, (byte Race, byte Level, int Account)> _characters = [];
+
+    /// <summary>While set, <see cref="ApplyMaintenanceAsync"/> throws before changing anything (the atomic failure case).</summary>
+    public volatile bool FailApply;
+
+    /// <summary>Teach the store a character's race, level and account (the join the weekly scores need).</summary>
+    public void AddCharacter(int id, byte race, byte level = 60, int account = 1)
+    {
+        lock (_lock)
+        {
+            _characters[id] = (race, level, account == 1 ? id : account);
+        }
+    }
+
     public Task<IReadOnlyList<HonorWeeklyScore>> ListWeeklyScoresAsync(uint weekBeginDay, uint weekEndDay, CancellationToken cancellationToken = default)
-        => Task.FromResult<IReadOnlyList<HonorWeeklyScore>>([]);
+    {
+        lock (_lock)
+        {
+            var sums = new Dictionary<int, (uint Hk, uint Dk, double Cp)>();
+            foreach ((int id, List<HonorCpRecord> rows) in _rows)
+            {
+                foreach (HonorCpRecord row in rows.Where(r => r.Date >= weekBeginDay && r.Date <= weekEndDay))
+                {
+                    (uint hk, uint dk, double cp) = sums.GetValueOrDefault(id);
+                    hk += row.Type == (byte)HonorKind.Honorable ? 1u : 0;
+                    dk += row.Type == (byte)HonorKind.Dishonorable ? 1u : 0;
+                    cp += row.Type == (byte)HonorKind.Dishonorable ? 0 : row.Cp;
+                    sums[id] = (hk, dk, cp);
+                }
+            }
+
+            HashSet<int> ids = [.. sums.Keys, .. _states.Where(s => s.Value.RankPoints > 0).Select(s => s.Key)];
+            var scores = new List<HonorWeeklyScore>();
+            foreach (int id in ids.Order().Where(_characters.ContainsKey))
+            {
+                (byte race, byte level, int account) = _characters[id];
+                (uint hk, uint dk, double cp) = sums.GetValueOrDefault(id);
+                CharacterHonorState state = _states.GetValueOrDefault(id, CharacterHonorState.Empty);
+                scores.Add(new HonorWeeklyScore(id, level, account, race, state.RankPoints, state.HighestRank, hk, dk, (float)cp));
+            }
+
+            return Task.FromResult<IReadOnlyList<HonorWeeklyScore>>(scores);
+        }
+    }
 
     public Task ApplyMaintenanceAsync(HonorMaintenanceBatch batch, CancellationToken cancellationToken = default)
-        => throw new NotSupportedException("the in-memory honor store does not run maintenance");
+    {
+        if (FailApply)
+        {
+            throw new IOException("controlled honor maintenance failure");
+        }
+
+        lock (_lock)
+        {
+            foreach (int id in _states.Keys.ToList())
+            {
+                _states[id] = _states[id] with { Standing = 0 };
+            }
+
+            foreach (HonorRankUpdate u in batch.Updates)
+            {
+                CharacterHonorState state = _states.GetValueOrDefault(u.CharacterId, CharacterHonorState.Empty);
+                _states[u.CharacterId] = state with
+                {
+                    RankPoints = HonorRounding.OneDecimal(u.RankPoints),
+                    Standing = u.Standing,
+                    HighestRank = u.HighestRank,
+                    LastWeekHk = u.WeekHk,
+                    LastWeekCp = HonorRounding.OneDecimal(u.WeekCp),
+                    StoredHk = state.StoredHk + (int)u.WeekHk,
+                    StoredDk = state.StoredDk + (int)u.WeekDk,
+                };
+            }
+
+            if (batch.CityProtectors is { } titled)
+            {
+                foreach (int id in _states.Keys.ToList())
+                {
+                    _states[id] = _states[id] with { CityProtector = titled.Contains(id) };
+                }
+
+                foreach (int id in titled.Where(i => !_states.ContainsKey(i)))
+                {
+                    _states[id] = CharacterHonorState.Empty with { CityProtector = true };
+                }
+            }
+
+            foreach (List<HonorCpRecord> rows in _rows.Values)
+            {
+                rows.RemoveAll(r => r.Date < batch.DeleteCpBefore);
+            }
+
+            _maintenance = batch.NewState;
+        }
+
+        return Task.CompletedTask;
+    }
 }

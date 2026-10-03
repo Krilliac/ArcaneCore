@@ -206,12 +206,15 @@ public sealed class HonorWorldTests
     public async Task An_existing_maintenance_row_is_kept_as_the_week_begin()
     {
         var store = new MemoryHonorStore();
-        await store.SaveMaintenanceAsync(new HonorMaintenanceState(1_000, 1_007, false));
+        // A stored week that is not due yet (so the maintenance feature leaves it alone) and differs from what the clock would compute.
+        uint last = WeekBegin - 3;
+        var kept = new HonorMaintenanceState(last, WeekBegin + 100, false);
+        await store.SaveMaintenanceAsync(kept);
         await using WorldTestHost host = HonorTestServices.Start(store);
         (WorldTestClient client, _) = await CreateAsync(host, "HONWEEK", "Honweek");
         await client.LoginAsync(1);
-        Assert.Equal(1_000u, await host.PlayerStateAsync("Honweek", p => Feature(p).WeekBeginDay));
-        Assert.Equal(new HonorMaintenanceState(1_000, 1_007, false), store.Maintenance);
+        Assert.Equal(last, await host.PlayerStateAsync("Honweek", p => Feature(p).WeekBeginDay));
+        Assert.Equal(kept, store.Maintenance);
         await client.DisposeAsync();
     }
 }
