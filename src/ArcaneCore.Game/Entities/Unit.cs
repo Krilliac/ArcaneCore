@@ -54,8 +54,14 @@ public abstract class Unit : WorldObject
         set => SetUInt32(UpdateFields.UnitFieldHealth, value);
     }
 
-    /// <summary>Alive while it has health (death states arrive with combat, M11).</summary>
-    public bool IsAlive => Health > 0;
+    /// <summary>
+    /// Alive in vmangos' sense (Unit::IsAlive: death state ALIVE). A released ghost has 1 health
+    /// but is not alive.
+    /// </summary>
+    public bool IsAlive => Health > 0 && Combat.DeathState == global::ArcaneCore.Game.Combat.DeathState.Alive;
+
+    /// <summary>Combat state of this unit (src/ArcaneCore.Game/Combat; docs/integration/combat.md).</summary>
+    public global::ArcaneCore.Game.Combat.UnitCombat Combat => field ??= new global::ArcaneCore.Game.Combat.UnitCombat(this);
 
     public uint MaxHealth
     {
