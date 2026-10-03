@@ -353,6 +353,7 @@ public sealed partial class MapCombat
             CombatPackets.AttackerStateUpdate(info.HitInfo, attacker.Guid, victim.Guid, info.TotalDamage, sub, info.TargetState, info.Blocked));
 
         DealMeleeDamage(info);
+        PlayerCombatSkills.OnMeleeResolved(attacker, victim, attackType, info.Outcome);
         return info;
     }
 
