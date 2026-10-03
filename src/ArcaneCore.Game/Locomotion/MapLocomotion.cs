@@ -20,6 +20,9 @@ internal sealed class MapLocomotion : IMapUpdater
         _world = world ?? throw new ArgumentNullException(nameof(world));
     }
 
+    /// <summary>The environment of this map's world (options, teleport probe).</summary>
+    internal LocomotionEnvironment Environment => LocomotionEnvironment.For(_world);
+
     public void Update(Map map, uint diffMs)
     {
         // Looked up per tick: the daemon registers the configured environment after maps may already exist.

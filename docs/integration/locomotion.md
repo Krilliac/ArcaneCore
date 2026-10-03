@@ -11,3 +11,4 @@ Characters/World version to renumber and no provider theory.
 | `src/ArcaneCore.Game/Entities/Player.cs` | `SetRooted` records its order in the pending ledger (`MovementControl.Order`) instead of building the packet itself (same bytes). | Ack validation and timeout. |
 | `src/ArcaneCore.Protocol/MovementInfo.cs` | Added `CorrectData()` (additive). | vmangos MovementInfo::CorrectData. |
 | `src/ArcaneCore.Game/Combat/MapCombat.Death.cs` | `SendGhostMovement` calls `MovementControl.Order` (same packet, now recorded in the pending ledger). | The ghost's water walk follows the client's ack. |
+| `src/ArcaneCore.Game/Spells/SpellDefines.cs` | not edited (the four aura interrupt bits of the design are only needed by the mount and liquid slices, which are not delivered). | - |

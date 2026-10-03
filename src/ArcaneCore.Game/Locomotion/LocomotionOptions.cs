@@ -24,7 +24,27 @@ public sealed class LocomotionOptions
     /// <summary>Fall damage multiplier (vmangos Rate.Damage.Fall, World.cpp:533, default 1; setConfigPos: a negative value becomes 1).</summary>
     public float RateDamageFall { get; set; } = 1.0f;
 
-    /// <summary>Apply vmangos' setConfigPos fallback to the values that must not be negative; returns the names that were reset.</summary>
+    /// <summary>
+    /// Speed multiplier of a player whose death state is CORPSE, outside battlegrounds (vmangos Death.Ghost.RunSpeed.World,
+    /// World.cpp:777, setConfigMinMax 0.1 to 10, default 1). Read literally as vmangos does (Unit.cpp:7044); at 1 it does nothing.
+    /// </summary>
+    public float GhostRunSpeedWorld { get; set; } = 1.0f;
+
+    /// <summary>The same inside a battleground (vmangos Death.Ghost.RunSpeed.BG, World.cpp:778, default 1).</summary>
+    public float GhostRunSpeedBattleground { get; set; } = 1.0f;
+
+    private static float ClampRate(float value, string name, List<string> changed)
+    {
+        float clamped = float.IsNaN(value) ? 1.0f : Math.Clamp(value, 0.1f, 10.0f);
+        if (clamped != value)
+        {
+            changed.Add(name);
+        }
+
+        return clamped;
+    }
+
+    /// <summary>Apply vmangos' setConfigPos fallback to the values that must not be negative; returns the names whose value was reset or clamped.</summary>
     public IReadOnlyList<string> Normalize()
     {
         List<string> reset = [];
@@ -34,6 +54,9 @@ public sealed class LocomotionOptions
             reset.Add(nameof(RateDamageFall));
         }
 
+        // setConfigMinMax(..., 1.0f, 0.1f, 10.0f): a value outside the range is clamped (a NaN is not in range either).
+        GhostRunSpeedWorld = ClampRate(GhostRunSpeedWorld, nameof(GhostRunSpeedWorld), reset);
+        GhostRunSpeedBattleground = ClampRate(GhostRunSpeedBattleground, nameof(GhostRunSpeedBattleground), reset);
         return reset;
     }
 }
@@ -106,6 +129,12 @@ public sealed class LocomotionEnvironment
         ArgumentNullException.ThrowIfNull(world);
         return s_mitigations.TryGetValue(world, out IEnvironmentalDamageMitigation? mitigation) ? mitigation : NoEnvironmentalMitigation.Instance;
     }
+
+    /// <summary>
+    /// The environment of the world a map belongs to (rules that run from aura handlers have the unit but not the
+    /// world); <see cref="Default"/> when the map is null or has no locomotion updater.
+    /// </summary>
+    public static LocomotionEnvironment For(Map? map) => map?.FindUpdater<MapLocomotion>()?.Environment ?? Default;
 
     /// <summary>The environment registered for <paramref name="world"/>, or <see cref="Default"/>.</summary>
     public static LocomotionEnvironment For(WorldRuntime world)

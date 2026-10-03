@@ -12,6 +12,13 @@ public enum MovementChangeType
     WaterWalk,
     Hover,
     FeatherFall,
+
+    /// <summary>A new walk speed (vmangos SPEED_CHANGE_WALK); the speed types carry <see cref="PendingMovementChange.NewValue"/>.</summary>
+    SpeedWalk,
+    SpeedRun,
+    SpeedRunBack,
+    SpeedSwim,
+    SpeedSwimBack,
 }
 
 /// <summary>One sent-but-unacknowledged change (vmangos PlayerMovementPendingChange, Unit.h).</summary>
@@ -20,6 +27,9 @@ public enum MovementChangeType
 /// <param name="Apply">True to set the state, false to clear it.</param>
 public sealed record PendingMovementChange(uint Counter, MovementChangeType Type, bool Apply)
 {
+    /// <summary>The speed in yards per second a speed change orders (vmangos pendingChange.newValue); 0 for the flag changes.</summary>
+    public float NewValue { get; init; }
+
     /// <summary>Milliseconds since the change was sent, advanced by the map tick (the ack timeout clock).</summary>
     public uint AgeMs { get; internal set; }
 }
@@ -91,9 +101,9 @@ public sealed class PendingMovementChanges
     public bool HasPendingOfType(MovementChangeType type) => _changes.Any(c => c.Type == type);
 
     /// <summary>Record a sent order (vmangos PushPendingMovementChange).</summary>
-    public PendingMovementChange Push(uint counter, MovementChangeType type, bool apply)
+    public PendingMovementChange Push(uint counter, MovementChangeType type, bool apply, float newValue = 0.0f)
     {
-        var change = new PendingMovementChange(counter, type, apply);
+        var change = new PendingMovementChange(counter, type, apply) { NewValue = newValue };
         _lastCounter[type] = counter;
         _changes.Add(change);
         return change;
@@ -110,6 +120,25 @@ public sealed class PendingMovementChanges
         {
             PendingMovementChange change = _changes[i];
             if (change.Counter == counter && change.Apply == apply && change.Type == type)
+            {
+                _changes.RemoveAt(i);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Match a speed acknowledgement (vmangos FindPendingMovementSpeedChange, Unit.cpp:6893-6925): the same counter and
+    /// type, and a speed within 0.01 of the one that was sent. The matching change is removed.
+    /// </summary>
+    public bool TryAcknowledgeSpeed(uint counter, MovementChangeType type, float speed)
+    {
+        for (int i = 0; i < _changes.Count; i++)
+        {
+            PendingMovementChange change = _changes[i];
+            if (change.Counter == counter && change.Type == type && Math.Abs(change.NewValue - speed) <= 0.01f)
             {
                 _changes.RemoveAt(i);
                 return true;

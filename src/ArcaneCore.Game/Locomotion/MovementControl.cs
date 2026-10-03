@@ -82,6 +82,24 @@ public static class MovementControl
     }
 
     /// <summary>
+    /// The client's ack for a speed change (vmangos HandleForceSpeedChangeAckOpcodes): it must match a pending change of the
+    /// type by counter and, within 0.01, speed. False, and a counted wrong ack, when nothing matches. On success the
+    /// caller applies <paramref name="speed"/> (the speed the client reports) with <see cref="UnitSpeed.SetReal"/>.
+    /// </summary>
+    public static bool AcknowledgeSpeed(Player player, MoveType type, uint counter, float speed)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        LocomotionState state = player.Locomotion;
+        if (!state.Pending.TryAcknowledgeSpeed(counter, UnitSpeed.ChangeTypeOf(type), speed))
+        {
+            state.NoteWrongAck();
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// The server applies a change itself (vmangos ResolvePendingMovementChange, Unit.cpp:6745): a root also stops
     /// motion (the moving flags are cleared), and with <paramref name="sendToClient"/> everyone is told with the
     /// SMSG_SPLINE_MOVE_* packet (SendMovementFlagChangeToAll).
@@ -90,6 +108,19 @@ public static class MovementControl
     {
         ArgumentNullException.ThrowIfNull(unit);
         ArgumentNullException.ThrowIfNull(change);
+        if (UnitSpeed.IsSpeedChange(change.Type))
+        {
+            // ResolvePendingMovementChange, speed cases (Unit.cpp:6767-6797): SetSpeedRateReal + SendSpeedChangeToAll.
+            MoveType moveType = UnitSpeed.MoveTypeOf(change.Type);
+            UnitSpeed.SetReal(unit, moveType, change.NewValue);
+            if (sendToClient)
+            {
+                CombatPackets.SendToSet(unit, SpeedPackets.SplineOpcode(moveType), SpeedPackets.BuildSpline(unit.Guid.Value, change.NewValue));
+            }
+
+            return;
+        }
+
         if (change is { Type: MovementChangeType.Root, Apply: true })
         {
             unit.RemoveMovementFlags(MovementFlags.MaskMoving);

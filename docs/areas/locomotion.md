@@ -176,3 +176,38 @@ until that lane installs its implementation.
 Not delivered: antiundermap1 (`UndermapRecall`, `:1105-1127`: more than 100 yards below the ground height while
 falling, return to the last safe position, Warsong Gulch below z = 250). It needs a safe-position record and the ground
 height under the player from the collision and pathfinding lanes.
+## Slice 6: speed-rates-players (delivered)
+
+The speed auras change a player's speeds through the order/ack handshake (vmangos `Unit::UpdateSpeed`,
+`Unit.cpp:6959-7100`; `SetSpeedRate`, `:7152-7183`; the aura handlers `SpellAuras.cpp:3972-4040`; the ack handler
+`MovementHandler.cpp:415-534`). 547 classic spells carry one of these auras (Sprint, Aspect of the Cheetah, Ghost Wolf, every
+snare, mounts), none of which did anything before.
+
+* **Formula** (`Locomotion/Speed/UnitSpeed.cs`, `ComputeRate`): run, unmounted: `bonus * (100 + main) / 100` with
+  `main` = strongest MOD_INCREASE_SPEED (31), `bonus` = the larger of the product of MOD_SPEED_ALWAYS (129) and
+  `(100 + strongest MOD_SPEED_NOT_STACK (171)) / 100`; mounted (a mount display is set) the same with 32, 130, 172, so
+  Ghost Wolf does not apply on a mount. Swim: strongest MOD_INCREASE_SWIM_SPEED (58). USE_NORMAL_MOVEMENT_SPEED (191) caps run
+  and swim at `amount / base`. Run, run-back and swim are then multiplied by `(100 + strongest MOD_DECREASE_SPEED (33)) / 100`.
+  Swim-back is never updated. Worked values (`SpeedRateFormulaTests`): Ghost Wolf +40 = 9.8; +40 with a -50 snare = 4.9;
+  mounted +60 = 11.2; mounted +60 with +25 always = 14.0; swim +50 = 7.083333.
+* **Handshake** (`UnitSpeed.SetRate`): a player in a map is sent `SMSG_FORCE_{WALK,RUN,RUN_BACK,SWIM,SWIM_BACK}_SPEED_CHANGE` =
+  packed GUID, u32 counter, f32 speed (byte-exact against gtker `smsg_force_run_speed_change.wowm`) and the change is
+  recorded; the speed changes on the matching `CMSG_FORCE_*_SPEED_CHANGE_ACK` (u64 GUID, counter, movement block, f32 speed;
+  counter, type and speed within 0.01 must match; parsed against the gtker test vector) and the client-reported speed is
+  stored before the block is. The observers get `MSG_MOVE_SET_*_SPEED` (packed GUID, block, speed), not the mover. An
+  unacknowledged change is enforced after `Locomotion:PendingAckResponseTimeMs` with `SMSG_SPLINE_SET_*_SPEED` to everyone; a
+  superseded one is dropped. A player that is not in a map (login restore) is set directly with no packet (explanation (1),
+  `Unit.cpp:7167-7173`); a non-player unit changes at once and everyone gets the spline packet.
+* **Auras**: `Spells/Auras/SpeedAuras.cs` registers 31, 32, 33, 58, 129, 130, 171, 172, 191, each recording itself in the aura ledger
+  and recomputing the speeds its vmangos handler does (33: run, run-back, swim; 191: run, swim; 58: swim; the rest: run).
+* **Ghost rate**: `Locomotion:GhostRunSpeedWorld` / `GhostRunSpeedBattleground` (vmangos `Death.Ghost.RunSpeed.World` /
+  `.Battleground`, `World.cpp:777-778`, default 1, range 0.1 to 10 as `setConfigMinMax`) multiply a player whose death state is
+  CORPSE (read literally, `Unit.cpp:7040-7046`; at 1 it does nothing). The ghost's real +25% run and swim comes from the Ghost
+  aura (8326), which `CombatHooks.ApplyGhostForm` (the death lane's seam, a no-op on this base) would have to cast: when it does,
+  these auras take effect through the same formula with no further change.
+
+Limits: creatures are not recomputed (their template rate and wounded slowdown are the creature slice, not delivered; a creature
+keeps the speed it spawned with); pets and charmed units do not follow the owner's speed (`CallForAllControlledUnits`, no pets on
+this base); the talent speed modifier on a caster's own speed aura (`SPELLMOD_SPEED`) is not applied; the turn rate is not
+changed by any 1.12 aura and is not handled; a speed that is within 0.01 of the sent one is stored as the client reported it
+(vmangos does the same). Unverified against a real 1.12.1 client (packed GUID widths, see slice 1).

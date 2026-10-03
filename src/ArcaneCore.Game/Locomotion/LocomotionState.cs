@@ -59,6 +59,21 @@ public sealed class AuraLedger
         return total;
     }
 
+    /// <summary>vmangos Unit::GetTotalAuraMultiplier: the product of (100 + amount) / 100 over the auras (1 when there are none).</summary>
+    public float Multiplier(AuraType type)
+    {
+        float multiplier = 1.0f;
+        if (_auras.TryGetValue(type, out List<SpellAura>? list))
+        {
+            foreach (SpellAura aura in list)
+            {
+                multiplier *= (100.0f + aura.Amount) / 100.0f;
+            }
+        }
+
+        return multiplier;
+    }
+
     /// <summary>vmangos Unit::GetMaxPositiveAuraModifier (0 when none is positive).</summary>
     public int MaxPositive(AuraType type)
     {
