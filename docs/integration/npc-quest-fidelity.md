@@ -82,6 +82,27 @@ decidable and which leaf types are dead; `ConditionFeature` logs it at startup.
   date driven and there is no scheduler. This is a placeholder, not retail behaviour.
 * Loot conditions are not wired (`LootService.Conditions` belongs to the durable-loot lane).
 
+### Known deviations without a switch (accepted temporary)
+
+Both fail closed and neither has a configuration option, which the standing rule (every deliberate deviation
+behind a switch that defaults to retail) calls for. They are accepted for this wave and listed in
+`claude-handoff-20261003.md` as known deviations; the follow-up is a retail-default switch for each.
+
+1. **Condition types that cannot be resolved here** (the "fail closed" rows of the Types table: PVP_RANK, the
+   script and world-state types, the types undecidable from an NPC interaction, and SKILL/SKILL_BELOW while the
+   skills feature is inactive). An undecidable leaf is *unknown* and the row is "not satisfied", so a gossip
+   option, vendor row or quest guarded by it stays hidden; retail would evaluate it. Counted and logged at
+   startup (`ConditionFeature`), not configurable. Follow-up: a switch (default retail) choosing between
+   fail-closed and a documented pass for a given type, once the owning system exists.
+2. **`AcceptableQuest` refusals** (`QuestNpcServices.Interaction.cs`): a quest is silently left out of the
+   offer, with no reply to the client, when it has a source spell (`SrcSpell`), a source item or source count
+   (`ReqSourceId`/`ReqSourceCount`), the PartyAccept, AutoRewarded or StayAlive flag, a reputation objective
+   while no reputation owner is registered, an exploration objective whose area trigger is unknown, or a quest
+   type other than 0, 1, 21, 62 and 81. Retail offers these quests; the adapters they need (source spells, loot
+   source counters, party confirmation, auto rewards, stay-alive failure) do not exist yet
+   (`docs/integration/quest-progression.md`). Not configurable. Follow-up: a retail-default switch that offers
+   them once their adapters exist (and until then logs which quests were withheld).
+
 ### Config
 
 | Key | Default | Meaning |
