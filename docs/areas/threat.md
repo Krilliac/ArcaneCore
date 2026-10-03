@@ -4,6 +4,13 @@ Status: wave 4 lane `threat-and-aggro` (branch `claude/vw5-threat-and-aggro`). E
 vmangos sources in `D:\refs\vmangos` (primary). Nothing here was run against a retail client or a vmangos server: the
 evidence is the reference code plus this repository's tests.
 
+Delivered, in commit order: threat-list core, victim selection, taunt and threat auras, the threat pipeline (damage, heal, spell threat),
+evade fidelity, spell_threat data, AI selection (EventAI bridge), stealth and alert, CritterAI. **Not delivered, by design:** the
+unreachable-target evade (nothing reports a chase as unreachable), social aggro and flee-for-assistance rework (faction-template call-for-help flags are
+in the client DBC, not in the references), GuardAI, aggro on pets and creature-versus-creature aggro (needs a bounded creature query and the
+reputation lane's hostility query), and creature_linking (1,189 rows; the movement-and-spawns lane owns the follow/respawn flags of the same
+table). Each is a slice of the lane design that a later lane can pick up; the limits sections below say what each missing piece depends on.
+
 ## Delivered scope
 
 ### threat-list-core (Game/Combat/ThreatList.cs, Game/Combat/Threat/*)
