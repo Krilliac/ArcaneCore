@@ -91,10 +91,7 @@ multiplier for the first school of the mask (`Unit::ApplyTotalThreatModifier`, U
 | Harmless hostile hit (debuff, CC, dispel) | both sides in combat, AttackedBy, zero-threat entry; not for triggered casts, EX_NO_THREAT, NO_INITIAL_THREAT, MOD_POSSESS | Spell.cpp:1649-1679 |
 | Positive spell on an in-combat target | caster in combat and a zero-threat entry on every list holding the target | Spell.cpp:1713-1720 |
 
-The spell_threat table is the `ISpellThreatCatalog` seam (`MapCombat.SpellThreatCatalog`). **No data source is delivered in this lane:**
-nothing implements the interface in production, so spell multipliers are 1 and there is no flat threat until the content layer binds a
-catalog (the world feature takes it from the service provider when one is registered). classic-db has 103 `spell_threat` rows (one with a
-multiplier other than 1), vmangos' own migrations add 313 more entries: the retail-accurate table is not in classic-db.
+The spell_threat table is the `ISpellThreatCatalog` seam (`MapCombat.SpellThreatCatalog`); the data side is below.
 
 `MapCombatDamageSink` (Game/Spells) is the production sink the world daemon uses (`WorldSpellDamageSink` derives from it), so tests exercise
 it directly.
@@ -121,3 +118,27 @@ their auras and spell modifiers.
 Not delivered: combo points other players hold on the creature are not cleared (no evade event reaches the combo service yet; the new
 event is the hook), a creature's pets and totems are not sent home (creatures have no controlled-unit links), the loot recipient is
 not cleared (no tapping primitive in Game).
+
+### spell_threat data (World schema step, importer, table, reload)
+
+| Piece | What it does | Where |
+|---|---|---|
+| World schema step | one table `spell_threat` (entry, threat, multiplier, ap_bonus, inverse_effect_mask, build_min, build_max); `SpellThreatDataModule.Version` = **21, provisional**: other wave-4 lanes claim the same number, the integrator renumbers | `Data/World/Threat/SpellThreatDataModule.cs` |
+| Importer | `SpellThreatDumpImporter.Parse` reads a mysqldump file by column name (case-insensitive: dumps mix `Threat` and `threat`), cmangos/classic-db dialect (`entry, Threat, multiplier, ap_bonus`) and vmangos dialect (`entry, threat, multiplier, inverse_effect_mask, build_min, build_max`, only rows whose range holds build 5875 are kept, SpellMgr.cpp:839); `ImportAsync` replaces the table in one transaction. Malformed input, a threat outside 0..65535, a non-zero `ap_bonus` (nothing applies it) and two rows for one spell are errors | `Data/World/Threat/SpellThreatDumpImporter.cs` |
+| Content and rank fill | `SpellThreatContent.Resolve` ports vmangos' `SpellRankHelper`/`DoSpellThreat` (SpellMgr.cpp:127-182, :770-827): unknown spells dropped, a custom rank needs its own threat, higher ranks inherit the first rank, redundant and orphaned custom ranks reported | `Kernel/WorldData/Threat/SpellThreatContent.cs` |
+| Live table | `SpellThreatTable` (the `ISpellThreatCatalog`), rows swapped by `Replace`; ranks resolved at the first lookup after a swap so the skill content and spell store may finish loading later | `Game/Combat/Threat/SpellThreatTable.cs` |
+| Feature and reload | `SpellThreatFeature` loads the table at startup when a store is registered; `.reload spell_threats` (the vmangos name) swaps it (an empty table empties it, vmangos clears first, unless `HotReload:EmptyTables = KeepLoaded`) | `World/Combat/SpellThreatFeature.cs`, `World/Reload/SpellThreatReloadable.cs` |
+
+Data provenance. classic-db z2815 has 103 `spell_threat` rows (flat threat 0..600, one multiplier other than 1: entry 8092 = 2, `ap_bonus` zero everywhere); vmangos'
+own migrations add 313 further entries (267 with a multiplier other than 1, most of them 0, several limited to build 5875) and use the
+`inverse_effect_mask` column. **The retail-accurate table is therefore not in classic-db**: for fidelity the operator must import a vmangos
+world database. No dump is bundled and none was available while this was written, so the vmangos dialect is built from the loader's
+SELECT, not from a real vmangos dump.
+
+Import is a library call, like the world-state importer (`SpellThreatDumpImporter.Parse` + `ImportAsync`); it is not wired into the
+unified `arcane-content-importer` CLI (the table has no entry in `ContentTableSpecs` and no drift test).
+
+Provider coverage. The schema and store tests are theories over `TestDatabases.AvailableProviders`; on this machine only SQLite ran. MariaDB DDL
+is not transactional and commits implicitly, so the step is only re-runnable (the upgrade test drops the table and runs the step twice);
+PostgreSQL folds unquoted identifiers to lower case, so EF quotes every identifier and the importer matches headers case-insensitively in
+code, never in SQL. The MariaDB and PostgreSQL cases have not been run.

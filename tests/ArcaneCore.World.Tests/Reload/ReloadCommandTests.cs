@@ -55,7 +55,7 @@ public sealed class ReloadCommandTests
         await using var host = WorldTestHost.Start();
         await using WorldTestClient admin = await AdministratorAsync(host);
 
-        await SayAsync(admin, ".reload spell");
+        await SayAsync(admin, ".reload spell_te");
 
         Assert.Equal("Re-loading spell_template...", (await admin.ReadChatAsync()).Text);
     }

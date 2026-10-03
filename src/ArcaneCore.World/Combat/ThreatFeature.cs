@@ -11,9 +11,9 @@ namespace ArcaneCore.World.Combat;
 /// <summary>
 /// Binds the threat formula to the world (discovered <see cref="IWorldFeature"/>): every map's <see cref="MapCombat"/> gets the spell
 /// system's <see cref="SpellThreatModifiers"/> (MOD_THREAT and MOD_CRITICAL_THREAT auras, SPELLMOD_THREAT talents) so damage, healing and
-/// spell threat follow vmangos' ThreatCalcHelper::CalcThreat, and the registered <see cref="ISpellThreatCatalog"/> (the spell_threat
-/// table), when there is one, so spell threat multipliers and flat spell threat apply. Without a catalog only the multipliers of the
-/// auras apply.
+/// spell threat follow vmangos' ThreatCalcHelper::CalcThreat, and the spell_threat table (a registered <see cref="ISpellThreatCatalog"/>,
+/// else the <see cref="SpellThreatFeature"/> table) so spell threat multipliers and flat spell threat apply. Without data only the
+/// multipliers of the auras apply.
 /// </summary>
 public sealed class ThreatFeature(IServiceProvider services) : IWorldFeature
 {
@@ -37,7 +37,7 @@ public sealed class ThreatFeature(IServiceProvider services) : IWorldFeature
         if (map.FindUpdater<MapCombat>() is { } combat)
         {
             combat.ThreatModifiers = Modifiers;
-            combat.SpellThreatCatalog = services.GetService<ISpellThreatCatalog>();
+            combat.SpellThreatCatalog = services.GetService<ISpellThreatCatalog>() ?? services.GetService<SpellThreatFeature>()?.Table;
         }
     }
 }
