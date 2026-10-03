@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using ArcaneCore.Game.Guilds;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Social;
 using Microsoft.Extensions.DependencyInjection;
