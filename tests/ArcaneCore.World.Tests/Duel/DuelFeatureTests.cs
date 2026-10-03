@@ -37,8 +37,8 @@ public sealed class DuelFeatureTests
         {
             ["World:Duel:Enabled"] = "false",
             ["World:Duel:StartDelaySeconds"] = "5",
-            ["World:Duel:OutOfBoundsYards"] = "50",
-            ["World:Duel:ReturnInBoundsYards"] = "40",
+            ["World:Duel:OutOfBoundsYards"] = "75",
+            ["World:Duel:ReturnInBoundsYards"] = "70",
             ["World:Duel:OutOfBoundsGraceSeconds"] = "12",
             ["World:Duel:RequireKnownArea"] = "true",
             ["World:Duel:ExpiredRequestIsSilent"] = "true",
@@ -56,8 +56,8 @@ public sealed class DuelFeatureTests
         DuelOptions o = feature.Options;
         Assert.False(o.Enabled);
         Assert.Equal(5, o.StartDelaySeconds);
-        Assert.Equal(50f, o.OutOfBoundsYards);
-        Assert.Equal(40f, o.ReturnInBoundsYards);
+        Assert.Equal(75f, o.OutOfBoundsYards);
+        Assert.Equal(70f, o.ReturnInBoundsYards);
         Assert.Equal(12, o.OutOfBoundsGraceSeconds);
         Assert.True(o.RequireKnownArea);
         Assert.True(o.ExpiredRequestIsSilent);
@@ -70,7 +70,7 @@ public sealed class DuelFeatureTests
     }
 
     [Fact]
-    public async Task Defaults_AreTheVmangosValues_WithoutAConfiguration()
+    public async Task Defaults_AreTheRetailValues_WithoutAConfiguration()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -83,8 +83,8 @@ public sealed class DuelFeatureTests
 
         Assert.True(feature.Options.Enabled);
         Assert.Equal(3, feature.Options.StartDelaySeconds);
-        Assert.Equal(75f, feature.Options.OutOfBoundsYards);
-        Assert.Equal(70f, feature.Options.ReturnInBoundsYards);
+        Assert.Equal(50f, feature.Options.OutOfBoundsYards);
+        Assert.Equal(40f, feature.Options.ReturnInBoundsYards);
         Assert.Equal(10, feature.Options.OutOfBoundsGraceSeconds);
     }
 

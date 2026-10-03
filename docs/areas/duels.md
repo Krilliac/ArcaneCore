@@ -17,7 +17,7 @@ real 1.12.1 client** (charter 1.3); the client checklist at the end is what a cl
 | `SMSG_DUEL_REQUESTED`, the two crossed `DuelInfo` halves, `PLAYER_DUEL_ARBITER` | `DuelService.Begin` | `SpellEffects.cpp:4732-4760` |
 | `CMSG_DUEL_ACCEPTED` and the 3000 ms countdown; the flag turns on 3 whole seconds later, teams 1 and 2 | `DuelService.Accept`, `UpdateDuelFlag` | `Handlers/DuelHandler.cpp:30-47`, `Objects/Player.cpp:17248-17263` |
 | `CMSG_DUEL_CANCELLED`: discard (interrupted) and `/forfeit` (combat stops, Grovel 7267, the opponent wins) | `DuelService.Cancel` | `DuelHandler.cpp:49-71` |
-| Boundaries: 75 yd out, 70 yd back, 10 s grace, `SMSG_DUEL_OUTOFBOUNDS/INBOUNDS`, a missing flag ends it as fled | `DuelService.CheckDistance`, `MapDuel` | `Player.cpp:6671-6718`, `Objects/Object.cpp:1738-1752` |
+| Boundaries: 50 yd out, 40 yd back (retail; vmangos 75/70 is an option), 10 s grace, `SMSG_DUEL_OUTOFBOUNDS/INBOUNDS`, a missing flag ends it as fled | `DuelService.CheckDistance`, `MapDuel` | `Player.cpp:6671-6718`, `Objects/Object.cpp:1738-1752` |
 | Completion: `SMSG_DUEL_COMPLETE`, `SMSG_DUEL_WINNER`, flag removal, hostile auras since the start removed, combo points cleared, arbiter/team reset, delayed delete | `DuelService.Complete` | `Player.cpp:6726-6822`, `Player.cpp:1126-1140` |
 | Hostility: a started duel makes the two players hostile before any team rule and waives the PvP-flag gate; no PvP pulses between opponents | `DuelRules`, `CombatHooks.IsFriendly/CanAttack`, `MapCombat.TogglePlayerPvpFlagOnAttackVictim/SetInCombatWithAggressor` | `Object.cpp:3650-3652`, `3797-3800`; `Objects/Unit.cpp:5973`, `6047` |
 | Duels end at 1 hp: clamp, win, Grovel; lethal damage from a third party kills and interrupts | `MapCombat.Duel.cs`, three call sites in `DealDamage` | `Unit.cpp:762-779`, `825-843`, `954-969` |
@@ -42,8 +42,8 @@ Defaults are the vmangos values; a different value is a deliberate deviation.
 |---|---|---|
 | `Enabled` | `true` | Off: the duel spell is refused with `SPELL_FAILED_NO_DUELING` |
 | `StartDelaySeconds` | `3` | Accept to start (the countdown packet always says 3000 ms) |
-| `OutOfBoundsYards` | `75` | Warning distance (vmangos "Nostalrius: modified duel distance (50 -> 75m)"; mangos-classic 50) |
-| `ReturnInBoundsYards` | `70` | Distance that counts as back (mangos-classic 40) |
+| `OutOfBoundsYards` | `50` | Warning distance, original 1.12 (mangos-classic `Player.cpp:6917-6937`); `75` is the vmangos Nostalrius widening (`Player.cpp:6688-6716`, "50 -> 75m") |
+| `ReturnInBoundsYards` | `40` | Distance that counts as back (mangos-classic `Player.cpp:6927`); vmangos uses 70 |
 | `OutOfBoundsGraceSeconds` | `10` | Seconds out before the duel is lost as fled (both references) |
 | `RequireKnownArea` | `false` | vmangos lets a duel start where the area has no AreaTable row; on, such areas refuse |
 | `ExpiredRequestIsSilent` | `false` | Both references end an unaccepted request whose flag expired as fled (a winner is announced); on, it is interrupted |
@@ -84,7 +84,7 @@ Defaults are the vmangos values; a different value is a deliberate deviation.
 
 ## Open questions
 
-* Which distances are true retail (75/70 or 50/40)? The references disagree and cannot settle it.
+* Whether the real 1.12 client agrees with 50/40 yd (the retail default, from mangos-classic; vmangos 75/70 is a Nostalrius change and an option): confirm in the client pass.
 * The real duration of the flag object (SpellDuration 21) and with it how long an unaccepted request lives.
 * Whether the 1.12 client needs the mangos-classic health/power percentage refresh for the opponent's bars.
 * Whether retail refuses a challenge from an invisible or stealthed player (`SPELL_FAILED_CANT_DUEL_WHILE_INVISIBLE/STEALTHED` exist in the enum; neither server uses them).
@@ -93,7 +93,7 @@ Defaults are the vmangos values; a different value is a deliberate deviation.
 
 1. `/duel` on a target: request dialog appears for the target; the flag stands between the players.
 2. Accept: countdown 3-2-1, then the flag turns on; name plates turn hostile for same-team duelists.
-3. Out-of-bounds warning past 75 yd, cleared by walking back; ten seconds out loses the duel.
+3. Out-of-bounds warning past 50 yd, cleared by walking back; ten seconds out loses the duel.
 4. Lethal hit leaves 1 hp, the loser is stunned (Grovel), the winner is announced, the flag disappears.
 5. `/forfeit` mid-duel and discarding the request before the countdown ends.
 6. Logout and a far teleport (hearthstone to another continent) mid-duel; a cast on a third player while dueling.

@@ -16,13 +16,13 @@ public sealed class DuelOptions
     public int StartDelaySeconds { get; set; } = 3;
 
     /// <summary>
-    /// Yards from the flag at which the out-of-bounds warning starts: 75 in vmangos ("Nostalrius: modified duel distance (50 -> 75m)",
-    /// Player.cpp:6688-6716), 50 in mangos-classic (Player.cpp:6917-6939). Which one is true retail cannot be settled from the references.
+    /// Yards from the flag at which the out-of-bounds warning starts: 50 as in original 1.12 (mangos-classic Player.cpp:6917-6937). vmangos widens it to 75
+    /// ("Nostalrius: modified duel distance (50 -> 75m)", Player.cpp:6688-6716), the option for that behaviour. Retail by default.
     /// </summary>
-    public float OutOfBoundsYards { get; set; } = 75f;
+    public float OutOfBoundsYards { get; set; } = 50f;
 
-    /// <summary>Yards within which a player who left the area counts as back: 70 in vmangos, 40 in mangos-classic.</summary>
-    public float ReturnInBoundsYards { get; set; } = 70f;
+    /// <summary>Yards within which a player who left the area counts as back: 40 as in original 1.12 (mangos-classic), 70 in vmangos.</summary>
+    public float ReturnInBoundsYards { get; set; } = 40f;
 
     /// <summary>Seconds out of bounds before the duel is lost as fled (10 in both references).</summary>
     public int OutOfBoundsGraceSeconds { get; set; } = 10;

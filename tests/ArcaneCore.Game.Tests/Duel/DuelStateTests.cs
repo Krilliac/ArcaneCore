@@ -54,14 +54,14 @@ public sealed class DuelStateTests
     }
 
     [Fact]
-    public void Options_DefaultToTheVmangosValues()
+    public void Options_DefaultToTheRetailValues()
     {
         var options = new DuelOptions();
 
         Assert.True(options.Enabled);
         Assert.Equal(3, options.StartDelaySeconds);
-        Assert.Equal(75f, options.OutOfBoundsYards);
-        Assert.Equal(70f, options.ReturnInBoundsYards);
+        Assert.Equal(50f, options.OutOfBoundsYards);
+        Assert.Equal(40f, options.ReturnInBoundsYards);
         Assert.Equal(10, options.OutOfBoundsGraceSeconds);
         Assert.False(options.RequireKnownArea);
         Assert.False(options.ExpiredRequestIsSilent);

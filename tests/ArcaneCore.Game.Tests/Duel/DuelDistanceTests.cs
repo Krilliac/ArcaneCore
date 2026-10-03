@@ -8,7 +8,7 @@ using static ArcaneCore.Game.Tests.Duel.DuelRig;
 namespace ArcaneCore.Game.Tests.Duel;
 
 /// <summary>
-/// vmangos Player::CheckDuelDistance (Player.cpp:6671-6718): 75 yd to leave, 70 yd to return, 10 s grace; the distance is 3D with both
+/// Retail 1.12 (mangos-classic Player.cpp:6902-6942): 50 yd to leave, 40 yd to return, 10 s grace (vmangos Nostalrius widens it to 75/70, Player.cpp:6688-6716, option); the distance is 3D with both
 /// bounding radii (Object.cpp:1738-1752); a flag object that is gone ends the duel as fled.
 /// </summary>
 public sealed class DuelDistanceTests
@@ -20,18 +20,18 @@ public sealed class DuelDistanceTests
     }
 
     [Fact]
-    public void LeavingTheArea_WarnsOnce_AtSeventyFiveYardsPlusRadii()
+    public void LeavingTheArea_WarnsOnce_AtFiftyYardsPlusRadii()
     {
         using var rig = new DuelRig();
         GameObject flag = rig.Challenge();
         rig.AcceptAndStart();
         rig.ClearPackets();
 
-        PlaceBAtDistanceFromFlag(rig, flag, 75f, -0.1f);
+        PlaceBAtDistanceFromFlag(rig, flag, 50f, -0.1f);
         rig.Tick();
         Assert.Empty(Packets(rig.SessionB, WorldOpcode.SmsgDuelOutofbounds));
 
-        PlaceBAtDistanceFromFlag(rig, flag, 75f, +0.1f);
+        PlaceBAtDistanceFromFlag(rig, flag, 50f, +0.1f);
         rig.Tick();
         rig.Tick();
 
@@ -41,21 +41,21 @@ public sealed class DuelDistanceTests
     }
 
     [Fact]
-    public void ComingBack_NeedsSeventyYards_AndSendsInBoundsOnce()
+    public void ComingBack_NeedsFortyYards_AndSendsInBoundsOnce()
     {
         using var rig = new DuelRig();
         GameObject flag = rig.Challenge();
         rig.AcceptAndStart();
-        PlaceBAtDistanceFromFlag(rig, flag, 75f, +0.1f);
+        PlaceBAtDistanceFromFlag(rig, flag, 50f, +0.1f);
         rig.Tick();
         rig.ClearPackets();
 
-        PlaceBAtDistanceFromFlag(rig, flag, 70f, +0.1f); // between 70 and 75: still out
+        PlaceBAtDistanceFromFlag(rig, flag, 40f, +0.1f); // between 40 and 50: still out
         rig.Tick();
         Assert.Empty(Packets(rig.SessionB, WorldOpcode.SmsgDuelInbounds));
         Assert.NotEqual(0, rig.B.Duel!.OutOfBoundSeconds);
 
-        PlaceBAtDistanceFromFlag(rig, flag, 70f, -0.1f);
+        PlaceBAtDistanceFromFlag(rig, flag, 40f, -0.1f);
         rig.Tick();
         rig.Tick();
 
@@ -69,7 +69,7 @@ public sealed class DuelDistanceTests
         using var rig = new DuelRig();
         GameObject flag = rig.Challenge();
         rig.AcceptAndStart();
-        PlaceBAtDistanceFromFlag(rig, flag, 75f, +5f);
+        PlaceBAtDistanceFromFlag(rig, flag, 50f, +5f);
         rig.Tick();
         long outAt = rig.Now;
         rig.ClearPackets();
@@ -94,12 +94,12 @@ public sealed class DuelDistanceTests
     [Fact]
     public void OptionsChangeTheDistances_AndTheGrace()
     {
-        using var rig = new DuelRig(new DuelOptions { OutOfBoundsYards = 50f, ReturnInBoundsYards = 40f, OutOfBoundsGraceSeconds = 3 });
+        using var rig = new DuelRig(new DuelOptions { OutOfBoundsYards = 75f, ReturnInBoundsYards = 70f, OutOfBoundsGraceSeconds = 3 });
         GameObject flag = rig.Challenge();
         rig.AcceptAndStart();
         rig.ClearPackets();
 
-        PlaceBAtDistanceFromFlag(rig, flag, 50f, +0.1f);
+        PlaceBAtDistanceFromFlag(rig, flag, 75f, +0.1f);
         rig.Tick();
         Assert.Single(Packets(rig.SessionB, WorldOpcode.SmsgDuelOutofbounds));
 
