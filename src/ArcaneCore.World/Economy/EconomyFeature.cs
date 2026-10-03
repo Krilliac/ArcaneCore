@@ -138,6 +138,11 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             await timer.DisposeAsync().ConfigureAwait(false);
         }
 
+        if (_auctionRecoveryTimer is { } recoveryTimer)
+        {
+            await recoveryTimer.DisposeAsync().ConfigureAwait(false);
+        }
+
         await _readStop.CancelAsync().ConfigureAwait(false);
         Task[] reads;
         lock (_readGate)
@@ -305,6 +310,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             return;
         }
 
+        RecoverAuctions();
         ExpireAuctions();
         Read((store, ct) => store.GetExpiredMailsAsync(Now, 50, ct), ExpireMails);
     }
