@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
 
@@ -25,7 +26,7 @@ public sealed partial class MapCombat
         player.SetUInt32(UpdateFields.UnitDynamicFlags, 0);
 
         byte bytes = player.GetByte(UpdateFields.PlayerFieldBytes, 0);
-        bytes = Hooks.IsInstanceable(player.MapId) ? (byte)(bytes & ~FieldByteReleaseTimer) : (byte)(bytes | FieldByteReleaseTimer);
+        bytes = IsInstanceableMap(player.MapId) ? (byte)(bytes & ~FieldByteReleaseTimer) : (byte)(bytes | FieldByteReleaseTimer);
         player.SetByte(UpdateFields.PlayerFieldBytes, 0, bytes);
 
         c.DeathTimer = CombatConstants.CorpseRepopTimeMs;
@@ -38,7 +39,14 @@ public sealed partial class MapCombat
     /// SMSG_CORPSE_RECLAIM_DELAY, the ghost timer reset, DEAD — then the graveyard hook.
     /// Returns false when the player is alive or already a ghost (HandleRepopRequestOpcode).
     /// </summary>
-    public bool RepopPlayer(Player player)
+    public bool RepopPlayer(Player player) => RepopPlayer(player, immediate: false);
+
+    /// <summary>
+    /// <see cref="RepopPlayer(Player)"/>; with <paramref name="immediate"/> the graveyard trip is made at once instead of being
+    /// scheduled (vmangos Player::ScheduleRepopAtGraveyard does that when the player is not in the world or its session is gone,
+    /// and WorldSession::LogoutPlayer repops a dying player synchronously, WorldSession.cpp:694-701).
+    /// </summary>
+    internal bool RepopPlayer(Player player, bool immediate)
     {
         UnitCombat c = player.Combat;
         if (IsQuestSettlementPending(player) || IsAliveState(player) || (player.Flags & PlayerFlags.Ghost) != 0)
@@ -76,9 +84,52 @@ public sealed partial class MapCombat
         c.DeathTimer = 0;
         SetDeathState(player, DeathState.Dead);
 
-        Hooks.RepopAtGraveyard(player);
+        if (immediate)
+        {
+            c.RepopPending = false;
+            Hooks.RepopAtGraveyard(player);
+        }
+        else
+        {
+            c.RepopPending = true; // Player::ScheduleRepopAtGraveyard; run by RunScheduledRepop
+        }
+
         return true;
     }
+
+    /// <summary>
+    /// The player tick part of vmangos Player::Update (Player.cpp:1329-1334): a scheduled repop runs once the player has no
+    /// pending movement change (the ghost's water-walk order must be answered first). The flag is cleared before the trip
+    /// like Player::RepopAtGraveyard does (Player.cpp:4992), so a trip that finds no graveyard is not retried.
+    /// </summary>
+    private void RunScheduledRepop(Player player)
+    {
+        UnitCombat c = player.Combat;
+        if (!c.RepopPending || player.Locomotion.Pending.HasPending)
+        {
+            return;
+        }
+
+        c.RepopPending = false;
+        Hooks.RepopAtGraveyard(player);
+    }
+
+    /// <summary>
+    /// The default of <see cref="CombatHooks.RepopAtGraveyard"/>: the world's registered graveyard implementation
+    /// (<see cref="Death.DeathSeams"/>), or false (the ghost stays on its body) when no graveyard feature registered one.
+    /// </summary>
+    internal bool RepopViaSeam(Player player)
+        => Death.DeathSeams.Find(_world)?.Graveyards is { } graveyards && graveyards.RepopAtGraveyard(player);
+
+    /// <summary>
+    /// vmangos MapEntry::Instanceable for a map id: the loaded map template when there is one (a dungeon, raid or battleground),
+    /// else the hooks' answer (<see cref="CombatHooks.IsInstanceable"/>: everything but the two continents, until map content
+    /// is loaded). The two continents always go to the hooks so a test or feature override of them keeps working.
+    /// </summary>
+    internal bool IsInstanceableMap(uint mapId)
+        => mapId > 1 && Maps.Templates.WorldMaps.Of(_world).Registry.Find(mapId) is { } template
+            ? template.Instanceable
+            : Hooks.IsInstanceable(mapId);
 
     /// <summary>
     /// CMSG_RECLAIM_CORPSE (vmangos HandleReclaimCorpseOpcode): a ghost with a corpse whose
@@ -154,7 +205,7 @@ public sealed partial class MapCombat
         c.DeathTimer = 0;
         c.PvpDeath = false;
 
-        if (!Hooks.IsInstanceable(snapshot.MapId))
+        if (!IsInstanceableMap(snapshot.MapId))
         {
             player.SetByte(UpdateFields.PlayerFieldBytes, 0,
                 (byte)(player.GetByte(UpdateFields.PlayerFieldBytes, 0) | FieldByteReleaseTimer));

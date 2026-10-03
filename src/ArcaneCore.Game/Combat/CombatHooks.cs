@@ -208,10 +208,11 @@ public class CombatHooks
     /// <summary>
     /// Where a released spirit goes (vmangos Player::RepopAtGraveyard → nearest graveyard
     /// from graveyard_zone/WorldSafeLocs). Return false to leave the ghost at its corpse —
-    /// the default until graveyard content and teleports exist. An implementation that returns
+    /// the default when no graveyard feature registered an <see cref="Death.IGraveyardRepop"/> for the world
+    /// (<see cref="Death.DeathSeams"/>); with one, the default asks it. An implementation that returns
     /// true has already moved the player.
     /// </summary>
-    public virtual bool RepopAtGraveyard(Player player) => false;
+    public virtual bool RepopAtGraveyard(Player player) => player.Map?.Combat.RepopViaSeam(player) ?? false;
 
     /// <summary>Resurrection sickness after a spirit-healer resurrection etc. (vmangos ResurrectPlayer applySickness). Default: none.</summary>
     public virtual void OnResurrected(Player player, bool applySickness)

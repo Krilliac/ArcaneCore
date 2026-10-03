@@ -268,8 +268,9 @@ All of these are minimal and additive unless stated otherwise.
 - **Instance contents do not persist across an unload or restart.** This covers creature
   deaths, respawn timers and boss state (vmangos `creature_respawn` / instance data, and
   `InstanceData` scripts). A re-created map respawns everything.
-- **Homebind on raid-group loss** teleports to the hearthstone bind point. vmangos
-  `RepopAtGraveyard` uses graveyards, and there is no graveyard data here.
+- **Homebind on raid-group loss** teleports to the hearthstone bind point, as vmangos does:
+  `Player::UpdateHomebindTime` calls `TeleportToHomebind` (Player.cpp:18534-18556); it does not use
+  graveyards (those serve released spirits, docs/areas/graveyards-resurrection.md).
 - The **"leave the instance to reset it" system message** text is ArcaneCore's own wording.
   It is not the vmangos `LANG_LEAVE_TO_RESET_INSTANCE` string, which could not be verified.
 - **Not modelled:**
@@ -288,5 +289,4 @@ All of these are minimal and additive unless stated otherwise.
 - Persisted instance state (`creature_respawn`, `gameobject_respawn` per instance) once
   `feat/creature-ai` and `feat/gameobjects-loot` expose respawn seams.
 - `InstanceData`-style scripts (boss state, doors) on `MapCreated`.
-- Graveyards for the homebind repop.
 - The 5-instances-per-hour limit.

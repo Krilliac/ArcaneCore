@@ -85,7 +85,10 @@ public sealed class UndermapTests
         Assert.False(player.IsAlive);
         Assert.True((player.Flags & PlayerFlags.Ghost) != 0);       // KillPlayer + BuildPlayerRepop
         Assert.NotNull(player.Combat.Corpse);
-        Assert.Equal(1, hooks.GraveyardRepops);                      // RepopPlayer already sent it there; not a second time
+        Assert.Equal(0, hooks.GraveyardRepops);                      // RepopPlayer only scheduled the trip
+        CombatTestKit.AckPendingMovement(player);
+        world.RunTick(100);
+        Assert.Equal(1, hooks.GraveyardRepops);                      // the scheduled trip, and no second one from the observer
         Assert.Contains(session.Sent, p => p.Opcode == WorldOpcode.SmsgDurabilityDamageDeath);
     }
 
@@ -100,7 +103,10 @@ public sealed class UndermapTests
         Move(world, player, -800f);
 
         Assert.DoesNotContain(session.Sent, p => p.Opcode == WorldOpcode.SmsgEnvironmentaldamagelog);
-        Assert.Equal(3, hooks.GraveyardRepops); // once for the death, then once per packet, as vmangos does
+        Assert.Equal(2, hooks.GraveyardRepops); // once per packet, as vmangos does (the death's own trip is still scheduled)
+        CombatTestKit.AckPendingMovement(player);
+        world.RunTick(100);
+        Assert.Equal(3, hooks.GraveyardRepops); // plus the scheduled one of the death
         Assert.True((player.Flags & PlayerFlags.Ghost) != 0);
     }
 

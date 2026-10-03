@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Protocol;
@@ -118,6 +119,18 @@ internal static class CombatTestKit
         world.AddPlayer(player);
         session.Clear();
         return player;
+    }
+
+    /// <summary>
+    /// The client answers every movement order the player is waiting on (the water-walk order a released spirit gets), which
+    /// is what lets the scheduled repop at the graveyard run on the next tick (vmangos Player.cpp:1329-1334).
+    /// </summary>
+    public static void AckPendingMovement(Player player)
+    {
+        foreach (ArcaneCore.Game.Locomotion.PendingMovementChange change in player.Locomotion.Pending.Changes.ToArray())
+        {
+            ArcaneCore.Game.Locomotion.MovementControl.Acknowledge(player, change.Type, change.Counter, change.Apply);
+        }
     }
 
     public static IEnumerable<(WorldOpcode Opcode, byte[] Payload)> Drain(FakeSession session)

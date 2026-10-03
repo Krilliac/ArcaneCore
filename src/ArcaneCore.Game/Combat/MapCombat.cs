@@ -236,7 +236,7 @@ public sealed partial class MapCombat : IMapUpdater
                 KillPlayer(player);
             }
 
-            if (c.DeathState == DeathState.Corpse && !Hooks.IsInstanceable(player.MapId))
+            if (c.DeathState == DeathState.Corpse && !IsInstanceableMap(player.MapId))
             {
                 if (diff >= c.DeathTimer)
                 {
@@ -246,6 +246,11 @@ public sealed partial class MapCombat : IMapUpdater
                 {
                     c.DeathTimer -= diff;
                 }
+            }
+
+            if (c.RepopPending)
+            {
+                RunScheduledRepop(player);
             }
         }
         else
@@ -300,7 +305,7 @@ public sealed partial class MapCombat : IMapUpdater
         UnitCombat c = player.Combat;
         if (c.DeathTimer > 0 && !IsAliveState(player) && (player.Flags & PlayerFlags.Ghost) == 0)
         {
-            RepopPlayer(player);
+            RepopPlayer(player, immediate: true);
         }
 
         if (c.Corpse is { } corpse)

@@ -70,6 +70,9 @@ public sealed class UnitCombat
     /// <summary>Unix second the corpse was last reset (vmangos Corpse::m_time / GetGhostTime, a time_t).</summary>
     internal long GhostTime { get; set; }
 
+    /// <summary>vmangos Player::m_repopAtGraveyardPending: the spirit was released and is sent to its graveyard once no movement change is pending.</summary>
+    internal bool RepopPending { get; set; }
+
     /// <summary>Killed by a player (vmangos Player::m_pvpDeath).</summary>
     public bool PvpDeath { get; internal set; }
 
