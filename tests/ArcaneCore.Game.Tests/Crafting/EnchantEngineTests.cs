@@ -183,6 +183,25 @@ public sealed class EnchantEngineTests
     }
 
     [Fact]
+    public void AnItemThatBreaks_LosesItsEnchantment_AndGetsItBackWhenRepaired()
+    {
+        using var rig = new Rig();
+        Item sword = rig.Give(Sword);
+        Rig.Enchant(sword, StrengthRing);
+        uint before = rig.Stat(0);
+        rig.Inventory.SwapItem(sword.BagSlot, sword.Slot, InventorySlots.Bag0, InventorySlots.MainHand);
+        Assert.Equal(before + 4, rig.Stat(0));
+
+        rig.Inventory.DurabilityPointsLossAll((int)sword.MaxDurability, inventory: false);   // breaks it
+        Assert.Equal(0u, sword.Durability);
+        Assert.Equal(before, rig.Stat(0));
+        Assert.False(rig.Enchantments.IsApplied(sword, EnchantSlots.Permanent));
+
+        rig.Inventory.RepairDurability(sword);
+        Assert.Equal(before + 4, rig.Stat(0));   // vmangos _ApplyItemMods skips a broken item and applies it again when it is whole
+    }
+
+    [Fact]
     public void AResistanceEnchantment_MovesTheResistanceOfItsSchool()
     {
         using var rig = new Rig();
