@@ -59,3 +59,19 @@ public readonly record struct SpellLearnSkillNode(ushort SkillId, ushort Step, u
 /// BasePoints + BaseDice, SpellEntry.h:1232).
 /// </summary>
 public readonly record struct SpellSkillEffect(uint SpellId, int EffectIndex, int MiscValue, int BasePoints, int BaseDice);
+
+/// <summary>
+/// One persisted skill of a character (vmangos characters.sql <c>character_skills</c>: guid, skill, value,
+/// max; Player::_LoadSkills reads <c>skill, value, max</c>, Player.cpp:20540-20660). The pure value and
+/// maximum only: bonuses and the step are derived again at login.
+/// </summary>
+public readonly record struct CharacterSkillRow(ushort Skill, ushort Value, ushort Max);
+
+/// <summary>
+/// A weapon skill value a character kept after unlearning it (vmangos <c>character_forgotten_skills</c>:
+/// guid, skill, value; Player::_LoadForgottenSkills Player.cpp:20628-20655, client builds above 1.10.2).
+/// </summary>
+public readonly record struct ForgottenSkillRow(ushort Skill, ushort Value);
+
+/// <summary>Everything the skill store keeps for one character: the skills and the forgotten weapon skill values.</summary>
+public sealed record CharacterSkillSnapshot(IReadOnlyList<CharacterSkillRow> Skills, IReadOnlyList<ForgottenSkillRow> Forgotten);
