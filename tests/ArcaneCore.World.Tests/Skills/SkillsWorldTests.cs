@@ -47,7 +47,9 @@ public sealed class SkillsWorldTests
         Assert.False(feature.IsActive);
         Assert.Null(player.Skills);
         Assert.Equal(300u, player.Inventory.Requirements.SkillValue(player.Inventory, 999));
-        Assert.IsType<DefaultItemRequirements>(player.Inventory.Requirements);
+        // The stats area wraps the default requirements; without skills content nothing wraps them with real skills.
+        Assert.IsNotType<PlayerItemRequirements>(player.Inventory.Requirements);
+        Assert.True(player.Inventory.Requirements.HasSpell(player.Inventory, 12345));
     }
 
     [Fact]
@@ -78,7 +80,8 @@ public sealed class SkillsWorldTests
         Assert.Equal(128u, weaponMask);
         Assert.False(dualWield);
         Assert.Equal(2u, free);
-        Assert.IsType<PlayerItemRequirements>(player.Inventory.Requirements);
+        // The requirement chain answers from the real skills (the legacy stand-in answered 300 for every skill).
+        Assert.Equal((uint)swords, player.Inventory.Requirements.SkillValue(player.Inventory, SkillIds.Swords));
     }
 
     [Fact]

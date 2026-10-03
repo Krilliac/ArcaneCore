@@ -346,25 +346,43 @@ public sealed class SkillsFeature : IWorldFeature, ISpellbookLoadObserver, IChar
                 skills.LearnLanguage((uint)context.Effect.MiscValue);
             }
         });
+        // Replaces the built-in handler, so it also sets the stats area's flag (PlayerStatState.SetCanDualWield),
+        // which the attack-power and off-hand recompute read; both flags answer the same question.
         system.RegisterEffect(SpellEffectName.DualWield, static context =>
         {
-            if (context.Target is Player { Skills: { } skills })
+            if (context.Target is Player player)
             {
-                skills.CanDualWield = true;
+                player.StatState.SetCanDualWield(true);
+                if (player.Skills is { } skills)
+                {
+                    skills.CanDualWield = true;
+                }
             }
         });
+        // Replaces the built-in handler, so it also sets the stats area's flag (PlayerStatState.SetCanParry),
+        // which the attack-power and off-hand recompute read; both flags answer the same question.
         system.RegisterEffect(SpellEffectName.Parry, static context =>
         {
-            if (context.Target is Player { Skills: { } skills })
+            if (context.Target is Player player)
             {
-                skills.CanParry = true;
+                player.StatState.SetCanParry(true);
+                if (player.Skills is { } skills)
+                {
+                    skills.CanParry = true;
+                }
             }
         });
+        // Replaces the built-in handler, so it also sets the stats area's flag (PlayerStatState.SetCanBlock),
+        // which the attack-power and off-hand recompute read; both flags answer the same question.
         system.RegisterEffect(SpellEffectName.Block, static context =>
         {
-            if (context.Target is Player { Skills: { } skills })
+            if (context.Target is Player player)
             {
-                skills.CanBlock = true;
+                player.StatState.SetCanBlock(true);
+                if (player.Skills is { } skills)
+                {
+                    skills.CanBlock = true;
+                }
             }
         });
     }

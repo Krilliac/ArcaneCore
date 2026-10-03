@@ -7,13 +7,13 @@ namespace ArcaneCore.Game.Skills;
 /// the skills feature is installed (vmangos Player::GetSkillValue, HasSpell, CanDualWield). Honor and
 /// reputation belong to other areas and keep answering through <paramref name="fallback"/> until their owners
 /// replace them. A player without attached skills answers like a character that knows nothing: skill 0, no
-/// dual wield, and no spell.
+/// dual wield (unless the wrapped provider grants it, as the stats area's ability flag does), and no spell.
 /// </summary>
 public sealed class PlayerItemRequirements(IItemRequirements fallback) : IItemRequirements
 {
     private readonly IItemRequirements _fallback = fallback ?? throw new ArgumentNullException(nameof(fallback));
 
-    public bool CanDualWield(PlayerInventory inventory) => inventory.Player?.Skills?.CanDualWield ?? false;
+    public bool CanDualWield(PlayerInventory inventory) => (inventory.Player?.Skills?.CanDualWield ?? false) || _fallback.CanDualWield(inventory);
 
     /// <summary>vmangos GetSkillValue: value plus permanent and temporary bonus; 0 for an unknown skill.</summary>
     public uint SkillValue(PlayerInventory inventory, uint skill) => inventory.Player?.Skills?.GetValue(skill) ?? 0;

@@ -423,13 +423,13 @@ public sealed class StatSystemItemApplier(PlayerStatSystem system, IItemStatsApp
 }
 
 /// <summary>
-/// The item requirements of a player attached to a <see cref="PlayerStatSystem"/>: Dual Wield is whatever the
-/// Dual Wield ability says (vmangos Player::CanDualWield is m_canDualWield, set by SPELL_EFFECT_DUAL_WIELD);
-/// everything else is the wrapped provider's.
+/// The item requirements of a player attached to a <see cref="PlayerStatSystem"/>: Dual Wield is true when the
+/// Dual Wield ability was applied (vmangos Player::CanDualWield is m_canDualWield, set by SPELL_EFFECT_DUAL_WIELD)
+/// or the wrapped provider says so (the skills area's flag); everything else is the wrapped provider's.
 /// </summary>
 public sealed class StatStateItemRequirements(IItemRequirements inner) : IItemRequirements
 {
-    public bool CanDualWield(PlayerInventory inventory) => inventory.Player?.StatState.CanDualWield ?? inner.CanDualWield(inventory);
+    public bool CanDualWield(PlayerInventory inventory) => (inventory.Player?.StatState.CanDualWield ?? false) || inner.CanDualWield(inventory);
 
     public uint SkillValue(PlayerInventory inventory, uint skill) => inner.SkillValue(inventory, skill);
 
