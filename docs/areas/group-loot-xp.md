@@ -46,6 +46,24 @@ two retail rules.
 Tests: `Social/GroupRewardRangeTests.cs` (7 cases: 2D, strict, radii, world boss, raid, other map,
 ghost corpse, hook) and `LootServiceTests.Recipients_UseTheRetailRewardDistance_*`.
 
+## Delivered: loot-types-and-packets (groundwork, not yet sent by any handler)
+
+`Loot/LootRollTypes.cs` (`RollVote` 0/1/2, `LootError` 0,4,5,6,8..16) and `Loot/GroupLootPackets.cs`:
+builders for SMSG_LOOT_START_ROLL (28 bytes), SMSG_LOOT_ROLL (34; vote announcements are the vmangos pairs
+pass 128/128, need 0/0, greed 128/2; resolved rolls carry number and vote 1/2), SMSG_LOOT_ROLL_WON (34),
+SMSG_LOOT_ALL_PASSED (24, field order differs from START_ROLL), SMSG_LOOT_MASTER_LIST (u8 count + guids) and the
+error form of SMSG_LOOT_RESPONSE (10 bytes), plus `TryParseLootRoll` (13 bytes, votes >= 3 rejected) and
+`TryParseMasterGive` (17 bytes).
+
+References: `D:\refs\vmangos\src\game\Server\Packets\Loot.cpp:20-215`, `Packets\Group.cpp:264-275`,
+`Group\Group.cpp:747-850` and `:957-972`, `Handlers\GroupHandler.cpp:370-391`,
+`D:\refs\mangos-classic\src\game\Entities\Player.cpp:20115-20122` (SendLootError),
+`D:\refs\wow_messages\wow_message_parser\wowm\world\loot\*.wowm`. wow_messages lists gold and items after the
+error code in the error form; vmangos and mangos-classic both stop at the code, which is followed here.
+
+Tests: `GameObjects/GroupLootPacketTests.cs` (literal byte arrays). Nothing sends or handles these yet: the
+roll engine, roll manager, handlers and the loot error replies are further slices (see below).
+
 ## Limits (recorded, not delivered)
 
 * Master loot has no master-give yet (no SMSG_LOOT_MASTER_LIST, CMSG_LOOT_MASTER_GIVE, master slot
