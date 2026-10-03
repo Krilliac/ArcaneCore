@@ -55,6 +55,18 @@ public class CombatHooks
         s_registered.AddOrUpdate(world, hooks);
     }
 
+    /// <summary>
+    /// Register <paramref name="hooks"/> only when nothing is registered for <paramref name="world"/> yet:
+    /// the first registration wins and a later one returns false instead of silently replacing it
+    /// (unlike <see cref="Register"/>, which is last-writer-wins). <see cref="Default"/> is never registered.
+    /// </summary>
+    public static bool TryRegister(Maps.WorldRuntime world, CombatHooks hooks)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(hooks);
+        return !ReferenceEquals(hooks, Default) && s_registered.TryAdd(world, hooks);
+    }
+
     /// <summary>The hooks registered for <paramref name="world"/>, or <see cref="Default"/>.</summary>
     public static CombatHooks For(Maps.WorldRuntime world) => s_registered.TryGetValue(world, out CombatHooks? hooks) ? hooks : Default;
 

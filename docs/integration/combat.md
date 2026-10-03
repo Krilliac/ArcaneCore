@@ -49,6 +49,14 @@ needs a characters-DB version from the lead.
   `UNIT_FIELD_MINDAMAGE`/`MAXDAMAGE`, `PLAYER_*_PERCENTAGE` and armor.
 - **Graveyards:** override `CombatHooks.RepopAtGraveyard(player)` to teleport the ghost
   (vmangos `Player::RepopAtGraveyard`). The default leaves it at the corpse.
-- **Factions:** override `CombatHooks.IsFriendly` / `CanAttack` with faction templates.
-  The default is team-by-race for players.
-- Register hooks per world: `CombatHooks.Register(world, hooks)`.
+- **Factions:** the daemon registers `FactionCombatHooks` (`src/ArcaneCore.Game/Combat/FactionCombatHooks.cs`) through
+  `WorldCombatHooksFeature` (`src/ArcaneCore.World/Combat/`) when a `FactionTemplateCatalog` is loaded (a registered
+  catalog, else `Creatures:FactionTemplateDbcPath`). A player cannot attack a non-player whose faction template
+  `IsFriendlyTo` the player's (same template semantics as `FactionCreatureHostility`); neutral and hostile NPCs, PvP
+  and every other `CanAttack` rule are unchanged. **With no catalog loaded (or an empty one) nothing is registered and
+  the permissive `CombatHooks.Default` applies: a player may attack any non-player unit** (a warning is logged once).
+  Not modelled: reputation/at-war, contested-guard state; templates missing from the catalog count as not friendly.
+  Evidence: automated tests only, no 1.12.1 client (charter 1.3); the reference clones were not available when this was
+  written, semantics are cited from the comments on `FactionTemplateRecord`.
+- Register hooks per world: `CombatHooks.Register(world, hooks)` (last writer wins) or
+  `CombatHooks.TryRegister(world, hooks)` (first wins, returns false otherwise).

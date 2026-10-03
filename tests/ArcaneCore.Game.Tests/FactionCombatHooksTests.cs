@@ -1,0 +1,116 @@
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Npc;
+using Xunit;
+
+namespace ArcaneCore.Game.Tests;
+
+/// <summary>Faction-aware production combat hooks (docs/integration/combat.md, Faction hooks).</summary>
+public sealed class FactionCombatHooksTests
+{
+    // Human player template is 1 (TestWorld.CreatePlayer); the rows are synthetic, not DBC data.
+    private static readonly FactionTemplateCatalog Catalog = new(
+    [
+        new FactionTemplateRecord(1, 1, 0, OwnMask: 2, FriendlyMask: 2, HostileMask: 8),         // player race
+        new FactionTemplateRecord(11, 11, 0, OwnMask: 2, FriendlyMask: 2, HostileMask: 8),       // friendly town NPC
+        new FactionTemplateRecord(14, 14, 0, OwnMask: 8, FriendlyMask: 8, HostileMask: 2),       // hostile monster
+        new FactionTemplateRecord(188, 188, 0, OwnMask: 0, FriendlyMask: 0, HostileMask: 0),     // neutral
+        new FactionTemplateRecord(35, 0, 0, OwnMask: 0, FriendlyMask: 0, HostileMask: 0, Friend1: 1), // explicit friend of player faction
+    ]);
+
+    private static (WorldRuntime World, Map Map, Player Player, CombatTestUnit Npc) Setup(uint npcTemplate)
+    {
+        (WorldRuntime world, Map map, _, _) = CombatTestKit.CreateWorld();
+        map.Combat.Hooks = new FactionCombatHooks(Catalog);
+        Player player = CombatTestKit.AddPlayer(world, 1, 0, 0, new FakeSession(1));
+        var npc = new CombatTestUnit { FactionTemplate = npcTemplate };
+        npc.Spawn(map, 3, 0);
+        return (world, map, player, npc);
+    }
+
+    [Fact]
+    public void FriendlyNpc_IsFriendly_AndCannotBeAttacked()
+    {
+        (WorldRuntime world, Map map, Player player, CombatTestUnit npc) = Setup(11);
+        using WorldRuntime w = world;
+        Assert.True(map.Combat.Hooks.IsFriendly(player, npc));
+        Assert.False(map.Combat.Hooks.CanAttack(player, npc));
+    }
+
+    [Fact]
+    public void ExplicitFriendList_MakesNpcFriendly()
+    {
+        (WorldRuntime world, Map map, Player player, CombatTestUnit npc) = Setup(35);
+        using WorldRuntime w = world;
+        Assert.False(map.Combat.Hooks.CanAttack(player, npc));
+    }
+
+    [Fact]
+    public void HostileAndNeutralNpcs_RemainAttackable()
+    {
+        (WorldRuntime world, Map map, Player player, CombatTestUnit npc) = Setup(14);
+        using WorldRuntime w = world;
+        Assert.False(map.Combat.Hooks.IsFriendly(player, npc));
+        Assert.True(map.Combat.Hooks.CanAttack(player, npc));
+        npc.FactionTemplate = 188;
+        Assert.True(map.Combat.Hooks.CanAttack(player, npc));
+    }
+
+    [Fact]
+    public void UnknownTemplate_KeepsTheBasePermissiveRule()
+    {
+        (WorldRuntime world, Map map, Player player, CombatTestUnit npc) = Setup(999);
+        using WorldRuntime w = world;
+        Assert.False(map.Combat.Hooks.IsFriendly(player, npc));
+        Assert.True(map.Combat.Hooks.CanAttack(player, npc));
+        npc.FactionTemplate = 0;
+        Assert.True(map.Combat.Hooks.CanAttack(player, npc));
+    }
+
+    [Fact]
+    public void FriendlyNpc_StillRefusesEveryNonFactionRuleOfTheBase()
+    {
+        (WorldRuntime world, Map map, Player player, CombatTestUnit npc) = Setup(14);
+        using WorldRuntime w = world;
+        npc.IsInEvadeMode = true;
+        Assert.False(map.Combat.Hooks.CanAttack(player, npc));
+        npc.IsInEvadeMode = false;
+        npc.UnitFlags |= UnitFlags.NotAttackable1;
+        Assert.False(map.Combat.Hooks.CanAttack(player, npc));
+    }
+
+    [Fact]
+    public void PlayerVsPlayer_IsUnchanged()
+    {
+        (WorldRuntime world, Map map, Player human, _) = Setup(14);
+        using WorldRuntime w = world;
+        Player dwarf = CombatTestKit.AddPlayer(world, 3, 2, 2, new FakeSession(3), Race.Dwarf);
+        Player orc = CombatTestKit.AddPlayer(world, 2, 2, 0, new FakeSession(2), Race.Orc);
+        Assert.True(map.Combat.Hooks.IsFriendly(human, dwarf));
+        Assert.False(map.Combat.Hooks.CanAttack(human, orc)); // unflagged enemy player
+        orc.UnitFlags |= UnitFlags.Pvp;
+        Assert.True(map.Combat.Hooks.CanAttack(human, orc));
+    }
+
+    [Fact]
+    public void TryRegister_FirstWins_AndRefusesASecondRegistration()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        var first = new FactionCombatHooks(Catalog);
+        var second = new FactionCombatHooks(Catalog);
+        Assert.Same(CombatHooks.Default, CombatHooks.For(world));
+        Assert.True(CombatHooks.TryRegister(world, first));
+        Assert.False(CombatHooks.TryRegister(world, second));
+        Assert.Same(first, CombatHooks.For(world));
+        Assert.Throws<ArgumentNullException>(() => CombatHooks.TryRegister(world, null!));
+    }
+
+    [Fact]
+    public void TryRegister_RefusesTheDefaultInstance()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        Assert.False(CombatHooks.TryRegister(world, CombatHooks.Default));
+        Assert.Same(CombatHooks.Default, CombatHooks.For(world));
+    }
+}
