@@ -137,3 +137,25 @@ logout/relog and restart persistence remain pending. NPC quest UI, models/icons,
 terrain/content fidelity, broader combat and playable quest/reward behavior still
 require their own real-client acceptance. No default branch merge, deployment or
 release is part of this tranche.
+
+## Inactive queue compatibility and lifecycle evidence
+
+Qualified source `434968a555bfbf15fb4bc6156e34ae277baee572` handles the two
+reported empty vanilla polls through normal world-thread ownership. An unqueued
+battlefield poll sends nothing; meeting-stone info sends opcode 661 with exact
+idle body `00 00 00 00 05`. Queue joining, battlegrounds and matchmaking remain
+unsupported. Surplus-byte rejection is an explicit ArcaneCore validation policy.
+
+Production `WorldServer` now observes accepted sessions through handler completion
+and async scope disposal before listener shutdown finishes, including a canceled
+host budget. Tests prove the prior premature return and the fixed drain. Additional
+real SQLite/SRP mock cases verify ordinary countdown logout/save barriers and
+durable position, identity and action-bar reload through a fresh host/provider.
+Non-cooperative I/O/disposal can extend shutdown until the owned work terminates.
+
+Full source provider CI passed 8,999 tests, zero failures/skips, with Release zero
+warnings/errors; native full qualification passed 8,887. The existing standalone
+59-check / 142-frame scenario remains intact. See the
+[contract and evidence](docs/integration/protocol-lifecycle-compat.md).
+Actual f8ae6e8 logout/relog/restart and current NPC UI acceptance remain pending
+and separate from this automated evidence. Computer Use is deferred by the user.
