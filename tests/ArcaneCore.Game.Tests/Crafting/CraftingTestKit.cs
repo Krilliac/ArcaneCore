@@ -20,20 +20,28 @@ internal sealed class CraftingTestKit : IDisposable
     public const uint BlacksmithHammer = 5956;
     public const uint Filler = 90001;
 
-    public static readonly ItemTemplateStore Templates = new(
+    private static readonly ItemTemplate[] BaseTemplates =
     [
         new ItemTemplate { Entry = LinenCloth, Class = 7, Name = "Linen Cloth", DisplayId = 1, Stackable = 20, Quality = 1 },
         new ItemTemplate { Entry = LinenBandage, Class = 1, Name = "Linen Bandage", DisplayId = 2, Stackable = 20, Quality = 1 },
         new ItemTemplate { Entry = CopperBar, Class = 7, Name = "Copper Bar", DisplayId = 3, Stackable = 20, Quality = 1 },
         new ItemTemplate { Entry = BlacksmithHammer, Class = 7, Name = "Blacksmith Hammer", DisplayId = 4, Stackable = 1, Quality = 1 },
         new ItemTemplate { Entry = Filler, Class = 7, Name = "Unstackable Filler", DisplayId = 5, Stackable = 1, Quality = 1 },
-    ], []);
+    ];
+
+    public static readonly ItemTemplateStore Templates = new(BaseTemplates, []);
 
     public CraftingTestKit(params SpellInfo[] spells)
+        : this(spells, [])
+    {
+    }
+
+    /// <summary>As above, with extra item templates (item-use tests).</summary>
+    public CraftingTestKit(SpellInfo[] spells, ItemTemplate[] extraItems)
     {
         Kit = new SpellTestKit(spells);
         (Player, Session) = Kit.AddPlayer(1);
-        Player.Inventory.Templates = Templates;
+        Player.Inventory.Templates = extraItems.Length == 0 ? Templates : new ItemTemplateStore([.. BaseTemplates, .. extraItems], []);
         Player.Inventory.GuidAllocator = new ItemGuidAllocator();
         Player.Inventory.Load([]);
     }

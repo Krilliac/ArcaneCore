@@ -114,7 +114,7 @@ public sealed class SpellCostSeamTests
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastItemSpell(player, item, Costly, SpellCastTargets.ForSelf()));
 
         Assert.Contains("check item=2589", log);
-        Assert.Contains("taker rage=70 item=2589", log);
+        Assert.Contains("taker rage=100 item=2589", log);   // an item cast takes no power (vmangos Spell::TakePower, Spell.cpp:5053)
         Assert.Contains("effect item=2589", log);
     }
 

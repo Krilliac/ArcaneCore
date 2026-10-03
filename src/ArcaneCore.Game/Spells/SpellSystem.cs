@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items.ItemUse;
 using ArcaneCore.Game.Ranged;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
@@ -346,8 +347,12 @@ public sealed partial class SpellSystem
         }
 
         InterruptAtCastCompletion(cast); // rogue lane: ACTION_LATE / ATTACKING half (vmangos Spell.cpp:3697-3714), docs/integration/rogue-aura-interrupt.md
-        AddCooldown(state, spell, cast.IsTriggered);
-        TakePower(caster, spell, cast.PowerCost, cast.IsTriggered);
+        AddCooldown(state, spell, cast.IsTriggered, castItem: cast.CastItem);
+        if (cast.CastItem is null)
+        {
+            TakePower(caster, spell, cast.PowerCost, cast.IsTriggered); // vmangos Spell::TakePower returns at once for an item cast (Spell.cpp:5053)
+        }
+
         TakeCosts(cast); // crafting lane: reagents (vmangos Spell::TakeReagents, Spell.cpp:3716-3718) sit between TakePower and TakeAmmo
         TakeAmmo(caster, spell); // ranged (hunter lane): vmangos order TakePower, TakeReagents, TakeAmmo (Spell.cpp:3716-3718)
         SendCastResult(caster, spell, SpellCastResult.CastOk, cast.IsTriggered);
@@ -413,6 +418,8 @@ public sealed partial class SpellSystem
                 NotifyOutcome(cast, outcome);
             }
         }
+
+        TakeCastItem(cast); // vmangos Spell::TakeCastItem, after the effects and SMSG_SPELL_GO (Spell.cpp:3876-3878)
 
         if (cast.State != SpellCastState.Casting)
         {
@@ -590,7 +597,7 @@ public sealed partial class SpellSystem
             return SpellCastResult.CasterDead;
         }
 
-        if (!triggered && !skipCooldown && !IsSpellReady(state, spell))
+        if (!triggered && !skipCooldown && !IsSpellReady(state, spell, castItem))
         {
             return SpellCastResult.NotReady;
         }
@@ -833,8 +840,9 @@ public sealed partial class SpellSystem
         return GetState(unit.Guid) is not { } state || IsSpellReady(state, spell);
     }
 
-    private bool IsSpellReady(UnitSpellState state, SpellInfo spell)
+    private bool IsSpellReady(UnitSpellState state, SpellInfo spell, Items.Item? castItem = null)
     {
+        ItemSpellCooldown cooldown = ItemSpellCooldowns.Pick(spell, castItem);
         // ranged (hunter lane): a COOLDOWN_ON_EVENT spell waits while the object it created lives (Unit::AddGameObject).
         if (spell.HasAttribute(SpellAttributes.CooldownOnEvent) && SpellObjects.IsCreatedBySpell(state.Unit, spell.Id))
         {
@@ -847,7 +855,7 @@ public sealed partial class SpellSystem
             return false;
         }
 
-        if (spell.Category != 0 && state.CategoryCooldowns.TryGetValue(spell.Category, out until) && until > now)
+        if (cooldown.Category != 0 && state.CategoryCooldowns.TryGetValue(cooldown.Category, out until) && until > now)
         {
             return false;
         }
@@ -1005,7 +1013,7 @@ public sealed partial class SpellSystem
     /// SMSG_SPELL_COOLDOWN tells the client — decision recorded in docs/areas/spells.md.
     /// COOLDOWN_ON_EVENT spells are not started here (the event that starts them is not modelled yet).
     /// </summary>
-    private void AddCooldown(UnitSpellState state, SpellInfo spell, bool triggered, bool onEvent = false)
+    private void AddCooldown(UnitSpellState state, SpellInfo spell, bool triggered, bool onEvent = false, Items.Item? castItem = null)
     {
         if (spell.IsPassive || (spell.HasAttribute(SpellAttributes.CooldownOnEvent) && !onEvent))
         {
@@ -1013,8 +1021,9 @@ public sealed partial class SpellSystem
         }
 
         // ranged (hunter lane): a ranged-slot spell also waits out the weapon speed (Player.cpp:22193-22197).
-        uint recovery = spell.RecoveryTime + RangedRecoveryMs(state.Unit, spell);
-        if (recovery == 0 && spell.CategoryRecoveryTime == 0)
+        ItemSpellCooldown picked = ItemSpellCooldowns.Pick(spell, castItem); // crafting lane: an item spell may carry its own category and times (Player.cpp:22139-22160)
+        uint recovery = picked.RecoveryTime + RangedRecoveryMs(state.Unit, spell);
+        if (recovery == 0 && picked.CategoryRecoveryTime == 0)
         {
             return;
         }
@@ -1025,14 +1034,14 @@ public sealed partial class SpellSystem
             state.SpellCooldowns[spell.Id] = now + recovery;
         }
 
-        if (spell.Category != 0 && spell.CategoryRecoveryTime > 0)
+        if (picked.Category != 0 && picked.CategoryRecoveryTime > 0)
         {
-            state.CategoryCooldowns[spell.Category] = now + spell.CategoryRecoveryTime;
+            state.CategoryCooldowns[picked.Category] = now + picked.CategoryRecoveryTime;
         }
 
         if (triggered && state.Unit is Player player)
         {
-            uint ms = Math.Max(recovery, spell.CategoryRecoveryTime);
+            uint ms = Math.Max(recovery, picked.CategoryRecoveryTime);
             player.Session.Send(WorldOpcode.SmsgSpellCooldown, SpellPackets.BuildSpellCooldown(player.Guid, [(spell.Id, ms)]));
         }
     }
@@ -1113,7 +1122,7 @@ public sealed partial class SpellSystem
     /// vmangos Spell::SendCastResult: players only; nothing for triggered casts or spells with
     /// DO_NOT_REPORT_SPELL_FAILURE; passive spells fail with DONT_REPORT.
     /// </summary>
-    private static void SendCastResult(Unit caster, SpellInfo spell, SpellCastResult result, bool triggered)
+    internal static void SendCastResult(Unit caster, SpellInfo spell, SpellCastResult result, bool triggered)
     {
         if (caster is not Player player || triggered || spell.HasAttribute(SpellAttributesEx2.DoNotReportSpellFailure))
         {
