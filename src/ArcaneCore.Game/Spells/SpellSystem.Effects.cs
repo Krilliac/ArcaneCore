@@ -53,10 +53,13 @@ public sealed partial class SpellSystem
     public bool HasEffectHandler(SpellEffectName effect) => EffectHandlers.ContainsKey(effect);
 
     /// <summary>
-    /// The first effect set, after vmangos SpellEffects.cpp: SCHOOL_DAMAGE (EffectSchoolDMG),
+    /// The effect set, after vmangos SpellEffects.cpp: SCHOOL_DAMAGE (EffectSchoolDMG),
     /// TELEPORT_UNITS (EffectTeleportUnits), APPLY_AURA (EffectApplyAura), HEAL (EffectHeal),
     /// ENERGIZE (EffectEnergize), LEARN_SPELL (EffectLearnSpell), TRIGGER_SPELL
-    /// (EffectTriggerSpell) and DUMMY (no generic behaviour; scripts hook it).
+    /// (EffectTriggerSpell), DUMMY (no generic behaviour; scripts hook it), and the second set:
+    /// ENVIRONMENTAL_DAMAGE, HEALTH_LEECH, the weapon damage family (WEAPON_DAMAGE,
+    /// WEAPON_DAMAGE_NOSCHOOL, NORMALIZED_WEAPON_DMG, WEAPON_PERCENT_DAMAGE), DISPEL,
+    /// INTERRUPT_CAST, SUMMON (through <see cref="ISpellSummonSink"/>) and APPLY_AREA_AURA_PARTY.
     /// </summary>
     private Dictionary<SpellEffectName, SpellEffectHandler> CreateEffectHandlers() => new()
     {
@@ -68,50 +71,20 @@ public sealed partial class SpellSystem
         [SpellEffectName.Energize] = EffectEnergize,
         [SpellEffectName.LearnSpell] = EffectLearnSpell,
         [SpellEffectName.TriggerSpell] = EffectTriggerSpell,
+        [SpellEffectName.EnvironmentalDamage] = EffectEnvironmentalDamage,
+        [SpellEffectName.HealthLeech] = EffectHealthLeech,
+        [SpellEffectName.WeaponDamageNoschool] = EffectWeaponDamage,
+        [SpellEffectName.WeaponDamage] = EffectWeaponDamage,
+        [SpellEffectName.NormalizedWeaponDmg] = EffectWeaponDamage,
+        [SpellEffectName.WeaponPercentDamage] = EffectWeaponDamage,
+        [SpellEffectName.Dispel] = EffectDispel,
+        [SpellEffectName.InterruptCast] = EffectInterruptCast,
+        [SpellEffectName.Summon] = EffectSummon,
+        [SpellEffectName.ApplyAreaAuraParty] = EffectApplyAreaAuraParty,
     };
 
-    /// <summary>
-    /// Per effect, the units it hits (vmangos Spell::FillTargetMap / SetTargetMap, subset):
-    /// TARGET_UNIT_CASTER → caster; the explicit single-unit targets (enemy, friend, any, party)
-    /// → the client's unit target, or the caster for a self-cast; no implicit target → the
-    /// explicit unit or the caster. Area and chain targets are not implemented yet.
-    /// Returns unit → effect mask, in first-hit order.
-    /// </summary>
-    private Dictionary<Unit, int> SelectTargets(SpellCast cast, Unit? unitTarget)
-    {
-        var result = new Dictionary<Unit, int>();
-        IReadOnlyList<SpellEffectInfo> effects = cast.Spell.Effects;
-        for (int i = 0; i < effects.Count; i++)
-        {
-            SpellEffectInfo effect = effects[i];
-            if (effect.IsEmpty)
-            {
-                continue;
-            }
-
-            Unit? target = effect.TargetA switch
-            {
-                SpellImplicitTarget.UnitCaster => cast.Caster,
-                SpellImplicitTarget.UnitEnemy or SpellImplicitTarget.UnitFriend or SpellImplicitTarget.Unit or SpellImplicitTarget.UnitParty
-                    => unitTarget ?? (cast.Targets.Mask == SpellCastTargetFlags.Self ? cast.Caster : null),
-                SpellImplicitTarget.None => unitTarget ?? cast.Caster,
-                _ => null,
-            };
-
-            if (target is null)
-            {
-                ReportUnsupported("implicit target", (uint)effect.TargetA, cast.Spell.Id);
-                continue;
-            }
-
-            result[target] = result.GetValueOrDefault(target) | (1 << i);
-        }
-
-        return result;
-    }
-
     /// <summary>vmangos Spell::DoAllEffectOnTarget → HandleEffects per effect, then the built aura holder is added.</summary>
-    private void ApplyEffects(SpellCast cast, Unit target, int effectMask)
+    private void ApplyEffects(SpellCast cast, Unit target, int effectMask, float[]? multipliers = null)
     {
         if (IsQuestSettlementPending(cast.Caster) || IsQuestSettlementPending(target))
         {
@@ -134,6 +107,10 @@ public sealed partial class SpellSystem
             }
 
             int value = cast.Spell.CalculateEffectValue(i, cast.Caster.Level, Random);
+            if (multipliers is not null && multipliers[i] != 1.0f)
+            {
+                value = (int)(value * multipliers[i]);
+            }
             var context = new SpellEffectContext(this, cast, target, i, value) { PendingHolder = holder };
             handler(context);
             holder = context.PendingHolder;
@@ -146,7 +123,8 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
-    /// vmangos Spell::EffectSchoolDMG + Unit::DealDamage path (damage handed to <see cref="IDamageSink"/>):
+    /// vmangos Spell::EffectSchoolDMG + Unit::DealDamage path: armor (physical), crit and partial
+    /// resist from <see cref="CombatRules"/>, then <see cref="IDamageSink"/>, pushback, and
     /// SMSG_SPELLNONMELEEDAMAGELOG to the caster's set.
     /// </summary>
     private void EffectSchoolDamage(SpellEffectContext context)
@@ -156,12 +134,10 @@ public sealed partial class SpellSystem
             return;
         }
 
-        uint dealt = Damage.DealSpellDamage(context.Caster, context.Target, context.Spell, (uint)context.Value, periodic: false);
-        SendToSet(context.Caster, WorldOpcode.SmsgSpellnonmeleedamagelog, SpellPackets.BuildSpellNonMeleeDamageLog(
-            context.Target.Guid, context.Caster.Guid, context.Spell.Id, dealt, context.Spell.School), includeSelf: true);
+        DealDirectDamage(context.Caster, context.Target, context.Spell, (uint)context.Value, allowCrit: true);
     }
 
-    /// <summary>vmangos Spell::EffectHeal → SpellCaster::DealHeal → SendHealSpellLog (to the set).</summary>
+    /// <summary>vmangos Spell::EffectHeal → SpellCaster::DealHeal → SendHealSpellLog (to the set); a critical heal is +50% (SpellCriticalHealingBonus).</summary>
     private void EffectHeal(SpellEffectContext context)
     {
         if (!context.Target.IsAlive || context.Value <= 0)
@@ -169,9 +145,16 @@ public sealed partial class SpellSystem
             return;
         }
 
-        uint healed = Damage.Heal(context.Caster, context.Target, context.Spell, (uint)context.Value);
+        uint amount = (uint)context.Value;
+        bool crit = CombatRules.RollCrit(this, context.Caster, context.Target, context.Spell);
+        if (crit)
+        {
+            amount = (uint)(amount * CombatRules.CritMultiplier(context.Spell));
+        }
+
+        uint healed = Damage.Heal(context.Caster, context.Target, context.Spell, amount);
         SendToSet(context.Caster, WorldOpcode.SmsgSpellheallog,
-            SpellPackets.BuildSpellHealLog(context.Target.Guid, context.Caster.Guid, context.Spell.Id, healed), includeSelf: true);
+            SpellPackets.BuildSpellHealLog(context.Target.Guid, context.Caster.Guid, context.Spell.Id, healed, crit), includeSelf: true);
     }
 
     /// <summary>
