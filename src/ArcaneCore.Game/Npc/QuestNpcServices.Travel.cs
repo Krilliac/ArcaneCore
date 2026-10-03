@@ -81,27 +81,42 @@ public sealed partial class QuestNpcServices
         }
     }
 
+    /// <summary>Most nodes an express flight may name (the client sends the whole route; vmangos has no cap, the mask has 256 nodes).</summary>
+    public const int MaxExpressNodes = NpcStore.TaxiMaskSize * 32;
+
+    /// <summary>CMSG_ACTIVATETAXI (vmangos HandleActivateTaxiOpcode): a direct flight between two nodes.</summary>
+    public void ActivateTaxi(Player player, ObjectGuid guid, uint sourceNode, uint destinationNode)
+        => ActivateTaxiPath(player, guid, [sourceNode, destinationNode], "ActivateTaxi");
+
     /// <summary>
-    /// CMSG_ACTIVATETAXI (vmangos HandleActivateTaxiOpcode → Player::ActivateTaxiPathTo, flight-master
-    /// case): not logging out or in combat, both nodes known, not mounted, the source node within
-    /// 2×INTERACTION_DISTANCE (cubed, as vmangos compares), a path between the nodes, and the
-    /// discounted price affordable. The flight owner then starts the flight and the price is taken.
+    /// CMSG_ACTIVATETAXIEXPRESS (vmangos HandleActivateTaxiExpressOpcode): a multi-hop route the
+    /// client computed; the client's total cost is ignored and recomputed from the paths.
+    /// </summary>
+    public void ActivateTaxiExpress(Player player, ObjectGuid guid, IReadOnlyList<uint> nodes)
+        => ActivateTaxiPath(player, guid, nodes, "ActivateTaxiExpress");
+
+    /// <summary>
+    /// vmangos Player::ActivateTaxiPathTo (flight-master case): two or more nodes, not logging out
+    /// or in combat, not under DISABLE_MOVE, every node known, not mounted, the source node within
+    /// 2×INTERACTION_DISTANCE (cubed, as vmangos compares), a path for every hop, a mount for the
+    /// team, and the ceil-discounted total affordable. The flight owner then starts the flight
+    /// and only then is the price taken.
     /// </summary>
     /// <remarks>
-    /// Shapeshift and spell-cast checks need the auras/spells owners and the flight itself the
-    /// movement owner (<see cref="ITaxiFlights"/>); without it a valid request is answered
-    /// ERR_TAXIUNSPECIFIEDSERVERERROR and nothing is charged.
+    /// Shapeshift and spell-cast checks need the auras/spells owners; without a flight owner
+    /// (<see cref="ITaxiFlights"/>) a valid request is answered ERR_TAXIUNSPECIFIEDSERVERERROR and
+    /// nothing is charged.
     /// </remarks>
-    public void ActivateTaxi(Player player, ObjectGuid guid, uint sourceNode, uint destinationNode)
+    private void ActivateTaxiPath(Player player, ObjectGuid guid, IReadOnlyList<uint> nodes, string what)
     {
-        if (Ready(player) is not { } s)
+        if (Ready(player) is not { } s || nodes.Count < 2 || nodes.Count > MaxExpressNodes)
         {
             return;
         }
 
         if (InteractableNpc(player, guid, NpcFlags.FlightMaster) is not { } npc)
         {
-            LogMissing("ActivateTaxi", guid);
+            LogMissing(what, guid);
             return;
         }
 
@@ -111,15 +126,18 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        // vmangos Player::ActivateTaxiPathTo rejects UNIT_FLAG_REMOVE_CLIENT_CONTROL.
-        if ((player.UnitFlags & UnitFlags.RemoveClientControl) != 0)
+        // vmangos Player::ActivateTaxiPathTo rejects UNIT_FLAG_DISABLE_MOVE (also set during a flight).
+        if ((player.UnitFlags & UnitFlags.RemoveClientControl) != 0 || Deps.Flights?.IsFlying(player) == true)
         {
             return;
         }
 
-        if (!IsNodeKnown(s, sourceNode) || !IsNodeKnown(s, destinationNode))
+        foreach (uint id in nodes)
         {
-            return;
+            if (!IsNodeKnown(s, id))
+            {
+                return;
+            }
         }
 
         if (player.GetUInt32(UpdateFields.UnitFieldMountdisplayid) != 0)
@@ -128,7 +146,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        if (Npcs.Node(sourceNode) is not { } node)
+        if (Npcs.Node(nodes[0]) is not { } node)
         {
             TaxiReply(player, ActivateTaxiReply.NoSuchPath);
             return;
@@ -150,20 +168,35 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        if (Npcs.Path(sourceNode, destinationNode) is not { } path)
+        var paths = new uint[nodes.Count - 1];
+        ulong total = 0;
+        for (int i = 1; i < nodes.Count; i++)
         {
-            return; // vmangos logs and returns without a reply
+            if (Npcs.Path(nodes[i - 1], nodes[i]) is not { } path)
+            {
+                return; // vmangos logs and returns without a reply
+            }
+
+            paths[i - 1] = path.Id;
+            total += path.Price;
         }
 
         uint mount = player.Team == Team.Alliance ? node.MountAlliance : node.MountHorde;
-        uint cost = (uint)((path.Price * PriceDiscount(player, npc)) + 0.5f);
+        if (mount == 0)
+        {
+            TaxiReply(player, ActivateTaxiReply.UnspecifiedServerError);
+            return;
+        }
+
+        double discounted = MathF.Ceiling(total * PriceDiscount(player, npc)); // single precision as vmangos
+        uint cost = discounted >= uint.MaxValue ? uint.MaxValue : (uint)discounted;
         if (player.Money < cost)
         {
             TaxiReply(player, ActivateTaxiReply.NotEnoughMoney);
             return;
         }
 
-        if (Deps.Flights?.StartFlight(player, sourceNode, destinationNode, path.Id, mount) != true)
+        if (Deps.Flights?.StartFlight(player, [.. nodes], paths, mount) != true)
         {
             TaxiReply(player, ActivateTaxiReply.UnspecifiedServerError);
             return;

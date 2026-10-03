@@ -12,8 +12,8 @@ public sealed partial class QuestNpcServices
     private const string GmOnSuffix = " (ON)";
 
     /// <summary>
-    /// A gossip option owned by another area was selected (banker, auctioneer, petitioner, tabard
-    /// designer, stable master, battlemaster, spirit healer/guide). The owner opens its window.
+    /// A gossip option owned by another area was selected (auctioneer, petitioner, tabard
+    /// designer, stable master, battlemaster, spirit guide). The owner opens its window.
     /// </summary>
     public event Action<Player, NpcInfo, GossipOption>? ForeignOptionSelected;
 
@@ -228,7 +228,11 @@ public sealed partial class QuestNpcServices
                 ForeignOptionSelected?.Invoke(p, npc, item.OptionId);
                 break;
             case GossipOption.SpiritHealer:
+                SendSpiritHealerConfirm(p, npc);
+                break;
             case GossipOption.Banker:
+                ShowBank(s, npc);
+                break;
             case GossipOption.Auctioneer:
             case GossipOption.StablePet:
             case GossipOption.Battlefield:
