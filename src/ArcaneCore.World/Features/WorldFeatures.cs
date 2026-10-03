@@ -20,6 +20,9 @@ public interface IWorldFeature
 {
     /// <summary>Called once, before the world thread starts (no world-thread work may run here).</summary>
     void Attach(WorldRuntime world);
+
+    /// <summary>After the world stops producing updates, drain feature-owned saves before shutdown completes.</summary>
+    Task StopAsync() => Task.CompletedTask;
 }
 
 /// <summary>Registration and attachment of the <see cref="IWorldFeature"/> implementations.</summary>
@@ -55,6 +58,28 @@ public static class WorldFeatures
         foreach (IWorldFeature feature in services.GetServices<IWorldFeature>())
         {
             feature.Attach(world);
+        }
+    }
+
+    /// <summary>Stop in reverse attachment order; every feature receives shutdown even if one fails.</summary>
+    public static async Task StopWorldFeaturesAsync(this IServiceProvider services)
+    {
+        List<Exception> failures = [];
+        foreach (IWorldFeature feature in services.GetServices<IWorldFeature>().Reverse())
+        {
+            try
+            {
+                await feature.StopAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                failures.Add(ex);
+            }
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new AggregateException("One or more world features failed to stop", failures);
         }
     }
 }

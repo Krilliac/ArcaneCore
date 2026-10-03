@@ -41,7 +41,15 @@ public sealed class WorldHost(
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         world.Stop();
-        await saveQueue.StopAsync().ConfigureAwait(false);
+        try
+        {
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            await scope.ServiceProvider.StopWorldFeaturesAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            await saveQueue.StopAsync().ConfigureAwait(false);
+        }
         logger.LogInformation("World saved and stopped");
     }
 }

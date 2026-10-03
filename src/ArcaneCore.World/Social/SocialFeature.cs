@@ -180,10 +180,10 @@ public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFac
 
         context.Channels.LeaveAll(player);
         context.Groups.OnLoggingOut(player);
-        if (ready)
-        {
-            context.Friends.BroadcastPresence(player, online: false);
-        }
+
+        // Friends can already see this player online while its own social rows are loading.
+        // Presence uses the observers' lists, so their offline update must not wait for ours.
+        context.Friends.BroadcastPresence(player, online: false);
 
         context.Friends.Unload(player);
     }

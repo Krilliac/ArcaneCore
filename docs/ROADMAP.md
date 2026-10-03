@@ -114,7 +114,7 @@ session outbound channel ◄───────────────┘
 | M10 | Creatures | Grid/cell index, creature/gameobject spawns, queries, waypoints, respawn | planned |
 | M11 | Combat | Melee, hit table, creature AI, death/ghost/resurrect, regen, XP/levels, loot/money | planned |
 | M12 | Spells | Cast pipeline, cooldowns, costs, core effects, auras, spellbook, trainers | planned |
-| M13 | Quests & NPC services | Gossip, quest flow, objectives, rewards, vendors | planned |
+| M13 | Quests & NPC services | Gossip, quest flow, objectives, rewards, vendors | partial candidate — [M13a](../MILESTONE_M13A.md): saved journal, queries, timed expiry; interaction and client acceptance pending |
 | M14 | Social | Groups, channels, friends/ignore, guilds | planned |
 
 Each milestone ships: code + automated loopback tests + `docs/Mx_ACCEPTANCE.md` +

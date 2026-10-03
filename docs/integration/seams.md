@@ -25,6 +25,27 @@ Registering a duplicate fails at startup. Nothing fails silently (charter: fail 
 
 ## Schema versions
 
+### M13a lifecycle additions
+
+`WorldRuntime.MapCreated` is raised on the world thread after a map is registered
+and its default updaters are attached. `WorldRuntime.Maps` may be enumerated on
+that thread (or before startup). A feature can install its updater on existing
+maps during attachment and subscribe for future maps without editing a central
+map registration list. Quest journals retain their state while a player is
+temporarily detached during a far transfer.
+
+`IWorldFeature.StopAsync` defaults to a completed task. The host stops the world,
+then awaits discovered feature shutdown in reverse order, then drains the core
+character save queue. All features receive shutdown even if another fails;
+failures are collected and reported. The loopback host uses the same order.
+
+These additive edits are in `Game/Maps/WorldRuntime.cs`,
+`World/Features/WorldFeatures.cs`, `World/WorldHost.cs`, and the test host.
+The quest login hook stages isolated player fields on the session task; its
+world-owned registry is populated only after the normal login packet sequence.
+The scoped implementation, visibility correction, and remaining adapters are
+documented in [M13a](../../MILESTONE_M13A.md).
+
 Each component's versions are a single contiguous sequence (a gap fails startup, see
 `DataModules.Compose`), so a number cannot be reserved before the branch that uses it is
 merged. **The lead assigns the final number at merge time, in merge order.**

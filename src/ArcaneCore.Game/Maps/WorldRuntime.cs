@@ -61,6 +61,15 @@ public sealed class WorldRuntime : IDisposable
     /// <summary>Every player in the world (world thread).</summary>
     public IEnumerable<Player> OnlinePlayers => _online.Values;
 
+    /// <summary>Existing maps (world thread); features can install per-map systems at attachment.</summary>
+    public IEnumerable<Map> Maps => _maps.Values;
+
+    /// <summary>
+    /// Raised on the world thread after a map and its default updaters have been registered.
+    /// Features install their per-map simulation here, including maps first visited later.
+    /// </summary>
+    public event Action<Map>? MapCreated;
+
     /// <summary>
     /// Raised on the world thread once a player has entered the world and its client has the
     /// full login sequence, i.e. after vmangos' <c>SendInitialPacketsAfterAddToMap</c> — where
@@ -157,6 +166,7 @@ public sealed class WorldRuntime : IDisposable
             map = new Map(mapId, this, _logger);
             DefaultMapUpdaters.AttachTo(map, this);
             _maps[mapId] = map;
+            Raise(MapCreated, map, nameof(MapCreated));
         }
 
         return map;
@@ -239,22 +249,23 @@ public sealed class WorldRuntime : IDisposable
         _stopSignal.Dispose();
     }
 
-    private void Raise(Action<Player>? handlers, Player player, string name)
+    private void Raise<T>(Action<T>? handlers, T subject, string name)
     {
         if (handlers is null)
         {
             return;
         }
 
-        foreach (Action<Player> handler in handlers.GetInvocationList().Cast<Action<Player>>())
+        foreach (Action<T> handler in handlers.GetInvocationList().Cast<Action<T>>())
         {
             try
             {
-                handler(player);
+                handler(subject);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "{Event} handler failed for {Player}", name, player.Name);
+                object? description = subject is Player player ? player.Name : subject;
+                _logger.LogError(ex, "{Event} handler failed for {Subject}", name, description);
             }
         }
     }
