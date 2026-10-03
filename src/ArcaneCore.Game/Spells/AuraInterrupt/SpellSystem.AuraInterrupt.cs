@@ -25,6 +25,14 @@ public sealed partial class SpellSystem
     /// break passes it, so Wyvern Sting, Prowl and the like survive the hit that their own proc causes.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// True once a proc engine exists that breaks procFlags crowd control on damage (vmangos Unit.cpp:688-692). Default false: the
+    /// engine has none (docs/areas/aura-engine.md), so the damage break keeps removing procFlags auras itself instead of leaving
+    /// Polymorph, Sap, Gouge and Freezing Trap unbreakable. Known retail gap until the proc lane lands: Wyvern Sting and Prowl
+    /// then break on their own hit.
+    /// </summary>
+    public bool ProcEngineBreaksDamageAuras { get; set; }
+
     public int RemoveAurasWithInterruptFlags(Unit unit, uint flags, uint exceptSpellId = 0, bool skipStealth = false, bool skipInvisibility = false,
         bool checkProcFlags = false)
     {

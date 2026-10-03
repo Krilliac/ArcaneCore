@@ -55,6 +55,7 @@ public sealed class AuraInterruptEngineTests
     public void DamageBreak_RemovesTheAuraWithoutProcFlags_AndSkipsOneThatHasThem()
     {
         using SpellTestKit kit = NewKit();
+        kit.System.ProcEngineBreaksDamageAuras = true;
         (Player attacker, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
         kit.System.CastSpell(victim, Sleep, SpellCastTargets.ForSelf(), triggered: true);
@@ -67,9 +68,25 @@ public sealed class AuraInterruptEngineTests
     }
 
     [Fact]
+    public void DamageBreak_WithoutAProcEngine_StillBreaksCrowdControlShapedAurasThatCarryProcFlags()
+    {
+        // Real Polymorph, Sap, Gouge and Freezing Trap carry AuraInterruptFlags.Damage and TAKEN_ANY_DAMAGE procFlags (vmangos Unit.cpp:688-692);
+        // vmangos breaks them in the proc engine. This engine has none, so the break must stay on the interrupt path by default.
+        using SpellTestKit kit = NewKit();
+        (Player attacker, _) = kit.AddPlayer(1);
+        (Player victim, _) = kit.AddPlayer(2, 2);
+        kit.System.CastSpell(victim, ProcSleep, SpellCastTargets.ForSelf(), triggered: true);
+
+        kit.System.OnDamageTaken(victim, attacker, 10, periodic: false);
+
+        Assert.False(kit.System.HasAura(victim, ProcSleep));
+    }
+
+    [Fact]
     public void DamageBreak_AlsoSkipsProcFlagAuras_WhenTheHitWasFullyAbsorbed()
     {
         using SpellTestKit kit = NewKit();
+        kit.System.ProcEngineBreaksDamageAuras = true;
         (Player attacker, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
         kit.System.CastSpell(victim, Sleep, SpellCastTargets.ForSelf(), triggered: true);

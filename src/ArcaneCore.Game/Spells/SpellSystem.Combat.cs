@@ -128,7 +128,7 @@ public sealed partial class SpellSystem
         // has procFlags (Wyvern Sting, Prowl).
         if (damage == 0)
         {
-            RemoveAurasWithInterruptFlags(victim, (uint)SpellAuraInterruptFlags.Damage, sourceSpellId, checkProcFlags: true);
+            RemoveAurasWithInterruptFlags(victim, (uint)SpellAuraInterruptFlags.Damage, sourceSpellId, checkProcFlags: ProcEngineBreaksDamageAuras);
 
             if (!periodic && victim is Player && state.CurrentCast is { State: SpellCastState.Preparing } preparing
                 && preparing.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.DamageCancels))
@@ -139,7 +139,7 @@ public sealed partial class SpellSystem
             return;
         }
 
-        RemoveAurasWithInterruptFlags(victim, (uint)SpellAuraInterruptFlags.Damage, sourceSpellId, checkProcFlags: true);
+        RemoveAurasWithInterruptFlags(victim, (uint)SpellAuraInterruptFlags.Damage, sourceSpellId, checkProcFlags: ProcEngineBreaksDamageAuras);
 
         // The cast or channel in progress: pushback, delay and damage cancels (retail rules in SpellSystem.Pushback.cs).
         // Self damage never pushes back or interrupts.
