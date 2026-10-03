@@ -152,7 +152,7 @@ consumed), the weapon-entry zeroing above.
   `UnitMods` / the modifier-group model of the design was deliberately not built: it would have no producer.
 - Skills: weapon and defense skill are the level maximum (`LevelMaximumSkills`); `StatFormulas.CombatSkillGainChance`
   exists but no skill gain or skill persistence does.
-- Ammo DPS is 0 (no ammo slot support), so ranged damage lacks the ammo term.
+- ~~Ammo DPS is 0~~ Fixed by the ranged lane (wave 4): the ammo DPS is part of the ranged damage fields and is recomputed when the ammo changes (`docs/areas/ranged/damage-inputs.md`).
 - Not persisted: XP, rest, health and powers still reset on relog (design slice `character-progress-persistence`
   was not done: Characters schema, cleanup registration).
 - Melee fidelity beyond the stat inputs is untouched: one sub-damage per swing, one armor value for all
