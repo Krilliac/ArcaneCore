@@ -148,6 +148,11 @@ public sealed partial class CreatureMapSystem
             }
 
             var creature = new Creature(spawn.Guid, template, spawn, _content, _random);
+            if (_options.Respawn.DrawDelayAtLoad)
+            {
+                creature.DrawRespawnDelay(); // m_respawnDelay is drawn once per loaded object (Creature.cpp:1963)
+            }
+
             if (_respawnAt.Remove(spawn.Guid, out long respawnAt) && respawnAt > _clockMs)
             {
                 creature.Health = 0;

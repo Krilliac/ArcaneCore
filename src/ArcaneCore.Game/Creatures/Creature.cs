@@ -134,13 +134,16 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// <summary>Map clock (ms) at which a dead creature respawns.</summary>
     internal long RespawnAtMs { get; set; }
 
+    private bool _respawnDelayDrawn;
+    private uint _respawnDelaySeconds;
+
     /// <summary>True only during the visibility pass of a runtime add (vmangos Map::Add → SetIsNewObject).</summary>
     internal bool IsNewObject { get; set; }
 
-    /// <summary>Corpse duration by rank (vmangos Creature::Create; cmangos CorpseDecay overrides when set).</summary>
+    /// <summary>Corpse duration by rank (vmangos Creature::Create, :1326-1343); the template's cmangos CorpseDecay overrides it only with <see cref="CreatureRespawnOptions.HonorTemplateCorpseDecay"/>.</summary>
     public uint CorpseDecaySeconds(CreatureOptions options)
     {
-        if (Template.CorpseDecaySeconds > 0)
+        if (options.Respawn.HonorTemplateCorpseDecay && Template.CorpseDecaySeconds > 0)
         {
             return Template.CorpseDecaySeconds;
         }
@@ -155,8 +158,75 @@ public sealed partial class Creature : Unit, ICombatCreature
         };
     }
 
-    /// <summary>A respawn delay in seconds: urand(spawntimesecsmin, spawntimesecsmax) (vmangos CreatureData::GetRandomRespawnTime).</summary>
+    /// <summary>
+    /// vmangos Creature::AllLootRemovedFromCorpse (Objects/Creature.cpp:3355-3401): a looted-out, not skinnable corpse decays sooner.
+    /// The looted delay is 0 when the corpse was skinned, else <paramref name="lootedDecayRate"/> x the corpse delay, or (vmangos'
+    /// default rate 0) a third of the respawn delay. While the respawn time has not passed, a respawn delay above the corpse delay always
+    /// takes the looted delay, a shorter one only when it is shorter than the time left; once the respawn time has passed the
+    /// corpse goes at once.
+    /// </summary>
+    internal void OnAllLootRemoved(float lootedDecayRate)
+    {
+        if (System is not { } system || DeathState != CreatureDeathState.Corpse)
+        {
+            return;
+        }
+
+        uint corpseDelaySeconds = CorpseDecaySeconds(system.Options);
+        long lootedMs = LootedForSkin
+            ? 0
+            : lootedDecayRate > 0f
+                ? (long)(corpseDelaySeconds * 1000.0 * lootedDecayRate)
+                : _respawnDelaySeconds * 1000L / 3;
+        uint looted = (uint)Math.Min(lootedMs, uint.MaxValue);
+
+        if (RespawnAtMs >= system.ClockMs)
+        {
+            if (_respawnDelaySeconds > corpseDelaySeconds)
+            {
+                CorpseDecayMs = looted;
+            }
+            else if (CorpseDecayMs > looted)
+            {
+                CorpseDecayMs = looted;
+            }
+        }
+        else
+        {
+            CorpseDecayMs = 0;
+        }
+    }
+
+    /// <summary>
+    /// Draw this object's respawn delay now (vmangos <c>m_respawnDelay = data->GetRandomRespawnTime()</c> in Creature::LoadFromDB,
+    /// Creature.cpp:1963); every later death reuses it. Without a call each death draws afresh (<see cref="NextRespawnDelaySeconds"/>).
+    /// </summary>
+    internal void DrawRespawnDelay()
+    {
+        _respawnDelayDrawn = true;
+        _respawnDelaySeconds = DrawFromSpawnRange();
+    }
+
+    /// <summary>
+    /// The respawn delay in seconds for this death: the delay drawn at load when there is one, else a fresh
+    /// urand(spawntimesecsmin, spawntimesecsmax) (vmangos CreatureData::GetRandomRespawnTime).
+    /// </summary>
     public uint NextRespawnDelaySeconds()
+    {
+        if (Spawn is null)
+        {
+            return 0;
+        }
+
+        if (!_respawnDelayDrawn)
+        {
+            _respawnDelaySeconds = DrawFromSpawnRange();
+        }
+
+        return _respawnDelaySeconds;
+    }
+
+    private uint DrawFromSpawnRange()
     {
         if (Spawn is null)
         {

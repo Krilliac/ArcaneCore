@@ -53,3 +53,24 @@ has no random-point query, so the point is uniform over the disc at the height p
 the Flying spline flag plumbed through `ICreatureMover.MovePath`); no timed random / pause-time API (nothing consumes it until waypoint
 node wander exists); vmangos' `Interrupt`/`Finalize` walk-mode reset (`:83-93`) is not sent separately because every spline launch
 already syncs the mode.
+
+### 3. Respawn delay and corpse decay (slice `respawn-core`)
+
+* The respawn delay `urand(spawntimesecsmin, spawntimesecsmax)` is drawn **once per creature object** when it is created from its
+  spawn row and reused at every death, as vmangos does (`m_respawnDelay = data->GetRandomRespawnTime()`, `Objects/Creature.cpp:1963`;
+  `SetDeathState` reads it, `:2246`). A grid unload/reload creates a new object and so draws again, as in vmangos. Before this change
+  every death drew afresh. `Creatures:Respawn:DrawDelayAtLoad=false` restores the old behaviour.
+* Corpse decay is by rank only (`Creature.cpp:1326-1343`: Corpse.Decay.NORMAL/RARE/ELITE/RAREELITE/WORLDBOSS). A template's
+  `CorpseDecay` column is a cmangos concept (14 templates in classic-db) and is ignored unless
+  `Creatures:Respawn:HonorTemplateCorpseDecay=true`.
+* `Creature.OnAllLootRemoved` is vmangos `AllLootRemovedFromCorpse` (`Creature.cpp:3355-3401`): skinned corpse 0; else
+  `Rate.Corpse.Decay.Looted` x corpse delay, or (retail default 0, `mangosd.conf.dist.in:1542`, cmangos `World.cpp:457`) a third of the
+  respawn delay; a respawn delay above the corpse delay always takes the looted delay, a shorter one only when it is shorter than the
+  time left; a respawn time that has already passed removes the corpse at once. `LootOptions.LootedCorpseDecayRate` now defaults to 0
+  (it was 0.5, which is not a vmangos or cmangos value); the loot service's one call site delegates to this method.
+
+Not delivered here (documented limits): spawn flags (`RANDOM_RESPAWN_TIME` x urand(90,110)/100, `DYNAMIC_RESPAWN_TIME`, `DEAD`,
+`DISABLED`, ... `ObjectDefines.h:127-134`) because ArcaneCore's spawn rows carry no flags column and importing one needs the path-data
+schema module (slice `waypoint-path-data`, not done); the config-driven dynamic respawn formula (`Creature.cpp:2703-2783`, off by
+default in vmangos: `DynamicRespawn.Range=-1`); `ForcedDespawn`; persistence of respawn timers across restarts (`creature_respawn`,
+needs a Characters schema module).

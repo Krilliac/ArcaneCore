@@ -69,8 +69,11 @@ public sealed class LootOptions
         RaidMapsUnlimited = RaidMapsUnlimitedRewardDistance,
     };
 
-    /// <summary>vmangos CONFIG_FLOAT_RATE_CORPSE_DECAY_LOOTED: a looted-out corpse stays this share of its decay time.</summary>
-    public float LootedCorpseDecayRate { get; set; } = 0.5f;
+    /// <summary>
+    /// vmangos CONFIG_FLOAT_RATE_CORPSE_DECAY_LOOTED (Rate.Corpse.Decay.Looted, mangosd.conf.dist.in:1542; cmangos World.cpp:457 too): a looted-out
+    /// corpse stays this share of its decay time. The retail default 0 means a third of the creature's respawn delay (Creature.cpp:3369-3370).
+    /// </summary>
+    public float LootedCorpseDecayRate { get; set; }
 
     /// <summary>vmangos Rate.Drop.Money.</summary>
     public float MoneyRate { get; set; } = 1.0f;

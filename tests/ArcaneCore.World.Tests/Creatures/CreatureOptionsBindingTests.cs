@@ -74,4 +74,21 @@ public sealed class CreatureOptionsBindingTests
 
         Assert.Equal((MonsterMoveOffsetBase.Midpoint, 40u), (bound.Movement.MonsterMoveOffsetBase, bound.Movement.RunDuringWanderChancePercent));
     }
+
+    [Fact]
+    public void RespawnOptions_DefaultToRetail_AndBindFromTheSection()
+    {
+        var defaults = new CreatureOptions();
+        Assert.Equal((true, false), (defaults.Respawn.DrawDelayAtLoad, defaults.Respawn.HonorTemplateCorpseDecay));
+
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Creatures:Respawn:DrawDelayAtLoad"] = "false",
+            ["Creatures:Respawn:HonorTemplateCorpseDecay"] = "true",
+        }).Build();
+        var bound = new CreatureOptions();
+        configuration.GetSection(CreatureOptions.SectionName).Bind(bound);
+
+        Assert.Equal((false, true), (bound.Respawn.DrawDelayAtLoad, bound.Respawn.HonorTemplateCorpseDecay));
+    }
 }
