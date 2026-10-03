@@ -43,6 +43,23 @@ public static class TradeRules
 
     /// <summary>TRADE_DISTANCE in yards (vmangos: 11.11).</summary>
     public const float MaxDistance = 11.11f;
+
+    /// <summary>
+    /// Whether an accept arrives too soon after the last modification of the trade (vmangos HandleAcceptTradeOpcode,
+    /// TradeHandler.cpp:251-257: difftime(now, last) * 1000 &lt; delay). vmangos measures with whole-second time(), so its
+    /// effective delay is "not within the same second"; <paramref name="wholeSeconds"/> false uses real milliseconds.
+    /// A trade never modified (<paramref name="lastModifiedMs"/> 0) is not delayed.
+    /// </summary>
+    public static bool ScamPrevented(long lastModifiedMs, long nowMs, uint delayMs, bool wholeSeconds)
+    {
+        if (delayMs == 0 || lastModifiedMs == 0)
+        {
+            return false;
+        }
+
+        long elapsedMs = wholeSeconds ? ((nowMs / 1000) - (lastModifiedMs / 1000)) * 1000 : nowMs - lastModifiedMs;
+        return elapsedMs < delayMs;
+    }
 }
 
 /// <summary>One side of an open trade: its offered item GUIDs per slot, gold and acceptance.</summary>
@@ -55,6 +72,9 @@ public sealed class TradeSide(Player player)
     public uint Gold { get; set; }
 
     public bool Accepted { get; set; }
+
+    /// <summary>Unix milliseconds of the last modification or accept attempt (vmangos TradeData::m_lastModificationTime); 0 = never.</summary>
+    public long LastModifiedMs { get; set; }
 
     public IReadOnlyList<ObjectGuid> Items => _items;
 

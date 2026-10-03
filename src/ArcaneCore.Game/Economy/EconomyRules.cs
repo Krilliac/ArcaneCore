@@ -78,6 +78,21 @@ public sealed class EconomyOptions
     /// </summary>
     public bool AllowDeleteWithAttachments { get; set; } = true;
 
+    /// <summary>Scam-prevention delay after a trade modification before an accept counts, ms (vmangos TradeHandler.cpp:657-658: 200; 0 = off).</summary>
+    public uint TradeScamPreventionMs { get; set; } = 200;
+
+    /// <summary>
+    /// Measure the delay in whole seconds like vmangos (time(nullptr): effectively "not within the same second"); false
+    /// uses real milliseconds (a true 200 ms). Default true.
+    /// </summary>
+    public bool TradeScamPreventionWholeSeconds { get; set; } = true;
+
+    /// <summary>
+    /// Report not enough gold / bag space with notifications 801-803 and keep the window open, as vmangos does
+    /// (TradeHandler.cpp:274-290, 420-455); false closes the trade with the inventory error. Default true.
+    /// </summary>
+    public bool TradeSpaceNotifications { get; set; } = true;
+
     /// <summary>Seconds between expiry sweeps of mail and auctions.</summary>
     public uint ExpirySweepSeconds { get; set; } = 60;
 
