@@ -23,7 +23,7 @@ public sealed class LocomotionFeature(IServiceProvider services, ILogger<Locomot
         services.GetService<IConfiguration>()?.GetSection(LocomotionOptions.SectionName).Bind(options);
         foreach (string name in options.Normalize())
         {
-            logger.LogError("Locomotion:{Option} is out of range; using {Value}.", name, name == nameof(LocomotionOptions.RateDamageFall) ? options.RateDamageFall : name == nameof(LocomotionOptions.GhostRunSpeedWorld) ? options.GhostRunSpeedWorld : options.GhostRunSpeedBattleground);
+            logger.LogError("Locomotion:{Option} is out of range and was corrected", name);
         }
 
         // The teleport feature is resolved on first use: it may attach after this one.

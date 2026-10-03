@@ -278,3 +278,40 @@ the movement part is `Locomotion/Knockback/Knockback.cs` (vmangos `Unit::KnockBa
 
 Not delivered: `SetLaunched` / the anticheat's knock back tolerance and `SetJumpInitialSpeed` (extrapolation only); damage-immunity interactions (a spell
 immunity that stops knock back belongs to the spell combat rules). Unverified against a 1.12.1 client (packed GUID width, see slice 1).
+## Slices 10 to 12: liquid environment, mirror timers and hazards, water breathing (delivered together)
+
+Players now know where they are in the liquids and the world hurts them accordingly: drowning, deep-sea fatigue and lava, with the client's breath bar.
+Before this nobody could drown, tire or burn.
+
+**Liquid environment flags** (`Locomotion/Hazards/LiquidEnvironment.cs`, `LocomotionState.Environment`; vmangos `Player::UpdateTerainEnvironmentFlags`,
+`Player.cpp:20353-20420`). The terrain is asked at z + 0.01 with every liquid type whenever a player's position or map changed since the last time:
+immediately after each accepted movement block (`LiquidFlagsObserver`, an After observer, vmangos `SetPosition`, `:5988`, with
+`Movement.RelocationVmapsCheckDelay` = 0) and once per tick for logins, teleports and spell relocations (`MapEnvironment`). The flags
+(`EnvironmentFlags`, vmangos `Player.h:75-86`): *Liquid* anywhere with liquid information; *Underwater* fully submerged (the liquid surface is above z + the
+collision height); *InWater* water or ocean, in or under the surface; *InMagma* / *InSlime* also within 0.1 yard above the surface; *HighSea* a deep water cell at any
+depth; *HighLiquid* deep enough to swim (surface above z + 0.75 x the collision height). No liquid clears them all. `SetEnvironmentFlags` side effects are ported:
+entering or leaving swimmable water removes the auras and channels with the new `UnderWaterCancels` (0x80) / `AboveWaterCancels` (0x100) interrupt flags (through
+`IEnvironmentSpellBridge`, implemented by `ArcaneCore.World/Locomotion/EnvironmentSpellBridgeFeature.cs` over the daemon's spell system), the high sea starts the fatigue
+timer, submersion the breath timer (unless the player cannot lose breath), a hazardous liquid the lava timer.
+
+**Mirror timers** (`MirrorTimer.cs`, a literal port of `MirrorTimer.cpp:19-150` with `ShortIntervalTimer`): a timer runs out while its scale is negative and pulses once on
+expiry and then every 2000 ms; a positive scale regenerates at that many times real time and stops at zero. `MapEnvironment` (an `IMapUpdater`, order 10) runs
+`UpdateMirrorTimers` for every player each tick (`Player.cpp:942-981`): activation (fatigue: high sea and not on a taxi; breath: submerged and able to lose breath; lava:
+magma or slime), deactivation (no liquid, or dead; a ghost keeps its fatigue), durations (`MirrorTimer.Fatigue.Max` 60 s, `MirrorTimer.Breath.Max` 60 s times the breathing
+multiplier, `MirrorTimer.Environmental.Max` 1 s), and `SMSG_START_MIRROR_TIMER` = u32 type, u32 remaining, u32 duration, i32 scale, u8 paused, u32 spell id /
+`SMSG_STOP_MIRROR_TIMER` = u32 type (gtker `smsg_start_mirror_timer.wowm`; a pause is always a full resend, the vmangos client-UI workaround). The lava timer is never sent.
+A game master's timers are frozen (`FreezeMirrorTimers`, `:2634,2656`; shown paused).
+Pulses (`OnMirrorTimerExpirationPulse`, `:983-1062`), through the environmental damage service of slice 3: fatigue deals `maxHealth / 5 + urand(0, level - 1)` exhaustion
+damage (a ghost is sent to the graveyard instead), breath the same as drowning, lava `urand(EnvironmentalDamage.Min, Max)` (605 to 610 by default, every two seconds).
+Slime does nothing, as in vmangos and mangos-classic (both define `DAMAGE_SLIME` and never apply it); `Locomotion:SlimeDamage` (default false) is the explicit deviation that
+applies the lava tick in slime. Whether retail hurt in slime is not provable from the references: open question. All numbers (60 s, 605 to 610) are the references' defaults and
+are configurable; no capture proves them.
+
+**Water breathing** (`Spells/Auras/WaterBreathingAuras.cs`, `SpellAuras.cpp:2305-2316`): `WATER_BREATHING` (82) makes the breath time zero (the bar never starts; while another such aura is
+on the player a removal keeps it zero), `MOD_WATER_BREATHING` (155, Unending Breath) multiplies it by the product of (100 + amount) / 100. 22 classic spells carry the water auras.
+
+Limits: the liquid kind is the one the `.map` file stores (no `LiquidType.dbc` remap, so liquid area spells such as the Undercity slime aura are not applied) and WMO liquid is not queried
+(the terrain lane's `docs/integration/vmap-los.md`), so lava and water inside buildings are not seen; the collision height is vmangos' fallback of 2 yards for every race
+(`LocomotionState.CollisionHeight`; the swim depth is three quarters of it), real model heights need the client's CreatureModelData; the feign death timer (hunter lane) and the Spirit
+of Redemption form are not handled; the swimming mobs' threat table update on entering water (`updateThreatTables`) belongs to the creature AI. A pulse that kills is handled by the
+next tick's combat update (the updater runs after combat so that combat stays every map's first updater).

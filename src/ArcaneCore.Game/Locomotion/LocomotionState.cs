@@ -126,6 +126,27 @@ public sealed class LocomotionState
 
     public bool IsFalling => FallStartZ != 0.0f;
 
+    /// <summary>Where the player is in the liquids (vmangos Player::m_environmentFlags).</summary>
+    public EnvironmentFlags Environment { get; set; }
+
+    /// <summary>
+    /// The mirror timers: fatigue, breath, feign death and the server-only environmental one (vmangos Player::m_mirrorTimers,
+    /// Player.h:1836). Feign death is created but never started (the hunter lane owns that state).
+    /// </summary>
+    public MirrorTimer[] MirrorTimers { get; } = [new(MirrorTimerType.Fatigue), new(MirrorTimerType.Breath), new(MirrorTimerType.FeignDeath), new(MirrorTimerType.Environmental)];
+
+    /// <summary>The factor on the breath time (vmangos Player::m_environmentBreathingMultiplier): 0 with a Water Breathing aura, 1 otherwise.</summary>
+    public float BreathingMultiplier { get; set; } = 1.0f;
+
+    /// <summary>
+    /// The unit's model collision height in yards (vmangos Unit::m_modelCollisionHeight, Unit.cpp:9380-9386). Without the client's
+    /// CreatureModelData it is vmangos' fallback of 2 yards for every race; the swim depth is three quarters of it.
+    /// </summary>
+    public float CollisionHeight { get; set; } = 2.0f;
+
+    /// <summary>The place the liquid flags were last evaluated for (null: never), so a tick only asks the terrain again after a move.</summary>
+    internal (Maps.Map Map, float X, float Y, float Z)? LastEnvironmentSample { get; set; }
+
     /// <summary>Forget the fall in progress (vmangos SetFallInformation(0)); called on teleport, swim, knock back and login.</summary>
     public void ResetFall() => FallStartZ = 0.0f;
 

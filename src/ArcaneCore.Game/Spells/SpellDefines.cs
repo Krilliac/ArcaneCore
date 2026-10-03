@@ -152,6 +152,12 @@ public enum SpellAuraInterruptFlags : uint
     /// <summary>AURA_INTERRUPT_DISMOUNT_CANCELS (vmangos SpellDefines.h:583): removed when the unit dismounts.</summary>
     DismountCancels = 0x00000040,
 
+    /// <summary>AURA_INTERRUPT_UNDER_WATER_CANCELS (vmangos SpellDefines.h:584): removed by entering water.</summary>
+    UnderWaterCancels = 0x00000080,
+
+    /// <summary>AURA_INTERRUPT_ABOVE_WATER_CANCELS (vmangos SpellDefines.h:585): removed by leaving water.</summary>
+    AboveWaterCancels = 0x00000100,
+
     /// <summary>AURA_INTERRUPT_MOUNT_CANCELS (vmangos SpellDefines.h:594): removed when the unit mounts.</summary>
     MountCancels = 0x00020000,
     StandingCancels = 0x00040000,

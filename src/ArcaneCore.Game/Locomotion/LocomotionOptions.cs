@@ -24,6 +24,28 @@ public sealed class LocomotionOptions
     /// <summary>Fall damage multiplier (vmangos Rate.Damage.Fall, World.cpp:533, default 1; setConfigPos: a negative value becomes 1).</summary>
     public float RateDamageFall { get; set; } = 1.0f;
 
+    /// <summary>Seconds of fatigue in deep water before the first pulse (vmangos MirrorTimer.Fatigue.Max, World.cpp:814, default 60).</summary>
+    public uint MirrorTimerFatigueMaxSec { get; set; } = 60;
+
+    /// <summary>Seconds of breath under water, times the water breathing multiplier (vmangos MirrorTimer.Breath.Max, World.cpp:815, default 60).</summary>
+    public uint MirrorTimerBreathMaxSec { get; set; } = 60;
+
+    /// <summary>Seconds in lava or slime before the first pulse (vmangos MirrorTimer.Environmental.Max, World.cpp:816, default 1).</summary>
+    public uint MirrorTimerEnvironmentalMaxSec { get; set; } = 1;
+
+    /// <summary>Lowest lava damage per pulse (vmangos EnvironmentalDamage.Min, World.cpp:817, default 605).</summary>
+    public uint EnvironmentalDamageMin { get; set; } = 605;
+
+    /// <summary>Highest lava damage per pulse (vmangos EnvironmentalDamage.Max, World.cpp:818, default 610, at least the minimum).</summary>
+    public uint EnvironmentalDamageMax { get; set; } = 610;
+
+    /// <summary>
+    /// Deliberate deviation, off by default: hurt in slime like in lava. vmangos (Player.cpp:1030-1040) and mangos-classic
+    /// (Player.cpp:1305-1311, "FIXME ... Undercity") damage only in magma although both define DAMAGE_SLIME; whether retail 1.12 hurt
+    /// in slime cannot be proven from the references. When on, a slime pulse deals the same 605-610 as lava.
+    /// </summary>
+    public bool SlimeDamage { get; set; }
+
     /// <summary>
     /// Speed multiplier of a player whose death state is CORPSE, outside battlegrounds (vmangos Death.Ghost.RunSpeed.World,
     /// World.cpp:777, setConfigMinMax 0.1 to 10, default 1). Read literally as vmangos does (Unit.cpp:7044); at 1 it does nothing.
@@ -52,6 +74,13 @@ public sealed class LocomotionOptions
         {
             RateDamageFall = 1.0f;
             reset.Add(nameof(RateDamageFall));
+        }
+
+        // setConfigMin(EnvironmentalDamage.Max, 610, EnvironmentalDamage.Min): the maximum is at least the minimum (World.cpp:818).
+        if (EnvironmentalDamageMax < EnvironmentalDamageMin)
+        {
+            EnvironmentalDamageMax = EnvironmentalDamageMin;
+            reset.Add(nameof(EnvironmentalDamageMax));
         }
 
         // setConfigMinMax(..., 1.0f, 0.1f, 10.0f): a value outside the range is clamped (a NaN is not in range either).
@@ -105,6 +134,20 @@ public sealed class LocomotionEnvironment
         ArgumentNullException.ThrowIfNull(mitigation);
         s_mitigations.AddOrUpdate(world, mitigation);
     }
+
+    private static readonly ConditionalWeakTable<WorldRuntime, IEnvironmentSpellBridge> s_spellBridges = new();
+
+    /// <summary>Use <paramref name="bridge"/> for the aura and channel removal of the liquid rules in <paramref name="world"/> (the world daemon's spell system).</summary>
+    public static void RegisterSpellBridge(WorldRuntime world, IEnvironmentSpellBridge bridge)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(bridge);
+        s_spellBridges.AddOrUpdate(world, bridge);
+    }
+
+    /// <summary>The spell bridge of the world <paramref name="map"/> belongs to, or null when none is registered.</summary>
+    public static IEnvironmentSpellBridge? SpellBridgeFor(Map? map)
+        => map?.FindUpdater<MapLocomotion>()?.World is { } world && s_spellBridges.TryGetValue(world, out IEnvironmentSpellBridge? bridge) ? bridge : null;
 
     private static readonly ConditionalWeakTable<WorldRuntime, IMountDisplaySource> s_mountDisplays = new();
 
