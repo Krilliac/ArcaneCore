@@ -26,4 +26,11 @@ public sealed class SpellRuleOptions
     /// Unit::GetSpellCritChance, Unit.cpp:5216-5219 "Mobs cannot land critical strikes with spells").
     /// </summary>
     public bool CreatureSpellCrit { get; init; }
+
+    /// <summary>
+    /// Whether holy resistance is ignored when resisting damage. Retail (vmangos Unit::CalculateDamageAbsorbAndResist,
+    /// Unit.cpp:1936-1946): false, holy is resisted like any magic school. true reproduces cmangos-classic
+    /// (Unit::CalculateEffectiveMagicResistancePercent, Unit.cpp:3917: "completely ignore holy resistance value").
+    /// </summary>
+    public bool IgnoreHolyResistance { get; init; }
 }

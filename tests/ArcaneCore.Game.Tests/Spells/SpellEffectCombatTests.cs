@@ -410,9 +410,8 @@ public sealed class SpellEffectCombatTests
         Assert.Equal(0f, VanillaSpellCombatRules.AverageResistFraction(caster, target, SpellSchool.Frost));
         uint resisted = rules.RollPartialResist(kit.System, caster, target, magic, 100);
         Assert.Equal(50u, resisted); // exactly on a quarter step
-        Assert.Equal(0u, rules.RollPartialResist(kit.System, caster, target, magic with { School = SpellSchool.Holy }, 100));
-        Assert.Equal(0u, rules.RollPartialResist(kit.System, caster, target, magic with { DamageClass = SpellDamageClass.None }, 100));
-        Assert.True(VanillaSpellCombatRules.IsBinary(kit.Store.Get(StunSpell)!));
+        Assert.Equal(50u, rules.RollPartialResist(kit.System, caster, target, magic with { DamageClass = SpellDamageClass.None }, 100)); // the school decides, not the damage class
+        Assert.True(VanillaSpellCombatRules.IsBinary(kit.Store.Get(StunSpell)! with { DamageClass = SpellDamageClass.Magic, School = SpellSchool.Frost })); // binary needs a magic non-physical spell (SpellMgr.cpp:3350-3356)
         Assert.False(VanillaSpellCombatRules.IsBinary(magic));
 
         SpellInfo physical = magic with { School = SpellSchool.Normal, DamageClass = SpellDamageClass.Melee };

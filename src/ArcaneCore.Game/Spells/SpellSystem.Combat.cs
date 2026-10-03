@@ -64,7 +64,10 @@ public sealed partial class SpellSystem
         bool crit = allowCrit && amount > 0 && CombatRules.RollCrit(this, caster, target, spell);
         if (crit)
         {
-            amount = (uint)(amount * CombatRules.CritMultiplier(spell));
+            // Exact vmangos amount (talent bonus, creature-type multiplier) when the rules offer it; else the plain multiplier.
+            amount = CombatRules is Rules.ISpellCritAmounts exact
+                ? exact.CriticalDamage(this, caster, target, spell, amount)
+                : (uint)(amount * CombatRules.CritMultiplier(spell));
         }
 
         uint resisted = Math.Min(amount, CombatRules.RollPartialResist(this, caster, target, spell, amount));

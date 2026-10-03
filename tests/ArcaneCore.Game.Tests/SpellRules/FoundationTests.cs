@@ -149,7 +149,7 @@ public sealed class FoundationTests
     }
 
     [Fact]
-    public void NoModifiers_IsTheIdentity_AndFlatCritSourceOnlyGivesPlayersACrit()
+    public void NoModifiers_IsTheIdentity_AndFlatCritSourceIsTheSameForEveryUnit()
     {
         using var kit = new SpellTestKit();
         (Player player, _) = kit.AddPlayer(1);
@@ -159,7 +159,7 @@ public sealed class FoundationTests
         Assert.Equal(7.5f, ISpellModifiers.None.Apply(player, spell, SpellModOp.CriticalChance, 7.5f));
         ISpellCritSource flat = ISpellCritSource.Flat(5f);
         Assert.Equal(5f, flat.SpellCritPercent(player, SpellSchool.Fire));
-        Assert.Equal(0f, flat.SpellCritPercent(beast, SpellSchool.Fire));
+        Assert.Equal(5f, flat.SpellCritPercent(beast, SpellSchool.Fire));
     }
 
     internal static Creature MakeCreature(uint rank, byte level)

@@ -169,7 +169,10 @@ public sealed partial class SpellSystem
         bool crit = CombatRules.RollCrit(this, context.Caster, context.Target, context.Spell);
         if (crit)
         {
-            amount = (uint)(amount * CombatRules.CritMultiplier(context.Spell));
+            // Exact vmangos amount (+50% / creature-type multiplier) when the rules offer it; else the plain multiplier.
+            amount = CombatRules is Rules.ISpellCritAmounts exact
+                ? exact.CriticalHeal(this, context.Caster, context.Target, context.Spell, amount)
+                : (uint)(amount * CombatRules.CritMultiplier(context.Spell));
         }
 
         uint healed = Damage.Heal(context.Caster, context.Target, context.Spell, amount);
