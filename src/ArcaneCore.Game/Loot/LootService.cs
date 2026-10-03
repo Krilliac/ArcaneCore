@@ -19,6 +19,8 @@ namespace ArcaneCore.Game.Loot;
 /// per-player visibility, group distribution (free-for-all and round robin), money split and the
 /// CMSG_LOOT / AUTOSTORE_LOOT_ITEM / LOOT_MONEY / LOOT_RELEASE flows. Behaviour re-implemented
 /// from vmangos LootMgr, Player::SendLoot and LootHandler.cpp (no code copied).
+/// Chests of dungeon instances keep their generated, remaining and consumed contents with the
+/// logical instance save through <see cref="Durable"/>; everything else lives in memory only.
 /// Thread affinity: world thread only.
 /// </summary>
 public sealed class LootService : IViewerFieldFilter

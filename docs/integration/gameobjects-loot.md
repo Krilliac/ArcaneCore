@@ -226,9 +226,9 @@ reconcile to Before.
 - Temporary and runtime chests in instances stay Unsupported. Chest gold is not generated or stored.
 - A lost queued `InstanceSaved` write (three attempts) makes the chests of that instance refuse (`ScopeMissing`)
   until restart: visible, but safe.
-- Not run in this session: MariaDB and PostgreSQL (the Data tests run on SQLite here; CI runs the other
-  engines); no single test runs real sockets, real EF and a world restart together (the store is tested on
-  SQLite, the runner and game on real sockets with an in-memory store that applies the same rules).
+- Not run in this session: MariaDB and PostgreSQL (the Data tests run on SQLite here, there is no server on this
+  box; CI runs the other engines, including their serializable-commit behaviour). Not covered by any test: a real
+  world database dump with chests (the end-to-end test seeds a minimal dungeon, trigger, chest and loot rows).
 
 **Shared-file edits** (all additive): `EfInstanceStore.DeleteInstanceAsync` (+chest rows),
 `InstanceManager.InstanceDeleted` event, `InstanceWriteQueue.Enqueued/WaitForAsync`,
@@ -279,8 +279,9 @@ test hosts (`WorldTestHost.WorldServices`, `InMemoryInstanceStore.Live/Deleted/S
   - Lock.dbc layout rejection
   - guid overflow
 - Durable chest loot:
-  - `ArcaneCore.Data.Tests/LootStateRulesTests` (9): the pure rules (availability, takes, replay, legal successors, award/inventory match).
+  - `ArcaneCore.Data.Tests/LootStateRulesTests` (10): the pure rules (availability, takes, replay, legal successors, award/inventory match).
   - `ArcaneCore.Data.Tests/LootStateStoreTests` (10 theories on the provider matrix): one-transaction commit and retry, stale expected, forged successors, award/inventory mismatch, missing scope, consumed then regenerated, startup purge, instance deletion, character deletion keeps the marks.
-  - `ArcaneCore.Game.Tests/GameObjects/DurableChestTests` (17, with `FakeLootCoordinator`, a coordinator that follows the runner contract and refuses any illegal transition): generation and refusal, partial take across map recreation, consumed chest and respawn, pending take with a grid reload, deferred despawn, owner release, unknown outcome, runtime chests.
-  - `ArcaneCore.World.Tests/GameObjects/InstanceChestDurabilityTests` (10, real sockets, the real instance system and runner, `InMemoryLootStateStore`): opening after the commit, partial take across unload and recreation, consumed chest, real reset, held commit, lost acknowledgement, refused generation, unreadable outcome, group gold split deferral, deleted scope.
+  - `ArcaneCore.Game.Tests/GameObjects/DurableChestTests` (19, with `FakeLootCoordinator`, a coordinator that follows the runner contract and refuses any illegal transition): generation and refusal, partial take across map recreation, consumed chest and respawn, pending take with a grid reload, deferred despawn, owner release and restore, quest and per-player stacks, unknown outcome, runtime chests.
+  - `ArcaneCore.World.Tests/GameObjects/InstanceChestDurabilityTests` (11, real sockets, the real instance system and runner, `InMemoryLootStateStore`): opening after the commit, partial take across unload and recreation, consumed chest, real reset, held commit, lost acknowledgement, refused generation, unreadable outcome, group gold split deferral, deleted scope, startup load and purge over stored chests.
+  - `ArcaneCore.MockClient.Tests/InstanceLootPersistenceTests` (1): real SRP/world sessions, the real SQLite stores and a real world restart. The Deadmines trigger, a partial take (state and inventory committed together, checked in the database), a normal world stop, a fresh daemon over the same files, login into the bound instance, and the exact remaining contents; then the last take consumes the chest (generation still 1).
 - `ArcaneCore.World.Tests/GameObjects/GameObjectWorldTests` (2): over loopback, the query (known, unknown and short payload), the chest create block, then use → loot → autostore → item in the bags → release → despawn.

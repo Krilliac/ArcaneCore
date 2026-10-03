@@ -497,6 +497,81 @@ public sealed class DurableChestTests
     }
 
     [Fact]
+    public void RoundRobinOwner_IsRestoredFromTheStoredRecord_WhenTheWorldStoppedWithTheWindowOpen()
+    {
+        Rig before = CreateRig();
+        (Player alice, FakeSession aliceSession) = before.Join(1);
+        (Player bob, _) = before.Join(2, 1, 0);
+        before.Groups.Create(LootMethod.RoundRobin, alice, bob);
+        before.System.Use(alice, before.Chest.Guid);
+        Window(aliceSession);
+        LootStateRecord stored = before.Durable.Find(Key)!;
+        Assert.Equal(1, stored.LootOwnerCharacterId);
+
+        // A new world over the stored state: nobody released, so alice still owns the shared stacks.
+        Rig after = CreateRig();
+        after.Durable.Cache[Key] = stored;
+        (Player aliceAgain, FakeSession aliceAgainSession) = after.Join(1);
+        (Player bobAgain, _) = after.Join(2, 1, 0);
+        Assert.Equal(GameObjectUseResult.InUse, after.System.Use(bobAgain, after.Chest.Guid));
+        Assert.Equal(GameObjectUseResult.Ok, after.System.Use(aliceAgain, after.Chest.Guid));
+        Assert.Equal(2, Window(aliceAgainSession).Items.Count);
+        Assert.Equal(aliceAgain.Guid, after.Chest.Loot!.Owner);
+        Assert.Equal(InventoryResult.Ok, after.Loot.TakeItem(aliceAgain, 0));
+        Assert.Equal(1, after.Durable.Find(Key)!.LootOwnerCharacterId);
+    }
+
+    [Fact]
+    public void QuestAndPerPlayerStacks_AreStoredAndRestoredPerCharacter()
+    {
+        Rig rig = CreateRig(
+        [
+            (LootTableKind.GameObject, Row(ChestLoot, QuestItem, -100)),
+            (LootTableKind.GameObject, Row(ChestLoot, PartyItem, 100)),
+            (LootTableKind.GameObject, Row(ChestLoot, Hide, 100)),
+        ]);
+        (Player alice, FakeSession aliceSession) = rig.Join(1);
+        (Player bob, _) = rig.Join(2, 1, 0);
+        rig.Groups.Create(LootMethod.FreeForAll, alice, bob);
+        rig.Quests.Needs.Add((alice.Guid, QuestItem)); // only alice needs the quest drop
+        rig.System.Use(alice, rig.Chest.Guid);
+        ParsedLoot window = Window(aliceSession);
+        ParsedLootItem quest = Slot(window, QuestItem);
+        ParsedLootItem party = Slot(window, PartyItem);
+        LootStateRecord stored = rig.Durable.Find(Key)!;
+        Assert.Equal([1], stored.Items.Single(i => i.Slot == quest.Slot).AllowedLooters);
+        Assert.True(stored.Items.Single(i => i.Slot == quest.Slot).IsQuest);
+        Assert.True(stored.Items.Single(i => i.Slot == party.Slot).IsPerPlayer);
+
+        // Alice takes her copy of the party item only; her quest drop and bob's copy stay.
+        Assert.Equal(InventoryResult.Ok, rig.Loot.TakeItem(alice, party.Slot));
+        stored = rig.Durable.Find(Key)!;
+        Assert.False(stored.Items.Single(i => i.Slot == party.Slot).IsLooted);
+        Assert.Equal([1], stored.Items.Single(i => i.Slot == party.Slot).LootedBy);
+        Assert.False(stored.Items.Single(i => i.Slot == quest.Slot).IsLooted);
+        rig.Loot.Release(alice, rig.Chest.Guid);
+
+        rig.Leave(alice);
+        rig.Leave(bob);
+        rig.Recreate();
+        (Player aliceAgain, FakeSession aliceAgainSession) = rig.Join(1);
+        (Player bobAgain, FakeSession bobAgainSession) = rig.Join(2, 1, 0);
+
+        // Alice still sees her quest drop (allowed list restored) but not her taken copy (looted-by restored).
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(aliceAgain, rig.Chest.Guid));
+        Assert.Equal([QuestItem, Hide], Window(aliceAgainSession).Items.Select(i => i.ItemId).Order());
+        rig.Loot.Release(aliceAgain, rig.Chest.Guid);
+
+        // Bob does not need the quest drop but still has his copy of the party item.
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(bobAgain, rig.Chest.Guid));
+        ParsedLoot seen = Window(bobAgainSession);
+        Assert.Equal([PartyItem, Hide], seen.Items.Select(i => i.ItemId).Order());
+        Assert.Equal(InventoryResult.Ok, rig.Loot.TakeItem(bobAgain, Slot(seen, PartyItem).Slot));
+        Assert.Equal(1u, bobAgain.Inventory.GetItemCount(PartyItem));
+        Assert.True(rig.Durable.Find(Key)!.Items.Single(i => i.Slot == party.Slot).IsLooted); // every recipient took their copy
+    }
+
+    [Fact]
     public void Take_RaisesTheItemCountChange_AndTellsTheQuestJournal_AfterTheCommit()
     {
         Rig rig = CreateRig();
