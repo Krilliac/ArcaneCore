@@ -177,7 +177,8 @@ public sealed partial class SpellSystem
         }
 
         SpellDamageResult result = DealDirectDamage(context.Caster, context.Target, context.Spell, ModifyDirect(SpellAmountStage.DirectDamage, context, (uint)context.Value), allowCrit: true);
-        float multiple = context.Effect.MultipleValue > 0 ? context.Effect.MultipleValue : 1.0f;
+        // SPELLMOD_MULTIPLE_VALUE on the leech multiple (vmangos EffectHealthLeech, SpellEffects.cpp:1799-1804).
+        float multiple = ModFloat(context.Caster, context.Spell, SpellModOp.MultipleValue, context.Effect.MultipleValue > 0 ? context.Effect.MultipleValue : 1.0f);
         uint gain = (uint)(result.Dealt * multiple);
         if (gain > 0 && context.Caster.IsAlive)
         {

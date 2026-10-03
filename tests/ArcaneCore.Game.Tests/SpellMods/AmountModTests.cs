@@ -29,6 +29,8 @@ public sealed class AmountModTests
     private const uint WeaponStrike = 943020;
     private const uint MeleeSchoolHit = 943021;
     private const uint IgnoringBolt = 943022;
+    private const uint Leech = 943023;
+    private const uint MultiplyMod = 943024;
     private const int FrostMask = 0x10;
     private const int AllSchools = 0x7F;
 
@@ -112,7 +114,17 @@ public sealed class AmountModTests
                 StartRecoveryCategory = 0,
                 StartRecoveryTime = 0,
             }),
-            Damage(IgnoringBolt, 100, SpellSchool.Frost) with { AttributesEx3 = 0x20000000 });
+            Damage(IgnoringBolt, 100, SpellSchool.Frost) with { AttributesEx3 = 0x20000000 },
+            InFamily(Spell(Leech, Effect(SpellEffectName.HealthLeech, 20, SpellImplicitTarget.UnitEnemy) with { MultipleValue = 0.5f }) with
+            {
+                School = SpellSchool.Shadow,
+                DamageClass = SpellDamageClass.Magic,
+                RangeIndex = 4,
+                Range = new SpellRange(0, 30),
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
+            }),
+            Pct(MultiplyMod, SpellModOp.MultipleValue, 100));
         CasterSpellModules.Register(kit.System, null);
         return kit;
     }
@@ -227,6 +239,19 @@ public sealed class AmountModTests
         Cast(kit, caster, IgnoringBolt, target);
 
         Assert.Equal([100u], sink.Damage);
+    }
+
+    [Fact]
+    public void HealthLeech_MultipleValueMod_ScalesTheHealing()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, Player target, RecordingSink sink) = Setup(kit);
+        Cast(kit, caster, Leech, target);
+        kit.System.LearnSpell(caster, MultiplyMod);
+        Cast(kit, caster, Leech, target);
+
+        // Damage 20, multiple 0.5 -> heals 10; with a +100% MULTIPLE_VALUE mod the multiple is 1.0 -> heals 20 (vmangos SpellEffects.cpp:1804).
+        Assert.Equal([10u, 20u], sink.Healing);
     }
 
     [Fact]

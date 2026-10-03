@@ -105,6 +105,7 @@ public sealed class TalentFeature : IWorldFeature, ICharacterHooks, IAsyncDispos
 
         TalentCoverageReport report = TalentEffectCoverage.Build(Catalog, _spells.System);
         _logger.LogInformation("Loaded {Talents} talents in {Tabs} tabs. {Report}", Catalog.TalentCount, Catalog.TabCount, report.Describe());
+        _logger.LogInformation("{ModReport}", Game.Spells.Mods.TalentModCoverage.Build(Catalog, _spells.System).Describe());
         if (chain is null)
         {
             _logger.LogWarning("Talents: no SkillLineAbility.dbc is available, so trainer-learned higher ranks of talent abilities are not disabled by a respec");
