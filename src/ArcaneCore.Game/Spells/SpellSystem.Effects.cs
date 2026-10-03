@@ -126,7 +126,7 @@ public sealed partial class SpellSystem
                 }
 
                 // vmangos CalculateSpellEffectValue (spell mods) comes before the chain damage multiplier.
-                int value = ModifyValue(SpellValueKind.EffectValue, cast.Caster, cast.Spell, i, cast.Spell.CalculateEffectValue(i, cast.Caster.Level, Random));
+                int value = ModifyValue(SpellValueKind.EffectValue, cast.Caster, cast.Spell, i, cast.Spell.CalculateEffectValue(i, cast.Caster.Level, Random), target);
                 if (multipliers is not null && multipliers[i] != 1.0f)
                 {
                     value = (int)(value * multipliers[i]);

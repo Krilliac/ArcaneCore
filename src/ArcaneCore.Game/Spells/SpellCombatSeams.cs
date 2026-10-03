@@ -16,17 +16,23 @@ public enum SpellCheckPhase
     /// <summary>After the caster is alive and the spell is off cooldown, before the target is resolved (vmangos shapeshift :5342, caster aura state :5392).</summary>
     Caster = 1,
 
-    /// <summary>After the explicit unit target exists and is alive, before range and line of sight (vmangos target aura state :5636).</summary>
+    /// <summary>After the explicit unit target exists and is alive, before range and line of sight (vmangos :5572-5640 target checks).</summary>
     Target = 2,
 
-    /// <summary>Before the range check (vmangos <c>CheckItems</c> :5698, then CheckRange :5707 and CheckPower :5721).</summary>
+    /// <summary>Before the range check (vmangos <c>CheckItems</c> :5698).</summary>
     Items = 3,
+
+    /// <summary>After range, line of sight and the target rules, before the power amounts (vmangos CheckPower :5721, combo points :7035-7038).</summary>
+    Power = 4,
+
+    /// <summary>After power and the caster auras (vmangos target aura state :5733-5742); also run for triggered casts.</summary>
+    Final = 5,
 }
 
 /// <summary>
 /// The stable ordering inside a <see cref="SpellCheckPhase"/>: lower runs first. The values follow the
-/// line order of the vmangos source (Spell.cpp: shapeshift 5342, caster aura state 5392, target aura state
-/// 5636, items 5698), so the result a client sees when two checks would fail at once is the retail one.
+/// line order of the vmangos source (Spell.cpp: shapeshift 5342, caster aura state 5392, items 5698, combo points 7035,
+/// target aura state 5733), so the result a client sees when two checks would fail at once is the retail one.
 /// </summary>
 public static class SpellCastCheckOrder
 {
@@ -36,11 +42,14 @@ public static class SpellCastCheckOrder
     /// <summary>vmangos Spell.cpp:5392 caster aura state requirement.</summary>
     public const int CasterAuraState = 200;
 
-    /// <summary>vmangos Spell.cpp:5636 target aura state requirement.</summary>
-    public const int TargetAuraState = 300;
-
     /// <summary>vmangos Spell.cpp:5698 <c>CheckItems</c> (equipped item class and weapon requirements).</summary>
-    public const int Equipment = 400;
+    public const int Equipment = 300;
+
+    /// <summary>vmangos Spell.cpp:7035-7038 (inside CheckPower): a finishing move needs combo points on the target.</summary>
+    public const int ComboPoints = 400;
+
+    /// <summary>vmangos Spell.cpp:5733-5742: a spell that needs a target below 20% health.</summary>
+    public const int TargetAuraState = 500;
 }
 
 /// <summary>What a cast check is asked about.</summary>
@@ -124,7 +133,8 @@ public enum SpellValueKind
 /// <param name="Caster">The caster.</param>
 /// <param name="Spell">The spell.</param>
 /// <param name="EffectIndex">The effect for <see cref="SpellValueKind.EffectValue"/>, otherwise -1.</param>
-public readonly record struct SpellValueContext(Unit Caster, SpellInfo Spell, int EffectIndex);
+/// <param name="Target">The unit the effect value is for (<see cref="SpellValueKind.EffectValue"/> only), otherwise null.</param>
+public readonly record struct SpellValueContext(Unit Caster, SpellInfo Spell, int EffectIndex, Unit? Target = null);
 
 /// <summary>
 /// Adjusts a computed spell number (spell modifiers, talents, set bonuses). Modifiers run in registration

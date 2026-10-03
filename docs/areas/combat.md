@@ -126,6 +126,25 @@ CMSG_TOGGLE_PVP: an optional u8 state (gtker `pvp/cmsg_toggle_pvp.wowm`, vmangos
 - Turning it off lets a 5-minute timer run out, paused during PvP combat (`Player::UpdatePvPFlagTimer`).
 - Attacking a flagged player flags the attacker (`TogglePlayerPvPFlagOnAttackVictim`).
 
+### Combo points (warrior-mechanics S09)
+`ComboPointService` (`Combat/Combo/`, installed by `ComboFeature`) follows vmangos `Player::AddComboPoints`,
+`ClearComboPoints` and `SetComboPoints` (`Player.cpp:19032-19093`):
+
+- **State.** Up to 5 points on one target; points on the current target add up, a new target restarts the count; negative
+  counts floor at 0. `PLAYER_FIELD_COMBO_TARGET` and `PLAYER_FIELD_BYTES` byte 1 are written only while the target can be found
+  (vmangos `SetComboPoints`). 1.12 has no combo point packet. Every change ends `SPELL_AURA_RETAIN_COMBO_POINTS` auras.
+- **Warriors.** A warrior holds at most the Overpower marker (see the aura state section); the client shows none and the
+  server uses it only to allow the cast (`Spell.cpp:7035-7038`).
+- **Finishing moves** (`NeedsComboPoints`): the check (spell cast check, phase Power) needs points on the explicit target:
+  `NO_COMBO_POINTS` for a rogue, `BAD_TARGETS` for a warrior; triggered casts and spells without an explicit unit target skip it.
+- **Scaling.** An effect adds `EffectPointsPerComboPoint x points` on the combo target (`SpellCaster.cpp:1190-1192`); a duration
+  stretches toward its maximum by points/5 (`SpellEntry.cpp:731-735`) for any spell whose base and maximum durations differ, as in
+  vmangos. The effect bonus is added to the truncated value (a fractional base plus a fractional bonus can differ by 1).
+- **Spending.** A finishing move that completes clears the points (`Spell.cpp:4374-4395`), except a harmful one that missed, was
+  dodged or parried on a target other than the caster. `SPELL_EFFECT_ADD_COMBO_POINTS` (80) adds its value.
+- **Gone.** The target dying, the owner dying and the owner logging out clear the points (`Unit.cpp:9410-9422`, `Player.cpp:1519`);
+  a unit that leaves the world without dying does not (limit).
+
 ### Melee spells and the swing (warrior-mechanics S08b)
 The swing reaches the spell system through `IMeleeSpellHooks` (`CombatEnvironment.MeleeSpells`, installed by the
 world daemon's `MeleeSpellFeature` as `SpellSystemMeleeHooks`; without it nothing is cast from a swing):

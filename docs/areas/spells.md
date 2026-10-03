@@ -137,16 +137,20 @@ the melee slot in `SpellSystem.NextSwing.cs`.
 
 - `ISpellCastCheck` (`RegisterCastCheck`): may veto a cast with any `SpellCastResult`. Checks run by
   `SpellCheckPhase` then `Order` (`SpellCastCheckOrder`), the line order of vmangos `Spell::CheckCast`: shapeshift
-  (`Spell.cpp:5342`) < caster aura state (`:5392`) < target aura state (`:5636`) < `CheckItems` (`:5698`), the last
-  three before the built-in range (`:5707`) and power (`:5721`) checks. Phases: Caster (after the cooldown check,
+  (`Spell.cpp:5342`) < caster aura state (`:5392`) < `CheckItems` (`:5698`) < the built-in range (`:5707`) and power (`:5721`) checks. Phases: Caster (after the cooldown check,
   before stun), Target (once an explicit unit target exists and is alive; skipped for spells without one), Items
   (before range). The context says whether the check is the strict cast-start one or the landing re-check.
   `GetErrorAtShapeshiftedCast` is strict-only in vmangos (`:5340`); the check itself must honour `Strict`.
+  Two later phases cover the rest of `CheckCast`: Power (after range, line of sight and the target rules, before the
+  built-in power check: the combo point requirement, `Spell.cpp:7035-7038`) and Final (after power: the 20% target aura
+  state, `:5733-5742`; also run for triggered casts). Order values follow the source: shapeshift < caster aura state <
+  equipment < combo points < target aura state (`SpellCastCheckOrder`). The context's target is the explicit unit
+  target (null without one); in the Target and Items phases a self cast of a unit-target spell passes the caster.
 - `ISpellCastObserver` (`RegisterObserver`): `OnPrepared`, `OnCast` (power taken, before targets and effects),
   `OnTargetOutcome` (miss reason, damage dealt, healing done, crit, effect mask; also for misses) and
   `OnFinished(completed)`. Damage and healing are credited to the outcome of the cast and target being applied;
   a nested triggered cast gets its own outcome.
-- `ISpellValueModifier` (`RegisterValueModifier`): adjusts the effect value (before chain multipliers), the
+- `ISpellValueModifier` (`RegisterValueModifier`; the context carries the effect's target): adjusts the effect value (before chain multipliers), the
   aura/channel duration (vmangos `CalculateDuration`, `SpellEntry.cpp:723-751`: never for permanent -1, floored at
   0), the power cost, and the cast time (`SpellEntry.cpp:487-494`: after the minimum, only when not 0, before haste).
   The duration is computed once per cast (`SpellCast.Duration`, like `m_duration`). Modifiers must be pure.

@@ -107,25 +107,31 @@ public sealed class SpellSeamTests
         using var kit = Kit();
         (Player caster, _, Player target) = Duel(kit);
         var log = new List<string>();
+        kit.System.RegisterCastCheck(new RecordingCheck(SpellCheckPhase.Final, SpellCastCheckOrder.TargetAuraState, log, "targetState"));
+        kit.System.RegisterCastCheck(new RecordingCheck(SpellCheckPhase.Power, SpellCastCheckOrder.ComboPoints, log, "combo"));
         kit.System.RegisterCastCheck(new RecordingCheck(SpellCheckPhase.Items, SpellCastCheckOrder.Equipment, log, "equipment"));
-        kit.System.RegisterCastCheck(new RecordingCheck(SpellCheckPhase.Target, SpellCastCheckOrder.TargetAuraState, log, "targetState"));
         kit.System.RegisterCastCheck(new RecordingCheck(SpellCheckPhase.Caster, SpellCastCheckOrder.CasterAuraState, log, "casterState"));
         kit.System.RegisterCastCheck(new RecordingCheck(SpellCheckPhase.Caster, SpellCastCheckOrder.Shapeshift, log, "shape"));
 
         kit.System.HandleCastRequest(caster, CastBolt, SpellCastTargets.ForUnit(target.Guid));
 
-        Assert.Equal(["shape", "casterState", "targetState", "equipment"], log);
+        Assert.Equal(["shape", "casterState", "equipment", "combo", "targetState"], log);
     }
 
     [Fact]
     public void CastCheck_OrderTable_FollowsVmangosCheckCastLineOrder()
     {
-        // vmangos Spell.cpp: shapeshift 5342 < CasterAuraState 5392 < TargetAuraState 5636 < CheckItems 5698 (< CheckRange 5707 < CheckPower 5721).
+        // vmangos Spell.cpp: shapeshift 5342 < CasterAuraState 5392 < CheckItems 5698 (< CheckRange 5707 < CheckPower 5721,
+        // whose combo point check is at 7035) < the 20% target aura state 5733.
         Assert.True(SpellCastCheckOrder.Shapeshift < SpellCastCheckOrder.CasterAuraState);
-        Assert.True(SpellCastCheckOrder.TargetAuraState < SpellCastCheckOrder.Equipment);
+        Assert.True(SpellCastCheckOrder.CasterAuraState < SpellCastCheckOrder.Equipment);
+        Assert.True(SpellCastCheckOrder.Equipment < SpellCastCheckOrder.ComboPoints);
+        Assert.True(SpellCastCheckOrder.ComboPoints < SpellCastCheckOrder.TargetAuraState);
         Assert.Equal(1, (int)SpellCheckPhase.Caster);
         Assert.Equal(2, (int)SpellCheckPhase.Target);
         Assert.Equal(3, (int)SpellCheckPhase.Items);
+        Assert.Equal(4, (int)SpellCheckPhase.Power);
+        Assert.Equal(5, (int)SpellCheckPhase.Final);
     }
 
     [Fact]

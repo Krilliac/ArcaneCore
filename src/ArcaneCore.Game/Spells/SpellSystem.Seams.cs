@@ -135,14 +135,14 @@ public sealed partial class SpellSystem
 
     // --- value modifiers ----------------------------------------------------------------------
 
-    private int ModifyValue(SpellValueKind kind, Unit caster, SpellInfo spell, int effectIndex, int value)
+    private int ModifyValue(SpellValueKind kind, Unit caster, SpellInfo spell, int effectIndex, int value, Unit? target = null)
     {
         if (_valueModifiers.Length == 0)
         {
             return value;
         }
 
-        var context = new SpellValueContext(caster, spell, effectIndex);
+        var context = new SpellValueContext(caster, spell, effectIndex, target);
         foreach (ISpellValueModifier modifier in _valueModifiers)
         {
             value = modifier.Modify(kind, context, value);

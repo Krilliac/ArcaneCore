@@ -643,7 +643,26 @@ public sealed partial class SpellSystem
         }
 
         SpellCastResult targetRules = CheckTargetRules(caster, spell, targets, unitTarget, strict);
-        return targetRules != SpellCastResult.CastOk ? targetRules : CheckPower(caster, spell);
+        if (targetRules != SpellCastResult.CastOk)
+        {
+            return targetRules;
+        }
+
+        // Registered checks inside vmangos CheckPower, before the amounts (combo points, Spell.cpp:7035-7038).
+        SpellCastResult beforePower = RunCastChecks(SpellCheckPhase.Power, caster, spell, targets, unitTarget, triggered, strict);
+        if (beforePower != SpellCastResult.CastOk)
+        {
+            return beforePower;
+        }
+
+        SpellCastResult power = CheckPower(caster, spell);
+        if (power != SpellCastResult.CastOk)
+        {
+            return power;
+        }
+
+        // Registered checks after power and caster auras: the target aura state (Spell.cpp:5733-5742).
+        return RunCastChecks(SpellCheckPhase.Final, caster, spell, targets, unitTarget, triggered, strict);
     }
 
     /// <summary>
@@ -1045,7 +1064,7 @@ public sealed partial class SpellSystem
     private static bool NeedsUnitTarget(SpellInfo spell)
         => spell.Effects.Any(e => !e.IsEmpty && IsExplicitUnitTarget(e.TargetA));
 
-    private static bool IsExplicitUnitTarget(SpellImplicitTarget target)
+    internal static bool IsExplicitUnitTarget(SpellImplicitTarget target)
         => target is SpellImplicitTarget.UnitEnemy or SpellImplicitTarget.UnitFriend or SpellImplicitTarget.Unit or SpellImplicitTarget.UnitParty
             or SpellImplicitTarget.UnitRaid or SpellImplicitTarget.UnitFriendChainHeal;
 
