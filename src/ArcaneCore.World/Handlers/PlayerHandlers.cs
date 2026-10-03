@@ -26,8 +26,6 @@ public sealed class PlayerHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgGmticketGetticket, HandleGmTicketGetTicket);
         table.OnWorld(WorldOpcode.MsgQueryNextMailTime,
             (session, _, _) => session.Send(WorldOpcode.MsgQueryNextMailTime, MiscPackets.BuildNoNextMail()));
-        table.OnWorld(WorldOpcode.CmsgRequestRaidInfo,
-            (session, _, _) => session.Send(WorldOpcode.SmsgRaidInstanceInfo, MiscPackets.BuildNoRaidInstances()));
     }
 
     /// <summary>CMSG_PLAYED_TIME (empty) → SMSG_PLAYED_TIME (vmangos HandlePlayedTime).</summary>

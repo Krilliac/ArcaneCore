@@ -18,6 +18,7 @@ namespace ArcaneCore.World.Creatures;
 public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<CreatureWorldFeature> logger) : IWorldFeature
 {
     private readonly Dictionary<uint, CreatureMapSystem> _systems = [];
+    private readonly Dictionary<Map, CreatureMapSystem> _instanceSystems = new(ReferenceEqualityComparer.Instance);
     private CreatureContent _content = CreatureContent.Empty;
     private WorldRuntime? _world;
     private ICreatureHeightProvider? _height;
@@ -48,6 +49,8 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         }
 
         logger.LogInformation("Loaded {Templates} creature templates and {Spawns} spawns", content.TemplateCount, content.SpawnCount);
+        world.MapCreated += OnMapCreated;
+        world.MapUnloading += OnMapUnloading;
         world.Post(() => Install(content));
     }
 
@@ -65,8 +68,33 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         }
     }
 
-    /// <summary>The creature system of a map, if it has one (world thread).</summary>
+    /// <summary>The creature system of a map's shared copy (instance 0), if it has one (world thread).</summary>
     public CreatureMapSystem? FindSystem(uint mapId) => _systems.GetValueOrDefault(mapId);
+
+    /// <summary>
+    /// The creature system of a map instance, if it has one (world thread). Dungeon instances
+    /// (docs/integration/instances.md) each get their own system and spawns.
+    /// </summary>
+    public CreatureMapSystem? FindSystem(Map map) => map.InstanceId == 0 ? FindSystem(map.MapId) : _instanceSystems.GetValueOrDefault(map);
+
+    /// <summary>The creature system of a map instance, attaching one if needed (world thread).</summary>
+    public CreatureMapSystem GetOrCreateSystem(Map map)
+    {
+        if (map.InstanceId == 0)
+        {
+            return GetOrCreateSystem(map.MapId);
+        }
+
+        if (!_instanceSystems.TryGetValue(map, out CreatureMapSystem? system))
+        {
+            WorldRuntime world = _world ?? throw new InvalidOperationException("the creature feature is not attached");
+            system = new CreatureMapSystem(map, Content, Options, _height, new Random(), () => world.NowMs, logger);
+            map.AddUpdater(system);
+            _instanceSystems[map] = system;
+        }
+
+        return system;
+    }
 
     /// <summary>The creature system of a map, attaching one if needed (world thread).</summary>
     public CreatureMapSystem GetOrCreateSystem(uint mapId)
@@ -82,4 +110,16 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
 
         return system;
     }
+
+    // A new instance of a map with spawns gets its own creature system (spawns are per
+    // instance, never shared); an unloaded instance drops it.
+    private void OnMapCreated(Map map)
+    {
+        if (map.InstanceId != 0 && Content.GetSpawns(map.MapId).Count > 0)
+        {
+            GetOrCreateSystem(map);
+        }
+    }
+
+    private void OnMapUnloading(Map map) => _instanceSystems.Remove(map);
 }

@@ -62,9 +62,10 @@ public sealed class Map
     private long _nextSequence;
     private bool _inUpdatePhase;
 
-    internal Map(uint mapId, WorldRuntime world, ILogger logger)
+    internal Map(uint mapId, uint instanceId, WorldRuntime world, ILogger logger)
     {
         MapId = mapId;
+        InstanceId = instanceId;
         _world = world;
         _logger = logger;
 
@@ -85,6 +86,12 @@ public sealed class Map
     }
 
     public uint MapId { get; }
+
+    /// <summary>The instance this map object simulates: 0 for the shared copy, else a dungeon/raid instance id.</summary>
+    public uint InstanceId { get; }
+
+    /// <summary>Whether the map has been unloaded (<see cref="WorldRuntime.UnloadMap"/>); it can no longer take players.</summary>
+    public bool IsUnloaded { get; private set; }
 
     public int PlayerCount => _players.Count;
 
@@ -149,6 +156,11 @@ public sealed class Map
         if (player.Map is not null)
         {
             throw new InvalidOperationException($"{player.Guid} is already in map {player.Map.MapId}");
+        }
+
+        if (IsUnloaded)
+        {
+            throw new InvalidOperationException($"map {MapId} instance {InstanceId} has been unloaded");
         }
 
         if (_objects.ContainsKey(player.Guid))
@@ -495,6 +507,20 @@ public sealed class Map
         {
             _movedObjects.Add(obj);
         }
+    }
+
+    /// <summary>
+    /// Unload every grid (objects are evicted, grid/terrain events run) and refuse further
+    /// players — vmangos <c>Map::UnloadAll</c> for a deleted instance. Called by
+    /// <see cref="WorldRuntime"/> after <see cref="WorldRuntime.MapUnloading"/>.
+    /// </summary>
+    internal void UnloadAll()
+    {
+        EnsureWorldThread();
+        EnsureNotInUpdatePhase();
+        IsUnloaded = true;
+        _grid.UnloadAll();
+        _afterUpdate.Clear();
     }
 
     /// <summary>Run <paramref name="action"/> after this map's next update phase (vmangos ScheduleFarTeleport).</summary>

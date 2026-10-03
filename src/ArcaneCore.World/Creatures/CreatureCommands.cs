@@ -41,7 +41,7 @@ public sealed class CreatureCommands : ICommandGroup
         }
 
         var player = context.Player;
-        Creature creature = feature.GetOrCreateSystem(player.MapId)
+        Creature creature = (player.Map is { } map ? feature.GetOrCreateSystem(map) : feature.GetOrCreateSystem(player.MapId))
             .SpawnTemporary(template, player.X, player.Y, player.Z, player.Orientation);
         context.Reply($"Spawned {template.Name} ({creature.Guid}).");
         return true;
@@ -100,7 +100,9 @@ public sealed class CreatureCommands : ICommandGroup
     }
 
     private static CreatureMapSystem System(CommandContext context)
-        => context.Session.Services.GetRequiredService<CreatureWorldFeature>().GetOrCreateSystem(context.Player.MapId);
+        => context.Player.Map is { } map
+            ? context.Session.Services.GetRequiredService<CreatureWorldFeature>().GetOrCreateSystem(map)
+            : context.Session.Services.GetRequiredService<CreatureWorldFeature>().GetOrCreateSystem(context.Player.MapId);
 
     private static Creature? Selected(CommandContext context)
     {

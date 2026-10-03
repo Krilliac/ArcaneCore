@@ -116,6 +116,13 @@ public sealed class TeleportService
             return false;
         }
 
+        // vmangos TeleportTo → MapManager::CanPlayerEnter: the instance rules may refuse a far
+        // teleport (raid group, full or resetting instance) before anything changes.
+        if (current.MapId != mapId && _world.MapResolver is { } resolver && !resolver.CanEnter(player, mapId))
+        {
+            return false;
+        }
+
         // vmangos TeleportTo: reset the client time stamp and stop movement, leave any transport.
         ResetMovementForTeleport(player);
 
@@ -135,8 +142,6 @@ public sealed class TeleportService
             return true;
         }
 
-        // Instance creation stub: dungeons and raids get (or reuse) an instance id and binding.
-        maps.Instances.GetOrCreateInstance(player, target);
         var pending = new Pending(destination, TeleportStage.FarScheduled, current, new TeleportDestination(player.MapId, player.X, player.Y, player.Z, player.Orientation));
         _pending[player.Guid] = pending;
         current.RunAfterUpdate(() => ExecuteTeleportFar(player, pending));
@@ -293,8 +298,11 @@ public sealed class TeleportService
 
     private bool TryEnterMap(Player player, TeleportDestination dest)
     {
-        Map map = _world.GetMap(dest.MapId);
-        if (map.FindObject(player.Guid) is not null)
+        // The map resolver picks (or creates) the instance and binds the player or its group
+        // (vmangos MapManager::CreateMap → DungeonMap::Add); null refuses the entry.
+        IMapResolver? resolver = _world.MapResolver;
+        Map? map = resolver is null ? _world.GetMap(dest.MapId) : resolver.ResolveEntry(player, dest.MapId);
+        if (map is null || map.FindObject(player.Guid) is not null)
         {
             return false;
         }
@@ -305,6 +313,7 @@ public sealed class TeleportService
         _beforeAddToMap(player);
         map.AddPlayer(player);
         _afterAddToMap(player);
+        resolver?.OnEntered(player, map);
         return true;
     }
 

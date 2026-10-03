@@ -191,18 +191,16 @@ public sealed class TeleportServiceTests
     }
 
     [Fact]
-    public void TeleportIntoADungeon_CreatesAnInstanceBinding()
+    public void TeleportIntoADungeon_WithoutAMapResolver_StartsAFarTeleport()
     {
+        // Instance selection and binds belong to the map resolver (Game.Instances.InstanceManager,
+        // covered by Instances/InstanceManagerTests); without one the shared map is used.
         using var f = new Fixture();
         Player a = TestWorld.CreatePlayer(1, 0, 0, new FakeSession(1));
         f.World.AddPlayer(a);
 
         Assert.True(f.Teleports.TeleportTo(a, 36, -16.4f, -383.07f, 61.78f, 1.86f));
-
-        uint? instance = WorldMaps.Of(f.World).Instances.BindingOf(a, 36);
-        Assert.NotNull(instance);
-        Assert.True(instance > InstanceRegistry.ReservedInstancesLast);
-        Assert.Equal(36u, WorldMaps.Of(f.World).Instances.MapOf(instance!.Value));
+        Assert.True(f.Teleports.IsBeingTeleportedFar(a));
     }
 
     private static void CharacterStateAssert(RecordingSaveQueue saves, uint mapId, float x, float y)
