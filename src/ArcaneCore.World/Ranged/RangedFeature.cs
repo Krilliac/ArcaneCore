@@ -1,0 +1,77 @@
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Ranged;
+using ArcaneCore.Game.Spells;
+using ArcaneCore.World.Features;
+using ArcaneCore.World.Spells;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+
+namespace ArcaneCore.World.Ranged;
+
+/// <summary>
+/// The hunter / ranged settings in the world daemon (discovered <see cref="IWorldFeature"/>):
+/// reads configuration section "Ranged" (every default is the retail behaviour,
+/// <see cref="RangedOptions"/>) and hands it to the spell system, which applies the ammunition
+/// rules in its cast pipeline.
+/// </summary>
+public sealed class RangedFeature : IWorldFeature
+{
+    private readonly IServiceProvider _services;
+    private readonly ILogger<RangedFeature> _logger;
+    private SpellSystem? _spells;
+
+    public RangedFeature(IServiceProvider services, ILogger<RangedFeature> logger)
+    {
+        _services = services ?? throw new ArgumentNullException(nameof(services));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        Options = Bind(services.GetService<IConfiguration>());
+    }
+
+    /// <summary>The bound settings.</summary>
+    public RangedOptions Options { get; }
+
+    /// <summary>The options of <paramref name="configuration"/>'s "Ranged" section over the retail defaults.</summary>
+    public static RangedOptions Bind(IConfiguration? configuration)
+    {
+        var options = new RangedOptions();
+        configuration?.GetSection(RangedOptions.SectionName).Bind(options);
+        return options;
+    }
+
+    public void Attach(WorldRuntime world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        SpellSystem spells = _services.GetRequiredService<SpellFeature>().System;
+        spells.RangedOptions = Options;
+        RangedHandlers.Register(spells);
+        _spells = spells;
+
+        // Map updaters are attached on the world thread (as the game object feature does).
+        world.Post(() =>
+        {
+            world.MapCreated += AttachMapSystems;
+            foreach (Map map in world.Maps.ToArray())
+            {
+                AttachMapSystems(map);
+            }
+        });
+
+        if (Options.Ammo.Mode != AmmoMode.Retail || Options.Range.Leeway != RangeLeewayMode.Retail)
+        {
+            _logger.LogWarning("Ranged settings deviate from retail: Ammo.Mode={Ammo}, Range.Leeway={Leeway}", Options.Ammo.Mode, Options.Range.Leeway);
+        }
+    }
+
+    /// <summary>The per-map systems of spell-created objects (hunter traps).</summary>
+    private void AttachMapSystems(Map map)
+    {
+        if (_spells is null || map.FindUpdater<SpellObjectSystem>() is not null)
+        {
+            return;
+        }
+
+        map.AddUpdater(new SpellObjectSystem(_spells));
+        map.AddUpdater(new TrapSystem(_spells));
+    }
+}

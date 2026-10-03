@@ -216,6 +216,17 @@ public sealed partial record SpellInfo
 
     public bool IsPassive => HasAttribute(SpellAttributes.Passive);
 
+    /// <summary>
+    /// vmangos SpellEntry::GetSpellSpecific SPELL_TRACKER precondition (SpellEntry.cpp:153-157): a tracking aura
+    /// (44, 45 or 151) on a spell with AttributesEx NO_AUTOCAST_AI or Attributes ALLOW_WHILE_MOUNTED. It leaves
+    /// out Well Fed and other always-allowed spells that merely carry such an aura.
+    /// </summary>
+    public bool IsTracker => (HasAura(AuraType.TrackCreatures) || HasAura(AuraType.TrackResources) || HasAura(AuraType.TrackStealthed))
+        && (HasAttribute(SpellAttributesEx.NoAutocastAi) || HasAttribute(SpellAttributes.AllowWhileMounted));
+
+    /// <summary>vmangos SpellEntry::IsFitToFamily&lt;family, bit&gt;: the family name matches and the flag bit is set.</summary>
+    public bool IsFitToFamily(uint familyName, int flagBit) => SpellFamilyName == familyName && (SpellFamilyFlags & (1UL << flagBit)) != 0;
+
     /// <summary>vmangos SPELL_ATTR_EX3_ONLY_ON_GHOSTS (SpellDefines.h, AttributesEx3 bit 12).</summary>
     private const uint Ex3OnlyOnGhosts = 0x00001000;
 
@@ -303,17 +314,14 @@ public sealed partial record SpellInfo
     /// <summary>
     /// Cast time in ms (vmangos SpellEntry::GetCastTime): castTime + perLevel * (rank / 5 -
     /// baseLevel), floored at the minimum; spells that are neither abilities nor tradeskills are
-    /// scaled by UNIT_MOD_CAST_SPEED (build &gt; 1.11.2 branch); USES_RANGED_SLOT adds 500 ms.
+    /// scaled by UNIT_MOD_CAST_SPEED (build &gt; 1.11.2 branch); ranged abilities (Aimed Shot) are
+    /// scaled by the ranged attack speed modifier instead; USES_RANGED_SLOT adds 500 ms unless
+    /// the spell is the auto-repeat spell itself (Auto Shot, wand Shoot). Ranged (hunter lane):
+    /// <paramref name="autoRepeat"/> and <paramref name="rangedHaste"/> (vmangos SpellEntry.cpp:504-512).
     /// A spell without a SpellCastTimes entry is instant.
     /// </summary>
-    public int GetCastTime(byte casterLevel, float castSpeed = 1.0f) => GetCastTime(casterLevel, castSpeed, null);
-
-    /// <summary>
-    /// <see cref="GetCastTime(byte, float)"/> with a cast-time modifier applied to the base time, after the
-    /// minimum and only when it is not 0, before the cast-speed scaling (vmangos SpellEntry.cpp:487-494,
-    /// SPELLMOD_CASTING_TIME).
-    /// </summary>
-    public int GetCastTime(byte casterLevel, float castSpeed, Func<int, int>? castTimeModifier)
+    /// <param name="castTimeModifier">Applied to the base time after the minimum and only when it is not 0, before the cast-speed scaling (vmangos SpellEntry.cpp:487-494, SPELLMOD_CASTING_TIME).</param>
+    public int GetCastTime(byte casterLevel, float castSpeed = 1.0f, bool autoRepeat = false, float rangedHaste = 1.0f, Func<int, int>? castTimeModifier = null)
     {
         if (CastTime == default)
         {
@@ -331,8 +339,12 @@ public sealed partial record SpellInfo
         {
             castTime = (int)(castTime * castSpeed);
         }
+        else if (HasAttribute(SpellAttributes.UsesRangedSlot) && !autoRepeat)
+        {
+            castTime = (int)(castTime * rangedHaste);
+        }
 
-        if (HasAttribute(SpellAttributes.UsesRangedSlot))
+        if (HasAttribute(SpellAttributes.UsesRangedSlot) && !autoRepeat)
         {
             castTime += 500;
         }

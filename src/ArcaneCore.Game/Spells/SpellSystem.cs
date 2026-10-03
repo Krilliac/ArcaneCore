@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Ranged;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -297,7 +298,8 @@ public sealed partial class SpellSystem
         {
             state.CurrentCast = cast;
             SendToSet(caster, WorldOpcode.SmsgSpellStart, SpellPackets.BuildSpellStart(
-                caster.Guid, caster.Guid, spell.Id, SpellCastFlags.Unknown2, (uint)castTime, targets), includeSelf: true);
+                caster.Guid, caster.Guid, spell.Id, WithAmmoFlag(SpellCastFlags.Unknown2, spell), (uint)castTime, targets,
+                RangedSpellFacts.IsRanged(spell) ? GetAmmoVisual(caster) : default), includeSelf: true); // ranged (hunter lane): ammo trailer
             AddGlobalCooldown(state, spell);
         }
 
@@ -339,6 +341,7 @@ public sealed partial class SpellSystem
         InterruptAtCastCompletion(cast); // rogue lane: ACTION_LATE / ATTACKING half (vmangos Spell.cpp:3697-3714), docs/integration/rogue-aura-interrupt.md
         AddCooldown(state, spell, cast.IsTriggered);
         TakePower(caster, spell, cast.PowerCost);
+        TakeAmmo(caster, spell); // ranged (hunter lane): vmangos order TakePower, TakeReagents, TakeAmmo (Spell.cpp:3716-3718)
         SendCastResult(caster, spell, SpellCastResult.CastOk, cast.IsTriggered);
         cast.Completed = true;
         NotifyCast(cast);
@@ -361,7 +364,8 @@ public sealed partial class SpellSystem
         }
 
         SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(
-            caster.Guid, caster.Guid, spell.Id, SpellCastFlags.Unknown9, hits, misses, cast.Targets), includeSelf: true);
+            caster.Guid, caster.Guid, spell.Id, WithAmmoFlag(SpellCastFlags.Unknown9, spell), hits, misses, cast.Targets,
+            RangedSpellFacts.IsRanged(spell) ? GetAmmoVisual(caster) : default), includeSelf: true); // ranged (hunter lane): ammo trailer
 
         int duration = cast.Duration;
         if (spell.IsChanneled && duration > 0 && !cast.IsTriggered)
@@ -389,7 +393,7 @@ public sealed partial class SpellSystem
                 InterruptTargetOfHostileSpell(cast, target, hit: false, dealsDamage: false); // rogue lane (vmangos Spell.cpp:1893-1897)
                 if (!IsQuestSettlementPending(caster) && !IsQuestSettlementPending(target) && target.IsAlive && Relations.IsHostile(caster, target))
                 {
-                    Damage.DealSpellDamage(caster, target, spell, 0, periodic: false);
+                    Damage.DealSpellDamage(caster, target, spell, 0, periodic: false, startsCombat: StartsCombat(caster, target));
                 }
 
                 NotifyOutcome(cast, new SpellTargetOutcome(target, entry.Miss, 0, 0, false, entry.EffectMask));
@@ -430,6 +434,13 @@ public sealed partial class SpellSystem
                 Cancel(cast);
                 return;
             }
+        }
+
+        // ranged (hunter lane): a player's cast bar does not run while feigning death (Spell.cpp:4082-4090).
+        if (cast.State == SpellCastState.Preparing && cast.Timer != 0 && cast.Caster is Player && IsFeigningDeath(cast.Caster))
+        {
+            Cancel(cast);
+            return;
         }
 
         cast.Timer = diffMs >= cast.Timer ? 0 : cast.Timer - (int)diffMs;
@@ -566,7 +577,7 @@ public sealed partial class SpellSystem
             return start;
         }
 
-        if (!caster.IsAlive && !spell.HasAttribute(SpellAttributes.AllowCastWhileDead))
+        if (!caster.IsAlive && !spell.HasAttribute(SpellAttributes.AllowCastWhileDead) && _objectCastDepth == 0)
         {
             return SpellCastResult.CasterDead;
         }
@@ -597,6 +608,20 @@ public sealed partial class SpellSystem
             && spell.InterruptFlags.HasFlag(SpellInterruptFlags.Movement) && IsMoving(mover))
         {
             return SpellCastResult.Moving;
+        }
+
+        // ranged (hunter lane): vmangos Spell::CheckItems (weapon and ammunition) runs before CheckRange (Spell.cpp:5694-5702).
+        SpellCastResult rangedItems = CheckRangedItems(caster, spell);
+        if (rangedItems != SpellCastResult.CastOk)
+        {
+            return rangedItems;
+        }
+
+        // ranged (hunter lane): Hunter's Mark needs an attackable unit (Spell.cpp:6436-6447).
+        SpellCastResult stalked = CheckStalkedTarget(caster, spell, unitTarget);
+        if (stalked != SpellCastResult.CastOk)
+        {
+            return stalked;
         }
 
         bool needsUnit = NeedsUnitTarget(spell);
@@ -641,7 +666,8 @@ public sealed partial class SpellSystem
         if (needsUnit)
         {
             Unit target = checkedTarget!;
-            SpellCastResult range = CheckRange(caster, spell, target, strict);
+            // ranged (hunter lane): a cast from a game object (trap) ignores range and the owner being far or dead (vmangos triggered casts).
+            SpellCastResult range = _objectCastDepth > 0 ? SpellCastResult.CastOk : CheckRange(caster, spell, target, strict, RangedOptions.Range.Leeway == RangeLeewayMode.Retail);
             if (range != SpellCastResult.CastOk)
             {
                 return range;
@@ -704,7 +730,7 @@ public sealed partial class SpellSystem
     /// (1.25 yd at cast start, 6.25 yd on landing) against the combat distance (3D distance minus
     /// both combat reaches), with the minimum range giving TOO_CLOSE.
     /// </summary>
-    internal static SpellCastResult CheckRange(Unit caster, SpellInfo spell, Unit target, bool strict)
+    internal static SpellCastResult CheckRange(Unit caster, SpellInfo spell, Unit target, bool strict, bool movementLeeway = true)
     {
         if (spell.RangeIndex == SpellConstants.RangeIndexSelfOnly || ReferenceEquals(caster, target))
         {
@@ -733,6 +759,13 @@ public sealed partial class SpellSystem
         float leeway = caster is Player
             ? (strict ? SpellConstants.PlayerStrictRangeLeeway : SpellConstants.PlayerLandingRangeLeeway)
             : (strict ? 0.0f : 2.25f);
+
+        // ranged (hunter lane): + 2.66 yd when a player is involved and both run (Spell.cpp:6911, Object.cpp:1890-1912).
+        if (movementLeeway)
+        {
+            leeway += RangeLeeway.Bonus(caster, target);
+        }
+
         float combatDistance = Math.Max(0.0f, distance - reach);
         if (combatDistance > spell.Range.Max + leeway)
         {
@@ -794,6 +827,12 @@ public sealed partial class SpellSystem
 
     private bool IsSpellReady(UnitSpellState state, SpellInfo spell)
     {
+        // ranged (hunter lane): a COOLDOWN_ON_EVENT spell waits while the object it created lives (Unit::AddGameObject).
+        if (spell.HasAttribute(SpellAttributes.CooldownOnEvent) && SpellObjects.IsCreatedBySpell(state.Unit, spell.Id))
+        {
+            return false;
+        }
+
         uint now = NowMs;
         if (state.SpellCooldowns.TryGetValue(spell.Id, out uint until) && until > now)
         {
@@ -941,22 +980,24 @@ public sealed partial class SpellSystem
     /// SMSG_SPELL_COOLDOWN tells the client — decision recorded in docs/areas/spells.md.
     /// COOLDOWN_ON_EVENT spells are not started here (the event that starts them is not modelled yet).
     /// </summary>
-    private void AddCooldown(UnitSpellState state, SpellInfo spell, bool triggered)
+    private void AddCooldown(UnitSpellState state, SpellInfo spell, bool triggered, bool onEvent = false)
     {
-        if (spell.IsPassive || spell.HasAttribute(SpellAttributes.CooldownOnEvent))
+        if (spell.IsPassive || (spell.HasAttribute(SpellAttributes.CooldownOnEvent) && !onEvent))
         {
             return;
         }
 
-        if (spell.RecoveryTime == 0 && spell.CategoryRecoveryTime == 0)
+        // ranged (hunter lane): a ranged-slot spell also waits out the weapon speed (Player.cpp:22193-22197).
+        uint recovery = spell.RecoveryTime + RangedRecoveryMs(state.Unit, spell);
+        if (recovery == 0 && spell.CategoryRecoveryTime == 0)
         {
             return;
         }
 
         uint now = NowMs;
-        if (spell.RecoveryTime > 0)
+        if (recovery > 0)
         {
-            state.SpellCooldowns[spell.Id] = now + spell.RecoveryTime;
+            state.SpellCooldowns[spell.Id] = now + recovery;
         }
 
         if (spell.Category != 0 && spell.CategoryRecoveryTime > 0)
@@ -966,7 +1007,7 @@ public sealed partial class SpellSystem
 
         if (triggered && state.Unit is Player player)
         {
-            uint ms = Math.Max(spell.RecoveryTime, spell.CategoryRecoveryTime);
+            uint ms = Math.Max(recovery, spell.CategoryRecoveryTime);
             player.Session.Send(WorldOpcode.SmsgSpellCooldown, SpellPackets.BuildSpellCooldown(player.Guid, [(spell.Id, ms)]));
         }
     }

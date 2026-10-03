@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Ranged;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -151,9 +152,10 @@ public sealed partial class SpellSystem
         return value;
     }
 
-    /// <summary>The cast time in ms with the registered cast-time modifiers (vmangos SpellEntry::GetCastTime).</summary>
+    /// <summary>The cast time in ms with the registered cast-time modifiers, the auto-repeat flag and the ranged haste (vmangos SpellEntry::GetCastTime).</summary>
     private int CastTimeFor(Unit caster, SpellInfo spell)
-        => spell.GetCastTime(caster.Level, CastSpeed(caster), castTime => ModifyValue(SpellValueKind.CastTime, caster, spell, -1, castTime));
+        => spell.GetCastTime(caster.Level, CastSpeed(caster), RangedSpellFacts.IsAutoRepeatRanged(spell), RangedAttackSpeedPct(caster),
+            castTime => ModifyValue(SpellValueKind.CastTime, caster, spell, -1, castTime));
 
     /// <summary>
     /// The aura/channel duration in ms (vmangos SpellEntry::CalculateDuration, SpellEntry.cpp:723-751): a permanent

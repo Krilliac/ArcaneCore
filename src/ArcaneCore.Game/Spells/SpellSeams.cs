@@ -21,6 +21,13 @@ public interface IDamageSink
     /// <summary>Deal <paramref name="damage"/> from a spell; returns the damage actually done.</summary>
     uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic);
 
+    /// <summary>
+    /// As above, but <paramref name="startsCombat"/> false keeps the victim out of combat with the caster
+    /// (a trap's hit on a player, vmangos Spell.cpp:1650). Sinks that do not track combat ignore it.
+    /// </summary>
+    uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat)
+        => DealSpellDamage(caster, victim, spell, damage, periodic);
+
     /// <summary>Heal <paramref name="amount"/>; returns the health actually restored.</summary>
     uint Heal(Unit caster, Unit target, SpellInfo spell, uint amount);
 }
