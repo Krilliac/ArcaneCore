@@ -8,8 +8,8 @@ namespace ArcaneCore.Game.Tests.Security;
 
 /// <summary>
 /// vmangos has no per-player channel cap (ChannelMgr.cpp:52-69), so a client can create
-/// unlimited named channels. The cap is hardening: the 1.12 UI joins at most about ten, and
-/// 0 restores the unlimited retail behaviour.
+/// unlimited named channels. The cap is opt-in hardening (Social:MaxJoinedChannels, default 0 =
+/// unlimited, as retail); the 1.12 UI joins at most about ten.
 /// </summary>
 public sealed class ChannelJoinCapTests
 {
@@ -54,12 +54,11 @@ public sealed class ChannelJoinCapTests
     }
 
     [Fact]
-    public void ZeroMeansUnlimited_AndTheDefaultIsHardened()
+    public void ZeroMeansUnlimited_AndTheDefaultIsRetail()
     {
         using var f = new SocialFixture();
         Player a = f.AddPlayer(1);
-        Assert.Equal(64, f.Context.Channels.MaxJoinedChannels);
-        f.Context.Channels.MaxJoinedChannels = 0;
+        Assert.Equal(0, f.Context.Channels.MaxJoinedChannels);
 
         for (int i = 0; i < 100; i++)
         {

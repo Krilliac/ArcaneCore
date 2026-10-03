@@ -54,7 +54,7 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        if (!MovementValidator.IsValid(movement))
+        if (!MovementValidator.IsValid(movement, session.StrictMovementFiniteness))
         {
             return; // dropped like vmangos VerifyMovementInfo failures (MovementHandler.cpp:596,:690)
         }
@@ -102,7 +102,7 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
 
         // An invalid packet is dropped, not stored, relayed or punished with a kick
         // (vmangos HandleMovementOpcodes: VerifyMovementInfo, MovementHandler.cpp:315,:489,:1042-1061).
-        if (!MovementValidator.IsValid(movement))
+        if (!MovementValidator.IsValid(movement, session.StrictMovementFiniteness))
         {
             return;
         }

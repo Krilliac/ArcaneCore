@@ -15,11 +15,14 @@ public sealed class ChannelManager(SocialContext context)
     private readonly Dictionary<ObjectGuid, HashSet<Channel>> _joined = [];
 
     /// <summary>
-    /// Most channels one player may be in; 0 = unlimited. Hardening: vmangos has no cap
-    /// (ChannelMgr.cpp:52-69), so a client could create unbounded named channels. The 1.12 UI
-    /// joins about ten, so 64 is never reached by a retail client.
+    /// Most channels one player may be in; 0 = unlimited (retail, the default). Opt-in hardening:
+    /// vmangos has no cap (ChannelMgr.cpp:52-69). Backed by Social:MaxJoinedChannels.
     /// </summary>
-    public int MaxJoinedChannels { get; set; } = 64;
+    public int MaxJoinedChannels
+    {
+        get => context.Options.MaxJoinedChannels;
+        set => context.Options.MaxJoinedChannels = value;
+    }
 
     /// <summary>The channel called <paramref name="name"/> for <paramref name="team"/>, if it exists (case-insensitive).</summary>
     public Channel? Find(Team team, string name) => Channels(team).GetValueOrDefault(name.ToLowerInvariant());

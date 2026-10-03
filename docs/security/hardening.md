@@ -33,8 +33,11 @@ with unusable credentials gets `FAIL_NOACCESS` (0x0D, `AuthCodes.h`).
 
 ### World authentication enforces account status (F4, status half)
 
-`WorldSession.HandleAuthSessionAsync` answers `AUTH_BANNED` (0x1C) or `AUTH_SUSPENDED` (0x20)
-for a non-active account after the digest check (vmangos `WorldSocket.cpp:283-345`).
+`WorldSession.HandleAuthSessionAsync` answers `AUTH_BANNED` (0x1C) for every non-active account
+(banned or suspended) after the digest check. vmangos has exactly one ban reply, `AUTH_BANNED`
+(`WorldSocket.cpp:333-345`), for a banned account or an IP ban, temporary or permanent;
+`AUTH_SUSPENDED` does not occur in that file (the only other nearby reply is `AUTH_UNAVAILABLE`
+at `:355`). The IP-ban half of that check is not implemented.
 `AuthResponseCode` gained `Unavailable 0x10`, `AlreadyOnline 0x1D`, `DbBusy 0x1F`, `Banned`,
 `Suspended`, confirmed against `wow_messages world/enums/world_result.wowm:35,57,59,63,65`.
 Not delivered: the `account_banned` / `ip_banned` tables, IP bans and session-key age (see
@@ -55,8 +58,8 @@ the write is cancelled and the stream disposed. `StalledWriterTests`.
 * Challenge body must be 31..47 bytes, `username_len <= 16`, locale in the vmangos allow-list;
   violations close without a reply as realmd does (`AuthSocket.cpp:248-262, 273, 213-230,
   306`).
-* `Auth:StrictUsernameCharset = true`: names outside printable ASCII get `UnknownAccount`
-  (hardening).
+* `Auth:StrictUsernameCharset = true` (opt-in, default false = retail): names outside printable
+  ASCII get `UnknownAccount`.
 * Client text goes through `LogSafe.Escape` before logging (CR/LF/ESC and format characters
   escaped, 64-character cap) to stop log forging.
 * `Realm/appsettings.json` ships `AutocreateAccounts: false` (was `true`). **Deviation from the
@@ -67,9 +70,10 @@ the write is cancelled and the stream disposed. `StalledWriterTests`.
 
 `Kernel/Net/AcceptLoop` keeps the loop alive through `SocketException`/`IOException`
 (rate-limited log, 100 ms backoff); previously one error faulted the `BackgroundService` and
-stopped the host. `ConnectionLimiter` enforces `Auth:` / `World:MaxConnections = 4096` and
-`MaxConnectionsPerIp = 64` before a DI scope or session exists (0 disables; IPv4-mapped
-addresses share the IPv4 bucket). Both are hardening with no vmangos equivalent. The world
+stopped the host. `ConnectionLimiter` enforces `Auth:` / `World:MaxConnections` and
+`MaxConnectionsPerIp` before a DI scope or session exists (default 0 = unlimited, retail;
+IPv4-mapped addresses share the IPv4 bucket). Both caps are opt-in hardening with no vmangos
+equivalent. The world
 `HandleClientAsync` no longer evaluates `RemoteEndPoint` outside its `try`.
 
 ### Movement validation (F8)
@@ -78,28 +82,31 @@ addresses share the IPv4 bucket). Both are hardening with no vmangos equivalent.
 `IsValidMapCoord` `GridDefines.h:175-203`): |x|,|y| <= MAP_HALFSIZE - 0.5 (17066.166),
 |z| <= 400000, finite |o| <= 4 pi, on a transport |tx|,|ty| <= 250 and |tz| <= 100 and
 position + transport offset itself a valid coordinate. Invalid packets are **dropped** (vmangos
-behaviour) instead of kicking. Hardening beyond retail: pitch, jump speeds/angles, spline
-elevation and transport orientation must be finite, because they were stored and relayed to
-every observer verbatim. `MovementRelayTests` proved the relay before the fix.
+behaviour) instead of kicking. Opt-in hardening beyond retail
+(`World:StrictMovementFiniteness`, default false): pitch, jump speeds/angles and spline
+elevation must be finite, because they are stored and relayed to every observer verbatim. `MovementRelayTests` proved the relay before the fix.
 
 ### Channel cap (F12)
 
-`ChannelManager.MaxJoinedChannels = 64` (0 = unlimited, retail). A refused join answers the
-existing `INVALID_NAME` notify and creates no channel. Hardening: vmangos has no cap
-(`ChannelMgr.cpp:52-69`).
+`Social:MaxJoinedChannels` (`SocialOptions`, default 0 = unlimited, retail). A positive value
+makes a refused join answer the existing `INVALID_NAME` notify and create no channel. Opt-in
+hardening: vmangos has no cap (`ChannelMgr.cpp:52-69`).
 
 ## Configuration summary
+
+Every non-retail behaviour is opt-in and defaults to retail.
 
 | Key | Default | Source |
 |---|---|---|
 | `Auth:MaxSessionDurationSeconds` | 300 | vmangos retail |
-| `Auth:ReadTimeoutSeconds` | 30 | hardening |
-| `Auth:StrictUsernameCharset` | true | hardening |
-| `Auth:MaxConnections` / `MaxConnectionsPerIp` | 4096 / 64 | hardening |
-| `World:MaxConnections` / `MaxConnectionsPerIp` | 4096 / 64 | hardening |
-| `Auth:AutocreateAccounts` (shipped) | false | hardening of a WCell convenience |
-| `WorldSessionOptions.WriterDrainGrace` | 5 s | hardening (code default, not config-bound) |
-| `ChannelManager.MaxJoinedChannels` | 64 | hardening (code default, not config-bound) |
+| `Auth:ReadTimeoutSeconds` | 0 (off) | opt-in hardening |
+| `Auth:StrictUsernameCharset` | false | opt-in hardening |
+| `Auth:MaxConnections` / `MaxConnectionsPerIp` | 0 / 0 (unlimited) | opt-in hardening |
+| `World:MaxConnections` / `MaxConnectionsPerIp` | 0 / 0 (unlimited) | opt-in hardening |
+| `Auth:AutocreateAccounts` | false (also shipped) | retail has no autocreate |
+| `World:WriterDrainGrace` | 00:00:00 (wait forever) | opt-in hardening, for example `00:00:05` |
+| `World:StrictMovementFiniteness` | false | opt-in hardening |
+| `Social:MaxJoinedChannels` | 0 (unlimited) | opt-in hardening |
 
 ## Not delivered (limits)
 
@@ -117,12 +124,12 @@ existing `INVALID_NAME` notify and creates no channel. Hardening: vmangos has no
 * Chat hygiene (255-byte cap, invisible characters, link grammar, flood mute).
 * The seeded fuzz/property harness and source-guard tests.
 * Reconnect commands (0x02/0x03) are still unsupported by `LogonSession`.
-* `MaxJoinedChannels`, `WriterDrainGrace` are not bound to configuration.
 * A real 1.12.1 client has not been run against any of this; the logon and world
   hardening is covered by protocol-level tests and the MockClient self-test only.
 
 ## Open questions for the developer
 
-* Hardened defaults (connection caps, read timeout, channel cap, charset) versus unlimited
-  retail behaviour: they are listed above so any can be set to 0 / false.
+* Whether any hardening knob should ship enabled in the shipped appsettings (all default to
+  retail now; an operator exposing the daemons to the internet will want the connection caps
+  and read timeout).
 * Whether the integrator should flip the README/M1 acceptance wording for autocreate.

@@ -11,6 +11,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.World.Social;
 
@@ -20,7 +21,11 @@ namespace ArcaneCore.World.Social;
 /// channel chat and the background work (guild preload, ordered writes, out-of-range party
 /// stats). Discovered through <see cref="IWorldFeature"/> (docs/integration/seams.md).
 /// </summary>
-public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFactory scopes, ILoggerFactory loggers)
+public sealed class SocialFeature(
+    CharacterDirectory directory,
+    IServiceScopeFactory scopes,
+    ILoggerFactory loggers,
+    IOptions<SocialOptions>? socialOptions = null)
     : IWorldFeature, IChatMessageHandler, IAsyncDisposable
 {
     /// <summary>How often grouped players' changed stats go to out-of-range members (vmangos sends them from the player update).</summary>
@@ -46,7 +51,7 @@ public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFac
     public SocialContext Context => _context ?? throw new InvalidOperationException("social feature not attached");
 
     /// <summary>Realm rules for cross-faction interaction (vmangos AllowTwoSide.*); off by default.</summary>
-    public SocialOptions Options { get; } = new();
+    public SocialOptions Options { get; } = socialOptions?.Value ?? new SocialOptions();
 
     /// <summary>Completes when the stored guilds are installed (world thread).</summary>
     public Task GuildsLoaded => _guildsLoaded;

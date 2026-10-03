@@ -12,10 +12,10 @@ namespace ArcaneCore.World.Handlers;
 /// position plus transport offset must itself be a valid map coordinate.
 /// </para>
 /// <para>
-/// Hardening that retail does not do (it only checks the fields above): every other float the
-/// block carries (pitch, jump speeds, spline elevation, transport orientation) must be finite,
-/// because they are stored and re-broadcast to every observer and a NaN or Infinity would be
-/// relayed verbatim into other clients.
+/// Opt-in hardening that retail does not do (World:StrictMovementFiniteness, default off): every
+/// other float the block carries (pitch, jump speeds, spline elevation) must be finite, because
+/// they are stored and re-broadcast to every observer and a NaN or Infinity would be relayed
+/// verbatim into other clients.
 /// </para>
 /// </summary>
 public static class MovementValidator
@@ -28,7 +28,7 @@ public static class MovementValidator
     private static readonly double MaxOrientation = 4 * Math.PI;
 
     /// <summary>True when the movement block may be applied and relayed.</summary>
-    public static bool IsValid(in MovementInfo m)
+    public static bool IsValid(in MovementInfo m, bool strictFiniteness = false)
     {
         if (!IsValidMapCoord(m.X, m.Y, m.Z, m.Orientation))
         {
@@ -56,11 +56,12 @@ public static class MovementValidator
             }
         }
 
-        // hardening: nothing non-finite may be stored or relayed
-        return float.IsFinite(m.Pitch)
+        // opt-in hardening: nothing non-finite may be stored or relayed
+        return !strictFiniteness
+            || (float.IsFinite(m.Pitch)
             && float.IsFinite(m.JumpZSpeed) && float.IsFinite(m.JumpCosAngle)
             && float.IsFinite(m.JumpSinAngle) && float.IsFinite(m.JumpXySpeed)
-            && float.IsFinite(m.SplineElevation);
+            && float.IsFinite(m.SplineElevation));
     }
 
     private static bool IsValidMapCoord(float x, float y, float z, float o)

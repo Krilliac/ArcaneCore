@@ -11,9 +11,9 @@ public sealed class WorldOptions
     /// <summary>World TCP port. Vanilla default is 8085 (Charter §3).</summary>
     public int Port { get; set; } = 8085;
 
-    /// <summary>Global cap on simultaneous world connections; 0 = unlimited. Hardening (no vmangos equivalent).</summary>
-    public int MaxConnections { get; set; } = 4096;
+    /// <summary>Global cap on simultaneous world connections; 0 = unlimited (retail, the default). Hardening (no vmangos equivalent).</summary>
+    public int MaxConnections { get; set; }
 
-    /// <summary>Cap per client IP address; 0 = unlimited. Hardening: a retail client holds one connection.</summary>
-    public int MaxConnectionsPerIp { get; set; } = 64;
+    /// <summary>Cap per client IP address; 0 = unlimited (retail, the default). Hardening: a retail client holds one connection.</summary>
+    public int MaxConnectionsPerIp { get; set; }
 }

@@ -95,7 +95,7 @@ public sealed class MovementValidatorTests
     [InlineData("sin")]
     [InlineData("xy")]
     [InlineData("spline")]
-    public void NonFiniteAuxiliaryFields_AreRejected(string field)
+    public void NonFiniteAuxiliaryFields_AreRejectedOnlyWhenStrict(string field)
     {
         MovementInfo m = Ok();
         switch (field)
@@ -108,6 +108,7 @@ public sealed class MovementValidatorTests
             default: m.SplineElevation = float.NaN; break;
         }
 
-        Assert.False(MovementValidator.IsValid(m));
+        Assert.True(MovementValidator.IsValid(m));   // retail: not checked
+        Assert.False(MovementValidator.IsValid(m, strictFiniteness: true));
     }
 }

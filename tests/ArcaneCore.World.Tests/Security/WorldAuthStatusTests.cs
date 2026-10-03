@@ -13,8 +13,10 @@ namespace ArcaneCore.World.Tests.Security;
 
 /// <summary>
 /// The world daemon must not admit an account the realm would have refused. vmangos joins
-/// account_banned in the CMSG_AUTH_SESSION query and answers AUTH_BANNED (permanent) or
-/// AUTH_SUSPENDED (temporary) before the session exists (WorldSocket.cpp:283-345).
+/// account_banned in the CMSG_AUTH_SESSION query and has exactly one ban reply, AUTH_BANNED,
+/// for a banned account, temporary or permanent (WorldSocket.cpp:333-345; AUTH_SUSPENDED does
+/// not occur in that file). The check runs after the digest. vmangos also refuses IP-banned
+/// addresses there (not implemented here).
 /// </summary>
 public sealed class WorldAuthStatusTests
 {
@@ -31,7 +33,7 @@ public sealed class WorldAuthStatusTests
 
     [Theory]
     [InlineData(AccountStatus.Banned, AuthResponseCode.Banned)]
-    [InlineData(AccountStatus.Suspended, AuthResponseCode.Suspended)]
+    [InlineData(AccountStatus.Suspended, AuthResponseCode.Banned)]
     public async Task NonActiveAccountWithValidSessionKey_IsRefusedAndNeverRegistered(
         AccountStatus status, AuthResponseCode expected)
     {

@@ -14,9 +14,27 @@ public sealed class MovementRelayTests
     private const float StartY = -132.493f;
 
     [Fact]
-    public async Task NonFiniteJumpField_IsNotRelayedAndSenderStaysConnected()
+    public async Task NonFiniteJumpField_IsRelayedVerbatimByDefault()
     {
+        // Retail behaviour: vmangos VerifyMovementInfo checks only position/orientation/transport.
         await using var host = WorldTestHost.Start();
+        await using WorldTestClient a = await host.EnterWorldAsync("PLAYERA", "Aaa");
+        await using WorldTestClient b = await host.EnterWorldAsync("PLAYERB", "Bbb");
+        await a.ReadUpdateAsync();
+        await b.ReadUpdateAsync();
+
+        MovementInfo odd = Valid(StartX + 1);
+        odd.Flags |= MovementFlags.Jumping;
+        odd.JumpZSpeed = float.NaN;
+        await a.SendAsync(WorldOpcode.MsgMoveJump, Encode(odd));
+        Assert.Equal(WorldOpcode.MsgMoveJump, (await b.ReadAsync()).Opcode);
+    }
+
+    [Fact]
+    public async Task NonFiniteJumpField_WithStrictFiniteness_IsNotRelayedAndSenderStaysConnected()
+    {
+        await using var host = WorldTestHost.Start(
+            sessionOptions: new ArcaneCore.World.Net.WorldSessionOptions { StrictMovementFiniteness = true });
         await using WorldTestClient a = await host.EnterWorldAsync("PLAYERA", "Aaa");
         await using WorldTestClient b = await host.EnterWorldAsync("PLAYERB", "Bbb");
         await a.ReadUpdateAsync();

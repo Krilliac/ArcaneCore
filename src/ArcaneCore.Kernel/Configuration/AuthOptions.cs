@@ -26,20 +26,21 @@ public sealed class AuthOptions
 
     /// <summary>
     /// Longest a client may take to deliver the rest of a packet once its command byte has
-    /// arrived, in seconds; 0 disables. Hardening (no vmangos equivalent): a retail client
-    /// sends each logon packet in one write.
+    /// arrived, in seconds; 0 disables. Hardening (no vmangos equivalent, default 0 =
+    /// retail): a retail client sends each logon packet in one write.
     /// </summary>
-    public int ReadTimeoutSeconds { get; set; } = 30;
+    public int ReadTimeoutSeconds { get; set; }
 
     /// <summary>
     /// Reject account names containing anything but printable ASCII (0x21-0x7E). Hardening:
     /// vmangos only escapes the name for SQL. A 1.12 client cannot type other characters.
+    /// Default off (retail).
     /// </summary>
-    public bool StrictUsernameCharset { get; set; } = true;
+    public bool StrictUsernameCharset { get; set; }
 
-    /// <summary>Global cap on simultaneous logon connections; 0 = unlimited. Hardening (no vmangos equivalent).</summary>
-    public int MaxConnections { get; set; } = 4096;
+    /// <summary>Global cap on simultaneous logon connections; 0 = unlimited (retail, the default). Hardening (no vmangos equivalent).</summary>
+    public int MaxConnections { get; set; }
 
-    /// <summary>Cap per client IP address; 0 = unlimited. Hardening: a retail client holds one connection.</summary>
-    public int MaxConnectionsPerIp { get; set; } = 64;
+    /// <summary>Cap per client IP address; 0 = unlimited (retail, the default). Hardening: a retail client holds one connection.</summary>
+    public int MaxConnectionsPerIp { get; set; }
 }
