@@ -3,8 +3,10 @@ using System.Text;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Characters;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Instances;
 using ArcaneCore.World.Net;
@@ -21,7 +23,8 @@ namespace ArcaneCore.World.Tests.Instances;
 /// Dungeon instances end to end over real sessions: the Deadmines area trigger (level
 /// requirement, then SMSG_TRANSFER_PENDING → SMSG_NEW_WORLD → MSG_MOVE_WORLDPORT_ACK) puts
 /// different groups into different instance maps, a teleport takes a player back out, and
-/// CMSG_RESET_INSTANCES / CMSG_REQUEST_RAID_INFO answer from the instance system.
+/// CMSG_RESET_INSTANCES / CMSG_REQUEST_RAID_INFO answer from the instance system; deleting a
+/// character drops its binds in memory and in storage.
 /// </summary>
 public sealed class InstanceLoopbackTests
 {
@@ -138,6 +141,48 @@ public sealed class InstanceLoopbackTests
         Assert.NotSame(one, two);
         Assert.Same(first, one.Map);
         Assert.Same(second, two.Map);
+    }
+
+    [Fact]
+    public async Task CharacterDelete_DropsTheBindInMemoryAndInStorage()
+    {
+        Assert.Contains(typeof(InstanceFeature), Features.WorldFeatures.FeatureTypes.Where(typeof(ICharacterDeleteHook).IsAssignableFrom));
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient keeper = await host.EnterWorldAsync("INSTKEEP", "Instkeep");
+        byte[] key = await host.AddAccountAsync("INSTGONE");
+        WorldTestClient victim = await host.ConnectAsync();
+        await victim.AuthenticateAsync("INSTGONE", key);
+        await victim.CreateCharacterAsync("Instgone");
+        Account account = (await host.Accounts.FindByUsernameAsync("INSTGONE"))!;
+        int id = (await host.Characters.GetByAccountAsync(account.Id)).Single(c => c.Name == "Instgone").Id;
+        var guid = Game.ObjectGuid.Player((uint)id);
+        await victim.LoginAsync((ulong)id);
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Instgone") is not null, "Instgone enters the world");
+        await EnterThroughTriggerAsync(host, victim, "Instgone");
+        uint instance = await InstanceOfAsync(host, "Instgone");
+
+        InstanceFeature feature = await host.PlayerStateAsync("Instkeep", p => Services(p).GetRequiredService<InstanceFeature>());
+        InMemoryInstanceStore store = await host.PlayerStateAsync("Instkeep", p => Services(p).GetRequiredService<InMemoryInstanceStore>());
+        Assert.Equal(instance, await host.OnWorldAsync(() => feature.Instances.GetPlayerBind(guid, Deadmines)?.Save.InstanceId));
+
+        await victim.DisposeAsync();
+        await host.WaitForWorldAsync(() => !host.World.IsOnline(guid), "Instgone leaves the world");
+        await using (WorldTestClient again = await host.ConnectAsync())
+        {
+            await again.AuthenticateAsync("INSTGONE", key);
+            byte[] raw = new byte[8];
+            BinaryPrimitives.WriteUInt64LittleEndian(raw, (ulong)id);
+            await again.SendAsync(WorldOpcode.CmsgCharDelete, raw);
+            Assert.Equal((byte)CharResult.CharDeleteSuccess, (await again.ReadUntilAsync(WorldOpcode.SmsgCharDelete))[0]);
+        }
+
+        Assert.Null(await host.OnWorldAsync(() => feature.Instances.GetPlayerBind(guid, Deadmines)));
+        await feature.FlushAsync();
+        string[] writes = [.. store.Writes];
+        int bound = Array.IndexOf(writes, $"bind {id} {instance} False");
+        int purged = Array.IndexOf(writes, $"delete character {id}");
+        Assert.True(bound >= 0 && purged > bound);
+        Assert.True(Array.IndexOf(writes, $"unbind {id} {instance}") is int unbound && unbound > bound && unbound < purged);
     }
 
     private static IServiceProvider Services(Player player) => ((WorldSession)player.Session).Services;

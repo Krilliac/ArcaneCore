@@ -1,6 +1,7 @@
 # Integration notes: instances and dungeons (`feat/instances`)
 
-Base: `codex/integrate-feature-fleet-20261003` at `0d32fba1070a0be08932a85551a4c1b4ca191cfc`.
+Base: `codex/integrate-feature-fleet-20261003` at `0d32fba1070a0be08932a85551a4c1b4ca191cfc`,
+brought up to `9346ad4` (#21, character deletion seams) for the delete hook.
 References: vmangos `MapManager.cpp`, `Map.cpp` (`DungeonMap`), `MapPersistentStateMgr.cpp`,
 `Player.cpp`, `Group.cpp`, `MiscHandler.cpp`, `MovementHandler.cpp`; packet layouts from
 gtker/wow_messages (1.12). Behaviour follows vmangos unless a gap below says otherwise.
@@ -109,6 +110,10 @@ gtker/wow_messages (1.12). Behaviour follows vmangos unless a gap below says oth
     wiring is posted to the world thread, because features attach in type-name order.
   - Runs `UpdateSchedule` every 5 s on a timer posted to the world thread.
   - Persists through an ordered, retrying write queue that is drained in `StopAsync`.
+  - Is an `ICharacterDeleteHook` (#21): `OnCharacterDeletingAsync` drains the write queue so
+    no queued bind lands after the rows go; `OnCharacterDeletedAsync` calls
+    `InstanceManager.DeleteCharacter` on the world thread (binds and last instance dropped)
+    and queues `IInstanceStore.DeleteCharacterAsync` after those writes.
 
   `InstanceHandlers` handles CMSG_RESET_INSTANCES and CMSG_REQUEST_RAID_INFO.
   `InstanceCommands` adds `.instance listbinds | unbind <map|all> | stats` (administrator).
@@ -128,6 +133,9 @@ The last table holds what vmangos keeps in `characters.instance_id`. The tables 
 nothing existing changes. `EfInstanceStore` implements `Kernel/Instances/IInstanceStore`.
 Every write is an idempotent upsert or delete. `LoadAsync` first deletes binds and
 last-instance rows of characters that no longer exist, and binds of missing instances.
+`InstanceDataModule` implements `ICharacterDataCleanup` (#21): character deletion removes the
+character's `character_instance` and `character_last_instance` rows in the deletion
+transaction; an instance nobody is bound to any more is dropped at the next load.
 
 **Schema version: the fleet plan reserves characters v9.** `DataModules.Compose` refuses
 version gaps and the integration base ends at v6, so this branch claims
@@ -217,9 +225,10 @@ All of these are minimal and additive unless stated otherwise.
 - `tests/ArcaneCore.Data.Tests/InstanceStoreTests.cs` (3 × provider matrix):
   - Round trip and in-place updates.
   - Deletes and no-op deletes.
-  - The load drops rows of deleted characters (deleted through `EfCharacterStore`) and binds
-    of missing instances.
-- `tests/ArcaneCore.World.Tests/Instances/InstanceLoopbackTests.cs` (3 tests over real
+  - Deleting a character through `EfCharacterStore` removes its rows (module cleanup), and
+    the load drops orphaned binds and binds of missing instances.
+  - `CharacterDeletionTests` (#21) also checks that the module declares its cleanup.
+- `tests/ArcaneCore.World.Tests/Instances/InstanceLoopbackTests.cs` (4 tests over real
   sessions):
   - Two groups through the Deadmines area trigger, with the full worldport-ack flow, get
     separate instances.
@@ -227,19 +236,14 @@ All of these are minimal and additive unless stated otherwise.
     and CMSG_REQUEST_RAID_INFO. The persisted writes arrive in order, and re-entering creates
     a new instance.
   - Each instance spawns its own creatures.
+  - CMSG_CHAR_DELETE of a character bound to a dungeon drops the bind in memory and queues
+    unbind, then the character purge, in order.
 - Existing tests pass unchanged except for the two edits listed above.
 
 ## Gaps (honest)
 
-- **Character deletion:** no seam exists. `ICharacterHooks` has no delete callback, and
-  `CharacterHandlers` calls `ICharacterStore.DeleteAsync` directly. Two things cover it:
-  - The startup load drops binds and last-instance rows of deleted characters.
-  - `IInstanceStore.DeleteCharacterAsync` / `InstanceManager.DeleteCharacter` /
-    `InstanceWriteQueue.CharacterDeleted` are ready for a future `OnCharacterDeletedAsync`
-    hook.
-
-  Until then a deleted character's in-memory binds live until restart. This is harmless: the
-  character cannot log in.
+- **Character deletion** uses the #21 seams (above). A save left without binds is deleted at
+  once, or when its map unloads.
 - **Group binds are not persisted**, because groups are in-memory only.
 - **Instance contents do not persist across an unload or restart.** This covers creature
   deaths, respawn timers and boss state (vmangos `creature_respawn` / instance data, and
@@ -261,8 +265,6 @@ All of these are minimal and additive unless stated otherwise.
 
 ## Next slice
 
-- A character-delete hook in `ICharacterHooks`, wired to `InstanceManager.DeleteCharacter` and
-  the write queue.
 - Persisted instance state (`creature_respawn`, `gameobject_respawn` per instance) once
   `feat/creature-ai` and `feat/gameobjects-loot` expose respawn seams.
 - `InstanceData`-style scripts (boss state, doors) on `MapCreated`.
