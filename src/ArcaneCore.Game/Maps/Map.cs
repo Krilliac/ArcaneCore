@@ -76,6 +76,9 @@ public sealed class Map
         player.ClearChangedFields();
         player.IsQueuedForUpdate = false;
 
+        // vmangos Player::BuildCreateUpdateBlockForPlayer: the player's own items precede it.
+        player.Inventory.WriteCreateBlocks(player.PendingUpdates, _world.NowMs);
+
         PacketWriter block = player.PendingUpdates.BeginBlock();
         UpdateBlockWriter.WriteCreateBlock(block, player, player, isNewObject: false, _world.NowMs);
         player.PendingUpdates.EndBlock();
@@ -309,6 +312,17 @@ public sealed class Map
 
     private void SendValuesUpdate(WorldObject obj)
     {
+        // An item's fields go to its owner only (vmangos Item::BuildUpdateData).
+        if (obj is Items.Item item)
+        {
+            if (item.Inventory?.Player is { } owner && ReferenceEquals(owner.Map, this))
+            {
+                AppendValues(obj, owner);
+            }
+
+            return;
+        }
+
         if (obj is Player self && ReferenceEquals(self.Map, this))
         {
             AppendValues(obj, self);

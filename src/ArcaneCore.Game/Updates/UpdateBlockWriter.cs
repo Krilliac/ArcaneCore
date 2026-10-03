@@ -108,6 +108,12 @@ public static class UpdateBlockWriter
             visible |= UpdateFieldFlags.Private;
         }
 
+        // vmangos GetUpdateFieldFlagsForTarget: an item's owner also gets OWNER_ONLY | UNK2 (item owner).
+        if (obj is Items.Item item && item.OwnerGuid == viewer.Guid)
+        {
+            visible |= UpdateFieldFlags.OwnerOnly | UpdateFieldFlags.ItemOwner;
+        }
+
         return visible;
     }
 
