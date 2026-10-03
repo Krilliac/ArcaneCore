@@ -2,6 +2,7 @@ using System.Numerics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -103,42 +104,84 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>
-    /// vmangos Creature::SelectHostileTarget: the victim from the threat list (110 % in melee /
-    /// 130 % at range to take aggro), skipping dead, unattackable and leashed targets. Nobody
-    /// left means evade. Returns whether the creature still has a victim.
+    /// vmangos Unit::SelectHostileTarget (Objects/Unit.cpp:7544-7612): the creature's victim for this update. In order: a
+    /// creature still in its respawn pacify chooses nothing (no evade, :7559-7561); a taunter that is still a valid target wins
+    /// (<see cref="ThreatList.GetTauntTarget"/>, :7563); otherwise the threat list picks (110 % in melee / 130 % at range, second-choice
+    /// targets last); a NO_THREAT_LIST creature sticks to its current victim (:7569-7571). A chosen target is attacked unless the
+    /// creature is stunned, confused or fleeing (:7573-7581, the sheep/fear fix). Without a target a NO_THREAT_LIST creature
+    /// just returns false, a creature that is out of combat, taunted or charmed returns false, one that is not chasing and still
+    /// has a targetable attacker (a pet sent at a far target) returns false, and anything else evades (:7584-7611).
+    /// Returns whether the creature still has a victim.
+    /// <para>
+    /// Limits: stun / fear / confuse / feign death are read from the unit flags, not from aura holders; "prevents fleeing"
+    /// and the pending-stun state are not modelled; second-choice targets are feared or confused units only (damage-immune,
+    /// breakable-CC and totem rules need the aura engine and a spell catalog the host does not have).
+    /// </para>
     /// </summary>
     public bool SelectHostileTarget(Creature creature)
     {
         ArgumentNullException.ThrowIfNull(creature);
-        if (!creature.IsAlive || creature.IsEvading || !_creatures.ContainsKey(creature.Guid))
+        if (!creature.IsAlive || creature.IsEvading || !_creatures.ContainsKey(creature.Guid) || creature.IsTempPacified)
         {
             return false;
         }
 
         UnitCombat combat = creature.Combat;
-        Unit? victim = combat.HasThreatList
-            ? combat.Threat.SelectVictim(
+        bool noThreatList = (creature.Template.Behaviour & CreatureBehaviourFlags.NoThreatList) != 0;
+
+        Unit? target = combat.Threat.GetTauntTarget(u => IsValidHostileTarget(creature, u));
+        if (target is null && combat.HasThreatList)
+        {
+            target = combat.Threat.SelectVictim(
                 u => IsValidHostileTarget(creature, u),
                 u => MapCombat.CanReachWithMeleeAutoAttack(creature, u),
-                u => IsOutOfThreatArea(creature, u))
-            : null;
-        if (victim is null)
+                u => IsOutOfThreatArea(creature, u),
+                static u => (u.UnitFlags & (UnitFlags.Confused | UnitFlags.Fleeing)) != 0);
+        }
+
+        if (target is null && noThreatList)
         {
-            if (combat.IsInCombat || combat.Victim is not null || combat.HasThreatList)
+            target = combat.Victim;
+        }
+
+        if (target is not null)
+        {
+            if ((creature.UnitFlags & LostControl) == 0)
             {
-                EnterEvadeMode(creature);
+                if (!ReferenceEquals(combat.Victim, target) && Map.Combat.Attack(creature, target, creature.AI?.MeleeEnabled ?? true))
+                {
+                    SendAiReaction(creature);
+                }
+
+                ApplyCombatMovement(creature);
             }
 
+            return true;
+        }
+
+        if (noThreatList)
+        {
+            return false; // like a player: the five second combat timer ends it
+        }
+
+        if (!combat.IsInCombat || combat.Threat.HasTauntCasters || !creature.CharmerGuid.IsEmpty)
+        {
             return false;
         }
 
-        if (!ReferenceEquals(combat.Victim, victim) && Map.Combat.Attack(creature, victim, creature.AI?.MeleeEnabled ?? true))
+        if (creature.Motion.CurrentType != MovementGeneratorType.Chase)
         {
-            SendAiReaction(creature);
+            foreach (Unit attacker in combat.Attackers)
+            {
+                if (ReferenceEquals(attacker.Map, Map) && IsValidHostileTarget(creature, attacker))
+                {
+                    return false;
+                }
+            }
         }
 
-        ApplyCombatMovement(creature);
-        return true;
+        EnterEvadeMode(creature);
+        return false;
     }
 
     /// <summary>

@@ -39,3 +39,21 @@ The list re-sorts lazily (only after a change), with a stable insertion sort, as
   are not implemented: damage threat stays raw damage, MOD_THREAT and spell_threat are unimplemented.
 - Taunt (SPELL_EFFECT_ATTACK_ME, SPELL_AURA_MOD_TAUNT), MOD_TOTAL_THREAT, MODIFY_THREAT_PERCENT have list primitives
   (`TauntApply`, `ApplyTempThreatModifier`, `ModifyThreatPercent`) but no spell handler yet.
+
+### victim-selection (Creatures/CreatureMapSystem.Combat.cs `SelectHostileTarget`)
+
+Creature victim selection now follows vmangos `Unit::SelectHostileTarget` (Objects/Unit.cpp:7544-7612):
+
+1. Dead, evading or unknown creature: false. A creature in its 5 s respawn pacify chooses nothing, does not switch and does not
+   evade (:7559-7561).
+2. A taunt target (latest taunter that is still a valid target) beats the threat list (:7563); then the list picks (two-pass,
+   110%/130%); a NO_THREAT_LIST creature sticks to its current victim (:7569-7571).
+3. A chosen target is attacked (and chased) unless the creature is stunned, confused or fleeing (:7573-7581).
+4. No target: NO_THREAT_LIST returns false; not in combat, taunted or charmed returns false; a creature that is not chasing but
+   still has a targetable attacker returns false (a pet sent at a far target, :7592-7603); anything else evades.
+
+Limits: stun/fear/confuse are read from `UnitFlags` (no aura-holder query), the "prevents fleeing" and pending-stun states are
+not modelled, second-choice targets are only feared or confused units (damage-immune, breakable-CC and the totem rule of
+`Unit::IsSecondaryThreatTarget`, Objects/Unit.cpp:9644-9676, need the aura engine and a spell catalog the host does not have).
+The unreachable-target timers (Creature.cpp:1017-1040) are not delivered: nothing in the repository reports a chase as
+unreachable (`TargetNotReachableEvent` has no producer), so there is nothing honest to time.
