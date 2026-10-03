@@ -277,4 +277,27 @@ public sealed class CombatSkillsTests
         Assert.False(rig.Player.IsAlive);
         Assert.Equal((ushort)20, rig.Skills.GetValuePure(SkillIds.Defense));
     }
+
+    [Theory]
+    [InlineData(17, true)]    // Battle Stance: flags1 Stance, not "shapeshifted" (vmangos Unit::IsShapeShifted, Unit.cpp:5843-5852)
+    [InlineData(30, true)]    // Stealth: Stance flag
+    [InlineData(31, true)]    // Moonkin: Stance flag
+    [InlineData(0, true)]
+    [InlineData(1, false)]    // Cat, Bear, Travel, Ghost Wolf, Shadowform: shapeshifted, no weapon skill (Player.cpp:5351)
+    [InlineData(5, false)]
+    [InlineData(3, false)]
+    [InlineData(16, false)]
+    [InlineData(28, false)]
+    public void WeaponSkillGain_FollowsTheFormFlags_NotTheFormByte(byte form, bool gains)
+    {
+        var rig = new Rig();
+        rig.Skills.Set(SkillIds.Swords, 20, 50);
+        rig.Equip(OneHandSword, InventorySlots.MainHand);
+        rig.Player.SetByte(UpdateFields.UnitFieldBytes1, 2, form);
+
+        rig.SkillRandom.Floats.Enqueue(0f);
+        rig.Map.Combat.AttackerStateUpdate(rig.Player, rig.Creature, WeaponAttackType.BaseAttack);
+
+        Assert.Equal((ushort)(gains ? 21 : 20), rig.Skills.GetValuePure(SkillIds.Swords));
+    }
 }

@@ -45,6 +45,24 @@ public sealed class ShapeshiftFormCatalog
         Enumerable.Range((int)BattleStance, (int)(BerserkerStance - BattleStance + 1))
             .Select(id => new ShapeshiftFormInfo((uint)id, 1, 0)));
 
+    /// <summary>
+    /// Every row of the build-5875 client SpellShapeshiftForm.dbc (32 rows, flags1 and creatureType), for servers
+    /// without <c>Combat:ShapeshiftFormDbcPath</c>. Provenance: read from the developer's own 1.12.1 client
+    /// (Data\dbc.MPQ, DBFilesClient\SpellShapeshiftForm.dbc), not from the GPL references and not downloaded; only
+    /// the two meaningful columns are kept. flags1 is 7 (Stance | NotToggleable | PersistOnDeath) for the warrior
+    /// stances 17-19, 8 (CanInteractNpc) for Shadowform 28, 1 (Stance) for Stealth 30 and the Moonkin form 31 (and
+    /// the unused row 32), and 0 for every other row, the druid animal forms included. creatureType is 1 (beast)
+    /// for 1, 3, 4, 5, 8, 14 and 16, -1 for 17 and 28 and 0 for the rest (vmangos Unit::GetCreatureType ignores
+    /// values of 0 or below). A configured DBC always overrides this table.
+    /// </summary>
+    public static ShapeshiftFormCatalog Retail { get; } = new(
+        [
+            new(1, 0, 1), new(2, 0, 0), new(3, 0, 1), new(4, 0, 1), new(5, 0, 1), new(6, 0, 0), new(7, 0, 0), new(8, 0, 1),
+            new(9, 0, 0), new(10, 0, 0), new(11, 0, 0), new(12, 0, 0), new(13, 0, 0), new(14, 0, 1), new(15, 0, 0), new(16, 0, 1),
+            new(17, 7, -1), new(18, 7, 0), new(19, 7, 0),
+            new(20, 0, 0), new(21, 0, 0), new(22, 0, 0), new(23, 0, 0), new(24, 0, 0), new(25, 0, 0), new(26, 0, 0), new(27, 0, 0),
+            new(28, 8, -1), new(29, 0, 0), new(30, 1, 0), new(31, 1, 0), new(32, 1, 0),
+        ]);
     public int Count => _forms.Count;
 
     /// <summary>Every form, in no particular order.</summary>

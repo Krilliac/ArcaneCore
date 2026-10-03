@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.WorldData;
 
 namespace ArcaneCore.Game.Combat;
 
@@ -43,6 +44,12 @@ public sealed class CombatOptions
 
     /// <summary>Path of the client's SpellShapeshiftForm.dbc (build 5875). Empty = only the three warrior stances are known.</summary>
     public string ShapeshiftFormDbcPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Refuse to start without <see cref="ShapeshiftFormDbcPath"/> instead of falling back to the built-in
+    /// build-5875 table (<c>ShapeshiftFormCatalog.Retail</c>). Default false.
+    /// </summary>
+    public bool RequireShapeshiftFormDbc { get; set; }
 
     /// <summary>
     /// vmangos World::setConfigPos (World.cpp:2959-2967): Rate.Mana and Rate.Rage.Loss cannot be negative and fall
@@ -97,6 +104,7 @@ public sealed class CombatEnvironment
     private readonly bool _frozen;
     private IPowerAuraSource? _auras;
     private IMeleeSpellHooks? _meleeSpells;
+    private ShapeshiftFormCatalog? _shapeshiftForms;
 
     public CombatEnvironment(CombatOptions options, IPowerAuraSource? auras = null, IMeleeSpellHooks? meleeSpells = null)
         : this(options, auras, meleeSpells, frozen: false)
@@ -135,6 +143,20 @@ public sealed class CombatEnvironment
         {
             ThrowIfFrozen();
             _meleeSpells = value;
+        }
+    }
+
+    /// <summary>
+    /// The form table the daemon runs with (the client DBC or the built-in retail rows), for combat code that asks
+    /// whether a unit is shapeshifted; null = <c>ShapeshiftFormCatalog.Retail</c> (set by the stance feature).
+    /// </summary>
+    public ShapeshiftFormCatalog? ShapeshiftForms
+    {
+        get => _shapeshiftForms;
+        set
+        {
+            ThrowIfFrozen();
+            _shapeshiftForms = value;
         }
     }
 

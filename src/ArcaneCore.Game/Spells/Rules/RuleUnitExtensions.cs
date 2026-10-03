@@ -45,7 +45,10 @@ public static class RuleUnitExtensions
         ArgumentNullException.ThrowIfNull(unit);
         uint type = unit switch
         {
-            Player => HumanoidCreatureType,
+            // vmangos Unit::GetCreatureType (Unit.cpp:7722-7735): the form's DBC creature type when above 0 (animal
+            // forms are beasts), else the race's (humanoid for all nine races of ChrRaces.dbc). The form table is
+            // the client's build-5875 one (ShapeshiftFormCatalog.Retail); a differing configured DBC is not consulted here.
+            Player => FormQueries.FormCreatureType(FormQueries.GetForm(unit), null) is var formType and not 0 ? formType : HumanoidCreatureType,
             Creatures.Creature creature => creature.Template.CreatureType,
             _ => 0,
         };

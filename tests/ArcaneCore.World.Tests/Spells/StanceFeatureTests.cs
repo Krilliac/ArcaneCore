@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Spells;
@@ -34,7 +36,7 @@ public sealed class StanceFeatureTests
         => Assert.Contains(typeof(StanceFeature), WorldFeatures.FeatureTypes);
 
     [Fact]
-    public async Task Attach_WithoutADbcPath_InstallsTheHandlerAndGate_WithTheWarriorStances()
+    public async Task Attach_WithoutADbcPath_InstallsTheHandlerAndGate_WithTheRetailTable()
     {
         await using ServiceProvider sp = Services();
         using WorldRuntime world = NewWorld(sp);
@@ -45,8 +47,19 @@ public sealed class StanceFeatureTests
         SpellSystem spells = sp.GetRequiredService<SpellFeature>().System;
         Assert.True(spells.HasAuraHandler(AuraType.ModShapeshift));
         Assert.Single(spells.CastChecks.OfType<StanceCastCheck>());
-        Assert.Equal(1u, feature.Service!.GetFormFlags(ShapeshiftForm.BattleStance));
-        Assert.Null(feature.Service.GetFormFlags(ShapeshiftForm.Cat));
+        Assert.Equal(7u, feature.Service!.GetFormFlags(ShapeshiftForm.BattleStance));   // client row: Stance | NotToggleable | PersistOnDeath
+        Assert.Equal(0u, feature.Service.GetFormFlags(ShapeshiftForm.Cat));              // a client row, not "unknown"
+        Assert.Equal(1u, feature.Service.GetFormFlags(ShapeshiftForm.Stealth));
+        Assert.Same(ShapeshiftFormCatalog.Retail, CombatEnvironment.For(world).ShapeshiftForms);
+    }
+
+    [Fact]
+    public async Task Attach_WithRequireShapeshiftFormDbcAndNoPath_StopsTheDaemonStart()
+    {
+        await using ServiceProvider sp = Services(new KeyValuePair<string, string?>("Combat:RequireShapeshiftFormDbc", "true"));
+        using WorldRuntime world = NewWorld(sp);
+
+        Assert.Throws<InvalidOperationException>(() => new StanceFeature(sp, NullLogger<StanceFeature>.Instance).Attach(world));
     }
 
     [Fact]

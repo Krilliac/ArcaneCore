@@ -1,6 +1,8 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Skills;
+using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.Skills;
 
 namespace ArcaneCore.Game.Combat;
@@ -15,9 +17,10 @@ namespace ArcaneCore.Game.Combat;
 /// (Unit.cpp:2515-2545) and Unit::ProcSkillsAndReactives (Unit.cpp:8834-8846).
 /// </summary>
 /// <remarks>
-/// Not modelled: shapeshift forms (the weapon skill of a form without weapons is the level maximum in vmangos
-/// and no weapon skill rises while shapeshifted; the form byte of UNIT_FIELD_BYTES_1 is read for the latter, but
-/// nothing writes it yet), and pets (a pet's owner counts as a player-controlled victim in vmangos).
+/// Weapon-skill gain is suppressed while shapeshifted in the DBC sense (<see cref="FormQueries.IsShapeShifted(Unit, ArcaneCore.Kernel.WorldData.ShapeshiftFormCatalog?)"/>:
+/// a form whose SpellShapeshiftForm row lacks the Stance flag; vmangos Player.cpp:5351), so warrior stances,
+/// Stealth and Moonkin still gain skill. Not modelled: the weapon skill of a form without weapons (the level
+/// maximum in vmangos), and pets (a pet's owner counts as a player-controlled victim in vmangos).
 /// </remarks>
 public static class PlayerCombatSkills
 {
@@ -104,7 +107,7 @@ public static class PlayerCombatSkills
     /// the victim is still alive. Spell weapon-damage skill-ups (a procSpell requiring a weapon) wait for the
     /// spell item data.
     /// </summary>
-    public static void OnMeleeResolved(Unit attacker, Unit victim, WeaponAttackType attackType, MeleeHitOutcome outcome)
+    public static void OnMeleeResolved(Unit attacker, Unit victim, WeaponAttackType attackType, MeleeHitOutcome outcome, ShapeshiftFormCatalog? forms = null)
     {
         if (outcome == MeleeHitOutcome.Evade)
         {
@@ -121,7 +124,7 @@ public static class PlayerCombatSkills
                 Attack: (SkillAttack)attackType,
                 VictimLevel: victim.Level,
                 VictimIsPlayerControlled: victim is Player,
-                ShapeShifted: IsShapeShifted(attackingPlayer),
+                ShapeShifted: FormQueries.IsShapeShifted(attackingPlayer, forms),
                 WeaponSkillId: skill,
                 CanGainSkill: !fishingPole,
                 Intellect: attackingPlayer.GetUInt32(UpdateFields.UnitFieldStat0 + IntellectStat)));
@@ -134,15 +137,12 @@ public static class PlayerCombatSkills
                 Attack: SkillAttack.Base,
                 VictimLevel: attacker.Level,
                 VictimIsPlayerControlled: attacker is Player,
-                ShapeShifted: IsShapeShifted(defendingPlayer),
+                ShapeShifted: FormQueries.IsShapeShifted(defendingPlayer, forms),
                 WeaponSkillId: 0,
                 CanGainSkill: true,
                 Intellect: 0f));
         }
     }
-
-    /// <summary>vmangos GetShapeshiftForm != FORM_NONE: UNIT_FIELD_BYTES_1 byte 2.</summary>
-    private static bool IsShapeShifted(Player player) => player.GetByte(UpdateFields.UnitFieldBytes1, 2) != 0;
 
     private static bool IsBroken(Item item) => item.MaxDurability > 0 && item.Durability == 0;
 }
