@@ -1,0 +1,237 @@
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
+
+namespace ArcaneCore.Game.Pets;
+
+/// <summary><c>map.Pets</c>: the map's <see cref="PetMapSystem"/> (attached to every map by <see cref="DefaultMapUpdaters"/>).</summary>
+public static class MapPetsExtensions
+{
+    extension(Map map)
+    {
+        /// <summary>The summoned units of this map (docs/integration/pets.md), or null before the updater is attached.</summary>
+        public PetMapSystem? Pets => map.FindUpdater<PetMapSystem>();
+    }
+}
+
+/// <summary>
+/// The summoned units of one map and the rules that end them (totems belong to the shaman lane's
+/// <c>Game/Totems/TotemSystem</c>, not to this system): a pet, guardian or mini pet is unsummoned when its owner is
+/// gone, more than <see cref="PetOptions.PetLeashDistance"/> away, no longer owns it, dead and
+/// out of combat, or when its duration ends (vmangos Pet::Update, Pet.cpp:662-712). The creature
+/// itself is an ordinary <see cref="Creature"/> in the map's <see cref="CreatureMapSystem"/>;
+/// this system only owns the summon bookkeeping and the timers.
+/// <para>Thread affinity: world thread.</para>
+/// </summary>
+[DefaultMapUpdater(Order = 150)]
+public sealed class PetMapSystem : IMapUpdater
+{
+    private readonly Map _map;
+    private readonly List<Creature> _summons = [];
+    private SummonService? _service;
+    private bool _combatSubscribed;
+
+    internal PetMapSystem(Map map, WorldRuntime world)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(world);
+        _map = map;
+    }
+
+    /// <summary>Tuning (retail defaults); the world feature replaces it from configuration.</summary>
+    public PetOptions Options { get; set; } = new();
+
+    /// <summary>Every live summoned creature of this map.</summary>
+    public IReadOnlyList<Creature> Summons => _summons;
+
+    /// <summary>The owner's guardians (not totems, not its pet), optionally of one entry (vmangos Unit::m_guardianPets).</summary>
+    public IEnumerable<Creature> GuardiansOf(Unit owner, uint entry = 0)
+        => _summons.Where(c => c.Summon is { Kind: SummonKind.Guardian } && c.OwnerGuid == owner.Guid && (entry == 0 || c.Entry == entry));
+
+    /// <summary>Every summon the unit owns.</summary>
+    public IEnumerable<Creature> SummonsOf(Unit owner) => _summons.Where(c => c.OwnerGuid == owner.Guid);
+
+    /// <summary>The owner's current mini pet, if any.</summary>
+    public Creature? MiniPetOf(Unit owner) => _summons.FirstOrDefault(c => c.Summon is { Kind: SummonKind.MiniPet } && c.OwnerGuid == owner.Guid);
+
+    internal void Register(Creature creature, SummonService service)
+    {
+        _service = service;
+        SubscribeCombat();
+        _summons.Add(creature);
+    }
+
+    private void SubscribeCombat()
+    {
+        if (!_combatSubscribed && _map.FindUpdater<MapCombat>() is { } combat)
+        {
+            combat.DamageDealt += OnDamageDealt;
+            _combatSubscribed = true;
+        }
+    }
+
+    /// <summary>
+    /// vmangos Unit::AttackedBy and the spell/melee damage path (Unit.cpp:4541, 4563, 6080): the pets and
+    /// guardians of a unit that was hit hear <c>OwnerAttackedBy</c>; those of a unit that dealt damage hear
+    /// <c>OwnerAttacked</c>.
+    /// </summary>
+    private void OnDamageDealt(Unit attacker, Unit victim, uint damage, bool direct, bool meleeDamage)
+    {
+        if (_summons.Count == 0)
+        {
+            return;
+        }
+
+        foreach (Creature pet in _summons.ToArray())
+        {
+            if (pet.AI is not PetAI ai || !pet.IsAlive || pet.Summon is not { Kind: SummonKind.Pet or SummonKind.Guardian })
+            {
+                continue;
+            }
+
+            if (pet.OwnerGuid == victim.Guid)
+            {
+                ai.OwnerAttackedBy(attacker);
+            }
+            else if (pet.OwnerGuid == attacker.Guid)
+            {
+                ai.OwnerAttacked(victim);
+            }
+        }
+    }
+
+    /// <summary>Drop the bookkeeping of a creature that left the map (it was killed, unloaded or unsummoned).</summary>
+    internal void Forget(Creature creature)
+    {
+        if (!_summons.Remove(creature))
+        {
+            return;
+        }
+    }
+
+    public void Update(Map map, uint diffMs)
+    {
+        if (_summons.Count == 0)
+        {
+            return;
+        }
+
+        foreach (Creature creature in _summons.ToArray())
+        {
+            if (creature.System is not { } system || !ReferenceEquals(system.FindCreature(creature.Guid), creature) || creature.Summon is not { } links)
+            {
+                // Killed and decayed, or its grid unloaded. vmangos Pet::Update unsummons a pet whose
+                // corpse timer ran out (Pet.cpp:679-686): the owner's pet link and action bar go too.
+                if (creature.Summon is { Kind: SummonKind.Pet } && _map.FindObject(creature.OwnerGuid) is Unit petOwner)
+                {
+                    SummonService.ReleasePetLink(creature, petOwner);
+                }
+
+                Forget(creature);
+                continue;
+            }
+
+            Unit? owner = creature.GetOwner();
+            switch (links.Kind)
+            {
+                case SummonKind.Wild:
+                    UpdateWild(creature, links, diffMs);
+                    break;
+                default:
+                    UpdatePet(creature, links, owner, diffMs);
+                    break;
+            }
+        }
+    }
+
+    public void OnPlayerRemoved(Map map, Player player)
+    {
+        // The owner leaves the map, so its summons cannot stay (vmangos unsummons totems and pets
+        // when the player is removed from the world). A far teleport does not bring them back:
+        // docs/integration/pets.md lists that under the limits.
+        foreach (Creature creature in SummonsOf(player).ToArray())
+        {
+            _service?.Unsummon(creature);
+        }
+    }
+
+    /// <summary>
+    /// vmangos TemporarySummon::Update, TEMPSUMMON_TIMED_DEATH_AND_DEAD_DESPAWN (TemporarySummon.cpp:200-218):
+    /// when the timer has run out the creature is killed unless it is in combat (it is retried every
+    /// tick, <c>m_timer = 0</c>); the corpse is then removed by its creature system like any temporary
+    /// summon. Without a duration (TEMPSUMMON_DEAD_DESPAWN) it only ends with its death.
+    /// </summary>
+    private void UpdateWild(Creature wild, SummonLinks links, uint diffMs)
+    {
+        if (!links.HasTimer)
+        {
+            return;
+        }
+
+        if (links.RemainingMs <= diffMs)
+        {
+            if (!wild.Combat.IsInCombat && wild.IsAlive)
+            {
+                wild.System?.KillCreature(wild);
+            }
+
+            links.RemainingMs = 0;
+        }
+        else
+        {
+            links.RemainingMs -= (int)diffMs;
+        }
+    }
+
+    /// <summary>vmangos Pet::Update (Pet.cpp:662-712) for the states a creature can be in here.</summary>
+    private void UpdatePet(Creature pet, SummonLinks links, Unit? owner, uint diffMs)
+    {
+        if (owner is null || !IsWithinLeash(pet, owner, Options) || (links.Kind == SummonKind.Pet && owner.PetGuid != pet.Guid))
+        {
+            _service?.Unsummon(pet);
+            return;
+        }
+
+        if (pet.DeathState != CreatureDeathState.Alive)
+        {
+            // vmangos CORPSE: the decay timer running out unsummons (Pet.cpp:677-686); the creature
+            // system decays the corpse itself, and the removal is handled in Update.
+            if (pet.DeathState == CreatureDeathState.Corpse && pet.CorpseDecayMs <= diffMs)
+            {
+                _service?.Unsummon(pet);
+            }
+
+            return;
+        }
+
+        // Despawn if the owner is dead and the pet is out of combat.
+        if (!owner.IsAlive && pet.Combat.Victim is null && pet.Combat.Attackers.Count == 0)
+        {
+            _service?.Unsummon(pet);
+            return;
+        }
+
+        if (links.RemainingMs > 0)
+        {
+            if (links.RemainingMs > (int)diffMs)
+            {
+                links.RemainingMs -= (int)diffMs;
+            }
+            else
+            {
+                _service?.Unsummon(pet);
+            }
+        }
+    }
+
+    /// <summary>vmangos <c>IsWithinDistInMap(owner, 120)</c>: the 3D distance less both bounding radii.</summary>
+    private static bool IsWithinLeash(Creature pet, Unit owner, PetOptions options)
+    {
+        float dx = pet.X - owner.X;
+        float dy = pet.Y - owner.Y;
+        float dz = pet.Z - owner.Z;
+        float limit = options.PetLeashDistance + pet.BoundingRadius + owner.BoundingRadius;
+        return ReferenceEquals(pet.Map, owner.Map) && (dx * dx) + (dy * dy) + (dz * dz) <= limit * limit;
+    }
+}
