@@ -1,0 +1,187 @@
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Crafting;
+
+namespace ArcaneCore.Game.Crafting.Enchanting;
+
+/// <summary>
+/// The enchant spell effects (crafting lane): ENCHANT_ITEM (permanent, SpellEffects.cpp:3009-3052), ENCHANT_ITEM_TEMPORARY (:3054-3099) and ENCHANT_HELD_ITEM
+/// (:5009-5057), with the cast checks of <c>Spell::CheckItems</c> (Spell.cpp:7311-7375) and the item-target fit check (<see cref="ItemTargetFitCheck"/>).
+/// <para>
+/// A temporary enchantment lasts the effect value in seconds (<c>damage * 1000</c> ms). Its charge count would come from vmangos' <c>spell_enchant_charges</c>
+/// table, which classic-db does not have: charges are 0 (duration only), a documented limit. The held-item effect takes its duration from the base points
+/// (<c>EffectBasePoints + EffectBaseDice</c>, vmangos <c>CalculateSimpleValue</c>), else the spell duration, else 10 s.
+/// </para>
+/// </summary>
+/// <param name="catalog">The enchantment catalog.</param>
+/// <param name="gmAllowTrades">vmangos <c>GM.AllowTrades</c> (default true): false keeps a game master's enchant from landing (SpellEffects.cpp:3029, :3079).</param>
+/// <param name="tradeItems">Finds the item a trade-slot target names; null: trade items are never found.</param>
+public sealed class EnchantItemSpells(EnchantCatalog catalog, Func<bool>? gmAllowTrades = null, Func<Player, SpellCastTargets, Item?>? tradeItems = null)
+{
+    /// <summary>The held-item fallback duration (SpellEffects.cpp:5033-5035: "10 seconds for enchants which don't have listed duration").</summary>
+    public const uint HeldItemFallbackMs = 10_000;
+
+    /// <summary>
+    /// Register the item-target fit check, the three effects and the two effect checks on <paramref name="system"/>. Throws when one of the effects already
+    /// has a handler (installing a second would replace it) or the fit check is already there.
+    /// </summary>
+    public void Install(SpellSystem system)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        foreach (SpellEffectName effect in new[] { SpellEffectName.EnchantItem, SpellEffectName.EnchantItemTemporary, SpellEffectName.EnchantHeldItem })
+        {
+            if (system.HasEffectHandler(effect))
+            {
+                throw new InvalidOperationException($"the {effect} effect already has a handler");
+            }
+        }
+
+        if (system.CastChecks.OfType<ItemTargetFitCheck>().Any())
+        {
+            throw new InvalidOperationException("the item target fit check is already installed");
+        }
+
+        system.RegisterCastCheck(new ItemTargetFitCheck(tradeItems));
+        system.RegisterEffectCheck(SpellEffectName.EnchantItem, CheckPermanent);
+        system.RegisterEffectCheck(SpellEffectName.EnchantItemTemporary, CheckTemporary);
+        system.RegisterEffect(SpellEffectName.EnchantItem, Permanent);
+        system.RegisterEffect(SpellEffectName.EnchantItemTemporary, Temporary);
+        system.RegisterEffect(SpellEffectName.EnchantHeldItem, Held);
+    }
+
+    // --- cast checks (Spell.cpp:7311-7375) ----------------------------------------------------------------------------
+
+    /// <summary>ENCHANT_ITEM: the item must exist, be of a high enough level and, in a trade window, be an enchant that may be traded.</summary>
+    private SpellCastResult CheckPermanent(SpellEffectCheckContext context)
+    {
+        if (context.Caster is not Player player || ItemTargetRules.Resolve(player, context.Targets, tradeItems) is not { } item)
+        {
+            return SpellCastResult.ItemGone;
+        }
+
+        if (item.Template.ItemLevel < context.Spell.BaseLevel)
+        {
+            return SpellCastResult.Lowlevel;
+        }
+
+        return TradeRules(player, item, context);
+    }
+
+    /// <summary>ENCHANT_ITEM_TEMPORARY: as the permanent check, without the item level.</summary>
+    private SpellCastResult CheckTemporary(SpellEffectCheckContext context)
+        => context.Caster is Player player && ItemTargetRules.Resolve(player, context.Targets, tradeItems) is { } item
+            ? TradeRules(player, item, context)
+            : SpellCastResult.ItemGone;
+
+    /// <summary>"Not allow enchant in trade slot for some enchant type" (Spell.cpp:7326-7340, :7354-7368).</summary>
+    private SpellCastResult TradeRules(Player caster, Item item, SpellEffectCheckContext context)
+    {
+        if (item.OwnerGuid == caster.Guid)
+        {
+            return SpellCastResult.CastOk;
+        }
+
+        if ((((uint)context.Spell.AttributesEx2) & ItemTargetRules.EnchantOwnItemOnly) != 0)
+        {
+            return SpellCastResult.NotTradeable;
+        }
+
+        if (catalog.Find((uint)context.Effect.MiscValue) is not { } enchant)
+        {
+            return SpellCastResult.Error;
+        }
+
+        return (enchant.Flags & EnchantCatalog.CanSoulboundFlag) != 0 ? SpellCastResult.NotTradeable : SpellCastResult.CastOk;
+    }
+
+    // --- effects --------------------------------------------------------------------------------------------------------
+
+    /// <summary>The item owner: a trade-window item belongs to the other player (vmangos <c>itemTarget-&gt;GetOwner()</c>).</summary>
+    private static Player? OwnerOf(Item item) => item.Inventory?.Player;
+
+    private bool GmRefused(Player caster) => gmAllowTrades?.Invoke() == false && caster.Security > AccountSecurity.Player;
+
+    /// <summary>
+    /// EffectEnchantItemPerm. The craft skill-up comes first, before the enchant is looked up (so it happens even for an enchant the catalog lacks,
+    /// SpellEffects.cpp:3018-3019); the old enchantment comes off, the new one is set with the caster logged and goes on when the item is worn.
+    /// </summary>
+    private void Permanent(SpellEffectContext context)
+    {
+        if (context.Caster is not Player caster || ItemTargetRules.Resolve(caster, context.Cast.Targets, tradeItems) is not { } item)
+        {
+            return;
+        }
+
+        caster.Skills?.UpdateCraft(context.Spell.Id);   // "not grow at item use at item case"
+        uint enchantId = (uint)context.Effect.MiscValue;
+        if (enchantId == 0 || catalog.Find(enchantId) is null || OwnerOf(item) is not { } owner || GmRefused(caster))
+        {
+            return;
+        }
+
+        owner.Enchantments?.Apply(item, EnchantSlots.Permanent, apply: false);
+        ItemEnchantments.Set(item, EnchantSlots.Permanent, enchantId, 0, 0, caster.Guid);
+        owner.Enchantments?.Apply(item, EnchantSlots.Permanent, apply: true);
+    }
+
+    /// <summary>EffectEnchantItemTmp: the temporary slot for <c>value * 1000</c> ms; charges are 0 (see the class remarks).</summary>
+    private void Temporary(SpellEffectContext context)
+    {
+        if (context.Caster is not Player caster || ItemTargetRules.Resolve(caster, context.Cast.Targets, tradeItems) is not { } item)
+        {
+            return;
+        }
+
+        uint enchantId = (uint)context.Effect.MiscValue;
+        if (enchantId == 0 || catalog.Find(enchantId) is null || OwnerOf(item) is not { } owner || GmRefused(caster))
+        {
+            return;
+        }
+
+        owner.Enchantments?.Apply(item, EnchantSlots.Temporary, apply: false);
+        ItemEnchantments.Set(item, EnchantSlots.Temporary, enchantId, (uint)Math.Max(context.Value, 0) * 1000, 0, caster.Guid);
+        owner.Enchantments?.Apply(item, EnchantSlots.Temporary, apply: true);
+    }
+
+    /// <summary>
+    /// EffectEnchantHeldItem: the main-hand item of the target player, only while worn; the temporary slot; a different enchantment already on it keeps
+    /// its place (the effect does nothing).
+    /// </summary>
+    private void Held(SpellEffectContext context)
+    {
+        if (context.Target is not Player owner || owner.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.MainHand) is not { } item)
+        {
+            return;
+        }
+
+        uint enchantId = (uint)context.Effect.MiscValue;
+        if (enchantId == 0 || catalog.Find(enchantId) is null)
+        {
+            return;
+        }
+
+        SpellEffectInfo effect = context.Effect;
+        int seconds = effect.BasePoints + effect.BaseDice;   // vmangos m_currentBasePoints: CalculateSimpleValue
+        uint duration = seconds > 0 ? (uint)seconds * 1000 : 0;
+        if (duration == 0)
+        {
+            duration = (uint)Math.Max(context.Spell.Duration.Base, 0);
+        }
+
+        if (duration == 0)
+        {
+            duration = HeldItemFallbackMs;
+        }
+
+        uint existing = ItemEnchantments.Id(item, EnchantSlots.Temporary);
+        if (existing != 0 && existing != enchantId)
+        {
+            return;
+        }
+
+        ItemEnchantments.Set(item, EnchantSlots.Temporary, enchantId, duration, 0, context.Caster.Guid);
+        owner.Enchantments?.Apply(item, EnchantSlots.Temporary, apply: true);
+    }
+}

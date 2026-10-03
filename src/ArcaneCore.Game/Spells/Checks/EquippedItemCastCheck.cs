@@ -52,7 +52,7 @@ public sealed class EquippedItemCastCheck : ISpellCastCheck
     {
         SpellInfo spell = context.Spell;
         // vmangos runs CheckItems "always (except passive spells)" (Spell.cpp:5696): the proficiency spells carry the item class they grant.
-        if (spell.EquippedItemClass < 0 || spell.IsPassive || context.Caster is not Player player || !context.Targets.Item.IsEmpty)
+        if (spell.EquippedItemClass < 0 || spell.IsPassive || context.Caster is not Player player || !context.Targets.Item.IsEmpty || (context.Targets.Mask & SpellCastTargetFlags.TradeItem) != 0)   // an item target (a trade slot 0 has an empty GUID): ItemTargetFitCheck owns it
         {
             return SpellCastResult.CastOk;
         }

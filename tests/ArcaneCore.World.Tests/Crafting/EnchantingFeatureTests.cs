@@ -35,6 +35,47 @@ public sealed class EnchantingFeatureTests
         Assert.True(feature.IsActive);
         Assert.Equal(1, feature.Catalog.Count);
         Assert.True(await host.PlayerStateAsync("Disenchanter", p => p.Enchantments is not null));
+        Assert.True(await host.OnWorldAsync(() =>
+        {
+            var system = host.WorldServices.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>().System;
+            return system.CastChecks.OfType<ItemTargetFitCheck>().Count() == 1
+                && system.HasEffectHandler(ArcaneCore.Game.Spells.SpellEffectName.EnchantItem)
+                && system.HasEffectHandler(ArcaneCore.Game.Spells.SpellEffectName.EnchantItemTemporary)
+                && system.HasEffectHandler(ArcaneCore.Game.Spells.SpellEffectName.EnchantHeldItem);
+        }));
+    }
+
+    [Fact]
+    public async Task ALoadedPlayer_HasTheItemHookInstalled_SoAnEnchantmentFollowsTheEquipState()
+    {
+        var content = new ArcaneCore.World.Tests.Items.ItemTestContent();
+        content.Templates.Templates.Add(new ArcaneCore.Kernel.Items.ItemTemplate { Entry = 25, Class = 2, SubClass = 7, Name = "Worn Shortsword", DisplayId = 1542, Quality = 1, InventoryType = 21, Delay = 1900, MaxDurability = 20, Damages = [new ArcaneCore.Kernel.Items.ItemDamage(1, 3, 0)] });
+        content.Templates.StartingItems.Add(new ArcaneCore.Kernel.Items.StartingItem(1, 1, 25, 1));
+        WorldTestHost host;
+        using (content.Use())
+        {
+            host = WorldTestHost.Start(configureServices: Services(Catalog()));
+        }
+
+        await using (host)
+        {
+            await using WorldTestClient client = await host.EnterWorldAsync("ENCHANT3", "Sharpener");
+
+            (uint worn, uint unworn) = await host.OnWorldAsync(() =>
+            {
+                var player = host.World.FindOnlinePlayer("Sharpener")!;
+                var sword = player.Inventory.GetItem(ArcaneCore.Game.Items.InventorySlots.Bag0, ArcaneCore.Game.Items.InventorySlots.MainHand)!;
+                uint before = player.GetUInt32(ArcaneCore.Game.UpdateFields.UnitFieldStat0);
+                ItemEnchantments.Set(sword, EnchantSlots.Permanent, 7, 0, 0);
+                player.Enchantments!.Apply(sword, EnchantSlots.Permanent, apply: true);
+                uint with = player.GetUInt32(ArcaneCore.Game.UpdateFields.UnitFieldStat0) - before;
+                player.Inventory.SwapItem(sword.BagSlot, sword.Slot, ArcaneCore.Game.Items.InventorySlots.Bag0, ArcaneCore.Game.Items.InventorySlots.ItemStart + 10);
+                return (with, player.GetUInt32(ArcaneCore.Game.UpdateFields.UnitFieldStat0) - before);
+            });
+
+            Assert.Equal(3u, worn);
+            Assert.Equal(0u, unworn);
+        }
     }
 
     [Fact]

@@ -1,10 +1,14 @@
 using ArcaneCore.Data.Crafting;
 using ArcaneCore.Game.Crafting.Enchanting;
+using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Crafting;
 using ArcaneCore.World.Characters;
+using ArcaneCore.World.Economy;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Spells;
@@ -71,6 +75,7 @@ public sealed class EnchantingFeature(IServiceProvider services, ILogger<Enchant
 
         Catalog = catalog;
         _spells = services.GetRequiredService<SpellFeature>();
+        new EnchantItemSpells(catalog, () => Options.GmAllowTrades, TradeItem).Install(_spells.System);
         IsActive = true;
         world.MapCreated += OnMapCreated;
         foreach (Map map in world.Maps)
@@ -79,6 +84,19 @@ public sealed class EnchantingFeature(IServiceProvider services, ILogger<Enchant
         }
 
         logger.LogInformation("Enchanting: {Count} enchantments", catalog.Count);
+    }
+
+    /// <summary>The item a trade-slot target names: the partner's offer in that slot (vmangos SpellCastTargets::Update, SpellCastTargetsInfo.cpp:130-136).</summary>
+    private Item? TradeItem(Player player, SpellCastTargets targets)
+    {
+        if (services.GetService<EconomyFeature>()?.TradeOf(player) is not { } trade || targets.Item.Value >= TradeRules.SlotCount)
+        {
+            return null;
+        }
+
+        TradeSide partner = trade.OtherSide(player);
+        var offered = partner[(int)targets.Item.Value];
+        return offered.IsEmpty ? null : partner.Player.Inventory.GetItemByGuid(offered);
     }
 
     private void OnMapCreated(Map map)

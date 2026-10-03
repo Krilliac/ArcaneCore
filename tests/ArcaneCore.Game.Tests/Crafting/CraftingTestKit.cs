@@ -37,10 +37,10 @@ internal sealed class CraftingTestKit : IDisposable
     }
 
     /// <summary>As above, with extra item templates (item-use tests).</summary>
-    public CraftingTestKit(SpellInfo[] spells, ItemTemplate[] extraItems)
+    public CraftingTestKit(SpellInfo[] spells, ItemTemplate[] extraItems, ArcaneCore.Kernel.Accounts.AccountSecurity security = ArcaneCore.Kernel.Accounts.AccountSecurity.Player)
     {
         Kit = new SpellTestKit(spells);
-        (Player, Session) = Kit.AddPlayer(1);
+        (Player, Session) = Kit.AddPlayer(1, security: security);
         Player.Inventory.Templates = extraItems.Length == 0 ? Templates : new ItemTemplateStore([.. BaseTemplates, .. extraItems], []);
         Player.Inventory.GuidAllocator = new ItemGuidAllocator();
         Player.Inventory.Load([]);
