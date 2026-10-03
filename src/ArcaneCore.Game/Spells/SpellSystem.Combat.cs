@@ -340,39 +340,6 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
-    /// SPELL_EFFECT_DISPEL (vmangos Spell::EffectDispel, re-implemented): EffectMiscValue names the
-    /// dispel type (Spell.dbc Dispel: 1 magic, 2 curse, 3 disease, 4 poison); up to the effect
-    /// value (at least one) random matching auras are removed — harmful auras from a friend,
-    /// beneficial auras from an enemy. Dispel resistance and SMSG_SPELLDISPELLOG are not modelled.
-    /// </summary>
-    private void EffectDispel(SpellEffectContext context)
-    {
-        List<SpellAuraHolder> candidates = DispellableAuras(context.Caster, context.Target, (uint)context.Effect.MiscValue);
-        int count = Math.Max(1, context.Value);
-        if (GetState(context.Target.Guid) is not { } state)
-        {
-            return;
-        }
-
-        while (count-- > 0 && candidates.Count > 0)
-        {
-            int index = Random.Next(candidates.Count);
-            RemoveHolder(state, candidates[index]);
-            candidates.RemoveAt(index);
-        }
-    }
-
-    /// <summary>Auras on <paramref name="target"/> that a dispel of <paramref name="dispelType"/> by <paramref name="caster"/> may remove.</summary>
-    public List<SpellAuraHolder> DispellableAuras(Unit caster, Unit target, uint dispelType)
-    {
-        ArgumentNullException.ThrowIfNull(caster);
-        ArgumentNullException.ThrowIfNull(target);
-        bool friendly = Relations.IsFriendly(caster, target);
-        return [.. GetAuras(target).Where(h => !h.IsRemoved && !h.Spell.IsPassive && h.Spell.Dispel == dispelType && dispelType != 0
-            && h.IsPositive != friendly)];
-    }
-
-    /// <summary>
     /// SPELL_EFFECT_INTERRUPT_CAST (vmangos Spell::EffectInterruptCast): a cast with a cast bar or a
     /// channel whose PreventionType is SILENCE is interrupted, and the target cannot cast spells of
     /// that school for this spell's duration (vmangos Unit::ProhibitSpellSchool); a player is told

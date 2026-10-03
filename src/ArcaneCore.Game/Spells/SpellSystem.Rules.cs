@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Rules.Application;
 
 namespace ArcaneCore.Game.Spells;
@@ -14,6 +15,12 @@ public sealed partial class SpellSystem
     /// calls it. Null until the loot area installs one, which means no window can be open.
     /// </summary>
     public Action<Player>? ReleaseLoot { get; set; }
+
+    /// <summary>
+    /// Talent spell modifiers (vmangos Player::ApplySpellMod: crit chance and damage, resist-miss chance, dispel
+    /// resistance, ...). The identity until the talents area installs the real storage.
+    /// </summary>
+    public ISpellModifiers SpellModifiers { get; set; } = ISpellModifiers.None;
 
     /// <summary>
     /// The application rules run for every spell landing on a target, in order (mechanic resistance, diminishing

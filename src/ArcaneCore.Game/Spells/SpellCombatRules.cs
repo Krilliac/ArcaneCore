@@ -67,8 +67,8 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts
     /// <summary>Rule tunables (docs/areas/spell-rules.md); every default is the retail behaviour.</summary>
     public SpellRuleOptions Options { get; init; } = new();
 
-    /// <summary>Talent spell modifiers (resist-miss chance, crit chance, crit damage); the identity until the talents area installs one.</summary>
-    public ISpellModifiers Modifiers { get; init; } = ISpellModifiers.None;
+    /// <summary>Talent spell modifiers for these rules only; null uses <see cref="SpellSystem.SpellModifiers"/> (the identity until the talents area installs one).</summary>
+    public ISpellModifiers? Modifiers { get; init; }
 
     /// <summary>Stat-driven base spell crit (the stats area); null uses <see cref="PlayerBaseSpellCrit"/> flat for every unit.</summary>
     public ISpellCritSource? CritSource { get; init; }
@@ -156,7 +156,7 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts
             return 100.0f;
         }
 
-        float chance = Modifiers.Apply(caster, spell, SpellModOp.ResistMissChance, MagicHitChance(caster, target, Options));
+        float chance = (Modifiers ?? system.SpellModifiers).Apply(caster, spell, SpellModOp.ResistMissChance, MagicHitChance(caster, target, Options));
         uint schoolMask = spell.SchoolMask();
         chance += system.GetTotalAuraModifier(target, AuraType.ModAttackerSpellHitChance, a => ((uint)a.MiscValue & schoolMask) != 0);
         if (spell.IsAreaEffect())
@@ -294,7 +294,7 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts
             }
         }
 
-        chance = Modifiers.Apply(caster, spell, SpellModOp.CriticalChance, chance);
+        chance = (Modifiers ?? system.SpellModifiers).Apply(caster, spell, SpellModOp.CriticalChance, chance);
         return chance > 0f ? chance : 0f;
     }
 
@@ -315,7 +315,7 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(spell);
-        int bonus = (int)Modifiers.Apply(caster, spell, SpellModOp.CritDamageBonus, SpellCritRules.CritBonus(damage, spell.DamageClass));
+        int bonus = (int)(Modifiers ?? system.SpellModifiers).Apply(caster, spell, SpellModOp.CritDamageBonus, SpellCritRules.CritBonus(damage, spell.DamageClass));
         return (uint)((damage + bonus) * CritVersusMultiplier(system, caster, target));
     }
 
