@@ -59,6 +59,7 @@ public sealed class InstanceChestDurabilityTests
         {
             var words = new uint[GameObjectTemplate.DataCount];
             words[1] = ChestEntry;
+            words[15] = 1; // chest.groupLootRules: only such chests use the group round robin (vmangos Player.cpp:7680-7698)
             var template = new GameObjectTemplate { Entry = ChestEntry, Type = (uint)GameObjectType.Chest, Name = "Durable chest", Data = words };
             // The dungeon entrance puts the player at (-16.4, -383.07, 61.78): the chest is 2.4 yd away.
             var content = new GameObjectContent([template],
@@ -363,22 +364,22 @@ public sealed class InstanceChestDurabilityTests
         uint instance = await f.EnterDungeonAsync(alice, "Dlootha");
         await f.EnterDungeonAsync(bob, "Dlootib");
 
-        // The group's round robin starts after the leader: bob owns the first chest.
-        await UseChestAsync(bob);
-        Window(await bob.ReadUntilAsync(WorldOpcode.SmsgLootResponse));
+        // The group's round robin starts at the leader (Group::Create, vmangos Group.cpp:134): alice owns the first chest.
+        await UseChestAsync(alice);
+        Window(await alice.ReadUntilAsync(WorldOpcode.SmsgLootResponse));
         var key = new LootStateKey(instance, ChestSpawn);
 
         f.Store.ThrowAfterApplying = true;
         f.Store.FailReconciliation = true;
-        await TakeAsync(bob, 0);
-        Assert.True(await bob.IsClosedByServerAsync());
+        await TakeAsync(alice, 0);
+        Assert.True(await alice.IsClosedByServerAsync());
         await f.Host.WaitForWorldAsync(() => f.Settlements.IsBlocked(key), "the key is blocked");
 
         // Nothing is rebuilt or opened for the blocked key, and the committed cache is untouched.
         Assert.Equal(GameObjectUseResult.Unsupported, await f.Host.OnWorldAsync(() => f.SystemOf(instance)
-            .Use(f.Host.World.FindOnlinePlayer("Dlootha")!, new ObjectGuid(ChestGuid()))));
+            .Use(f.Host.World.FindOnlinePlayer("Dlootib")!, new ObjectGuid(ChestGuid()))));
         Assert.False(await f.Host.OnWorldAsync(() => f.Settlements.Find(key)!.Items.Single(i => i.Slot == 0).IsLooted));
-        Assert.DoesNotContain(await alice.CollectAsync(Quiet), p => p.Opcode == WorldOpcode.SmsgLootResponse);
+        Assert.DoesNotContain(await bob.CollectAsync(Quiet), p => p.Opcode == WorldOpcode.SmsgLootResponse);
     }
 
     [Fact]
@@ -392,37 +393,37 @@ public sealed class InstanceChestDurabilityTests
         await f.EnterDungeonAsync(bob, "Dlootkk");
         Player aliceP = await f.Host.PlayerAsync("Dlootjj");
 
-        // Alice kills a corpse worth 10 copper shared with the group. The round robin starts after
-        // the leader, so bob owns the corpse (and the money) and alice then owns the chest.
+        // Alice kills a corpse worth 10 copper shared with the group. The round robin starts at the
+        // leader, so alice owns the corpse (and the money) and bob then owns the chest.
         ulong corpse = await f.Host.OnWorldAsync(() => AddCorpse(aliceP.Map!, aliceP).Guid.Value);
-        await bob.SendAsync(WorldOpcode.CmsgLoot, BitConverter.GetBytes(corpse));
-        await bob.ReadUntilAsync(WorldOpcode.SmsgLootResponse);
+        await alice.SendAsync(WorldOpcode.CmsgLoot, BitConverter.GetBytes(corpse));
+        await alice.ReadUntilAsync(WorldOpcode.SmsgLootResponse);
 
-        await UseChestAsync(alice);
-        Window(await alice.ReadUntilAsync(WorldOpcode.SmsgLootResponse));
+        await UseChestAsync(bob);
+        Window(await bob.ReadUntilAsync(WorldOpcode.SmsgLootResponse));
         uint aliceMoney = await f.Host.PlayerStateAsync("Dlootjj", p => p.Money);
         uint bobMoney = await f.Host.PlayerStateAsync("Dlootkk", p => p.Money);
         f.Store.Hold = InMemoryLootStateStore.NewSignal();
         f.Store.CommitEntered = InMemoryLootStateStore.NewSignal();
-        await TakeAsync(alice, 0);
+        await TakeAsync(bob, 0);
         await f.Store.CommitEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         // The split is deferred as a whole: nothing is paid, nothing is consumed, nobody is notified.
-        await bob.CollectAsync(Quiet);
-        await bob.SendAsync(WorldOpcode.CmsgLootMoney, []);
-        Assert.DoesNotContain(await bob.CollectAsync(Quiet), p => p.Opcode is WorldOpcode.SmsgLootMoneyNotify or WorldOpcode.SmsgLootClearMoney);
+        await alice.CollectAsync(Quiet);
+        await alice.SendAsync(WorldOpcode.CmsgLootMoney, []);
+        Assert.DoesNotContain(await alice.CollectAsync(Quiet), p => p.Opcode is WorldOpcode.SmsgLootMoneyNotify or WorldOpcode.SmsgLootClearMoney);
         Assert.Equal(aliceMoney, await f.Host.PlayerStateAsync("Dlootjj", p => p.Money));
         Assert.Equal(bobMoney, await f.Host.PlayerStateAsync("Dlootkk", p => p.Money));
         Assert.Equal(10u, await f.Host.OnWorldAsync(() => f.Context.Feature!.FindSystem(aliceP.Map!)!.Loot!.FindLoot(new ObjectGuid(corpse))!.Gold));
 
         f.Store.Hold.SetResult();
-        await alice.ReadUntilAsync(WorldOpcode.SmsgLootRemoved);
-        await bob.CollectAsync(Quiet);
-        await bob.SendAsync(WorldOpcode.CmsgLootMoney, []);
-        await bob.ReadUntilAsync(WorldOpcode.SmsgLootClearMoney);
+        await bob.ReadUntilAsync(WorldOpcode.SmsgLootRemoved);
+        await alice.CollectAsync(Quiet);
+        await alice.SendAsync(WorldOpcode.CmsgLootMoney, []);
+        await alice.ReadUntilAsync(WorldOpcode.SmsgLootClearMoney);
         Assert.Equal(aliceMoney + 5, await f.Host.PlayerStateAsync("Dlootjj", p => p.Money));
         Assert.Equal(bobMoney + 5, await f.Host.PlayerStateAsync("Dlootkk", p => p.Money));
-        Assert.Equal(2u, await f.Host.PlayerStateAsync("Dlootjj", p => Count(p, Cloth)));
+        Assert.Equal(2u, await f.Host.PlayerStateAsync("Dlootkk", p => Count(p, Cloth)));
     }
 
     [Fact]

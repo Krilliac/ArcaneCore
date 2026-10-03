@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.WorldData.GameObjects;
@@ -22,6 +23,7 @@ public sealed class GameObjectTests
     private const uint MailboxEntry = 106;
     private const uint FocusEntry = 107;
     private const uint QuestChestEntry = 108;
+    private const uint RulesChestEntry = 109;
     private const uint ChestLoot = 500;
     private const uint QuestChestLoot = 501;
     private const uint QuestId = 77;
@@ -68,6 +70,7 @@ public sealed class GameObjectTests
             GoTemplate(MailboxEntry, GameObjectType.Mailbox),
             GoTemplate(FocusEntry, GameObjectType.SpellFocus, (0, 4), (1, 10)),
             GoTemplate(QuestChestEntry, GameObjectType.Chest, (1, QuestChestLoot)),
+            GoTemplate(RulesChestEntry, GameObjectType.Chest, (1, ChestLoot), (15, 1)),
         ];
         var content = new GameObjectContent(templates, spawns, Locks, [(GooberEntry, QuestId)], []);
         var lootContent = new LootContent(loot ??
@@ -258,6 +261,29 @@ public sealed class GameObjectTests
         Assert.Empty(Packets(session, WorldOpcode.SmsgLootResponse));
         Assert.Equal(GameObjectUseResult.Ok, system.Use(player, unlocked.Guid));
         Assert.Equal([unlocked], used);
+    }
+
+    [Fact]
+    public void GroupLootChest_AdvancesTheRoundRobinPointer_ButAnOrdinaryNodeAndAChestWithoutRulesDoNot()
+    {
+        // vmangos Player.cpp:7680-7698: the pointer moves only for GAMEOBJECT_TYPE_CHEST with chest.groupLootRules (data15).
+        Rig rig = CreateRig([GoSpawn(1, ChestEntry, 3, 0), GoSpawn(2, HerbEntry, 4, 0), GoSpawn(3, RulesChestEntry, 5, 0)]);
+        var groups = new FakeGroups();
+        rig.Loot.Groups = groups;
+        (Player alice, _) = rig.Join(1);
+        (Player bob, _) = rig.Join(2, 1, 0);
+        Group group = groups.Create(LootMethod.RoundRobin, alice, bob);
+
+        Assert.Equal(LootResult.Ok, rig.Loot.OpenGameObject(alice, rig.Single(HerbEntry), ChestLoot));
+        Assert.Equal(LootResult.Ok, rig.Loot.OpenGameObject(alice, rig.Single(ChestEntry), ChestLoot));
+        Assert.Equal(alice.Guid, group.LooterGuid);
+        Assert.Empty(groups.LooterUpdates);
+        Assert.True(rig.Single(HerbEntry).Loot!.Owner.IsEmpty);
+
+        Assert.Equal(LootResult.Ok, rig.Loot.OpenGameObject(alice, rig.Single(RulesChestEntry), ChestLoot));
+        Assert.Equal(bob.Guid, group.LooterGuid);
+        Assert.Equal(alice.Guid, rig.Single(RulesChestEntry).Loot!.Owner);
+        Assert.Equal([group], groups.LooterUpdates);
     }
 
     [Fact]

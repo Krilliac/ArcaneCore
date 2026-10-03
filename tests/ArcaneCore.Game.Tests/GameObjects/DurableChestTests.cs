@@ -92,9 +92,9 @@ public sealed class DurableChestTests
         }
     }
 
-    private static Rig CreateRig(IEnumerable<(LootTableKind, LootStoreRow)>? rows = null, long spawnSeconds = SpawnSeconds)
+    private static Rig CreateRig(IEnumerable<(LootTableKind, LootStoreRow)>? rows = null, long spawnSeconds = SpawnSeconds, bool groupLootRules = true)
     {
-        var template = GoTemplate(ChestEntry, GameObjectType.Chest, (1, ChestLoot));
+        var template = GoTemplate(ChestEntry, GameObjectType.Chest, (1, ChestLoot), (15, groupLootRules ? 1u : 0u)); // chest.groupLootRules is data15 (vmangos GameObjectDefines.h:277)
         var spawn = new GameObjectSpawn
         {
             Guid = ChestSpawn, Entry = ChestEntry, MapId = Dungeon, X = 3, Y = 0, Z = 83.5f, SpawnTimeSeconds = (int)spawnSeconds,
@@ -169,24 +169,40 @@ public sealed class DurableChestTests
     }
 
     [Fact]
+    public void ChestWithoutGroupLootRules_LeavesTheRoundRobinPointerAndOwnerAlone()
+    {
+        // vmangos Player.cpp:7680-7698: only a chest with chest.groupLootRules calls Group::UpdateLooterGuid.
+        Rig rig = CreateRig(groupLootRules: false);
+        (Player alice, FakeSession session) = rig.Join(1);
+        (Player bob, _) = rig.Join(2, 1, 0);
+        Group group = rig.Groups.Create(LootMethod.RoundRobin, alice, bob);
+
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(alice, rig.Chest.Guid));
+        Assert.Equal(alice.Guid, group.LooterGuid);
+        Assert.Empty(rig.Groups.LooterUpdates);
+        Assert.True(rig.Chest.Loot!.Owner.IsEmpty);
+        Assert.Single(Packets(session, WorldOpcode.SmsgLootResponse));
+    }
+
+    [Fact]
     public void RefusedGeneration_ReleasesTheClient_AndDoesNotAdvanceTheGroupLooter()
     {
         Rig rig = CreateRig();
         (Player alice, FakeSession session) = rig.Join(1);
         (Player bob, _) = rig.Join(2, 1, 0);
         Group group = rig.Groups.Create(LootMethod.RoundRobin, alice, bob);
-        Assert.True(group.LooterGuid.IsEmpty);
+        Assert.Equal(alice.Guid, group.LooterGuid); // GroupManager starts the pointer at the leader
 
         rig.Durable.NextOutcome = LootOutcome.Before;
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(alice, rig.Chest.Guid));
         Assert.Single(Packets(session, WorldOpcode.SmsgLootReleaseResponse));
-        Assert.True(group.LooterGuid.IsEmpty);
+        Assert.Equal(alice.Guid, group.LooterGuid);
         Assert.Null(rig.Chest.Loot);
         Assert.Null(rig.Durable.Find(Key));
 
         rig.Durable.NextOutcome = LootOutcome.After;
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(alice, rig.Chest.Guid));
-        Assert.Equal(alice.Guid, group.LooterGuid);
+        Assert.Equal(bob.Guid, group.LooterGuid); // alice owns this chest, the pointer moved on only now that it committed
         Assert.Equal(1, rig.Durable.Find(Key)!.LootOwnerCharacterId);
         Assert.Equal([1, 2], rig.Durable.Find(Key)!.Recipients.Order());
     }
