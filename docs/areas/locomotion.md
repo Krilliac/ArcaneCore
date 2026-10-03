@@ -5,6 +5,38 @@ mangos-classic and the gtker packet layouts (`D:\refs\wow_messages`). Nothing wa
 below cites the file and lines it was verified against. Everything is retail by default; the
 `Locomotion` configuration section holds the (few) switches.
 
+## Overview
+
+| # | Slice | State |
+|---|---|---|
+| 1 | loco-foundation (pending-change ledger, ack timeout, observer seam, root ack) | delivered |
+| 2 | flag-auras-and-authority (water walk, hover, feather fall, CorrectData, root flag) | delivered |
+| 3 | environmental-damage | delivered |
+| 4 | fall-damage | delivered |
+| 5 | undermap-void (antiundermap2) | delivered |
+| 6 | speed-rates-players (speed auras, force-speed handshake) | delivered |
+| 7 | speed-rates-creatures | delivered |
+| 8 | mount-aura | delivered |
+| 9 | knockback and player pull | delivered |
+| 10-12 | liquid-environment-flags, mirror-timers-hazards, water-breathing-auras | delivered together |
+| - | movement-flag-tests (opt-in anticheat flag tests) | not delivered: opt-in hardening, default off in vmangos, not retail behaviour |
+| - | collision-height-dbc | not delivered: needs the developer's client CreatureModelData / CreatureDisplayInfo files, which are not available to test against |
+
+No schema, store or data module changed anywhere in the lane (nothing it keeps is persisted: speeds, falls, breath timers and pending acks are rebuilt at login, as in
+vmangos), so the Characters/World schema versions did not move and the MariaDB/PostgreSQL provider rule is not triggered. The tests that need terrain write synthetic `.map`
+tiles to a temporary directory; none touches a database.
+
+## Open questions (need a real client, a capture or a developer decision)
+
+* GUID width of `SMSG_FORCE_MOVE_ROOT` and the other 1.12 movement SMSGs: packed (vmangos, mangos-classic, mangoszero, what the base sends) versus the full GUID that gtker lists
+  for the root and spline-root packets. Packed is kept everywhere; every ack-bearing slice needs a real-client check.
+* Slime damage (`Locomotion:SlimeDamage`, off), breath and fatigue base duration (60 s) and the lava tick (605 to 610 every 2 s): reference defaults, not proven.
+* Knock back vertical speed: vmangos divides the effect value as an integer, mangos-classic as a float (57 gives 5 or 5.7).
+* An environmental death marks the player as a PvP death in vmangos (a self kill is its own tap); retail behaviour of the corpse type and reclaim delay is unknown.
+* The ghost's +25% run and swim speed (Ghost aura 8326) waits for the death lane's `ApplyGhostForm`; the speed formula already honours the aura.
+* WMO liquid (lava and slime inside buildings, canals), `LiquidType.dbc` remaps and real model collision heights depend on collision/client data lanes.
+* Server-driven player movement (Charge, Leap, Blink-style effects) needs a player spline and pathfinding and is not designed here.
+* Taxi: an aura mount is not removed when a flight starts (needs the spell system in `TaxiFlightSystem`).
 ## Slice 1: loco-foundation (delivered)
 
 ### What it does
