@@ -34,6 +34,13 @@ public sealed class EconomyMailSendParityTests
         public bool CanUseMailbox(Player player, ObjectGuid mailbox) => player.IsInWorld && mailbox.High == HighGuid.GameObject;
     }
 
+    /// <summary>The synthetic NPC is a Stormwind-style auctioneer of house 2 with 15% deposit and 5% cut.</summary>
+    internal sealed class AnyAuctioneer : IAuctioneerAccess
+    {
+        public AuctionHouseEntry? FindHouse(Player player, ObjectGuid auctioneer)
+            => player.IsInWorld && auctioneer.Value == SyntheticArcaneServer.NpcGuid ? new AuctionHouseEntry(2, 15, 5) : null;
+    }
+
     internal static readonly ObjectGuid Mailbox = ObjectGuid.WithEntry(HighGuid.GameObject, 900081, 1);
 
     [Theory]
@@ -175,6 +182,7 @@ public sealed class EconomyMailSendParityTests
                 {
                     services.AddSingleton<TimeProvider>(clock);
                     services.AddSingleton<IMailboxAccess>(new AnyMailbox());
+                    services.AddSingleton<IAuctioneerAccess>(new AnyAuctioneer());
                 }, token);
             await server.AddAccountAsync(SenderAccount, Password, token);
             await server.AddAccountAsync(ReceiverAccount, Password, token);

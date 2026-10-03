@@ -93,6 +93,15 @@ public sealed class EconomyOptions
     /// </summary>
     public bool TradeSpaceNotifications { get; set; } = true;
 
+    /// <summary>Rate.Auction.Time multiplier of a listing's duration (vmangos World.cpp:534, AuctionHouseHandler.cpp:362; default 1.0).</summary>
+    public float AuctionRateTime { get; set; } = 1.0f;
+
+    /// <summary>
+    /// Active auctions one account may hold per auction house (vmangos Auction.AccountConcurrentLimit, World.cpp:538,
+    /// AuctionHouseHandler.cpp:274-280); 0 = unlimited (default).
+    /// </summary>
+    public uint AuctionAccountConcurrentLimit { get; set; }
+
     /// <summary>Seconds between expiry sweeps of mail and auctions.</summary>
     public uint ExpirySweepSeconds { get; set; } = 60;
 
@@ -123,6 +132,9 @@ public static class AuctionHouseRules
 
     /// <summary>Listing durations the 1.12 client offers, in minutes (2, 8 and 24 hours).</summary>
     public static readonly IReadOnlyList<uint> DurationsMinutes = [120, 480, 1440];
+
+    /// <summary>The client limit of a start bid or buyout (vmangos AuctionHouseHandler.cpp:236: 2,000,000,000 copper).</summary>
+    public const uint MaxPrice = 2_000_000_000;
 
     /// <summary>Maximum auctions per list result page (vmangos: 50).</summary>
     public const int PageSize = 50;
