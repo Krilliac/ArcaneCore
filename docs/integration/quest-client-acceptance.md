@@ -18,7 +18,11 @@ Release build with zero warnings/errors. The standalone mock passed 41 checks ac
 not passed acceptance.
 
 Record the exact server SHA used in the session. An asynchronous settlement successor
-must be pinned to its own qualified SHA and CI evidence before making latency claims.
+is preserved at source `1bf0bdaef36cb775c18b3f7c01ca9e4f81fadaaa`, incorporated by
+`cd66c674f921e7f2ead189fe802dc7b3d20b499c` in canonical draft #11. Its native Release
+passes zero warnings/errors and all 8,799 tests; the standalone passes 41 checks /
+122 frames. Use the exact final canonical SHA and terminal full-provider CI results
+recorded on draft #11, whose source and test tree match this qualified source.
 The deliberately delayed database, uncertain-commit and stale-session cases belong to
 automated qualification; this manual run uses the normal database path.
 
