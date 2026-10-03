@@ -260,6 +260,36 @@ public sealed class NpcTravelServiceTests
     }
 
     [Fact]
+    public void ActivateTaxi_InAShapeshiftFormThatCannotMount_RepliesShapeshiftedAndChargesNothing()
+    {
+        // vmangos Player::ActivateTaxiPathTo -> IsInDisallowedMountForm (Player.cpp:17872-17880): cat form is 1.
+        using var rig = new TaxiRig();
+        NpcServiceKit kit = rig.Kit;
+        kit.Player.Money = 1000;
+        kit.Player.SetByte(UpdateFields.UnitFieldBytes1, 2, 1);
+
+        kit.Services.ActivateTaxi(kit.Player, kit.Npc.Guid, 1, 2);
+
+        Assert.Equal((uint)ActivateTaxiReply.PlayerShapeshifted, Reply(kit));
+        Assert.Equal(1000, (long)kit.Player.Money);
+    }
+
+    [Fact]
+    public void ActivateTaxi_InAStanceOrStealthForm_IsNotRefusedAsShapeshifted()
+    {
+        // Battle stance (0x11) is an allowed form (Unit.cpp:5870-5878).
+        using var rig = new TaxiRig();
+        NpcServiceKit kit = rig.Kit;
+        kit.Player.Money = 1000;
+        kit.Player.SetByte(UpdateFields.UnitFieldBytes1, 2, 0x11);
+
+        kit.Services.ActivateTaxi(kit.Player, kit.Npc.Guid, 1, 2);
+
+        Assert.DoesNotContain(kit.Drain(), p => p.Opcode == WorldOpcode.SmsgActivatetaxireply
+            && BitConverter.ToUInt32(p.Payload) == (uint)ActivateTaxiReply.PlayerShapeshifted);
+    }
+
+    [Fact]
     public void ActivateTaxi_Refusals_ChargeNothing()
     {
         using var rig = new TaxiRig();

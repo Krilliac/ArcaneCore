@@ -146,6 +146,14 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        // vmangos Player::ActivateTaxiPathTo: IsInDisallowedMountForm -> ERR_TAXIPLAYERSHAPESHIFTED
+        // (Player.cpp:17872-17880). Form-id half only; see FormInterlocks (druid lane).
+        if (Spells.Druid.FormInterlocks.BlocksTaxi(player))
+        {
+            TaxiReply(player, ActivateTaxiReply.PlayerShapeshifted);
+            return;
+        }
+
         if (Npcs.Node(nodes[0]) is not { } node)
         {
             TaxiReply(player, ActivateTaxiReply.NoSuchPath);
