@@ -29,6 +29,33 @@ public sealed class WorldStateHooks
 
     public ZoneOptions Zones { get; } = new();
 
+    public TimeOptions TimeSettings { get; } = new();
+
+    /// <summary>
+    /// "Now" in the game's local zone (vmangos <c>localtime</c>): the server's zone by default, the
+    /// configured <see cref="TimeOptions.TimeZoneId"/> if set, UTC when
+    /// <see cref="TimeOptions.UseServerLocalTime"/> is false.
+    /// </summary>
+    public DateTimeOffset LocalNow()
+    {
+        TimeZoneInfo zone = !TimeSettings.UseServerLocalTime
+            ? TimeZoneInfo.Utc
+            : TimeSettings.TimeZoneId.Length == 0 ? Time.Zone : ResolveZone(TimeSettings.TimeZoneId);
+        return TimeZoneInfo.ConvertTime(Time.UtcNow, zone);
+    }
+
+    private TimeZoneInfo? _namedZone;
+
+    private TimeZoneInfo ResolveZone(string id)
+    {
+        if (_namedZone is null || !string.Equals(_namedZone.Id, id, StringComparison.Ordinal))
+        {
+            _namedZone = TimeZoneInfo.FindSystemTimeZoneById(id);
+        }
+
+        return _namedZone;
+    }
+
     /// <summary>The clock weather seasons and game events read (the real server-local clock by default).</summary>
     public IGameTime Time { get; set; } = SystemGameTime.Instance;
 

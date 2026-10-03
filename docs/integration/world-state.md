@@ -13,3 +13,10 @@ Seams added: `WorldStateHooks.For(world)` (options, clock, zone locator, locatio
 channel logic from other lanes should use `IPlayerLocationListener` instead of polling zones.
 
 Schema: none so far.
+
+## game-time slice
+
+| File | Change | Why |
+|---|---|---|
+| `src/ArcaneCore.World/Packets/CharacterPackets.cs` | `BuildTimeSpeed` gains a `DateTimeOffset` (local) overload; the old `DateTime` overload delegates; the private packer moved to `GameTimePacker`. | Pack local time. |
+| `src/ArcaneCore.World/Handlers/LoginSequence.cs` | `SendInitialPacketsBeforeAddToMap` passes `WorldStateHooks.For(session.World).LocalNow()`. | vmangos `Player.cpp:19141-19145`. |

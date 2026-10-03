@@ -30,3 +30,22 @@ public sealed class ZoneOptions
     /// </summary>
     public ClientZoneTrust ClientZoneTrust { get; set; } = ClientZoneTrust.Auto;
 }
+
+/// <summary>Game-time options (configuration section <c>World:Time</c>).</summary>
+public sealed class TimeOptions
+{
+    public const string SectionName = "World:Time";
+
+    /// <summary>
+    /// Pack the SERVER's local time into SMSG_LOGIN_SETTIMESPEED and compute weather seasons and
+    /// event dates in it, as vmangos does with <c>localtime</c> (Server/Packets/Misc.cpp:924-933,
+    /// Weather.cpp:100-103). Default true (retail); false uses UTC.
+    /// </summary>
+    public bool UseServerLocalTime { get; set; } = true;
+
+    /// <summary>
+    /// An explicit zone id (IANA or Windows) to treat as "server local time"; empty = the machine's
+    /// zone. Only read while <see cref="UseServerLocalTime"/> is true.
+    /// </summary>
+    public string TimeZoneId { get; set; } = "";
+}

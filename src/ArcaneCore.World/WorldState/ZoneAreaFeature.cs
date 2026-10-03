@@ -31,7 +31,16 @@ public sealed class ZoneAreaFeature(IServiceProvider services) : IWorldFeature, 
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
         WorldStateHooks hooks = WorldStateHooks.For(world);
-        services.GetService<IConfiguration>()?.GetSection(ZoneOptions.SectionName).Bind(hooks.Zones);
+        IConfiguration? configuration = services.GetService<IConfiguration>();
+        configuration?.GetSection(ZoneOptions.SectionName).Bind(hooks.Zones);
+        // The game-time options live here too (this feature is the world-state option binder).
+        configuration?.GetSection(TimeOptions.SectionName).Bind(hooks.TimeSettings);
+        if (hooks.TimeSettings.UseServerLocalTime && hooks.TimeSettings.TimeZoneId.Length > 0)
+        {
+            // Fail closed at startup on an unknown zone id instead of at the first login.
+            _ = TimeZoneInfo.FindSystemTimeZoneById(hooks.TimeSettings.TimeZoneId);
+        }
+
         hooks.AddLocationListener(this);
         foreach (IPlayerLocationListener listener in services.GetServices<IWorldFeature>().OfType<IPlayerLocationListener>())
         {

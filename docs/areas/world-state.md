@@ -90,6 +90,20 @@ Not wired yet: the explore check in the zone tracker, persistence of the words, 
 loader, `.explorecheat`/`.showarea`/`.hidearea`, and the first-login cinematic (a documented limit:
 without a cinematic the first check runs right after the map add).
 
+### Game time (`game-time`)
+
+SMSG_LOGIN_SETTIMESPEED packs the SERVER's local time (vmangos `localtime_r` in
+`Server/Packets/Misc.cpp:924-933`), not UTC: `GameTimePacker.Pack` keeps the bit layout
+(`minute | hour<<6 | weekday<<11 | (day-1)<<14 | month0<<20 | (year-2000)<<24`, Sunday 0) and is
+checked against the wow_messages vector `0x1673320A` (2022-08-13 Saturday 08:10). The timescale
+stays 1/60 (`Player.cpp:19141-19145`). `WorldStateHooks.LocalNow()` is the one place "local time" is
+decided; the clock is an injectable `IGameTime`.
+
+| Key (`World:Time`) | Default | Meaning |
+|---|---|---|
+| `UseServerLocalTime` | `true` | `true` = retail (machine local time); `false` = UTC. |
+| `TimeZoneId` | empty | Optional IANA/Windows zone id used as "server local time" (an unknown id fails startup). |
+
 ## Deviations from retail (all documented, none silent)
 
 - `ClientZoneTrust=Auto` is a development-world allowance, not retail. Retail is `Never`.
