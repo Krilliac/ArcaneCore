@@ -19,6 +19,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -41,17 +42,21 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
         var hold = new CapacityHold();
         var clients = new List<OwnedClient>();
         var rewardReaders = new List<Task<MockQuestComplete>>();
+        var serverLogs = new ConcurrentQueue<string>();
+        string stage = "starting the server";
         await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(services =>
         {
             services.AddScoped<ICreatureDataStore>(provider => new CapacityCreatureSource(
                 new EfCreatureDataStore(provider.GetRequiredService<WorldDbContext>())));
             services.AddScoped<ICharacterQuestRewardStore>(provider => new CapacityRewardStore(
                 new EfCharacterQuestRewardStore(provider.GetRequiredService<CharacterDbContext>()), hold));
+            services.AddLogging(logging => logging.AddProvider(new LogCapture(serverLogs)));
         }, token);
         try
         {
-            // Every journal is completed before holding any settlement, so the operation's
-            // real five-second budget is reserved for the capacity observation and release.
+            stage = "preparing nine journals";
+            // Every journal is completed before holding any settlement, so the settlement budget
+            // (raised for this test below) is spent only on the capacity observation and release.
             for (int index = 0; index <= QuestNpcFeature.MaxConcurrentSettlements; index++)
             {
                 OwnedClient client = await CreateClientAsync(server, $"CAPREWARD{index}", $"Caphero{(char)('a' + index)}", token);
@@ -69,12 +74,20 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
             }
 
             QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
+            // The production budget (5 s from the moment a settlement starts) also bounds the held
+            // store call below, so the observation window must not race it: under load the
+            // observations take longer than that, the held settlements are abandoned as Unknown and
+            // the readers never see QuestComplete. Capacity, not the deadline, is under test here.
+            feature.Options.SettlementBudgetSeconds = 45;
+            stage = "choosing eight rewards";
             foreach (OwnedClient client in clients.Take(QuestNpcFeature.MaxConcurrentSettlements))
             {
                 await MockScenarios.ChooseRewardAsync(client.Connection, 1, token);
             }
 
+            stage = "waiting for eight held commits";
             await hold.EightEntered.Task.WaitAsync(token);
+            stage = "observing capacity with eight held";
             Assert.Equal(QuestNpcFeature.MaxConcurrentSettlements, feature.PendingSettlementCount);
             Guid[] operationIds = clients.Take(QuestNpcFeature.MaxConcurrentSettlements).Select(client =>
                 feature.PendingOperationId(checked((int)client.Guid)) ?? throw new InvalidOperationException("A held capacity turn-in lost its operation."))
@@ -109,12 +122,16 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
             for (int index = 0; index < QuestNpcFeature.MaxConcurrentSettlements; index++)
             {
                 OwnedClient client = clients[index];
+                stage = $"released: settlement of player {index}";
                 await feature.WaitForSettlementAsync(checked((int)client.Guid), token);
+                stage = $"released: reward packet for player {index}";
                 ValidateCapacityReward(await rewardReaders[index].WaitAsync(token));
+                stage = $"released: persisted reward of player {index}";
                 await MockScenarios.ValidatePersistedRewardAsync(server, client.Guid, rewarded: true, count: 2, token);
             }
 
             Assert.Equal(0, feature.PendingSettlementCount);
+            stage = "ninth player retry";
             Task<MockQuestComplete> ninthReader = ReadCapacityRewardAsync(ninth.Connection, ninth.Guid, hold, token);
             rewardReaders.Add(ninthReader);
             await MockScenarios.ChooseRewardAsync(ninth.Connection, 1, token);
@@ -122,6 +139,15 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
             await MockScenarios.ValidatePersistedRewardAsync(server, ninth.Guid, rewarded: true, count: 2, token);
             Assert.Equal(QuestNpcFeature.MaxConcurrentSettlements + 1, hold.Attempts);
             Assert.Equal(0, feature.PendingSettlementCount);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            // A bare cancellation at the test deadline says nothing about where it stalled.
+            output.WriteLine($"FAILED at stage '{stage}': {exception.GetType().Name}; held-commit attempts {hold.Attempts}, " +
+                $"released {hold.IsReleased}, abandoned {hold.Abandoned.Task.IsCompleted}, readers " +
+                string.Join(",", rewardReaders.Select(r => r.Status)));
+            output.WriteLine("Server warnings and errors:" + Environment.NewLine + string.Join(Environment.NewLine, serverLogs));
+            throw;
         }
         finally
         {
@@ -514,6 +540,33 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
         }
     }
 
+    /// <summary>Keeps the world host's warnings and errors so a failing run can show what the server saw.</summary>
+    private sealed class LogCapture(ConcurrentQueue<string> sink) : ILoggerProvider
+    {
+        public ILogger CreateLogger(string categoryName) => new CaptureLogger(categoryName, sink);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class CaptureLogger(string category, ConcurrentQueue<string> sink) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Warning;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                if (IsEnabled(logLevel))
+                {
+                    sink.Enqueue($"{logLevel} {category}: {formatter(state, exception)}"
+                        + (exception is null ? string.Empty : $" | {exception.GetType().Name}: {exception.Message}"));
+                }
+            }
+        }
+    }
+
     private sealed class CapacityHold
     {
         private readonly ConcurrentDictionary<int, CharacterQuestRewardRequest> _entered = new();
@@ -522,6 +575,9 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
         internal bool IsReleased => Released.Task.IsCompleted;
         internal TaskCompletionSource EightEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource Released { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes when a held commit is cancelled by its settlement budget instead of being released.</summary>
+        internal TaskCompletionSource Abandoned { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal async Task WaitAsync(CharacterQuestRewardRequest request, CancellationToken token)
         {
@@ -532,7 +588,15 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
                 EightEntered.TrySetResult();
             }
 
-            await Released.Task.WaitAsync(token);
+            try
+            {
+                await Released.Task.WaitAsync(token);
+            }
+            catch (OperationCanceledException)
+            {
+                Abandoned.TrySetResult();
+                throw;
+            }
         }
 
         internal void Release() => Released.TrySetResult();

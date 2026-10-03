@@ -38,4 +38,15 @@ public sealed class QuestNpcOptions
 
     /// <summary>Rate.Drop.Money (quest money rewards).</summary>
     public float RateDropMoney { get; set; } = 1.0f;
+
+    /// <summary>
+    /// Seconds one reward settlement may take end to end (save, drains, the reward transaction)
+    /// before it is abandoned and reconciled from the stored rows. Operational, not a gameplay
+    /// rule: 5 is the shipped value. A test that deliberately holds a settlement open raises it so
+    /// its observation window is not a race against this deadline.
+    /// </summary>
+    public int SettlementBudgetSeconds { get; set; } = 5;
+
+    /// <summary><see cref="SettlementBudgetSeconds"/> as a duration, never below one second.</summary>
+    public TimeSpan SettlementBudget => TimeSpan.FromSeconds(Math.Max(1, SettlementBudgetSeconds));
 }

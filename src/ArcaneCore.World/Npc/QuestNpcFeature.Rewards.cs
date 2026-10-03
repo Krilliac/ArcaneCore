@@ -124,7 +124,7 @@ public sealed partial class QuestNpcFeature
         try
         {
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(_settlementStop.Token);
-            budget.CancelAfter(TimeSpan.FromSeconds(5));
+            budget.CancelAfter(Options.SettlementBudget);
             // These tasks remain observed even if a store ignores cooperative cancellation.
             await operation.Saves.SaveForSettlementAsync(operation.Request.Before, budget.Token).ConfigureAwait(false);
             budget.Token.ThrowIfCancellationRequested();
