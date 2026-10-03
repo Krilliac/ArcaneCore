@@ -125,6 +125,23 @@ Collected from the lane reports; none are on by default except where noted.
 - Movement: packed GUIDs for the new SMSG_MOVE_* packets and a root ack without the Root flag is applied, not kicked (unverified against a real client).
 - Integration choice: movement acks with invalid movement blocks are now dropped rather than kicking the client (follows main's wave-2 retail-validation policy).
 
+## Known follow-ups (from docs/integration/wave3-release-review.md; not fixed in this wave)
+
+- F4 `Bans:RecheckIntervalSeconds` defaults to 0 (retail): a ban written outside the world process (`arcane-account ban`,
+  SQL, another daemon) does not kick a connected player until they disconnect; they cannot log back in. Release note:
+  operators who ban externally should set 30-60 s (one indexed query per pass).
+- F6 `Language.Addon` chat returns before the mute and flood gates (`ChatHandlers.cs`), so a muted or flooding player can
+  still broadcast addon messages to party/guild/raid/battleground/channel members. Not a regression (main had no flood
+  control); apply the mute check and a count or byte limit to addon messages.
+- F7 `ChatRestrictionService.Mute` has no producer outside tests (no `.mute` command, no stored `mutetime`), so its flood
+  logic is not reached at runtime; `ChatFeature._sessionMutes` entries are removed only when that account is queried again
+  (slow, account-bounded leak). Add the command or prune the dead logic, and expire the entries.
+- F8 Mail/auction escrow items (`OwnerGuid = 0`) leave orphan `item_loot_state`/`item_loot` rows when the escrow item is
+  deleted. Harmless (guids are monotonic); add both tables to the escrow delete.
+- F9 `.banlist character` loads every character identity and runs one history query per matching account, unbounded, at
+  Moderator level. Prefix-filter in the store query and cap the result.
+- F10 The realm does one more uncached indexed IP-ban read per logon challenge (before SRP). Consider a short TTL cache.
+
 ## Open questions
 
 - Real 1.12.1 client captures: root-family GUID packing, 50/40 yd duel boundary, slime damage, knockback vertical speed rounding, lava tick values, environmental PvP death.

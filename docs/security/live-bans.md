@@ -41,7 +41,8 @@ Administrator for `ban ip` and every `unban`.
 |---|---|---|
 | `Bans:RecheckIntervalSeconds` | `0` (off, retail) | Re-check connected sessions against ban rows, IP bans and the status column every N seconds (fractions allowed) |
 | `Bans:RevokeSessionKeyOnBan` | `false` (retail keeps the key) | Null the stored session key after a live ban; the next world reconnect then answers `UnknownAccount` instead of `AUTH_BANNED` |
-| `Bans:RejectUnparseableDuration` | `false` (retail) | Make a malformed `.ban` duration a syntax error instead of a permanent ban |
+| `Bans:RejectUnparseableDuration` | `false` (retail) | Make a malformed `.ban` duration a syntax error instead of a permanent ban. A duration that overflows 32 bits of seconds (about 136 years) is always refused, by `.ban` and `arcane-account ban`, whatever this is set to: it never wraps into a short or permanent ban |
+| `Bans:ProtectHigherSecurity` | `true` (stricter than retail) | Refuse `.ban account` / `.ban character` against an account whose security is equal to or higher than the invoker's (banning your own account still works). vmangos has no such guard; set `false` for exact parity. Not applied to `.ban ip` or to unbans |
 | `Bans:RealmId` | `1` | Written to `account_banned.realm` (vmangos `realmID`); never filtered on, as retail |
 
 Behaviour retail mandates (kick on `.ban`, refusal at logon and world auth, IP-ban refusal, the
