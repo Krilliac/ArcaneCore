@@ -58,7 +58,7 @@ public sealed class CharacterCreationOptions
     /// <summary>vmangos StartPlayerLevel (default 1), clamped to 1..MaxPlayerLevel (World.cpp:673).</summary>
     public int StartPlayerLevel { get; set; } = 1;
 
-    /// <summary>vmangos GM.StartLevel (default 1), clamped to StartPlayerLevel..MaxPlayerLevel; used for accounts above player security (World.cpp:679, Player.cpp:16217).</summary>
+    /// <summary>vmangos GM.StartLevel (default 1), clamped to StartPlayerLevel..MAX_LEVEL (100); used for accounts above player security (World.cpp:677, Player.cpp:16217).</summary>
     public int GmStartLevel { get; set; } = 1;
 
     /// <summary>
@@ -78,14 +78,16 @@ public sealed class CharacterCreationOptions
     /// <summary>The effective CharactersPerRealm: clamped to 1..10 (World.cpp:633).</summary>
     public static int EffectiveCharactersPerRealm(int configured) => Math.Clamp(configured, 1, 10);
 
-    /// <summary>vmangos PLAYER_STRONG_MAX_LEVEL (DBCEnums.h:38), the ceiling of GM.StartLevel.</summary>
-    public const int MaxLevel = 255;
+    /// <summary>vmangos MAX_LEVEL (DBCEnums.h:34), the ceiling of GM.StartLevel (World.cpp:677). MaxPlayerLevel alone may reach 255.</summary>
+    public const int MaxGmStartLevel = 100;
 
     /// <summary>The start level for an account of the given security (World.cpp:673-679).</summary>
     public int StartLevelFor(bool staff, int maxPlayerLevel)
     {
         int start = Math.Clamp(StartPlayerLevel, 1, Math.Max(1, maxPlayerLevel));
-        return staff ? Math.Clamp(GmStartLevel, start, MaxLevel) : start;
+        if (!staff) return start;
+        // setConfigMinMax tests the minimum before the maximum (World.cpp:3002-3010), so start wins over the ceiling.
+        return GmStartLevel < start ? start : Math.Min(GmStartLevel, MaxGmStartLevel);
     }
 
     /// <summary>The start money (vmangos MAX_MONEY_AMOUNT = 0x7FFFFFFF - 1, Player.h:656).</summary>

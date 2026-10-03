@@ -172,6 +172,12 @@ public sealed class CharacterCreationRulesTests
         var g = new CharacterCreationOptions { StartPlayerLevel = 99, GmStartLevel = 80 };
         Assert.Equal(60, g.StartLevelFor(false, 60));
         Assert.Equal(80, g.StartLevelFor(true, 60));
+        // GM.StartLevel ceiling is MAX_LEVEL 100 (DBCEnums.h:34, World.cpp:677), not PLAYER_STRONG_MAX_LEVEL 255.
+        Assert.Equal(CharacterCreationOptions.MaxGmStartLevel, 100);
+        Assert.Equal(100, new CharacterCreationOptions { GmStartLevel = 200 }.StartLevelFor(true, 255));
+        Assert.Equal(1, new CharacterCreationOptions { GmStartLevel = 200 }.StartLevelFor(false, 255));
+        // vmangos checks the minimum first (World.cpp:3002), so a start level above 100 wins.
+        Assert.Equal(150, new CharacterCreationOptions { StartPlayerLevel = 150, GmStartLevel = 120 }.StartLevelFor(true, 255));
         Assert.Equal(1, new CharacterCreationOptions { StartPlayerLevel = 0 }.StartLevelFor(false, 60));
         Assert.Equal(0x7FFFFFFEu, new CharacterCreationOptions { StartPlayerMoney = long.MaxValue }.StartMoney);
     }
