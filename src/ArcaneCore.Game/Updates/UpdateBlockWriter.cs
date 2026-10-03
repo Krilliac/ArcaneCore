@@ -54,13 +54,13 @@ public static class UpdateBlockWriter
 
                 index++;
             }
-            else if (values[index] != 0)
+            else if (obj.GetValueFor(index, viewer) != 0)
             {
                 mask.SetBit(index);
             }
         }
 
-        WriteValues(writer, values, mask);
+        WriteValues(writer, obj, viewer, mask);
     }
 
     /// <summary>
@@ -91,7 +91,7 @@ public static class UpdateBlockWriter
 
         writer.WriteByte((byte)ObjectUpdateType.Values);
         writer.WritePackedGuid(obj.Guid.Value);
-        WriteValues(writer, obj.Values, mask);
+        WriteValues(writer, obj, viewer, mask);
         return true;
     }
 
@@ -119,12 +119,13 @@ public static class UpdateBlockWriter
         return visible;
     }
 
-    private static void WriteValues(PacketWriter writer, ReadOnlySpan<uint> values, UpdateMask mask)
+    /// <summary>The masked values, each as <paramref name="viewer"/> sees it (<see cref="WorldObject.GetValueFor"/>).</summary>
+    private static void WriteValues(PacketWriter writer, WorldObject obj, Player viewer, UpdateMask mask)
     {
         mask.WriteTo(writer);
         for (int index = mask.NextSetBit(0); index >= 0; index = mask.NextSetBit(index + 1))
         {
-            writer.WriteUInt32(values[index]);
+            writer.WriteUInt32(obj.GetValueFor(index, viewer));
         }
     }
 
