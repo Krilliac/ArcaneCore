@@ -12,11 +12,18 @@ Nothing from the references was copied into the repository, only numeric constan
 
 ## Delivered
 
+Wired into the running server: the power caps (Player constructor), the high-liquid updater (`LiquidInterruptFeature`)
+and the taxi interlock. **Not wired (no runtime caller yet, exercised by tests only):** `PowerTypeSwitch.SetPowerType`,
+`FeralFormulas`, `FurorRules`, `FormDisplayTable`, `FormBoostTable`, `RipDamageRules`, `FrenziedRegenerationRules`,
+`ShapeshiftFormEffectRules`, `DruidForms` and the other pure tables. They are primitives for the form engine
+(see "Not delivered"); until aura 36 exists, druid forms remain inert buffs and these rules change no behaviour.
+
 ### Power type switch (`PowerTypeSwitch`)
 Port of `Unit::SetPowerType` (`Objects/Unit.cpp:4386-4427`) and the create-power maxima of `GetCreatePowers`
 (`Unit.cpp:8245-8264`). Writes `UNIT_FIELD_BYTES_0` byte 3; Rage sets max 1000 and current 0, Energy max 100 and
 current 0, Mana changes nothing else. `EnsureFeralPowerCaps` gives a druid the rage/energy maxima without touching
-the type or current values, never lowering a maximum. This fixes a real defect: a druid is created with only the
+the type or current values, never lowering a maximum. It is called from the `Player` constructor (every class, as
+vmangos `UpdateAllStats`), which fixes a real defect: a druid used to be created with only the
 mana maximum set, so every rage or energy write clamped to 0 (`MapCombat.SetPower`). The group PowerType update
 flag is produced by the existing `GroupManager` member diff, so nothing is sent from here.
 
@@ -43,7 +50,7 @@ vmangos `ENVIRONMENT_FLAG_HIGH_LIQUID` (`Player.cpp:20353-20419`, `Player.cpp:84
 `ILiquidProbe` (default `TerrainLiquidProbe`: liquid status at `z + 0.01`, in-water or under-water, surface above
 `z + 0.75 * 2.0`) is asked; on a change entering deep liquid removes auras and stops channels with
 `AURA_INTERRUPT_UNDER_WATER_CANCELS` (0x80, Travel Form, mounts, Food, Drink), leaving removes those with
-`ABOVE_WATER_CANCELS` (0x100, Aquatic Form). It is edge-triggered, first sighting only records the state, and
+`ABOVE_WATER_CANCELS` (0x100, Aquatic Form). It is edge-triggered; the state before the first probe is "not in deep liquid" (vmangos m_environmentFlags starts at 0), so a player first probed in deep water gets the entering edge. Also
 `HighLiquidChanged` is raised for other systems (breath/fatigue timers belong to world-state-exploration).
 `AuraInterruptMasks`, `RemoveAurasWithInterruptFlags` and `InterruptChannelWithFlags` are reusable helpers built from
 the public `SpellSystem` API.
@@ -105,7 +112,7 @@ Merge point with the npc-services-quests lane.
 3. Combo points: one shared API (warrior S09, spell-breadth S5 or class-rogue); the Rip term must be read before
    the finisher clears the points.
 4. death-persistence life-persistence must restore all five power fields after `RestoreAuras`.
-5. Call `PowerTypeSwitch.EnsureFeralPowerCaps` (or equivalent) wherever player stats are initialised; it is idempotent.
+5. `PowerTypeSwitch.EnsureFeralPowerCaps` is now called from the `Player` constructor; a stats lane that rewrites max powers must not lower rage/energy maxima.
 
 ## Provenance
 

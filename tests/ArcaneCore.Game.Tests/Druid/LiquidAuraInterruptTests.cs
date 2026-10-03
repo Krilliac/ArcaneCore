@@ -92,7 +92,7 @@ public class LiquidAuraInterruptTests
     public void EnteringHighLiquid_RemovesTheUnderWaterCancelsAura_AndKeepsOthers()
     {
         using var rig = new Rig();
-        rig.MoveAndTick(); // first sighting records "dry"
+        rig.MoveAndTick(); // first sighting, dry: no edge
         rig.Apply(TravelLike);
         rig.Apply(AquaLike);
         rig.Apply(ControlBuff);
@@ -109,7 +109,7 @@ public class LiquidAuraInterruptTests
     public void LeavingHighLiquid_RemovesTheAboveWaterCancelsAura()
     {
         using var rig = new Rig(startsHigh: true);
-        rig.MoveAndTick(); // first sighting records "in water"
+        rig.MoveAndTick(); // first sighting in water is the entering edge (nothing applied yet)
         rig.Apply(AquaLike);
         rig.Apply(TravelLike);
 
@@ -118,6 +118,21 @@ public class LiquidAuraInterruptTests
 
         Assert.False(rig.Has(AquaLike));
         Assert.True(rig.Has(TravelLike));
+    }
+
+    [Fact]
+    public void FirstSightingInDeepWater_IsAnEnteringEdge_LikeVmangosInitialZeroEnvironmentFlags()
+    {
+        // vmangos m_environmentFlags starts at 0 (login/teleport ack runs UpdateTerainEnvironmentFlags), so the first
+        // probe in deep water removes UNDER_WATER_CANCELS auras (Player.cpp:20353-20419, 848-855).
+        using var rig = new Rig(startsHigh: true);
+        rig.Apply(TravelLike);
+        rig.Apply(AquaLike);
+
+        rig.MoveAndTick();
+
+        Assert.False(rig.Has(TravelLike));
+        Assert.True(rig.Has(AquaLike));
     }
 
     [Fact]

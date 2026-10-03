@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.Tests.Druid;
 /// </summary>
 public class PowerTypeSwitchTests
 {
-    private static Player CreateDruid()
+    private static Player CreateDruid(Class cls = Class.Druid)
     {
         var character = new CharacterRecord
         {
@@ -21,7 +21,7 @@ public class PowerTypeSwitchTests
             AccountId = 1,
             Name = "Druid",
             Race = (byte)Race.NightElf,
-            Class = (byte)Class.Druid,
+            Class = (byte)cls,
             Gender = (byte)Gender.Female,
             Level = 60,
             MapId = 0,
@@ -94,7 +94,7 @@ public class PowerTypeSwitchTests
     [Fact]
     public void EnsureFeralPowerCaps_SetsMaximaButNeverLowersOrTouchesCurrentValues()
     {
-        Player druid = CreateDruid();
+        Player druid = CreateDruid(Class.Mage);
         Assert.Equal(0u, MapCombat.GetMaxPower(druid, PowerType.Rage));
 
         PowerTypeSwitch.EnsureFeralPowerCaps(druid);
@@ -121,9 +121,20 @@ public class PowerTypeSwitchTests
     [Fact]
     public void RewardRage_OnDruidWithoutCaps_ClampsToZero_Baseline()
     {
-        // GUARD for the defect this slice fixes: with no rage maximum every write clamps to 0.
-        Player druid = CreateDruid();
+        // Baseline for a class created without caps (the druid constructor wiring prevents this): with no rage maximum every write clamps to 0.
+        Player druid = CreateDruid(Class.Mage);
         MapCombat.SetPower(druid, PowerType.Rage, 500);
         Assert.Equal(0u, MapCombat.GetPower(druid, PowerType.Rage));
+    }
+
+    [Fact]
+    public void NewPlayer_AlreadyHasRageAndEnergyMaxima_WithoutAnyFormSwitch()
+    {
+        // Wired at player creation (vmangos Player::UpdateAllStats sets every power maximum for every class).
+        Player druid = CreateDruid();
+
+        Assert.Equal(PowerTypeSwitch.MaxRage, MapCombat.GetMaxPower(druid, PowerType.Rage));
+        Assert.Equal(PowerTypeSwitch.MaxEnergy, MapCombat.GetMaxPower(druid, PowerType.Energy));
+        Assert.Equal(500u, MapCombat.GetMaxPower(druid, PowerType.Mana));
     }
 }

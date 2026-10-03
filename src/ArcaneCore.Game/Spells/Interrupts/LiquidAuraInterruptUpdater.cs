@@ -7,8 +7,9 @@ namespace ArcaneCore.Game.Spells.Interrupts;
 /// Per-map edge detector for vmangos ENVIRONMENT_FLAG_HIGH_LIQUID (D:\refs\vmangos\src\game\Objects\Player.cpp:
 /// 848-855, 20353-20419). Whenever a player's position changed since the last probe, ask the
 /// <see cref="ILiquidProbe"/>; on a change of the flag, entering deep liquid removes auras and stops channels
-/// carrying UNDER_WATER_CANCELS (0x80), leaving removes those carrying ABOVE_WATER_CANCELS (0x100). The first
-/// sighting of a player only records the state (no edge). The spell system is reached through a getter because
+/// carrying UNDER_WATER_CANCELS (0x80), leaving removes those carrying ABOVE_WATER_CANCELS (0x100). On the first
+/// sighting the previous state is "not in deep liquid" (vmangos m_environmentFlags starts at 0), so a player first
+/// probed in deep water gets the entering edge. The spell system is reached through a getter because
 /// the spell feature builds it independently of the map.
 /// </summary>
 public sealed class LiquidAuraInterruptUpdater(Func<SpellSystem?> spells, ILiquidProbe probe) : IMapUpdater
@@ -32,7 +33,7 @@ public sealed class LiquidAuraInterruptUpdater(Func<SpellSystem?> spells, ILiqui
 
             bool high = probe.IsHighLiquid(map, player);
             _states[player] = new State(player.X, player.Y, player.Z, high);
-            if (hadState && last.High != high)
+            if (last.High != high)
             {
                 OnChanged(player, high);
             }
