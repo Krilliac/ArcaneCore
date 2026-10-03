@@ -64,7 +64,8 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
         }
 
         world.PlayerLoggingOut += OnPlayerLoggingOut;
-        _logger.LogInformation("Loaded {Factions} factions and {OnKill} kill reputation entries", service.Factions.Count, service.OnKillCount);
+        _logger.LogInformation("Loaded {Factions} factions, {OnKill} kill reputation entries, {Spillovers} spillover templates and {Rates} reward rates",
+            service.Factions.Count, service.OnKillCount, service.Content.SpilloverCount, service.Content.RateCount);
     }
 
     /// <summary>Clear rows left by a deleted character whose id was reused (after older writes drain).</summary>
@@ -208,11 +209,21 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
             FactionCatalog factions = services.GetService<FactionCatalog>()
                 ?? (string.IsNullOrWhiteSpace(Options.FactionDbcPath) ? FactionCatalog.Empty : FactionDbcReader.Load(Options.FactionDbcPath));
             IReadOnlyList<ReputationOnKillEntry> onKill;
+            ReputationContentRows contentRows;
             using (IServiceScope scope = scopes.CreateScope())
             {
                 onKill = scope.ServiceProvider.GetService<IReputationOnKillSource>() is { } source
                     ? source.LoadAsync().GetAwaiter().GetResult()
                     : [];
+                contentRows = scope.ServiceProvider.GetService<IReputationContentSource>() is { } contentSource
+                    ? contentSource.LoadAsync().GetAwaiter().GetResult()
+                    : ReputationContentRows.Empty;
+            }
+
+            ReputationContent content = ReputationContent.Create(contentRows, factions);
+            foreach (string warning in content.Warnings)
+            {
+                _logger.LogWarning("Reputation content: {Warning}", warning);
             }
 
             _writes = new ReputationWriteQueue(scopes, loggers.CreateLogger<ReputationWriteQueue>());
@@ -221,6 +232,7 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
             {
                 PeaceForcedUsesEffectiveStanding = Options.PeaceForcedUsesEffectiveStanding,
                 SpilloverEnabled = Options.SpilloverEnabled,
+                Content = content,
             };
         }
     }

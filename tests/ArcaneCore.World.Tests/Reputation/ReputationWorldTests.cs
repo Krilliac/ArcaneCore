@@ -273,6 +273,9 @@ internal sealed class ReputationTestServices : IWorldTestServices
 {
     public static readonly AsyncLocal<MemoryReputationStore?> Current = new();
 
+    /// <summary>Spillover/reward-rate rows served by a fake <see cref="IReputationContentSource"/> (null: none registered).</summary>
+    public static readonly AsyncLocal<ReputationContentRows?> ContentRows = new();
+
     public void Register(IServiceCollection services)
     {
         if (Current.Value is not { } store)
@@ -287,6 +290,15 @@ internal sealed class ReputationTestServices : IWorldTestServices
             new FactionRecord(469, 10, [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0x04, 0, 0, 0], 0, "Alliance"),
             new FactionRecord(BootyBay, 0, [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], 0, "Booty Bay"),
         ]));
+        if (ContentRows.Value is { } rows)
+        {
+            services.AddSingleton<IReputationContentSource>(new FixedContentSource(rows));
+        }
+    }
+
+    private sealed class FixedContentSource(ReputationContentRows rows) : IReputationContentSource
+    {
+        public Task<ReputationContentRows> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(rows);
     }
 
     private const uint Stormwind = 72;
