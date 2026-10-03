@@ -75,7 +75,9 @@ public sealed partial class EconomyFeature
     /// <summary>CMSG_AUCTION_SELL_ITEM (vmangos HandleAuctionSellItem).</summary>
     public void SellItem(WorldSession session, Player player, ObjectGuid auctioneer, ObjectGuid itemGuid, uint bid, uint buyout, uint minutes)
     {
-        if (AuctioneerAccess.FindHouse(player, auctioneer) is not { } house || bid == 0)
+        // vmangos HandleAuctionSellItem (AuctionHouseHandler.cpp:230-345) in its order: silent drop of a zero bid or
+        // duration, the 2,000,000,000 client limit, bid above buyout, the house, the account limit, the duration, the item.
+        if (bid == 0 || minutes == 0)
         {
             return;
         }
@@ -83,13 +85,7 @@ public sealed partial class EconomyFeature
         void Fail(AuctionError error, InventoryResult inventory = InventoryResult.Ok) =>
             session.Send(WorldOpcode.SmsgAuctionCommandResult, EconomyPackets.AuctionCommandResult(0, AuctionAction.Started, error, inventory));
 
-        if (!Enabled || !AuctionHouseRules.DurationsMinutes.Contains(minutes))
-        {
-            Fail(AuctionError.Database);
-            return;
-        }
-
-        if (bid > EconomyOptions.MaxMoney || buyout > EconomyOptions.MaxMoney)
+        if (bid > AuctionHouseRules.MaxPrice || buyout > AuctionHouseRules.MaxPrice)
         {
             Fail(AuctionError.NotEnoughMoney);
             return;
@@ -101,13 +97,42 @@ public sealed partial class EconomyFeature
             return;
         }
 
-        if (player.Inventory.GetItemByGuid(itemGuid) is not { } item || player.Inventory.CanTransferOut(item) != InventoryResult.Ok)
+        if (AuctioneerAccess.FindHouse(player, auctioneer) is not { } house)
+        {
+            Fail(AuctionError.Database);
+            return;
+        }
+
+        uint limit = Options.AuctionAccountConcurrentLimit;
+        if (limit != 0 && _auctions.Values.Count(v => v.Auction.HouseId == house.Id
+                && _directory?.Find(v.Auction.SellerId) is { } owner && owner.AccountId == session.AccountId) >= limit)
+        {
+            session.Send(WorldOpcode.SmsgMessagechat,
+                ArcaneCore.World.Packets.ChatPackets.BuildSystemMessage("You have reached the limit of active auctions on your account."));
+            Fail(AuctionError.Database);
+            return;
+        }
+
+        if (!Enabled || !AuctionHouseRules.DurationsMinutes.Contains(minutes))
+        {
+            Fail(AuctionError.Database);
+            return;
+        }
+
+        if (itemGuid.IsEmpty)
         {
             Fail(AuctionError.ItemNotFound);
             return;
         }
 
-        uint deposit = AuctionHouseRules.Deposit(house, item.Template.SellPrice, item.Count, minutes, Options.AuctionDepositMin);
+        // A missing, bank, untradable, conjured or timed item all answer INVENTORY / EQUIP_ERR_ITEM_NOT_FOUND (:314-346).
+        if (player.Inventory.GetItemByGuid(itemGuid) is not { } item || player.Inventory.CanTransferOut(item) != InventoryResult.Ok)
+        {
+            Fail(AuctionError.Inventory, InventoryResult.ItemNotFound);
+            return;
+        }
+
+        uint deposit = AuctionHouseRules.Deposit(house, item.Template.SellPrice, item.Count, minutes, Options.AuctionDepositMin, Options.AuctionRateDeposit);
         if (player.Money < deposit)
         {
             Fail(AuctionError.NotEnoughMoney);
@@ -138,7 +163,7 @@ public sealed partial class EconomyFeature
             SellerId = IdOf(player),
             StartBid = bid,
             Buyout = buyout,
-            ExpireTime = Now + (minutes * 60L),
+            ExpireTime = Now + (uint)(minutes * 60 * Options.AuctionRateTime),
             Deposit = deposit,
         };
         RunAuctionOperation([actor], [new EscrowFromInventory(IdOf(player), data), new InsertAuction(auction)], auction.Id, outcome =>
@@ -205,7 +230,16 @@ public sealed partial class EconomyFeature
         }
 
         uint cost = auction.BidderId == me ? price - auction.Bid : price;
-        if (player.Money < cost)
+        if (Options.AuctionSilentRefusals)
+        {
+            // vmangos AuctionHouseHandler.cpp:498-503: the whole price must be in hand and the refusal gets no answer
+            // (the 1.12 client checks its own money first).
+            if (price > player.Money)
+            {
+                return;
+            }
+        }
+        else if (player.Money < cost)
         {
             Fail(AuctionError.NotEnoughMoney);
             return;
@@ -299,10 +333,15 @@ public sealed partial class EconomyFeature
         }
 
         AuctionRecord auction = view.Auction;
-        uint cut = auction.BidderId != 0 ? AuctionHouseRules.Cut(house, auction.Bid) : 0;
+        uint cut = auction.BidderId != 0 ? AuctionHouseRules.Cut(house, auction.Bid, Options.AuctionRateCut) : 0;
         if (player.Money < cut)
         {
-            Fail(AuctionError.NotEnoughMoney);
+            // vmangos AuctionHouseHandler.cpp:592-594: "maybe message needed", but none is sent.
+            if (!Options.AuctionSilentRefusals)
+            {
+                Fail(AuctionError.NotEnoughMoney);
+            }
+
             return;
         }
 
@@ -428,7 +467,7 @@ public sealed partial class EconomyFeature
         yield return AuctionMail(auction, auction.BidderId, AuctionMailAction.Won, now, item: item);
         if (CharacterExists(auction.SellerId))
         {
-            uint cut = AuctionHouseRules.Cut(house, auction.Bid);
+            uint cut = AuctionHouseRules.Cut(house, auction.Bid, Options.AuctionRateCut);
             uint proceeds = (uint)Math.Min(EconomyOptions.MaxMoney, (long)auction.Bid + auction.Deposit - cut);
             yield return AuctionMail(auction, auction.SellerId, AuctionMailAction.Successful, now, money: proceeds, cut: cut);
         }

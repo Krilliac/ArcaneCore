@@ -46,7 +46,7 @@ public sealed class EconomyOptions
     /// <summary>Days before a cash-on-delivery letter expires (vmangos: 3).</summary>
     public uint CodExpireDays { get; set; } = 3;
 
-    /// <summary>Most letters a mailbox may hold (vmangos MAX_INBOX_CLIENT_CAPACITY 100 is the client view).</summary>
+    /// <summary>A recipient already holding MORE than this many letters is refused (vmangos MailHandler.cpp:258: count &gt; 100).</summary>
     public int MaxMailboxSize { get; set; } = 100;
 
     /// <summary>Whether players of opposite teams may mail each other (vmangos CONFIG_BOOL_ALLOW_TWO_SIDE_INTERACTION_MAIL).</summary>
@@ -60,6 +60,74 @@ public sealed class EconomyOptions
 
     /// <summary>Minimum deposit in copper (vmangos CONFIG_UINT32_AUCTION_DEPOSIT_MIN, default 0).</summary>
     public uint AuctionDepositMin { get; set; }
+
+    /// <summary>Rate.Auction.Deposit multiplier (vmangos World.cpp:535, default 1.0).</summary>
+    public float AuctionRateDeposit { get; set; } = 1.0f;
+
+    /// <summary>Rate.Auction.Cut multiplier (vmangos World.cpp:536, default 1.0).</summary>
+    public float AuctionRateCut { get; set; } = 1.0f;
+
+    /// <summary>Delivery delay of letters carrying an item or money, seconds (vmangos MailDeliveryDelay, World.cpp:691: 1 hour).</summary>
+    public uint MailDeliveryDelaySeconds { get; set; } = 3600;
+
+    /// <summary>Reading a letter shortens its remaining life to this many days when more remains (vmangos MailHandler.cpp:454-458: 3; 0 disables).</summary>
+    public uint MailReadExpiryDays { get; set; } = 3;
+
+    /// <summary>Largest cash-on-delivery amount accepted, copper (vmangos MailHandler.cpp:162: 100,000,000).</summary>
+    public uint MailMaxCodCopper { get; set; } = 100_000_000;
+
+    /// <summary>Longest subject in bytes; longer ones are dropped (vmangos MailHandler.cpp:155: 64).</summary>
+    public int MailSubjectMaxLength { get; set; } = 64;
+
+    /// <summary>Longest body in bytes; longer ones are dropped (vmangos MailHandler.cpp:158: 500).</summary>
+    public int MailBodyMaxLength { get; set; } = 500;
+
+    /// <summary>Answer oversize or over-COD letters with an internal error instead of dropping them silently like vmangos (default false).</summary>
+    public bool MailOversizeAnswersError { get; set; }
+
+    /// <summary>
+    /// Also return an expired money-only player letter to its sender (default true, the pre-lane behaviour; no retail source
+    /// shows otherwise). false matches the emulators: vmangos and mangos-classic delete it
+    /// (ObjectMgr.cpp:6995-7000: only letters with items are returned).
+    /// </summary>
+    public bool ReturnExpiredMoneyOnlyMail { get; set; } = true;
+
+    /// <summary>
+    /// Letters with an item or money may be deleted by the receiver, destroying the attachment, as vmangos does
+    /// (MailHandler.cpp:469-491 refuses only cash on delivery). Default false: only emptied letters can be deleted, the
+    /// pre-lane behaviour, since no retail source shows attachments being destroyable.
+    /// </summary>
+    public bool AllowDeleteWithAttachments { get; set; }
+
+    /// <summary>Scam-prevention delay after a trade modification before an accept counts, ms (vmangos TradeHandler.cpp:657-658: 200; 0 = off).</summary>
+    public uint TradeScamPreventionMs { get; set; } = 200;
+
+    /// <summary>
+    /// Measure the delay in whole seconds like vmangos (time(nullptr): effectively "not within the same second"); false
+    /// uses real milliseconds (a true 200 ms). Default true.
+    /// </summary>
+    public bool TradeScamPreventionWholeSeconds { get; set; } = true;
+
+    /// <summary>
+    /// Report not enough gold / bag space with notifications 801-803 and keep the window open, as vmangos does
+    /// (TradeHandler.cpp:274-290, 420-455); false closes the trade with the inventory error. Default true.
+    /// </summary>
+    public bool TradeSpaceNotifications { get; set; } = true;
+
+    /// <summary>Rate.Auction.Time multiplier of a listing's duration (vmangos World.cpp:534, AuctionHouseHandler.cpp:362; default 1.0).</summary>
+    public float AuctionRateTime { get; set; } = 1.0f;
+
+    /// <summary>
+    /// Active auctions one account may hold per auction house (vmangos Auction.AccountConcurrentLimit, World.cpp:538,
+    /// AuctionHouseHandler.cpp:274-280); 0 = unlimited (default).
+    /// </summary>
+    public uint AuctionAccountConcurrentLimit { get; set; }
+
+    /// <summary>
+    /// A bid the bidder cannot afford, or a cancellation whose cut the seller cannot pay, is answered with nothing, as
+    /// vmangos does (AuctionHouseHandler.cpp:498-503, 592-594); false answers NOT_ENOUGH_MONEY. Default true.
+    /// </summary>
+    public bool AuctionSilentRefusals { get; set; } = true;
 
     /// <summary>Seconds between expiry sweeps of mail and auctions.</summary>
     public uint ExpirySweepSeconds { get; set; } = 60;
@@ -92,6 +160,9 @@ public static class AuctionHouseRules
     /// <summary>Listing durations the 1.12 client offers, in minutes (2, 8 and 24 hours).</summary>
     public static readonly IReadOnlyList<uint> DurationsMinutes = [120, 480, 1440];
 
+    /// <summary>The client limit of a start bid or buyout (vmangos AuctionHouseHandler.cpp:236: 2,000,000,000 copper).</summary>
+    public const uint MaxPrice = 2_000_000_000;
+
     /// <summary>Maximum auctions per list result page (vmangos: 50).</summary>
     public const int PageSize = 50;
 
@@ -103,17 +174,37 @@ public static class AuctionHouseRules
         return options.AuctionHouses.FirstOrDefault(h => h.Id == id);
     }
 
-    /// <summary>vmangos GetAuctionDeposit: SellPrice × count × (duration / 2 h) × deposit% (at least the configured minimum).</summary>
-    public static uint Deposit(AuctionHouseEntry house, uint sellPrice, uint count, uint durationMinutes, uint minimum = 0)
+    /// <summary>
+    /// vmangos GetAuctionDeposit (AuctionHouseMgr.cpp:98-110): single-precision arithmetic in vmangos order,
+    /// float(sell * count * units) * depositPercent / 100.0f, raised to the minimum, then multiplied by
+    /// Rate.Auction.Deposit and truncated. The integer product is taken in 64 bits (vmangos wraps it in uint32;
+    /// real item data never reaches that: max SellPrice*stack*12 = 24,000,000).
+    /// </summary>
+    public static uint Deposit(AuctionHouseEntry house, uint sellPrice, uint count, uint durationMinutes, uint minimum = 0, float rate = 1f)
     {
         ulong units = (ulong)durationMinutes * 60 / MinAuctionSeconds;
-        ulong deposit = (ulong)sellPrice * count * units * house.DepositPercent / 100;
-        return (uint)Math.Min(uint.MaxValue, Math.Max(deposit, minimum));
+        float deposit = (float)((ulong)sellPrice * count * units);
+        deposit = deposit * house.DepositPercent;
+        deposit /= 100.0f;
+        float min = minimum;
+        if (deposit < min)
+        {
+            deposit = min;
+        }
+
+        float scaled = deposit * rate;
+        return scaled >= uint.MaxValue ? uint.MaxValue : scaled <= 0f ? 0u : (uint)scaled;
     }
 
-    /// <summary>vmangos GetAuctionCut: cut% of the winning bid.</summary>
-    public static uint Cut(AuctionHouseEntry house, uint bid) => (uint)((ulong)house.CutPercent * bid / 100);
-
+    /// <summary>
+    /// vmangos GetAuctionCut (AuctionHouseMgr.cpp:845-848): cutPercent * bid * Rate.Auction.Cut / 100.0f in single
+    /// precision. ArcaneCore keeps the cutPercent*bid product in 64 bits on purpose (vmangos wraps it in uint32).
+    /// </summary>
+    public static uint Cut(AuctionHouseEntry house, uint bid, float rate = 1f)
+    {
+        float cut = (float)((ulong)house.CutPercent * bid) * rate / 100.0f;
+        return cut >= uint.MaxValue ? uint.MaxValue : cut <= 0f ? 0u : (uint)cut;
+    }
     /// <summary>vmangos GetAuctionOutBid: 5% of the current bid in whole percents, at least 1 copper.</summary>
     public static uint OutBid(uint bid) => Math.Max(bid / 100 * 5, 1);
 
@@ -201,11 +292,17 @@ public static class AuctionSearch
 {
     public const uint Any = 0xFFFFFFFF;
 
+    private const uint InvTypeChest = 5;
+    private const uint InvTypeRobe = 20;
+
     /// <summary>The page of matching auctions (at most <see cref="AuctionHouseRules.PageSize"/>) and the total match count.</summary>
     public static (IReadOnlyList<AuctionRecord> Page, int Total) Run(IEnumerable<AuctionRecord> auctions, AuctionQuery query,
         Func<uint, ItemTemplate?> templates, Func<ItemTemplate, bool>? usable = null)
     {
-        List<AuctionRecord> matches = auctions.OrderBy(a => a.Id).Where(a => templates(a.ItemEntry) is { } t && Matches(t, query, usable)).ToList();
+        // vmangos keeps OrderedAuctionMap keyed by buyout price (AuctionHouseMgr.cpp:71-75, 711-790), insertion order
+        // (the auction id) within a key, so which rows a page shows follows the buyout price.
+        List<AuctionRecord> matches = auctions.OrderBy(a => a.Buyout).ThenBy(a => a.Id)
+            .Where(a => templates(a.ItemEntry) is { } t && Matches(t, query, usable)).ToList();
         int from = (int)Math.Min(query.ListFrom, (uint)matches.Count);
         return (matches.Skip(from).Take(AuctionHouseRules.PageSize).ToList(), matches.Count);
     }
@@ -222,7 +319,9 @@ public static class AuctionSearch
             return false;
         }
 
-        if (query.InventoryType != Any && template.InventoryType != query.InventoryType)
+        // vmangos AuctionHouseMgr.cpp:760: the chest slot (INVTYPE_CHEST 5) also lists robes (INVTYPE_ROBE 20).
+        if (query.InventoryType != Any && template.InventoryType != query.InventoryType
+            && !(query.InventoryType == InvTypeChest && template.InventoryType == InvTypeRobe))
         {
             return false;
         }
@@ -232,8 +331,9 @@ public static class AuctionSearch
             return false;
         }
 
-        if ((query.LevelMin != 0 && template.RequiredLevel < query.LevelMin)
-            || (query.LevelMax != 0 && template.RequiredLevel > query.LevelMax))
+        // vmangos AuctionHouseMgr.cpp:765: the maximum level only applies together with a minimum level.
+        if (query.LevelMin != 0 && (template.RequiredLevel < query.LevelMin
+            || (query.LevelMax != 0 && template.RequiredLevel > query.LevelMax)))
         {
             return false;
         }
@@ -270,24 +370,50 @@ public static class MailRules
         Money = money,
         Checked = MailCheckMask.Copied,
         DeliverTime = now,
-        ExpireTime = now + (options.MailExpireDays * SecondsPerDay),
+        // vmangos Mail.cpp:318-321: an auction note without item and money lives one hour.
+        ExpireTime = now + (money == 0 && itemGuid == 0 ? 3600 : options.MailExpireDays * SecondsPerDay),
     };
 
+    /// <summary>
+    /// Delivery and expiry of a new letter (vmangos MailDraft::SendMailTo, Mail.cpp:312-326): letters with an item or money
+    /// arrive after the configured delay, text-only letters at once, and expiry (3 days COD, else 30) counts from delivery.
+    /// </summary>
+    public static (long Deliver, long Expire) SendTiming(long now, bool hasItemOrMoney, uint cod, EconomyOptions options)
+    {
+        long deliver = now + (hasItemOrMoney ? options.MailDeliveryDelaySeconds : 0);
+        return (deliver, deliver + ((cod > 0 ? options.CodExpireDays : options.MailExpireDays) * SecondsPerDay));
+    }
+
+    /// <summary>MailHandler.cpp:454-458: reading clamps the remaining life to <paramref name="days"/> days when more remains (0 = off).</summary>
+    public static long ExpireAfterRead(long expireTime, long now, uint days)
+        => days > 0 && expireTime - now > days * SecondsPerDay ? now + (days * SecondsPerDay) : expireTime;
+
     /// <summary>The returned copy of a player's letter (vmangos MailDraft::SendReturnToSender): sender and receiver swap, COD cleared.</summary>
-    public static MailRecord Returned(MailRecord mail, uint newId, long now, EconomyOptions options) => mail with
+    public static MailRecord Returned(MailRecord mail, uint newId, long now, EconomyOptions options, uint deliverDelaySeconds = 0) => mail with
     {
         Id = newId,
         SenderId = checked((uint)mail.ReceiverId),
         ReceiverId = checked((int)mail.SenderId),
         Cod = 0,
         Checked = (mail.Checked & (MailCheckMask.HasBody | MailCheckMask.Copied)) | MailCheckMask.Returned,
-        DeliverTime = now,
-        ExpireTime = now + (options.MailExpireDays * SecondsPerDay),
+        DeliverTime = now + deliverDelaySeconds,
+        ExpireTime = now + deliverDelaySeconds + (options.MailExpireDays * SecondsPerDay),
     };
 
     /// <summary>Whether the letter can be returned to a player (a player's unreturned letter).</summary>
     public static bool CanReturn(MailRecord mail) => mail.MessageType == MailMessageType.Normal
         && (mail.Checked & MailCheckMask.Returned) == 0 && mail.SenderId != 0;
+
+    /// <summary>
+    /// Whether an expired letter goes back to its sender rather than being deleted. Only player letters that are not
+    /// already returned and not COD payments qualify (vmangos ReturnOrDeleteOldMails, ObjectMgr.cpp:6995-7002, 7029-7044).
+    /// vmangos returns only letters with an item; by default a money-only letter is returned too
+    /// (<see cref="EconomyOptions.ReturnExpiredMoneyOnlyMail"/> false restores the vmangos deletion).
+    /// </summary>
+    public static bool ReturnsOnExpiry(MailRecord mail, EconomyOptions options)
+        => mail.MessageType == MailMessageType.Normal && mail.SenderId != 0
+            && (mail.Checked & (MailCheckMask.CodPayment | MailCheckMask.Returned)) == 0
+            && (mail.HasItem || (options.ReturnExpiredMoneyOnlyMail && mail.Money > 0));
 
     /// <summary>Remaining days as the client shows them (SMSG_MAIL_LIST_RESULT expiration_time).</summary>
     public static float DaysLeft(MailRecord mail, long now) => (mail.ExpireTime - now) / (float)SecondsPerDay;

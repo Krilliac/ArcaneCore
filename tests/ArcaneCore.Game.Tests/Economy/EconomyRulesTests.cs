@@ -92,7 +92,8 @@ public sealed class EconomyRulesTests
         Assert.Equal(80, AuctionSearch.Run(auctions, all with { ItemClass = 7 }, Find).Total);
         Assert.Equal(40, AuctionSearch.Run(auctions, all with { Quality = 2 }, Find).Total);
         Assert.Equal(40, AuctionSearch.Run(auctions, all with { LevelMin = 10 }, Find).Total);
-        Assert.Equal(80, AuctionSearch.Run(auctions, all with { LevelMax = 10 }, Find).Total);
+        Assert.Equal(120, AuctionSearch.Run(auctions, all with { LevelMax = 10 }, Find).Total); // vmangos: the maximum needs a minimum
+        Assert.Equal(40, AuctionSearch.Run(auctions, all with { LevelMin = 10, LevelMax = 30 }, Find).Total);
         Assert.Equal(40, AuctionSearch.Run(auctions, all with { InventoryType = 13 }, Find).Total);
         Assert.Equal(80, AuctionSearch.Run(auctions, all with { Usable = true }, Find, t => t.RequiredLevel <= 10).Total);
     }

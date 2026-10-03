@@ -40,6 +40,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
     private ItemsFeature? _items;
     private CharacterDirectory? _directory;
     private Timer? _sweepTimer;
+    private Timer? _deliveryTimer;
     private uint _lastMailId;
     private uint _lastAuctionId;
     private uint _lastTextId;
@@ -129,6 +130,12 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             TimeSpan period = TimeSpan.FromSeconds(Options.ExpirySweepSeconds);
             _sweepTimer = new Timer(_ => world.Post(RunExpirySweep), null, period, period);
         }
+
+        if (Enabled)
+        {
+            // vmangos MasterPlayer::Update checks the next mail delivery time every world tick; once a second is as fine as the clock.
+            _deliveryTimer = new Timer(_ => world.Post(NotifyDeliveredMail), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+        }
     }
 
     public Task WaitForSettlementAsync(int characterId, CancellationToken cancellationToken = default)
@@ -140,6 +147,11 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         if (_sweepTimer is { } timer)
         {
             await timer.DisposeAsync().ConfigureAwait(false);
+        }
+
+        if (_deliveryTimer is { } deliveryTimer)
+        {
+            await deliveryTimer.DisposeAsync().ConfigureAwait(false);
         }
 
         if (_auctionRecoveryTimer is { } recoveryTimer)
@@ -326,6 +338,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
     {
         CancelTrade(player, TradeStatus.TradeCanceled);
         _mailboxes.Remove(IdOf(player));
+        _nextMailDelivery.Remove(IdOf(player));
     }
 
     private readonly HashSet<Map> _maps = [];

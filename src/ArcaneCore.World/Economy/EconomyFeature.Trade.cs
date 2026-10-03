@@ -118,17 +118,24 @@ public sealed partial class EconomyFeature
             return;
         }
 
+        if (tradeSlot >= TradeRules.SlotCount)
+        {
+            CancelTrade(player, TradeStatus.TradeCanceled);
+            return;
+        }
+
         Item? item = player.Inventory.GetItem(bag, slot);
         TradeSide mine = trade.SideOf(player);
-        if (tradeSlot >= TradeRules.SlotCount || item is null || mine.SlotOf(item.Guid) >= 0
+        if (item is null || mine.SlotOf(item.Guid) >= 0
             || (tradeSlot != TradeRules.NonTradedSlot && player.Inventory.CanBeTraded(item) != InventoryResult.Ok))
         {
             CancelTrade(player, TradeStatus.TradeCanceled);
             return;
         }
 
+        bool changed = mine[tradeSlot] != item.Guid;
         mine[tradeSlot] = item.Guid;
-        TradeChanged(trade, mine);
+        TradeNegotiated(trade, mine, changed);
     }
 
     /// <summary>CMSG_CLEAR_TRADE_ITEM.</summary>
@@ -140,8 +147,9 @@ public sealed partial class EconomyFeature
         }
 
         TradeSide mine = trade.SideOf(player);
+        bool changed = !mine[tradeSlot].IsEmpty;
         mine[tradeSlot] = ObjectGuid.Empty;
-        TradeChanged(trade, mine);
+        TradeNegotiated(trade, mine, changed);
     }
 
     /// <summary>CMSG_SET_TRADE_GOLD: more than the player owns is ignored.</summary>
@@ -153,8 +161,9 @@ public sealed partial class EconomyFeature
         }
 
         TradeSide mine = trade.SideOf(player);
+        bool changed = mine.Gold != gold;
         mine.Gold = gold;
-        TradeChanged(trade, mine);
+        TradeNegotiated(trade, mine, changed);
     }
 
     /// <summary>CMSG_UNACCEPT_TRADE.</summary>
@@ -184,8 +193,18 @@ public sealed partial class EconomyFeature
 
         TradeSide mine = trade.SideOf(player);
         TradeSide theirs = trade.OtherSide(player);
-        mine.Accepted = true;
         Player other = theirs.Player;
+
+        // vmangos TradeHandler.cpp:251-257: an accept right after a modification is bounced with BACK_TO_TRADE.
+        long nowMs = NowMs;
+        if (TradeRules.ScamPrevented(mine.LastModifiedMs, nowMs, Options.TradeScamPreventionMs, Options.TradeScamPreventionWholeSeconds))
+        {
+            session.Send(WorldOpcode.SmsgTradeStatus, EconomyPackets.TradeStatus(TradeStatus.BackToTrade));
+            return;
+        }
+
+        mine.LastModifiedMs = nowMs;
+        mine.Accepted = true;
         if (!TradeSession.InRange(player, other))
         {
             mine.Accepted = false;
@@ -193,17 +212,19 @@ public sealed partial class EconomyFeature
             return;
         }
 
+        // vmangos TradeHandler.cpp:274-290: the short player is told "not enough gold" and the PARTNER gets BACK_TO_TRADE
+        // (SetAccepted(false, crosssend)).
         if (mine.Gold > player.Money)
         {
             mine.Accepted = false;
-            SendBackToTrade(trade);
+            RefuseForGold(trade, player, other);
             return;
         }
 
         if (theirs.Gold > other.Money)
         {
             theirs.Accepted = false;
-            SendBackToTrade(trade);
+            RefuseForGold(trade, other, player);
             return;
         }
 
@@ -222,10 +243,27 @@ public sealed partial class EconomyFeature
         }
 
         other.Session.Send(WorldOpcode.SmsgTradeStatus, EconomyPackets.TradeStatus(TradeStatus.TradeAccept));
-        CompleteTrade(trade);
+        CompleteTrade(trade, player);
     }
 
-    private void CompleteTrade(TradeSession trade)
+    /// <summary>The player short of gold is notified (801); the partner receives BACK_TO_TRADE. With the option off both get BACK_TO_TRADE.</summary>
+    private void RefuseForGold(TradeSession trade, Player shortPlayer, Player partner)
+    {
+        if (!Options.TradeSpaceNotifications)
+        {
+            SendBackToTrade(trade);
+            return;
+        }
+
+        Notify(shortPlayer, "You do not have enough gold");
+        partner.Session.Send(WorldOpcode.SmsgTradeStatus, EconomyPackets.TradeStatus(TradeStatus.BackToTrade));
+    }
+
+    /// <summary>SMSG_NOTIFICATION (vmangos WorldSession::SendNotification); the texts are mangos_string 801-803 of classic-db.</summary>
+    private static void Notify(Player player, string text)
+        => player.Session.Send(WorldOpcode.SmsgNotification, ArcaneCore.World.Packets.ChatPackets.BuildNotification(text));
+
+    private void CompleteTrade(TradeSession trade, Player accepter)
     {
         TradeSide a = trade.Initiator;
         TradeSide b = trade.Target;
@@ -233,6 +271,20 @@ public sealed partial class EconomyFeature
         List<ItemInstanceData> bGives = [.. b.TradedItems.Select(g => b.Player.Inventory.GetItemByGuid(g)!.ToData())];
         InventoryResult aResult = a.Player.Inventory.TryStageEconomyTransfer([.. a.TradedItems], bGives, out EconomyInventoryStage? aStage, trade: true);
         InventoryResult bResult = b.Player.Inventory.TryStageEconomyTransfer([.. b.TradedItems], aGives, out EconomyInventoryStage? bStage, trade: true);
+        if ((aResult != InventoryResult.Ok || bResult != InventoryResult.Ok) && Options.TradeSpaceNotifications)
+        {
+            // vmangos TradeHandler.cpp:420-455: the trade stays open; the player who cannot receive is told (802) and the
+            // partner is told it is the partner's bags (803); both acceptances clear, each with BACK_TO_TRADE.
+            bool accepterShort = (ReferenceEquals(accepter, a.Player) ? aResult : bResult) != InventoryResult.Ok;
+            Player partner = trade.OtherSide(accepter).Player;
+            Notify(accepter, accepterShort ? "You do not have enough free slots" : "Your partner does not have enough free bag slots");
+            Notify(partner, accepterShort ? "Your partner does not have enough free bag slots" : "You do not have enough free slots");
+            trade.ClearAccepted();
+            trade.OtherSide(accepter).LastModifiedMs = NowMs;
+            SendBackToTrade(trade);
+            return;
+        }
+
         if (aResult != InventoryResult.Ok || bResult != InventoryResult.Ok)
         {
             // Not enough room on one side (vmangos LANG_NOT_FREE_TRADE_SLOTS): nothing moves; the window
@@ -318,21 +370,31 @@ public sealed partial class EconomyFeature
         return true;
     }
 
-    /// <summary>An offer changed: both acceptances clear and both windows show the changed side.</summary>
-    private void TradeChanged(TradeSession trade, TradeSide changed)
+    /// <summary>
+    /// vmangos HandleSetTradeGold/Item/ClearTradeItem (TradeHandler.cpp:675-746) with TradeData::SetItem/SetMoney
+    /// (TradeData.cpp:57-120). Every call clears the PARTNER's acceptance (BACK_TO_TRADE to the partner) and stamps both
+    /// modification times; only a real change then clears the owner's acceptance too (another BACK_TO_TRADE each) and
+    /// refreshes the trader's view of the changed side. Setting the value that is already set changes nothing more.
+    /// </summary>
+    private void TradeNegotiated(TradeSession trade, TradeSide changedSide, bool changed)
     {
-        bool wasAccepted = trade.Initiator.Accepted || trade.Target.Accepted;
-        trade.ClearAccepted();
-        if (wasAccepted)
+        TradeSide partnerSide = trade.OtherSide(changedSide.Player);
+        Player owner = changedSide.Player;
+        Player partner = partnerSide.Player;
+        byte[] backToTrade = EconomyPackets.TradeStatus(TradeStatus.BackToTrade);
+        partnerSide.Accepted = false;
+        partner.Session.Send(WorldOpcode.SmsgTradeStatus, backToTrade);
+        partnerSide.LastModifiedMs = changedSide.LastModifiedMs = NowMs;
+        if (!changed)
         {
-            SendBackToTrade(trade);
+            return;
         }
 
-        Player owner = changed.Player;
-        Player other = trade.OtherSide(owner).Player;
-        List<ItemInstanceData?> slots = [.. changed.Items.Select(g => g.IsEmpty ? null : owner.Inventory.GetItemByGuid(g)?.ToData())];
-        owner.Session.Send(WorldOpcode.SmsgTradeStatusExtended, EconomyPackets.TradeStatusExtended(false, changed.Gold, slots, Templates.Find));
-        other.Session.Send(WorldOpcode.SmsgTradeStatusExtended, EconomyPackets.TradeStatusExtended(true, changed.Gold, slots, Templates.Find));
+        changedSide.Accepted = false;
+        owner.Session.Send(WorldOpcode.SmsgTradeStatus, backToTrade);
+        partner.Session.Send(WorldOpcode.SmsgTradeStatus, backToTrade);
+        List<ItemInstanceData?> slots = [.. changedSide.Items.Select(g => g.IsEmpty ? null : owner.Inventory.GetItemByGuid(g)?.ToData())];
+        partner.Session.Send(WorldOpcode.SmsgTradeStatusExtended, EconomyPackets.TradeStatusExtended(true, changedSide.Gold, slots, Templates.Find));
     }
 
     private static void SendBackToTrade(TradeSession trade) => SendBoth(trade, TradeStatus.BackToTrade);

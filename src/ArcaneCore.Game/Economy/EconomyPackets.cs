@@ -42,11 +42,14 @@ public static class EconomyPackets
         return w.ToArray();
     }
 
-    /// <summary>SMSG_MAIL_LIST_RESULT: u8 count, then each letter (at most 255; the client shows 50).</summary>
+    /// <summary>Most letters sent in one list (vmangos MailHandler.cpp:758-766: 254, the count is one byte).</summary>
+    public const int MaxMailListEntries = 254;
+
+    /// <summary>SMSG_MAIL_LIST_RESULT: u8 count, then each letter (at most <see cref="MaxMailListEntries"/>; the client shows 50).</summary>
     public static byte[] MailList(IReadOnlyList<MailView> mails, long now, Func<uint, ItemTemplate?> templates)
     {
         var w = new PacketWriter(16 + (mails.Count * 96));
-        int count = Math.Min(mails.Count, byte.MaxValue);
+        int count = Math.Min(mails.Count, MaxMailListEntries);
         w.WriteByte((byte)count);
         foreach (MailView view in mails.Take(count))
         {

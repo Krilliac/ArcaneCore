@@ -1,3 +1,4 @@
+using System.Text;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Entities;
@@ -16,13 +17,14 @@ public sealed record SendMailRequest(ObjectGuid Mailbox, string Receiver, string
 
 public sealed partial class EconomyFeature
 {
-    /// <summary>Longest letter body stored (item_text.text).</summary>
-    public const int MaxBodyLength = 4000;
-
-    /// <summary>Longest subject accepted (the client limits it to 64 characters).</summary>
-    public const int MaxSubjectLength = 128;
-
     private readonly Dictionary<int, Mailbox> _mailboxes = [];
+
+    /// <summary>
+    /// World thread: the earliest not-yet-delivered letter time per online character (vmangos
+    /// MasterPlayer::m_nextMailDelivereTime, MasterPlayer.cpp:66-76, 175-209). When it passes the client
+    /// receives SMSG_RECEIVED_MAIL.
+    /// </summary>
+    private readonly Dictionary<int, long> _nextMailDelivery = [];
     private readonly HashSet<uint> _busyMails = [];
 
     /// <summary>The cached letters of an online character, newest first (tests and GM tools).</summary>
@@ -63,7 +65,22 @@ public sealed partial class EconomyFeature
             return;
         }
 
-        if (ValidateSendMail(player, request, out CharacterIdentity? receiver, out InventoryResult equipError) is { } error)
+        // vmangos HandleSendMail drops oversize letters and an over-limit COD without any answer (MailHandler.cpp:155-166).
+        if (Encoding.UTF8.GetByteCount(request.Subject) > Options.MailSubjectMaxLength
+            || Encoding.UTF8.GetByteCount(request.Body) > Options.MailBodyMaxLength
+            || request.Cod > Options.MailMaxCodCopper)
+        {
+            if (Options.MailOversizeAnswersError)
+            {
+                SendMailResult(session, 0, MailAction.Send, MailResult.InternalError);
+            }
+
+            return;
+        }
+
+        // vmangos order (MailHandler.cpp:181-276): receiver, self, then money, then the receiver's box size,
+        // then team, then an open trade, then the item.
+        if (ValidateSendMail(player, request, afterCap: false, out CharacterIdentity? receiver, out InventoryResult equipError) is { } error)
         {
             SendMailResult(session, 0, MailAction.Send, error, equipError);
             return;
@@ -73,7 +90,7 @@ public sealed partial class EconomyFeature
         int receiverId = receiver!.Id;
         Read((store, ct) => store.GetMailsAsync(receiverId, ct), mails =>
         {
-            if (mails.Count >= Options.MaxMailboxSize)
+            if (mails.Count > Options.MaxMailboxSize)
             {
                 SendMailResult(session, 0, MailAction.Send, MailResult.RecipientCapReached);
                 return;
@@ -91,13 +108,15 @@ public sealed partial class EconomyFeature
             return;
         }
 
-        if (ValidateSendMail(player, request, out CharacterIdentity? receiver, out InventoryResult equipError) is { } error)
+        if (ValidateSendMail(player, request, afterCap: true, out CharacterIdentity? receiver, out InventoryResult equipError) is { } error)
         {
             SendMailResult(session, 0, MailAction.Send, error, equipError);
             return;
         }
 
         Item? item = request.Item.IsEmpty ? null : player.Inventory.GetItemByGuid(request.Item);
+        // vmangos MailHandler.cpp:406-411: a COD without an item is zeroed, not refused.
+        uint cod = item is null ? 0 : request.Cod;
         InventoryResult staged = player.Inventory.TryStageEconomyTransfer(item is null ? [] : [item.Guid], [], out EconomyInventoryStage? stage);
         if (staged != InventoryResult.Ok)
         {
@@ -108,6 +127,7 @@ public sealed partial class EconomyFeature
         long now = Now;
         bool hasBody = request.Body.Length > 0;
         ItemInstanceData? itemData = stage!.RemovedData.SingleOrDefault();
+        (long deliverTime, long expireTime) = MailRules.SendTiming(now, itemData is not null || request.Money > 0, cod, Options);
         var mail = new MailRecord
         {
             Id = NextMailId(),
@@ -120,10 +140,11 @@ public sealed partial class EconomyFeature
             ItemGuid = itemData?.Guid ?? 0,
             ItemEntry = itemData?.Entry ?? 0,
             Money = request.Money,
-            Cod = request.Cod,
-            Checked = hasBody ? MailCheckMask.HasBody : MailCheckMask.None,
-            DeliverTime = now,
-            ExpireTime = now + ((request.Cod > 0 ? Options.CodExpireDays : Options.MailExpireDays) * MailRules.SecondsPerDay),
+            Cod = cod,
+            // vmangos MailHandler.cpp:416: HAS_BODY with a body, COPIED (nothing to copy) without.
+            Checked = hasBody ? MailCheckMask.HasBody : MailCheckMask.Copied,
+            DeliverTime = deliverTime,
+            ExpireTime = expireTime,
         };
         uint cost = request.Money + Options.MailPostage;
         EconomyActor? actor = Settlements.CreateActor(session, player, stage, player.Money - cost);
@@ -151,11 +172,16 @@ public sealed partial class EconomyFeature
         }
     }
 
-    private MailResult? ValidateSendMail(Player player, SendMailRequest request, out CharacterIdentity? receiver, out InventoryResult equipError)
+    /// <summary>
+    /// The CMSG_SEND_MAIL checks in vmangos order (MailHandler.cpp:181-276 and :394-411). Without
+    /// <paramref name="afterCap"/> only the checks that precede the receiver's box-size test run (receiver, self, money);
+    /// with it the ones after it (team, open trade, item) run too.
+    /// </summary>
+    private MailResult? ValidateSendMail(Player player, SendMailRequest request, bool afterCap, out CharacterIdentity? receiver, out InventoryResult equipError)
     {
         equipError = InventoryResult.Ok;
         receiver = null;
-        if (!Enabled || request.Subject.Length > MaxSubjectLength || request.Body.Length > MaxBodyLength)
+        if (!Enabled)
         {
             return MailResult.InternalError;
         }
@@ -171,20 +197,30 @@ public sealed partial class EconomyFeature
             return MailResult.CannotSendToSelf;
         }
 
-        if (!Options.AllowCrossTeamMail && !player.IsGameMaster && IsAlliance(receiver.Race) != (player.Team == Team.Alliance))
-        {
-            return MailResult.NotYourTeam;
-        }
-
         if ((ulong)request.Money + Options.MailPostage > player.Money)
         {
             return MailResult.NotEnoughMoney;
         }
 
+        if (!afterCap)
+        {
+            return null;
+        }
+
+        if (!Options.AllowCrossTeamMail && !player.IsGameMaster && IsAlliance(receiver.Race) != (player.Team == Team.Alliance))
+        {
+            return MailResult.NotYourTeam;
+        }
+
+        // vmangos MailHandler.cpp:272-276: a normal client cannot have the mail and trade windows open together.
+        if (TradeOf(player) is not null)
+        {
+            return MailResult.InternalError;
+        }
+
         if (request.Item.IsEmpty)
         {
-            // vmangos refuses cash on delivery without an item.
-            return request.Cod > 0 ? MailResult.InternalError : null;
+            return null;
         }
 
         if (player.Inventory.GetItemByGuid(request.Item) is not { } item)
@@ -312,8 +348,12 @@ public sealed partial class EconomyFeature
             return;
         }
 
-        // vmangos: reading a letter shortens nothing in 1.12 except unread COD (3 days stays).
-        MailRecord updated = view.Mail with { Checked = view.Mail.Checked | MailCheckMask.Read };
+        // vmangos MailHandler.cpp:454-458: reading clamps a longer remaining life to 3 days (Economy:MailReadExpiryDays).
+        MailRecord updated = view.Mail with
+        {
+            Checked = view.Mail.Checked | MailCheckMask.Read,
+            ExpireTime = MailRules.ExpireAfterRead(view.Mail.ExpireTime, Now, Options.MailReadExpiryDays),
+        };
         RunMailOperation([], [new UpdateMail(view.Mail, updated)], [mailId], outcome =>
         {
             if (outcome == EconomyOutcome.After)
@@ -337,7 +377,11 @@ public sealed partial class EconomyFeature
             return;
         }
 
-        var returned = new MailView(MailRules.Returned(view.Mail, NextMailId(), Now, Options), view.Item);
+        // vmangos Mail.cpp:252-291: an item returned to a character of another account is delayed like a new letter.
+        bool crossAccount = view.Mail.HasItem && _directory?.Find(IdOf(player)) is { } me
+            && _directory.Find((int)view.Mail.SenderId) is { } sender && sender.AccountId != me.AccountId;
+        var returned = new MailView(MailRules.Returned(view.Mail, NextMailId(), Now, Options,
+            crossAccount ? Options.MailDeliveryDelaySeconds : 0), view.Item);
         RunMailOperation([], [new DeleteMail(view.Mail), new InsertMail(returned.Mail, null)], [mailId], outcome =>
         {
             if (outcome == EconomyOutcome.After)
@@ -353,7 +397,10 @@ public sealed partial class EconomyFeature
         }, () => SendMailResult(session, mailId, MailAction.ReturnedToSender, MailResult.InternalError));
     }
 
-    /// <summary>CMSG_MAIL_DELETE: only an emptied letter (no item, no money) may be deleted.</summary>
+    /// <summary>
+    /// CMSG_MAIL_DELETE: by default only an emptied, non-COD letter. <see cref="EconomyOptions.AllowDeleteWithAttachments"/>
+    /// true follows vmangos (MailHandler.cpp:469-491): any letter except a cash-on-delivery one, the attachment destroyed with it.
+    /// </summary>
     public void DeleteMail(WorldSession session, Player player, ObjectGuid mailbox, uint mailId)
     {
         if (!MailboxAccess.CanUseMailbox(player, mailbox))
@@ -361,13 +408,20 @@ public sealed partial class EconomyFeature
             return;
         }
 
-        if (FindOwnMail(player, mailId) is not { } view || view.Mail.HasItem || view.Mail.Money > 0)
+        if (FindOwnMail(player, mailId) is not { } view || view.Mail.Cod > 0
+            || (!Options.AllowDeleteWithAttachments && (view.Mail.HasItem || view.Mail.Money > 0)))
         {
             SendMailResult(session, mailId, MailAction.Deleted, MailResult.InternalError);
             return;
         }
 
-        RunMailOperation([], [new DeleteMail(view.Mail)], [mailId], outcome =>
+        var changes = new List<EconomyChange> { new DeleteMail(view.Mail) };
+        if (view.Mail.HasItem)
+        {
+            changes.Add(new DeleteEscrowItem(view.Mail.ItemGuid));
+        }
+
+        RunMailOperation([], changes, [mailId], outcome =>
         {
             if (outcome == EconomyOutcome.After)
             {
@@ -511,7 +565,57 @@ public sealed partial class EconomyFeature
             }
         }
 
-        receiver.Session.Send(WorldOpcode.SmsgReceivedMail, EconomyPackets.ReceivedMail());
+        // vmangos MasterPlayer::AddNewMailDeliverTime (MasterPlayer.cpp:197-209): a ready letter notifies at once,
+        // a delayed one is remembered and notifies when it becomes deliverable.
+        long due = view.Mail.DeliverTime;
+        if (due <= Now)
+        {
+            receiver.Session.Send(WorldOpcode.SmsgReceivedMail, EconomyPackets.ReceivedMail());
+        }
+        else if (!_nextMailDelivery.TryGetValue(view.Mail.ReceiverId, out long pending) || pending > due)
+        {
+            _nextMailDelivery[view.Mail.ReceiverId] = due;
+        }
+    }
+
+    /// <summary>
+    /// World thread, once a second: notify characters whose delayed letters became deliverable
+    /// (vmangos MasterPlayer::Update, MasterPlayer.cpp:66-76).
+    /// </summary>
+    internal void NotifyDeliveredMail()
+    {
+        if (_nextMailDelivery.Count == 0)
+        {
+            return;
+        }
+
+        long now = Now;
+        foreach (int id in _nextMailDelivery.Where(p => p.Value <= now).Select(p => p.Key).ToList())
+        {
+            _nextMailDelivery.Remove(id);
+            if (OnlinePlayer(id) is not { } receiver)
+            {
+                continue;
+            }
+
+            receiver.Session.Send(WorldOpcode.SmsgReceivedMail, EconomyPackets.ReceivedMail());
+            ScheduleNextDelivery(id);
+        }
+    }
+
+    /// <summary>Remember the earliest still-undelivered letter of a cached mailbox (vmangos UpdateNextMailTimeAndUnreads).</summary>
+    private void ScheduleNextDelivery(int characterId)
+    {
+        long now = Now;
+        if (_mailboxes.TryGetValue(characterId, out Mailbox? box) && box.Loaded
+            && box.Mails.Where(m => m.Mail.DeliverTime > now && m.Mail.ExpireTime > now).Select(m => m.Mail.DeliverTime).DefaultIfEmpty(0).Min() is long next and > 0)
+        {
+            _nextMailDelivery[characterId] = next;
+        }
+        else
+        {
+            _nextMailDelivery.Remove(characterId);
+        }
     }
 
     private void ReplaceMail(int characterId, MailView view)
@@ -569,6 +673,7 @@ public sealed partial class EconomyFeature
 
             current.Mails = mails;
             current.Loaded = true;
+            ScheduleNextDelivery(id);
             if (sendList)
             {
                 long now = Now;
@@ -592,12 +697,14 @@ public sealed partial class EconomyFeature
         });
     }
 
-    /// <summary>vmangos Player::UpdateMail expiry: return a player's unreturned letter with contents, else delete it and its item.</summary>
+    /// <summary>
+    /// vmangos ReturnOrDeleteOldMails (ObjectMgr.cpp:6995-7044): an expired letter with an item goes back once to its
+    /// player sender; money-only letters, COD payments, returned letters and system letters are deleted with their item.
+    /// </summary>
     private void ExpireMail(MailView view, long now)
     {
         MailRecord mail = view.Mail;
-        bool hasContents = mail.HasItem || mail.Money > 0;
-        if (hasContents && MailRules.CanReturn(mail) && CharacterExists((int)mail.SenderId))
+        if (MailRules.ReturnsOnExpiry(mail, Options) && CharacterExists((int)mail.SenderId))
         {
             var returned = new MailView(MailRules.Returned(mail, NextMailId(), now, Options), view.Item);
             RunMailOperation([], [new DeleteMail(mail), new InsertMail(returned.Mail, null)], [mail.Id], outcome =>
