@@ -218,6 +218,48 @@ public sealed class GameObjectTests
         Assert.Equal(0u, GameObjectLocks.LockIdOf(GoTemplate(MailboxEntry, GameObjectType.Mailbox, (0, 5))));
     }
 
+    [Theory]
+    [InlineData(GameObjectType.Door)]
+    [InlineData(GameObjectType.Button)]
+    [InlineData(GameObjectType.Chest)]
+    [InlineData(GameObjectType.Goober)]
+    public void UnknownNonzeroLock_RefusesUseAndOpenLock_WhileZeroLockStillWorks(GameObjectType type)
+    {
+        int lockWord = type is GameObjectType.Door or GameObjectType.Button ? 1 : 0;
+        (int, uint)[] lootData = type == GameObjectType.Chest ? [(1, ChestLoot)] : [];
+        var content = new GameObjectContent(
+            [GoTemplate(901, type, [.. lootData, (lockWord, 999u)]), GoTemplate(902, type, lootData)],
+            [GoSpawn(1, 901, 3, 0), GoSpawn(2, 902, 3, 0)], [], [], []);
+        WorldRuntime world = TestWorld.CreateRuntime();
+        Map map = world.GetMap(0);
+        var quests = new FakeQuestJournal();
+        var loot = new LootService(new LootContent([(LootTableKind.GameObject, Row(ChestLoot, Hide, 100))], []))
+            { Items = ItemStore, Quests = quests };
+        var system = new GameObjectMapSystem(map, content, loot, quests);
+        map.AddUpdater(system);
+        (Player player, FakeSession session) = Player(1);
+        world.AddPlayer(player);
+        world.RunTick(50);
+        session.Clear();
+        GameObject locked = system.GameObjects.Single(go => go.Entry == 901);
+        GameObject unlocked = system.GameObjects.Single(go => go.Entry == 902);
+        var used = new List<GameObject>();
+        system.Used += (_, go) => used.Add(go);
+
+        Assert.Equal(GameObjectUseResult.Locked, system.Use(player, locked.Guid));
+        Assert.Equal(GameObjectUseResult.Locked, system.OpenLock(player, locked.Guid, LockType.Open));
+        Assert.Equal(GameObjectState.Ready, locked.State);
+        Assert.Equal(GameObjectLootState.Ready, locked.LootState);
+        Assert.Null(locked.Loot);
+        Assert.Empty(used);
+        Assert.Empty(quests.Used);
+        Assert.Empty(player.Inventory.AllItems);
+        Assert.Equal(0u, player.Money);
+        Assert.Empty(Packets(session, WorldOpcode.SmsgLootResponse));
+        Assert.Equal(GameObjectUseResult.Ok, system.Use(player, unlocked.Guid));
+        Assert.Equal([unlocked], used);
+    }
+
     [Fact]
     public void HerbNode_NeedsTheOpenLockSpell_AndTheSkill()
     {
@@ -432,6 +474,62 @@ public sealed class GameObjectTests
         Assert.Equal(0, rig.System.LoadedGridCount);
         Assert.Empty(rig.System.GameObjects);
         Assert.Equal(respawnAt, rig.System.PendingRespawnAt(1));
+    }
+
+    [Fact]
+    public void PartialChest_GridReloadKeepsTakenState_AndBindsTheFreshSource()
+    {
+        Rig rig = CreateRig([GoSpawn(1, ChestEntry, 3, 0, spawnTimeSeconds: 600)],
+        [
+            (LootTableKind.GameObject, Row(ChestLoot, ItemTestData.ToughJerky, 100)),
+            (LootTableKind.GameObject, Row(ChestLoot, Hide, 100)),
+        ]);
+        (Player original, FakeSession originalSession) = rig.Join(1);
+        GameObject oldChest = rig.Single(ChestEntry);
+        originalSession.Clear();
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(original, oldChest.Guid));
+        ParsedLoot initial = ParsedLoot.Parse(Assert.Single(Packets(originalSession, WorldOpcode.SmsgLootResponse)).Payload);
+        ParsedLootItem taken = initial.Items.Single(item => item.ItemId == ItemTestData.ToughJerky);
+        Assert.Equal(Items.InventoryResult.Ok, rig.Loot.TakeItem(original, taken.Slot));
+        LootBag bag = oldChest.Loot!;
+        rig.Loot.Release(original, oldChest.Guid);
+        rig.World.RemovePlayer(original);
+        for (int i = 0; i < 400 && rig.System.LoadedGridCount > 0; i++)
+        {
+            rig.World.RunTick(1000);
+        }
+
+        Assert.Equal(0, rig.System.LoadedGridCount);
+        Assert.True(rig.System.ClockMs < 600_000);
+        Assert.Null(oldChest.Map);
+        Assert.Null(rig.Loot.FindLoot(oldChest.Guid));
+        Assert.Empty(bag.Viewers);
+
+        (Player replacement, FakeSession replacementSession) = rig.Join(1);
+        GameObject freshChest = rig.Single(ChestEntry);
+        Assert.NotSame(oldChest, freshChest);
+        Assert.Same(bag, freshChest.Loot);
+        Assert.Same(bag, rig.Loot.FindLoot(freshChest.Guid));
+        Assert.False(rig.System.Remove(oldChest));
+        rig.System.Despawn(oldChest);
+        Assert.Same(freshChest, rig.System.Find(freshChest.Guid));
+        Assert.Same(freshChest, rig.Map.FindObject(freshChest.Guid));
+        replacementSession.Clear();
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(replacement, freshChest.Guid));
+        ParsedLoot remaining = ParsedLoot.Parse(Assert.Single(Packets(replacementSession, WorldOpcode.SmsgLootResponse)).Payload);
+        ParsedLootItem leftover = Assert.Single(remaining.Items);
+        Assert.Equal(Hide, leftover.ItemId);
+        Assert.Equal(Items.InventoryResult.LootCantLootThatNow, rig.Loot.TakeItem(original, leftover.Slot));
+        Assert.Equal(Items.InventoryResult.AlreadyLooted, rig.Loot.TakeItem(replacement, taken.Slot));
+        Assert.Equal(0u, replacement.Inventory.GetItemCount(ItemTestData.ToughJerky));
+        Assert.Equal(Items.InventoryResult.Ok, rig.Loot.TakeItem(replacement, leftover.Slot));
+        Assert.Equal(1u, replacement.Inventory.GetItemCount(Hide));
+        Assert.Equal(1u, original.Inventory.GetItemCount(ItemTestData.ToughJerky));
+        rig.Loot.Release(replacement, freshChest.Guid);
+        rig.World.RunTick(50);
+        Assert.False(freshChest.IsSpawned);
+        rig.System.ForceRespawn(oldChest);
+        Assert.Null(rig.Map.FindObject(freshChest.Guid));
     }
 
     [Fact]

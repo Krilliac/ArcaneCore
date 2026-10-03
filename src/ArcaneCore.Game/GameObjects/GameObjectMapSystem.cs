@@ -32,6 +32,7 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
     private readonly Dictionary<GridCoord, List<GameObjectSpawn>> _spawnsByGrid = [];
     private readonly Dictionary<GridCoord, List<GameObject>> _grids = [];
     private readonly Dictionary<uint, long> _respawnAt = [];
+    private readonly Dictionary<uint, LootBag> _unloadedLoot = [];
     private readonly Dictionary<ObjectGuid, GameObject> _objects = [];
     private readonly Dictionary<ObjectGuid, Dictionary<Player, uint>> _questFlagsSent = [];
     private readonly Dictionary<uint, uint[]> _questLootItems = [];
@@ -218,7 +219,10 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
             return result;
         }
 
-        result = GameObjectLocks.CheckOpenLock(_content.FindLock(GameObjectLocks.LockIdOf(go!.Template)), player, lockType, keyItemId, SkillValue);
+        uint lockId = GameObjectLocks.LockIdOf(go!.Template);
+        LockEntry? entry = _content.FindLock(lockId);
+        result = lockId != 0 && entry is null ? GameObjectUseResult.Locked
+            : GameObjectLocks.CheckOpenLock(entry, player, lockType, keyItemId, SkillValue);
         if (result != GameObjectUseResult.Ok)
         {
             return result;
@@ -292,8 +296,16 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
 
     private GameObjectUseResult UseDoorOrButton(Player player, GameObject go)
     {
-        GameObjectUseResult locked = GameObjectLocks.CheckDirectUse(_content.FindLock(GameObjectLocks.LockIdOf(go.Template)), player);
+        GameObjectUseResult locked = CheckDirectLock(player, go);
         return locked != GameObjectUseResult.Ok ? locked : ActivateDoorOrButton(go, go.Template.GetData(2));
+    }
+
+    private GameObjectUseResult CheckDirectLock(Player player, GameObject go)
+    {
+        uint lockId = GameObjectLocks.LockIdOf(go.Template);
+        LockEntry? entry = _content.FindLock(lockId);
+        return lockId != 0 && entry is null ? GameObjectUseResult.Locked
+            : GameObjectLocks.CheckDirectUse(entry, player);
     }
 
     /// <summary>
@@ -331,7 +343,7 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
             return GameObjectUseResult.NeedsQuest;
         }
 
-        GameObjectUseResult locked = GameObjectLocks.CheckDirectUse(_content.FindLock(GameObjectLocks.LockIdOf(go.Template)), player);
+        GameObjectUseResult locked = CheckDirectLock(player, go);
         return locked != GameObjectUseResult.Ok ? locked : OpenChest(player, go);
     }
 
@@ -362,7 +374,7 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
     /// </summary>
     internal void OnLootReleased(GameObject go, LootBag bag)
     {
-        if (!_objects.ContainsKey(go.Guid))
+        if (!Tracks(go) || !ReferenceEquals(go.Loot, bag))
         {
             return;
         }
@@ -374,7 +386,7 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
     {
         if (!lockChecked)
         {
-            GameObjectUseResult locked = GameObjectLocks.CheckDirectUse(_content.FindLock(GameObjectLocks.LockIdOf(go.Template)), player);
+            GameObjectUseResult locked = CheckDirectLock(player, go);
             if (locked != GameObjectUseResult.Ok)
             {
                 return locked;
@@ -467,11 +479,12 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
     public bool Remove(GameObject go)
     {
         ArgumentNullException.ThrowIfNull(go);
-        if (!_objects.Remove(go.Guid))
+        if (!Tracks(go))
         {
             return false;
         }
 
+        _objects.Remove(go.Guid);
         Loot?.ForgetLoot(go);
         _questFlagsSent.Remove(go.Guid);
         _despawnAt.Remove(go.Guid);
@@ -497,7 +510,7 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
     public void Despawn(GameObject go)
     {
         ArgumentNullException.ThrowIfNull(go);
-        if (!_objects.ContainsKey(go.Guid))
+        if (!Tracks(go))
         {
             return;
         }
@@ -523,11 +536,14 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
     public void ForceRespawn(GameObject go)
     {
         ArgumentNullException.ThrowIfNull(go);
-        if (_objects.ContainsKey(go.Guid) && !go.IsSpawned)
+        if (Tracks(go) && !go.IsSpawned)
         {
             Respawn(go);
         }
     }
+
+    private bool Tracks(GameObject go)
+        => _objects.TryGetValue(go.Guid, out GameObject? current) && ReferenceEquals(current, go);
 
     private void Respawn(GameObject go)
     {
@@ -570,6 +586,11 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
             _objects[go.Guid] = go;
             list.Add(go);
             ConfigureQuestFlags(go);
+            if (_unloadedLoot.Remove(spawn.Guid, out LootBag? remaining))
+            {
+                Loot!.RestoreGameObjectLoot(go, remaining);
+            }
+
             bool pending = _respawnAt.Remove(spawn.Guid, out long respawnAt);
             if (pending && respawnAt > _clockMs)
             {
@@ -598,6 +619,11 @@ public sealed class GameObjectMapSystem : IMapUpdater, IViewerFieldFilter
 
         foreach (GameObject go in list)
         {
+            if (go.Spawn is { } spawn && go.IsSpawned && go.Loot is { IsEmpty: false } remaining)
+            {
+                _unloadedLoot[spawn.Guid] = remaining;
+            }
+
             if (go.Spawn is not null && !go.IsSpawned && go.RespawnAtMs > 0)
             {
                 _respawnAt[go.Spawn.Guid] = go.RespawnAtMs;

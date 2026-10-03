@@ -119,8 +119,8 @@ All other files are new:
   - UNIT_DYNFLAG_LOOTABLE is shown only to allowed looters.
   - When a corpse is looted out it becomes skinnable if it has skinning loot. Otherwise its decay is shortened by `LootedCorpseDecayRate`.
 - **Other loot sources and the loot window.**
-  - Skinning loot. Lootable items (ITEM_FLAG_LOOTABLE 0x4). A locked item answers ItemLocked.
-  - Taking items and money. Money is split among group members in range, with SMSG_LOOT_MONEY_NOTIFY.
+  - Skinning loot is exposed as a spell collaborator seam. Item container opening is refused until generated/consumed loot has durable storage; a locked item still answers ItemLocked.
+  - Taking items and money. Money is split among group members in range, with SMSG_LOOT_MONEY_NOTIFY. A split is deferred while an eligible recipient has a pending quest settlement, without consuming or redistributing their share.
   - On release, a round robin owner's release opens the loot to everyone.
   - A late player may open a chest someone else left unfinished.
 - **Packets:**
@@ -132,7 +132,7 @@ All other files are new:
 
 - **Persistence.**
   - Game object respawn times are not persisted across a restart.
-  - Item container loot is not persisted.
+  - Item container loot is not persisted, so CMSG_OPEN_ITEM does not generate loot or consume containers. A durable consumed/remaining-state collaborator is required before enabling this path.
   - The remainder of a money split (gold mod number of sharers) is dropped.
 - **Group loot.**
   - There is no master loot, need/greed or group-loot roll UI. Those methods fall back to round robin.
@@ -159,9 +159,9 @@ All other files are new:
 ## Tests
 
 - `ArcaneCore.Game.Tests/GameObjects`:
-  - `GameObjectTests` (21)
+  - `GameObjectTests` (23, including partial-chest grid reload and unresolved lock checks)
   - `LootGeneratorTests` (7)
-  - `LootServiceTests` (17)
+  - `LootServiceTests` (18, including settlement-held money and container refusal)
 - `ArcaneCore.Data.Tests/GameObjectLootDataTests` (6 tests; 10 cases with all three engines):
   - schema step
   - round-trip and replace on SQLite, MariaDB and PostgreSQL

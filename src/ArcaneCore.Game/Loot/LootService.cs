@@ -363,12 +363,25 @@ public sealed class LootService : IViewerFieldFilter
         }
     }
 
+    /// <summary>Rebind retained chest contents to the new object created when its grid loads.</summary>
+    internal void RestoreGameObjectLoot(GameObject source, LootBag bag)
+    {
+        if (bag.Source != source.Guid || bag.Kind != LootSourceKind.GameObject
+            || bag.Viewers.Count != 0 || _bags.ContainsKey(source.Guid))
+        {
+            throw new InvalidOperationException("retained chest loot does not match an unobserved source");
+        }
+
+        source.Loot = bag;
+        _bags.Add(source.Guid, (source, bag));
+    }
+
     // --- items -----------------------------------------------------------------------------
 
     /// <summary>
     /// CMSG_OPEN_ITEM (vmangos HandleOpenItemOpcode): an ITEM_FLAG_LOOTABLE item that is not
-    /// locked opens into item_loot_template loot for its owner. The loot lives until the item
-    /// is emptied (then destroyed); it is not persisted across logout (gap).
+    /// locked is refused until item loot has a durable consumed/remaining-state collaborator.
+    /// Ordinary inventory snapshots cannot preserve generated loot across a fresh login.
     /// </summary>
     public LootResult OpenItem(Player player, Item item)
     {
@@ -390,14 +403,8 @@ public sealed class LootService : IViewerFieldFilter
             return LootResult.Locked;
         }
 
-        if (!_bags.TryGetValue(item.Guid, out var entry) || !ReferenceEquals(entry.Source, item))
-        {
-            LootBag fresh = Generate(item.Guid, LootSourceKind.Item, LootType.Corpse, LootTableKind.Item, item.Entry, [player]);
-            entry = (item, fresh);
-            _bags[item.Guid] = entry;
-        }
-
-        return Show(player, entry.Bag);
+        player.Inventory.SendEquipError(InventoryResult.LootCantLootThatNow, item, null);
+        return LootResult.NotAllowed;
     }
 
     // --- CMSG_LOOT and the loot window -----------------------------------------------------
@@ -550,9 +557,16 @@ public sealed class LootService : IViewerFieldFilter
         {
             foreach (ObjectGuid guid in bag.Recipients)
             {
-                if (map.FindPlayer(guid) is { } member && member.CanMutateQuestSettlementState
+                if (map.FindPlayer(guid) is { } member
                     && (ReferenceEquals(member, player) || Distance3D(member, source) <= Options.GroupLootDistance))
                 {
+                    // A temporary settlement hold cannot change this recipient's allocation.
+                    // Defer the whole split before changing balances or consuming bag gold.
+                    if (!member.CanMutateQuestSettlementState)
+                    {
+                        return false;
+                    }
+
                     sharers.Add(member);
                 }
             }

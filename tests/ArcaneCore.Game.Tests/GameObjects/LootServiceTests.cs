@@ -288,6 +288,54 @@ public sealed class LootServiceTests
         Assert.Equal(10u, alice.Money);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void MoneySplit_DefersForAnEligibleHeldRecipient_WithoutRedistributing(bool inRange)
+    {
+        Rig rig = CreateRig();
+        (Player alice, FakeSession aliceSession) = rig.Join(1);
+        (Player bob, FakeSession bobSession) = rig.Join(2, 1, 0);
+        rig.Groups.Create(LootMethod.FreeForAll, alice, bob);
+        Creature wolf = rig.KillWolf(alice);
+        Assert.Equal(LootResult.Ok, rig.Loot.Open(bob, wolf.Guid));
+        LootBag bag = rig.Loot.FindLoot(wolf.Guid)!;
+        Assert.Equal(2, bag.Recipients.Count);
+        if (!inRange)
+        {
+            alice.Relocate(90, 0, 83.5f, 0, 0);
+        }
+
+        uint aliceBefore = alice.Money;
+        uint bobBefore = bob.Money;
+        Guid operation = Guid.NewGuid();
+        Assert.True(alice.BeginQuestSettlement(operation));
+        aliceSession.Clear();
+        bobSession.Clear();
+
+        Assert.Equal(!inRange, rig.Loot.TakeMoney(bob));
+        Assert.Equal(aliceBefore, alice.Money);
+        Assert.Equal(bobBefore + (inRange ? 0u : 10u), bob.Money);
+        Assert.Equal(inRange ? 10u : 0u, bag.Gold);
+        Assert.True(alice.IsQuestSettlementPending);
+        Assert.Empty(Packets(aliceSession, WorldOpcode.SmsgLootMoneyNotify));
+        if (inRange)
+        {
+            Assert.Empty(Packets(bobSession, WorldOpcode.SmsgLootClearMoney));
+            Assert.Empty(rig.Quests.MoneyEvents);
+        }
+
+        Assert.True(alice.EndQuestSettlement(operation));
+        if (inRange)
+        {
+            Assert.True(rig.Loot.TakeMoney(bob));
+            Assert.Equal(aliceBefore + 5, alice.Money);
+            Assert.Equal(bobBefore + 5, bob.Money);
+            Assert.Equal(0u, bag.Gold);
+            Assert.Equal(2, rig.Quests.MoneyEvents.Count);
+        }
+    }
+
     [Fact]
     public void RoundRobin_OnlyTheLooterUntilReleased_ThenEveryone_AndTheTurnAdvances()
     {
@@ -363,9 +411,13 @@ public sealed class LootServiceTests
     }
 
     [Fact]
-    public void OpenItem_LootableContainer_IsDestroyedWhenEmptied_LockedAndPlainItemsAreRefused()
+    public void OpenItem_RefusesContainersUntilConsumedLootCanBePersisted()
     {
-        Rig rig = CreateRig(rows: [(LootTableKind.Item, Row(Lockbox, ItemTestData.ToughJerky, 100, minOrRef: 2, max: 2))]);
+        Rig rig = CreateRig(rows:
+        [
+            (LootTableKind.Item, Row(Lockbox, ItemTestData.ToughJerky, 100, minOrRef: 2, max: 2)),
+            (LootTableKind.Item, Row(Lockbox, Hide, 100)),
+        ]);
         (Player player, FakeSession session) = rig.Join(1);
         Item clam = ItemTestData.Give(player.Inventory, Lockbox);
         Item locked = ItemTestData.Give(player.Inventory, LockedBox);
@@ -376,16 +428,29 @@ public sealed class LootServiceTests
         Assert.Equal(LootResult.Locked, rig.Loot.OpenItem(player, locked));
         Assert.Contains(NonUpdatePackets(session), p => p.Opcode == WorldOpcode.SmsgInventoryChangeFailure);
 
-        Assert.Equal(LootResult.Ok, rig.Loot.OpenItem(player, clam));
-        ParsedLoot loot = LootResponse(session);
-        Assert.Equal(clam.Guid.Value, loot.Guid);
-        rig.Loot.Release(player, clam.Guid); // nothing taken yet: the item stays with its loot
-        Assert.NotNull(player.Inventory.GetItemByGuid(clam.Guid));
-        Assert.Equal(LootResult.Ok, rig.Loot.OpenItem(player, clam));
-        Assert.Equal(InventoryResult.Ok, rig.Loot.TakeItem(player, loot.Items[0].Slot));
+        Assert.Equal(LootResult.NotAllowed, rig.Loot.OpenItem(player, clam));
+        Assert.Empty(Packets(session, WorldOpcode.SmsgLootResponse));
+        Assert.Null(rig.Loot.FindLoot(clam.Guid));
+        Assert.Null(rig.Loot.OpenLootOf(player));
+        Assert.Equal(InventoryResult.LootCantLootThatNow, rig.Loot.TakeItem(player, 0));
         rig.Loot.Release(player, clam.Guid);
-        Assert.Null(player.Inventory.GetItemByGuid(clam.Guid));
-        Assert.Equal(2u, player.Inventory.GetItemCount(ItemTestData.ToughJerky));
+        Assert.Same(clam, player.Inventory.GetItemByGuid(clam.Guid));
+        Assert.Equal(0u, player.Inventory.GetItemCount(ItemTestData.ToughJerky));
+        Assert.Equal(0u, player.Inventory.GetItemCount(Hide));
+        Assert.Empty(rig.Quests.Looted);
+
+        var persisted = player.Inventory.CreateSnapshot();
+        rig.World.RemovePlayer(player);
+        (Player replacement, FakeSession replacementSession) = rig.Join(1);
+        replacement.Inventory.Load(persisted.Items);
+        Item restored = replacement.Inventory.GetItemByGuid(clam.Guid)!;
+        Assert.NotSame(clam, restored);
+        replacementSession.Clear();
+        Assert.Equal(LootResult.NotAllowed, rig.Loot.OpenItem(replacement, restored));
+        Assert.Empty(Packets(replacementSession, WorldOpcode.SmsgLootResponse));
+        Assert.Equal(1u, replacement.Inventory.GetItemCount(Lockbox));
+        Assert.Equal(0u, replacement.Inventory.GetItemCount(ItemTestData.ToughJerky));
+        Assert.Equal(0u, replacement.Inventory.GetItemCount(Hide));
         player.Health = 0;
         Assert.Equal(LootResult.Dead, rig.Loot.OpenItem(player, locked));
     }
@@ -409,7 +474,7 @@ public sealed class LootServiceTests
     }
 
     [Fact]
-    public void OpeningAnotherLoot_ReleasesThePreviousWindow()
+    public void RefusedContainer_DoesNotReleaseTheCurrentCorpseWindow()
     {
         Rig rig = CreateRig(minGold: 5, maxGold: 5);
         (Player player, FakeSession session) = rig.Join(1);
@@ -417,10 +482,11 @@ public sealed class LootServiceTests
         Item clam = ItemTestData.Give(player.Inventory, Lockbox);
         rig.Loot.Open(player, wolf.Guid);
         session.Clear();
-        rig.Loot.OpenItem(player, clam);
-        Assert.Same(rig.Loot.FindLoot(clam.Guid), rig.Loot.OpenLootOf(player));
-        Assert.Empty(rig.Loot.FindLoot(wolf.Guid)!.Viewers);
-        Assert.Single(Packets(session, WorldOpcode.SmsgLootReleaseResponse));
+        Assert.Equal(LootResult.NotAllowed, rig.Loot.OpenItem(player, clam));
+        Assert.Same(rig.Loot.FindLoot(wolf.Guid), rig.Loot.OpenLootOf(player));
+        Assert.Contains(player, rig.Loot.FindLoot(wolf.Guid)!.Viewers);
+        Assert.Null(rig.Loot.FindLoot(clam.Guid));
+        Assert.Empty(Packets(session, WorldOpcode.SmsgLootReleaseResponse));
     }
 
     [Fact]
