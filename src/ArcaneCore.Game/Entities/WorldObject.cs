@@ -14,6 +14,7 @@ public abstract class WorldObject
 {
     private readonly uint[] _values;
     private readonly UpdateMask _changed;
+    private bool _batchingMove;
 
     protected WorldObject(ObjectGuid guid, byte typeId, uint typeMask, int valuesCount)
     {
@@ -53,9 +54,39 @@ public abstract class WorldObject
 
     public uint MapId { get; set; }
 
-    public float X { get; set; }
+    /// <summary>World X. Changing it re-files the object in its map's grid (docs/areas/grid-terrain.md).</summary>
+    public float X
+    {
+        get;
+        set
+        {
+            if (field != value)
+            {
+                field = value;
+                if (!_batchingMove)
+                {
+                    Map?.OnObjectMoved(this);
+                }
+            }
+        }
+    }
 
-    public float Y { get; set; }
+    /// <summary>World Y. Changing it re-files the object in its map's grid.</summary>
+    public float Y
+    {
+        get;
+        set
+        {
+            if (field != value)
+            {
+                field = value;
+                if (!_batchingMove)
+                {
+                    Map?.OnObjectMoved(this);
+                }
+            }
+        }
+    }
 
     public float Z { get; set; }
 
@@ -65,6 +96,35 @@ public abstract class WorldObject
     public Map? Map { get; internal set; }
 
     public bool IsInWorld => Map is not null;
+
+    /// <summary>Order in which the object joined its map; visibility passes visit objects in this order.</summary>
+    internal long MapSequence { get; set; }
+
+    /// <summary>
+    /// Move the object in one step, so its map re-files it once (setting <see cref="X"/> and
+    /// <see cref="Y"/> separately re-files it after each).
+    /// </summary>
+    public void SetPosition(float x, float y, float z, float orientation)
+    {
+        bool moved = x != X || y != Y;
+        _batchingMove = true;
+        try
+        {
+            X = x;
+            Y = y;
+        }
+        finally
+        {
+            _batchingMove = false;
+        }
+
+        Z = z;
+        Orientation = orientation;
+        if (moved)
+        {
+            Map?.OnObjectMoved(this);
+        }
+    }
 
     /// <summary>Fields changed since the last values flush.</summary>
     internal UpdateMask ChangedFields => _changed;
