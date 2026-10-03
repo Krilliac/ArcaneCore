@@ -31,13 +31,16 @@ public sealed class WorldServer(
         listener.Start();
         logger.LogInformation("World daemon listening on {Address}:{Port} ({Handlers} opcode handlers)",
             config.BindAddress, config.Port, opcodes.Count);
+        using var sessionStop = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        var sessions = new HashSet<Task>();
 
         try
         {
             while (!stoppingToken.IsCancellationRequested)
             {
                 TcpClient client = await listener.AcceptTcpClientAsync(stoppingToken).ConfigureAwait(false);
-                _ = HandleClientAsync(client, stoppingToken);
+                sessions.RemoveWhere(static session => session.IsCompleted);
+                sessions.Add(HandleClientAsync(client, sessionStop.Token));
             }
         }
         catch (OperationCanceledException)
@@ -47,7 +50,26 @@ public sealed class WorldServer(
         finally
         {
             listener.Stop();
+            sessionStop.Cancel();
+            await Task.WhenAll(sessions).ConfigureAwait(false);
             logger.LogInformation("World daemon stopped listening");
+        }
+    }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await base.StopAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Session handlers and async scope disposal may ignore cancellation. Keep owning
+            // them before WorldHost drains storage, even if the host's shutdown budget expires.
+            if (ExecuteTask is { } execution)
+            {
+                await execution.ConfigureAwait(false);
+            }
         }
     }
 
