@@ -66,6 +66,30 @@ next slice. Verification note: the long-run test pins the port's own distributio
 regens change state, 47 % of time at grade 0.27 or more for a 20 % rain zone); it is a
 self-consistency check against a second port, not a retail oracle.
 
+### Exploration rules (`exploration-core`, pure rules)
+
+`ExploredZones` is the `PLAYER_EXPLORED_ZONES_1..64` bit math (64 words, `flag / 32`, bit
+`flag % 32`, an unsigned shift so bit 31 is safe, flag `0xFFFF` skipped, offsets of 64 and above
+rejected without throwing; vmangos `Player.cpp:6089-6204`). `ExplorationXp.Compute` is the
+`Player.cpp:6171-6196` formula: no XP for area level 0 or at the maximum level; within five
+levels the base XP of the area level; more than five levels below the area the base XP of
+`level + 5`; more than five above, `base * percent / 100` (integer division first) with
+`percent = clamp(100 - (diff - 5) * 5, 0, 100)`; the rate multiplies as a float32 and the result
+truncates. `ExplorationBaseXpTable` is data (`exploration_basexp`); a level without a row is 0
+(`ObjectMgr::GetBaseXP`, `:8516`) and an empty table gives 0 XP everywhere. SMSG_EXPLORATION_EXPERIENCE
+is `u32 area, u32 xp` (`Misc.cpp:833-837`); vmangos sends it for every discovered area that has an
+entry, even with 0 XP (mangos-classic only when the area level is above 0; vmangos, the primary,
+is followed).
+
+`ClassicDbFact` tests read `exploration_basexp` straight from the classic-db dump
+(`D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz`, or `ARCANE_CLASSICDB_DUMP`) and are
+reported as skipped with that reason when it is absent; no game data is committed. Verified there:
+61 rows, level 60 = 660, and the XP examples in the tests.
+
+Not wired yet: the explore check in the zone tracker, persistence of the words, the table
+loader, `.explorecheat`/`.showarea`/`.hidearea`, and the first-login cinematic (a documented limit:
+without a cinematic the first check runs right after the map add).
+
 ## Deviations from retail (all documented, none silent)
 
 - `ClientZoneTrust=Auto` is a development-world allowance, not retail. Retail is `Never`.
