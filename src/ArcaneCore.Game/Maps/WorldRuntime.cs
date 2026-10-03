@@ -108,6 +108,14 @@ public sealed class WorldRuntime : IDisposable
     /// </summary>
     public event Action<Player>? PlayerLoggingOut;
 
+    /// <summary>
+    /// Raised once per world tick on the world thread, after the posted commands and before the maps update,
+    /// with the tick's elapsed milliseconds (vmangos <c>World::Update</c> drives <c>sGameEventMgr.Update</c> from
+    /// its own timers, World.cpp:2106-2111; this is the equivalent seam for world-level services). A failing
+    /// handler is logged and does not stop the others.
+    /// </summary>
+    public event Action<uint>? WorldTick;
+
     /// <summary>Announce that <paramref name="player"/> finished entering the world (world thread).</summary>
     public void NotifyLoggedIn(Player player) => Raise(PlayerLoggedIn, player, nameof(PlayerLoggedIn));
 
@@ -278,6 +286,7 @@ public sealed class WorldRuntime : IDisposable
     public void RunTick(uint diffMs)
     {
         RunCommands();
+        Raise(WorldTick, diffMs, nameof(WorldTick));
 
         // A snapshot: a map system may create another map (an instance) during its update.
         foreach (Map map in _maps.Values.ToArray())

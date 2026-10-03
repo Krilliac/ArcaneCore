@@ -113,4 +113,58 @@ public sealed class GameEventOptions
     /// vmangos loop, whose yearly events start a day late in many years.
     /// </summary>
     public Events.LeapDayMode LeapDayMode { get; set; } = Events.LeapDayMode.DateStable;
+
+    /// <summary>
+    /// Whether the game-event service runs at all. Default true. With false no event ever starts: holiday
+    /// content, event quests and event spawns stay off (the pre-wave-4 behaviour).
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Which <c>game_event</c> table layout the data is in (<see cref="Events.GameEventDialect"/>). Default
+    /// <c>Auto</c>: decided from the table's own columns when it is loaded; set it only to override a wrong guess.
+    /// </summary>
+    public Events.GameEventDialect Dialect { get; set; } = Events.GameEventDialect.Auto;
+
+    /// <summary>
+    /// Whether an event is active AT its start instant (vmangos <c>start &lt;= current</c>, GameEventMgr.cpp:41) or only
+    /// after it (mangos-classic <c>start &lt; current</c>, GameEventMgr.cpp:36-40). Default <c>Auto</c>: the rule of the
+    /// table's dialect (the vmangos rule for vmangos tables, the mangos-classic rule for classic-db tables).
+    /// </summary>
+    public Events.GameEventStartBoundary StartBoundary { get; set; } = Events.GameEventStartBoundary.Auto;
+
+    /// <summary>
+    /// How a <c>start_time</c> / <c>end_time</c> that has no zone is read. Default <c>Wall</c> (vmangos: MySQL
+    /// <c>UNIX_TIMESTAMP</c> reads the session zone, GameEventMgr.cpp:183); <c>StandardTime</c> reproduces
+    /// mangos-classic, whose <c>std::mktime</c> on a zeroed <c>tm</c> never applies daylight saving
+    /// (Field.cpp:24-31).
+    /// </summary>
+    public Events.GameEventDateTimeInterpretation DateTimeInterpretation { get; set; } = Events.GameEventDateTimeInterpretation.Wall;
+
+    /// <summary>
+    /// How yearly (<c>schedule_type</c> 11) events are moved to the current year (<see cref="Events.YearlyRebaseMode"/>).
+    /// Default <c>SpanNewYear</c> (a holiday that crosses New Year keeps running, as in retail); <c>MangosLiteral</c> is
+    /// the mangos-classic code, which cuts such a holiday at December 31st.
+    /// </summary>
+    public Events.YearlyRebaseMode YearlyRebase { get; set; } = Events.YearlyRebaseMode.SpanNewYear;
+
+    /// <summary>
+    /// mangos-classic never restores a serverside (<c>schedule_type</c> 0) event that was active at shutdown (its
+    /// Update skips them and CheckOneGameEvent is false for their far-future start, GameEventMgr.cpp:634-690), vmangos
+    /// leaves that state to its hardcoded handlers. Default false (retail); true re-applies the serverside events
+    /// recorded in <c>game_event_status</c> with the resume flag, so their progress is not lost.
+    /// </summary>
+    public bool RestoreServersideEvents { get; set; }
+
+    /// <summary>
+    /// vmangos <c>Event.Announce</c> (GameEventMgr.cpp:788-789): tell every player in the world when an event starts.
+    /// Default false (retail default).
+    /// </summary>
+    public bool Announce { get; set; }
+
+    /// <summary>
+    /// Registers a <c>.reload game_event</c> sub-command. Retail has none, so the default is false; it still needs
+    /// <c>HotReload:Commands</c> like every reload.
+    /// </summary>
+    public bool AllowReload { get; set; }
 }
