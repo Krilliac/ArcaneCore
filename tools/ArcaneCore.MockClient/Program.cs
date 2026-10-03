@@ -15,6 +15,11 @@ internal static class Program
             return 0;
         }
 
+        if (args.Length > 0 && args[0] == "live")
+        {
+            return await LiveSession.MainAsync(args[1..], Console.Out, Console.Error).ConfigureAwait(false);
+        }
+
         ClientFixtureOptions? fixture = null;
         if (args.Length == 7 && args[0] == "client-fixture" && args[1] == "--directory"
             && args[3] == "--account" && args[5] == "--password")
@@ -55,6 +60,7 @@ internal static class Program
     private static void PrintUsage(TextWriter writer)
     {
         writer.WriteLine("Usage: arcane-mock self-test");
+        writer.WriteLine("       arcane-mock live ...   (stay connected to a running dev server; run 'arcane-mock live' with no flags for details)");
         writer.WriteLine("       arcane-mock client-fixture --directory <new absolute directory> --account <name> --password <disposable password>");
     }
 }

@@ -30,6 +30,22 @@ public sealed class WorldClient : IAsyncDisposable
         _stream = client.GetStream();
     }
 
+    /// <summary>The local end of this connection (its port identifies the connection), or null once closed.</summary>
+    public EndPoint? LocalEndPoint
+    {
+        get
+        {
+            try
+            {
+                return _client.Client.LocalEndPoint;
+            }
+            catch (ObjectDisposedException)
+            {
+                return null;
+            }
+        }
+    }
+
     public static async Task<WorldClient> ConnectAsync(IPEndPoint endpoint, CancellationToken ct = default)
         => new(await ProtocolIO.ConnectAsync(endpoint, ct).ConfigureAwait(false));
 
