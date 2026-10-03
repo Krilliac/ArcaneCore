@@ -147,9 +147,22 @@ public sealed class QuestCreatureAdapterTests
         Assert.Equal(0u, kit.State.Quests.SlotQuestId(1));
     }
 
+    [Fact]
+    public void RewardedRepeatableHistory_MayBeTakenAgainAndKeepsItsRewardedFlag()
+    {
+        // feat/quest-progression: repeatables are supported (vmangos RewardQuest leaves them NONE).
+        var history = new CharacterQuestStatus(1, 900004, (byte)QuestStatus.None, true, false, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0);
+        using var kit = new Kit([history]);
+        Assert.True(kit.Services.AcceptQuest(kit.Player, kit.Creature.Guid, 900004));
+        Assert.Equal(QuestStatus.Complete, kit.State.Quests.GetStatus(900004));
+        Assert.True(kit.State.Quests.Get(900004)!.Rewarded);
+        Assert.Equal(900004u, kit.State.Quests.SlotQuestId(0));
+        Assert.Single(kit.Sink.Rows);
+    }
+
     [Theory]
     [InlineData(900001u)]
-    [InlineData(900004u)]
     public void PreviouslyRewardedHistory_CannotEnterJournalOnlyFlow(uint questId)
     {
         // A real persisted history row reaches the service through CompleteLoad.
