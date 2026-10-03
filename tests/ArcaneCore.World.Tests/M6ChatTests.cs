@@ -142,7 +142,7 @@ public sealed class M6ChatTests
 
         await human.SendChatAsync(ChatType.Say, Language.Orcish, "Lok'tar");
         var notification = new PacketReader(await human.ReadUntilAsync(WorldOpcode.SmsgNotification));
-        Assert.Equal("You don't know that language.", notification.ReadCString());
+        Assert.Equal("You don't know that language", notification.ReadCString()); // mangos_string 806 has no full stop
         Assert.DoesNotContain(await gm.CollectAsync(), p => p.Opcode == WorldOpcode.SmsgMessagechat);
 
         // Universal itself is only accepted for AFK/DND (vmangos IsLanguageAllowedForChatType).
