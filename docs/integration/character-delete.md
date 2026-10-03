@@ -3,7 +3,7 @@
 Branch `feat/character-delete-cleanup`, based on canonical integration head
 `0d32fba1070a0be08932a85551a4c1b4ca191cfc`. The original slice used no schema version.
 The deletion-outcome recovery below (branch `claude/ac-1-delete-recovery`, base `c3dea16`) adds
-characters schema **v11** (`CharacterDeletionDataModule.Version`, the one constant the integrator
+characters schema **v12** (`CharacterDeletionDataModule.Version`, the one constant the integrator
 renumbers; seams.md "Schema versions").
 
 ## Problem
@@ -96,7 +96,7 @@ by the character and its `character_inventory` slots.
 
 ## Tests
 
-- Recovery (characters v11): Data `CharacterDeletionLedgerTests` (commit-then-throw, rollback and
+- Recovery (characters v12): Data `CharacterDeletionLedgerTests` (commit-then-throw, rollback and
   refusal, caller transaction, create fence, idempotent complete, cleanup refusal, generated-id
   evidence), `PostDeleteRemovalFenceTests` and `ReputationLifetimeFenceTests` (late removal keeps a
   recreated character, still deletes orphans), `IntegratedSchemaTests` (allocation by constant);
@@ -119,7 +119,7 @@ by the character and its `character_inventory` slots.
   deleted character's retained snapshot, no shutdown rewrite, no inherited hold/quarantine,
   refusal while quest writes are queued).
 
-## Deletion outcome recovery (characters v11)
+## Deletion outcome recovery (characters v12)
 
 Handoff item 1 (`claude-handoff-20261003.md`). Before this, the stored delete and the runtime
 finalizers shared one `try`: when the store call threw *after* committing (a lost acknowledgement),
@@ -129,7 +129,7 @@ economy caches, save-queue holds and the directory entry stayed live until resta
 the economy ledger's (`economy_operation` / `IsCommittedAsync`).
 
 **Ledger.** `ICharacterDeletionStore` (Kernel) with `PendingCharacterDeletion`; `EfCharacterStore`
-implements it. `character_deletion` (`CharacterDeletionDataModule`, v11, implements
+implements it. `character_deletion` (`CharacterDeletionDataModule`, v12, implements
 `ICharacterDataCleanup`): `operation_id` PK, `character_id` UNIQUE, `account_id` INDEX, `name`,
 `committed_at`. The row is written in the deletion transaction, so it exists exactly when the
 character's rows are gone, and stays until the world completes the finalizers. The module's
@@ -209,7 +209,7 @@ with a multi-statement removal.
   character-level audit log.
 - Real-client deletion acceptance is deferred with the other client runs. Whether the 1.12.1
   client re-enumerates after `CHAR_DELETE_FAILED` was not verified; recovery does not depend on it.
-- Recovery (v11): the sweep runs only when the owning account requests its character list. After a
+- Recovery (v12): the sweep runs only when the owning account requests its character list. After a
   process restart the live caches are already empty, so a pending row mainly blocks explicit-id
   recreation until that account next enumerates or deletes; it never blocks generated ids. There is
   no background sweep. A finalizer that fails persistently is retried at most once per session.
@@ -221,9 +221,8 @@ with a multi-statement removal.
   index and the commit-then-throw ledger test are proven on SQLite only until CI's cells run them.
 - The ledger tests inject the lost acknowledgement with an EF `DbTransactionInterceptor`
   (a real commit, then a throw); a real network fault mid-COMMIT was not produced.
-- The v11 upgrade path creates the table only; like every characters module it relies on the
-  bootstrapper's table-only upgrade step (remaining-work item 3 covers index parity for upgraded
-  databases, so an upgraded database may lack the `character_deletion` unique/account indexes).
+- The v12 upgrade creates the table together with its model indexes (`CreateTableChange` after the index repair, characters 11:
+  [schema-index-repair.md](schema-index-repair.md)), so an upgraded database has the `character_deletion` unique and account indexes.
 - A World-level test that races a gated `SpellStatePersistence` delete against an explicit
   recreate was not added: queued writes are ordered behind the delete, so it only fails for writes
   that bypass the queue; the store-level fence tests cover that shape directly.

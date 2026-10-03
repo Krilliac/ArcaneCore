@@ -74,11 +74,35 @@ No ExecutionPolicy bypass or speculative service restart is needed.
   deleting escrow. Unknown auctions retain reservations through fresh recovery;
   deletion invalidates older recovery callbacks.
 
-Schema allocations: **Auth2 / World8 / Characters10**. Characters reputation7,
-instances8, spell state9, economy10; world GO/loot7 then AI8. Original feature
-branches retain provisional numbers. Never apply a source branch's provisional
-schema to a database already using the final allocation. New changes require
-coordinated forward versions and complete cleanup registration.
+- Integration of handoff items 1-6 (branch `claude/ac-integration`; **local verification only;
+  exact-head hosted CI pending**):
+  - Deletion outcome recovery: a durable `character_deletion` ledger, read-back after a thrown
+    delete, a character-list sweep that finalizes pending deletions, an explicit-id create fence,
+    and conditional (lifetime-fenced) post-delete removals that the hooks await.
+  - Reputation write durability: failed writes are retained, never dropped, and carried by the next
+    change, the login barrier, logout and shutdown.
+  - Forward index repair: upgrades create the indexes of the tables they create; inline repair steps
+    add the missing ones; startup is idempotent, resumable and serialized per component.
+  - Durable consumed loot for dungeon-instance chests (`loot_state*` tables).
+  - Reward collaborators: permanent `LearnSpell`/`CreateItem` and quest reputation rewards settle in
+    the quest reward transaction, with destination and summon-owner preflight.
+  - Economy recovery contract: a transactional auction snapshot, per-ID quarantine and backoff,
+    allocator reseed after an external insert, and a finished `economy.md`.
+  - Integration fix: the quest reward settlement now drains the reputation queue with
+    `FlushCharacterAsync` (retry, refuse while not durable) rather than the pure barrier, so a
+    retained older row cannot overwrite rows the reward writes; the reputation write queue's
+    post-delete removal uses the conditional `DeleteDeletedCharacterAsync`.
+
+Schema allocations at the integration of 2026-10-03: **Auth 2 / World 10 / Characters 13**.
+Characters: reputation 7, instances 8, spell state 9, economy 10, forward index repair 11
+(inline step, `CharacterDbContext.IndexRepairVersion`), deletion outcome ledger 12
+(`CharacterDeletionDataModule.Version`), durable loot state 13 (`LootStateDataModule.Version`).
+World: GO/loot 7, AI 8, forward index repair 9 (inline step, `WorldDbContext.IndexRepairVersion`),
+quest reputation reward columns 10 (`QuestReputationRewardWorldModule.Version`). Each number lives in
+one constant and tests reference the constants or `Schema.CurrentVersion`. Before this integration the
+allocation was Auth2 / World8 / Characters10. Original feature branches retain provisional numbers.
+Never apply a source branch's provisional schema to a database already using the final allocation. New
+changes require coordinated forward versions and complete cleanup registration.
 
 ## Evidence and its limits
 
@@ -118,38 +142,63 @@ dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-t
 
 ## Remaining work, in priority order
 
-1. **Deletion outcome recovery.** A durable delete whose acknowledgement throws
-   can return false and skip runtime/cache finalizers; a retry for a missing row
-   skips them again. Add durable operation identity/reconciliation and real
-   commit-then-throw tests. Keep online/ownership checks and caller transaction
-   ownership. Redundant queued spell/state/reputation post-delete removal also
-   needs a lifetime fence under explicit ID reuse; ordinary generated-ID reuse
-   was not established. Do not report the conditional gap as observed client loss.
-2. **Reputation failure durability.** Its three-attempt queue drops failed writes
-   after dirty state has cleared and a later flush may succeed. Choose a retention,
-   retry/quarantine and shutdown contract; prove gain/watched-state persistence
-   after repeated failures, relog and restart.
-3. **Forward index repair and upgrade parity.** Historical bootstrap filters
-   separate index operations. Already-versioned databases can miss owner/spawn
-   indexes and the unique guild-member CharacterId index. Use a frozen populated
-   released baseline, preserve all feature rows, compare fresh/upgraded indexes,
-   allocate forward repair, and test repeated/interrupted/concurrent startup.
-   Actual MySQL qualification remains separate from MariaDB.
-4. **Durable consumed loot.** Item containers and nonzero-instance chests remain
-   deliberately refused. Store generated/remaining/consumed contents atomically
-   with awards, tied to the logical instance save across unload/recreation/restart;
-   clear only on real reset/deletion. Keep ordinary shared chests working and
-   preserve original group gold shares while a recipient is held.
-5. **Complete reward collaborators.** Bring permanent item/spell/reputation grants
-   into atomic settlement or durable effect intent/recovery. Add destination and
-   summon-owner preflight before allowing those rewards. Preserve journal and
-   reward availability on refusal; never replay old callbacks onto replacement
-   players. Area-aura capabilities share the finite/nonpassive handler guard.
-6. **Economy recovery contract depth.** Row and escrow reads are separate queries;
-   per-ID quarantine and deletion generations handle local races but do not claim
-   an atomic external-writer snapshot. Decide/document external same-ID ownership,
-   crash recovery and expiry/trade edge cases. Finish the current economy.md stub
-   with delivered scope, limits, shared-file changes and provenance.
+Items 1-6 were delivered by the 2026-10-03 integration (`claude/ac-integration`). That is local
+verification only; exact-head hosted CI pending. Do not read a source branch's result as combined proof.
+
+1. **Deletion outcome recovery. Delivered; exact limits remain.** Details: `character-delete.md`.
+   `CHAR_DELETE_SUCCESS` means the rows are durably gone; an ambiguous outcome answers failure and is
+   finalized by a sweep run when the owning account requests its character list, or by a retry. Limits:
+   no background sweep (after a restart a pending row mainly blocks explicit-id recreation until that
+   account enumerates or deletes); a finalizer that keeps failing is retried at most once per session;
+   a commit a server finishes after its connection failed is not seen at that request; generated ids
+   are not fenced (reuse was not established, and the conditional removals are defense in depth,
+   not observed client loss); economy re-sends `SMSG_RECEIVED_MAIL` for recently returned letters on a
+   re-run; the lost acknowledgement is injected with an EF interceptor, not a real network fault;
+   MariaDB/PostgreSQL proof of the conditional deletes, unique index and ledger test comes only from
+   hosted CI; real-client deletion acceptance is deferred; no soft delete or audit log.
+2. **Reputation failure durability. Delivered; exact limits remain.** Details: `reputation.md`.
+   Retention is in process only: a crash, or storage still down at graceful shutdown, loses the
+   retained gain (shutdown fails loudly naming the characters; a crash cannot). There is no
+   periodic background retry (an online player is retried at the next change, logout, relog or
+   shutdown). A character with an unrecovered write cannot log in until storage recovers. Merging
+   assumes absolute rows and a last-wins store, so a future delta-style write must not reuse the
+   path. Deletion is never blocked by retained writes; a later shutdown failure can name a character
+   whose deletion already removed its rows.
+3. **Forward index repair and upgrade parity. Delivered; exact limits remain.** Details:
+   `schema-index-repair.md`. Limits: MariaDB and PostgreSQL lock SQL, catalog queries and
+   non-transactional DDL resume are proved only by hosted CI (the differ output is proved offline);
+   actual MySQL 8 server support is unqualified; the frozen populated baseline is SQLite only; repair
+   is explicit, there is no automatic drift detection for an index dropped later; realm/content
+   seeding after bootstrap is outside the lock; fresh create on PostgreSQL is resumable rather than
+   one transaction; older binaries fail closed on the version-0 marker. Duplicate guild-member or
+   auction rows stop the upgrade and are never deleted (operator guide in the doc).
+4. **Durable consumed loot. Partially delivered.** Delivered: dungeon-instance chest contents
+   stored with awards, tied to the logical instance save across unload, recreation and restart,
+   cleared only on reset or deletion; ordinary shared chests keep working; held group gold shares
+   preserved. **Not delivered: item containers** (`CMSG_OPEN_ITEM` on a lootable item still answers
+   cannot-loot; vmangos behaviour for generated container loot was not verified). Temporary and
+   runtime chests in instances stay unsupported and chest gold is not generated or stored; a lost
+   queued `InstanceSaved` write makes that instance's chests refuse until restart; the remainder of
+   a money split is dropped; contents persistence is this port's choice, not verified against
+   vmangos; MariaDB/PostgreSQL only through hosted CI; no real world-dump chest test. See
+   `gameobjects-loot.md`.
+5. **Complete reward collaborators. Delivered; exact limits remain.** Permanent spell, item and
+   reputation grants settle atomically in the reward transaction with destination and
+   summon-owner preflight, and the area-aura family shares the finite/nonpassive guard. Limits:
+   summon rewards stay refused in the daemon (no `ISpellSummonSink`), covered with fakes only;
+   transient teleport/summon rewards can still fail after the commit and are logged and lost,
+   never replayed; the area-aura and non-base teleport/summon holes were latent (nothing in `src`
+   registers those handlers); SQLite only until hosted CI; the packet order and several vmangos
+   behaviours were applied from recollection, not re-checked, and have no real-client capture;
+   deliberate difference: a `CreateItem` reward that does not fit refuses the turn-in. See
+   `quest-progression.md` and `quest-settlement-async.md`.
+6. **Economy recovery contract depth. Delivered; exact limits remain.** `economy.md` is finished.
+   Limits: single writer (an external online insert of a new auction is invisible until restart and
+   an external edit converges only when an operation on it is refused); mailboxes can be torn
+   (separate reads) and mail has no reserved-id recovery; expiry backoff is in memory; a poisoned
+   expired auction stays locked until an operator repairs the cause; the snapshot is proved on SQLite
+   locally and on MariaDB/PostgreSQL only by hosted CI (real MySQL unqualified); no bidder index and
+   the ledger is never pruned; fidelity to a real 1.12.1 client is unproved.
 7. **Spell acceptance/depth.** Category-only cooldown client UI remains unproved;
    death/logout/relog aura persistence needs broader coverage. Finish unsupported
    effects/targets and real two-player aura attribution/UI acceptance.

@@ -1,7 +1,10 @@
 # Schema: forward index repair and upgrade parity
 
 Branch `claude/ac-3-index-repair`, from `c3dea16` (handoff item 3). Allocates **Characters 11** and
-**World 9**. Auth stays 2.
+**World 9**. Auth stays 2. In the integrated tree the repair is not the top step: modules take Characters 12 (deletion
+outcome recovery) and 13 (durable loot state) and World 10 (quest reputation rewards) after it. That is safe because a
+module's `CreateTableChange` creates the table together with its model indexes, and the repair names only tables that
+exist before it. `SchemaBootstrapGuardsTests` and `IntegratedSchemaTests` no longer require the repair to be last.
 
 ## What was wrong
 

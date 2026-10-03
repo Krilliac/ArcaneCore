@@ -1,6 +1,6 @@
 # Economy: mail, auction house, player trade
 
-Characters schema **v10** (reputation 7, instances 8, spell state 9, economy 10). The recovery-contract change documented here adds no schema version: it is a transactional read, in-memory backoff and policy. Auth stays at 2 and World at 8.
+Characters schema **v10** (reputation 7, instances 8, spell state 9, economy 10). The recovery-contract change documented here adds no schema version: it is a transactional read, in-memory backoff and policy. Auth stays at 2 and World stays at its own sequence (see [seams](seams.md) for the final allocation).
 
 Related: [takeover scope and evidence](takeover-20261003.md), [character deletion](character-delete.md), [seams](seams.md), [Claude continuation handoff](claude-handoff-20261003.md).
 
@@ -80,7 +80,7 @@ The two interleaving theories in `EconomyAuctionSnapshotTests` run over the avai
 - **A poisoned expired auction stays locked** until an operator repairs the cause (see Expiry).
 - **Expiry uses settlement capacity** and can briefly refuse other operations.
 - **Provider evidence.** The snapshot is proved locally on SQLite only. MariaDB and PostgreSQL rely on the repeatable-read transaction and are proved only by hosted CI. Real MySQL is unqualified.
-- **Indexes and the ledger.** There is no index on the bidder column and the ledger (`economy_operation`) is never pruned. Either fix needs a coordinated characters v11.
+- **Indexes and the ledger.** There is no index on the bidder column and the ledger (`economy_operation`) is never pruned. Either fix needs a coordinated new characters version (11-13 are taken).
 - **Fidelity.** House percentages, postage and durations follow vmangos/cMaNGOS behavior (re-implemented, GPL code not copied) and still need acceptance against a real 1.12.1 client and an extracted DBC. Mail, auction and trade packets are verified by byte-layout tests and the native mock client, not by a retail client.
 
 ## Shared-file edits

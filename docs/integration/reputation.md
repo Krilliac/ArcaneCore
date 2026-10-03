@@ -160,8 +160,10 @@ installed (requirements fail closed).
 
 - **Character delete:** `ReputationCharacterDeleteHook` (docs/integration/character-delete.md)
   drains the queue before the deletion transaction removes the rows and queues
-  `ReputationFeature.DeleteCharacter(id)` afterwards. Queued post-delete removal has no lifetime
-  fence against an explicitly reused id (claude-handoff-20261003.md priority 1).
+  `ReputationFeature.DeleteCharacter(id)` afterwards. The queued removal is conditional
+  (`ICharacterReputationStore.DeleteDeletedCharacterAsync`: it applies only while the id has no
+  `characters` row), so it cannot wipe a character recreated with the same id, and the hook waits,
+  bounded, for it to be attempted.
 - **Kill data has no world schema slot.** Kill rewards read `IReputationOnKillSource`; no world
   module provides it in this round, so kill reputation is inactive in the daemon until the world
   data owner adds `creature_onkill_reputation` (or registers a source).
@@ -175,8 +177,10 @@ installed (requirements fail closed).
   quest settlement; it remains for other callers and still persists through the queue.
   While a quest settlement holds a character, `ModifyReputation`, `SetReputation`, kill/quest
   rewards, `SetAtWar` and `SetInactive` are refused; `SetWatchedFaction` (its own table) is not.
-  This does not fix the queue's drop-after-three-retries behaviour: only the factions a reward
-  writes converge to the live state.
+  The queue no longer drops failed writes (see above): the settlement worker retries the
+  character's retained writes with `FlushCharacterAsync` before the transaction and refuses
+  (NotStarted, journal intact) while they are still not durable, so a retained older row cannot
+  overwrite the rows the reward writes.
 - No spillover templates (`reputation_spillover_template`), no `reputation_reward_rate`, no
   forced reactions (`SPELL_AURA_FORCE_REACTION`), no aura gain modifiers (e.g. the human
   Diplomacy racial: the spells owner sets `ReputationService.GainModifier`).

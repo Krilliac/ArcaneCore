@@ -16,7 +16,7 @@ are cited in doc comments so reviewers can compare.
 | Component | Version | Owner | Step |
 |---|---|---|---|
 | world | **7** | `ArcaneCore.Data.World.GameObjects.GameObjectLootDataModule` | `CreateTableChange` × 11 |
-| characters | **11** (`LootStateDataModule.Version`; the lead renumbers at merge) | `ArcaneCore.Data.Loot.LootStateDataModule` | `CreateTableChange` × 4: `loot_state`, `loot_state_item`, `loot_state_player`, `loot_operation` |
+| characters | **13** (`LootStateDataModule.Version`; integration order: index repair 11, deletion recovery 12, loot 13) | `ArcaneCore.Data.Loot.LootStateDataModule` | `CreateTableChange` × 4: `loot_state`, `loot_state_item`, `loot_state_player`, `loot_operation` |
 
 The 11 tables:
 - `gameobject_template`

@@ -88,7 +88,7 @@ No GPL text was copied.
   - A transient teleport or summon that fails at publication, after a successful
     commit, is logged and lost. It was never persistent, and the preflight narrows the
     window but cannot close it.
-- Reputation rewards (`RewRepFaction1..5`/`RewRepValue1..5`, world schema v9) go through
+- Reputation rewards (`RewRepFaction1..5`/`RewRepValue1..5`, world schema v10) go through
   `IQuestReputationSettlement` (`ReputationService`), passed as
   `QuestNpcDependencies.ReputationRewards` only when Faction.dbc is loaded. Pairs with
   a zero faction or value, and unknown or reputation-less factions, are skipped exactly
@@ -178,7 +178,7 @@ closed.
 | `World/Progression/QuestRewardEffects.cs` | shape classification, preparation and preflight |
 | `World/Spells/SpellbookCache.cs`, `SpellCommands.cs`, `WorldSpellSinks.cs` | `AdoptCommitted`, hold guard for `ForgetSpell`/`.unlearn`, `CanTeleport` |
 | `Kernel/Quests/ICharacterQuestRewardStore.cs`, `Data/Quests/EfCharacterQuestRewardStore.cs` | `LearnedSpells`, `ReputationAfter` committed in the reward transaction |
-| `Data/Quests/QuestReputationRewardWorldModule.cs` | new: world schema v9 |
+| `Data/Quests/QuestReputationRewardWorldModule.cs` | new: world schema v10 |
 | `Game/Quests/QuestPackets.cs` | `Complete(quest, experience, money)` |
 | `Game/Spells/SpellSystem.Effects.cs` | `SpellHitTarget` event |
 | `World/Teleport/TeleportHandlers.cs` | calls the world features that implement `IAreaTriggerListener` |
@@ -188,7 +188,7 @@ closed.
 | `Data/Quests/EfCharacterQuestStore.cs` | a rewarded row is kept only against a non-rewarded incoming row |
 
 ## Schema
-World v9 (`QuestReputationRewardWorldModule.Version`): the ten `quest_template` reputation-reward columns, added with default 0 to databases created before the step (a fresh database already has them). No characters or auth change: learned spells and faction rows go into the existing `character_spell` (v4) and `character_reputation` (v7) tables inside the reward transaction. Limitation: **XP within the current level is not persisted**. The
+World v10 (`QuestReputationRewardWorldModule.Version`): the ten `quest_template` reputation-reward columns, added with default 0 to databases created before the step (a fresh database already has them). No characters or auth change: learned spells and faction rows go into the existing `character_spell` (v4) and `character_reputation` (v7) tables inside the reward transaction. Limitation: **XP within the current level is not persisted**. The
 `characters` table has no XP column, so a relog resets the bar to 0 (level is
 persisted). Fixing this needs a reserved characters migration that adds `xp` (and
 `rest_bonus`, for rested XP).
@@ -238,9 +238,9 @@ Limits:
   covered with fakes only.
 - Transient teleport and summon rewards can still fail after the commit (the destination or
   instance became unavailable). They are logged and lost, never replayed.
-- The reputation queue's retry-then-drop behaviour is unchanged (handoff priority 2). Only the
-  factions a reward writes converge to the live state; `ReputationFeature.FlushAsync` completes
-  even if queued writes were dropped, so it does not prove storage equals live state.
+- The reputation queue now retains failed writes (handoff item 2). The settlement retries the
+  character's retained writes with `ReputationFeature.FlushCharacterAsync` before the transaction and
+  refuses while they are not durable (`QuestRewardAsyncRecoveryTests.RetainedReputationWrite_*`).
 - The extra serializable reads and writes were exercised on SQLite only in this lane. The
   MariaDB 10.11 and PostgreSQL 16 matrix (next-key locks on `character_reputation` /
   `character_spell`, PostgreSQL 40001 retries) is exercised by the hosted CI run, not here.

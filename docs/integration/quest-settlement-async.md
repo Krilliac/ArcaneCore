@@ -3,7 +3,7 @@
 This extends the qualified ordinary creature-kill/item/money reward slice. Reward
 categories and the explicit `Quests:OrdinaryRewardQuestIds` allowlist stay unchanged.
 No clustering transport or process deployment is introduced. The reward transaction also
-carries learned spells and faction rows (below); the only schema step is world v9, which adds
+carries learned spells and faction rows (below); the only schema step is world v10, which adds
 the quest reputation reward columns to `quest_template`.
 
 ## Ownership and ordering
@@ -69,13 +69,13 @@ of the player's standings.
 The settlement worker, after the core and quest drains and inside the same 5 s budget,
 also drains the owners whose rows the transaction writes: the spellbook
 (`SpellbookCache.FlushCharacterAsync`, which throws when a failed write cannot be
-recovered) and the reputation queue (`ReputationFeature.FlushAsync`). A failure there
+recovered) and the reputation queue (`ReputationFeature.FlushCharacterAsync`, which retries the
+character's retained writes and throws while they are still not durable). A failure there
 leaves the outcome NotStarted: no transaction, character resumed, journal preserved.
 Anything later written for the character is held out by the guards (`ForgetSpell`,
 `.unlearn`, reputation changes, flag toggles; `SetWatchedFaction` is not guarded, it writes
-its own table). The flush does not prove storage equals live reputation: a queue write
-dropped after three retries stays dropped (handoff priority 2), and only the factions the
-reward writes converge.
+its own table). The reputation queue retains failed writes instead of dropping them, so after a
+successful flush the character has no retained write that could later overwrite the committed rows.
 
 The commit inserts the missing `character_spell` rows and upserts the `character_reputation`
 rows through the context's own sets in the same single `SaveChanges`. The module stores

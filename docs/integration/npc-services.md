@@ -127,5 +127,5 @@ adds them.
 - World overflow (v9 or the next free version): `creature_template.gossip_menu_id`,
   `trainer_type`, `trainer_class`, `trainer_race` and `trainer_spell`. These would replace
   `NpcServices:NpcTemplates`.
-- Characters overflow (v11 or the next free version): a bank bag slot count column
+- Characters overflow (a new version after 13): a bank bag slot count column
   (PLAYER_BYTES_2 byte 2), which enables CMSG_BUY_BANK_SLOT.
