@@ -10,7 +10,10 @@ namespace ArcaneCore.World.Reputation;
 /// Character deletion for reputation (docs/integration/character-delete.md): queued reputation
 /// writes drain before the rows are removed (by <c>CharacterReputationDataModule</c> in the
 /// deletion transaction); afterwards <see cref="ReputationFeature.DeleteCharacter"/> queues a
-/// delete behind any later write, so nothing can bring a row back.
+/// delete behind any later write, so nothing can bring a row back. Deletion is never blocked by
+/// retained failed writes (<see cref="ReputationFeature.FlushAsync"/> neither retries nor throws,
+/// and the deletion barrier seam is deliberately not used): <c>DeleteCharacter</c> discards
+/// whatever the queue retained for the character.
 /// </summary>
 public sealed class ReputationCharacterDeleteHook(ReputationFeature reputation) : IWorldFeature, ICharacterDeleteHook
 {

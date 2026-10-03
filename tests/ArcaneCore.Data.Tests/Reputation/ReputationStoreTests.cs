@@ -89,6 +89,48 @@ public sealed class ReputationStoreTests : IAsyncLifetime
         Assert.Equal(6, (await LoadAsync(connection, kept)).Factions.Single().Standing);
     }
 
+    /// <summary>
+    /// The write queue retries a failed write whose commit may have succeeded
+    /// (<c>ReputationWriteQueue</c>), so replaying every operation on fresh contexts must converge
+    /// to the same state on every provider, including a replay for a character that was deleted.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Replay_IsIdempotent_OnEveryProvider(DatabaseProvider provider)
+    {
+        (DatabaseConnectionOptions connection, CharacterRecord[] characters) = await CreateAsync(provider, "Replayed");
+        int id = characters[0].Id;
+        CharacterReputationRow[] rows = [new(id, 72, 3500, 0x11), new(id, 21, -45000, 0x03)];
+        for (int replay = 0; replay < 2; replay++)
+        {
+            await WriteAsync(connection, store => store.SaveFactionsAsync(id, rows));
+            await WriteAsync(connection, store => store.SaveWatchedFactionAsync(id, 4));
+            CharacterReputationData loaded = await LoadAsync(connection, id);
+            Assert.Equal(rows.OrderBy(r => r.Faction), loaded.Factions);
+            Assert.Equal(4, loaded.WatchedFaction);
+        }
+
+        for (int replay = 0; replay < 2; replay++)
+        {
+            await WriteAsync(connection, store => store.DeleteCharacterAsync(id));
+            CharacterReputationData gone = await LoadAsync(connection, id);
+            Assert.Empty(gone.Factions);
+            Assert.Equal(-1, gone.WatchedFaction);
+        }
+
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection))
+        {
+            Assert.True(await new EfCharacterStore(db).DeleteAsync(id, 78));
+        }
+
+        // A queued write replayed after the character itself is gone is ignored, not resurrected.
+        await WriteAsync(connection, store => store.SaveFactionsAsync(id, rows));
+        await WriteAsync(connection, store => store.SaveWatchedFactionAsync(id, 4));
+        CharacterReputationData orphan = await LoadAsync(connection, id);
+        Assert.Empty(orphan.Factions);
+        Assert.Equal(-1, orphan.WatchedFaction);
+    }
+
     public Task InitializeAsync() => Task.CompletedTask;
 
     public Task DisposeAsync() => _databases.DisposeAsync().AsTask();
