@@ -251,6 +251,16 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         Assert.Equal(60u, (await afterWorld.ClassInfo.SingleAsync()).BaseHealth);
     }
 
+    [Fact]
+    public void Shorten_TakesTheLengthAfterLineEndingsShrink()
+    {
+        // "\r\n" becomes one space, so the replaced text is shorter than the original: slicing it with the
+        // original length throws ArgumentOutOfRangeException and hides the failure being reported.
+        Assert.Equal("a b", Shorten("a\r\nb", 90));
+        Assert.Equal("a b c", Shorten("a\r\nb\r\nc", 90));
+        Assert.Equal("a b", Shorten("a\r\nb\r\ncdefgh", 3));
+    }
+
     public Task InitializeAsync() => Task.CompletedTask;
 
     public Task DisposeAsync() => _databases.DisposeAsync().AsTask();
@@ -272,7 +282,7 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         {
             throw new Xunit.Sdk.XunitException(
                 $"{label}: startup completed without the injected fault. EF commands seen ({tap.Commands.Count}): " +
-                string.Join(" || ", tap.Commands.Select(c => c.ReplaceLineEndings(" ")[..Math.Min(90, c.Length)])));
+                string.Join(" || ", tap.Commands.Select(c => Shorten(c, 90))));
         }
 
         for (Exception? e = thrown; e is not null; e = e.InnerException)
@@ -284,6 +294,13 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         }
 
         throw new Xunit.Sdk.XunitException("startup failed, but not of the injected fault: " + thrown);
+    }
+
+    /// <summary>One line, at most <paramref name="max"/> characters. The length is taken after the line endings are replaced: they can change it.</summary>
+    internal static string Shorten(string text, int max)
+    {
+        string line = text.ReplaceLineEndings(" ");
+        return line[..Math.Min(max, line.Length)];
     }
 
     private static async Task AssertConvergedAsync(string component, DatabaseConnectionOptions connection, string label)
