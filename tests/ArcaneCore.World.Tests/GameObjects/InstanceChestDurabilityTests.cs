@@ -59,6 +59,7 @@ public sealed class InstanceChestDurabilityTests
         {
             var words = new uint[GameObjectTemplate.DataCount];
             words[1] = ChestEntry;
+            words[15] = 1; // chest.groupLootRules: only such chests use the group round robin (vmangos Player.cpp:7680-7698)
             var template = new GameObjectTemplate { Entry = ChestEntry, Type = (uint)GameObjectType.Chest, Name = "Durable chest", Data = words };
             // The dungeon entrance puts the player at (-16.4, -383.07, 61.78): the chest is 2.4 yd away.
             var content = new GameObjectContent([template],

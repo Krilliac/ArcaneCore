@@ -15,7 +15,7 @@ the last looter" pick, and master loot no longer corrupts the master looter.
 | Two calls per kill: first with `ifNeeded` (who loots THIS kill, the leader on the first kill because `Group::Create` sets the looter to the leader), then without (advance for the next kill) | `LootService.PlanLooter` | `Objects/Unit.cpp:1037` and `:1078`, `Group.cpp:134`, `GroupManager.cs:135` |
 | Looter changed: SMSG_GROUP_LIST is resent (`ILootGroups.LooterChanged`, wired to `GroupManager.SendUpdate`) | `LootService.CommitLooter`, `GameObjectLootFeature.SocialGroups` | `Group.cpp:2530-2542` |
 | Offline master looter: first online leader/assistant other than the master takes over, otherwise the group switches to group loot with threshold uncommon (`ILootGroups.IsMemberOnline`, default true) | `GroupLooterSelection.MasterLooterFallback`, `LootService.EnsureMasterLooterAvailable` | `Unit.cpp:1041-1063` |
-| Chests (plain and durable) use the same plan; a durable chest only moves the pointer when its generation committed (as before) | `LootService.OpenGameObject`, `OpenDurableGameObject`/`FinishGeneration` | unchanged commit rule |
+| Game objects use the same plan ONLY for a chest with `chest.groupLootRules` (data15); herb/ore nodes, fishing nodes and ordinary chests leave the pointer and the owner alone. A durable chest only moves the pointer when its generation committed | `LootService.UsesGroupLootRules`, `OpenGameObject`, `OpenDurableGameObject`/`FinishGeneration` | `Objects/Player.cpp:7680-7698`, `GameObjectDefines.h:277` |
 
 Behaviour changes that existing tests pinned (updated in the same commit):
 the first group kill goes to the leader (it used to go to the member after him), and the pointer
@@ -70,8 +70,8 @@ roll engine, roll manager, handlers and the loot error replies are further slice
   type, steal protection). Until it exists the shared loot of a master-loot kill is held by the master
   looter when he is within reward distance (otherwise it is open to every recipient). Retail shows
   every opener the under-threshold items and the master the rest (`LootMgr.cpp:829-981`).
-* Loot threshold, roll (need/greed/group loot) packets and state, quest-item sharing, chest
-  `groupLootRules`, money split rules, loot errors, open range are
+* Loot threshold, roll (need/greed/group loot) packets and state, quest-item sharing, personal (non-groupRules) chest loot,
+  money split rules, loot errors, open range are
   unchanged and still differ from retail (see `docs/integration/gameobjects-loot.md`). The reviewed
   design of this lane lists them as further slices.
 * Loot recipient is still the killer's group, not a tap list (stats-combat-formulas lane owns

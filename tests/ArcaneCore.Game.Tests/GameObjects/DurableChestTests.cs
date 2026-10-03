@@ -92,9 +92,9 @@ public sealed class DurableChestTests
         }
     }
 
-    private static Rig CreateRig(IEnumerable<(LootTableKind, LootStoreRow)>? rows = null, long spawnSeconds = SpawnSeconds)
+    private static Rig CreateRig(IEnumerable<(LootTableKind, LootStoreRow)>? rows = null, long spawnSeconds = SpawnSeconds, bool groupLootRules = true)
     {
-        var template = GoTemplate(ChestEntry, GameObjectType.Chest, (1, ChestLoot));
+        var template = GoTemplate(ChestEntry, GameObjectType.Chest, (1, ChestLoot), (15, groupLootRules ? 1u : 0u)); // chest.groupLootRules is data15 (vmangos GameObjectDefines.h:277)
         var spawn = new GameObjectSpawn
         {
             Guid = ChestSpawn, Entry = ChestEntry, MapId = Dungeon, X = 3, Y = 0, Z = 83.5f, SpawnTimeSeconds = (int)spawnSeconds,
@@ -166,6 +166,22 @@ public sealed class DurableChestTests
         Assert.Equal(GameObjectUseResult.Ok, rig.System.OpenLock(alice, rig.Chest.Guid, LockType.Open));
         Assert.Equal(2, Window(session).Items.Count);
         Assert.Equal(1u, Assert.Single(rig.Durable.Started).Updated.Generation);
+    }
+
+    [Fact]
+    public void ChestWithoutGroupLootRules_LeavesTheRoundRobinPointerAndOwnerAlone()
+    {
+        // vmangos Player.cpp:7680-7698: only a chest with chest.groupLootRules calls Group::UpdateLooterGuid.
+        Rig rig = CreateRig(groupLootRules: false);
+        (Player alice, FakeSession session) = rig.Join(1);
+        (Player bob, _) = rig.Join(2, 1, 0);
+        Group group = rig.Groups.Create(LootMethod.RoundRobin, alice, bob);
+
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(alice, rig.Chest.Guid));
+        Assert.Equal(alice.Guid, group.LooterGuid);
+        Assert.Empty(rig.Groups.LooterUpdates);
+        Assert.True(rig.Chest.Loot!.Owner.IsEmpty);
+        Assert.Single(Packets(session, WorldOpcode.SmsgLootResponse));
     }
 
     [Fact]

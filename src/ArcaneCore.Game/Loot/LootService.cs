@@ -226,6 +226,14 @@ public sealed class LootService : IViewerFieldFilter
         return new LooterPlan(recipients.Count > 1 ? first.Looter : default, next.Looter, next.Looter != current);
     }
 
+    /// <summary>
+    /// vmangos Player::SendLoot touches the round-robin pointer for game objects only when the object is a
+    /// chest whose template sets chest.groupLootRules (data15; Player.cpp:7680-7698, GameObjectDefines.h:277).
+    /// Herb and ore nodes, fishing nodes and ordinary chests leave Group::m_looterGuid alone.
+    /// </summary>
+    internal static bool UsesGroupLootRules(GameObject go)
+        => go.Type == GameObjectType.Chest && go.Template.GetData(15) != 0;
+
     /// <summary>Apply a <see cref="LooterPlan"/>: set the bag's owner and move the group's pointer, telling its members.</summary>
     private void ApplyLooterPlan(LootBag bag, Group? group, in LooterPlan plan)
     {
@@ -384,7 +392,8 @@ public sealed class LootService : IViewerFieldFilter
             LootBag fresh = Generate(go.Guid, LootSourceKind.GameObject,
                 go.Type == GameObjectType.FishingNode ? LootType.Fishing : LootType.Corpse,
                 LootTableKind.GameObject, lootId, recipients);
-            ApplyLooterPlan(fresh, group, PlanLooter(group, recipients, fresh.Recipients));
+            Group? looterGroup = UsesGroupLootRules(go) ? group : null;
+            ApplyLooterPlan(fresh, looterGroup, PlanLooter(looterGroup, recipients, fresh.Recipients));
             go.Loot = fresh;
             _bags[go.Guid] = (go, fresh);
         }
@@ -458,7 +467,8 @@ public sealed class LootService : IViewerFieldFilter
         List<Player> recipients = RecipientsFor(player, go, out Group? group);
         LootBag fresh = Generate(go.Guid, LootSourceKind.GameObject, LootType.Corpse, LootTableKind.GameObject, lootId, recipients);
         fresh.DurableKey = key;
-        LooterPlan plan = PlanLooter(group, recipients, fresh.Recipients);
+        Group? looterGroup = UsesGroupLootRules(go) ? group : null;
+        LooterPlan plan = PlanLooter(looterGroup, recipients, fresh.Recipients);
         fresh.Owner = plan.Owner;
 
         LootStateRecord updated = fresh.ToRecord(key, go.Entry, (record?.Generation ?? 0) + 1, RespawnAtUnix(go, durable.UnixNow));
@@ -467,7 +477,7 @@ public sealed class LootService : IViewerFieldFilter
             Key = key,
             Expected = record,
             Updated = updated,
-            Finished = (outcome, live, _) => FinishGeneration(outcome, live, player, key, fresh, group, plan),
+            Finished = (outcome, live, _) => FinishGeneration(outcome, live, player, key, fresh, looterGroup, plan),
         };
         return durable.TryStart(operation) ? LootResult.Ok : LootResult.NotAllowed;
     }
