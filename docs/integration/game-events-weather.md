@@ -17,6 +17,16 @@ Every edit to a shared file is listed here so the integrator can resolve conflic
 | `src/ArcaneCore.Data/World/WorldState/WorldStateDumpImporter.cs` | `WriteAsync` (CLI contract) | CLI import. |
 | `src/ArcaneCore.Data/Content/Import/Cli/ContentImporterCli.cs` | Additive: read the world-state tables, one write call, two lines in the counts | CLI import. |
 
+## Schema (renumber at merge)
+
+| Component | Constant | Value here | Tables |
+|---|---|---|---|
+| World | `GameEventDataModule.Version` | 21 | `game_event`, `game_event_time`, `game_event_creature`, `game_event_gameobject`, `game_event_creature_data`, `game_event_quest`, `game_event_mail` |
+| Characters | `GameEventStatusDataModule.Version` | 21 | `game_event_status` (global, documented no-op `ICharacterDataCleanup`) |
+
+Tests use the constants. `IntegratedSchemaTests` has one tuple appended per module (merge conflict candidate: keep every lane's tuple).
+`ContentImporterCli.cs` has further additive blocks (game-event importer: read, write call, count lines).
+
 ## New reloadable name
 
 `game_weather` (`GameWeatherReloadable`). If the hot-reload-everywhere lane also registers that name, keep one (a duplicate

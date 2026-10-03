@@ -67,6 +67,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(GameObjectSpawnDataModule), DatabaseComponent.World, GameObjectSpawnDataModule.Version),
             (typeof(SpecialLootDataModule), DatabaseComponent.World, SpecialLootDataModule.Version),
             (typeof(StartActionWorldModule), DatabaseComponent.World, StartActionWorldModule.Version),
+            (typeof(ArcaneCore.Data.World.WorldState.GameEventDataModule), DatabaseComponent.World, ArcaneCore.Data.World.WorldState.GameEventDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -84,6 +85,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.WorldState.ExploredZonesDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ExploredZonesDataModule.Version),
             (typeof(ItemLootDataModule), DatabaseComponent.Characters, ItemLootDataModule.Version),
             (typeof(PetitionDataModule), DatabaseComponent.Characters, PetitionDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.WorldState.GameEventStatusDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.GameEventStatusDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),

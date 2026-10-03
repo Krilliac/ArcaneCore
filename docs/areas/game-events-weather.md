@@ -92,6 +92,41 @@ Pure maths in `Game/WorldState/Events`, every function taking the time and the z
   computed anew in the configured zone; the packed fields around a daylight-saving edge are wall-clock fields (an hour that
   does not exist never appears).
 
+### Game-event data (`game-event-data`)
+
+- **World schema** `GameEventDataModule` (constant `Version = 21`, the next free world version at this base; the integrator
+  renumbers): `game_event`, `game_event_time`, `game_event_creature`, `game_event_gameobject`, `game_event_creature_data`,
+  `game_event_quest`, `game_event_mail`. `game_event` is a superset of both dialects (mangos-classic `schedule_type`, `linkedTo`;
+  vmangos `start_time`, `end_time`, `hardcoded`, `disabled`, `patch_min`, `patch_max`); dates are the source text
+  (`yyyy-MM-dd HH:mm:ss`, no provider datetime type, no zone: the service decides how to read them). Event numbers are `int`
+  in the tables (the sources are smallint, and some providers have no unsigned small integer); the sign convention is kept
+  (positive spawns during the event, negative removes during it). Keys: `(guid, event)` for the spawn and creature-data tables,
+  `(quest, event)`, `(event, race_mask, quest)` for mails. All identifiers are lower snake case. The `CreateTableChange` steps
+  are re-runnable, so a MariaDB start that died halfway (DDL is not transactional) converges on the next start (tested by
+  recreating that state).
+- **Characters schema** `GameEventStatusDataModule` (`Version = 21`): `game_event_status` (one `event` column, vmangos
+  `characters.sql:499-502`). It is global, not per character, so its `ICharacterDataCleanup` is a documented no-op (the
+  guard test requires every characters module to have one). `EfGameEventStatusStore.ReplaceActiveAsync(set)` deletes all and
+  inserts the set in one transaction (a failing insert keeps the old set); calls are serialised in the process by a semaphore
+  rather than a database advisory lock (Npgsql pooling returns the same physical connection to concurrent callers, so advisory
+  locks would be re-entrant; MariaDB repeatable read would fail one of two interleaved replaces on the key). This is a
+  deliberate storage deviation from vmangos, which inserts per start and deletes per stop and truncates at start; the
+  observable result is the same set.
+- **Importer** `GameEventDumpImporter` (library and `arcane-content-importer import`): both dialects by column name from the
+  dump (reordered or extra columns do not shift values); vmangos `display_id` is the model id; vmangos rows are patch
+  versioned, so `game_event_creature_data` keeps the highest `patch` not above 10 per `(guid, event)` and `game_event_quest`
+  skips `patch_min` above 10 (skipped rows are counted in the report). A missing key column, a value count that differs from the
+  column count, a non-numeric value or an unterminated statement rejects the whole dump before anything is written; later
+  rows replace earlier ones with the same key; `--replace` empties the seven tables first; without it an existing key fails the
+  write and changes nothing. Rows are NOT checked against `creature` / `gameobject`: classic-db has 33 creature and 1126
+  gameobject event rows whose spawn is not in the dump (1095 of them on Noblegarden, event 9); they are imported, counted by
+  the test, and skipped and logged by the world loader. Verified against the real classic-db dump: 67 events (26 serverside,
+  36 date, 3 yearly, 1 lunar, 1 Easter), 38 `game_event_time` rows, 3219 creature rows (108 negative), 12274 gameobject rows
+  (2 negative), 977 creature-data rows, 61 quests, 1 mail.
+- Tests: every table round-trips on the provider matrix (SQLite locally; MariaDB and PostgreSQL only on hosted CI, where they
+  are the only place provider semantics are exercised), including signed events and date text; duplicate keys are refused;
+  the status store replaces atomically and serialises two concurrent replaces. This machine ran SQLite only.
+
 ## Not delivered (limits)
 
 Recorded as slices are completed; see the final section.
