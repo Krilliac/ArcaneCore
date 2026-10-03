@@ -1,3 +1,4 @@
+using ArcaneCore.MockClient.Hosting;
 using ArcaneCore.MockClient.Protocol;
 using ArcaneCore.Protocol;
 
@@ -7,8 +8,12 @@ namespace ArcaneCore.MockClient.Scenarios;
 internal sealed class ScenarioConnection(WorldClient client)
 {
     private const int MaximumPacketsPerStage = 128;
+    private readonly Dictionary<ulong, Dictionary<int, uint>> _observedFields = [];
 
     internal int FramesReceived { get; private set; }
+
+    internal IReadOnlyDictionary<int, uint> FieldsOf(ulong guid) => _observedFields.GetValueOrDefault(guid)
+        ?? new Dictionary<int, uint>();
 
     internal Task SendAsync(WorldOpcode opcode, byte[] payload, CancellationToken cancellationToken)
         => client.SendAsync((ushort)opcode, payload, cancellationToken);
@@ -17,7 +22,64 @@ internal sealed class ScenarioConnection(WorldClient client)
     {
         WorldFrame frame = await client.ReadAsync(cancellationToken).ConfigureAwait(false);
         FramesReceived++;
+        byte[]? body = frame.Opcode switch
+        {
+            (ushort)WorldOpcode.SmsgUpdateObject => frame.Payload,
+            (ushort)WorldOpcode.SmsgCompressedUpdateObject => ScenarioWire.InflateUpdate(frame.Payload),
+            _ => null,
+        };
+        if (body is not null)
+        {
+            foreach (MockFieldUpdate update in ScenarioWire.FieldUpdates(body))
+            {
+                if (!_observedFields.TryGetValue(update.Guid, out Dictionary<int, uint>? fields))
+                {
+                    fields = [];
+                    _observedFields.Add(update.Guid, fields);
+                }
+
+                foreach ((int field, uint value) in update.Fields)
+                {
+                    fields[field] = value;
+                }
+            }
+        }
+
         return frame;
+    }
+
+    /// <summary>A map-thread response followed by a ping rejects repeated reward success or grant notifications.</summary>
+    internal async Task AssertNoRewardUntilPongAsync(uint sequence, CancellationToken cancellationToken)
+    {
+        // Ping is answered on the session task and can overtake queued world packets.
+        // The NPC status request shares their map queue, so its reply proves the earlier
+        // turn-in handler finished before we request a ping echo.
+        await SendAsync(WorldOpcode.CmsgQuestgiverStatusQuery,
+            ScenarioWire.Guid(SyntheticArcaneServer.NpcGuid), cancellationToken).ConfigureAwait(false);
+        WorldFrame status = await ReadWithoutRewardUntilAsync(WorldOpcode.SmsgQuestgiverStatus, cancellationToken).ConfigureAwait(false);
+        ScenarioWire.Require(ScenarioWire.QuestgiverStatus(status.Payload).Guid == SyntheticArcaneServer.NpcGuid,
+            "Reward rejection map barrier returned a different NPC GUID.");
+        await SendAsync(WorldOpcode.CmsgPing, ScenarioWire.Ping(sequence, 0), cancellationToken).ConfigureAwait(false);
+        WorldFrame pong = await ReadWithoutRewardUntilAsync(WorldOpcode.SmsgPong, cancellationToken).ConfigureAwait(false);
+        ScenarioWire.Require(pong.Payload.AsSpan().SequenceEqual(ScenarioWire.UInt32(sequence)),
+            "Reward rejection barrier returned a different ping sequence.");
+    }
+
+    private async Task<WorldFrame> ReadWithoutRewardUntilAsync(WorldOpcode opcode, CancellationToken cancellationToken)
+    {
+        for (int index = 0; index < MaximumPacketsPerStage; index++)
+        {
+            WorldFrame frame = await ReadAsync(cancellationToken).ConfigureAwait(false);
+            ScenarioWire.Require(frame.Opcode != (ushort)WorldOpcode.SmsgQuestgiverQuestComplete
+                && frame.Opcode != (ushort)WorldOpcode.SmsgItemPushResult,
+                "Rejected or repeated quest reward produced a success or item grant notification.");
+            if (frame.Opcode == (ushort)opcode)
+            {
+                return frame;
+            }
+        }
+
+        throw new MockProtocolException($"Reward rejection barrier did not return {opcode} within {MaximumPacketsPerStage} packets.");
     }
 
     internal async Task<byte[]> ExpectAsync(WorldOpcode opcode, CancellationToken cancellationToken)
@@ -119,7 +181,7 @@ internal sealed class ScenarioConnection(WorldClient client)
         };
         MockSelfCreate self = ScenarioWire.SelfCreate(body);
         ScenarioWire.Require(self.Guid == guid, "Login self create GUID differs from the requested character.");
-        // Nearby NPC visibility updates can follow self create before the post-map stage.
+        // Nearby object creates may arrive before world states or at the map's later flush.
         byte[] states = await ReadUntilAsync(WorldOpcode.SmsgInitWorldStates, cancellationToken).ConfigureAwait(false);
         ScenarioWire.Require(states.Length >= 10, "Login world-state reply is truncated.");
         return new MockLogin(location, self, motdLines);

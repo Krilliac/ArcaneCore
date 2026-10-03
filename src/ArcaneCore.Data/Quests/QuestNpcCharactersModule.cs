@@ -30,7 +30,9 @@ public sealed class QuestNpcCharactersModule : IDataModule
             entity.Property(r => r.CharacterId).HasColumnName("guid");
             entity.Property(r => r.Quest).HasColumnName("quest");
             entity.Property(r => r.Status).HasColumnName("status");
-            entity.Property(r => r.Rewarded).HasColumnName("rewarded");
+            // Guard an older writer that loaded this row before a durable reward.
+            // This uses the existing column and requires no schema migration.
+            entity.Property(r => r.Rewarded).HasColumnName("rewarded").IsConcurrencyToken();
             entity.Property(r => r.Explored).HasColumnName("explored");
             entity.Property(r => r.Timer).HasColumnName("timer");
             entity.Property(r => r.MobCount1).HasColumnName("mob_count1");
@@ -60,5 +62,9 @@ public sealed class QuestNpcCharactersModule : IDataModule
         });
     }
 
-    public void AddServices(IServiceCollection services) => services.AddScoped<ICharacterQuestStore, EfCharacterQuestStore>();
+    public void AddServices(IServiceCollection services)
+    {
+        services.AddScoped<ICharacterQuestStore, EfCharacterQuestStore>();
+        services.AddScoped<ICharacterQuestRewardStore, EfCharacterQuestRewardStore>();
+    }
 }

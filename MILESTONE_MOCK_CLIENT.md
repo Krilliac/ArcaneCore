@@ -11,6 +11,24 @@ accepts a second ordinary quest, verifies its fields and saved state across a
 fresh realm/world exchange, abandons it, and confirms the cleared slot after
 another relog. The original saved journal retains its objective progress.
 
+The next slice adds distinct quest 900003 after those existing journal checks.
+Its two real target spawns are visible in the player's map. Independently encoded
+eight-byte client attack requests drive the production melee swing and death
+path, first to partial progress and then to the complete journal state. The
+client sends separate complete and request-reward packets, decodes the entire
+offer, selects zero-based choice slot one, and checks the completion body,
+coinage, backpack slots and item fields. Real character, inventory and quest
+stores must agree on 1234 copper, fixed item 900040, chosen item 900042 and
+rewarded history; item 900041 must be absent. Duplicate choice requests and a
+fresh realm/world relog must retain that result and the original journal.
+
+Only this synthetic ordinary quest is configured in
+`Quests:OrdinaryRewardQuestIds` before startup. It has one positive creature-kill
+requirement of two, one fixed reward and two dense choices, with no XP, maximum-level
+money, source/required items, reputation, spells, timers, flags or events. A
+fixture combat random source makes the low health targets deterministic while
+the production attack, damage, death and objective adapters remain in use.
+
 The fixture uses real EF stores and three unique SQLite files, ephemeral loopback
 listeners, and the normal world host and feature lifecycle. It tracks sessions
 and drains persistence before disposing contexts and deleting its owned directory.
@@ -50,12 +68,26 @@ remain reference options. No new runtime dependencies were introduced.
 
 ## Validation and remaining acceptance
 
-The combined native Release build passed with zero warnings/errors and all
+The preceding native journal slice's combined Release build passed with zero warnings/errors and all
 8,657 tests passed (8,005 crypto, 59 SQLite data, 367 Game, 46 mock-client,
 3 Realm and 177 World), with no failures or skips. The executable passed
 all 29 named checks across 75 received frames in approximately two seconds.
 The final focused review found and corrected rewarded-history reacceptance;
 ordinary and repeatable history now have regression coverage.
+
+The combat/reward Release build passed with zero warnings/errors and all 8,760
+native tests passed with zero failures/skips: crypto 8,005, SQLite data 74,
+Game 398, mock-client 92, Realm 3 and World 188. The standalone executable
+passed all 41 checks across 122 received frames in 5.024 seconds. It retains
+the original 29 named checks and adds 12 reward checks, with the same
+45-second scenario and 60-second CLI deadlines. New wire vectors independently
+pin the offer suffix and fixed-reward-only completion layout to vmangos/core
+`4b3d241cffe245a1f68da11380bce96c23db48c0`; the recorded gtker pin agrees on
+completion and differs semantically on the zero-valued offer flags/spell words.
+All 16 adverse reward cases passed, including rollback/retry, capacity, lost
+acknowledgement and unreadable-outcome quarantine/relog. Qualification fixed
+nearby-create timing, natural combat exit before logout and an existing delayed
+social-load overwrite race; four deterministic social regressions passed.
 
 Run the [implementation checks](docs/MOCK_CLIENT_ACCEPTANCE.md) and the full
 Release/provider suite. Record exact results and integrated source heads in
@@ -63,5 +95,5 @@ Release/provider suite. Record exact results and integrated source heads in
 
 This demonstrates the implemented exchange against ArcaneCore's own listeners.
 Rendering, UI, client executable acceptance, terrain/content fidelity, animation,
-and a complete playable quest/reward loop still require later work and real-client
+and broader playable quest/reward behaviour still require later work and real-client
 acceptance. No default branch merge, deployment or release is part of this tranche.

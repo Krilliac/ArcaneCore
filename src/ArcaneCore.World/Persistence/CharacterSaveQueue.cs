@@ -1,6 +1,7 @@
 using System.Threading.Channels;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Items;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -14,61 +15,267 @@ public sealed class CharacterSaveQueue(IServiceScopeFactory scopes, ILogger<Char
 {
     private const int MaxAttempts = 3;
 
-    private readonly Channel<CharacterState> _channel = Channel.CreateUnbounded<CharacterState>(
-        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+    private readonly Lock _gate = new();
+    private readonly Dictionary<int, FailedSave> _failed = [];
+    private readonly HashSet<int> _quarantined = [];
+    private readonly Channel<PendingWrite> _channel = Channel.CreateUnbounded<PendingWrite>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false, AllowSynchronousContinuations = false });
     private Task? _consumer;
     private int _pending;
+    private bool _stopped;
 
     /// <summary>Snapshots queued or being written.</summary>
     public int Pending => Volatile.Read(ref _pending);
 
-    public void Start() => _consumer ??= Task.Run(ConsumeAsync);
+    public void Start()
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_stopped, this);
+            _consumer ??= Task.Run(ConsumeAsync);
+        }
+    }
 
     public void Enqueue(CharacterState state)
     {
-        Interlocked.Increment(ref _pending);
-        if (!_channel.Writer.TryWrite(state))
+        ArgumentNullException.ThrowIfNull(state);
+        lock (_gate)
         {
-            Interlocked.Decrement(ref _pending);
-            logger.LogError("save queue closed; character {Id} state lost", state.Id);
+            if (_quarantined.Contains(state.Id))
+            {
+                return;
+            }
+
+            if (_stopped)
+            {
+                logger.LogError("save queue closed; character {Id} state not accepted", state.Id);
+                return;
+            }
+
+            Interlocked.Increment(ref _pending);
+            if (!_channel.Writer.TryWrite(new PendingWrite(state.Id, Copy(state), null, default)))
+            {
+                Interlocked.Decrement(ref _pending);
+                throw new InvalidOperationException("the character save queue is closed");
+            }
+        }
+    }
+
+    /// <summary>Drain earlier snapshots in order and retry this character's retained failure. Cancellation never removes retained state.</summary>
+    public Task FlushCharacterAsync(int characterId, CancellationToken cancellationToken = default)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_stopped, this);
+            _consumer ??= Task.Run(ConsumeAsync);
+            if (!_channel.Writer.TryWrite(new PendingWrite(characterId, null, done, cancellationToken)))
+            {
+                throw new InvalidOperationException("the character save queue is closed");
+            }
+        }
+
+        return done.Task.WaitAsync(cancellationToken);
+    }
+
+    /// <summary>Suppress new and still-queued snapshots until authoritative loading explicitly resumes the character.</summary>
+    public void QuarantineCharacter(int characterId)
+    {
+        lock (_gate)
+        {
+            _quarantined.Add(characterId);
+        }
+    }
+
+    public void ResumeCharacter(int characterId)
+    {
+        lock (_gate)
+        {
+            _quarantined.Remove(characterId);
+        }
+    }
+
+    public bool IsQuarantined(int characterId)
+    {
+        lock (_gate)
+        {
+            return _quarantined.Contains(characterId);
         }
     }
 
     /// <summary>Stop accepting snapshots and wait until every queued one is written.</summary>
     public async Task StopAsync()
     {
-        _channel.Writer.TryComplete();
-        if (_consumer is not null)
+        Task consumer;
+        lock (_gate)
         {
-            await _consumer.ConfigureAwait(false);
+            _stopped = true;
+            _channel.Writer.TryComplete();
+            consumer = _consumer ??= Task.Run(ConsumeAsync);
         }
+
+        await consumer.ConfigureAwait(false);
     }
 
     private async Task ConsumeAsync()
     {
-        await foreach (CharacterState state in _channel.Reader.ReadAllAsync().ConfigureAwait(false))
+        await foreach (PendingWrite write in _channel.Reader.ReadAllAsync().ConfigureAwait(false))
         {
-            for (int attempt = 1; attempt <= MaxAttempts; attempt++)
+            try
             {
-                try
+                if (write.State is { } state)
                 {
-                    await using AsyncServiceScope scope = scopes.CreateAsyncScope();
-                    ICharacterStore store = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
-                    await store.SaveStateAsync(state).ConfigureAwait(false);
-                    break;
+                    lock (_gate)
+                    {
+                        if (_quarantined.Contains(write.CharacterId))
+                        {
+                            continue;
+                        }
+
+                        if (_failed.TryGetValue(write.CharacterId, out FailedSave? earlier))
+                        {
+                            state = Merge(state, earlier.State);
+                        }
+                    }
+
+                    await SaveRetainingFailureAsync(state, default).ConfigureAwait(false);
                 }
-                catch (Exception ex) when (attempt < MaxAttempts)
+                else
                 {
-                    logger.LogWarning(ex, "saving character {Id} failed (attempt {Attempt}); retrying", state.Id, attempt);
-                    await Task.Delay(200 * attempt).ConfigureAwait(false);
+                    await RecoverAsync(write.CharacterId, write.CancellationToken).ConfigureAwait(false);
                 }
-                catch (Exception ex)
+
+                write.Done?.TrySetResult();
+            }
+            catch (Exception ex)
+            {
+                write.Done?.TrySetException(ex);
+            }
+            finally
+            {
+                if (write.State is not null)
                 {
-                    logger.LogError(ex, "saving character {Id} failed; state lost", state.Id);
+                    Interlocked.Decrement(ref _pending);
+                }
+            }
+        }
+
+        int[] failed;
+        lock (_gate)
+        {
+            failed = _failed.Keys.ToArray();
+        }
+
+        foreach (int id in failed)
+        {
+            try
+            {
+                await RecoverAsync(id, default).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // SaveRetainingFailureAsync keeps the snapshot and original failure below.
+            }
+        }
+
+        lock (_gate)
+        {
+            if (_failed.Count > 0)
+            {
+                throw new InvalidOperationException($"character saves did not drain for characters {string.Join(", ", _failed.Keys.Order())}",
+                    _failed.Values.First().Failure);
+            }
+        }
+    }
+
+    private async Task RecoverAsync(int id, CancellationToken cancellationToken)
+    {
+        CharacterState? retained;
+        lock (_gate)
+        {
+            // A quarantined barrier is an ordered drain only. Fresh login must load
+            // authoritative storage before the owner explicitly resumes this ID.
+            if (_quarantined.Contains(id))
+            {
+                return;
+            }
+
+            retained = _failed.GetValueOrDefault(id)?.State;
+        }
+
+        if (retained is not null)
+        {
+            await SaveRetainingFailureAsync(retained, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task SaveRetainingFailureAsync(CharacterState state, CancellationToken cancellationToken)
+    {
+        for (int attempt = 1; attempt <= MaxAttempts; attempt++)
+        {
+            lock (_gate)
+            {
+                if (_quarantined.Contains(state.Id))
+                {
+                    return;
                 }
             }
 
-            Interlocked.Decrement(ref _pending);
+            try
+            {
+                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                ICharacterStore store = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
+                await store.SaveStateAsync(state, cancellationToken).ConfigureAwait(false);
+                lock (_gate)
+                {
+                    _failed.Remove(state.Id);
+                }
+
+                return;
+            }
+            catch (Exception ex) when (attempt < MaxAttempts && !cancellationToken.IsCancellationRequested)
+            {
+                lock (_gate)
+                {
+                    _failed[state.Id] = new FailedSave(state, ex);
+                }
+
+                logger.LogWarning(ex, "saving character {Id} failed (attempt {Attempt}); retrying", state.Id, attempt);
+                await Task.Delay(200 * attempt, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                lock (_gate)
+                {
+                    _failed[state.Id] = new FailedSave(state, ex);
+                }
+
+                logger.LogError(ex, "saving character {Id} failed; authoritative snapshot retained", state.Id);
+                throw;
+            }
         }
     }
+
+    private static CharacterState Merge(CharacterState newer, CharacterState failed) => newer with
+    {
+        ActionButtons = newer.ActionButtons ?? failed.ActionButtons,
+        Home = newer.Home ?? failed.Home,
+        Inventory = newer.Inventory ?? failed.Inventory,
+    };
+
+    private static CharacterState Copy(CharacterState state) => state with
+    {
+        ActionButtons = state.ActionButtons is { } buttons ? Array.AsReadOnly(buttons.ToArray()) : null,
+        Inventory = state.Inventory is { } inventory ? new InventorySnapshot(Array.AsReadOnly(inventory.Items.Select(row => row with
+        {
+            Item = row.Item with
+            {
+                Charges = Array.AsReadOnly(row.Item.Charges.ToArray()),
+                Enchantments = Array.AsReadOnly(row.Item.Enchantments.ToArray()),
+            },
+        }).ToArray())) : null,
+    };
+
+    private sealed record FailedSave(CharacterState State, Exception Failure);
+    private sealed record PendingWrite(int CharacterId, CharacterState? State, TaskCompletionSource? Done, CancellationToken CancellationToken);
 }

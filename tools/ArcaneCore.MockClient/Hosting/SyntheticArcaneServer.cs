@@ -7,9 +7,11 @@ using ArcaneCore.Data;
 using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Quests;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Npc;
@@ -20,6 +22,8 @@ using ArcaneCore.World;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Npc;
+using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Social;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
@@ -39,9 +43,19 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
 {
     public const uint JournalQuestId = 900001;
     public const uint NpcQuestId = 900002;
+    public const uint RewardQuestId = 900003;
     public const uint NpcEntry = 900010;
     public const uint NpcSpawn = 900020;
     public const ulong NpcGuid = ((ulong)0xF130 << 48) | ((ulong)NpcEntry << 24) | NpcSpawn;
+    public const uint TargetEntry = 900030;
+    public const uint FirstTargetSpawn = 900021;
+    public const uint SecondTargetSpawn = 900022;
+    public const ulong FirstTargetGuid = ((ulong)0xF130 << 48) | ((ulong)TargetEntry << 24) | FirstTargetSpawn;
+    public const ulong SecondTargetGuid = ((ulong)0xF130 << 48) | ((ulong)TargetEntry << 24) | SecondTargetSpawn;
+    public const uint FixedRewardItem = 900040;
+    public const uint UnchosenRewardItem = 900041;
+    public const uint ChosenRewardItem = 900042;
+    public const uint RewardMoney = 1234;
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(5);
     private readonly object _gate = new();
@@ -69,6 +83,9 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
         RealmEndpoint = (IPEndPoint)realmListener.LocalEndpoint;
         WorldEndpoint = (IPEndPoint)worldListener.LocalEndpoint;
         World = services.GetRequiredService<WorldRuntime>();
+        // A deterministic roll source changes only the combat roll. Client attacks still
+        // pass through CombatHandlers, the map swing loop, health loss and UnitKilled.
+        World.MapCreated += static map => map.Combat.Random = SyntheticCombatRandom.Instance;
         _worldHost = services.GetServices<IHostedService>().OfType<WorldHost>().Single();
     }
 
@@ -83,6 +100,16 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
 
     /// <summary>The unique fixture directory, removed after sessions and saves drain.</summary>
     public string DataDirectory => _directory.Path;
+
+    /// <summary>Observe actual handler writes after both ordered persistence queues drain.</summary>
+    public async Task FlushCharacterAsync(int characterId, CancellationToken cancellationToken = default)
+    {
+        await World.InvokeAsync(() => true).WaitAsync(cancellationToken).ConfigureAwait(false);
+        await _services.GetRequiredService<QuestNpcFeature>().Persistence.FlushCharacterAsync(characterId)
+            .WaitAsync(cancellationToken).ConfigureAwait(false);
+        await _services.GetRequiredService<CharacterSaveQueue>().FlushCharacterAsync(characterId, cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     public static Task<SyntheticArcaneServer> StartAsync(CancellationToken cancellationToken = default)
         => StartAsync(configureServices: null, cancellationToken);
@@ -277,6 +304,7 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
             ["World:UpdateCompressionThreshold"] = "0",
             ["World:InstantLogoutSecurity"] = "Player",
             ["World:Motd"] = "ArcaneCore synthetic mock client fixture.",
+            ["Quests:OrdinaryRewardQuestIds:0"] = RewardQuestId.ToString(System.Globalization.CultureInfo.InvariantCulture),
         };
         foreach (string component in new[] { "Auth", "Characters", "World" })
         {
@@ -354,6 +382,27 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
                 ReqCreatureOrGOId1 = 900102,
                 ReqCreatureOrGOCount1 = 2,
             });
+            content.Set<QuestTemplate>().Add(new QuestTemplate
+            {
+                Entry = RewardQuestId,
+                Method = 2,
+                Type = 0,
+                MinLevel = 1,
+                QuestLevel = 1,
+                Title = "Mock combat reward",
+                Details = "synthetic combat and durable reward",
+                Objectives = "defeat two live synthetic targets",
+                OfferRewardText = "Choose one synthetic keepsake.",
+                ReqCreatureOrGOId1 = (int)TargetEntry,
+                ReqCreatureOrGOCount1 = 2,
+                RewOrReqMoney = (int)RewardMoney,
+                RewItemId1 = FixedRewardItem,
+                RewItemCount1 = 1,
+                RewChoiceItemId1 = UnchosenRewardItem,
+                RewChoiceItemCount1 = 1,
+                RewChoiceItemId2 = ChosenRewardItem,
+                RewChoiceItemCount2 = 1,
+            });
             content.Set<CreatureTemplateRow>().Add(new CreatureTemplateRow
             {
                 Entry = NpcEntry,
@@ -382,6 +431,50 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
                 Z = 83.5312f,
             });
             content.Set<CreatureQuestStarterRow>().Add(new CreatureQuestStarterRow { Id = NpcEntry, Quest = NpcQuestId });
+            content.Set<CreatureQuestStarterRow>().Add(new CreatureQuestStarterRow { Id = NpcEntry, Quest = RewardQuestId });
+            content.Set<CreatureQuestEnderRow>().Add(new CreatureQuestEnderRow { Id = NpcEntry, Quest = RewardQuestId });
+            content.Set<CreatureTemplateRow>().Add(new CreatureTemplateRow
+            {
+                Entry = TargetEntry,
+                Name = "Synthetic combat target",
+                Faction = 900011,
+                DisplayId1 = 900012,
+                MinLevel = 1,
+                MaxLevel = 1,
+                MinLevelHealth = 1,
+                MaxLevelHealth = 1,
+                UnitClass = 1,
+                Civilian = true,
+            });
+            foreach (uint spawn in new[] { FirstTargetSpawn, SecondTargetSpawn })
+            {
+                content.Set<CreatureSpawnRow>().Add(new CreatureSpawnRow
+                {
+                    Guid = spawn,
+                    Entry = TargetEntry,
+                    MapId = 0,
+                    X = -8949.95f + (spawn == FirstTargetSpawn ? 0.5f : -0.5f),
+                    Y = -132.493f,
+                    Z = 83.5312f,
+                    SpawnTimeMinSeconds = 3600,
+                    SpawnTimeMaxSeconds = 3600,
+                });
+            }
+
+            foreach (uint item in new[] { FixedRewardItem, UnchosenRewardItem, ChosenRewardItem })
+            {
+                content.Set<ItemTemplateRow>().Add(new ItemTemplateRow
+                {
+                    Entry = item,
+                    Class = 15,
+                    Name = $"Synthetic keepsake {item}",
+                    DisplayId = item + 100,
+                    Quality = 1,
+                    AllowableClass = -1,
+                    AllowableRace = -1,
+                    Stackable = 20,
+                });
+            }
             await content.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -395,6 +488,15 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
         _worldAcceptLoop = AcceptLoopAsync(_worldListener, isRealm: false);
         // Confirm the simulation thread is processing commands before publishing endpoints.
         await World.InvokeAsync(() => true).WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private sealed class SyntheticCombatRandom : ICombatRandom
+    {
+        internal static readonly SyntheticCombatRandom Instance = new();
+
+        public int Next(int minInclusive, int maxInclusive) => maxInclusive;
+
+        public float NextFloat(float min, float max) => max;
     }
 
     private async Task AcceptLoopAsync(TcpListener listener, bool isRealm)

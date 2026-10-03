@@ -63,6 +63,9 @@ public sealed partial class MapCombat : IMapUpdater
 
     public ICombatRandom Random { get; set; } = SharedCombatRandom.Instance;
 
+    /// <summary>One authoritative death, after its state transition (world thread). Objective adapters subscribe without replacing combat hooks.</summary>
+    public event Action<Unit?, Unit>? UnitKilled;
+
     /// <summary>Corpses currently in this map.</summary>
     public IReadOnlyList<Corpse> Corpses => _corpses;
 

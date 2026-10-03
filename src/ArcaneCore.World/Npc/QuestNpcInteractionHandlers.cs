@@ -23,6 +23,9 @@ public sealed class QuestNpcInteractionHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgQuestgiverQueryQuest, Details);
         table.OnWorld(WorldOpcode.CmsgQuestgiverAcceptQuest, Accept);
         table.OnWorld(WorldOpcode.CmsgQuestlogRemoveQuest, Abandon);
+        table.OnWorld(WorldOpcode.CmsgQuestgiverCompleteQuest, Complete);
+        table.OnWorld(WorldOpcode.CmsgQuestgiverRequestReward, RequestReward);
+        table.OnWorld(WorldOpcode.CmsgQuestgiverChooseReward, ChooseReward);
     }
 
     private static QuestNpcServices Services(WorldSession session) => session.Services.GetRequiredService<QuestNpcFeature>().Services;
@@ -50,6 +53,28 @@ public sealed class QuestNpcInteractionHandlers : IOpcodeHandlerGroup
     {
         RequireLength(payload, 1);
         Services(session).AbandonQuest(player, payload[0]);
+    }
+
+    private static void Complete(WorldSession session, Player player, byte[] payload)
+    {
+        (ObjectGuid guid, uint quest) = ReadQuest(payload);
+        Services(session).CompleteQuest(player, guid, quest);
+    }
+
+    private static void RequestReward(WorldSession session, Player player, byte[] payload)
+    {
+        (ObjectGuid guid, uint quest) = ReadQuest(payload);
+        Services(session).RequestReward(player, guid, quest);
+    }
+
+    private static void ChooseReward(WorldSession session, Player player, byte[] payload)
+    {
+        RequireLength(payload, 16);
+        var reader = new PacketReader(payload);
+        var guid = new ObjectGuid(reader.ReadUInt64());
+        uint quest = reader.ReadUInt32();
+        uint choice = reader.ReadUInt32();
+        session.Services.GetRequiredService<QuestNpcFeature>().ChooseReward(session, player, guid, quest, choice);
     }
 
     private static (ObjectGuid Guid, uint Quest) ReadQuest(byte[] payload)

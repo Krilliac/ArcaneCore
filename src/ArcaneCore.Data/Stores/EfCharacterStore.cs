@@ -59,12 +59,24 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore
 
     public async Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default)
     {
+        if (!await StageStateAsync(state, cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        db.ChangeTracker.Clear();
+    }
+
+    /// <summary>Stage state and inventory on this context, leaving the commit to the caller.</summary>
+    internal async Task<bool> StageStateAsync(CharacterState state, CancellationToken cancellationToken)
+    {
         CharacterRecord? character = await db.Characters
             .FirstOrDefaultAsync(c => c.Id == state.Id, cancellationToken)
             .ConfigureAwait(false);
         if (character is null)
         {
-            return; // deleted while the save was queued
+            return false; // deleted while the save was queued
         }
 
         character.MapId = state.MapId;
@@ -105,8 +117,7 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore
             await ItemPersistence.StageReplaceAsync(db, state.Id, inventory, cancellationToken).ConfigureAwait(false);
         }
 
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        db.ChangeTracker.Clear();
+        return true;
     }
 
     public async Task<IReadOnlyList<ActionButton>> GetActionButtonsAsync(int characterId, CancellationToken cancellationToken = default)

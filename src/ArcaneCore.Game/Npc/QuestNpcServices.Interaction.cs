@@ -78,7 +78,8 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        Send(player, WorldOpcode.SmsgQuestgiverQuestDetails, QuestPackets.Details(guid, quest, Options.RateDropMoney, DisplayOf));
+        Send(player, WorldOpcode.SmsgQuestgiverQuestDetails, QuestPackets.Details(guid, quest, Options.RateDropMoney,
+            id => Deps.Items?.GetItem(id)?.DisplayId ?? player.Inventory.Templates.Find(id)?.DisplayId ?? 0));
     }
 
     /// <summary>Returns true only after creating a journal entry and handing its delta to persistence.</summary>

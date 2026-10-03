@@ -76,18 +76,46 @@ public static partial class QuestPackets
         return w;
     }
 
-    public static PacketWriter RequestItems(ObjectGuid npc, Quest quest, bool complete, Func<uint, uint> display)
+    public static PacketWriter RequestItems(ObjectGuid npc, Quest quest, bool complete, Func<uint, uint> display, bool closeOnCancel = true)
     {
         var w = Header(npc, quest, quest.RequestItemsText);
         w.WriteUInt32(0);
         w.WriteUInt32(complete ? quest.Template.CompleteEmote : quest.Template.IncompleteEmote);
-        w.WriteUInt32(1); // closeOnCancel.
+        w.WriteUInt32(closeOnCancel ? 1u : 0u);
         w.WriteUInt32(quest.Template.RewOrReqMoney < 0 ? (uint)-(long)quest.Template.RewOrReqMoney : 0);
         Items(w, quest.ReqItemId, quest.ReqItemCount, display);
         w.WriteUInt32(2);
         w.WriteUInt32(complete ? 3u : 0u);
         w.WriteUInt32(4);
         w.WriteUInt32(8);
+        return w;
+    }
+
+    /// <summary>
+    /// Ordinary item/money SMSG_QUESTGIVER_QUEST_COMPLETE (5875): quest, 3, zero XP,
+    /// configured money, then fixed item/count pairs. Choice rewards are excluded.
+    /// vmangos/core 4b3d241cffe245a1f68da11380bce96c23db48c0 Quest.cpp 123–135,
+    /// Player.cpp 14336–14363; gtker/wow_messages 70abb9deff0bb63440d8aeb4386b820653e8a176
+    /// smsg_questgiver_quest_complete.wowm. Money retains its configured 32-bit pattern,
+    /// including a negative required-money amount; it is not the clamped balance delta.
+    /// </summary>
+    public static PacketWriter Complete(Quest quest, uint money)
+    {
+        var w = new PacketWriter(20 + (quest.RewItemsCount * 8));
+        w.WriteUInt32(quest.Id);
+        w.WriteUInt32(3);
+        w.WriteUInt32(0);
+        w.WriteUInt32(money);
+        w.WriteUInt32((uint)quest.RewItemsCount);
+        for (int i = 0; i < QuestConstants.RewardsCount; i++)
+        {
+            if (quest.RewItemId[i] != 0)
+            {
+                w.WriteUInt32(quest.RewItemId[i]);
+                w.WriteUInt32(quest.RewItemCount[i]);
+            }
+        }
+
         return w;
     }
 

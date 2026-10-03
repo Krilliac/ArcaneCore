@@ -90,7 +90,13 @@ public sealed class WorldRuntime : IDisposable
     public void NotifyLoggedIn(Player player) => Raise(PlayerLoggedIn, player, nameof(PlayerLoggedIn));
 
     /// <summary>Queue one player's current state for saving (world thread).</summary>
-    public void SavePlayer(Player player) => _saveQueue.Enqueue(player.CreateSnapshot(NowMs));
+    public void SavePlayer(Player player)
+    {
+        if (_online.TryGetValue(player.Guid, out Player? current) && ReferenceEquals(current, player))
+        {
+            _saveQueue.Enqueue(player.CreateSnapshot(NowMs));
+        }
+    }
 
     /// <summary>Send a packet to every player in the world (world thread).</summary>
     public void BroadcastToAll(WorldOpcode opcode, ReadOnlySpan<byte> payload)
@@ -188,16 +194,18 @@ public sealed class WorldRuntime : IDisposable
     /// <summary>Take a player out of the world and queue its state for saving (world thread).</summary>
     public void RemovePlayer(Player player)
     {
-        if (!_online.ContainsKey(player.Guid))
+        if (!_online.TryGetValue(player.Guid, out Player? current) || !ReferenceEquals(current, player))
         {
             return;
         }
 
         Raise(PlayerLoggingOut, player, nameof(PlayerLoggingOut));
-        _online.TryRemove(player.Guid, out _);
-        _onlineByName.TryRemove(new KeyValuePair<string, Player>(player.Name, player));
         player.Map?.RemovePlayer(player);
         _saveQueue.Enqueue(player.CreateSnapshot(NowMs));
+        // Publish offline only after the final snapshot is queued: login's save barrier
+        // must never overtake this old session's last write.
+        _onlineByName.TryRemove(new KeyValuePair<string, Player>(player.Name, player));
+        _online.TryRemove(new KeyValuePair<ObjectGuid, Player>(player.Guid, player));
     }
 
     /// <summary>
@@ -206,7 +214,7 @@ public sealed class WorldRuntime : IDisposable
     /// </summary>
     public void LogoutPlayer(Player player)
     {
-        if (!_online.ContainsKey(player.Guid))
+        if (!_online.TryGetValue(player.Guid, out Player? current) || !ReferenceEquals(current, player))
         {
             return;
         }

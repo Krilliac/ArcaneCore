@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Net;
 using System.Net.Sockets;
 using ArcaneCore.MockClient.Protocol;
+using ArcaneCore.MockClient.Scenarios;
 using Xunit;
 
 namespace ArcaneCore.MockClient.Tests;
@@ -29,6 +30,214 @@ public sealed class ProtocolTests
     {
         Assert.Equal(new byte[] { 0, 12, 0xDC, 1, 0, 0 }, ProtocolPackets.ClientHeader(0x01DC, 8));
         Assert.Equal(new byte[] { 0, 4, 0x37, 0, 0, 0 }, ProtocolPackets.ClientHeader(0x0037, 0));
+    }
+
+    [Fact]
+    public void QuestChooseReward_EncodesExactGuidQuestAndChoice()
+    {
+        byte[] expected = Convert.FromHexString("0807060504030201A3BB0D0001000000");
+        byte[] actual = ScenarioWire.GuidQuestChoice(0x0102030405060708, 900003, 1);
+        Assert.Equal(16, actual.Length);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void QuestOfferReward_DecodesIndependentBuild5875Literal()
+    {
+        MockQuestOfferReward result = ScenarioWire.QuestOfferReward(QuestOfferRewardVector());
+        Assert.Equal(0x0102030405060708ul, result.Guid);
+        Assert.Equal(900003u, result.QuestId);
+        Assert.Equal("Reward", result.Title);
+        Assert.Equal("Done", result.Text);
+        Assert.Equal(1u, result.EnableNext);
+        // Delay precedes emote ID on the wire, unlike SMSG_QUESTGIVER_QUEST_DETAILS.
+        Assert.Equal(new MockQuestEmote(5, 1000), Assert.Single(result.Emotes));
+        Assert.Collection(result.Choices,
+            item => Assert.Equal(new MockQuestReward(900041, 1, 11), item),
+            item => Assert.Equal(new MockQuestReward(900042, 3, 12), item));
+        Assert.Equal(new MockQuestReward(900040, 2, 13), Assert.Single(result.Rewards));
+        Assert.Equal(1234, result.Money);
+        Assert.Equal(0u, result.Flags);
+        Assert.Equal(0u, result.Spell);
+    }
+
+    [Fact]
+    public void QuestOfferReward_PreservesSignedMoneyAndOrderedFlagsSpellSuffix()
+    {
+        byte[] body = QuestOfferRewardVector();
+        BinaryPrimitives.WriteInt32LittleEndian(body.AsSpan(84), -7);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(88), 0x100);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(92), 54321);
+        MockQuestOfferReward result = ScenarioWire.QuestOfferReward(body);
+        Assert.Equal(-7, result.Money);
+        Assert.Equal(0x100u, result.Flags);
+        Assert.Equal(54321u, result.Spell);
+    }
+
+    [Theory]
+    [InlineData(28, 5u)]
+    [InlineData(40, 7u)]
+    [InlineData(68, 5u)]
+    [InlineData(28, uint.MaxValue)]
+    [InlineData(40, uint.MaxValue)]
+    [InlineData(68, uint.MaxValue)]
+    public void QuestOfferReward_RejectsCountsBeyondVanillaLimits(int offset, uint count)
+    {
+        byte[] body = QuestOfferRewardVector();
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(offset), count);
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.QuestOfferReward(body));
+    }
+
+    [Fact]
+    public void QuestOfferReward_RejectsEveryTruncationAndTrailingByte()
+    {
+        byte[] body = QuestOfferRewardVector();
+        for (int length = 0; length < body.Length; length++)
+        {
+            Assert.Throws<MockProtocolException>(() => ScenarioWire.QuestOfferReward(body[..length]));
+        }
+
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.QuestOfferReward([.. body, 0]));
+    }
+
+    [Fact]
+    public void QuestComplete_DecodesOnlyFixedItemPairsWithoutGuidOrChoice()
+    {
+        byte[] body = QuestCompleteVector();
+        Assert.Equal(28, body.Length);
+        MockQuestComplete result = ScenarioWire.QuestComplete(body);
+        Assert.Equal(900003u, result.QuestId);
+        Assert.Equal(3u, result.Type);
+        Assert.Equal(0u, result.Experience);
+        Assert.Equal(1234u, result.Money);
+        Assert.Equal(new MockQuestCompletedReward(900040, 2), Assert.Single(result.Rewards));
+    }
+
+    [Fact]
+    public void QuestComplete_RejectsEveryTruncationAndAdditionalRewardFields()
+    {
+        byte[] body = QuestCompleteVector();
+        for (int length = 0; length < body.Length; length++)
+        {
+            Assert.Throws<MockProtocolException>(() => ScenarioWire.QuestComplete(body[..length]));
+        }
+
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.QuestComplete([.. body, 0]));
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.QuestComplete(
+            [0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, .. body]));
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.QuestComplete(
+            [.. body, 0xCA, 0xBB, 0x0D, 0, 3, 0, 0, 0]));
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.QuestComplete([.. body, 13, 0, 0, 0]));
+    }
+
+    [Theory]
+    [InlineData(5u)]
+    [InlineData(uint.MaxValue)]
+    public void QuestComplete_RejectsCountsBeyondFourFixedRewards(uint count)
+    {
+        byte[] body = QuestCompleteVector();
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(16), count);
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.QuestComplete(body));
+    }
+
+    [Theory]
+    [InlineData("A3BB0D00BEBB0D0001000000020000000807060504030201", 1u)]
+    [InlineData("A3BB0D00BEBB0D0002000000020000000807060504030201", 2u)]
+    public void QuestKill_DecodesIndependentProgressLiterals(string hex, uint count)
+    {
+        byte[] body = Convert.FromHexString(hex);
+        MockQuestKill result = ScenarioWire.QuestKill(body);
+        Assert.Equal(new MockQuestKill(900003, 900030, count, 2, 0x0102030405060708), result);
+        Assert.Equal(24, body.Length);
+        for (int length = 0; length < body.Length; length++)
+        {
+            Assert.Throws<MockProtocolException>(() => ScenarioWire.QuestKill(body[..length]));
+        }
+
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.QuestKill([.. body, 0]));
+    }
+
+    [Fact]
+    public void InitialSelfCreate_DecodesOwnedItemCreatesBeforePlayer()
+    {
+        byte[] body = [3, 0, 0, 0, 0, .. FirstItemCreateVector(), .. SecondItemCreateVector(), .. SelfCreateBlockVector()];
+        MockSelfCreate self = ScenarioWire.SelfCreate(body);
+        Assert.Equal(0x1234ul, self.Guid);
+        Assert.Equal(1f, self.X);
+        Assert.Equal(2f, self.Y);
+        Assert.Equal(3f, self.Z);
+        Assert.Equal(4f, self.Orientation);
+        Assert.Equal(0x1234u, self.Fields[0]);
+        Assert.Equal(0u, self.Fields[1]);
+        Assert.Equal(0x19u, self.Fields[2]);
+        Assert.Collection(ScenarioWire.FieldUpdates(body),
+            item =>
+            {
+                Assert.Equal(0x4000000000000001ul, item.Guid);
+                Assert.Equal(900040u, item.Fields[3]);
+            },
+            item =>
+            {
+                Assert.Equal(0x4000000000000002ul, item.Guid);
+                Assert.Equal(900042u, item.Fields[3]);
+            },
+            player => Assert.Equal(self.Guid, player.Guid));
+        for (int length = 0; length < body.Length; length++)
+        {
+            Assert.Throws<MockProtocolException>(() => ScenarioWire.SelfCreate(body[..length]));
+        }
+
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.SelfCreate([.. body, 0]));
+    }
+
+    [Fact]
+    public void InitialSelfCreate_RequiresExactlyOneSelfPlayer()
+    {
+        byte[] self = SelfCreateBlockVector();
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.SelfCreate([2, 0, 0, 0, 0, .. self, .. self]));
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.SelfCreate(
+            [2, 0, 0, 0, 0, .. FirstItemCreateVector(), .. SecondItemCreateVector()]));
+        Assert.Equal(0x1234ul, ScenarioWire.SelfCreate([1, 0, 0, 0, 0, .. self]).Guid);
+    }
+
+    [Theory]
+    [InlineData(0u)]
+    [InlineData(129u)]
+    [InlineData(uint.MaxValue)]
+    public void InitialSelfCreate_RejectsCountsBeyondItsBlockLimit(uint count)
+    {
+        byte[] body = [1, 0, 0, 0, 0, .. SelfCreateBlockVector()];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, count);
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.SelfCreate(body));
+    }
+
+    [Theory]
+    [InlineData(4, 1)] // transport header
+    [InlineData(5, 3)] // self must use CREATE_OBJECT
+    [InlineData(10, 0x70)] // SELF update flag is required
+    [InlineData(11, 1)] // optional movement flags are forbidden
+    [InlineData(35, 1)] // nonzero fall time
+    [InlineData(63, 0)] // ALL trailer must be one
+    [InlineData(72, 0x35)] // object GUID fields must agree with packed GUID
+    [InlineData(80, 3)] // self fields must describe a player
+    public void InitialSelfCreate_PreservesStrictPlayerChecks(int offset, int value)
+    {
+        byte[] body = [1, 0, 0, 0, 0, .. SelfCreateBlockVector()];
+        body[offset] = (byte)value;
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.SelfCreate(body));
+    }
+
+    [Fact]
+    public void InitialSelfCreate_RequiresPositiveSpeedAndBothGuidFields()
+    {
+        byte[] self = SelfCreateBlockVector();
+        byte[] zeroSpeed = [1, 0, 0, 0, 0, .. self];
+        BinaryPrimitives.WriteUInt32LittleEndian(zeroSpeed.AsSpan(39), 0);
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.SelfCreate(zeroSpeed));
+        // The high GUID word is zero, but its omission still makes the create incomplete.
+        byte[] missingHighWord = [1, 0, 0, 0, 0, .. self[..62],
+            1, 5, 0, 0, 0, 0x34, 0x12, 0, 0, 0x19, 0, 0, 0];
+        Assert.Throws<MockProtocolException>(() => ScenarioWire.SelfCreate(missingHighWord));
     }
 
     [Theory]
@@ -297,6 +506,44 @@ public sealed class ProtocolTests
             Assert.Contains("M2 did not verify", exception.Message);
         });
     }
+
+    // Independently assembled protocol fixtures, using synthetic IDs. Layout reference:
+    // vmangos/core @ 4b3d241cffe245a1f68da11380bce96c23db48c0,
+    // src/game/Server/Packets/Quest.cpp: QuestGiverOfferReward, QuestGiverQuestComplete,
+    // QuestUpdateAddKill and QuestgiverChooseReward. No upstream source code or captures copied.
+    private static byte[] QuestOfferRewardVector() => Convert.FromHexString(
+        "0807060504030201" + // full GUID
+        "A3BB0D00" + // quest 900003
+        "52657761726400" + // title: Reward
+        "446F6E6500" + // offer text: Done
+        "0100000001000000" + // enable next and one emote
+        "E803000005000000" + // delay 1000, emote 5
+        "02000000" + // two choices
+        "C9BB0D00010000000B000000" + // item 900041, count 1, display 11
+        "CABB0D00030000000C000000" + // item 900042, count 3, display 12
+        "01000000" + // one fixed reward
+        "C8BB0D00020000000D000000" + // item 900040, count 2, display 13
+        "D20400000000000000000000"); // money 1234, flags 0, reward spell 0
+
+    private static byte[] QuestCompleteVector() => Convert.FromHexString(
+        "A3BB0D000300000000000000D204000001000000C8BB0D0002000000");
+
+    // Independent update fixtures: item CREATE blocks carry ALL, then a field mask;
+    // the self player carries SELF/ALL/LIVING/HAS_POSITION and six positive speeds.
+    private static byte[] FirstItemCreateVector() => Convert.FromHexString(
+        "02810140011001000000010F000000010000000000004003000000C8BB0D00");
+
+    private static byte[] SecondItemCreateVector() => Convert.FromHexString(
+        "02810240011001000000010F000000020000000000004003000000CABB0D00");
+
+    private static byte[] SelfCreateBlockVector() => Convert.FromHexString(
+        "020334120471" + // CREATE_OBJECT, packed GUID 0x1234, player, self update flags
+        "0000000001000000" + // no movement flags, clock one
+        "0000803F000000400000404000008040" + // x/y/z/orientation: 1/2/3/4
+        "00000000" + // zero fall time
+        "0000803F0000803F0000803F0000803F0000803F0000803F" + // six speeds of one
+        "01000000" + // ALL trailer
+        "0107000000341200000000000019000000"); // fields: full GUID and player type
 
     private static byte[] LittleEndian(string hex, int width)
     {

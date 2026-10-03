@@ -49,7 +49,7 @@ public sealed partial class QuestNpcServices
         foreach ((Quest quest, QuestStatusData data, int slot) in LoggedQuests(state))
         {
             if (data.Status != QuestStatus.Incomplete || !quest.HasSpecialFlag(QuestSpecialFlags.KillOrCast)
-                || (talking && quest.HasSpecialFlag(QuestSpecialFlags.ExplorationOrEvent)))
+                || (talking && !quest.HasSpecialFlag(QuestSpecialFlags.ExplorationOrEvent)))
             {
                 continue;
             }

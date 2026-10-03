@@ -41,6 +41,13 @@ public sealed class EfCharacterQuestStore(CharacterDbContext db) : ICharacterQue
 
         foreach (CharacterQuestStatus status in upserts)
         {
+            // Ordinary nonrepeatable rewards are permanent history. The current daemon
+            // refuses repeatable turn-ins, so older queued progress cannot reopen one.
+            if (existing.TryGetValue(status.Quest, out CharacterQuestStatusRow? rewarded) && rewarded.Rewarded)
+            {
+                continue;
+            }
+
             if (!existing.TryGetValue(status.Quest, out CharacterQuestStatusRow? row))
             {
                 row = new CharacterQuestStatusRow { CharacterId = characterId, Quest = status.Quest };
