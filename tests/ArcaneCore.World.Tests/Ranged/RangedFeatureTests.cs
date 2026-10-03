@@ -18,6 +18,7 @@ public sealed class RangedFeatureTests
 
         Assert.Equal(AmmoMode.Retail, options.Ammo.Mode);
         Assert.Equal(RangeLeewayMode.Retail, options.Range.Leeway);
+        Assert.Equal(TrapRadiusSource.Vmangos, options.Traps.RadiusSource);
     }
 
     [Fact]
@@ -27,12 +28,23 @@ public sealed class RangedFeatureTests
         {
             ["Ranged:Ammo:Mode"] = "Infinite",
             ["Ranged:Range:Leeway"] = "None",
+            ["Ranged:Traps:RadiusSource"] = "Template",
         }).Build();
 
         RangedOptions options = RangedFeature.Bind(configuration);
 
         Assert.Equal(AmmoMode.Infinite, options.Ammo.Mode);
         Assert.Equal(RangeLeewayMode.None, options.Range.Leeway);
+        Assert.Equal(TrapRadiusSource.Template, options.Traps.RadiusSource);
+    }
+
+    [Fact]
+    public async Task EveryMapGetsTheSpellObjectSystem()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("RANGEDMAP", "Mapper");
+
+        await host.WaitForWorldAsync(() => host.World.Maps.All(m => m.FindUpdater<SpellObjectSystem>() is not null) && host.World.Maps.Any(), "the spell object system on every map");
     }
 
     [Fact]

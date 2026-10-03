@@ -75,7 +75,7 @@ public sealed class FeignDeathTests : IDisposable
             },
         ], [], []);
         _spells = new SpellSystem(store, () => _now, random: new FixedRandom(10_000)) { MapUpdateIntervalMs = 0, Relations = _relations };
-        RangedAuras.Register(_spells);
+        RangedHandlers.Register(_spells);
         _hunter = TestWorld.CreatePlayer(1, 0, 0, _session);
         _hunter.Level = 60;
         _world.AddPlayer(_hunter);

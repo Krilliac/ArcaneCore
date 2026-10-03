@@ -51,7 +51,7 @@ public sealed class TrackingAuraTests
     private static SpellTestKit WithHandlers()
     {
         SpellTestKit kit = Kit();
-        RangedAuras.Register(kit.System);
+        RangedHandlers.Register(kit.System);
         return kit;
     }
 

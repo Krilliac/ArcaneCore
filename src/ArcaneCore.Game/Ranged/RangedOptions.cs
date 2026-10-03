@@ -20,6 +20,16 @@ public enum RangeLeewayMode
     None = 1,
 }
 
+/// <summary>Where a hunter trap takes its trigger radius from (<c>Ranged:Traps:RadiusSource</c>).</summary>
+public enum TrapRadiusSource
+{
+    /// <summary>Retail 1.12.1 as vmangos ships it (GameObject.cpp:482-497): the twelve hunter trap templates trigger at 2.5 yd, every other trap at its template radius (data2).</summary>
+    Vmangos = 0,
+
+    /// <summary>Deviation: always the template radius (data2; the classic-db rows carry 5 yd for the hunter traps).</summary>
+    Template = 1,
+}
+
 /// <summary>
 /// Hunter / ranged-combat settings (configuration section "Ranged"). Every default is the
 /// retail 1.12.1 behaviour (vmangos); a value that differs is a deliberate, documented deviation.
@@ -32,10 +42,18 @@ public sealed class RangedOptions
 
     public RangeOptions Range { get; } = new();
 
+    public TrapOptions Traps { get; } = new();
+
     /// <summary>Ammunition settings (<c>Ranged:Ammo</c>).</summary>
     public sealed class AmmoOptions
     {
         public AmmoMode Mode { get; set; } = AmmoMode.Retail;
+    }
+
+    /// <summary>Trap settings (<c>Ranged:Traps</c>).</summary>
+    public sealed class TrapOptions
+    {
+        public TrapRadiusSource RadiusSource { get; set; } = TrapRadiusSource.Vmangos;
     }
 
     /// <summary>Range settings (<c>Ranged:Range</c>).</summary>

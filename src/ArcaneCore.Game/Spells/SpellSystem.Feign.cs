@@ -74,7 +74,7 @@ public sealed partial class SpellSystem
         }
     }
 
-    /// <summary>The aura handler for AuraType.FeignDeath (registered by <see cref="RangedAuras"/>).</summary>
+    /// <summary>The aura handler for AuraType.FeignDeath (registered by <see cref="RangedHandlers"/>).</summary>
     internal void ApplyFeignDeath(SpellAuraHolder holder, SpellAura aura, bool apply)
     {
         Unit target = holder.Target;

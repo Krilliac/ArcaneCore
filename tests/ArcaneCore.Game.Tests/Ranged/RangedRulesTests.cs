@@ -138,6 +138,7 @@ public sealed class RangedRulesTests
         var options = new RangedOptions();
         Assert.Equal(AmmoMode.Retail, options.Ammo.Mode);
         Assert.Equal(RangeLeewayMode.Retail, options.Range.Leeway);
+        Assert.Equal(TrapRadiusSource.Vmangos, options.Traps.RadiusSource);
         Assert.Equal("Ranged", RangedOptions.SectionName);
     }
 }

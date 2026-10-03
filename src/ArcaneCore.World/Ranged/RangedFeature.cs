@@ -19,6 +19,7 @@ public sealed class RangedFeature : IWorldFeature
 {
     private readonly IServiceProvider _services;
     private readonly ILogger<RangedFeature> _logger;
+    private SpellSystem? _spells;
 
     public RangedFeature(IServiceProvider services, ILogger<RangedFeature> logger)
     {
@@ -43,10 +44,33 @@ public sealed class RangedFeature : IWorldFeature
         ArgumentNullException.ThrowIfNull(world);
         SpellSystem spells = _services.GetRequiredService<SpellFeature>().System;
         spells.RangedOptions = Options;
-        RangedAuras.Register(spells);
+        RangedHandlers.Register(spells);
+        _spells = spells;
+
+        // Map updaters are attached on the world thread (as the game object feature does).
+        world.Post(() =>
+        {
+            world.MapCreated += AttachMapSystems;
+            foreach (Map map in world.Maps.ToArray())
+            {
+                AttachMapSystems(map);
+            }
+        });
+
         if (Options.Ammo.Mode != AmmoMode.Retail || Options.Range.Leeway != RangeLeewayMode.Retail)
         {
             _logger.LogWarning("Ranged settings deviate from retail: Ammo.Mode={Ammo}, Range.Leeway={Leeway}", Options.Ammo.Mode, Options.Range.Leeway);
         }
+    }
+
+    /// <summary>The per-map systems of spell-created objects (hunter traps).</summary>
+    private void AttachMapSystems(Map map)
+    {
+        if (_spells is null || map.FindUpdater<SpellObjectSystem>() is not null)
+        {
+            return;
+        }
+
+        map.AddUpdater(new SpellObjectSystem(_spells));
     }
 }

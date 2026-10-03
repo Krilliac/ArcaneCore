@@ -702,6 +702,12 @@ public sealed partial class SpellSystem
 
     private bool IsSpellReady(UnitSpellState state, SpellInfo spell)
     {
+        // ranged (hunter lane): a COOLDOWN_ON_EVENT spell waits while the object it created lives (Unit::AddGameObject).
+        if (spell.HasAttribute(SpellAttributes.CooldownOnEvent) && SpellObjects.IsCreatedBySpell(state.Unit, spell.Id))
+        {
+            return false;
+        }
+
         uint now = NowMs;
         if (state.SpellCooldowns.TryGetValue(spell.Id, out uint until) && until > now)
         {
@@ -849,9 +855,9 @@ public sealed partial class SpellSystem
     /// SMSG_SPELL_COOLDOWN tells the client — decision recorded in docs/areas/spells.md.
     /// COOLDOWN_ON_EVENT spells are not started here (the event that starts them is not modelled yet).
     /// </summary>
-    private void AddCooldown(UnitSpellState state, SpellInfo spell, bool triggered)
+    private void AddCooldown(UnitSpellState state, SpellInfo spell, bool triggered, bool onEvent = false)
     {
-        if (spell.IsPassive || spell.HasAttribute(SpellAttributes.CooldownOnEvent))
+        if (spell.IsPassive || (spell.HasAttribute(SpellAttributes.CooldownOnEvent) && !onEvent))
         {
             return;
         }
