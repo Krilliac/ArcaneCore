@@ -67,6 +67,7 @@ public sealed class ModuleLaneConfigTests
             ["World:HotCode:Modules:Enabled"] = "true",
             ["World:HotCode:Modules:Directory"] = "mods",
             ["World:HotCode:Modules:AllowAnyEnvironment"] = "true",
+            ["World:HotCode:Modules:Allowlist"] = "allow.txt",
             ["World:HotCode:Modules:LoadOnStart:0"] = "A",
             ["World:HotCode:Modules:LoadOnStart:1"] = "B",
         }).Build();
@@ -76,6 +77,7 @@ public sealed class ModuleLaneConfigTests
         Assert.True(modules.Enabled);
         Assert.Equal("mods", modules.Directory);
         Assert.True(modules.AllowAnyEnvironment);
+        Assert.Equal("allow.txt", modules.Allowlist);
         Assert.Equal(["A", "B"], modules.LoadOnStart);
     }
 
@@ -93,6 +95,7 @@ public sealed class ModuleLaneConfigTests
     public void Modules_AreRefusedInProduction_UnlessTheOperatorOptsIn()
     {
         var options = new HotCodeOptions { Modules = { Enabled = true, Directory = "mods" } };
+        options.Modules.Allowlist = "allow.txt";
 
         HotCodeVerdict refused = HotCodeGuard.Evaluate(options, new Probe("Production"));
         options.Modules.AllowAnyEnvironment = true;
@@ -104,9 +107,26 @@ public sealed class ModuleLaneConfigTests
     }
 
     [Fact]
+    public void Modules_InProduction_NeedAnAllowlist_EvenWithTheOperatorOptIn()
+    {
+        var options = new HotCodeOptions { Modules = { Enabled = true, Directory = "mods", AllowAnyEnvironment = true } };
+
+        HotCodeVerdict noList = HotCodeGuard.Evaluate(options, new Probe("Production"));
+        options.Modules.Allowlist = "allow.txt";
+        HotCodeVerdict withList = HotCodeGuard.Evaluate(options, new Probe("Production"));
+        options.Modules.Allowlist = string.Empty;
+        HotCodeVerdict development = HotCodeGuard.Evaluate(options, new Probe("Development"));
+
+        Assert.False(noList.Allowed);
+        Assert.Contains("Modules:Allowlist", Assert.Single(noList.Refusals));
+        Assert.True(withList.Allowed);
+        Assert.True(development.Allowed); // Development / Staging keep working without a list
+    }
+
+    [Fact]
     public void Modules_WithoutADirectory_RefuseToStart()
     {
-        var options = new HotCodeOptions { Modules = { Enabled = true, AllowAnyEnvironment = true } };
+        var options = new HotCodeOptions { Modules = { Enabled = true, AllowAnyEnvironment = true, Allowlist = "allow.txt" } };
 
         HotCodeVerdict verdict = HotCodeGuard.Evaluate(options, new Probe("Production"));
 
@@ -124,7 +144,7 @@ public sealed class ModuleLaneConfigTests
     public void TheModuleLane_DoesNotNeedTheWatchLaneToBeAllowedInProduction()
     {
         // The watch lane stays Development/Staging only, whatever the modules say.
-        var options = new HotCodeOptions { Enabled = true, Modules = { Enabled = true, Directory = "mods", AllowAnyEnvironment = true } };
+        var options = new HotCodeOptions { Enabled = true, Modules = { Enabled = true, Directory = "mods", AllowAnyEnvironment = true, Allowlist = "allow.txt" } };
 
         HotCodeVerdict verdict = HotCodeGuard.Evaluate(options, new Probe("Production"));
 

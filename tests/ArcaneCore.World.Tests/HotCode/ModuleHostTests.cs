@@ -53,8 +53,8 @@ public sealed class ModuleHostTests : IDisposable
         }
     }
 
-    private ModuleHost NewHost(IHotCodeWorld world, TimeSpan timeout)
-        => new(new HotModuleOptions { Enabled = true, Directory = _root }, world, _opcodes, _commands,
+    private ModuleHost NewHost(IHotCodeWorld world, TimeSpan timeout, string allowlist = "")
+        => new(new HotModuleOptions { Enabled = true, Directory = _root, Allowlist = allowlist }, world, _opcodes, _commands,
             new HotCodeAudit(Path.Combine(_dir, "audit.log")), NullLogger.Instance, timeout);
 
     private static string FixtureDll(int version) => Path.Combine(AppContext.BaseDirectory, "hotfixtures", "v" + version, "HotFixture.dll");
@@ -160,6 +160,50 @@ public sealed class ModuleHostTests : IDisposable
     {
         Assert.True(table.TryGet(WorldOpcode.CmsgQueryTime, out OpcodeHandler handler));
         return handler;
+    }
+
+    private static string Sha(string dll) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(dll)));
+
+    [Fact]
+    public async Task AModuleWhoseHashIsNotOnTheAllowlist_IsRefused_AuditedAndChangesNothing()
+    {
+        string dll = Install(1);
+        string list = Path.Combine(_dir, "allow.txt");
+        File.WriteAllText(list, Sha(FixtureDll(2)) + Environment.NewLine); // only version 2 is approved
+        ModuleHost host = NewHost(_world, TimeSpan.FromSeconds(10), list);
+
+        ModuleResult result = await host.LoadAsync("HotFixture");
+
+        Assert.False(result.Ok);
+        Assert.Contains("allowlist", result.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(Sha(dll), result.Detail);
+        Assert.Empty(host.List());
+        Assert.False(_opcodes.TryGet(WorldOpcode.CmsgQueryTime, out _));
+        Assert.Null(Help("hotfixture"));
+        string audit = await File.ReadAllTextAsync(Path.Combine(_dir, "audit.log"));
+        Assert.Contains("module-rejected", audit);
+        Assert.Contains(Sha(dll), audit);
+    }
+
+    [Fact]
+    public async Task AModuleWhoseHashIsListed_Loads_AndAReloadToAnUnlistedBuildKeepsTheRunningVersion()
+    {
+        Install(1);
+        string list = Path.Combine(_dir, "allow.txt");
+        File.WriteAllText(list, "# approved" + Environment.NewLine + Sha(FixtureDll(1)) + "  HotFixture v1" + Environment.NewLine);
+        ModuleHost host = NewHost(_world, TimeSpan.FromSeconds(10), list);
+        Assert.True((await host.LoadAsync("HotFixture")).Ok);
+
+        Install(2); // a different build is dropped in; it is not approved
+        ModuleResult reload = await host.ReloadAsync("HotFixture");
+
+        Assert.False(reload.Ok);
+        Assert.Equal(1, VersionOf(_opcodes, WorldOpcode.CmsgQueryTime));
+        Assert.Equal("fixture v1", Help("hotfixture"));
+
+        File.AppendAllText(list, Sha(FixtureDll(2)) + Environment.NewLine); // approving it needs no restart
+        Assert.True((await host.ReloadAsync("HotFixture")).Ok);
+        Assert.Equal("fixture v2", Help("hotfixture"));
     }
 
     [Fact]
