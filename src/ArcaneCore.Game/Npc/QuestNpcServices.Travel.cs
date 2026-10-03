@@ -111,6 +111,12 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        // vmangos Player::ActivateTaxiPathTo rejects UNIT_FLAG_REMOVE_CLIENT_CONTROL.
+        if ((player.UnitFlags & UnitFlags.RemoveClientControl) != 0)
+        {
+            return;
+        }
+
         if (!IsNodeKnown(s, sourceNode) || !IsNodeKnown(s, destinationNode))
         {
             return;

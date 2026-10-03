@@ -108,11 +108,12 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        ModifyMoney(s, -(long)price);
         if (!items.StoreNewItem(player, itemId, totalCount))
         {
             return;
         }
+
+        ModifyMoney(s, -(long)price);
 
         uint newCount = UseStock(npc.Guid, vendorItem, proto, totalCount);
 

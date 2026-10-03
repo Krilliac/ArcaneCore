@@ -12,6 +12,9 @@ public sealed record GossipMenuItem(
     int ActionMenu,
     uint ActionPoi);
 
+/// <summary>One prepared quest entry (vmangos GossipDef.h QuestMenuItem).</summary>
+public sealed record QuestMenuItem(uint QuestId, DialogStatus Icon);
+
 /// <summary>vmangos GossipDef.h Gossip_Option (gossip_menu_option.option_id).</summary>
 public enum GossipOption : byte
 {
