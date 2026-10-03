@@ -30,6 +30,17 @@ public sealed record CreatureTemplate
 
     public uint NpcFlags { get; init; }
 
+    /// <summary>vmangos CreatureDefines.h:242,272-275 NPC service metadata.</summary>
+    public uint GossipMenuId { get; init; }
+
+    public uint TrainerType { get; init; }
+
+    public byte TrainerClass { get; init; }
+
+    public byte TrainerRace { get; init; }
+
+    public uint TrainerSpell { get; init; }
+
     public uint UnitFlags { get; init; }
 
     public uint DynamicFlags { get; init; }

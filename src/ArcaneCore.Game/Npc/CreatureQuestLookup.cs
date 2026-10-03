@@ -10,7 +10,7 @@ namespace ArcaneCore.Game.Npc;
 /// World-thread questgiver snapshot from the player's actual map and visible GUID set.
 /// vmangos/core 4b3d241cffe245a1f68da11380bce96c23db48c0 Player.cpp
 /// GetNPCIfCanInteractWith/CanInteractWithNPC and Object.cpp GetReactionTo.
-/// Only quest handlers consume this lookup; gossip/trainer metadata is outside this adapter.
+/// Gossip and trainer metadata comes from the creature's imported template.
 /// Without a <paramref name="reactions"/> source only reputation-free templates resolve; with
 /// the reputation owner's source, known reputation factions and contested guards resolve too.
 /// </summary>
@@ -35,7 +35,11 @@ public sealed class CreatureQuestLookup(FactionTemplateCatalog factions, INpcRea
         return new NpcInfo(creature.Guid, creature.Entry, creature.Spawn?.Guid ?? creature.Guid.Low,
             (NpcFlags)creature.NpcFlags, creature.MapId, creature.X, creature.Y, creature.Z,
             creature.BoundingRadius, creature.IsAlive, hostile, creature.Combat.IsInCombat,
-            (creature.UnitFlags & UnitFlags.NotSelectable) != 0, 0,
+            (creature.UnitFlags & UnitFlags.NotSelectable) != 0, creature.Template.GossipMenuId,
+            TrainerType: (TrainerType)creature.Template.TrainerType,
+            TrainerClass: creature.Template.TrainerClass,
+            TrainerRace: creature.Template.TrainerRace,
+            TrainerSpell: creature.Template.TrainerSpell,
             FactionId: factions.Find(creature.FactionTemplate)?.Faction ?? 0);
     }
 

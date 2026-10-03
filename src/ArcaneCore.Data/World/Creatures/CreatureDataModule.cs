@@ -43,6 +43,17 @@ public sealed class CreatureTemplateRow
 
     public uint NpcFlags { get; set; }
 
+    /// <summary>vmangos CreatureDefines.h:242,272-275; added by CreatureNpcMetadataDataModule.</summary>
+    public uint GossipMenuId { get; set; }
+
+    public uint TrainerType { get; set; }
+
+    public byte TrainerClass { get; set; }
+
+    public byte TrainerRace { get; set; }
+
+    public uint TrainerSpell { get; set; }
+
     public uint UnitFlags { get; set; }
 
     public uint DynamicFlags { get; set; }
