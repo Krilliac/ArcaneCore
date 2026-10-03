@@ -23,6 +23,15 @@ public sealed partial class SpellSystem
     public void OnUnitDied(Unit unit)
     {
         ArgumentNullException.ThrowIfNull(unit);
+        RemoveAurasOnDeath(unit);
+        if (!unit.IsAlive)
+        {
+            RaiseUnitDied(unit); // diminishing returns reset on death (Unit.cpp:7363)
+        }
+    }
+
+    private void RemoveAurasOnDeath(Unit unit)
+    {
         if (unit.IsAlive || GetState(unit.Guid) is not { } state || !ReferenceEquals(state.Unit, unit))
         {
             return;

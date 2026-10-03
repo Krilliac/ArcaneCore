@@ -9,8 +9,8 @@ public static class SpellCritRules
     /// <summary>vmangos SPELLFAMILY_WARLOCK (SpellDefines.h:38).</summary>
     private const uint FamilyWarlock = 5;
 
-    /// <summary>vmangos CF_WARLOCK_HEALTHSTONE class mask (SpellClassMask.h:111).</summary>
-    private const ulong WarlockHealthstoneFlag = 16;
+    /// <summary>vmangos CF_WARLOCK_HEALTHSTONE class mask: bit 16, CM0 0x00010000 (SpellClassMask.h:111).</summary>
+    private const ulong WarlockHealthstoneFlag = 1UL << 16;
 
     /// <summary>The fixed crit chance of potions and healthstones in percent (Unit.cpp:5229-5231).</summary>
     public const float FixedPotionCritPercent = 10.0f;

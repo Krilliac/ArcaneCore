@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules.Application;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -13,6 +14,27 @@ public sealed partial class SpellSystem
     /// calls it. Null until the loot area installs one, which means no window can be open.
     /// </summary>
     public Action<Player>? ReleaseLoot { get; set; }
+
+    /// <summary>
+    /// The application rules run for every spell landing on a target, in order (mechanic resistance, diminishing
+    /// returns, ...): they narrow the effect mask and may veto the built aura holder. Empty by default.
+    /// </summary>
+    public List<ISpellApplicationRule> ApplicationRules { get; } = [];
+
+    /// <summary>An aura holder was put on its target (after its handlers ran); a refreshed stack does not raise it.</summary>
+    public event Action<SpellAuraHolder>? HolderAdded;
+
+    /// <summary>An aura holder was taken off its target (after its handlers ran).</summary>
+    public event Action<SpellAuraHolder>? HolderRemoved;
+
+    /// <summary>A unit died and its auras were removed (see <see cref="OnUnitDied"/>).</summary>
+    public event Action<Unit>? UnitDied;
+
+    internal void RaiseHolderAdded(SpellAuraHolder holder) => HolderAdded?.Invoke(holder);
+
+    internal void RaiseHolderRemoved(SpellAuraHolder holder) => HolderRemoved?.Invoke(holder);
+
+    internal void RaiseUnitDied(Unit unit) => UnitDied?.Invoke(unit);
 
     /// <summary>
     /// Whether a live root or stun aura roots <paramref name="unit"/> (vmangos Unit::SetRooted via HandleAuraModRoot /

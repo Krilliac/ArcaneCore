@@ -25,7 +25,7 @@ public sealed class SpellCritRulesTests
         RuleTestSupport.Magic(Bolt, SpellSchool.Fire),
         SpellTestKit.Spell(DummyOnly, SpellTestKit.Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitEnemy)) with { DamageClass = SpellDamageClass.Magic, School = SpellSchool.Fire },
         RuleTestSupport.Magic(Potion, SpellSchool.Fire) with { SpellFamilyName = 13 },
-        RuleTestSupport.Magic(Healthstone, SpellSchool.Fire) with { SpellFamilyName = 5, SpellFamilyFlags = 0x10 },
+        RuleTestSupport.Magic(Healthstone, SpellSchool.Fire) with { SpellFamilyName = 5, SpellFamilyFlags = 0x10000 },
         SpellTestKit.Spell(Heal, SpellTestKit.Effect(SpellEffectName.Heal, 10, SpellImplicitTarget.UnitFriend)) with { DamageClass = SpellDamageClass.Magic, School = SpellSchool.Holy },
         SpellTestKit.Spell(Strike, SpellTestKit.Effect(SpellEffectName.WeaponDamage, 5, SpellImplicitTarget.UnitEnemy)) with { DamageClass = SpellDamageClass.Melee },
         RuleTestSupport.Grant(SchoolCrit, AuraType.ModSpellCritChanceSchool, 7, 1 << (int)SpellSchool.Fire),

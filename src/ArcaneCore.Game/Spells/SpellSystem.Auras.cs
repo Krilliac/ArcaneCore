@@ -112,6 +112,8 @@ public sealed partial class SpellSystem
         {
             AuraHandlers.GetValueOrDefault(aura.Type)?.Apply?.Invoke(this, holder, aura, true);
         }
+
+        RaiseHolderAdded(holder);
     }
 
     /// <summary>Remove every aura of <paramref name="spellId"/> from <paramref name="target"/> (vmangos Unit::RemoveAurasDueToSpell).</summary>
@@ -227,6 +229,8 @@ public sealed partial class SpellSystem
         {
             AuraHandlers.GetValueOrDefault(aura.Type)?.Apply?.Invoke(this, holder, aura, false);
         }
+
+        RaiseHolderRemoved(holder);
 
         if (holder.AreaParent is { } parent && parent.AreaChildren.TryGetValue(holder.Target.Guid, out SpellAuraHolder? child)
             && ReferenceEquals(child, holder))

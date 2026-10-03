@@ -33,4 +33,13 @@ public sealed class SpellRuleOptions
     /// (Unit::CalculateEffectiveMagicResistancePercent, Unit.cpp:3917: "completely ignore holy resistance value").
     /// </summary>
     public bool IgnoreHolyResistance { get; init; }
+
+    /// <summary>Whether crowd-control spells diminish (vmangos Spell.cpp:1733-1800). Retail: true; false is a dev-host switch.</summary>
+    public bool DiminishingReturns { get; init; } = true;
+
+    /// <summary>
+    /// Milliseconds after the last aura of a diminishing group ended before the level resets (vmangos
+    /// Unit::GetDiminishing, Unit.cpp:7630: 15 seconds).
+    /// </summary>
+    public uint DiminishingResetMs { get; init; } = 15_000;
 }

@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules.Application;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells;
@@ -103,6 +104,23 @@ public sealed partial class SpellSystem
             return;
         }
 
+        // Application rules (mechanic resistance, diminishing returns): they narrow the effect mask before any effect runs.
+        SpellApplication? application = null;
+        if (ApplicationRules.Count > 0)
+        {
+            application = new SpellApplication(this, cast, target, effectMask);
+            foreach (ISpellApplicationRule rule in ApplicationRules)
+            {
+                rule.Begin(application);
+            }
+
+            effectMask = application.EffectMask;
+            if (effectMask == 0)
+            {
+                return;
+            }
+        }
+
         SpellAuraHolder? holder = null;
         for (int i = 0; i < SpellConstants.MaxEffects; i++)
         {
@@ -130,7 +148,11 @@ public sealed partial class SpellSystem
 
         if (holder is not null && !holder.IsEmpty)
         {
-            AddAuraHolder(holder);
+            // The application rules (diminishing returns, ...) may drop the holder; its non-aura effects already ran.
+            if (application is null || ApplicationRules.All(rule => rule.AcceptHolder(application, holder)))
+            {
+                AddAuraHolder(holder);
+            }
         }
 
         SpellHitTarget?.Invoke(cast.Caster, target, cast.Spell.Id);
