@@ -262,7 +262,30 @@ Limit: a manual `.event start` / `.event stop` schedule override does not surviv
 
 ## Not delivered (limits)
 
-Recorded as slices are completed; see the final section.
+- **Event mails** (`game_event_mail`, vmangos `SendEventMails`, GameEventMgr.cpp:1038-1063; classic-db has one row, on the script-started
+  Scourge Invasion event 17): read and indexed (`GameEventRows.Mails`), not delivered. There is no system-mail sender or MailTemplate content in this tree
+  (it needs the economy lane); nothing is stubbed.
+- **Darkmoon Faire schedules** (`schedule_type` 2-10, computed): rejected loudly (event disabled, issue line), not implemented: classic-db has no row that uses them.
+- **Hardcoded vmangos events** (`HardcodedEvents.cpp`: elemental invasion, nightmare dragons, Darkmoon, goblets, Scourge invasion, AQ war effort):
+  only the seam exists (`IWorldEventHandler`, with `hardcoded` / `disabled` handling in the service); the handlers are bespoke C++ and are another lane's.
+- **Weekly recompute**: mangos-classic recomputes computed schedules at the weekly reset (World.cpp:2337); ArcaneCore has no weekly reset, so they are
+  recomputed when the local calendar day changes. There is no `ScheduleRecompute` option because `WeeklyReset` could not work.
+- **Pooled event gameobjects** (410 rows in classic-db): no pool primitive; they spawn together instead of one per pool (see "Event spawns").
+- **Event creature spells and equipment**, **event mails**, **`.npc info` / `.gobject info` event lines**: see above.
+- **A second quest-template reload** and **a manual `.event start/stop` surviving `.reload game_event`**: see above.
+- **Provider coverage**: the new world and characters stores were only exercised on SQLite on this machine (no MariaDB or PostgreSQL server). The provider
+  theories (`TestDatabases.AvailableProviders`) are written against real provider semantics (non-transactional MariaDB DDL: re-runnable steps;
+  PostgreSQL lower-case folding: lower snake case names; Npgsql pooling: no advisory locks) and run on hosted CI.
+
+## Verification notes
+
+- Lunar new year: every year 2000-2040 equals the real Chinese new year (including 2015, where the mangos-classic approximation is a month early, and 2033-34 with
+  its leap eleventh month). New moons are checked against published times to within ten minutes.
+- Easter 2006-2099 equals the true Easter (independent algorithm); the Gauss port is one day off in 2100, pinned.
+- Every behaviour that was changed or added has a test that failed without it (checked by removing the change for the weather tick, the CLI import, the
+  event link rule, the spawn gate and the creature-data hook).
+- Timing: nothing in this lane waits on a duration. Schedules run on a settable clock and `RunTick(diff)`; the end-to-end tests wait on conditions with a
+  10 second deadline and were run repeatedly (the feature, spawn and reload classes six times each).
 
 ## Provenance and citations
 
