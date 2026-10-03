@@ -2,8 +2,11 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Commands;
 
@@ -14,15 +17,24 @@ public delegate bool CommandHandler(CommandContext context, string args);
 /// One chat command or command group (vmangos/cmangos ChatCommand): the minimum account
 /// security that can see and use it, help text, and either a handler, sub-commands, or both
 /// (the handler then serves arguments that name no sub-command, like ".gm on").
+/// <para>
+/// <paramref name="RetailLevel"/> is the vmangos account level (0-7, Common.h:136-146) the command
+/// needs; when null the level of <paramref name="Security"/> under <see cref="GmOptions.SecurityMap"/>
+/// is used, so a command declared only with an <see cref="AccountSecurity"/> behaves as before.
+/// </para>
 /// </summary>
 public sealed record ChatCommand(
     string Name,
     AccountSecurity Security,
     string Help,
     CommandHandler? Handler = null,
-    IReadOnlyList<ChatCommand>? Children = null)
+    IReadOnlyList<ChatCommand>? Children = null,
+    byte? RetailLevel = null)
 {
     public IReadOnlyList<ChatCommand> SubCommands => Children ?? [];
+
+    /// <summary>The retail account level needed to run this command.</summary>
+    public int RequiredLevel(GmOptions options) => RetailLevel ?? options.LevelOf(Security);
 }
 
 /// <summary>The invoker of a chat command (world thread).</summary>
@@ -55,13 +67,14 @@ public sealed class CommandContext(WorldSession session, Player player, CommandT
         => Player.Selection.IsEmpty ? Player : World.FindOnlinePlayer(Player.Selection);
 
     /// <summary>
-    /// Whether the invoker may act on <paramref name="target"/>: always on itself, otherwise
-    /// only on accounts of equal or lower security. (cmangos/vmangos allow staff to act on
-    /// higher accounts unless GM.LowerSecurity is set; ArcaneCore always applies the check.)
+    /// Whether the invoker may act on <paramref name="target"/>: always on itself, otherwise the
+    /// vmangos HasLowerSecurity rule (<see cref="GmSecurity.HasLowerSecurity"/>); <paramref name="strong"/>
+    /// also refuses accounts of equal security (mute/unmute). <see cref="GmOptions.LowerSecurity"/>
+    /// defaults to on, stricter than the vmangos default (see docs/integration/gm-commands.md).
     /// </summary>
-    public bool CanActOn(Player target)
+    public bool CanActOn(Player target, bool strong = false)
     {
-        if (ReferenceEquals(target, Player) || Security >= target.Security)
+        if (ReferenceEquals(target, Player) || !GmSecurity.HasLowerSecurity(Security, target.Security, strong, Commands.Gm))
         {
             return true;
         }
@@ -77,9 +90,12 @@ public sealed class CommandContext(WorldSession session, Player player, CommandT
 /// match by exact name first, then by abbreviation in table order (vmangos FindCommand /
 /// hasStringAbbr); commands above the invoker's security behave as if they did not exist.
 /// </summary>
-public sealed class CommandTable(IReadOnlyList<ChatCommand> roots)
+public sealed class CommandTable(IReadOnlyList<ChatCommand> roots, GmOptions? gm = null)
 {
     public IReadOnlyList<ChatCommand> Roots { get; } = roots;
+
+    /// <summary>The <c>World:GmCommands</c> options (retail defaults when none were bound).</summary>
+    public GmOptions Gm { get; } = gm ?? new GmOptions();
 
     /// <summary>
     /// Whether <paramref name="message"/> is command syntax, and the command text without its
@@ -134,6 +150,14 @@ public sealed class CommandTable(IReadOnlyList<ChatCommand> roots)
             return;
         }
 
+        if (GmCommandLog.ShouldLog(current, Gm))
+        {
+            Player invoker = context.Player;
+            string selection = invoker.Selection.IsEmpty ? "none" : invoker.Selection.ToString();
+            ILogger log = context.Session.Services.GetService<ILoggerFactory>()?.CreateLogger(GmCommandLog.Category) ?? context.Session.Logger;
+            log.LogInformation("{Line}", GmCommandLog.Describe(rest.Length == 0 ? path : $"{path} {rest}", context.Session.AccountId, invoker.Name, invoker.MapId, invoker.X, invoker.Y, invoker.Z, selection));
+        }
+
         if (!current.Handler(context, rest))
         {
             context.Reply($"Incorrect syntax. .{path}: {current.Help}");
@@ -160,15 +184,19 @@ public sealed class CommandTable(IReadOnlyList<ChatCommand> roots)
     }
 
     /// <summary>Comma-separated names of the commands in <paramref name="commands"/> visible to <paramref name="security"/>.</summary>
-    public static string ListNames(IEnumerable<ChatCommand> commands, AccountSecurity security)
-        => string.Join(", ", commands.Where(c => c.Security <= security).Select(c => c.Name));
+    public string ListNames(IEnumerable<ChatCommand> commands, AccountSecurity security)
+        => string.Join(", ", commands.Where(c => IsAvailable(c, security)).Select(c => c.Name));
 
-    private static ChatCommand? Find(IReadOnlyList<ChatCommand> level, string word, AccountSecurity security)
+    /// <summary>Whether an account of <paramref name="security"/> reaches <paramref name="command"/> (retail level compare).</summary>
+    public bool IsAvailable(ChatCommand command, AccountSecurity security)
+        => Gm.LevelOf(security) >= command.RequiredLevel(Gm);
+
+    private ChatCommand? Find(IReadOnlyList<ChatCommand> level, string word, AccountSecurity security)
     {
         ChatCommand? abbreviation = null;
         foreach (ChatCommand command in level)
         {
-            if (command.Security > security)
+            if (!IsAvailable(command, security))
             {
                 continue;
             }

@@ -60,9 +60,9 @@ public static class BuiltinCommands
         }
 
         context.Reply(command.Help);
-        if (command.SubCommands.Any(c => c.Security <= context.Security))
+        if (command.SubCommands.Any(c => context.Commands.IsAvailable(c, context.Security)))
         {
-            context.Reply($"Subcommands: {CommandTable.ListNames(command.SubCommands, context.Security)}");
+            context.Reply($"Subcommands: {context.Commands.ListNames(command.SubCommands, context.Security)}");
         }
 
         return true;
@@ -70,7 +70,7 @@ public static class BuiltinCommands
 
     private static bool ListCommands(CommandContext context, string args)
     {
-        context.Reply($"Commands available to you: {CommandTable.ListNames(context.Commands.Roots, context.Security)}");
+        context.Reply($"Commands available to you: {context.Commands.ListNames(context.Commands.Roots, context.Security)}");
         return true;
     }
 

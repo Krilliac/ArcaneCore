@@ -42,7 +42,7 @@ public static class WorldServiceCollectionExtensions
         services.Configure<WorldSessionOptions>(configuration.GetSection(WorldOptions.SectionName));
 
         services.AddSingleton(_ => BuildOpcodeTable());
-        services.AddSingleton(_ => ChatCommands.CreateTable());
+        services.AddSingleton(_ => ChatCommands.CreateTable(configuration));
         services.AddWorldFeatures();
         services.AddSingleton<CharacterDirectory>();
         services.AddSingleton<CharacterDeletionReconciler>();
