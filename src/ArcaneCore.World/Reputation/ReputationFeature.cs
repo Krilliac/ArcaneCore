@@ -262,6 +262,7 @@ public sealed partial class ReputationFeature(IServiceProvider services, IServic
             {
                 PeaceForcedUsesEffectiveStanding = Options.PeaceForcedUsesEffectiveStanding,
                 SpilloverEnabled = Options.SpilloverEnabled,
+                SendForcedReactions = Options.SendForcedReactions,
                 Content = content,
             };
         }

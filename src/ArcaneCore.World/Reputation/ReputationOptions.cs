@@ -32,4 +32,11 @@ public sealed class ReputationOptions
     /// forced reactions; Object.cpp:3608-3816). False keeps the template-only hooks. Needs Faction.dbc and FactionTemplate.dbc.
     /// </summary>
     public bool CombatReactions { get; set; } = true;
+
+    /// <summary>
+    /// Send SMSG_SET_FORCED_REACTIONS when a forced-reaction aura applies or fades (default false). The layout is vmangos (u32 faction, u32 rank);
+    /// gtker/wow_messages types the faction as a u16, so the width is unconfirmed by a real client. The forced reaction itself works
+    /// on the server either way; only the client display of it needs the packet.
+    /// </summary>
+    public bool SendForcedReactions { get; set; }
 }

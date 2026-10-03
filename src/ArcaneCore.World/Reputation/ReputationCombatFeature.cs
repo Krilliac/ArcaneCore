@@ -33,6 +33,9 @@ public sealed class ReputationCombatFeature(IServiceProvider services, ILogger<R
     private volatile ICreatureHostility? _hostility;
     private ICreatureHostility? _fallback;
 
+    /// <summary>The reaction resolver of the installed rules, or null while inactive (shared with the spell handlers).</summary>
+    public ReputationReactionResolver? Resolver { get; private set; }
+
     /// <summary>Whether the reputation combat rules are installed.</summary>
     public bool IsActive => _hostility is not null;
 
@@ -68,6 +71,7 @@ public sealed class ReputationCombatFeature(IServiceProvider services, ILogger<R
         }
 
         var resolver = new ReputationReactionResolver(templates, service.Factions, service.For, (a, b) => SameRaid(a, b));
+        Resolver = resolver;
         _fallback = new FactionCreatureHostility(templates);
         _hostility = new ReputationCreatureHostility(_fallback, resolver);
 
