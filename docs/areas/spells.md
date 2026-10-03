@@ -81,6 +81,15 @@ When a server and the docs disagree, the server wins and the conflict is listed 
    - Use `.learn <id>` and `.cast <id>` as a GM.
    - Apply a damage-over-time spell and check the aura icon, its timer and the ticks.
 
+## Death
+
+`SpellFeature` subscribes `MapCombat.UnitKilled` and calls `SpellSystem.OnUnitDied`, which removes every
+non-passive aura of the dead unit (through the normal removal path, so stun/root handlers, aura slots and
+area children are cleaned up). A dead player keeps the root `MapCombat` set on JUST_DIED. Cooldowns, the
+cast in progress and passive auras are untouched, so a death-then-logout save holds no auras. Not done:
+a death-persistent aura exemption (ghost, resurrection sickness) and cancelling the cast in progress. The
+vmangos `RemoveAllAurasOnDeath` rule was not checked against a reference clone (none was available).
+
 ## What's left
 
 - Area, chain and AoE target selection, and TargetB-based unit selection.
