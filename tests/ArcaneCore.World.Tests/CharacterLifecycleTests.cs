@@ -77,9 +77,11 @@ public sealed class CharacterLifecycleTests
         await using WorldTestClient client = await host.ConnectAsync();
         await client.AuthenticateAsync(Account, key);
 
-        // The in-memory world data only allows human warrior; orc mage is invalid.
+        // The in-memory world data only allows human and orc warriors. Orc mage is a valid race and a valid class
+        // without a start row: vmangos Player::Create fails (Player.cpp:408-413) and answers CHAR_CREATE_ERROR;
+        // only an unknown race or class is CHAR_CREATE_FAILED (CharacterHandler.cpp:218-228).
         await client.SendAsync(WorldOpcode.CmsgCharCreate, BuildCreate("Badcombo", race: 2, cls: 8, gender: 0));
-        Assert.Equal((byte)CharResult.CharCreateFailed, (await client.ReadAsync()).Payload[0]);
+        Assert.Equal((byte)CharResult.CharCreateError, (await client.ReadAsync()).Payload[0]);
     }
 
     [Fact]

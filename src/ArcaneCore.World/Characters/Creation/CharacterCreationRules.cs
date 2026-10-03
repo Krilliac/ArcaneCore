@@ -58,9 +58,10 @@ public static class CharacterCreationRules
         ArgumentNullException.ThrowIfNull(facts);
 
         bool staff = security > AccountSecurity.Player;
+        bool legacy = options.Mode == CharacterCreationMode.Legacy;
 
         // 1. CharactersCreatingDisabled: bit 0 Alliance, bit 1 Horde, ordinary players only.
-        if (!staff && options.CharactersCreatingDisabled != 0)
+        if (!legacy && !staff && options.CharactersCreatingDisabled != 0)
         {
             uint bit = RaceClassRules.TeamForRace(request.Race) == ArcaneCore.Game.Entities.Team.Alliance ? 1u : 2u;
             if ((options.CharactersCreatingDisabled & bit) != 0)
@@ -70,12 +71,20 @@ public static class CharacterCreationRules
         }
 
         // 2-3. Race and class rows; a race flagged NOT_PLAYABLE answers DISABLED.
-        if (!RaceClassRules.RaceExists(request.Race) || !RaceClassRules.ClassExists(request.Class))
+        if (legacy)
+        {
+            // Earlier builds: valid means "a start row exists for the pair".
+            if (!await facts.HasStartInfoAsync(request.Race, request.Class).ConfigureAwait(false))
+            {
+                return Refuse(CharResult.CharCreateFailed);
+            }
+        }
+        else if (!RaceClassRules.RaceExists(request.Race) || !RaceClassRules.ClassExists(request.Class))
         {
             return Refuse(CharResult.CharCreateFailed);
         }
 
-        if (!RaceClassRules.IsPlayableRace(request.Race))
+        if (!legacy && !RaceClassRules.IsPlayableRace(request.Race))
         {
             return Refuse(CharResult.CharCreateDisabled);
         }
@@ -99,14 +108,14 @@ public static class CharacterCreationRules
         }
 
         // 9. Characters per realm, clamped to 1..10 (World.cpp:633).
-        if (await facts.CountOnRealmAsync().ConfigureAwait(false) >= CharacterCreationOptions.EffectiveCharactersPerRealm(charactersPerRealm))
+        if (await facts.CountOnRealmAsync().ConfigureAwait(false) >= (legacy ? charactersPerRealm : CharacterCreationOptions.EffectiveCharactersPerRealm(charactersPerRealm)))
         {
             return Refuse(CharResult.CharCreateServerLimit);
         }
 
         // 10. PvP realm, one faction per account. Faithful to vmangos: only the account's first
         // character is compared, and a first character of race 0 always violates (:296-304).
-        bool allowTwoSide = !options.IsPvPRealm || options.AllowTwoSideAccounts || staff;
+        bool allowTwoSide = legacy || !options.IsPvPRealm || options.AllowTwoSideAccounts || staff;
         if (!allowTwoSide && await facts.FirstCharacterRaceAsync().ConfigureAwait(false) is { } firstRace
             && (firstRace == 0 || RaceClassRules.TeamForRace(firstRace) != RaceClassRules.TeamForRace(request.Race)))
         {
