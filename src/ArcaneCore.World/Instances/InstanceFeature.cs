@@ -58,6 +58,13 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
     /// <summary>Wait until every queued write has been attempted (tests).</summary>
     public Task FlushAsync() => _writes?.FlushAsync() ?? Task.CompletedTask;
 
+    /// <summary>The number of instance writes queued so far (world thread: read it when an operation starts).</summary>
+    public long WriteWatermark => _writes?.Enqueued ?? 0;
+
+    /// <summary>Wait until the writes counted by <paramref name="watermark"/> were attempted (for example a queued <c>InstanceSaved</c>).</summary>
+    public Task WaitForWritesAsync(long watermark, CancellationToken cancellationToken)
+        => _writes?.WaitForAsync(watermark, cancellationToken) ?? Task.CompletedTask;
+
     public void Attach(WorldRuntime world)
     {
         _world = world;

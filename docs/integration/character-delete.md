@@ -30,6 +30,14 @@ how its rows are deleted. Rows of other characters that point at the deleted one
 in the same method (as social does for `character_social.OtherId`). Mail should return or
 delete letters, and auctions should be cancelled, in that module's own cleanup.
 
+`LootStateDataModule` (durable chest loot of dungeon instances) deliberately **keeps** the rows that name the
+character (`loot_state_player`, `loot_state.loot_owner`): an empty recipient list means "anyone may loot", so
+deleting the only recipient would open the chest to everyone and could un-loot per-player stacks. The marks stay
+as inert history, and the live loot cache is never keyed by character, so nothing in it goes stale. A pending loot
+operation of the character is drained first (`GameObjectLootFeature` is an `ICharacterSettlementBarrier`,
+awaited by the delete flow). Limit: where an engine reuses the highest character id, a later character with that
+id would appear in those marks. If that must be removed, replace the id with a reserved tombstone id instead of deleting.
+
 ## Order (vmangos `WorldSession::HandleCharDeleteOpcode` → `Player::DeleteFromDB`)
 
 1. Refuse: invalid GUID, character not owned by the account, character in the world.

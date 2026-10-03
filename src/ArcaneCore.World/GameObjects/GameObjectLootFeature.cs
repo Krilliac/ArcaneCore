@@ -8,13 +8,18 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.Loot;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
+using ArcaneCore.World.Characters;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Instances;
 using ArcaneCore.World.Items;
 using ArcaneCore.World.Npc;
+using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Social;
+using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -28,9 +33,12 @@ namespace ArcaneCore.World.GameObjects;
 /// Quest checks go through the quest feature, groups through the social feature and item
 /// templates through the items feature; each is optional (absent → no quest drops, solo loot,
 /// no items).
+/// <para>Chests of dungeon instances keep their consumed and remaining loot with the logical instance
+/// save through <see cref="ILootStateStore"/> and <see cref="LootSettlements"/> (docs/integration/gameobjects-loot.md);
+/// without a store they stay refused.</para>
 /// <para>Options come from the <c>Loot</c> configuration section (<see cref="LootOptions"/>).</para>
 /// </summary>
-public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<GameObjectLootFeature> logger) : IWorldFeature
+public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<GameObjectLootFeature> logger) : IWorldFeature, ICharacterSettlementBarrier
 {
     public const string SectionName = "Loot";
 
@@ -38,6 +46,10 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
     private GameObjectContent _content = GameObjectContent.Empty;
     private LootContent _lootContent = LootContent.Empty;
     private WorldRuntime? _world;
+    private LootSettlements? _settlements;
+
+    /// <summary>Durable chest loot of dungeon instances, or null when no <see cref="ILootStateStore"/> is registered.</summary>
+    public LootSettlements? Settlements => _settlements;
 
     /// <summary>The loaded game object content (immutable; safe to read from any thread).</summary>
     public GameObjectContent Content => Volatile.Read(ref _content);
@@ -66,6 +78,14 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             {
                 loot = lootStore.LoadAsync().GetAwaiter().GetResult();
             }
+
+            // Fail closed like the content stores: stored chests must be known (and orphans purged)
+            // before the instance system loads, or a reused instance id could inherit old state.
+            if (scope.ServiceProvider.GetService<ILootStateStore>() is { } stateStore)
+            {
+                _settlements = new LootSettlements(services.GetRequiredService<IServiceScopeFactory>(), logger);
+                _settlements.Load(stateStore.LoadInstanceStatesAsync().GetAwaiter().GetResult());
+            }
         }
 
         Volatile.Write(ref _content, content);
@@ -85,6 +105,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;
         world.PlayerLoggingOut += OnPlayerLoggingOut;
+        InstallDurableLoot(world);
         foreach (Map map in world.Maps.ToArray())
         {
             OnMapCreated(map);
@@ -95,6 +116,37 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             GetOrCreateSystem(mapId);
         }
     }
+
+    /// <summary>
+    /// Wire the durable chest loot to the instance system. This runs in the install post, which
+    /// precedes the post that loads the instance saves (features attach in type-name order, and
+    /// this one first), so the startup drops of unbound saves reach <c>InstanceDeleted</c>.
+    /// </summary>
+    private void InstallDurableLoot(WorldRuntime world)
+    {
+        if (_settlements is not { } settlements)
+        {
+            return;
+        }
+
+        InstanceFeature? instances = services.GetService<InstanceFeature>();
+        Game.Instances.InstanceManager? manager = instances?.Instances;
+        settlements.Attach(world, services.GetService<CharacterSaveQueue>(), services.GetService<TeleportFeature>(),
+            id => manager?.FindSave(id) is { IsDeleted: false },
+            () => instances?.WriteWatermark ?? 0,
+            (watermark, token) => instances?.WaitForWritesAsync(watermark, token) ?? Task.CompletedTask);
+        if (manager is not null)
+        {
+            manager.InstanceDeleted += settlements.OnInstanceDeleted;
+        }
+    }
+
+    /// <summary>Login and character deletion wait for an in-flight chest operation of the character.</summary>
+    public Task WaitForSettlementAsync(int characterId, CancellationToken cancellationToken = default)
+        => _settlements?.WaitForCharacterAsync(characterId, cancellationToken) ?? Task.CompletedTask;
+
+    /// <summary>Cancel in-flight chest operations and finalize them without world publication.</summary>
+    public Task StopAsync() => _settlements?.StopAsync() ?? Task.CompletedTask;
 
     private void OnMapCreated(Map map)
     {
@@ -109,6 +161,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             Quests = Quests,
             Groups = new SocialGroups(services),
             CreatureOptions = services.GetService<CreatureWorldFeature>()?.Options ?? new CreatureOptions(),
+            Durable = _settlements,
         };
         var system = new GameObjectMapSystem(map, Content, loot, Quests, logger);
         map.AddUpdater(system);

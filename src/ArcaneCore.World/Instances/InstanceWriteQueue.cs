@@ -19,6 +19,8 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private Task? _consumer;
     private int _pending;
+    private long _enqueued;
+    private long _attempted;
 
     /// <summary>Writes queued or in progress.</summary>
     public int Pending => Volatile.Read(ref _pending);
@@ -46,6 +48,22 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
     /// <summary>Delete a character's binds and last instance (queued by the character delete hook).</summary>
     public void CharacterDeleted(int characterId) => Enqueue(store => store.DeleteCharacterAsync(characterId));
 
+    /// <summary>The number of writes queued so far: a watermark for <see cref="WaitForAsync"/>.</summary>
+    public long Enqueued => Interlocked.Read(ref _enqueued);
+
+    /// <summary>
+    /// Wait until the first <paramref name="watermark"/> writes (<see cref="Enqueued"/> read earlier)
+    /// have been attempted, whatever is queued after them. Unlike <see cref="FlushAsync"/> a steady
+    /// stream of later writes cannot starve it, and it honours cancellation.
+    /// </summary>
+    public async Task WaitForAsync(long watermark, CancellationToken cancellationToken)
+    {
+        while (Interlocked.Read(ref _attempted) < watermark)
+        {
+            await Task.Delay(5, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     /// <summary>Wait until every write queued so far has been attempted (tests).</summary>
     public async Task FlushAsync()
     {
@@ -68,9 +86,11 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
     private void Enqueue(Func<IInstanceStore, Task> write)
     {
         Interlocked.Increment(ref _pending);
+        Interlocked.Increment(ref _enqueued);
         if (!_channel.Writer.TryWrite(write))
         {
             Interlocked.Decrement(ref _pending);
+            Interlocked.Decrement(ref _enqueued);
             logger.LogError("instance write queue closed; write lost");
         }
     }
@@ -102,6 +122,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 }
             }
 
+            Interlocked.Increment(ref _attempted);
             Interlocked.Decrement(ref _pending);
         }
     }

@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Loot;
 using ArcaneCore.Kernel.Instances;
 using Microsoft.EntityFrameworkCore;
 
@@ -54,6 +55,12 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<CharacterInstanceRow>().Where(b => b.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<CharacterLastInstanceRow>().Where(l => l.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+
+        // Consumed/remaining chest loot lives and dies with its logical instance save. This is
+        // hygiene; the startup purge in EfLootStateStore is what guards a reused instance id.
+        await db.Set<LootStatePlayerRow>().Where(r => r.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<LootStateItemRow>().Where(r => r.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<LootStateRow>().Where(r => r.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<InstanceRow>().Where(i => i.Id == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }

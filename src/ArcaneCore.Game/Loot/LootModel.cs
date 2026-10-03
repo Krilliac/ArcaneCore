@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Loot;
 
 namespace ArcaneCore.Game.Loot;
 
@@ -119,6 +120,109 @@ public sealed class LootBag
 
     /// <summary>Set once the source was released with nothing left (no more reopen).</summary>
     public bool IsClosed { get; internal set; }
+
+    /// <summary>
+    /// The durable key of an instance chest's bag (see <see cref="ILootStateCoordinator"/>), or null
+    /// for loot that only lives in memory (corpses, shared-copy chests).
+    /// </summary>
+    internal LootStateKey? DurableKey { get; set; }
+
+    /// <summary>
+    /// The durable record of this chest: the generation, who may take what and what was taken.
+    /// Chest loot holds no money (<c>mingold</c> is not imported), so a bag with gold cannot be stored.
+    /// </summary>
+    internal LootStateRecord ToRecord(LootStateKey key, uint sourceEntry, uint generation, long respawnAtUnix)
+    {
+        if (Gold != 0)
+        {
+            throw new InvalidOperationException("chest loot with money cannot be stored");
+        }
+
+        bool consumed = IsEmpty;
+        return new LootStateRecord(key, sourceEntry, CharacterIdOf(Owner), generation, consumed, consumed ? respawnAtUnix : 0,
+            [.. Recipients.Select(CharacterIdOf).Order()],
+            [.. _items.Select(i => new LootStateItem(i.Slot, i.ItemId, i.Count, i.IsQuestItem, i.IsPerPlayer, i.IsLooted,
+                [.. i.AllowedLooters.Select(CharacterIdOf).Order()], [.. i.LootedBy.Select(CharacterIdOf).Order()]))]);
+    }
+
+    /// <summary>
+    /// A bag rebuilt from its durable record. The client display ids come from the item
+    /// templates; null when a template is missing (the chest is then refused rather than shown
+    /// with wrong items).
+    /// </summary>
+    internal static LootBag? FromRecord(ObjectGuid source, LootType type, LootStateRecord record, Func<uint, uint?> displayIdOf)
+    {
+        var bag = new LootBag(source, LootSourceKind.GameObject, type) { DurableKey = record.Key };
+        foreach (int id in record.Recipients)
+        {
+            bag.Recipients.Add(GuidOf(id));
+        }
+
+        bag.Owner = record.LootOwnerCharacterId == 0 ? default : GuidOf(record.LootOwnerCharacterId);
+        foreach (LootStateItem stored in record.Items)
+        {
+            if (displayIdOf(stored.ItemId) is not { } display)
+            {
+                return null;
+            }
+
+            var item = new LootItem(stored.Slot, stored.ItemId, stored.Count, stored.IsQuest, stored.IsPerPlayer, display)
+            {
+                IsLooted = stored.IsLooted,
+            };
+            foreach (int id in stored.AllowedLooters)
+            {
+                item.AllowedLooters.Add(GuidOf(id));
+            }
+
+            foreach (int id in stored.LootedBy)
+            {
+                item.LootedBy.Add(GuidOf(id));
+            }
+
+            bag.Add(item);
+        }
+
+        return bag;
+    }
+
+    /// <summary>
+    /// Bring the live bag in line with a committed record of the same generation: taken stacks and
+    /// who took them, and the recipients (a late opener that is not stored yet stays). The
+    /// round-robin owner can only be cleared (released), never set again.
+    /// </summary>
+    internal void ApplyRecord(LootStateRecord record)
+    {
+        foreach (LootStateItem stored in record.Items)
+        {
+            if (FindSlot(stored.Slot) is not { } item)
+            {
+                continue;
+            }
+
+            item.IsLooted = stored.IsLooted;
+            foreach (int id in stored.LootedBy)
+            {
+                item.LootedBy.Add(GuidOf(id));
+            }
+        }
+
+        foreach (int id in record.Recipients)
+        {
+            Recipients.Add(GuidOf(id));
+        }
+
+        // A release since the operation began stays released: the owner is only ever cleared here.
+        if (record.LootOwnerCharacterId == 0)
+        {
+            Owner = default;
+        }
+    }
+
+    /// <summary>The character id the characters database uses for a player (the GUID counter).</summary>
+    internal static int CharacterIdOf(ObjectGuid guid) => guid.IsEmpty ? 0 : checked((int)guid.Low);
+
+    internal static ObjectGuid GuidOf(int characterId) => ObjectGuid.Player(checked((uint)characterId));
 
     internal void Add(LootItem item) => _items.Add(item);
 
