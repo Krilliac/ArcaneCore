@@ -177,6 +177,27 @@ public sealed partial class SpellSystem
     {
         ArgumentNullException.ThrowIfNull(unit);
         ArgumentNullException.ThrowIfNull(auras);
+        bool outer = IsRestoringAuras;
+        IsRestoringAuras = true;
+        try
+        {
+            return RestoreAurasCore(unit, auras, nowUnixMs);
+        }
+        finally
+        {
+            IsRestoringAuras = outer;
+        }
+    }
+
+    /// <summary>
+    /// True while <see cref="RestoreAuras"/> applies saved auras (login). Aura handlers that reset a power when they apply
+    /// (the form handler: energy 0, rage cut) read it and leave the powers alone: vmangos restores the saved health and
+    /// powers after the auras are loaded (Player.cpp:15057-15070), so the reset has no lasting effect there.
+    /// </summary>
+    public bool IsRestoringAuras { get; private set; }
+
+    private IReadOnlyList<SpellAuraHolder> RestoreAurasCore(Unit unit, IEnumerable<PersistedAura> auras, long nowUnixMs)
+    {
         var restored = new List<SpellAuraHolder>();
         foreach (PersistedAura saved in auras)
         {

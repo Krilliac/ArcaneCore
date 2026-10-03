@@ -207,7 +207,14 @@ public sealed class ShapeshiftService
             }
         }
 
-        SwitchPower(target, form);
+        if (_spells.IsRestoringAuras)
+        {
+            KeepPowersAtRestore(target, form);
+        }
+        else
+        {
+            SwitchPower(target, form);
+        }
 
         byte oldForm = (byte)GetForm(target);
         SetForm(target, form);
@@ -366,6 +373,29 @@ public sealed class ShapeshiftService
 
                 break;
         }
+    }
+
+    /// <summary>
+    /// A form restored at login: the unit takes the form's power type with its maximum, but keeps the powers it was loaded
+    /// with and rolls no Furor (vmangos restores the saved powers after the auras, Player.cpp:15057-15070, which overwrites
+    /// what the power switch and a Furor proc did).
+    /// </summary>
+    private static void KeepPowersAtRestore(Unit target, ShapeshiftForm form)
+    {
+        PowerType power = form switch
+        {
+            ShapeshiftForm.Cat => PowerType.Energy,
+            ShapeshiftForm.Bear or ShapeshiftForm.DireBear => PowerType.Rage,
+            ShapeshiftForm.BattleStance or ShapeshiftForm.DefensiveStance or ShapeshiftForm.BerserkerStance => PowerType.Rage,
+            _ => PowerType.Mana,
+        };
+        if (power == PowerType.Mana)
+        {
+            return;
+        }
+
+        PowerTypeSwitch.EnsureFeralPowerCaps(target);
+        target.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)power);
     }
 
     /// <summary>Furor (SpellAuras.cpp:2512-2548): the dummy aura of icon 238 holds the chance in percent; irand(1, 100) at or below it casts the proc spell.</summary>
