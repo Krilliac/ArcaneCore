@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Characters;
 
 namespace ArcaneCore.World.Packets;
 
@@ -18,7 +19,7 @@ public static class CharacterPackets
     private const uint Level1NextLevelXp = 400;
 
     /// <summary>SMSG_CHAR_ENUM: count followed by one block per character.</summary>
-    public static byte[] BuildCharEnum(IReadOnlyList<CharacterRecord> characters)
+    public static byte[] BuildCharEnum(IReadOnlyList<CharacterRecord> characters, IReadOnlyDictionary<int, CharEnumItem[]>? equipment = null)
     {
         var writer = new PacketWriter(64 + (characters.Count * 200));
         writer.WriteByte((byte)characters.Count);
@@ -48,10 +49,12 @@ public static class CharacterPackets
             writer.WriteUInt32(0); // pet level
             writer.WriteUInt32(0); // pet family
 
+            CharEnumItem[]? items = equipment?.GetValueOrDefault(c.Id);
             for (int slot = 0; slot < EquipmentSlots; slot++)
             {
-                writer.WriteUInt32(0); // item display info id
-                writer.WriteByte(0);   // inventory type
+                CharEnumItem item = items is not null && slot < items.Length ? items[slot] : default;
+                writer.WriteUInt32(item.DisplayId); // item display info id
+                writer.WriteByte(item.InventoryType);
             }
         }
 
