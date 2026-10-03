@@ -52,7 +52,7 @@ No edits to `WorldServiceCollectionExtensions.cs`, `ChatHandlers.cs`, `Character
 
 ## Public API for other areas
 
-- `WorldMaps.Of(world)`: `Registry` (map templates), `Terrain`, `Areas`, `Instances`,
+- `WorldMaps.Of(world)`: `Registry` (map templates), `Terrain`, `Areas` (instances: docs/integration/instances.md),
   `FindAreaTrigger`, `FindAreaTriggerTeleport`, `FindGameTele`.
 - `session.Services.GetRequiredService<TeleportFeature>().Teleports`: `TeleportTo`,
   `TeleportToHomebind`, `IsBeingTeleported(Near|Far)`, `StageOf`, `DestinationOf`.
