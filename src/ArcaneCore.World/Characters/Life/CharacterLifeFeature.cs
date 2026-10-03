@@ -66,6 +66,11 @@ public sealed class CharacterLifeFeature : IWorldFeature, ICharacterHooks, IDisp
         // Experience goes through the progression service so the next-level clamp has one owner.
         session.Services.GetRequiredService<ProgressionFeature>().Progression.InitializeLoadedPlayer(player, life.Xp);
         player.LoadedLife = PlayerLife.ApplyVitals(player, life);
+        if (PlayerLife.IsGhostWithBody(life))
+        {
+            // The body is put back on the world thread once the player is in its map (DeathFeature).
+            PlayerLife.ApplyGhostState(player);
+        }
     }
 
     private void OnPlayerLoggedIn(Player player)

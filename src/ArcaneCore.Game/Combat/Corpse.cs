@@ -46,23 +46,35 @@ public sealed class Corpse : WorldObject
     public static Corpse CreateFor(Player player, bool pvpDeath)
     {
         ArgumentNullException.ThrowIfNull(player);
+        return CreateAt(player, player.MapId, player.X, player.Y, player.Z, player.Orientation,
+            pvpDeath ? CorpseType.ResurrectablePvp : CorpseType.ResurrectablePve);
+    }
+
+    /// <summary>
+    /// The corpse of <paramref name="player"/> at an explicit place and of an explicit type: a body
+    /// that was left in the world by an earlier session (vmangos loads it from the corpse table,
+    /// Corpse::LoadCorpse); appearance comes from the owner like <see cref="CreateFor"/>.
+    /// </summary>
+    public static Corpse CreateAt(Player player, uint mapId, float x, float y, float z, float orientation, CorpseType type)
+    {
+        ArgumentNullException.ThrowIfNull(player);
 
         uint counter = (uint)Interlocked.Increment(ref s_nextCounter);
         var corpse = new Corpse(new ObjectGuid(((ulong)HighGuid.Corpse << 48) | counter))
         {
-            Type = pvpDeath ? CorpseType.ResurrectablePvp : CorpseType.ResurrectablePve,
-            MapId = player.MapId,
-            X = player.X,
-            Y = player.Y,
-            Z = player.Z,
-            Orientation = player.Orientation,
+            Type = type,
+            MapId = mapId,
+            X = x,
+            Y = y,
+            Z = z,
+            Orientation = orientation,
         };
 
         corpse.SetUInt64(UpdateFields.CorpseFieldOwner, player.Guid.Value);
-        corpse.SetFloat(UpdateFields.CorpseFieldFacing, player.Orientation);
-        corpse.SetFloat(UpdateFields.CorpseFieldPosX, player.X);
-        corpse.SetFloat(UpdateFields.CorpseFieldPosY, player.Y);
-        corpse.SetFloat(UpdateFields.CorpseFieldPosZ, player.Z);
+        corpse.SetFloat(UpdateFields.CorpseFieldFacing, orientation);
+        corpse.SetFloat(UpdateFields.CorpseFieldPosX, x);
+        corpse.SetFloat(UpdateFields.CorpseFieldPosY, y);
+        corpse.SetFloat(UpdateFields.CorpseFieldPosZ, z);
         corpse.SetUInt32(UpdateFields.CorpseFieldDisplayId, player.NativeDisplayId);
 
         byte skin = player.GetByte(UpdateFields.PlayerBytes, 0);

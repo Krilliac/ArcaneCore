@@ -129,6 +129,31 @@ public sealed class PlayerLifeTests
     }
 
     [Fact]
+    public void ApplyVitals_AGhostWithoutABody_IsResurrectedAtHalf()
+    {
+        Player player = NewPlayer();
+        var life = new CharacterLife(1, [0, 0, 0, 0, 0], 0, 0, true, null);
+
+        Assert.True(PlayerLife.HasNoBodyToReturnTo(life));
+        PlayerLife.ApplyVitals(player, life);
+
+        Assert.Equal(500u, player.Health);
+    }
+
+    [Fact]
+    public void ApplyVitals_AGhostWithABody_KeepsItsOneHealth()
+    {
+        Player player = NewPlayer();
+        var life = new CharacterLife(1, [0, 0, 0, 0, 0], 0, 0, true, new CorpseSnapshot(0, 1, 2, 3, 0, 5, 1));
+
+        Assert.False(PlayerLife.HasNoBodyToReturnTo(life));
+        Assert.True(PlayerLife.IsGhostWithBody(life));
+        PlayerLife.ApplyVitals(player, life);
+
+        Assert.Equal(1u, player.Health);
+    }
+
+    [Fact]
     public void Reapply_RaisesHealthAndPowerToTheStoredValuesOnceAurasRaisedTheMaximums()
     {
         Player player = NewPlayer();

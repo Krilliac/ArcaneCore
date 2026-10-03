@@ -63,7 +63,7 @@ public static class PlayerLife
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(life);
-        if (life.Health == 0 && !life.IsGhost)
+        if (HasNoBodyToReturnTo(life))
         {
             MapCombat.RestoreFraction(player, CombatConstants.CorpseReclaimRestorePercent);
         }
@@ -83,6 +83,41 @@ public static class PlayerLife
         }
 
         return new LoadedLife(life, player.Health, applied);
+    }
+
+    /// <summary>
+    /// Dead without being a ghost, or a ghost without a body: vmangos <c>Player::LoadCorpse</c>
+    /// resurrects both at half health ("Prevent Dead Player login without corpse", Player.cpp:15434-15439).
+    /// </summary>
+    public static bool HasNoBodyToReturnTo(CharacterLife life)
+    {
+        ArgumentNullException.ThrowIfNull(life);
+        return life.IsGhost ? life.Corpse is null : life.Health == 0;
+    }
+
+    /// <summary>
+    /// Whether the stored life is a ghost that goes back to its body at login (a ghost with a corpse).
+    /// </summary>
+    public static bool IsGhostWithBody(CharacterLife life)
+    {
+        ArgumentNullException.ThrowIfNull(life);
+        return life.IsGhost && life.Corpse is not null;
+    }
+
+    /// <summary>
+    /// The state of a released spirit that does not need a map: PLAYER_FLAGS_GHOST and the dead
+    /// state, so the create block it enters the world with already shows a ghost (vmangos gets
+    /// the same from the ghost aura, whose PLAYER_FLAGS_GHOST is applied during the aura load:
+    /// Player.cpp:14972-14975, SpellAuras.cpp:5639-5659). The body and the water walking (the
+    /// login relocates the player, which clears movement flags) are put back on the world thread
+    /// by <see cref="MapCombat.RestoreGhost"/>.
+    /// </summary>
+    public static void ApplyGhostState(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        player.Flags |= PlayerFlags.Ghost;
+        player.Combat.DeathState = DeathState.Dead;
+        player.Combat.DeathTimer = 0;
     }
 
     /// <summary>

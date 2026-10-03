@@ -1,4 +1,6 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Death;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.World.Features;
 using Microsoft.Extensions.Configuration;
@@ -12,7 +14,7 @@ namespace ArcaneCore.World.Death;
 /// (auto-discovered like every <see cref="IWorldFeature"/>). Later death slices extend this
 /// feature (login handling, ghost form, graveyards).
 /// </summary>
-public sealed class DeathFeature : IWorldFeature
+public sealed class DeathFeature : IWorldFeature, IDisposable
 {
     private readonly IServiceProvider _services;
     private readonly ILogger<DeathFeature> _logger;
@@ -43,5 +45,32 @@ public sealed class DeathFeature : IWorldFeature
         {
             _logger.LogWarning("Death hooks were already registered for this world; the {Section} options are not applied", DeathOptions.SectionName);
         }
+
+        world.PlayerLoggedIn += OnPlayerLoggedIn;
+    }
+
+    public void Dispose()
+    {
+        if (_world is { } world)
+        {
+            world.PlayerLoggedIn -= OnPlayerLoggedIn;
+        }
+    }
+
+    /// <summary>
+    /// A stored ghost has entered its map: put its body back and finish the ghost state
+    /// (vmangos Player::LoadCorpse from HandlePlayerLogin, CharacterHandler.cpp:636). A ghost whose
+    /// body is missing was already resurrected at half health when its vitals were applied.
+    /// The stored life stays on the player for <c>CharacterLifeFeature</c>, which clears it after
+    /// the login auras have been restored.
+    /// </summary>
+    private void OnPlayerLoggedIn(Player player)
+    {
+        if (player.LoadedLife is not { Stored: { } life } || !PlayerLife.IsGhostWithBody(life) || player.Map is not { } map)
+        {
+            return;
+        }
+
+        map.Combat.RestoreGhost(player, life.Corpse!);
     }
 }

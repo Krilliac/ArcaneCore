@@ -120,6 +120,88 @@ public sealed partial class MapCombat
     }
 
     /// <summary>
+    /// Put a logged-in ghost's body back (world thread, the player is in this map; vmangos
+    /// Player::LoadCorpse + Corpse loading). <paramref name="snapshot"/> is the stored body: the
+    /// corpse object is created at its place (in the map it was left in), the ghost time is the
+    /// stored Unix second, the ghost form is applied, the "release timer" byte flag is set on a
+    /// non-instanceable map (Player.cpp:15434), and the client is told what is left of the
+    /// reclaim delay (Player::SendCorpseReclaimDelay(load = true), Player.cpp:20228-20260). The
+    /// ghost's own state (flag, dead state, 1 health) is applied before it enters the map by
+    /// <see cref="Death.PlayerLife.ApplyGhostState"/>.
+    /// </summary>
+    public void RestoreGhost(Player player, Kernel.Characters.CorpseSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        UnitCombat c = player.Combat;
+        if ((player.Flags & PlayerFlags.Ghost) == 0 || c.DeathState != DeathState.Dead)
+        {
+            Death.PlayerLife.ApplyGhostState(player);
+        }
+
+        if (c.Corpse is { } old)
+        {
+            RemoveCorpse(old);
+        }
+
+        MapCombat corpseMap = snapshot.MapId == _map.MapId ? this : _world.GetMap(snapshot.MapId).Combat;
+        var type = (CorpseType)snapshot.Type;
+        Corpse corpse = Corpse.CreateAt(player, snapshot.MapId, snapshot.X, snapshot.Y, snapshot.Z, snapshot.Orientation,
+            type is CorpseType.ResurrectablePvp ? type : CorpseType.ResurrectablePve);
+        corpseMap.AddCorpse(corpse);
+        c.Corpse = corpse;
+        c.GhostTime = snapshot.GhostTimeUnix;
+        c.DeathTimer = 0;
+        c.PvpDeath = false;
+
+        if (!Hooks.IsInstanceable(snapshot.MapId))
+        {
+            player.SetByte(UpdateFields.PlayerFieldBytes, 0,
+                (byte)(player.GetByte(UpdateFields.PlayerFieldBytes, 0) | FieldByteReleaseTimer));
+        }
+
+        // The login relocation cleared the movement flags and the create block was built before
+        // this: the ghost walks on water from the client's side only once told so.
+        SendGhostMovement(player, ghost: true);
+        Hooks.ApplyGhostForm(player);
+        player.NeedsVisibilityUpdate = true;
+        SendCorpseReclaimDelayOnLoad(player);
+    }
+
+    /// <summary>
+    /// Player::SendCorpseReclaimDelay(load = true): the delay that remains of the one the stored
+    /// recent-death window implies, counted from the stored ghost time. Nothing is sent when the
+    /// ghost time is after the window or the delay is already over.
+    /// </summary>
+    private void SendCorpseReclaimDelayOnLoad(Player player)
+    {
+        UnitCombat c = player.Combat;
+        if (c.Corpse is not { } corpse || c.GhostTime > c.DeathExpireTime)
+        {
+            return;
+        }
+
+        uint count = 0;
+        if (ReclaimDelayScales(corpse.Type == CorpseType.ResurrectablePvp))
+        {
+            count = (uint)((c.DeathExpireTime - c.GhostTime) / CombatConstants.DeathExpireStepSeconds);
+            if (count >= CombatConstants.MaxDeathCount)
+            {
+                count = CombatConstants.MaxDeathCount - 1;
+            }
+        }
+
+        long expected = c.GhostTime + CombatConstants.CorpseReclaimDelaySeconds[(int)count];
+        long now = NowSeconds;
+        if (now >= expected)
+        {
+            return;
+        }
+
+        player.Session.Send(WorldOpcode.SmsgCorpseReclaimDelay, CombatPackets.CorpseReclaimDelay((uint)(expected - now) * 1000));
+    }
+
+    /// <summary>
     /// vmangos Player::ResurrectPlayer: ALIVE, ghost form removed, unrooted, health/mana/energy
     /// restored to <paramref name="restorePercent"/> and rage emptied (when &gt; 0).
     /// </summary>
@@ -183,9 +265,13 @@ public sealed partial class MapCombat
         }
 
         player.Flags = ghost ? player.Flags | PlayerFlags.Ghost : player.Flags & ~PlayerFlags.Ghost;
-        player.Session.Send(ghost ? WorldOpcode.SmsgMoveWaterWalk : WorldOpcode.SmsgMoveLandWalk,
-            CombatPackets.MovementFlagChange(player.Guid, player.NextMovementCounter()));
+        SendGhostMovement(player, ghost);
     }
+
+    /// <summary>SMSG_MOVE_WATER_WALK / SMSG_MOVE_LAND_WALK: the client starts or stops walking on water.</summary>
+    private static void SendGhostMovement(Player player, bool ghost)
+        => player.Session.Send(ghost ? WorldOpcode.SmsgMoveWaterWalk : WorldOpcode.SmsgMoveLandWalk,
+            CombatPackets.MovementFlagChange(player.Guid, player.NextMovementCounter()));
 
     /// <summary>
     /// vmangos Player::GetCorpseReclaimDelay: 30/60/120 s by deaths in the last 5-minute steps

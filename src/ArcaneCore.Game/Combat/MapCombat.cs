@@ -243,16 +243,27 @@ public sealed partial class MapCombat : IMapUpdater
 
     /// <summary>
     /// A player is leaving the world (logout or disconnect; vmangos WorldSession::LogoutPlayer →
-    /// CombatStop / RemoveFromWorld): stop its fights, drop it from every threat list and take
-    /// its corpse out of the map (corpses are not persisted yet).
+    /// CombatStop / RemoveFromWorld): stop its fights, drop it from every threat list, release a
+    /// spirit that logs out still waiting at its body ("If the player just died before logging
+    /// out, make him appear as a ghost": BuildPlayerRepop + RepopAtGraveyard,
+    /// WorldSession.cpp:694-701, taken when the death timer is running), and take the corpse out
+    /// of the map. The body is persisted with the character (the logout snapshot is captured
+    /// after this and reads <see cref="UnitCombat.Corpse"/>, which stays set for that reason) and
+    /// is put back by <see cref="RestoreGhost"/> at the next login; it is not kept in the world
+    /// while its owner is offline (docs/integration/death-persistence.md, limits).
     /// </summary>
     internal void OnPlayerLeaving(Player player)
     {
         DetachRelations(player);
-        if (player.Combat.Corpse is { } corpse)
+        UnitCombat c = player.Combat;
+        if (c.DeathTimer > 0 && !IsAliveState(player) && (player.Flags & PlayerFlags.Ghost) == 0)
+        {
+            RepopPlayer(player);
+        }
+
+        if (c.Corpse is { } corpse)
         {
             RemoveCorpse(corpse);
-            player.Combat.Corpse = null;
         }
     }
 

@@ -236,7 +236,8 @@ public sealed class IntegratedCreatureCombatTests
         Assert.Same(source, corpse.Map);
         Assert.Same(corpse, source.FindObject(corpse.Guid));
         world.RemovePlayer(player);
-        Assert.Null(player.Combat.Corpse);
+        // The reference stays so the logout snapshot can store the body (the object itself leaves the map).
+        Assert.Same(corpse, player.Combat.Corpse);
         Assert.Null(source.FindObject(corpse.Guid));
         Assert.Empty(source.Combat.Corpses);
     }
