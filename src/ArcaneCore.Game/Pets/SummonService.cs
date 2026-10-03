@@ -4,6 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.Pets;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -60,6 +61,9 @@ public sealed partial class SummonService : ISpellSummonSink
         _logger = logger ?? NullLogger.Instance;
         _random = random ?? new Random();
     }
+
+    /// <summary>The pet tables (<c>pet_levelstats</c>, <c>petcreateinfo_spell</c>); empty until the world loads them.</summary>
+    public PetContent Content { get; set; } = PetContent.Empty;
 
     /// <summary>The totem spell lookup (null: totems are visual only).</summary>
     public ITotemSpellSource? TotemSpells { get; set; }
@@ -301,11 +305,9 @@ public sealed partial class SummonService : ISpellSummonSink
             creature.SetUInt32(UpdateFields.UnitFieldPetexperience, 0);
             creature.SetUInt32(UpdateFields.UnitFieldPetnextlevelexp, 1000);
             creature.NpcFlags = 0;
-            creature.Level = caster.Level; // InitStatsForLevel(caster level); the stats themselves are the stats lane's
-            if ((caster.UnitFlags & UnitFlags.Pvp) != 0)
-            {
-                creature.UnitFlags |= UnitFlags.Pvp;
-            }
+
+            // Pet::InitStatsForLevel(caster level, caster): level, flags and the pet_levelstats stats
+            PetInitializer.InitStatsForLevel(creature, caster, caster.Level, Content);
 
             // vmangos passes -caster orientation for the pet (SpellEffects.cpp:2372).
             return new CreatureHome(req.X, req.Y, req.Z, Creature.NormalizeOrientation(-caster.Orientation));
@@ -314,6 +316,7 @@ public sealed partial class SummonService : ISpellSummonSink
         pets.Options = _options;
         pets.Register(pet, this);
         AttachPetAi(pet);
+        PetInitializer.InitCreateSpells(pet, Content, _spells);
         caster.SetPetGuid(pet.Guid);
 
         // Player::PetSpellInitialize (SpellEffects.cpp:2417-2420)

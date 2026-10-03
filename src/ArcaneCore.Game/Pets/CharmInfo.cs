@@ -85,7 +85,7 @@ public sealed class CharmInfo
     public const int ActionBarSize = 10;
 
     private readonly ActionButton[] _bar = new ActionButton[ActionBarSize];
-    private readonly Dictionary<uint, bool> _spells = [];
+    private readonly Dictionary<uint, ActionType> _spells = [];
 
     internal CharmInfo(ReactState react)
     {
@@ -120,8 +120,11 @@ public sealed class CharmInfo
     /// <summary>The ten action buttons in slot order.</summary>
     public IReadOnlyList<ActionButton> ActionBar => _bar;
 
-    /// <summary>The spells the pet knows and whether each is on autocast (vmangos PetSpell::active).</summary>
-    public IReadOnlyDictionary<uint, bool> PetSpells => _spells;
+    /// <summary>The spells the pet knows with their state (vmangos PetSpell::active: passive, disabled or enabled autocast).</summary>
+    public IReadOnlyDictionary<uint, ActionType> SpellStates => _spells;
+
+    /// <summary>The spells the pet knows and whether each is on autocast.</summary>
+    public IReadOnlyDictionary<uint, bool> PetSpells => _spells.ToDictionary(s => s.Key, s => s.Value == ActionType.Enabled);
 
     public ActionButton GetButton(int slot) => (uint)slot < ActionBarSize ? _bar[slot] : ActionButton.Empty;
 
@@ -157,21 +160,28 @@ public sealed class CharmInfo
     }
 
     /// <summary>
-    /// Teach the pet a spell and put it on the bar (vmangos Pet::addSpell / CharmInfo::AddSpellToActionBar,
-    /// Unit.cpp:8461-8488). A spell already on the bar keeps its slot. Rank chains
-    /// (<c>GetFirstSpellInChain</c>) are not modelled, so a new rank takes its own slot until the spell
-    /// chain data exists. Returns false when the pet already knew it.
+    /// Teach the pet a spell and put it on the bar (vmangos Pet::AddSpell / CharmInfo::AddSpellToActionBar,
+    /// Pet.cpp:1887-1975, Unit.cpp:8461-8488). A spell already on the bar keeps its slot, a passive spell is
+    /// known but never on the bar. Rank chains (<c>GetFirstSpellInChain</c>) are not modelled, so a new rank
+    /// takes its own slot until the spell chain data exists. Returns false when the pet already knew it.
     /// </summary>
-    public bool LearnSpell(uint spellId, bool autocast = false)
+    public bool LearnSpell(uint spellId, ActionType state)
     {
-        if (spellId == 0 || !_spells.TryAdd(spellId, autocast))
+        if (spellId == 0 || !_spells.TryAdd(spellId, state == ActionType.Decide ? ActionType.Disabled : state))
         {
             return false;
         }
 
-        AddSpellToActionBar(spellId, autocast ? ActionType.Enabled : ActionType.Disabled);
+        if (state != ActionType.Passive)
+        {
+            AddSpellToActionBar(spellId, state);
+        }
+
         return true;
     }
+
+    /// <summary>A castable spell, with autocast off (vmangos ACT_DECIDE) or on.</summary>
+    public bool LearnSpell(uint spellId, bool autocast = false) => LearnSpell(spellId, autocast ? ActionType.Enabled : ActionType.Disabled);
 
     /// <summary>vmangos Pet::removeSpell.</summary>
     public bool UnlearnSpell(uint spellId)
@@ -225,14 +235,15 @@ public sealed class CharmInfo
         return false;
     }
 
-    /// <summary>vmangos CharmInfo::SetSpellAutocast (the bar) together with Pet::ToggleAutocast (the spell list).</summary>
+    /// <summary>vmangos CharmInfo::SetSpellAutocast (the bar) together with Pet::ToggleAutocast (the spell list); a passive spell has no autocast.</summary>
     public void SetSpellAutocast(uint spellId, bool state)
     {
-        if (_spells.ContainsKey(spellId))
+        if (!_spells.TryGetValue(spellId, out ActionType current) || current == ActionType.Passive)
         {
-            _spells[spellId] = state;
+            return;
         }
 
+        _spells[spellId] = state ? ActionType.Enabled : ActionType.Disabled;
         for (int i = 0; i < ActionBarSize; i++)
         {
             if (_bar[i].Action == spellId && _bar[i].IsForSpell)

@@ -2,6 +2,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.WorldData.Pets;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Spells;
@@ -23,12 +24,14 @@ namespace ArcaneCore.World.Pets;
 public sealed class PetsFeature : IWorldFeature, ISpellSummonSink
 {
     private readonly IServiceProvider _services;
+    private readonly ILogger<PetsFeature> _logger;
 
     public PetsFeature(IServiceProvider services, ILogger<PetsFeature> logger)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(logger);
         _services = services;
+        _logger = logger;
         Service = new SummonService(
             Options,
             map => _services.GetService<CreatureWorldFeature>()?.GetOrCreateSystem(map),
@@ -49,6 +52,18 @@ public sealed class PetsFeature : IWorldFeature, ISpellSummonSink
     {
         ArgumentNullException.ThrowIfNull(world);
         _services.GetService<IConfiguration>()?.GetSection(PetOptions.SectionName).Bind(Options);
+
+        // The pet tables: without a registered store the world simply has no pet data (templates are used).
+        using (IServiceScope scope = _services.CreateScope())
+        {
+            if (scope.ServiceProvider.GetService<IPetDataStore>() is { } store)
+            {
+                Service.Content = store.LoadAsync().GetAwaiter().GetResult();
+                _logger.LogInformation("Loaded {Stats} pet level stat sets and {Spells} pet spell lists",
+                    Service.Content.LevelStatsEntryCount, Service.Content.CreateSpellEntryCount);
+            }
+        }
+
         if (_services.GetService<SpellFeature>() is { } spells)
         {
             Service.Install(spells.System);

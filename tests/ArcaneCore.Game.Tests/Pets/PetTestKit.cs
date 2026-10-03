@@ -5,6 +5,7 @@ using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.Pets;
 using ArcaneCore.Protocol;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
@@ -48,10 +49,11 @@ internal sealed class PetTestKit : IDisposable
     public const uint PetShieldSpell = 910041;
     public const uint PetPassiveSpell = 910042;
     public const uint ImpSpell = 910043;
+    public const uint LearnShieldSpell = 910044;
 
     public const int TotemDurationMs = 30_000;
 
-    public PetTestKit(IEnumerable<SpellInfo>? extraSpells = null)
+    public PetTestKit(IEnumerable<SpellInfo>? extraSpells = null, PetContent? petContent = null)
     {
         Spells = new SpellTestKit([.. DefaultPetSpells(), .. extraSpells ?? []]);
         Map = Spells.World.GetMap(0);
@@ -66,6 +68,7 @@ internal sealed class PetTestKit : IDisposable
                     b.MinLevelHealth = 100;
                     b.MaxLevelHealth = 100;
                     b.NpcFlags = entry == MiniPetEntry ? 2u : 0u; // some mini pets have quests
+                    b.UnitFlags = entry == PetEntry ? (uint)UnitFlags.ServerControlled : 0u; // a summoned pet starts with its flags cleared
                 })),
                 CreatureTestSupport.Template(NpcCasterEntry, b =>
                 {
@@ -82,6 +85,7 @@ internal sealed class PetTestKit : IDisposable
         Map.AddUpdater(Creatures);
         Service = new SummonService(systems: map => ReferenceEquals(map, Map) ? Creatures : null, random: new Random(3));
         Spells.System.Units = new MapObjectResolver();
+        Service.Content = petContent ?? PetContent.Empty;
         Service.Install(Spells.System);
         Controller = new PetController(Service, () => Spells.System, new Random(5));
         Spells.System.Summons = Service;
@@ -168,6 +172,7 @@ internal sealed class PetTestKit : IDisposable
         },
         Spell(PetShieldSpell, Effect(SpellEffectName.Heal, 5, SpellImplicitTarget.UnitFriend)),
         Spell(ImpSpell, Effect(SpellEffectName.Summon, 0, misc: (int)ImpEntry)),
+        Spell(LearnShieldSpell, Effect(SpellEffectName.LearnPetSpell, 0, trigger: PetShieldSpell)),
         Spell(PetPassiveSpell, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy)) with
         {
             Attributes = SpellAttributes.Passive,

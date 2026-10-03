@@ -131,9 +131,9 @@ public static class PetPackets
         var spells = new List<uint>();
         if (listSpells)
         {
-            foreach ((uint spell, bool autocast) in charm.PetSpells)
+            foreach ((uint spell, ActionType state) in charm.SpellStates)
             {
-                spells.Add(ActionButton.Make(spell, autocast ? ActionType.Enabled : ActionType.Disabled).Packed);
+                spells.Add(ActionButton.Make(spell, state).Packed);
             }
         }
 

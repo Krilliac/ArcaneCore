@@ -133,6 +133,37 @@ missing melee attack (entry 416). `PetMapSystem` feeds the owner hooks from the 
 spell with autocast on goes at the victim, chosen at random among those that qualify, with the aggro growl
 (10%: the special-spell talk) for the owner (the harmful half of `PetAI.cpp:226-330`).
 
+### P4 pet data: levelstats and create spells
+
+`Kernel/WorldData/Pets/PetContent.cs`, `Data/World/Pets/PetWorldDataModule.cs`, `Game/Pets/PetInitializer.cs`,
+the load in `World/Pets/PetsFeature.cs`.
+
+* **Schema: World version 11** (`PetWorldDataModule.Version`, the next free world version of this tree: 10 is
+  the quest reputation columns; the integrator renumbers the constant in merge order). Two tables, no
+  character data (so no `ICharacterDataCleanup`): `pet_levelstats` (`Entry, Level, Health, Mana, Armor,
+  DmgMin, DmgMax, Strength, Agility, Stamina, Intellect, Spirit`, key `(Entry, Level)`, the vmangos column
+  set, `ObjectMgr.cpp:4410`) and `petcreateinfo_spell` (`Entry, Spell1..Spell4`). Importer mapping for the
+  content-import lane: classic-db names the first table `creature_entry, level, hp, mana, armor, str, agi,
+  sta, inte, spi` (no damage columns: `DmgMin`/`DmgMax` stay 0, which keeps the creature's own damage) and
+  the second one exactly `entry, Spell1..Spell4`. vmangos also gates `petcreateinfo_spell` rows by
+  `patch_min`/`patch_max` (`ObjectMgr.cpp:6475`); classic-db has no such columns. The classic-db dump also
+  holds an entry `1` (the standard hunter pet stats); it is loaded like any other and used by nothing yet.
+* **PetContent** follows `LoadPetLevelInfo`/`GetPetLevelInfo` (`ObjectMgr.cpp:4406-4516`): levels outside
+  1..60 are ignored (60 is the vmangos `MaxPlayerLevel` default), an entry without level 1 data is a hard error
+  (vmangos exits; here the world refuses to start), a level without data repeats the level below it, a lookup
+  above 60 answers level 60. Create spells stop at the first 0 and an empty row is not kept.
+* **InitStatsForLevel** (SUMMON_PET branch, `Pet.cpp:1274-1480`), when the summoned pet's creature has a row
+  for the caster's level: the template's unit flags are dropped (`SetUInt32Value(UNIT_FIELD_FLAGS, NONE)`),
+  melee damage when both bounds are non-zero, armor when non-zero, health, mana (the power type becomes mana)
+  and the five stats; the owner's player-controlled and PvP flags are copied and health and mana end full.
+  The rank health and damage rates of a creature owner (`_GetHealthMod`, `_GetDamageMod`) default to 1 in
+  vmangos and are not configurable here.
+* **InitPetCreateSpells** (`Pet.cpp:2051-2104`): the bar is reset, every spell of the row that exists is
+  learned; a learn spell (SPELL_EFFECT_LEARN_SPELL or LEARN_PET_SPELL) stands for the spell it triggers; a
+  passive spell is cast on the pet at once, known but off the bar (`Pet::AddSpell`, `Pet.cpp:1887-1975`); any
+  other starts with autocast **off** (`ACT_DECIDE`), on the first free spell slot. The spell list reaches the
+  owner in `SMSG_PET_SPELLS`; passive spells carry state 0x01.
+
 ## Configuration (`Pets`, every default is the retail value)
 
 | Key | Default | Meaning |
@@ -178,6 +209,14 @@ spell with autocast on goes at the victim, chosen at random among those that qua
 * **Map change.** A pet or totem is unsummoned when its owner leaves the map (including a far
   teleport). vmangos re-summons a temporarily unsummoned pet after the transfer
   (`UnsummonPetTemporaryIfAny`); that belongs with pet persistence (P7).
+* **Pet data gaps.** A pet whose creature has no `pet_levelstats` row keeps its template health, damage,
+  armor and stats: vmangos falls back to `creature_classlevelstats` (`GetClassLevelStats`), a table of the
+  stats lane that this build does not have. Not ported: the owner's stat inheritance and `UpdateAllStats`
+  (the stats lane), the template's school resistances, `LearnPetPassives` (skill-line passives),
+  `CastPetAuras` (`spell_pet_auras`), the owner's teach spells (`AddTeachSpell`: the player learning the
+  summoned demon's spells), `GetPetCreateSpellEntry` rows by creature spell list (`pet_spell_list_id`), the
+  hunter pet branch and `pet_name_generation`. The pet name is the creature name, not the family name of
+  `CreatureFamily.dbc` (`InitializeDefaultName`).
 * **Pet spell lists.** A summoned pet starts with no spells: its spell list comes from
   `petcreateinfo_spell` / the creature spell list (vmangos `InitPetCreateSpells`), the data of slice P4.
   `CharmInfo.LearnSpell` is the entry point; rank chains (`GetFirstSpellInChain`) are not modelled, so a new

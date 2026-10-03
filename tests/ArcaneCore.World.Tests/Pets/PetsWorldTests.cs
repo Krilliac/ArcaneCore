@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.WorldData.Pets;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
@@ -61,6 +62,16 @@ public sealed class PetsWorldTests
 
         // SPELL_EFFECT_SUMMON keeps its built-in handler (the quest reward preflight models it).
         Assert.True(spells.HasBuiltInEffectHandler(SpellEffectName.Summon));
+    }
+
+    [Fact]
+    public async Task Daemon_LoadsThePetTablesFromTheRegisteredStore()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        PetContent content = host.WorldServices.GetRequiredService<PetsFeature>().Service.Content;
+
+        Assert.Equal(PetTestServices.Health, content.FindLevelStats(PetTestServices.Entry, 1)!.Health);
+        Assert.Equal([PetTestServices.Spell], content.GetCreateSpells(PetTestServices.Entry));
     }
 
     [Fact]
