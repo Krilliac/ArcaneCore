@@ -15,7 +15,25 @@ public interface IGraveyardRepop
     /// sends it back from. Returns false when no graveyard applies and the player stays where it is.
     /// </summary>
     bool RepopAtGraveyard(Player player);
+
+    /// <summary>
+    /// The spirit of a player that is leaving the world was just released (vmangos WorldSession::LogoutPlayer,
+    /// WorldSession.cpp:694-701): the place the character is saved at becomes the graveyard. No teleport happens, since
+    /// the client is gone and would never acknowledge it. Returns false when no graveyard applies.
+    /// </summary>
+    bool RelocateLeavingPlayer(Player player);
+
+    /// <summary>
+    /// A ghost was resurrected by a spirit healer (vmangos WorldSession::SendSpiritResurrect, NPCHandler.cpp:430-471):
+    /// when the graveyard nearest to its <paramref name="corpse"/> differs from the one nearest to where the player stands, it is
+    /// teleported to the corpse's graveyard, facing the safe location's facing when it has one (else keeping its own);
+    /// otherwise, or without a corpse, only its visibility is refreshed. Returns true when a teleport was started.
+    /// </summary>
+    bool TeleportToCorpseGraveyard(Player player, CorpsePlace? corpse);
 }
+
+/// <summary>Where a corpse lies: its map and position.</summary>
+public readonly record struct CorpsePlace(uint MapId, float X, float Y, float Z);
 
 /// <summary>
 /// The per-world registry of the death area's own extension points. <see cref="Combat.CombatHooks"/>

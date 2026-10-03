@@ -19,11 +19,21 @@ public sealed class DeathSeamsTests
     {
         public List<Player> Calls { get; } = [];
 
+        public List<Player> Leaving { get; } = [];
+
         public bool RepopAtGraveyard(Player player)
         {
             Calls.Add(player);
             return true;
         }
+
+        public bool RelocateLeavingPlayer(Player player)
+        {
+            Leaving.Add(player);
+            return true;
+        }
+
+        public bool TeleportToCorpseGraveyard(Player player, CorpsePlace? corpse) => false;
     }
 
     /// <summary>A world with the DEFAULT combat hooks (no test hooks), one dead-and-released player and the given seam.</summary>
@@ -131,7 +141,7 @@ public sealed class DeathSeamsTests
     }
 
     [Fact]
-    public void ALoggingOutSpirit_IsSentAtOnce_NotScheduled()
+    public void ALoggingOutSpirit_IsRelocatedAtOnce_NotScheduledAndNotTeleported()
     {
         var seam = new CountingGraveyards();
         (WorldRuntime world, Map map, Player player, _) = Create(seam);
@@ -143,7 +153,8 @@ public sealed class DeathSeamsTests
 
             map.Combat.OnPlayerLeaving(player);
 
-            Assert.Single(seam.Calls); // WorldSession.cpp:694-701 repops synchronously
+            Assert.Single(seam.Leaving); // WorldSession.cpp:694-701 repops synchronously, before the save
+            Assert.Empty(seam.Calls);    // and a client that is leaving is never sent a teleport
         }
     }
 

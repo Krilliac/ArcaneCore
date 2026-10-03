@@ -39,14 +39,16 @@ public sealed partial class MapCombat
     /// SMSG_CORPSE_RECLAIM_DELAY, the ghost timer reset, DEAD — then the graveyard hook.
     /// Returns false when the player is alive or already a ghost (HandleRepopRequestOpcode).
     /// </summary>
-    public bool RepopPlayer(Player player) => RepopPlayer(player, immediate: false);
+    public bool RepopPlayer(Player player) => RepopPlayer(player, immediate: false, leaving: false);
 
     /// <summary>
     /// <see cref="RepopPlayer(Player)"/>; with <paramref name="immediate"/> the graveyard trip is made at once instead of being
     /// scheduled (vmangos Player::ScheduleRepopAtGraveyard does that when the player is not in the world or its session is gone,
-    /// and WorldSession::LogoutPlayer repops a dying player synchronously, WorldSession.cpp:694-701).
+    /// and WorldSession::LogoutPlayer repops a dying player synchronously, WorldSession.cpp:694-701). With <paramref name="leaving"/>
+    /// the player is on its way out of the world, so only the place it is saved at moves
+    /// (<see cref="Death.IGraveyardRepop.RelocateLeavingPlayer"/>); nothing is teleported.
     /// </summary>
-    internal bool RepopPlayer(Player player, bool immediate)
+    internal bool RepopPlayer(Player player, bool immediate, bool leaving)
     {
         UnitCombat c = player.Combat;
         if (IsQuestSettlementPending(player) || IsAliveState(player) || (player.Flags & PlayerFlags.Ghost) != 0)
@@ -84,7 +86,12 @@ public sealed partial class MapCombat
         c.DeathTimer = 0;
         SetDeathState(player, DeathState.Dead);
 
-        if (immediate)
+        if (leaving)
+        {
+            c.RepopPending = false;
+            Death.DeathSeams.Find(_world)?.Graveyards?.RelocateLeavingPlayer(player);
+        }
+        else if (immediate)
         {
             c.RepopPending = false;
             Hooks.RepopAtGraveyard(player);
@@ -112,6 +119,23 @@ public sealed partial class MapCombat
 
         c.RepopPending = false;
         Hooks.RepopAtGraveyard(player);
+    }
+
+    /// <summary>The <see cref="Death.DeathOptions"/> of this world (<c>World:Death</c>).</summary>
+    internal Death.DeathOptions DeathSettings => Death.DeathHooks.For(_world).Options;
+
+    /// <summary>
+    /// A spirit released on a transport is taken off it and comes back alive at the graveyard (vmangos Player::RepopAtGraveyard,
+    /// Player.cpp:5000-5005: RemovePassenger + ResurrectPlayer(1.0f)); its body is not left behind in the world.
+    /// </summary>
+    internal void ResurrectFromTransport(Player player)
+    {
+        ResurrectPlayer(player, 1.0f, applySickness: false);
+        if (player.Combat.Corpse is { } corpse)
+        {
+            RemoveCorpse(corpse);
+            player.Combat.Corpse = null;
+        }
     }
 
     /// <summary>

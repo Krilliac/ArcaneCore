@@ -305,7 +305,7 @@ public sealed partial class MapCombat : IMapUpdater
         UnitCombat c = player.Combat;
         if (c.DeathTimer > 0 && !IsAliveState(player) && (player.Flags & PlayerFlags.Ghost) == 0)
         {
-            RepopPlayer(player, immediate: true);
+            RepopPlayer(player, immediate: true, leaving: true);
         }
 
         if (c.Corpse is { } corpse)
