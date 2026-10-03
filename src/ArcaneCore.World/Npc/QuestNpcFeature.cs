@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using ArcaneCore.Data.Npc;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
@@ -18,7 +19,8 @@ namespace ArcaneCore.World.Npc;
 /// <summary>
 /// Persisted quest journals and query content in the daemon. Session hooks fill the untracked
 /// player's update fields before self-create; only world-thread login events register journals
-/// with the quest service. NPC interactions require their own dependency adapters.
+/// with the quest service. Creature quest interactions use live map/visibility snapshots and
+/// optional faction templates; missing reaction data denies interaction.
 /// </summary>
 public sealed class QuestNpcFeature : IWorldFeature, ICharacterHooks, IAsyncDisposable
 {
@@ -65,7 +67,11 @@ public sealed class QuestNpcFeature : IWorldFeature, ICharacterHooks, IAsyncDisp
             NpcContent npcs = scope.ServiceProvider.GetService<INpcContentStore>() is { } npcStore
                 ? npcStore.LoadAsync().GetAwaiter().GetResult()
                 : NpcContent.Empty;
-            Services = BuildServices(new QuestStore(quests), new NpcStore(npcs));
+            FactionTemplateCatalog factions = _services.GetService<FactionTemplateCatalog>()
+                ?? (string.IsNullOrWhiteSpace(Options.FactionTemplateDbcPath)
+                    ? FactionTemplateCatalog.Empty
+                    : FactionTemplateDbcReader.Load(Options.FactionTemplateDbcPath));
+            Services = BuildServices(new QuestStore(quests), new NpcStore(npcs), factions);
         }
 
         _world = world;
@@ -116,8 +122,9 @@ public sealed class QuestNpcFeature : IWorldFeature, ICharacterHooks, IAsyncDisp
     /// <summary>The world has stopped; drain quest/taxi saves before host shutdown succeeds.</summary>
     public Task StopAsync() => Persistence.DisposeAsync().AsTask();
 
-    private QuestNpcServices BuildServices(QuestStore quests, NpcStore npcs) => new(quests, npcs,
-        new QuestNpcDependencies(), Options, new PersistenceSink(this), () => _clock.GetUtcNow().ToUnixTimeSeconds(), _logger);
+    private QuestNpcServices BuildServices(QuestStore quests, NpcStore npcs, FactionTemplateCatalog? factions = null) => new(quests, npcs,
+        new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions ?? FactionTemplateCatalog.Empty)),
+        Options, new PersistenceSink(this), () => _clock.GetUtcNow().ToUnixTimeSeconds(), _logger);
 
     private void OnMapCreated(Map map)
     {

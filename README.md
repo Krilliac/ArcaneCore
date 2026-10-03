@@ -19,6 +19,24 @@ login, serves quest/NPC text queries, and persists timed expiry across relogs
 and map transfers. Full quest/NPC interaction and
 [real-client acceptance](docs/M13A_ACCEPTANCE.md) remain pending.
 
+The [M13b slice](MILESTONE_M13B.md) adds guarded live-creature quest status,
+details, acceptance and abandonment for ordinary non-repeatable quests. It
+requires known faction data and current map visibility. Rewards, objective event
+adapters and broader NPC services remain subsequent work.
+
+The native [mock client](MILESTONE_MOCK_CLIENT.md) exercises the real realm and
+world sessions with synthetic SQLite content and independent client packets.
+Run its bounded authentication, character, journal and reconnect scenario after
+building Release:
+
+```bash
+dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-test
+```
+
+It prints assertion results as JSON and returns a failing exit code if a stage
+fails. [Mock checks](docs/MOCK_CLIENT_ACCEPTANCE.md) run in CI; actual build 5875
+UI and content acceptance will follow separately.
+
 ## Layout
 
 ```
@@ -32,6 +50,7 @@ src/
   ArcaneCore.World          world daemon (TCP 8085): sessions, opcode table, handlers, chat commands, save queue
 tools/
   ArcaneCore.AccountTool    account create / set-password / set-gmlevel / list CLI
+  ArcaneCore.MockClient     owned-loopback realm/world protocol acceptance CLI
   codegen/                  generates WorldOpcode.g.cs + UpdateFields.g.cs from the references
 tests/
   ArcaneCore.Cryptography.Tests   SRP6 known-answer + round-trip tests
@@ -39,6 +58,7 @@ tests/
   ArcaneCore.Game.Tests           update pipeline, maps, world runtime (no sockets)
   ArcaneCore.Data.Tests           schema + stores on SQLite, MariaDB, PostgreSQL
   ArcaneCore.World.Tests          end-to-end world daemon over loopback
+  ArcaneCore.MockClient.Tests     independent client vectors and realm/world lifecycle
 ```
 
 ## Databases

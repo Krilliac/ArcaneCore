@@ -28,6 +28,32 @@ public sealed class QuestStoreTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task AcceptAbandonAndReaccept_DeltasSurviveFreshContexts(DatabaseProvider provider)
+    {
+        (DatabaseConnectionOptions connection, CharacterRecord[] characters) = await CreateAsync(provider, "Accepting", "Otherquester");
+        int id = characters[0].Id;
+        var accepted = new CharacterQuestStatus(id, 900001, Incomplete, false, false, 1_900_000_001,
+            0, 0, 0, 0, 0, 0, 0, 0, 0);
+        CharacterQuestStatus other = accepted with { CharacterId = characters[1].Id, MobCount1 = 2 };
+        await WriteAsync(connection, store => store.SaveQuestsAsync(id, [accepted]));
+        await WriteAsync(connection, store => store.SaveQuestsAsync(other.CharacterId, [other]));
+        Assert.Equal([accepted], (await LoadAsync(connection, id)).Quests);
+
+        CharacterQuestStatus abandoned = accepted with { Status = 0, Timer = 0 };
+        await WriteAsync(connection, store => store.SaveQuestsAsync(id, [abandoned]));
+        Assert.Equal([abandoned], (await LoadAsync(connection, id)).Quests);
+        Assert.Equal([other], (await LoadAsync(connection, other.CharacterId)).Quests);
+
+        CharacterQuestStatus reaccepted = accepted with { Timer = 1_900_000_123 };
+        await WriteAsync(connection, store => store.SaveQuestsAsync(id, [reaccepted]));
+        await WriteAsync(connection, store => store.SaveQuestsAsync(id, [reaccepted]));
+        Assert.Equal([reaccepted], (await LoadAsync(connection, id)).Quests);
+        await using CharacterDbContext verify = TestContexts.Create<CharacterDbContext>(connection);
+        Assert.Equal(2, await verify.Set<CharacterQuestStatusRow>().CountAsync());
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task Journal_ReloadsMultipleStatuses_WithAllObjectiveCountsRewardAndTimer(DatabaseProvider provider)
     {
         (DatabaseConnectionOptions connection, CharacterRecord[] characters) =

@@ -33,6 +33,11 @@ public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFac
     private Task _guildsLoaded = Task.CompletedTask;
     private WorldRuntime? _world;
     private SocialContext? _context;
+    private readonly Lock _lifecycleLock = new();
+    private readonly CancellationTokenSource _stop = new();
+    private readonly HashSet<Task> _loginReads = [];
+    private volatile bool _stopping;
+    private Task? _stopped;
 
     /// <summary>The social state (world thread only).</summary>
     public SocialContext Context => _context ?? throw new InvalidOperationException("social feature not attached");
@@ -92,18 +97,46 @@ public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFac
         }
     }
 
-    /// <summary>Stop the stats timer and write out everything queued (the container disposes singletons at shutdown).</summary>
-    public async ValueTask DisposeAsync()
+    /// <summary>Stop background reads and timers, then drain writes before the provider is disposed.</summary>
+    public Task StopAsync()
     {
+        lock (_lifecycleLock)
+        {
+            _stopping = true;
+            return _stopped ??= StopCoreAsync();
+        }
+    }
+
+    public ValueTask DisposeAsync() => new(StopAsync());
+
+    private async Task StopCoreAsync()
+    {
+        // Do not run cancellation callbacks while holding the lifecycle lock.
+        await Task.Yield();
+        _stop.Cancel();
+        if (_world is not null)
+        {
+            _world.PlayerLoggedIn -= OnLoggedIn;
+            _world.PlayerLoggingOut -= OnLoggingOut;
+        }
+
         if (_statsTimer is not null)
         {
             await _statsTimer.DisposeAsync().ConfigureAwait(false);
         }
 
+        Task[] reads;
+        lock (_lifecycleLock)
+        {
+            reads = [.. _loginReads];
+        }
+        await Task.WhenAll(reads.Append(_guildsLoaded)).ConfigureAwait(false);
+
         if (_writes is not null)
         {
             await _writes.StopAsync().ConfigureAwait(false);
         }
+        _stop.Dispose();
     }
 
     /// <summary>
@@ -113,32 +146,57 @@ public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFac
     /// </summary>
     private void OnLoggedIn(Player player)
     {
+        lock (_lifecycleLock)
+        {
+            if (_stopping)
+            {
+                return;
+            }
+            Task read = Task.Run(() => LoadSocialAsync(player));
+            _loginReads.Add(read);
+            _ = read.ContinueWith(completed =>
+            {
+                lock (_lifecycleLock)
+                {
+                    _loginReads.Remove(completed);
+                }
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+    }
+
+    private async Task LoadSocialAsync(Player player)
+    {
         WorldRuntime world = _world!;
         int characterId = (int)player.Guid.Low;
-        _ = Task.Run(async () =>
+        IReadOnlyList<SocialEntry> entries = [];
+        try
         {
-            IReadOnlyList<SocialEntry> entries = [];
-            try
+            await _guildsLoaded.WaitAsync(_stop.Token).ConfigureAwait(false);
+            _stop.Token.ThrowIfCancellationRequested();
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            if (scope.ServiceProvider.GetService<ISocialStore>() is { } store)
             {
-                await _guildsLoaded.ConfigureAwait(false);
-                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
-                if (scope.ServiceProvider.GetService<ISocialStore>() is { } store)
-                {
-                    entries = await store.GetSocialAsync(characterId).ConfigureAwait(false);
-                }
+                entries = await store.GetSocialAsync(characterId, _stop.Token).ConfigureAwait(false);
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "loading the social list of character {Id} failed; starting empty", characterId);
-            }
+        }
+        catch (OperationCanceledException) when (_stopping)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "loading the social list of character {Id} failed; starting empty", characterId);
+        }
 
+        if (!_stopping)
+        {
             world.Post(() => CompleteLogin(player, entries));
-        });
+        }
     }
 
     private void CompleteLogin(Player player, IReadOnlyList<SocialEntry> entries)
     {
-        if (!ReferenceEquals(_world!.FindOnlinePlayer(player.Guid), player))
+        if (_stopping || !ReferenceEquals(_world!.FindOnlinePlayer(player.Guid), player))
         {
             return; // logged out meanwhile
         }
@@ -199,15 +257,26 @@ public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFac
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
                 if (scope.ServiceProvider.GetService<ISocialStore>() is { } store)
                 {
-                    guilds = await store.GetGuildsAsync().ConfigureAwait(false);
+                    guilds = await store.GetGuildsAsync(_stop.Token).ConfigureAwait(false);
                 }
 
                 break;
             }
+            catch (OperationCanceledException) when (_stopping)
+            {
+                return;
+            }
             catch (Exception ex) when (attempt < 3)
             {
                 _logger.LogWarning(ex, "loading guilds failed (attempt {Attempt}); retrying", attempt);
-                await Task.Delay(500 * attempt).ConfigureAwait(false);
+                try
+                {
+                    await Task.Delay(500 * attempt, _stop.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (_stopping)
+                {
+                    return;
+                }
             }
             catch (Exception ex)
             {
@@ -217,10 +286,20 @@ public sealed class SocialFeature(CharacterDirectory directory, IServiceScopeFac
             }
         }
 
-        await world.InvokeAsync(() =>
+        try
         {
-            Context.Guilds.Load(guilds);
-            return true;
-        }).ConfigureAwait(false);
+            await world.InvokeAsync(() =>
+            {
+                if (!_stopping)
+                {
+                    Context.Guilds.Load(guilds);
+                }
+                return true;
+            }).WaitAsync(_stop.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_stopping)
+        {
+            // The world may already be stopped; no pending world invocation holds up disposal.
+        }
     }
 }

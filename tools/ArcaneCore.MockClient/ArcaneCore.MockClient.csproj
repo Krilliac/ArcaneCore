@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ArcaneCore.MockClient</RootNamespace>
+    <AssemblyName>arcane-mock</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/ArcaneCore.Data/ArcaneCore.Data.csproj" />
+    <ProjectReference Include="../../src/ArcaneCore.Realm/ArcaneCore.Realm.csproj" />
+    <ProjectReference Include="../../src/ArcaneCore.World/ArcaneCore.World.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="ArcaneCore.MockClient.Tests" />
+  </ItemGroup>
+</Project>

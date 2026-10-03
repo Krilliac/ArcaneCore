@@ -9,6 +9,9 @@ public sealed class QuestNpcOptions
 {
     public const string SectionName = "Quests";
 
+    /// <summary>Optional developer-supplied build-5875 FactionTemplate.dbc; absent means unknown NPC factions.</summary>
+    public string? FactionTemplateDbcPath { get; set; }
+
     /// <summary>Quests.LowLevelHideDiff (negative = never grey out).</summary>
     public int LowLevelHideDiff { get; set; } = 4;
 

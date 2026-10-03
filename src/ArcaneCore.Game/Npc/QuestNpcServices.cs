@@ -194,7 +194,9 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
     /// </remarks>
     public NpcInfo? InteractableNpc(Player player, ObjectGuid guid, NpcFlags flags)
     {
-        if (guid.IsEmpty || !player.IsInWorld || (player.UnitFlags & UnitFlags.TaxiFlight) != 0)
+        // Player.cpp CanInteractWithNPC rejects lost control / inability to react.
+        const UnitFlags unavailable = UnitFlags.TaxiFlight | UnitFlags.Stunned | UnitFlags.Confused | UnitFlags.Fleeing;
+        if (guid.IsEmpty || !player.IsInWorld || !player.IsAlive || (player.UnitFlags & unavailable) != 0)
         {
             return null;
         }
@@ -223,8 +225,9 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
         float dx = npc.X - player.X;
         float dy = npc.Y - player.Y;
         float dz = npc.Z - player.Z;
-        float distance = MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz)) - npc.BoundingRadius - player.BoundingRadius;
-        return distance <= InteractionDistance ? npc : null;
+        // Object.cpp IsWithinDist: strict 3D radius-adjusted comparison.
+        float range = InteractionDistance + npc.BoundingRadius + player.BoundingRadius;
+        return float.IsFinite(range) && range > 0 && (dx * dx) + (dy * dy) + (dz * dz) < range * range ? npc : null;
     }
 
     /// <summary>A creature the player can see (vmangos GetObjectByTypeMask(TYPEMASK_CREATURE…)), without interaction checks.</summary>

@@ -1,0 +1,358 @@
+using System.Buffers.Binary;
+using System.Net;
+using System.Net.Sockets;
+using ArcaneCore.MockClient.Protocol;
+using Xunit;
+
+namespace ArcaneCore.MockClient.Tests;
+
+// Numerical reference vectors: gtker/wow_srp @ 25ffab6433e1ee5eee629200cf42b592c1f36121.
+// See PROTOCOL_VECTORS_NOTICE.md for source paths, byte orders, and the retained MIT license.
+public sealed class ProtocolTests
+{
+    private static readonly byte[] CaptureKey =
+    [
+        239, 107, 150, 237, 174, 220, 162, 4, 138, 56, 166, 166, 138, 152, 188, 146, 96, 151,
+        1, 201, 202, 137, 231, 87, 203, 23, 62, 17, 7, 169, 178, 1, 51, 208, 202, 223, 26, 216, 250, 9,
+    ];
+
+    [Fact]
+    public void ProtocolThreeChallenge_HasIndependentGoldenEncoding()
+    {
+        byte[] expected = Convert.FromHexString(
+            "00032400576F5700010C01F316363878006E69570042476E65000000007F00000106544553544552");
+        Assert.Equal(expected, ProtocolPackets.LogonChallenge("TESTER", 5875));
+    }
+
+    [Fact]
+    public void WorldClientHeader_UsesBigEndianSizeAndLittleEndianFourByteOpcode()
+    {
+        Assert.Equal(new byte[] { 0, 12, 0xDC, 1, 0, 0 }, ProtocolPackets.ClientHeader(0x01DC, 8));
+        Assert.Equal(new byte[] { 0, 4, 0x37, 0, 0, 0 }, ProtocolPackets.ClientHeader(0x0037, 0));
+    }
+
+    [Theory]
+    [InlineData("A47DD4CD70DA1B0EF7E1FA8C02DE68AF0CEFCC77ACA287FBC3ADCDE0E7B78FE7", "7186DF27C1A309B5B26E293CD00ADD01E7037E09116089F26E810FD2D962BC42")]
+    [InlineData("FEF24F6DBCE6FBC39666B928574B862EABD39DE8ABA94BA1CEB701EBEB4BB511", "62741F2045A1934CFCCDD2C4DD465C19002BFD11BDE5C0996E102AB682A69743")]
+    public void ClientSrpPublicKey_MatchesPinnedVector(string privateKey, string expected)
+        => Assert.Equal(LittleEndian(expected, 32), ClientSrp6.PublicKey(LittleEndian(privateKey, 32)));
+
+    [Theory]
+    [InlineData(
+        "E232D2C71AD1BF58DB9F7DBE51FFE271B6BDC61524F2E6B32ABFFFCAB09D09AB",
+        "FC3D610C4E2CEC5ECC7E47344D0ED81D2ACB938AB198EC7E2ED474AEFCC3ABD1",
+        "A4A7CB7DFBE00D26EE06F6B3DACC51E5779D7E8B", "FDAFAEF0E77F0FE1BD2956CF1820D4BC964E5283",
+        "3898DF5193EA6AA8111524A253DB480A51EA6160D1E41BC4B662420299B4A435")]
+    [InlineData(
+        "8CBDF6ADB7AB7C440ADF2A6EF35504A16D0CFC1D6BDB2B9D490A9FE0DBFC2ED4",
+        "32B7EF3E95B0F0B8DDCDAAEDFA8763B50CA388D37CE6DC9EECDB621A5C844B25",
+        "DE80EB1158911D56B8FDC761DC0AEA0C7C9D7EFD", "BAFAEBD30DC342C57F28C0CDB68DFD238AB2CACF",
+        "879E097E9C97C6F5AB5970FBAD87C038405E0CBF401F8864FD0DADD5FAF2CB76")]
+    public void ClientSrpSharedSecret_MatchesPinnedVector(string server, string secret, string x, string u, string expected)
+        => Assert.Equal(LittleEndian(expected, 32), ClientSrp6.SharedSecret(
+            LittleEndian(server, 32), LittleEndian(secret, 32), LittleEndian(x, 20), LittleEndian(u, 20)));
+
+    [Theory]
+    [InlineData("FCCC2DFFED3E8D0D77EAD3E230D9C12BFFA4F3D41BE507C0E534FC0DD6EB4C8F", "6C558DD116725AE527707A08C3E4BE3181B5E622343403807389BF42BC3AB61A89AC8DE01A4E14EE")]
+    [InlineData("094FDE5CD68EEEF5F6FB8B0DAB05D68AF7886A03ABEADD8231FAC47FE0BDC1CC", "6D9EADFB4A0C13733697EE3CFDE55401D75973221ACC20E267F544492D3E29A41735FCC30637A22A")]
+    public void ClientSrpInterleave_MatchesPinnedVector(string shared, string expected)
+        => Assert.Equal(LittleEndian(expected, 40), ClientSrp6.Interleave(LittleEndian(shared, 32)));
+
+    [Fact]
+    public void ClientSrpProof_PreservesFixedWidthLeadingZeros()
+    {
+        byte[] actual = ClientSrp6.Proof("7WG6SHZL33JMGPO4",
+            LittleEndian("00A4A09E0B5ACA438B8CD837D0816CA26043DBD1EAEF138EEF72DCF3F696D03D", 32),
+            LittleEndian("0095FE039AFE5E1BADE9AC0CAEC3CB73D2D08BBF4CA8ADDBCDF0CE709ED5103F", 32),
+            LittleEndian("00B0C41F58CCE894CFB816FA72CA344C9FE2ED7CE799452ADBA7ABDCD26EAE75", 32),
+            LittleEndian("2F409C9AEC0FE203D3673202D57BEA19C931AACBD1FD75C539C34129BD70F83E37BFC0F99CD3A477", 40));
+        Assert.Equal(LittleEndian("7D07022B4064CCE633D679F61C6B212B6F8BC5C3", 20), actual);
+    }
+
+    [Fact]
+    public void ServerSrpProof_MatchesPinnedVector()
+    {
+        byte[] actual = ClientSrp6.Hash(
+            LittleEndian("BFD1AC65C8DAAAD88BF9DFF9AF8D1DCDF11DFD0C7E398EDCDF5DBBD08EFB39D3", 32),
+            LittleEndian("7EBBC190D9AB2DC0CD891372CB30DF1ED35CDA1E", 20),
+            LittleEndian("4876E68F9FCCB6CA9BC9C9BCEBDB36F2358B6EAD0F17881D811891A9888E8E5B10E1162CE8B58293", 40));
+        Assert.Equal(LittleEndian("269E3A3EF5DCD15944F043513BDA20D20FEBA2E0", 20), actual);
+    }
+
+    [Fact]
+    public void WorldAuthProof_MatchesPinnedVector()
+    {
+        byte[] key = LittleEndian("914D6219A99109D6BD946F6E6AF12BB611C59A22531C6F1A3F3CF58624D528DC163BE43813112C3D", 40);
+        // Upstream hex_decode_be reverses byte pairs; this digest is printed as a big-endian integer.
+        Assert.Equal(LittleEndian("6095EB678CD195253F66F32BADA785CA6D9376B2", 20),
+            ProtocolPackets.WorldProof("TNDQWSHEBWHPABV2", key, 1454143186, 309086257));
+    }
+
+    [Fact]
+    public void WorldAuthPayload_HasIndependentFixedFieldsAndCapturedProof()
+    {
+        byte[] body = ProtocolPackets.WorldAuth("A", CaptureKey, 12589856, 0xDEADBEEF, 5875);
+        Assert.Equal(new byte[] { 0xF3, 0x16, 0, 0, 0, 0, 0, 0, 0x41, 0 }, body[..10]);
+        Assert.Equal(12589856u, BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(10)));
+        Assert.Equal(new byte[] { 26, 97, 90, 187, 176, 134, 53, 49, 75, 160, 129, 47, 67, 207, 231, 42, 234, 184, 227, 124 }, body[14..34]);
+        Assert.Equal(new byte[4], body[34..]);
+    }
+
+    [Fact]
+    public void ClientHeaderEncryption_MatchesConsecutiveCapturedHeaders()
+    {
+        byte[] key = [9, 83, 75, 103, 5, 182, 16, 162, 170, 134, 230, 117, 11, 100, 136, 74, 88, 145, 175, 126, 216, 48, 38, 40, 234, 116, 174, 149, 133, 20, 193, 51, 103, 223, 194, 141, 4, 191, 161, 96];
+        var cipher = new ClientHeaderCipher(key);
+        byte[][] expected = [[9, 96, 220, 67, 72, 254], [14, 188, 50, 185, 159, 20], [31, 135, 219, 38, 126, 15], [190, 48, 52, 101, 139, 179]];
+        for (int index = 0; index < expected.Length; index++)
+        {
+            byte[] header = index == 0 ? [0, 4, 55, 0, 0, 0] : [0, 12, 0xDC, 1, 0, 0];
+            cipher.Encrypt(header);
+            Assert.Equal(expected[index], header);
+        }
+    }
+
+    [Fact]
+    public void ServerHeaderDecryption_MatchesConsecutiveCapturedHeaders()
+    {
+        var cipher = new ClientHeaderCipher(CaptureKey);
+        byte[][] encrypted = [[239, 86, 206, 186], [104, 222, 119, 123], [5, 67, 190, 101], [239, 141, 238, 129]];
+        byte[][] expected = [[0, 12, 0xEE, 1], [0, 170, 59, 0], [0, 6, 0xDD, 1], [0, 6, 0xDD, 1]];
+        for (int index = 0; index < encrypted.Length; index++)
+        {
+            cipher.Decrypt(encrypted[index]);
+            Assert.Equal(expected[index], encrypted[index]);
+        }
+    }
+
+    [Theory]
+    [InlineData("192.0.2.1:8085")]
+    [InlineData("[2001:db8::1]:8085")]
+    [InlineData("example.com:8085")]
+    [InlineData("127.0.0.1:0")]
+    public void RealmEndpoint_RejectsRemoteDnsAndZeroPort(string address)
+        => Assert.ThrowsAny<Exception>(() => new MockRealm("Test", address).GetLoopbackEndpoint());
+
+    [Theory]
+    [InlineData("127.0.0.1:8085")]
+    [InlineData("[::1]:8085")]
+    [InlineData("[::ffff:127.0.0.1]:8085")]
+    public void RealmEndpoint_AcceptsNumericLoopback(string address)
+        => Assert.Equal(8085, new MockRealm("Test", address).GetLoopbackEndpoint().Port);
+
+    [Fact]
+    public async Task BothClients_RejectRemoteEndpointsBeforeConnecting()
+    {
+        var remote = new IPEndPoint(IPAddress.Parse("192.0.2.1"), 8085);
+        await Assert.ThrowsAsync<ArgumentException>(() => WorldClient.ConnectAsync(remote));
+        await Assert.ThrowsAsync<ArgumentException>(() => LogonClient.AuthenticateAsync(remote, "TEST", "TEST"));
+    }
+
+    [Fact]
+    public void RealmList_ParsesIndependentLiteralAndRejectsTruncation()
+    {
+        byte[] body = Convert.FromHexString("00000000010000000000417263616E65003132372E302E302E313A38303835000000803F0203000200");
+        MockRealm realm = Assert.Single(ProtocolPackets.RealmList(body));
+        Assert.Equal("Arcane", realm.Name);
+        Assert.Equal("127.0.0.1:8085", realm.Address);
+        Assert.Throws<MockProtocolException>(() => ProtocolPackets.RealmList(body[..^1]));
+    }
+
+    [Fact]
+    public async Task ExactReader_HandlesFragmentedReadsAndReportsPartialEof()
+    {
+        await using var stream = new OneByteStream([1, 2, 3]);
+        Assert.Equal(new byte[] { 1, 2, 3 }, await ProtocolIO.ReadExactAsync(stream, 3, "fixture", CancellationToken.None));
+        await using var partial = new OneByteStream([1, 2]);
+        EndOfStreamException exception = await Assert.ThrowsAsync<EndOfStreamException>(() => ProtocolIO.ReadExactAsync(partial, 3, "fixture", CancellationToken.None));
+        Assert.Contains("2 of 3", exception.Message);
+    }
+
+    [Fact]
+    public async Task DefaultDeadline_ReportsUsefulTimeout()
+    {
+        TimeoutException exception = await Assert.ThrowsAsync<TimeoutException>(() => ProtocolIO.BoundedAsync("fixture stall", CancellationToken.None, async token =>
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            return true;
+        }));
+        Assert.Contains("fixture stall", exception.Message);
+        Assert.Contains("5-second", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("0001EC01", typeof(MockProtocolException))]
+    [InlineData("FFFFEC01", typeof(MockProtocolException))]
+    [InlineData("0006EC", typeof(EndOfStreamException))]
+    [InlineData("0006EC010102", typeof(EndOfStreamException))]
+    public async Task WorldReader_RejectsMalformedAndPartialFrames(string bytes, Type exceptionType)
+    {
+        await WithWorldPeerAsync(async stream =>
+        {
+            await stream.WriteAsync(Convert.FromHexString(bytes));
+            stream.Close();
+        }, async client =>
+        {
+            Exception? exception = await Record.ExceptionAsync(() => client.ReadAsync());
+            Assert.NotNull(exception);
+            Assert.IsType(exceptionType, exception);
+        });
+    }
+
+    [Fact]
+    public async Task WorldReader_RejectsOverlappingReadersAndHonorsCancellation()
+    {
+        await WithWorldPeerAsync(_ => Task.CompletedTask, async client =>
+        {
+            using var cancellation = new CancellationTokenSource();
+            Task<WorldFrame> first = client.ReadAsync(cancellation.Token);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => client.ReadAsync());
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+            await Assert.ThrowsAsync<ObjectDisposedException>(() => client.ReadAsync());
+        });
+    }
+
+    [Fact]
+    public async Task WorldPacketSearch_StopsAtItsPacketLimit()
+    {
+        await WithWorldPeerAsync(async stream => await stream.WriteAsync(new byte[] { 0, 2, 0x37, 0 }), async client =>
+        {
+            MockProtocolException exception = await Assert.ThrowsAsync<MockProtocolException>(() => client.ReadUntilAsync(0x01DD, maxPackets: 1));
+            Assert.Contains("within 1 packets", exception.Message);
+        });
+    }
+
+    [Theory]
+    [InlineData((byte)0x0D)]
+    [InlineData((byte)0x14)]
+    [InlineData((byte)0x15)]
+    public async Task WorldAuth_ReturnsPlaintextFailureWithoutWaitingForAddon(byte result)
+    {
+        await WithWorldPeerAsync(async stream =>
+        {
+            await stream.WriteAsync(new byte[] { 0, 6, 0xEC, 1, 1, 2, 3, 4 });
+            await ReadClientPacketAsync(stream);
+            await stream.WriteAsync(new byte[] { 0, 3, 0xEE, 1, result });
+        }, async client => Assert.Equal(result, await client.AuthenticateAsync("TEST", CaptureKey)));
+    }
+
+    [Fact]
+    public async Task WorldAuth_ConsumesEncryptedAddonAndRetainsReceiveCipherState()
+    {
+        await WithWorldPeerAsync(async stream =>
+        {
+            await stream.WriteAsync(new byte[] { 0, 6, 0xEC, 1, 1, 2, 3, 4 });
+            byte[] request = await ReadClientPacketAsync(stream);
+            Assert.Equal(0x01EDu, BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(2)));
+            Assert.Equal(5875u, BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(6)));
+            // Independently computed literal continuation of the pinned CaptureKey cipher stream.
+            await stream.WriteAsync(new byte[] { 239, 86, 206, 186, 0x0C, 0, 0, 0, 0, 0, 0, 0, 0, 0, 104, 70, 147, 153, 35, 97, 220, 131, 0x78, 0x56, 0x34, 0x12 });
+        }, async client =>
+        {
+            Assert.Equal((byte)0x0C, await client.AuthenticateAsync("TEST", CaptureKey));
+            WorldFrame pong = await client.ReadAsync();
+            Assert.Equal((ushort)0x01DD, pong.Opcode);
+            Assert.Equal(new byte[] { 0x78, 0x56, 0x34, 0x12 }, pong.Payload);
+        });
+    }
+
+    [Fact]
+    public async Task LogonAuth_ReturnsFailureResult()
+    {
+        await WithLogonPeerAsync(async stream =>
+        {
+            await ReadLogonChallengeAsync(stream);
+            await stream.WriteAsync(new byte[] { 0, 0, 4 });
+        }, async endpoint =>
+        {
+            MockAuthException exception = await Assert.ThrowsAsync<MockAuthException>(() => LogonClient.AuthenticateAsync(endpoint, "TEST", "TEST"));
+            Assert.Equal((byte)4, exception.Result);
+        });
+    }
+
+    [Fact]
+    public async Task LogonAuth_VerifiesM2BeforeReturningSessionKey()
+    {
+        await WithLogonPeerAsync(async stream =>
+        {
+            await ReadLogonChallengeAsync(stream);
+            byte[] challenge = new byte[119];
+            challenge[3] = 1; // nonzero server public key, deliberately unrelated to an account
+            challenge[35] = 1;
+            challenge[36] = 7;
+            challenge[37] = 32;
+            Convert.FromHexString("B79B3E2A87823CAB8F5EBFBF8EB10108535006298B5BADBD5B53E1895E644B89").CopyTo(challenge, 38);
+            await stream.WriteAsync(challenge);
+            byte[] proof = new byte[75];
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await stream.ReadExactlyAsync(proof, timeout.Token);
+            Assert.Equal((byte)1, proof[0]);
+            byte[] badM2 = new byte[26];
+            badM2[0] = 1;
+            await stream.WriteAsync(badM2);
+        }, async endpoint =>
+        {
+            MockProtocolException exception = await Assert.ThrowsAsync<MockProtocolException>(() => LogonClient.AuthenticateAsync(endpoint, "TEST", "TEST"));
+            Assert.Contains("M2 did not verify", exception.Message);
+        });
+    }
+
+    private static byte[] LittleEndian(string hex, int width)
+    {
+        byte[] bytes = Convert.FromHexString(hex.PadLeft(width * 2, '0'));
+        Array.Reverse(bytes);
+        return bytes;
+    }
+
+    private static async Task WithWorldPeerAsync(Func<NetworkStream, Task> server, Func<WorldClient, Task> action)
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        Task<TcpClient> accept = listener.AcceptTcpClientAsync();
+        await using WorldClient client = await WorldClient.ConnectAsync((IPEndPoint)listener.LocalEndpoint);
+        using TcpClient peer = await accept;
+        Task handler = server(peer.GetStream());
+        await action(client);
+        await handler.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    private static async Task WithLogonPeerAsync(Func<NetworkStream, Task> server, Func<IPEndPoint, Task> action)
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        Task<TcpClient> accept = listener.AcceptTcpClientAsync(timeout.Token).AsTask();
+        Task clientTask = action((IPEndPoint)listener.LocalEndpoint);
+        using TcpClient peer = await accept;
+        Task handler = server(peer.GetStream());
+        await clientTask.WaitAsync(timeout.Token);
+        await handler.WaitAsync(timeout.Token);
+    }
+
+    private static async Task<byte[]> ReadClientPacketAsync(NetworkStream stream)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        byte[] header = new byte[6];
+        await stream.ReadExactlyAsync(header, timeout.Token);
+        byte[] body = new byte[BinaryPrimitives.ReadUInt16BigEndian(header) - 4];
+        await stream.ReadExactlyAsync(body, timeout.Token);
+        return [.. header, .. body];
+    }
+
+    private static async Task ReadLogonChallengeAsync(NetworkStream stream)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        byte[] header = new byte[4];
+        await stream.ReadExactlyAsync(header, timeout.Token);
+        byte[] body = new byte[BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(2))];
+        await stream.ReadExactlyAsync(body, timeout.Token);
+        Assert.Equal((byte)3, header[1]);
+    }
+
+    private sealed class OneByteStream(byte[] bytes) : MemoryStream(bytes, writable: false)
+    {
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            => base.ReadAsync(buffer[..Math.Min(1, buffer.Length)], cancellationToken);
+    }
+}

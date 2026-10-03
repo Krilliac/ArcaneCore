@@ -12,11 +12,13 @@
     <Project Path="tests/ArcaneCore.Cryptography.Tests/ArcaneCore.Cryptography.Tests.csproj" />
     <Project Path="tests/ArcaneCore.Data.Tests/ArcaneCore.Data.Tests.csproj" />
     <Project Path="tests/ArcaneCore.Game.Tests/ArcaneCore.Game.Tests.csproj" />
+    <Project Path="tests/ArcaneCore.MockClient.Tests/ArcaneCore.MockClient.Tests.csproj" />
     <Project Path="tests/ArcaneCore.Realm.Tests/ArcaneCore.Realm.Tests.csproj" />
     <Project Path="tests/ArcaneCore.World.Tests/ArcaneCore.World.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/ArcaneCore.AccountTool/ArcaneCore.AccountTool.csproj" />
+    <Project Path="tools/ArcaneCore.MockClient/ArcaneCore.MockClient.csproj" />
     <Project Path="tools/spell-import/ArcaneCore.SpellImport.csproj" />
   </Folder>
 </Solution>
