@@ -1,4 +1,5 @@
 using System.Numerics;
+using ArcaneCore.AccountTool;
 using ArcaneCore.Cryptography;
 using ArcaneCore.Data;
 using ArcaneCore.Data.Auth;
@@ -42,14 +43,10 @@ switch (command)
 
 async Task<int> CreateAsync()
 {
-    if (args.Length != 3)
+    if (!TryReadCredentials(out string username, out string password))
     {
-        Console.Error.WriteLine("usage: arcane-account create <username> <password>");
         return 1;
     }
-
-    string username = args[1].ToUpperInvariant();
-    string password = args[2];
 
     if (await accounts.FindByUsernameAsync(username).ConfigureAwait(false) is not null)
     {
@@ -72,14 +69,10 @@ async Task<int> CreateAsync()
 
 async Task<int> SetPasswordAsync()
 {
-    if (args.Length != 3)
+    if (!TryReadCredentials(out string username, out string password))
     {
-        Console.Error.WriteLine("usage: arcane-account set-password <username> <password>");
         return 1;
     }
-
-    string username = args[1].ToUpperInvariant();
-    string password = args[2];
 
     if (await accounts.FindByUsernameAsync(username).ConfigureAwait(false) is null)
     {
@@ -130,6 +123,34 @@ async Task<int> ListAsync()
     return 0;
 }
 
+bool TryReadCredentials(out string username, out string password)
+{
+    username = string.Empty;
+    password = string.Empty;
+    PasswordRequest request = PasswordSource.Parse(args, Environment.GetEnvironmentVariable, Console.IsInputRedirected);
+    if (!request.IsValid)
+    {
+        Console.Error.WriteLine(request.Error);
+        return false;
+    }
+
+    if (request.Mode == PasswordMode.Argv)
+    {
+        Console.Error.WriteLine(PasswordSource.ArgvWarning);
+    }
+
+    string? read = PasswordSource.Read(request, Environment.GetEnvironmentVariable, Console.In, PasswordSource.PromptNoEcho);
+    if (read is null)
+    {
+        Console.Error.WriteLine("no password supplied (empty, or the two prompts did not match)");
+        return false;
+    }
+
+    username = request.Username!.ToUpperInvariant();
+    password = read;
+    return true;
+}
+
 static (byte[] Salt, byte[] Verifier) MakeCredentials(string username, string password)
 {
     byte[] salt = WowSrp6.GenerateSalt();
@@ -152,8 +173,11 @@ static void PrintUsage()
 {
     Console.Error.WriteLine("ArcaneCore account tool");
     Console.Error.WriteLine("usage:");
-    Console.Error.WriteLine("  arcane-account create <username> <password>");
-    Console.Error.WriteLine("  arcane-account set-password <username> <password>");
+    Console.Error.WriteLine("  arcane-account create <username> [--password-stdin]");
+    Console.Error.WriteLine("  arcane-account set-password <username> [--password-stdin]");
+    Console.Error.WriteLine("    the password comes from a no-echo prompt, from stdin (--password-stdin or piped),");
+    Console.Error.WriteLine("    or from the ARCANE_ACCOUNT_PASSWORD environment variable; '<username> <password>' still");
+    Console.Error.WriteLine("    works but exposes the password in process listings and shell history (warned on stderr)");
     Console.Error.WriteLine("  arcane-account set-gmlevel <username> <0-3|player|moderator|gamemaster|administrator>");
     Console.Error.WriteLine("  arcane-account list");
 }

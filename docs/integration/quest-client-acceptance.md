@@ -99,7 +99,8 @@ $config | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $run 'ap
 git -C $repo rev-parse HEAD | Set-Content -LiteralPath (Join-Path $run 'server-sha.txt')
 Push-Location $run
 $testPassword = Read-Host 'Password used only for this disposable account'
-dotnet (Join-Path $repo 'tools/ArcaneCore.AccountTool/bin/Release/net10.0/arcane-account.dll') create CLIENTA $testPassword
+# The password goes in on stdin, never on the command line (visible in process listings and history).
+$testPassword | dotnet (Join-Path $repo 'tools/ArcaneCore.AccountTool/bin/Release/net10.0/arcane-account.dll') create CLIENTA --password-stdin
 if ($LASTEXITCODE -ne 0) { throw 'Account creation failed; inspect this disposable configuration.' }
 dotnet (Join-Path $repo 'tools/ArcaneCore.AccountTool/bin/Release/net10.0/arcane-account.dll') list
 Pop-Location
