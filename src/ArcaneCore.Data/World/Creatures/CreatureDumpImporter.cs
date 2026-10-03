@@ -1,5 +1,6 @@
 using System.Globalization;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 
@@ -33,6 +34,12 @@ public sealed record CreatureImportReport(
 
     /// <summary>cmangos <c>creature_ai_texts</c> rows.</summary>
     public int AiTexts { get; init; }
+
+    /// <summary><c>broadcast_text</c> rows (the lines positive EventAI text ids refer to).</summary>
+    public int BroadcastTexts { get; init; }
+
+    /// <summary><c>creature_ai_summons</c> rows.</summary>
+    public int AiSummons { get; init; }
 }
 
 /// <summary>
@@ -64,11 +71,20 @@ public sealed class CreatureDumpImporter
     private readonly Dictionary<(byte Class, byte Level), ClassLevelStats> _classLevelStats = [];
     private readonly Dictionary<uint, CreatureAiScriptRow> _aiScripts = [];
     private readonly Dictionary<int, CreatureAiTextRow> _aiTexts = [];
+    private readonly Dictionary<uint, BroadcastTextRow> _broadcastTexts = [];
+    private readonly Dictionary<uint, CreatureAiSummonRow> _aiSummons = [];
     private bool _warnedVMangosAiEvents;
     private readonly List<string> _warnings = [];
     private int _skippedSpawns;
 
     public CreatureDumpDialect Dialect { get; private set; }
+
+    /// <summary>
+    /// How template <c>ExtraFlags</c> / <c>flags_extra</c> are decoded. <see cref="CreatureExtraFlagsDialect.Unknown"/> (the
+    /// default) detects it per row from the column name: <c>flags_extra</c> is vmangos, <c>ExtraFlags</c> is cmangos.
+    /// Set it to force a dialect for a dump whose column names do not say.
+    /// </summary>
+    public CreatureExtraFlagsDialect ExtraFlagsDialect { get; set; }
 
     /// <summary>Read one dump (call again for further files; later rows replace earlier ones with the same key).</summary>
     public void Read(TextReader dump)
@@ -107,6 +123,12 @@ public sealed class CreatureDumpImporter
                     break;
                 case "creature_ai_texts":
                     ReadAiText(row);
+                    break;
+                case "broadcast_text":
+                    ReadBroadcastText(row);
+                    break;
+                case "creature_ai_summons":
+                    ReadAiSummon(row);
                     break;
                 case "creature_ai_events":
                     if (!_warnedVMangosAiEvents)
@@ -165,6 +187,8 @@ public sealed class CreatureDumpImporter
             {
                 await db.Set<CreatureAiScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureAiTextRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<BroadcastTextRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<CreatureAiSummonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureAddonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureMovementRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureSpawnRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
@@ -179,6 +203,8 @@ public sealed class CreatureDumpImporter
             await InsertBatchedAsync(db, _addons.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _aiScripts.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _aiTexts.Values, cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _broadcastTexts.Values, cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _aiSummons.Values, cancellationToken).ConfigureAwait(false);
 
             if (savepoint is not null)
             {
@@ -236,11 +262,17 @@ public sealed class CreatureDumpImporter
     {
         AiEvents = _aiScripts.Count,
         AiTexts = _aiTexts.Count,
+        BroadcastTexts = _broadcastTexts.Count,
+        AiSummons = _aiSummons.Count,
     };
 
     /// <summary>The EventAI rows that would be written (for inspection and tests).</summary>
     public (IReadOnlyCollection<CreatureAiScriptRow> Scripts, IReadOnlyCollection<CreatureAiTextRow> Texts) AiSnapshot()
         => ([.. _aiScripts.Values], [.. _aiTexts.Values]);
+
+    /// <summary>The broadcast texts and EventAI summon locations that would be written (for inspection and tests).</summary>
+    public (IReadOnlyCollection<BroadcastTextRow> BroadcastTexts, IReadOnlyCollection<CreatureAiSummonRow> Summons) BehaviourSnapshot()
+        => ([.. _broadcastTexts.Values], [.. _aiSummons.Values]);
 
     private static async Task InsertBatchedAsync<T>(WorldDbContext db, IEnumerable<T> rows, CancellationToken ct)
         where T : class
@@ -333,6 +365,18 @@ public sealed class CreatureDumpImporter
             CorpseDecaySeconds = U32(row, "CorpseDecay"),
             ExtraFlags = U32(row, "ExtraFlags", "flags_extra"),
             AIName = Truncate(Str(row, "AIName", "ai_name"), 64),
+
+            // Behaviour columns: cmangos Detection/CallForHelp/Pursuit/Leash/Timeout (mangos.sql creature_template),
+            // vmangos detection_range/call_for_help_range/leash_range (CreatureDefines.h:250-252). A missing
+            // Detection column stays null so the content default (18) applies.
+            Detection = row.TryGet(out _, "Detection", "detection_range") ? F32(row, 18.0f, "Detection", "detection_range") : null,
+            CallForHelp = F32(row, 0f, "CallForHelp", "call_for_help_range"),
+            Pursuit = U32(row, "Pursuit"),
+            Leash = F32(row, 0f, "Leash", "leash_range"),
+            Timeout = U32(row, "Timeout"),
+            StaticFlags1 = U32(row, "StaticFlags1", "static_flags1"),
+            StaticFlags2 = U32(row, "StaticFlags2", "static_flags2"),
+            ExtraFlagsDialect = (byte)ResolveExtraFlagsDialect(row, vmangos),
         };
 
         VMangosStats? stats = null;
@@ -348,6 +392,26 @@ public sealed class CreatureDumpImporter
         }
 
         _templates[entry] = (patch, t, stats);
+    }
+
+    private CreatureExtraFlagsDialect ResolveExtraFlagsDialect(DumpRow row, bool vmangosTemplate)
+    {
+        if (ExtraFlagsDialect != CreatureExtraFlagsDialect.Unknown)
+        {
+            return ExtraFlagsDialect;
+        }
+
+        if (row.Has("flags_extra"))
+        {
+            return CreatureExtraFlagsDialect.VMangos;
+        }
+
+        if (row.Has("ExtraFlags"))
+        {
+            return CreatureExtraFlagsDialect.CMangos;
+        }
+
+        return vmangosTemplate ? CreatureExtraFlagsDialect.VMangos : CreatureExtraFlagsDialect.CMangos;
     }
 
     /// <summary>vmangos CreatureInfo::GetTypeFlags — the client-visible subset of the static flags.</summary>
@@ -539,18 +603,41 @@ public sealed class CreatureDumpImporter
 
     private void ReadAiScript(DumpRow row)
     {
+        // cmangos CreatureEventAIMgr.cpp:233-252: a positive creature_id is a template entry, a negative
+        // one is a spawn guid (-creature_id).
+        int key = Int(Get(row, "creature_id"));
+        uint id = U32(row, "id");
+
+        // event_chance is read as GetUInt8; 0 never triggers and above 100 is forced to 100 (cpp:266, 272-279).
+        uint chance = U32(row, "event_chance");
+        if (chance == 0)
+        {
+            Warn($"creature_ai_scripts {id}: 0 percent chance; the event never triggers");
+        }
+        else if (chance > 100)
+        {
+            Warn($"creature_ai_scripts {id}: chance {chance} is above 100; adjusted to 100");
+            chance = 100;
+        }
+
+        // event_flags is read as GetUInt32 (cpp:267); the old byte column keeps the low byte.
+        uint flags = U32(row, "event_flags");
         var script = new CreatureAiScriptRow
         {
-            Id = U32(row, "id"),
-            CreatureId = U32(row, "creature_id"),
+            Id = id,
+            CreatureId = key > 0 ? (uint)key : 0,
+            CreatureGuid = key < 0 ? (uint)-(long)key : 0,
             EventType = U8(row, "event_type"),
             EventInversePhaseMask = U32(row, "event_inverse_phase_mask"),
-            EventChance = U8(row, "event_chance"),
-            EventFlags = U8(row, "event_flags"),
+            EventChance = (byte)chance,
+            EventFlags = (byte)(flags & 0xFF),
+            EventFlags32 = flags,
             EventParam1 = Int(Get(row, "event_param1")),
             EventParam2 = Int(Get(row, "event_param2")),
             EventParam3 = Int(Get(row, "event_param3")),
             EventParam4 = Int(Get(row, "event_param4")),
+            EventParam5 = Int(Get(row, "event_param5")),
+            EventParam6 = Int(Get(row, "event_param6")),
             Action1Type = U8(row, "action1_type"),
             Action1Param1 = Int(Get(row, "action1_param1")),
             Action1Param2 = Int(Get(row, "action1_param2")),
@@ -577,6 +664,8 @@ public sealed class CreatureDumpImporter
             Type = U8(row, "type"),
             Language = U32(row, "language"),
             Emote = U32(row, "emote"),
+            Sound = U32(row, "sound"),
+            BroadcastTextId = U32(row, "broadcast_text_id"),
         };
         if (text.Entry >= 0)
         {
@@ -585,6 +674,42 @@ public sealed class CreatureDumpImporter
         }
 
         _aiTexts[text.Entry] = text;
+    }
+
+    // broadcast_text: the columns mangos-classic ObjectMgr::LoadBroadcastText reads (ObjectMgr.cpp:7786-7821).
+    private void ReadBroadcastText(DumpRow row)
+    {
+        var text = new BroadcastTextRow
+        {
+            Id = U32(row, "Id"),
+            Text = Truncate(Str(row, "Text"), 2000),
+            FemaleText = Truncate(Str(row, "Text1"), 2000),
+            ChatType = U8(row, "ChatTypeID"),
+            Language = U8(row, "LanguageID"),
+            SoundId = U32(row, "SoundEntriesID1"),
+            EmoteId1 = U32(row, "EmoteID1"),
+            EmoteId2 = U32(row, "EmoteID2"),
+            EmoteId3 = U32(row, "EmoteID3"),
+            EmoteDelay1 = U32(row, "EmoteDelay1"),
+            EmoteDelay2 = U32(row, "EmoteDelay2"),
+            EmoteDelay3 = U32(row, "EmoteDelay3"),
+        };
+        _broadcastTexts[text.Id] = text;
+    }
+
+    private void ReadAiSummon(DumpRow row)
+    {
+        var summon = new CreatureAiSummonRow
+        {
+            Id = U32(row, "id"),
+            X = F32(row, 0f, "position_x"),
+            Y = F32(row, 0f, "position_y"),
+            Z = F32(row, 0f, "position_z"),
+            Orientation = F32(row, 0f, "orientation"),
+            SpawnTimeSeconds = U32Or(row, 120, "spawntimesecs"),
+            Comment = Truncate(Str(row, "comment"), 255),
+        };
+        _aiSummons[summon.Id] = summon;
     }
 
     private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max];

@@ -16,6 +16,8 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         List<CreatureAddonRow> addons = await db.Set<CreatureAddonRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureAiScriptRow> scripts = await db.Set<CreatureAiScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureAiTextRow> texts = await db.Set<CreatureAiTextRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<BroadcastTextRow> broadcastTexts = await db.Set<BroadcastTextRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<CreatureAiSummonRow> summons = await db.Set<CreatureAiSummonRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
 
         return new CreatureContent(
             templates.Select(ToTemplate),
@@ -36,8 +38,17 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
             movement.Select(m => (m.SpawnGuid, new CreatureWaypoint(m.Point, m.X, m.Y, m.Z, m.Orientation, m.WaitTimeMs) { Run = m.Run })),
             models.Select(m => new CreatureModelInfo(m.DisplayId, m.BoundingRadius, m.CombatReach, m.Gender, m.DisplayIdOtherGender)),
             addons.Select(a => new CreatureAddon(a.Guid, a.MountDisplayId, a.StandState, a.SheathState, a.EmoteState)),
-            new CreatureAiContent(scripts.Select(CreatureAiDataModule.ToEvent), texts.Select(CreatureAiDataModule.ToText)));
+            new CreatureAiContent(
+                scripts.Select(CreatureAiDataModule.ToEvent),
+                texts.Select(CreatureAiDataModule.ToText),
+                new BroadcastTextCatalog(broadcastTexts.Select(ToBroadcastText)),
+                summons.Select(s => new CreatureAiSummon(s.Id, s.X, s.Y, s.Z, s.Orientation, s.SpawnTimeSeconds)),
+                EventAiDialect.CMangos));
     }
+
+    internal static BroadcastText ToBroadcastText(BroadcastTextRow r) => new(
+        r.Id, r.Text, r.FemaleText, r.ChatType, r.Language, r.SoundId,
+        [r.EmoteId1, r.EmoteId2, r.EmoteId3], [r.EmoteDelay1, r.EmoteDelay2, r.EmoteDelay3]);
 
     internal static CreatureTemplate ToTemplate(CreatureTemplateRow r) => new()
     {
@@ -82,5 +93,13 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         CorpseDecaySeconds = r.CorpseDecaySeconds,
         ExtraFlags = r.ExtraFlags,
         AIName = r.AIName,
+        Detection = r.Detection ?? CreatureTemplate.DefaultDetectionRange,
+        CallForHelp = r.CallForHelp,
+        Pursuit = r.Pursuit,
+        Leash = r.Leash,
+        Timeout = r.Timeout,
+        StaticFlags1 = r.StaticFlags1,
+        StaticFlags2 = r.StaticFlags2,
+        ExtraFlagsDialect = (CreatureExtraFlagsDialect)r.ExtraFlagsDialect,
     };
 }

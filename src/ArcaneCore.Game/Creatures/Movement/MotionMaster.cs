@@ -35,6 +35,9 @@ public sealed class MotionMaster
 
     internal ICreatureMovementGenerator Default => _default;
 
+    /// <summary>False when the generator on top has found its target unreachable (always true for generators that never do).</summary>
+    public bool IsReachable => Top.IsReachable;
+
     /// <summary>Install the default generator and start it (spawn, respawn).</summary>
     internal void Initialize(ICreatureMovementGenerator defaultGenerator, ICreatureMover mover, bool start)
     {

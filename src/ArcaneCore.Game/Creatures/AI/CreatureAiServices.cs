@@ -152,4 +152,7 @@ public sealed class CreatureAiServices
     public ICreatureSpellCaster? Spells { get; init; }
 
     public CreatureAiFactory Factory { get; init; } = new();
+
+    /// <summary>Aura stacks and casting state of any unit (EventAI aura and target-casting events); null: no auras, nobody casting.</summary>
+    public IUnitSpellQueries? UnitSpells { get; init; }
 }

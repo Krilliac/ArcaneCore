@@ -86,11 +86,22 @@ when it inspects a prefix.
 | Key | Default | Meaning (vmangos/cmangos config) |
 |---|---|---|
 | `AggroRate` | 1.0 | Rate.Creature.Aggro; 0 turns aggro on sight off |
+| `AggroScanMode` | `Relocation` | `Relocation` (retail: movement-driven AI notify) or `Poll` (every creature checks every player every tick, development) |
+| `AiRelocationNotifyDelayMs` | 1000 | Visibility.AIRelocationNotifyDelay |
+| `MaxCreatureAttackRadius` | 40 | MaxCreaturesAttackRadius (yd, times the aggro rate) |
+| `RespawnPacifyMs` | 5000 | A respawned creature cannot initiate attacks for this long (vmangos SetTempPacified) |
+| `SendAiReaction` | true | SMSG_AI_REACTION(hostile) on every attack start (the aggro sound) |
+| `AggroUsesBoundingRadius` | false | Development: add both bounding radii to the aggro range (retail measures the plain distance) |
+| `EventAi:UpdateIntervalMs` | 500 | cmangos EVENT_UPDATE_TIME: how often timer-driven EventAI events are evaluated |
+| `EventAi:DebugOnlyEvents` | false | Run EventAI rows flagged EFLAG_DEBUG_ONLY |
+| `EventAi:ReportUnsupported` | true | Log rows with unsupported events, actions or conditions once per creature entry |
 | `AssistanceRadius` | 10 | CreatureFamilyAssistanceRadius |
 | `AssistanceDelayMs` | 1500 | CreatureFamilyAssistanceDelay |
 | `FleeAssistanceRadius` | 30 | CreatureFamilyFleeAssistanceRadius |
 | `FleeDelayMs` | 7000 | CreatureFamilyFleeDelay |
-| `ThreatRadius` | 60 | ThreatRadius (leash) |
+| `ThreatRadius` | 50 | ThreatRadius (soft leash sphere around the fight start; the radius is max(1.5 x aggro radius, ThreatRadius)) |
+| `LeashCheckIntervalMs` | 3000 | How often a creature in combat runs the hard-leash check and refreshes its leash extension while crowd controlled (0 turns the template hard leash off) |
+| `LeashExtensionSeconds` | 12 | Whole seconds a victim outside the threat area is tolerated after the leash clock starts |
 | `FactionTemplateDbcPath` | — | FactionTemplate.dbc for the default hostility |
 
 ## Merge notes

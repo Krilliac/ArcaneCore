@@ -107,6 +107,43 @@ public sealed record CreatureTemplate
     /// empty picks the default (docs/areas/creature-ai.md).
     /// </summary>
     public string AIName { get; init; } = string.Empty;
+
+    /// <summary>vmangos <c>CreatureInfo::detection_range</c> default (Objects/CreatureDefines.h:250); classic-db <c>Detection</c> column default.</summary>
+    public const float DefaultDetectionRange = 18.0f;
+
+    /// <summary>
+    /// Proximity-aggro detection range in yards (cmangos <c>Detection</c>, vmangos <c>detection_range</c>);
+    /// the base of the aggro radius (vmangos Objects/Creature.cpp:2193-2240, cmangos Entities/Unit.cpp:11784).
+    /// </summary>
+    public float Detection { get; init; } = DefaultDetectionRange;
+
+    /// <summary>Call-for-help range in yards (cmangos <c>CallForHelp</c>, vmangos <c>call_for_help_range</c>); 0 = the creature calls nobody.</summary>
+    public float CallForHelp { get; init; }
+
+    /// <summary>cmangos <c>Pursuit</c>: milliseconds without a hit refresh after which the creature evades; 0 = unset.</summary>
+    public uint Pursuit { get; init; }
+
+    /// <summary>Hard leash range in yards from the combat start point (cmangos <c>Leash</c>, vmangos <c>leash_range</c>); 0 = unset.</summary>
+    public float Leash { get; init; }
+
+    /// <summary>cmangos <c>Timeout</c>: milliseconds a leash refresh lasts before evade; 0 = unset.</summary>
+    public uint Timeout { get; init; }
+
+    /// <summary>vmangos <c>static_flags1</c> / cmangos <c>StaticFlags1</c> (CREATURE_STATIC_FLAG_*; identical bits in both).</summary>
+    public uint StaticFlags1 { get; init; }
+
+    /// <summary>vmangos <c>static_flags2</c> / cmangos <c>StaticFlags2</c>.</summary>
+    public uint StaticFlags2 { get; init; }
+
+    /// <summary>Which engine authored <see cref="ExtraFlags"/>; decode through <see cref="Behaviour"/>.</summary>
+    public CreatureExtraFlagsDialect ExtraFlagsDialect { get; init; }
+
+    /// <summary>
+    /// The behaviour switches decoded once from the dialect-specific flag columns; AI and movement code
+    /// reads this instead of raw <see cref="ExtraFlags"/> bits.
+    /// </summary>
+    public CreatureBehaviourFlags Behaviour
+        => CreatureBehaviour.Normalize(ExtraFlagsDialect, ExtraFlags, StaticFlags1, StaticFlags2, Civilian);
 }
 
 /// <summary>One placed creature (a <c>creature</c> row).</summary>

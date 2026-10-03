@@ -139,19 +139,7 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
     }
 
     private void OnMapUnloading(Map map) => _instanceSystems.Remove(map);
-    private CreatureAiServices BuildAiServices()
-    {
-        ICreatureHostility hostility = services.GetService<ICreatureHostility>()
-            ?? new FactionCreatureHostility(services.GetService<FactionTemplateCatalog>()
-                ?? (string.IsNullOrWhiteSpace(Options.FactionTemplateDbcPath)
-                    ? FactionTemplateCatalog.Empty
-                    : FactionTemplateDbcReader.Load(Options.FactionTemplateDbcPath)));
-        SpellFeature? spells = services.GetService<SpellFeature>();
-        return new CreatureAiServices
-        {
-            Hostility = hostility,
-            Spells = spells is null ? null : new SpellSystemCreatureCaster(spells.System),
-            Factory = services.GetService<CreatureAiFactory>() ?? new CreatureAiFactory(),
-        };
-    }
+
+    // The services are assembled (and bound from the container by reflection) in CreatureAiServicesBinder.
+    private CreatureAiServices BuildAiServices() => CreatureAiServicesBinder.Build(services, Options);
 }
