@@ -82,6 +82,13 @@ public class Item : WorldObject
         set => SetUInt32(UpdateFields.ItemFieldDurability, value);
     }
 
+    /// <summary>ITEM_FIELD_DURATION: remaining lifetime in seconds of a timed item (0 = untimed).</summary>
+    public uint Duration
+    {
+        get => GetUInt32(UpdateFields.ItemFieldDuration);
+        set => SetUInt32(UpdateFields.ItemFieldDuration, value);
+    }
+
     public uint MaxDurability => GetUInt32(UpdateFields.ItemFieldMaxdurability);
 
     /// <summary>ITEM_FIELD_FLAGS.</summary>

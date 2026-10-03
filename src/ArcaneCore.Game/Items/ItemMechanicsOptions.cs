@@ -22,4 +22,13 @@ public sealed class ItemMechanicsOptions
     /// only exposes the value.
     /// </summary>
     public double DurabilityLossChanceDamage { get; set; } = 0.5;
+
+    /// <summary>
+    /// How often (ms) the per-map item maintenance runs: timed-item ticks and map/area-limited item
+    /// checks. vmangos reacts to the zone change itself (Player::UpdateZone, Player.cpp:6643-6656)
+    /// and ticks durations once a second (Player.cpp:1155); here Player.ZoneId has no change
+    /// event, so the zone is polled at this interval (a deliberate, documented deviation: the result
+    /// is the same within one interval).
+    /// </summary>
+    public int ZoneLimitCheckMs { get; set; } = 1000;
 }
