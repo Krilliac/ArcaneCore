@@ -42,6 +42,7 @@ public static class WorldServiceCollectionExtensions
         services.Configure<WorldRuntimeOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<WorldSessionOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<SocialOptions>(configuration.GetSection(SocialOptions.SectionName));
+        services.Configure<Bans.BanOptions>(configuration.GetSection(Bans.BanOptions.SectionName));
 
         services.AddSingleton(_ => BuildOpcodeTable());
         services.AddSingleton(_ => ChatCommands.CreateTable());

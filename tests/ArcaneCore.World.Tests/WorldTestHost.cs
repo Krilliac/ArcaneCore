@@ -7,6 +7,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.World.Bans;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Features;
@@ -35,7 +36,8 @@ internal sealed class WorldTestHost : IAsyncDisposable
     private readonly ILogger _sessionLogger;
 
     private WorldTestHost(
-        int compressionThreshold, Action<WorldRuntimeOptions>? configure, WorldSessionOptions? sessionOptions, ILogger? sessionLogger)
+        int compressionThreshold, Action<WorldRuntimeOptions>? configure, WorldSessionOptions? sessionOptions, ILogger? sessionLogger,
+        BanOptions? banOptions)
     {
         _sessionOptions = sessionOptions ?? new WorldSessionOptions();
         _sessionLogger = sessionLogger ?? NullLogger.Instance;
@@ -50,6 +52,10 @@ internal sealed class WorldTestHost : IAsyncDisposable
         collection.AddSingleton(Registry);
         collection.AddSingleton(StatusEvents);
         collection.AddSingleton<IBanStore>(Bans);
+        if (banOptions is not null)
+        {
+            collection.AddSingleton(Microsoft.Extensions.Options.Options.Create(banOptions));
+        }
         collection.AddSingleton<ICharacterStore>(Characters);
         collection.AddSingleton<IAccountDataStore>(AccountData);
         collection.AddSingleton<IWorldDataStore>(WorldData);
@@ -114,8 +120,8 @@ internal sealed class WorldTestHost : IAsyncDisposable
     /// <summary>Start a host. Compression is off by default so tests can read update blocks directly.</summary>
     public static WorldTestHost Start(
         int compressionThreshold = 0, Action<WorldRuntimeOptions>? configure = null, WorldSessionOptions? sessionOptions = null,
-        ILogger? sessionLogger = null)
-        => new(compressionThreshold, configure, sessionOptions, sessionLogger);
+        ILogger? sessionLogger = null, BanOptions? banOptions = null)
+        => new(compressionThreshold, configure, sessionOptions, sessionLogger, banOptions);
 
     /// <summary>Create an account with a fresh session key (as if it had just logged in at the realm).</summary>
     public async Task<byte[]> AddAccountAsync(string name, AccountSecurity security = AccountSecurity.Player)
