@@ -109,6 +109,27 @@ See the [async contract](docs/integration/quest-settlement-async.md) and the
 [bounded real-client handoff](docs/integration/quest-client-acceptance.md).
 
 This demonstrates the implemented exchange against ArcaneCore's own listeners.
+
+The NPC greeting successor retains all 41 checks and adds 18 actual wire checks,
+passing **59 checks / 142 frames / 5.041 seconds** on the exact native source
+`248accc71acbe70144b92c33761d8f9ae0ab07cc`. It decodes both hello responses,
+eligible/mixed menus, selected details and incomplete/completed turn-in phases,
+and verifies rewarded history stays excluded across duplicate choice and relog.
+Full native Release passed **8,866 tests**, zero failures/skips and zero
+warnings/errors. [Full source provider CI](https://github.com/Krilliac/ArcaneCore/actions/runs/37104390069)
+passed **8,978 tests** across SQLite/MariaDB 10.11/PostgreSQL 16 and the standalone
+scenario before canonical integration. Schema versions remain auth 2/characters 6/world 6.
+
+`arcane-mock client-fixture --directory <new absolute path> --account <name>
+--password <disposable password>` writes persistent repository-authored content,
+three SQLite databases, server-only faction data, loopback configuration and
+provenance. It does not start a daemon or clean up its output. Eleven focused
+tests cover transactional rollback, existing-content/output refusal, credentials,
+hashes, cancellation and normal world loading with its listener removed. The
+[separate UI handoff](docs/integration/quest-ui-acceptance.md) preserves the user's
+original f8ae6e8 acceptance target and reserves actual client work for their
+selected file-access chat; publishing this successor does not change that pin.
+
 Rendering, UI, client executable acceptance, terrain/content fidelity, animation,
 and broader playable quest/reward behaviour still require later work and real-client
 acceptance. No default branch merge, deployment or release is part of this tranche.

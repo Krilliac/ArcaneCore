@@ -8,9 +8,14 @@ It uses repository-owned synthetic content and normal realm/world daemons.
 The preceding qualified integration stays pinned at
 `f8ae6e8b5f805e94f145194a82f80e876fa2dec3`; its
 [earlier client handoff](quest-client-acceptance.md) remains a historical procedure.
-This UI follow-up needs its own exact qualified source/integration SHA and final
-CI evidence, which the integrator records before scheduling the session. No
-actual client UI, rendering or gameplay pass is claimed by this document.
+The separately qualified UI source is
+`248accc71acbe70144b92c33761d8f9ae0ab07cc` on
+`codex/quest-greeting-fixture-20261003`.
+[Full source provider CI](https://github.com/Krilliac/ArcaneCore/actions/runs/37104390069)
+passed Release with zero warnings/errors, all 8,978 tests and the 59-check native
+scenario before canonical integration. Canonical publication is tracked in
+[draft #11](https://github.com/Krilliac/ArcaneCore/pull/11). No actual client UI,
+rendering or gameplay pass is claimed by this document.
 The user's current acceptance target remains the preceding pin. This separate UI
 follow-up is used only when the user chooses it in their selected file-access chat;
 publishing it does not switch that session or its baseline instructions.
