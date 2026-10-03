@@ -207,7 +207,8 @@ public sealed class WorldRuntime : IDisposable
     /// <summary>
     /// Ask for an instance map to be unloaded after the current map pass (world thread). It is
     /// unloaded only if it is still registered, is not instance 0, has no players and nobody is
-    /// in transit from it; otherwise the request is dropped and the owner asks again later.
+    /// in transit from it. Requests wait for transit to finish; occupied or replaced maps drop
+    /// their request and the owner asks again later.
     /// </summary>
     public void UnloadMap(Map map)
     {
@@ -337,8 +338,16 @@ public sealed class WorldRuntime : IDisposable
         foreach (Map map in pending)
         {
             if (!_maps.TryGetValue((map.MapId, map.InstanceId), out Map? current) || !ReferenceEquals(current, map)
-                || map.PlayerCount > 0 || map.TransitCount > 0)
+                || map.PlayerCount > 0)
             {
+                continue;
+            }
+
+            if (map.TransitCount > 0)
+            {
+                // A reset's unload timer has already expired. Keep this exact source map's
+                // request until its final worldport acknowledgment (or disconnect) drains transit.
+                _unloadRequests.Add(map);
                 continue;
             }
 

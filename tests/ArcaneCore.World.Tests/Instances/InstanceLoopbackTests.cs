@@ -3,6 +3,7 @@ using System.Text;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -98,6 +99,61 @@ public sealed class InstanceLoopbackTests
         // Entering again creates a new instance.
         await EnterThroughTriggerAsync(host, client, "Instsolo");
         Assert.NotEqual(id, await InstanceOfAsync(host, "Instsolo"));
+    }
+
+    [Fact]
+    public async Task ResetInstance_WorldportAckAfterUnloadExpiry_UnloadsExactSourceMap()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("INSTTRANSIT", "Insttransit");
+        await using WorldTestClient outside = await host.EnterWorldAsync("INSTOUTSIDE", "Instoutside");
+        await GroupAsync(host, client, outside, "Insttransit", "Instoutside");
+        await EnterThroughTriggerAsync(host, client, "Insttransit");
+
+        (Player player, Map source, InstanceFeature feature, TeleportService teleports) = await host.PlayerStateAsync(
+            "Insttransit", p => (p, p.Map!, Services(p).GetRequiredService<InstanceFeature>(), TeleportFeatureOf(p).Teleports));
+        var observer = new WorldportAckMapObserver(player, teleports);
+        await host.OnWorldAsync(() =>
+        {
+            feature.Options.HomebindTimerMs = 1;
+            source.AddUpdater(observer);
+        });
+
+        // The remaining group member is outside, so disbanding resets this occupied instance
+        // and homebinds its last player. Keep the client in transit past the 1 ms unload delay.
+        await client.SendAsync(WorldOpcode.CmsgGroupDisband, []);
+        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(await client.ReadUntilAsync(WorldOpcode.SmsgNewWorld)));
+        await host.WaitForWorldAsync(
+            () => source.TransitCount == 1 && feature.Instances.StateOf(source)?.UnloadTimerMs == 0,
+            "the reset map's unload timer expires while the client is in transit");
+        await host.OnWorldAsync(() =>
+        {
+            Assert.Same(source, host.World.FindMap(Deadmines, source.InstanceId));
+            Assert.Equal(0, source.PlayerCount);
+            Assert.True(feature.Instances.StateOf(source)!.ResetAfterUnload);
+            Assert.Null(feature.Instances.FindSave(source.InstanceId));
+            Assert.Null(player.Map);
+        });
+
+        // The real world handler runs during source-map packet processing and posts arrival
+        // to the next command pass; a direct service call between ticks skips this ordering.
+        await client.SendAsync(WorldOpcode.MsgMoveWorldportAck, []);
+        Assert.Equal(1, await observer.AckTransitCount.WaitAsync(TimeSpan.FromSeconds(10)));
+        await observer.ArrivalMapPass.WaitAsync(TimeSpan.FromSeconds(10));
+        await client.ReadUntilAsync(WorldOpcode.SmsgInitWorldStates);
+        // The observer's arrival signal came from the map pass, so this next command runs
+        // after that pass's deferred unloads, without a timing-based quiet-window assertion.
+        await host.OnWorldAsync(() =>
+        {
+            Assert.Null(host.World.FindMap(Deadmines, source.InstanceId));
+            Assert.True(source.IsUnloaded);
+            Assert.Null(feature.Instances.StateOf(source));
+            Assert.Equal(0, source.TransitCount);
+            Assert.Same(player, host.World.FindOnlinePlayer(player.Guid));
+            Assert.Same(host.World.FindMap(0), player.Map);
+            Assert.False(player.Map!.IsUnloaded);
+            Assert.Equal(2, host.World.OnlinePlayerCount);
+        });
     }
 
     [Fact]
@@ -220,4 +276,29 @@ public sealed class InstanceLoopbackTests
     }
 
     private static byte[] CString(string text) => [.. Encoding.UTF8.GetBytes(text), 0];
+
+    private sealed class WorldportAckMapObserver(Player player, TeleportService teleports) : IMapUpdater
+    {
+        private readonly TaskCompletionSource<int> _ackTransitCount = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _arrivalMapPass = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<int> AckTransitCount => _ackTransitCount.Task;
+
+        public Task ArrivalMapPass => _arrivalMapPass.Task;
+
+        public void OnPlayerRemoved(Map map, Player removed) { }
+
+        public void Update(Map map, uint diffMs)
+        {
+            if (teleports.StageOf(player) == TeleportStage.Arriving)
+            {
+                _ackTransitCount.TrySetResult(map.TransitCount);
+            }
+
+            if (player.Map is { MapId: 0 } && map.TransitCount == 0)
+            {
+                _arrivalMapPass.TrySetResult(true);
+            }
+        }
+    }
 }
