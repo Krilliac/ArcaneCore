@@ -14,7 +14,7 @@ References (`D:\refs`): **vmangos** is primary; **mangos-classic** and **classic
 | Slice | What | Main files |
 |---|---|---|
 | Foundation | `SpellMechanic` (vmangos SpellDefines.h:659-695), `DispelType` and masks, school masks, raw attribute bits, `SpellInfo` mechanic/area views, boss-relative levels (`SpellCaster.cpp:70-114`), `SpellRuleOptions`, `ISpellModifiers` / `ISpellCritSource` seams, 1.12 packets SMSG_SPELLORDAMAGE_IMMUNE / SMSG_SPELLDISPELLOG / SMSG_DISPEL_FAILED (`wow_messages` smsg_*.md) | `Rules/SpellMechanic.cs` ... `Rules/SpellRulePackets.cs` |
-| Hit, crit, binary, resist chance | Magic hit chance (`SpellCaster.cpp:772-880`): 22% base floor, boss levels, victim attacker-hit auras, AoE avoidance, mechanic and debuff resistance, ALWAYS_HIT, IGNORE_RESISTANCES, binary scaling, talent resist-miss mod, 1-99% clamp. Resist chance (`SpellCaster.cpp:882-925`): penetration, vulnerability, innate creature resistance scaled by level/63. `IsBinary` is the vmangos list (`SpellMgr.cpp:3342-3393`). Crit (`Unit.cpp:5212-5316`, `SpellCaster.cpp:958-1024`): CanCrit needs a damage/heal effect, creatures never crit unless configured, potions and healthstones 10%, victim attacker-crit auras, melee-class spells always crit a player who is not standing, exact crit damage/heal amounts | `Rules/MagicHitChance.cs`, `SpellResistance.cs`, `SpellBinary.cs`, `SpellCritRules.cs`, `SpellCombatRules.cs` |
+| Hit, crit, binary, resist chance | Magic hit chance (`SpellCaster.cpp:772-880`): 22% base floor, boss levels, victim attacker-hit auras, AoE avoidance, mechanic and debuff resistance, ALWAYS_HIT, IGNORE_RESISTANCES, binary scaling, talent resist-miss mod, 1-99% clamp. Resist chance (`SpellCaster.cpp:882-925`): penetration, vulnerability, innate creature resistance scaled by level/63. `IsBinary` is the vmangos list (`SpellMgr.cpp:3342-3393`). Crit (`Unit.cpp:5212-5316`, `SpellCaster.cpp:958-1024`): CanCrit needs a damage/heal effect, creatures never crit unless configured, potions and healthstones 10%, victim attacker-crit auras (spell, melee and ranged), melee/ranged-class crit from `GetUnitCriticalChance` (`Unit.cpp:2552-2595`), melee-class spells always crit a player who is not standing, exact crit damage/heal amounts | `Rules/MagicHitChance.cs`, `SpellResistance.cs`, `SpellBinary.cs`, `SpellCritRules.cs`, `SpellCombatRules.cs` |
 | Crowd-control state | Stun, root, silence, pacify, pacify+silence, disarm, fear, confuse set their unit flags from the live auras (never toggled); interrupts (`SpellAuras.cpp:3444-3463, 3502-3545, 3548-3640, 3859-3890, 5625-5640`, `Unit.cpp:9112-9174`); stun stands a player up when not mounted and releases loot; totems ignore fear/confuse; PREVENTS_FLEEING blocks fear; the logout stun/root is a separate source so a logout cancel cannot lift a stun or root held by an aura | `Rules/CrowdControl/*`, `Player.cs` (`StunnedByAura`, `RootedByAura`) |
 | Mechanic resistance and diminishing returns | `ISpellApplicationRule` hook in `ApplyEffects`; per-effect mechanic resistance (`Unit.cpp:2461-2470`); diminishing returns (`Spell.cpp:1733-1800`, `Unit.cpp:7618-7690`, `SpellEntry.cpp:281-390`): groups, level read at hit, first hit creates the entry at level 2, 100/50/25/0%, type PLAYER needs player-like sides, stuns diminish on creatures, 15 s window from the LAST aura of the group ending, death clears, fully diminished holders are dropped (their damage effects still run) | `Rules/Application/*`, `Rules/Diminishing/*` |
 | Immunities | School, damage, dispel, mechanic, mechanic-mask, effect and state immunity read from live auras (`Unit.cpp:5404-5658`); polarity rule, NO_IMMUNITIES / NO_SCHOOL_IMMUNITIES / IGNORE_CASTER_AND_TARGET_RESTRICTIONS bypass; IMMUNITY_PURGES_EFFECT purges (`SpellAuras.cpp:4042-4180`) and UNIT_FLAG_IMMUNE; MISS_IMMUNE in the hit roll in vmangos order (`SpellCaster.cpp:169-227`); immune effects stripped from the effect mask; immune DoT ticks send SMSG_SPELLORDAMAGE_IMMUNE; creature static masks through `ICreatureImmunityProvider` (`Creature.cpp:2438-2480`) | `Rules/Immunity/*` |
@@ -30,6 +30,7 @@ References (`D:\refs`): **vmangos** is primary; **mangos-classic** and **classic
 | `MagicHitFloorPercent` | 22 | Lowest base magic hit chance (vmangos `SpellCaster.cpp:829-834`, from a classic duel test). 1 reproduces cmangos-classic (`Unit.cpp:3861`) |
 | `WorldBossLevelDiff` | 3 | Levels a world boss counts above its target (`World.cpp:744`) |
 | `CreatureSpellCrit` | false | Creatures that are not player-owned never crit with spells (`Unit.cpp:5216-5219`); true restores a 5% crit |
+| `ResistTablePath` | unset | File with the retail partial-resist outcome table (`Unit.cpp:1885-1918`); unset uses the quarter-step approximation |
 | `IgnoreHolyResistance` | false | vmangos resists holy damage (`Unit.cpp:1936-1946`); true is the cmangos rule (`Unit.cpp:3917`) |
 | `DiminishingReturns` | true | Crowd-control diminishing returns |
 | `DiminishingResetMs` | 15000 | Window from the end of the last aura of a group to the level reset (`Unit.cpp:7630`) |
@@ -42,11 +43,20 @@ returns. Features of this area live in namespace `ArcaneCore.World.Spells` so th
 
 ## Deliberate deviations from the references (all documented in code too)
 
-- **Two-bucket partial resist.** The vmangos partial resist distribution is a 31-row table (`Unit.cpp:1885-1918`) written
-  from a forum image; it is data and is not reproduced here. `RollPartialResist` draws the two adjacent quarter steps
-  (0/25/50/75%) so that the mean equals the resist chance; the DoT one-tenth rule (`Unit.cpp:2417-2425`) and the
-  negative-resist extra damage are not applied (the interface returns a `uint` resisted amount). Recorded limit, not a switch.
-- **Triggered-by-aura.** `DiminishingClassifier` takes "triggered by an aura" (stun and root get their own trigger groups,
+- **Partial-resist distribution is external data.** The vmangos distribution is a 31-row table (`Unit.cpp:1885-1918`)
+  that is data and is not reproduced here. Set `SpellRules:ResistTablePath` to a file with the rows
+  (`resist100,resist75,resist50,resist25,resist0,chanceResist`, `ResistOutcomeTable`) and the roll is retail: linear
+  interpolation between the two rows around the chance, one roll, 100% rounded down to 75% (`Unit.cpp:2427-2458`). Without
+  the file `RollResist` draws the two adjacent quarter steps so the mean equals the resist chance; that approximation is the
+  only part that differs from retail, and only until the operator supplies the table. The DoT one-tenth rule with its four
+  exempt spells (`Unit.cpp:2406-2425`) and the vulnerability extra damage (`Unit.cpp:1948-1953`, `2229-2230`) are code and
+  apply in both modes.
+- **Absorbed damage still breaks control.** A hit that is fully absorbed calls `OnDamageTaken(..., absorbed)`, which takes
+  the vmangos `damage == 0` branch (`Unit.cpp:733-746`): damage-cancels auras break and a player's damage-cancels cast is
+  interrupted (not by DoTs), with no pushback.
+- **Melee and ranged spell crit.** Ports `GetUnitCriticalChance` (`Unit.cpp:2552-2595`): player crit field alone for
+  players, 5 plus MOD_CRIT_PERCENT otherwise, the victim's attacker melee/ranged crit auras and the weapon-skill versus
+  defense term. The skills come from the combat hooks (a player with no ranged weapon has weapon skill 0, as in vmangos).- **Triggered-by-aura.** `DiminishingClassifier` takes "triggered by an aura" (stun and root get their own trigger groups,
   `SpellEntry.cpp:341`) from `SpellCast.IsTriggered`; the engine has no proc system or aura-trigger flag yet.
 - **Overlapping pacify/silence.** Flags are recomputed from all live auras of both aura types; vmangos clears the pacify
   flag when any pacify aura goes and checks only `MOD_SILENCE` for the silence flag. The overlap case is the only difference.

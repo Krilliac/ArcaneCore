@@ -53,7 +53,7 @@ public static class SpellCombatRules
 /// code copied; formulas cited per member). Damage class NONE spells always hit and never crit
 /// (vmangos Unit::SpellHitResult / IsSpellCrit "case SPELL_DAMAGE_CLASS_NONE").
 /// </summary>
-public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts
+public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISpellResistRoll
 {
     /// <summary>
     /// Base spell critical chance (percent) of a player before stat-driven bonuses. The stats area
@@ -67,6 +67,9 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts
 
     /// <summary>Rule tunables (docs/areas/spell-rules.md); every default is the retail behaviour.</summary>
     public SpellRuleOptions Options { get; init; } = new();
+
+    /// <summary>The retail partial-resist distribution (<see cref="SpellRuleOptions.ResistTablePath"/>); null uses the mean-preserving quarter-step approximation.</summary>
+    public ResistOutcomeTable? ResistTable { get; init; }
 
     /// <summary>Talent spell modifiers for these rules only; null uses <see cref="SpellSystem.SpellModifiers"/> (the identity until the talents area installs one).</summary>
     public ISpellModifiers? Modifiers { get; init; }
@@ -254,7 +257,8 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts
     /// CANT_CRIT never crit; potions and healthstones crit 10%; magic spells use the caster's school crit
     /// (<see cref="ISpellCritSource"/> base + MOD_SPELL_CRIT_CHANCE + the school's MOD_SPELL_CRIT_CHANCE_SCHOOL)
     /// plus, for hostile spells, the victim's MOD_ATTACKER_SPELL_CRIT_CHANCE by school; melee and ranged
-    /// class spells use the white crit chance plus the school aura, and always crit a player who is not
+    /// class spells use the white crit chance plus the school aura (<see cref="UnitCritChance"/>: the player crit field or 5 plus MOD_CRIT_PERCENT for other units,
+    /// the victim's attacker-crit auras and the weapon-skill difference), and always crit a player who is not
     /// standing; the talent crit-chance spell mod applies last and the result is never negative.
     /// </summary>
     public virtual float CritChance(SpellSystem system, Unit caster, Unit? target, SpellInfo spell)
@@ -296,13 +300,8 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts
                         return 100f;
                     }
 
-                    float white = spell.DamageClass == SpellDamageClass.Ranged
-                        ? (caster is Player ? caster.GetFloat(UpdateFields.PlayerRangedCritPercentage) : CreatureBaseMeleeCrit)
-                        : (caster is Player ? caster.GetFloat(UpdateFields.PlayerCritPercentage) : CreatureBaseMeleeCrit);
-                    chance = white
-                        + system.GetTotalAuraModifier(caster, AuraType.ModCritPercent)
-                        + system.GetTotalAuraModifier(caster, AuraType.ModSpellCritChanceSchool, a => ((uint)a.MiscValue & schoolMask) != 0);
-                    break;
+                    chance = UnitCritChance(system, caster, target, spell.DamageClass == SpellDamageClass.Ranged ? WeaponAttackType.RangedAttack : WeaponAttackType.BaseAttack)
+                        + system.GetTotalAuraModifier(caster, AuraType.ModSpellCritChanceSchool, a => ((uint)a.MiscValue & schoolMask) != 0);                    break;
                 default:
                     return 0f;
             }
@@ -312,6 +311,34 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts
         return chance > 0f ? chance : 0f;
     }
 
+    /// <summary>
+    /// vmangos Unit::GetUnitCriticalChance (Unit.cpp:2552-2595): a player's crit field (already aura-inclusive) or, for
+    /// anything else, 5 plus MOD_CRIT_PERCENT; plus the victim's MOD_ATTACKER_MELEE/RANGED_CRIT_CHANCE; plus the weapon
+    /// skill against the victim's defense (0.04 per point against a player or when ahead, else 0.2 per point of the
+    /// capped difference); never below 0. Without a victim only the first term applies.
+    /// </summary>
+    private float UnitCritChance(SpellSystem system, Unit caster, Unit? target, WeaponAttackType attackType)
+    {
+        float crit = caster is Player
+            ? caster.GetFloat(attackType == WeaponAttackType.RangedAttack ? UpdateFields.PlayerRangedCritPercentage : UpdateFields.PlayerCritPercentage)
+            : CreatureBaseMeleeCrit + system.GetTotalAuraModifier(caster, AuraType.ModCritPercent);
+        if (target is null)
+        {
+            return crit;
+        }
+
+
+        crit += system.GetTotalAuraModifier(target, attackType == WeaponAttackType.RangedAttack ? AuraType.ModAttackerRangedCritChance : AuraType.ModAttackerMeleeCritChance);
+        MeleeRollInput input = caster.Map?.FindUpdater<MapCombat>() is { } combat
+            ? combat.BuildRollInput(caster, target, attackType)
+            : new MeleeRollInput
+            {
+                AttackerWeaponSkill = MeleeHitTable.SkillMaxForLevel(caster, target),
+                AttackerMaxSkill = MeleeHitTable.SkillMaxForLevel(caster, target),
+                VictimDefenseSkill = MeleeHitTable.SkillMaxForLevel(target, caster),
+            };
+        return MeleeHitTable.CritChance(input with { BaseCritChance = crit, VictimIsPlayer = target is Player });
+    }
     public virtual float CritMultiplier(SpellInfo spell)
     {
         ArgumentNullException.ThrowIfNull(spell);
@@ -372,39 +399,67 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts
     }
 
     /// <summary>
-    /// Partial resists of damage (vmangos Unit::CalculateDamageAbsorbAndResist, Unit.cpp:1936-1946): every
-    /// non-physical school except binary spells and IGNORE_RESISTANCES spells (the damage class is not
-    /// tested, holy is resisted unless <see cref="SpellRuleOptions.IgnoreHolyResistance"/>). The resisted
-    /// fraction is <see cref="ResistChance"/>; the outcome is one of the quarter steps (0/25/50/75%), drawn
-    /// from the two steps around the average so the expected value equals the average. This is an approximation of
-    /// vmangos' 31-row distribution table (Unit.cpp:1885-1918, external data not shipped) and ignores the
-    /// DoT one-tenth rule and vulnerability bonus damage; see docs/areas/spell-rules.md.
+    /// The resisted part of a direct hit (<see cref="RollResist"/> without the periodic rule); a vulnerability is not a resist here.
     /// </summary>
-    public virtual uint RollPartialResist(SpellSystem system, Unit caster, Unit target, SpellInfo spell, uint damage)
+    public virtual uint RollPartialResist(SpellSystem system, Unit caster, Unit target, SpellInfo spell, uint damage) =>
+        (uint)Math.Max(0, RollResist(system, caster, target, spell, damage, periodic: false));
+
+    /// <summary>
+    /// vmangos Unit::CalculateDamageAbsorbAndResist and RollMagicResistanceMultiplierOutcomeAgainst (Unit.cpp:1920-1955,
+    /// 2397-2458): every non-physical school except binary spells and IGNORE_RESISTANCES spells can be partially resisted
+    /// (the damage class is not tested, holy unless <see cref="SpellRuleOptions.IgnoreHolyResistance"/>); a negative
+    /// resist chance (vulnerability) rolls whatever the spell and returns extra damage as a negative number. The sign
+    /// and size come from <see cref="ResistChance"/>; damage over time uses a tenth of the chance except the
+    /// four spells vmangos exempts (Unit.cpp:2411-2425). The outcome is 0/25/50/75% of the damage, dithered: from
+    /// <see cref="ResistTable"/> when one is supplied, otherwise drawn from the two quarter steps around the average so the
+    /// mean equals it (an approximation of the 31-row table, Unit.cpp:1885-1918, which is external data; docs/areas/spell-rules.md).
+    /// </summary>
+    public virtual int RollResist(SpellSystem system, Unit caster, Unit target, SpellInfo spell, uint damage, bool periodic)
     {
         ArgumentNullException.ThrowIfNull(system);
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(spell);
-        if (damage == 0 || spell.School == SpellSchool.Normal || IsBinary(spell) || spell.IgnoresResistances()
-            || (spell.School == SpellSchool.Holy && Options.IgnoreHolyResistance))
+        if (damage == 0 || (spell.School == SpellSchool.Holy && Options.IgnoreHolyResistance))
         {
             return 0;
         }
 
-        float fraction = ResistChance(system, caster, target, spell.School, innateResists: true);
-        if (fraction <= 0)
+        bool canResist = spell.School != SpellSchool.Normal && !IsBinary(spell) && !spell.IgnoresResistances();
+        float chance = ResistChance(system, caster, target, spell.School, innateResists: true);
+        if (chance == 0f || (!canResist && chance >= 0f))
         {
             return 0;
         }
 
-        int lowStep = (int)(fraction / 0.25f);
-        float upperChance = (fraction - (lowStep * 0.25f)) / 0.25f;
-        int step = system.Random.NextDouble() < upperChance ? lowStep + 1 : lowStep;
-        step = Math.Clamp(step, 0, 3);
-        return (uint)(damage * step / 4);
+        float multiplier = ResistMultiplier(system, Math.Abs(chance), periodic ? spell : null);
+        int resisted = SpellRounding.Dither(damage * multiplier, system.Random);
+        return chance < 0f ? -resisted : resisted;
     }
 
+    /// <summary>
+    /// The damage over time spells that follow the normal resist rules (vmangos Unit.cpp:2417-2421: Vaelastrasz's Flame
+    /// Breath, Nightmare Dragon's Noxious Breath, Lord Kri's Toxic Volley, Sapphiron's Frost Aura).
+    /// </summary>
+    private static readonly uint[] s_fullResistDots = [23461, 24818, 25812, 28531];
+
+    private float ResistMultiplier(SpellSystem system, float chance, SpellInfo? dotSpell)
+    {
+        if (dotSpell is not null && Array.IndexOf(s_fullResistDots, dotSpell.Id) < 0)
+        {
+            chance *= 0.1f; // Unit.cpp:2423
+        }
+
+        if (ResistTable is { } table)
+        {
+            return table.Multiplier(chance * 100f, system.Random.Next(0, 100));
+        }
+
+        int lowStep = (int)(chance / 0.25f);
+        float upperChance = (chance - (lowStep * 0.25f)) / 0.25f;
+        int step = system.Random.NextDouble() < upperChance ? lowStep + 1 : lowStep;
+        return Math.Clamp(step, 0, 3) * 0.25f;
+    }
     /// <summary>
     /// vmangos SpellCaster::GetSpellResistChance (SpellCaster.cpp:882-925): the resist chance of
     /// <paramref name="school"/> damage from <paramref name="caster"/> (negative for a vulnerability), see

@@ -34,6 +34,14 @@ public sealed class SpellRuleOptions
     /// </summary>
     public bool IgnoreHolyResistance { get; init; }
 
+    /// <summary>
+    /// Path of a file with vmangos' partial-resist outcome table (<see cref="ResistOutcomeTable"/>: 31 rows of
+    /// <c>resist100,resist75,resist50,resist25,resist0,chanceResist</c>, Unit.cpp:1885-1918), which the repository does
+    /// not ship. Unset: the engine draws the two quarter steps around the average resist (mean-preserving
+    /// approximation, docs/areas/spell-rules.md); the damage-over-time one-tenth rule and the vulnerability bonus apply either way.
+    /// </summary>
+    public string? ResistTablePath { get; init; }
+
     /// <summary>Whether crowd-control spells diminish (vmangos Spell.cpp:1733-1800). Retail: true; false is a dev-host switch.</summary>
     public bool DiminishingReturns { get; init; } = true;
 

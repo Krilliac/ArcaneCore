@@ -20,6 +20,9 @@ public sealed class SpellCritRulesTests
     private const uint AttackerCrit = 900_111;
     private const uint VersusBeast = 900_112;
     private const uint GenericCrit = 900_113;
+    private const uint MeleeAttackerCrit = 900_114;
+    private const uint RangedAttackerCrit = 900_115;
+    private const uint CritPercent = 900_116;
 
     private static SpellTestKit Kit() => new(
         RuleTestSupport.Magic(Bolt, SpellSchool.Fire),
@@ -31,7 +34,10 @@ public sealed class SpellCritRulesTests
         RuleTestSupport.Grant(SchoolCrit, AuraType.ModSpellCritChanceSchool, 7, 1 << (int)SpellSchool.Fire),
         RuleTestSupport.Grant(AttackerCrit, AuraType.ModAttackerSpellCritChance, 12, 1 << (int)SpellSchool.Fire),
         RuleTestSupport.Grant(VersusBeast, AuraType.ModCritPercentVersus, 10, 1),
-        RuleTestSupport.Grant(GenericCrit, AuraType.ModSpellCritChance, 3));
+        RuleTestSupport.Grant(GenericCrit, AuraType.ModSpellCritChance, 3),
+        RuleTestSupport.Grant(MeleeAttackerCrit, AuraType.ModAttackerMeleeCritChance, 4),
+        RuleTestSupport.Grant(RangedAttackerCrit, AuraType.ModAttackerRangedCritChance, 6),
+        RuleTestSupport.Grant(CritPercent, AuraType.ModCritPercent, 3));
 
     [Fact]
     public void Creatures_NeverCritWithSpells_UnlessTheOptionRestoresIt()
@@ -165,4 +171,93 @@ public sealed class SpellCritRulesTests
 
         Assert.Equal(151u, rules.CriticalHeal(kit.System, caster, target, kit.Store.Get(Heal)!, 101));
     }
-}
+
+    [Fact]
+    public void MeleeSpells_AddTheVictimsMeleeAttackerCrit_RangedSpellsTheRangedOne()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 2);
+        (Player plain, _) = kit.AddPlayer(3, 3);
+        caster.Level = 60;
+        target.Level = 60;
+        plain.Level = 60;
+        caster.SetFloat(UpdateFields.PlayerCritPercentage, 10f);
+        caster.SetFloat(UpdateFields.PlayerRangedCritPercentage, 30f); // high enough that the skill-0 penalty (-12) does not floor at 0
+        var rules = new VanillaSpellCombatRules();
+        SpellInfo strike = kit.Store.Get(Strike)!;
+        SpellInfo shot = strike with { DamageClass = SpellDamageClass.Ranged };
+        RuleTestSupport.Apply(kit, target, MeleeAttackerCrit);
+
+        Assert.Equal(14f, rules.CritChance(kit.System, caster, target, strike), 3); // 10 + 4, equal skills add nothing (Unit.cpp:2580-2590)
+        float rangedBase = rules.CritChance(kit.System, caster, plain, shot);       // a player with no ranged weapon has weapon skill 0 (SpellCaster.cpp GetWeaponSkillValue)
+        Assert.Equal(rangedBase, rules.CritChance(kit.System, caster, target, shot), 3); // the melee aura does not count for a ranged spell
+        RuleTestSupport.Apply(kit, target, RangedAttackerCrit);
+        Assert.Equal(rangedBase + 6f, rules.CritChance(kit.System, caster, target, shot), 3);
+    }
+
+    [Fact]
+    public void AMeleeSpellAgainstAHigherLevelCreature_LosesCritFromTheSkillGap()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, _) = kit.AddPlayer(1);
+        caster.Level = 60;
+        caster.SetFloat(UpdateFields.PlayerCritPercentage, 10f);
+        Creature boss = FoundationTests.MakeCreature(0, 63);
+        var rules = new VanillaSpellCombatRules();
+
+        // weapon 300, defense 315: not ahead and the victim is no player, so the capped difference counts 0.2 per point (Unit.cpp:2590).
+        Assert.Equal(7f, rules.CritChance(kit.System, caster, boss, kit.Store.Get(Strike)!), 3);
+    }
+
+    [Fact]
+    public void AMeleeSpellAgainstALowerLevelPlayer_GainsCritAtFourHundredthsPerPoint()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 2);
+        caster.Level = 60;
+        target.Level = 50;
+        caster.SetFloat(UpdateFields.PlayerCritPercentage, 10f);
+
+        Assert.Equal(12f, new VanillaSpellCombatRules().CritChance(kit.System, caster, target, kit.Store.Get(Strike)!), 3); // 50 points * 0.04
+    }
+
+    [Fact]
+    public void APlayersCritField_IsNotDoubleCountedWithTheCritPercentAura()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 2);
+        caster.Level = 60;
+        target.Level = 60;
+        caster.SetFloat(UpdateFields.PlayerCritPercentage, 10f);
+        RuleTestSupport.Apply(kit, caster, CritPercent);
+
+        Assert.Equal(10f, new VanillaSpellCombatRules().CritChance(kit.System, caster, target, kit.Store.Get(Strike)!), 3); // the field already includes auras (Unit.cpp:2556-2577)
+    }
+
+    [Fact]
+    public void ACreatureCaster_UsesFivePlusTheCritPercentAura()
+    {
+        using SpellTestKit kit = Kit();
+        (Player target, _) = kit.AddPlayer(1);
+        target.Level = 20;
+        Creature caster = FoundationTests.MakeCreature(0, 20);
+        kit.System.CastSpell(caster, CritPercent, SpellCastTargets.ForSelf(), triggered: true);
+        var rules = new VanillaSpellCombatRules { Options = new SpellRuleOptions { CreatureSpellCrit = true } };
+
+        Assert.Equal(8f, rules.CritChance(kit.System, caster, target, kit.Store.Get(Strike)!), 3); // 5 + 3
+    }
+
+    [Fact]
+    public void TheCritChanceIsNeverNegative()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, _) = kit.AddPlayer(1);
+        caster.Level = 60;
+        caster.SetFloat(UpdateFields.PlayerCritPercentage, 1f);
+        Creature boss = FoundationTests.MakeCreature(0, 63);
+
+        Assert.Equal(0f, new VanillaSpellCombatRules().CritChance(kit.System, caster, boss, kit.Store.Get(Strike)!)); // 1 - 3 floors at 0 (Unit.cpp:2592)
+    }}

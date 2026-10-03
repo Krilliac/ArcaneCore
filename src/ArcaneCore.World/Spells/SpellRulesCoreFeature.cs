@@ -39,7 +39,11 @@ public sealed class SpellRulesCoreFeature(IServiceProvider services, ILogger<Spe
 
         if (services.GetService<ISpellCombatRules>() is null)
         {
-            system.CombatRules = new VanillaSpellCombatRules { Options = Options };
+            system.CombatRules = new VanillaSpellCombatRules
+            {
+                Options = Options,
+                ResistTable = string.IsNullOrWhiteSpace(Options.ResistTablePath) ? null : ResistOutcomeTable.Load(Options.ResistTablePath),
+            };
         }
 
         system.ImmunityEnforcement = Options.ImmunityEnforcement;

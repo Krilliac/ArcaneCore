@@ -164,6 +164,7 @@ public sealed partial class SpellSystem
                 }
 
                 uint splitted;
+                uint splitAbsorbed = 0;
                 if (aura.Type == AuraType.SplitDamageFlat)
                 {
                     int part = Math.Min(remaining, aura.Amount);
@@ -171,7 +172,8 @@ public sealed partial class SpellSystem
                     splitted = (uint)Math.Max(part, 0);
                     if (!HasLiveAura(splitTo, AuraType.SplitDamageFlat))
                     {
-                        splitted -= AbsorbDamage(attacker, splitTo, schoolMask, splitted, spell, allowSplit: false);
+                        splitAbsorbed = AbsorbDamage(attacker, splitTo, schoolMask, splitted, spell, allowSplit: false);
+                        splitted -= splitAbsorbed;
                     }
                 }
                 else
@@ -182,7 +184,7 @@ public sealed partial class SpellSystem
 
                 Unit source = attacker ?? target;
                 uint dealt = Damage.DealSpellDamage(source, splitTo, holder.Spell, splitted, periodic: true);
-                OnDamageTaken(splitTo, source, dealt, periodic: true);
+                OnDamageTaken(splitTo, source, dealt, periodic: true, splitAbsorbed);
                 SendToSet(source, WorldOpcode.SmsgSpellnonmeleedamagelog,
                     SpellPackets.BuildSpellNonMeleeDamageLog(splitTo.Guid, source.Guid, holder.Spell.Id, dealt, SpellSchoolMasks.FirstSchoolIn(schoolMask)), includeSelf: true);
             }

@@ -71,15 +71,35 @@ public sealed partial class SpellSystem
                 : (uint)(amount * CombatRules.CritMultiplier(spell));
         }
 
-        uint resisted = Math.Min(amount, CombatRules.RollPartialResist(this, caster, target, spell, amount));
-        amount -= resisted;
+        uint resisted = ApplyResist(caster, target, spell, ref amount, periodic: false);
         uint absorbed = AbsorbDamage(caster, target, spell.SchoolMask(), amount, spell); // shields, mana shield, split (Unit.cpp:1920-2200)
         amount -= absorbed;
         uint dealt = Damage.DealSpellDamage(caster, target, spell, amount, periodic: false);
-        OnDamageTaken(target, caster, dealt, periodic: false);
+        OnDamageTaken(target, caster, dealt, periodic: false, absorbed);
         SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog, SpellPackets.BuildSpellNonMeleeDamageLog(
             target.Guid, caster.Guid, spell.Id, dealt, spell.School, absorbed: absorbed, resisted: resisted, hitInfo: crit ? SpellHitTypeCrit : 0), includeSelf: true);
         return new SpellDamageResult(dealt, resisted, crit, absorbed);
+    }
+
+    /// <summary>
+    /// The resist step of <see cref="DealDirectDamage"/> and damage over time: a partial resist comes off
+    /// <paramref name="amount"/> and is returned; a vulnerability (negative resist) adds its extra damage to
+    /// <paramref name="amount"/> before absorbs see it (Unit.cpp:1948-1953, 2229-2232) and returns 0.
+    /// </summary>
+    private uint ApplyResist(Unit caster, Unit target, SpellInfo spell, ref uint amount, bool periodic)
+    {
+        int roll = CombatRules is ISpellResistRoll signed
+            ? signed.RollResist(this, caster, target, spell, amount, periodic)
+            : (int)Math.Min(CombatRules.RollPartialResist(this, caster, target, spell, amount), int.MaxValue);
+        if (roll < 0)
+        {
+            amount += (uint)-roll;
+            return 0;
+        }
+
+        uint resisted = Math.Min(amount, (uint)roll);
+        amount -= resisted;
+        return resisted;
     }
 
     /// <summary>
@@ -89,13 +109,32 @@ public sealed partial class SpellSystem
     /// progress is interrupted (SPELL_INTERRUPT_FLAG_ABORT_ON_DMG) or pushed back
     /// (SPELL_INTERRUPT_FLAG_PUSH_BACK) by direct damage only ("DoTs can't interrupt or delay");
     /// a channel is delayed (CHANNEL_FLAG_DELAY) or interrupted (CHANNEL_FLAG_DAMAGE). Self damage is ignored.
+    /// When nothing got through but <paramref name="absorbed"/> is positive, the damage == 0 branch applies
+    /// (Unit.cpp:733-746): damage-cancels auras still break and a player's damage-cancels cast is interrupted
+    /// (not by damage over time), but nothing is pushed back or delayed.
     /// </summary>
-    public void OnDamageTaken(Unit victim, Unit? attacker, uint damage, bool periodic)
+    public void OnDamageTaken(Unit victim, Unit? attacker, uint damage, bool periodic, uint absorbed = 0)
     {
         ArgumentNullException.ThrowIfNull(victim);
-        if (damage == 0 || ReferenceEquals(victim, attacker) || !victim.IsAlive || GetState(victim.Guid) is not { } state
+        if ((damage == 0 && absorbed == 0) || ReferenceEquals(victim, attacker) || !victim.IsAlive || GetState(victim.Guid) is not { } state
             || !ReferenceEquals(state.Unit, victim))
         {
+            return;
+        }
+
+        if (damage == 0)
+        {
+            foreach (SpellAuraHolder holder in state.Auras.Where(h => (h.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.Damage) != 0).ToArray())
+            {
+                RemoveHolder(state, holder);
+            }
+
+            if (!periodic && victim is Player && state.CurrentCast is { State: SpellCastState.Preparing } preparing
+                && preparing.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.DamageCancels))
+            {
+                Cancel(preparing); // "interrupt spells like trying to mount even through absorb shields"
+            }
+
             return;
         }
 
