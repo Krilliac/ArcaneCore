@@ -46,8 +46,12 @@ public sealed class RowMapper<T>
 
     private readonly Dictionary<string, PropertyInfo> _byName;
     private readonly HashSet<PropertyInfo> _wrap;
-    private IReadOnlyList<string>? _plannedFor;
-    private (int Index, string Column, PropertyInfo Property)[] _plan = [];
+    // The column list and the plan built for it are published together as ONE immutable reference:
+    // the importers share a static mapper across threads, and two fields would let a reader pair one
+    // caller's plan with another caller's columns.
+    private sealed record ColumnPlan(IReadOnlyList<string> Columns, (int Index, string Column, PropertyInfo Property)[] Entries);
+
+    private volatile ColumnPlan? _current;
 
     /// <param name="aliases">Source column name (any case, underscores ignored) to property name.</param>
     /// <param name="signedAsUnsigned">Names of unsigned 32-bit properties whose source column is signed and holds negative values meaning two's-complement bits (a server that stores them in a uint32 reads -1 as 0xFFFFFFFF): they wrap instead of clamping.</param>
@@ -78,13 +82,14 @@ public sealed class RowMapper<T>
     public T Map(DumpRow row, MapDiagnostics? diagnostics = null)
     {
         ArgumentNullException.ThrowIfNull(row);
-        if (!ReferenceEquals(_plannedFor, row.Columns))
+        ColumnPlan? current = _current;
+        if (current is null || !ReferenceEquals(current.Columns, row.Columns))
         {
-            Plan(row.Columns);
+            current = Plan(row.Columns);
         }
 
         var result = new T();
-        foreach ((int index, string column, PropertyInfo property) in _plan)
+        foreach ((int index, string column, PropertyInfo property) in current.Entries)
         {
             if (index >= row.Values.Count)
             {
@@ -103,7 +108,7 @@ public sealed class RowMapper<T>
         return result;
     }
 
-    private void Plan(IReadOnlyList<string> columns)
+    private ColumnPlan Plan(IReadOnlyList<string> columns)
     {
         var plan = new List<(int, string, PropertyInfo)>();
         var taken = new HashSet<PropertyInfo>();
@@ -115,8 +120,9 @@ public sealed class RowMapper<T>
             }
         }
 
-        _plan = [.. plan];
-        _plannedFor = columns;
+        var built = new ColumnPlan(columns, [.. plan]);
+        _current = built;
+        return built;
     }
 
     private static class Converter

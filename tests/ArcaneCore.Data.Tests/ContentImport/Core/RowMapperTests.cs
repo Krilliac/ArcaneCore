@@ -139,6 +139,34 @@ public sealed class RowMapperTests
         Assert.Equal(("A", 1u, "B", 2u, "C", 3u), (a.Name, a.Entry, b.Name, b.Entry, c.Name, c.Entry));
     }
 
+    /// <summary>
+    /// The importers share one static mapper, so two threads mapping rows with different column
+    /// orders must not see each other's column plan.
+    /// </summary>
+    [Fact]
+    public void SharedMapper_MapsConcurrentRowsWithDifferentColumnOrders_Correctly()
+    {
+        string[] first = ["entry", "level"];
+        string[] second = ["level", "entry"];
+        var failures = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+        Parallel.For(0, 8, new ParallelOptions { MaxDegreeOfParallelism = 8 }, worker =>
+        {
+            bool useFirst = worker % 2 == 0;
+            for (int i = 0; i < 20000; i++)
+            {
+                Sample s = useFirst ? Map(first, ["7", "9"]) : Map(second, ["9", "7"]);
+                if (s.Entry != 7u || s.Level != 9)
+                {
+                    failures.Add($"worker {worker}: entry={s.Entry} level={s.Level}");
+                    return;
+                }
+            }
+        });
+
+        Assert.Empty(failures);
+    }
+
     private static Sample Map(string[] columns, string?[] values, MapDiagnostics? diagnostics = null)
         => s_mapper.Map(new DumpRow("sample_table", columns, values), diagnostics);
 }
