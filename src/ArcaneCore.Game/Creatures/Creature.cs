@@ -198,6 +198,17 @@ public sealed partial class Creature : Unit, ICombatCreature
     }
 
     /// <summary>
+    /// A respawn that picks another entry of the spawn (vmangos Creature::UpdateEntry from the DEAD branch of Creature::Update, Creature.cpp:830-841;
+    /// cmangos ResetEntry): the object keeps its GUID and takes the new template; <see cref="InitializeFields"/> then rewrites the unit fields.
+    /// </summary>
+    internal void ChangeTemplate(CreatureTemplate template)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        _template = template;
+        _templateVersion = Content.DefinitionsVersion;
+    }
+
+    /// <summary>
     /// Draw this object's respawn delay now (vmangos <c>m_respawnDelay = data->GetRandomRespawnTime()</c> in Creature::LoadFromDB,
     /// Creature.cpp:1963); every later death reuses it. Without a call each death draws afresh (<see cref="NextRespawnDelaySeconds"/>).
     /// </summary>

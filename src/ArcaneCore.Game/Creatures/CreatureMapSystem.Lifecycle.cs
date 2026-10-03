@@ -129,22 +129,38 @@ public sealed partial class CreatureMapSystem
 
         foreach (CreatureSpawn spawn in spawns)
         {
-            CreatureTemplate? template = _content.FindTemplate(spawn.Entry);
-            if (template is null)
+            // A spawn with creature_spawn_entry rows becomes one of them; the entry part of its GUID is the one chosen when the object was
+            // created, so a spawn that is already loaded is looked up under every entry it may carry.
+            IReadOnlyList<uint> alternatives = _options.Respawn.AlternateEntries ? _content.GetSpawnEntries(spawn.Guid) : [];
+            Creature? moved = null;
+            foreach (uint candidate in alternatives.Count > 0 ? alternatives : [spawn.Entry])
             {
-                if (_warnedMissingTemplates.Add(spawn.Entry))
+                if (_creatures.TryGetValue(ObjectGuid.WithEntry(HighGuid.Unit, candidate, spawn.Guid), out moved))
                 {
-                    _logger.LogWarning("creature spawn {Guid} on map {MapId} uses missing creature_template {Entry}; skipped", spawn.Guid, Map.MapId, spawn.Entry);
+                    break;
                 }
-
-                continue;
             }
 
-            ObjectGuid guid = ObjectGuid.WithEntry(HighGuid.Unit, template.Entry, spawn.Guid);
-            if (_creatures.TryGetValue(guid, out Creature? moved))
+            if (moved is not null)
             {
                 grid.Creatures.Add(moved);
                 continue; // a live spawn walked away before its home grid unloaded
+            }
+
+            CreatureTemplate? template = alternatives.Count > 0 ? SpawnEntryChooser.Choose(_content, alternatives, _random) : _content.FindTemplate(spawn.Entry);
+            if (template is null)
+            {
+                uint warnKey = alternatives.Count > 0 ? spawn.Guid | 0x8000_0000u : spawn.Entry;
+                if (_warnedMissingTemplates.Add(warnKey))
+                {
+                    _logger.LogWarning(
+                        alternatives.Count > 0
+                            ? "creature spawn {Guid} on map {MapId} has no creature_template for any of its creature_spawn_entry rows; skipped"
+                            : "creature spawn {Guid} on map {MapId} uses missing creature_template {Entry}; skipped",
+                        spawn.Guid, Map.MapId, spawn.Entry);
+                }
+
+                continue;
             }
 
             var creature = new Creature(spawn.Guid, template, spawn, _content, _random);
@@ -292,6 +308,16 @@ public sealed partial class CreatureMapSystem
             return;
         }
 
+        // A spawn with several entries picks again at every respawn (vmangos Creature.cpp:830-841); the GUID stays, the AI follows the template.
+        bool entryChanged = false;
+        if (creature.Spawn is { } spawn && _options.Respawn.AlternateEntries && _content.GetSpawnEntries(spawn.Guid) is { Count: > 0 } alternatives
+            && SpawnEntryChooser.Choose(_content, alternatives, _random) is { } chosen && chosen.Entry != creature.Template.Entry)
+        {
+            ForgetAi(creature);
+            creature.ChangeTemplate(chosen);
+            entryChanged = true;
+        }
+
         Map.Combat.Untrack(creature);
         creature.Combat.DeathState = DeathState.Alive;
         MapCombat.ClearInCombat(creature);
@@ -309,6 +335,11 @@ public sealed partial class CreatureMapSystem
         Map.AddObject(creature);
         ResetAiState(creature);
         creature.Motion.Initialize(creature.Motion.Default, this, start: true);
+        if (entryChanged)
+        {
+            CreateAi(creature);
+        }
+
         creature.AI?.OnRespawn();
     }
 

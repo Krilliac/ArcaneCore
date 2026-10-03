@@ -68,6 +68,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(SpecialLootDataModule), DatabaseComponent.World, SpecialLootDataModule.Version),
             (typeof(StartActionWorldModule), DatabaseComponent.World, StartActionWorldModule.Version),
             (typeof(CreatureMovementTemplateDataModule), DatabaseComponent.World, CreatureMovementTemplateDataModule.Version),
+            (typeof(CreatureSpawnEntryDataModule), DatabaseComponent.World, CreatureSpawnEntryDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),

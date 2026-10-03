@@ -24,4 +24,11 @@ public sealed class CreatureRespawnOptions
     /// cmangos column; vmangos sets the corpse delay by rank alone (Creature.cpp:1326-1343), which is retail.
     /// </summary>
     public bool HonorTemplateCorpseDecay { get; set; }
+
+    /// <summary>
+    /// <c>Creatures:Respawn:AlternateEntries</c>: a spawn with <c>creature_spawn_entry</c> rows (vmangos <c>id2</c> ... <c>id5</c>) becomes one of
+    /// those entries when it loads and again at every respawn (cmangos Creature::LoadFromDB / ResetEntry; vmangos Creature.cpp:830-841,
+    /// :1936-1944). False ignores the rows: a spawn whose <c>id</c> is 0 then never spawns (the earlier behaviour).
+    /// </summary>
+    public bool AlternateEntries { get; set; } = true;
 }

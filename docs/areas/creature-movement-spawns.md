@@ -127,3 +127,34 @@ paths and `SetNextWaypoint`, the 30 s pause while a player talks to the creature
 columns of `creature_movement` (`wander_distance`, `path_id`, `script_id`), cmangos `waypoint_path`/spawn-group formations (163
 formation paths in classic-db), creature groups and linking. vmangos numbers nodes from 0 and treats the first reached node as "none"
 (`m_lastReachedWaypoint`); this lane keeps the data's 1-based ids (see the generator comment).
+
+### 6. Alternate spawn entries (slice `spawn-alternate-entries`)
+
+Data (World schema version **22**, `CreatureSpawnEntryDataModule.Version`; the integrator renumbers): new table `creature_spawn_entry`
+(`SpawnGuid, Entry`, key `(SpawnGuid, Entry)`). The importer reads the cmangos table and the vmangos `id`, `id2` ... `id5` columns
+(a spawn with any non-zero `id2..id5` gets one row per non-zero id, `id` included; this replaces the earlier "id2 is reported, not
+imported" warning). `CreatureContent.GetSpawnEntries(spawnGuid)` returns them ascending and distinct. It is spawn data, not part of the
+swappable definitions.
+
+Behaviour (cmangos `Creature::LoadFromDB` / `ResetEntry`, `Entities/Creature.cpp:1640-1660`, `636-655`; vmangos `Creature.cpp:830-841`,
+`:1936-1944`):
+
+* A spawn with rows becomes one of them, uniformly among the entries that have a `creature_template` (cmangos skips a row without one
+  when it loads the table, `ObjectMgr.cpp:1853-1858`), when its grid loads **and again at every respawn**.
+* The object keeps its GUID (the entry part is the one chosen at creation, as in both references); `InitializeFields` rewrites the unit
+  fields from the new template, the AI is created afresh when the entry changed (vmangos CSTATE_INIT_AI_ON_RESPAWN, cmangos `AIM_Initialize`), and the
+  client sees the new `OBJECT_FIELD_ENTRY` in the create block of the respawn (the corpse was removed, so it is a fresh object for the client).
+* A spawn already loaded (it walked out of its home grid before the grid unloaded) is found under any entry its GUID may carry, so a
+  re-loaded grid never adds a second object.
+* A spawn none of whose entries has a template is skipped with one warning. Hot reload (`.reload creature_template`) counts such a
+  spawn as orphaned only when none of its entries has a template any more.
+* `Creatures:Respawn:AlternateEntries=false` ignores the rows (a spawn with `id = 0` then never spawns, as before).
+
+Scale: of classic-db's 66,310 spawns, **2,802 have `id = 0`**. 2,234 of them (3.4 percent: 1,121 on map 0, 309 on map 1, 147 in map 209,
+147 in map 90 ...) are resolved by `creature_spawn_entry` and spawn now; the other **568 are resolved by cmangos spawn groups
+(`spawn_group_entry`) and still do not spawn** (creature groups are not implemented). `RealClassicDbDump_...` pins these figures.
+
+Differences from the references, on purpose: cmangos uses `creature.id` when it is not 0 and rolls only at respawn; vmangos rolls at
+load as well. One rule serves both dialects: a spawn that has rows always chooses among them (the 46 classic-db spawns with both an `id`
+and rows lose nothing: the `id` is normally one of the rows). vmangos group entry limits (`creature_groups_entry_limit`) are not applied. Only SQLite ran locally for the store
+tests; MariaDB/PostgreSQL run on hosted CI (one `CREATE TABLE`, composite integer key).

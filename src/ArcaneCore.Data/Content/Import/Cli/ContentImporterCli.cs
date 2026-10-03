@@ -335,6 +335,7 @@ public static class ContentImporterCli
             ["creature_spawn"] = creatures.Spawns,
             ["creature_movement"] = creatures.Waypoints,
             ["creature_movement_template"] = creatures.MovementTemplates,
+            ["creature_spawn_entry"] = creatures.SpawnEntries,
             ["creature_model_info"] = creatures.Models,
             ["creature_addon"] = creatures.Addons,
             ["creature_ai_scripts"] = creatures.AiEvents,
@@ -446,6 +447,7 @@ public static class ContentImporterCli
                 ("creature_spawn", await db.Set<CreatureSpawnRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_movement", await db.Set<CreatureMovementRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_movement_template", await db.Set<CreatureMovementTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("creature_spawn_entry", await db.Set<CreatureSpawnEntryRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_model_info", await db.Set<CreatureModelInfoRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_addon", await db.Set<CreatureAddonRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("gameobject_template", await db.Set<GameObjectTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
@@ -484,7 +486,9 @@ public static class ContentImporterCli
             IQueryable<CreatureTemplateRow> templates = db.Set<CreatureTemplateRow>();
             int missingCreatures = await db.Set<CreatureSpawnRow>()
                 .CountAsync(s => s.Entry != 0 && !templates.Any(t => t.Entry == s.Entry), ct).ConfigureAwait(false);
-            int randomEntryCreatures = await db.Set<CreatureSpawnRow>().CountAsync(s => s.Entry == 0, ct).ConfigureAwait(false);
+            IQueryable<CreatureSpawnEntryRow> spawnEntries = db.Set<CreatureSpawnEntryRow>();
+            int randomEntryCreatures = await db.Set<CreatureSpawnRow>()
+                .CountAsync(s => s.Entry == 0 && !spawnEntries.Any(e => e.SpawnGuid == s.Guid), ct).ConfigureAwait(false);
             IQueryable<GameObjectTemplateRow> objectTemplates = db.Set<GameObjectTemplateRow>();
             int missingObjects = await db.Set<GameObjectSpawnRow>()
                 .CountAsync(s => s.Entry != 0 && !objectTemplates.Any(t => t.Entry == s.Entry), ct).ConfigureAwait(false);
@@ -529,7 +533,7 @@ public static class ContentImporterCli
 
             if (randomEntryCreatures > 0)
             {
-                o.WriteLine($"note: {randomEntryCreatures} creature spawn(s) have entry 0 (cmangos resolves these through creature_spawn_entry, which is not imported yet)");
+                o.WriteLine($"note: {randomEntryCreatures} creature spawn(s) have entry 0 and no creature_spawn_entry rows, so they never spawn (cmangos also resolves entry 0 through spawn_group_entry, which is not imported)");
             }
 
             if (randomEntryObjects > 0)

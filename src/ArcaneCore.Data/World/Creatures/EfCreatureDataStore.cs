@@ -12,6 +12,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         List<CreatureTemplateRow> templates = await db.Set<CreatureTemplateRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureSpawnRow> spawns = await db.Set<CreatureSpawnRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureMovementRow> movement = await db.Set<CreatureMovementRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<CreatureSpawnEntryRow> spawnEntries = await db.Set<CreatureSpawnEntryRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureMovementTemplateRow> entryPaths = await db.Set<CreatureMovementTemplateRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureModelInfoRow> models = await db.Set<CreatureModelInfoRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureAddonRow> addons = await db.Set<CreatureAddonRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
@@ -45,7 +46,8 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
                 new BroadcastTextCatalog(broadcastTexts.Select(ToBroadcastText)),
                 summons.Select(s => new CreatureAiSummon(s.Id, s.X, s.Y, s.Z, s.Orientation, s.SpawnTimeSeconds)),
                 EventAiDialect.CMangos),
-            entryPaths.Select(p => (p.Entry, p.PathId, new CreatureWaypoint(p.Point, p.X, p.Y, p.Z, p.Orientation, p.WaitTimeMs))));
+            entryPaths.Select(p => (p.Entry, p.PathId, new CreatureWaypoint(p.Point, p.X, p.Y, p.Z, p.Orientation, p.WaitTimeMs))),
+            spawnEntries.Select(e => (e.SpawnGuid, e.Entry)));
     }
 
     internal static BroadcastText ToBroadcastText(BroadcastTextRow r) => new(

@@ -257,6 +257,7 @@ public sealed class CreatureContent
     public static readonly CreatureContent Empty = new([], [], [], [], []);
 
     private readonly Dictionary<uint, IReadOnlyList<CreatureSpawn>> _spawnsByMap;
+    private readonly Dictionary<uint, IReadOnlyList<uint>> _spawnEntries;
     private volatile CreatureDefinitions _definitions;
     private int _version;
 
@@ -267,7 +268,8 @@ public sealed class CreatureContent
         IEnumerable<CreatureModelInfo> models,
         IEnumerable<CreatureAddon> addons,
         CreatureAiContent? ai = null,
-        IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryWaypoints = null)
+        IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryWaypoints = null,
+        IEnumerable<(uint SpawnGuid, uint Entry)>? spawnEntries = null)
     {
         _definitions = new CreatureDefinitions(
             templates.ToDictionary(t => t.Entry),
@@ -280,6 +282,9 @@ public sealed class CreatureContent
             (entryWaypoints ?? [])
                 .GroupBy(w => (w.Entry, w.PathId))
                 .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureWaypoint>)[.. g.Select(w => w.Point).OrderBy(p => p.Point)]));
+        _spawnEntries = (spawnEntries ?? [])
+            .GroupBy(e => e.SpawnGuid)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<uint>)[.. g.Select(e => e.Entry).Distinct().Order()]);
         CreatureSpawn[] all = [.. spawns];
         SpawnCount = all.Length;
         _spawnsByMap = all.GroupBy(s => s.MapId)
@@ -330,6 +335,12 @@ public sealed class CreatureContent
             ? new CreatureWaypointPath(CreatureWaypointOrigin.Entry, template)
             : CreatureWaypointPath.None;
     }
+
+    /// <summary>
+    /// The creature entries a spawn row can become (cmangos <c>creature_spawn_entry</c>; vmangos <c>id</c>, <c>id2</c> ... <c>id5</c>),
+    /// ascending and distinct; empty for a spawn with one fixed entry. Part of the spawn data, so a definitions swap does not touch it.
+    /// </summary>
+    public IReadOnlyList<uint> GetSpawnEntries(uint spawnGuid) => _spawnEntries.GetValueOrDefault(spawnGuid) ?? [];
 
     public IReadOnlyList<CreatureSpawn> GetSpawns(uint mapId) => _spawnsByMap.GetValueOrDefault(mapId) ?? [];
 
