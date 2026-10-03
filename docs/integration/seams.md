@@ -35,10 +35,11 @@ merged. **The lead assigns the final number at merge time, in merge order.**
   (only once your PR is out of draft, so it never races your pushes). Any test that asserts
   a literal current version should use `<Context>.Schema.CurrentVersion` instead.
 
-Requests so far (2026-10-02): world v2 — creatures, grid-terrain, items, spells,
-quests-npc; characters v3 — items, spells, quests-npc. Assigned: world v2 → creatures (#7,
-first world module to merge). Current base: auth v2, characters v2, world v1 (v2 once #7
-lands); the next world module gets v3, the first characters module v3.
+The 2026-10-03 integration candidate assigns world v2 creatures, v3 maps,
+v4 items, v5 spells, v6 quests/NPC; characters v3 items, v4 spells, v5 quests,
+v6 social. Auth remains v2. See [fleet accounting](fleet-20261003.md) for the
+exact source heads, schema lineage, and validation. These assignments apply to
+this candidate; the original feature branches retain their draft allocations.
 
 ## Local build and test (box)
 

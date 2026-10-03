@@ -2,16 +2,15 @@
 
 Status: ready for review. Area doc: `docs/areas/items.md`.
 
-## Schema versions (need the lead's allocation)
+## Assigned schema versions
 
 | Component | Version | Module | Changes |
 |---|---|---|---|
-| World | **2** | `Data/Content/Items/ItemWorldDataModule.cs` | create `item_template` (vmangos columns), `playercreateinfo_item` |
+| World | **4** | `Data/Content/Items/ItemWorldDataModule.cs` | create `item_template` (vmangos columns), `playercreateinfo_item` |
 | Characters | **3** | `Data/Characters/Items/ItemCharacterDataModule.cs` | create `item_instance`, `character_inventory` |
 
-These are the next free numbers at the base (world v1, characters v2). Per `seams.md` the lead
-assigns the final numbers at merge time; each is a single constant (`SchemaVersion` in the
-module), and no test asserts a literal version.
+Assigned in the [2026-10-03 integration candidate](fleet-20261003.md). The source
+branch originally requested world v2 and characters v3.
 
 ## Owned paths (nearest equivalents)
 

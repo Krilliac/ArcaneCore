@@ -2,14 +2,15 @@
 
 Work in progress. The PR is a draft until the area is complete. This file lists what the lead needs to merge it next to the other fleet branches.
 
-## Schema versions claimed
+## Assigned schema versions
 
 | Component | Version | Module | Tables |
 |---|---|---|---|
-| world | **v2** | `ArcaneCore.Data/Quests/QuestNpcWorldModule.cs` | `quest_template`, `creature_questrelation`, `creature_involvedrelation`, `npc_gossip`, `gossip_menu`, `gossip_menu_option`, `npc_text`, `npc_vendor`, `npc_trainer`, `taxi_nodes`, `taxi_path`, `race_taxi_start`, `points_of_interest` |
-| characters | **v3** | `ArcaneCore.Data/Quests/QuestNpcCharactersModule.cs` | `character_queststatus`, `character_taxi` |
+| world | **v6** | `ArcaneCore.Data/Quests/QuestNpcWorldModule.cs` | `quest_template`, `creature_questrelation`, `creature_involvedrelation`, `npc_gossip`, `gossip_menu`, `gossip_menu_option`, `npc_text`, `npc_vendor`, `npc_trainer`, `taxi_nodes`, `taxi_path`, `race_taxi_start`, `points_of_interest` |
+| characters | **v5** | `ArcaneCore.Data/Quests/QuestNpcCharactersModule.cs` | `character_queststatus`, `character_taxi` |
 
-These are the next free numbers at the seam (world v1, characters v2). If the lead gives them to another branch, this branch renumbers. Each number is a single `SchemaVersion` property.
+Assigned in the [2026-10-03 integration candidate](fleet-20261003.md). The source
+branch originally requested world v2 and characters v3.
 
 ## Paths owned
 
@@ -21,7 +22,8 @@ These are the next free numbers at the seam (world v1, characters v2). If the le
 
 ## Shared files edited
 
-None. Everything plugs in through the seams in `docs/integration/seams.md`:
+The source snapshot contains Game/data services. The following planned daemon
+seams are still pending; they are not registered by this integration:
 - handler groups (`IOpcodeHandlerGroup`)
 - one `IWorldFeature`
 - `PlayerLoggedIn` / `PlayerLoggingOut`

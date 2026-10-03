@@ -227,11 +227,9 @@ rows are kept. The tables start empty: fill them from a vmangos world database e
 - One `Map` object per instance (instances currently share their map's `Map`); instance
   resets, player limits and `SMSG_TRANSFER_ABORTED` paths (max players, not found).
 - vmaps (WMO/model heights, line of sight, indoor areas) and mmaps (pathfinding).
-- Ignoring client movement while a teleport is pending (vmangos `HandleMovementOpcodes`):
-  belongs in `MovementHandlers.cs`; `TeleportService.IsBeingTeleported` is ready for it.
 - Server-side zone updates from terrain on movement (currently on teleport only; the client's
   `CMSG_ZONEUPDATE` is still trusted).
-- Grid content loading (creature/game object spawns per grid) — the creatures area hooks
-  `GridLoaded` / `GridUnloading`.
+- Game object grid content loading. Creature spawns use `GridLoaded` / `GridUnloading`
+  in the integration candidate.
 - Transports, taxi flights, ghosts entering dungeons, battleground entrances, area-trigger
   scripts/quests/taverns.

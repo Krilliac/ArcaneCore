@@ -36,10 +36,10 @@ Status: implemented on `feat/creatures` (PR into `claude/friendly-hamilton-cuz4j
 - Speeds: 2.5 × speed_walk and 7 × speed_run.
 
 **Map system** (`CreatureMapSystem`, attached through the new `IMapUpdater` hook):
-- **Grids:** spawns are bucketed by vmangos grid (64 × 64 grids of 533.33333 yd, `ComputeGridPair`). A grid loads when a player is within visibility range + 50 yd. It unloads after `GridUnloadDelayMs` (default 5 min, vmangos `GridCleanUpDelay`) with no player near. Dead spawns keep their respawn time across unloads.
+- **Grids:** spawns are bucketed by vmangos grid (64 × 64 grids of 533.33333 yd, `ComputeGridPair`). The integrated map grid lifecycle owns loading and unloading (`World:Maps:GridUnload`, `GridCleanUpDelayMs`, and `GridActivationDistance`). Dead spawns keep their respawn time across unloads.
 - **Visibility:** the same rule players use (`Map.IsWithinVisibilityDistance`: 100 yd + grey distance + radii, 2D).
   - Entering range sends a create block. CREATE_OBJECT is used for grid loads and respawns; CREATE_OBJECT2 only for runtime adds (`SpawnTemporary`), as in vmangos `Map::Add` → `SetIsNewObject`.
-  - Leaving range, corpse removal or despawn sends an out-of-range block. Value changes reach viewers through the map's existing values phase.
+  - Leaving range sends an out-of-range block; corpse removal or despawn uses the map's SMSG_DESTROY_OBJECT path. Creatures share the map object and observer indexes, so movement, health and other value changes reach viewers once.
 - **Life cycle** (vmangos `Creature::SetDeathState` / `Update`):
   - `KillCreature`: health 0, NPC flags cleared, target cleared, movement stopped (stop packet).
   - Respawn time = death + urand(spawntimesecsmin, max).

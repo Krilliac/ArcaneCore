@@ -7,10 +7,10 @@ Branch `feat/social`, branched from `claude/friendly-hamilton-cuz4j4` after the 
 
 | Database | Version | Module | Change |
 |---|---|---|---|
-| characters | **3** | `ArcaneCore.Data.Social.SocialDataModule` | new tables `character_social`, `guild`, `guild_rank`, `guild_member` (additive only) |
+| characters | **6** | `ArcaneCore.Data.Social.SocialDataModule` | new tables `character_social`, `guild`, `guild_rank`, `guild_member` (additive only) |
 
-Characters v2 is the inline M6 step. If another branch also takes characters v3, the later PR
-renumbers (change `SchemaVersion` in `SocialDataModule`).
+Assigned in the [2026-10-03 integration candidate](fleet-20261003.md), after inventory,
+spellbooks and quest state. The source branch originally requested characters v3.
 
 ## Seams used (no shared registration files edited)
 

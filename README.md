@@ -9,6 +9,11 @@ charter and prime directives.
 > chat, /who, account settings, action bars, GM commands); awaiting real-client
 > acceptance. Scope and order of the next milestones: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
+This integration candidate also combines creatures, grids/terrain/teleports,
+items, spells, social systems, and the partial quests/NPC draft. Exact branch
+heads, schema allocations, integration repairs, validation, and remaining
+client acceptance work are in [the fleet integration record](docs/integration/fleet-20261003.md).
+
 ## Layout
 
 ```

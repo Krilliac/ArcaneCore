@@ -15,14 +15,14 @@ Everything new lives in owned folders:
 - tests: `tests/ArcaneCore.Game.Tests/GridTerrain/`, `tests/ArcaneCore.World.Tests/GridTerrain/`
   (including the `MapTestServices` test double), `tests/ArcaneCore.Data.Tests/MapDataModuleTests.cs`
 
-## Schema version (needs the lead's allocation)
+## Assigned schema version
 
 | Component | Version | Module | Tables |
 |---|---|---|---|
-| world | **2** (requested; lead to confirm) | `ArcaneCore.Data.Content.Maps.MapDataModule` | `map_template`, `area_template`, `areatrigger_template`, `areatrigger_teleport`, `game_tele` |
+| world | **3** | `ArcaneCore.Data.Content.Maps.MapDataModule` | `map_template`, `area_template`, `areatrigger_template`, `areatrigger_teleport`, `game_tele` |
 
-World was at v1 with no steps at the seam. If another branch lands a world v2 first, this
-module renumbers (one constant: `MapDataModule.Version`).
+Assigned in the [2026-10-03 integration candidate](fleet-20261003.md), after creatures v2.
+The source branch originally requested v2.
 
 ## Shared files touched (minimal, additive)
 

@@ -3,17 +3,15 @@
 Area: the core of the spell system (branch `feat/spells`). It is built on the seams in
 [seams.md](seams.md) (PR #1, `feat/fleet-plan`).
 
-## Schema versions claimed
+## Assigned schema versions
 
 | Component | Version | Module | Tables |
 |---|---|---|---|
-| world | **2** | `ArcaneCore.Data.Content.Spells.SpellWorldDataModule` | `spell_template`, `spell_cast_times`, `spell_duration`, `spell_range`, `spell_radius`, `playercreateinfo_spell`, `spell_target_position` |
-| characters | **3** | `ArcaneCore.Data.Characters.Spells.CharacterSpellDataModule` | `character_spell` |
+| world | **5** | `ArcaneCore.Data.Content.Spells.SpellWorldDataModule` | `spell_template`, `spell_cast_times`, `spell_duration`, `spell_range`, `spell_radius`, `playercreateinfo_spell`, `spell_target_position` |
+| characters | **4** | `ArcaneCore.Data.Characters.Spells.CharacterSpellDataModule` | `character_spell` |
 
-These were taken as the next free numbers at the seam (world v1, characters v2). **Collision
-risk:** another area that also adds world or characters tables will pick the same numbers. The
-lead assigns the final numbers. Renumbering means changing only the `SchemaVersion`
-property of the module.
+Assigned in the [2026-10-03 integration candidate](fleet-20261003.md). The source
+branch originally requested world v2 and characters v3.
 
 ## Shared files edited
 
@@ -46,16 +44,23 @@ CharacterHandlers, WorldRuntime, DbContexts, WorldTestHost).
 | Casting from other systems (items, procs, scripts) | `SpellFeature.System.CastSpell(caster, spellId, targets, triggered)` |
 | Interrupting (combat damage, movement) | `SpellFeature.System.CancelCast` / `CancelChannel` |
 
-## Requests to the lead
+## Integration status and remaining work
 
 1. **Map update hook.** `SpellFeature` ticks from a timer that posts `Update` to the world thread
    once per tick interval, with at most one post pending. A `WorldRuntime` per-tick event (or an
    `IWorldFeature.Update(diff)`) would remove the timer.
-2. **Per-login async load.** The spellbook (`character_spell`) is loaded once, in full, at startup,
-   and then written through on an ordered background queue. This matches the CharacterDirectory
-   precedent. A login-stage seam that can await I/O before the player is created would allow loading
-   per character instead.
+2. **Character loading and creation now use #9's hooks.** Starting spells are persisted
+   before creation succeeds. Login drains preceding queued writes, loads the character's
+   persisted book, and fails closed on database errors. Failed queued writes are reconciled
+   against the authoritative cache before reload. Startup preload remains for compatibility.
 3. **Character deletion event.** Deleting a character leaves its `character_spell` rows behind.
    `SpellbookCache.DeleteCharacter(id)` is ready, but CharacterHandlers is on the avoid list.
-4. **Character creation.** New characters get their `playercreateinfo_spell` defaults on first login,
-   in `BuildInitialSpells`, rather than at creation (cmangos `Player::Create → learnDefaultSpells`).
+4. **Combat, creature lookup, and teleports are connected.** `WorldSpellSinks` resolves units
+   through `Map.FindObject`, deals damage through `MapCombat`, and sends player teleports
+   through `TeleportService` including far transfer and acknowledgement. Healing distributes
+   base effective healing threat and enters combat; class/spell threat modifiers remain.
+5. **Empty books across restart.** An intentionally emptied in-memory book is preserved on
+   relog, but a restarted daemon cannot distinguish zero persisted rows from a legacy character
+   awaiting defaults without additional metadata.
+6. **Far transfer preserves spell state.** Online players awaiting a world-port ack retain
+   their aura/cast state with simulation paused while detached. Cooldowns use absolute time.

@@ -64,7 +64,7 @@ When a server and the docs disagree, the server wins and the conflict is listed 
 | Interrupt packets | cmangos also sends SMSG_SPELL_FAILURE on interrupt. vmangos sends SMSG_SPELL_FAILED_OTHER to the set (self included) plus CAST_RESULT to the caster. | vmangos. |
 | SMSG_SPELL_COOLDOWN | vmangos `Player::AddCooldown` sends no SMSG_SPELL_COOLDOWN, because the client starts the timer itself for casts it requested. `Player::AddGCD(updateClient)` sends `(spell, 0)` only for server-forced GCDs. | Non-triggered casts send nothing, as in vmangos. Triggered player casts (server-initiated: `.cast`, triggered spells) send `(spell, cooldown ms)` so the client shows a cooldown it did not start. This is a deliberate addition. |
 | IsPositive | vmangos `IsPositiveSpell` inspects a large table, including triggered spells. | A simplified heuristic: the debuff attribute, enemy targets, and damage or harmful auras. |
-| Starting spells | cmangos grants `playercreateinfo_spell` in `Player::Create`. | Granted on the first login (character creation belongs to the characters area). |
+| Starting spells | cmangos grants `playercreateinfo_spell` in `Player::Create`. | Granted at creation through character hooks; login fills legacy missing books. |
 
 ## Acceptance steps
 
@@ -87,7 +87,9 @@ When a server and the docs disagree, the server wins and the conflict is listed 
 - Reagents, item casts, totems, spell focus, shapeshift and stance checks, facing, line of sight, area restrictions.
 - Talents, ranks, spell modifiers, crits, resists and misses (SPELL_GO misses are supported by the packet, but nothing produces them yet), proc system, diminishing returns, immunities, dispel.
 - Aura persistence (`character_aura`) and cooldown persistence. Both are dropped on logout.
-- Power regeneration, death and corpse handling, and threat. These belong to the combat area through the `IDamageSink` seam.
-- Far teleports (the map area, through `ITeleportSink`) and creatures as targets or casters (the creatures area, through `ISpellUnitResolver`).
+- Complete spell combat modifiers. Integrated spell damage now uses map combat death/threat,
+  and effective healing adds base distributed threat and enters combat.
+- Non-player far teleports. Player far teleports and shared creature lookup are connected in
+  the integration candidate; non-player transfers remain unsupported.
 - Trainers and the trainer spell list (the NPC area, through `SpellSystem.LearnSpell`).
 - The remaining effect and aura types, which are logged once as unsupported.
