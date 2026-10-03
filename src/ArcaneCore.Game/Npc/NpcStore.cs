@@ -27,6 +27,7 @@ public sealed class NpcStore
 
     public NpcStore(NpcContent content)
     {
+        Content = content;
         _npcGossip = content.NpcGossips.GroupBy(g => g.NpcGuid).ToFrozenDictionary(g => g.Key, g => g.First().TextId);
 
         // vmangos GetGossipTextId walks a menu's texts by rising condition_id.
@@ -57,6 +58,12 @@ public sealed class NpcStore
     }
 
     public static NpcStore Empty { get; } = new(NpcContent.Empty);
+
+    /// <summary>
+    /// The rows this store was built from. The live reload (<c>.reload npc_vendor</c>, ...) replaces one table's rows
+    /// of it and builds the next store, so the tables it does not reload keep exactly what is live.
+    /// </summary>
+    public NpcContent Content { get; }
 
     /// <summary>All existing taxi nodes (vmangos sTaxiNodesMask).</summary>
     public IReadOnlyList<uint> TaxiNodesMask => _taxiNodesMask;

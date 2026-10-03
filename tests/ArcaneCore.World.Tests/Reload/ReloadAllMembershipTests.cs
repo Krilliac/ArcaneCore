@@ -32,9 +32,19 @@ public sealed class ReloadAllMembershipTests
         // all_quest calls HandleReloadQuestTemplateCommand (:938) and reloads the quest relations (:940-942).
         ["quest_template"] = true,
 
-        // Not reached by any all_* command: the config (Chat.cpp:808 registers it on its own), item_template
-        // (all_item :996-1002 only reloads page_text, item_enchantment and item_required_target) and
-        // creature_template (all_npc :925-933 leaves it out).
+        // all_npc: npc_gossip, npc_trainer, npc_vendor, points_of_interest (ServerCommands.cpp:928-931); all_gossips: gossip_menu,
+        // gossip_menu_option, npc_gossip, points_of_interest (:987-992).
+        ["npc_gossip"] = true,
+        ["npc_trainer"] = true,
+        ["npc_vendor"] = true,
+        ["points_of_interest"] = true,
+        ["gossip_menu"] = true,
+        ["gossip_menu_option"] = true,
+
+        // Not reached by any all_* command: npc_text (neither all_npc nor all_gossips lists it), the config (Chat.cpp:808
+        // registers it on its own), item_template (all_item :996-1002 only reloads page_text, item_enchantment and
+        // item_required_target) and creature_template (all_npc :925-933 leaves it out).
+        ["npc_text"] = false,
         ["config"] = false,
         ["item_template"] = false,
         ["creature_template"] = false,
@@ -47,6 +57,7 @@ public sealed class ReloadAllMembershipTests
     private static readonly HashSet<string> VmangosNames = new(StringComparer.Ordinal)
     {
         "areatrigger_teleport", "config", "creature_template", "game_tele", "item_template", "quest_template", "spell_template",
+        "npc_gossip", "npc_text", "npc_trainer", "npc_vendor", "points_of_interest", "gossip_menu", "gossip_menu_option",
     };
 
     /// <summary>Names with no vmangos counterpart (none yet; each needs a reason in docs/areas/hot-reload.md).</summary>

@@ -97,6 +97,21 @@ by id; journals keep quest ids, not templates, so nothing is re-wired and an onl
 - The quest area triggers (`areatrigger_involvedrelation`) are the configuration key `Quests:AreaTriggerQuests` here, not a
   table; they are read when the world starts.
 
+**NPC service tables** (`NpcContentReloadables`: `npc_gossip`, `npc_text`, `npc_trainer`, `npc_vendor`, `points_of_interest`,
+`gossip_menu`, `gossip_menu_option`; `NpcStore.Content`, `QuestNpcServices.ReplaceNpcs`): the whole `NpcContent` is read through
+`INpcContentStore` off the world thread, only the named table's rows are put into a copy of the live content, the next immutable
+`NpcStore` is built from that copy (still off the world thread), and the commit swaps it into the live `QuestNpcServices`. Gossip,
+vendor and trainer windows opened afterwards, and every NPC text query, use it; a window a player already has open keeps the list
+it was sent. The other tables, and the flight network, are exactly what was live (a test pins it). vmangos commands:
+`HandleReloadNpcGossipCommand` / `NpcText` / `NpcTrainer` / `NpcVendor` / `PointsOfInterest` / `GossipMenu` /
+`GossipMenuOption`, `ServerCommands.cpp:1264-1311` and `:1071-1091`; loaders `ObjectMgr.cpp:10865`, `6827`, `10600`, `10780`,
+`9081`, `10931`, `11013`; table entries `Chat.cpp:847-848`, `867-870`, `880`. `reload all` reaches the first six through all_npc
+and all_gossips (`ServerCommands.cpp:925-933`, `985-994`); `npc_text` is in neither, so it is not in `all`.
+- Every one of these vmangos loaders clears its map before it looks at the query result (`ObjectMgr.cpp:10867`, `6829`,
+  `10604-10607`, `10784-10787`, `9083`, `10933`, `11015`), so an empty table empties the rows; `HotReload:EmptyTables = KeepLoaded`
+  keeps them (as for `item_template`).
+- vmangos also reloads `npc_trainer_template` with `npc_trainer` and `npc_vendor_template` with `npc_vendor`
+  (`ServerCommands.cpp:1282-1301`); ArcaneCore has no template tables (an entry's list is one list), so there is nothing more to read.
 **`game_tele`, `areatrigger_teleport`** (`MapContentReloadables`, `WorldMaps.ReplaceGameTeles` /
 `BuildAreaTriggerTables` / `ReplaceAreaTriggerTables`): the `.tele` locations, and the area triggers with
 their teleports, are read via `IMapDataStore` off the world thread and swapped on it (vmangos
@@ -159,9 +174,9 @@ table or catalog from the database).
 | `creature_template` (830) | no (all_npc :925-933 omits it) | `creature_template` | delivered |
 | `creature_ai_events` (820) | yes (:890) | part of the creature content, rides on `creature_template` (so not in `all`) | delivered, see Limits |
 | `quest_template` (884) and the four `*_questrelation` / `*_involvedrelation` tables (824, 827, 840, 842) | yes, via all_quest (:938-942) | `quest_template` (templates and the four relation tables together) | delivered |
-| `npc_gossip` (867), `npc_trainer` (869), `npc_vendor` (870), `points_of_interest` (880) | yes, via all_npc (:928-931) | none yet | planned |
-| `gossip_menu` (847), `gossip_menu_option` (848) | yes, via all_gossips (:987-988) | none yet | planned |
-| `npc_text` (868) | no | none yet | planned |
+| `npc_gossip` (867), `npc_trainer` (869), `npc_vendor` (870), `points_of_interest` (880) | yes, via all_npc (:928-931) | `npc_gossip`, `npc_trainer`, `npc_vendor`, `points_of_interest` | delivered |
+| `gossip_menu` (847), `gossip_menu_option` (848) | yes, via all_gossips (:987-988) | `gossip_menu`, `gossip_menu_option` | delivered |
+| `npc_text` (868) | no | `npc_text` | delivered |
 | `creature_loot_template` (825), `gameobject_loot_template` (841), `item_loot_template` (853), `skinning_loot_template` (890), `reference_loot_template` (885), `fishing_loot_template` (834), `pickpocketing_loot_template` (874), `disenchant_loot_template` (831) | yes, all at once via all_loot (:891, :916-922) | none yet | planned |
 | `mail_loot_template` (863) | yes, via all_loot | none | no store |
 | `skill_fishing_base_level` (889) | yes (:887) | none yet; the base levels live in the loot content object | planned |
