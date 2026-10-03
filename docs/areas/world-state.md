@@ -44,6 +44,28 @@ Config (`World:Zones`):
 |---|---|---|
 | `ClientZoneTrust` | `Auto` | `Never` = retail (always derived). `Always` = use the client / stored zone. `Auto` = the client / stored zone is used only while zones cannot be derived (no `area_template` rows or no terrain files). |
 
+### Weather engine (`weather-core`, pure rules)
+
+`WeatherState.ReGenerate` is a line-by-line port of vmangos `Weather::ReGenerate`
+(`Weather.cpp:87-210`; mangos-classic's is identical) with float32 arithmetic and the C++
+constants (`0.33333334f`, `0.6666667f`, `0.9999f`, `0.3333f`, `0.3334f`, `0.6667f`). Preserved
+quirks, each pinned by a test: the "get fair" branch falls through into a fresh roll from the
+chance table; the get-better / get-worse returns do not normalize (a grade can exceed 1 until a
+packet is built, which normalizes like `SendWeatherUpdateToPlayer`); a zone without a
+`game_weather` row stays fine; permanent weather never regenerates.
+`WeatherSeasons.Of(local)` is `((tm_yday - 78 + 365) / 91) % 4` on the server-local day.
+`ZoneWeatherChances.FromColumns` takes the 12 `game_weather` columns (spring, summer, fall,
+winter by rain, snow, storm) and replaces a value above 100 with 25 (`Weather.cpp:480-495`).
+Sounds are the 1.12 table (`Weather.cpp:40-52, 402-443`); SMSG_WEATHER is
+`u32 type, f32 grade, u32 sound, u8 instant` (13 bytes; vmangos `Misc.cpp:404-427`, wow_messages
+`smsg_weather.wowm`). The random source (`IWeatherRandom`) is injected; the clock is an argument.
+
+Not wired yet: the per-map zone weather registry, the 10-minute interval timer, broadcast to the
+zone, `.wchange`, and the `game_weather` table/importer. The engine is usable on its own by the
+next slice. Verification note: the long-run test pins the port's own distribution (46.5 % of
+regens change state, 47 % of time at grade 0.27 or more for a 20 % rain zone); it is a
+self-consistency check against a second port, not a retail oracle.
+
 ## Deviations from retail (all documented, none silent)
 
 - `ClientZoneTrust=Auto` is a development-world allowance, not retail. Retail is `Never`.
