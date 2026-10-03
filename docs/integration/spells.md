@@ -64,3 +64,20 @@ CharacterHandlers, WorldRuntime, DbContexts, WorldTestHost).
    awaiting defaults without additional metadata.
 6. **Far transfer preserves spell state.** Online players awaiting a world-port ack retain
    their aura/cast state with simulation paused while detached. Cooldowns use absolute time.
+
+## Revocable aura caster ownership
+
+The [qualified lifetime follow-up](aura-caster-ownership.md) binds a holder to a
+weak, revocable token for the exact caster Unit. Actual logout/non-transit
+forgetting revokes that token, including when the caster's own state was pruned.
+Same-GUID replacement cannot receive old effect attribution, threat or quest kill
+credit, pause an old holder through its settlement, or inherit its stacks. Late
+old removal also cannot forget replacement state. Legitimate map-only transit
+keeps ownership, and an exact owner's stack/refresh behavior remains intact.
+
+Missing/revoked casters keep the existing target fallback. Holder GUID and periodic
+aura log provenance remain; triggered spell logs retain their actual resolved or
+fallback actor. This adds no saved aura state or broader offline gameplay. Twenty
+new Game/World cases and full native/provider suites cover the bounded contract.
+Actual two-session/client aura behavior remains pending in the user's selected
+chat; source-only weak-lifetime reasoning does not claim a forced-GC measurement.
