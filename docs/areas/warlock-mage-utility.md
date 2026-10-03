@@ -76,3 +76,23 @@ modelled; (3) no `Spells:Warlock:SoulShards:RequireTap` switch was added: the de
 nothing needs it until a tap source exists.
 
 Tests: `tests/ArcaneCore.Game.Tests/Spells/Utility/SoulShardTests.cs` (10 tests; RED first: 6 failed, the 4 negative cases passed by design).
+
+## wlm-16 Absorb shield spell power (`SpellAmountStage.AbsorbShield`, `SpellBonusModule`)
+
+Absorb shields got no spell power: `SnapshotAuraAmount` skipped `SPELL_AURA_SCHOOL_ABSORB`. Now the shield amount goes through a new
+`SpellAmountStage.AbsorbShield` (caster side, stored in the aura at creation; a login-restored aura is built from its saved amount in
+`SpellSystem.Persistence.cs` and never re-snapshotted, so there is no double bonus). `SpellBonusModule` implements vmangos
+`Aura::HandleSchoolAbsorb` (SpellAuras.cpp:5750-5810):
+
+* Fire Ward and Frost Ward (mage family flags 3 and 8, `SpellClassMask.h`) and Shadow Ward (warlock family, icon 207, category 56): 10 percent of
+  `SpellBaseDamageBonusDone` for the spell's school (ModDamageDone for the school plus the per-aura truncated spirit part, players only);
+* Power Word: Shield (priest family flag 0) in the same function: 10 percent of `SpellBaseHealingBonusDone` (the design listed only the three
+  wards; retail does the same for Power Word: Shield and no other lane owns it);
+* the bonus is multiplied by `CalculateLevelPenalty` (`SpellCoefficients.LevelPenalty`), added to the data amount and truncated to int
+  (`rand_dither` of an integer is the integer). Ice Barrier, Mana Shield, Spellstone, Sacrifice and every other shield keep the data amount.
+
+Shared edits: `ISpellAmountModifier.cs` (enum member), `SpellSystem.Amounts.cs` (one switch arm), `SpellBonusModule.cs` (one branch plus the two
+base-bonus helpers). Existing limits of the module stay (equipped-item restricted +damage auras, talent spell mods).
+
+Tests: `tests/ArcaneCore.Game.Tests/Spells/Utility/AbsorbShieldTests.cs` (10 tests; RED first: 7 failed, 3 characterization tests pass today:
+unchanged non-ward shield, module not installed, other-school shield). The absorb path itself (shield break, school mask) is exercised as acceptance.

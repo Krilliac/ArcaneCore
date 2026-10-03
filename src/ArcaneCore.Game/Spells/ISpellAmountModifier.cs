@@ -22,6 +22,12 @@ public enum SpellAmountStage
 
     /// <summary>One tick of a heal aura: the target side only, with the aura's stack count.</summary>
     HealOverTimeTick,
+
+    /// <summary>
+    /// A school absorb shield being created (SPELL_AURA_SCHOOL_ABSORB, vmangos Aura::HandleSchoolAbsorb): the caster side only, stored in the aura.
+    /// The modifier decides which shields get a bonus (Fire/Frost/Shadow Ward and Power Word: Shield); every other shield must come back unchanged.
+    /// </summary>
+    AbsorbShield,
 }
 
 /// <summary>

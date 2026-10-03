@@ -28,6 +28,17 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
 {
     private const int SpiritStat = 4;
 
+    // vmangos SpellDefines.h SPELLFAMILY_*, SpellClassMask.h CF_MAGE_FIRE_WARD (3), CF_MAGE_FROST_WARD (8), CF_PRIEST_POWER_WORD_SHIELD (0); Shadow Ward is
+    // identified by icon 207 and category 56 (SpellAuras.cpp:5782).
+    private const uint MageFamily = 3;
+    private const uint WarlockFamily = 5;
+    private const uint PriestFamily = 6;
+    private const int FireWardFlag = 3;
+    private const int FrostWardFlag = 8;
+    private const int PowerWordShieldFlag = 0;
+    private const uint ShadowWardIcon = 207;
+    private const uint ShadowWardCategory = 56;
+
     /// <summary>The explicit coefficient table, when one is loaded; null runs the formula only.</summary>
     public ISpellBonusCoefficients? Coefficients { get; set; }
 
@@ -36,6 +47,11 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(spell);
+        if (stage == SpellAmountStage.AbsorbShield)
+        {
+            return AbsorbShield(caster, spell, amount);
+        }
+
         bool overTime = stage is not (SpellAmountStage.DirectDamage or SpellAmountStage.DirectHeal);
 
         // Weapon based (melee / ranged class) damage belongs to the melee formulas: direct hits route by DmgClass
@@ -58,6 +74,57 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
             SpellAmountStage.DamageOverTimeTick => Taken(false, amount, target, spell, mask, coefficient, stack),
             _ => Taken(true, amount, target, spell, mask, coefficient, stack),
         };
+    }
+
+    /// <summary>
+    /// vmangos Aura::HandleSchoolAbsorb (SpellAuras.cpp:5750-5810): Power Word: Shield adds 10 percent of the caster's +healing for the school
+    /// (SpellBaseHealingBonusDone), Fire Ward and Frost Ward (mage family flags 3 and 8) and Shadow Ward (warlock family, icon 207, category 56)
+    /// 10 percent of the +damage for the school (SpellBaseDamageBonusDone); the bonus is multiplied by CalculateLevelPenalty. Ice Barrier, Mana
+    /// Shield, Spellstone and every other shield get nothing. The caller truncates to int like the int32 modifier of vmangos (rand_dither of an
+    /// integer is the integer).
+    /// </summary>
+    private float AbsorbShield(Unit caster, SpellInfo spell, float amount)
+    {
+        int mask = 1 << (int)spell.School;
+        float benefit = 0;
+        if (spell.IsFitToFamily(PriestFamily, PowerWordShieldFlag))
+        {
+            benefit = BaseHealingBonusDone(caster, mask) * 0.1f;
+        }
+        else if (spell.IsFitToFamily(MageFamily, FireWardFlag) || spell.IsFitToFamily(MageFamily, FrostWardFlag)
+            || (spell.SpellFamilyName == WarlockFamily && spell.SpellIconId == ShadowWardIcon && spell.Category == ShadowWardCategory))
+        {
+            benefit = BaseDamageBonusDone(caster, mask) * 0.1f;
+        }
+
+        return amount + (benefit * SpellCoefficients.LevelPenalty(spell));
+    }
+
+    /// <summary>vmangos SpellBaseDamageBonusDone: ModDamageDone for the school plus the spirit based part (players).</summary>
+    private float BaseDamageBonusDone(Unit caster, int mask)
+    {
+        float benefit = Sum(caster, AuraType.ModDamageDone, a => (a.MiscValue & mask) != 0);
+        if (caster is Player)
+        {
+            foreach (int percent in Amounts(caster, AuraType.ModSpellDamageOfStatPercent, a => (a.MiscValue & mask) != 0))
+            {
+                benefit += (int)(Spirit(caster) * percent / 100.0f); // vmangos truncates each aura's share
+            }
+        }
+
+        return benefit;
+    }
+
+    /// <summary>vmangos SpellBaseHealingBonusDone: ModHealingDone for the school plus the spirit based part (players).</summary>
+    private float BaseHealingBonusDone(Unit caster, int mask)
+    {
+        float benefit = Sum(caster, AuraType.ModHealingDone, a => (a.MiscValue & mask) != 0);
+        if (caster is Player)
+        {
+            benefit += Sum(caster, AuraType.ModSpellHealingOfStatPercent, null) * Spirit(caster) / 100.0f;
+        }
+
+        return benefit;
     }
 
     /// <summary>vmangos SpellDamageBonusDone / SpellHealingBonusDone.</summary>
