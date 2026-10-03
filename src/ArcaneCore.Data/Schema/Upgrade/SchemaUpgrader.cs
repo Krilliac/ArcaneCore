@@ -42,6 +42,18 @@ public static class SchemaUpgrader
             throw new SchemaBlockedException(message, plan);
         }
 
+        if (options.RefuseActiveSessions && plan.NeedsApply)
+        {
+            int? others = await ServerProbe.CountOtherSessionsAsync(db, cancellationToken).ConfigureAwait(false);
+            if (others is > 0)
+            {
+                throw new SchemaActiveSessionsException(
+                    $"{others} other session(s) are connected to the {definition.Component} database. Stop every ArcaneCore daemon and tool first " +
+                    "(visibility is best effort: sessions of other roles may not be listed), or pass --allow-active-sessions if you know they are idle.",
+                    others.Value);
+            }
+        }
+
         await SchemaBootstrapper.EnsureAsync(db, definition, options, logger, cancellationToken).ConfigureAwait(false);
         return plan;
     }

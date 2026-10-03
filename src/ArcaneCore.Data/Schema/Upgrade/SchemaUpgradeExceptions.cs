@@ -15,6 +15,12 @@ public sealed class SchemaBlockedException(string message, SchemaPlan plan) : Sc
     public SchemaPlan Plan { get; } = plan;
 }
 
+/// <summary>Other sessions are connected to the database and the apply was asked to refuse that.</summary>
+public sealed class SchemaActiveSessionsException(string message, int sessions) : SchemaMismatchException(message)
+{
+    public int Sessions { get; } = sessions;
+}
+
 /// <summary>The startup <see cref="SchemaPolicy"/> forbids what the database needs.</summary>
 public sealed class SchemaPolicyException(string message, SchemaState state, int? databaseVersion, int codeVersion) : SchemaMismatchException(message)
 {

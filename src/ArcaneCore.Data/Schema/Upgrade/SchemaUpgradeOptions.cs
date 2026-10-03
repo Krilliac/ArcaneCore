@@ -31,6 +31,13 @@ public sealed class SchemaUpgradeOptions
     /// <summary>What an existing database may be subjected to; <see cref="SchemaPolicy.Always"/> by default (the historic behaviour).</summary>
     public SchemaPolicy Policy { get; init; } = SchemaPolicy.Always;
 
+    /// <summary>
+    /// Whether <see cref="SchemaUpgrader"/> refuses when other sessions are connected to the database
+    /// (<see cref="ServerProbe.CountOtherSessionsAsync"/>, best effort). Off by default for the library; the
+    /// arcane-db tool turns it on unless told <c>--allow-active-sessions</c>, because the references expect the server to be stopped.
+    /// </summary>
+    public bool RefuseActiveSessions { get; init; }
+
     /// <summary>Called once per version row written, in order.</summary>
     public IProgress<SchemaStepProgress>? Progress { get; init; }
 
