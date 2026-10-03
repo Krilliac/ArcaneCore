@@ -559,7 +559,7 @@ public sealed partial class SpellSystem
                 return SpellCastResult.TargetsDead;
             }
 
-            SpellCastResult range = CheckRange(caster, spell, target, strict);
+            SpellCastResult range = CheckRange(caster, spell, target, strict, RangedOptions.Range.Leeway == RangeLeewayMode.Retail);
             if (range != SpellCastResult.CastOk)
             {
                 return range;
@@ -597,7 +597,7 @@ public sealed partial class SpellSystem
     /// (1.25 yd at cast start, 6.25 yd on landing) against the combat distance (3D distance minus
     /// both combat reaches), with the minimum range giving TOO_CLOSE.
     /// </summary>
-    internal static SpellCastResult CheckRange(Unit caster, SpellInfo spell, Unit target, bool strict)
+    internal static SpellCastResult CheckRange(Unit caster, SpellInfo spell, Unit target, bool strict, bool movementLeeway = true)
     {
         if (spell.RangeIndex == SpellConstants.RangeIndexSelfOnly || ReferenceEquals(caster, target))
         {
@@ -620,6 +620,13 @@ public sealed partial class SpellSystem
         float leeway = caster is Player
             ? (strict ? SpellConstants.PlayerStrictRangeLeeway : SpellConstants.PlayerLandingRangeLeeway)
             : (strict ? 0.0f : 2.25f);
+
+        // ranged (hunter lane): + 2.66 yd when a player is involved and both run (Spell.cpp:6911, Object.cpp:1890-1912).
+        if (movementLeeway)
+        {
+            leeway += RangeLeeway.Bonus(caster, target);
+        }
+
         float combatDistance = Math.Max(0.0f, distance - reach);
         if (combatDistance > spell.Range.Max + leeway)
         {
