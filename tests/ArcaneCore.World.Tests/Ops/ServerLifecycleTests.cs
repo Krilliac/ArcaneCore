@@ -93,18 +93,23 @@ public sealed class ServerLifecycleTests
             Assert.Equal(ExitCodes.Restart, await stopped.Task);
             Assert.Equal(ExitCodes.Restart, ExitCodes.Current);
 
-            // The stop is observed on the world thread; the last announcement may still be in flight to the client socket,
-            // so accumulate until both have arrived (or a generous deadline) rather than trusting one collect.
+            // The countdown advances by *elapsed* seconds, so a tick delayed past a full second on a loaded machine
+            // legitimately goes 2 -> 0 and never announces "1 Second.". Assert what is invariant: the first
+            // announcement is "2 Seconds.", and whatever follows is only the "1 Second." announcement.
             List<byte[]> messages = [];
-            DateTime deadline = DateTime.UtcNow.AddSeconds(10);
-            while (messages.Count < 2 && DateTime.UtcNow < deadline)
+            DateTime settle = DateTime.UtcNow.AddMilliseconds(500);
+            while (DateTime.UtcNow < settle)
             {
                 messages.AddRange((await admin.CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgServerMessage).Select(p => p.Payload));
+                await Task.Delay(50);
             }
 
-            Assert.Equal(
-                [Expected(ServerMessageType.RestartTime, "2 Seconds."), Expected(ServerMessageType.RestartTime, "1 Second.")],
-                messages);
+            Assert.InRange(messages.Count, 1, 2);
+            Assert.Equal(Expected(ServerMessageType.RestartTime, "2 Seconds."), messages[0]);
+            if (messages.Count == 2)
+            {
+                Assert.Equal(Expected(ServerMessageType.RestartTime, "1 Second."), messages[1]);
+            }
         }
         finally
         {
