@@ -183,7 +183,7 @@ public sealed class GroupModel
         if (liquidSize > 0)
         {
             int end = reader.Position + liquidSize;
-            liquid = WmoLiquid.Read(ref reader);
+            liquid = WmoLiquid.Read(ref reader, end);
             reader.Seek(end);
         }
 
@@ -244,17 +244,34 @@ public sealed class GroupModel
 public sealed record WmoLiquid(uint TilesX, uint TilesY, Vector3 Corner, uint Type, float[] Heights, byte[] Flags)
 {
     /// <summary>u32 tiles X, u32 tiles Y, f32[3] corner, u32 type, f32 heights[(X+1)(Y+1)], u8 flags[X·Y].</summary>
-    internal static WmoLiquid Read(ref CollisionDataReader reader)
+    internal static WmoLiquid Read(ref CollisionDataReader reader, int chunkEnd = int.MaxValue)
     {
         uint tilesX = reader.ReadUInt32();
         uint tilesY = reader.ReadUInt32();
         Vector3 corner = reader.ReadVector3();
         uint type = reader.ReadUInt32();
-        long heightCount = ((long)tilesX + 1) * ((long)tilesY + 1);
-        long flagCount = (long)tilesX * tilesY;
-        if (heightCount * 4 + flagCount > reader.Remaining)
+
+        // Compare the counts to what the LIQU chunk can hold BEFORE multiplying: the untrusted
+        // grid dimensions must never reach an overflowing product (AC-PI-001).
+        int available = Math.Min(reader.Remaining, chunkEnd - reader.Position);
+        if (available < 0)
         {
-            throw new InvalidDataException($"liquid {tilesX}×{tilesY} does not fit in the {reader.Remaining} bytes left");
+            throw new InvalidDataException("liquid header runs past its chunk");
+        }
+
+        long maxHeights = available / 4;
+        long width = (long)tilesX + 1;
+        long depth = (long)tilesY + 1;
+        if (width > maxHeights || depth > maxHeights || width * depth > maxHeights)
+        {
+            throw new InvalidDataException($"liquid {tilesX}×{tilesY} does not fit in the {available} bytes left");
+        }
+
+        long heightCount = width * depth;
+        long flagCount = (long)tilesX * tilesY;
+        if ((heightCount * 4) + flagCount > available)
+        {
+            throw new InvalidDataException($"liquid {tilesX}×{tilesY} does not fit in the {available} bytes left");
         }
 
         var heights = new float[heightCount];
