@@ -314,7 +314,7 @@ public sealed class DiminishingTests
     private static (SpellAuraHolder Holder, SpellApplication App) Apply(SpellTestKit kit, DiminishingRule rule, Unit caster, Unit target, uint spellId)
     {
         SpellInfo spell = kit.Store.Get(spellId)!;
-        var cast = new SpellCast(spell, caster, SpellCastTargets.ForUnit(target.Guid), triggered: false, 0, 0);
+        var cast = new SpellCast(spell, caster, SpellCastTargets.ForUnit(target.Guid), triggered: false, 0, 0, 0);
         var app = new SpellApplication(kit.System, cast, target, 1);
         rule.Begin(app);
         var holder = new SpellAuraHolder(spell, target, caster, new AuraCasterOwner(caster), 4000);

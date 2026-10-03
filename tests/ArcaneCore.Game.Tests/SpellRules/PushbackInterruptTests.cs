@@ -129,7 +129,7 @@ public sealed class PushbackInterruptTests
         (Player attacker, _) = kit.AddPlayer(1);
         Creature creature = FoundationTests.MakeCreature(0, 30);
         SpellInfo bolt = kit.Store.Get(Bolt)! with { InterruptFlags = SpellInterruptFlags.DamagePushback | SpellInterruptFlags.DamageCancels };
-        var cast = new SpellCast(bolt, creature, SpellCastTargets.ForUnit(attacker.Guid), triggered: false, 3000, 0);
+        var cast = new SpellCast(bolt, creature, SpellCastTargets.ForUnit(attacker.Guid), triggered: false, 3000, 0, 0);
         cast.Timer = 1000;
         kit.System.StateOf(creature).CurrentCast = cast;
 
@@ -230,7 +230,7 @@ public sealed class PushbackInterruptTests
         kit.Advance(2000);
         kit.System.Spellbook!.LearnSpell(victim, Bolt);
         kit.System.CastSpell(victim, Bolt, SpellCastTargets.ForUnit(kicker.Guid), triggered: true); // triggered: ignores the lockout, no CurrentCast
-        kit.System.StateOf(victim).CurrentCast = new SpellCast(kit.Store.Get(Bolt)!, victim, SpellCastTargets.ForUnit(kicker.Guid), false, 3000, 0);
+        kit.System.StateOf(victim).CurrentCast = new SpellCast(kit.Store.Get(Bolt)!, victim, SpellCastTargets.ForUnit(kicker.Guid), false, 3000, 0, 0);
         kit.System.CastSpell(kicker, Kick, SpellCastTargets.ForUnit(victim.Guid), triggered: true); // a second kick must not extend the lockout
         kit.Advance(2100);
         Assert.False(kit.System.IsSchoolLocked(victim, SpellSchool.Fire)); // 4 s from the first kick
@@ -247,7 +247,7 @@ public sealed class PushbackInterruptTests
 
         // An instant spell (cast time 0) occupying the slot is not interrupted either.
         SpellInfo instant = kit.Store.Get(InstantFire)!;
-        kit.System.StateOf(victim).CurrentCast = new SpellCast(instant, victim, SpellCastTargets.ForUnit(kicker.Guid), false, 0, 0);
+        kit.System.StateOf(victim).CurrentCast = new SpellCast(instant, victim, SpellCastTargets.ForUnit(kicker.Guid), false, 0, 0, 0);
         kit.System.CastSpell(kicker, Kick, SpellCastTargets.ForUnit(victim.Guid), triggered: true);
         Assert.NotNull(kit.System.GetState(victim.Guid)!.CurrentCast);
     }
@@ -258,7 +258,7 @@ public sealed class PushbackInterruptTests
         using SpellTestKit kit = Kit();
         (Player kicker, Player victim, _, _) = Casting(kit, Bolt);
         SpellInfo noPushback = kit.Store.Get(Bolt)! with { InterruptFlags = SpellInterruptFlags.None };
-        kit.System.StateOf(victim).CurrentCast = new SpellCast(noPushback, victim, SpellCastTargets.ForUnit(kicker.Guid), false, 3000, 0);
+        kit.System.StateOf(victim).CurrentCast = new SpellCast(noPushback, victim, SpellCastTargets.ForUnit(kicker.Guid), false, 3000, 0, 0);
         kit.System.CastSpell(kicker, Kick, SpellCastTargets.ForUnit(victim.Guid), triggered: true);
         Assert.NotNull(kit.System.GetState(victim.Guid)!.CurrentCast); // not interruptible
 
@@ -325,7 +325,7 @@ public sealed class PushbackInterruptTests
         Creature creature = FoundationTests.MakeCreature(0, 30);
         kit.System.CreatureImmunities = new SilenceImmune();
         SpellInfo bolt = kit.Store.Get(Bolt)!;
-        var cast = new SpellCast(bolt, creature, SpellCastTargets.ForUnit(kicker.Guid), false, 3000, 0);
+        var cast = new SpellCast(bolt, creature, SpellCastTargets.ForUnit(kicker.Guid), false, 3000, 0, 0);
         kit.System.StateOf(creature).CurrentCast = cast;
 
         kit.System.LockOut(creature, SpellSchoolMasks.Of(SpellSchool.Fire), 4000, bolt);
