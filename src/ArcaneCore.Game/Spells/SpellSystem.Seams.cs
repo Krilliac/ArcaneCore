@@ -10,6 +10,15 @@ public sealed partial class SpellSystem
     private ISpellValueModifier[] _valueModifiers = [];
     private ISpellChainRangeProvider[] _chainRangeProviders = [];
 
+    /// <summary>The registered cast checks in run order (phase, order, registration).</summary>
+    public IReadOnlyList<ISpellCastCheck> CastChecks => _castChecks;
+
+    /// <summary>The registered observers in registration order.</summary>
+    public IReadOnlyList<ISpellCastObserver> Observers => _observers;
+
+    /// <summary>The registered value modifiers in registration order.</summary>
+    public IReadOnlyList<ISpellValueModifier> ValueModifiers => _valueModifiers;
+
     /// <summary>The target outcome being built by <see cref="ApplyEffects"/> (re-entrant: nested triggered casts save and restore it).</summary>
     private OutcomeBuilder? _outcome;
 

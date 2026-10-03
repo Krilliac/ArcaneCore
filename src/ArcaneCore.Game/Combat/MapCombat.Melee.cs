@@ -613,7 +613,7 @@ public sealed partial class MapCombat
             if (outcome is MeleeHitOutcome.Parry or MeleeHitOutcome.Dodge
                 && cleanDamage > 0 && direct && meleeDamage && enterCombat && attacker is Player { PowerType: PowerType.Rage } ragePlayer)
             {
-                RewardRage(ragePlayer, (uint)(cleanDamage * 0.75f), attacker: true);
+                RewardRage(ragePlayer, (uint)(cleanDamage * 0.75f), attacker: true, PowerEnvironment.For(_world));
             }
 
             if (enterCombat)
@@ -640,7 +640,7 @@ public sealed partial class MapCombat
 
         if (direct && meleeDamage && enterCombat && attacker is Player { PowerType: PowerType.Rage } rager)
         {
-            RewardRage(rager, damage, attacker: true);
+            RewardRage(rager, damage, attacker: true, PowerEnvironment.For(_world));
         }
 
         if (victim.Health <= damage)
@@ -668,7 +668,7 @@ public sealed partial class MapCombat
         }
         else if (enterCombat && victim.PowerType == PowerType.Rage)
         {
-            RewardRage((Player)victim, damage, attacker: false);
+            RewardRage((Player)victim, damage, attacker: false, PowerEnvironment.For(_world));
         }
 
         DamageDealt?.Invoke(attacker, victim, damage, direct, meleeDamage);
@@ -688,19 +688,26 @@ public sealed partial class MapCombat
     /// <summary>
     /// vmangos Player::RewardRage (Kalgan's formula): conversion = 0.0091107836·L² +
     /// 3.225598133·L + 4.2652911; dealing earns damage/conversion × 7.5, taking ×2.5; the power
-    /// field holds rage × 10.
+    /// field holds rage × 10. This overload uses the retail rates and knows no auras; the world's
+    /// rates and Berserker Rage come with <see cref="PowerEnvironment"/>.
     /// </summary>
-    public static void RewardRage(Player player, uint damage, bool attacker)
+    public static void RewardRage(Player player, uint damage, bool attacker) => RewardRage(player, damage, attacker, PowerEnvironment.Default);
+
+    /// <summary>
+    /// <see cref="RewardRage(Player, uint, bool)"/> with the world's power environment: Rate.Rage.Income, and
+    /// Berserker Rage (18499, effect 0) multiplies rage taken by 1.3 (<see cref="PowerRules.RageFromDamage"/>).
+    /// </summary>
+    public static void RewardRage(Player player, uint damage, bool attacker, PowerEnvironment power)
     {
+        ArgumentNullException.ThrowIfNull(power);
         if (IsQuestSettlementPending(player))
         {
             return;
         }
 
-        float level = player.Level;
-        float conversion = (float)((0.0091107836 * level * level) + (3.225598133 * level)) + 4.2652911f;
-        float add = attacker ? damage / conversion * 7.5f : damage / conversion * 2.5f;
-        ModifyPower(player, PowerType.Rage, (int)(uint)(add * 10));
+        bool berserkerRage = !attacker && power.HasAura(player, PowerRules.BerserkerRageSpell, 0);
+        uint add = PowerRules.RageFromDamage(player.Level, damage, attacker, berserkerRage, power.Options.RateRageIncome);
+        ModifyPower(player, PowerType.Rage, (int)add);
     }
 
     /// <summary>

@@ -79,6 +79,8 @@ with `GetMeleeMissChance`, `Unit::GetUnitCriticalChance` and the dodge/parry/blo
 - **Rage:** vmangos `Player::RewardRage`.
   - Conversion = 0.0091107836·L² + 3.225598133·L + 4.2652911.
   - Dealing damage gives damage/conv·7.5; taking it gives damage/conv·2.5; both ×10.
+  - Taken rage is ×1.3 under Berserker Rage (18499, effect 0), and the result is ×`Combat:RateRageIncome`
+    (`PowerRules.RageFromDamage`, `Player.cpp:2243-2267`).
 - **Combat state:** vmangos `Unit::SetInCombatState`. UNIT_FLAG_IN_COMBAT lasts 5.5 s
   after PvP, batched to the 1-second check (`BatchifyTimer`). Units stay in combat while
   attacking, being attacked or on a threat list. SMSG_CANCEL_COMBAT is sent on stop (vmangos
@@ -124,12 +126,28 @@ CMSG_TOGGLE_PVP: an optional u8 state (gtker `pvp/cmsg_toggle_pvp.wowm`, vmangos
 - Turning it off lets a 5-minute timer run out, paused during PvP combat (`Player::UpdatePvPFlagTimer`).
 - Attacking a flagged player flags the attacker (`TogglePlayerPvPFlagOnAttackVictim`).
 
+### Power economy (warrior-mechanics S03)
+The rates live in `CombatOptions` (config section `Combat`: `RateRageIncome`, `RateRageLoss`, `RateEnergy`,
+`RateMana`; defaults 1 = retail, `mangosd.conf.dist.in:2793-2799`). `Rate.Mana` and `Rate.Rage.Loss` fall back to 1 when
+negative (`World::setConfigPos`, `World.cpp:2959-2967`); the other two are not validated, like vmangos. The world
+daemon's `PowerFeature` binds them and registers a `PowerEnvironment` (options plus an aura source backed by the spell
+system) for the world; worlds without it use `PowerEnvironment.Default`.
+
+- **Refund.** `PowerRefundObserver` (a spell cast observer) returns `round(cost x 0.82)` of the power of an
+  `EX_DISCOUNT_POWER_ON_MISS` ability: energy on miss, dodge, parry or immune, rage on dodge or parry only
+  (`Spell.cpp:1267-1285`; the comment there says 80%, the code 0.82).
+- **Limits.** Health regeneration is unchanged (no `Rate.Health`, no regen-in-combat auras); the mana regen
+  ignores spirit-regen auras; rage from abilities is none (only white swings, as in both cores).
+
 ### Regeneration
 - **Players**, every 2 s (vmangos `Player::RegenerateAll` / `Regenerate`):
   - Out of combat: health by spirit per class (`GetRegenHPPerSpirit`, ×1.5 sitting) and rage
-    −2.
-  - Always: energy +20.
-  - Mana: `GetRegenMPPerSpirit`·2, or 0 within 5 s of spending mana.
+    −2 (×`Combat:RateRageLoss`, not while a SPELL_AURA_INTERRUPT_REGEN aura such as Bloodrage is on).
+  - Always: energy +20 (×`Combat:RateEnergy`).
+  - Mana: `GetRegenMPPerSpirit`·2·`Combat:RateMana`, or 0 within 5 s of spending mana.
+  - Rage and energy ticks are also scaled by MOD_POWER_REGEN_PERCENT auras for that power
+    (`Player.cpp:2323-2328`).
+  - See "Power economy" above.
 - **Creatures**, every 5 s out of combat: a third of max health/mana (vmangos
   `Creature::RegenerateHealth` / `RegenerateMana`).
 
