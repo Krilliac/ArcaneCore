@@ -10,6 +10,7 @@ using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Progression;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -67,6 +68,7 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
         }
 
         world.PlayerLoggingOut += OnPlayerLoggingOut;
+        service.ReputationChanged += OnReputationChanged;
         _logger.LogInformation("Loaded {Factions} factions, {OnKill} kill reputation entries, {Spillovers} spillover templates and {Rates} reward rates",
             service.Factions.Count, service.OnKillCount, service.Content.SpilloverCount, service.Content.RateCount);
     }
@@ -148,6 +150,10 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
             world.MapCreated -= OnMapCreated;
             world.MapUnloading -= OnMapUnloading;
             world.PlayerLoggingOut -= OnPlayerLoggingOut;
+            if (_service is { } service)
+            {
+                service.ReputationChanged -= OnReputationChanged;
+            }
         }
 
         foreach (MapCombat combat in _combat)
@@ -166,6 +172,10 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
             map.Combat.UnitKilled += OnUnitKilled;
         }
     }
+
+    /// <summary>Player::ReputationChanged: reputation-objective quests complete or revert (resolved lazily, the quest feature attaches first).</summary>
+    private void OnReputationChanged(Player player, uint factionId)
+        => services.GetService<QuestNpcFeature>()?.Services?.ReputationChanged(player, factionId);
 
     private void OnPlayerLoggingOut(Player player)
     {

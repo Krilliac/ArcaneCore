@@ -32,6 +32,7 @@ public sealed partial class PlayerReputation
 {
     private readonly SortedDictionary<int, FactionState> _states = [];
     private readonly List<int> _newlyVisible = [];
+    private readonly List<uint> _changed = [];
 
     public PlayerReputation(FactionCatalog factions, Race race, Class playerClass)
     {
@@ -168,6 +169,7 @@ public sealed partial class PlayerReputation
             SetAtWar(state, true);
         }
 
+        _changed.Add(faction.Id);
         return true;
     }
 

@@ -259,6 +259,7 @@ public sealed partial class ReputationService : IReputationService, IPlayerReput
             return false;
         }
 
+        rep.TakeChangedFactions(); // nothing from an earlier direct Apply may leak into this change
         bool changed = rep.ApplyWithSpillover(faction, value, incremental, noSpillover || !SpilloverEnabled, Content, out _);
         foreach (int listId in rep.TakeNewlyVisible())
         {
@@ -267,10 +268,12 @@ public sealed partial class ReputationService : IReputationService, IPlayerReput
 
         if (rep.State(faction) is not { } state)
         {
+            RaiseChanged(player, rep);
             return false; // vmangos only reports the main faction (SendState), and only when it has a state
         }
 
         player.Session.Send(WorldOpcode.SmsgSetFactionStanding, ReputationPackets.SetFactionStanding(rep.TakeStandingUpdate(state)));
+        RaiseChanged(player, rep);
         return changed;
     }
 
