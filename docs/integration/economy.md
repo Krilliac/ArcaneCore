@@ -81,7 +81,7 @@ The two interleaving theories in `EconomyAuctionSnapshotTests` run over the avai
 - **Expiry uses settlement capacity** and can briefly refuse other operations.
 - **Provider evidence.** The snapshot is proved locally on SQLite only. MariaDB and PostgreSQL rely on the repeatable-read transaction and are proved only by hosted CI. Real MySQL is unqualified.
 - **Indexes and the ledger.** There is no index on the bidder column and the ledger (`economy_operation`) is never pruned. Either fix needs a coordinated new characters version (11-13 are taken).
-- **Fidelity.** House percentages, postage and durations follow vmangos/cMaNGOS behavior (re-implemented, GPL code not copied) and still need acceptance against a real 1.12.1 client and an extracted DBC. Mail, auction and trade packets are verified by byte-layout tests and the native mock client, not by a retail client.
+- **Fidelity.** House percentages, postage and durations follow vmangos/cMaNGOS behavior (re-implemented, GPL code not copied) and still need acceptance against a real 1.12.1 client and an extracted DBC. Mail, auction and trade packets are verified by byte-layout tests and the native mock client, not by a retail client. The wave-3 comparison against vmangos, what was brought in line, the options that default to retail and what remains open are in [economy fidelity](economy-fidelity.md).
 
 ## Shared-file edits
 
