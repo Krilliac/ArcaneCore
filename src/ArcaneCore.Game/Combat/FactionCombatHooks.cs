@@ -22,7 +22,7 @@ namespace ArcaneCore.Game.Combat;
 /// (3) Player versus player is left to the base rule (team friendliness, PvP flag).
 /// </para>
 /// <para>
-/// Not modelled, so this is NOT equivalent to vmangos: player reputation / at-war state (Faction.dbc
+/// Not modelled here (the reputation items are modelled by <c>ReputationCombatHooks</c>, which wraps this class when Faction.dbc is loaded), so this is NOT equivalent to vmangos: player reputation / at-war state (Faction.dbc
 /// reputationListID, <c>CanHaveReputation</c>, FACTION_FLAG_AT_WAR making a faction HOSTILE, Object.cpp:3714-3731 and
 /// 3677-3693); neutral-versus-neutral being attackable only when the faction is at war for reputation-capable
 /// factions (Object.cpp:3775-3792); the contested-guard rule (IsContestedGuardFaction plus PLAYER_FLAGS_CONTESTED_PVP

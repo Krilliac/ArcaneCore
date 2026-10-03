@@ -9,7 +9,7 @@ namespace ArcaneCore.Game.Reputation;
 /// WorldObject::GetReactionTo / GetFactionReactionTo (no GPL source copied). Every method
 /// fails closed (returns false) when the data it needs is missing: an unknown template, a
 /// nonzero faction absent from Faction.dbc, or a reputation faction whose player state is not
-/// loaded. Forced reactions (SPELL_AURA_FORCE_REACTION) are not modelled yet.
+/// loaded. Forced reactions (SPELL_AURA_FORCE_REACTION) are read from <see cref="PlayerReputation.TryGetForcedRank"/> (in-memory state set by the force-reaction aura); the whole unit-to-unit ladder is <see cref="ReputationReactionResolver"/>.
 /// </summary>
 public static class ReputationReactions
 {

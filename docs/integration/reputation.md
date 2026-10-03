@@ -45,8 +45,9 @@ Rules worth knowing:
   faction out of war. Unknown or reputation-less factions in storage are ignored; an invalid
   watched slot loads as -1.
 - Falling to Hostile declares war, except that `PeaceForced` blocks war until the faction is
-  Hated. **Deliberate deviation:** vmangos compares the *relative* standing for that exception;
-  ArcaneCore uses the effective reputation so a nonzero race base cannot open or close it.
+  Hated. Retail compares the *relative* standing for that exception (wave 4 restored it);
+  `Reputation:PeaceForcedUsesEffectiveStanding` keeps the old effective-rank behaviour. See
+  [../areas/reputation.md](../areas/reputation.md).
 - The client may toggle war (not while in combat, not for hidden/forced-invisible slots, not
   against forced peace above Hated), inactive (visible, non-hidden slots only) and the watched
   faction (-1 or a visible slot). Toggles are persisted, not echoed. The watched slot is
@@ -164,9 +165,8 @@ installed (requirements fail closed).
   (`ICharacterReputationStore.DeleteDeletedCharacterAsync`: it applies only while the id has no
   `characters` row), so it cannot wipe a character recreated with the same id, and the hook waits,
   bounded, for it to be attempted.
-- **Kill data has no world schema slot.** Kill rewards read `IReputationOnKillSource`; no world
-  module provides it in this round, so kill reputation is inactive in the daemon until the world
-  data owner adds `creature_onkill_reputation` (or registers a source).
+- **Kill data** is served by `CreatureOnKillReputationWorldModule` (world v14) since the wave-1 integration; the wave-4 spillover and
+  reward-rate tables are `ReputationTemplatesWorldModule`.
 - **Quest reputation rewards** are part of the quest reward transaction
   ([quest-progression.md](quest-progression.md)). `QuestTemplate` carries
   `RewRepFaction1..5`/`RewRepValue1..5` (world schema v9). The quest owner stages the gains
@@ -181,16 +181,10 @@ installed (requirements fail closed).
   character's retained writes with `FlushCharacterAsync` before the transaction and refuses
   (NotStarted, journal intact) while they are still not durable, so a retained older row cannot
   overwrite the rows the reward writes.
-- No spillover templates (`reputation_spillover_template`), no `reputation_reward_rate`, no
-  forced reactions (`SPELL_AURA_FORCE_REACTION`), no aura gain modifiers (e.g. the human
-  Diplomacy racial: the spells owner sets `ReputationService.GainModifier`).
-- No group, pet or tapped-kill credit: only direct player kills reward reputation.
-- No honor-rank vendor discounts (vanilla PvP rank), only the 10 % Honored discount.
-- Combat hostility (`CombatHooks`) is not wired to reputation reactions, and nothing registers
-  production hooks: player attacks use the defaults (only same-team players are friendly, any
-  non-player unit is attackable). Faction templates drive only creature aggro on sight
-  (`ICreatureHostility`) and interaction checks. NPCs are not made visible on interaction or attack (only on change), and
-  SMSG_SET_FACTION_ATWAR (server-forced war) is not sent.
+- **Superseded in wave 4** (spillover, reward rates, forced reactions, gain auras, group kill credit, combat and aggro
+  reactions, item rank gating, rep-objective quests, GM commands, price rounding): see
+  [../areas/reputation.md](../areas/reputation.md), which also lists what is still open (honor discounts,
+  temporary war, selection visibility, the tapper rule).
 - The u16/u32 CMSG question above is decided from server sources, not a client capture.
 
 ## Tests
