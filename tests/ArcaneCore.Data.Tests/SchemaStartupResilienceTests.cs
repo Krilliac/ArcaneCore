@@ -76,8 +76,7 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         Assert.True(ddl > 0, $"{component} step {stepVersion} issued no DDL");
 
         Func<string, bool> isVersionWrite = sql => sql.Contains(component + "_schema", StringComparison.Ordinal)
-            && (sql.TrimStart().StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase)
-                || sql.TrimStart().StartsWith("INSERT", StringComparison.OrdinalIgnoreCase));
+            && CommandTap.IsWrite(sql, "UPDATE", "INSERT");
 
         var faults = new List<(string Label, Func<string, bool> When, int On)>();
         for (int k = 1; k <= ddl; k++)
@@ -90,7 +89,8 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         foreach ((string label, Func<string, bool> when, int on) in faults)
         {
             DatabaseConnectionOptions connection = await PrepareLegacyAsync(provider, component, stepVersion - 1, stepVersion);
-            await AssertInjectedAsync(() => EnsureAsync(component, connection, stepVersion, new CommandTap(when, on)));
+            var tap = new CommandTap(when, on);
+            await AssertInjectedAsync(() => EnsureAsync(component, connection, stepVersion, tap), $"{provider} {component} step {stepVersion} {label} (probe saw {ddl} DDL)", tap);
 
             // A restart under the current definition must reach the same schema as an uninterrupted start.
             try
@@ -118,7 +118,7 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         // Die after each DDL statement, and just before the statement that records the version
         // (the crash the historic bootstrapper left an empty version table for).
         Func<string, bool> isVersionInsert = sql => sql.Contains(component + "_schema", StringComparison.Ordinal)
-            && sql.TrimStart().StartsWith("INSERT", StringComparison.OrdinalIgnoreCase);
+            && CommandTap.IsWrite(sql, "INSERT");
         var faults = new List<(string Label, Func<string, bool> When, int On, bool Before)>();
         for (int k = 1; k <= ddl; k++)
         {
@@ -130,7 +130,8 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         foreach ((string label, Func<string, bool> when, int on, bool before) in faults)
         {
             DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
-            await AssertInjectedAsync(() => SchemaProbe.EnsureCurrentAsync(component, connection, new CommandTap(when, on, faultBeforeStatement: before)));
+            var tap = new CommandTap(when, on, faultBeforeStatement: before);
+            await AssertInjectedAsync(() => SchemaProbe.EnsureCurrentAsync(component, connection, tap), $"{provider} {component} fresh create {label} (probe saw {ddl} DDL)", tap);
             try
             {
                 await SchemaProbe.EnsureCurrentAsync(component, connection);
@@ -141,6 +142,41 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
             }
 
             await AssertConvergedAsync(component, connection, $"{component} fresh create {label}");
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(ProviderComponents))]
+    public async Task ExistingEmptyDatabase_StartsLikeAFreshOne(DatabaseProvider provider, string component)
+    {
+        // The state a startup that died right after CREATE DATABASE leaves: the database exists, nothing in it.
+        // (The fault harness does not count CREATE DATABASE as an injectable statement, so this is where that crash point is covered.)
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using (DbContext empty = SchemaProbe.CreateContext(component, connection))
+        {
+            var creator = (IRelationalDatabaseCreator)empty.GetService<IDatabaseCreator>();
+            Assert.False(await creator.ExistsAsync(), "the database should not exist yet");
+            await creator.CreateAsync();
+            Assert.True(await creator.ExistsAsync(), "the database should exist now");
+            Assert.False(await creator.HasTablesAsync(), "the database should be empty");
+        }
+
+        var tap = new CommandTap();
+        await SchemaProbe.EnsureCurrentAsync(component, connection, tap);
+        Assert.True(tap.Ddl > 0, component + " issued no DDL against an empty database");
+        await AssertConvergedAsync(component, connection, component + " restart over an existing empty database");
+
+        // Same schema as an uninterrupted fresh start of a database that did not exist.
+        DatabaseConnectionOptions fresh = await _databases.CreateAsync(provider);
+        await SchemaProbe.EnsureCurrentAsync(component, fresh);
+        await using DbContext restarted = SchemaProbe.CreateContext(component, connection);
+        await using DbContext uninterrupted = SchemaProbe.CreateContext(component, fresh);
+        Assert.Equal(
+            await SchemaProbe.ActualIndexesAsync(uninterrupted, SchemaProbe.ModelTables(uninterrupted)),
+            await SchemaProbe.ActualIndexesAsync(restarted, SchemaProbe.ModelTables(restarted)));
+        foreach (string table in SchemaProbe.ModelTables(restarted))
+        {
+            Assert.Equal(await SchemaProbe.ActualColumnsAsync(uninterrupted, table), await SchemaProbe.ActualColumnsAsync(restarted, table));
         }
     }
 
@@ -250,12 +286,22 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         Assert.Equal(60u, (await afterWorld.ClassInfo.SingleAsync()).BaseHealth);
     }
 
+    [Fact]
+    public void Shorten_TakesTheLengthAfterLineEndingsShrink()
+    {
+        // "\r\n" becomes one space, so the replaced text is shorter than the original: slicing it with the
+        // original length throws ArgumentOutOfRangeException and hides the failure being reported.
+        Assert.Equal("a b", Shorten("a\r\nb", 90));
+        Assert.Equal("a b c", Shorten("a\r\nb\r\nc", 90));
+        Assert.Equal("a b", Shorten("a\r\nb\r\ncdefgh", 3));
+    }
+
     public Task InitializeAsync() => Task.CompletedTask;
 
     public Task DisposeAsync() => _databases.DisposeAsync().AsTask();
 
     /// <summary>The startup must die of the injected fault (EF wraps it in a DbUpdateException for SaveChanges), not of anything else.</summary>
-    private static async Task AssertInjectedAsync(Func<Task> startup)
+    private static async Task AssertInjectedAsync(Func<Task> startup, string label, CommandTap tap)
     {
         Exception? thrown = null;
         try
@@ -267,7 +313,13 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
             thrown = ex;
         }
 
-        Assert.NotNull(thrown);
+        if (thrown is null)
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"{label}: startup completed without the injected fault. EF commands seen ({tap.Commands.Count}): " +
+                string.Join(" || ", tap.Commands.Select(c => Shorten(c, 90))));
+        }
+
         for (Exception? e = thrown; e is not null; e = e.InnerException)
         {
             if (e is InjectedFaultException)
@@ -277,6 +329,13 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         }
 
         throw new Xunit.Sdk.XunitException("startup failed, but not of the injected fault: " + thrown);
+    }
+
+    /// <summary>One line, at most <paramref name="max"/> characters. The length is taken after the line endings are replaced: they can change it.</summary>
+    internal static string Shorten(string text, int max)
+    {
+        string line = text.ReplaceLineEndings(" ");
+        return line[..Math.Min(max, line.Length)];
     }
 
     private static async Task AssertConvergedAsync(string component, DatabaseConnectionOptions connection, string label)

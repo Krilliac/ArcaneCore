@@ -1,7 +1,7 @@
 namespace ArcaneCore.Game.Spells;
 
-// Combat-mechanics enums and attribute bits (hand-written, not generated). Every value is verbatim from
-// vmangos at the SUPPORTED_CLIENT_BUILD = 1.12.1 branch (src/shared/Progression.h:36); the file:line of
+// Combat-mechanics enums and attribute bits (hand-written, not generated). The numeric constants were taken from and
+// cross-checked against vmangos (no code copied) at the SUPPORTED_CLIENT_BUILD = 1.12.1 branch (src/shared/Progression.h:36); the file:line of
 // each block is on its summary. The legacy bit enums in SpellDefines.cs are intentionally untouched: the
 // combat bits live in the *Combat enums below so the two sets can never disagree about a member name.
 

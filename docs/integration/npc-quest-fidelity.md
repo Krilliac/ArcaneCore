@@ -49,7 +49,8 @@ not reversed (115-122); a missing condition id is false (`IsConditionSatisfied`,
 |---|---|
 | Always | NOT -3, OR -2, AND -1, NONE 0, ITEM_EQUIPPED 3, TEAM 6, RACE_CLASS 14, LEVEL 15, GENDER 35 |
 | Needs a collaborator that the daemon supplies | AURA 1, ITEM 2, ITEM_WITH_BANK 23, AREAID 4, AREA_FLAG 13, REPUTATION_RANK_MIN 5 / MAX 30, QUESTREWARDED 8, QUESTTAKEN 9, QUESTAVAILABLE 19, QUEST_NONE 22, SPELL 17, ACTIVE_GAME_EVENT 12, ACTIVE_HOLIDAY 26, AD_COMMISSION_AURA 10 |
-| Collaborator missing in the daemon: fail closed | SKILL 7 and SKILL_BELOW 29 (there is no skills owner, see `npc-services.md`), PVP_RANK 11 (no honor system) |
+| Needs the skills feature to be active | SKILL 7 and SKILL_BELOW 29: decided from `Player.Skills.GetValueBase` (Player::GetSkillValueBase) once `SkillsFeature.IsActive` (it attaches after `ConditionFeature` and then calls `RefreshCollaborators`); with skills in Legacy mode or without skill content they fail closed |
+| Collaborator missing in the daemon: fail closed | PVP_RANK 11 (no honor system) |
 | Not decidable from an NPC interaction: fail closed | INSTANCE_SCRIPT 18, LEARNABLE_ABILITY 28, COMPLETED_ENCOUNTER 31, LAST_WAYPOINT 33, DEAD_OR_AWAY 36, CREATURE_IN_RANGE 37, PVP_SCRIPT 38, SPAWN_COUNT 39, WORLD_SCRIPT 40, WORLDSTATE 42, IS_IN_COMBAT 43 |
 
 Counts of classic-db rows by type (sizing only, from the z2815 dump's `conditions` INSERT; never a
@@ -62,7 +63,7 @@ test constant): 1x33, 2x45, 4x11, 5x26, 6x4, 7x57, 8x150, 9x96, 10x1, 11x3, 12x2
 An undecidable leaf yields *unknown* and unknown propagates with three-valued logic (NOT unknown is
 unknown, AND with a false is false, OR with a true is true, the reverse flag keeps unknown). The final
 answer is "not satisfied". It is never reversed into a pass: `NOT(skill condition)` must not show an
-option merely because there is no skills system. Each undecidable evaluation is counted in
+option merely because skills are not active. Each undecidable evaluation is counted in
 `ConditionEvaluator.Unavailable` and `ConditionEvaluator.Summarize()` reports how many table rows are
 decidable and which leaf types are dead; `ConditionFeature` logs it at startup.
 
@@ -80,6 +81,27 @@ decidable and which leaf types are dead; `ConditionFeature` logs it at startup.
 * `Conditions:ActiveGameEvents` and `Conditions:ActiveHolidays` default to empty: retail game events are
   date driven and there is no scheduler. This is a placeholder, not retail behaviour.
 * Loot conditions are not wired (`LootService.Conditions` belongs to the durable-loot lane).
+
+### Known deviations without a switch (accepted temporary)
+
+Both fail closed and neither has a configuration option, which the standing rule (every deliberate deviation
+behind a switch that defaults to retail) calls for. They are accepted for this wave and listed in
+`claude-handoff-20261003.md` as known deviations; the follow-up is a retail-default switch for each.
+
+1. **Condition types that cannot be resolved here** (the "fail closed" rows of the Types table: PVP_RANK, the
+   script and world-state types, the types undecidable from an NPC interaction, and SKILL/SKILL_BELOW while the
+   skills feature is inactive). An undecidable leaf is *unknown* and the row is "not satisfied", so a gossip
+   option, vendor row or quest guarded by it stays hidden; retail would evaluate it. Counted and logged at
+   startup (`ConditionFeature`), not configurable. Follow-up: a switch (default retail) choosing between
+   fail-closed and a documented pass for a given type, once the owning system exists.
+2. **`AcceptableQuest` refusals** (`QuestNpcServices.Interaction.cs`): a quest is silently left out of the
+   offer, with no reply to the client, when it has a source spell (`SrcSpell`), a source item or source count
+   (`ReqSourceId`/`ReqSourceCount`), the PartyAccept, AutoRewarded or StayAlive flag, a reputation objective
+   while no reputation owner is registered, an exploration objective whose area trigger is unknown, or a quest
+   type other than 0, 1, 21, 62 and 81. Retail offers these quests; the adapters they need (source spells, loot
+   source counters, party confirmation, auto rewards, stay-alive failure) do not exist yet
+   (`docs/integration/quest-progression.md`). Not configurable. Follow-up: a retail-default switch that offers
+   them once their adapters exist (and until then logs which quests were withheld).
 
 ### Config
 

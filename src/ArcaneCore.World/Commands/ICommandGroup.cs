@@ -1,6 +1,7 @@
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Gm.Core;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Commands;
 
@@ -15,32 +16,50 @@ namespace ArcaneCore.World.Commands;
 public interface ICommandGroup
 {
     IReadOnlyList<ChatCommand> Commands { get; }
+
+    /// <summary>
+    /// Whether this group's roots are registered at all. Default true. A group behind a
+    /// configuration switch returns false when the switch is off, so its roots do not exist
+    /// (the chat reply is the same "There is no such command." as for any unknown root).
+    /// <paramref name="services"/> is null when the table is built without a host.
+    /// </summary>
+    bool IsEnabled(IServiceProvider? services) => true;
 }
 
 /// <summary>The daemon's command table: <see cref="BuiltinCommands"/>, then every <see cref="ICommandGroup"/>, then every <see cref="ICommandExtension"/>.</summary>
 public static class ChatCommands
 {
-    public static CommandTable CreateTable(GmOptions? options = null)
+    public static CommandTable CreateTable(GmOptions? options = null, IServiceProvider? services = null)
         => Build(
             BuiltinCommands.Create().Roots,
             AssemblyDiscovery.CreateAll<ICommandGroup>(),
             AssemblyDiscovery.CreateAll<ICommandExtension>(),
-            options ?? new GmOptions());
+            options ?? new GmOptions(),
+            services);
+
+    /// <summary>The table for a host: <c>World:GmCommands</c> from its configuration, and its services so a group behind a switch (HotReload:Commands) can leave its roots out.</summary>
+    public static CommandTable CreateTable(IServiceProvider services)
+        => CreateTable(services.GetService<IConfiguration>() is { } configuration ? GmOptions.Bind(configuration) : new GmOptions(), services);
 
     /// <summary>The table for the daemon's configuration (<c>World:GmCommands</c>).</summary>
-    public static CommandTable CreateTable(IConfiguration configuration) => CreateTable(GmOptions.Bind(configuration));
+    public static CommandTable CreateTable(IConfiguration configuration, IServiceProvider? services = null)
+        => CreateTable(GmOptions.Bind(configuration), services);
 
-    /// <summary>Assemble a table from explicit parts (the discovery-free form tests use).</summary>
+    /// <summary>Assemble a table from explicit parts (the discovery-free form tests use). <paramref name="services"/> is null when built without a host.</summary>
     public static CommandTable Build(
         IEnumerable<ChatCommand> builtins,
         IEnumerable<ICommandGroup> groups,
         IEnumerable<ICommandExtension> extensions,
-        GmOptions options)
+        GmOptions options,
+        IServiceProvider? services = null)
     {
         var roots = new List<ChatCommand>(builtins);
         foreach (ICommandGroup group in groups)
         {
-            roots.AddRange(group.Commands);
+            if (group.IsEnabled(services))
+            {
+                roots.AddRange(group.Commands);
+            }
         }
 
         string? duplicate = roots.GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase)

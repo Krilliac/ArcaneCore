@@ -49,7 +49,7 @@ public static class WorldServiceCollectionExtensions
         services.PostConfigure<WorldRuntimeOptions>(o => configuration.GetSection(PerformanceLogOptions.SectionName).Bind(o.Perf));
 
         services.AddSingleton(_ => BuildOpcodeTable());
-        services.AddSingleton(_ => ChatCommands.CreateTable(configuration));
+        services.AddSingleton(sp => ChatCommands.CreateTable(configuration, sp));
         services.AddSingleton(sp => new CommandTableSource(sp.GetRequiredService<CommandTable>()));
         services.AddWorldFeatures();
         services.AddSingleton<CharacterDirectory>();

@@ -5,6 +5,7 @@ using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Data.Schema;
 
@@ -33,10 +34,13 @@ internal sealed class SchemaLock : IAsyncDisposable
     private IDbContextTransaction? _transaction;
     private bool _heldByName;
 
-    private SchemaLock(DbContext db, string component)
+    private readonly ILogger? _logger;
+
+    private SchemaLock(DbContext db, string component, ILogger? logger)
     {
         _db = db;
         _component = component;
+        _logger = logger;
     }
 
     /// <summary>The lock name of a component on MariaDB/MySQL, hashed in SQL (documented contract).</summary>
@@ -57,9 +61,10 @@ internal sealed class SchemaLock : IAsyncDisposable
         return unchecked((long)hash);
     }
 
-    public static async Task<SchemaLock> AcquireAsync(DbContext db, string component, TimeSpan timeout, CancellationToken cancellationToken)
+    public static async Task<SchemaLock> AcquireAsync(
+        DbContext db, string component, TimeSpan timeout, CancellationToken cancellationToken, ILogger? logger = null)
     {
-        var held = new SchemaLock(db, component);
+        var held = new SchemaLock(db, component, logger);
         try
         {
             switch (db.Database.ProviderName)
@@ -130,11 +135,28 @@ internal sealed class SchemaLock : IAsyncDisposable
                         break;
                 }
             }
-            catch (DbException)
+            catch (Exception ex) when (ex is DbException or InvalidOperationException)
             {
-                // The connection is gone, and the server releases a session's locks when the
-                // session ends; the error that broke the connection is the one worth reporting.
+                // The connection is gone or still busy with the command that failed (MySqlConnector throws
+                // InvalidOperationException for that, and ObjectDisposedException derives from it). The error
+                // that broke the bootstrap is the one worth reporting, so this must not replace it. The lock
+                // belongs to the session, so end the session: closing the connection returns it to the pool,
+                // which resets it (MariaDB COM_RESET_CONNECTION, PostgreSQL DISCARD ALL) and drops the lock.
+                _logger?.LogWarning(ex, "Could not release the {Component} schema lock; closing the connection so the server drops it", _component);
+                await CloseConnectionQuietlyAsync().ConfigureAwait(false);
             }
+        }
+    }
+
+    private async Task CloseConnectionQuietlyAsync()
+    {
+        try
+        {
+            await _db.Database.GetDbConnection().CloseAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is DbException or InvalidOperationException)
+        {
+            // Already closed or unusable: the session is over either way.
         }
     }
 

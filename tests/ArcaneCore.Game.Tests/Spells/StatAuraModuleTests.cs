@@ -1,5 +1,7 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Stats;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
@@ -152,6 +154,80 @@ public sealed class StatAuraModuleTests
 
         kit.System.RemoveAuras(mage, Intellect);
         Assert.Equal(300u, mage.GetUInt32(UpdateFields.UnitFieldMaxpower1));
+    }
+
+    /// <summary>
+    /// The stats lane keeps a ledger of the stamina and intellect bonus already inside the maximum fields and
+    /// recomputes it from the TOTAL stat on every item and level update (vmangos recomputes max health from the stat
+    /// group, StatSystem.cpp:165-192; auras only modify the stat group). An aura that moved the maximum on its own, without
+    /// the ledger, was counted twice by the next update and again, negatively, after removal.
+    /// </summary>
+    [Fact]
+    public void ModStat_Stamina_IsCountedOnce_ByTheStatsLanesRecomputation_WhateverUpdatesRunAfterwards()
+    {
+        using var kit = Kit();
+        (Player player, _) = kit.AddPlayer(1);
+        var system = new PlayerStatSystem();
+        system.Attach(player); // syncs the ledger with the stat fields as they are
+        uint baseline = player.MaxHealth;
+        int baseStamina = player.GetInt32(UpdateFields.UnitFieldStat0 + 2);
+        uint baseBonus = ExperienceFormulas.HealthBonusFromStamina((uint)baseStamina);
+        uint Expected(int stamina) => baseline - baseBonus + ExperienceFormulas.HealthBonusFromStamina((uint)stamina);
+
+        kit.System.CastSpell(player, Stamina, SpellCastTargets.ForSelf(), triggered: true);
+        Assert.Equal(Expected(baseStamina + 10), player.MaxHealth);
+        system.UpdateAll(player);                                  // what an item equip or a level-up runs
+        Assert.Equal(Expected(baseStamina + 10), player.MaxHealth);
+        system.UpdateAll(player);
+        Assert.Equal(Expected(baseStamina + 10), player.MaxHealth);
+
+        // An item-like stamina delta, then the update the item hook runs.
+        player.SetInt32(UpdateFields.UnitFieldStat0 + 2, player.GetInt32(UpdateFields.UnitFieldStat0 + 2) + 7);
+        system.UpdateAll(player);
+        Assert.Equal(Expected(baseStamina + 17), player.MaxHealth);
+
+        kit.System.RemoveAuras(player, Stamina);
+        Assert.Equal(Expected(baseStamina + 7), player.MaxHealth);
+        system.UpdateAll(player);
+        Assert.Equal(Expected(baseStamina + 7), player.MaxHealth);
+
+        // The item comes off: fully back to the baseline.
+        player.SetInt32(UpdateFields.UnitFieldStat0 + 2, baseStamina);
+        system.UpdateAll(player);
+        Assert.Equal(baseline, player.MaxHealth);
+    }
+
+    [Fact]
+    public void ModStat_Intellect_IsCountedOnce_ByTheStatsLanesRecomputation_WhateverUpdatesRunAfterwards()
+    {
+        using var kit = Kit();
+        Player mage = AddCaster(kit, 3, Class.Mage, PowerType.Mana);
+        mage.SetUInt32(UpdateFields.UnitFieldBaseMana, 100);
+        mage.SetInt32(UpdateFields.UnitFieldStat0 + 3, 30);
+        var system = new PlayerStatSystem();
+        system.Attach(mage);
+        int manaField = UpdateFields.UnitFieldMaxpower1;
+        uint baseline = mage.GetUInt32(manaField);
+        uint baseBonus = ExperienceFormulas.ManaBonusFromIntellect(30);
+        uint Expected(int intellect) => baseline - baseBonus + ExperienceFormulas.ManaBonusFromIntellect((uint)intellect);
+
+        kit.System.CastSpell(mage, Intellect, SpellCastTargets.ForSelf(), triggered: true);
+        Assert.Equal(Expected(40), mage.GetUInt32(manaField));
+        system.UpdateAll(mage);
+        Assert.Equal(Expected(40), mage.GetUInt32(manaField));
+
+        mage.SetInt32(UpdateFields.UnitFieldStat0 + 3, mage.GetInt32(UpdateFields.UnitFieldStat0 + 3) + 5);
+        system.UpdateAll(mage);
+        Assert.Equal(Expected(45), mage.GetUInt32(manaField));
+
+        kit.System.RemoveAuras(mage, Intellect);
+        Assert.Equal(Expected(35), mage.GetUInt32(manaField));
+        system.UpdateAll(mage);
+        Assert.Equal(Expected(35), mage.GetUInt32(manaField));
+
+        mage.SetInt32(UpdateFields.UnitFieldStat0 + 3, 30);
+        system.UpdateAll(mage);
+        Assert.Equal(baseline, mage.GetUInt32(manaField));
     }
 
     [Fact]

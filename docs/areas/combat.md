@@ -170,7 +170,7 @@ The swing reaches the spell system through `IMeleeSpellHooks` (`CombatEnvironmen
 world daemon's `MeleeSpellFeature` as `SpellSystemMeleeHooks`; without it nothing is cast from a swing):
 
 - **No swing while casting.** `MapCombat.AttackerStateUpdate` returns without a swing while the unit has a generic
-  cast or a channel in progress (vmangos `Unit::AttackerStateUpdate`, `Unit.cpp:2239-2240`). The attack timer still
+  cast or a channel in progress (vmangos `Unit::AttackerStateUpdate`, `Unit.cpp:2240-2241`). The attack timer still
   restarts, so the swing is lost, not delayed. `Combat:MeleeCastingBlocksSwing` (default true, retail) turns it off.
 - **Queued next-swing spell.** The main-hand swing casts the spell queued in `UnitSpellState.MeleeCast` at the victim
   instead of the white hit (`Unit.cpp:2249-2257`): power is taken, effects applied, SMSG_SPELL_GO sent. A cast that fails

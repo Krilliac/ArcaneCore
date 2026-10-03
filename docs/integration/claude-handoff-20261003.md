@@ -141,7 +141,7 @@ dotnet test ArcaneCore.slnx -c Release --no-build -m:1 --verbosity normal
 dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-test
 ```
 
-## Vanilla-fidelity wave (nine lanes; local verification only; hosted CI pending)
+## Vanilla-fidelity wave (nine lanes; hosted CI green on `claude/vw-integration` at `40a2a9d`)
 
 Integrated on `claude/vw-integration` from base `49448fd`, in the order stats, skills, death, spells, warrior,
 creature AI, NPC/quests, content import, hot reload. Standing rule: retail 1.12.1 mechanics and data, references
@@ -165,7 +165,25 @@ Schema after this wave (one named constant each; tests use constants and `Schema
 **Auth 2 / World 14 / Characters 15**. Characters: skills 14, life 15. World: player stats 11, creature behaviour 12,
 conditions 13, on-kill reputation 14. The lanes had allocated 14/14 (Characters) and 11/11/11/11 (World) in parallel;
 they were renumbered in merge order. Remaining work from the list below is unchanged unless an area document above says
-otherwise. This wave has no real-client evidence; do not read it as client-accepted.
+otherwise.
+
+Known deviations that have no switch yet (accepted for this wave; each needs a retail-default switch as follow-up,
+details in `docs/integration/npc-quest-fidelity.md`, "Known deviations without a switch"):
+
+- Condition types that cannot be resolved fail closed (the row is "not satisfied" and its gossip option, vendor row or
+  quest stays hidden) and cannot be configured.
+- `AcceptableQuest` silently withholds quests that have a source spell, a source item/count, a PartyAccept, AutoRewarded
+  or StayAlive flag, an exploration objective without a known area trigger, a reputation objective without a reputation
+  owner, or an unsupported quest type, with no reply to the client.
+- `Stats:RequireImportedData` defaults to false (vmangos refuses to start without the player base data); the startup log
+  says so when the data is incomplete. It is the one deliberate difference of the stat feature.
+- Hot reload is off by default (`HotReload:Commands=false`); a development server enables it.
+
+Verification: local build, full suite and mock-client self-test, and hosted CI. The hosted `build-and-test` run 37140986207
+(head `40a2a9d` of `claude/vw-integration`, with the MariaDB 10.11 and PostgreSQL 16 provider containers) concluded
+success. Later commits on the branch (the review fixes) are covered by their own hosted runs, not by that one. This wave
+has no real-client evidence: nothing here was tested against a 1.12.1 client, so do not read it as client-accepted.
+
 ## Wave 2 (twenty branches; local verification only; hosted CI pending)
 
 Integrated on `claude/vw2-integration` on top of `claude/vw-integration` (wave 1, head `41babaf`), in this order: security hardening,
@@ -235,8 +253,9 @@ hosted-CI evidence either.
 
 ## Remaining work, in priority order
 
-Items 1-6 were delivered by the 2026-10-03 integration (`claude/ac-integration`). That is local
-verification only; exact-head hosted CI pending. Do not read a source branch's result as combined proof.
+Items 1-6 were delivered by the 2026-10-03 integration (`claude/ac-integration`). Their hosted CI is
+the run of the wave-1 branch built on top of them (`claude/vw-integration` at `40a2a9d`, run 37140986207, success); a
+source branch's own result is still not combined proof, and none of it involved a real client.
 
 1. **Deletion outcome recovery. Delivered; exact limits remain.** Details: `character-delete.md`.
    `CHAR_DELETE_SUCCESS` means the rows are durably gone; an ambiguous outcome answers failure and is

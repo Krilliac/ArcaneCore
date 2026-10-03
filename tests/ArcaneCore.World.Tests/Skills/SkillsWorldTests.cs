@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Buffers.Binary;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Conditions;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Skills;
@@ -12,6 +13,7 @@ using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Skills;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
@@ -234,6 +236,64 @@ public sealed class SkillsWorldTests
         await gm.SendChatAsync(ChatType.Say, Language.Common, ".maxskill");
         await host.WaitForWorldAsync(() => player.Skills!.GetValuePure(SkillIds.Swords) == 5, "maxskill raises the value to the maximum");
         Assert.False(await host.OnWorldAsync(() => player.Skills!.Has(SkillIds.Mining)));
+    }
+
+    private const uint HasSwords = 1;
+    private const uint SwordsFive = 2;
+    private const uint HasUnknownSkill = 3;
+    private const uint LacksSwords = 4;
+    private const uint LacksUnknownSkill = 5;
+
+    private sealed class SkillConditionStore : IConditionContentStore
+    {
+        public Task<IReadOnlyList<ConditionRecord>> LoadAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<ConditionRecord>>(
+            [
+                new(HasSwords, (int)ConditionType.Skill, SkillIds.Swords, 1, 0, 0, 0),
+                new(SwordsFive, (int)ConditionType.Skill, SkillIds.Swords, 5, 0, 0, 0),
+                new(HasUnknownSkill, (int)ConditionType.Skill, 999, 1, 0, 0, 0),
+                new(LacksSwords, (int)ConditionType.SkillBelow, SkillIds.Swords, 1, 0, 0, 0),
+                new(LacksUnknownSkill, (int)ConditionType.SkillBelow, 999, 1, 0, 0, 0),
+            ]);
+    }
+
+    [Fact]
+    public async Task SkillConditions_AreDecidedFromThePlayersSkills_WhenTheSkillsAreActive()
+    {
+        await using var host = WorldTestHost.Start(configureServices: s =>
+        {
+            Configure(s);
+            s.AddSingleton<IConditionContentStore, SkillConditionStore>();
+        });
+        await using WorldTestClient client = await host.EnterWorldAsync("CONDSKILL", "Condskill");
+        Player player = await host.PlayerAsync("Condskill");
+        ConditionFeature conditions = host.WorldServices.GetRequiredService<ConditionFeature>();
+
+        (bool has, bool five, bool unknown, bool lacksSwords, bool lacksUnknown) = await host.OnWorldAsync(() => (
+            conditions.IsSatisfied(HasSwords, player, null),
+            conditions.IsSatisfied(SwordsFive, player, null),
+            conditions.IsSatisfied(HasUnknownSkill, player, null),
+            conditions.IsSatisfied(LacksSwords, player, null),
+            conditions.IsSatisfied(LacksUnknownSkill, player, null)));
+
+        Assert.True(has);              // swords 1 at level 1 (login test above)
+        Assert.False(five);
+        Assert.False(unknown);
+        Assert.False(lacksSwords);     // SKILL_BELOW with value 1 = "does not have the skill"
+        Assert.True(lacksUnknown);
+        Assert.Empty(conditions.Current.Summarize().UnavailableByType);
+    }
+
+    [Fact]
+    public async Task SkillConditions_FailClosedAndAreCounted_WhenTheSkillsAreNotActive()
+    {
+        await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IConditionContentStore, SkillConditionStore>());
+        ConditionFeature conditions = host.WorldServices.GetRequiredService<ConditionFeature>();
+
+        Assert.False(host.WorldServices.GetRequiredService<SkillsFeature>().IsActive);
+        IReadOnlyDictionary<int, int> unavailable = conditions.Current.Summarize().UnavailableByType;
+        Assert.Equal(3, unavailable[(int)ConditionType.Skill]);
+        Assert.Equal(2, unavailable[(int)ConditionType.SkillBelow]);
     }
 
     private static void Configure(IServiceCollection services)

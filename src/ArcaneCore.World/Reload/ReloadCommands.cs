@@ -35,25 +35,12 @@ public sealed class ReloadCommands : ICommandGroup
 
     private static ReloadFeature Feature(CommandContext context) => context.Session.Services.GetRequiredService<ReloadFeature>();
 
-    private static bool Disabled(CommandContext context, ReloadFeature feature)
-    {
-        if (feature.Options.Commands)
-        {
-            return false;
-        }
-
-        context.Reply("Hot reload is disabled (HotReload:Commands).");
-        return true;
-    }
+    /// <summary>The <c>.reload</c> root exists only when <c>HotReload:Commands</c> is on (default off).</summary>
+    public bool IsEnabled(IServiceProvider? services) => services is not null && ReloadPolicy.Resolve(services).Commands;
 
     private static bool Reload(CommandContext context, string args)
     {
         ReloadFeature feature = Feature(context);
-        if (Disabled(context, feature))
-        {
-            return true;
-        }
-
         string word = args.Trim();
         if (word.Length == 0)
         {
@@ -82,11 +69,6 @@ public sealed class ReloadCommands : ICommandGroup
     private static bool ReloadAll(CommandContext context, string args)
     {
         ReloadFeature feature = Feature(context);
-        if (Disabled(context, feature))
-        {
-            return true;
-        }
-
         context.Reply("Re-loading all...");
         Run(context, feature, () => feature.Coordinator.ReloadAllAsync());
         return true;
