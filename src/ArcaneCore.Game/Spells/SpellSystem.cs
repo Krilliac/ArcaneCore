@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Ranged;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -271,13 +272,14 @@ public sealed partial class SpellSystem
             return result;
         }
 
-        int castTime = triggered ? 0 : spell.GetCastTime(caster.Level, CastSpeed(caster));
+        int castTime = triggered ? 0 : CastTimeFor(caster, spell); // ranged (hunter lane): auto-repeat and ranged haste
         var cast = new SpellCast(spell, caster, targets, triggered, castTime, CalculatePowerCost(caster, spell));
         if (!triggered)
         {
             state.CurrentCast = cast;
             SendToSet(caster, WorldOpcode.SmsgSpellStart, SpellPackets.BuildSpellStart(
-                caster.Guid, caster.Guid, spell.Id, SpellCastFlags.Unknown2, (uint)castTime, targets), includeSelf: true);
+                caster.Guid, caster.Guid, spell.Id, WithAmmoFlag(SpellCastFlags.Unknown2, spell), (uint)castTime, targets,
+                RangedSpellFacts.IsRanged(spell) ? GetAmmoVisual(caster) : default), includeSelf: true); // ranged (hunter lane): ammo trailer
             AddGlobalCooldown(state, spell);
         }
 
@@ -314,6 +316,7 @@ public sealed partial class SpellSystem
 
         AddCooldown(state, spell, cast.IsTriggered);
         TakePower(caster, spell, cast.PowerCost);
+        TakeAmmo(caster, spell); // ranged (hunter lane): vmangos order TakePower, TakeReagents, TakeAmmo (Spell.cpp:3716-3718)
         SendCastResult(caster, spell, SpellCastResult.CastOk, cast.IsTriggered);
 
         Dictionary<Unit, SpellTargetEntry> targetEffects = SelectTargets(cast, unitTarget);
@@ -334,7 +337,8 @@ public sealed partial class SpellSystem
         }
 
         SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(
-            caster.Guid, caster.Guid, spell.Id, SpellCastFlags.Unknown9, hits, misses, cast.Targets), includeSelf: true);
+            caster.Guid, caster.Guid, spell.Id, WithAmmoFlag(SpellCastFlags.Unknown9, spell), hits, misses, cast.Targets,
+            RangedSpellFacts.IsRanged(spell) ? GetAmmoVisual(caster) : default), includeSelf: true); // ranged (hunter lane): ammo trailer
 
         int duration = spell.GetDuration();
         if (spell.IsChanneled && duration > 0 && !cast.IsTriggered)
@@ -522,10 +526,17 @@ public sealed partial class SpellSystem
             return SpellCastResult.Stunned;
         }
 
-        if (!triggered && strict && caster is Player mover && spell.GetCastTime(caster.Level, CastSpeed(caster)) > 0
+        if (!triggered && strict && caster is Player mover && CastTimeFor(caster, spell) > 0
             && spell.InterruptFlags.HasFlag(SpellInterruptFlags.Movement) && IsMoving(mover))
         {
             return SpellCastResult.Moving;
+        }
+
+        // ranged (hunter lane): vmangos Spell::CheckItems (weapon and ammunition) runs before CheckRange (Spell.cpp:5694-5702).
+        SpellCastResult rangedItems = CheckRangedItems(caster, spell);
+        if (rangedItems != SpellCastResult.CastOk)
+        {
+            return rangedItems;
         }
 
         if (NeedsUnitTarget(spell))
@@ -824,15 +835,17 @@ public sealed partial class SpellSystem
             return;
         }
 
-        if (spell.RecoveryTime == 0 && spell.CategoryRecoveryTime == 0)
+        // ranged (hunter lane): a ranged-slot spell also waits out the weapon speed (Player.cpp:22193-22197).
+        uint recovery = spell.RecoveryTime + RangedRecoveryMs(state.Unit, spell);
+        if (recovery == 0 && spell.CategoryRecoveryTime == 0)
         {
             return;
         }
 
         uint now = NowMs;
-        if (spell.RecoveryTime > 0)
+        if (recovery > 0)
         {
-            state.SpellCooldowns[spell.Id] = now + spell.RecoveryTime;
+            state.SpellCooldowns[spell.Id] = now + recovery;
         }
 
         if (spell.Category != 0 && spell.CategoryRecoveryTime > 0)
@@ -842,7 +855,7 @@ public sealed partial class SpellSystem
 
         if (triggered && state.Unit is Player player)
         {
-            uint ms = Math.Max(spell.RecoveryTime, spell.CategoryRecoveryTime);
+            uint ms = Math.Max(recovery, spell.CategoryRecoveryTime);
             player.Session.Send(WorldOpcode.SmsgSpellCooldown, SpellPackets.BuildSpellCooldown(player.Guid, [(spell.Id, ms)]));
         }
     }

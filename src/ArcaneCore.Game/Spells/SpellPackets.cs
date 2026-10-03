@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Ranged;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells;
@@ -71,7 +72,7 @@ public static class SpellPackets
     /// caster GUID, u32 spell, u16 cast flags, u32 cast time, targets [, u32 ammo display, u32
     /// ammo inventory type when CAST_FLAG_AMMO].
     /// </summary>
-    public static byte[] BuildSpellStart(ObjectGuid castItemOrCaster, ObjectGuid caster, uint spellId, SpellCastFlags flags, uint castTimeMs, SpellCastTargets targets)
+    public static byte[] BuildSpellStart(ObjectGuid castItemOrCaster, ObjectGuid caster, uint spellId, SpellCastFlags flags, uint castTimeMs, SpellCastTargets targets, AmmoVisual ammo = default)
     {
         ArgumentNullException.ThrowIfNull(targets);
         var writer = new PacketWriter(40);
@@ -83,8 +84,8 @@ public static class SpellPackets
         targets.Write(writer);
         if ((flags & SpellCastFlags.Ammo) != 0)
         {
-            writer.WriteUInt32(0);
-            writer.WriteUInt32(0);
+            writer.WriteUInt32(ammo.DisplayId);
+            writer.WriteUInt32(ammo.InventoryType);
         }
 
         return writer.ToArray();
@@ -97,7 +98,7 @@ public static class SpellPackets
     /// </summary>
     public static byte[] BuildSpellGo(
         ObjectGuid castItemOrCaster, ObjectGuid caster, uint spellId, SpellCastFlags flags,
-        IReadOnlyList<ObjectGuid> hits, IReadOnlyList<(ObjectGuid Guid, SpellMissInfo Reason)> misses, SpellCastTargets targets)
+        IReadOnlyList<ObjectGuid> hits, IReadOnlyList<(ObjectGuid Guid, SpellMissInfo Reason)> misses, SpellCastTargets targets, AmmoVisual ammo = default)
     {
         ArgumentNullException.ThrowIfNull(hits);
         ArgumentNullException.ThrowIfNull(misses);
@@ -127,8 +128,8 @@ public static class SpellPackets
         targets.Write(writer);
         if ((flags & SpellCastFlags.Ammo) != 0)
         {
-            writer.WriteUInt32(0);
-            writer.WriteUInt32(0);
+            writer.WriteUInt32(ammo.DisplayId);
+            writer.WriteUInt32(ammo.InventoryType);
         }
 
         return writer.ToArray();

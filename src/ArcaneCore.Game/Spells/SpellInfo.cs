@@ -276,10 +276,13 @@ public sealed record SpellInfo
     /// <summary>
     /// Cast time in ms (vmangos SpellEntry::GetCastTime): castTime + perLevel * (rank / 5 -
     /// baseLevel), floored at the minimum; spells that are neither abilities nor tradeskills are
-    /// scaled by UNIT_MOD_CAST_SPEED (build &gt; 1.11.2 branch); USES_RANGED_SLOT adds 500 ms.
+    /// scaled by UNIT_MOD_CAST_SPEED (build &gt; 1.11.2 branch); ranged abilities (Aimed Shot) are
+    /// scaled by the ranged attack speed modifier instead; USES_RANGED_SLOT adds 500 ms unless
+    /// the spell is the auto-repeat spell itself (Auto Shot, wand Shoot). Ranged (hunter lane):
+    /// <paramref name="autoRepeat"/> and <paramref name="rangedHaste"/> (vmangos SpellEntry.cpp:504-512).
     /// A spell without a SpellCastTimes entry is instant.
     /// </summary>
-    public int GetCastTime(byte casterLevel, float castSpeed = 1.0f)
+    public int GetCastTime(byte casterLevel, float castSpeed = 1.0f, bool autoRepeat = false, float rangedHaste = 1.0f)
     {
         if (CastTime == default)
         {
@@ -292,8 +295,12 @@ public sealed record SpellInfo
         {
             castTime = (int)(castTime * castSpeed);
         }
+        else if (HasAttribute(SpellAttributes.UsesRangedSlot) && !autoRepeat)
+        {
+            castTime = (int)(castTime * rangedHaste);
+        }
 
-        if (HasAttribute(SpellAttributes.UsesRangedSlot))
+        if (HasAttribute(SpellAttributes.UsesRangedSlot) && !autoRepeat)
         {
             castTime += 500;
         }
