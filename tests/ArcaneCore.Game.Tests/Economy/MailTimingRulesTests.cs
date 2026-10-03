@@ -56,6 +56,22 @@ public sealed class MailTimingRulesTests
     }
 
     [Fact]
+    public void ExpiryReturnsOnlyUnreturnedPlayerLettersWithAnItem()
+    {
+        var o = new EconomyOptions();
+        var item = new MailRecord { MessageType = MailMessageType.Normal, SenderId = 7, ItemGuid = 5, ItemEntry = 1 };
+        Assert.True(MailRules.ReturnsOnExpiry(item, o));
+        Assert.False(MailRules.ReturnsOnExpiry(item with { Checked = MailCheckMask.Returned }, o));
+        Assert.False(MailRules.ReturnsOnExpiry(item with { Checked = MailCheckMask.CodPayment }, o));
+        Assert.False(MailRules.ReturnsOnExpiry(item with { MessageType = MailMessageType.Auction }, o));
+        var gold = new MailRecord { MessageType = MailMessageType.Normal, SenderId = 7, Money = 9 };
+        Assert.False(MailRules.ReturnsOnExpiry(gold, o));
+        Assert.True(MailRules.ReturnsOnExpiry(gold, new EconomyOptions { ReturnExpiredMoneyOnlyMail = true }));
+        Assert.False(MailRules.ReturnsOnExpiry(gold with { Checked = MailCheckMask.CodPayment }, new EconomyOptions { ReturnExpiredMoneyOnlyMail = true }));
+        Assert.True(o.AllowDeleteWithAttachments);
+    }
+
+    [Fact]
     public void MailList_IsCappedAt254Letters()
     {
         List<MailView> mails = [.. Enumerable.Range(1, 300).Select(i => new MailView(

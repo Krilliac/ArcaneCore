@@ -66,6 +66,18 @@ public sealed class EconomyOptions
     /// <summary>Answer oversize or over-COD letters with an internal error instead of dropping them silently like vmangos (default false).</summary>
     public bool MailOversizeAnswersError { get; set; }
 
+    /// <summary>
+    /// Also return an expired money-only player letter to its sender. vmangos and mangos-classic delete it
+    /// (ObjectMgr.cpp:6995-7000: only letters with items are returned); default false.
+    /// </summary>
+    public bool ReturnExpiredMoneyOnlyMail { get; set; }
+
+    /// <summary>
+    /// Letters with an item or money may be deleted by the receiver, destroying the attachment (vmangos MailHandler.cpp:469-491
+    /// refuses only cash on delivery); false restores the earlier "emptied letters only" rule. Default true.
+    /// </summary>
+    public bool AllowDeleteWithAttachments { get; set; } = true;
+
     /// <summary>Seconds between expiry sweeps of mail and auctions.</summary>
     public uint ExpirySweepSeconds { get; set; } = 60;
 
@@ -328,6 +340,17 @@ public static class MailRules
     /// <summary>Whether the letter can be returned to a player (a player's unreturned letter).</summary>
     public static bool CanReturn(MailRecord mail) => mail.MessageType == MailMessageType.Normal
         && (mail.Checked & MailCheckMask.Returned) == 0 && mail.SenderId != 0;
+
+    /// <summary>
+    /// Whether an expired letter goes back to its sender rather than being deleted. vmangos ReturnOrDeleteOldMails
+    /// (ObjectMgr.cpp:6995-7002, 7029-7044): only letters with an item are returned, and only player letters that are not
+    /// already returned and not COD payments; everything else is deleted. <see cref="EconomyOptions.ReturnExpiredMoneyOnlyMail"/>
+    /// also returns an unreturned money-only player letter (not vmangos behavior).
+    /// </summary>
+    public static bool ReturnsOnExpiry(MailRecord mail, EconomyOptions options)
+        => mail.MessageType == MailMessageType.Normal && mail.SenderId != 0
+            && (mail.Checked & (MailCheckMask.CodPayment | MailCheckMask.Returned)) == 0
+            && (mail.HasItem || (options.ReturnExpiredMoneyOnlyMail && mail.Money > 0));
 
     /// <summary>Remaining days as the client shows them (SMSG_MAIL_LIST_RESULT expiration_time).</summary>
     public static float DaysLeft(MailRecord mail, long now) => (mail.ExpireTime - now) / (float)SecondsPerDay;

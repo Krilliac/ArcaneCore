@@ -28,7 +28,7 @@ public sealed class EconomyMailSendParityTests
     private const string SenderAccount = "MAILSENDER";
     private const string ReceiverAccount = "MAILRECEIVER";
     private const string Password = "PASSWORD";
-    private static readonly ObjectGuid Mailbox = ObjectGuid.WithEntry(HighGuid.GameObject, 900081, 1);
+    internal static readonly ObjectGuid Mailbox = ObjectGuid.WithEntry(HighGuid.GameObject, 900081, 1);
 
     [Theory]
     [InlineData("subject")]
@@ -133,7 +133,7 @@ public sealed class EconomyMailSendParityTests
         Assert.True((read.Checked & MailCheckMask.Read) != 0);
     }
 
-    private sealed class Rig : IAsyncDisposable
+    internal sealed class Rig : IAsyncDisposable
     {
         private readonly WorldClient _senderClient;
         private readonly WorldClient? _receiverClient;
@@ -156,6 +156,7 @@ public sealed class EconomyMailSendParityTests
         public ScenarioConnection Sender { get; }
         public ScenarioConnection? Receiver { get; }
         public ulong ReceiverGuid { get; }
+        public ulong SenderGuid { get; init; }
         public CancellationToken Token => _deadline.Token;
 
         public static async Task<Rig> StartAsync(bool loginReceiver = false)
@@ -195,7 +196,7 @@ public sealed class EconomyMailSendParityTests
                 player.Money = 10_000;
                 return true;
             }).WaitAsync(token);
-            return new Rig(server, clock, senderClient, senderConn, receiverGuid, receiverClient, receiverConn) { };
+            return new Rig(server, clock, senderClient, senderConn, receiverGuid, receiverClient, receiverConn) { SenderGuid = senderGuid };
         }
 
         public Task SendAsync(string receiver, string subject, string body, uint money, uint cod)
@@ -236,6 +237,14 @@ public sealed class EconomyMailSendParityTests
             await using AsyncServiceScope scope = Server.Services.CreateAsyncScope();
             return await new EfEconomyStore(scope.ServiceProvider.GetRequiredService<CharacterDbContext>())
                 .GetMailsAsync(checked((int)ReceiverGuid), Token);
+        }
+
+        public async Task<IReadOnlyList<MailRecord>> MailsOfAsync(ulong guid)
+        {
+            await Server.Services.GetRequiredService<EconomyFeature>().DrainAsync().WaitAsync(Token);
+            await using AsyncServiceScope scope = Server.Services.CreateAsyncScope();
+            return await new EfEconomyStore(scope.ServiceProvider.GetRequiredService<CharacterDbContext>())
+                .GetMailsAsync(checked((int)guid), Token);
         }
 
         public async Task AssertNoReceivedMailUntilPongAsync()

@@ -397,7 +397,10 @@ public sealed partial class EconomyFeature
         }, () => SendMailResult(session, mailId, MailAction.ReturnedToSender, MailResult.InternalError));
     }
 
-    /// <summary>CMSG_MAIL_DELETE: only an emptied letter (no item, no money) may be deleted.</summary>
+    /// <summary>
+    /// CMSG_MAIL_DELETE (vmangos MailHandler.cpp:469-491): any letter except a cash-on-delivery one; the attachment is
+    /// destroyed with it. <see cref="EconomyOptions.AllowDeleteWithAttachments"/> false keeps the earlier emptied-only rule.
+    /// </summary>
     public void DeleteMail(WorldSession session, Player player, ObjectGuid mailbox, uint mailId)
     {
         if (!MailboxAccess.CanUseMailbox(player, mailbox))
@@ -405,13 +408,20 @@ public sealed partial class EconomyFeature
             return;
         }
 
-        if (FindOwnMail(player, mailId) is not { } view || view.Mail.HasItem || view.Mail.Money > 0)
+        if (FindOwnMail(player, mailId) is not { } view || view.Mail.Cod > 0
+            || (!Options.AllowDeleteWithAttachments && (view.Mail.HasItem || view.Mail.Money > 0)))
         {
             SendMailResult(session, mailId, MailAction.Deleted, MailResult.InternalError);
             return;
         }
 
-        RunMailOperation([], [new DeleteMail(view.Mail)], [mailId], outcome =>
+        var changes = new List<EconomyChange> { new DeleteMail(view.Mail) };
+        if (view.Mail.HasItem)
+        {
+            changes.Add(new DeleteEscrowItem(view.Mail.ItemGuid));
+        }
+
+        RunMailOperation([], changes, [mailId], outcome =>
         {
             if (outcome == EconomyOutcome.After)
             {
@@ -687,12 +697,14 @@ public sealed partial class EconomyFeature
         });
     }
 
-    /// <summary>vmangos Player::UpdateMail expiry: return a player's unreturned letter with contents, else delete it and its item.</summary>
+    /// <summary>
+    /// vmangos ReturnOrDeleteOldMails (ObjectMgr.cpp:6995-7044): an expired letter with an item goes back once to its
+    /// player sender; money-only letters, COD payments, returned letters and system letters are deleted with their item.
+    /// </summary>
     private void ExpireMail(MailView view, long now)
     {
         MailRecord mail = view.Mail;
-        bool hasContents = mail.HasItem || mail.Money > 0;
-        if (hasContents && MailRules.CanReturn(mail) && CharacterExists((int)mail.SenderId))
+        if (MailRules.ReturnsOnExpiry(mail, Options) && CharacterExists((int)mail.SenderId))
         {
             var returned = new MailView(MailRules.Returned(mail, NextMailId(), now, Options), view.Item);
             RunMailOperation([], [new DeleteMail(mail), new InsertMail(returned.Mail, null)], [mail.Id], outcome =>
