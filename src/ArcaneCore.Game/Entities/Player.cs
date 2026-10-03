@@ -201,7 +201,7 @@ public sealed partial class Player : Unit
     internal bool NeedsVisibilityUpdate { get; set; }
 
     /// <summary>
-    /// Whether the player may speak a language. Until skills exist (M12) this is the race's
+    /// Whether the player may speak a language. Without attached skills (the legacy stand-ins) this is the race's
     /// starting languages, verified against classic-db playercreateinfo_spell (language spells
     /// 668/669/670/671/672/7340/7341/17737, vmangos lang_description); GMs speak every language.
     /// </summary>
@@ -210,6 +210,12 @@ public sealed partial class Player : Unit
         if (language is Language.Universal || IsGameMaster)
         {
             return true;
+        }
+
+        // With the skill system attached the LANGUAGE spell effects decide (vmangos m_knownLanguagesMask).
+        if (Skills is { } skills)
+        {
+            return skills.KnowsLanguage((uint)language);
         }
 
         return Race switch

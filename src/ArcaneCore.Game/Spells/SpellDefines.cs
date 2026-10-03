@@ -187,6 +187,9 @@ public enum SpellImplicitTarget : uint
     GameObject = 23,
     EnumUnitsEnemyInCone24 = 24,
     Unit = 25,
+
+    /// <summary>TARGET_GAMEOBJECT_ITEM: the game object or item named in the cast's explicit target block (Pick Lock, vmangos / cmangos value 26).</summary>
+    GameObjectItem = 26,
     EnumUnitsFriendAoeAtSrcLoc = 30,
     EnumUnitsFriendAoeAtDestLoc = 31,
     EnumUnitsPartyAoeAtSrcLoc = 33,

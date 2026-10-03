@@ -74,7 +74,7 @@ public static class GameObjectLocks
     /// value (professionless lock types always open); a key case opens with
     /// <paramref name="keyItemId"/>. Nothing matching: <see cref="GameObjectUseResult.Locked"/>.
     /// </summary>
-    public static GameObjectUseResult CheckOpenLock(LockEntry? entry, Player player, LockType lockType, uint keyItemId, Func<Player, uint, uint> skillValue)
+    public static GameObjectUseResult CheckOpenLock(LockEntry? entry, Player player, LockType lockType, uint keyItemId, Func<Player, uint, uint> skillValue, uint skillBonus = 0)
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(skillValue);
@@ -93,7 +93,7 @@ public static class GameObjectLocks
 
                 case LockKeyType.Skill when entry.Indexes[i] == (uint)lockType:
                     uint skill = LockSkills.ForLockType(lockType);
-                    if (skill == 0 || skillValue(player, skill) >= entry.Skills[i])
+                    if (skill == 0 || skillValue(player, skill) + skillBonus >= entry.Skills[i])
                     {
                         return GameObjectUseResult.Ok;
                     }

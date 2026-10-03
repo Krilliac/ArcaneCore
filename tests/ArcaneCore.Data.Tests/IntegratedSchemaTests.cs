@@ -13,6 +13,7 @@ using ArcaneCore.Data.Economy;
 using ArcaneCore.Data.Quests;
 using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Skills;
 using ArcaneCore.Data.Social;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
@@ -60,6 +61,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(EconomyDataModule), DatabaseComponent.Characters, EconomyDataModule.Version),
             (typeof(CharacterDeletionDataModule), DatabaseComponent.Characters, CharacterDeletionDataModule.Version),
             (typeof(LootStateDataModule), DatabaseComponent.Characters, LootStateDataModule.Version),
+            (typeof(CharacterSkillsDataModule), DatabaseComponent.Characters, CharacterSkillsDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),

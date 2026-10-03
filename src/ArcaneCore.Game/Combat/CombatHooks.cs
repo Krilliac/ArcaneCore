@@ -124,11 +124,17 @@ public class CombatHooks
 
     /// <summary>
     /// The unit's skill with the weapon in this slot (vmangos SpellCaster::GetWeaponSkillValue).
-    /// Default: players are treated as having maxed unarmed/weapon skill (level × 5) until
-    /// skills exist; other units use level × 5 (GetUnitMeleeSkill), raised for world bosses.
+    /// Default: a player with attached skills (<see cref="Player.Skills"/>) uses <see cref="PlayerCombatSkills"/>;
+    /// without them players are treated as having maxed unarmed/weapon skill (level × 5); other units use
+    /// level × 5 (GetUnitMeleeSkill), raised for world bosses.
     /// </summary>
     public virtual int GetWeaponSkill(Unit unit, WeaponAttackType attackType, Unit? victim)
     {
+        if (unit is Player { Skills: { } skills } skilled)
+        {
+            return PlayerCombatSkills.WeaponSkill(skilled, skills, attackType);
+        }
+
         if (unit is Player && attackType != WeaponAttackType.BaseAttack && !HasOffhandWeapon(unit))
         {
             return 0; // "feral or unarmed skill only for base attack"
@@ -138,19 +144,20 @@ public class CombatHooks
     }
 
     /// <summary>
-    /// Defense skill (vmangos SpellCaster::GetDefenseSkillValue). Default: level × 5 for
-    /// everyone (players' current and max defense are equal until skills exist).
+    /// Defense skill (vmangos SpellCaster::GetDefenseSkillValue). Default: the Defense skill for a player with
+    /// attached skills; level × 5 for everyone else.
     /// </summary>
-    public virtual int GetDefenseSkill(Unit unit, Unit? attacker) => MeleeHitTable.SkillMaxForLevel(unit, attacker);
+    public virtual int GetDefenseSkill(Unit unit, Unit? attacker)
+        => unit is Player { Skills: { } skills } ? PlayerCombatSkills.DefenseSkill(skills, attacker) : MeleeHitTable.SkillMaxForLevel(unit, attacker);
 
-    /// <summary>vmangos Unit::HaveOffhandWeapon. Default: nobody dual wields until items exist.</summary>
-    public virtual bool HasOffhandWeapon(Unit unit) => false;
+    /// <summary>vmangos Unit::HaveOffhandWeapon. Default: a player with attached skills has one when a usable weapon is in the off hand; nobody else dual wields.</summary>
+    public virtual bool HasOffhandWeapon(Unit unit) => unit is Player { Skills: not null } player && PlayerCombatSkills.HasOffhandWeapon(player);
 
-    /// <summary>Player has a weapon that can parry (vmangos Player::CanParry &amp;&amp; GetWeaponForParry). Default: unarmed, so no.</summary>
-    public virtual bool PlayerCanParry(Player player) => false;
+    /// <summary>Player has a weapon that can parry (vmangos Player::CanParry &amp;&amp; GetWeaponForParry). Default: the Parry ability and a weapon, with attached skills; otherwise no.</summary>
+    public virtual bool PlayerCanParry(Player player) => player.Skills is { } skills && PlayerCombatSkills.CanParry(player, skills);
 
-    /// <summary>Player can block with an intact shield (vmangos Player::CanBlock + off-hand item with Block). Default: no shield.</summary>
-    public virtual bool PlayerCanBlock(Player player) => false;
+    /// <summary>Player can block with an intact shield (vmangos Player::CanBlock + off-hand item with Block). Default: the Block ability and a shield, with attached skills; otherwise no.</summary>
+    public virtual bool PlayerCanBlock(Player player) => player.Skills is { } skills && PlayerCombatSkills.CanBlock(player, skills);
 
     /// <summary>
     /// vmangos Unit::GetShieldBlockValue: players (strength / 20 − 1, auras later), creatures

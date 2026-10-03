@@ -35,6 +35,16 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
+    /// <summary>
+    /// A spell was added to a player's book by <see cref="LearnSpell"/> (any thread that learns: the session task
+    /// while a character loads, the world thread afterwards). Raised after the book changed and outside its lock,
+    /// so a handler may learn or forget further spells (the skills area teaches the spells a skill grants).
+    /// </summary>
+    public event Action<Player, uint>? SpellLearned;
+
+    /// <summary>A spell was removed from a player's book by <see cref="ForgetSpell"/> (same rules as <see cref="SpellLearned"/>).</summary>
+    public event Action<Player, uint>? SpellForgotten;
+
     /// <summary>Characters with a cached spellbook.</summary>
     public int CharacterCount
     {
@@ -113,6 +123,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         }
 
         Enqueue(id, store => store.AddAsync(id, [spellId]));
+        SpellLearned?.Invoke(player, spellId);
         return true;
     }
 
@@ -157,6 +168,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         }
 
         Enqueue(id, store => store.RemoveAsync(id, spellId));
+        SpellForgotten?.Invoke(player, spellId);
         return true;
     }
 

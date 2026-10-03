@@ -577,7 +577,13 @@ public sealed partial class SpellSystem
         }
 
         SpellCastResult targetRules = CheckTargetRules(caster, spell, targets, unitTarget, strict);
-        return targetRules != SpellCastResult.CastOk ? targetRules : CheckPower(caster, spell);
+        if (targetRules != SpellCastResult.CastOk)
+        {
+            return targetRules;
+        }
+
+        SpellCastResult effectChecks = CheckEffects(caster, spell, targets, unitTarget, triggered, strict);
+        return effectChecks != SpellCastResult.CastOk ? effectChecks : CheckPower(caster, spell);
     }
 
     /// <summary>
