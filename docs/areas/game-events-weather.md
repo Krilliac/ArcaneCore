@@ -242,6 +242,24 @@ through `GameEventFeature.ServiceCreated`; a listener must be added with `GameEv
 to the old service dies with it). The roll-back of a failing commit rebuilds the previous service from the previous tables.
 Limit: a manual `.event start` / `.event stop` schedule override does not survive a reload (the table decides again).
 
+### Event creature data (`game-event-creature-data`, partial)
+
+- While an event runs, the creatures it lists in `game_event_creature_data` take its `entry_id` (another `creature_template`: the creature's
+  `Template`, entry field, level, health, flags and loot follow it) and `modelid` (vmangos `display_id`: a forced model), live ones at once
+  (a living creature is re-initialised like vmangos `UpdateEntry`, a dead one keeps the override for its respawn) and ones created later (a grid load, a
+  respawn) as they are created; they return to their own when the event stops (vmangos `UpdateEntry(original, nullptr)`, Creature.cpp:358-362 and :837, :1949;
+  GameEventMgr.cpp:961-1021). A spawn listed under several events takes the data of the first running one in event order
+  (`GetCreatureUpdateDataForActiveEvent`). An `entry_id` with no template is ignored. `Creature.EventTemplate` / `EventDisplayId` are the
+  override (new partial `Creature.EventData.cs`), `ICreatureEventData` is what the creature system asks, `GameEventCreatureData` answers it and
+  refreshes live creatures on an event change, `GameEventCreatureDataFeature` wires it.
+- **Not applied, counted and reported once:** `equipment_id` (creatures have no equipment model, 13 rows in classic-db) and
+  `spell_start` / `spell_end` (920 of 977 rows, 748 on Love is in the Air: casting the spell on the creature, removing the opposite aura and
+  keeping it across death and respawn is the aura engine's, another lane's). Also: a creature's AI instance is not rebuilt for a swapped
+  entry (it keeps the AI of the spawn's own template until its next creation).
+- Shared-file edits: `Creatures/Creature.cs` (`Template` returns `EventTemplate` when set; `InitializeFields` uses `EventDisplayId` when set),
+  `CreatureMapSystem.Lifecycle.cs` (one `ApplyEventData(creature)` line in `LoadSpawns`); new partials `Creature.EventData.cs`,
+  `CreatureMapSystem.EventData.cs`.
+
 ## Not delivered (limits)
 
 Recorded as slices are completed; see the final section.

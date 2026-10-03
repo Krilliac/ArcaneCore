@@ -160,6 +160,7 @@ public sealed partial class CreatureMapSystem
             }
 
             var creature = new Creature(spawn.Guid, template, spawn, _content, _random);
+            ApplyEventData(creature); // a running game event may change its entry or model (game_event_creature_data)
             if (_respawnAt.Remove(spawn.Guid, out long respawnAt) && respawnAt > _clockMs)
             {
                 creature.Health = 0;
