@@ -83,7 +83,8 @@ copied). Each piece of code cites file:line.
 - `CanOpenLock` (`Spell.cpp:7869-7923`): key case, first fitting skill case decides, spell skill bonus, no skill when cast
   from an item. Range to the node centre, `ALREADY_OPEN`, `CHEST_IN_USE` at landing, `LOW_CASTLEVEL`, `TRY_AGAIN`.
 - The orange failure (`Spell.cpp:6050-6057`, skinning `:5960-5963`): herbalism and mining never fail at the world maximum
-  (`GetConfigMaxSkillValue` is a world constant, `World.h:744-748`), lockpicking and skinning can; the roll is
+  (`GetConfigMaxSkillValue` is a world constant, `World.h:744-748`), skinning likewise requires `skill < max`
+  (`Spell.cpp:5962-5964`); only lockpicking can fail at the maximum (`canFailAtMax`, `Spell.cpp:6054`); the roll is
   `required > irand(skill - 25, skill + 37)`.
 - One skill-up per player and node until the node respawns (`GameObject.SkillupSet`, `GameObject.h:171-176`); elite
   skinning doubles the chance (`SpellEffects.cpp:5371-5390`).

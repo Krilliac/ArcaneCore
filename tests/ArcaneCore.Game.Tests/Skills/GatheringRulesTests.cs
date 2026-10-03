@@ -110,10 +110,11 @@ public sealed class GatheringRulesTests
     [Theory]
     [InlineData(Herbalism, 300, 400, false, 300, 400)]    // herbalism and mining never fail at the world maximum (300)
     [InlineData(Mining, 300, 400, false, 300, 400)]
-    [InlineData(Lockpicking, 300, 400, true, 300, 400)]   // lockpicking and skinning still can
-    [InlineData(SkillIds.Skinning, 300, 400, true, 300, 400)]
+    [InlineData(Lockpicking, 300, 400, true, 300, 400)]   // only lockpicking can (canFailAtMax, Spell.cpp:6054)
+    [InlineData(SkillIds.Skinning, 300, 400, false, 300, 400)]  // skinning requires skill < max (Spell.cpp:5962-5964)
+    [InlineData(SkillIds.Skinning, 299, 400, true, 300, 400)]   // just below the maximum it still fails
     [InlineData(Herbalism, 299, 400, true, 300, 400)]     // below the maximum: required 400 > irand(274, 336) always
-    public void OrangeGatherFails_AtTheMaximum_OnlyForLockpickingAndSkinning(uint skill, int skillValue, int required, bool fails, int configMax, int unused)
+    public void OrangeGatherFails_AtTheMaximum_OnlyForLockpicking(uint skill, int skillValue, int required, bool fails, int configMax, int unused)
     {
         _ = unused;
         Assert.Equal(fails, GatheringRules.OrangeGatherFails(skill, skillValue, required, (ushort)configMax, new FixedRandom(int.MaxValue)));

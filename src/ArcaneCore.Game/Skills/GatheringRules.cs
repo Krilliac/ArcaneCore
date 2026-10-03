@@ -81,14 +81,15 @@ public static class GatheringRules
     }
 
     /// <summary>
-    /// The orange-gathering failure (Spell.cpp:6050-6057 and :5960-5963): Herbalism and Mining never fail at the world
-    /// maximum skill, Lockpicking and Skinning can; the roll is <c>required &gt; irand(skill - 25, skill + 37)</c>
+    /// The orange-gathering failure (Spell.cpp:6050-6057 for lock opening, :5960-5964 for skinning): only Lockpicking
+    /// can fail at the world maximum skill (<c>canFailAtMax</c>, Spell.cpp:6054); Herbalism, Mining and Skinning
+    /// require <c>skill &lt; max</c>. The roll is <c>required &gt; irand(skill - 25, skill + 37)</c>
     /// (inclusive). True when the attempt fails (TRY_AGAIN).
     /// </summary>
     public static bool OrangeGatherFails(uint skillId, int skillValue, int requiredSkill, ushort configMaxSkill, Random random)
     {
         ArgumentNullException.ThrowIfNull(random);
-        bool canFailAtMax = skillId != SkillIds.Herbalism && skillId != SkillIds.Mining;
+        bool canFailAtMax = skillId == SkillIds.Lockpicking;
         return (canFailAtMax || skillValue < configMaxSkill) && requiredSkill > random.Next(skillValue - 25, skillValue + 37 + 1);
     }
 
