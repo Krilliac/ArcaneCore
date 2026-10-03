@@ -164,6 +164,24 @@ the load in `World/Pets/PetsFeature.cs`.
   other starts with autocast **off** (`ACT_DECIDE`), on the first free spell slot. The spell list reaches the
   owner in `SMSG_PET_SPELLS`; passive spells carry state 0x01.
 
+### P6 who a pet acts for (hand-offs to the other lanes)
+
+`Game/Pets/OwnerLinks.cs` also carries the vmangos resolution helpers: `GetCharmerOrOwner`,
+`GetCharmerOrOwnerOrSelf`, `IsCharmerOrOwnerPlayerOrPlayerItself`, `GetCharmerOrOwnerPlayerOrSelf`,
+`GetCharmerOrOwnerPlayer`, `GetAffectingPlayer` (`Unit.cpp:4795-4834`: a player acts for itself, a pet or totem
+for its owner, a pet of a creature for the player that owns that creature) and `GetPet`. They are tested but
+**not wired into other areas' code by this lane**: each caller below is a one-line change in the other
+lane's file, listed here so the integrator can apply it where the lane that owns the file lands.
+
+| Area (file) | What needs the helper | vmangos |
+|---|---|---|
+| loot (`Game/Loot/LootService.OnCreatureKilled`) | `killer is not Player` refuses a pet's kill: use `killer?.GetAffectingPlayer()` for the recipient | `Unit.cpp:981`, `1256` (`GetCharmerOrOwnerPlayerOrPlayerItself`) |
+| experience, quest kill credit, reputation (group-loot-xp, npc-services-quests lanes) | the same killer resolution | `Unit.cpp:1256` |
+| faction and PvP rules (`Combat/FactionCombatHooks.cs`, lines 31-32 list it as missing) | hostility of a pet or totem is its owner's: `Object.cpp:3745-3815`; copy of the owner faction is already on the unit, the player-controlled and PvP flags too | `Object.cpp:3745-3815` |
+| stats (stats-combat-formulas lane) | the owner's stat inheritance for a pet (`Pet::UpdateAllStats`), `CreatureClassLevelStats` for pets without `pet_levelstats` | `Pet.cpp:1274-1480` |
+| mounts (the owner's lane) | `PetController.SetEnabled(pet, false/true)` on mount and dismount (greys the bar) | `Player.cpp:18214`, `18249` |
+| teleports and logout (teleport, character lanes) | re-summon of a pet unsummoned by a far teleport or a logout needs the pet store (P7) | `UnsummonPetTemporaryIfAny` |
+
 ## Configuration (`Pets`, every default is the retail value)
 
 | Key | Default | Meaning |
