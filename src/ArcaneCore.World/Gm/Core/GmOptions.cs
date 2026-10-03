@@ -36,6 +36,13 @@ public sealed class GmOptions
     /// </summary>
     public bool LowerSecurity { get; set; } = true;
 
+    /// <summary>
+    /// The most lines <c>.lookup</c> prints (0 = unlimited, as vmangos). A one-letter search on a
+    /// full classic database matches about 14,000 items, each its own chat packet, all sent from
+    /// the world thread; an operator may cap it (a final line says results were left out).
+    /// </summary>
+    public int LookupMaxResults { get; set; }
+
     /// <summary>The retail level of a stored account security (unmapped values count as Player).</summary>
     public int LevelOf(AccountSecurity security) => SecurityMap.GetValueOrDefault(security, (byte)0);
 

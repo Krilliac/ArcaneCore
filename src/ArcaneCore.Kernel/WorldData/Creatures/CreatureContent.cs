@@ -197,6 +197,9 @@ public sealed class CreatureContent
     /// <summary>Maps that have at least one spawn.</summary>
     public IEnumerable<uint> MapsWithSpawns => _spawnsByMap.Keys;
 
+    /// <summary>Every creature template (GM lookups; unordered).</summary>
+    public IEnumerable<CreatureTemplate> Templates => _templates.Values;
+
     public CreatureTemplate? FindTemplate(uint entry) => _templates.GetValueOrDefault(entry);
 
     public CreatureModelInfo? FindModel(uint displayId) => _models.GetValueOrDefault(displayId);

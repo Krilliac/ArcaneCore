@@ -61,4 +61,25 @@ public static class GmStrings
 
     /// <summary>LANG_APPEARING_TO (114; mangos.sql:3502).</summary>
     public static string AppearingTo(string link) => $"{link} is appearing to your location.";
+
+    /// <summary>LANG_COMMAND_NOITEMFOUND (436; mangos.sql:3789).</summary>
+    public const string NoItemsFound = "No items found!";
+
+    /// <summary>LANG_COMMAND_NOCREATUREFOUND (447; mangos.sql:3801).</summary>
+    public const string NoCreaturesFound = "No creatures found!";
+
+    /// <summary>LANG_COMMAND_NOGAMEOBJECTFOUND (448; mangos.sql:3802).</summary>
+    public const string NoGameObjectsFound = "No gameobjects found!";
+
+    /// <summary>LANG_COMMAND_ITEM_USABLE (vmangos 1152; mangos-classic mangos.sql:4129).</summary>
+    public const string Usable = "[usable]";
+
+    /// <summary>LANG_COMMAND_TELE_NOLOCATION (166; mangos.sql:3552).</summary>
+    public const string TeleNoLocation = "There are no teleport locations matching your request.";
+
+    /// <summary>The first line of LANG_COMMAND_TELE_LOCATION (168; mangos.sql:3553: "Locations found are:" then the list).</summary>
+    public const string TeleLocationsFound = "Locations found are:";
+
+    /// <summary>Not a vmangos text: printed when <c>GmCommands:LookupMaxResults</c> cut a lookup short.</summary>
+    public const string LookupOmitted = "More results were omitted (World:GmCommands:LookupMaxResults).";
 }
