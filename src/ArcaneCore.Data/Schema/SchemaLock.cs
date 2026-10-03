@@ -207,5 +207,8 @@ internal sealed class SchemaLock : IAsyncDisposable
     private SchemaMismatchException Timeout(TimeSpan timeout, Exception? inner)
         => new(
             $"timed out after {timeout.TotalSeconds:0.#} s waiting for the {_component} schema lock; another process is changing " +
-            "this database's schema, or one that died still holds the lock." + (inner is null ? string.Empty : " " + inner.Message));
+            "this database's schema, or one that died still holds the lock." + (inner is null ? string.Empty : " " + inner.Message))
+        {
+            Reason = SchemaMismatchReason.LockTimeout,
+        };
 }

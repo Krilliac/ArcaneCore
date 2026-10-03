@@ -7,6 +7,8 @@ using ArcaneCore.Data.Schema;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using MySqlConnector;
+using Npgsql;
 
 namespace ArcaneCore.Data.Tests.Upgrade;
 
@@ -110,6 +112,48 @@ internal static partial class UpgradeTestSupport
         DatabaseConnectionOptions connection = await databases.CreateAsync(DatabaseProvider.Sqlite);
         await CandidateBaseline.CreateAsync(SqlitePath(connection), variant);
         return connection;
+    }
+
+    /// <summary>Run <c>arcane-db</c> in-process against one database holding every component.</summary>
+    public static Task<(int Code, string Out, string Err)> RunCliAsync(DatabaseConnectionOptions single, params string[] args)
+        => RunCliAsync(new DatabaseOptions { Provider = single.Provider, ConnectionString = single.ConnectionString }, args);
+
+    public static async Task<(int Code, string Out, string Err)> RunCliAsync(DatabaseOptions options, params string[] args)
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+        int code = await Schema.Upgrade.Cli.DbUpgradeCli.RunAsync(args, options, output, error, CancellationToken.None);
+        return (code, output.ToString(), error.ToString());
+    }
+
+    /// <summary>Take the component's schema lock from a separate, unpooled connection, the way another process would.</summary>
+    public static async Task<IAsyncDisposable> HoldSchemaLockAsync(DatabaseConnectionOptions options, string component)
+    {
+        DbConnection connection = options.Provider switch
+        {
+            DatabaseProvider.Sqlite => new SqliteConnection(options.ConnectionString + ";Pooling=False"),
+            DatabaseProvider.PostgreSql => new NpgsqlConnection(options.ConnectionString + ";Pooling=false"),
+            _ => new MySqlConnection(options.ConnectionString + ";Pooling=false"),
+        };
+        await connection.OpenAsync();
+        string sql = options.Provider switch
+        {
+            DatabaseProvider.Sqlite => "BEGIN IMMEDIATE",
+            DatabaseProvider.PostgreSql => $"SELECT pg_advisory_lock({SchemaBootstrapper.AdvisoryLockKey(component)})",
+            _ => $"SELECT GET_LOCK(SHA1(CONCAT('arcanecore_schema:', DATABASE(), ':{component}')), 0)",
+        };
+        await using (DbCommand command = connection.CreateCommand())
+        {
+            command.CommandText = sql;
+            await command.ExecuteScalarAsync();
+        }
+
+        return new HeldLock(connection);
+    }
+
+    private sealed class HeldLock(DbConnection connection) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync() => await connection.DisposeAsync();
     }
 
     public static int CountStatements(IEnumerable<string> commands, Regex pattern) => commands.Count(c => pattern.IsMatch(c));

@@ -74,7 +74,21 @@ public sealed class SchemaDefinition
 /// <see cref="SchemaBlockedException"/>, <see cref="SchemaPolicyException"/>) that every existing
 /// <c>catch (SchemaMismatchException)</c> still handles.
 /// </remarks>
-public class SchemaMismatchException(string message) : Exception(message);
+public class SchemaMismatchException(string message) : Exception(message)
+{
+    /// <summary>Why the bootstrap failed, for callers that map failures to exit codes without parsing the message.</summary>
+    public SchemaMismatchReason Reason { get; init; }
+}
+
+/// <summary>The cause behind a <see cref="SchemaMismatchException"/> where one is distinguished.</summary>
+public enum SchemaMismatchReason
+{
+    /// <summary>Any other mismatch (unknown state, newer database, damaged table, refused index).</summary>
+    Other = 0,
+
+    /// <summary>The wait for another process's schema lock ran out.</summary>
+    LockTimeout = 1,
+}
 
 /// <summary>
 /// Creates, adopts and upgrades one component's schema inside a database that other
