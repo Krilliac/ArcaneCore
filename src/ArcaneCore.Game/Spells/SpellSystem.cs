@@ -313,7 +313,7 @@ public sealed partial class SpellSystem
         }
 
         AddCooldown(state, spell, cast.IsTriggered);
-        TakePower(caster, spell, cast.PowerCost);
+        TakePower(caster, spell, cast.PowerCost, cast.IsTriggered);
         SendCastResult(caster, spell, SpellCastResult.CastOk, cast.IsTriggered);
 
         Dictionary<Unit, SpellTargetEntry> targetEffects = SelectTargets(cast, unitTarget);
@@ -760,12 +760,21 @@ public sealed partial class SpellSystem
         if (!spell.HasAttribute(SpellAttributesEx.UseAllMana))
         {
             cost += caster.GetInt32(UpdateFields.UnitFieldPowerCostModifier + (int)spell.School);
+
+            // vmangos Spell::CalculatePowerCost (Spell.cpp:7026-7036): creature-level scaling, then the school
+            // percent multiplier (aura 72: Clearcasting, cost talents). Casters lane, mana-spend-rule.
+            if (((uint)spell.Attributes & Casters.CasterAttributes.ScalesWithCreatureLevel) != 0 && caster.Level > 0)
+            {
+                cost = (int)(cost / ((1.117f * spell.SpellLevel / caster.Level) - 0.1327f));
+            }
+
+            cost = (int)(cost * (1.0f + caster.GetFloat(UpdateFields.UnitFieldPowerCostMultiplier + (int)spell.School)));
         }
 
         return (uint)Math.Max(cost, 0);
     }
 
-    private static void TakePower(Unit caster, SpellInfo spell, uint cost)
+    private static void TakePower(Unit caster, SpellInfo spell, uint cost, bool triggered)
     {
         if (cost == 0)
         {
@@ -782,6 +791,14 @@ public sealed partial class SpellSystem
         {
             var power = (PowerType)spell.PowerType;
             SetPower(caster, power, GetPower(caster, power) - Math.Min(cost, GetPower(caster, power)));
+
+            // vmangos Spell::TakePower (Spell.cpp:5077-5079): paying mana starts the five second timer unless the
+            // spell has SPELL_ATTR_EX2_DONT_BLOCK_MANA_REGEN. A triggered cast (trigger-spell auras, scripts) does
+            // not start it: vmangos skips TakePower entirely for casts triggered by an aura. Casters lane, mana-spend-rule.
+            if (power == PowerType.Mana && !triggered && ((uint)spell.AttributesEx2 & Casters.CasterAttributes.Ex2DontBlockManaRegen) == 0)
+            {
+                caster.Combat.NoteManaUsed(spell.Id);
+            }
         }
     }
 
