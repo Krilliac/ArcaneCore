@@ -177,6 +177,37 @@ a wrong value count, a non-numeric or out-of-range token is an error, never a si
   character that no longer exists).
 - With no `IExploredZonesStore` registered the words live in memory only.
 
+### Live exploration (`exploration-runtime`)
+
+`ZoneAreaUpdater` carries the explore trigger of vmangos `Player::SetPosition` (`Player.cpp:5969-5985`):
+the first sight of a player in a map (login, far teleport: the map add is a teleport there) and every
+position change run the explore check at once, or after `World:Zones:RelocationCheckDelayMs`
+(vmangos `Movement.RelocationVmapsCheckDelay`, default 0, at most 2000). `ExplorationService` is
+the exploration half of `CheckAreaExploreAndOutdoor` (`:6089-6204`): a living player on a terrain cell with
+an undiscovered flag sets the bit, gets `ExplorationXp` through the progression feature's
+`IPlayerExperience` (SMSG_LOG_XPGAIN, no rested bonus), then SMSG_EXPLORATION_EXPERIENCE (area, xp),
+always, even with 0 XP (area level 0, max level, or no `exploration_basexp` table). An unknown area
+sets the bit, logs, and sends nothing; a flag of 64 words or more is logged and ignored. Every change goes to
+`IExploredZonesSink` (persistence). `ExplorationFeature` binds `World:Exploration`, loads
+`exploration_basexp` (one startup warning when it is empty, then 0 XP everywhere) and installs the
+service. The explore check needs area data and terrain files (`IZoneLocator.CanDeriveZones`);
+without them nothing is discovered (a development world).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `World:Exploration:RateXp` | `1.0` | vmangos `Rate.XP.Explore`. |
+| `World:Exploration:CorrectExploreCheat` | `false` | `.explorecheat` as vmangos wrote it announces the SELECTED player but changes the ISSUER's fields, and `0` ORs in 0 (clears nothing). `true` applies it to the selected player and really clears on 0. |
+| `World:Zones:RelocationCheckDelayMs` | `0` | vmangos `Movement.RelocationVmapsCheckDelay`. |
+
+GM commands (Moderator, the nearest tier to vmangos `SEC_TICKETMASTER`): `.explorecheat 0|1`, `.showarea <areaId>`
+(sets the bit of the area's explore flag on the selected player), `.hidearea <areaId>` (XORs it, as
+vmangos does: hiding an unexplored area explores it). An unknown area id (vmangos `GetFlagById` = -1)
+or a flag at word 64 or above answers mangos_string 115 "Incorrect values."; texts 116, 551-554, 560, 561
+are the classic-db `mangos_string` rows.
+
+Reference disagreement resolved toward the primary: vmangos sends the exploration packet for every
+discovered area with an entry (mangos-classic only when the area level is above 0).
+
 ## Deviations from retail (all documented, none silent)
 
 - `ClientZoneTrust=Auto` is a development-world allowance, not retail. Retail is `Never`.

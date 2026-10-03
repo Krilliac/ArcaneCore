@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.WorldState.Exploration;
 using ArcaneCore.Kernel.WorldData;
 
 namespace ArcaneCore.Game.WorldState.Zones;
@@ -16,6 +17,12 @@ public interface IZoneLocator
 
     /// <summary>The area or zone entry with this id (vmangos <c>AreaEntry::GetById</c>), or null.</summary>
     AreaTemplate? Find(uint areaId);
+
+    /// <summary>The terrain's area (explore) flag at the player's position (vmangos <c>TerrainInfo::GetAreaFlag</c>); 0xFFFF when there is none.</summary>
+    uint GetAreaFlag(Map map, Player player) => ExploredZones.NoAreaFlag;
+
+    /// <summary>vmangos <c>AreaEntry::GetByAreaFlagAndMap</c>: the entry a flag stands for on a map, or null.</summary>
+    AreaTemplate? FindByAreaFlag(uint areaFlag, uint mapId) => null;
 }
 
 /// <summary>The default locator: the map's terrain area flags through the world's <see cref="WorldMaps.Areas"/>.</summary>
@@ -26,4 +33,8 @@ internal sealed class TerrainZoneLocator(WorldRuntime world) : IZoneLocator
     public (uint ZoneId, uint AreaId) Locate(Map map, Player player) => map.GetZoneAndAreaId(player.X, player.Y, player.Z);
 
     public AreaTemplate? Find(uint areaId) => WorldMaps.Of(world).Areas.GetById(areaId);
+
+    public uint GetAreaFlag(Map map, Player player) => map.Terrain.GetAreaFlag(player.X, player.Y, player.Z);
+
+    public AreaTemplate? FindByAreaFlag(uint areaFlag, uint mapId) => WorldMaps.Of(world).Areas.GetByAreaFlagAndMap(areaFlag, mapId);
 }

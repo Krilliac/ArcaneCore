@@ -37,6 +37,20 @@ public sealed class WorldStateHooks
     /// <summary>Where explored-zones changes go for persistence (null: not persisted).</summary>
     public Exploration.IExploredZonesSink? ExploredZonesSink { get; set; }
 
+    public ExplorationOptions ExplorationSettings { get; } = new();
+
+    /// <summary>The <c>exploration_basexp</c> table (empty until a feature loads it: exploration then gives 0 XP).</summary>
+    public Exploration.ExplorationBaseXpTable ExplorationBaseXp
+    {
+        get => _baseXp;
+        set => _baseXp = value ?? throw new ArgumentNullException(nameof(value));
+    }
+
+    private volatile Exploration.ExplorationBaseXpTable _baseXp = Exploration.ExplorationBaseXpTable.Empty;
+
+    /// <summary>The explore check the zone tracker calls when a player moved (null: no exploration).</summary>
+    public Exploration.IExplorationChecker? Explorer { get; set; }
+
     /// <summary>The loaded <c>game_weather</c> chances (empty until a feature loads them).</summary>
     public WeatherChanceTable WeatherChances { get; } = new();
 

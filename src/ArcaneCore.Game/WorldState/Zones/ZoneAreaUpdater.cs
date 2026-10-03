@@ -39,6 +39,13 @@ public sealed class ZoneAreaUpdater : IMapUpdater
         public uint Timer;
         public uint Zone;
         public uint Area;
+
+        // The explore trigger (vmangos Player::SetPosition -> m_areaCheckTimer / CheckAreaExploreAndOutdoor).
+        public bool ExploreSeen;
+        public float LastX;
+        public float LastY;
+        public float LastZ;
+        public uint AreaCheckTimer;
     }
 
     private WorldStateHooks Hooks => WorldStateHooks.For(_world);
@@ -66,6 +73,7 @@ public sealed class ZoneAreaUpdater : IMapUpdater
         foreach (Player player in map.Players)
         {
             State state = GetState(player);
+            CheckExplore(player, state, diffMs);
             if (state.Timer == 0)
             {
                 // vmangos runs the first UpdateZone from SendInitialPacketsAfterAddToMap; a player that
@@ -94,6 +102,49 @@ public sealed class ZoneAreaUpdater : IMapUpdater
                 }
 
                 state.Timer = ZoneUpdateIntervalMs;
+            }
+        }
+    }
+
+    // vmangos Player::SetPosition (Player.cpp:5969-5985): a position change runs the explore check at once, or
+    // arms m_areaCheckTimer when Movement.RelocationVmapsCheckDelay is set; the first sight of a player (login,
+    // teleport: the map add is a "teleport" there) counts as a change.
+    private void CheckExplore(Player player, State state, uint diffMs)
+    {
+        WorldStateHooks hooks = Hooks;
+        if (hooks.Explorer is not { } explorer)
+        {
+            return;
+        }
+
+        uint delay = Math.Min(hooks.Zones.RelocationCheckDelayMs, 2000u);
+        bool moved = !state.ExploreSeen || state.LastX != player.X || state.LastY != player.Y || state.LastZ != player.Z;
+        if (moved)
+        {
+            state.ExploreSeen = true;
+            (state.LastX, state.LastY, state.LastZ) = (player.X, player.Y, player.Z);
+            if (delay == 0)
+            {
+                explorer.CheckAreaExplore(player);
+                return;
+            }
+
+            if (state.AreaCheckTimer == 0)
+            {
+                state.AreaCheckTimer = delay;
+            }
+        }
+
+        if (state.AreaCheckTimer > 0)
+        {
+            if (diffMs >= state.AreaCheckTimer)
+            {
+                state.AreaCheckTimer = 0;
+                explorer.CheckAreaExplore(player);
+            }
+            else
+            {
+                state.AreaCheckTimer -= diffMs;
             }
         }
     }

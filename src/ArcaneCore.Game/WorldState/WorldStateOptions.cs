@@ -29,6 +29,12 @@ public sealed class ZoneOptions
     /// This is a documented development allowance, not retail behaviour.
     /// </summary>
     public ClientZoneTrust ClientZoneTrust { get; set; } = ClientZoneTrust.Auto;
+
+    /// <summary>
+    /// vmangos <c>Movement.RelocationVmapsCheckDelay</c> (default 0, at most 2000): when above 0 the
+    /// explore check runs this many ms after a position change instead of at once (Player.cpp:5975-5985).
+    /// </summary>
+    public uint RelocationCheckDelayMs { get; set; }
 }
 
 /// <summary>Game-time options (configuration section <c>World:Time</c>).</summary>
@@ -60,4 +66,20 @@ public sealed class WeatherOptions
 
     /// <summary>vmangos <c>ChangeWeatherInterval</c>: ms between weather regenerations of a zone (default 10 minutes, World.cpp:596).</summary>
     public uint ChangeIntervalMs { get; set; } = 10 * 60 * 1000;
+}
+
+/// <summary>Exploration options (configuration section <c>World:Exploration</c>).</summary>
+public sealed class ExplorationOptions
+{
+    public const string SectionName = "World:Exploration";
+
+    /// <summary>vmangos <c>Rate.XP.Explore</c> (default 1).</summary>
+    public float RateXp { get; set; } = 1.0f;
+
+    /// <summary>
+    /// <c>.explorecheat</c> as vmangos writes it (CharacterCommands.cpp:640-679) is buggy: it announces the
+    /// SELECTED player but changes the ISSUER's fields, and "0" ORs in 0 (does nothing). Default false
+    /// (retail/vmangos). True applies the effect to the selected player and really clears on 0.
+    /// </summary>
+    public bool CorrectExploreCheat { get; set; }
 }
