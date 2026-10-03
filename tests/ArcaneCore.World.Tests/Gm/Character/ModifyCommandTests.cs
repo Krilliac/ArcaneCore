@@ -67,8 +67,9 @@ public sealed class ModifyCommandTests
         await using WorldTestClient gm = await host.EnterWorldAsync("MDMBAD", "Mdmbad", AccountSecurity.Administrator);
         await gm.CollectAsync();
 
-        Assert.StartsWith("Incorrect syntax.", (await Run(gm, ".modify money"))!);
-        Assert.StartsWith("Incorrect syntax.", (await Run(gm, ".modify money lots"))!);
+        Assert.StartsWith("Syntax:", (await Run(gm, ".modify money"))!);
+        await gm.CollectAsync();   // the help text has a second line
+        Assert.StartsWith("Syntax:", (await Run(gm, ".modify money lots"))!);
         Assert.Equal(0u, await host.PlayerStateAsync("Mdmbad", p => p.Money));
     }
 
@@ -134,7 +135,7 @@ public sealed class ModifyCommandTests
         // A single argument that is not a number is a name.
         Assert.Equal($"You changed level of {Link("Lvlvic")} to 3.", await Run(gm, ".levelup Lvlvic"));
         Assert.Equal("Player not found!", await Run(gm, ".levelup Nobodyhere"));
-        Assert.StartsWith("Incorrect syntax.", (await Run(gm, ".levelup 2 Lvlvic"))!);
+        Assert.StartsWith("Syntax:", (await Run(gm, ".levelup 2 Lvlvic"))!);
     }
 
     [Fact]
@@ -176,8 +177,8 @@ public sealed class ModifyCommandTests
             return (await client.ReadChatAsync()).Text;
         }
 
-        await client.SendChatAsync(ChatType.Say, Language.Common, ".help");
-        Assert.StartsWith("Commands available", (await client.ReadChatAsync()).Text);
+        await client.SendChatAsync(ChatType.Say, Language.Common, ".nosuchcommand");
+        Assert.Equal("There is no such command", (await client.ReadChatAsync()).Text);
         return null;
     }
 }

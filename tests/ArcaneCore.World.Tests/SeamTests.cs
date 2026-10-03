@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
@@ -32,12 +33,20 @@ public sealed class SeamTests
     }
 
     [Fact]
-    public void BuiltinCommands_ComeFirst_InTheirOriginalOrder()
+    public void CommandRoots_AreInRetailTableOrder_AndUnique()
     {
         string[] builtins = ["help", "commands", "save", "saveall", "server", "gps", "announce", "notify", "gm", "kick", "modify"];
         CommandTable table = ChatCommands.CreateTable();
-        Assert.Equal(builtins, table.Roots.Take(builtins.Length).Select(c => c.Name));
-        Assert.Equal(table.Roots.Count, table.Roots.Select(c => c.Name.ToUpperInvariant()).Distinct().Count());
+        string[] names = [.. table.Roots.Select(c => c.Name)];
+
+        Assert.All(builtins, b => Assert.Contains(b, names));
+        Assert.Equal(table.Roots.Count, names.Select(n => n.ToUpperInvariant()).Distinct().Count());
+
+        // Roots the vmangos table has come first, in its order (Chat.cpp:1185-1366); the rest keep registration order after them.
+        int[] retail = [.. names.Select(RetailCommandOrder.IndexOf).Where(i => i >= 0)];
+        Assert.Equal(retail.Order(), retail);
+        int firstUnknown = Array.FindIndex(names, n => RetailCommandOrder.IndexOf(n) < 0);
+        Assert.True(firstUnknown < 0 || names.Skip(firstUnknown).All(n => RetailCommandOrder.IndexOf(n) < 0));
     }
 
     [Fact]

@@ -56,7 +56,7 @@ public sealed class LookupCommandTests
         Assert.Equal("No items found!", (await gm.ReadChatAsync()).Text);
 
         await gm.SendChatAsync(ChatType.Say, Language.Common, ".lookup item");
-        Assert.StartsWith("Incorrect syntax.", (await gm.ReadChatAsync()).Text);
+        Assert.StartsWith("Syntax:", (await gm.ReadChatAsync()).Text);
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public sealed class LookupCommandTests
         Assert.Equal("There are no teleport locations matching your request.", (await gm.ReadChatAsync()).Text);
 
         await gm.SendChatAsync(ChatType.Say, Language.Common, ".lookup tele");
-        Assert.StartsWith("Incorrect syntax.", (await gm.ReadChatAsync()).Text);
+        Assert.StartsWith("Syntax:", (await gm.ReadChatAsync()).Text);
     }
 
     [Fact]

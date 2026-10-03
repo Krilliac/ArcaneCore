@@ -158,9 +158,9 @@ public sealed class ItemCommandTests
         }
 
         // Flush: a following sentinel command's reply proves nothing else was said before it.
-        await client.SendChatAsync(ChatType.Say, Language.Common, ".help");
+        await client.SendChatAsync(ChatType.Say, Language.Common, ".nosuchcommand");
         string next = (await client.ReadChatAsync()).Text;
-        Assert.StartsWith("Commands available", next);
+        Assert.Equal("There is no such command", next);
         return null;
     }
 

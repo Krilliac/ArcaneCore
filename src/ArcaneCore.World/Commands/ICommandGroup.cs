@@ -50,6 +50,18 @@ public static class ChatCommands
             throw new InvalidOperationException($"chat command '.{duplicate}' is defined twice");
         }
 
+        if (options.RetailLevels)
+        {
+            roots = RetailCommandLevels.Apply(roots);
+        }
+
+        // Retail table order decides what an abbreviation means (Chat.cpp:1185-1366); the pre-retail
+        // exact-name-first rule keeps the registration order (built-ins, then groups by type name).
+        if (!options.ExactNameFirst)
+        {
+            roots = RetailCommandOrder.Sort(roots, r => r.Name);
+        }
+
         foreach (ICommandExtension extension in extensions)
         {
             string[] path = extension.Path.Split(' ', StringSplitOptions.RemoveEmptyEntries);

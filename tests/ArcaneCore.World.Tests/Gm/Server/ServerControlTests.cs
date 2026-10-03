@@ -202,7 +202,7 @@ public sealed class ServerControlTests
 
         await admin.SendChatAsync(ChatType.Say, Language.Common, command);
 
-        Assert.StartsWith("Incorrect syntax.", (await admin.ReadChatAsync()).Text);
+        Assert.StartsWith("Syntax:", (await admin.ReadChatAsync()).Text);
         Assert.False(host.WorldServices.GetRequiredService<ShutdownFeature>().Scheduler.StopRequested);
     }
 

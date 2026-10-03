@@ -37,6 +37,26 @@ public sealed class GmOptions
     public bool LowerSecurity { get; set; } = true;
 
     /// <summary>
+    /// Treat a command above the invoker's level as if it did not exist ("There is no such
+    /// command", the behaviour before the retail table work). Retail (false) resolves the command
+    /// first and answers "This command is not available to you." (Chat.cpp:1884-1888).
+    /// </summary>
+    public bool HideUnavailable { get; set; }
+
+    /// <summary>
+    /// A command word matching a command name exactly wins over a longer name that starts with it
+    /// (the behaviour before the retail table work). Retail (false) takes the first table entry the
+    /// word is a prefix of (hasStringAbbr, Chat.cpp:1566-1600), with roots in retail order.
+    /// </summary>
+    public bool ExactNameFirst { get; set; }
+
+    /// <summary>
+    /// Apply the vmangos account level of the commands declared before the retail command work
+    /// (<see cref="RetailCommandLevels"/>); off keeps their ArcaneCore four-level declarations.
+    /// </summary>
+    public bool RetailLevels { get; set; } = true;
+
+    /// <summary>
     /// The most lines <c>.lookup</c> prints (0 = unlimited, as vmangos). A one-letter search on a
     /// full classic database matches about 14,000 items, each its own chat packet, all sent from
     /// the world thread; an operator may cap it (a final line says results were left out).

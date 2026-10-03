@@ -149,4 +149,61 @@ public static class GmStrings
 
     /// <summary>Not a vmangos text: this server does not level creatures with .levelup (vmangos does).</summary>
     public const string LevelingCreaturesUnsupported = "Leveling creatures is not supported; select a player.";
+
+    /// <summary>LANG_COMMAND_UNAVAILABLE (50): the vmangos migration 20240107103630_world.sql:14 text.</summary>
+    public const string CommandUnavailable = "This command is not available to you.";
+
+    /// <summary>LANG_NO_CMD (6; mangos.sql:3428), without a final period.</summary>
+    public const string NoSuchCommand = "There is no such command";
+
+    /// <summary>LANG_NO_SUBCMD (7; mangos.sql:3429).</summary>
+    public const string NoSuchSubcommand = "There is no such subcommand";
+
+    /// <summary>LANG_SUBCMDS_LIST (8; mangos.sql:3430): "Command %s have subcommands:".</summary>
+    public static string SubcommandsList(string command) => $"Command {command} have subcommands:";
+
+    /// <summary>LANG_AVIABLE_CMD (9; mangos.sql:3431).</summary>
+    public const string CommandsAvailable = "Commands available to you:";
+
+    /// <summary>LANG_CMD_SYNTAX (10; mangos.sql:3432).</summary>
+    public const string CmdSyntax = "Incorrect syntax.";
+
+    /// <summary>LANG_NO_HELP_CMD (5; mangos.sql:3427).</summary>
+    public const string NoHelpForCommand = "There is no help for that command";
+
+    /// <summary>LANG_YOURS_SECURITY_IS_LOW (403; mangos.sql:3756).</summary>
+    public const string SecurityTooLow = "You have low security level for this.";
+
+    /// <summary>LANG_USE_BOL (259; mangos.sql:3628).</summary>
+    public const string UseOnOff = "Incorrect value, use on or off";
+
+    /// <summary>LANG_PLAYER_SAVED (14; mangos.sql:3436).</summary>
+    public const string PlayerSaved = "Player saved.";
+
+    /// <summary>LANG_PLAYERS_SAVED (15; mangos.sql:3437).</summary>
+    public const string PlayersSaved = "All players saved.";
+
+    /// <summary>LANG_SYSTEMMESSAGE (3; mangos.sql:3425): "|cffff0000[System Message]: %s|r", what .announce sends.</summary>
+    public static string SystemMessage(string text) => $"|cffff0000[System Message]: {text}|r";
+
+    /// <summary>LANG_GLOBAL_NOTIFY (100; mangos.sql:3488): the prefix of every .notify.</summary>
+    public const string GlobalNotifyPrefix = "Global notify: ";
+
+    /// <summary>LANG_GM_ON (332; mangos.sql:3698).</summary>
+    public const string GmOn = "GM mode is ON";
+
+    /// <summary>LANG_GM_OFF (333; mangos.sql:3699).</summary>
+    public const string GmOff = "GM mode is OFF";
+
+    /// <summary>LANG_GM_CHAT_ON (334; mangos.sql:3700).</summary>
+    public const string GmChatOn = "GM Chat Badge is ON";
+
+    /// <summary>LANG_GM_CHAT_OFF (335; mangos.sql:3701).</summary>
+    public const string GmChatOff = "GM Chat Badge is OFF";
+
+    /// <summary>LANG_COMMAND_KICKSELF (281; mangos.sql:3649).</summary>
+    public const string CommandKickSelf = "You can't kick self, logout instead";
+
+    /// <summary>LANG_COMMAND_KICKMESSAGE (282; mangos.sql:3650): "Player %s kicked.".</summary>
+    public static string CommandKickMessage(string link) => $"Player {link} kicked.";
 }
