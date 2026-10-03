@@ -22,7 +22,7 @@ internal static class SpellThreat
     /// EX4_NO_HARMFUL_THREAT spells add nothing and EX_NO_THREAT spells only raise an existing entry
     /// (ThreatManager.cpp:424).
     /// Limit: pets and totems cannot be told apart from creatures here (no pet or totem model yet), and the
-    /// SPELLMOD_THREAT talent modifier (CalcThreat :43) needs the spell-mod system.
+    /// SPELLMOD_THREAT talent modifier is applied before the MOD_THREAT auras (CalcThreat :43).
     /// </summary>
     public static void Add(SpellSystem system, Unit caster, Unit victim, SpellInfo spell, float threat)
     {
@@ -35,6 +35,9 @@ internal static class SpellThreat
 
         if (threat != 0f)
         {
+            // vmangos ThreatCalcHelper::CalcThreat (ThreatManager.cpp:41-44): the SPELLMOD_THREAT talent mod of the hated unit
+            // comes first, before the MOD_THREAT auras (spell-modifier-engine).
+            threat = system.ModFloat(caster, spell, SpellModOp.Threat, threat);
             uint schoolBit = 1u << (int)spell.School;
             foreach (SpellAura aura in system.AurasOfType(caster, AuraType.ModThreat))
             {

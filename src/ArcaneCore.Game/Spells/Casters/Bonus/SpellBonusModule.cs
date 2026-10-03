@@ -43,7 +43,14 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
         // (Aura::CalculateDotDamage). Direct healing is not routed by class.
         if ((overTime || stage == SpellAmountStage.DirectDamage) && spell.DamageClass is SpellDamageClass.Melee or SpellDamageClass.Ranged)
         {
-            return amount;
+            // The weapon formulas skip spell power but still apply the DAMAGE / DOT spell mod to the done amount
+            // (vmangos MeleeDamageBonusDone, SpellCaster.cpp:1443-1452); the target side (ticks) has no spell mod.
+            return stage switch
+            {
+                SpellAmountStage.DirectDamage => spells.ModFloat(caster, spell, SpellModOp.Damage, amount),
+                SpellAmountStage.DamageOverTimeSnapshot or SpellAmountStage.HealOverTimeSnapshot => spells.ModFloat(caster, spell, SpellModOp.Dot, amount),
+                _ => amount,
+            };
         }
 
         SpellBonusKind kind = overTime ? SpellBonusKind.OverTime : SpellBonusKind.SpellDirect;
@@ -51,17 +58,21 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
         int mask = 1 << (int)spell.School;
         return stage switch
         {
-            SpellAmountStage.DirectDamage => Taken(false, Done(false, amount, caster, spell, mask, coefficient, 1), target, spell, mask, coefficient, 1),
-            SpellAmountStage.DirectHeal => Taken(true, Done(true, amount, caster, spell, mask, coefficient, 1), target, spell, mask, coefficient, 1),
-            SpellAmountStage.DamageOverTimeSnapshot => Done(false, amount, caster, spell, mask, coefficient, 1),
-            SpellAmountStage.HealOverTimeSnapshot => Done(true, amount, caster, spell, mask, coefficient, 1),
+            SpellAmountStage.DirectDamage => Taken(false, Done(false, amount, caster, spell, mask, coefficient, 1, SpellModOp.Damage), target, spell, mask, coefficient, 1),
+            SpellAmountStage.DirectHeal => Taken(true, Done(true, amount, caster, spell, mask, coefficient, 1, SpellModOp.Damage), target, spell, mask, coefficient, 1),
+            SpellAmountStage.DamageOverTimeSnapshot => Done(false, amount, caster, spell, mask, coefficient, 1, SpellModOp.Dot),
+            SpellAmountStage.HealOverTimeSnapshot => Done(true, amount, caster, spell, mask, coefficient, 1, SpellModOp.Dot),
             SpellAmountStage.DamageOverTimeTick => Taken(false, amount, target, spell, mask, coefficient, stack),
             _ => Taken(true, amount, target, spell, mask, coefficient, stack),
         };
     }
 
-    /// <summary>vmangos SpellDamageBonusDone / SpellHealingBonusDone.</summary>
-    private float Done(bool heal, float amount, Unit caster, SpellInfo spell, int mask, EffectiveCoefficient coefficient, uint stack)
+    /// <summary>
+    /// vmangos SpellDamageBonusDone / SpellHealingBonusDone. <paramref name="modOp"/> is the spell mod applied to the finished
+    /// done amount (DAMAGE for direct damage and healing, DOT for over-time snapshots; SpellCaster.cpp:1446, :1522, :1697), and
+    /// SPELL_BONUS_DAMAGE scales the coefficient when there is a benefit to scale (SpellBonusWithCoeffs, :1760-1766).
+    /// </summary>
+    private float Done(bool heal, float amount, Unit caster, SpellInfo spell, int mask, EffectiveCoefficient coefficient, uint stack, SpellModOp modOp)
     {
         if (SpellBonusFormulas.IgnoresCasterModifiers(spell)
             || (heal && spell.DamageClass == SpellDamageClass.None && spell.IsPassive))
@@ -92,7 +103,14 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
             percent = SpellBonusFormulas.MultiplicativePercent(Amounts(caster, AuraType.ModDamagePercentDone, a => (a.MiscValue & mask) != 0));
         }
 
-        return SpellBonusFormulas.AmountDone(amount, 0, benefit, coefficient, stack, percent);
+        if (benefit != 0)
+        {
+            coefficient = coefficient with { Coefficient = spells.ModFloat(caster, spell, SpellModOp.SpellBonusDamage, coefficient.Coefficient * 100.0f) / 100.0f };
+        }
+
+        float done = SpellBonusFormulas.AmountDone(amount, 0, benefit, coefficient, stack, percent);
+        float modified = spells.ModFloat(caster, spell, modOp, done);
+        return modified > 0 ? modified : 0;
     }
 
     /// <summary>vmangos Unit::SpellDamageBonusTaken / SpellHealingBonusTaken.</summary>

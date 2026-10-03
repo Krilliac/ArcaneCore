@@ -218,6 +218,9 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
             miss = 5.0f + ((target.Level - caster.Level) * 5 * 0.1f);
         }
 
+        // vmangos GetMeleeMissChance (SpellCaster.cpp:381-388): the RESIST_MISS_CHANCE spell mod acts on the hit chance
+        // bonus (a flat bonus that subtracts from the miss chance; a percent mod skips its zero base).
+        miss -= (Modifiers ?? system.SpellModifiers).Apply(caster, spell, SpellModOp.ResistMissChance, 0f);
         miss = Math.Clamp(miss, 0f, 60f);
         int roll = system.Random.Next(0, 10_000);
         int bound = (int)(miss * 100);

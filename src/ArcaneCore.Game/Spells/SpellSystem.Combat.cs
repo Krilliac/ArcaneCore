@@ -244,6 +244,9 @@ public sealed partial class SpellSystem
         WeaponAttackType attack = context.Spell.DamageClass == SpellDamageClass.Ranged ? WeaponAttackType.RangedAttack : WeaponAttackType.BaseAttack;
         float weapon = WeaponDamageRoll(context.Caster, attack, normalized);
         float total = Math.Max(0f, (weapon + bonus) * percent);
+
+        // The DAMAGE spell mod on the done amount, before armor and crit (vmangos MeleeDamageBonusDone, SpellCaster.cpp:1446).
+        total = ModFloat(context.Caster, context.Spell, SpellModOp.Damage, total);
         if (total < 1f)
         {
             return;
