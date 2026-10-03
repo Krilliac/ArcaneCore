@@ -430,6 +430,16 @@ public sealed class WorldSession : IPlayerSession
             return false;
         }
 
+        // Account status is enforced here too: the logon server only gates the SRP exchange, and
+        // a session key may have been issued before the ban. vmangos answers AUTH_BANNED for a
+        // permanent ban and AUTH_SUSPENDED for a temporary one (WorldSocket.cpp:283-345).
+        if (stored.Status != AccountStatus.Active)
+        {
+            _logger.LogInformation("[{Endpoint}] refused world login for {Status} account", RemoteEndpoint, stored.Status);
+            SendAuthResponse(stored.Status == AccountStatus.Banned ? AuthResponseCode.Banned : AuthResponseCode.Suspended);
+            return false;
+        }
+
         AccountSettings settings = await Services.GetRequiredService<IAccountDataStore>()
             .GetAsync(stored.Id).ConfigureAwait(false);
 
