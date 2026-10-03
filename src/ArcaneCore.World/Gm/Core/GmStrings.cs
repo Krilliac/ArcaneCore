@@ -34,4 +34,31 @@ public static class GmStrings
 
     /// <summary>vmangos <c>playerLink</c> (Chat.h:134): the clickable player name used in replies.</summary>
     public static string PlayerLink(string name) => $"|cffffffff|Hplayer:{name}|h[{name}]|h|r";
+
+    /// <summary>LANG_COMMAND_TELE_NOTFOUND (164; mangos.sql:3550).</summary>
+    public const string TeleNotFound = "Teleport location not found!";
+
+    /// <summary>LANG_CANT_TELEPORT_SELF (171; mangos.sql:3556).</summary>
+    public const string CantTeleportSelf = "You can't teleport self to self!";
+
+    /// <summary>LANG_IS_TELEPORTED (102; mangos.sql:3490).</summary>
+    public static string IsTeleported(string link) => $"{link} is already being teleported.";
+
+    /// <summary>LANG_SUMMONING (108; mangos.sql:3496): "You are summoning %s%s.".</summary>
+    public static string Summoning(string link, string suffix = "") => $"You are summoning {link}{suffix}.";
+
+    /// <summary>LANG_SUMMONED_BY (109; mangos.sql:3497).</summary>
+    public static string SummonedBy(string link) => $"You are being summoned by {link}.";
+
+    /// <summary>LANG_TELEPORTING_TO (110; mangos.sql:3498): "You are teleporting %s%s to %s.".</summary>
+    public static string TeleportingTo(string link, string suffix, string location) => $"You are teleporting {link}{suffix} to {location}.";
+
+    /// <summary>LANG_TELEPORTED_TO_BY (111; mangos.sql:3499).</summary>
+    public static string TeleportedToBy(string link) => $"You are being teleported by {link}.";
+
+    /// <summary>LANG_APPEARING_AT_ONLINE (113; mangos.sql:3501): "Appearing at %s's location.".</summary>
+    public static string AppearingAt(string link) => $"Appearing at {link}'s location.";
+
+    /// <summary>LANG_APPEARING_TO (114; mangos.sql:3502).</summary>
+    public static string AppearingTo(string link) => $"{link} is appearing to your location.";
 }
