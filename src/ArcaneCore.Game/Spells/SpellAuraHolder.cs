@@ -120,6 +120,13 @@ public sealed class SpellAuraHolder
 
     public int MaxDuration { get; internal set; }
 
+    /// <summary>
+    /// When this holder was put on its target, in whole Unix seconds (vmangos SpellAuraHolder::m_applyTime, set when the
+    /// holder is constructed: SpellAuras.cpp:6665, getter SpellAuras.h:473). A stack refresh keeps the original value; a
+    /// replacement holder gets its own. Stamped by <see cref="SpellSystem.AddAuraHolder"/> from <see cref="SpellSystem.UnixSecondsClock"/>.
+    /// </summary>
+    public long AppliedAtUnixSeconds { get; internal set; }
+
     /// <summary>Visible aura slot 0-47, or <see cref="NoSlot"/>.</summary>
     public byte Slot { get; internal set; } = NoSlot;
 

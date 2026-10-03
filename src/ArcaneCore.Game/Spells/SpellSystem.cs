@@ -93,6 +93,13 @@ public sealed partial class SpellSystem
 
     public uint NowMs => _clock();
 
+    /// <summary>
+    /// Whole Unix seconds (vmangos <c>time(nullptr)</c>) stamped on a holder when it is applied
+    /// (<see cref="SpellAuraHolder.AppliedAtUnixSeconds"/>). The default is the system clock; a feature that compares
+    /// the stamp with another wall-clock reading (the duel service) installs the clock it reads, so both sides agree.
+    /// </summary>
+    public Func<long> UnixSecondsClock { get; set; } = static () => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
     /// <summary>The spell state of a unit, if it has any.</summary>
     public UnitSpellState? GetState(ObjectGuid guid) => _states.GetValueOrDefault(guid);
 

@@ -109,6 +109,7 @@ public sealed partial class SpellSystem
             RemoveHolder(state, existing);
         }
 
+        holder.AppliedAtUnixSeconds = UnixSecondsClock();
         holder.Slot = holder.NeedsVisibleSlot ? FindFreeSlot(holder.Target, holder.IsPositive) : SpellAuraHolder.NoSlot;
         state.Auras.Add(holder);
         if (holder.Slot != SpellAuraHolder.NoSlot)
