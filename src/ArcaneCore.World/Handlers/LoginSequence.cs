@@ -58,5 +58,15 @@ public static class LoginSequence
     /// world states (the map add itself has already sent the self create).
     /// </summary>
     public static void SendInitialPacketsAfterAddToMap(WorldSession session, Player player)
-        => session.Send(WorldOpcode.SmsgInitWorldStates, LoginPackets.BuildInitWorldStates(player.MapId, player.ZoneId));
+    {
+        // docs/areas/world-state.md: the zone tracker derives the zone and sends the world states
+        // (and everything else a zone entry triggers) exactly like vmangos' UpdateZone.
+        if (session.Services.GetService<WorldState.ZoneAreaFeature>() is { } zones)
+        {
+            zones.ForceUpdate(player);
+            return;
+        }
+
+        session.Send(WorldOpcode.SmsgInitWorldStates, LoginPackets.BuildInitWorldStates(player.MapId, player.ZoneId));
+    }
 }
