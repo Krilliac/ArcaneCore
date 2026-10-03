@@ -115,7 +115,8 @@ public sealed class StartActionsWorldTests
             (_, CharacterRecord record, IReadOnlyList<ActionButton> stored) = await CreateAndLoginAsync(host, "BAR5");
 
             Assert.Equal(3, stored.Count);
-            Assert.Equal(((byte)5, 100u, 0u), (record.Level, record.Money, record.PlayedTime));
+            // Played time is wall-clock (main persists it on every save), so only level and money are pinned.
+            Assert.Equal(((byte)5, 100u), (record.Level, record.Money));
         }
     }
 

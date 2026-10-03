@@ -71,6 +71,24 @@ the lane's final fix commit, not the lane as a whole.
 - **social-guild-petitions / SocialFeature.cs**: binds `World:Guild` and `World:Social:WriteQueue`.
 - **chat-languages-channels / ChatHandlers.cs, WorldConfigKeys.cs, docs/areas/social.md**: usings,
   live keys (`MaxJoinedChannels` and `VmangosChannelExtensions`) and the Options paragraph combined.
+- **Cross-lane duplicate (found by tests, not by git): chat mute and anti-flood.** The social lane
+  (`ChatRestrictionFeature` + `ChatRestrictionService`, an `IChatMessageHandler`) and the chat lane
+  (`ChatFeature` + `IChatMuteSource`, gating inside `ChatHandlers`) each implemented the vmangos mute check,
+  flood counter and mute-only-whisper-staff rule, both bound to `World:Chat`. Merged as is they counted and
+  muted twice and ignored each other's runtime options (`ChatGateTests.FloodControl_...` and
+  `ChatRestrictionEndToEndTests.AMutedSpeaker_...` failed). Resolution: `ChatFeature` is the single gate;
+  `ChatRestrictionFeature` is now an `IChatMuteSource` over the service's explicit mute table (the `.mute` /
+  stored-mute seam) and no longer an `IChatMessageHandler`; `IChatMuteSource` is a registered seam interface.
+  The service's pure flood logic and its unit tests remain but the runtime no longer calls them (dead code to
+  prune later). `ChatRestrictionEndToEndTests`: the handler-ordering test was removed (no longer a handler) and
+  the staff member now enables `.whispers on`, because the chat lane implements retail `AcceptsWhispersFrom`
+  (a plain player cannot whisper a staff member who does not accept whispers).
+- **Retail GM text conventions (main) vs lane test expectations**: `BanCommandTests` expected "Incorrect syntax."
+  and "There is no such command"; main's GM table prints the command's own `Syntax: ...` help in place of
+  "Incorrect syntax." and answers "This command is not available to you." for a command above the invoker's
+  level. Tests updated to main's texts; the ban commands themselves are unchanged.
+- **StartActionsWorldTests**: asserted `PlayedTime == 0` after create+login; played time is now persisted from the
+  wall clock, so it read 1 on a slow run. The test pins level and money only.
 - **live-ban-enforcement / WorldServiceCollectionExtensions.cs, WorldTestHost.cs, AccountTool**: all
   option bindings kept; `WorldTestHost.Start` takes both `configureServices` and `banOptions`; the
   account tool keeps main's no-echo credential reader and the lane's ban/unban/baninfo/banlist commands.

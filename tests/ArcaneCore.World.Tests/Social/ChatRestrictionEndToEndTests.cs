@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Chat;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Social;
@@ -24,17 +25,6 @@ public sealed class ChatRestrictionEndToEndTests
         var reader = new PacketReader(await client.ReadUntilAsync(WorldOpcode.SmsgNotification));
         return reader.ReadCString();
     }
-
-    [Fact]
-    public void TheGate_IsOfferedEveryMessageBeforeTheGuildAndChannelHandlers()
-    {
-        // Handlers run in feature-name order (docs/integration/seams.md), so the gate must sort first.
-        Type[] order = [.. WorldFeatureTypes().Where(t => typeof(IChatMessageHandler).IsAssignableFrom(t))];
-
-        Assert.True(Array.IndexOf(order, typeof(ChatRestrictionFeature)) < Array.IndexOf(order, typeof(SocialFeature)));
-    }
-
-    private static IEnumerable<Type> WorldFeatureTypes() => ArcaneCore.World.Features.WorldFeatures.FeatureTypes;
 
     [Fact]
     public async Task ElevenSaysInASecond_ArmTheFloodMute_AndTheTwelfthIsRefusedWithTheWaitNotice()
@@ -82,6 +72,8 @@ public sealed class ChatRestrictionEndToEndTests
             social.Context.Guilds.Create(2, "Arcane", out _);
             social.Context.Guilds.AdminInvite(3, "Arcane");
             host.WorldServices.GetRequiredService<ChatRestrictionFeature>().Service.Mute(2, clock.GetUtcNow().ToUnixTimeSeconds() + 300);
+            // Retail: a plain player can only whisper a staff member who accepts whispers (`.whispers on`, vmangos MasterPlayer::AcceptsWhispersFrom).
+            host.WorldServices.GetRequiredService<ChatFeature>().SetAcceptWhispers(host.World.FindOnlinePlayer("Keeper")!, true);
         });
         foreach (WorldTestClient client in new[] { gm, muted, friend })
         {

@@ -58,7 +58,7 @@ public sealed class BanCommandTests
         await host.AddAccountAsync("TARGET");
         await Drain(admin);
 
-        Assert.StartsWith("Incorrect syntax. .ban account:", await CommandAsync(admin, ".ban account target forever x"));
+        Assert.StartsWith("Syntax: .ban account", await CommandAsync(admin, ".ban account target forever x"));
         Assert.Equal("TARGET is banned for 1h. Reason: x.", await CommandAsync(admin, ".ban account target 1h x"));
     }
 
@@ -70,7 +70,7 @@ public sealed class BanCommandTests
         await Drain(admin);
 
         Assert.Equal("account NOBODY not found", await CommandAsync(admin, ".ban account nobody 1d spam"));
-        Assert.StartsWith("Incorrect syntax.", await CommandAsync(admin, ".ban account nobody 1d")); // no reason
+        Assert.StartsWith("Syntax: .ban account", await CommandAsync(admin, ".ban account nobody 1d")); // no reason
         Assert.Equal("Account not exist: ABCDEFGHIJKLMNOPQ", await CommandAsync(admin, ".ban account abcdefghijklmnopq 1d x")); // normalizeString fails
     }
 
@@ -126,7 +126,7 @@ public sealed class BanCommandTests
         await using WorldTestClient other = await host.EnterWorldAsync("OTHER", "Other");
         await Drain(admin, other);
 
-        Assert.StartsWith("Incorrect syntax.", await CommandAsync(admin, ".ban ip not-an-ip 1d x"));
+        Assert.StartsWith("Syntax: .ban ip", await CommandAsync(admin, ".ban ip not-an-ip 1d x"));
         Assert.Equal("127.0.0.1 is banned permanently for lan.", await CommandAsync(admin, ".ban ip 127.0.0.1 0 lan"));
 
         // Both clients connect from the loopback address; the invoker's own account is spared, the other is kicked.
@@ -145,7 +145,7 @@ public sealed class BanCommandTests
         await Drain(admin);
         await CommandAsync(admin, ".ban account lifted 1d x");
 
-        Assert.StartsWith("Incorrect syntax.", await CommandAsync(admin, ".unban account lifted")); // the message is required
+        Assert.StartsWith("Syntax: .unban account", await CommandAsync(admin, ".unban account lifted")); // the message is required
         Assert.Equal("LIFTED unbanned.", await CommandAsync(admin, ".unban account lifted appealed"));
         Assert.Equal("There was an error removing the ban on NOBODY.", await CommandAsync(admin, ".unban account nobody m"));
 
@@ -255,8 +255,8 @@ public sealed class BanCommandTests
         await host.AddAccountAsync("TARGET");
         await Drain(mod, gm);
 
-        // A visible parent with only hidden children answers with the subcommand list; either way the verb did not run.
-        static bool Refused(string reply) => reply.StartsWith("There is no such command", StringComparison.Ordinal) || reply.StartsWith("There is no such subcommand", StringComparison.Ordinal);
+        // A command above the invoker's level answers "This command is not available to you." (the GM lane's retail text; hidden-command mode answers "no such command"); either way the verb did not run.
+        static bool Refused(string reply) => reply.StartsWith("This command is not available to you", StringComparison.Ordinal) || reply.StartsWith("There is no such command", StringComparison.Ordinal) || reply.StartsWith("There is no such subcommand", StringComparison.Ordinal);
         Assert.True(Refused(await CommandAsync(mod, ".ban account target 1d x")));
         Assert.True(Refused(await CommandAsync(mod, ".baninfo ip 1.2.3.4")));
         Assert.True(Refused(await CommandAsync(mod, ".banlist ip")));
