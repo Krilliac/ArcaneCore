@@ -578,9 +578,14 @@ public sealed partial class SpellSystem
             return casterState;
         }
 
-        if (!triggered && (caster.UnitFlags & UnitFlags.Stunned) != 0 && spell.InterruptFlags.HasFlag(SpellInterruptFlags.Stun))
+        if (!triggered)
         {
-            return SpellCastResult.Stunned;
+            // The caster's own state (stun, confuse, fear, silence, pacify) and the immunity-granting-spell bypass (vmangos Spell::CheckCasterAuras).
+            SpellCastResult stateResult = Rules.Gating.CasterAuraGate.Check(this, caster, spell, CastTimeFor(caster, spell));
+            if (stateResult != SpellCastResult.CastOk)
+            {
+                return stateResult;
+            }
         }
 
         if (!triggered && strict && caster is Player mover && CastTimeFor(caster, spell) > 0
@@ -795,7 +800,7 @@ public sealed partial class SpellSystem
             return false;
         }
 
-        if (state.SchoolLockouts.TryGetValue(spell.School, out until) && until > now)
+        if (spell.PreventionType == SpellConstants.PreventionTypeSilence && state.SchoolLockouts.TryGetValue(spell.School, out until) && until > now)
         {
             return false;
         }

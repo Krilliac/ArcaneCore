@@ -1,11 +1,12 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells;
 
 /// <summary>The result of one direct spell damage application.</summary>
-public readonly record struct SpellDamageResult(uint Dealt, uint Resisted, bool Critical);
+public readonly record struct SpellDamageResult(uint Dealt, uint Resisted, bool Critical, uint Absorbed = 0);
 
 public sealed partial class SpellSystem
 {
@@ -64,17 +65,42 @@ public sealed partial class SpellSystem
         bool crit = allowCrit && amount > 0 && CombatRules.RollCrit(this, caster, target, spell);
         if (crit)
         {
-            amount = (uint)(amount * CombatRules.CritMultiplier(spell));
+            // Exact vmangos amount (talent bonus, creature-type multiplier) when the rules offer it; else the plain multiplier.
+            amount = CombatRules is Rules.ISpellCritAmounts exact
+                ? exact.CriticalDamage(this, caster, target, spell, amount)
+                : (uint)(amount * CombatRules.CritMultiplier(spell));
         }
 
-        uint resisted = Math.Min(amount, CombatRules.RollPartialResist(this, caster, target, spell, amount));
-        amount -= resisted;
+        uint resisted = ApplyResist(caster, target, spell, ref amount, periodic: false);
+        uint absorbed = AbsorbDamage(caster, target, spell.SchoolMask(), amount, spell); // shields, mana shield, split (Unit.cpp:1920-2200)
+        amount -= absorbed;
         uint dealt = Damage.DealSpellDamage(caster, target, spell, amount, periodic: false);
-        OnDamageTaken(target, caster, dealt, periodic: false);
+        OnDamageTaken(target, caster, dealt, periodic: false, absorbed);
         RecordDamage(caster, target, spell, dealt, crit);
         SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog, SpellPackets.BuildSpellNonMeleeDamageLog(
-            target.Guid, caster.Guid, spell.Id, dealt, spell.School, resisted: resisted, hitInfo: crit ? SpellHitTypeCrit : 0), includeSelf: true);
-        return new SpellDamageResult(dealt, resisted, crit);
+            target.Guid, caster.Guid, spell.Id, dealt, spell.School, absorbed: absorbed, resisted: resisted, hitInfo: crit ? SpellHitTypeCrit : 0), includeSelf: true);
+        return new SpellDamageResult(dealt, resisted, crit, absorbed);
+    }
+
+    /// <summary>
+    /// The resist step of <see cref="DealDirectDamage"/> and damage over time: a partial resist comes off
+    /// <paramref name="amount"/> and is returned; a vulnerability (negative resist) adds its extra damage to
+    /// <paramref name="amount"/> before absorbs see it (Unit.cpp:1948-1953, 2229-2232) and returns 0.
+    /// </summary>
+    private uint ApplyResist(Unit caster, Unit target, SpellInfo spell, ref uint amount, bool periodic)
+    {
+        int roll = CombatRules is ISpellResistRoll signed
+            ? signed.RollResist(this, caster, target, spell, amount, periodic)
+            : (int)Math.Min(CombatRules.RollPartialResist(this, caster, target, spell, amount), int.MaxValue);
+        if (roll < 0)
+        {
+            amount += (uint)-roll;
+            return 0;
+        }
+
+        uint resisted = Math.Min(amount, (uint)roll);
+        amount -= resisted;
+        return resisted;
     }
 
     /// <summary>
@@ -84,13 +110,32 @@ public sealed partial class SpellSystem
     /// progress is interrupted (SPELL_INTERRUPT_FLAG_ABORT_ON_DMG) or pushed back
     /// (SPELL_INTERRUPT_FLAG_PUSH_BACK) by direct damage only ("DoTs can't interrupt or delay");
     /// a channel is delayed (CHANNEL_FLAG_DELAY) or interrupted (CHANNEL_FLAG_DAMAGE). Self damage is ignored.
+    /// When nothing got through but <paramref name="absorbed"/> is positive, the damage == 0 branch applies
+    /// (Unit.cpp:733-746): damage-cancels auras still break and a player's damage-cancels cast is interrupted
+    /// (not by damage over time), but nothing is pushed back or delayed.
     /// </summary>
-    public void OnDamageTaken(Unit victim, Unit? attacker, uint damage, bool periodic)
+    public void OnDamageTaken(Unit victim, Unit? attacker, uint damage, bool periodic, uint absorbed = 0)
     {
         ArgumentNullException.ThrowIfNull(victim);
-        if (damage == 0 || ReferenceEquals(victim, attacker) || !victim.IsAlive || GetState(victim.Guid) is not { } state
+        if ((damage == 0 && absorbed == 0) || ReferenceEquals(victim, attacker) || !victim.IsAlive || GetState(victim.Guid) is not { } state
             || !ReferenceEquals(state.Unit, victim))
         {
+            return;
+        }
+
+        if (damage == 0)
+        {
+            foreach (SpellAuraHolder holder in state.Auras.Where(h => (h.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.Damage) != 0).ToArray())
+            {
+                RemoveHolder(state, holder);
+            }
+
+            if (!periodic && victim is Player && state.CurrentCast is { State: SpellCastState.Preparing } preparing
+                && preparing.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.DamageCancels))
+            {
+                Cancel(preparing); // "interrupt spells like trying to mount even through absorb shields"
+            }
+
             return;
         }
 
@@ -100,104 +145,8 @@ public sealed partial class SpellSystem
             RemoveHolder(state, holder);
         }
 
-        if (state.CurrentCast is not { } cast)
-        {
-            return;
-        }
-
-        if (cast.State == SpellCastState.Preparing)
-        {
-            if (periodic || cast.IsTriggered || cast.Timer <= 0)
-            {
-                return;
-            }
-
-            if (cast.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.DamageCancels))
-            {
-                Cancel(cast);
-            }
-            else if (cast.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.DamagePushback))
-            {
-                Delay(cast);
-            }
-        }
-        else if (cast.State == SpellCastState.Casting)
-        {
-            uint flags = (uint)cast.Spell.ChannelInterruptFlags;
-            if ((flags & SpellChannelInterruptFlags.Delay) != 0)
-            {
-                DelayChannel(cast);
-            }
-            else if ((flags & (SpellChannelInterruptFlags.Damage | SpellChannelInterruptFlags.Damage2)) != 0)
-            {
-                Cancel(cast);
-            }
-        }
-    }
-
-    /// <summary>
-    /// vmangos/cmangos-classic Spell::Delayed: push the cast bar back 500 ms, never beyond the full
-    /// cast time; SMSG_SPELL_DELAYED to the caster's set.
-    /// </summary>
-    private void Delay(SpellCast cast)
-    {
-        int delay = SpellConstants.PushbackMs;
-        if (cast.Timer + delay > cast.CastTime)
-        {
-            delay = cast.CastTime - cast.Timer;
-            cast.Timer = cast.CastTime;
-        }
-        else
-        {
-            cast.Timer += delay;
-        }
-
-        cast.PushbackCount++;
-        if (delay > 0)
-        {
-            SendToSet(cast.Caster, WorldOpcode.SmsgSpellDelayed, SpellPackets.BuildSpellDelayed(cast.Caster.Guid, (uint)delay), includeSelf: true);
-        }
-    }
-
-    /// <summary>
-    /// vmangos Spell::DelayedChannel: shorten the channel by 25% of its duration (at most what is
-    /// left), shorten its auras on the caster and target by the same amount, MSG_CHANNEL_UPDATE.
-    /// </summary>
-    private void DelayChannel(SpellCast cast)
-    {
-        int delay = Math.Max(0, cast.Spell.GetDuration()) * SpellConstants.ChannelPushbackPercent / 100;
-        if (cast.Timer <= delay)
-        {
-            delay = cast.Timer;
-            cast.Timer = 0;
-        }
-        else
-        {
-            cast.Timer -= delay;
-        }
-
-        cast.PushbackCount++;
-        Unit? target = ResolveUnitTarget(cast.Caster, cast.Targets);
-        foreach (Unit unit in target is null || ReferenceEquals(target, cast.Caster) ? [cast.Caster] : new[] { cast.Caster, target })
-        {
-            if (IsQuestSettlementPending(unit) || GetState(unit.Guid) is not { } state
-                || !ReferenceEquals(state.Unit, unit))
-            {
-                continue;
-            }
-
-            foreach (SpellAuraHolder holder in state.Auras.Where(h => h.Spell.Id == cast.Spell.Id
-                && h.CasterGuid == cast.Caster.Guid && ReferenceEquals(ResolveAuraCaster(h), cast.Caster) && !h.IsPermanent))
-            {
-                holder.Duration = Math.Max(0, holder.Duration - delay);
-                SendAuraDuration(holder);
-            }
-        }
-
-        if (cast.Caster is Player player)
-        {
-            player.Session.Send(WorldOpcode.MsgChannelUpdate, SpellPackets.BuildChannelUpdate((uint)cast.Timer));
-        }
+        // The cast or channel in progress: pushback, delay and damage cancels (retail rules in SpellSystem.Pushback.cs).
+        ApplyDamageToCurrentCast(victim, state, periodic);
     }
 
     /// <summary>
@@ -336,79 +285,6 @@ public sealed partial class SpellSystem
         float speed = unit.GetUInt32(timeIndex) / 1000.0f;
         float normalizedSpeed = NormalizedWeaponSpeed(unit, attack);
         return Math.Max(0f, roll + ((normalizedSpeed - speed) * attackPower / 14.0f));
-    }
-
-    /// <summary>
-    /// SPELL_EFFECT_DISPEL (vmangos Spell::EffectDispel, re-implemented): EffectMiscValue names the
-    /// dispel type (Spell.dbc Dispel: 1 magic, 2 curse, 3 disease, 4 poison); up to the effect
-    /// value (at least one) random matching auras are removed — harmful auras from a friend,
-    /// beneficial auras from an enemy. Dispel resistance and SMSG_SPELLDISPELLOG are not modelled.
-    /// </summary>
-    private void EffectDispel(SpellEffectContext context)
-    {
-        List<SpellAuraHolder> candidates = DispellableAuras(context.Caster, context.Target, (uint)context.Effect.MiscValue);
-        int count = Math.Max(1, context.Value);
-        if (GetState(context.Target.Guid) is not { } state)
-        {
-            return;
-        }
-
-        while (count-- > 0 && candidates.Count > 0)
-        {
-            int index = Random.Next(candidates.Count);
-            RemoveHolder(state, candidates[index]);
-            candidates.RemoveAt(index);
-        }
-    }
-
-    /// <summary>Auras on <paramref name="target"/> that a dispel of <paramref name="dispelType"/> by <paramref name="caster"/> may remove.</summary>
-    public List<SpellAuraHolder> DispellableAuras(Unit caster, Unit target, uint dispelType)
-    {
-        ArgumentNullException.ThrowIfNull(caster);
-        ArgumentNullException.ThrowIfNull(target);
-        bool friendly = Relations.IsFriendly(caster, target);
-        return [.. GetAuras(target).Where(h => !h.IsRemoved && !h.Spell.IsPassive && h.Spell.Dispel == dispelType && dispelType != 0
-            && h.IsPositive != friendly)];
-    }
-
-    /// <summary>
-    /// SPELL_EFFECT_INTERRUPT_CAST (vmangos Spell::EffectInterruptCast): a cast with a cast bar or a
-    /// channel whose PreventionType is SILENCE is interrupted, and the target cannot cast spells of
-    /// that school for this spell's duration (vmangos Unit::ProhibitSpellSchool); a player is told
-    /// with SMSG_SPELL_COOLDOWN for the interrupted spell.
-    /// </summary>
-    private void EffectInterruptCast(SpellEffectContext context)
-    {
-        Unit target = context.Target;
-        if (GetState(target.Guid) is not { CurrentCast: { } cast } state || !ReferenceEquals(state.Unit, target))
-        {
-            return;
-        }
-
-        bool interruptible = cast.State == SpellCastState.Casting || (cast.State == SpellCastState.Preparing && cast.CastTime > 0);
-        if (!interruptible || cast.Spell.PreventionType != SpellConstants.PreventionTypeSilence)
-        {
-            return;
-        }
-
-        int lockout = context.Spell.GetDuration();
-        if (lockout > 0)
-        {
-            state.SchoolLockouts[cast.Spell.School] = NowMs + (uint)lockout;
-            if (target is Player player)
-            {
-                player.Session.Send(WorldOpcode.SmsgSpellCooldown, SpellPackets.BuildSpellCooldown(player.Guid, [(cast.Spell.Id, (uint)lockout)]));
-            }
-        }
-
-        Cancel(cast);
-    }
-
-    /// <summary>Whether <paramref name="unit"/> is locked out of <paramref name="school"/> by an interrupt.</summary>
-    public bool IsSchoolLocked(Unit unit, SpellSchool school)
-    {
-        ArgumentNullException.ThrowIfNull(unit);
-        return GetState(unit.Guid) is { } state && state.SchoolLockouts.TryGetValue(school, out uint until) && until > NowMs;
     }
 
     /// <summary>

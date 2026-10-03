@@ -257,12 +257,9 @@ public static class SpellConstants
     /// <summary>Eye height added to both ends of a line-of-sight query (vmangos WorldObject::IsWithinLOSInMap: + 2.0 yd).</summary>
     public const float LineOfSightHeight = 2.0f;
 
-    /// <summary>Cast-bar pushback per hit (vmangos/cmangos-classic Spell::Delayed: 500 ms).</summary>
-    public const int PushbackMs = 500;
-
-    /// <summary>Channel pushback per hit, percent of the channel duration (vmangos Spell::DelayedChannel: 25%).</summary>
-    public const int ChannelPushbackPercent = 25;
-
     /// <summary>Spell.dbc PreventionType SPELL_PREVENTION_TYPE_SILENCE (interruptible by SPELL_EFFECT_INTERRUPT_CAST).</summary>
     public const uint PreventionTypeSilence = 1;
+
+    /// <summary>Spell.dbc PreventionType SPELL_PREVENTION_TYPE_PACIFY (vmangos SpellDefines.h:234-236): blocked while pacified.</summary>
+    public const uint PreventionTypePacify = 2;
 }

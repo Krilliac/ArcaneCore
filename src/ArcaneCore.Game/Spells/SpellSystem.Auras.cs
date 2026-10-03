@@ -1,5 +1,8 @@
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules;
+using ArcaneCore.Game.Spells.Rules.CrowdControl;
+using ArcaneCore.Game.Spells.Rules.Immunity;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells;
@@ -28,9 +31,10 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// The first aura set (vmangos SpellAuras.cpp AuraHandler table): periodic damage/heal/energize,
-    /// OBS_MOD_HEALTH/MANA, PERIODIC_TRIGGER_SPELL, DUMMY, MOD_ROOT and MOD_STUN.
+    /// OBS_MOD_HEALTH/MANA, PERIODIC_TRIGGER_SPELL and DUMMY, plus the crowd-control handlers installed by
+    /// <see cref="CcAuraHandlers"/> (root, stun, silence, pacify, disarm, fear, confuse).
     /// </summary>
-    private static Dictionary<AuraType, AuraHandler> CreateAuraHandlers() => new()
+    private static Dictionary<AuraType, AuraHandler> CreateAuraHandlers() => ImmunityAuraHandlers.Install(CcAuraHandlers.Install(new()
     {
         [AuraType.Dummy] = new AuraHandler(null, null),
         [AuraType.PeriodicDamage] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicDamage(h, a)),
@@ -40,9 +44,7 @@ public sealed partial class SpellSystem
         [AuraType.PeriodicEnergize] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicEnergize(h, a)),
         [AuraType.ObsModMana] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicEnergize(h, a)),
         [AuraType.PeriodicTriggerSpell] = new AuraHandler(null, static (s, h, a) => s.TickTriggerSpell(h, a)),
-        [AuraType.ModRoot] = new AuraHandler(static (s, h, a, apply) => s.ApplyRoot(h, apply), null),
-        [AuraType.ModStun] = new AuraHandler(static (s, h, a, apply) => s.ApplyStun(h, apply), null),
-    };
+    }));
 
     /// <summary>vmangos Spell::EffectApplyAura: add this effect's aura to the target's pending holder.</summary>
     private void EffectApplyAura(SpellEffectContext context)
@@ -121,6 +123,8 @@ public sealed partial class SpellSystem
         {
             AuraHandlers.GetValueOrDefault(aura.Type)?.Apply?.Invoke(this, holder, aura, true);
         }
+
+        RaiseHolderAdded(holder);
     }
 
     /// <summary>Remove every aura of <paramref name="spellId"/> from <paramref name="target"/> (vmangos Unit::RemoveAurasDueToSpell).</summary>
@@ -236,6 +240,8 @@ public sealed partial class SpellSystem
         {
             AuraHandlers.GetValueOrDefault(aura.Type)?.Apply?.Invoke(this, holder, aura, false);
         }
+
+        RaiseHolderRemoved(holder);
 
         if (holder.AreaParent is { } parent && parent.AreaChildren.TryGetValue(holder.Target.Guid, out SpellAuraHolder? child)
             && ReferenceEquals(child, holder))
@@ -369,12 +375,20 @@ public sealed partial class SpellSystem
             ? (uint)((ulong)target.MaxHealth * (uint)aura.Amount / 100)
             : (uint)aura.Amount;
         Unit caster = ResolveAuraCaster(holder) ?? target;
-        uint resisted = Math.Min(amount, CombatRules.RollPartialResist(this, caster, target, holder.Spell, amount));
-        amount -= resisted;
+        if (ImmunityRules.IsImmuneToDamage(this, target, holder.Spell.SchoolMask(), holder.Spell))
+        {
+            // vmangos Aura::PeriodicTick: an immune target takes nothing and the client is told (SpellAuras.cpp:5839-5841).
+            SendToSet(caster, WorldOpcode.SmsgSpellordamageImmune, SpellRulePackets.BuildSpellOrDamageImmune(caster.Guid, target.Guid, holder.Spell.Id), includeSelf: true);
+            return;
+        }
+
+        uint resisted = ApplyResist(caster, target, holder.Spell, ref amount, periodic: true);
+        uint absorbed = AbsorbDamage(caster, target, holder.Spell.SchoolMask(), amount, holder.Spell);
+        amount -= absorbed;
         uint dealt = Damage.DealSpellDamage(caster, target, holder.Spell, amount, periodic: true);
-        OnDamageTaken(target, caster, dealt, periodic: true);
+        OnDamageTaken(target, caster, dealt, periodic: true, absorbed);
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
-            target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, dealt, (uint)holder.Spell.School, Resisted: resisted)), includeSelf: true);
+            target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, dealt, (uint)holder.Spell.School, Absorbed: absorbed, Resisted: resisted)), includeSelf: true);
     }
 
     /// <summary>
@@ -429,51 +443,5 @@ public sealed partial class SpellSystem
         {
             CastSpell(caster, triggerSpell, SpellCastTargets.ForUnit(holder.Target.Guid), triggered: true);
         }
-    }
-
-    /// <summary>
-    /// vmangos Aura::HandleAuraModRoot → Unit::SetRooted: players get SMSG_FORCE_MOVE_ROOT/UNROOT
-    /// through <see cref="Player.SetRooted"/>; the root lifts when the last root/stun aura goes,
-    /// except on a dead player, whose root belongs to MapCombat (set on JUST_DIED, lifted by release
-    /// or resurrection).
-    /// </summary>
-    private void ApplyRoot(SpellAuraHolder holder, bool apply)
-    {
-        if (holder.Target is not Player player)
-        {
-            return;
-        }
-
-        if (apply)
-        {
-            player.SetRooted(true);
-        }
-        else if (player.IsAlive && !GetAuras(player).Any(h => !h.IsRemoved && (h.HasAura(AuraType.ModRoot) || h.HasAura(AuraType.ModStun))))
-        {
-            player.SetRooted(false);
-        }
-    }
-
-    /// <summary>
-    /// vmangos Aura::HandleAuraModStun → Unit::SetStunned (subset): UNIT_FLAG_STUNNED, rooted,
-    /// and the cast in progress is interrupted; lifted with the last stun aura.
-    /// </summary>
-    private void ApplyStun(SpellAuraHolder holder, bool apply)
-    {
-        Unit target = holder.Target;
-        if (apply)
-        {
-            target.UnitFlags |= UnitFlags.Stunned;
-            if (GetState(target.Guid)?.CurrentCast is { } cast)
-            {
-                Cancel(cast);
-            }
-        }
-        else if (!GetAuras(target).Any(h => !h.IsRemoved && h.HasAura(AuraType.ModStun)))
-        {
-            target.UnitFlags &= ~UnitFlags.Stunned;
-        }
-
-        ApplyRoot(holder, apply);
     }
 }

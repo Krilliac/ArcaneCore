@@ -167,7 +167,7 @@ public sealed class SpellSettlementFreezeTests
 
         kit.System.OnDamageTaken(caster, attacker, 5, periodic: false);
 
-        Assert.Equal(6000, cast.Timer);
+        Assert.Equal(7000, cast.Timer);
         Assert.Equal(1, cast.PushbackCount);
         Assert.Equal(8000, holder.Duration);
         Assert.Same(holder, Assert.Single(kit.System.GetAuras(target)));
@@ -181,7 +181,7 @@ public sealed class SpellSettlementFreezeTests
         Assert.Equal(7900, holder.Duration); // Resumes without catching up held time.
         targetSession.Clear();
         kit.System.OnDamageTaken(caster, attacker, 5, periodic: false);
-        Assert.Equal(5900, holder.Duration);
+        Assert.Equal(7100, holder.Duration);
         Assert.Single(Packets(targetSession, WorldOpcode.SmsgUpdateAuraDuration));
     }
 
@@ -208,7 +208,7 @@ public sealed class SpellSettlementFreezeTests
 
         kit.System.OnDamageTaken(replacement, attacker, 5, periodic: false);
 
-        Assert.Equal(6000, freshCast.Timer);
+        Assert.Equal(7000, freshCast.Timer);
         Assert.Equal(8000, orphan.Duration);
         Assert.False(orphan.IsRemoved);
         Assert.Same(target, kit.System.ResolveAuraActor(orphan));

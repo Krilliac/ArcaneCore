@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules.Application;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells;
@@ -108,6 +109,23 @@ public sealed partial class SpellSystem
             return null;
         }
 
+        // Application rules (mechanic resistance, diminishing returns): they narrow the effect mask before any effect runs.
+        SpellApplication? application = null;
+        if (ApplicationRules.Count > 0)
+        {
+            application = new SpellApplication(this, cast, target, effectMask);
+            foreach (ISpellApplicationRule rule in ApplicationRules)
+            {
+                rule.Begin(application);
+            }
+
+            effectMask = application.EffectMask;
+            if (effectMask == 0)
+            {
+                return null;
+            }
+        }
+
         // Damage and healing dealt by the effect handlers is credited to this target's outcome; a nested
         // triggered cast builds its own and restores ours.
         var outcome = new OutcomeBuilder(cast, target, effectMask);
@@ -142,7 +160,9 @@ public sealed partial class SpellSystem
                 holder = context.PendingHolder;
             }
 
-            if (holder is not null && !holder.IsEmpty)
+            // The application rules (diminishing returns, ...) may drop the holder; its non-aura effects already ran.
+            if (holder is not null && !holder.IsEmpty
+                && (application is null || ApplicationRules.All(rule => rule.AcceptHolder(application, holder))))
             {
                 AddAuraHolder(holder);
             }
@@ -199,7 +219,10 @@ public sealed partial class SpellSystem
         bool crit = CombatRules.RollCrit(this, context.Caster, context.Target, context.Spell);
         if (crit)
         {
-            amount = (uint)(amount * CombatRules.CritMultiplier(context.Spell));
+            // Exact vmangos amount (+50% / creature-type multiplier) when the rules offer it; else the plain multiplier.
+            amount = CombatRules is Rules.ISpellCritAmounts exact
+                ? exact.CriticalHeal(this, context.Caster, context.Target, context.Spell, amount)
+                : (uint)(amount * CombatRules.CritMultiplier(context.Spell));
         }
 
         uint healed = Damage.Heal(context.Caster, context.Target, context.Spell, amount);

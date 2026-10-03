@@ -149,7 +149,7 @@ public sealed class SpellPersistenceWorldTests
         });
 
         Assert.InRange(before, 1, 2500);
-        Assert.Equal(before + 500, after);
+        Assert.Equal(before + 1000, after); // the first pushback of a cast is 1000 ms (vmangos Spell::GetNextDelayAtDamageMsTime)
         Assert.Equal(1, pushbacks);
     }
 
