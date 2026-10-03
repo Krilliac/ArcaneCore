@@ -13,6 +13,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Baselines/*.sql" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\ArcaneCore.Data\ArcaneCore.Data.csproj" />
   </ItemGroup>
 

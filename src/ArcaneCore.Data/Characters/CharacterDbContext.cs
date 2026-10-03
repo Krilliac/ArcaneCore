@@ -39,6 +39,12 @@ public sealed class AccountTutorialRow
 /// <summary>EF Core context for the characters database (one per realm).</summary>
 public sealed class CharacterDbContext(DbContextOptions<CharacterDbContext> options) : DbContext(options)
 {
+    /// <summary>
+    /// The characters version of the forward index repair (the single constant the lead renumbers at merge time,
+    /// docs/integration/seams.md). Tests refer to it or to <c>Schema.CurrentVersion</c>, never to a literal.
+    /// </summary>
+    public const int IndexRepairVersion = 11;
+
     /// <summary>Schema history of the characters database.</summary>
     /// <remarks>Later versions come from <see cref="IDataModule"/>s of <see cref="DatabaseComponent.Characters"/>.</remarks>
     public static readonly SchemaDefinition Schema = DataModules.Compose(
@@ -60,6 +66,21 @@ public sealed class CharacterDbContext(DbContextOptions<CharacterDbContext> opti
                 new CreateTableChange("character_action"),
                 new CreateTableChange("account_data"),
                 new CreateTableChange("account_tutorial"),
+            ]),
+
+            // Forward index repair: tables created by upgrade steps before the bootstrapper carried the
+            // model's indexes. Owned by this context, not by a feature module: it owns no rows, so it has no
+            // character-deletion cleanup to register (docs/integration/schema-index-repair.md).
+            new SchemaStep(IndexRepairVersion,
+            [
+                new EnsureIndexesChange("characters"),
+                new EnsureIndexesChange("item_instance"),
+                new EnsureIndexesChange("character_inventory"),
+                new EnsureIndexesChange("guild_member"),
+                new EnsureIndexesChange("instance"),
+                new EnsureIndexesChange("character_instance"),
+                new EnsureIndexesChange("mail"),
+                new EnsureIndexesChange("auction"),
             ]),
         ]);
 
