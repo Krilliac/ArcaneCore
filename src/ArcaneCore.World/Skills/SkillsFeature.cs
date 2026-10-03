@@ -101,6 +101,7 @@ public sealed class SkillsFeature : IWorldFeature, ISpellbookLoadObserver, IChar
         Catalog = catalog;
         _proficiencies = ReadProficiencies(spellRows);
         IsActive = true;
+        _services.GetService<ArcaneCore.World.Npc.ConditionFeature>()?.RefreshCollaborators(); // SKILL / SKILL_BELOW conditions can be decided now
 
         RegisterEffects(_spells.System);
         new GatheringSpells(_services, this).Register(_spells.System);

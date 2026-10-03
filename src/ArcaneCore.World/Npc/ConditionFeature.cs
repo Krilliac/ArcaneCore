@@ -8,6 +8,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Reputation;
+using ArcaneCore.World.Skills;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -45,6 +46,7 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
 {
     private ConditionEvaluator _current = new(ConditionTable.Empty, new ConditionContext());
     private WorldRuntime? _world;
+    private ConditionTable? _table;
 
     public ConditionOptions Options { get; } = new();
 
@@ -67,14 +69,39 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
         }
 
         ConditionTable table = ConditionTable.Build(records);
-        var evaluator = new ConditionEvaluator(table, BuildContext(world));
-        Volatile.Write(ref _current, evaluator);
+        _table = table;
+        Install(world, table);
         foreach (ConditionRejection rejection in table.Rejected.Take(20))
         {
             logger.LogWarning("Condition {Entry} (type {Type}) skipped: {Reason}", rejection.Entry, rejection.Type, rejection.Reason);
         }
 
-        ConditionSummary summary = evaluator.Summarize();
+        LogSummary(table);
+    }
+
+    /// <summary>
+    /// Build the evaluator over <paramref name="table"/> with the collaborators the daemon has right now. A feature that attaches
+    /// after this one and becomes a collaborator (the skills feature, which needs its content loaded first) calls
+    /// <see cref="RefreshCollaborators"/>.
+    /// </summary>
+    private void Install(WorldRuntime world, ConditionTable table)
+        => Volatile.Write(ref _current, new ConditionEvaluator(table, BuildContext(world)));
+
+    /// <summary>Rebuild the evaluator over the loaded table once a collaborator became available after <see cref="Attach"/>.</summary>
+    public void RefreshCollaborators()
+    {
+        if (_world is null || _table is null)
+        {
+            return;
+        }
+
+        Install(_world, _table);
+        LogSummary(_table);
+    }
+
+    private void LogSummary(ConditionTable table)
+    {
+        ConditionSummary summary = Current.Summarize();
         logger.LogInformation(
             "Conditions: {Rows} rows loaded, {Rejected} rejected, {Evaluable} decidable; undecidable leaf rows by type (they fail closed): {Unavailable}",
             table.Count, table.Rejected.Count, summary.Evaluable,
@@ -92,8 +119,12 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
             ItemCount = (player, item, bank) => player.Inventory.GetItemCount(item, bank),
             HasSpell = (player, spell) => services.GetService<SpellFeature>()?.System.Spellbook?.HasSpell(player, spell) ?? false,
 
-            // No skills owner exists (docs/integration/npc-services.md): SkillValueBase stays unset so the
-            // skill conditions fail closed and are counted, instead of reading "no skill" for everyone.
+            // Player::GetSkillValueBase from the skills feature, once it is active (it attaches after this feature and then
+            // calls RefreshCollaborators). Without active skills (Legacy mode or no skill content) SkillValueBase stays unset,
+            // so SKILL and SKILL_BELOW fail closed and are counted, instead of reading "no skill" for everyone.
+            SkillValueBase = services.GetService<SkillsFeature>() is { IsActive: true }
+                ? (player, skill) => player.Skills?.GetValueBase(skill) ?? (ushort)0
+                : null,
             FactionExists = ranked is null ? null : faction => ranked.Factions.Find(faction) is not null,
             ReputationRank = ranked is null ? null : (player, faction) => (byte)ranked.GetRank(player, faction),
             ZoneAndArea = (mapId, x, y, z) => world.Maps.FirstOrDefault(m => m.MapId == mapId)?.GetZoneAndAreaId(x, y, z) ?? (0u, 0u),

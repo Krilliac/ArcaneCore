@@ -83,8 +83,9 @@ adds them.
 
 ## Limits (honest)
 
-- **Skills:** there is no skills owner, so every skill value reads 0. Trainer rows with a
-  required skill stay red, and primary-profession points don't exist. spell_chain `req_spell`
+- **Skills:** the skills feature is the owner when it is active (`SkillsFeature.IsActive`); without skill
+  content (or in `Skills:Mode=Legacy`) players have no `Skills`, every skill value reads 0 for trainers, and
+  the skill conditions fail closed. spell_chain `req_spell`
   (talent-dependent ranks) is not modelled; only the SkillLineAbility forward chain is.
 - **Bank bag slots:** the count isn't persisted (no characters column), so CMSG_BUY_BANK_SLOT
   is refused unless a persistence callback is wired. That needs a characters schema version.
