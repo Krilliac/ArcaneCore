@@ -131,7 +131,7 @@ public sealed partial class EconomyFeature
             ExpireTime = Now + (minutes * 60L),
             Deposit = deposit,
         };
-        bool started = Start([actor], [new EscrowFromInventory(IdOf(player), data), new InsertAuction(auction)], outcome =>
+        RunAuctionOperation([actor], [new EscrowFromInventory(IdOf(player), data), new InsertAuction(auction)], auction.Id, outcome =>
         {
             if (outcome == EconomyOutcome.After)
             {
@@ -144,10 +144,6 @@ public sealed partial class EconomyFeature
                 Fail(AuctionError.Database);
             }
         });
-        if (!started)
-        {
-            Fail(AuctionError.Database);
-        }
     }
 
     /// <summary>CMSG_AUCTION_PLACE_BID (vmangos HandleAuctionPlaceBid): a bid, or a buyout that ends the auction.</summary>
@@ -422,7 +418,7 @@ public sealed partial class EconomyFeature
         }
     }
 
-    private void RunAuctionOperation(IReadOnlyList<EconomyActor> actors, IReadOnlyList<EconomyChange> changes, uint auctionId,
+    internal void RunAuctionOperation(IReadOnlyList<EconomyActor> actors, IReadOnlyList<EconomyChange> changes, uint auctionId,
         Action<EconomyOutcome> finished)
     {
         if (!_busyAuctions.Add(auctionId))
@@ -433,7 +429,14 @@ public sealed partial class EconomyFeature
 
         bool started = Start(actors, changes, outcome =>
         {
-            _busyAuctions.Remove(auctionId);
+            if (outcome == EconomyOutcome.Unknown)
+            {
+                QuarantineAuction(auctionId, changes);
+            }
+            else
+            {
+                _busyAuctions.Remove(auctionId);
+            }
             finished(outcome);
         });
         if (!started)
@@ -444,7 +447,8 @@ public sealed partial class EconomyFeature
     }
 
     private IEnumerable<AuctionView> HouseAuctions(uint houseId, long now)
-        => _auctions.Values.Where(v => v.Auction.HouseId == houseId && v.Auction.ExpireTime > now).OrderBy(v => v.Auction.Id);
+        => _auctions.Values.Where(v => v.Auction.HouseId == houseId && v.Auction.ExpireTime > now
+            && !_auctionRecoveries.ContainsKey(v.Auction.Id)).OrderBy(v => v.Auction.Id);
 
     private void SendPage(WorldSession session, WorldOpcode opcode, IEnumerable<AuctionView> auctions, uint listFrom)
     {

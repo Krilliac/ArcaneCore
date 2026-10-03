@@ -48,11 +48,12 @@ public sealed partial class EconomyFeature : ICharacterDeleteHook
     }
 
     /// <summary>World thread: apply the deletion cleanup to the caches.</summary>
-    private void ResyncDeletedCharacter(int id, IReadOnlyList<AuctionRecord> sold, IReadOnlyDictionary<uint, ItemInstanceData> items,
+    internal void ResyncDeletedCharacter(int id, IReadOnlyList<AuctionRecord> sold, IReadOnlyDictionary<uint, ItemInstanceData> items,
         IReadOnlyList<MailRecord> letters)
     {
         _mailboxes.Remove(id);
         Dictionary<uint, AuctionRecord> stillSold = sold.ToDictionary(a => a.Id);
+        InvalidateDeletedAuctionRecoveries(id, stillSold);
         foreach (AuctionView view in _auctions.Values.Where(v => v.Auction.SellerId == id || v.Auction.BidderId == id).ToList())
         {
             AuctionRecord auction = view.Auction;
@@ -73,6 +74,7 @@ public sealed partial class EconomyFeature : ICharacterDeleteHook
             }
         }
 
+        RecoverAuctions();
         long now = Now;
         foreach (IGrouping<int, MailRecord> byReceiver in letters.Where(m => m.ReceiverId != id).GroupBy(m => m.ReceiverId))
         {
