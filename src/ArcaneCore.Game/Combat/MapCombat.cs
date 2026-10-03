@@ -1,7 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
-using ArcaneCore.Game.Updates;
 using ArcaneCore.Protocol;
+using MapGrid = ArcaneCore.Game.Maps.Grid.Grid;
 
 namespace ArcaneCore.Game.Combat;
 
@@ -25,7 +25,7 @@ public sealed partial class MapCombat : IMapUpdater
     private readonly WorldRuntime _world;
     private readonly HashSet<Unit> _units = [];
     private readonly List<Corpse> _corpses = [];
-    private readonly HashSet<ObjectGuid> _newCorpses = [];
+    private readonly Dictionary<Corpse, MapGrid> _corpseGrids = [];
     private CombatHooks? _hooks;
     private long _elapsedMs;
 
@@ -33,9 +33,21 @@ public sealed partial class MapCombat : IMapUpdater
     {
         _map = map;
         _world = world;
+        map.Grids.GridUnloading += grid =>
+        {
+            foreach (Corpse corpse in _corpses.Where(c => ReferenceEquals(_corpseGrids.GetValueOrDefault(c), grid)).ToArray())
+            {
+                if (world.FindOnlinePlayer(corpse.Owner) is { } owner && ReferenceEquals(owner.Combat.Corpse, corpse))
+                {
+                    owner.Combat.Corpse = null;
+                }
+
+                RemoveCorpse(corpse);
+            }
+        };
         world.PlayerLoggingOut += player =>
         {
-            if (ReferenceEquals(player.Map, _map))
+            if (ReferenceEquals(player.Map, _map) || ReferenceEquals(player.Combat.Corpse?.Map, _map))
             {
                 OnPlayerLeaving(player);
             }
@@ -73,6 +85,11 @@ public sealed partial class MapCombat : IMapUpdater
     /// <summary>A unit in this map by GUID: players, tracked units, then <see cref="CombatHooks.FindUnit"/>.</summary>
     public Unit? FindUnit(ObjectGuid guid)
     {
+        if (_map.FindObject(guid) is Unit registered)
+        {
+            return registered;
+        }
+
         if (_map.FindPlayer(guid) is { } player)
         {
             return player;
@@ -93,11 +110,10 @@ public sealed partial class MapCombat : IMapUpdater
     void IMapUpdater.Update(Map map, uint diffMs) => Update(diffMs);
 
     /// <summary>
-    /// The player is leaving the map. Logout already ran <see cref="OnPlayerLeaving"/> from
-    /// <see cref="WorldRuntime.PlayerLoggingOut"/> while the player was still in the map; this
-    /// repeat is a no-op then and covers any other way out of the map.
+    /// Map departure detaches fights but keeps the body reclaimable across a far teleport.
+    /// Actual logout removes the corpse through <see cref="WorldRuntime.PlayerLoggingOut"/>.
     /// </summary>
-    void IMapUpdater.OnPlayerRemoved(Map map, Player player) => OnPlayerLeaving(player);
+    void IMapUpdater.OnPlayerRemoved(Map map, Player player) => DetachRelations(player);
 
     /// <summary>One combat step (run by <see cref="Map.Update"/> through <see cref="IMapUpdater"/>).</summary>
     public void Update(uint diffMs)
@@ -127,7 +143,6 @@ public sealed partial class MapCombat : IMapUpdater
             }
         }
 
-        UpdateCorpseVisibility();
     }
 
     private void UpdateUnit(Unit unit, uint diff)
@@ -200,6 +215,9 @@ public sealed partial class MapCombat : IMapUpdater
         c.Tracker = null;
     }
 
+    /// <summary>Detach a despawning unit before the map removes its object and observer ownership.</summary>
+    public void Untrack(Unit unit) => Forget(unit);
+
     /// <summary>
     /// A player is leaving the world (logout or disconnect; vmangos WorldSession::LogoutPlayer →
     /// CombatStop / RemoveFromWorld): stop its fights, drop it from every threat list and take
@@ -234,6 +252,8 @@ public sealed partial class MapCombat : IMapUpdater
         {
             c.Threat.Clear();
         }
+
+        ClearInCombat(unit);
     }
 
     // --- helpers ------------------------------------------------------------------
@@ -306,62 +326,34 @@ public sealed partial class MapCombat : IMapUpdater
 
     private void AddCorpse(Corpse corpse)
     {
-        corpse.Map = _map;
+        _map.AddObject(corpse, isNewObject: true);
         _corpses.Add(corpse);
-        _newCorpses.Add(corpse.Guid);
+        Maps.Grid.CellCoord cell = _map.Grids.CellOf(corpse)!.Value;
+        MapGrid grid = _map.Grids.GetGrid(cell.Grid)!;
+        // The body must remain reclaimable after the ghost leaves its grid. Until corpse
+        // persistence exists, hold the grid's existing unload lock while its owner is online.
+        grid.IncrementUnloadActiveLock();
+        _corpseGrids.Add(corpse, grid);
     }
 
     private void RemoveCorpse(Corpse corpse)
     {
+        if (corpse.Map is { } ownerMap && !ReferenceEquals(ownerMap, _map))
+        {
+            ownerMap.Combat.RemoveCorpse(corpse);
+            return;
+        }
+
         if (!_corpses.Remove(corpse))
         {
             return;
         }
 
-        _newCorpses.Remove(corpse.Guid);
-        foreach (Player viewer in _map.Players)
+        if (_corpseGrids.Remove(corpse, out MapGrid? grid))
         {
-            if (viewer.VisibleObjects.Remove(corpse.Guid))
-            {
-                // Queued with the viewer's other blocks so it cannot overtake a pending create.
-                viewer.PendingUpdates.AddOutOfRange(corpse.Guid);
-            }
+            grid.DecrementUnloadActiveLock();
         }
 
-        corpse.Map = null;
-    }
-
-    /// <summary>Create / out-of-range corpse blocks for every player (vmangos Player::UpdateVisibilityOf for corpses).</summary>
-    private void UpdateCorpseVisibility()
-    {
-        if (_corpses.Count == 0)
-        {
-            return;
-        }
-
-        uint now = _world.NowMs;
-        foreach (Corpse corpse in _corpses)
-        {
-            bool isNew = _newCorpses.Contains(corpse.Guid);
-            foreach (Player viewer in _map.Players)
-            {
-                bool visible = viewer.VisibleObjects.Contains(corpse.Guid);
-                bool inRange = Map.IsWithinVisibilityDistance(viewer, corpse, visible);
-                if (visible && !inRange)
-                {
-                    viewer.VisibleObjects.Remove(corpse.Guid);
-                    viewer.PendingUpdates.AddOutOfRange(corpse.Guid);
-                }
-                else if (!visible && inRange)
-                {
-                    viewer.VisibleObjects.Add(corpse.Guid);
-                    PacketWriter block = viewer.PendingUpdates.BeginBlock();
-                    UpdateBlockWriter.WriteCreateBlock(block, corpse, viewer, isNew, now);
-                    viewer.PendingUpdates.EndBlock();
-                }
-            }
-        }
-
-        _newCorpses.Clear();
+        _map.RemoveObject(corpse);
     }
 }

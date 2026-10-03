@@ -1,8 +1,9 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
-using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using MapGrid = ArcaneCore.Game.Maps.Grid.Grid;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -13,15 +14,14 @@ namespace ArcaneCore.Game.Creatures;
 /// unloaded after they leave, per-player visibility, death/corpse/respawn timers and idle
 /// movement. Attached to its <see cref="Map"/> as an <see cref="IMapUpdater"/>.
 /// <para>
-/// Each update runs (0) catch-up moves for clients that received a moving creature's create
-/// block last tick, (1) grid load/unload, (2) creature timers and movement, (3) visibility —
-/// all before the map's values/flush phases, so the blocks queued here go out this tick.
+/// Each update advances catch-up splines, creature timers and idle movement. The map owns
+/// grid lifecycle, visibility and values/flush; observer snapshots after its flush schedule
+/// catch-up moves for the next tick, after a creature's create block reached the client.
 /// </para>
 /// <para>
 /// Grids follow vmangos GridDefines.h (64×64 grids of 533.33333 yd, ComputeGridPair). Within a
-/// grid the visit is a plain list (vmangos further splits a grid into 16×16 cells, cmangos into
-/// 8×8; the cell index belongs to the grid/map area). Visibility uses
-/// <see cref="Map.IsWithinVisibilityDistance"/>, the same rule players use.
+/// grid spawn bookkeeping is a plain list; live objects use the map's shared cell index.
+/// The map's grid load/unload events and World:Maps configuration own their lifecycle.
 /// </para>
 /// Thread affinity: world thread only.
 /// </summary>
@@ -39,12 +39,6 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
     /// <summary>vmangos CENTER_GRID_OFFSET.</summary>
     public const float CenterGridOffset = SizeOfGrids / 2;
 
-    /// <summary>
-    /// Extra distance around a player's visibility range within which grids are kept loaded and
-    /// searched, so creatures that wander out of their home grid are still found.
-    /// </summary>
-    public const float GridSearchMargin = 50f;
-
     private readonly CreatureContent _content;
     private readonly CreatureOptions _options;
     private readonly ICreatureHeightProvider _height;
@@ -59,7 +53,6 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
     private readonly Dictionary<Player, HashSet<Creature>> _seen = [];
     private readonly List<(Player Viewer, Creature Creature, uint SplineId)> _catchUp = [];
     private readonly HashSet<uint> _warnedMissingTemplates = [];
-    private readonly List<GridCoord> _scratchGrids = [];
     private readonly List<Creature> _scratchCreatures = [];
 
     private long _clockMs;
@@ -75,7 +68,7 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
         Map = map;
         _content = content;
         _options = options ?? new CreatureOptions();
-        _height = height ?? NoTerrainHeight.Instance;
+        _height = height ?? new MapCreatureHeightProvider(map);
         _random = random ?? new Random();
         _serverTime = serverTime ?? (() => unchecked((uint)_clockMs));
         _logger = logger ?? NullLogger.Instance;
@@ -95,6 +88,16 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
 
         // Runtime spawns (GM .npc add, summons) take counters above the database spawns.
         _nextTemporaryCounter = maxGuid + 1;
+
+        Map.Grids.GridLoaded += grid => LoadGrid(new GridCoord(grid.Coord.X, grid.Coord.Y));
+        Map.Grids.GridUnloading += OnMapGridUnloading;
+        foreach (MapGrid grid in Map.Grids.LoadedGrids.ToArray())
+        {
+            if (grid.ObjectDataLoaded)
+            {
+                LoadGrid(new GridCoord(grid.Coord.X, grid.Coord.Y));
+            }
+        }
     }
 
     public Map Map { get; }
@@ -141,9 +144,8 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
 
         _clockMs += diffMs;
         SendCatchUpMoves();
-        UpdateGrids();
         UpdateCreatures(diffMs);
-        UpdateVisibility();
+        Map.RunAfterUpdate(CaptureNewObservers);
     }
 
     public void OnPlayerRemoved(Map map, Player player)
@@ -162,6 +164,17 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
     public void KillCreature(Creature creature)
     {
         ArgumentNullException.ThrowIfNull(creature);
+        if (creature.DeathState != CreatureDeathState.Alive || !_creatures.ContainsKey(creature.Guid))
+        {
+            return;
+        }
+
+        Map.Combat.Kill(null, creature);
+    }
+
+    /// <summary>Called by combat once death has stopped the unit's fights and cleared threat.</summary>
+    internal void OnCreatureDied(Creature creature)
+    {
         if (creature.DeathState != CreatureDeathState.Alive || !_creatures.ContainsKey(creature.Guid))
         {
             return;
@@ -226,7 +239,6 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
             return;
         }
 
-        HideFromAll(creature);
         foreach (LoadedGrid grid in _grids.Values)
         {
             grid.Creatures.Remove(creature);
@@ -306,101 +318,57 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
         _catchUp.Clear();
     }
 
-    /// <summary>Load the grids around every player; unload grids nobody has been near for the delay (vmangos Map::UnloadGrid).</summary>
-    private void UpdateGrids()
-    {
-        foreach (Player player in Map.Players)
-        {
-            CollectGridsAround(player.X, player.Y);
-            foreach (GridCoord coord in _scratchGrids)
-            {
-                if (!_grids.TryGetValue(coord, out LoadedGrid? grid))
-                {
-                    grid = LoadGrid(coord);
-                }
-
-                grid.LastActiveMs = _clockMs;
-            }
-        }
-
-        if (!_options.GridUnload)
-        {
-            return;
-        }
-
-        List<GridCoord>? expired = null;
-        foreach ((GridCoord coord, LoadedGrid grid) in _grids)
-        {
-            if (_clockMs - grid.LastActiveMs >= _options.GridUnloadDelayMs)
-            {
-                (expired ??= []).Add(coord);
-            }
-        }
-
-        if (expired is not null)
-        {
-            foreach (GridCoord coord in expired)
-            {
-                UnloadGrid(coord);
-            }
-        }
-    }
-
     private void UpdateCreatures(uint diffMs)
     {
         uint now = _serverTime();
-        foreach (LoadedGrid grid in _grids.Values)
+        // Live position may be outside the spawn's original grid. Snapshot ownership rather
+        // than spawn buckets so a moved creature is updated once and survives home-grid unload.
+        _scratchCreatures.Clear();
+        _scratchCreatures.AddRange(_creatures.Values);
+        foreach (Creature creature in _scratchCreatures)
         {
-            // A temporary creature's corpse removal takes it out of the list: iterate a copy.
-            _scratchCreatures.Clear();
-            _scratchCreatures.AddRange(grid.Creatures);
-            foreach (Creature creature in _scratchCreatures)
+            switch (creature.DeathState)
             {
-                switch (creature.DeathState)
-                {
-                    case CreatureDeathState.Alive:
-                        creature.AdvanceSpline(_clockMs, now);
-                        if (_options.MovementEnabled)
-                        {
-                            creature.MovementGenerator?.Update(creature, this, diffMs);
-                        }
+                case CreatureDeathState.Alive:
+                    creature.AdvanceSpline(_clockMs, now);
+                    if (_options.MovementEnabled && !creature.Combat.IsInCombat)
+                    {
+                        creature.MovementGenerator?.Update(creature, this, diffMs);
+                    }
 
-                        break;
+                    break;
 
-                    case CreatureDeathState.Corpse:
-                        // vmangos Creature::Update CORPSE: decay over, or a DB spawn's respawn time reached.
-                        bool respawnDue = creature.Spawn is not null && creature.RespawnAtMs <= _clockMs;
-                        if (creature.CorpseDecayMs <= diffMs || respawnDue)
-                        {
-                            RemoveCorpse(creature);
-                        }
-                        else
-                        {
-                            creature.CorpseDecayMs -= diffMs;
-                        }
+                case CreatureDeathState.Corpse:
+                    // vmangos Creature::Update CORPSE: decay over, or a DB spawn's respawn time reached.
+                    bool respawnDue = creature.Spawn is not null && creature.RespawnAtMs <= _clockMs;
+                    if (creature.CorpseDecayMs <= diffMs || respawnDue)
+                    {
+                        RemoveCorpse(creature);
+                    }
+                    else
+                    {
+                        creature.CorpseDecayMs -= diffMs;
+                    }
 
-                        break;
+                    break;
 
-                    case CreatureDeathState.Dead:
-                        if (creature.Spawn is not null && creature.RespawnAtMs <= _clockMs)
-                        {
-                            Respawn(creature);
-                        }
+                case CreatureDeathState.Dead:
+                    if (creature.Spawn is not null && creature.RespawnAtMs <= _clockMs)
+                    {
+                        Respawn(creature);
+                    }
 
-                        break;
-                }
+                    break;
             }
         }
     }
 
     /// <summary>
-    /// vmangos Player::UpdateVisibilityOf&lt;Creature&gt; for every player and the creatures of the
-    /// grids around it: create on entering range, out-of-range on leaving; dead creatures (corpse
-    /// removed) are never visible (Creature::IsVisibleInGridForPlayer).
+    /// Snapshot the map's observer ownership after visibility and flush. A newly visible
+    /// moving creature sends its remaining spline next tick, after its create block.
     /// </summary>
-    private void UpdateVisibility()
+    private void CaptureNewObservers()
     {
-        uint now = _serverTime();
         foreach (Player player in Map.Players)
         {
             if (!_seen.TryGetValue(player, out HashSet<Creature>? seen))
@@ -408,61 +376,22 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
                 _seen[player] = seen = [];
             }
 
-            // Leaving range (or the world, or dying past the corpse).
-            List<Creature>? gone = null;
-            foreach (Creature creature in seen)
+            seen.RemoveWhere(creature => !ReferenceEquals(creature.Map, Map)
+                || !player.VisibleObjects.Contains(creature.Guid));
+            foreach (Creature creature in _creatures.Values)
             {
-                if (!_creatures.ContainsKey(creature.Guid) || creature.DeathState == CreatureDeathState.Dead
-                    || !Map.IsWithinVisibilityDistance(player, creature, alreadyVisible: true))
-                {
-                    (gone ??= []).Add(creature);
-                }
-            }
-
-            if (gone is not null)
-            {
-                foreach (Creature creature in gone)
-                {
-                    seen.Remove(creature);
-                    if (player.VisibleObjects.Remove(creature.Guid))
-                    {
-                        player.PendingUpdates.AddOutOfRange(creature.Guid);
-                    }
-                }
-            }
-
-            // Entering range.
-            CollectGridsAround(player.X, player.Y);
-            foreach (GridCoord coord in _scratchGrids)
-            {
-                if (!_grids.TryGetValue(coord, out LoadedGrid? grid))
+                if (!Map.ObserversOf(creature).Contains(player) || !seen.Add(creature))
                 {
                     continue;
                 }
 
-                foreach (Creature creature in grid.Creatures)
+                if (creature.Spline is { } spline)
                 {
-                    if (creature.DeathState == CreatureDeathState.Dead || seen.Contains(creature)
-                        || !Map.IsWithinVisibilityDistance(player, creature, alreadyVisible: false))
-                    {
-                        continue;
-                    }
-
-                    seen.Add(creature);
-                    player.VisibleObjects.Add(creature.Guid);
-                    PacketWriter block = player.PendingUpdates.BeginBlock();
-                    UpdateBlockWriter.WriteCreateBlock(block, creature, player, creature.IsNewObject, now);
-                    player.PendingUpdates.EndBlock();
-
-                    if (creature.Spline is { } spline)
-                    {
-                        _catchUp.Add((player, creature, spline.Id));
-                    }
+                    _catchUp.Add((player, creature, spline.Id));
                 }
             }
         }
 
-        // vmangos Map::Add: SetIsNewObject(true) only for the visibility pass of the add itself.
         foreach (Creature creature in _creatures.Values)
         {
             creature.IsNewObject = false;
@@ -471,26 +400,15 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
 
     // --- grids & life cycle -------------------------------------------------------------------
 
-    /// <summary>The grids overlapping the square of visibility range + margin around (x, y), into <see cref="_scratchGrids"/>.</summary>
-    private void CollectGridsAround(float x, float y)
-    {
-        _scratchGrids.Clear();
-        float reach = Map.VisibilityRange + GridSearchMargin;
-        GridCoord min = ComputeGrid(x - reach, y - reach);
-        GridCoord max = ComputeGrid(x + reach, y + reach);
-        for (int gx = min.X; gx <= max.X; gx++)
-        {
-            for (int gy = min.Y; gy <= max.Y; gy++)
-            {
-                _scratchGrids.Add(new GridCoord(gx, gy));
-            }
-        }
-    }
-
     /// <summary>vmangos ObjectGridLoader: create the grid's spawns (dead ones keep their respawn time).</summary>
     private LoadedGrid LoadGrid(GridCoord coord)
     {
-        var grid = new LoadedGrid { LastActiveMs = _clockMs };
+        if (_grids.TryGetValue(coord, out LoadedGrid? existing))
+        {
+            return existing;
+        }
+
+        var grid = new LoadedGrid();
         _grids[coord] = grid;
         if (!_spawnsByGrid.TryGetValue(coord, out List<CreatureSpawn>? spawns))
         {
@@ -510,12 +428,20 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
                 continue;
             }
 
+            ObjectGuid guid = ObjectGuid.WithEntry(HighGuid.Unit, template.Entry, spawn.Guid);
+            if (_creatures.TryGetValue(guid, out Creature? moved))
+            {
+                grid.Creatures.Add(moved);
+                continue; // a live spawn walked away before its home grid unloaded
+            }
+
             var creature = new Creature(spawn.Guid, template, spawn, _content, _random);
             if (_respawnAt.Remove(spawn.Guid, out long respawnAt) && respawnAt > _clockMs)
             {
                 creature.Health = 0;
                 creature.NpcFlags = 0;
                 creature.DeathState = CreatureDeathState.Dead;
+                creature.Combat.DeathState = DeathState.Dead;
                 creature.RespawnAtMs = respawnAt;
             }
 
@@ -534,7 +460,12 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
 
         foreach (Creature creature in grid.Creatures)
         {
-            HideFromAll(creature);
+            if (ReferenceEquals(creature.Map, Map) && Map.Grids.CellOf(creature) is { } cell
+                && (cell.Grid.X != coord.X || cell.Grid.Y != coord.Y))
+            {
+                continue; // shared spatial ownership keeps a creature in another live grid
+            }
+
             if (creature.Spawn is not null && creature.DeathState != CreatureDeathState.Alive)
             {
                 _respawnAt[creature.Spawn.Guid] = creature.RespawnAtMs;
@@ -547,13 +478,18 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
     private void AddToWorld(Creature creature, LoadedGrid grid)
     {
         creature.MapId = Map.MapId;
-        creature.Map = Map;
+        creature.System = this;
         creature.WalkSpeed = creature.CreatureWalkSpeed;
         creature.RunSpeed = creature.CreatureRunSpeed;
         creature.ClearChangedFields();
         creature.MovementGenerator = CreateMovementGenerator(creature);
         _creatures[creature.Guid] = creature;
         grid.Creatures.Add(creature);
+        if (creature.DeathState != CreatureDeathState.Dead)
+        {
+            Map.AddObject(creature, isNewObject: creature.IsNewObject);
+        }
+
         if (creature.DeathState == CreatureDeathState.Alive && _options.MovementEnabled)
         {
             creature.MovementGenerator.Reset(creature, this);
@@ -563,7 +499,10 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
     private void RemoveFromWorld(Creature creature)
     {
         _creatures.Remove(creature.Guid);
-        creature.Map = null;
+        Map.Combat.Untrack(creature);
+        Map.RemoveObject(creature);
+        creature.System = null;
+        ForgetObservers(creature);
     }
 
     private ICreatureMovementGenerator CreateMovementGenerator(Creature creature)
@@ -593,7 +532,10 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
     {
         creature.DeathState = CreatureDeathState.Dead;
         creature.CorpseDecayMs = 0;
-        HideFromAll(creature);
+        creature.Combat.DeathState = DeathState.Dead;
+        Map.Combat.Untrack(creature);
+        Map.RemoveObject(creature);
+        ForgetObservers(creature);
         creature.ResetToHome(_serverTime());
         if (creature.Spawn is null)
         {
@@ -605,11 +547,27 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
 
             RemoveFromWorld(creature);
         }
+        else if (!_grids.ContainsKey(ComputeGrid(creature.Home.X, creature.Home.Y)))
+        {
+            // The creature died after walking out of an unloaded home grid. Keep its deadline
+            // as dormant spawn data; do not respawn into a grid no player has loaded.
+            _respawnAt[creature.Spawn.Guid] = creature.RespawnAtMs;
+            RemoveFromWorld(creature);
+        }
     }
 
     /// <summary>vmangos Creature::Update DEAD → respawn: fields re-initialized (level, display, health), ALIVE, movement restarted.</summary>
     private void Respawn(Creature creature)
     {
+        if (!_creatures.ContainsKey(creature.Guid))
+        {
+            return;
+        }
+
+        Map.Combat.Untrack(creature);
+        creature.Combat.DeathState = DeathState.Alive;
+        MapCombat.ClearInCombat(creature);
+        creature.Combat.SetAttackTimer(WeaponAttackType.BaseAttack, 0);
         creature.InitializeFields();
         creature.DeathState = CreatureDeathState.Alive;
         creature.RespawnAtMs = 0;
@@ -617,31 +575,63 @@ public sealed class CreatureMapSystem : IMapUpdater, ICreatureMover
 
         // Invisible until now, so nobody needs a values update for the re-initialization.
         creature.ClearChangedFields();
+        Map.AddObject(creature);
         if (_options.MovementEnabled)
         {
             creature.MovementGenerator?.Reset(creature, this);
         }
     }
 
-    /// <summary>Send out-of-range for <paramref name="creature"/> to everyone who sees it.</summary>
-    private void HideFromAll(Creature creature)
+    private void ForgetObservers(Creature creature)
     {
-        foreach ((Player player, HashSet<Creature> seen) in _seen)
+        foreach (HashSet<Creature> seen in _seen.Values)
         {
-            if (seen.Remove(creature) && player.VisibleObjects.Remove(creature.Guid))
-            {
-                player.PendingUpdates.AddOutOfRange(creature.Guid);
-            }
+            seen.Remove(creature);
         }
 
         _catchUp.RemoveAll(c => ReferenceEquals(c.Creature, creature));
     }
 
+    private void OnMapGridUnloading(MapGrid grid)
+    {
+        UnloadGrid(new GridCoord(grid.Coord.X, grid.Coord.Y));
+        // vmangos Map::CreatureRespawnRelocation returns a moved creature to its loaded
+        // home grid before unloading its current grid. Otherwise drop the live ownership.
+        foreach (Creature creature in grid.AllObjects().OfType<Creature>())
+        {
+            if (!_creatures.ContainsKey(creature.Guid))
+            {
+                continue;
+            }
+
+            GridCoord home = ComputeGrid(creature.Home.X, creature.Home.Y);
+            if ((home.X != grid.Coord.X || home.Y != grid.Coord.Y)
+                && _grids.ContainsKey(home) && creature.DeathState == CreatureDeathState.Alive)
+            {
+                Map.Combat.Untrack(creature);
+                StopMoving(creature);
+                creature.ResetToHome(_serverTime());
+                creature.MovementGenerator?.Reset(creature, this);
+                continue;
+            }
+
+            if (creature.Spawn is not null && creature.DeathState != CreatureDeathState.Alive)
+            {
+                _respawnAt[creature.Spawn.Guid] = creature.RespawnAtMs;
+            }
+
+            foreach (LoadedGrid loaded in _grids.Values)
+            {
+                loaded.Creatures.Remove(creature);
+            }
+
+            RemoveFromWorld(creature);
+        }
+    }
+
     private sealed class LoadedGrid
     {
         public List<Creature> Creatures { get; } = [];
-
-        public long LastActiveMs { get; set; }
     }
 }
 

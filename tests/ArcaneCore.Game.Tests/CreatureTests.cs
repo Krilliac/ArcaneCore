@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
@@ -256,9 +257,10 @@ public sealed class CreatureTests
     [Fact]
     public void Grid_UnloadsAfterDelay_KeepingRespawnTimes()
     {
-        var options = new CreatureOptions { GridUnloadDelayMs = 1000, CorpseDecayNormalSeconds = 1 };
-        CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 30, 0, respawnSeconds: 60)]);
-        (WorldRuntime world, _, CreatureMapSystem system) = CreateSystem(content, options);
+        var options = new CreatureOptions { CorpseDecayNormalSeconds = 1 };
+        CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 30, 0, respawnSeconds: 600)]);
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateSystem(content, options);
+        map.Grids.Options.GridCleanUpDelayMs = 60_000;
         var session = new FakeSession();
         Player player = TestWorld.CreatePlayer(1, 0, 0, session);
         world.AddPlayer(player);
@@ -266,14 +268,13 @@ public sealed class CreatureTests
         Creature wolf = Assert.Single(system.Creatures);
         system.KillCreature(wolf);
         long respawnAt = wolf.RespawnAtMs;
-        Assert.Equal(system.ClockMs + 60_000, respawnAt);
+        Assert.Equal(system.ClockMs + 600_000, respawnAt);
 
         // Walk far away: the grid unloads after the delay and remembers the respawn time.
         player.Relocate(5000, 5000, 83.5f, 0, 0);
-        for (int i = 0; i < 25; i++)
-        {
-            world.RunTick(50);
-        }
+        world.RunTick(6000); // Active -> Idle, after the map's expiry/10 activity check
+        world.RunTick(1);    // Idle -> Removal with the canonical map expiry
+        world.RunTick(60_000);
 
         Assert.False(system.IsGridLoaded(30, 0));
         Assert.DoesNotContain(system.Creatures, c => c.Spawn?.Guid == 1);
@@ -316,15 +317,17 @@ public sealed class CreatureTests
         Assert.Equal(0u, values.Values[UpdateFields.UnitFieldHealth]);
         Assert.Equal(0u, values.Values[UpdateFields.UnitNpcFlags]);
 
-        // Corpse decays after 2 s: out of range, back home, invisible.
+        // Corpse decays after 2 s: map removal, back home, invisible.
         for (int i = 0; i < 40; i++)
         {
             world.RunTick(50);
         }
 
         Assert.Equal(CreatureDeathState.Dead, wolf.DeathState);
-        ParsedBlock gone = Assert.Single(DrainBlocks(session));
-        Assert.Equal(ObjectUpdateType.OutOfRangeObjects, gone.Type);
+        var removed = new List<(WorldOpcode Opcode, byte[] Payload)>();
+        Assert.Empty(DrainBlocks(session, removed));
+        byte[] destroyed = Assert.Single(removed, p => p.Opcode == WorldOpcode.SmsgDestroyObject).Payload;
+        Assert.Equal(wolf.Guid.Value, BinaryPrimitives.ReadUInt64LittleEndian(destroyed));
         Assert.DoesNotContain(wolf.Guid, player.VisibleObjects);
 
         // Respawn 5 s after death: alive, full health, flags back, created again.
@@ -533,12 +536,13 @@ public sealed class CreatureTests
 
         var b = new FakeSession(2);
         Player bob = TestWorld.CreatePlayer(2, 0, 0, b);
+        float createX = wolf.X; // AddPlayer queues the shared map's current object snapshot
         world.AddPlayer(bob);
         b.Clear();
         world.RunTick(50);
         var others = new List<(WorldOpcode Opcode, byte[] Payload)>();
         ParsedBlock create = Assert.Single(DrainBlocks(b, others), blk => blk.Guids[0] == wolf.Guid.Value);
-        Assert.Equal(wolf.X, create.Movement!.Value.X); // live position in the create block
+        Assert.Equal(createX, create.Movement!.Value.X); // position when the create was queued
         Assert.DoesNotContain(others, p => p.Opcode == WorldOpcode.SmsgMonsterMove);
 
         world.RunTick(50);

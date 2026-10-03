@@ -85,12 +85,6 @@ public sealed class CreatureOptions
     /// <summary>Corpse.Decay.WORLDBOSS (s): 3600.</summary>
     public uint CorpseDecayWorldBossSeconds { get; set; } = 3600;
 
-    /// <summary>Unload a grid's creatures this long after the last player left its area (vmangos GridUnload on, GridCleanUpDelay 5 min).</summary>
-    public uint GridUnloadDelayMs { get; set; } = 5 * 60 * 1000;
-
-    /// <summary>Whether idle grids are unloaded at all (vmangos GridUnload, default on).</summary>
-    public bool GridUnload { get; set; } = true;
-
     /// <summary>Random and waypoint movement; off leaves every creature idle at its spawn point.</summary>
     public bool MovementEnabled { get; set; } = true;
 }

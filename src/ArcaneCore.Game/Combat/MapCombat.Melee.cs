@@ -341,7 +341,6 @@ public sealed partial class MapCombat
             CombatPackets.AttackerStateUpdate(info.HitInfo, attacker.Guid, victim.Guid, info.TotalDamage, sub, info.TargetState, info.Blocked));
 
         DealMeleeDamage(info);
-        AttackedBy(victim, attacker);
         return info;
     }
 
@@ -579,9 +578,12 @@ public sealed partial class MapCombat
     /// attacker without a victim starts attacking, non-player victims gain threat and player
     /// victims earn rage. <paramref name="outcome"/> / <paramref name="cleanDamage"/> carry the
     /// dodge/parry rage case. Returns the damage dealt. Public for the spells area (direct
-    /// spell damage uses <paramref name="direct"/> = false for DoTs).
+    /// spell damage uses <paramref name="direct"/> = false for DoTs, and
+    /// <paramref name="meleeDamage"/> = false for every spell). vmangos Unit.cpp DealDamage
+    /// distinguishes DIRECT_DAMAGE from SPELL_DIRECT_DAMAGE: only weapon damage rewards
+    /// outgoing rage, and its auto-start Attack call enables melee only for DIRECT_DAMAGE.
     /// </summary>
-    public uint DealDamage(Unit attacker, Unit victim, uint damage, MeleeHitOutcome outcome = MeleeHitOutcome.Normal, uint cleanDamage = 0, bool direct = true)
+    public uint DealDamage(Unit attacker, Unit victim, uint damage, MeleeHitOutcome outcome = MeleeHitOutcome.Normal, uint cleanDamage = 0, bool direct = true, bool meleeDamage = true)
     {
         if (!IsAliveState(victim))
         {
@@ -597,7 +599,7 @@ public sealed partial class MapCombat
         if (damage == 0)
         {
             if (outcome is MeleeHitOutcome.Parry or MeleeHitOutcome.Dodge
-                && cleanDamage > 0 && direct && enterCombat && attacker is Player { PowerType: PowerType.Rage } ragePlayer)
+                && cleanDamage > 0 && direct && meleeDamage && enterCombat && attacker is Player { PowerType: PowerType.Rage } ragePlayer)
             {
                 RewardRage(ragePlayer, (uint)(cleanDamage * 0.75f), attacker: true);
             }
@@ -614,6 +616,7 @@ public sealed partial class MapCombat
                 }
             }
 
+            AttackedBy(victim, attacker);
             return 0;
         }
 
@@ -623,7 +626,7 @@ public sealed partial class MapCombat
             SetInCombatWithVictim(attacker, victim);
         }
 
-        if (direct && enterCombat && attacker is Player { PowerType: PowerType.Rage } rager)
+        if (direct && meleeDamage && enterCombat && attacker is Player { PowerType: PowerType.Rage } rager)
         {
             RewardRage(rager, damage, attacker: true);
         }
@@ -640,7 +643,7 @@ public sealed partial class MapCombat
         {
             if (attacker.Combat.Victim is null && attacker is Player)
             {
-                Attack(attacker, victim, melee: true);
+                Attack(attacker, victim, melee: meleeDamage);
             }
         }
 
@@ -656,6 +659,7 @@ public sealed partial class MapCombat
             RewardRage((Player)victim, damage, attacker: false);
         }
 
+        AttackedBy(victim, attacker);
         return damage;
     }
 
@@ -688,6 +692,11 @@ public sealed partial class MapCombat
     /// </summary>
     public void Kill(Unit? killer, Unit victim)
     {
+        if (!IsAliveState(victim))
+        {
+            return;
+        }
+
         var playerTap = killer as Player;
         if (playerTap is not null && !ReferenceEquals(playerTap, victim))
         {

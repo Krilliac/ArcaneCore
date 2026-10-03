@@ -20,7 +20,7 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
     private readonly Dictionary<uint, CreatureMapSystem> _systems = [];
     private CreatureContent _content = CreatureContent.Empty;
     private WorldRuntime? _world;
-    private ICreatureHeightProvider _height = NoTerrainHeight.Instance;
+    private ICreatureHeightProvider? _height;
 
     /// <summary>The loaded content (immutable; safe to read from any thread).</summary>
     public CreatureContent Content => Volatile.Read(ref _content);
@@ -36,7 +36,7 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
     {
         _world = world;
         services.GetService<IConfiguration>()?.GetSection(CreatureOptions.SectionName).Bind(Options);
-        _height = services.GetService<ICreatureHeightProvider>() ?? NoTerrainHeight.Instance;
+        _height = services.GetService<ICreatureHeightProvider>();
 
         CreatureContent content = CreatureContent.Empty;
         using (IServiceScope scope = services.CreateScope())

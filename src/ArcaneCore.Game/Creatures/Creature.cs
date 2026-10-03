@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -11,7 +12,7 @@ namespace ArcaneCore.Game.Creatures;
 /// health/mana columns (<c>Creature::SelectLevel</c>, "old style").
 /// <para>Thread affinity: world thread (owned by its map's <see cref="CreatureMapSystem"/>).</para>
 /// </summary>
-public sealed class Creature : Unit
+public sealed class Creature : Unit, ICombatCreature
 {
     /// <summary>OBJECT_FIELD_TYPE for creatures: TYPEMASK_OBJECT | TYPEMASK_UNIT (vmangos ObjectGuid.h).</summary>
     public const uint CreatureTypeMask = Game.TypeMask.Object | Game.TypeMask.Unit;
@@ -76,6 +77,38 @@ public sealed class Creature : Unit
     public float WanderDistance { get; }
 
     public CreatureDeathState DeathState { get; internal set; } = CreatureDeathState.Alive;
+
+    /// <summary>The map system owns death, movement and respawn even while the spawn is hidden.</summary>
+    internal CreatureMapSystem? System { get; set; }
+
+    // This creature model has no evade, pet or regeneration overrides; preserve the
+    // documented CombatHooks defaults (docs/integration/combat.md). Rank is loaded content.
+    public bool IsInEvadeMode => false;
+
+    public bool CanParry => true;
+
+    public bool CanBlock => true;
+
+    public bool CanCrush => true;
+
+    public bool IsWorldBoss => (CreatureRank)Template.Rank == CreatureRank.WorldBoss;
+
+    public bool RegeneratesHealth => true;
+
+    /// <summary>vmangos CreatureAI::AttackedBy: an idle creature retaliates against its attacker.</summary>
+    public void OnAttackedBy(Unit attacker)
+    {
+        if (Map is not { } map || Combat.Victim is not null || !IsAlive || !map.Combat.Hooks.CanAttack(this, attacker))
+        {
+            return;
+        }
+
+        System?.StopMoving(this);
+        map.Combat.Attack(this, attacker);
+    }
+
+    /// <summary>vmangos CreatureAI::JustDied: begin the map system's corpse and respawn timers.</summary>
+    public void OnJustDied(Unit? killer) => System?.OnCreatureDied(this);
 
     public uint NpcFlags
     {

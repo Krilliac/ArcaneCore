@@ -127,6 +127,29 @@ public sealed class GridMapTests
     }
 
     [Fact]
+    public void RemovingObjectBeforeJoiningObserversFirstTick_SendsCreateBeforeDestroy()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        Map map = world.GetMap(0);
+        var unit = new TestUnit(1, 5, 0);
+        map.AddObject(unit);
+        var session = new FakeSession(1);
+        Player player = TestWorld.CreatePlayer(1, 0, 0, session);
+        world.AddPlayer(player);
+        session.Clear(); // self create has flushed; the nearby object's create is pending
+
+        map.RemoveObject(unit);
+
+        (WorldOpcode opcode, byte[] create) = session.Next();
+        Assert.Equal(WorldOpcode.SmsgUpdateObject, opcode);
+        Assert.Equal((byte)ObjectUpdateType.CreateObject, create[5]);
+        Assert.Equal(WorldOpcode.SmsgDestroyObject, session.Next().Opcode);
+        world.RunTick(50);
+        Assert.True(session.Sent.IsEmpty);
+        Assert.DoesNotContain(unit.Guid, player.VisibleObjects);
+    }
+
+    [Fact]
     public void NonPlayerObjects_InUnloadedGrids_AreRemovedWithTheGrid()
     {
         using WorldRuntime world = TestWorld.CreateRuntime();

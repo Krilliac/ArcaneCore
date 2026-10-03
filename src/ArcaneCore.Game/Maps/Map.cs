@@ -487,7 +487,11 @@ public sealed class Map
             return;
         }
 
-        if (obj is not Player)
+        if (obj is Player player)
+        {
+            player.NeedsVisibilityUpdate = true;
+        }
+        else
         {
             _movedObjects.Add(obj);
         }
@@ -707,6 +711,10 @@ public sealed class Map
             {
                 if (other.VisibleObjects.Remove(obj.Guid))
                 {
+                    // A joining observer may still have this object's create queued.
+                    // Flush it before destroying the object so the client cannot recreate it
+                    // later from the end-of-tick flush (vmangos update-before-remove order).
+                    FlushPlayer(other);
                     other.Session.Send(WorldOpcode.SmsgDestroyObject, destroy);
                 }
             }
