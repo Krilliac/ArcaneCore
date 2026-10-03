@@ -119,15 +119,11 @@ public static class LoginPackets
 
     /// <summary>
     /// SMSG_INIT_WORLD_STATES: u32 map, u32 zone (builds &gt; 1.11.2), u16 count, then
-    /// (u32 state, i32 value) pairs (vmangos Misc::InitWorldStates, gtker). No world states are
-    /// tracked yet; cmangos-classic sends an empty list outside battlegrounds and outdoor PvP zones.
+    /// (u32 state, i32 value) pairs (vmangos Misc::InitWorldStates, gtker). This overload sends no
+    /// states (cmangos-classic sends an empty list outside battlegrounds and outdoor PvP zones); the
+    /// zone feature builds the real list from the world-state registry
+    /// (<see cref="ArcaneCore.Game.WorldState.States.WorldStatePackets.BuildInit"/>, docs/areas/world-state.md).
     /// </summary>
     public static byte[] BuildInitWorldStates(uint mapId, uint zoneId)
-    {
-        var writer = new PacketWriter(10);
-        writer.WriteUInt32(mapId);
-        writer.WriteUInt32(zoneId);
-        writer.WriteUInt16(0);
-        return writer.ToArray();
-    }
+        => ArcaneCore.Game.WorldState.States.WorldStatePackets.BuildInit(mapId, zoneId, []);
 }

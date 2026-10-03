@@ -394,7 +394,8 @@ public sealed partial class MapCombat
             return;
         }
 
-        if (!c.InPvpCombat && (player.Flags & PlayerFlags.PvpDesired) == 0)
+        // The timer also freezes inside a PvP-enforced area (vmangos Player.cpp:17199-17207; docs/areas/world-state.md).
+        if (!c.InPvpCombat && !WorldState.Zones.PvpAreaState.IsInEnforcedArea(player) && (player.Flags & PlayerFlags.PvpDesired) == 0)
         {
             c.PvpFlagTimer = c.PvpFlagTimer > diff ? c.PvpFlagTimer - diff : 0;
             UpdatePvp(player, false);

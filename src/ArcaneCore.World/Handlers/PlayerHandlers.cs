@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Handlers;
@@ -89,6 +90,14 @@ public sealed class PlayerHandlers : IOpcodeHandlerGroup
     {
         var reader = new PacketReader(payload);
         uint zone = reader.ReadUInt32();
+        // docs/areas/world-state.md: the zone is derived server-side (vmangos MiscHandler.cpp:381-386);
+        // the client value is used only in client-zone mode (no area data / ClientZoneTrust=Always).
+        if (session.Services.GetService<WorldState.ZoneAreaFeature>() is { } zones)
+        {
+            zones.HandleClientZone(player, zone);
+            return;
+        }
+
         if (zone == 0)
         {
             return;

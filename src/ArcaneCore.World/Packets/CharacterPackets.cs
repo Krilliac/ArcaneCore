@@ -77,11 +77,17 @@ public static class CharacterPackets
     /// SMSG_LOGIN_SETTIMESPEED: packed game time + game minutes per real second
     /// (vmangos Player::SendInitialPacketsBeforeAddToMap: 1.0f / 60.0f).
     /// </summary>
-    public static byte[] BuildTimeSpeed(DateTime utcNow)
+    public static byte[] BuildTimeSpeed(DateTime utcNow) => BuildTimeSpeed(new DateTimeOffset(utcNow));
+
+    /// <summary>
+    /// The same packet from the game's LOCAL time (vmangos packs <c>localtime</c>; see
+    /// <see cref="ArcaneCore.Game.WorldState.Time.GameTimePacker"/>).
+    /// </summary>
+    public static byte[] BuildTimeSpeed(DateTimeOffset local)
     {
         var writer = new PacketWriter(8);
-        writer.WriteUInt32(PackGameTime(utcNow));
-        writer.WriteSingle(1.0f / 60.0f);
+        writer.WriteUInt32(ArcaneCore.Game.WorldState.Time.GameTimePacker.Pack(local));
+        writer.WriteSingle(ArcaneCore.Game.WorldState.Time.GameTimePacker.GameSpeedMinutesPerSecond);
         return writer.ToArray();
     }
 
@@ -120,20 +126,5 @@ public static class CharacterPackets
             MaxPower: maxPower,
             StartPower: startPower,
             NextLevelXp: Level1NextLevelXp);
-    }
-
-    /// <summary>
-    /// Pack a UTC time into the client's calendar bit-field (vmangos WorldSession game-time
-    /// packing): minute | hour&lt;&lt;6 | weekday&lt;&lt;11 | (day-1)&lt;&lt;14 | (month-1)&lt;&lt;20 | (year-100)&lt;&lt;24.
-    /// </summary>
-    private static uint PackGameTime(DateTime utcNow)
-    {
-        int weekday = (int)utcNow.DayOfWeek; // Sunday = 0, matches the client
-        return (uint)(utcNow.Minute
-            | (utcNow.Hour << 6)
-            | (weekday << 11)
-            | ((utcNow.Day - 1) << 14)
-            | ((utcNow.Month - 1) << 20)
-            | ((utcNow.Year - 2000) << 24));
     }
 }

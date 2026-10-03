@@ -50,7 +50,7 @@ public static class LoginSequence
         // Reputation (docs/integration/reputation.md): the player's 64 reputation-list slots.
         session.Send(WorldOpcode.SmsgInitializeFactions,
             session.Services.GetService<Reputation.ReputationFeature>()?.Service.BuildInitializeFactions(player) ?? LoginPackets.BuildInitializeFactions());
-        session.Send(WorldOpcode.SmsgLoginSettimespeed, CharacterPackets.BuildTimeSpeed(DateTime.UtcNow));
+        session.Send(WorldOpcode.SmsgLoginSettimespeed, CharacterPackets.BuildTimeSpeed(ArcaneCore.Game.WorldState.WorldStateHooks.For(session.World).LocalNow()));
     }
 
     /// <summary>
@@ -58,5 +58,15 @@ public static class LoginSequence
     /// world states (the map add itself has already sent the self create).
     /// </summary>
     public static void SendInitialPacketsAfterAddToMap(WorldSession session, Player player)
-        => session.Send(WorldOpcode.SmsgInitWorldStates, LoginPackets.BuildInitWorldStates(player.MapId, player.ZoneId));
+    {
+        // docs/areas/world-state.md: the zone tracker derives the zone and sends the world states
+        // (and everything else a zone entry triggers) exactly like vmangos' UpdateZone.
+        if (session.Services.GetService<WorldState.ZoneAreaFeature>() is { } zones)
+        {
+            zones.ForceUpdate(player);
+            return;
+        }
+
+        session.Send(WorldOpcode.SmsgInitWorldStates, LoginPackets.BuildInitWorldStates(player.MapId, player.ZoneId));
+    }
 }
