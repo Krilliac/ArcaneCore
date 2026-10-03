@@ -36,9 +36,16 @@ public sealed class Channel
             Name = "INVALIDCHANNEL";
             Announce = false;
         }
-        else if (Name == "World")
+        else if (context.Options.VmangosChannelExtensions && Name == "World")
         {
+            // vmangos Channel.cpp:63-66, not retail (SocialOptions.VmangosChannelExtensions).
             Flags = ChannelFlags.General;
+            Announce = false;
+        }
+        else if (context.Options.VmangosChannelExtensions && Name is "China" or "中国")
+        {
+            // vmangos Channel.cpp:67-71; the second spelling is the UTF-8 Mandarin name.
+            Flags = ChannelFlags.Custom;
             Announce = false;
         }
         else

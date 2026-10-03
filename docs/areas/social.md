@@ -70,9 +70,10 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
 - **Character deletion** is handled: `SocialCharacterDeleteHook` and `SocialDataModule` remove
   friend/ignore rows and guild membership, `SocialPetitionFeature` and `PetitionDataModule` the
   character's petition and signatures (docs/integration/character-delete.md).
-- **Options.** `SocialFeature.Options` (`World:Social`: two-side friend/group/guild/channel) is bound at
-  startup and reloadable; the guild, charter and chat options are bound from `World:Guild` and `World:Chat`
-  and are restart-only (see [social-guild-petitions](../integration/social-guild-petitions.md)).
+- **Options.** `SocialFeature.Options` (`World:Social`) is bound at
+  startup and reloadable (two-side friend/group/guild/channel, vmangos channel extensions); the guild, charter and chat
+  options are bound from `World:Guild` and `World:Chat` and are restart-only (see
+  [social-guild-petitions](../integration/social-guild-petitions.md); chat gates are in [chat.md](chat.md)).
 - **WorldDefense is muted.** vmangos `Channel::Say` lets only honor rank 15 and up speak there;
   honor ranks are not implemented (always 0), so nobody can talk in WorldDefense.
 - **Client guild create.** `CMSG_GUILD_CREATE` is honoured as in vmangos (`GuildHandler.cpp:47-72`);
@@ -86,7 +87,7 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
   when that viewer has the view-officer-note right; the roster broadcast to the whole guild
   after a change never includes them.
 - **Channels:** no GM join of the opposite faction's built-in channels and no silent GM join
-  configuration.
+  configuration. The vmangos-only "World"/"China" channel names are off by default (chat.md).
 - **Whisper ignore is client-side.** The server still delivers whispers from ignored players;
   the 1.12 client drops them and sends `CMSG_CHAT_IGNORED`, and the whisperer then gets
   CHAT_MSG_IGNORED (vmangos HandleChatIgnoredOpcode).

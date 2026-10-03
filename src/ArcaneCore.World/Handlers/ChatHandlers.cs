@@ -1,13 +1,16 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Chat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
+using ArcaneCore.World.Chat;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
 using ArcaneCore.World.Social;
+using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -28,6 +31,12 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     /// <summary>vmangos WhoListClientQueryTask stops after 49 entries ("50 is maximum player count sent to client").</summary>
     private const int WhoMaxEntries = 49;
 
+    /// <summary>vmangos SharedDefines.h:1303 MAX_CHAT_MSG_TYPE for a 1.12 client: a CMSG_MESSAGECHAT type at or above it is dropped.</summary>
+    private const uint MaxChatMsgType = 0x5E;
+
+    /// <summary>classic-db mangos_string 806 (vmangos LANG_NOT_LEARNED_LANGUAGE), sent as SMSG_NOTIFICATION.</summary>
+    private const string LanguageNotLearned = "You don't know that language";
+
     public void Register(OpcodeTable table)
     {
         table.OnWorld(WorldOpcode.CmsgMessagechat, HandleMessageChat);
@@ -45,9 +54,9 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
         var reader = new PacketReader(payload);
         uint rawType = reader.ReadUInt32();
         var language = (Language)reader.ReadUInt32();
-        if (rawType > byte.MaxValue)
+        if (rawType >= MaxChatMsgType)
         {
-            return;
+            return; // vmangos: "Wrong message type received"
         }
 
         var type = (ChatType)rawType;
@@ -60,33 +69,81 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
         }
 
         WorldRuntimeOptions options = session.World.Options;
+        ChatFeature chat = session.Services.GetRequiredService<ChatFeature>();
         if (language == Language.Addon)
         {
-            // Addon messages skip the language checks and command parsing (vmangos
-            // HandleChatMessageOpcode / SanitizeChatMessage) and only travel the group, guild,
-            // battleground and channel chat that features serve; unserved, they are dropped.
-            OfferToFeatures(session, player, new ClientChatMessage(type, language, target, message));
+            // Disabled addon channel? (vmangos AddonChannel). Addon messages are not touched by the
+            // language or flood gates, skip command parsing (vmangos HandleChatMessageOpcode /
+            // SanitizeChatMessage) and only travel the group, guild, battleground and channel chat
+            // that features serve; unserved, they are dropped.
+            if (chat.Options.AddonChannel)
+            {
+                OfferToFeatures(session, player, new ClientChatMessage(type, language, target, message));
+            }
+
             return;
         }
 
         // Talking in a language the character does not know is cheating (vmangos: notification).
         if (language != Language.Universal && !player.KnowsLanguage(language))
         {
-            session.Send(WorldOpcode.SmsgNotification, ChatPackets.BuildNotification("You don't know that language."));
+            session.Send(WorldOpcode.SmsgNotification, ChatPackets.BuildNotification(LanguageNotLearned));
             return;
         }
 
-        // GMs and cross-faction realms speak plainly (vmangos HandleChatMessageOpcode).
-        if (player.IsGameMaster || (options.AllowTwoSideChat && language is Language.Common or Language.Orcish))
+        if (player.IsGameMaster)
         {
-            language = Language.Universal;
+            language = Language.Universal; // GM mode speaks plainly, ignoring spell effects
+        }
+        else
+        {
+            // Cross-faction realms speak plainly (vmangos HandleChatMessageOpcode) ...
+            if (options.AllowTwoSideChat && language is Language.Common or Language.Orcish)
+            {
+                language = Language.Universal;
+            }
+
+            // ... but SPELL_AURA_MOD_LANGUAGE overwrites it (the first aura, "only single case used").
+            if (session.Services.GetService<SpellFeature>() is { } spells && spells.System.ModLanguageOverride(player) is { } forced)
+            {
+                language = forced;
+            }
         }
 
         if (type is not (ChatType.Afk or ChatType.Dnd))
         {
+            // Mute and anti-flood (vmangos: the mute check, then UpdateSpeakTime, before sanitising
+            // and command parsing, so command lines count as messages). A whisper is checked later,
+            // against its receiver: a muted player may still whisper staff.
+            if (type != ChatType.Whisper && chat.MuteNotice(player) is { } notice)
+            {
+                session.Send(WorldOpcode.SmsgNotification, ChatPackets.BuildNotification(notice));
+                return;
+            }
+
+            chat.UpdateSpeakTime(player);
+
             if (message.Length == 0)
             {
                 return; // vmangos SanitizeChatMessage
+            }
+
+            // The rest of SanitizeChatMessage (addon messages returned above): invisible-character
+            // runs, then the link check, which drops (or kicks for) a malformed message.
+            if (chat.Options.FakeMessagePreventing)
+            {
+                message = ChatSanitizer.StripInvisibleChars(message);
+            }
+
+            if (chat.Options.StrictLinkSeverity > 0 && !ChatSanitizer.IsValidChatMessage(message, chat.Options.StrictLinkSeverity))
+            {
+                session.Logger.LogWarning("[{Endpoint}] {Player} sent a chat message with an invalid link", session.RemoteEndpoint, player.Name);
+                if (chat.Options.StrictLinkKick)
+                {
+                    session.Kick();
+                }
+
+                return;
             }
 
             if (TryRunCommand(session, player, message))
@@ -136,7 +193,7 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
                 break;
 
             case ChatType.Whisper:
-                Whisper(session, player, target, message, options);
+                Whisper(session, player, target, message, options, chat);
                 break;
 
             case ChatType.Afk:
@@ -232,13 +289,24 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     /// is allowed. The receiver gets CHAT_MSG_WHISPER, the sender CHAT_MSG_WHISPER_INFORM, then
     /// the receiver's DND or AFK auto-reply. Whispers are always sent in Universal.
     /// </summary>
-    private static void Whisper(WorldSession session, Player sender, string targetName, string message, WorldRuntimeOptions options)
+    private static void Whisper(WorldSession session, Player sender, string targetName, string message, WorldRuntimeOptions options, ChatFeature chat)
     {
         string name = CharacterNames.Normalize(targetName);
         Player? receiver = name.Length == 0 ? null : session.World.FindOnlinePlayer(name);
-        if (receiver is null)
+        // A plain player cannot see a staff member who does not accept its whispers (vmangos
+        // ChatHandler.cpp:411: the same "player not found" notice as for an offline target).
+        if (receiver is null
+            || (sender.Security == AccountSecurity.Player && receiver.Security > AccountSecurity.Player
+                && !chat.AcceptsWhispersFrom(receiver, sender.Guid)))
         {
             session.Send(WorldOpcode.SmsgChatPlayerNotFound, ChatPackets.BuildPlayerNotFound(name));
+            return;
+        }
+
+        // "Can only whisper GMs while muted" (vmangos ChatHandler.cpp:417-428).
+        if (receiver.Security == AccountSecurity.Player && chat.MuteNotice(sender) is { } notice)
+        {
+            session.Send(WorldOpcode.SmsgNotification, ChatPackets.BuildNotification(notice));
             return;
         }
 
@@ -249,6 +317,7 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        chat.NoteWhisperSent(sender, receiver);
         receiver.Session.Send(WorldOpcode.SmsgMessagechat,
             ChatPackets.BuildMessage(ChatType.Whisper, Language.Universal, sender.Guid, message, sender.ChatTag));
         session.Send(WorldOpcode.SmsgMessagechat,
@@ -280,6 +349,21 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     };
 
     /// <summary>
+    /// vmangos HandleEmoteOpcode / HandleTextEmoteOpcode: a muted player cannot emote; the
+    /// "You must wait ... before speaking again." notification is sent instead. True when muted.
+    /// </summary>
+    private static bool RejectMuted(WorldSession session, Player player)
+    {
+        if (session.Services.GetRequiredService<ChatFeature>().MuteNotice(player) is not { } notice)
+        {
+            return false;
+        }
+
+        session.Send(WorldOpcode.SmsgNotification, ChatPackets.BuildNotification(notice));
+        return true;
+    }
+
+    /// <summary>
     /// CMSG_TEXT_EMOTE: u32 text emote, u32 emote number, u64 target (vmangos Misc::TextEmote).
     /// Sent to everyone within the text-emote range, the emoter included, with the target's
     /// name (vmangos HandleTextEmoteOpcode / EmoteChatBuilder). The accompanying animation
@@ -292,6 +376,11 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
         uint emoteNumber = reader.ReadUInt32();
         var targetGuid = new ObjectGuid(reader.ReadUInt64());
         if (!player.IsAlive || (player.UnitFlags & UnitFlags.PreventAnim) != 0 || player.Map is not { } map)
+        {
+            return;
+        }
+
+        if (RejectMuted(session, player))
         {
             return;
         }
@@ -310,7 +399,12 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     {
         var reader = new PacketReader(payload);
         uint emote = reader.ReadUInt32();
-        if (emote is not (0 or 3) || !player.IsAlive || (player.UnitFlags & UnitFlags.PreventAnim) != 0)
+        if (!player.IsAlive || (player.UnitFlags & UnitFlags.PreventAnim) != 0 || RejectMuted(session, player))
+        {
+            return; // vmangos HandleEmoteOpcode: alive and not animation-locked, CanSpeak, then the emote filter
+        }
+
+        if (emote is not (0 or 3))
         {
             return;
         }

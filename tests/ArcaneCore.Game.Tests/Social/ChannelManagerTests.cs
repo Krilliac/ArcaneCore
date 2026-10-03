@@ -78,7 +78,6 @@ public sealed class ChannelManagerTests
     [InlineData("Trade - City", 0x3C)]
     [InlineData("LocalDefense - Elwynn Forest", 0x18)]
     [InlineData("LookingForGroup", 0x50)]
-    [InlineData("World", 0x10)]
     public void BuiltInChannelFlags(string name, int flags)
     {
         using var f = new SocialFixture();

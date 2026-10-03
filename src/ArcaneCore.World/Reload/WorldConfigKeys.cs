@@ -113,6 +113,8 @@ public static class WorldConfigKeys
 
         // Opt-in channel-join cap (security hardening lane; 0 = unlimited, the retail behaviour): ChannelManager reads it at each join.
         LiveSocialCount("MaxJoinedChannels", o => o.MaxJoinedChannels, (o, v) => o.MaxJoinedChannels = v),
+        // Not a vmangos key: the switch for its custom "World"/"China" channel names, read when a channel is created.
+        LiveSocial("VmangosChannelExtensions", o => o.VmangosChannelExtensions, (o, v) => o.VmangosChannelExtensions = v),
     ];
 
     private static string? NonNegative<T>(T value) where T : struct, IComparable<T>
