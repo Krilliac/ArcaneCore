@@ -237,7 +237,7 @@ public sealed class ShapeshiftService
 }
 
 /// <summary>
-/// The shapeshift gate of <c>Spell::CheckCast</c> (vmangos Spell.cpp:5340-5343): only for the strict check of a
+/// The shapeshift gate of <c>Spell::CheckCast</c> (vmangos Spell.cpp:5349-5351): only for the strict check of a
 /// non-triggered cast, before the caster aura state.
 /// </summary>
 public sealed class StanceCastCheck(ShapeshiftService service) : ISpellCastCheck

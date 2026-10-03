@@ -10,7 +10,7 @@ namespace ArcaneCore.Game.Tests.CombatMechanics;
 
 /// <summary>
 /// S06 warrior stances against vmangos: HandleAuraModShapeshift (SpellAuras.cpp:2420-2575), HandleShapeshiftBoosts
-/// (:5433-5597), the strict shapeshift gate (Spell.cpp:5340-5343) and GetErrorAtShapeshiftedCast
+/// (:5433-5597), the strict shapeshift gate (Spell.cpp:5349-5351) and GetErrorAtShapeshiftedCast
 /// (SpellEntry.cpp:1032-1074). Spell attribute words are the classic-db 1.12.1 values of the real stance spells.
 /// </summary>
 public sealed class StanceTests
@@ -323,7 +323,7 @@ public sealed class StanceTests
     [Fact]
     public void TheGateIsStrictOnly_ACastThatLandsAfterAStanceChangeStillLands()
     {
-        // vmangos GetErrorAtShapeshiftedCast runs under `if (strict ...)` (Spell.cpp:5340): the landing re-check skips it.
+        // vmangos GetErrorAtShapeshiftedCast runs under `if (strict ...)` (Spell.cpp:5349): the landing re-check skips it.
         using var rig = new Rig();
         rig.Cast(BattleStance);
         Assert.Equal(SpellCastResult.CastOk, rig.CastAtEnemy(BattleCastTime));

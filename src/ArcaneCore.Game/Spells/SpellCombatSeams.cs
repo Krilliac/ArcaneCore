@@ -13,7 +13,10 @@ namespace ArcaneCore.Game.Spells;
 /// </summary>
 public enum SpellCheckPhase
 {
-    /// <summary>After the caster is alive and the spell is off cooldown, before the target is resolved (vmangos shapeshift :5342, caster aura state :5392).</summary>
+    /// <summary>First: before the cooldown and death checks (vmangos not-standing :5309).</summary>
+    Start = 0,
+
+    /// <summary>After the caster is alive and the spell is off cooldown, before the target is resolved (vmangos shapeshift :5349, caster aura state :5392).</summary>
     Caster = 1,
 
     /// <summary>After the explicit unit target exists and is alive, before range and line of sight (vmangos :5572-5640 target checks).</summary>
@@ -31,12 +34,24 @@ public enum SpellCheckPhase
 
 /// <summary>
 /// The stable ordering inside a <see cref="SpellCheckPhase"/>: lower runs first. The values follow the
-/// line order of the vmangos source (Spell.cpp: shapeshift 5342, caster aura state 5392, items 5698, combo points 7035,
+/// line order of the vmangos source (Spell.cpp: shapeshift 5349, caster aura state 5392, items 5698, combo points 7035,
 /// target aura state 5733), so the result a client sees when two checks would fail at once is the retail one.
 /// </summary>
 public static class SpellCastCheckOrder
 {
-    /// <summary>vmangos Spell.cpp:5342 <c>GetErrorAtShapeshiftedCast</c> (strict, non-triggered casts only).</summary>
+    /// <summary>vmangos Spell.cpp:5309 the caster must stand (<see cref="SpellCheckPhase.Start"/>).</summary>
+    public const int Standing = 50;
+
+    /// <summary>vmangos Spell.cpp:5343-5344 a combat-forbidden spell in combat (strict, non-triggered; before the shapeshift check).</summary>
+    public const int AffectingCombat = 50;
+
+    /// <summary>vmangos Spell.cpp:5353-5354 the stealth requirement (strict, non-triggered; after the shapeshift check).</summary>
+    public const int Stealth = 150;
+
+    /// <summary>vmangos Spell.cpp:5640-5649 behind/in-front facing of the target (<see cref="SpellCheckPhase.Target"/>).</summary>
+    public const int Facing = 100;
+
+    /// <summary>vmangos Spell.cpp:5349 <c>GetErrorAtShapeshiftedCast</c> (strict, non-triggered casts only).</summary>
     public const int Shapeshift = 100;
 
     /// <summary>vmangos Spell.cpp:5392 caster aura state requirement.</summary>

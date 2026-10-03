@@ -121,7 +121,7 @@ public sealed class SpellSeamTests
     [Fact]
     public void CastCheck_OrderTable_FollowsVmangosCheckCastLineOrder()
     {
-        // vmangos Spell.cpp: shapeshift 5342 < CasterAuraState 5392 < CheckItems 5698 (< CheckRange 5707 < CheckPower 5721,
+        // vmangos Spell.cpp: shapeshift 5349 < CasterAuraState 5392 < CheckItems 5698 (< CheckRange 5707 < CheckPower 5721,
         // whose combo point check is at 7035) < the 20% target aura state 5733.
         Assert.True(SpellCastCheckOrder.Shapeshift < SpellCastCheckOrder.CasterAuraState);
         Assert.True(SpellCastCheckOrder.CasterAuraState < SpellCastCheckOrder.Equipment);

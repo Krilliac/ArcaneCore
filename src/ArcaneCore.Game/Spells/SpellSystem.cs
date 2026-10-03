@@ -544,6 +544,13 @@ public sealed partial class SpellSystem
             return SpellCastResult.NotReady;
         }
 
+        // Registered first checks (stand state): vmangos Spell.cpp:5309.
+        SpellCastResult start = RunCastChecks(SpellCheckPhase.Start, caster, spell, targets, unitTarget, triggered, strict);
+        if (start != SpellCastResult.CastOk)
+        {
+            return start;
+        }
+
         if (!caster.IsAlive && !spell.HasAttribute(SpellAttributes.AllowCastWhileDead))
         {
             return SpellCastResult.CasterDead;
@@ -554,7 +561,7 @@ public sealed partial class SpellSystem
             return SpellCastResult.NotReady;
         }
 
-        // Registered caster-state checks (shapeshift, caster aura state): vmangos Spell.cpp:5342-5392.
+        // Registered caster-state checks (shapeshift, caster aura state): vmangos Spell.cpp:5349-5392.
         SpellCastResult casterState = RunCastChecks(SpellCheckPhase.Caster, caster, spell, targets, unitTarget, triggered, strict);
         if (casterState != SpellCastResult.CastOk)
         {

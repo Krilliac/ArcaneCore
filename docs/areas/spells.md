@@ -137,10 +137,10 @@ the melee slot in `SpellSystem.NextSwing.cs`.
 
 - `ISpellCastCheck` (`RegisterCastCheck`): may veto a cast with any `SpellCastResult`. Checks run by
   `SpellCheckPhase` then `Order` (`SpellCastCheckOrder`), the line order of vmangos `Spell::CheckCast`: shapeshift
-  (`Spell.cpp:5342`) < caster aura state (`:5392`) < `CheckItems` (`:5698`) < the built-in range (`:5707`) and power (`:5721`) checks. Phases: Caster (after the cooldown check,
+  (`Spell.cpp:5349`) < caster aura state (`:5392`) < `CheckItems` (`:5698`) < the built-in range (`:5707`) and power (`:5721`) checks. Phases: Caster (after the cooldown check,
   before stun), Target (once an explicit unit target exists and is alive; skipped for spells without one), Items
   (before range). The context says whether the check is the strict cast-start one or the landing re-check.
-  `GetErrorAtShapeshiftedCast` is strict-only in vmangos (`:5340`); the check itself must honour `Strict`.
+  `GetErrorAtShapeshiftedCast` is strict-only in vmangos (`:5349`); the check itself must honour `Strict`.
   Two later phases cover the rest of `CheckCast`: Power (after range, line of sight and the target rules, before the
   built-in power check: the combo point requirement, `Spell.cpp:7035-7038`) and Final (after power: the 20% target aura
   state, `:5733-5742`; also run for triggered casts). Order values follow the source: shapeshift < caster aura state <
@@ -182,7 +182,7 @@ the melee slot in `SpellSystem.NextSwing.cs`.
   to a form (`SpellAuraHolder::m_isRemovedOnShapeLost`, `SpellAuras.cpp:6672`: caster is the target and
   `IsRemovedOnShapeLost`) and interrupts a queued next-swing, preparing or channelled spell that is bound to it.
 - **Gate**: `StanceCastCheck` (phase Caster, order Shapeshift) runs `GetErrorAtShapeshiftedCast` for the caster's
-  form on the strict check of non-triggered casts only (`Spell.cpp:5340-5343`); the landing re-check and triggered
+  form on the strict check of non-triggered casts only (`Spell.cpp:5349-5351`); the landing re-check and triggered
   casts skip it.
 - **Persistence**: the stance aura is a normal permanent aura, so `character_aura` saves it and the restore
   re-runs the handler (form byte, boost). Passives are not saved and come back from the handler.
@@ -201,6 +201,21 @@ the melee slot in `SpellSystem.NextSwing.cs`.
   rage/energy swap; the "talent that learns a spell" exemption of the gate needs the talent tree (not loaded);
   Tactical Mastery only matters once talents exist (the aura is read, nothing grants it yet); the stance-change
   cooldown and the quest-granted stance spells are spell data / quest rewards, not code.
+
+## Generic cast rules (warrior-mechanics S16)
+`GeneralCastChecks` (installed by `CastCheckFeature`) registers four of vmangos `Spell::CheckCast`'s generic rules as cast checks:
+
+- **Standing** (`Spell.cpp:5308-5309`, phase Start, before the cooldown check): a non-triggered cast needs a standing caster
+  unless the spell has ALLOW_WHILE_SITTING (`NOT_STANDING`); the dead stand state counts as standing (`Unit::IsStandingUp`).
+- **Combat-forbidden spells** (`:5343-5344`): `NOT_IN_COMBAT_ONLY_PEACEFUL` (Charge) fails with `AFFECTING_COMBAT` in combat; strict,
+  non-triggered casts only, ahead of the shapeshift gate.
+- **Stealth-only spells** (`:5353-5354`): `ONLY_STEALTHED` needs a `MOD_STEALTH` aura; strict, non-triggered, after the shapeshift gate.
+- **Facing** (`:5639-5649`, phase Target): a behind-only spell (`AttributesEx2 == 0x100000` and `AttributesEx & 0x200`; vmangos' database
+  custom flag is not available) fails with `NOT_BEHIND` unless the caster is behind the target, and a creature that fights the
+  caster and is not incapacitated always faces it on the strict check; a spell whose Attributes are exactly `0x150010` needs the
+  target to face the caster (`NOT_INFRONT`). vmangos also sends an interrupt packet with these two; that packet is not sent.
+- **Not covered**: indoor and outdoor (terrain), underwater and above-water, battleground, mounted and taxi, target level limits,
+  the other target flags, and the explicit-target mask check.
 
 ## What's left
 
