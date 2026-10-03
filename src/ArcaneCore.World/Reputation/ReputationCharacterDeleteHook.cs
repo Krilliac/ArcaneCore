@@ -16,6 +16,9 @@ namespace ArcaneCore.World.Reputation;
 /// </summary>
 public sealed class ReputationCharacterDeleteHook(ReputationFeature reputation) : IWorldFeature, ICharacterDeleteHook
 {
+    /// <summary>How long the post-delete drain waits for the queued removals (tests shorten it).</summary>
+    public TimeSpan DrainTimeout { get; init; } = CharacterDeletion.DrainTimeout;
+
     public void Attach(WorldRuntime world)
     {
     }
@@ -26,6 +29,6 @@ public sealed class ReputationCharacterDeleteHook(ReputationFeature reputation) 
     {
         ArgumentNullException.ThrowIfNull(character);
         reputation.DeleteCharacter(character.Id);
-        await reputation.FlushAsync().WaitAsync(CharacterDeletion.DrainTimeout).ConfigureAwait(false);
+        await reputation.FlushAsync().WaitAsync(DrainTimeout).ConfigureAwait(false);
     }
 }

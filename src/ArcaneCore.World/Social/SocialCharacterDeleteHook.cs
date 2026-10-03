@@ -23,6 +23,9 @@ public sealed class SocialCharacterDeleteHook(SocialFeature social, CharacterDir
     /// <summary>Upper bound for the guild preload and one world-thread round trip during deletion.</summary>
     public static readonly TimeSpan WorldCallTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>How long the post-delete drain waits for the queued purge (tests shorten it).</summary>
+    public TimeSpan DrainTimeout { get; init; } = CharacterDeletion.DrainTimeout;
+
     private WorldRuntime? _world;
 
     public void Attach(WorldRuntime world) => _world = world;
@@ -91,6 +94,6 @@ public sealed class SocialCharacterDeleteHook(SocialFeature social, CharacterDir
 
         // The deletion completes only after the purge was attempted (it is conditional on the id
         // still having no character row, so a recreated character keeps its friends and guild).
-        await social.Context.Persistence.FlushAsync().WaitAsync(CharacterDeletion.DrainTimeout).ConfigureAwait(false);
+        await social.Context.Persistence.FlushAsync().WaitAsync(DrainTimeout).ConfigureAwait(false);
     }
 }

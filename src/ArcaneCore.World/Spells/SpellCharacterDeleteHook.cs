@@ -17,6 +17,9 @@ namespace ArcaneCore.World.Spells;
 /// </summary>
 public sealed class SpellCharacterDeleteHook(SpellFeature spells) : IWorldFeature, ICharacterDeleteHook
 {
+    /// <summary>How long the post-delete drain waits for the queued removals (tests shorten it).</summary>
+    public TimeSpan DrainTimeout { get; init; } = CharacterDeletion.DrainTimeout;
+
     public void Attach(WorldRuntime world)
     {
     }
@@ -35,7 +38,7 @@ public sealed class SpellCharacterDeleteHook(SpellFeature spells) : IWorldFeatur
         spells.State.DeleteCharacter(character.Id);
 
         // "Attempted", not "succeeded": both queues log and swallow a failed store call.
-        await spells.Spellbook.FlushAsync().WaitAsync(CharacterDeletion.DrainTimeout).ConfigureAwait(false);
-        await spells.State.FlushCharacterAsync(character.Id).WaitAsync(CharacterDeletion.DrainTimeout).ConfigureAwait(false);
+        await spells.Spellbook.FlushAsync().WaitAsync(DrainTimeout).ConfigureAwait(false);
+        await spells.State.FlushCharacterAsync(character.Id).WaitAsync(DrainTimeout).ConfigureAwait(false);
     }
 }
