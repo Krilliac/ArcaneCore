@@ -228,6 +228,8 @@ internal sealed class CreatureTemplateBuilder
     public uint ExtraFlags { get; set; }
     public uint CorpseDecaySeconds { get; set; }
     public float Scale { get; set; }
+    public string AIName { get; set; } = string.Empty;
+    public bool Civilian { get; set; }
 
     public CreatureTemplate Build() => new()
     {
@@ -252,5 +254,7 @@ internal sealed class CreatureTemplateBuilder
         Scale = Scale,
         CreatureType = 1,
         Family = 1,
+        AIName = AIName,
+        Civilian = Civilian,
     };
 }
