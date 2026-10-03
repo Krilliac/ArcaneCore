@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Kernel.Accounts;
 
 namespace ArcaneCore.Game.Maps;
@@ -64,4 +65,7 @@ public sealed class WorldRuntimeOptions
     /// (vmangos PlayerCommands, default on).
     /// </summary>
     public bool PlayerCommands { get; set; } = true;
+
+    /// <summary>Grid lifecycle and terrain data (the <c>World:Maps</c> section; docs/areas/grid-terrain.md).</summary>
+    public MapOptions Maps { get; set; } = new();
 }
