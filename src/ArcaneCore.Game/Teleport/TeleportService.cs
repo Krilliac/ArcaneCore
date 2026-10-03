@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Grid;
@@ -149,6 +150,9 @@ public sealed class TeleportService
         {
             return false;
         }
+
+        // vmangos revives a ghost that enters the map its corpse is in (Player.cpp:1953-1966; there before the entry check, here once it passed).
+        current.Combat.ReviveForDungeonEntry(player, mapId);
 
         // vmangos TeleportTo: reset the client time stamp and stop movement, leave any transport.
         ResetMovementForTeleport(player);

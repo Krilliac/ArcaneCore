@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Death.Travel;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
@@ -70,6 +71,16 @@ public sealed class TeleportHandlers : IOpcodeHandlerGroup
         {
             return;
         }
+
+        // A ghost may only enter the dungeon its corpse is in, or one the corpse's dungeon is nested in (MiscHandler.cpp:712-756).
+        GhostEntry ghostEntry = GhostEntryRules.Resolve(player, teleport, maps.Registry, maps.AreaTriggers.Select(t => maps.FindAreaTriggerTeleport(t.Id)).OfType<AreaTriggerTeleport>());
+        if (ghostEntry.Refused)
+        {
+            session.Send(WorldOpcode.SmsgAreaTriggerMessage, TeleportPackets.BuildAreaTriggerMessage(ghostEntry.Message!));
+            return;
+        }
+
+        teleport = ghostEntry.Trigger!;
 
         // vmangos: players in GM mode (.gm on) skip the level requirement.
         if (!player.IsGameMaster && player.Level < teleport.RequiredLevel)

@@ -124,6 +124,8 @@ public sealed partial class MapCombat
         Hooks.RepopAtGraveyard(player);
     }
 
+    private byte[] BuildCorpseQueryFor(Player player) => Death.Travel.CorpseQuery.Build(player, _world);
+
     /// <summary>
     /// vmangos Player::SpawnCorpseBones (ObjectAccessor::ConvertCorpseForPlayer): a resurrected player's corpse is no longer
     /// resurrectable. Bones objects are not modelled, so the corpse simply leaves the world.
@@ -150,6 +152,24 @@ public sealed partial class MapCombat
         SetPower(player, PowerType.Rage, 0);
         SetPower(player, PowerType.Energy, GetMaxPower(player, PowerType.Energy));
         SpawnCorpseBones(player);
+    }
+
+    /// <summary>
+    /// A ghost that far-teleports into the map its corpse lies in is resurrected at half health on the way and its corpse goes
+    /// (vmangos Player::TeleportTo, Player.cpp:1953-1966: DEAD, map above 1, a different map, the corpse in the target map).
+    /// Returns whether it happened.
+    /// </summary>
+    internal bool ReviveForDungeonEntry(Player player, uint targetMapId)
+    {
+        if (player.Combat.DeathState != DeathState.Dead || targetMapId <= 1 || player.MapId == targetMapId
+            || player.Combat.Corpse is not { } corpse || corpse.MapId != targetMapId)
+        {
+            return false;
+        }
+
+        ResurrectPlayer(player, CombatConstants.CorpseReclaimRestorePercent, applySickness: false);
+        SpawnCorpseBones(player);
+        return true;
     }
 
     /// <summary>The <see cref="Death.DeathOptions"/> of this world (<c>World:Death</c>).</summary>
@@ -347,9 +367,17 @@ public sealed partial class MapCombat
         SetPower(player, PowerType.Energy, (uint)(GetMaxPower(player, PowerType.Energy) * percent));
     }
 
-    /// <summary>MSG_CORPSE_QUERY reply body (vmangos HandleCorpseQueryOpcode; dungeon ghost entrances need Map.dbc).</summary>
+    /// <summary>
+    /// MSG_CORPSE_QUERY reply body (vmangos HandleCorpseQueryOpcode): a corpse in a dungeon other than the player's map is shown at the
+    /// dungeon's ghost entrance (<see cref="Death.Travel.CorpseQuery"/>); a player that is in no map gets the corpse's own place.
+    /// </summary>
     public static byte[] BuildCorpseQuery(Player player)
     {
+        if (player.Map is { } map)
+        {
+            return map.Combat.BuildCorpseQueryFor(player);
+        }
+
         if (player.Combat.Corpse is not { } corpse)
         {
             return CombatPackets.CorpseQueryNotFound();
