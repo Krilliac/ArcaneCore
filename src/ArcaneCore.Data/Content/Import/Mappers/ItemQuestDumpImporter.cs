@@ -89,7 +89,7 @@ public sealed class ItemQuestDumpImporter
     private readonly Dictionary<(byte, byte, uint), PlayerCreateInfoItemRow> _startItems = [];
     private readonly MapDiagnostics _diagnostics = new();
     private readonly List<string> _warnings = [];
-    private readonly Dictionary<string, (IReadOnlyList<string> Columns, int[] Key)> _keyCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SpecKeyReader _keys = new();
     private int _skipped;
 
     /// <summary>Whether an <c>item_template</c> column is read (the spec's mapped-column rule).</summary>
@@ -203,7 +203,7 @@ public sealed class ItemQuestDumpImporter
 
     private void ReadItem(DumpRow row)
     {
-        uint[] key = KeyOf(row, "item_template");
+        uint[] key = _keys.Read(row, "item_template");
         int patch = PatchOf(row);
         if (patch > MaxPatch)
         {
@@ -223,7 +223,7 @@ public sealed class ItemQuestDumpImporter
 
     private void ReadQuest(DumpRow row)
     {
-        uint[] key = KeyOf(row, "quest_template");
+        uint[] key = _keys.Read(row, "quest_template");
         int patch = PatchOf(row);
         if (patch > MaxPatch)
         {
@@ -255,7 +255,7 @@ public sealed class ItemQuestDumpImporter
     private void ReadRelation(DumpRow row, HashSet<(uint, uint)> into)
     {
         string table = row.Table.ToLowerInvariant();
-        uint[] key = KeyOf(row, table);
+        uint[] key = _keys.Read(row, table);
         if (row.Has("patch_min"))
         {
             // vmangos LoadQuestRelationsHelper: WHERE WowPatch BETWEEN patch_min AND patch_max.
@@ -273,7 +273,7 @@ public sealed class ItemQuestDumpImporter
 
     private void ReadStartItem(DumpRow row)
     {
-        _ = KeyOf(row, "playercreateinfo_item");
+        _ = _keys.Read(row, "playercreateinfo_item");
         PlayerCreateInfoItemRow item = s_startItemMapper.Map(row, _diagnostics);
         _startItems[(item.Race, item.Class, item.ItemId)] = item;
     }
@@ -313,30 +313,6 @@ public sealed class ItemQuestDumpImporter
         List<(uint, uint)> starters = Filter(_starters, "creature_questrelation");
         List<(uint, uint)> enders = Filter(_enders, "creature_involvedrelation");
         return new Relations(starters, enders, dropped, warnings);
-    }
-
-    /// <summary>The table's key values of a row; the key columns must exist (a missing one is a schema error, never 0).</summary>
-    private uint[] KeyOf(DumpRow row, string table)
-    {
-        if (!_keyCache.TryGetValue(table, out var cached) || !ReferenceEquals(cached.Columns, row.Columns))
-        {
-            cached = (row.Columns, ContentTableSpecs.Find(table)!.ResolveKey(row.Columns));
-            _keyCache[table] = cached;
-        }
-
-        var key = new uint[cached.Key.Length];
-        for (int i = 0; i < key.Length; i++)
-        {
-            string? raw = cached.Key[i] < row.Values.Count ? row.Values[cached.Key[i]] : null;
-            if (!uint.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out key[i]))
-            {
-                throw new ImportSchemaException(
-                    table, ContentTableSpecs.Find(table)!.Keys[i].Canonical,
-                    $"table `{table}`: key value '{raw ?? "NULL"}' of `{ContentTableSpecs.Find(table)!.Keys[i].Canonical}` is not an unsigned number");
-            }
-        }
-
-        return key;
     }
 
     private static int PatchOf(DumpRow row) => row.Has("patch") ? Int(row, "patch") : 0;

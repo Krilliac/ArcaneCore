@@ -8,6 +8,7 @@ using ArcaneCore.Data.Content.Import;
 using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Quests;
+using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
@@ -421,6 +422,32 @@ public sealed class ContentImporterCliTests : IDisposable
         Assert.Equal(ExitCodes.Verify, code);
         Assert.Contains("1 playercreateinfo_item row(s) name an item that has no item_template", output, StringComparison.Ordinal);
         Assert.Contains("2 creature_questrelation and 2 creature_involvedrelation", output, StringComparison.Ordinal);
+    }
+
+    private const string KillReputation = """
+        CREATE TABLE `creature_onkill_reputation` (`creature_id` mediumint unsigned NOT NULL, `RewOnKillRepFaction1` smallint, `RewOnKillRepFaction2` smallint, `MaxStanding1` tinyint, `IsTeamAward1` tinyint, `RewOnKillRepValue1` mediumint, `MaxStanding2` tinyint, `IsTeamAward2` tinyint, `RewOnKillRepValue2` mediumint, `TeamDependent` tinyint unsigned, PRIMARY KEY (`creature_id`));
+        INSERT INTO `creature_onkill_reputation` VALUES (1001,21,0,5,0,25,0,0,0,0),(424242,87,169,5,0,5,7,0,-25,0);
+        """;
+
+    [Fact]
+    public async Task Import_WritesTheKillReputation_AndVerifyNotesCreaturesWithoutATemplate()
+    {
+        string database = Db("world.db");
+        string dump = WriteDump("rep.sql", CMangosDump + "\n" + KillReputation);
+
+        (int plan, string planOutput, _) = await RunAsync("plan", dump);
+        (int import, string importOutput, _) = await RunAsync("import", dump, "--database", database);
+        (int verify, string verifyOutput, _) = await RunAsync("verify", "--database", database);
+
+        Assert.Equal(ExitCodes.Ok, plan);
+        Assert.Contains("RewOnKillRepFaction1", TableLine(planOutput, "creature_onkill_reputation").Mapped, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Ok, import);
+        Assert.Contains("creature_onkill_reputation  2", importOutput, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Ok, verify);
+        Assert.Contains("creature_onkill_reputation  2", verifyOutput, StringComparison.Ordinal);
+        Assert.Contains("1 creature_onkill_reputation row(s) name a creature that has no creature_template", verifyOutput, StringComparison.Ordinal);
+        await using WorldDbContext db = Open(database);
+        Assert.Equal([1001u, 424242u], (await db.Set<CreatureOnKillReputationRow>().AsNoTracking().ToListAsync()).Select(r => r.CreatureId).Order());
     }
 
     [Fact]

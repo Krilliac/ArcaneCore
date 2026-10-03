@@ -2,6 +2,7 @@ using System.Globalization;
 using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Quests;
+using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
@@ -34,7 +35,7 @@ public static class ContentImporterCli
         commands:
           plan <dump>...        read the dump(s) and print, per table, the dialect, row and key
                                 counts and which columns an importer reads; writes no database
-          import <dump>...      import the creature, game object, loot, item and quest tables
+          import <dump>...      import the creature, game object, loot, item, quest and kill-reputation tables
                                 (and the starting outfit, playercreateinfo_item)
           import-dbc <dir>      import the five spell DBCs from a client DBFilesClient directory
           verify                count the imported tables and check references
@@ -172,6 +173,7 @@ public static class ContentImporterCli
         var creatures = new CreatureDumpImporter();
         var objects = new GameObjectLootDumpImporter();
         var itemsAndQuests = new ItemQuestDumpImporter { QuestXp = ParseQuestXp(a) };
+        var onKill = new OnKillReputationDumpImporter();
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             creatures.Read(reader);
@@ -185,6 +187,11 @@ public static class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             itemsAndQuests.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            onKill.Read(reader);
         }
 
         string? dbcDirectory = a.Value("--dbc-dir");
@@ -215,6 +222,7 @@ public static class ContentImporterCli
         CreatureImportReport creatureReport = creatures.BuildReport();
         GameObjectLootImportReport objectReport = objects.BuildReport();
         ItemQuestImportReport itemQuestReport = itemsAndQuests.BuildReport();
+        ReputationOnKillImportReport onKillReport = onKill.BuildReport();
         if (!dryRun)
         {
             o.WriteLine($"target: {target!.Describe}");
@@ -227,6 +235,7 @@ public static class ContentImporterCli
                     creatureReport = await creatures.WriteAsync(db, replace, token).ConfigureAwait(false);
                     objectReport = await objects.WriteAsync(db, replace, token).ConfigureAwait(false);
                     itemQuestReport = await itemsAndQuests.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    onKillReport = await onKill.WriteAsync(db, replace, token).ConfigureAwait(false);
                 }, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -238,6 +247,7 @@ public static class ContentImporterCli
         warnings.AddRange(creatureReport.Warnings);
         warnings.AddRange(objectReport.Warnings);
         warnings.AddRange(itemQuestReport.Warnings);
+        warnings.AddRange(onKillReport.Warnings);
         if (itemQuestReport.DerivedQuestXp > 0)
         {
             warnings.Add(
@@ -245,7 +255,7 @@ public static class ContentImporterCli
                 "(the source has no RewXP; cmangos Quest::XPValue); XP reduced for grey quests can differ from cmangos by 1");
         }
 
-        (Dictionary<string, long> imported, Dictionary<string, long> skipped) = Counts(creatureReport, objectReport, itemQuestReport);
+        (Dictionary<string, long> imported, Dictionary<string, long> skipped) = Counts(creatureReport, objectReport, itemQuestReport, onKillReport);
         o.WriteLine(dryRun ? "would import:" : "imported:");
         foreach ((string table, long count) in imported)
         {
@@ -263,7 +273,7 @@ public static class ContentImporterCli
     }
 
     private static (Dictionary<string, long> Imported, Dictionary<string, long> Skipped) Counts(
-        CreatureImportReport creatures, GameObjectLootImportReport objects, ItemQuestImportReport itemsAndQuests)
+        CreatureImportReport creatures, GameObjectLootImportReport objects, ItemQuestImportReport itemsAndQuests, ReputationOnKillImportReport onKill)
     {
         var imported = new Dictionary<string, long>
         {
@@ -286,12 +296,14 @@ public static class ContentImporterCli
             ["creature_questrelation"] = itemsAndQuests.QuestStarters,
             ["creature_involvedrelation"] = itemsAndQuests.QuestEnders,
             ["playercreateinfo_item"] = itemsAndQuests.StartingItems,
+            ["creature_onkill_reputation"] = onKill.Entries,
         };
         var skipped = new Dictionary<string, long>
         {
             ["creature_spawn"] = creatures.SkippedSpawns,
             ["gameobject_and_loot_rows"] = objects.SkippedRows,
             ["item_and_quest_rows"] = itemsAndQuests.SkippedRows,
+            ["creature_onkill_reputation"] = onKill.SkippedRows,
         };
         return (imported, skipped);
     }
@@ -382,6 +394,7 @@ public static class ContentImporterCli
                 ("creature_questrelation", await db.Set<CreatureQuestStarterRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_involvedrelation", await db.Set<CreatureQuestEnderRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("playercreateinfo_item", await db.Set<PlayerCreateInfoItemRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("creature_onkill_reputation", await db.Set<CreatureOnKillReputationRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_template", await db.Set<SpellTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
             };
             foreach ((string table, int count) in counts)
@@ -410,6 +423,14 @@ public static class ContentImporterCli
                 o.WriteLine(
                     $"note: {giversWithoutTemplate} creature_questrelation and {endersWithoutTemplate} creature_involvedrelation row(s) name a creature " +
                     "that has no creature_template (the loaders keep these and only log them)");
+            }
+
+            int onKillWithoutTemplate = await db.Set<CreatureOnKillReputationRow>()
+                .CountAsync(r => !templates.Any(t => t.Entry == r.CreatureId), ct).ConfigureAwait(false);
+            if (onKillWithoutTemplate > 0)
+            {
+                o.WriteLine(
+                    $"note: {onKillWithoutTemplate} creature_onkill_reputation row(s) name a creature that has no creature_template (vmangos skips them at load)");
             }
 
             if (startingItemsMissing > 0)

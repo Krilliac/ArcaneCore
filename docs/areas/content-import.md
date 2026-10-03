@@ -1,6 +1,6 @@
 # Area: content import (classic-db / vmangos dumps to the world database)
 
-Status: first slices of the unified importer (`claude/vw-content-import-full`). WoW 1.12.1 (5875). Data source of record:
+Status: first four slices of the unified importer (core, CLI, items and quests, kill reputation), branch `claude/vw-content-import-full`. WoW 1.12.1 (5875). Data source of record:
 the cmaNGOS **classic-db** Full_DB snapshot (`ClassicDB_1_12_1_z2815.sql.gz`, "Melting Pot v2", core z2815). vmangos
 dumps are a second accepted layout. The dumps are GPL-3 data with Blizzard copyright material in them (classic-db
 `COPYRIGHT.md`): they are read from wherever the developer keeps them, never committed, and the importer refuses to write a
@@ -94,6 +94,26 @@ Imports the tables that already had a schema and store but no importer: `item_te
   starting outfit from `CharStartOutfit.dbc` (`src/game/Entities/Player.cpp:857-900`) and only adds `playercreateinfo_item`
   rows on top (`Globals/ObjectMgr.cpp:3157`). New characters therefore still get no starting items from classic-db.
 
+### `onkill-reputation` (`Data/Reputation/CreatureOnKillReputationWorldModule.cs`, `Import/Mappers/OnKillReputationDumpImporter.cs`; World schema step)
+
+Kill reputation was a hole: `IReputationOnKillSource` (Kernel `CharacterReputation.cs`) is what `ReputationFeature` resolves
+from DI, and nothing registered it, so no creature ever granted reputation. This slice adds the table, the source and the
+importer.
+
+- **Schema.** `CreatureOnKillReputationWorldModule`, one new `IDataModule` file, `Version = 11` (the next free World version
+  after the quest-reputation step at 10; the single constant the integrator renumbers; `IntegratedSchemaTests` and the module
+  test refer to the constant). Table `creature_onkill_reputation`, key `CreatureId`; the module registers
+  `EfReputationOnKillSource` (scoped). No `ICharacterDataCleanup`: the world schema holds no per-character rows.
+- **By-name mapping.** vmangos selects `IsTeamAward` before `MaxStanding` (`ObjectMgr.cpp:8897-8899`) and classic-db stores
+  `MaxStanding` first, so reading by position swaps them; the importer maps by name and a test pins the order independence.
+  vmangos rows take the highest `patch` not above 10 (`:8902`).
+- **Not done at import time.** vmangos skips rows whose creature has no template or whose faction is not in Faction.dbc
+  (`:8935-8957`); the importer has neither set. `verify` notes creatures without a template (none in z2815); the reputation
+  service ignores unknown factions at kill time.
+- Verified: 470 rows imported from z2815 (all with templates), and the world daemon logged "Loaded 0 factions and 470 kill
+  reputation entries" (the factions need `Faction.dbc`, which this machine does not have, so reputation gains were not
+  exercised end to end).
+
 ## Verified against the real classic-db dump
 
 Run on `ClassicDB_1_12_1_z2815.sql.gz` (12,959,882 bytes, SHA-256 `4f92db52...d0c0`, `db_version` "Classic DB version 1.12.1
@@ -116,6 +136,7 @@ Run on `ClassicDB_1_12_1_z2815.sql.gz` (12,959,882 bytes, SHA-256 `4f92db52...d0
 | quest_template | 4,245 | 4,245 (RewXP derived for 3,492) |
 | creature_questrelation / creature_involvedrelation | 3,826 / 3,951 | 3,826 / 3,951 (none dropped) |
 | playercreateinfo_item | 0 | 0 (see above) |
+| creature_onkill_reputation | 470 | 470 |
 
 The world daemon (`ArcaneCore.World`, SQLite for all three databases, port overridden) then logged "Loaded 10384 creature
 templates and 66310 spawns" and "Loaded 10743 game object templates, 47827 spawns, 0 locks, 222501 loot rows, 5060 creature
@@ -124,9 +145,9 @@ loot entries" and "Loaded 4245 quest templates". Item templates load lazily (fir
 ## Limits (explicit, not done)
 
 - **Only what the importers read is imported.** Not imported (listed by `plan`):
-  NPC vendors/trainers/gossip/NPC text, conditions, `creature_spawn_entry`/`gameobject_spawn_entry`, equipment
+  NPC vendors (11,890 rows), trainers (27,309), gossip menus/options/NPC text and `npc_*_template` tables (they need `creature_template.VendorTemplateId/TrainerTemplateId/GossipMenuId`, which the creature template does not carry, plus schema and Game-side consumers), conditions, `creature_spawn_entry`/`gameobject_spawn_entry`, equipment
   and template addons, `creature_template_classlevelstats` and the template multipliers, movement templates, pools and
-  game events, onkill reputation, broadcast text, DBC-derived tables (maps, areas, taxi, races, start outfits), player start
+  game events, broadcast text, DBC-derived tables (maps, areas, taxi, races, start outfits), player start
   stats, graveyards. The unmapped columns of every read table are printed by `plan`.
 - **Spawns with id 0** (2,802 creatures, 3,614 game objects in z2815) are imported with entry 0: cmangos resolves them through
   `creature_spawn_entry` / `gameobject_spawn_entry` (not imported), so the runtime cannot spawn them. `verify` notes them.

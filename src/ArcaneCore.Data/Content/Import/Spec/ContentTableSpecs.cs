@@ -77,6 +77,13 @@ public static class ContentTableSpecs
         new(ContentDialect.VMangos, ["patch", "RewXP"], []),
     ];
 
+    // creature_onkill_reputation: vmangos rows carry `patch` (ObjectMgr.cpp:8902); classic-db has none.
+    private static readonly DialectSignature[] s_onKillSignatures =
+    [
+        new(ContentDialect.CMangos, ["RewOnKillRepFaction1"], ["patch"]),
+        new(ContentDialect.VMangos, ["RewOnKillRepFaction1", "patch"], []),
+    ];
+
     // quest relations: vmangos filters on patch_min/patch_max (ObjectMgr.cpp:9178).
     private static readonly DialectSignature[] s_relationSignatures =
     [
@@ -143,6 +150,7 @@ public static class ContentTableSpecs
         new("creature_questrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], s_relationSignatures),
         new("creature_involvedrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], s_relationSignatures),
         new("playercreateinfo_item", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("itemid")], ["amount"], []),
+        new("creature_onkill_reputation", [new KeyColumn("creature_id")], [], s_onKillSignatures, OnKillReputationDumpImporter.ReadsColumn),
     ];
 
     private static readonly FrozenDictionary<string, TableSpec> s_byTable =

@@ -78,6 +78,7 @@ $expected = [ordered]@{
     'quest_template'              = 'quest_template'
     'creature_questrelation'      = 'creature_questrelation'
     'creature_involvedrelation'   = 'creature_involvedrelation'
+    'creature_onkill_reputation'  = 'creature_onkill_reputation'
 }
 
 $failures = 0
