@@ -24,4 +24,27 @@ public sealed partial class SpellSystem
 
     /// <summary>Spell::TakeCastItem (Spell.cpp:4991-5048): charges and the destroy of a spent expendable item, see <see cref="ItemSpellCharges"/>.</summary>
     private static void TakeCastItem(SpellCast cast) => ItemSpellCharges.TakeCastItem(cast);
+
+    /// <summary>
+    /// vmangos <c>Unit::RemoveAurasDueToItemSpell</c>: remove the auras of <paramref name="spellId"/> that were cast from <paramref name="item"/>
+    /// (an enchantment or item set spell that stops when the item is taken off). Returns how many holders were removed.
+    /// </summary>
+    public int RemoveAurasDueToItemSpell(Unit unit, Item item, uint spellId)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        ArgumentNullException.ThrowIfNull(item);
+        if (GetState(unit.Guid) is not { } state || !ReferenceEquals(state.Unit, unit))
+        {
+            return 0;
+        }
+
+        int removed = 0;
+        foreach (SpellAuraHolder holder in state.Auras.Where(h => !h.IsRemoved && h.Spell.Id == spellId && h.CastItemGuid == item.Guid).ToArray())
+        {
+            RemoveHolder(state, holder);
+            removed++;
+        }
+
+        return removed;
+    }
 }

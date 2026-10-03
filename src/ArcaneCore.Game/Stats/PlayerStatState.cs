@@ -21,6 +21,7 @@ public sealed class PlayerStatState
 
     private readonly WeaponDamageEntry[][] _damage = new WeaponDamageEntry[3][];
     private readonly int[] _count = new int[3];
+    private readonly float[] _totalDamage = new float[3];
 
     internal PlayerStatState(Player owner)
     {
@@ -92,6 +93,24 @@ public sealed class PlayerStatState
 
         CanDualWield = value;
         Maintainer?.UpdateAttackPowerAndDamage(Owner, ranged: false);
+    }
+
+    /// <summary>
+    /// The flat damage added to a hand (vmangos <c>m_auraModifiersGroup[UNIT_MOD_DAMAGE_MAINHAND|OFFHAND|RANGED][TOTAL_VALUE]</c>, the term a weapon enchantment
+    /// with a damage or totem effect adds through Player::ApplyEnchantment, Player.cpp:11771-11780 and :11846-11863). Read by <see cref="PlayerStatSystem"/>.
+    /// </summary>
+    public float TotalDamage(WeaponAttackType type) => _totalDamage[(int)type];
+
+    /// <summary>Add <paramref name="delta"/> to a hand's flat damage and recompute the damage fields of that hand.</summary>
+    public void AddTotalDamage(WeaponAttackType type, float delta)
+    {
+        if (delta == 0)
+        {
+            return;
+        }
+
+        _totalDamage[(int)type] += delta;
+        Maintainer?.UpdateAttackPowerAndDamage(Owner, ranged: type == WeaponAttackType.RangedAttack);
     }
 
     /// <summary>Unit::GetWeaponDamageCount.</summary>
