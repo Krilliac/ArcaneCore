@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells.Rules;
+using ArcaneCore.Game.Spells.Rules.Immunity;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -76,9 +77,9 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts
     private static readonly SpellRuleOptions s_defaultOptions = new();
 
     /// <summary>
-    /// vmangos Unit::SpellHitResult: self casts and positive spells always land; an evading creature
-    /// evades; magic spells use <see cref="MagicHitChance"/>; melee/ranged spells roll miss, dodge
-    /// and parry (no glancing/crushing, vmangos MeleeSpellHitResult).
+    /// vmangos Unit::SpellHitResult: an evading creature evades; an immune target is immune (<see cref="ImmunityRules"/>);
+    /// self casts and positive spells always land; magic spells use <see cref="MagicHitChance"/>; melee/ranged spells
+    /// roll miss, dodge and parry (no glancing/crushing, vmangos MeleeSpellHitResult).
     /// </summary>
     public virtual SpellMissInfo RollHit(SpellSystem system, Unit caster, Unit target, SpellInfo spell)
     {
@@ -86,14 +87,27 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(spell);
-        if (ReferenceEquals(caster, target) || spell.IsPositive)
+        bool self = ReferenceEquals(caster, target);
+        if (!self && !spell.IsPositive && target is ICombatCreature { IsInEvadeMode: true })
+        {
+            return SpellMissInfo.Evade;
+        }
+
+        // vmangos SpellCaster::SpellHitResult order (SpellCaster.cpp:169-227): evade, immune to the spell (even a
+        // positive one: an immunity can block both), self and positive spells land, then immune to the damage.
+        if (!self && ImmunityRules.IsImmuneToSpell(system, target, spell, castOnSelf: false))
+        {
+            return SpellMissInfo.Immune;
+        }
+
+        if (self || spell.IsPositive)
         {
             return SpellMissInfo.None;
         }
 
-        if (target is ICombatCreature { IsInEvadeMode: true })
+        if (ImmunityRules.IsImmuneToDamage(system, target, spell.SchoolMask(), spell))
         {
-            return SpellMissInfo.Evade;
+            return SpellMissInfo.Immune;
         }
 
         switch (spell.DamageClass)

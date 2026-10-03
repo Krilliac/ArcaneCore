@@ -3,6 +3,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Rules.Application;
 using ArcaneCore.Game.Spells.Rules.Diminishing;
+using ArcaneCore.Game.Spells.Rules.Immunity;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Spells;
@@ -52,13 +53,14 @@ public sealed class SpellRulesFeatureTests
             ["SpellRules:IgnoreHolyResistance"] = "true",
             ["SpellRules:DiminishingReturns"] = "false",
             ["SpellRules:DiminishingResetMs"] = "9000",
+            ["SpellRules:ImmunityEnforcement"] = "false",
         }).Build();
 
         SpellRuleOptions bound = SpellRulesCoreFeature.BindOptions(configuration);
         SpellRuleOptions defaults = SpellRulesCoreFeature.BindOptions(null);
 
-        Assert.Equal((1f, 2, true, false, 9000u), (bound.MagicHitFloorPercent, bound.WorldBossLevelDiff, bound.IgnoreHolyResistance, bound.DiminishingReturns, bound.DiminishingResetMs));
-        Assert.Equal((22f, 3, false, true, 15_000u), (defaults.MagicHitFloorPercent, defaults.WorldBossLevelDiff, defaults.IgnoreHolyResistance, defaults.DiminishingReturns, defaults.DiminishingResetMs));
+        Assert.Equal((1f, 2, true, false, 9000u, false), (bound.MagicHitFloorPercent, bound.WorldBossLevelDiff, bound.IgnoreHolyResistance, bound.DiminishingReturns, bound.DiminishingResetMs, bound.ImmunityEnforcement));
+        Assert.Equal((22f, 3, false, true, 15_000u, true), (defaults.MagicHitFloorPercent, defaults.WorldBossLevelDiff, defaults.IgnoreHolyResistance, defaults.DiminishingReturns, defaults.DiminishingResetMs, defaults.ImmunityEnforcement));
         Assert.False(defaults.CreatureSpellCrit);
     }
 
@@ -74,9 +76,10 @@ public sealed class SpellRulesFeatureTests
             SpellFeature spells = ((WorldSession)player.Session).Services.GetRequiredService<SpellFeature>();
             var vanilla = Assert.IsType<VanillaSpellCombatRules>(spells.System.CombatRules);
             Assert.Equal(22f, vanilla.Options.MagicHitFloorPercent);
-            Assert.Equal(2, spells.System.ApplicationRules.Count);
-            Assert.IsType<MechanicResistRule>(spells.System.ApplicationRules[0]);
-            Assert.IsType<DiminishingRule>(spells.System.ApplicationRules[1]);
+            Assert.Equal(3, spells.System.ApplicationRules.Count);
+            Assert.IsType<ImmunityApplicationRule>(spells.System.ApplicationRules[0]);
+            Assert.IsType<MechanicResistRule>(spells.System.ApplicationRules[1]);
+            Assert.IsType<DiminishingRule>(spells.System.ApplicationRules[2]);
         });
     }
 }

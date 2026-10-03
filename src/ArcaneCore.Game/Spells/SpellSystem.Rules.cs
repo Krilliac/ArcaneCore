@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Rules.Application;
+using ArcaneCore.Game.Spells.Rules.Immunity;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -21,6 +22,15 @@ public sealed partial class SpellSystem
     /// resistance, ...). The identity until the talents area installs the real storage.
     /// </summary>
     public ISpellModifiers SpellModifiers { get; set; } = ISpellModifiers.None;
+
+    /// <summary>
+    /// Whether immunities are enforced (retail: true; <c>SpellRules:ImmunityEnforcement</c> false disables every check
+    /// for development hosts).
+    /// </summary>
+    public bool ImmunityEnforcement { get; set; } = true;
+
+    /// <summary>The static immunities of creatures (creature data area); null means none.</summary>
+    public ICreatureImmunityProvider? CreatureImmunities { get; set; }
 
     /// <summary>
     /// The application rules run for every spell landing on a target, in order (mechanic resistance, diminishing

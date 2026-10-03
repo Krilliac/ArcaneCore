@@ -42,4 +42,10 @@ public sealed class SpellRuleOptions
     /// Unit::GetDiminishing, Unit.cpp:7630: 15 seconds).
     /// </summary>
     public uint DiminishingResetMs { get; init; } = 15_000;
+
+    /// <summary>
+    /// Whether immunities (aura-granted and creature static masks) are enforced. Retail: true; false disables every
+    /// immunity check for development hosts.
+    /// </summary>
+    public bool ImmunityEnforcement { get; init; } = true;
 }

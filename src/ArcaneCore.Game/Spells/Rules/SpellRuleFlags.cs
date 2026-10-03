@@ -39,4 +39,10 @@ public static class SpellRuleFlags
 
     /// <summary>AttributesEx4: SPELL_ATTR_EX4_IGNORE_DAMAGE_TAKEN_MODIFIERS (SpellDefines.h:994).</summary>
     public const uint Ex4IgnoreDamageTakenModifiers = 0x00000100;
+
+    /// <summary>AttributesEx: SPELL_ATTR_EX_IGNORE_CASTER_AND_TARGET_RESTRICTIONS (SpellDefines.h:893; moved to Ex3 after 1.10).</summary>
+    public const uint ExIgnoreCasterAndTargetRestrictions = 0x00800000;
+
+    /// <summary>AttributesEx3: SPELL_ATTR_EX3_IGNORE_CASTER_AND_TARGET_RESTRICTIONS (SpellDefines.h:976).</summary>
+    public const uint Ex3IgnoreCasterAndTargetRestrictions = 0x10000000;
 }
