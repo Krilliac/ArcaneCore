@@ -34,7 +34,7 @@ public interface ITotemSpellSource
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class SummonService : ISpellSummonSink
+public sealed partial class SummonService : ISpellSummonSink
 {
     /// <summary>vmangos Spell::EffectSummonTotem: <c>CreatureCreatePos(caster, orientation, 2.0f, angle)</c>.</summary>
     public const float TotemDistance = 2.0f;
@@ -45,16 +45,18 @@ public sealed class SummonService : ISpellSummonSink
     private readonly PetOptions _options;
     private readonly Func<Map, CreatureMapSystem?> _systems;
     private readonly ILogger _logger;
+    private readonly Random _random;
     private readonly HashSet<string> _warned = [];
     private SpellSystem? _spells;
 
     /// <param name="options">Tuning (retail defaults when null); handed to every map's <see cref="PetMapSystem"/>.</param>
     /// <param name="systems">The creature system a summon spawns into; the default is the one attached to the map.</param>
-    public SummonService(PetOptions? options = null, Func<Map, CreatureMapSystem?>? systems = null, ILogger? logger = null)
+    public SummonService(PetOptions? options = null, Func<Map, CreatureMapSystem?>? systems = null, ILogger? logger = null, Random? random = null)
     {
         _options = options ?? new PetOptions();
         _systems = systems ?? (static map => map.FindUpdater<CreatureMapSystem>());
         _logger = logger ?? NullLogger.Instance;
+        _random = random ?? new Random();
     }
 
     /// <summary>The totem spell lookup (null: totems are visual only).</summary>
@@ -70,6 +72,9 @@ public sealed class SummonService : ISpellSummonSink
         spells.RegisterEffect(SpellEffectName.SummonTotemSlot2, context => EffectSummonTotem(context, TotemSlots.Earth));
         spells.RegisterEffect(SpellEffectName.SummonTotemSlot3, context => EffectSummonTotem(context, TotemSlots.Water));
         spells.RegisterEffect(SpellEffectName.SummonTotemSlot4, context => EffectSummonTotem(context, TotemSlots.Air));
+        spells.RegisterEffect(SpellEffectName.SummonWild, EffectSummonWild);
+        spells.RegisterEffect(SpellEffectName.SummonGuardian, EffectSummonGuardian);
+        spells.RegisterEffect(SpellEffectName.SummonCritter, EffectSummonCritter);
     }
 
     // --- totems ---------------------------------------------------------------------------------
@@ -282,6 +287,12 @@ public sealed class SummonService : ISpellSummonSink
         {
             creature.Summon = new SummonLinks(SummonKind.Pet, caster.Guid, req.SpellId, TotemSlots.None, req.DurationMs);
             ApplyOwner(creature, caster, req.SpellId);
+            creature.NpcFlags = 0;
+            creature.Level = caster.Level; // InitStatsForLevel(caster level); the stats themselves are the stats lane's
+            if ((caster.UnitFlags & UnitFlags.Pvp) != 0)
+            {
+                creature.UnitFlags |= UnitFlags.Pvp;
+            }
 
             // vmangos passes -caster orientation for the pet (SpellEffects.cpp:2372).
             return new CreatureHome(req.X, req.Y, req.Z, Creature.NormalizeOrientation(-caster.Orientation));
@@ -300,7 +311,11 @@ public sealed class SummonService : ISpellSummonSink
 
     // --- shared pieces --------------------------------------------------------------------------
 
-    /// <summary>The links a summoned pet or guardian gets from its owner (SpellEffects.cpp:2391-2397, 2880-2884).</summary>
+    /// <summary>
+    /// The links every summoned pet, guardian and mini pet gets from its owner (SpellEffects.cpp:2391-2397,
+    /// 2880-2884, 5440-5446): owner and creator, the owner's faction, the pet name timestamp and the spell.
+    /// Level, NPC flags and the PvP flag differ per kind and are set by the caller.
+    /// </summary>
     internal static void ApplyOwner(Creature creature, Unit owner, uint spellId)
     {
         creature.SetOwnerGuid(owner.Guid);
@@ -308,12 +323,6 @@ public sealed class SummonService : ISpellSummonSink
         creature.FactionTemplate = owner.FactionTemplate;
         creature.SetUInt32(UpdateFields.UnitFieldPetNameTimestamp, 0);
         creature.SetUInt32(UpdateFields.UnitCreatedBySpell, spellId);
-        creature.NpcFlags = 0;
-        creature.Level = owner.Level;
-        if ((owner.UnitFlags & UnitFlags.Pvp) != 0)
-        {
-            creature.UnitFlags |= UnitFlags.Pvp;
-        }
     }
 
     /// <summary>

@@ -125,13 +125,17 @@ public sealed class PetMapSystem : IMapUpdater
             }
 
             Unit? owner = creature.GetOwner();
-            if (links.Kind == SummonKind.Totem)
+            switch (links.Kind)
             {
-                UpdateTotem(creature, links, owner, diffMs);
-            }
-            else
-            {
-                UpdatePet(creature, links, owner, diffMs);
+                case SummonKind.Totem:
+                    UpdateTotem(creature, links, owner, diffMs);
+                    break;
+                case SummonKind.Wild:
+                    UpdateWild(creature, links, diffMs);
+                    break;
+                default:
+                    UpdatePet(creature, links, owner, diffMs);
+                    break;
             }
         }
     }
@@ -168,6 +172,34 @@ public sealed class PetMapSystem : IMapUpdater
         }
 
         links.RemainingMs -= (int)diffMs;
+    }
+
+    /// <summary>
+    /// vmangos TemporarySummon::Update, TEMPSUMMON_TIMED_DEATH_AND_DEAD_DESPAWN (TemporarySummon.cpp:200-218):
+    /// when the timer has run out the creature is killed unless it is in combat (it is retried every
+    /// tick, <c>m_timer = 0</c>); the corpse is then removed by its creature system like any temporary
+    /// summon. Without a duration (TEMPSUMMON_DEAD_DESPAWN) it only ends with its death.
+    /// </summary>
+    private void UpdateWild(Creature wild, SummonLinks links, uint diffMs)
+    {
+        if (!links.HasTimer)
+        {
+            return;
+        }
+
+        if (links.RemainingMs <= diffMs)
+        {
+            if (!wild.Combat.IsInCombat && wild.IsAlive)
+            {
+                wild.System?.KillCreature(wild);
+            }
+
+            links.RemainingMs = 0;
+        }
+        else
+        {
+            links.RemainingMs -= (int)diffMs;
+        }
     }
 
     /// <summary>vmangos Pet::Update (Pet.cpp:662-712) for the states a creature can be in here.</summary>

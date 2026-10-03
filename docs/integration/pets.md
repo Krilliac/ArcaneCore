@@ -44,6 +44,38 @@ owner/creator links, owner faction and level, `UNIT_FIELD_SUMMON` set on the own
 `Pets:PetLeashDistance` (120, by the 3D distance less both radii), no longer lists it as its pet,
 dead with the pet out of combat, or when the spell duration ends.
 
+### P2 guardians, wild summons and mini pets
+
+`Game/Pets/SummonService.Guardians.cs`; registered by `SummonService.Install`.
+
+* **SUMMON_GUARDIAN (42)**, vmangos `EffectSummonGuardian` (`SpellEffects.cpp:2775-2914`):
+  HIGHGUID_PET creatures that are owned (owner and creator fields, owner faction, name timestamp 0,
+  created-by-spell) but **not** the owner's `UNIT_FIELD_SUMMON` pet. A direct (not triggered) second
+  cast by a player dismisses its guardians of that entry and stops there, unless the spell has both a
+  duration and a category (`2791-2804`); a non-player caster is capped at 16 guardians of an entry
+  (refused once it has more than `MaxNpcGuardiansPerEntry` = 15, `2806`); the level is the template's
+  `urand(level_min, level_max)`, or for a non-player caster with `EffectMultipleValue <= 0` the
+  caster level plus that value when it is 1..63 (`2810-2822`); `damage` guardians (at least 1), the
+  first at the destination facing `-orientation`, the others on a random point within the effect radius
+  of the centre facing `+orientation`, or all at the caster when there is no destination
+  (`2851-2865`); follow angle `pi/2 + pi/6 * (guardians + pet)` wrapped below `2 pi` (`2889-2897`),
+  stored in `SummonLinks.FollowAngle`. The NPC flags stay the template's.
+* **SUMMON_WILD (41)**, vmangos `EffectSummonWild` (`2685-2772`) through `SummonCreature`
+  (`Object.cpp:2547-2610`): HIGHGUID_UNIT temporary summons without owner or creator fields (`2761`),
+  template faction and level, `UNIT_CREATED_BY_SPELL`; `damage` of them (at least 1), the first at the
+  destination, the others at random points in the radius; no destination: `radius` in front of the
+  caster (the caster's own radius is added by `GetNearPoint`), or the caster's position at radius 0.
+  Lifetime is TEMPSUMMON_TIMED_DEATH_AND_DEAD_DESPAWN (`TemporarySummon.cpp:201-218`) when the spell
+  has a duration (killed at the timer unless in combat, retried every tick, the corpse then decays
+  like any temporary creature) and TEMPSUMMON_DEAD_DESPAWN without one (only its death ends it).
+* **SUMMON_CRITTER (97)**, vmangos `EffectSummonCritter` (`5400-5472`): players only; the same entry
+  again just dismisses the mini pet, another entry replaces it; owned by the player but not its
+  `UNIT_FIELD_SUMMON`; keeps the template level and NPC flags (`SelectLevel`, `5458`); without a
+  destination it appears at the caster, with one it appears `PET_FOLLOW_DIST` (2) away at
+  `MINI_PET_SUMMON_ANGLE` (pi/4) from the caster's facing (vmangos ignores the destination,
+  `5433-5434`); faces the player (`5462`). Pet.cpp's owner-gone, range, dead-owner and duration rules
+  apply to guardians and mini pets as to pets (not the `IsControlled` pet-link rule).
+
 ## Configuration (`Pets`, every default is the retail value)
 
 | Key | Default | Meaning |
@@ -89,5 +121,20 @@ dead with the pet out of combat, or when the spell duration ends.
 * **Map change.** A pet or totem is unsummoned when its owner leaves the map (including a far
   teleport). vmangos re-summons a temporarily unsummoned pet after the transfer
   (`UnsummonPetTemporaryIfAny`); that belongs with pet persistence (P7).
+* **No pet AI yet.** Pets, guardians and mini pets run the creature-ai default AI for their template
+  (AggressorAI fights back when attacked; creature-versus-creature aggro is not modelled there
+  either). vmangos `PetAI` (follow at the stored angle, defend, assist the owner, the commands and
+  react states) is tied to `CharmInfo` and the pet wire protocol and is a later slice that also waits
+  for the creature-ai leash and aggro work. The first consequence: nothing follows its owner, and an
+  attacked guardian runs the generic assistance call.
+* **Guardian level scaling.** The engineering-trinket level (`SpellEffects.cpp:2824-2832`) needs the
+  skills lane's skill values; a guardian's stats follow its template, not `InitStatsForLevel`.
+* **Random points** use a uniform disc at the terrain height (or the centre's Z), as the creature
+  wander does, instead of the navmesh walk query of `GetRandomPoint` (`Object.cpp:1991-2063`).
+* **Summon limit.** vmangos `SummonCreature` refuses once the summoner has too many active summons
+  (`GetCreatureSummonLimit`, `Object.cpp:2445`, `2557`); not modelled for wild summons.
+* **SUMMON_PET (56)** is not registered: vmangos `EffectSummonPet` (`SpellEffects.cpp:3171`) loads the
+  saved pet or creates a warlock demon through `LoadPetFromDB`/`CreateBaseAtCreature`, which needs
+  the pet store (P7). **SUMMON_POSSESSED** and charm are also outside this build.
 * Hunter taming, feeding, loyalty, stable and talents belong to the class-hunter and talents lanes;
   warlock summon kits to class-casters.

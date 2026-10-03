@@ -14,6 +14,28 @@ public enum SummonKind : byte
 
     /// <summary>vmangos Pet(MINI_PET): HIGHGUID_PET, the owner's single non-combat companion (EffectSummonCritter).</summary>
     MiniPet,
+
+    /// <summary>
+    /// vmangos TemporarySummon created by SPELL_EFFECT_SUMMON_WILD: HIGHGUID_UNIT, no owner links, template
+    /// faction, despawns after the spell duration (TEMPSUMMON_TIMED_DEATH_AND_DEAD_DESPAWN) or at its death.
+    /// </summary>
+    Wild,
+}
+
+/// <summary>Pet constants (vmangos Pet.h:134-137, DBCEnums.h:44).</summary>
+public static class PetConstants
+{
+    /// <summary>vmangos PET_FOLLOW_DIST.</summary>
+    public const float FollowDistance = 2.0f;
+
+    /// <summary>vmangos PET_FOLLOW_ANGLE (pi/2): the default follow angle.</summary>
+    public const float FollowAngle = MathF.PI / 2.0f;
+
+    /// <summary>vmangos MINI_PET_SUMMON_ANGLE (pi/4).</summary>
+    public const float MiniPetSummonAngle = MathF.PI / 4.0f;
+
+    /// <summary>vmangos CREATURE_MAX_LEVEL.</summary>
+    public const int MaxCreatureLevel = 63;
 }
 
 /// <summary>vmangos TotemSlot (SharedDefines.h:1727-1735).</summary>

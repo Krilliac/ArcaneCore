@@ -10,13 +10,15 @@ namespace ArcaneCore.Game.Pets;
 /// </summary>
 public sealed class SummonLinks
 {
-    internal SummonLinks(SummonKind kind, ObjectGuid owner, uint spellId, int slot, int durationMs)
+    internal SummonLinks(SummonKind kind, ObjectGuid owner, uint spellId, int slot, int durationMs, float followAngle = PetConstants.FollowAngle)
     {
         Kind = kind;
         Owner = owner;
         SpellId = spellId;
         Slot = slot;
         RemainingMs = durationMs;
+        HasTimer = durationMs > 0;
+        FollowAngle = followAngle;
     }
 
     public SummonKind Kind { get; }
@@ -32,4 +34,10 @@ public sealed class SummonLinks
 
     /// <summary>Time left in ms; 0 or less on a non-totem means no limit (vmangos m_duration).</summary>
     public int RemainingMs { get; internal set; }
+
+    /// <summary>The summon was created with a positive duration (a wild summon without one only ends with its death).</summary>
+    public bool HasTimer { get; }
+
+    /// <summary>vmangos Pet::SetFollowAngle: where, relative to the owner's facing, the summon stands while following.</summary>
+    public float FollowAngle { get; }
 }
