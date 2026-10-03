@@ -1,4 +1,6 @@
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.WorldData.Loot;
 
 namespace ArcaneCore.Game.Loot;
 
@@ -31,6 +33,34 @@ public sealed partial class LootService
     {
         ArgumentNullException.ThrowIfNull(source);
         ForgetLoot(source);
+    }
+
+    // --- skinning --------------------------------------------------------------------------------
+
+    /// <summary>vmangos <c>LootTemplates_Skinning.HaveLootFor(skinning_loot_id)</c>: the creature has skinning loot at all.</summary>
+    public bool HasSkinningLoot(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        return Content.FindCreature(creature.Entry) is { SkinningLootId: not 0 } info && Content.HasEntry(LootTableKind.Skinning, info.SkinningLootId);
+    }
+
+    /// <summary>
+    /// vmangos Creature::IsSkinnableBy (Creature.h:308): the head start of the tapper has run out, or <paramref name="player"/> is a tapper. Combat
+    /// keeps no tap list yet, so the recipients of the corpse loot (the killer and their group at the time) stand in for <c>IsTappedBy</c>.
+    /// </summary>
+    public bool IsSkinnableBy(Player player, Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(creature);
+        return creature.SkinningForOthersMs == 0
+            || (_bags.TryGetValue(creature.Guid, out var entry) && entry.Bag.Recipients.Contains(player.Guid));
+    }
+
+    /// <summary>vmangos <c>loot.isLooted()</c> of a corpse: nothing (money or items) is left to take. A corpse without loot counts as looted.</summary>
+    public bool IsCorpseLooted(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        return !_bags.TryGetValue(creature.Guid, out var entry) || entry.Bag.Kind != LootSourceKind.Creature || entry.Bag.IsEmpty;
     }
 
     /// <summary>Forget the loot registered under <paramref name="source"/> whose object may already be gone (a disenchanted item).</summary>

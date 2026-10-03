@@ -47,6 +47,8 @@ public sealed partial class CreatureMapSystem
         creature.Target = default;
         creature.DeathState = CreatureDeathState.Corpse;
         creature.CorpseDecayMs = creature.CorpseDecaySeconds(_options) * 1000;
+        creature.SkinningForOthersMs = Creature.SkinningForOthersDefaultMs; // Creature.cpp:822-825: a new life, a new corpse
+        creature.LootedForSkin = false;
         creature.RespawnAtMs = _clockMs + (creature.NextRespawnDelaySeconds() * 1000L);
     }
 

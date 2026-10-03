@@ -276,6 +276,12 @@ public sealed partial class LootService : IViewerFieldFilter
         CloseReplacedBag(creature.Guid, bag);
         _bags[creature.Guid] = (creature, bag);
         creature.ViewerFieldFilter = this;
+        if (HasSkinningLoot(creature))
+        {
+            // vmangos Creature::SetDeathState (Creature.cpp:2274-2277): skinnable from the moment it dies with a loot recipient and a skinning template.
+            creature.UnitFlags |= UnitFlags.Skinnable;
+        }
+
         if (bag.IsEmpty)
         {
             CreatureLootedOut(creature, bag);
@@ -310,13 +316,19 @@ public sealed partial class LootService : IViewerFieldFilter
     {
         bag.IsClosed = true;
         creature.SetUInt32(UpdateFields.UnitDynamicFlags, creature.GetUInt32(UpdateFields.UnitDynamicFlags) & ~UnitDynFlagLootable);
-        if (Content.FindCreature(creature.Entry) is { SkinningLootId: not 0 })
+        AllLootRemovedFromCorpse(creature);
+    }
+
+    /// <summary>
+    /// vmangos Creature::AllLootRemovedFromCorpse (Creature.cpp:3355-3395): the tapper's skinning head start restarts; a corpse that is not
+    /// (or no longer) skinnable decays sooner: a skinned one at once, an unskinned one after <see cref="LootOptions.LootedCorpseDecayRate"/> of its time.
+    /// </summary>
+    private void AllLootRemovedFromCorpse(Creature creature)
+    {
+        creature.SkinningForOthersMs = Creature.SkinningForOthersDefaultMs;
+        if ((creature.UnitFlags & UnitFlags.Skinnable) == 0 && creature.DeathState == CreatureDeathState.Corpse)
         {
-            creature.UnitFlags |= UnitFlags.Skinnable;
-        }
-        else if (creature.DeathState == CreatureDeathState.Corpse)
-        {
-            uint looted = (uint)(creature.CorpseDecaySeconds(CreatureOptions) * 1000.0 * Options.LootedCorpseDecayRate);
+            uint looted = creature.LootedForSkin ? 0 : (uint)(creature.CorpseDecaySeconds(CreatureOptions) * 1000.0 * Options.LootedCorpseDecayRate);
             creature.CorpseDecayMs = Math.Min(creature.CorpseDecayMs, looted);
         }
     }
@@ -342,8 +354,15 @@ public sealed partial class LootService : IViewerFieldFilter
         }
 
         creature.UnitFlags &= ~UnitFlags.Skinnable;
+        creature.LootedForSkin = true;
         LootBag bag = Generate(creature.Guid, LootSourceKind.Skinning, LootType.Skinning, LootTableKind.Skinning, info.SkinningLootId, [player]);
         _bags[creature.Guid] = (creature, bag);
+        if (!bag.IsEmpty)
+        {
+            // Player.cpp:7914-7928: "let reopen skinning loot if will closed".
+            creature.SetUInt32(UpdateFields.UnitDynamicFlags, creature.GetUInt32(UpdateFields.UnitDynamicFlags) | UnitDynFlagLootable);
+        }
+
         return Show(player, bag);
     }
 
@@ -718,7 +737,7 @@ public sealed partial class LootService : IViewerFieldFilter
         ArgumentNullException.ThrowIfNull(player);
 
         if (!_bags.TryGetValue(guid, out var entry) || entry.Source is not Creature creature
-            || !ReferenceEquals(creature.Map, player.Map) || entry.Bag.Kind != LootSourceKind.Creature
+            || !ReferenceEquals(creature.Map, player.Map) || entry.Bag.Kind is not (LootSourceKind.Creature or LootSourceKind.Skinning)
             || creature.DeathState != CreatureDeathState.Corpse)
         {
             Refuse(player, guid);
@@ -953,9 +972,13 @@ public sealed partial class LootService : IViewerFieldFilter
 
                 break;
 
-            case Creature when bag.Kind == LootSourceKind.Skinning:
+            case Creature skinned when bag.Kind == LootSourceKind.Skinning:
                 if (bag.IsEmpty)
                 {
+                    // DoLootRelease (LootHandler.cpp:574-580): nothing left, the corpse stops being lootable and, skinned, goes at once.
+                    bag.IsClosed = true;
+                    skinned.SetUInt32(UpdateFields.UnitDynamicFlags, skinned.GetUInt32(UpdateFields.UnitDynamicFlags) & ~UnitDynFlagLootable);
+                    AllLootRemovedFromCorpse(skinned);
                     _bags.Remove(guid);
                 }
 

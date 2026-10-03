@@ -171,7 +171,7 @@ public sealed class LootServiceTests
     [Fact]
     public void CreatureWithNothingToDrop_IsNeverLootable_AndImmediatelySkinnableWhenItHasSkinLoot()
     {
-        Rig rig = CreateRig(rows: [], minGold: 0, maxGold: 0);
+        Rig rig = CreateRig(rows: [(LootTableKind.Skinning, Row(SkinLoot, Hide, 100))], minGold: 0, maxGold: 0);
         (Player player, _) = rig.Join(1);
         Creature wolf = rig.KillWolf(player);
         Assert.Equal(0u, wolf.GetUInt32(UpdateFields.UnitDynamicFlags) & LootService.UnitDynFlagLootable);
@@ -410,7 +410,9 @@ public sealed class LootServiceTests
         Rig rig = CreateRig();
         (Player player, FakeSession session) = rig.Join(1);
         Creature wolf = rig.KillWolf(player);
-        Assert.Equal(LootResult.NotLootable, rig.Loot.OpenSkinning(player, wolf));
+        // vmangos Creature::SetDeathState (Creature.cpp:2274-2277): skinnable from death on; "loot first" is the spell's TARGET_NOT_LOOTED check.
+        Assert.True(wolf.UnitFlags.HasFlag(UnitFlags.Skinnable));
+        Assert.False(rig.Loot.IsCorpseLooted(wolf));
 
         rig.Loot.Open(player, wolf.Guid);
         rig.Loot.TakeItem(player, 0);
