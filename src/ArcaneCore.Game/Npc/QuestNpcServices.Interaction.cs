@@ -21,8 +21,10 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        // vmangos HandleQuestgiverStatusQueryOpcode (QuestHandler.cpp:36-77) only refuses hostile creatures; it never tests the
+        // quest-giver npc flag (four relation NPCs of classic-db lack it and still show their marks).
         DialogStatus status = DialogStatus.None;
-        if (!npc.IsHostile && (npc.NpcFlags & NpcFlags.QuestGiver) != 0)
+        if (!npc.IsHostile)
         {
             foreach (uint id in EndersOf(npc))
             {
@@ -31,13 +33,12 @@ public sealed partial class QuestNpcServices
                     continue;
                 }
 
-                DialogStatus candidate = state.Quests.GetStatus(id) switch
-                {
-                    QuestStatus.Complete when !state.Quests.RewardStatus(quest) => DialogStatus.Reward2,
-                    QuestStatus.Incomplete => DialogStatus.Incomplete,
-                    _ when quest.IsAutoComplete && CanTakeQuest(state, quest, []) => quest.IsRepeatable ? DialogStatus.RewardRep : DialogStatus.Reward2,
-                    _ => DialogStatus.None,
-                };
+                // GetDialogStatus (QuestHandler.cpp:517-526): a finished-and-unrewarded quest or a takeable autocomplete quest
+                // is Reward2, or RewardRep when it is an autocomplete repeatable one; otherwise an incomplete quest.
+                DialogStatus candidate = (state.Quests.GetStatus(id) == QuestStatus.Complete && !state.Quests.RewardStatus(quest))
+                    || (quest.IsAutoComplete && CanTakeQuest(state, quest, []))
+                    ? quest.IsAutoComplete && quest.IsRepeatable ? DialogStatus.RewardRep : DialogStatus.Reward2
+                    : state.Quests.GetStatus(id) == QuestStatus.Incomplete ? DialogStatus.Incomplete : DialogStatus.None;
                 if ((byte)candidate > (byte)status)
                 {
                     status = candidate;
@@ -55,7 +56,7 @@ public sealed partial class QuestNpcServices
                 DialogStatus candidate = player.Level < quest.MinLevel ? DialogStatus.Unavailable
                     : quest.IsAutoComplete || (quest.IsRepeatable && !quest.HasFlag(QuestFlags.Unk2) && state.Quests.Get(id)?.Rewarded == true)
                         ? DialogStatus.RewardRep
-                    : Options.LowLevelHideDiff < 0 || player.Level <= (long)(quest.QuestLevel < 0 ? player.Level : quest.QuestLevel) + Options.LowLevelHideDiff
+                    : Options.LowLevelHideDiff < 0 || player.Level <= (long)QuestLevelForPlayer(player, quest) + Options.LowLevelHideDiff
                         ? DialogStatus.Available : DialogStatus.Chat;
                 if ((byte)candidate > (byte)status)
                 {
@@ -70,6 +71,9 @@ public sealed partial class QuestNpcServices
         body.WriteUInt32((uint)status);
         Send(player, WorldOpcode.SmsgQuestgiverStatus, body);
     }
+
+    /// <summary>vmangos Player::GetQuestLevelForPlayer (Player.h:1114): the quest's level when positive, else the player's own (14 classic-db quests have level 0).</summary>
+    private static int QuestLevelForPlayer(Player player, Quest quest) => quest.QuestLevel > 0 ? quest.QuestLevel : player.Level;
 
     public void QuestgiverQueryQuest(Player player, ObjectGuid guid, uint questId)
     {
