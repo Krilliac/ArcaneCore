@@ -66,6 +66,14 @@ public sealed class WorldRuntimeOptions
     /// </summary>
     public bool PlayerCommands { get; set; } = true;
 
+    /// <summary>
+    /// A map updater that throws in this many consecutive ticks is skipped from then on, until
+    /// <see cref="Map.ClearUpdaterFaults"/> (a code hot reload calls it after each applied edit).
+    /// 0 (the default) never skips: a throwing updater is logged every tick and the others
+    /// still run, as before. Only <c>World:HotCode:Enabled</c> sets it (docs/areas/code-hot-reload.md).
+    /// </summary>
+    public int MaxConsecutiveUpdaterFaults { get; set; }
+
     /// <summary>Grid lifecycle and terrain data (the <c>World:Maps</c> section; docs/areas/grid-terrain.md).</summary>
     public MapOptions Maps { get; set; } = new();
 }

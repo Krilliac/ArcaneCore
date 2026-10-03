@@ -5,6 +5,8 @@ using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
+using ArcaneCore.World.HotCode;
+using ArcaneCore.World.HotCode.Modules;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.Configuration;
@@ -42,9 +44,11 @@ public static class WorldServiceCollectionExtensions
         services.Configure<WorldRuntimeOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<WorldSessionOptions>(configuration.GetSection(WorldOptions.SectionName));
         services.Configure<SocialOptions>(configuration.GetSection(SocialOptions.SectionName));
+        services.Configure<HotCodeOptions>(configuration.GetSection(HotCodeOptions.SectionName));
 
         services.AddSingleton(_ => BuildOpcodeTable());
         services.AddSingleton(_ => ChatCommands.CreateTable());
+        services.AddSingleton(sp => new CommandTableSource(sp.GetRequiredService<CommandTable>()));
         services.AddWorldFeatures();
         services.AddSingleton<CharacterDirectory>();
         services.AddSingleton<CharacterDeletionReconciler>();
@@ -59,6 +63,19 @@ public static class WorldServiceCollectionExtensions
         // Order matters: the world starts before the listener and stops after it.
         services.AddHostedService<WorldHost>();
         services.AddHostedService<WorldServer>();
+
+        // Off by default: with World:HotCode:Enabled unset no hot-code object is registered at all.
+        if (configuration.IsHotCodeEnabled())
+        {
+            services.AddHotCode();
+        }
+
+        // Separately opt-in: the module lane (load, replace, unload code) works without the dotnet-watch runner.
+        if (configuration.IsHotModulesEnabled())
+        {
+            services.AddHotModules();
+        }
+
         return services;
     }
 }

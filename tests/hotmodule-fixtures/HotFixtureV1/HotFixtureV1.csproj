@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A module for the module-host tests, assembly name HotFixture. Built only through the test
+       project's reference (not in ArcaneCore.slnx). HotFixtureV2 compiles the same source with V2. -->
+  <PropertyGroup>
+    <AssemblyName>HotFixture</AssemblyName>
+    <RootNamespace>HotFixture</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\ArcaneCore.World\ArcaneCore.World.csproj" />
+  </ItemGroup>
+
+</Project>

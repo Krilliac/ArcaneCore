@@ -57,6 +57,10 @@ public sealed class Map
     private readonly List<Action> _afterUpdate = [];
     private readonly List<WorldObject> _valuesQueue = [];
     private readonly List<IMapUpdater> _updaters = [];
+
+    // Consecutive failure count per updater; -1 means the fault breaker is skipping it. Empty
+    // unless an updater throws and World:MaxConsecutiveUpdaterFaults is set.
+    private readonly Dictionary<IMapUpdater, int> _updaterFaults = new(ReferenceEqualityComparer.Instance);
     private readonly GridContainer _grid;
     private readonly TerrainInfo _terrain;
     private long _nextSequence;
@@ -124,6 +128,42 @@ public sealed class Map
         EnsureWorldThread();
         EnsureNotInUpdatePhase();
         _updaters.Add(updater);
+    }
+
+    /// <summary>
+    /// Give every updater skipped by the fault breaker another chance, and forget the failure
+    /// counts (world thread). A code hot reload calls this after each applied edit, because the
+    /// edit may be the fix.
+    /// </summary>
+    public void ClearUpdaterFaults()
+    {
+        EnsureWorldThread();
+        _updaterFaults.Clear();
+    }
+
+    /// <summary>The updaters the fault breaker is skipping (world thread).</summary>
+    public IReadOnlyList<IMapUpdater> IsolatedUpdaters
+        => [.. _updaters.Where(u => _updaterFaults.TryGetValue(u, out int faults) && faults < 0)];
+
+    private void CountUpdaterFault(IMapUpdater updater)
+    {
+        int limit = _world.Options.MaxConsecutiveUpdaterFaults;
+        if (limit <= 0)
+        {
+            return;
+        }
+
+        int faults = _updaterFaults.GetValueOrDefault(updater) + 1;
+        if (faults < limit)
+        {
+            _updaterFaults[updater] = faults;
+            return;
+        }
+
+        _updaterFaults[updater] = -1;
+        _logger.LogError(
+            "map {MapId} updater {Updater} failed {Limit} ticks in a row and is skipped until the next code edit is applied or the server restarts",
+            MapId, updater.GetType().Name, limit);
     }
 
     /// <summary>The first attached system of type <typeparamref name="T"/>, if any.</summary>
@@ -381,13 +421,23 @@ public sealed class Map
         // (1c) per-map systems (creatures, …) — see IMapUpdater
         foreach (IMapUpdater updater in _updaters)
         {
+            if (_updaterFaults.Count > 0 && _updaterFaults.TryGetValue(updater, out int faults) && faults < 0)
+            {
+                continue; // isolated by the fault breaker (see ClearUpdaterFaults)
+            }
+
             try
             {
                 updater.Update(this, diffMs);
+                if (_updaterFaults.Count > 0)
+                {
+                    _updaterFaults.Remove(updater); // only consecutive failures count
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "map {MapId} updater {Updater} failed", MapId, updater.GetType().Name);
+                CountUpdaterFault(updater);
             }
         }
 

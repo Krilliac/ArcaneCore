@@ -209,7 +209,7 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
             return false;
         }
 
-        CommandTable commands = session.Services.GetRequiredService<CommandTable>();
+        CommandTable commands = session.Services.GetRequiredService<CommandTableSource>().Current;
         var context = new CommandContext(session, player, commands);
         try
         {

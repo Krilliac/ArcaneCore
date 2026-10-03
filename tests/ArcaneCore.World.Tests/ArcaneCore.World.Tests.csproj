@@ -19,4 +19,15 @@
     <ProjectReference Include="..\..\src\ArcaneCore.Cryptography\ArcaneCore.Cryptography.csproj" />
   </ItemGroup>
 
+  <!-- Modules for the module-host tests: built first, then copied to hotfixtures/v1 and hotfixtures/v2 in the output. -->
+  <ItemGroup>
+    <ProjectReference Include="..\hotmodule-fixtures\HotFixtureV1\HotFixtureV1.csproj" ReferenceOutputAssembly="false" OutputItemType="HotFixtureV1Output" />
+    <ProjectReference Include="..\hotmodule-fixtures\HotFixtureV2\HotFixtureV2.csproj" ReferenceOutputAssembly="false" OutputItemType="HotFixtureV2Output" />
+  </ItemGroup>
+
+  <Target Name="CopyHotFixtures" AfterTargets="Build">
+    <Copy SourceFiles="@(HotFixtureV1Output)" DestinationFolder="$(OutDir)hotfixtures\v1" />
+    <Copy SourceFiles="@(HotFixtureV2Output)" DestinationFolder="$(OutDir)hotfixtures\v2" />
+  </Target>
+
 </Project>
