@@ -789,6 +789,7 @@ public sealed partial class MapCombat
         if (victim is Player playerVictim)
         {
             playerVictim.Combat.PvpDeath = playerTap is not null;
+            ApplyDeathDurabilityLoss(playerVictim, killer);
         }
         else
         {
