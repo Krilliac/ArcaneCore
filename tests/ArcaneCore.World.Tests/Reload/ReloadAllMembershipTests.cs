@@ -20,8 +20,9 @@ public sealed class ReloadAllMembershipTests
     /// </summary>
     internal static readonly IReadOnlyDictionary<string, bool> Expected = new Dictionary<string, bool>(StringComparer.Ordinal)
     {
-        // all_area: areatrigger_teleport (ServerCommands.cpp:910).
+        // all_area: areatrigger_teleport, areatrigger_tavern (ServerCommands.cpp:910-911).
         ["areatrigger_teleport"] = true,
+        ["areatrigger_tavern"] = true,
 
         // reload all calls HandleReloadGameTeleCommand (:902).
         ["game_tele"] = true,
@@ -78,7 +79,7 @@ public sealed class ReloadAllMembershipTests
     /// </summary>
     private static readonly HashSet<string> VmangosNames = new(StringComparer.Ordinal)
     {
-        "areatrigger_teleport", "config", "creature_template", "game_tele", "item_template", "quest_template", "spell_template",
+        "areatrigger_teleport", "areatrigger_tavern", "config", "creature_template", "game_tele", "item_template", "quest_template", "spell_template",
         "npc_gossip", "npc_text", "npc_trainer", "npc_vendor", "points_of_interest", "gossip_menu", "gossip_menu_option",
         "all_loot", "creature_loot_template", "gameobject_loot_template", "item_loot_template", "skinning_loot_template",
         "reference_loot_template", "fishing_loot_template", "pickpocketing_loot_template", "disenchant_loot_template",

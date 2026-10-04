@@ -7,6 +7,7 @@ using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Characters.Creation;
+using ArcaneCore.World.Characters.Rename;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Packets;
@@ -67,7 +68,10 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             }
         }
 
-        session.Send(WorldOpcode.SmsgCharEnum, CharacterPackets.BuildCharEnum(list, equipment));
+        // The at-login rename flag becomes CHARACTER_FLAG_RENAME, so the client prompts for a new name (Player::BuildEnumData).
+        IReadOnlyDictionary<int, uint> flags = await CharacterRename.CharEnumFlagsOfAccountAsync(session).ConfigureAwait(false);
+
+        session.Send(WorldOpcode.SmsgCharEnum, CharacterPackets.BuildCharEnum(list, equipment, flags));
     }
 
     /// <summary>
