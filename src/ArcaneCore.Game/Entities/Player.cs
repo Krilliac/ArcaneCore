@@ -460,12 +460,23 @@ public sealed partial class Player : Unit
         // A spirit that logs out while still at its body is saved at its graveyard (vmangos WorldSession.cpp:694-701);
         // the player itself stays where it is until it leaves the map.
         (uint saveMap, float saveX, float saveY, float saveZ, float saveO) = LogoutLocation ?? (MapId, X, Y, Z, Orientation);
-        return new CharacterState(
-            (int)Guid.Low, saveMap, ZoneId, saveX, saveY, saveZ, saveO, Level,
-            Math.Max(PlayedTimeAt(nowMs), 1u), LevelPlayedTimeAt(nowMs), Money, ActionBarToggles, buttons, Home,
-            Inventory.TakeSnapshotIfChanged(),
-            Death.PlayerLife.Capture(this), Inventory.BankBagSlotCount);
+        return CreateSnapshot(nowMs, saveMap, saveX, saveY, saveZ, saveO, buttons, Inventory.TakeSnapshotIfChanged());
     }
+
+    /// <summary>
+    /// The persistent state with the character placed at the given position instead of where it stands (world thread).
+    /// The inventory and action buttons are left as the last snapshot saved them (omitted, not reset), so taking this
+    /// snapshot never steals a change from the ordinary one; for a relocation decided after the player left the world.
+    /// </summary>
+    public CharacterState CreateSnapshotAt(uint nowMs, uint mapId, float x, float y, float z)
+        => CreateSnapshot(nowMs, mapId, x, y, z, Orientation, buttons: null, inventory: null);
+
+    private CharacterState CreateSnapshot(uint nowMs, uint mapId, float x, float y, float z, float orientation,
+        IReadOnlyList<ActionButton>? buttons, Kernel.Items.InventorySnapshot? inventory)
+        => new(
+            (int)Guid.Low, mapId, ZoneId, x, y, z, orientation, Level,
+            Math.Max(PlayedTimeAt(nowMs), 1u), LevelPlayedTimeAt(nowMs), Money, ActionBarToggles, buttons, Home,
+            inventory, Death.PlayerLife.Capture(this), Inventory.BankBagSlotCount);
 
     private static uint Pack(uint action, byte type) => (action & 0x00FFFFFF) | ((uint)type << 24);
 

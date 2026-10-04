@@ -78,6 +78,50 @@ public sealed class TaxiFlightWriteQueueTests
     }
 
     [Fact]
+    public async Task FailingSaveWithAFallback_RunsItOnce_AndDeletesTheRowInsteadOfRetainingTheSave()
+    {
+        await using var fixture = Fixture.Create();
+        fixture.Store.FailWrites = true;
+        int abandoned = 0;
+        fixture.Queue.Save(7, Route, () => Interlocked.Increment(ref abandoned));
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+
+        // The save failed every attempt; the fallback ran and the delete that replaced it is retained while the store is down.
+        Assert.Equal(1, abandoned);
+        Assert.Equal(6, fixture.Store.Attempts(7));
+        Assert.True(fixture.Queue.HasRetainedFailure(7));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Queue.FlushCharacterAsync(7));
+        Assert.Equal(1, abandoned);
+
+        fixture.Store.FailWrites = false;
+        await fixture.Queue.FlushCharacterAsync(7);
+        Assert.False(fixture.Queue.HasRetainedFailure(7));
+        Assert.Null(fixture.Store.Saved(7));
+        Assert.Equal(["delete 7"], fixture.Store.Calls);
+        Assert.Equal(1, abandoned);
+    }
+
+    [Fact]
+    public async Task ASupersededFailingSave_DoesNotRunItsFallback()
+    {
+        await using var fixture = Fixture.Create();
+        var other = new TaxiFlightRoute([4, 5], [20], [9]);
+        int abandoned = 0;
+        fixture.Store.HoldNextWrite();
+        fixture.Store.FailWrites = true;
+        fixture.Queue.Save(7, Route, () => Interlocked.Increment(ref abandoned));
+        await fixture.Store.Entered.Task.WaitAsync(Budget);
+        fixture.Queue.Save(7, other); // the newer request is authoritative
+        fixture.Store.Release.TrySetResult();
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+        fixture.Store.FailWrites = false;
+        await fixture.Queue.FlushCharacterAsync(7);
+
+        Assert.Equal(0, abandoned);
+        Assert.Equal(other, fixture.Store.Saved(7));
+    }
+
+    [Fact]
     public async Task SaveThenDelete_AppliesInOrder_DeleteWinsEvenWhileTheSaveIsInFlight()
     {
         await using var fixture = Fixture.Create();

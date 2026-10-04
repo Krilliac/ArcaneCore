@@ -17,6 +17,13 @@ namespace ArcaneCore.World.Npc;
 /// <see cref="RequestRetry"/> (logout) and <see cref="StopAsync"/> (a final retry that throws, naming the characters).
 /// </para>
 /// <para>
+/// A save may carry an <c>abandon</c> fallback (<see cref="Save(int, TaxiFlightRoute, Action?)"/>). When such a save
+/// fails every attempt and no newer request replaced it, the route is given up instead of retained: the fallback runs
+/// (the owner puts the character somewhere it can stand) and the operation becomes a delete of the row, which is itself
+/// retained until durable. This keeps the character row and the route row consistent on disk, the guarantee the
+/// synchronous save had, while the write still leaves the world thread.
+/// </para>
+/// <para>
 /// <see cref="FlushAsync"/> stays a pure ordered barrier: it never retries and never throws. Retention is in process
 /// only: a crash, or a store that is still down at exit, loses what is retained (loudly).
 /// </para>
@@ -61,14 +68,21 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
     public void Start() => _consumer ??= Task.Run(ConsumeAsync);
 
     /// <summary>Queue saving the route of a character that logged out mid-flight; replaces any older request.</summary>
-    public void Save(int characterId, TaxiFlightRoute route)
+    public void Save(int characterId, TaxiFlightRoute route) => Save(characterId, route, abandon: null);
+
+    /// <summary>
+    /// Queue saving the route of a character that logged out mid-flight; replaces any older request. When the save
+    /// fails every attempt (and was not replaced meanwhile), <paramref name="abandon"/> runs off the world thread and
+    /// the route is deleted instead of retained; a null <paramref name="abandon"/> retains the failed save.
+    /// </summary>
+    public void Save(int characterId, TaxiFlightRoute route, Action? abandon)
     {
         ArgumentNullException.ThrowIfNull(route);
-        Request(characterId, route);
+        Request(characterId, route, abandon);
     }
 
     /// <summary>Queue removing the character's saved route; replaces any older request.</summary>
-    public void Delete(int characterId) => Request(characterId, null);
+    public void Delete(int characterId) => Request(characterId, null, null);
 
     /// <summary>True while the character's last write failed all attempts and is still retained.</summary>
     public bool HasRetainedFailure(int characterId)
@@ -158,7 +172,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
     }
 
     /// <summary>A null <paramref name="route"/> is a delete.</summary>
-    private void Request(int characterId, TaxiFlightRoute? route)
+    private void Request(int characterId, TaxiFlightRoute? route, Action? abandon)
     {
         lock (_gate)
         {
@@ -167,7 +181,7 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
                 _characters[characterId] = unsaved = new Unsaved();
             }
 
-            unsaved.Operation = new Operation(route, ++unsaved.Generation);
+            unsaved.Operation = new Operation(route, ++unsaved.Generation, abandon);
             unsaved.Failure = null; // the new request supersedes the failed one and is itself attempted
             if (_stopped)
             {
@@ -299,39 +313,73 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
             operation = current;
         }
 
+        while (true)
+        {
+            try
+            {
+                await WriteAsync(characterId, operation).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Operation? replacement = null;
+                lock (_gate)
+                {
+                    // Only the request that failed is retained; a newer one replaced it and is queued itself.
+                    if (_characters.TryGetValue(characterId, out Unsaved? unsaved) && unsaved.Operation?.Generation == operation.Generation)
+                    {
+                        if (operation.Abandon is not null)
+                        {
+                            // Give the route up rather than keep it: the owner relocates the character and the row goes.
+                            replacement = unsaved.Operation = new Operation(null, ++unsaved.Generation, null);
+                        }
+                        else
+                        {
+                            unsaved.Failure = ex;
+                        }
+                    }
+                }
+
+                if (replacement is null)
+                {
+                    logger.LogError(ex, "taxi route {Action} for character {Character} failed; retained for retry", operation.Route is null ? "delete" : "save", characterId);
+                    return;
+                }
+
+                logger.LogError(ex, "taxi route save for character {Character} failed; the route is abandoned and its row deleted", characterId);
+                Abandon(characterId, operation.Abandon!);
+                operation = replacement;
+                continue;
+            }
+
+            lock (_gate)
+            {
+                if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
+                {
+                    return;
+                }
+
+                if (unsaved.Operation?.Generation == operation.Generation)
+                {
+                    unsaved.Operation = null;
+                    unsaved.Failure = null;
+                }
+
+                Release(characterId, unsaved);
+            }
+
+            return;
+        }
+    }
+
+    private void Abandon(int characterId, Action abandon)
+    {
         try
         {
-            await WriteAsync(characterId, operation).ConfigureAwait(false);
+            abandon();
         }
         catch (Exception ex)
         {
-            lock (_gate)
-            {
-                // Only the request that failed is retained; a newer one replaced it and is queued itself.
-                if (_characters.TryGetValue(characterId, out Unsaved? unsaved) && unsaved.Operation?.Generation == operation.Generation)
-                {
-                    unsaved.Failure = ex;
-                }
-            }
-
-            logger.LogError(ex, "taxi route {Action} for character {Character} failed; retained for retry", operation.Route is null ? "delete" : "save", characterId);
-            return;
-        }
-
-        lock (_gate)
-        {
-            if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
-            {
-                return;
-            }
-
-            if (unsaved.Operation?.Generation == operation.Generation)
-            {
-                unsaved.Operation = null;
-                unsaved.Failure = null;
-            }
-
-            Release(characterId, unsaved);
+            logger.LogError(ex, "taxi route fallback for character {Character} failed; the route row is still deleted", characterId);
         }
     }
 
@@ -378,7 +426,8 @@ public sealed class TaxiFlightWriteQueue(IServiceScopeFactory scopes, ILogger lo
 
     private sealed record Work(int CharacterId, Kind Kind, TaskCompletionSource? Done);
 
-    private sealed record Operation(TaxiFlightRoute? Route, long Generation);
+    /// <summary>A null <paramref name="Route"/> is a delete; <paramref name="Abandon"/> is the save's fallback (see the class summary).</summary>
+    private sealed record Operation(TaxiFlightRoute? Route, long Generation, Action? Abandon);
 
     /// <summary>One character's not-yet-durable state. Every member is guarded by the queue's gate.</summary>
     private sealed class Unsaved
