@@ -154,7 +154,7 @@ public sealed partial class EconomyFeature
             changes.Add(new EscrowFromInventory(IdOf(player), itemData));
         }
 
-        changes.Add(new InsertMail(mail, hasBody ? request.Body : null));
+        changes.Add(new InsertMail(mail, hasBody ? request.Body : null, Options.MaxMailboxSize));
         if (actor is null || !Start([actor], changes, outcome =>
             {
                 if (outcome == EconomyOutcome.After)

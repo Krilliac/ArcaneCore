@@ -97,7 +97,7 @@ public sealed record ReleaseFromEscrow(int CharacterId, uint ItemGuid) : Economy
 public sealed record DeleteEscrowItem(uint ItemGuid) : EconomyChange;
 
 /// <summary>A new letter; <paramref name="Body"/> creates <c>item_text</c> row <see cref="MailRecord.ItemTextId"/>.</summary>
-public sealed record InsertMail(MailRecord Mail, string? Body) : EconomyChange;
+public sealed record InsertMail(MailRecord Mail, string? Body, int RecipientCap = 0) : EconomyChange;
 
 /// <summary>Replace a letter that must still equal <paramref name="Expected"/>.</summary>
 public sealed record UpdateMail(MailRecord Expected, MailRecord Updated) : EconomyChange;

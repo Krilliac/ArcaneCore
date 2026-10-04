@@ -371,6 +371,14 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
                     db.Add(new ItemTextRow { Id = mail.ItemTextId, Text = body });
                 }
 
+                // The caller's pre-read of the box size can be stale by the time this commit runs, so a player letter re-counts inside the
+                // transaction. Same meaning as vmangos (MailHandler.cpp:258-259): a box already holding MORE than the cap refuses.
+                if (insert.RecipientCap > 0
+                    && await db.Set<MailRow>().AsNoTracking().CountAsync(r => r.ReceiverId == mail.ReceiverId, cancellationToken).ConfigureAwait(false) > insert.RecipientCap)
+                {
+                    return false;
+                }
+
                 var row = new MailRow();
                 row.CopyFrom(mail);
                 db.Add(row);

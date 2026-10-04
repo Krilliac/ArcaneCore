@@ -76,6 +76,30 @@ public sealed class EconomyStoreTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task InsertMail_WithRecipientCap_RechecksTheBoxInsideTheCommit(DatabaseProvider provider)
+    {
+        // Security (wave-3 scan finding 3): the world thread's pre-read count can be stale, so the insert itself enforces the cap.
+        // The cap keeps vmangos's meaning: a box holding MORE than the cap refuses (MailHandler.cpp:258-259).
+        Seed seed = await CreateAsync(provider);
+        for (uint id = 1; id <= 2; id++)
+        {
+            Assert.Equal(EconomyCommitResult.Committed, await CommitAsync(seed, new EconomyCommitRequest(Guid.NewGuid(), [],
+                [new InsertMail(Letter(id, seed.A.Id, seed.B.Id), null)])));
+        }
+
+        Assert.Equal(EconomyCommitResult.Committed, await CommitAsync(seed, new EconomyCommitRequest(Guid.NewGuid(), [],
+            [new InsertMail(Letter(3, seed.A.Id, seed.B.Id), null, RecipientCap: 2)])));
+        Assert.Equal(EconomyCommitResult.Conflict, await CommitAsync(seed, new EconomyCommitRequest(Guid.NewGuid(), [],
+            [new InsertMail(Letter(4, seed.A.Id, seed.B.Id), null, RecipientCap: 2)])));
+        Assert.Equal(EconomyCommitResult.Committed, await CommitAsync(seed, new EconomyCommitRequest(Guid.NewGuid(), [],
+            [new InsertMail(Letter(5, seed.A.Id, seed.B.Id), null)]))); // no cap (system letters): never refused
+
+        await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(seed.Connection);
+        Assert.Equal(4, (await new EfEconomyStore(db).GetMailsAsync(seed.B.Id)).Count);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task RetriedOperation_IsAlreadyCommitted_AndAppliesNothingTwice(DatabaseProvider provider)
     {
         Seed seed = await CreateAsync(provider);
