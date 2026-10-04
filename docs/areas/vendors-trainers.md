@@ -29,4 +29,4 @@ offer lessons. Whether the selected content dump uses that path is an open data 
 
 ## Verification
 
-Release solution build and focused Game, World and SQLite Data tests passed. MariaDB/PostgreSQL provider tests require hosted CI configuration and were not run locally.
+Release solution build (0 warnings, 0 errors) and the Cryptography, Data (SQLite), Game, MockClient, Realm and World suites plus the MockClient self-test passed locally. MariaDB/PostgreSQL provider tests run only on hosted CI and were not run locally. Real 1.12.1 client acceptance was not performed.
