@@ -406,6 +406,37 @@ public sealed class ThreatListCoreTests
         Assert.Same(target, owner.Combat.Threat.SelectVictim(Valid, _ => true));
     }
 
+    [Fact]
+    public void TogglingGameMasterMode_MovesThePlayerOfflineInEveryList_AndBack()
+    {
+        var (world, _, _, _) = CombatTestKit.CreateWorld();
+        using WorldRuntime runtime = world;
+        Player target = CombatTestKit.AddPlayer(runtime, 1, 0, 0, new FakeSession(1));
+        var first = new CombatTestUnit();
+        var second = new CombatTestUnit();
+        first.Combat.Threat.AddThreat(target, 100);
+        second.Combat.Threat.AddThreat(target, 40);
+        Assert.Same(target, first.Combat.Threat.SelectVictim(Valid, _ => true));
+
+        target.SetGameMaster(true); // vmangos Player::SetGameMaster: GetHostileRefManager().setOnlineOfflineState(false), Player.cpp:2639
+
+        foreach (CombatTestUnit list in new[] { first, second })
+        {
+            Assert.Same(target, Assert.Single(list.Combat.Threat.OfflineEntries).Target);
+            Assert.Equal(0f, list.Combat.Threat.GetOnlineThreat(target));
+            Assert.Null(list.Combat.Threat.SelectVictim(Valid, _ => true));
+        }
+
+        Assert.Equal(100f, first.Combat.Threat.GetThreat(target)); // kept while offline
+
+        target.SetGameMaster(false); // Player.cpp:2665: setOnlineOfflineState(true)
+
+        Assert.Empty(first.Combat.Threat.OfflineEntries);
+        Assert.Empty(second.Combat.Threat.OfflineEntries);
+        Assert.Same(target, first.Combat.Threat.SelectVictim(Valid, _ => true));
+        Assert.Equal(40f, second.Combat.Threat.GetOnlineThreat(target));
+    }
+
     // --- two-pass selection (ThreatManager.cpp:286-370) --------------------------------------
 
     [Fact]

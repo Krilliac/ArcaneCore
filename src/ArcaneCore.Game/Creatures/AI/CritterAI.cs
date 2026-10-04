@@ -7,7 +7,7 @@ namespace ArcaneCore.Game.Creatures;
 /// vmangos CritterAI (AI/CritterAI.cpp:16-60): a critter (creature type 8) never attacks and never fights back. When it takes damage that does
 /// not kill it, or is hit by a hostile spell that does no direct damage, it runs from the attacker for 30 seconds; a critter that has been in combat
 /// for 30 seconds without a new hit goes home (evade). Selected for a template of creature type 8 without an AIName (vmangos selects it before the
-/// permit contest, AI/CreatureAISelector.cpp:78-79) unless it has EventAI rows (<c>Creatures:ImplicitEventAi</c>); also available by name.
+/// permit contest, AI/CreatureAISelector.cpp:78-79) unless its AIName names another AI (or, with the opt-in <c>Creatures:ImplicitEventAi</c>, it has EventAI rows); also available by name.
 /// Limits: vmangos' DamageTaken hook sees the damage before it is applied, <see cref="OnAttackedBy"/> runs after a non-lethal hit (a lethal hit does not run it,
 /// like the reference's <c>uiDamage &lt; health</c> test); the damage amount is not part of the hook.
 /// </summary>

@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat.Threat;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Accounts;
@@ -294,11 +295,13 @@ public sealed partial class Player : Unit
         {
             Flags |= PlayerFlags.Gm;
             FactionTemplate = GameMasterFactionTemplate;
+            HostileRefs.SetOnlineOfflineState(this, false); // vmangos Player.cpp:2639: every threat list holding the GM parks the entry offline
         }
         else
         {
             Flags &= ~PlayerFlags.Gm;
             FactionTemplate = _raceFactionTemplate;
+            HostileRefs.SetOnlineOfflineState(this, true); // Player.cpp:2665
         }
     }
 

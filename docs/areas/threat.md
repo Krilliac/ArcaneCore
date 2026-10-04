@@ -25,7 +25,7 @@ The mirror set `UnitCombat.ThreatenedBy` is the HostileRefManager. Behaviour tha
 | A non-negative change on a pet's entry also creates a 0-threat entry for its owner | ThreatManager.cpp:117-122 |
 | Assist threat is 0 while the owner is confused or fleeing (the entry still exists) | ThreatManager.cpp:414-421 |
 | `NoNewEntry`: raise an existing entry, never create one (EX_NO_THREAT) | ThreatManager.cpp:424, addThreatDirectly :427-447 |
-| Offline list: a GM target's entry keeps its threat but is never selected; it comes back when the GM flag goes | ThreatManager.cpp:128-149, :526-543 |
+| Offline list: a GM target's entry keeps its threat but is never selected; it comes back when the GM flag goes; `Player.SetGameMaster` drives it through `HostileRefs.SetOnlineOfflineState` for every list holding the player (`TogglingGameMasterMode_MovesThePlayerOfflineInEveryList_AndBack`) | ThreatManager.cpp:128-149, :526-543, Player.cpp:2639, :2665, HostileRefManager.cpp:95-118 |
 | Percent modification: below -100 removes, -100 zeroes, otherwise scales | ThreatManager.cpp:250-262, ThreatManager.h addThreatPercent |
 | Temp threat (taunt, Fade): folded into the stored threat and remembered; applied once, no stacking | ThreatManager.cpp:481-500, ThreatManager.h setTempThreat/resetTempThreat |
 | Taunt caster list: latest valid taunter first | Objects/Unit.cpp:7513-7542 |
@@ -152,15 +152,16 @@ code, never in SQL. The MariaDB and PostgreSQL cases have not been run.
 
 ### AI selection (Creatures/AI/CreatureAiServices.cs `CreatureAiFactory.Create`)
 
-A creature with no `AIName` and `creature_ai_scripts` rows for its entry (or its spawn guid: a negative `creature_id`) now runs EventAI
-(`Creatures:ImplicitEventAi`, default true); an explicit `AIName` always wins, and a summoned pet, guardian or totem never gets it. This is a
-**data-dialect bridge, not the vmangos rule**: vmangos selects EventAI only for `ai_name = 'EventAI'` (AI/CreatureAISelector.cpp:37-100, AI/EventAI/CreatureEventAI.cpp:51-56),
-while mangos-classic selects it for every creature that is not a pet, totem or guard (CreatureEventAI::Permissible, AI/EventAI/CreatureEventAI.cpp:51-63).
-The classic-db dump this server imports has no `AIName` column at all (79 `creature_template` columns), yet 4,325 of its 10,384 templates have
-`creature_ai_scripts` rows (1,284 of them the "flee at 15%" script); without the bridge those rows never run. Counts: python over the z2815 dump,
-not verified by a run of this server. Switch it off to get vmangos' AIName-only selection.
+The retail rule applies by default: a template runs EventAI when its `AIName` is `EventAI` (vmangos AI/CreatureAISelector.cpp:37-100,
+AI/EventAI/CreatureEventAI.cpp:51-56). classic-db z2815 `creature_template` has the column (`AIName` char(64), 4,325 templates say `EventAI`;
+`CreatureDumpImporter` reads it and `CreatureAiDataModule` adds it), so imported data needs no bridge
+(`Importer_ReadsTheAiNameColumnOfAClassicDbPositionalRow`, `ATemplateWithAiNameEventAi_RunsEventAi_WithoutAnyBridge_AndTheFleeRowFires`).
 
-Limits: the vmangos selector's other branches (GuardAI for guards, CritterAI for critters, GuardEventAI/PetEventAI, the permit contest, PetAI/TotemAI by owner)
+`Creatures:ImplicitEventAi` (default **false**) is a deliberate deviation for hand-edited data: switched on, a creature with no `AIName` but
+`creature_ai_scripts` rows for its entry (or its spawn guid: a negative `creature_id`) also runs EventAI, like the mangos-classic permit
+(CreatureEventAI::Permissible, AI/EventAI/CreatureEventAI.cpp:51-63). An explicit `AIName` always wins, and a summoned pet, guardian or totem never gets it.
+
+Limits: the vmangos selector's other branches (GuardAI for guards, GuardEventAI/PetEventAI, the permit contest, PetAI/TotemAI by owner)
 are not delivered; pets and totems get theirs from the pets and totems areas. Unsupported EventAI events and actions in the newly attached rows are
 reported once per entry (`Creatures:EventAi:ReportUnsupported`) and skipped, so scripts that need a missing primitive are partly inert.
 
@@ -184,7 +185,7 @@ stealth awareness); detect-range auras and creature-versus-creature detection ar
 ### critters (Creatures/AI/CritterAI.cs)
 
 `CritterAI` (vmangos AI/CritterAI.cpp:16-60) is selected for a template of creature type 8 with no `AIName` (the vmangos selector picks it before the permit
-contest, AI/CreatureAISelector.cpp:78-79; a critter with EventAI rows keeps EventAI through `Creatures:ImplicitEventAi`; summoned mini pets keep their pet AI).
+contest, AI/CreatureAISelector.cpp:78-79; a critter whose AIName is EventAI keeps it (or, with the opt-in `Creatures:ImplicitEventAi`, one with EventAI rows); summoned mini pets keep their pet AI).
 A critter never attacks on sight and never fights back (`AttackStart` refuses); a non-lethal hit or a hostile spell without direct damage makes it run from the
 attacker for 30 s (`ESCAPE_TIMER`), each of them restarts a 30 s combat timer, and a critter still in combat when the timer runs out evades. A lethal hit does not
 make it flee (the reference tests `damage < health` before the hit; here the hook runs after a non-lethal hit). `CreatureAI.AttackStart` is now virtual.

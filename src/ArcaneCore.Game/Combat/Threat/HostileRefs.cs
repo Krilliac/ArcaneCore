@@ -51,6 +51,29 @@ public static class HostileRefs
         }
     }
 
+    /// <summary>
+    /// vmangos HostileRefManager::setOnlineOfflineState (HostileRefManager.cpp:95-106): put the target online or offline in every list
+    /// that holds it (a game master goes offline, Player::SetGameMaster, Player.cpp:2639 and :2665).
+    /// </summary>
+    public static void SetOnlineOfflineState(Unit target, bool online)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        foreach (Unit holder in Snapshot(target))
+        {
+            holder.Combat.Threat.SetOnlineState(target, online);
+        }
+    }
+
+    /// <summary>vmangos HostileRefManager::updateThreatTables (HostileRefManager.cpp:110-118): re-derive the target's online state in every list that holds it.</summary>
+    public static void UpdateThreatTables(Unit target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        foreach (Unit holder in Snapshot(target))
+        {
+            holder.Combat.Threat.UpdateOnlineStatus(target);
+        }
+    }
+
     /// <summary>vmangos SPELL_ATTR_EX4_NO_HELPFUL_THREAT (SpellDefines.h:989): HostileRefManager::threatAssist ignores the spell.</summary>
     public const uint AttributeEx4NoHelpfulThreat = 0x00000008;
 

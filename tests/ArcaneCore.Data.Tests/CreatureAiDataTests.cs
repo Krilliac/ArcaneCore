@@ -64,6 +64,28 @@ public sealed class CreatureAiDataTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Importer_ReadsTheAiNameColumnOfAClassicDbPositionalRow()
+    {
+        // classic-db z2815 creature_template has AIName char(64) (column 87) and 4,325 rows say 'EventAI': the retail selector needs no bridge.
+        var importer = new CreatureDumpImporter();
+        importer.Read(new StringReader("""
+            CREATE TABLE `creature_template` (
+              `Entry` mediumint(8) unsigned NOT NULL DEFAULT '0',
+              `Name` char(100) NOT NULL DEFAULT '',
+              `MinLevel` tinyint(3) unsigned NOT NULL DEFAULT '1',
+              `MaxLevel` tinyint(3) unsigned NOT NULL DEFAULT '1',
+              `AIName` char(64) NOT NULL DEFAULT '',
+              PRIMARY KEY (`Entry`)
+            ) ENGINE=MyISAM;
+            INSERT INTO `creature_template` VALUES (910001,'Scripted Wolf',5,5,'EventAI'),(910002,'Plain Bear',6,6,'');
+            """));
+
+        CreatureTemplateRow[] templates = [.. importer.Snapshot().Templates];
+        Assert.Equal("EventAI", Assert.Single(templates, t => t.Entry == 910001).AIName);
+        Assert.Equal(string.Empty, Assert.Single(templates, t => t.Entry == 910002).AIName);
+    }
+
+    [Fact]
     public void Importer_WarnsOnceAboutVMangosAiEvents()
     {
         var importer = new CreatureDumpImporter();

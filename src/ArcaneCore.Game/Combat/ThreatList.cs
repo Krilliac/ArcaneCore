@@ -132,7 +132,7 @@ public sealed class ThreatList
         entry.Threat = Math.Max(0f, entry.Threat + change);
         if (!entry.IsOnline)
         {
-            UpdateOnlineStatus(entry);
+            SetOnline(entry, !ThreatRules.IsTargetUnreachable(entry.Target));
         }
 
         if (change != 0f)
@@ -313,13 +313,25 @@ public sealed class ThreatList
         ThreatEntry? entry = Find(_entries, target) ?? Find(_offline, target);
         if (entry is not null)
         {
-            UpdateOnlineStatus(entry);
+            SetOnline(entry, !ThreatRules.IsTargetUnreachable(entry.Target));
         }
     }
 
-    private void UpdateOnlineStatus(ThreatEntry entry)
+    /// <summary>
+    /// vmangos HostileReference::setOnlineOfflineState (ThreatManager.cpp:154-165): force one entry's online state without
+    /// calculating it, the call Player::SetGameMaster makes for every list holding the player (Player.cpp:2639, :2665).
+    /// </summary>
+    public void SetOnlineState(Unit target, bool online)
     {
-        bool online = !ThreatRules.IsTargetUnreachable(entry.Target);
+        ThreatEntry? entry = Find(_entries, target) ?? Find(_offline, target);
+        if (entry is not null)
+        {
+            SetOnline(entry, online);
+        }
+    }
+
+    private void SetOnline(ThreatEntry entry, bool online)
+    {
         if (online == entry.IsOnline)
         {
             return;

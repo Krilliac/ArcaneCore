@@ -10,9 +10,9 @@ using static ArcaneCore.Game.Tests.CreatureTestSupport;
 namespace ArcaneCore.Game.Tests.CreatureAi;
 
 /// <summary>
-/// Which AI a creature gets. vmangos selects EventAI only for <c>ai_name = 'EventAI'</c> (AI/CreatureAISelector.cpp:37-100); cmangos-classic
-/// selects it for every creature by default (AI/EventAI/CreatureEventAI.cpp:51-63), and classic-db has no AIName column at all, so
-/// <c>Creatures:ImplicitEventAi</c> bridges the data: rows for the entry (or a spawn) mean EventAI unless an AIName says otherwise.
+/// Which AI a creature gets. vmangos selects EventAI only for <c>ai_name = 'EventAI'</c> (AI/CreatureAISelector.cpp:37-100). classic-db z2815
+/// carries <c>creature_template.AIName</c> (4,325 rows say 'EventAI'), so the retail rule needs no bridge. <c>Creatures:ImplicitEventAi</c>
+/// (default off) is the opt-in deviation that also gives EventAI to a creature with rows but no AIName (the cmangos-classic permit, AI/EventAI/CreatureEventAI.cpp:51-63).
 /// </summary>
 public sealed class AiSelectionTests
 {
@@ -32,6 +32,8 @@ public sealed class AiSelectionTests
             Action1 = new CreatureAiAction((byte)EventAiActionType.FleeForAssist, 0, 0, 0),
         };
 
+    private static readonly CreatureOptions ImplicitOn = new() { ImplicitEventAi = true };
+
     private static (WorldRuntime World, Map Map, CreatureMapSystem System, Player Player) Start(
         CreatureTemplate template, IEnumerable<CreatureSpawn> spawns, IEnumerable<CreatureAiEvent> rows, CreatureOptions? options = null)
     {
@@ -42,9 +44,10 @@ public sealed class AiSelectionTests
     }
 
     [Fact]
-    public void ATemplateWithoutAnAiName_ButWithRows_RunsEventAi_AndTheFleeRowFires()
+    public void ATemplateWithAiNameEventAi_RunsEventAi_WithoutAnyBridge_AndTheFleeRowFires()
     {
-        (WorldRuntime runtime, Map map, CreatureMapSystem system, Player player) = Start(Template(), [Spawn(1, WolfEntry, 30, 0)], [FleeAtFifteenPercent(WolfEntry)]);
+        Assert.False(new CreatureOptions().ImplicitEventAi); // retail by default
+        (WorldRuntime runtime, Map map, CreatureMapSystem system, Player player) = Start(Template(configure: t => t.AIName = "EventAI"), [Spawn(1, WolfEntry, 30, 0)], [FleeAtFifteenPercent(WolfEntry)]);
         using WorldRuntime world = runtime;
         Creature wolf = Assert.Single(system.Creatures);
         var ai = Assert.IsType<CreatureEventAI>(wolf.AI);
@@ -61,13 +64,21 @@ public sealed class AiSelectionTests
     }
 
     [Fact]
-    public void WithTheSwitchOff_AnEmptyAiNameKeepsTheDefaultAi()
+    public void ByDefault_AnEmptyAiNameWithRows_KeepsTheDefaultAi_LikeVMangos()
     {
-        (WorldRuntime runtime, _, CreatureMapSystem system, _) = Start(Template(), [Spawn(1, WolfEntry, 30, 0)], [FleeAtFifteenPercent(WolfEntry)],
-            new CreatureOptions { ImplicitEventAi = false });
+        (WorldRuntime runtime, _, CreatureMapSystem system, _) = Start(Template(), [Spawn(1, WolfEntry, 30, 0)], [FleeAtFifteenPercent(WolfEntry)]);
         using WorldRuntime world = runtime;
 
         Assert.IsType<AggressorAI>(Assert.Single(system.Creatures).AI);
+    }
+
+    [Fact]
+    public void WithTheDeviationOn_AnEmptyAiNameWithRows_RunsEventAi()
+    {
+        (WorldRuntime runtime, _, CreatureMapSystem system, _) = Start(Template(), [Spawn(1, WolfEntry, 30, 0)], [FleeAtFifteenPercent(WolfEntry)], ImplicitOn);
+        using WorldRuntime world = runtime;
+
+        Assert.IsType<CreatureEventAI>(Assert.Single(system.Creatures).AI);
     }
 
     [Fact]
@@ -94,7 +105,7 @@ public sealed class AiSelectionTests
     [Fact]
     public void ARowKeyedToOneSpawn_GivesEventAiToThatSpawnOnly()
     {
-        (WorldRuntime runtime, _, CreatureMapSystem system, _) = Start(Template(), [Spawn(1, WolfEntry, 30, 0), Spawn(2, WolfEntry, 40, 0)], [FleeAtFifteenPercent(WolfEntry, guid: 2)]);
+        (WorldRuntime runtime, _, CreatureMapSystem system, _) = Start(Template(), [Spawn(1, WolfEntry, 30, 0), Spawn(2, WolfEntry, 40, 0)], [FleeAtFifteenPercent(WolfEntry, guid: 2)], ImplicitOn);
         using WorldRuntime world = runtime;
 
         Creature first = system.Creatures.Single(c => c.Spawn!.Guid == 1);
@@ -106,7 +117,7 @@ public sealed class AiSelectionTests
     [Fact]
     public void RowsOfAnotherEntry_DoNotAttachEventAi()
     {
-        (WorldRuntime runtime, _, CreatureMapSystem system, _) = Start(Template(), [Spawn(1, WolfEntry, 30, 0)], [FleeAtFifteenPercent(WolfEntry + 1)]);
+        (WorldRuntime runtime, _, CreatureMapSystem system, _) = Start(Template(), [Spawn(1, WolfEntry, 30, 0)], [FleeAtFifteenPercent(WolfEntry + 1)], ImplicitOn);
         using WorldRuntime world = runtime;
 
         Assert.IsType<AggressorAI>(Assert.Single(system.Creatures).AI);
