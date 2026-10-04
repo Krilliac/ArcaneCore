@@ -28,6 +28,12 @@ internal sealed class SpellTestServices : IWorldTestServices
     /// <summary>Spell 14824 of classic-db (the Light Quiver equip spell): passive, aura 141 MOD_RANGED_AMMO_HASTE +10 (ranged lane).</summary>
     public const uint QuiverHasteSpell = 14824;
 
+    /// <summary>
+    /// A synthetic non-passive "Equip:" item spell (items lane): permanent dummy aura that stacks on itself up to 3, so a saved copy
+    /// restored at login on top of the equip replay would show as a second stack instead of refreshing in place.
+    /// </summary>
+    public const uint StackingEquipSpell = 9011;
+
     public void Register(IServiceCollection services)
     {
         services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(Content()));
@@ -91,9 +97,16 @@ internal sealed class SpellTestServices : IWorldTestServices
                 s.DurationIndex = 3;
                 s.SpellVisual = 1;
             }),
+            With(Spell(StackingEquipSpell, "Test Stacking Equip", effect: 6, value: 1, targetA: 1), s =>
+            {
+                s.EffectApplyAuraName1 = 4; // SPELL_AURA_DUMMY
+                s.DurationIndex = 21;       // permanent
+                s.StackAmount = 3;
+                s.SpellVisual = 1;
+            }),
         ],
         [new SpellCastTimeRow { Id = 2, CastTime = 500, MinCastTime = 500 }, new SpellCastTimeRow { Id = 5, CastTime = 3000, MinCastTime = 3000 }],
-        [new SpellDurationRow { Id = 3, Duration = 15000, MaxDuration = 15000 }],
+        [new SpellDurationRow { Id = 3, Duration = 15000, MaxDuration = 15000 }, new SpellDurationRow { Id = 21, Duration = -1, MaxDuration = -1 }],
         [new SpellRangeRow { Id = 1 }, new SpellRangeRow { Id = 4, MaxRange = 30 }],
         [],
         [new PlayerCreateSpellRow { Race = 1, Class = 1, Spell = Heal }, new PlayerCreateSpellRow { Race = 1, Class = 1, Spell = Bolt }],
