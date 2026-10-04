@@ -1,6 +1,9 @@
 using ArcaneCore.Game.Crafting;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.World.Economy;
 using ArcaneCore.World.Features;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -30,8 +33,12 @@ public sealed class CraftingFeature(IServiceProvider services) : IWorldFeature
         }
 
         SpellSystem system = services.GetRequiredService<Spells.SpellFeature>().System;
-        ReagentRules.Install(system);
+        ReagentRules.Install(system, IsInTrade);
         CreateItemSpells.Install(system);   // after the reagent pair: a craft must never be free
         FirstAidObserver.Install(system);
     }
+
+    /// <summary>vmangos <c>Item::IsInTrade</c>: the item is offered in one of the six trade slots of the player's open trade.</summary>
+    private bool IsInTrade(Player player, Item item)
+        => services.GetService<EconomyFeature>()?.TradeOf(player) is { } trade && trade.SideOf(player).Items.Contains(item.Guid);
 }

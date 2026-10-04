@@ -434,6 +434,20 @@ public sealed class ItemUseTests
     }
 
     [Fact]
+    public void AnItemCast_WithoutThePower_StillCasts_BecauseCheckPowerReturnsOkForACastItem()
+    {
+        // vmangos Spell::CheckPower returns SPELL_CAST_OK at once when m_CastItem is set (Spell.cpp:7050-7052, "item cast not used power").
+        using var rig = new Rig();
+        Item wand = rig.Give(CostlyWand);
+        SpellSystem.SetPower(rig.Player, PowerType.Rage, 0);
+        Assert.Equal(0u, SpellSystem.GetPower(rig.Player, PowerType.Rage));
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Kit.System.CastItemSpell(rig.Player, wand, CostlySpell, SpellCastTargets.ForSelf()));
+
+        Assert.Equal(0u, SpellSystem.GetPower(rig.Player, PowerType.Rage));
+    }
+
+    [Fact]
     public void InstallingTheCheckTwice_Throws()
     {
         using var rig = new Rig();

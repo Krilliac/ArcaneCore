@@ -58,9 +58,16 @@ public sealed class EnchantingFeature(IServiceProvider services, ILogger<Enchant
     {
         ArgumentNullException.ThrowIfNull(world);
         services.GetService<IConfiguration>()?.GetSection(EnchantingOptions.SectionName).Bind(Options);
-        if (!Options.Enabled || !CraftingFeature.IsEnabled(services.GetService<IConfiguration>()))
+        if (!CraftingFeature.IsEnabled(services.GetService<IConfiguration>()))
         {
             logger.LogInformation("Enchanting: disabled");
+            return;
+        }
+
+        if (!Options.Enabled)
+        {
+            logger.LogInformation("Enchanting: disabled");
+            EnchantItemSpells.InstallUnavailable(services.GetRequiredService<SpellFeature>().System);
             return;
         }
 
@@ -69,7 +76,8 @@ public sealed class EnchantingFeature(IServiceProvider services, ILogger<Enchant
         if (catalog is null)
         {
             logger.LogWarning(
-                "Enchanting: no SpellItemEnchantment.dbc is configured (Enchanting:SpellItemEnchantmentDbcPath); enchanting is inactive: enchant spells stay unhandled and no enchantment is applied");
+                "Enchanting: no SpellItemEnchantment.dbc is configured (Enchanting:SpellItemEnchantmentDbcPath); enchanting is inactive: enchant casts are refused and consume no reagents");
+            EnchantItemSpells.InstallUnavailable(services.GetRequiredService<SpellFeature>().System);
             return;
         }
 

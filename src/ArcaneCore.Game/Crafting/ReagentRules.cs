@@ -20,7 +20,12 @@ public static class ReagentRules
     /// Register the check (<see cref="ReagentCastCheck"/>) and the taker (<see cref="ReagentCostTaker"/>) on <paramref name="system"/>.
     /// A second call throws: the pair must exist exactly once or reagents would be checked or consumed twice.
     /// </summary>
-    public static void Install(SpellSystem system)
+    /// <param name="system">The spell system.</param>
+    /// <param name="isInTrade">
+    /// Whether a player has offered an item in an open trade (the economy feature owns trades); null means never. Offered items neither count
+    /// as reagents nor are destroyed (vmangos <c>Player::HasItemCount</c> and <c>DestroyItemCount</c> skip <c>IsInTrade</c>, Player.cpp:8681-8734).
+    /// </param>
+    public static void Install(SpellSystem system, Func<Player, Item, bool>? isInTrade = null)
     {
         ArgumentNullException.ThrowIfNull(system);
         if (IsInstalled(system))
@@ -28,8 +33,8 @@ public static class ReagentRules
             throw new InvalidOperationException("the reagent check and cost taker are already installed");
         }
 
-        system.RegisterCastCheck(new ReagentCastCheck());
-        system.RegisterCostTaker(new ReagentCostTaker());
+        system.RegisterCastCheck(new ReagentCastCheck(isInTrade));
+        system.RegisterCostTaker(new ReagentCostTaker(isInTrade));
     }
 
     /// <summary>Whether <see cref="Install"/> already ran on <paramref name="system"/>.</summary>
@@ -41,6 +46,10 @@ public static class ReagentRules
 
     /// <summary>vmangos <c>IgnoreItemRequirements</c>: only a player pays reagents, and a triggered cast never does (see the class remarks).</summary>
     public static bool IgnoresItemRequirements(Unit caster, bool triggered) => caster is not Player || triggered;
+
+    /// <summary>The predicate that hides a player's traded items from the count and the destruction (null: nothing is hidden).</summary>
+    internal static Func<Item, bool>? TradeFilter(Player player, Func<Player, Item, bool>? isInTrade)
+        => isInTrade is null ? null : item => isInTrade(player, item);
 
     /// <summary>
     /// The count of <paramref name="reagent"/> a cast really needs. When the cast item is itself the reagent, is used up by the
@@ -73,7 +82,7 @@ public static class ReagentRules
 /// (<see cref="SpellFocusCastCheck.FocusOrder"/>, :7230), before the effect checks (:7311). A missing reagent is
 /// <see cref="SpellCastResult.ItemNotReady"/>, a missing tool <see cref="SpellCastResult.ItemGone"/>.
 /// </summary>
-public sealed class ReagentCastCheck : ISpellCastCheck
+public sealed class ReagentCastCheck(Func<Player, Item, bool>? isInTrade = null) : ISpellCastCheck
 {
     /// <summary>After the focus check (Equipment + 50), before the item-target fit (Equipment + 70).</summary>
     public const int ReagentOrder = SpellCastCheckOrder.Equipment + 60;
@@ -90,9 +99,10 @@ public sealed class ReagentCastCheck : ISpellCastCheck
             return SpellCastResult.CastOk;
         }
 
+        Func<Item, bool>? traded = ReagentRules.TradeFilter(player, isInTrade);
         foreach (SpellReagent reagent in spell.Reagents)
         {
-            if (player.Inventory.GetItemCount(reagent.ItemId) < ReagentRules.EffectiveCount(context.CastItem, reagent))
+            if (player.Inventory.GetItemCount(reagent.ItemId, exclude: traded) < ReagentRules.EffectiveCount(context.CastItem, reagent))
             {
                 return SpellCastResult.ItemNotReady;
             }
@@ -100,7 +110,7 @@ public sealed class ReagentCastCheck : ISpellCastCheck
 
         foreach (uint tool in spell.Totems)
         {
-            if (player.Inventory.GetItemCount(tool) < 1)
+            if (player.Inventory.GetItemCount(tool, exclude: traded) < 1)
             {
                 return SpellCastResult.ItemGone;
             }
@@ -111,7 +121,7 @@ public sealed class ReagentCastCheck : ISpellCastCheck
 }
 
 /// <summary>Spell::TakeReagents (Spell.cpp:5082-5128): destroy every reagent (the bank is not touched) right after the power is spent.</summary>
-public sealed class ReagentCostTaker : ISpellCostTaker
+public sealed class ReagentCostTaker(Func<Player, Item, bool>? isInTrade = null) : ISpellCostTaker
 {
     public void TakeCost(SpellCast cast)
     {
@@ -120,6 +130,7 @@ public sealed class ReagentCostTaker : ISpellCostTaker
             return;
         }
 
+        Func<Item, bool>? traded = ReagentRules.TradeFilter(player, isInTrade);
         foreach (SpellReagent reagent in cast.Spell.Reagents)
         {
             uint count = ReagentRules.EffectiveCount(cast.CastItem, reagent);
@@ -128,7 +139,7 @@ public sealed class ReagentCostTaker : ISpellCostTaker
                 cast.CastItem = null; // the cast item is consumed as a reagent: vmangos clears m_CastItem so TakeCastItem does not use it up twice
             }
 
-            player.Inventory.DestroyItemCount(reagent.ItemId, count, includeBank: false);
+            player.Inventory.DestroyItemCount(reagent.ItemId, count, includeBank: false, exclude: traded);
         }
     }
 }

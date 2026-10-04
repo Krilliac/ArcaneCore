@@ -726,17 +726,22 @@ public sealed partial class SpellSystem
             return effectChecks;
         }
 
-        // Registered checks inside vmangos CheckPower, before the amounts (combo points, Spell.cpp:7035-7038).
-        SpellCastResult beforePower = RunCastChecks(SpellCheckPhase.Power, caster, spell, targets, unitTarget, triggered, strict, castItem);
-        if (beforePower != SpellCastResult.CastOk)
+        // vmangos Spell::CheckPower returns SPELL_CAST_OK at once for an item cast ("item cast not used power", Spell.cpp:7050-7052), so neither its
+        // registered checks nor the amounts run; the take half skips the power the same way (TakePower, Spell.cpp:5053).
+        if (castItem is null)
         {
-            return beforePower;
-        }
+            // Registered checks inside vmangos CheckPower, before the amounts (combo points, Spell.cpp:7035-7038).
+            SpellCastResult beforePower = RunCastChecks(SpellCheckPhase.Power, caster, spell, targets, unitTarget, triggered, strict, castItem);
+            if (beforePower != SpellCastResult.CastOk)
+            {
+                return beforePower;
+            }
 
-        SpellCastResult power = CheckPower(caster, spell);
-        if (power != SpellCastResult.CastOk)
-        {
-            return power;
+            SpellCastResult power = CheckPower(caster, spell);
+            if (power != SpellCastResult.CastOk)
+            {
+                return power;
+            }
         }
 
         // Registered checks after power and caster auras: the target aura state (Spell.cpp:5733-5742).

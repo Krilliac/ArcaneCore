@@ -19,7 +19,7 @@ public sealed class ReagentTests
     private const uint NoRequirements = 91004;
     private const uint SelfReagentItem = 90100;
 
-    private static CraftingTestKit Rig()
+    private static CraftingTestKit Rig(Func<Player, Item, bool>? isInTrade = null)
     {
         var rig = new CraftingTestKit(
             CraftingTestKit.Craft(NeedsCloth) with { Reagents = [new SpellReagent(CraftingTestKit.LinenCloth, 2)] },
@@ -29,8 +29,37 @@ public sealed class ReagentTests
                 Reagents = [new SpellReagent(CraftingTestKit.LinenCloth, 3), new SpellReagent(CraftingTestKit.CopperBar, 2)],
             },
             CraftingTestKit.Craft(NoRequirements));
-        ReagentRules.Install(rig.System);
+        ReagentRules.Install(rig.System, isInTrade);
         return rig;
+    }
+
+    [Fact]
+    public void ReagentsOfferedInATrade_DoNotCount_AndAreNotDestroyed()
+    {
+        // vmangos Player::HasItemCount and DestroyItemCount skip IsInTrade items (Player.cpp:8681-8734).
+        Item? offered = null;
+        using CraftingTestKit rig = Rig((_, item) => item == offered);
+        offered = rig.Give(CraftingTestKit.LinenCloth, 5);
+
+        Assert.Equal(SpellCastResult.ItemNotReady, rig.Cast(NeedsCloth));
+
+        Assert.Equal(5u, offered.Count);
+        Assert.NotNull(rig.Inventory.GetItemByGuid(offered.Guid));
+    }
+
+    [Fact]
+    public void WithAFreeStackBesideTheTradedOne_OnlyTheFreeStackIsConsumed()
+    {
+        Item? offered = null;
+        using CraftingTestKit rig = Rig((_, item) => item == offered);
+        offered = rig.Give(CraftingTestKit.LinenCloth, 20);   // a full stack: the next cloth lands in its own stack
+        Item freeCloth = rig.Give(CraftingTestKit.LinenCloth, 2);
+        Assert.NotEqual(offered.Guid, freeCloth.Guid);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(NeedsCloth));
+
+        Assert.Equal(20u, offered.Count);
+        Assert.Null(rig.Inventory.GetItemByGuid(freeCloth.Guid));
     }
 
     [Fact]

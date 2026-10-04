@@ -143,11 +143,11 @@ public sealed partial class PlayerInventory
     /// Player::DestroyItemCount(entry, …) order: backpack, keyring, bag contents, then worn items
     /// that may come off, then — when asked — the bank). Returns how many were destroyed.
     /// </summary>
-    public uint DestroyItemCount(uint entry, uint count, bool includeBank = false)
+    public uint DestroyItemCount(uint entry, uint count, bool includeBank = false, Func<Item, bool>? exclude = null)
     {
         Player?.EnsureQuestSettlementMutationAllowed();
         uint remaining = count;
-        foreach (Item item in RemovalOrder(includeBank).Where(i => i.Entry == entry).ToList())
+        foreach (Item item in RemovalOrder(includeBank).Where(i => i.Entry == entry && exclude?.Invoke(i) != true).ToList())
         {
             if (remaining == 0)
             {

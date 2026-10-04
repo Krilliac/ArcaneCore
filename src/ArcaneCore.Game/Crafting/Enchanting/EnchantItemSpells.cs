@@ -51,6 +51,21 @@ public sealed class EnchantItemSpells(EnchantCatalog catalog, Func<bool>? gmAllo
         system.RegisterEffect(SpellEffectName.EnchantHeldItem, Held);
     }
 
+    /// <summary>
+    /// Fail closed while enchanting is unavailable (no <c>SpellItemEnchantment.dbc</c>, or <c>Enchanting:Enabled</c> false): every enchant effect refuses the cast
+    /// with <see cref="SpellCastResult.Unknown"/> before the reagents are taken, so a player never loses rods, dust or essences for an enchant that
+    /// would apply nothing. This is an ArcaneCore guard with no vmangos counterpart (vmangos always has the DBC). Installing the real effects afterwards
+    /// replaces these checks.
+    /// </summary>
+    public static void InstallUnavailable(SpellSystem system)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        foreach (SpellEffectName effect in new[] { SpellEffectName.EnchantItem, SpellEffectName.EnchantItemTemporary, SpellEffectName.EnchantHeldItem })
+        {
+            system.RegisterEffectCheck(effect, static _ => SpellCastResult.Unknown);
+        }
+    }
+
     // --- cast checks (Spell.cpp:7311-7375) ----------------------------------------------------------------------------
 
     /// <summary>ENCHANT_ITEM: the item must exist, be of a high enough level and, in a trade window, be an enchant that may be traded.</summary>

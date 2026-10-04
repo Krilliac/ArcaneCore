@@ -22,7 +22,8 @@ not be used) and no enchantment engine. All 1,159 tradeskill crafts reported "no
   slot with a non-positive item id and a zero totem slot are absent (vmangos `Spell.cpp:7254`, `:7292`; `SpellEntry.h:635-637`).
 - `ReagentCastCheck` (cast phase `Items`, order Equipment + 60, after the spell focus at +50): a missing reagent is `ITEM_NOT_READY`, a missing tool
   `ITEM_GONE`, reagents first (`Spell.cpp:7249-7306`). When the cast item is itself a reagent, is used up by the cast and the recipe needs more than one,
-  the count grows by one (`:7266-7280`, `:5101-5113`).
+  the count grows by one (`:7266-7280`, `:5101-5113`). Items offered in an open trade neither count nor are destroyed (`Player::HasItemCount` and
+  `DestroyItemCount` skip `IsInTrade`, `Player.cpp:8681-8734`): offering the only cloth in a trade slot makes the recipe `ITEM_NOT_READY`.
 - `ReagentCostTaker` destroys the reagents right after the power is spent and before the ammunition and the effects (`Spell.cpp:3716-3718`: "remove reagents
   before HandleEffects to allow place crafted item in same slot"); the bank is not touched; when the cast item is the reagent it is cleared from the cast so it is not
   used up twice.
@@ -33,7 +34,7 @@ not be used) and no enchantment engine. All 1,159 tradeskill crafts reported "no
   (the ranged lane's ammunition is still called inline) can register here instead of editing the call site.
 - `SpellCast.CastItem`, `SpellSystem.CastItemSpell(player, item, spellId, targets, triggered)`, and the same item on `SpellCastCheckContext` and
   `SpellEffectCheckContext` (optional trailing parameter, existing callers compile unchanged).
-- A cast from an item takes no power (`Spell::TakePower`, `Spell.cpp:5053`); the item's own cooldown category and times replace the spell's
+- A cast from an item checks and takes no power (`Spell::CheckPower` returns OK at once, `Spell.cpp:7050-7052`; `Spell::TakePower`, `Spell.cpp:5053`); the item's own cooldown category and times replace the spell's
   (`ItemSpellCooldowns`, `Player::AddCooldown` `pickCooldowns`, `Player.cpp:22139-22160`), in the readiness test too.
 - `TakeCastItem` runs after the effects (`Spell.cpp:3876-3878`).
 
@@ -136,8 +137,8 @@ not be used) and no enchantment engine. All 1,159 tradeskill crafts reported "no
 | Key | Default | Meaning |
 |---|---|---|
 | `Crafting:Enabled` | `true` | Master switch of reagents, the CREATE_ITEM effect and first aid. `false` registers none of them. |
-| `Enchanting:Enabled` | `true` | `false` leaves the engine and the enchant effects unregistered. |
-| `Enchanting:SpellItemEnchantmentDbcPath` | unset | Build-5875 `SpellItemEnchantment.dbc`. Unset: enchanting is inactive and logs a warning. Set but unreadable or with another layout: startup refuses. |
+| `Enchanting:Enabled` | `true` | `false` leaves the engine and the enchant effects unregistered; enchant casts are refused (`Unknown`) and consume no reagents. |
+| `Enchanting:SpellItemEnchantmentDbcPath` | unset | Build-5875 `SpellItemEnchantment.dbc`. Unset: enchanting is inactive and logs a warning; every enchant effect then refuses the cast with `Unknown` before any reagent is taken (ArcaneCore guard, no vmangos counterpart). Set but unreadable or with another layout: startup refuses. |
 | `Enchanting:GmAllowTrades` | `true` | vmangos `GM.AllowTrades` (`World.cpp:680`). |
 
 Skill gain tuning stays in the existing `Skills` options (`SkillGain.Crafting`, `SkillChance` colours).
