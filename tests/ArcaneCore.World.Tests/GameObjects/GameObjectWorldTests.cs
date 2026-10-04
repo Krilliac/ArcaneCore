@@ -132,7 +132,7 @@ public sealed class GameObjectWorldTests
     }
 
     /// <summary>Read until an update packet carries the create block of a game object.</summary>
-    private static async Task ReadUntilGameObjectCreateAsync(WorldTestClient client, ulong guid)
+    internal static async Task ReadUntilGameObjectCreateAsync(WorldTestClient client, ulong guid)
     {
         while (true)
         {
@@ -183,11 +183,17 @@ public sealed class GameObjectWorldTests
 /// <summary>What a game object test hands its host: the content, and back the feature instance.</summary>
 internal sealed class GameObjectTestContext(GameObjectContent content, LootContent loot)
 {
-    public GameObjectContent Content { get; } = content;
+    public GameObjectContent Content { get; set; } = content;
 
-    public LootContent Loot { get; } = loot;
+    public LootContent Loot { get; set; } = loot;
 
     public GameObjectLootFeature? Feature { get; set; }
+
+    /// <summary>When set, the loot store throws it at every later load (a database that went away; the reload tests use it).</summary>
+    public Exception? LootFailure { get; set; }
+
+    /// <summary>When set, the game object store throws it at every later load.</summary>
+    public Exception? ContentFailure { get; set; }
 }
 
 /// <summary>Game object and loot stores whose content the starting test sets (async-local, so tests stay isolated).</summary>
@@ -198,10 +204,10 @@ internal sealed class GameObjectTestStore : IGameObjectDataStore, ILootDataStore
     private readonly GameObjectTestContext? _context = Current.Value;
 
     Task<GameObjectContent> IGameObjectDataStore.LoadAsync(CancellationToken cancellationToken)
-        => Task.FromResult(_context?.Content ?? GameObjectContent.Empty);
+        => _context?.ContentFailure is { } failure ? Task.FromException<GameObjectContent>(failure) : Task.FromResult(_context?.Content ?? GameObjectContent.Empty);
 
     Task<LootContent> ILootDataStore.LoadAsync(CancellationToken cancellationToken)
-        => Task.FromResult(_context?.Loot ?? LootContent.Empty);
+        => _context?.LootFailure is { } failure ? Task.FromException<LootContent>(failure) : Task.FromResult(_context?.Loot ?? LootContent.Empty);
 }
 
 /// <summary>Registers <see cref="GameObjectTestStore"/> in every test host (empty unless a game object test set content).</summary>

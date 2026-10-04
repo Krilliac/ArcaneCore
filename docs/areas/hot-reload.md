@@ -1,6 +1,7 @@
 # Area: Live reload (`.reload`)
 
-Branch `claude/vw-hot-reload`. Operator-initiated reload of configuration and content without a
+Branch `claude/vw-hot-reload` (wave 1), extended by `claude/vw5-hot-reload-everywhere` (wave 4: quests, NPC tables, loot, game
+objects, the `reload all` contract and the table audit). Operator-initiated reload of configuration and content without a
 restart, modelled on the vmangos `.reload` command tree. Nothing reloads by itself.
 
 References (read-only, never copied): **vmangos** `src/game/Chat/Chat.cpp` (reload table 794-935,
@@ -33,11 +34,12 @@ no such command." exactly like any unknown command. On: everything below. A deve
 with `HotReload:Commands=true` (the dev runner script sets it). Read once when the world starts.
 
 **Commands** (`ReloadCommands`, Administrator, only when `HotReload:Commands=true`)
-- `.reload config`, `.reload spell_template`, `.reload all` (the reloadables vmangos `reload all` reaches, ServerCommands.cpp:885-905:
-  `areatrigger_teleport` :907-914, `game_tele` :900, `spell_template` :969-971; not the config, and not
-  `item_template` or `creature_template`, which vmangos' `all_item` :996-1002 and `all_npc` :925-933 leave out
-  and which stay reachable by name, Chat.cpp:830, 855), `.reload status` (ArcaneCore addition), names matched exactly or by unique
-  prefix (vmangos matches command words by abbreviation, `hasStringAbbr`).
+- `.reload <name>` for every registered reloadable (the audit table below lists them), `.reload all` (the reloadables vmangos
+  `reload all` reaches, ServerCommands.cpp:885-1002: `areatrigger_teleport` :910, `game_tele` :902, `spell_template` :971, `quest_template`
+  :938, `npc_gossip` / `npc_trainer` / `npc_vendor` / `points_of_interest` :928-931, `gossip_menu` / `gossip_menu_option` :987-988, `all_loot`
+  :891; not the config, and not `item_template`, `creature_template`, `gameobject_template` or `npc_text`, which vmangos' `all` leaves out and
+  which stay reachable by name), `.reload status` (ArcaneCore addition), names matched exactly or by unique prefix (vmangos matches
+  command words by abbreviation, `hasStringAbbr`). `ReloadAllMembershipTests` pins the set.
 - The command returns at once and reports from the world thread when the reload ends, so the tick is
   never blocked by a database read.
 
@@ -75,7 +77,76 @@ creature sees the new template at once and takes its unit fields from it at its 
   their last known template). A world that started with no creature data takes the whole content,
   spawns included, through `CreatureWorldFeature.Install`; the shared `CreatureContent.Empty` is never
   mutated.
-- The vmangos `<entry>` argument (one template) is not supported; the whole table reloads.
+- The vmangos `<entry>` argument (one template) is not supported; the whole table reloads. The same holds for `gameobject_template`
+  (`ServerCommands.cpp:1779-1783`). Both would need an entry-aware reload contract (`IContentReloadable` has none) and, for creatures, a
+  per-entry definition swap in `CreatureContent`; left as a recorded limit.
+
+**`quest_template`** (`QuestContentReloadable`, `QuestNpcServices.ReplaceQuests`, `QuestStore.Templates`): the quest
+templates and the four relation tables (`creature_questrelation`, `creature_involvedrelation`,
+`gameobject_questrelation`, `gameobject_involvedrelation`) are read through `IQuestContentStore` off the world thread
+into a new immutable `QuestStore` (chains, breadcrumbs and exclusive groups are derived from the whole set), which is
+swapped into the live `QuestNpcServices` on the world thread (vmangos `HandleReloadQuestTemplateCommand`
+`ServerCommands.cpp:1145-1156` -> `ObjectMgr::LoadQuests` `ObjectMgr.cpp:5523`; relations `LoadQuestRelationsHelper`
+`ObjectMgr.cpp:9172`; table entry `Chat.cpp:884`; `reload all` reaches it through `all_quest`, `ServerCommands.cpp:935-944`).
+`QuestNpcServices.Quests` / `.Npcs` are now volatile-backed with `ReplaceQuests` / `ReplaceNpcs`, so every holder of the
+services (online journals, quest givers, the query handlers, the objective adapter) sees the new store at its next lookup
+by id; journals keep quest ids, not templates, so nothing is re-wired and an online player's log is untouched.
+- The relation tables are cleared and re-read (`ObjectMgr.cpp:9174`): a relation removed from the table is removed live.
+- An empty `quest_template` keeps the loaded quests (`ObjectMgr.cpp:5568-5577` returns before touching anything), whatever
+  `HotReload:EmptyTables` says.
+- A template whose row has left the table stays loaded until the next restart and is listed in the result, because
+  `LoadQuests` only inserts or overwrites entries of its map (`ObjectMgr.cpp:5590-5594`) and never removes one. This is
+  retail, so there is no switch.
+- Duplicate entries are rejected with the ids listed.
+- The quest area triggers (`areatrigger_involvedrelation`) are the configuration key `Quests:AreaTriggerQuests` here, not a
+  table; they are read when the world starts.
+
+**NPC service tables** (`NpcContentReloadables`: `npc_gossip`, `npc_text`, `npc_trainer`, `npc_vendor`, `points_of_interest`,
+`gossip_menu`, `gossip_menu_option`; `NpcStore.Content`, `QuestNpcServices.ReplaceNpcs`): the whole `NpcContent` is read through
+`INpcContentStore` off the world thread, only the named table's rows are put into a copy of the live content, the next immutable
+`NpcStore` is built from that copy (still off the world thread), and the commit swaps it into the live `QuestNpcServices`. Gossip,
+vendor and trainer windows opened afterwards, and every NPC text query, use it; a window a player already has open keeps the list
+it was sent. The other tables, and the flight network, are exactly what was live (a test pins it). vmangos commands:
+`HandleReloadNpcGossipCommand` / `NpcText` / `NpcTrainer` / `NpcVendor` / `PointsOfInterest` / `GossipMenu` /
+`GossipMenuOption`, `ServerCommands.cpp:1264-1311` and `:1071-1091`; loaders `ObjectMgr.cpp:10865`, `6827`, `10600`, `10780`,
+`9081`, `10931`, `11013`; table entries `Chat.cpp:847-848`, `867-870`, `880`. `reload all` reaches the first six through all_npc
+and all_gossips (`ServerCommands.cpp:925-933`, `985-994`); `npc_text` is in neither, so it is not in `all`.
+- Every one of these vmangos loaders clears its map before it looks at the query result (`ObjectMgr.cpp:10867`, `6829`,
+  `10604-10607`, `10784-10787`, `9083`, `10933`, `11015`), so an empty table empties the rows; `HotReload:EmptyTables = KeepLoaded`
+  keeps them (as for `item_template`).
+- vmangos also reloads `npc_trainer_template` with `npc_trainer` and `npc_vendor_template` with `npc_vendor`
+  (`ServerCommands.cpp:1282-1301`); ArcaneCore has no template tables (an entry's list is one list), so there is nothing more to read.
+**Loot tables** (`LootContentReloadables`: `all_loot`, the eight per-table `*_loot_template` reloadables and
+`skill_fishing_base_level`; `LootContent.Rows` and friends, `GameObjectLootFeature.ReplaceLootContent`, `LootService.ReplaceContent`):
+the whole `LootContent` is read through `ILootDataStore` off the world thread and the next immutable content is composed from it and
+the live one (one table's rows replaced, or everything), still off the world thread; the commit swaps it into the loot module and into the
+`LootService` of every map already attached (maps created later take it from the feature), so a chest or corpse filled from then on
+rolls from the new rows. vmangos: `HandleReloadAllLootCommand` `ServerCommands.cpp:916-923` -> `LoadLootTables` (`LootMgr.h:431`), the per-table
+commands `:1174-1254`, `LootStore::LoadLootTable` `LootMgr.cpp:94-189`; table entries `Chat.cpp:801`, `825`, `831`, `834`, `841`, `853`, `874`, `885`,
+`889`, `890`.
+- Loot already generated keeps what it rolled, like vmangos (it rolls when the corpse or chest is filled, `Loot::FillLoot`): a chest whose
+  window is open when the table changes still hands out the old item (a test pins it).
+- `LoadLootTable` clears its store before it looks at the query result (`LootMgr.cpp:100`) and an empty table leaves it empty (`:184-188`), so an empty
+  table empties its rows; `HotReload:EmptyTables = KeepLoaded` keeps them. `skill_fishing_base_level` clears first as well (`ObjectMgr.cpp:10409`).
+- `all_loot` is a superset of vmangos' command: the loot module reads the creature loot ids and gold (`creature_loot_info`), the pickpocket loot ids
+  and the fishing base levels together with its tables (in vmangos they belong to `creature_template` and `skill_fishing_base_level`), and `all_loot`
+  replaces all of it. The per-table commands replace only their table's rows, and `skill_fishing_base_level` only the base levels. `reload all`
+  reaches `all_loot` only (vmangos' `all` calls `skill_fishing_base_level` too, `:887`; its content is already in `all_loot`, and a second load of the same
+  database tables would add nothing).
+- `mail_loot_template` has no counterpart (mail loot is not a table here). A change to a creature's loot id in `creature_template` reaches the
+  loot module with `all_loot` (or `reload all`), not with `creature_template` alone, because the loot module reads that column from its own table.
+
+**`gameobject_template`** (`GameObjectContentReloadable`, `GameObjectContent.Spawns` / `Locks` / `QuestStarters` / `QuestEnders`,
+`GameObjectLootFeature.ReplaceContent`, `GameObjectMapSystem.ReplaceContent`, `GameObject.ReplaceTemplate`): the templates are read through
+`IGameObjectDataStore` off the world thread and put into a copy of the live `GameObjectContent` (spawns, locks and quest relations are
+not reloaded); the commit swaps it into the object system of every map and rebinds every live object to the template of its entry
+(vmangos `HandleReloadGameObjectTemplatesCommand` `ServerCommands.cpp:1775-1790` -> `LoadGameObjectTemplates` `ObjectMgr.cpp:8140`; table
+entry `Chat.cpp:845`; not in `reload all`). What is read through the template from then on (data fields, loot id, lock id, ...) changes at
+once; the update fields written when an object was created (display id, flags, faction) change only when it is created again, which is what
+vmangos does too (its objects point at the record the loader overwrites, and `GameObject::Create` filled the fields once).
+- An empty table keeps the loaded templates (`ObjectMgr.cpp:8145-8146` returns before touching anything), whatever `HotReload:EmptyTables`
+  says; a template whose row has left the table stays loaded until the next restart and is listed in the result (`ObjectMgr.cpp:8148-8153`
+  inserts or overwrites and never removes). Retail, so no switch.
 
 **`game_tele`, `areatrigger_teleport`** (`MapContentReloadables`, `WorldMaps.ReplaceGameTeles` /
 `BuildAreaTriggerTables` / `ReplaceAreaTriggerTables`): the `.tele` locations, and the area triggers with
@@ -116,6 +187,51 @@ on the world thread, so every reader sees the new value on its next read.
   do (World.cpp:2949-2977); `HotReload:NegativeNumbers = Reject` rejects the whole reload instead. A test fails if a new `WorldRuntimeOptions` / `MapOptions` / `WorldOptions` property is
   not classified in `WorldConfigKeys`.
 
+## Reload table audit (vmangos `Chat.cpp:794-910` against ArcaneCore)
+
+Every entry of the vmangos reload table, what ArcaneCore does with it, and whether `.reload all` reaches it
+(`ServerCommands.cpp:885-1002`). `ReloadAllMembershipTests` pins the "in all" answer for every registered
+reloadable, so a new reloadable that forgets to say whether `all` includes it fails the suite. Status words:
+**delivered** (a reloadable exists), **planned** (this lane, a later slice), **owner lane** (the store belongs to
+another wave-4 lane, which adds a reloadable when its store is swappable), **no store** (ArcaneCore reads no such
+table or catalog from the database).
+
+| vmangos name (Chat.cpp line) | In vmangos `all` | ArcaneCore | Status |
+|---|---|---|---|
+| `all` (796), `all_area` (797) | itself; all_area = areatrigger_teleport, areatrigger_tavern, game_graveyard_zone (:910-912) | `.reload all` | delivered |
+| `areatrigger_teleport` (813) | yes, via all_area (:910) | `areatrigger_teleport` | delivered |
+| `areatrigger_tavern` (812) | yes, via all_area (:911) | none | no store |
+| `game_graveyard_zone` (835) | yes, via all_area (:912) | none | owner lane (graveyards-resurrection) |
+| `areatrigger_involvedrelation` (811) | yes, via all_quest (:937) | none: the quest area triggers are the configuration key `Quests:AreaTriggerQuests`, bound when the world starts | no store (restart) |
+| `config` (808) | no | `config` | delivered |
+| `game_tele` (836) | yes (:902) | `game_tele` | delivered |
+| `spell_template` (905) | yes, via all_spell (:971) | `spell_template` | delivered |
+| `item_template` (855) | no | `item_template` | delivered |
+| `creature_template` (830) | no (all_npc :925-933 omits it) | `creature_template` | delivered |
+| `creature_ai_events` (820) | yes (:890) | part of the creature content, rides on `creature_template` (so not in `all`) | delivered, see Limits |
+| `quest_template` (884) and the four `*_questrelation` / `*_involvedrelation` tables (824, 827, 840, 842) | yes, via all_quest (:938-942) | `quest_template` (templates and the four relation tables together) | delivered |
+| `npc_gossip` (867), `npc_trainer` (869), `npc_vendor` (870), `points_of_interest` (880) | yes, via all_npc (:928-931) | `npc_gossip`, `npc_trainer`, `npc_vendor`, `points_of_interest` | delivered |
+| `gossip_menu` (847), `gossip_menu_option` (848) | yes, via all_gossips (:987-988) | `gossip_menu`, `gossip_menu_option` | delivered |
+| `npc_text` (868) | no | `npc_text` | delivered |
+| `creature_loot_template` (825), `gameobject_loot_template` (841), `item_loot_template` (853), `skinning_loot_template` (890), `reference_loot_template` (885), `fishing_loot_template` (834), `pickpocketing_loot_template` (874), `disenchant_loot_template` (831) | yes, all at once via all_loot (:891, :916-922) | the eight `*_loot_template` reloadables, and `all_loot` (the one `all` reaches) | delivered |
+| `mail_loot_template` (863) | yes, via all_loot | none | no store |
+| `skill_fishing_base_level` (889) | yes (:887) | `skill_fishing_base_level` (the base levels live in the loot content object, so `all` reaches them through `all_loot`, not on their own) | delivered |
+| `item_enchantment_template` (852), `page_text` (871), `item_required_target` (854) | yes, via all_item (:996-1002) | none | no store |
+| `gameobject_template` (845) | no | `gameobject_template` | delivered |
+| `gameobject` (838), `gameobject_requirement` (843) | no | none | owner lane (gameobject-types) |
+| `command` (817), `reserved_name` (888), `mangos_string` (864) | yes (:899-901) | none | no store |
+| `creature` (819), `creature_groups` (823), `creature_display_info_addon` (822), `cinematic_waypoints` (816) | no | none | owner lane (creature-movement-spawns) |
+| `creature_spells` (828) | no | none | no store |
+| `creature_onkill_reputation` (826), `reputation_reward_rate` (886), `reputation_spillover_template` (887) | no | none | owner lane (reputation-factions) |
+| `spell_area`, `spell_chain`, `spell_elixir`, `spell_learn_spell`, `spell_proc_event`, `spell_proc_item_enchant`, `spell_script_target`, `spell_target_position`, `spell_threats`, `spell_pet_auras` (891-906) | yes, via all_spell (:972-981) | none | owner lane (spell-modifier-engine, aura-engine-completeness, threat-and-aggro) |
+| `spell_mod` (898), `spell_group` (895), `spell_group_stack_rules` (896), `spell_disabled` (893) | no | none | owner lane (spell-modifier-engine, aura-engine-completeness) |
+| `*_scripts` (829, 832, 844, 846, 849, 881, 883, 903), `all_scripts` (804) | not in `all` (:946-967) | none | no store (DB scripts are not interpreted) |
+| `game_weather` (837) | no | none | owner lane (game-events-weather) |
+| `creature_battleground`, `gameobject_battleground` (821, 839) | yes (:903) | none | owner lane (battlegrounds) |
+| `locales_*` (856-862), `all_locales` (800) | yes (:897) | none | no store (only the default strings are read) |
+| `conditions` (818) | no | none | owner lane (condition evaluator content) |
+| `exploration_basexp` (833), `instance_buff_removal` (850), `map_template` (866), `map_loot_disabled` (865), `taxi_path_transitions` (907), `quest_greeting` (882), `trainer_greeting` (908), `pet_name_generation` (872), `variables` (909), `player_factionchange_*` (875-879), `petitions` (873), `character_pet` (815), `autobroadcast` (814), `anticheat` (807), `account_banned` (810), `ip_banned` (851) | no | none | no store, or another area's live store (bans are enforced live from the database, not from a cached list) |
+
 ## Deviations from retail
 
 Every row with a switch defaults to retail. Rows marked *structural* are behaviours the design cannot offer a
@@ -132,14 +248,27 @@ retail variant of (no switch is possible); they are limits, not options.
 | A live creature keeps the unit fields it copied from its template (faction, flags, health, speeds ...) until it respawns; what is read through `Creature.Template` (rank, corpse delay, AI name, speeds, loot ids ...) changes at once. vmangos behaves the same way: the reload replaces the table, `Creature::UpdateEntry` re-copies at respawn. | none |
 | Retail behaviour, switchable: an empty `item_template`, `game_tele` or unusable `areatrigger_teleport` empties the table (vmangos clears first); `spell_template` and `creature_template` keep what is loaded (vmangos returns early). | `HotReload:EmptyTables` (`Retail` default; `KeepLoaded` keeps the loaded rows for the three clearing tables) |
 | A negative interval/range in `.reload config` is replaced by its default and noted (vmangos `setConfigPos`/`setConfigMin`). | `HotReload:NegativeNumbers` (`Retail` default; `Reject` rejects the reload) |
+| `quest_template` also re-reads the four quest relation tables, and there are no separate `creature_questrelation` / `creature_involvedrelation` / `gameobject_*relation` reloadables (vmangos has one command per table, Chat.cpp:824, 827, 840, 842): the quest store derives chains, breadcrumbs and relations from one immutable set. `reload all` reloads all of them either way (`all_quest`, ServerCommands.cpp:938-942). | none, structural |
 | `.reload spell_template` does not reload `spell_mod` (no such table here; vmangos ServerCommands.cpp:1414). | none |
 | Live reload is off by default and is a development facility: vmangos always registers its `reload` root (Chat.cpp:1212), here the root and the coordinator do not exist unless enabled. Per the standing rule that hot-reload commands are off by default. | `HotReload:Commands` (default false; `true` for a development server) |
 
 ## Limits (not delivered, by design of this slice)
 
-- Only `config`, `spell_template`, `item_template` and `creature_template` are reloadable. Quests, NPC data, gameobject
-  loot, catalogs, the map registry/areas/terrain and collision are separate slices (hr-quest-npc, ...), several
-  gated behind other lanes' work on the files they touch.
+- The reloadables are the delivered rows of the audit table above. Everything else in the vmangos reload table is either another wave-4
+  lane's store (spell modifiers, procs and chains, threat, weather and events, graveyards, creature groups and spawns, reputation,
+  battlegrounds, conditions: each of those lanes adds an `IContentReloadable` class, discovered without a registry edit, once its store is
+  an immutable object behind a stable holder) or has no table here at all (`mangos_string`, `command`, `reserved_name`, `page_text`,
+  `item_enchantment_template`, `item_required_target`, the locales, `*_scripts`, `areatrigger_tavern`, `creature_spells`: nothing reads
+  them from the database, so there is nothing to reload; the quest area triggers are the configuration key `Quests:AreaTriggerQuests`,
+  read at start). The map registry, areas, terrain and collision data are restart-only, as in vmangos.
+- The `<entry>` argument of `creature_template` and `gameobject_template` (one template) is not supported (see the creature section).
+- `creature_ai_events` (in vmangos `all`, ServerCommands.cpp:890) reloads with `creature_template` here (EventAI is part of the creature
+  content), and `creature_template` is not in `all`, so `reload all` leaves EventAI alone; `.reload creature_template` reloads it.
+- A held `Item` keeps its creation template (see Deviations); held quests, open gossip, vendor and trainer windows and open loot keep what
+  they were given. Online players' quest journals keep quest ids, so a reload never touches a journal.
+- The reloads that read through `INpcContentStore`, `IQuestContentStore`, `ILootDataStore` and `IGameObjectDataStore` use the existing
+  `Load` methods unchanged; they add no new database query, so there is no provider-specific schema or SQL to cover (the existing store
+  tests keep their provider theories). The reload tests use in-memory stores, on every machine.
 - No file watcher, no database revision polling, no automatic apply, no assembly (code) reload and no
   cluster rollout. The `HotReload` section itself is read when the world starts.
 - Reloaded spells are visible to new casts, lookups and logins. Spells already in flight keep their
@@ -151,7 +280,9 @@ retail variant of (no switch is possible); they are limits, not options.
 
 ## Tests
 
-`tests/ArcaneCore.World.Tests/Reload` (coordinator, config, social config, spell, item, creature, map, command end-to-end over loopback) and
+`tests/ArcaneCore.World.Tests/Reload` (coordinator, config, social config, spell, item, creature, map, quest, NPC tables, loot tables,
+game objects, the `reload all` membership, command end-to-end over loopback; every reload test changes a row between the first load and the
+reload and reads it through a live holder, a client, a journal or a chest, and each has a failed-store and a rollback case) and
 `tests/ArcaneCore.Game.Tests/Reload` (transaction, creature definitions). The three safety behaviours were proven load-bearing
 by disabling each guard and watching its test fail: the empty-table guard, the restart-only message, and
 the unreadable-source rejection. The same was done for the social startup binding and for the live item

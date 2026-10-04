@@ -123,20 +123,22 @@ public sealed class ReloadCommandTests
         Assert.Equal("Re-loading all...", (await admin.ReadChatAsync()).Text);
 
         // vmangos reload all (ServerCommands.cpp:885-905) reaches areatrigger_teleport (:907-914), game_tele (:900) and spell_template (:969-971),
-        // but neither item_template (all_item :996-1002) nor creature_template (all_npc :925-933).
+        // but neither item_template (all_item :996-1002), creature_template (all_npc :925-933) nor npc_text (in neither all_npc nor all_gossips).
+        // ReloadAllMembershipTests pins the whole set.
         List<string> lines = await ReadLinesUntilAsync(admin, l => l.StartsWith("spell_template reloaded:", StringComparison.Ordinal));
         Assert.Contains(lines, l => l.StartsWith("areatrigger_teleport reloaded:", StringComparison.Ordinal));
         Assert.Contains(lines, l => l.StartsWith("game_tele reloaded:", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, l => l.StartsWith("item_template", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, l => l.StartsWith("creature_template", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.StartsWith("npc_text", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, l => l.StartsWith("config", StringComparison.Ordinal));
     }
 
-    /// <summary>Chat lines up to and including the first that satisfies <paramref name="last"/> (at most 20).</summary>
+    /// <summary>Chat lines up to and including the first that satisfies <paramref name="last"/> (at most 80: one line per reloadable and the list grows with every table a lane makes reloadable).</summary>
     private static async Task<List<string>> ReadLinesUntilAsync(WorldTestClient client, Func<string, bool> last)
     {
         var lines = new List<string>();
-        for (int i = 0; i < 20; i++)
+        for (int i = 0; i < 80; i++)
         {
             string line = (await client.ReadChatAsync()).Text;
             lines.Add(line);

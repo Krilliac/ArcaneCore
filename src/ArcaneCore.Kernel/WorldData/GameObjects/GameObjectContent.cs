@@ -132,6 +132,15 @@ public sealed class GameObjectContent
             .ToDictionary(g => g.Key, g => (IReadOnlyList<uint>)[.. g.Select(r => r.Quest).Distinct().Order()]);
     }
 
+    /// <summary>Every spawn, the locks and the quest relations as the constructor took them (the live reload rebuilds the content with the templates replaced).</summary>
+    public IEnumerable<GameObjectSpawn> Spawns => _spawnsByMap.Values.SelectMany(s => s);
+
+    public IEnumerable<LockEntry> Locks => _locks.Values;
+
+    public IEnumerable<(uint Entry, uint Quest)> QuestStarters => _starters.SelectMany(p => p.Value.Select(q => (p.Key, q)));
+
+    public IEnumerable<(uint Entry, uint Quest)> QuestEnders => _enders.SelectMany(p => p.Value.Select(q => (p.Key, q)));
+
     public int TemplateCount => _templates.Count;
 
     public int SpawnCount { get; }
