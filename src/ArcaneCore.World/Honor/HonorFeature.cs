@@ -35,6 +35,9 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
     private HonorOptions _options = new();
     private uint _weekBegin;
 
+    /// <summary>The clock honor is dated with: the registered <see cref="HonorClock"/> (tests substitute a fixed one), else the real clock.</summary>
+    private HonorClock Clock => services.GetService<HonorClock>() ?? HonorClock.System;
+
     /// <summary>
     /// Held by a login from before its honor read until its state is tracked, and by the weekly job from before its store
     /// transaction until the week begin day moves. A login therefore sees the week wholly before (old row, old week: the result is
@@ -83,7 +86,7 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
             return;
         }
 
-        var hooks = new HonorHooks(_options, HonorClock.System) { InternalRank = player => service.For(player)?.Rank.Rank ?? 0 };
+        var hooks = new HonorHooks(_options, Clock) { InternalRank = player => service.For(player)?.Rank.Rank ?? 0 };
         if (!HonorHooks.TryRegister(world, hooks))
         {
             _logger.LogWarning("Honor hooks were already registered for this world; the channel rank source is not installed");
@@ -243,7 +246,7 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
             // HonorMaintenancer::Initialize (HonorMgr.cpp:654-669): read the stored days; the very first start takes the most
             // recent maintenance weekday. It must happen before any player's honor is computed, or every row would count as
             // "this week" and the lifetime totals would double count.
-            uint today = HonorClock.System.GameDay(_options.TimeZoneOffsetHours * 3600);
+            uint today = Clock.GameDay(_options.TimeZoneOffsetHours * 3600);
             uint last = HonorMaintenancePlanner.LastMaintenanceDay(today, _options.MaintenanceDay);
             using (IServiceScope scope = scopes.CreateScope())
             {
@@ -262,7 +265,7 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
             }
 
             Volatile.Write(ref _weekBegin, last);
-            return _service = new HonorService(_options, HonorClock.System, () => WeekBeginDay, new Sink(_writes));
+            return _service = new HonorService(_options, Clock, () => WeekBeginDay, new Sink(_writes));
         }
     }
 

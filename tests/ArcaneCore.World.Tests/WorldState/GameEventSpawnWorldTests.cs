@@ -34,8 +34,8 @@ internal sealed class GameEventTestServices : IWorldTestServices
 /// <summary>
 /// Game-event spawns end to end in the running world daemon: the data store feeds the event feature, the event feature drives the
 /// service from the world tick, and the spawn feature installs the gate on the creature system that the creature feature attaches.
-/// Event windows are placed around the real clock (the host runs a real tick thread), a few hours wide, so the test never depends on
-/// a duration; it waits on conditions.
+/// Event windows are placed around a fixed game clock installed through <see cref="WorldTestHost.GameTime"/> (the host still runs a real
+/// tick thread), a few hours wide, so the test depends on neither the wall clock nor a duration; it waits on conditions.
 /// </summary>
 public sealed class GameEventSpawnWorldTests
 {
@@ -50,7 +50,9 @@ public sealed class GameEventSpawnWorldTests
     [Fact]
     public async Task EventSpawns_AreGated_StartWithTheirEvent_AndLeaveWithIt()
     {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
+        // The host runs at a fixed mid-June instant (see GameEventCommandTests), so the windows below never depend on the wall clock.
+        DateTimeOffset now = new(2026, 6, 17, 12, 0, 0, TimeSpan.Zero);
+        WorldTestHost.GameTime.Value = new ArcaneCore.Game.WorldState.Time.FixedGameTime(now, TimeZoneInfo.Local);
         var template = new CreatureTemplate
         {
             Entry = Wolf, Name = "Young Wolf", MinLevel = 2, MaxLevel = 2, DisplayIds = [903], Faction = 32, CreatureType = 1, MinLevelHealth = 55, MaxLevelHealth = 55,
@@ -74,6 +76,7 @@ public sealed class GameEventSpawnWorldTests
         {
             CreatureTestStore.Current.Value = null;
             GameEventTestStore.Current.Value = null;
+            WorldTestHost.GameTime.Value = null;
         }
 
         await using WorldTestHost host = started;

@@ -26,10 +26,18 @@ namespace ArcaneCore.World.Tests;
 /// </summary>
 internal sealed class WorldTestHost : IAsyncDisposable
 {
+    /// <summary>The game clock the next <see cref="Start"/> installs on the world (null: the real clock).</summary>
+    public static readonly AsyncLocal<ArcaneCore.Game.WorldState.Time.IGameTime?> GameTime = new();
+
     private readonly ServiceProvider _services;
     private readonly TcpListener _listener;
     private readonly CancellationTokenSource _stop = new();
     private readonly List<Task> _sessions = [];
+
+    // Every client this host handed out. The test holds the only other reference; a client the test drops is otherwise garbage, and the
+    // finalizer of its TcpClient closes the socket, which logs the player out in the middle of the test (a GC-timing flake). Keeping them
+    // here ties each connection to the host's lifetime; DisposeAsync closes them (a repeated dispose is harmless).
+    private readonly List<WorldTestClient> _clients = [];
     private readonly Task _acceptLoop;
 
     private readonly WorldSessionOptions _sessionOptions;
@@ -74,6 +82,13 @@ internal sealed class WorldTestHost : IAsyncDisposable
         SaveQueue = _services.GetRequiredService<CharacterSaveQueue>();
         World = new WorldRuntime(options, SaveQueue, NullLogger<WorldRuntime>.Instance);
         Opcodes = WorldServiceCollectionExtensions.BuildOpcodeTable();
+
+        // A test that needs the world to run at a chosen instant sets GameTime around Start (async-local, so tests stay isolated); it must be
+        // in place before the features attach, because the game event feature reads the clock while it loads.
+        if (GameTime.Value is { } gameTime)
+        {
+            ArcaneCore.Game.WorldState.WorldStateHooks.For(World).Time = gameTime;
+        }
 
         _services.AttachWorldFeatures(World);
         // The harness runs with weather off (vmangos ActivateWeather=0) so an SMSG_WEATHER after every zone
@@ -143,7 +158,13 @@ internal sealed class WorldTestHost : IAsyncDisposable
     {
         var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, Port);
-        return new WorldTestClient(client);
+        var connected = new WorldTestClient(client);
+        lock (_clients)
+        {
+            _clients.Add(connected);
+        }
+
+        return connected;
     }
 
     /// <summary>Connect, authenticate, create a warrior (human unless <paramref name="race"/> says otherwise) and enter the world.</summary>
@@ -226,6 +247,24 @@ internal sealed class WorldTestHost : IAsyncDisposable
         catch (Exception ex) when (ex is OperationCanceledException or SocketException or ObjectDisposedException)
         {
             // listener stopped
+        }
+
+        WorldTestClient[] clients;
+        lock (_clients)
+        {
+            clients = [.. _clients];
+        }
+
+        foreach (WorldTestClient connected in clients)
+        {
+            try
+            {
+                await connected.DisposeAsync();
+            }
+            catch (Exception ex) when (ex is ObjectDisposedException or IOException or SocketException)
+            {
+                // already closed by the test
+            }
         }
 
         Task[] sessions;

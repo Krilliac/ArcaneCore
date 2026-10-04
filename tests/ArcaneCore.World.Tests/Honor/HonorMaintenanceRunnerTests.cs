@@ -49,6 +49,16 @@ public sealed class HonorMaintenanceRunnerTests
         return new Rig(store, provider, honor, runner);
     }
 
+    private static async Task Eventually(Func<bool> condition)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "the condition did not become true within 20 s");
+            await Task.Delay(5);
+        }
+    }
+
     private static void Rows(MemoryHonorStore store, int id, int count, float cp, uint date, HonorKind kind = HonorKind.Honorable)
         => store.Seed(id, store.State(id), [.. store.Rows(id), .. Enumerable.Range(0, count).Select(i => new HonorCpRecord(4, (uint)(1000 + i), cp, date, (byte)kind))]);
 
@@ -110,7 +120,11 @@ public sealed class HonorMaintenanceRunnerTests
         await rig.Honor.WeekGate.WaitAsync();
         Task<int> run = rig.Runner.RunDueAsync(107, null);
 
-        await Task.Delay(200);
+        // Start the negative window only once the runner demonstrably reached its last step before the gate (the scores read), so a slow
+        // start on a loaded machine cannot make the "still waiting" check pass for the wrong reason; then give a gate-less runner ample time.
+        await Eventually(() => rig.Store.ListWeeklyScoresCalls >= 1);
+        Task finished = await Task.WhenAny(run, Task.Delay(250));
+        Assert.NotSame(run, finished);
         Assert.False(run.IsCompleted);
         Assert.Equal(new HonorMaintenanceState(100, 107, false), rig.Store.Maintenance); // nothing committed yet
         Assert.Equal(100u, rig.Honor.WeekBeginDay);
@@ -241,7 +255,7 @@ public sealed class HonorMaintenanceRunnerTests
     public async Task Online_players_are_updated_in_memory_exactly_as_the_rows_were()
     {
         var store = new MemoryHonorStore();
-        uint today = HonorMaintenancePlanner.GameDay(DateTimeOffset.UtcNow.ToUnixTimeSeconds(), 0);
+        uint today = HonorTestServices.Today;
         uint thisWeek = HonorMaintenancePlanner.LastMaintenanceDay(today, new HonorOptions().MaintenanceDay);
         await store.SaveMaintenanceAsync(new HonorMaintenanceState(thisWeek, thisWeek + 7, false)); // not due: attach leaves it
         await using WorldTestHost host = HonorTestServices.Start(store);
