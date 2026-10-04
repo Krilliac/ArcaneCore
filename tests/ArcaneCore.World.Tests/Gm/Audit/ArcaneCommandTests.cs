@@ -216,9 +216,9 @@ public sealed class ArcaneCommandTests
         await using WorldTestClient mod = await Staff(host, AccountSecurity.Moderator, "MOD", "Moddy");
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".commands");        // level 0: never audited
         await mod.SendChatAsync(ChatType.Say, Language.Common, ".gmannounce first");
+        await mod.CollectAsync();       // two sockets: wait for the announcement to be processed so the audit order is the send order
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".mute nobody 5m");
         await admin.CollectAsync();
-        await mod.CollectAsync();
 
         string[] lines = await LinesAsync(admin, ".arcane gmlog");
 
