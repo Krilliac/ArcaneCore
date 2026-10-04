@@ -82,4 +82,55 @@ public sealed class GameEventQuestWorldTests
 
         await quests.DisposeAsync();
     }
+
+    [Fact]
+    public async Task AQuestTemplateReload_DoesNotLoseTheEventState_TheNextWorldTickReappliesIt()
+    {
+        // .reload quest_template swaps in a freshly built QuestStore (QuestContentReloadable: QuestNpcServices.ReplaceQuests), whose quest
+        // objects know nothing about the running events. GameEventQuests.Resync, driven by the feature's WorldTick subscription, must
+        // put the event state back (docs/integration/wave4-integration.md, formerly an open question).
+        var collection = new ServiceCollection();
+        collection.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
+        collection.AddScoped<IQuestContentStore, FakeQuests>();
+        collection.AddScoped<IGameEventDataStore, FakeEvents>();
+        collection.AddSingleton(sp => new QuestNpcFeature(sp, sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<QuestNpcFeature>.Instance));
+        collection.AddSingleton(sp => new GameEventFeature(sp, NullLogger<GameEventFeature>.Instance));
+        collection.AddSingleton(sp => new GameEventQuestFeature(sp, NullLogger<GameEventQuestFeature>.Instance));
+        await using ServiceProvider services = collection.BuildServiceProvider();
+        using var world = new WorldRuntime(
+            new WorldRuntimeOptions { AutosaveIntervalMs = 0 },
+            new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance),
+            NullLogger<WorldRuntime>.Instance);
+        var clock = new FixedGameTime(Utc(2026, 10, 3, 10));
+        WorldStateHooks.For(world).Time = clock;
+        QuestNpcFeature quests = services.GetRequiredService<QuestNpcFeature>();
+        services.GetRequiredService<GameEventFeature>().Attach(world);
+        services.GetRequiredService<GameEventQuestFeature>().Attach(world);
+        quests.Attach(world);
+        world.RunTick(10);
+        clock.UtcNow = Utc(2026, 10, 3, 12, 30);
+        world.RunTick(8_000_000); // event 2 runs
+        Assert.True(quests.Services.Quests.Get(10)!.IsActive);
+
+        // The reload while the event runs. The rebuilt quest 10 carries Method 1 (disabled), so a fresh object is inactive and only the
+        // event state can make it active: the world tick must re-apply it.
+        QuestStore swapped = new(new QuestContent(
+            [new QuestTemplate { Entry = 10, Method = 1, QuestLevel = 1, Title = "Quest 10" }, new QuestTemplate { Entry = 11, Method = 2, QuestLevel = 1, Title = "Quest 11" }], [], []));
+        quests.Services.ReplaceQuests(swapped);
+        Assert.False(swapped.Get(10)!.IsActive);                 // the rebuilt object has not been told about the running event yet
+        world.RunTick(100);                                      // the next world tick re-syncs
+        Assert.True(swapped.Get(10)!.IsActive);                  // event still running: active again
+        Assert.True(swapped.Get(11)!.IsActive);                  // not listed: untouched
+
+        // The same reload after the event ended: a fresh object is active by its Method and must be switched off again.
+        clock.UtcNow = Utc(2026, 10, 3, 15);
+        world.RunTick(uint.MaxValue / 2);
+        QuestStore afterEnd = new(new QuestContent(
+            [new QuestTemplate { Entry = 10, Method = 2, QuestLevel = 1, Title = "Quest 10" }, new QuestTemplate { Entry = 11, Method = 2, QuestLevel = 1, Title = "Quest 11" }], [], []));
+        quests.Services.ReplaceQuests(afterEnd);
+        Assert.True(afterEnd.Get(10)!.IsActive);
+        world.RunTick(100);
+        Assert.False(afterEnd.Get(10)!.IsActive);
+        await quests.DisposeAsync();
+    }
 }
