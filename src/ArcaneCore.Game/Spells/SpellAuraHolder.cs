@@ -36,10 +36,17 @@ public sealed class SpellAura
         EffectIndex = effectIndex;
         Type = type;
         Amount = amount;
+        UnitAmount = amount;
         Amplitude = amplitude;
         MiscValue = miscValue;
-        PeriodicTimer = (int)amplitude;
+        PeriodicTimer = (int)Period;
     }
+
+    /// <summary>
+    /// vmangos Aura::m_positive = SpellEntry::IsPositiveEffect(effect index) (SpellAuras.cpp:276): polarity is decided per
+    /// effect. Set by <see cref="SpellAuraHolder.ResolvePolarity"/> once every effect aura is attached.
+    /// </summary>
+    public bool IsPositive { get; internal set; } = true;
 
     public int EffectIndex { get; }
 
@@ -48,13 +55,24 @@ public sealed class SpellAura
     /// <summary>Modifier amount (vmangos Modifier::m_amount), from the effect value at application.</summary>
     public int Amount { get; internal set; }
 
+    /// <summary>
+    /// The one-stack amount: <see cref="Amount"/> is this times the holder's stack count (vmangos recomputes
+    /// stacks * CalculateSpellEffectValue in SetStackAmount, SpellAuras.cpp:6975-6990, instead of dividing the total).
+    /// </summary>
+    internal int UnitAmount { get; set; }
+
     /// <summary>Periodic interval in ms (Spell.dbc EffectAmplitude; 0 = not periodic).</summary>
     public uint Amplitude { get; }
 
     /// <summary>Spell.dbc EffectMiscValue (power type for energize/mana auras).</summary>
     public int MiscValue { get; }
 
-    public bool IsPeriodic => Amplitude > 0;
+    /// <summary>
+    /// The tick interval: the amplitude, or the type's default when it has none (<see cref="PeriodicTiming.PeriodFor"/>).
+    /// </summary>
+    public uint Period => PeriodicTiming.PeriodFor(Type, Amplitude);
+
+    public bool IsPeriodic => Period > 0;
 
     /// <summary>Time to the next tick (vmangos Aura::m_periodicTimer, first tick one amplitude after application).</summary>
     internal int PeriodicTimer { get; set; }
@@ -86,7 +104,6 @@ public sealed class SpellAuraHolder
         CasterGuid = casterGuid;
         CasterLevel = casterLevel;
         CasterOwner = casterOwner;
-        IsPositive = spell.IsPositive;
         Charges = (int)spell.ProcCharges;
 
         // vmangos SpellAuraHolder ctor: permanent for -1 durations and passive spells; durations
@@ -121,7 +138,36 @@ public sealed class SpellAuraHolder
 
     internal AuraCasterOwner CasterOwner { get; }
 
-    public bool IsPositive { get; }
+    /// <summary>
+    /// vmangos SpellAuraHolder::IsPositive (SpellAuras.cpp:7475-7482): positive only when EVERY aura effect of this holder is
+    /// positive. Computed from the effect auras (<see cref="ResolvePolarity"/>), never from the spell as a whole: Stealth
+    /// carries a -51 speed effect yet is a buff. A holder without aura effects falls back to the spell.
+    /// </summary>
+    public bool IsPositive => _positive ??= ComputePositive(null);
+
+    private bool? _positive;
+
+    private bool ComputePositive(Func<uint, SpellInfo?>? lookup)
+    {
+        bool any = false;
+        bool positive = true;
+        for (int i = 0; i < _auras.Length; i++)
+        {
+            if (_auras[i] is not { } aura)
+            {
+                continue;
+            }
+
+            any = true;
+            aura.IsPositive = Spell.IsPositiveEffect(i, lookup);
+            positive &= aura.IsPositive;
+        }
+
+        return any ? positive : Spell.IsPositiveSpell(lookup);
+    }
+
+    /// <summary>Recompute per-effect and holder polarity once all effect auras exist (the periodic-trigger check needs the spell store).</summary>
+    internal void ResolvePolarity(Func<uint, SpellInfo?>? lookup) => _positive = ComputePositive(lookup);
 
     public bool IsPermanent { get; }
 
@@ -150,11 +196,11 @@ public sealed class SpellAuraHolder
 
     public bool IsRemoved { get; internal set; }
 
-    /// <summary>
-    /// Whether the holder was removed because its target died (vmangos AURA_REMOVE_BY_DEATH): set by <c>SpellSystem.RemoveAurasOnDeath</c> just before
-    /// the remove handlers run, so a handler (Soul Shard creation) can tell death from expiry, a dispel or a cancel. Warlock lane (wlm-07).
-    /// </summary>
-    internal bool RemovedByDeath { get; set; }
+    /// <summary>Why this holder was removed (vmangos SpellAuraHolder::m_removeMode); set before the remove handlers and <see cref="SpellSystem.HolderRemoved"/> run.</summary>
+    public AuraRemoveMode RemoveMode { get; internal set; }
+
+    /// <summary>Whether the holder was removed because its target died (vmangos AURA_REMOVE_BY_DEATH), so a remove handler (Soul Shard creation) can tell death from expiry, a dispel or a cancel. Warlock lane (wlm-07); derived from <see cref="RemoveMode"/>.</summary>
+    internal bool RemovedByDeath => RemoveMode == AuraRemoveMode.Death;
 
     /// <summary>For an aura a party area aura put on a group member: the caster's source holder (vmangos AreaAura owner).</summary>
     public SpellAuraHolder? AreaParent { get; internal set; }
@@ -166,13 +212,42 @@ public sealed class SpellAuraHolder
     internal Dictionary<ObjectGuid, SpellAuraHolder> AreaChildren { get; } = [];
 
     /// <summary>Whether <c>character_aura</c> keeps this holder across logout (see SpellSystem.CaptureState).</summary>
-    public bool IsSaveable => !IsRemoved && !Spell.IsPassive && !Spell.IsChanneled && AreaParent is null && !IsEmpty;
+    public bool IsSaveable => !IsRemoved && !Spell.IsPassive && !Spell.IsChanneled && AreaParent is null && !IsEmpty
+        && !IsNeverSaved(Spell);
+
+    /// <summary>
+    /// vmangos Player::SaveAura (Player.cpp:16618-16660): an aura whose spell is cancelled by leaving or entering the world, or that
+    /// carries bind sight, possess, charm, far sight or AoE charm on any effect, is not saved.
+    /// </summary>
+    internal static bool IsNeverSaved(SpellInfo spell)
+    {
+        const uint enterWorldCancels = 0x00400000; // AURA_INTERRUPT_ENTER_WORLD_CANCELS (SpellDefines.h:599)
+        if (((uint)spell.AuraInterruptFlags & ((uint)SpellAuraInterruptFlags.LeaveWorld | enterWorldCancels)) != 0)
+        {
+            return true;
+        }
+
+        foreach (SpellEffectInfo effect in spell.Effects)
+        {
+            if (effect.Effect == SpellEffectName.ApplyAura
+                && effect.AuraType is AuraType.BindSight or AuraType.ModPossess or AuraType.ModCharm or AuraType.FarSight or AuraType.AoeCharm)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     public IReadOnlyList<SpellAura?> Auras => _auras;
 
     public bool HasAura(AuraType type) => _auras.Any(a => a?.Type == type);
 
-    internal void SetAura(SpellAura aura) => _auras[aura.EffectIndex] = aura;
+    internal void SetAura(SpellAura aura)
+    {
+        _auras[aura.EffectIndex] = aura;
+        _positive = null;
+    }
 
     internal bool IsEmpty => _auras.All(a => a is null);
 

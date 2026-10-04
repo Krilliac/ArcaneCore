@@ -173,6 +173,9 @@ public sealed partial class SpellSystem
     /// their remaining time. Unknown or passive spells, expired rows, and effect indices whose
     /// spell effect is no longer an aura are skipped. Returns the holders restored.
     /// </summary>
+    /// <summary>SPELL_ATTR_EX4_AURA_EXPIRES_OFFLINE (vmangos SpellDefines.h:988).</summary>
+    internal const uint AttributeEx4AuraExpiresOffline = 0x00000004;
+
     public IReadOnlyList<SpellAuraHolder> RestoreAuras(Unit unit, IEnumerable<PersistedAura> auras, long nowUnixMs)
     {
         ArgumentNullException.ThrowIfNull(unit);
@@ -210,7 +213,9 @@ public sealed partial class SpellSystem
             int remaining = saved.RemainingMs;
             if (!permanent)
             {
-                if (!spell.IsPositive)
+                // vmangos HasRealTimeDuration (SpellEntry.h:1092): only SPELL_ATTR_EX4_AURA_EXPIRES_OFFLINE auras count down
+                // while offline; Auras:HarmfulAurasExpireOffline adds the older cmangos rule for harmful auras.
+                if ((spell.AttributesEx4 & AttributeEx4AuraExpiresOffline) != 0 || (AuraOptions.HarmfulAurasExpireOffline && !spell.IsPositive))
                 {
                     long offline = Math.Max(0, nowUnixMs - saved.SavedAtUnixMs);
                     remaining = (int)Math.Max(0, remaining - Math.Min(offline, int.MaxValue));
@@ -239,7 +244,7 @@ public sealed partial class SpellSystem
 
                 var aura = new SpellAura(i, effect.AuraType, saved.Amounts.ElementAtOrDefault(i), effect.Amplitude, effect.MiscValue);
                 int timer = saved.PeriodicTimers.ElementAtOrDefault(i);
-                if (aura.IsPeriodic && timer > 0 && timer <= (int)aura.Amplitude)
+                if (aura.IsPeriodic && timer > 0 && timer <= (int)aura.Period)
                 {
                     aura.PeriodicTimer = timer;
                 }
@@ -258,7 +263,16 @@ public sealed partial class SpellSystem
             }
 
             holder.StackAmount = (byte)Math.Clamp((int)saved.StackAmount, 1, Math.Max(1, (int)spell.StackAmount));
-            holder.Charges = Math.Max(0, saved.Charges);
+            foreach (SpellAura? restoredAura in holder.Auras)
+            {
+                // The saved amount is the stacked total; the one-stack value is recovered by division (exact for every stack the engine itself produced).
+                if (restoredAura is not null)
+                {
+                    restoredAura.UnitAmount = restoredAura.Amount / holder.StackAmount;
+                }
+            }
+
+            holder.Charges = spell.ProcCharges == 0 ? 0 : Math.Max(0, saved.Charges); // "prevent wrong values of remaincharges" (Player.cpp:15390-15392)
             AddAuraHolder(holder);
             if (!holder.IsRemoved)
             {

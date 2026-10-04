@@ -136,6 +136,17 @@ public sealed partial class SpellSystem
                 && h.CasterGuid == cast.Caster.Guid && ReferenceEquals(ResolveAuraCaster(h), cast.Caster) && !h.IsPermanent))
             {
                 holder.Duration = Math.Max(0, holder.Duration - delay);
+
+                // vmangos Unit::DelaySpellAuraHolder: "push down the tick timer with the delay, otherwise we can still get max
+                // ticks even with pushback" (RefreshAuraPeriodicTimers).
+                foreach (SpellAura? aura in holder.Auras)
+                {
+                    if (aura is not null)
+                    {
+                        PeriodicTiming.SyncToDuration(aura, holder.Duration);
+                    }
+                }
+
                 SendAuraDuration(holder);
             }
         }

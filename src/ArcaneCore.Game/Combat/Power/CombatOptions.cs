@@ -107,17 +107,23 @@ public interface IPowerAuraSource
     /// </summary>
     float GetPowerRegenFactor(Unit unit, PowerType power);
 
-    // The members below feed the regeneration auras of mage, warlock and consumable spells (docs/areas/warlock-mage-utility.md, wlm-15). They have
-    // default bodies so a source that only knows the three members above keeps working: no unit has any of these auras then.
+    // The members below feed the regeneration auras of mage, warlock and consumable spells (docs/areas/warlock-mage-utility.md, wlm-15). They are derived
+    // from GetAuras by default, so a source that only knows the members above plus GetAuras keeps working.
+
+    /// <summary>
+    /// The live auras of <paramref name="type"/> on <paramref name="unit"/> (vmangos Unit::GetAurasByType), the primitive the regeneration tick reads
+    /// for food, drink and the health regeneration modifiers (<see cref="RegenModifiers"/>). A source that does not implement it reports none.
+    /// </summary>
+    IReadOnlyList<SpellAura> GetAuras(Unit unit, AuraType type) => [];
 
     /// <summary>vmangos Unit::GetTotalAuraModifier: the sum of the amounts of the unit's auras of <paramref name="type"/>.</summary>
-    int GetTotalAuraModifier(Unit unit, AuraType type) => 0;
+    int GetTotalAuraModifier(Unit unit, AuraType type) => GetAuras(unit, type).Sum(a => a.Amount);
 
     /// <summary>vmangos Unit::GetTotalAuraModifierByMiscValue: the same, for the auras whose misc value is <paramref name="miscValue"/>.</summary>
-    int GetTotalAuraModifierByMisc(Unit unit, AuraType type, int miscValue) => 0;
+    int GetTotalAuraModifierByMisc(Unit unit, AuraType type, int miscValue) => GetAuras(unit, type).Where(a => a.MiscValue == miscValue).Sum(a => a.Amount);
 
     /// <summary>The amount and periodic interval of every aura of <paramref name="type"/> on the unit (the Food aura needs its interval).</summary>
-    IReadOnlyList<RegenAura> GetRegenAuras(Unit unit, AuraType type) => [];
+    IReadOnlyList<RegenAura> GetRegenAuras(Unit unit, AuraType type) => [.. GetAuras(unit, type).Select(a => new RegenAura(a.Amount, a.Amplitude))];
 
     /// <summary>vmangos Unit::IsPolymorphed: the unit's transform is a mage polymorph.</summary>
     bool IsPolymorphed(Unit unit) => false;
@@ -245,6 +251,7 @@ public sealed class CombatEnvironment
     internal IReadOnlyList<RegenAura> GetRegenAuras(Unit unit, AuraType type) => Auras?.GetRegenAuras(unit, type) ?? [];
 
     internal bool IsPolymorphed(Unit unit) => Auras?.IsPolymorphed(unit) ?? false;
+    internal IReadOnlyList<SpellAura> GetAuras(Unit unit, AuraType type) => Auras?.GetAuras(unit, type) ?? [];
 }
 
 /// <summary>The <see cref="IPowerAuraSource"/> backed by the world's <see cref="SpellSystem"/>.</summary>
@@ -270,6 +277,29 @@ public sealed class SpellSystemPowerAuras(SpellSystem spells) : IPowerAuraSource
     {
         ArgumentNullException.ThrowIfNull(unit);
         return _spells.GetAuras(unit).Any(h => !h.IsRemoved && h.HasAura(type));
+    }
+
+    public IReadOnlyList<SpellAura> GetAuras(Unit unit, AuraType type)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        List<SpellAura>? found = null;
+        foreach (SpellAuraHolder holder in _spells.GetAuras(unit))
+        {
+            if (holder.IsRemoved)
+            {
+                continue;
+            }
+
+            foreach (SpellAura? aura in holder.Auras)
+            {
+                if (aura is not null && aura.Type == type)
+                {
+                    (found ??= []).Add(aura);
+                }
+            }
+        }
+
+        return found ?? [];
     }
 
     public float GetPowerRegenFactor(Unit unit, PowerType power)

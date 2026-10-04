@@ -256,62 +256,10 @@ public sealed partial record SpellInfo
     public bool HasAura(AuraType aura) => _effects.Any(e => e.Effect == SpellEffectName.ApplyAura && e.AuraType == aura);
 
     /// <summary>
-    /// Whether the spell is beneficial. Simplified from vmangos SpellEntry::IsPositiveSpell /
-    /// IsPositiveEffect: negative when AURA_IS_DEBUFF is set, when any effect targets an enemy,
-    /// or when it deals school damage or applies a known harmful aura. Recorded as a deviation in
-    /// docs/areas/spells.md (the full vmangos table also inspects triggered spells).
+    /// Whether the spell is beneficial: vmangos SpellEntry::IsPositiveSpell without a triggered-spell lookup or a
+    /// dispel caster/victim (see SpellInfo.Polarity.cs; <see cref="IsPositiveSpell"/> takes both).
     /// </summary>
-    public bool IsPositive
-    {
-        get
-        {
-            if (HasAttribute(SpellAttributes.AuraIsDebuff))
-            {
-                return false;
-            }
-
-            foreach (SpellEffectInfo effect in _effects)
-            {
-                if (effect.IsEmpty)
-                {
-                    continue;
-                }
-
-                if (effect.TargetA is SpellImplicitTarget.UnitEnemy or SpellImplicitTarget.UnitEnemyNearCaster
-                    or SpellImplicitTarget.EnumUnitsEnemyAoeAtSrcLoc or SpellImplicitTarget.EnumUnitsEnemyAoeAtDestLoc
-                    or SpellImplicitTarget.EnumUnitsEnemyInCone24 or SpellImplicitTarget.EnumUnitsEnemyInCone54
-                    or SpellImplicitTarget.EnumUnitsEnemyWithinCasterRange)
-                {
-                    return false;
-                }
-
-                if (effect.Effect is SpellEffectName.SchoolDamage or SpellEffectName.HealthLeech or SpellEffectName.WeaponDamage
-                    or SpellEffectName.WeaponDamageNoschool or SpellEffectName.NormalizedWeaponDmg or SpellEffectName.WeaponPercentDamage
-                    or SpellEffectName.InterruptCast or SpellEffectName.EnvironmentalDamage)
-                {
-                    return false;
-                }
-
-                if (effect.Effect == SpellEffectName.ApplyAura && effect.AuraType is AuraType.PeriodicDamage
-                    or AuraType.ModStun or AuraType.ModRoot or AuraType.ModDecreaseSpeed or AuraType.PeriodicDamagePercent
-                    or AuraType.PeriodicLeech or AuraType.ModFear or AuraType.ModConfuse or AuraType.ModSilence)
-                {
-                    return false;
-                }
-
-                // vmangos SpellEntry::IsPositiveEffect (SpellEntry.cpp:976-987): "non-positive immunities". Recently Bandaged (11196) is a
-                // MECHANIC_IMMUNITY to the bandage mechanic that must block the positive bandage heal (crafting lane, First Aid).
-                if (effect.Effect == SpellEffectName.ApplyAura && effect.AuraType == AuraType.MechanicImmunity
-                    && (Rules.SpellMechanic)effect.MiscValue is Rules.SpellMechanic.Bandage or Rules.SpellMechanic.Shield
-                        or Rules.SpellMechanic.Mount or Rules.SpellMechanic.Invulnerability)
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-    }
+    public bool IsPositive => IsPositiveSpell();
 
     /// <summary>
     /// vmangos Unit::GetSpellRank: the caster level, capped at maxLevel * 5 when maxLevel is set

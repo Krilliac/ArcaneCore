@@ -114,6 +114,9 @@ public enum SpellAttributesEx : uint
 
     /// <summary>vmangos SPELL_ATTR_EX_CANT_TARGET_SELF (AoE and chain selection skip the caster).</summary>
     CantTargetSelf = 0x00080000,
+
+    /// <summary>vmangos SPELL_ATTR_EX_NO_AURA_ICON (SpellDefines.h:898): the client does not display the aura.</summary>
+    NoAuraIcon = 0x10000000,
 }
 
 /// <summary>Spell.dbc AttributesEx2 bits (vmangos SpellDefines.h SpellAttributesEx2).</summary>

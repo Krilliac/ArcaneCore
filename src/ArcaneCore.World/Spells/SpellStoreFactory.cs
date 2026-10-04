@@ -144,6 +144,7 @@ public static class SpellStoreFactory
             MaxAffectedTargets = row.MaxAffectedTargets,
             SpellVisual = row.SpellVisual,
             SpellIconId = row.SpellIconID,
+            ActiveIconId = row.ActiveIconID,
             Name = row.SpellName ?? string.Empty,
             Rank = row.Rank ?? string.Empty,
             Effects =

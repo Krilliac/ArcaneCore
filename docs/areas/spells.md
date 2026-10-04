@@ -63,7 +63,7 @@ When a server and the docs disagree, the server wins and the conflict is listed 
 | AURAFLAGS bits | vmangos: CANCELABLE 0x01, EFF0 0x08, EFF1 0x04, EFF2 0x02. cmangos-classic uses different values. | vmangos. |
 | Interrupt packets | cmangos also sends SMSG_SPELL_FAILURE on interrupt. vmangos sends SMSG_SPELL_FAILED_OTHER to the set (self included) plus CAST_RESULT to the caster. | vmangos. |
 | SMSG_SPELL_COOLDOWN | vmangos `Player::AddCooldown` sends no SMSG_SPELL_COOLDOWN, because the client starts the timer itself for casts it requested. `Player::AddGCD(updateClient)` sends `(spell, 0)` only for server-forced GCDs. | Non-triggered casts send nothing, as in vmangos. Triggered player casts (server-initiated: `.cast`, triggered spells) send `(spell, cooldown ms)` so the client shows a cooldown it did not start. This is a deliberate addition. |
-| IsPositive | vmangos `IsPositiveSpell` inspects a large table, including triggered spells. | A simplified heuristic: the debuff attribute, enemy targets, and damage or harmful auras. |
+| IsPositive | vmangos `IsPositiveSpell`/`IsPositiveEffect` decide per effect. | Ported exactly (docs/areas/aura-engine.md); the holder is positive when all of its aura effects are. |
 | Starting spells | cmangos grants `playercreateinfo_spell` in `Player::Create`. | Granted at creation through character hooks; login fills legacy missing books. |
 
 ## Acceptance steps

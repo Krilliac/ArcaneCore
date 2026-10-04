@@ -17,6 +17,9 @@ public static class RegenModifiers
     /// <summary>One regeneration tick in ms (vmangos REGEN_TIME_PLAYER_FULL).</summary>
     public const float TickMs = CombatConstants.PlayerRegenIntervalMs;
 
+    /// <summary>The period of a MOD_REGEN aura without an amplitude (vmangos HandleModRegen).</summary>
+    public const uint DefaultModRegenPeriodMs = 5000;
+
     /// <summary>The mana per second (vmangos m_modManaRegen, or m_modManaRegenInterrupt inside the five second window).</summary>
     public static float ManaPerSecond(float spiritRegen, float percentFactor, int powerRegenTotal, int interruptTotal, bool recentCast)
     {
@@ -70,10 +73,9 @@ public static class RegenModifiers
             {
                 foreach (RegenAura food in foodAuras)
                 {
-                    if (food.PeriodMs > 0)
-                    {
-                        add += food.Amount * (TickMs / food.PeriodMs);
-                    }
+                    // vmangos HandleModRegen (SpellAuras.cpp:4795-4803): an amplitude of 0 means a 5000 ms period.
+                    uint period = food.PeriodMs == 0 ? DefaultModRegenPeriodMs : food.PeriodMs;
+                    add += food.Amount * (TickMs / period);
                 }
             }
         }

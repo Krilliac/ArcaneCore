@@ -69,9 +69,10 @@ public sealed class SpellPersistenceTests
     }
 
     [Fact]
-    public void RestoreAuras_HarmfulAurasLoseOfflineTime_BeneficialAndPermanentKeepIt()
+    public void RestoreAuras_WithTheCmangosSwitch_HarmfulAurasLoseOfflineTime_BeneficialAndPermanentKeepIt()
     {
         using var kit = Kit();
+        kit.System.AuraOptions = new AuraOptions { HarmfulAurasExpireOffline = true }; // default is the vmangos rule: tests in Auras/AuraPersistenceFidelityTests
         (Player player, _) = kit.AddPlayer(1);
         PersistedAura buff = Aura(Buff, player.Guid, remaining: 20_000, amount: 15);
         PersistedAura dot = Aura(Dot, new ObjectGuid(2), remaining: 9_000, amount: 4) with { PeriodicTimers = [1_200, 0, 0] };
