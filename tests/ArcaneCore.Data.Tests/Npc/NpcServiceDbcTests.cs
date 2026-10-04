@@ -12,6 +12,20 @@ public sealed class NpcServiceDbcTests
     private static uint F(float value) => BitConverter.SingleToUInt32Bits(value);
 
     [Fact]
+    public void TaxiNodesAndPaths_ReadVanillaColumnsAndRejectWrongWidths()
+    {
+        // vmangos Database/DBCfmt.h:83-85: 16 fields in TaxiNodes, four in TaxiPath.
+        IReadOnlyList<TaxiNode> nodes = NpcServiceDbcReaders.ReadTaxiNodes(DbcFile.Parse(Image(16,
+            [1, 0, F(2), F(3), F(4), 0, 0, 0, 0, 0, 0, 0, 0, 0, 2224, 3837])));
+        Assert.Equal((1u, 0u, 2f, 3f, 4f, 2224u, 3837u),
+            (nodes[0].Id, nodes[0].MapId, nodes[0].X, nodes[0].Y, nodes[0].Z, nodes[0].MountHorde, nodes[0].MountAlliance));
+        TaxiPath path = Assert.Single(NpcServiceDbcReaders.ReadTaxiPaths(DbcFile.Parse(Image(4, [10, 1, 2, 73]))));
+        Assert.Equal((10u, 1u, 2u, 73u), (path.Id, path.FromNode, path.ToNode, path.Price));
+        Assert.Throws<InvalidDataException>(() => NpcServiceDbcReaders.ReadTaxiNodes(DbcFile.Parse(Image(15, new uint[15]))));
+        Assert.Throws<InvalidDataException>(() => NpcServiceDbcReaders.ReadTaxiPaths(DbcFile.Parse(Image(5, new uint[5]))));
+    }
+
+    [Fact]
     public void TaxiPathNode_GroupsByPathInIndexOrder()
     {
         TaxiPathNodeCatalog catalog = NpcServiceDbcReaders.ReadTaxiPathNodes(DbcFile.Parse(Image(9,

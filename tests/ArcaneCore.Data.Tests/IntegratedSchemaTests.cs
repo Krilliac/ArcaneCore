@@ -84,6 +84,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.WorldState.ExploredZonesDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ExploredZonesDataModule.Version),
             (typeof(ItemLootDataModule), DatabaseComponent.Characters, ItemLootDataModule.Version),
             (typeof(PetitionDataModule), DatabaseComponent.Characters, PetitionDataModule.Version),
+            (typeof(CharacterTaxiFlightDataModule), DatabaseComponent.Characters, CharacterTaxiFlightDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
