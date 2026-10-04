@@ -6,6 +6,7 @@ using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Schema;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
+using DbUpgradeExitCodes = ArcaneCore.Data.Schema.Upgrade.Cli.DbUpgradeExitCodes;
 using HostExitCodes = ArcaneCore.Kernel.Ops.ExitCodes;
 using ImporterExitCodes = ArcaneCore.Data.Content.Import.ExitCodes;
 
@@ -112,6 +113,8 @@ public sealed class SchemaReferenceTests
             Assert.Contains($"| {(int)field.GetRawConstantValue()!} | `{field.Name}` |", page, StringComparison.Ordinal);
         }
 
+        Assert.Contains($"| {DbUpgradeExitCodes.Refused} | `Refused` |", page, StringComparison.Ordinal);
+        Assert.Contains($"| {DbUpgradeExitCodes.LockTimeout} | `LockTimeout` |", page, StringComparison.Ordinal);
         Assert.Contains("RestartPreventExitStatus=78", page, StringComparison.Ordinal);
         Assert.Contains(HostExitCodes.InvalidConfiguration.ToString(), page, StringComparison.Ordinal);
     }

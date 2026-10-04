@@ -18,6 +18,14 @@ namespace ArcaneCore.Data.Tests;
 /// </summary>
 public sealed class SchemaStartupResilienceTests : IAsyncLifetime
 {
+    /// <summary>The environment variable that overrides <see cref="FaultParallelism"/> (an integer, at least 1).</summary>
+    internal const string FaultParallelismVariable = "ARCANECORE_TEST_FAULT_PARALLELISM";
+
+    internal const int DefaultFaultParallelism = 4;
+
+    /// <summary>How many injected faults of one theory case run at once; see <see cref="RunFaultsAsync{T}"/>.</summary>
+    internal static int FaultParallelism { get; } = ReadFaultParallelism(Environment.GetEnvironmentVariable(FaultParallelismVariable));
+
     private readonly TestDatabases _databases = new();
 
     public static IEnumerable<object[]> Providers() => TestDatabases.AvailableProviders();
@@ -86,24 +94,33 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
 
         faults.Add(("after the version write", isVersionWrite, 1));
 
-        foreach ((string label, Func<string, bool> when, int on) in faults)
+        await RunFaultsAsync(faults, FaultParallelism, async fault =>
         {
+            (string label, Func<string, bool> when, int on) = fault;
             DatabaseConnectionOptions connection = await PrepareLegacyAsync(provider, component, stepVersion - 1, stepVersion);
-            var tap = new CommandTap(when, on);
-            await AssertInjectedAsync(() => EnsureAsync(component, connection, stepVersion, tap), $"{provider} {component} step {stepVersion} {label} (probe saw {ddl} DDL)", tap);
-
-            // A restart under the current definition must reach the same schema as an uninterrupted start.
             try
             {
-                await SchemaProbe.EnsureCurrentAsync(component, connection);
-            }
-            catch (Exception ex)
-            {
-                throw new Xunit.Sdk.XunitException($"{component} step {stepVersion} interrupted {label}: restart failed: {ex.GetType().Name}: {ex.Message}");
-            }
+                var tap = new CommandTap(when, on);
+                await AssertInjectedAsync(() => EnsureAsync(component, connection, stepVersion, tap), $"{provider} {component} step {stepVersion} {label} (probe saw {ddl} DDL)", tap);
 
-            await AssertConvergedAsync(component, connection, $"{component} step {stepVersion} {label}");
-        }
+                // A restart under the current definition must reach the same schema as an uninterrupted start.
+                try
+                {
+                    await SchemaProbe.EnsureCurrentAsync(component, connection);
+                }
+                catch (Exception ex)
+                {
+                    throw new Xunit.Sdk.XunitException($"{component} step {stepVersion} interrupted {label}: restart failed: {ex.GetType().Name}: {ex.Message}");
+                }
+
+                await AssertConvergedAsync(component, connection, $"{component} step {stepVersion} {label}");
+            }
+            finally
+            {
+                await _databases.ReleaseAsync(connection);
+            }
+        });
+        await _databases.ReleaseAsync(probe);
     }
 
     [Theory]
@@ -127,22 +144,30 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
 
         faults.Add(("before the version write", isVersionInsert, 1, true));
 
-        foreach ((string label, Func<string, bool> when, int on, bool before) in faults)
+        await RunFaultsAsync(faults, FaultParallelism, async fault =>
         {
+            (string label, Func<string, bool> when, int on, bool before) = fault;
             DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
-            var tap = new CommandTap(when, on, faultBeforeStatement: before);
-            await AssertInjectedAsync(() => SchemaProbe.EnsureCurrentAsync(component, connection, tap), $"{provider} {component} fresh create {label} (probe saw {ddl} DDL)", tap);
             try
             {
-                await SchemaProbe.EnsureCurrentAsync(component, connection);
-            }
-            catch (Exception ex)
-            {
-                throw new Xunit.Sdk.XunitException($"{component} fresh create interrupted {label}: restart failed: {ex.GetType().Name}: {ex.Message}");
-            }
+                var tap = new CommandTap(when, on, faultBeforeStatement: before);
+                await AssertInjectedAsync(() => SchemaProbe.EnsureCurrentAsync(component, connection, tap), $"{provider} {component} fresh create {label} (probe saw {ddl} DDL)", tap);
+                try
+                {
+                    await SchemaProbe.EnsureCurrentAsync(component, connection);
+                }
+                catch (Exception ex)
+                {
+                    throw new Xunit.Sdk.XunitException($"{component} fresh create interrupted {label}: restart failed: {ex.GetType().Name}: {ex.Message}");
+                }
 
-            await AssertConvergedAsync(component, connection, $"{component} fresh create {label}");
-        }
+                await AssertConvergedAsync(component, connection, $"{component} fresh create {label}");
+            }
+            finally
+            {
+                await _databases.ReleaseAsync(connection);
+            }
+        });
     }
 
     [Theory]
@@ -299,6 +324,39 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
     public Task InitializeAsync() => Task.CompletedTask;
 
     public Task DisposeAsync() => _databases.DisposeAsync().AsTask();
+
+    /// <summary>
+    /// Every injected fault runs against its own database, so they are independent: run <paramref name="parallelism"/>
+    /// at a time. Every fault runs even when an earlier one fails (each releases its own database in its own
+    /// <c>finally</c>); the first failure is rethrown once all have finished.
+    /// </summary>
+    internal static async Task RunFaultsAsync<T>(IReadOnlyList<T> faults, int parallelism, Func<T, Task> run)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(parallelism, 1);
+        using var slots = new SemaphoreSlim(parallelism);
+        await Task.WhenAll(faults.Select(async fault =>
+        {
+            await slots.WaitAsync();
+            try
+            {
+                await run(fault);
+            }
+            finally
+            {
+                slots.Release();
+            }
+        }));
+    }
+
+    /// <summary>
+    /// <see cref="DefaultFaultParallelism"/> unless <paramref name="value"/> (the environment variable) is a positive
+    /// integer. Anything else, including 0 and negative numbers, means the default: a misspelt override must not turn
+    /// the theory serial or unbounded silently.
+    /// </summary>
+    internal static int ReadFaultParallelism(string? value)
+        => int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int parsed) && parsed >= 1
+            ? parsed
+            : DefaultFaultParallelism;
 
     /// <summary>The startup must die of the injected fault (EF wraps it in a DbUpdateException for SaveChanges), not of anything else.</summary>
     private static async Task AssertInjectedAsync(Func<Task> startup, string label, CommandTap tap)

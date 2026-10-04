@@ -17,6 +17,7 @@ internal sealed class TestDatabases : IAsyncDisposable
 
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "arcanecore-tests-" + Guid.NewGuid().ToString("N"));
     private readonly List<DatabaseConnectionOptions> _created = [];
+    private readonly object _gate = new();
 
     public static IEnumerable<object[]> AvailableProviders()
     {
@@ -47,8 +48,45 @@ internal sealed class TestDatabases : IAsyncDisposable
         };
 
         var options = new DatabaseConnectionOptions { Provider = provider, ConnectionString = connectionString };
-        _created.Add(options);
+        lock (_gate)
+        {
+            _created.Add(options);
+        }
+
         return Task.FromResult(options);
+    }
+
+    /// <summary>
+    /// Drop one database now instead of at the end of the class. A theory that opens one database per injected
+    /// fault would otherwise leave hundreds on the server until its class finishes.
+    /// </summary>
+    public async Task ReleaseAsync(DatabaseConnectionOptions options)
+    {
+        lock (_gate)
+        {
+            if (!_created.Remove(options))
+            {
+                return;
+            }
+        }
+
+        ClearPool(options);
+        if (options.Provider != DatabaseProvider.Sqlite)
+        {
+            await DropAsync(options);
+        }
+        else
+        {
+            string path = new SqliteConnectionStringBuilder(options.ConnectionString).DataSource;
+            try
+            {
+                File.Delete(path);
+            }
+            catch (IOException)
+            {
+                // best effort; DisposeAsync removes the directory
+            }
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -65,10 +103,7 @@ internal sealed class TestDatabases : IAsyncDisposable
 
         foreach (DatabaseConnectionOptions options in _created.Where(o => o.Provider != DatabaseProvider.Sqlite))
         {
-            var builder = new DbContextOptionsBuilder<DbContext>();
-            DataServiceCollectionExtensions.ConfigureProvider(builder, options);
-            await using var db = new DbContext(builder.Options);
-            await db.Database.EnsureDeletedAsync();
+            await DropAsync(options);
         }
 
         try
@@ -82,6 +117,14 @@ internal sealed class TestDatabases : IAsyncDisposable
         {
             // best effort
         }
+    }
+
+    private static async Task DropAsync(DatabaseConnectionOptions options)
+    {
+        var builder = new DbContextOptionsBuilder<DbContext>();
+        DataServiceCollectionExtensions.ConfigureProvider(builder, options);
+        await using var db = new DbContext(builder.Options);
+        await db.Database.EnsureDeletedAsync();
     }
 
     private static void ClearPool(DatabaseConnectionOptions options)
