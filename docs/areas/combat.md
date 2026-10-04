@@ -221,9 +221,10 @@ system) for the world; worlds without it use `CombatEnvironment.Default`.
   `HitInfo` sends; we send them as vmangos does.
 - **Corpse lifetime.** Corpses are removed (out-of-range block) instead of turning to bones
   (DESTROY_OBJECT/bones corpse).
-- **Graveyard.** No teleport yet; the ghost stays at the corpse.
-- **Ghost form.** The ghost flag and water walk are set directly instead of through aura
-  8326/20584, so there is no ghost speed.
+- **Graveyard.** Delivered by the graveyards-resurrection lane ([graveyards-resurrection.md](graveyards-resurrection.md)):
+  the repop is scheduled and the ghost is sent to its graveyard. Without graveyard data the ghost stays at the corpse.
+- **Ghost form.** Delivered by the same lane: the ghost aura 8326 (and the wisp 20584) with its speed, behind
+  `World:Death:GhostFormAura`; without the spell in the store, the flag and water walk are set directly.
 - **Unit state.** UNIT_FLAG_STUNNED stands in for the root/unit state.
 - **Player stats.** Weapon damage, attack speed, attack power, crit/dodge/parry/block
   percentages and the agility part of armor are now written by the player stat system
@@ -232,13 +233,14 @@ system) for the world; worlds without it use `CombatEnvironment.Default`.
   weapon, parry, block and the shield block value for players; a map without the stats
   feature keeps the `CombatHooks` defaults. Still open: one sub-damage per swing, one armor
   value for every school, aura modifiers. Skills default to level×5.
-- **Durability.** No durability loss and no SMSG_DURABILITY_DAMAGE_DEATH.
+- **Durability.** A death by a creature loses 10% of the worn items and sends SMSG_DURABILITY_DAMAGE_DEATH
+  (graveyards-resurrection lane); not when a player tapped the kill or in a battleground.
 - **Emotes.** No EMOTE_ONESHOT_WOUNDCRITICAL.
 - **Create blocks.** No UPDATEFLAG_MELEE_ATTACKING.
-- **Visibility.** Ghosts and the living are not separated.
+- **Visibility.** Ghosts and the living are separated by `GhostVisibilityRule` (graveyards-resurrection lane).
 - **Persistence.** Death state and corpses are not persisted across logout.
-- **Corpse query in dungeons.** The ghost entrance needs Map.dbc; we return the corpse
-  position.
+- **Corpse query in dungeons.** A corpse in a dungeon, seen from another map, is shown at the dungeon's ghost
+  entrance from `map_template` (graveyards-resurrection lane).
 - **Creature combat.** Creature combat exit/evade and in-combat mana belong to the AI and
   creatures areas.
 - **Logout while dead.** CancelLogout could unroot a dead player.
@@ -271,10 +273,8 @@ system) for the world; worlds without it use `CombatEnvironment.Default`.
    combat.
 
 ## What's left
-- Graveyard teleport.
-- Ghost aura and speed.
-- Durability loss.
-- Bones corpses and corpse persistence.
+- Bones corpses (graveyards, the ghost aura and speed, and the death durability loss are delivered, see
+  [graveyards-resurrection.md](graveyards-resurrection.md)).
 - Ghost visibility.
 - Creature-side AI combat (evade, leash, chase).
 - Ranged auto-shot.

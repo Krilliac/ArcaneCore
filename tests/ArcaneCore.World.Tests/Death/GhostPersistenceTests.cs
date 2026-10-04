@@ -49,7 +49,9 @@ public sealed class GhostPersistenceTests
         await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Ghostone") is null, "the session to leave the world");
         // The logout save is queued after the player leaves the world and written by the save queue's own task, so wait for it
         // (reading the store right after the removal raced the queue: about 40 percent failures under load at wave-2 integration).
-        await host.WaitForWorldAsync(() => host.Characters.Life(1) is not null, "the logout save to reach the store");
+        // Wait for the GHOST snapshot, not just any: an earlier alive save (the login) can already be in the store, and
+        // "Life(1) is not null" was satisfied by it before the logout save landed (an intermittent red, wave-3 integration).
+        await host.WaitForWorldAsync(() => host.Characters.Life(1)?.IsGhost == true, "the logout save of the ghost to reach the store");
         CharacterLife stored = host.Characters.Life(1)!;
         Assert.True(stored.IsGhost);
         Assert.Equal(1u, stored.Health);

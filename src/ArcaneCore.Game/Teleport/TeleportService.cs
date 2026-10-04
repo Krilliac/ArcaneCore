@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Grid;
@@ -59,6 +60,12 @@ public sealed class TeleportService
         _afterAddToMap = afterAddToMap;
         _logger = logger ?? NullLogger.Instance;
     }
+
+    /// <summary>
+    /// Raised on the world thread when a teleport of a player has finished: after a same-map teleport was acknowledged, or after the
+    /// player entered the new map (vmangos runs delayed operations such as DELAYED_RESURRECT_PLAYER at that point).
+    /// </summary>
+    public event Action<Player>? TeleportCompleted;
 
     /// <summary>Number of players with a teleport in progress.</summary>
     public int PendingCount => _pending.Count;
@@ -144,6 +151,9 @@ public sealed class TeleportService
             return false;
         }
 
+        // vmangos revives a ghost that enters the map its corpse is in (Player.cpp:1953-1966; there before the entry check, here once it passed).
+        current.Combat.ReviveForDungeonEntry(player, mapId);
+
         // vmangos TeleportTo: reset the client time stamp and stop movement, leave any transport.
         ResetMovementForTeleport(player);
 
@@ -208,6 +218,7 @@ public sealed class TeleportService
         SendTeleportToObservers(map, player, dest);
         UpdateZone(map, player);
         player.NeedsVisibilityUpdate = true;
+        TeleportCompleted?.Invoke(player);
         return true;
     }
 
@@ -335,6 +346,7 @@ public sealed class TeleportService
         map.AddPlayer(player);
         _afterAddToMap(player);
         resolver?.OnEntered(player, map);
+        TeleportCompleted?.Invoke(player);
         return true;
     }
 

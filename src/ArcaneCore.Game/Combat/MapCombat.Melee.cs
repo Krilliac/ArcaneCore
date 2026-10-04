@@ -808,6 +808,8 @@ public sealed partial class MapCombat
         if (victim is Player playerVictim)
         {
             playerVictim.Combat.PvpDeath = playerTap is not null;
+            ApplyDeathDurabilityLoss(playerVictim, killer);
+            Death.Resurrection.ResurrectionRequests.Clear(playerVictim); // SetDeathState(JUST_DIED): ClearResurrectRequestData
         }
         else
         {

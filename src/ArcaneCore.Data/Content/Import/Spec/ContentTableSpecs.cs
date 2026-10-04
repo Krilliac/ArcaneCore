@@ -117,6 +117,14 @@ public static class ContentTableSpecs
         new(ContentDialect.VMangos, ["patch_min", "patch_max"], []),
     ];
 
+    // game_graveyard_zone: cmangos links by ghost_loc and link_kind (GraveyardManager.cpp:248); vmangos by ghost_zone with
+    // patch_min/patch_max (ObjectMgr.cpp:7453-7510).
+    private static readonly DialectSignature[] s_graveyardSignatures =
+    [
+        new(ContentDialect.CMangos, ["ghost_loc"], ["ghost_zone"]),
+        new(ContentDialect.VMangos, ["ghost_zone", "patch_min", "patch_max"], []),
+    ];
+
     private static readonly TableSpec[] s_specs =
     [
         new("creature_template", [new KeyColumn("Entry")], s_creatureTemplateColumns,
@@ -186,6 +194,9 @@ public static class ContentTableSpecs
         new("player_classlevelstats", [new KeyColumn("class"), new KeyColumn("level")], [], [], PlayerCreateDumpImporter.ReadsClassColumn),
         new("areatrigger_teleport", [new KeyColumn("id")], [], s_portalSignatures, LocationDumpImporter.ReadsPortalColumn),
         new("game_tele", [new KeyColumn("id")], [], [], LocationDumpImporter.ReadsTeleColumn),
+        new("world_safe_locs", [new KeyColumn("id")], ["map", "x", "y", "z", "o", "name"], []),
+        new("game_graveyard_zone", [new KeyColumn("id"), new KeyColumn("ghost_zone", "ghost_loc")], ["faction", "link_kind", "patch_min", "patch_max"], s_graveyardSignatures),
+        new("world_safe_locs_facing", [new KeyColumn("id")], ["orientation"], []),
     ];
 
     private static readonly FrozenDictionary<string, TableSpec> s_byTable =

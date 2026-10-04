@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
 
@@ -25,7 +26,7 @@ public sealed partial class MapCombat
         player.SetUInt32(UpdateFields.UnitDynamicFlags, 0);
 
         byte bytes = player.GetByte(UpdateFields.PlayerFieldBytes, 0);
-        bytes = Hooks.IsInstanceable(player.MapId) ? (byte)(bytes & ~FieldByteReleaseTimer) : (byte)(bytes | FieldByteReleaseTimer);
+        bytes = IsInstanceableMap(player.MapId) ? (byte)(bytes & ~FieldByteReleaseTimer) : (byte)(bytes | FieldByteReleaseTimer);
         player.SetByte(UpdateFields.PlayerFieldBytes, 0, bytes);
 
         c.DeathTimer = CombatConstants.CorpseRepopTimeMs;
@@ -38,7 +39,16 @@ public sealed partial class MapCombat
     /// SMSG_CORPSE_RECLAIM_DELAY, the ghost timer reset, DEAD — then the graveyard hook.
     /// Returns false when the player is alive or already a ghost (HandleRepopRequestOpcode).
     /// </summary>
-    public bool RepopPlayer(Player player)
+    public bool RepopPlayer(Player player) => RepopPlayer(player, immediate: false, leaving: false);
+
+    /// <summary>
+    /// <see cref="RepopPlayer(Player)"/>; with <paramref name="immediate"/> the graveyard trip is made at once instead of being
+    /// scheduled (vmangos Player::ScheduleRepopAtGraveyard does that when the player is not in the world or its session is gone,
+    /// and WorldSession::LogoutPlayer repops a dying player synchronously, WorldSession.cpp:694-701). With <paramref name="leaving"/>
+    /// the player is on its way out of the world, so only the place it is saved at moves
+    /// (<see cref="Death.IGraveyardRepop.RelocateLeavingPlayer"/>); nothing is teleported.
+    /// </summary>
+    internal bool RepopPlayer(Player player, bool immediate, bool leaving)
     {
         UnitCombat c = player.Combat;
         if (IsQuestSettlementPending(player) || IsAliveState(player) || (player.Flags & PlayerFlags.Ghost) != 0)
@@ -51,8 +61,10 @@ public sealed partial class MapCombat
             KillPlayer(player); // released before its update ran (HandleRepopRequestOpcode)
         }
 
+        // The ghost aura (when there is one) sets the ghost flag itself, so the order to walk on water is not gated on the flag
+        // being clear afterwards (RepopPlayer refused a player that already was a ghost above).
         Hooks.ApplyGhostForm(player);
-        SetGhost(player, true);
+        SetGhost(player, true, wasGhost: false);
 
         if (c.Corpse is { } old)
         {
@@ -75,10 +87,134 @@ public sealed partial class MapCombat
         c.GhostTime = NowSeconds;
         c.DeathTimer = 0;
         SetDeathState(player, DeathState.Dead);
+        player.NeedsVisibilityUpdate = true; // a ghost sees and is seen differently (GhostVisibilityRule)
 
-        Hooks.RepopAtGraveyard(player);
+        if (leaving)
+        {
+            c.RepopPending = false;
+            Death.DeathSeams.Find(_world)?.Graveyards?.RelocateLeavingPlayer(player);
+        }
+        else if (immediate)
+        {
+            c.RepopPending = false;
+            Hooks.RepopAtGraveyard(player);
+        }
+        else
+        {
+            c.RepopPending = true; // Player::ScheduleRepopAtGraveyard; run by RunScheduledRepop
+        }
+
         return true;
     }
+
+    /// <summary>
+    /// The player tick part of vmangos Player::Update (Player.cpp:1329-1334): a scheduled repop runs once the player has no
+    /// pending movement change (the ghost's water-walk order must be answered first). The flag is cleared before the trip
+    /// like Player::RepopAtGraveyard does (Player.cpp:4992), so a trip that finds no graveyard is not retried.
+    /// </summary>
+    private void RunScheduledRepop(Player player)
+    {
+        UnitCombat c = player.Combat;
+        if (!c.RepopPending || player.Locomotion.Pending.HasPending)
+        {
+            return;
+        }
+
+        c.RepopPending = false;
+        Hooks.RepopAtGraveyard(player);
+    }
+
+    private byte[] BuildCorpseQueryFor(Player player) => Death.Travel.CorpseQuery.Build(player, _world);
+
+    /// <summary>
+    /// vmangos Player::SpawnCorpseBones (ObjectAccessor::ConvertCorpseForPlayer): a resurrected player's corpse is no longer
+    /// resurrectable. Bones objects are not modelled, so the corpse simply leaves the world.
+    /// </summary>
+    public void SpawnCorpseBones(Player player)
+    {
+        if (player.Combat.Corpse is { } corpse)
+        {
+            RemoveCorpse(corpse);
+            player.Combat.Corpse = null;
+        }
+    }
+
+    /// <summary>
+    /// The end of vmangos Player::ResurrectUsingRequestData (Player.cpp:20106-20127): <see cref="ResurrectPlayer"/> without a restore,
+    /// then health and mana set to what the resurrection offered (capped at the maximums), rage emptied, energy full, and the corpse
+    /// converted (<see cref="SpawnCorpseBones"/>).
+    /// </summary>
+    internal void CompleteResurrection(Player player, uint health, uint mana)
+    {
+        // DELAYED_RESURRECT_PLAYER does not ask IsAlive (Player.cpp:2157-2170): a ghost already revived on the way (the far
+        // teleport into its corpse's map, Player.cpp:1953-1966) still gets the offered vitals.
+        if (!IsAliveState(player))
+        {
+            ResurrectPlayer(player, 0f, applySickness: false);
+            if (!IsAliveState(player))
+            {
+                return; // a quest settlement holds the player: nothing is resurrected
+            }
+        }
+
+        player.Health = Math.Min(player.MaxHealth, health);
+        SetPower(player, PowerType.Mana, Math.Min(GetMaxPower(player, PowerType.Mana), mana));
+        SetPower(player, PowerType.Rage, 0);
+        SetPower(player, PowerType.Energy, GetMaxPower(player, PowerType.Energy));
+        SpawnCorpseBones(player);
+    }
+
+    /// <summary>
+    /// A ghost that far-teleports into the map its corpse lies in is resurrected at half health on the way and its corpse goes
+    /// (vmangos Player::TeleportTo, Player.cpp:1953-1966: DEAD, map above 1, a different map, the corpse in the target map).
+    /// Returns whether it happened.
+    /// </summary>
+    internal bool ReviveForDungeonEntry(Player player, uint targetMapId)
+    {
+        if (player.Combat.DeathState != DeathState.Dead || targetMapId <= 1 || player.MapId == targetMapId
+            || player.Combat.Corpse is not { } corpse || corpse.MapId != targetMapId)
+        {
+            return false;
+        }
+
+        ResurrectPlayer(player, CombatConstants.CorpseReclaimRestorePercent, applySickness: false);
+        SpawnCorpseBones(player);
+        return true;
+    }
+
+    /// <summary>The <see cref="Death.DeathOptions"/> of this world (<c>World:Death</c>).</summary>
+    internal Death.DeathOptions DeathSettings => Death.DeathHooks.For(_world).Options;
+
+    /// <summary>
+    /// A spirit released on a transport is taken off it and comes back alive at the graveyard (vmangos Player::RepopAtGraveyard,
+    /// Player.cpp:5000-5005: RemovePassenger + ResurrectPlayer(1.0f)); its body is not left behind in the world.
+    /// </summary>
+    internal void ResurrectFromTransport(Player player)
+    {
+        ResurrectPlayer(player, 1.0f, applySickness: false);
+        if (player.Combat.Corpse is { } corpse)
+        {
+            RemoveCorpse(corpse);
+            player.Combat.Corpse = null;
+        }
+    }
+
+    /// <summary>
+    /// The default of <see cref="CombatHooks.RepopAtGraveyard"/>: the world's registered graveyard implementation
+    /// (<see cref="Death.DeathSeams"/>), or false (the ghost stays on its body) when no graveyard feature registered one.
+    /// </summary>
+    internal bool RepopViaSeam(Player player)
+        => Death.DeathSeams.Find(_world)?.Graveyards is { } graveyards && graveyards.RepopAtGraveyard(player);
+
+    /// <summary>
+    /// vmangos MapEntry::Instanceable for a map id: the loaded map template when there is one (a dungeon, raid or battleground),
+    /// else the hooks' answer (<see cref="CombatHooks.IsInstanceable"/>: everything but the two continents, until map content
+    /// is loaded). The two continents always go to the hooks so a test or feature override of them keeps working.
+    /// </summary>
+    internal bool IsInstanceableMap(uint mapId)
+        => mapId > 1 && Maps.Templates.WorldMaps.Of(_world).Registry.Find(mapId) is { } template
+            ? template.Instanceable
+            : Hooks.IsInstanceable(mapId);
 
     /// <summary>
     /// CMSG_RECLAIM_CORPSE (vmangos HandleReclaimCorpseOpcode): a ghost with a corpse whose
@@ -154,7 +290,7 @@ public sealed partial class MapCombat
         c.DeathTimer = 0;
         c.PvpDeath = false;
 
-        if (!Hooks.IsInstanceable(snapshot.MapId))
+        if (!IsInstanceableMap(snapshot.MapId))
         {
             player.SetByte(UpdateFields.PlayerFieldBytes, 0,
                 (byte)(player.GetByte(UpdateFields.PlayerFieldBytes, 0) | FieldByteReleaseTimer));
@@ -212,10 +348,12 @@ public sealed partial class MapCombat
             return;
         }
 
+        bool wasGhost = (player.Flags & PlayerFlags.Ghost) != 0;
         SetDeathState(player, DeathState.Alive);
         Hooks.RemoveGhostForm(player);
-        SetGhost(player, false);
+        SetGhost(player, false, wasGhost);
         player.SetRooted(false);
+        player.SetUInt32(UpdateFields.PlayerSelfResSpell, 0); // "clear self-resurrection state after resurrection by another way"
 
         if (restorePercent > 0f)
         {
@@ -239,9 +377,17 @@ public sealed partial class MapCombat
         SetPower(player, PowerType.Energy, (uint)(GetMaxPower(player, PowerType.Energy) * percent));
     }
 
-    /// <summary>MSG_CORPSE_QUERY reply body (vmangos HandleCorpseQueryOpcode; dungeon ghost entrances need Map.dbc).</summary>
+    /// <summary>
+    /// MSG_CORPSE_QUERY reply body (vmangos HandleCorpseQueryOpcode): a corpse in a dungeon other than the player's map is shown at the
+    /// dungeon's ghost entrance (<see cref="Death.Travel.CorpseQuery"/>); a player that is in no map gets the corpse's own place.
+    /// </summary>
     public static byte[] BuildCorpseQuery(Player player)
     {
+        if (player.Map is { } map)
+        {
+            return map.Combat.BuildCorpseQueryFor(player);
+        }
+
         if (player.Combat.Corpse is not { } corpse)
         {
             return CombatPackets.CorpseQueryNotFound();
@@ -251,15 +397,15 @@ public sealed partial class MapCombat
     }
 
     /// <summary>
-    /// PLAYER_FLAGS_GHOST and water walking. vmangos gets both from the ghost aura (8326:
-    /// SPELL_AURA_GHOST + SPELL_AURA_WATER_WALK); nothing casts that aura yet (the ghost-form
-    /// hooks have no override), so combat applies them directly, and
-    /// the move change goes to the client as SMSG_MOVE_WATER_WALK / SMSG_MOVE_LAND_WALK.
+    /// PLAYER_FLAGS_GHOST and water walking. The ghost aura (8326: SPELL_AURA_GHOST, +25% run and swim speed; vmangos
+    /// <c>HandleAuraGhost</c> sets the flag) sets the flag when the ghost form feature is registered; water walking is
+    /// ordered separately in vmangos too (<c>SetWaterWalking(true)</c>, Player.cpp:4566). Without the aura, combat sets the flag
+    /// itself. The move change goes to the client as SMSG_MOVE_WATER_WALK / SMSG_MOVE_LAND_WALK. <paramref name="wasGhost"/> is
+    /// whether the player was a ghost before the aura was applied or removed: the aura changes the flag, so it cannot be read here.
     /// </summary>
-    private static void SetGhost(Player player, bool ghost)
+    private static void SetGhost(Player player, bool ghost, bool wasGhost)
     {
-        bool isGhost = (player.Flags & PlayerFlags.Ghost) != 0;
-        if (isGhost == ghost)
+        if (wasGhost == ghost)
         {
             return;
         }
@@ -267,6 +413,12 @@ public sealed partial class MapCombat
         player.Flags = ghost ? player.Flags | PlayerFlags.Ghost : player.Flags & ~PlayerFlags.Ghost;
         SendGhostMovement(player, ghost);
     }
+
+    /// <summary>The default of <see cref="CombatHooks.ApplyGhostForm"/>: the world's registered ghost form, if any.</summary>
+    internal void ApplyGhostFormViaSeam(Player player) => Death.DeathSeams.Find(_world)?.GhostForm?.Apply(player);
+
+    /// <summary>The default of <see cref="CombatHooks.RemoveGhostForm"/>: the world's registered ghost form, if any.</summary>
+    internal void RemoveGhostFormViaSeam(Player player) => Death.DeathSeams.Find(_world)?.GhostForm?.Remove(player);
 
     /// <summary>
     /// SMSG_MOVE_WATER_WALK / SMSG_MOVE_LAND_WALK: the client starts or stops walking on water. The order goes through

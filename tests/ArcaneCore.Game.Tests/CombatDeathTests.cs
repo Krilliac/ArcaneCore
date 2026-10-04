@@ -119,6 +119,9 @@ public sealed class CombatDeathTests
         Assert.NotEqual(0u, (uint)(s.V.Flags & PlayerFlags.Ghost));
         Assert.Equal(1u, s.V.Health);
         Assert.False(s.V.IsAlive);
+        Assert.Equal(0, s.Hooks.GraveyardRepops); // scheduled: waits for the water-walk ack (Player.cpp:1329-1334)
+        CombatTestKit.AckPendingMovement(s.V);
+        world.RunTick(100);
         Assert.Equal(1, s.Hooks.GraveyardRepops);
         Corpse corpse = Assert.Single(s.Map.Combat.Corpses);
         Assert.Same(corpse, s.V.Combat.Corpse);

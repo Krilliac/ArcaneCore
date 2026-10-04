@@ -1247,7 +1247,15 @@ public sealed partial class SpellSystem
     }
 
     private Unit? ResolveUnitTarget(Unit caster, SpellCastTargets targets)
-        => (targets.Mask & (SpellCastTargetFlags.Unit | SpellCastTargetFlags.UnitEnemy)) != 0 ? Units.Find(caster, targets.Unit) : null;
+    {
+        if ((targets.Mask & (SpellCastTargetFlags.Unit | SpellCastTargetFlags.UnitEnemy)) != 0)
+        {
+            return Units.Find(caster, targets.Unit);
+        }
+
+        // A corpse target is its owner (vmangos Spell.cpp:3109-3118 adds the owner of the corpse to the targets of the resurrect effects).
+        return (targets.Mask & (SpellCastTargetFlags.CorpseAlly | SpellCastTargetFlags.CorpseEnemy)) != 0 ? ResolveCorpseOwner(caster, targets.Corpse) : null;
+    }
 
     private static bool NeedsUnitTarget(SpellInfo spell)
         => spell.Effects.Any(e => !e.IsEmpty && IsExplicitUnitTarget(e.TargetA));

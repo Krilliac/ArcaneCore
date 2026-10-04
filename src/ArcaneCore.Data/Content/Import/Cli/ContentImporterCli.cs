@@ -3,6 +3,7 @@ using ArcaneCore.Data.Content.Chr;
 using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.Graveyards;
 using ArcaneCore.Data.Quests;
 using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Schema;
@@ -242,6 +243,7 @@ public static class ContentImporterCli
         var playerCreate = new PlayerCreateDumpImporter();
         var startActions = new PlayerCreateActionDumpImporter();
         var locations = new LocationDumpImporter();
+        var graveyards = new GraveyardDumpImporter();
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             creatures.Read(reader);
@@ -291,6 +293,11 @@ public static class ContentImporterCli
             worldState = WorldStateDumpImporter.Parse(reader);
         }
 
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            graveyards.Read(reader);
+        }
+
         string? dbcDirectory = a.Value("--dbc-dir");
         if (dbcDirectory is not null)
         {
@@ -308,6 +315,20 @@ public static class ContentImporterCli
             {
                 throw new CliException(ExitCodes.Io, $"Lock.dbc: {ex.Message}", ex);
             }
+
+            // vmangos keeps its safe locations in WorldSafeLocs.dbc; a cmangos dump has them in world_safe_locs (optional here).
+            string safeLocsPath = Path.Combine(dbcDirectory, "WorldSafeLocs.dbc");
+            if (File.Exists(safeLocsPath))
+            {
+                try
+                {
+                    graveyards.ReadSafeLocs(WorldSafeLocsDbcReader.Load(safeLocsPath));
+                }
+                catch (InvalidDataException ex)
+                {
+                    throw new CliException(ExitCodes.Io, $"WorldSafeLocs.dbc: {ex.Message}", ex);
+                }
+            }
         }
         else
         {
@@ -323,6 +344,7 @@ public static class ContentImporterCli
         PlayerCreateImportReport playerReport = playerCreate.BuildReport();
         PlayerCreateActionImportReport startActionReport = startActions.BuildReport();
         LocationImportReport locationReport = locations.BuildReport();
+        GraveyardImportReport graveyardReport = graveyards.BuildReport();
         if (!dryRun)
         {
             o.WriteLine($"target: {target!.Describe}");
@@ -341,6 +363,7 @@ public static class ContentImporterCli
                     locationReport = await locations.WriteAsync(db, replace, token).ConfigureAwait(false);
                     await WorldStateDumpImporter.WriteAsync(db, worldState, replace, token).ConfigureAwait(false);
                     await gameEvents.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    graveyardReport = await graveyards.WriteAsync(db, replace, token).ConfigureAwait(false);
                 }, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -356,6 +379,7 @@ public static class ContentImporterCli
         warnings.AddRange(playerReport.Warnings);
         warnings.AddRange(startActionReport.Warnings);
         warnings.AddRange(locationReport.Warnings);
+        warnings.AddRange(graveyardReport.Warnings);
         if (itemQuestReport.DerivedQuestXp > 0)
         {
             warnings.Add(
@@ -376,6 +400,9 @@ public static class ContentImporterCli
         skipped["game_event_rows"] = gameEventReport.SkippedRows;
         imported["game_weather"] = worldState.Weather.Count;
         imported["exploration_basexp"] = worldState.BaseXp.Count;
+        imported["world_safe_locs"] = graveyardReport.SafeLocs;
+        imported["game_graveyard_zone"] = graveyardReport.Links;
+        skipped["game_graveyard_zone"] = graveyardReport.SkippedLinks;
         o.WriteLine(dryRun ? "would import:" : "imported:");
         foreach ((string table, long count) in imported)
         {

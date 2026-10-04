@@ -47,8 +47,9 @@ needs a characters-DB version from the lead.
 - **Items / stats:** override `CombatHooks.GetWeaponSkill`, `GetDefenseSkill`,
   `HasOffhandWeapon`, `PlayerCanParry`, `PlayerCanBlock` and `GetShieldBlockValue`, and fill
   `UNIT_FIELD_MINDAMAGE`/`MAXDAMAGE`, `PLAYER_*_PERCENTAGE` and armor.
-- **Graveyards:** override `CombatHooks.RepopAtGraveyard(player)` to teleport the ghost
-  (vmangos `Player::RepopAtGraveyard`). The default leaves it at the corpse.
+- **Graveyards:** register an `IGraveyardRepop` in `DeathSeams` (the graveyard feature does, with the real data); the
+  `CombatHooks.RepopAtGraveyard` default asks it and leaves the ghost at the corpse without one
+  (docs/areas/graveyards-resurrection.md).
 - **Factions:** the daemon registers `FactionCombatHooks` (`src/ArcaneCore.Game/Combat/FactionCombatHooks.cs`) through
   `WorldCombatHooksFeature` (`src/ArcaneCore.World/Combat/`) when a `FactionTemplateCatalog` is loaded (a registered
   catalog, else `Creatures:FactionTemplateDbcPath`). It is a **template-only subset** of vmangos

@@ -199,11 +199,11 @@ ported: it only changes damage for GM-like invulnerability states and game maste
 reads the stored position) ports "Antiundermap2" (vmangos `HandleMoverRelocation`, `MovementHandler.cpp:1132-1161`): a
 non-GM player below z = -500 takes `FALL_TO_VOID` damage of half the current health (the whole health on a battleground
 map, `MapTemplate.IsBattleground`), logged as a fall. If that kills, `KillPlayer` and `RepopPlayer` run (vmangos
-`KillPlayer` + `BuildPlayerRepop`; this core's `RepopPlayer` already sends the ghost to the graveyard, so the graveyard hook
-is not called twice). A player that is already a ghost only takes `Hooks.RepopAtGraveyard` again, once per packet as
+`KillPlayer` + `BuildPlayerRepop`; this core's `RepopPlayer` already schedules the ghost's graveyard trip, so the graveyard hook
+is not called a second time for the death). A player that is already a ghost only takes `Hooks.RepopAtGraveyard` again, once per packet as
 vmangos does ("this is actually called many times while falling"). A 1-health player takes 0 damage (1 / 2 = 0) and is
-still sent to the graveyard. `RepopAtGraveyard` is the death lane's hook and is a no-op (returns false) on this base
-until that lane installs its implementation.
+still sent to the graveyard. `RepopAtGraveyard` is the death lane's hook: it asks the graveyard feature's `IGraveyardRepop`
+(docs/areas/graveyards-resurrection.md) and does nothing without graveyard data.
 
 Not delivered: antiundermap1 (`UndermapRecall`, `:1105-1127`: more than 100 yards below the ground height while
 falling, return to the last safe position, Warsong Gulch below z = 250). It needs a safe-position record and the ground

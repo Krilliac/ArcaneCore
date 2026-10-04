@@ -23,6 +23,12 @@ public sealed partial class SpellSystem
     public void OnUnitDied(Unit unit)
     {
         ArgumentNullException.ThrowIfNull(unit);
+        if (unit is Player { IsAlive: false } dying)
+        {
+            // Player::SetDeathState(JUST_DIED) picks the self-resurrection spell before Unit::SetDeathState strips the auras (the Soulstone is one).
+            Death.Resurrection.SelfResurrection.OnPlayerDied(this, dying);
+        }
+
         RemoveAurasOnDeath(unit);
         if (!unit.IsAlive)
         {

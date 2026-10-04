@@ -99,8 +99,8 @@ gossip and trainer columns; `NpcTemplates` can override them.
   the flight on login. Observers who come into view mid-hop get no spline (they see the player
   move by position updates). Movement is linear between waypoints, while the client draws a
   Catmull-Rom curve; both end on the same nodes. TaxiPathNode delays and flags are ignored.
-- **Spirit healer:** no corpse bones and no graveyard teleport when the corpse's graveyard
-  differs. The 17251 cast visual is not shown.
+- **Spirit healer:** no corpse bones (the corpse just leaves the world); the graveyard teleport when the corpse's
+  graveyard differs is delivered (docs/areas/graveyards-resurrection.md). The 17251 cast visual is not shown.
 - **Buyback** items are not saved across logout, as in vmangos.
 - Quest item counters rely on `PlayerInventory.ItemCountChanged`; `InventoryItemService`
   doesn't report quest events itself.

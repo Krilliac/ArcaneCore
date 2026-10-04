@@ -20,7 +20,7 @@ public sealed class SpiritHealerResurrection(Func<SpellSystem?> spells, IItemSer
     /// <summary>SPELL_ID_PASSIVE_RESURRECTION_SICKNESS (vmangos SharedDefines.h).</summary>
     public const uint ResurrectionSicknessSpell = 15007;
 
-    /// <summary>Death.SicknessLevel default (vmangos mangosd.conf.dist).</summary>
+    /// <summary>Death.SicknessLevel default (vmangos mangosd.conf.dist); the value in force is <see cref="Death.DeathOptions.SicknessLevel"/>.</summary>
     public const int SicknessStartLevel = 11;
 
     /// <summary>vmangos SendSpiritResurrect: DurabilityLossAll(0.25f, true).</summary>
@@ -42,18 +42,19 @@ public sealed class SpiritHealerResurrection(Func<SpellSystem?> spells, IItemSer
 
     private void ApplySickness(Player player)
     {
-        if (player.Level < SicknessStartLevel || spells() is not { } system || system.Store.Get(ResurrectionSicknessSpell) is null)
+        int startLevel = player.Map?.Combat.DeathSettings.SicknessLevel ?? SicknessStartLevel;
+        if (player.Level < startLevel || spells() is not { } system || system.Store.Get(ResurrectionSicknessSpell) is null)
         {
             return;
         }
 
         system.CastSpell(player, ResurrectionSicknessSpell, SpellCastTargets.ForSelf(), triggered: true);
-        if (player.Level >= SicknessStartLevel + 9)
+        if (player.Level >= startLevel + 9)
         {
             return;
         }
 
-        int durationMs = (player.Level - SicknessStartLevel + 1) * 60 * 1000;
+        int durationMs = (player.Level - startLevel + 1) * 60 * 1000;
         foreach (SpellAuraHolder holder in system.GetAuras(player).Where(h => h.Spell.Id == ResurrectionSicknessSpell && !h.IsPermanent))
         {
             holder.MaxDuration = durationMs;

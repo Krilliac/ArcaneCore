@@ -44,6 +44,25 @@ public sealed partial class SpellSystem
                 continue;
             }
 
+            if (effect.Effect is SpellEffectName.Resurrect or SpellEffectName.ResurrectNew)
+            {
+                // vmangos Spell::SetTargetMap (Spell.cpp:3106-3117): the targets of the resurrect effects are the explicit unit and the
+                // owner of the explicit corpse, whatever the implicit target says (the player spells have none: TARGET_NONE).
+                if (unitTarget is not null)
+                {
+                    if (!result.TryGetValue(unitTarget, out SpellTargetEntry? resurrectEntry))
+                    {
+                        resurrectEntry = new SpellTargetEntry();
+                        result[unitTarget] = resurrectEntry;
+                        order.Add(unitTarget);
+                    }
+
+                    resurrectEntry.EffectMask |= 1 << i;
+                }
+
+                continue;
+            }
+
             SpellImplicitTarget selector = IsLocationTarget(effect.TargetA) && effect.TargetB != SpellImplicitTarget.None && !IsLocationTarget(effect.TargetB)
                 ? effect.TargetB
                 : effect.TargetA;

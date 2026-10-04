@@ -435,6 +435,9 @@ public sealed partial class Player : Unit
         _levelStartMs = nowMs;
     }
 
+    /// <summary>Where the next snapshot saves the player instead of where it stands (the graveyard of a spirit that logs out), or null.</summary>
+    internal (uint MapId, float X, float Y, float Z, float Orientation)? LogoutLocation { get; set; }
+
     /// <summary>The persistent state to save (world thread). Action buttons are included only when changed.</summary>
     public CharacterState CreateSnapshot(uint nowMs)
     {
@@ -454,8 +457,11 @@ public sealed partial class Player : Unit
             _actionButtonsChanged = false;
         }
 
+        // A spirit that logs out while still at its body is saved at its graveyard (vmangos WorldSession.cpp:694-701);
+        // the player itself stays where it is until it leaves the map.
+        (uint saveMap, float saveX, float saveY, float saveZ, float saveO) = LogoutLocation ?? (MapId, X, Y, Z, Orientation);
         return new CharacterState(
-            (int)Guid.Low, MapId, ZoneId, X, Y, Z, Orientation, Level,
+            (int)Guid.Low, saveMap, ZoneId, saveX, saveY, saveZ, saveO, Level,
             Math.Max(PlayedTimeAt(nowMs), 1u), LevelPlayedTimeAt(nowMs), Money, ActionBarToggles, buttons, Home,
             Inventory.TakeSnapshotIfChanged(),
             Death.PlayerLife.Capture(this), Inventory.BankBagSlotCount);
