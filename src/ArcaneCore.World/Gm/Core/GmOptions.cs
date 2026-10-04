@@ -30,6 +30,12 @@ public sealed class GmOptions
     public bool LogCommands { get; set; } = true;
 
     /// <summary>
+    /// How many of the latest audit lines <c>.arcane gmlog</c> can show (ArcaneCore only; the lines are the ones
+    /// <see cref="LogCommands"/> writes, kept in memory, lost on restart). 0 keeps none.
+    /// </summary>
+    public int AuditTailSize { get; set; } = 200;
+
+    /// <summary>
     /// vmangos GM.LowerSecurity (mangosd.conf.dist.in:2536). Retail default is false, which lets
     /// staff act on a higher account; ArcaneCore keeps the stricter true as its default so the
     /// existing refusal does not weaken. Strong checks (mute/unmute) are strict in both.

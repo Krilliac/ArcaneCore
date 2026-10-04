@@ -1,0 +1,246 @@
+using System.Buffers.Binary;
+using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Gm;
+using ArcaneCore.Protocol;
+using ArcaneCore.World.Commands;
+using ArcaneCore.World.Gm.Audit;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace ArcaneCore.World.Tests.Gm.Audit;
+
+/// <summary>
+/// GM tickets end to end: the player packets (CMSG_GMTICKET_*, layouts of mangos-zero, UNVERIFIED on a retail client) and the
+/// staff <c>.ticket</c> commands, with the store, the retained-write path and the character-deletion hook.
+/// </summary>
+public sealed class TicketTests
+{
+    internal static string Link(string name) => $"|cffffffff|Hplayer:{name}|h[{name}]|h|r";
+
+    internal static byte[] CreatePayload(string text, byte category = 1)
+    {
+        var writer = new PacketWriter(64);
+        writer.WriteByte(category);
+        writer.WriteUInt32(0);        // map (the server stores its own)
+        writer.WriteSingle(1f);
+        writer.WriteSingle(2f);
+        writer.WriteSingle(3f);
+        writer.WriteCString(text);
+        writer.WriteCString(string.Empty);
+        return writer.ToArray();
+    }
+
+    internal static byte[] TextPayload(string text)
+    {
+        var writer = new PacketWriter(32);
+        writer.WriteCString(text);
+        return writer.ToArray();
+    }
+
+    internal static uint U32(byte[] payload) => BinaryPrimitives.ReadUInt32LittleEndian(payload);
+
+    internal static async Task<string> ReplyAsync(WorldTestClient client, string command)
+    {
+        await client.SendChatAsync(ChatType.Say, Language.Common, command);
+        return (await client.ReadChatAsync()).Text;
+    }
+
+    internal static async Task<string[]> LinesAsync(WorldTestClient client, string command)
+    {
+        await client.CollectAsync();
+        await client.SendChatAsync(ChatType.Say, Language.Common, command);
+        return [.. (await client.CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text)];
+    }
+
+    internal static InMemoryGmAuditStore StoreOf(WorldTestHost host) => host.WorldServices.GetRequiredService<InMemoryGmAuditStore>();
+
+    internal static GmAuditFeature AuditOf(WorldTestHost host) => host.WorldServices.GetRequiredService<GmAuditFeature>();
+
+    /// <summary>A player files a ticket with <paramref name="text"/> and the response code is read.</summary>
+    internal static async Task<uint> CreateAsync(WorldTestClient client, string text)
+    {
+        await client.SendAsync(WorldOpcode.CmsgGmticketCreate, CreatePayload(text));
+        return U32(await client.ReadUntilAsync(WorldOpcode.SmsgGmticketCreate));
+    }
+
+    // ---- the player's packets ----
+
+    [Fact]
+    public async Task Create_StoresTheTicket_AnswersCreated_TellsStaff_AndPersists()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("GMA", "Gmaaa", AccountSecurity.GameMaster);
+        await using WorldTestClient mod = await host.EnterWorldAsync("MOD", "Moddy", AccountSecurity.Moderator);
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plain");
+        await host.PlaceAsync("Plain", -8800f, -100f, 90f);
+        await gm.CollectAsync();
+        await mod.CollectAsync();
+        await player.CollectAsync();
+
+        Assert.Equal(GmTicketHandlers.ResponseCreated, await CreateAsync(player, "I am stuck in the wall"));
+
+        Assert.Equal($"New ticket from {Link("Plain")} (ID 1)", (await gm.ReadChatAsync()).Text);
+        Assert.DoesNotContain(await mod.CollectAsync(), p => p.Opcode == WorldOpcode.SmsgMessagechat);   // tickets are GameMaster work
+        GmTicketRecord ticket = AuditOf(host).OpenTicketOf(3)!;
+        Assert.Equal((1, "I am stuck in the wall", (byte)1, -8800f, -100f, 90f), (ticket.Id, ticket.Text, ticket.Category, ticket.X, ticket.Y, ticket.Z));   // the server's own position
+        await WorldTestHost.WaitForAsync(() => StoreOf(host).Ticket(1) is not null, "the ticket to reach storage");
+        Assert.Equal(GmTicketStatus.Open, StoreOf(host).Ticket(1)!.Status);
+    }
+
+    [Fact]
+    public async Task Create_SecondTicketOfTheSameCharacter_IsRefused()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plain");
+        await player.CollectAsync();
+
+        Assert.Equal(GmTicketHandlers.ResponseCreated, await CreateAsync(player, "first"));
+        Assert.Equal(GmTicketHandlers.ResponseAlreadyExists, await CreateAsync(player, "second"));
+
+        Assert.Equal("first", Assert.Single(AuditOf(host).OpenTickets()).Text);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("\u0007\u0007")]
+    public async Task Create_WithNoUsableText_IsAnError_AndStoresNothing(string text)
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plain");
+        await player.CollectAsync();
+
+        Assert.Equal(GmTicketHandlers.ResponseCreateError, await CreateAsync(player, text));
+        Assert.Empty(AuditOf(host).OpenTickets());
+    }
+
+    [Fact]
+    public async Task Create_ATruncatedPacket_IsAnError_NotAFault()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plain");
+        await player.CollectAsync();
+
+        await player.SendAsync(WorldOpcode.CmsgGmticketCreate, [1, 0, 0]);
+
+        Assert.Equal(GmTicketHandlers.ResponseCreateError, U32(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketCreate)));
+        Assert.Empty(AuditOf(host).OpenTickets());
+    }
+
+    [Fact]
+    public async Task Create_TheTextIsCappedAndStrippedOfControlCharacters()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plain");
+        await player.CollectAsync();
+
+        Assert.Equal(GmTicketHandlers.ResponseCreated, await CreateAsync(player, "\u0007  help\nme " + new string('x', 3000)));
+
+        string stored = AuditOf(host).OpenTickets()[0].Text;
+        Assert.Equal(GmAuditLimits.MaxTextLength, stored.Length);
+        Assert.StartsWith("helpme x", stored, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetTicket_ReportsNoTicket_ThenTheOpenTicket()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plain");
+        await player.CollectAsync();
+
+        await player.SendAsync(WorldOpcode.CmsgGmticketGetticket, []);
+        Assert.Equal(0x0Au, U32(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketGetticket)));
+
+        await CreateAsync(player, "need a GM");
+        await player.SendAsync(WorldOpcode.CmsgGmticketGetticket, []);
+        var reader = new PacketReader(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketGetticket));
+        Assert.Equal((GmTicketHandlers.StatusHasTicket, "need a GM"), (reader.ReadUInt32(), reader.ReadCString()));
+        Assert.Equal(1 + 12 + 2, reader.Remaining);   // category, three floats, two bytes: the mangos-zero tail
+    }
+
+    [Fact]
+    public async Task UpdateText_ReplacesTheText_TellsStaff_AndFailsWithoutATicket()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("GMA", "Gmaaa", AccountSecurity.GameMaster);
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plain");
+        await gm.CollectAsync();
+        await player.CollectAsync();
+
+        await player.SendAsync(WorldOpcode.CmsgGmticketUpdatetext, TextPayload("nothing to update"));
+        Assert.Equal(GmTicketHandlers.ResponseUpdateError, U32(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketUpdatetext)));
+
+        await CreateAsync(player, "old text");
+        await gm.CollectAsync();
+        await player.SendAsync(WorldOpcode.CmsgGmticketUpdatetext, TextPayload("\u0007new text"));   // the client puts a BEL in front of an update
+
+        Assert.Equal(GmTicketHandlers.ResponseUpdated, U32(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketUpdatetext)));
+        Assert.Equal($"Player {Link("Plain")} has updated his ticket (ID 1).", (await gm.ReadChatAsync()).Text);
+        Assert.Equal("new text", AuditOf(host).OpenTickets()[0].Text);
+        await WorldTestHost.WaitForAsync(() => StoreOf(host).Ticket(1)?.Text == "new text", "the update to reach storage");
+
+        await player.SendAsync(WorldOpcode.CmsgGmticketUpdatetext, TextPayload("\u0007"));           // nothing left after cleaning
+        Assert.Equal(GmTicketHandlers.ResponseUpdateError, U32(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketUpdatetext)));
+        Assert.Equal("new text", AuditOf(host).OpenTickets()[0].Text);
+    }
+
+    [Fact]
+    public async Task DeleteTicket_WithdrawsTheTicket_AndRemovesTheRow()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plain");
+        await player.CollectAsync();
+        await CreateAsync(player, "never mind");
+        await WorldTestHost.WaitForAsync(() => StoreOf(host).Ticket(1) is not null, "the ticket row");
+
+        await player.SendAsync(WorldOpcode.CmsgGmticketDeleteticket, []);
+
+        Assert.Equal(GmTicketHandlers.ResponseDeleted, U32(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketDeleteticket)));
+        Assert.Equal(0x0Au, U32(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketGetticket)));
+        Assert.Empty(AuditOf(host).OpenTickets());
+        await WorldTestHost.WaitForAsync(() => StoreOf(host).Ticket(1) is null, "the row to go");
+
+        await player.SendAsync(WorldOpcode.CmsgGmticketDeleteticket, []);   // again, with no ticket: still answered
+        Assert.Equal(GmTicketHandlers.ResponseDeleted, U32(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketDeleteticket)));
+    }
+
+    // ---- staff commands ----
+
+    [Fact]
+    public void Levels_ListShowRespondCloseNeedGameMaster_DeleteNeedsAdministrator()
+    {
+        CommandTable table = ChatCommands.CreateTable();
+        foreach (string path in new[] { "ticket", "ticket list", "ticket onlinelist", "ticket show", "ticket respond", "ticket close" })
+        {
+            ChatCommand command = table.Find(path)!;
+            Assert.True(table.IsAvailable(command, AccountSecurity.GameMaster), path);
+            Assert.False(table.IsAvailable(command, AccountSecurity.Moderator), path);
+        }
+
+        ChatCommand delete = table.Find("ticket delete")!;
+        Assert.False(table.IsAvailable(delete, AccountSecurity.GameMaster));
+        Assert.True(table.IsAvailable(delete, AccountSecurity.Administrator));
+    }
+
+    [Fact]
+    public async Task Commands_AreRefusedBelowTheirLevel()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient mod = await host.EnterWorldAsync("MOD", "Moddy", AccountSecurity.Moderator);
+        await using WorldTestClient gm = await host.EnterWorldAsync("GMA", "Gmaaa", AccountSecurity.GameMaster);
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plain");
+        await CreateAsync(player, "help");
+        await mod.CollectAsync();
+        await gm.CollectAsync();
+
+        foreach (string command in new[] { ".ticket", ".ticket list", ".ticket show 1", ".ticket respond 1 hi", ".ticket close 1" })
+        {
+            Assert.Equal("This command is not available to you.", await ReplyAsync(mod, command));
+        }
+
+        Assert.Equal("This command is not available to you.", await ReplyAsync(gm, ".ticket delete 1"));
+        Assert.Equal("Open tickets: 1", await ReplyAsync(gm, ".ticket"));   // nothing was deleted
+        Assert.Single(AuditOf(host).OpenTickets());
+    }
+}
