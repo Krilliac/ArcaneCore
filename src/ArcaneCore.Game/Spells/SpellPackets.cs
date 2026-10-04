@@ -291,13 +291,13 @@ public static class SpellPackets
     }
 
     /// <summary>
-    /// SMSG_SPELL_DELAYED (cmangos-classic / vmangos Spell::Delayed): packed caster GUID, u32 delay
-    /// ms. gtker lists a full GUID for 1.12; the servers win (recorded in docs/integration/spells-persistence.md).
+    /// SMSG_SPELL_DELAYED: full u64 GUID, u32 delay ms (wow_messages smsg_spell_delayed.wowm; vmangos
+    /// Packets/Spell.cpp:656 and mangos-classic Spell.cpp:6834 stream an ObjectGuid, whose operator&lt;&lt; is a raw u64).
     /// </summary>
     public static byte[] BuildSpellDelayed(ObjectGuid caster, uint delayMs)
     {
-        var writer = new PacketWriter(13);
-        writer.WritePackedGuid(caster.Value);
+        var writer = new PacketWriter(12);
+        writer.WriteUInt64(caster.Value);
         writer.WriteUInt32(delayMs);
         return writer.ToArray();
     }

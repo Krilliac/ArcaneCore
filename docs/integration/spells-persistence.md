@@ -159,8 +159,8 @@ and `DmgMultiplier1-3`), `SpellFeature.cs`, the spell test kits and `SpellTestSe
 ## Known limits
 
 - Cone arc is π/2 (`SpellConstants.ConeArc`); vmangos's per-spell cone angle was not confirmed.
-- SMSG_SPELL_DELAYED is written with a packed caster GUID (vmangos); gtker lists a full GUID for
-  1.12 — not verified against a client.
+- SMSG_SPELL_DELAYED is written with a full u64 caster GUID (wow_messages, vmangos and mangos-classic all agree;
+  an earlier packed-GUID form was a protocol-audit finding, see docs/integration/protocol-audit-codex.md).
 - No SMSG_SPELLDISPELLOG and no dispel resistance; the interrupt's SMSG_SPELL_COOLDOWN names only
   the interrupted spell, not every spell of the school.
 - Summon is a seam only: no creature/pet/totem summoning exists yet (without a sink the effect is
