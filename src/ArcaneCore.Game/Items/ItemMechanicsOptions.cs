@@ -17,9 +17,11 @@ public sealed class ItemMechanicsOptions
 
     /// <summary>
     /// vmangos <c>DurabilityLossChance.Damage</c> (mangosd.conf.dist.in:2848, World.cpp:554): the
-    /// percent chance (0.5 means 0.5 percent) that damage dealt or taken costs one random worn
-    /// item a durability point (Unit.cpp:880-895). Consumed by the combat triggers; the inventory
-    /// only exposes the value.
+    /// percent chance (0.5 means 0.5 percent) that damage dealt or taken costs a worn item a
+    /// durability point (Unit.cpp:1093-1108). Rolled per damage event by MapCombat (MapCombat.Durability.cs):
+    /// a player victim that survives loses a point on a uniformly random equipment slot, and a
+    /// player's connecting melee swing wears the weapon of the swinging hand. Zero or less never
+    /// rolls; <see cref="DurabilityLossEnable"/> false overrides it.
     /// </summary>
     public double DurabilityLossChanceDamage { get; set; } = 0.5;
 

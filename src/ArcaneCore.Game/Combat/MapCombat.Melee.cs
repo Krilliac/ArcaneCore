@@ -617,7 +617,7 @@ public sealed partial class MapCombat
             }
         }
 
-        DealDamage(info.Attacker, victim, info.TotalDamage, info.Outcome, info.CleanDamage, direct: true);
+        RollHitDoneDurability(info, DealDamage(info.Attacker, victim, info.TotalDamage, info.Outcome, info.CleanDamage, direct: true));
     }
 
     // --- damage, combat state, kill (vmangos Unit::DealDamage, Kill) ---------------------
@@ -730,6 +730,7 @@ public sealed partial class MapCombat
             RewardRage((Player)victim, damage, attacker: false, CombatEnvironment.For(_world));
         }
 
+        RollHitTakenDurability(victim);
         DamageDealt?.Invoke(attacker, victim, damage, direct, meleeDamage);
         AttackedBy(victim, attacker);
         if (duelEnded)
