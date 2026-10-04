@@ -153,6 +153,13 @@ public sealed class WorldRuntime : IDisposable
     }
 
     /// <summary>
+    /// True once <see cref="Stop"/> has retired the world thread: from then on every <see cref="InvokeAsync{T}"/> is cancelled
+    /// rather than run, so a caller that sees a cancelled invocation while this is set knows the world is gone, not that its own
+    /// token fired.
+    /// </summary>
+    public bool IsStopped => _stopped;
+
+    /// <summary>
     /// Stop the world thread, then save every online character. After this returns the world
     /// thread is gone, so this method may touch world state itself.
     /// </summary>

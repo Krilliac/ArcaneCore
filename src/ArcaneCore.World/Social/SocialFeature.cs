@@ -420,9 +420,11 @@ public sealed class SocialFeature(
                 return true;
             }).WaitAsync(_stop.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (_stopping)
+        catch (OperationCanceledException) when (_stopping || world.IsStopped)
         {
-            // The world may already be stopped; no pending world invocation holds up disposal.
+            // Either this feature is stopping or the world thread is already gone (WorldRuntime.Stop cancels every pending
+            // invocation, and it runs before the features stop): the load is moot and must not fault the lifecycle task
+            // that StopAsync awaits. Guild creation stays disabled, which only matters for the moments before shutdown.
         }
     }
 }
