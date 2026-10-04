@@ -44,7 +44,8 @@ public sealed class ResurrectionRequestTests
                 Res(Rebirth, SpellEffectName.ResurrectNew, 400, 700, ex3: 0x10),
                 Res(Percent, SpellEffectName.Resurrect, 19, 0));
             DeathHooks.Register(Kit.World, new DeathHooks(new DeathOptions(), new FixedDeathClock(T)));
-            WorldMaps.Of(Kit.World).Load(new MapContent([new MapTemplate(0, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Eastern Kingdoms", "")], [], [], [], []));
+            WorldMaps.Of(Kit.World).Load(new MapContent([new MapTemplate(0, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Eastern Kingdoms", ""),
+                new MapTemplate(36, 0, MapType.Instance, 0, 10, 0, 0, -11208f, 1672f, "Deadmines", "")], [], [], [], []));
             Teleports = new TeleportService(Kit.World, _ => { }, _ => { });
             Service = new ResurrectionService(Kit.World, () => Teleports);
             Kit.System.Resurrection = Service;
@@ -151,6 +152,22 @@ public sealed class ResurrectionRequestTests
     }
 
     [Fact]
+    public void ResurrectPercent_UsesIntegerArithmetic_SoAFractionIsNeverRoundedUp()
+    {
+        // SpellEffects.cpp:5246: rand_ditheru(GetMaxHealth() * damage / 100) divides as integers; 19% of 1033 is 196.27 and must
+        // be 196 every time (a float with dither would give 197 about a quarter of the time).
+        using var rig = new Rig();
+        rig.Ghost.MaxHealth = 1033;
+
+        for (int i = 0; i < 60; i++)
+        {
+            ResurrectionRequests.Clear(rig.Ghost);
+            rig.CastAtCorpse(rig.Caster, Percent);
+            Assert.Equal(196u, ResurrectionRequests.Get(rig.Ghost)!.Health);
+        }
+    }
+
+    [Fact]
     public void ACorpseThatIsNotInTheCastersMap_IsBadTargets_AndNothingHappens()
     {
         using var rig = new Rig();
@@ -193,6 +210,29 @@ public sealed class ResurrectionRequestTests
         Assert.Equal(0u, (uint)(rig.Ghost.Flags & PlayerFlags.Ghost));
         Assert.Null(rig.Ghost.Combat.Corpse);
         Assert.Empty(rig.Combat.Corpses);
+        Assert.Equal(0u, rig.Ghost.GetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Rage));
+    }
+
+    [Fact]
+    public void Accepting_IntoTheCorpsesOwnDungeon_StillAppliesTheOfferedVitals_NotTheHalfHealthOfTheDungeonRevive()
+    {
+        // Player.cpp:2157-2170 / 20104-20115: DELAYED_RESURRECT_PLAYER does not look at IsAlive; the far teleport had revived the
+        // ghost at 50% (Player.cpp:1953-1966), and the spell's health and zero rage still go on afterwards.
+        using var rig = new Rig();
+        rig.Combat.RestoreGhost(rig.Ghost, new Kernel.Characters.CorpseSnapshot(36, 5f, 6f, 7f, 0f, T - 10, (byte)CorpseType.ResurrectablePve));
+        ResurrectionRequests.Set(rig.Ghost, new ResurrectionRequest(rig.Caster.Guid, 36, 0, 5f, 6f, 7f, 0f, 300, 0));
+        rig.Ghost.Health = 1;
+
+        rig.Service.Respond(rig.Ghost, rig.Caster.Guid, accept: true);
+
+        Assert.True(rig.Ghost.IsAlive); // revived by the entry into the corpse's map, before the teleport ran
+        Assert.Equal(rig.Ghost.MaxHealth / 2, rig.Ghost.Health);
+        rig.Kit.World.RunTick(1);
+        Assert.True(rig.Teleports.HandleWorldportAck(rig.Ghost));
+        rig.Kit.World.RunTick(1);
+
+        Assert.Equal(36u, rig.Ghost.MapId);
+        Assert.Equal(300u, rig.Ghost.Health);
         Assert.Equal(0u, rig.Ghost.GetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Rage));
     }
 

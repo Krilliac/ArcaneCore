@@ -146,7 +146,17 @@ public sealed partial class MapCombat
     /// </summary>
     internal void CompleteResurrection(Player player, uint health, uint mana)
     {
-        ResurrectPlayer(player, 0f, applySickness: false);
+        // DELAYED_RESURRECT_PLAYER does not ask IsAlive (Player.cpp:2157-2170): a ghost already revived on the way (the far
+        // teleport into its corpse's map, Player.cpp:1953-1966) still gets the offered vitals.
+        if (!IsAliveState(player))
+        {
+            ResurrectPlayer(player, 0f, applySickness: false);
+            if (!IsAliveState(player))
+            {
+                return; // a quest settlement holds the player: nothing is resurrected
+            }
+        }
+
         player.Health = Math.Min(player.MaxHealth, health);
         SetPower(player, PowerType.Mana, Math.Min(GetMaxPower(player, PowerType.Mana), mana));
         SetPower(player, PowerType.Rage, 0);

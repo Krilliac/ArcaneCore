@@ -161,7 +161,7 @@ public sealed class ResurrectionService(WorldRuntime world, Func<TeleportService
 
     private void OnTeleportCompleted(Player player)
     {
-        if (_awaitingTeleport.Remove(player.Guid) && !player.IsAlive && ResurrectionRequests.Get(player) is { } request)
+        if (_awaitingTeleport.Remove(player.Guid) && ResurrectionRequests.Get(player) is { } request)
         {
             Complete(player, request);
         }
@@ -170,7 +170,7 @@ public sealed class ResurrectionService(WorldRuntime world, Func<TeleportService
     /// <summary>The resurrection itself, after any teleport: alive with the offered health and mana, no rage, full energy, the corpse gone.</summary>
     private static void Complete(Player player, ResurrectionRequest request)
     {
-        if (player.Map is { } map && !player.IsAlive)
+        if (player.Map is { } map)
         {
             map.Combat.CompleteResurrection(player, request.Health, request.Mana);
         }

@@ -50,9 +50,11 @@ public sealed class ResurrectEffects : ISpellHandlerModule
             return;
         }
 
-        float percent = context.Value;
-        uint health = Dither(context.System, target.MaxHealth * percent / 100f);
-        uint mana = Dither(context.System, MapCombat.GetMaxPower(target, PowerType.Mana) * percent / 100f);
+        // SpellEffects.cpp:5246-5247: GetMaxHealth() * damage / 100 is uint32 arithmetic (damage converts to unsigned), so the
+        // value handed to rand_ditheru(float) has no fraction and the dither never rounds up.
+        uint percent = (uint)Math.Max(context.Value, 0);
+        uint health = unchecked(target.MaxHealth * percent) / 100;
+        uint mana = unchecked(MapCombat.GetMaxPower(target, PowerType.Mana) * percent) / 100;
         Offer(context, target, health, mana);
     }
 
@@ -67,19 +69,6 @@ public sealed class ResurrectEffects : ISpellHandlerModule
         bool spiritHealer = caster is not Player && (caster.GetUInt32(UpdateFields.UnitNpcFlags) & (uint)NpcFlags.SpiritHealer) != 0;
         string name = caster is Player ? string.Empty : (caster as Creatures.Creature)?.Template.Name ?? string.Empty;
         requests.Request(target, caster, name, health, mana, sickness: spiritHealer, noResTimer: (context.Spell.AttributesEx3 & Ex3NoResTimer) != 0);
-    }
-
-    /// <summary>vmangos rand_ditheru: round down or up with the fraction as the chance.</summary>
-    private static uint Dither(SpellSystem system, float value)
-    {
-        if (value <= 0f)
-        {
-            return 0;
-        }
-
-        uint whole = (uint)value;
-        float fraction = value - whole;
-        return fraction > 0f && system.Random.NextDouble() < fraction ? whole + 1 : whole;
     }
 
     private static SpellCastResult CheckCorpse(SpellEffectCheckContext context)
