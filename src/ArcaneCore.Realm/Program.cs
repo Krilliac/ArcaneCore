@@ -13,6 +13,7 @@ builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOpt
 builder.Services.Configure<RealmSeedOptions>(builder.Configuration.GetSection(RealmSeedOptions.SectionName));
 builder.Services.AddAuthDatabase(builder.Configuration);
 builder.Services.AddHostedService<LogonServer>();
+builder.Services.AddRealmWatchdog(builder.Configuration);
 
 IHost host = builder.Build();
 
