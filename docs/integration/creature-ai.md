@@ -92,9 +92,9 @@ when it inspects a prefix.
 | `RespawnPacifyMs` | 5000 | A respawned creature cannot initiate attacks for this long (vmangos SetTempPacified) |
 | `SendAiReaction` | true | SMSG_AI_REACTION(hostile) on every attack start (the aggro sound) |
 | `AggroUsesBoundingRadius` | false | Development: add both bounding radii to the aggro range (retail measures the plain distance) |
-| `EventAi:UpdateIntervalMs` | 500 | cmangos EVENT_UPDATE_TIME: how often timer-driven EventAI events are evaluated |
-| `EventAi:DebugOnlyEvents` | false | Run EventAI rows flagged EFLAG_DEBUG_ONLY |
-| `EventAi:ReportUnsupported` | true | Log rows with unsupported events, actions or conditions once per creature entry |
+| `Creatures:EventAi:UpdateIntervalMs` | 500 | cmangos EVENT_UPDATE_TIME: how often timer-driven EventAI events are evaluated |
+| `Creatures:EventAi:DebugOnlyEvents` | false | Run EventAI rows flagged EFLAG_DEBUG_ONLY |
+| `Creatures:EventAi:ReportUnsupported` | true | Log rows with unsupported events, actions or conditions once per creature entry |
 | `AssistanceRadius` | 10 | CreatureFamilyAssistanceRadius |
 | `AssistanceDelayMs` | 1500 | CreatureFamilyAssistanceDelay |
 | `FleeAssistanceRadius` | 30 | CreatureFamilyFleeAssistanceRadius |

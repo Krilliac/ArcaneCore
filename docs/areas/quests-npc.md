@@ -11,8 +11,11 @@ FactionTemplate.dbc establishes hostility. Unknown, nonzero NPC faction IDs, and
 templates deny interaction until their reputation/PvP state adapters exist.
 
 No schema version is introduced. CreatureTemplateRow's version-2 model remains unchanged.
-Gossip-menu and trainer metadata do not exist in that model; these handlers never consume those
-fields or register gossip, vendor, trainer, completion, or reward behavior. Non-repeatable journal-only quests
+Gossip-menu and trainer metadata do not exist in that model, so these M13a/M13b creature adapters
+never consume those fields or register gossip, vendor, trainer, completion, or reward behavior themselves.
+That behaviour was delivered later by separate features on newer schema modules: gossip routing, vendors,
+repair, trainers, innkeepers, bankers, spirit healers and flight masters are described in
+[the NPC services notes](../integration/npc-services.md). Non-repeatable journal-only quests
 can be accepted and abandoned completely without inventing source-item or spell effects.
 
 Related quest details do not require acceptance eligibility, as in the pinned read-only query
