@@ -24,4 +24,8 @@ public sealed class ReputationCreatureHostility(ICreatureHostility fallback, Rep
     }
 
     public bool CanAssist(Creature helper, Creature caller) => _fallback.CanAssist(helper, caller);
+
+    public bool IsHostileToPlayers(Unit unit) => _fallback.IsHostileToPlayers(unit);
+
+    public bool IsFriendly(Creature creature, Unit other) => _fallback.IsFriendly(creature, other);
 }

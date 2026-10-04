@@ -16,6 +16,21 @@ public interface ICreatureHostility
 
     /// <summary>Whether <paramref name="helper"/> joins a fight <paramref name="caller"/> is in (vmangos Creature::CanAssistTo faction check).</summary>
     bool CanAssist(Creature helper, Creature caller);
+
+    /// <summary>
+    /// Whether <paramref name="unit"/>'s faction is hostile to players as such (mangos Unit::IsHostileToPlayers, Object/UnitHostility.cpp:392-407:
+    /// the template's hostile mask carries FACTION_MASK_PLAYER): what makes a guard attack a mob that wanders into town. The default
+    /// (false) is for implementations that cannot read the faction templates; <see cref="FactionCreatureHostility"/> answers from them.
+    /// </summary>
+    bool IsHostileToPlayers(Unit unit) => false;
+
+    /// <summary>
+    /// Whether <paramref name="creature"/>'s faction is friendly to <paramref name="other"/> in either direction (vmangos
+    /// WorldObject::GetFactionReactionTo REP_FRIENDLY, Object.cpp:3734-3741, template part): whom a guard defends. The combat
+    /// hooks' <c>IsFriendly</c> is deliberately player-only (FactionCombatHooks remarks), so creature friendliness lives here. The
+    /// default (false) is for implementations without faction templates.
+    /// </summary>
+    bool IsFriendly(Creature creature, Unit other) => false;
 }
 
 /// <summary>
@@ -30,7 +45,34 @@ public sealed class FactionCreatureHostility(FactionTemplateCatalog factions) : 
 {
     private const uint ContestedGuard = 0x1000;
 
+    /// <summary>DBCEnums.h FACTION_MASK_PLAYER (mangos Server/DBCEnums.h:71): the bit of every player in the faction masks.</summary>
+    public const uint FactionMaskPlayer = 1;
+
     public static FactionCreatureHostility Empty { get; } = new(FactionTemplateCatalog.Empty);
+
+    /// <summary>
+    /// FactionTemplateEntry::IsHostileToPlayers (mangos Server/DBCStructure.h:501): the hostile mask has the player bit. The reference's
+    /// Unit::IsHostileToPlayers also denies it for a faction with a reputation list (Faction.dbc ReputationIndex), which this catalog does
+    /// not carry; a reputation faction hostile by mask (none known) would be over-reported.
+    /// </summary>
+    public bool IsHostileToPlayers(Unit unit)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        return factions.Find(unit.FactionTemplate) is { } own && own.Faction != 0 && (own.HostileMask & FactionMaskPlayer) != 0;
+    }
+
+    /// <summary>FactionTemplateEntry::IsFriendlyTo either way, unless <paramref name="creature"/>'s template is hostile to the other's (hostile wins, Object.cpp:3734-3741).</summary>
+    public bool IsFriendly(Creature creature, Unit other)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        ArgumentNullException.ThrowIfNull(other);
+        if (factions.Find(creature.FactionTemplate) is not { } own || factions.Find(other.FactionTemplate) is not { } target)
+        {
+            return false;
+        }
+
+        return !own.IsHostileTo(target) && (own.IsFriendlyTo(target) || target.IsFriendlyTo(own));
+    }
 
     public bool IsHostile(Creature creature, Unit target)
     {
@@ -91,13 +133,15 @@ public interface ICreatureSpellCaster
 /// <summary>
 /// Builds a creature's AI from its <c>AIName</c> (vmangos CreatureAISelector / cmangos
 /// ScriptMgr::GetCreatureAI). Built-ins: <c>NullAI</c>, <c>ReactorAI</c>, <c>PassiveAI</c>,
-/// <c>AggressorAI</c>, <c>EventAI</c>. Scripts register more names before the world starts.
-/// An empty name picks EventAI only with <c>Creatures:ImplicitEventAi</c> (default off) and creature_ai_scripts rows for the entry or spawn, else ReactorAI for civilians and AggressorAI otherwise; an unknown name uses
+/// <c>AggressorAI</c>, <c>CritterAI</c>, <c>GuardAI</c>, <c>EventAI</c>. Scripts register more names before the world starts.
+/// An empty name picks GuardAI for a template with the GUARD extra flag, then EventAI only with <c>Creatures:ImplicitEventAi</c> (default off) and creature_ai_scripts rows for the entry or spawn, else ReactorAI for civilians and AggressorAI otherwise; an unknown name uses
 /// the same default and is reported once.
 /// </summary>
 public sealed class CreatureAiFactory
 {
     public const string EventAIName = "EventAI";
+
+    public const string GuardAIName = "GuardAI";
 
     /// <summary>CreatureType.dbc id of a critter (CREATURE_TYPE_CRITTER).</summary>
     public const uint CritterType = 8;
@@ -109,6 +153,7 @@ public sealed class CreatureAiFactory
         ["PassiveAI"] = static (c, _) => new ReactorAI(c),
         ["AggressorAI"] = static (c, _) => new AggressorAI(c),
         ["CritterAI"] = static (c, _) => new CritterAI(c),
+        [GuardAIName] = static (c, _) => new GuardAI(c),
         [EventAIName] = static (c, content) => new CreatureEventAI(c, content.Ai),
     };
 
@@ -131,9 +176,12 @@ public sealed class CreatureAiFactory
 
     /// <summary>
     /// Select the AI (vmangos FactorySelector::selectAI, AI/CreatureAISelector.cpp:37-100, as far as this server has the classes): the
-    /// template's AIName when it names a registered AI; otherwise, with <paramref name="implicitEventAi"/> (<c>Creatures:ImplicitEventAi</c>) and
-    /// <c>creature_ai_scripts</c> rows for the creature's entry or spawn guid, EventAI (the cmangos-classic default permit, a deviation from
-    /// vmangos, off by default; the retail route is the template's AIName 'EventAI', which classic-db carries); otherwise ReactorAI for a civilian and AggressorAI for the rest. A summoned pet, guardian or totem never gets the implicit EventAI.
+    /// template's AIName when it names a registered AI; otherwise GuardAI for a template with the GUARD extra flag (mangos
+    /// CreatureAISelector.cpp:85-88: the guard check comes after the script name and before the permit contest); otherwise, with
+    /// <paramref name="implicitEventAi"/> (<c>Creatures:ImplicitEventAi</c>) and <c>creature_ai_scripts</c> rows for the creature's entry or spawn guid,
+    /// EventAI (the cmangos-classic default permit, a deviation from vmangos, off by default; the retail route is the template's AIName
+    /// 'EventAI', which classic-db carries); otherwise ReactorAI for a civilian and AggressorAI for the rest. A summoned pet, guardian or
+    /// totem never gets the implicit EventAI or GuardAI.
     /// </summary>
     public CreatureAI Create(Creature creature, CreatureContent content, out bool unknown, bool implicitEventAi)
     {
@@ -148,6 +196,10 @@ public sealed class CreatureAiFactory
             }
 
             unknown = true;
+        }
+        else if (creature.Summon is null && (creature.Template.Behaviour & CreatureBehaviourFlags.Guard) != 0)
+        {
+            return new GuardAI(creature);
         }
         else if (implicitEventAi && creature.Summon is null && HasEventRows(creature, content)
             && _factories.TryGetValue(EventAIName, out Func<Creature, CreatureContent, CreatureAI>? eventFactory))

@@ -95,8 +95,15 @@ public sealed class ReputationCombatFeature(IServiceProvider services, ILogger<R
 
     public bool CanAssist(Creature helper, Creature caller) => helper.FactionTemplate == caller.FactionTemplate;
 
+    // Hostility to players as such is a faction-template fact (guards attacking mobs), so it never goes through the reputation resolver.
+    public bool IsHostileToPlayers(Unit unit) => Fallback().IsHostileToPlayers(unit);
+
+    public bool IsFriendly(Creature creature, Unit other) => Fallback().IsFriendly(creature, other);
+
     // Until attached (or when inactive) behave exactly like the creature feature's own default: template-only hostility.
-    private bool DefaultHostility(Creature creature, Unit target)
+    private bool DefaultHostility(Creature creature, Unit target) => Fallback().IsHostile(creature, target);
+
+    private ICreatureHostility Fallback()
     {
         if (_fallback is null)
         {
@@ -106,7 +113,7 @@ public sealed class ReputationCombatFeature(IServiceProvider services, ILogger<R
                 ?? (string.IsNullOrWhiteSpace(options.FactionTemplateDbcPath) ? FactionTemplateCatalog.Empty : FactionTemplateDbcReader.Load(options.FactionTemplateDbcPath)));
         }
 
-        return _fallback.IsHostile(creature, target);
+        return _fallback;
     }
 
     private void Inactive(string reason)

@@ -16,12 +16,11 @@ namespace ArcaneCore.Game.Pets;
 /// <c>_stopAttack</c>, <c>HandleReturnMovement</c>, <c>DoAttack</c>, <c>AttackStart</c> (as
 /// <see cref="AttackTarget"/>: the base <c>AttackStart</c> is not virtual), <c>CanAttack</c>,
 /// <c>SelectNextTarget</c>, <c>KilledUnit</c>, <c>AttackedBy</c>, <c>OwnerAttackedBy</c>,
-/// <c>OwnerAttacked</c>, <c>MovementInform</c> and the imp's lack of a melee attack. Not ported (each
-/// needs data or primitives another area owns, docs/integration/pets.md): positive and ally autocast
+/// <c>OwnerAttacked</c>, <c>MovementInform</c>, <c>MoveInLineOfSight</c> (an aggressive pet attacks a hostile unit that comes into
+/// its aggro radius; the creature area's relocation notify brings it creatures as well as players) and the imp's lack of a melee
+/// attack. Not ported (each needs data or primitives another area owns, docs/integration/pets.md): positive and ally autocast
 /// (<c>Spell::CanAutoCast</c>, <c>UpdateAllies</c>), taunt, the threat-list retarget of creature-owned
-/// pets, crowd-control checks (<c>HasAuraPetShouldAvoidBreaking</c>), possession, and aggro on sight
-/// (the creature area does not model creature-versus-creature aggro, so an aggressive pet reacts
-/// to attacks on itself and its owner only).
+/// pets, crowd-control checks (<c>HasAuraPetShouldAvoidBreaking</c>) and possession.
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
@@ -46,6 +45,28 @@ public sealed class PetAI : CreatureAI
     private Unit? Owner => Me.GetOwner();
 
     private MapCombat? Fight => Me.Map?.Combat;
+
+    /// <summary>The pet looks around (its react state decides whether it acts on what it sees; <see cref="MoveInLineOfSight"/>).</summary>
+    public override bool AggroesOnSight => true;
+
+    /// <summary>
+    /// mangos PetAI::MoveInLineOfSight (Object/PetAI.cpp:79-108): a pet without a victim, not disabled (a mounted owner), with the
+    /// aggressive react state attacks a hostile unit that comes into its aggro radius (the host's on-sight rule: attackable, the
+    /// hostility seam, the 3 yd vertical limit, line of sight), through its own attack (command and PvP flags, chase unless told to
+    /// stay). A defensive or passive pet only reacts to attacks (<see cref="OnAttackedBy"/>, <see cref="OwnerAttackedBy"/>).
+    /// </summary>
+    public override void MoveInLineOfSight(Unit who)
+    {
+        if (Me.Combat.Victim is not null || Charm is not { } charm || (Me.IsPet && !charm.Enabled) || charm.ReactState != ReactState.Aggressive)
+        {
+            return;
+        }
+
+        if (System is { } system && system.CanAggroOnSight(Me, who))
+        {
+            AttackTarget(who);
+        }
+    }
 
     // --- UpdateAI -------------------------------------------------------------------------------------
 

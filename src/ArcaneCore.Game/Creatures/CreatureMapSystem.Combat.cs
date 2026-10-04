@@ -10,8 +10,8 @@ using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.Creatures;
 
-/// <summary>Attack start, victim selection, the leash and combat movement (vmangos CreatureAI::AttackStart, Creature::SelectHostileTarget, IsOutOfThreatArea).</summary>
-public sealed partial class CreatureMapSystem
+/// <summary>Attack start, victim selection, the leash, the unreachable-target rule and combat movement (vmangos CreatureAI::AttackStart, Creature::SelectHostileTarget, IsOutOfThreatArea).</summary>
+public sealed partial class CreatureMapSystem : ICreaturePathQuery
 {
     // --- combat --------------------------------------------------------------------------------
 
@@ -157,6 +157,11 @@ public sealed partial class CreatureMapSystem
                 }
 
                 ApplyCombatMovement(creature);
+                if (IsTargetUnreachableForTooLong(creature))
+                {
+                    GiveUpUnreachableTarget(creature, target);
+                    return false;
+                }
             }
 
             return true;
@@ -259,6 +264,66 @@ public sealed partial class CreatureMapSystem
         }
 
         return false;
+    }
+
+    // --- unreachable target ------------------------------------------------------------------------
+
+    /// <summary>
+    /// <see cref="ICreaturePathQuery"/>: <see cref="FindPath"/> plus the pathfinder's verdict. No path and a partial path
+    /// (<see cref="PathType.Incomplete"/>, the route ends at the point nearest the destination) are unreachable; a straight line
+    /// without navigation data, a shortcut and a complete path are reachable. World thread; no allocation beyond the path itself.
+    /// </summary>
+    IReadOnlyList<Vector3> ICreaturePathQuery.FindPath(Creature creature, Vector3 destination, out bool reachable)
+    {
+        var start = new Vector3(creature.X, creature.Y, creature.Z);
+        PathResult path = Map.Collision.FindPath(start, destination);
+        if (!path.HasPath)
+        {
+            reachable = false;
+            return [destination];
+        }
+
+        reachable = (path.Type & PathType.Incomplete) == 0;
+        var corners = new List<Vector3>(path.Points.Count - 1);
+        for (int i = 1; i < path.Points.Count; i++)
+        {
+            corners.Add(path.Points[i]);
+        }
+
+        return corners;
+    }
+
+    /// <summary>
+    /// Whether the creature's chase has reported its victim unreachable for at least <see cref="CreatureOptions.UnreachableTargetEvadeMs"/>
+    /// (0 turns the rule off). Only a chase on top of the stack counts: a creature that does not move in combat has nothing to be
+    /// unreachable, as in vmangos (Creature.cpp:1017-1040 reads the current generator's IsReachable).
+    /// </summary>
+    public bool IsTargetUnreachableForTooLong(Creature creature)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        return _options.UnreachableTargetEvadeMs > 0
+            && creature.Motion.Top is TargetedMovementGenerator { Type: MovementGeneratorType.Chase, IsReachable: false } chase
+            && chase.UnreachableMs >= _options.UnreachableTargetEvadeMs;
+    }
+
+    /// <summary>
+    /// mangos Unit::SelectHostileTarget on an unreachable victim (Object/UnitThreat.cpp:342-361): alone on the threat list the
+    /// creature evades; otherwise the victim is dropped from the list (threat -101 %) and the attack stops without leaving combat,
+    /// so the next selection picks another target. The reference also strips its taunt auras; this host has no aura removal seam
+    /// for creatures (docs/areas/creature-ai.md), so a taunter that is unreachable is dropped from the list only.
+    /// </summary>
+    private void GiveUpUnreachableTarget(Creature creature, Unit target)
+    {
+        ThreatList threat = creature.Combat.Threat;
+        if (threat.Entries.Count < 2) // the reference counts the online list (getThreatList().size())
+        {
+            EnterEvadeMode(creature);
+            return;
+        }
+
+        threat.ModifyThreatPercent(target, -101);
+        Map.Combat.AttackStop(creature, targetSwitch: true);
+        creature.Motion.Remove(MovementGeneratorType.Chase);
     }
 
     /// <summary>

@@ -60,45 +60,94 @@ public sealed partial class CreatureMapSystem
     /// <summary>
     /// Whether <paramref name="creature"/> attacks <paramref name="who"/> on sight (vmangos CallAIMoveLOS + BasicAI::MoveInLineOfSight,
     /// AI/BasicAI.cpp:49-77): the creature is alive, not evading and not out of control; the target is an attackable living
-    /// player (not GM) in this map; proximity aggro is allowed for it; the creature can initiate an attack on a unit that is
-    /// not already its victim; the vertical distance (bounding radii taken off, flyers exempt) is within 3 yd; the plain 3D
-    /// distance is inside the aggro radius (no bounding radii, strictly less); the hostility seam calls it an enemy; and it is in
-    /// line of sight. Creature-versus-creature aggro is not modelled (docs/areas/creature-ai.md).
+    /// unit in this map (a player that is not a GM, or, with <c>Creatures:CreatureAggroOnCreatures</c>, another creature that is not
+    /// evading: mangos AggressorAI::MoveInLineOfSight takes any unit, Object/AggressorAI.cpp:70-95); proximity aggro is allowed for it;
+    /// the creature can initiate an attack on a unit that is not already its victim; the vertical distance (bounding radii taken
+    /// off, flyers exempt) is within 3 yd; the plain 3D distance is inside the aggro radius (no bounding radii, strictly less); the
+    /// hostility seam calls it an enemy (the reputation lane's answer for players, the faction templates between creatures); and it
+    /// is in line of sight.
     /// </summary>
     public bool CanAggroOnSight(Creature creature, Unit who)
     {
         ArgumentNullException.ThrowIfNull(creature);
         ArgumentNullException.ThrowIfNull(who);
-        if (who is not Player player || player.IsGameMaster || !player.IsAlive || !ReferenceEquals(player.Map, Map))
+        return IsAggroTarget(creature, who)
+            && IsProximityAggroAllowedFor(creature, who)
+            && CanInitiateAttack(creature)
+            && IsInAggroReach(creature, who)
+            && Map.Combat.Hooks.CanAttack(creature, who)
+            && _ai.Hostility.IsHostile(creature, who)
+            && CanSeeForAggro(creature, who);
+    }
+
+    /// <summary>
+    /// mangos GuardAI::MoveInLineOfSight (Object/GuardAI.cpp:65-85): a guard without a victim attacks a unit in its aggro radius that
+    /// is hostile to players as such (a mob in town), that its own hostility calls an enemy (an opposing-faction or Hated player, a
+    /// contested-PvP player for a contested guard), or, with <c>Creatures:GuardsDefendFriendlies</c>, that is fighting a creature the
+    /// guard is friendly to (the clause both references keep commented out). The common gates of <see cref="CanAggroOnSight"/> apply
+    /// (alive, in control, can initiate, 3 yd vertical limit, attackable, line of sight); the reference guard does not add threat to a
+    /// second target in dungeons, so a guard with a victim ignores everyone else.
+    /// </summary>
+    public bool CanGuardAggroOnSight(Creature guard, Unit who)
+    {
+        ArgumentNullException.ThrowIfNull(guard);
+        ArgumentNullException.ThrowIfNull(who);
+        if (guard.Combat.Victim is not null || !IsAggroTarget(guard, who) || !IsProximityAggroAllowedFor(guard, who)
+            || !CanInitiateAttack(guard) || !IsInAggroReach(guard, who) || !Map.Combat.Hooks.CanAttack(guard, who))
         {
             return false;
         }
 
-        if (!creature.IsAlive || creature.IsEvading || !_creatures.ContainsKey(creature.Guid) || (creature.UnitFlags & LostControl) != 0
-            || !IsProximityAggroAllowedFor(creature, player)
-            || ReferenceEquals(creature.Combat.Victim, player) || !CanInitiateAttack(creature))
+        bool enemy = _ai.Hostility.IsHostileToPlayers(who)
+            || _ai.Hostility.IsHostile(guard, who)
+            || (_options.GuardsDefendFriendlies && who.Combat.Victim is Creature friend && !ReferenceEquals(friend, guard)
+                && friend.IsAlive && ReferenceEquals(friend.Map, Map) && _ai.Hostility.IsFriendly(guard, friend));
+        return enemy && CanSeeForAggro(guard, who);
+    }
+
+    /// <summary>
+    /// The unit half of the on-sight gates: a living player that is not a GM, or a living creature of this map that is not the
+    /// creature itself (mangos Unit::IsTargetableForAttack; the evade and flag checks are the combat hooks'), and the creature's own
+    /// state (alive, in this system, not evading, not out of control, not already fighting the unit).
+    /// </summary>
+    private bool IsAggroTarget(Creature creature, Unit who)
+    {
+        switch (who)
         {
-            return false;
+            case Player player when player.IsGameMaster:
+                return false;
+            case Player:
+                break;
+            case Creature other when !_options.CreatureAggroOnCreatures || ReferenceEquals(other, creature) || other.IsInEvadeMode:
+                return false;
+            case Creature:
+                break;
+            default:
+                return false;
         }
 
-        float radii = creature.BoundingRadius + player.BoundingRadius;
+        return who.IsAlive && ReferenceEquals(who.Map, Map)
+            && creature.IsAlive && !creature.IsEvading && _creatures.ContainsKey(creature.Guid) && (creature.UnitFlags & LostControl) == 0
+            && !ReferenceEquals(creature.Combat.Victim, who);
+    }
+
+    /// <summary>The vertical limit (bounding radii taken off, INHABIT_AIR exempt) and the aggro radius (plain distance, strictly inside).</summary>
+    private bool IsInAggroReach(Creature creature, Unit who)
+    {
+        float radii = creature.BoundingRadius + who.BoundingRadius;
         bool canFly = (creature.Template.InhabitType & 0x04) != 0; // INHABIT_AIR
-        float dz = MathF.Max(0f, MathF.Abs(creature.Z - player.Z) - radii);
+        float dz = MathF.Max(0f, MathF.Abs(creature.Z - who.Z) - radii);
         if (!canFly && dz > CreatureAggro.MaxZDistance)
         {
             return false;
         }
 
-        float range = GetAttackDistance(creature, player) + (_options.AggroUsesBoundingRadius ? radii : 0f);
-        if (DistanceSquared(creature, player) >= range * range)
-        {
-            return false;
-        }
-
-        return Map.Combat.Hooks.CanAttack(creature, player)
-            && _ai.Hostility.IsHostile(creature, player)
-            && (StealthServices.Find(Map) is not ICreatureVisibility visibility
-                || visibility.CanCreatureSee(creature, player, out _))
-            && InLineOfSight(creature, player);
+        float range = GetAttackDistance(creature, who) + (_options.AggroUsesBoundingRadius ? radii : 0f);
+        return DistanceSquared(creature, who) < range * range;
     }
+
+    /// <summary>Stealth and invisibility (players only: creature stealth is not modelled) and line of sight.</summary>
+    private bool CanSeeForAggro(Creature creature, Unit who)
+        => (who is not Player player || StealthServices.Find(Map) is not ICreatureVisibility visibility || visibility.CanCreatureSee(creature, player, out _))
+            && InLineOfSight(creature, who);
 }

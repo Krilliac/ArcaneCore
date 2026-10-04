@@ -33,12 +33,32 @@ docs/integration/creature-ai.md.
   - **Soft leash** (`Creature::IsOutOfThreatArea`, Objects/Creature.cpp:2796-2815): never with NO_LEASH_EVADE or in an instanceable map. The threat area is a sphere around where the fight began with radius `max(1.5 x aggro radius, ThreatRadius)` (`Creatures:ThreatRadius`, 50 here; the earlier 60 was wrong). The target is out only when neither the creature nor the target is inside it and the leash extension clock is more than `Creatures:LeashExtensionSeconds` (12) whole seconds old. The clock starts at the first check outside the area, is refreshed at the 3 s check while the creature is stunned, confused or fleeing, is shared with creatures that joined through its assistance call, and is cleared when combat stops.
   - **Hard leash** (`creature_template.Leash`, Creature::Update :976-993): every `Creatures:LeashCheckIntervalMs` (3000) of world time a creature in combat whose distance from where the fight began exceeds its template leash range evades instead of running its AI.
   - **Evade**: interrupts the cast, `CombatStop`, clears threat, restores full health and mana, calls `OnEvade`, then runs home. A waypoint mover goes back to its combat start point; anything else goes to its spawn point. The creature is immune to new attacks until it is home.
+  - **Unreachable target** (lane L3; `CreatureMapSystem.Combat.cs`, `Movement/CombatMovement.cs`): the chase generator asks the map system for the path and its verdict (`ICreaturePathQuery`: no path or an `Incomplete` path is unreachable; a straight line without navigation data is reachable), keeps vmangos' `m_bReachable` as `IsReachable`, re-paths every 100 ms while stuck without launching zero-length splines, and counts `UnreachableMs` (the count pauses while the creature cannot move and restarts with every new victim). `SelectHostileTarget` reads it after applying combat movement: once the count reaches `Creatures:UnreachableTargetEvadeMs` (5000; 0 disables) a creature alone on its threat list evades, one with more entries drops the victim from the list (-101 %), stops attacking and picks the next target on the following tick (mangos `Unit::SelectHostileTarget`, Object/UnitThreat.cpp:342-361, which evades at once and carries a TODO for the timer; vmangos times it in Creature.cpp:1017-1040). EventAI event 36 reads the same flag. Not delivered: the reference strips the creature's taunt auras when it gives an unreachable victim up (no creature aura-removal seam here); the vmangos timer value could not be re-read for this build (UNVERIFIED: 5000 is ArcaneCore's choice).
   - **Assistance** (vmangos `CallAssistance`): once per fight, idle creatures of the same faction within 10 yd that can see the caller join after 1.5 s. Helpers do not call more help.
   - **Flee for assistance**: the creature runs to the nearest possible helper (within 30 yd) and calls for help when it arrives. If no helper is found, it flees for 7 s.
 - **AI selection** (`CreatureAiFactory`, from `creature_template.AIName`): `NullAI`, `ReactorAI`,
-  `PassiveAI` (= reactor), `AggressorAI` and `EventAI`, plus registered C# scripts. An empty
-  name gives Reactor for civilians and Aggressor otherwise. Unknown names are reported once
-  and get the default.
+  `PassiveAI` (= reactor), `AggressorAI`, `CritterAI`, `GuardAI` and `EventAI`, plus registered C# scripts. An empty
+  name gives GuardAI for a template with the GUARD extra flag (0x400 in both dialects; mangos CreatureAISelector.cpp:85-88 puts
+  the guard check after the script name and before the permit contest), Reactor for civilians and Aggressor otherwise. Unknown
+  names are reported once and get the default.
+- **GuardAI** (`Creatures/AI/GuardAI.cs`, mangos Object/GuardAI.cpp re-implemented): only the on-sight rule differs from
+  AggressorAI (`CreatureMapSystem.CanGuardAggroOnSight`): a guard without a victim attacks a unit in its aggro radius that is
+  hostile to players as such (`ICreatureHostility.IsHostileToPlayers`: the faction template's hostile mask carries
+  FACTION_MASK_PLAYER, DBCEnums.h:71), that its own hostility calls an enemy (opposing faction, Hated reputation, a contested-PvP
+  player for a contested guard), or, with `Creatures:GuardsDefendFriendlies` (default true), that is fighting a creature the guard is
+  friendly to (`ICreatureHostility.IsFriendly`, the template reaction; both references keep this clause commented out, GuardAI.cpp:74,
+  so the retail behaviour is UNVERIFIED). The common gates apply (alive, in control, `CanInitiateAttack`, 3 yd vertical limit, the
+  combat hooks' attackability, line of sight); a guard with a victim ignores everyone else. Not delivered: SMSG_ZONE_UNDER_ATTACK on a
+  guard's death (needs a world-wide team broadcast and a verified message layout) and the reference's separate guard sight range.
+- **Creature-versus-creature aggro** (`Creatures:CreatureAggroOnCreatures`, default true): `CanAggroOnSight` takes any living unit
+  of the map (a GM player and an evading creature are excluded; the hostility seam decides: reputation for players, the faction
+  templates between creatures, mangos AggressorAI::MoveInLineOfSight), and the relocation notify of a moving creature visits the
+  creatures around it in both directions (mangos CreatureCreatureRelocationWorker, GridNotifiersImpl.h:67-84), so a hostile mob and a
+  guard, or a mob and an aggressive pet, acquire each other. The notify now draws its candidates from the map's cell index
+  (`GridContainer.CollectObjects`) instead of scanning every creature of the map. `Poll` mode stays player-only.
+- **Pets** (`Pets/PetAI.cs`): `MoveInLineOfSight` is mangos PetAI::MoveInLineOfSight (Object/PetAI.cpp:79-108): an aggressive,
+  enabled pet without a victim attacks a hostile unit the common on-sight rule accepts, through its own attack (command and PvP
+  flags, chase unless told to stay); defensive and passive pets only react to attacks.
 - **EventAI** (`CreatureEventAI` + `Creatures/AI/EventAi/`, re-implemented from mangos-classic
   `src/game/AI/EventAI/CreatureEventAI.cpp`; no code copied). `CreatureEventAI` only forwards the AI hooks
   to an `EventAiEngine`; the engine owns the machinery and the event/action types are handler classes
@@ -73,9 +93,9 @@ docs/integration/creature-ai.md.
     movement (no change or casting fails), 22 and 23 phases, 24 evade (with the combat-only parameter), 25
     flee for assistance, 37 die, 39 call for help.
   - **Targets**: 0-6, 7 (the invoker; there are no pets), 10, 12 and 15 (no unit). Others fail the action.
-  - Event 36 (target not reachable) is checked at every batch but nothing marks a chase unreachable until the no-path
-    chase generator exists, so it does not fire in play yet; death-prevented (35) needs the death-prevention action and
-    a combat hook and is not implemented.
+  - Event 36 (target not reachable) is checked at every batch and fires while the chase generator reports its victim
+    unreachable (see "Unreachable target" above; nothing is unreachable without navigation data); death-prevented (35) needs
+    the death-prevention action and a combat hook and is not implemented.
   - **Not supported, reported once per entry** (`CreatureEventAI.Unsupported`): every other event and action
     type; a death event with a condition id (no conditions system); a spawned event with the zone condition
     (no zone lookup); cast flags beyond the three above, SET_RANGED_MODE and caster mode (ranged mode is
@@ -108,7 +128,10 @@ changed, checked by identical test totals and a line-multiset comparison of the 
 - `ICreatureMovementGenerator` gained default members `GetResetPosition` (evade runs to the default
   generator's reset position when it supplies one; none do yet) and `IsReachable`
   (`MotionMaster.IsReachable`); vmangos `MovementGenerator.h:61-64`,
-  `HomeMovementGenerator.cpp:52`. Both default to the previous behaviour.
+  `HomeMovementGenerator.cpp:52`. Both default to the previous behaviour. `TargetedMovementGenerator` overrides `IsReachable`
+  from the `ICreaturePathQuery` verdict (`CreatureMapSystem` implements that query beside `ICreatureMover`).
+- `ICreatureHostility` gained default members `IsHostileToPlayers` and `IsFriendly` (false by default; the faction
+  implementation answers from the templates, the reputation implementations forward to it).
 
 ## Content model (world schema step `CreatureBehaviourDataModule`)
 
@@ -167,8 +190,11 @@ code was copied.
 - Hostility comes from the faction template only. Reputation, at-war and forced reactions are not used; that seam is for the reputation area.
 - Paths and line of sight come from `map.Collision` (feat/vmap-los). Without installed vmaps or mmaps they are straight and always clear. There is no re-path while a long path is being walked, other than chase's own re-check timer.
 - Evade interrupts the cast but does not remove auras. vmangos `RemoveAllAurasOnEvade` is not modelled.
-- Creatures do not aggro on other creatures (guards against hostile mobs, pets).
+- Creature-versus-creature aggro reads the faction templates only (the reputation seam answers for players); creature stealth
+  and invisibility are not modelled for creature targets; `Poll` mode scans players only. Mobs aggro on pets and totems alike
+  (no totem exemption exists in the references' on-sight rules; UNVERIFIED against the client).
 - Flee-for-assist is simplified: there is no "attempts to run away in fear" emote, and help is called once on arrival.
-- No guard AI, pet AI, totem AI or formation/linking (`creature_linking`).
-  - **How aggro is triggered** (`Creatures:AggroScanMode`, default `Relocation`): a player or creature that moves or joins the map schedules one AI notify after 1000 ms (`Visibility.AIRelocationNotifyDelay`); the notify makes the creatures (for a player) or the players (for a creature) within `MaxCreatureAttackRadius` (40) times the aggro rate run `MoveInLineOfSight` for it (`AiRelocationNotifier`; vmangos Unit.cpp:10082-10160, GridNotifiersImpl.h:57-119). Standing still triggers nothing. `Poll` is the original behaviour: every creature checks every player every tick (development). The aggro predicate asks the stealth and invisibility visibility service whether the creature detects the player: a stealthed player is attacked only when the creature detects it, and one just outside detection range raises the stealth alert (docs/areas/threat.md). Differences from vmangos: a plain 2D radius instead of grid cells and no creature-versus-creature notify.
+- No totem AI or formation/linking (`creature_linking`); no SMSG_ZONE_UNDER_ATTACK from a guard's death.
+- An unreachable victim does not lose its taunt auras when it is given up (the reference strips SPELL_AURA_MOD_TAUNT).
+  - **How aggro is triggered** (`Creatures:AggroScanMode`, default `Relocation`): a player or creature that moves or joins the map schedules one AI notify after 1000 ms (`Visibility.AIRelocationNotifyDelay`); the notify makes the creatures (for a player) or the players and, with `Creatures:CreatureAggroOnCreatures`, the creatures (for a creature, both directions) within `MaxCreatureAttackRadius` (40) times the aggro rate run `MoveInLineOfSight` for it (`AiRelocationNotifier`; vmangos Unit.cpp:10082-10160, GridNotifiersImpl.h:57-119). Standing still triggers nothing. `Poll` is the original behaviour: every creature checks every player every tick (development). The aggro predicate asks the stealth and invisibility visibility service whether the creature detects the player: a stealthed player is attacked only when the creature detects it, and one just outside detection range raises the stealth alert (docs/areas/threat.md). Differences from vmangos: a plain 2D radius over the touched cells instead of the exact cell visit.
 - Per-instance map updaters and instance resets belong to `feat/instances`.
