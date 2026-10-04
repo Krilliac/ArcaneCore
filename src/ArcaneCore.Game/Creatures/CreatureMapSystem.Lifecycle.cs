@@ -290,6 +290,8 @@ public sealed partial class CreatureMapSystem
         MapCombat.ClearInCombat(creature);
         creature.Combat.SetAttackTimer(WeaponAttackType.BaseAttack, 0);
         creature.InitializeFields();
+        creature.LootTapPlayerGuid = default;
+        creature.LootTapGroup = null;
         creature.DeathState = CreatureDeathState.Alive;
         creature.RespawnAtMs = 0;
 

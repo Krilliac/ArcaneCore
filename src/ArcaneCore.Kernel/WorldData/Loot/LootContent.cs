@@ -38,7 +38,7 @@ public enum LootTableKind : byte
 /// <param name="GroupId">0 = ungrouped; rows of one group yield at most one item.</param>
 /// <param name="MinCountOrRef">Minimum count, or a negative reference_loot_template entry.</param>
 /// <param name="MaxCount">Maximum count, or the number of times a reference is processed.</param>
-/// <param name="ConditionId">conditions.condition_entry (unsupported here: a non-zero condition skips the row).</param>
+/// <param name="ConditionId">conditions.condition_entry; a missing evaluator fails closed.</param>
 public sealed record LootStoreRow(uint Entry, uint Item, float ChanceOrQuestChance, byte GroupId, int MinCountOrRef, uint MaxCount, uint ConditionId = 0);
 
 /// <summary>

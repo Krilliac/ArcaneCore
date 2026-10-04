@@ -3,7 +3,11 @@ using ArcaneCore.Kernel.WorldData.Loot;
 namespace ArcaneCore.Game.Loot;
 
 /// <summary>A rolled item before it is placed in a <see cref="LootBag"/>.</summary>
-public readonly record struct RolledLoot(uint ItemId, uint Count, bool IsQuestItem, uint ConditionId);
+public readonly record struct RolledLoot(uint ItemId, uint Count, bool IsQuestItem, uint ConditionId)
+{
+    /// <summary>Conditions on reference rows traversed to reach this item (LootMgr.cpp:1225-1243).</summary>
+    public IReadOnlyList<uint> ReferenceConditions { get; init; } = [];
+}
 
 /// <summary>
 /// Rolls a loot template (behaviour re-implemented from vmangos LootTemplate::Process and
@@ -41,7 +45,8 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
     // groupid > 0 AND mincountOrRef > 0; reference rows (mincountOrRef < 0) are stored with the ungrouped
     // entries and roll independently, whatever their groupid. A reference row's groupid instead selects
     // the single group of the REFERENCED template that is processed (0 = the whole template).
-    private void Process(LootTableKind kind, uint entry, List<RolledLoot> result, int depth, byte groupFilter = 0)
+    private void Process(LootTableKind kind, uint entry, List<RolledLoot> result, int depth, byte groupFilter = 0,
+        IReadOnlyList<uint>? inheritedConditions = null)
     {
         if (depth > MaxReferenceDepth)
         {
@@ -56,7 +61,7 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
             List<LootStoreRow> members = [.. rows.Where(r => r.GroupId == groupFilter && r.MinCountOrRef > 0)];
             if (members.Count > 0 && PickFromGroup(members) is { } picked)
             {
-                Emit(picked, result, depth);
+                Emit(picked, result, depth, inheritedConditions);
             }
 
             return;
@@ -69,26 +74,28 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
                 continue;
             }
 
-            Emit(row, result, depth);
+            Emit(row, result, depth, inheritedConditions);
         }
 
         foreach (IGrouping<byte, LootStoreRow> group in rows.Where(r => r.GroupId > 0 && r.MinCountOrRef > 0).GroupBy(r => r.GroupId).OrderBy(g => g.Key))
         {
             if (PickFromGroup([.. group]) is { } picked)
             {
-                Emit(picked, result, depth);
+                Emit(picked, result, depth, inheritedConditions);
             }
         }
     }
 
-    private void Emit(LootStoreRow row, List<RolledLoot> result, int depth)
+    private void Emit(LootStoreRow row, List<RolledLoot> result, int depth, IReadOnlyList<uint>? inheritedConditions)
     {
         if (row.MinCountOrRef < 0)
         {
+            IReadOnlyList<uint> conditions = row.ConditionId == 0 ? inheritedConditions ?? []
+                : [.. (inheritedConditions ?? []), row.ConditionId];
             // vmangos LootMgr.cpp:1234: `loop < maxcount`, so maxcount 0 processes the reference zero times.
             for (uint n = 0; n < row.MaxCount; n++)
             {
-                Process(LootTableKind.Reference, (uint)-row.MinCountOrRef, result, depth + 1, row.GroupId);
+                Process(LootTableKind.Reference, (uint)-row.MinCountOrRef, result, depth + 1, row.GroupId, conditions);
             }
 
             return;
@@ -97,7 +104,10 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
         uint min = (uint)Math.Max(1, row.MinCountOrRef);
         uint max = Math.Max(min, row.MaxCount);
         uint count = min == max ? min : (uint)_random.NextInt64(min, (long)max + 1);
-        result.Add(new RolledLoot(row.Item, count, row.ChanceOrQuestChance < 0, row.ConditionId));
+        result.Add(new RolledLoot(row.Item, count, row.ChanceOrQuestChance < 0, row.ConditionId)
+        {
+            ReferenceConditions = inheritedConditions ?? [],
+        });
     }
     /// <summary>vmangos LootGroup::Roll: explicit chances against one shrinking roll, then the equal-chance pool.</summary>
     private LootStoreRow? PickFromGroup(IReadOnlyList<LootStoreRow> rows)

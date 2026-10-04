@@ -74,6 +74,19 @@ public sealed class LootGeneratorReferenceGroupTests
     }
 
     [Fact]
+    public void NestedReferences_CarryEveryReferenceConditionToTheLeaf()
+    {
+        LootGenerator generator = Generator(4,
+            (LootTableKind.Creature, Row(1, 0, 100, minOrRef: -2, max: 1, condition: 3)),
+            (LootTableKind.Reference, Row(2, 0, 100, minOrRef: -4, max: 1, condition: 5)),
+            (LootTableKind.Reference, Row(4, 9, 100, condition: 7)));
+
+        RolledLoot roll = Assert.Single(generator.Roll(LootTableKind.Creature, 1));
+        Assert.Equal([3u, 5u], roll.ReferenceConditions);
+        Assert.Equal(7u, roll.ConditionId);
+    }
+
+    [Fact]
     public void ReferenceRowIsNotCountedAsGroupMember_PlainGroupMembersStillExclusive()
     {
         LootGenerator generator = Generator(8,

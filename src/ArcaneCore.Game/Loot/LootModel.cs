@@ -95,7 +95,7 @@ public sealed class LootItem
     /// <summary>ITEM_FLAG_PARTY_LOOT (0x800, vmangos freeforall): every allowed looter gets a copy.</summary>
     public bool IsPerPlayer { get; }
 
-    /// <summary>For a quest item: the players who needed it when the loot was generated.</summary>
+    /// <summary>For a quest or conditioned item: the players eligible when the loot was generated.</summary>
     public HashSet<ObjectGuid> AllowedLooters { get; } = [];
 
     /// <summary>Taken by somebody (shared item), or by everyone allowed (per-player item).</summary>
@@ -297,7 +297,7 @@ public sealed class LootBag
             return null;
         }
 
-        if (item.IsQuestItem && !item.AllowedLooters.Contains(player.Guid))
+        if ((item.IsQuestItem || item.AllowedLooters.Count > 0) && !item.AllowedLooters.Contains(player.Guid))
         {
             return null;
         }
@@ -341,7 +341,8 @@ public sealed class LootBag
         {
             // Open loot (no recipient list) keeps per-player copies for whoever comes next.
             item.LootedBy.Add(player.Guid);
-            item.IsLooted = Recipients.Count > 0 && Recipients.All(item.LootedBy.Contains);
+            IEnumerable<ObjectGuid> eligible = item.AllowedLooters.Count > 0 ? item.AllowedLooters : Recipients;
+            item.IsLooted = eligible.Any() && eligible.All(item.LootedBy.Contains);
         }
         else
         {

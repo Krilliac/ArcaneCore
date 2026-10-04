@@ -28,6 +28,10 @@ public sealed partial class LootService : IViewerFieldFilter
     /// <summary>UNIT_DYNFLAG_LOOTABLE.</summary>
     public const uint UnitDynFlagLootable = 0x0001;
 
+    /// <summary>UNIT_DYNFLAG_TAPPED and UNIT_DYNFLAG_TAPPED_BY_PLAYER (vmangos SharedDefines.h:1155-1156).</summary>
+    public const uint UnitDynFlagTapped = 0x0004;
+    public const uint UnitDynFlagTappedByPlayer = 0x0008;
+
     /// <summary>ITEM_FLAG_LOOTABLE (the item opens into loot: clams, lockboxes, bags of goods).</summary>
     public const uint ItemFlagLootable = 0x0004;
 
@@ -99,7 +103,8 @@ public sealed partial class LootService : IViewerFieldFilter
     /// <summary>
     /// Build loot for <paramref name="recipients"/> from template <paramref name="entry"/>
     /// (vmangos Loot::FillLoot): normal items first (at most 16), then quest items only some
-    /// recipient needs (at most 32), each visible only to those recipients.
+    /// recipient needs (at most 32), each visible only to those recipients; conditioned items
+    /// are similarly restricted to recipients who passed their condition at generation.
     /// </summary>
     /// <param name="zeroEntryIsATable">
     /// Entry 0 normally means "no loot id" and yields an empty bag; fishing_loot_template entry 0 is the failed-cast junk table
@@ -120,7 +125,7 @@ public sealed partial class LootService : IViewerFieldFilter
             return bag;
         }
 
-        var normal = new List<(RolledLoot Roll, ItemTemplate Template)>();
+        var normal = new List<(RolledLoot Roll, ItemTemplate Template, List<Player>? Allowed)>();
         var quest = new List<(RolledLoot Roll, ItemTemplate Template, List<Player> Needing)>();
         foreach (RolledLoot roll in Generator.Roll(table, entry))
         {
@@ -129,14 +134,19 @@ public sealed partial class LootService : IViewerFieldFilter
                 continue; // vmangos drops rows with unknown items at load
             }
 
-            if (roll.ConditionId != 0 && (Conditions is null || !recipients.Any(p => Conditions(p, roll.ConditionId))))
+            Func<Player, uint, bool>? evaluator = Conditions;
+            List<Player>? allowed = roll.ConditionId == 0 && roll.ReferenceConditions.Count == 0 ? null
+                : evaluator is null ? [] : [.. recipients.Where(p => (roll.ConditionId == 0 || evaluator(p, roll.ConditionId))
+                    && roll.ReferenceConditions.All(conditionId => evaluator(p, conditionId)))];
+            if (allowed is { Count: 0 })
             {
                 continue;
             }
 
             if (roll.IsQuestItem)
             {
-                List<Player> needing = [.. recipients.Where(p => Quests?.NeedsQuestItem(p, roll.ItemId) == true)];
+                List<Player> needing = [.. recipients.Where(p => (allowed is null || allowed.Contains(p))
+                    && Quests?.NeedsQuestItem(p, roll.ItemId) == true)];
                 if (needing.Count > 0 && quest.Count < MaxQuestItems)
                 {
                     quest.Add((roll, template, needing));
@@ -144,14 +154,23 @@ public sealed partial class LootService : IViewerFieldFilter
             }
             else if (normal.Count < MaxLootItems)
             {
-                normal.Add((roll, template));
+                normal.Add((roll, template, allowed));
             }
         }
 
         byte slot = 0;
-        foreach ((RolledLoot roll, ItemTemplate template) in normal)
+        foreach ((RolledLoot roll, ItemTemplate template, List<Player>? allowed) in normal)
         {
-            bag.Add(new LootItem(slot++, roll.ItemId, roll.Count, false, (template.Flags & ItemFlagPartyLoot) != 0, template.DisplayId));
+            var item = new LootItem(slot++, roll.ItemId, roll.Count, false, (template.Flags & ItemFlagPartyLoot) != 0, template.DisplayId);
+            if (allowed is not null)
+            {
+                foreach (Player player in allowed)
+                {
+                    item.AllowedLooters.Add(player.Guid);
+                }
+            }
+
+            bag.Add(item);
         }
 
         foreach ((RolledLoot roll, ItemTemplate template, List<Player> needing) in quest)
@@ -175,10 +194,13 @@ public sealed partial class LootService : IViewerFieldFilter
     /// world bosses +150 yd, a dead member counts through his corpse; see <see cref="GroupRewardRange"/>), in group order.
     /// </summary>
     public List<Player> RecipientsFor(Player looter, WorldObject source, out Group? group)
+        => RecipientsFor(looter, source, out group, null);
+
+    private List<Player> RecipientsFor(Player looter, WorldObject source, out Group? group, Group? taggedGroup)
     {
         ArgumentNullException.ThrowIfNull(looter);
         ArgumentNullException.ThrowIfNull(source);
-        group = Groups?.GroupOf(looter);
+        group = taggedGroup ?? Groups?.GroupOf(looter);
         if (group is null || looter.Map is not { } map)
         {
             return [looter];
@@ -282,23 +304,64 @@ public sealed partial class LootService : IViewerFieldFilter
 
     // --- creature corpses -----------------------------------------------------------------
 
+    /// <summary>Record the first player damage tap before death; later attackers cannot take the loot rights.</summary>
+    public void OnCreatureDamaged(Unit attacker, Unit victim, uint damage)
+    {
+        if (damage == 0 || victim is not Creature { IsPet: false, DeathState: CreatureDeathState.Alive } creature
+            || !creature.LootTapPlayerGuid.IsEmpty || DuelRules.ControllingPlayer(attacker) is not { } player)
+        {
+            return;
+        }
+
+        // vmangos Unit.cpp:800-819 records the original player and group on the first hit.
+        creature.LootTapPlayerGuid = player.Guid;
+        creature.LootTapGroup = Groups?.GroupOf(player);
+        creature.ViewerFieldFilter = this;
+        creature.SetUInt32(UpdateFields.UnitDynamicFlags,
+            creature.GetUInt32(UpdateFields.UnitDynamicFlags) | UnitDynFlagTapped | UnitDynFlagTappedByPlayer);
+    }
+
     /// <summary>
     /// A creature died (subscribe to <see cref="MapCombat.UnitKilled"/>): generate its corpse loot
     /// for the killing player and their group, set UNIT_DYNFLAG_LOOTABLE (shown only to allowed
-    /// looters), or mark it looted out at once when nothing dropped. Combat has no tap list yet,
-    /// so the killer is the loot recipient.
+    /// looters), or mark it looted out at once when nothing dropped. The first damage tap owns
+    /// the rights; a first-hit killing blow uses its killer as the tapper.
     /// </summary>
     public LootBag? OnCreatureKilled(Unit? killer, Unit victim)
     {
         Prune();
-        if (victim is not Creature creature || killer is not Player player || !creature.IsInWorld
-            || !ReferenceEquals(player.Map, creature.Map))
+        if (victim is not Creature creature || !creature.IsInWorld || creature.Map is not { } map)
+        {
+            return null;
+        }
+
+        Group? tappedGroup = creature.LootTapGroup;
+        // vmangos Creature::GetGroupLootRecipient resolves the stored id through the live group
+        // manager (Creature.cpp:1541-1552). A disbanded group cannot retain its old rights.
+        if (tappedGroup is not null && !tappedGroup.Members.Any(member => map.FindPlayer(member.Guid) is { } candidate
+            && ReferenceEquals(Groups?.GroupOf(candidate), tappedGroup)))
+        {
+            tappedGroup = null;
+        }
+
+        Player? player = creature.LootTapPlayerGuid.IsEmpty ? null : map.FindPlayer(creature.LootTapPlayerGuid);
+        if (player is null && tappedGroup is not null)
+        {
+            player = tappedGroup.Members.Select(member => map.FindPlayer(member.Guid))
+                .FirstOrDefault(member => member is not null && ReferenceEquals(Groups?.GroupOf(member), tappedGroup));
+        }
+
+        if (creature.LootTapPlayerGuid.IsEmpty)
+        {
+            player = killer is null ? null : DuelRules.ControllingPlayer(killer);
+        }
+        if (player is null || !ReferenceEquals(player.Map, map))
         {
             return null;
         }
 
         CreatureLootInfo? info = Content.FindCreature(creature.Entry);
-        List<Player> recipients = RecipientsFor(player, creature, out Group? group);
+        List<Player> recipients = RecipientsFor(player, creature, out Group? group, tappedGroup);
         LootBag bag = Generate(creature.Guid, LootSourceKind.Creature, LootType.Corpse, LootTableKind.Creature, info?.LootId ?? 0, recipients);
         if (info is not null && info.MaxGold > 0)
         {
@@ -332,7 +395,20 @@ public sealed partial class LootService : IViewerFieldFilter
     /// <summary>Per-viewer UNIT_DYNFLAG_LOOTABLE (vmangos Object::BuildValuesUpdate + Player::isAllowedToLoot).</summary>
     uint IViewerFieldFilter.Filter(WorldObject obj, int index, uint value, Player viewer)
     {
-        if (index != UpdateFields.UnitDynamicFlags || (value & UnitDynFlagLootable) == 0)
+        if (index != UpdateFields.UnitDynamicFlags)
+        {
+            return value;
+        }
+
+        if (obj is Creature tapped && !tapped.LootTapPlayerGuid.IsEmpty)
+        {
+            bool canTap = tapped.LootTapPlayerGuid == viewer.Guid || tapped.LootTapGroup is { } group
+                && ReferenceEquals(Groups?.GroupOf(viewer), group);
+            value = canTap ? value | UnitDynFlagTapped | UnitDynFlagTappedByPlayer
+                : (value | UnitDynFlagTapped) & ~UnitDynFlagTappedByPlayer;
+        }
+
+        if ((value & UnitDynFlagLootable) == 0)
         {
             return value;
         }
@@ -912,14 +988,15 @@ public sealed partial class LootService : IViewerFieldFilter
             return false;
         }
 
-        _bags.TryGetValue(bag.Source, out var entry);
         var sharers = new List<Player>();
-        if (bag.Kind == LootSourceKind.Creature && bag.ShareMoney && bag.Recipients.Count > 1 && player.Map is { } map && entry.Source is { } source)
+        if (bag.Kind == LootSourceKind.Creature && bag.ShareMoney && player.Map is { } map && Groups?.GroupOf(player) is { } group)
         {
-            foreach (ObjectGuid guid in bag.Recipients)
+            // vmangos LootHandler.cpp:303-330: split among the looter's current group members
+            // at IsWithinLootXPDist of the looter, not the corpse's generation-time recipients.
+            foreach (GroupMemberSlot slot in group.Members)
             {
-                if (map.FindPlayer(guid) is { } member
-                    && (ReferenceEquals(member, player) || Distance3D(member, source) <= Options.GroupLootDistance))
+                if (map.FindPlayer(slot.Guid) is { } member
+                    && GroupRewardRange.IsWithinLootXpDist(member, player, Options.RewardRange))
                 {
                     // A temporary settlement hold cannot change this recipient's allocation.
                     // Defer the whole split before changing balances or consuming bag gold.
@@ -933,7 +1010,7 @@ public sealed partial class LootService : IViewerFieldFilter
             }
         }
 
-        if (sharers.Count > 1)
+        if (sharers.Count > 0)
         {
             uint share = bag.Gold / (uint)sharers.Count;
             foreach (Player member in sharers)
