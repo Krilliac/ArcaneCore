@@ -35,7 +35,7 @@ tiles to a temporary directory; none touches a database.
 * An environmental death marks the player as a PvP death in vmangos (a self kill is its own tap); retail behaviour of the corpse type and reclaim delay is unknown.
 * The ghost's +25% run and swim speed (Ghost aura 8326) waits for the death lane's `ApplyGhostForm`; the speed formula already honours the aura.
 * WMO liquid (lava and slime inside buildings, canals), `LiquidType.dbc` remaps and real model collision heights depend on collision/client data lanes.
-* Server-driven player movement (Charge, Leap, Blink-style effects) needs a player spline and pathfinding and is not designed here.
+* Server-driven player movement: Charge, Blink (Leap) and the face-caster teleport are delivered by `ForcedMovement` without a stepped player spline (the charger is relocated at once and the spline is sent for the clients), see [transform-and-charge.md](transform-and-charge.md); a server-stepped player spline is still not designed.
 * Taxi: an aura mount is not removed when a flight starts (needs the spell system in `TaxiFlightSystem`).
 ## Slice 1: loco-foundation (delivered)
 

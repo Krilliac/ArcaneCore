@@ -64,7 +64,7 @@ public static partial class AuraSupport
         new(AuraType.PeriodicLeech, AuraSupportLevel.Handler, "HandlePeriodicLeech", 118, "DrainAuras.cs, SpellCoefficients.cs, SpellInfoRuleExtensions.cs", ""),
         new(AuraType.ModHitChance, AuraSupportLevel.Unsupported, "HandleNoImmediateEffect", 119, "", ""),
         new(AuraType.ModSpellHitChance, AuraSupportLevel.Referenced, "HandleModSpellHitChance", 120, "SpellCombatRules.cs, SpellSystem.Feign.cs", ""),
-        new(AuraType.Transform, AuraSupportLevel.Unsupported, "HandleAuraTransform", 121, "", "aura-transform (not scheduled)"),
+        new(AuraType.Transform, AuraSupportLevel.Handler, "HandleAuraTransform", 121, "TransformAuras.cs, ShapeshiftService.cs, CombatOptions.cs", ""),
         new(AuraType.ModSpellCritChance, AuraSupportLevel.Referenced, "HandleModSpellCritChance", 122, "SpellCombatRules.cs", ""),
         new(AuraType.ModIncreaseSwimSpeed, AuraSupportLevel.Handler, "HandleAuraModIncreaseSwimSpeed", 123, "SpeedAuras.cs, UnitSpeed.cs", ""),
         new(AuraType.ModDamageDoneCreature, AuraSupportLevel.Unsupported, "HandleNoImmediateEffect", 124, "", ""),
