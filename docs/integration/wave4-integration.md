@@ -171,11 +171,19 @@ Final head, one pass per project, no failures:
 | Project | Total | Passed | Skipped |
 |---|---|---|---|
 | Cryptography.Tests | 8017 | 8017 | 0 |
-| Data.Tests | 934 | 925 | 9 (real-data probes and provider-only cases) |
+| Data.Tests | 934 | 925 | 9 (environment-gated real-data probes, see below) |
 | Game.Tests | 5347 | 5347 | 0 |
 | MockClient.Tests | 196 | 196 | 0 |
 | Realm.Tests | 37 | 37 | 0 |
 | World.Tests | 1684 | 1683 | 1 |
+
+Data.Tests skips are all environment-gated facts, none is provider-only when a MariaDB or PostgreSQL server is configured. Eight need the classic-db dump
+(`ARCANECORE_CLASSICDB_DUMP` for `CreatureMovementTemplateTests`, `CreatureBehaviourImportTests`, `GameObjectSpawnDataTests`, `CreatureSpawnEntryTests`,
+`WeatherImportCliTests`, `GameEventImporterTests` and `WorldStateDataTests`; `ARCANECORE_CLASSIC_DB` for `TotemSpellDataTests`) and three need a build-5875 DBC
+directory (`ARCANECORE_TEST_DBC_DIR`: `SkillDbcReaderTests`, `ShapeshiftFormDbcTests`, `EnchantDbcReaderTests`). One more, the read-committed bid/deletion theory in
+`EconomyCharacterDeletionRaceTests`, skips only when neither `ARCANECORE_TEST_MARIADB` nor `ARCANECORE_TEST_POSTGRES` is set. With no variables set a run skips 12; with the
+two database variables and no dump or DBC (the CI configuration in `.github/workflows/ci.yml`) it skips 11. The 9 above is neither, so some of the dump or DBC variables
+were set on the machine that produced it; which ones is UNVERIFIED (the run was not logged). The CI skip count was not read from a CI log.
 
 MockClient self-test: outcome passed, `checkCount` 59, 59 checks passed, 0 failed.
 

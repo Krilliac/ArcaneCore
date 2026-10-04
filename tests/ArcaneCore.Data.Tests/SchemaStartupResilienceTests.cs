@@ -18,6 +18,8 @@ namespace ArcaneCore.Data.Tests;
 /// </summary>
 public sealed class SchemaStartupResilienceTests : IAsyncLifetime
 {
+    private const int FaultParallelism = 4;
+
     private readonly TestDatabases _databases = new();
 
     public static IEnumerable<object[]> Providers() => TestDatabases.AvailableProviders();
@@ -86,24 +88,33 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
 
         faults.Add(("after the version write", isVersionWrite, 1));
 
-        foreach ((string label, Func<string, bool> when, int on) in faults)
+        await RunFaultsAsync(faults, async fault =>
         {
+            (string label, Func<string, bool> when, int on) = fault;
             DatabaseConnectionOptions connection = await PrepareLegacyAsync(provider, component, stepVersion - 1, stepVersion);
-            var tap = new CommandTap(when, on);
-            await AssertInjectedAsync(() => EnsureAsync(component, connection, stepVersion, tap), $"{provider} {component} step {stepVersion} {label} (probe saw {ddl} DDL)", tap);
-
-            // A restart under the current definition must reach the same schema as an uninterrupted start.
             try
             {
-                await SchemaProbe.EnsureCurrentAsync(component, connection);
-            }
-            catch (Exception ex)
-            {
-                throw new Xunit.Sdk.XunitException($"{component} step {stepVersion} interrupted {label}: restart failed: {ex.GetType().Name}: {ex.Message}");
-            }
+                var tap = new CommandTap(when, on);
+                await AssertInjectedAsync(() => EnsureAsync(component, connection, stepVersion, tap), $"{provider} {component} step {stepVersion} {label} (probe saw {ddl} DDL)", tap);
 
-            await AssertConvergedAsync(component, connection, $"{component} step {stepVersion} {label}");
-        }
+                // A restart under the current definition must reach the same schema as an uninterrupted start.
+                try
+                {
+                    await SchemaProbe.EnsureCurrentAsync(component, connection);
+                }
+                catch (Exception ex)
+                {
+                    throw new Xunit.Sdk.XunitException($"{component} step {stepVersion} interrupted {label}: restart failed: {ex.GetType().Name}: {ex.Message}");
+                }
+
+                await AssertConvergedAsync(component, connection, $"{component} step {stepVersion} {label}");
+            }
+            finally
+            {
+                await _databases.ReleaseAsync(connection);
+            }
+        });
+        await _databases.ReleaseAsync(probe);
     }
 
     [Theory]
@@ -127,22 +138,30 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
 
         faults.Add(("before the version write", isVersionInsert, 1, true));
 
-        foreach ((string label, Func<string, bool> when, int on, bool before) in faults)
+        await RunFaultsAsync(faults, async fault =>
         {
+            (string label, Func<string, bool> when, int on, bool before) = fault;
             DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
-            var tap = new CommandTap(when, on, faultBeforeStatement: before);
-            await AssertInjectedAsync(() => SchemaProbe.EnsureCurrentAsync(component, connection, tap), $"{provider} {component} fresh create {label} (probe saw {ddl} DDL)", tap);
             try
             {
-                await SchemaProbe.EnsureCurrentAsync(component, connection);
-            }
-            catch (Exception ex)
-            {
-                throw new Xunit.Sdk.XunitException($"{component} fresh create interrupted {label}: restart failed: {ex.GetType().Name}: {ex.Message}");
-            }
+                var tap = new CommandTap(when, on, faultBeforeStatement: before);
+                await AssertInjectedAsync(() => SchemaProbe.EnsureCurrentAsync(component, connection, tap), $"{provider} {component} fresh create {label} (probe saw {ddl} DDL)", tap);
+                try
+                {
+                    await SchemaProbe.EnsureCurrentAsync(component, connection);
+                }
+                catch (Exception ex)
+                {
+                    throw new Xunit.Sdk.XunitException($"{component} fresh create interrupted {label}: restart failed: {ex.GetType().Name}: {ex.Message}");
+                }
 
-            await AssertConvergedAsync(component, connection, $"{component} fresh create {label}");
-        }
+                await AssertConvergedAsync(component, connection, $"{component} fresh create {label}");
+            }
+            finally
+            {
+                await _databases.ReleaseAsync(connection);
+            }
+        });
     }
 
     [Theory]
@@ -299,6 +318,27 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
     public Task InitializeAsync() => Task.CompletedTask;
 
     public Task DisposeAsync() => _databases.DisposeAsync().AsTask();
+
+    /// <summary>
+    /// Every injected fault runs against its own database, so they are independent: run a few at a time. Serial, one
+    /// theory case spends minutes creating a database and replaying the upgrade line per fault point.
+    /// </summary>
+    private static async Task RunFaultsAsync<T>(IReadOnlyList<T> faults, Func<T, Task> run)
+    {
+        using var slots = new SemaphoreSlim(FaultParallelism);
+        await Task.WhenAll(faults.Select(async fault =>
+        {
+            await slots.WaitAsync();
+            try
+            {
+                await run(fault);
+            }
+            finally
+            {
+                slots.Release();
+            }
+        }));
+    }
 
     /// <summary>The startup must die of the injected fault (EF wraps it in a DbUpdateException for SaveChanges), not of anything else.</summary>
     private static async Task AssertInjectedAsync(Func<Task> startup, string label, CommandTap tap)
