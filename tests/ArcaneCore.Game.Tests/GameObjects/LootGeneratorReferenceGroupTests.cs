@@ -74,6 +74,28 @@ public sealed class LootGeneratorReferenceGroupTests
     }
 
     [Fact]
+    public void ImportedHugeReferenceMaxcount_IsBoundedByThePerRollBudget()
+    {
+        // Security (wave-3 scan finding 1): an imported maxcount must not let one roll run billions of Process calls.
+        LootGenerator generator = Generator(5,
+            (LootTableKind.Creature, Row(5, 0, 100, minOrRef: -7, max: 5_000_000)),
+            (LootTableKind.Reference, Row(7, 70, 100)));
+        List<RolledLoot> rolled = generator.Roll(LootTableKind.Creature, 5);
+        Assert.InRange(rolled.Count, 1, 10_000);
+    }
+
+    [Fact]
+    public void BudgetZero_IsTheUnboundedVmangosBehaviour()
+    {
+        var generator = new LootGenerator(
+            new LootContent(
+                [(LootTableKind.Creature, Row(5, 0, 100, minOrRef: -7, max: 20_000)), (LootTableKind.Reference, Row(7, 70, 100))],
+                []),
+            new Random(5)) { MaxProcessCallsPerRoll = 0 };
+        Assert.Equal(20_000, generator.Roll(LootTableKind.Creature, 5).Count);
+    }
+
+    [Fact]
     public void ReferenceRowIsNotCountedAsGroupMember_PlainGroupMembersStillExclusive()
     {
         LootGenerator generator = Generator(8,
