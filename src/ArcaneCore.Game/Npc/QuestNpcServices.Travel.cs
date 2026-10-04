@@ -179,7 +179,7 @@ public sealed partial class QuestNpcServices
 
         var paths = new uint[nodes.Count - 1];
         var legCosts = new uint[paths.Length];
-        float discount = PriceDiscount(player, npc);
+        float discount = PriceDiscount(player, npc, taxi: true); // honor rank discount applies to taxi fares only on this path
         ulong total = 0;
         for (int i = 1; i < nodes.Count; i++)
         {

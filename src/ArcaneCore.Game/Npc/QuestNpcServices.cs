@@ -19,7 +19,8 @@ public sealed record QuestNpcDependencies(
     IMapInfo? Maps = null,
     IResurrection? Resurrection = null,
     Progression.IQuestRewardEffects? RewardEffects = null,
-    IQuestReputationSettlement? ReputationRewards = null);
+    IQuestReputationSettlement? ReputationRewards = null,
+    Honor.IPlayerHonor? Honor = null);
 
 /// <summary>Where quest/NPC state changes go (the world daemon's save queue). World thread.</summary>
 public interface IQuestNpcSink

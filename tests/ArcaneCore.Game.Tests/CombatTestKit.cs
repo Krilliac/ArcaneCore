@@ -26,7 +26,7 @@ internal sealed class ScriptedRandom : ICombatRandom
 }
 
 /// <summary>A minimal non-player unit standing in for the creatures area's Creature.</summary>
-internal sealed class CombatTestUnit : Unit, ICombatCreature
+internal class CombatTestUnit : Unit, ICombatCreature
 {
     private static uint s_counter = 100;
 

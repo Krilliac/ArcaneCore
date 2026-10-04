@@ -33,7 +33,7 @@ public sealed class InventoryItemService(
 
     public ItemInfo? GetItem(uint itemId) => templates().Find(itemId) is { } t
         ? new ItemInfo(t.Entry, t.DisplayId, t.BuyPrice, t.BuyCount == 0 ? 1 : t.BuyCount, t.MaxDurability, t.AllowableClass, t.AllowableRace,
-            t.Bonding, t.RequiredReputationFaction, t.RequiredReputationRank, t.RequiredHonorRank)
+            t.Bonding, t.RequiredReputationFaction, t.RequiredReputationRank, t.RequiredHonorRank, t.RequiredLevel)
         : null;
 
     public uint GetItemCount(Player player, uint itemId, bool inBankAlso) => player.Inventory.GetItemCount(itemId, inBankAlso);
