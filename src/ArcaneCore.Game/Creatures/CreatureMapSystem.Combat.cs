@@ -274,7 +274,7 @@ public sealed partial class CreatureMapSystem
         }
 
         MovementGeneratorType current = creature.Motion.CurrentType;
-        if (current is MovementGeneratorType.Fleeing or MovementGeneratorType.Point or MovementGeneratorType.Home)
+        if (current is MovementGeneratorType.Fleeing or MovementGeneratorType.Confused or MovementGeneratorType.Point or MovementGeneratorType.Home)
         {
             return;
         }

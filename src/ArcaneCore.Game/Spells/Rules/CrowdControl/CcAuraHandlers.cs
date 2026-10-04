@@ -7,7 +7,8 @@ namespace ArcaneCore.Game.Spells.Rules.CrowdControl;
 /// ModFear and ModConfuse (vmangos SpellAuras.cpp HandleAuraModRoot / HandleAuraModStun :3548-3640,
 /// HandleAuraModSilence :3859-3890, HandleAuraModPacify(AndSilence) :5625-5640, HandleAuraModDisarm :3502-3545,
 /// HandleModFear / HandleModConfuse :3444-3463). They set the unit flags and interrupt casts; the movement
-/// a fear or confuse causes belongs to the creature movement code, which reads the flags.
+/// a fear or confuse causes belongs to the creature movement code (the map tick's crowd-control hook), which reads the
+/// flags; a feared creature's caster is remembered here so it knows what to run from, and a creature's root flag follows its root and stun auras.
 /// </summary>
 internal static class CcAuraHandlers
 {
@@ -110,6 +111,11 @@ internal static class CcAuraHandlers
         if (apply && aura.Type == AuraType.ModFear && system.HasLiveAura(target, AuraType.PreventsFleeing))
         {
             return;
+        }
+
+        if (apply && aura.Type == AuraType.ModFear && target is Creatures.Creature)
+        {
+            CcState.RememberFearSource(target, holder.CasterOwner.Caster);
         }
 
         CcState.RefreshFear(system, target);

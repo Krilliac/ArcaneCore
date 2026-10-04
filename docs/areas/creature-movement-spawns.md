@@ -45,7 +45,7 @@ live spline inside the create block (`packet_builder.cpp:152-200`).
   longer runs back to the spawn point.
 * UpdateAsync gates (`:113-128`): stunned/rooted/confused/fleeing zero the move timer and start no leg; casting stops the creature and
   freezes the timer.
-* `MovementGeneratorType` numbers follow `Movement/MotionMaster.h:36-59` (Chase 6, Home 7, Point 9, Fleeing 10, Follow 15); the
+* `MovementGeneratorType` numbers follow `Movement/MotionMaster.h:36-59` (Confused 5, Chase 6, Home 7, Point 9, Fleeing 10, Follow 15); the
   values are internal (never persisted or sent; grep of casts found none).
 
 Limits: no navmesh random point and no steep-slope exclusion (vmangos `MOVE_PATHFINDING | MOVE_EXCLUDE_STEEP_SLOPES`; the pathfinder
@@ -53,6 +53,35 @@ has no random-point query, so the point is uniform over the disc at the height p
 the Flying spline flag plumbed through `ICreatureMover.MovePath`); no timed random / pause-time API (nothing consumes it until waypoint
 node wander exists); vmangos' `Interrupt`/`Finalize` walk-mode reset (`:83-93`) is not sent separately because every spline launch
 already syncs the mode.
+
+### Fear, confuse and polymorph movement (lane `L1-fear-confuse-movement`)
+
+* **Hook.** Each alive creature tick reads `UnitFlags.Fleeing` / `UnitFlags.Confused` (set from the live auras by `CcState.RefreshFear`)
+  before the motion update (`CreatureMapSystem.SyncCrowdControlMovement`): two flag tests when neither is set. A flag with no generator
+  pushes one on the `MotionMaster` stack (`SyncCrowdControl`); a generator with no flag is removed and the generator beneath resumes
+  (chase, follow, random, waypoint). The spell system never calls into the map. Both flags: fear wins, confuse starts when it ends.
+* **Fear** (`CrowdControlFleeingMovementGenerator`, `Type = Fleeing`) wraps the existing `FleeingMovementGenerator` with no duration:
+  legs run away from the fear source (the caster of the latest fear aura, remembered by `CcAuraHandlers` in `CcState.FearSource`; a
+  creature that feared itself, or whose caster left the world, flees in a random direction), 0.5-1 s pause between legs. Unlike the
+  plain flight it does not own the flag: starting, resuming, interrupting it or clearing the stack (evade) leaves `Fleeing` as the auras
+  had it (a point pushed after the aura ended, before the hook ran, must not stick the flag back on), and the hook starts the flight again
+  while the flag holds. Removed while buried under a pushed generator, it leaves that generator's spline running.
+* **Confuse / Polymorph** (`ConfusedMovementGenerator`, new `MovementGeneratorType.Confused = 5`): a Polymorph carries a ModConfuse
+  aura, so it staggers like any confuse. A walk to a random point within 10 yd of where it was confused, a new point every 800-1500 ms
+  even mid-leg (mangosserver `MotionGenerators/ConfusedMovementGenerator.cpp`: `STAGGER_RADIUS`, `STAGGER_INTERVAL_*`, `MOVE_WALK`). The
+  anchor survives an interruption.
+* **Rooted / stunned.** Both generators stop the spline and wait while the creature is stunned or has `MovementFlags.Root`. A creature's
+  root flag is now set and cleared by `CcState.RefreshRoot` from its root and stun auras (it was players only); this also stops
+  random and waypoint movement of rooted creatures through `CreatureMovementGates`. `ApplyCombatMovement` no longer pushes a chase over a
+  confused creature.
+* Tests: `tests/ArcaneCore.Game.Tests/Creatures/FearConfuseMovementTests.cs` (synthetic map, no navmesh, flags set directly plus the aura
+  side through `SpellTestKit`).
+
+Limits: no `SMSG_FORCE_MOVE_ROOT`-style packet is sent to observers for a rooted creature, and whether the 1.12.1 client needs one is
+UNVERIFIED (the server only stops the spline and sends the stop packet); a fear aura that lands while a critter's own timed flee is on
+top is absorbed by it (the plain flight clears the flag when it ends); a stale fear source (left the map after the flight started) is not
+re-read each leg; the stagger point has no navmesh reachability test; the 10 yd stagger radius is the mangosserver reference value and
+was not compared with a 1.12.1 client capture (UNVERIFIED). Fear on players is not a creature generator and is not covered here.
 
 ### 3. Respawn delay and corpse decay (slice `respawn-core`)
 

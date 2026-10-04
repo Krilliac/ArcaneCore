@@ -3,6 +3,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Spells.Rules.CrowdControl;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using MapGrid = ArcaneCore.Game.Maps.Grid.Grid;
@@ -314,6 +315,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
                         break; // the script killed or despawned it
                     }
 
+                    SyncCrowdControlMovement(creature);
+
                     // The default (idle/random/waypoint) generator does not run in combat;
                     // chase, flee, home and point generators on top of it always do.
                     if (!creature.Combat.IsInCombat || !ReferenceEquals(creature.Motion.Top, creature.Motion.Default))
@@ -347,6 +350,27 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// The crowd-control movement hook (vmangos Unit::SetFeared / SetConfused start MoveFleeing / MoveConfused when the aura
+    /// lands and drop the generator when it ends): the unit flags the auras own (<c>CcState.RefreshFear</c>) say what the
+    /// creature's movement stack must run, so a fear or confuse needs no call from the spell system into the map.
+    /// A creature without either flag and without such a generator costs two flag tests. World thread.
+    /// </summary>
+    private static void SyncCrowdControlMovement(Creature creature)
+    {
+        UnitFlags flags = creature.UnitFlags;
+        CrowdControlMovement wanted = (flags & UnitFlags.Fleeing) != 0 ? CrowdControlMovement.Fear
+            : (flags & UnitFlags.Confused) != 0 ? CrowdControlMovement.Confuse
+            : CrowdControlMovement.None;
+        MotionMaster motion = creature.Motion;
+        if (wanted == motion.ActiveCrowdControl)
+        {
+            return;
+        }
+
+        motion.SyncCrowdControl(wanted, wanted == CrowdControlMovement.Fear ? CcState.FearSource(creature) : null);
     }
 
     /// <summary>
