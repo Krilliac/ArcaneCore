@@ -10,8 +10,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 3 | `account`, `realmlist` |
-| `characters` | 26 | `characters` |
-| `world` | 28 | `player_create_info`, `race_info`, `class_info` |
+| `characters` | 28 | `characters` |
+| `world` | 30 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -49,6 +49,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 24 | `Creatures.CreatureRespawnDataModule` | creates `creature_respawn` | yes |
 | 25 | `Characters.WorldState.GameEventStatusDataModule` | creates `game_event_status` | yes |
 | 26 | `Gm.GmAuditDataModule` | creates `account_mute`, `gm_ticket` | yes |
+| 27 | `Characters.Life.CharacterRestDataModule` | creates `character_rest` | yes |
+| 28 | `Characters.Rename.CharacterRenameDataModule` | creates `character_at_login` | yes |
 
 ## `world`
 
@@ -81,5 +83,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 26 | `Quests.QuestAdvancedWorldModule` | adds columns `quest_template.RewMailTemplateId`, `quest_template.RewMailDelaySecs` |
 | 27 | `World.Threat.SpellThreatDataModule` | creates `spell_threat` |
 | 28 | `Graveyards.GraveyardDataModule` | creates `world_safe_locs`, `game_graveyard_zone` |
+| 29 | `Quests.AreaTriggerQuestWorldModule` | creates `areatrigger_involvedrelation`; adds columns `areatrigger_teleport.RequiredItem`, `areatrigger_teleport.RequiredItem2`, `areatrigger_teleport.RequiredQuestDone`, `areatrigger_teleport.RequiredCondition` |
+| 30 | `World.Rest.AreaTriggerTavernDataModule` | creates `areatrigger_tavern` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.

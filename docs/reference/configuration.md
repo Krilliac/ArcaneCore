@@ -27,6 +27,7 @@ How to read the tables:
 - [`Enchanting`](#enchanting)
 - [`GameObjects`](#gameobjects)
 - [`HotReload`](#hotreload)
+- [`ItemSets`](#itemsets)
 - [`Items`](#items)
 - [`Locomotion`](#locomotion)
 - [`Loot`](#loot)
@@ -38,6 +39,7 @@ How to read the tables:
 - [`Ranged`](#ranged)
 - [`Realms`](#realms)
 - [`Reputation`](#reputation)
+- [`Rest`](#rest)
 - [`Skills`](#skills)
 - [`SpecialLoot`](#specialloot)
 - [`SpellRules`](#spellrules)
@@ -264,11 +266,17 @@ How to read the tables:
 | `HotReload:EmptyTables` | `EmptyTablePolicy` | `Retail` | - | What a reload does when item_template, game_tele or areatrigger_teleport comes back empty. Default Retail: vmangos clears the loaded rows first (ObjectMgr.cpp:3817, 10468, 7708), so the table ends up empty. Values: `Retail`, `KeepLoaded`. |
 | `HotReload:NegativeNumbers` | `InvalidNumberPolicy` | `Retail` | - | What `.reload config` does with a negative interval or range. Default Retail: vmangos logs an error and uses the default (World.cpp:2949-2977 setConfigPos/setConfigMin). Values: `Retail`, `Reject`. |
 
+## `ItemSets`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `ItemSets:DbcPath` | `string` | `null` | - | The build-5875 ItemSet.dbc (45 fields), supplied by the developer and never downloaded by the daemon. Empty: no item set bonuses (the ON_EQUIP item spells still work). A configured file that is unreadable or has another layout refuses startup. |
+
 ## `Items`
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
-| `Items:DurabilityLossChanceDamage` | `double` | `0.5` | - | vmangos `DurabilityLossChance.Damage` (mangosd.conf.dist.in:2848, World.cpp:554): the percent chance (0.5 means 0.5 percent) that damage dealt or taken costs one random worn item a durability point (Unit.cpp:880-895). Consumed by the combat triggers; the inventory only exposes the value. |
+| `Items:DurabilityLossChanceDamage` | `double` | `0.5` | - | vmangos `DurabilityLossChance.Damage` (mangosd.conf.dist.in:2848, World.cpp:554): the percent chance (0.5 means 0.5 percent) that damage dealt or taken costs a worn item a durability point (Unit.cpp:1093-1108). Rolled per damage event by MapCombat (MapCombat.Durability.cs): a player victim that survives loses a point on a uniformly random equipment slot, and a player's connecting melee swing wears the weapon of the swinging hand. Zero or less never rolls; `DurabilityLossEnable` false overrides it. |
 | `Items:DurabilityLossEnable` | `bool` | `true` | - | vmangos `DurabilityLoss.Enable` (mangosd.conf.dist.in:2847, World.cpp:553; read first in Player::DurabilityPointsLoss, Player.cpp:4866). False: no item ever loses durability. |
 | `Items:ZoneLimitCheckMs` | `int` | `1000` | - | How often (ms) the per-map item maintenance runs: timed-item ticks and map/area-limited item checks. vmangos reacts to the zone change itself (Player::UpdateZone, Player.cpp:6643-6656) and ticks durations once a second (Player.cpp:1155); here Player.ZoneId has no change event, so the zone is polled at this interval (a deliberate, documented deviation: the result is the same within one interval). |
 
@@ -297,6 +305,7 @@ How to read the tables:
 | `Loot:LootedCorpseDecayRate` | `float` | `0` | - | vmangos CONFIG_FLOAT_RATE_CORPSE_DECAY_LOOTED (Rate.Corpse.Decay.Looted, mangosd.conf.dist.in:1542; cmangos World.cpp:457 too): a looted-out corpse stays this share of its decay time. The retail default 0 means a third of the creature's respawn delay (Creature.cpp:3369-3370). |
 | `Loot:MoneyRate` | `float` | `1` | - | vmangos Rate.Drop.Money. |
 | `Loot:RaidMapsUnlimitedRewardDistance` | `bool` | `true` | - | Raid maps have no reward distance limit (vmangos Object.cpp:1482-1483). False applies `GroupLootDistance` there too. |
+| `Loot:RollTimeoutMs` | `uint` | `60000` | - | How long a need/greed roll waits for votes before the players who did not vote count as passed, in milliseconds (vmangos Group.cpp:72 LOOT_ROLL_TIMEOUT, 1 minute; the same value goes into SMSG_LOOT_START_ROLL as the countdown). |
 
 ## `NpcServices`
 
@@ -382,6 +391,16 @@ How to read the tables:
 | `Reputation:RateLowLevelKill` | `float` | `0.2` | - | Multiplier on reputation gained from killing low-level creatures; the vmangos key `Rate.Reputation.LowLevel.Kill` (default 0.2, mangosd.conf.dist.in:2832). |
 | `Reputation:SendForcedReactions` | `bool` | `false` | - | Send SMSG_SET_FORCED_REACTIONS when a forced-reaction aura applies or fades (default false). The layout is vmangos (u32 faction, u32 rank); gtker/wow_messages types the faction as a u16, so the width is unconfirmed by a real client. The forced reaction itself works on the server either way; only the client display of it needs the packet. |
 | `Reputation:SpilloverEnabled` | `bool` | `true` | - | Retail (true): reputation_spillover_template applies (ReputationMgr.cpp:211-243). False switches every spillover off. |
+
+## `Rest`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Rest:AccrualIntervalSeconds` | `uint` | `10` | - | Seconds of resting between two gains of rested experience (the reference adds the gain once at least 10 seconds have passed since the last one). The pool grows by the same amount per second whatever the interval; a longer one only makes the steps larger. Values below 1 count as 1. |
+| `Rest:RateInGame` | `float` | `1` | - | Rate.Rest.InGame: multiplier of the rested experience gained while resting in an inn or a capital city. 0 turns the gain off. |
+| `Rest:RateOfflineInTavernOrCity` | `float` | `1` | - | Rate.Rest.Offline.InTavernOrCity: multiplier of the rested experience gained while logged out, when the character logged out resting. |
+| `Rest:RateOfflineInWilderness` | `float` | `1` | - | Rate.Rest.Offline.InWilderness: multiplier of the rested experience gained while logged out, when the character did not log out resting. The gain is a quarter of the resting one at rate 1 (the reference divides it by four). |
+| `Rest:SaveIntervalSeconds` | `uint` | `300` | - | Seconds between the writes of the rested state of every online character (the pool, the time and the resting flag; the time is what offline accrual counts from after a crash). A logout and a shutdown always write. 0 writes only then, so after a crash the stored time is that of the last logout and the whole session counts as offline time. |
 
 ## `Skills`
 

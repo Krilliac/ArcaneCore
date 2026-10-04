@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 5 |
 | `Moderator` | 1 | 21 |
-| `GameMaster` | 3 | 110 |
-| `Administrator` | 6 | 157 |
+| `GameMaster` | 3 | 111 |
+| `Administrator` | 6 | 158 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -29,6 +29,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.cast` | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast #spell — cast a spell (triggered) on the selected player or yourself. |
 | `.character` ... | 2 | GameMaster | declared retail level | Syntax: .character $subcommand |
 | `.character reputation` | 2 | GameMaster | declared retail level | Syntax: .character reputation [$player_name] Shows the reputation of the selected player or of the named online player. |
+| `.character rename` | 3 | GameMaster | declared retail level | Syntax: .character rename [$name] Request a rename of the selected character, or the named one (online or not); the player is asked for a new name at the character screen. |
 | `.deplenish` | 3 | GameMaster | declared retail level | Syntax: .deplenish Set the health of the selected unit or yourself to 1 and its power to 0. |
 | `.replenish` | 3 | GameMaster | declared retail level | Syntax: .replenish Restore the health, and the mana of a mana user, of the selected unit or yourself. |
 | `.event` ... | 3 | GameMaster | declared retail level | Syntax: .event #event_id Show the information of an event. |
