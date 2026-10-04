@@ -223,11 +223,26 @@ public sealed class ServerProbeTests : IAsyncLifetime
             await command.ExecuteScalarAsync();
         }
 
-        return new Held(connection);
+        return new Held(connection, options.Provider, component);
     }
 
-    private sealed class Held(DbConnection connection) : IAsyncDisposable
+    private sealed class Held(DbConnection connection, DatabaseProvider provider, string component) : IAsyncDisposable
     {
-        public async ValueTask DisposeAsync() => await connection.DisposeAsync();
+        public async ValueTask DisposeAsync()
+        {
+            // Release the lock explicitly and wait for the answer. Merely closing the connection ends the session
+            // only asynchronously (the client sends Terminate/QUIT and returns; the server backend then exits and
+            // frees the session-scoped lock), so a probe issued right after Dispose could still see the lock held
+            // on a loaded server. pg_advisory_unlock / RELEASE_LOCK are synchronous.
+            await using (DbCommand command = connection.CreateCommand())
+            {
+                command.CommandText = provider == DatabaseProvider.PostgreSql
+                    ? $"SELECT pg_advisory_unlock({SchemaBootstrapper.AdvisoryLockKey(component)})"
+                    : $"SELECT RELEASE_LOCK(SHA1(CONCAT('arcanecore_schema:', DATABASE(), ':{component}')))";
+                await command.ExecuteScalarAsync();
+            }
+
+            await connection.DisposeAsync();
+        }
     }
 }

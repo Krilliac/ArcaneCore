@@ -14,7 +14,7 @@ namespace ArcaneCore.Data.Tests.Graveyards;
 /// ARCANECORE_TEST_MARIADB / ARCANECORE_TEST_POSTGRES servers exist (hosted CI), where these are written for the real
 /// semantics: MariaDB DDL commits implicitly (the schema is created by the bootstrapper before any import transaction
 /// starts), PostgreSQL DDL is transactional, names are lower-case snake_case in both so quoting does not differ, a
-/// <c>float</c> column round-trips with single precision (asserted with a tolerance), and ids are unsigned 32-bit values
+/// <c>float</c> column round-trips with single precision (asserted with a tolerance: MariaDB returns FLOAT text with 6 significant digits), and ids are unsigned 32-bit values
 /// above <c>int.MaxValue</c> in at least one row (PostgreSQL has no unsigned type).
 /// </summary>
 public sealed class GraveyardStoreTests : IAsyncLifetime
@@ -68,7 +68,9 @@ public sealed class GraveyardStoreTests : IAsyncLifetime
         Assert.Equal([1u, 7u, 4000000000u], content.SafeLocs.Select(l => l.Id));
         WorldSafeLoc elwynn = content.SafeLocs[0];
         Assert.Equal((0u, "Elwynn Forest, Goldshire"), (elwynn.MapId, elwynn.Name));
-        Assert.InRange(elwynn.X, -9100.123f - 1e-3f, -9100.123f + 1e-3f);
+        // MariaDB stores the exact single (CAST(x AS DOUBLE) = -9100.123046875) but returns an unconstrained FLOAT as text
+        // rounded to 6 significant digits ("-9100.12"), so a value of magnitude 1e3..1e4 reads back within 5e-3.
+        Assert.InRange(elwynn.X, -9100.123f - 5e-3f, -9100.123f + 5e-3f);
         Assert.InRange(elwynn.Orientation, 3.14159f - 1e-4f, 3.14159f + 1e-4f);
         Assert.Equal("Zul'Gurub Entrance, éè", content.SafeLocs[2].Name);
         Assert.Equal(
