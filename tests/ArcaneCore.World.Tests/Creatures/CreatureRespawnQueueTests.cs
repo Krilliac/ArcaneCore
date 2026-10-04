@@ -42,9 +42,27 @@ public sealed class CreatureRespawnQueueTests
             return Task.FromResult(Stored);
         }
 
-        public Task SaveAsync(IReadOnlyCollection<CreatureRespawnRecord> upserts, IReadOnlyCollection<CreatureRespawnKey> deletes, CancellationToken cancellationToken = default)
+        /// <summary>While set, every write fails (a lasting outage); cleared, writes land again.</summary>
+        public volatile bool Down;
+
+        /// <summary>When set, a save waits for it before it lands (a write still in flight).</summary>
+        public TaskCompletionSource? HoldSaves { get; set; }
+
+        /// <summary>Signalled when a save started waiting on <see cref="HoldSaves"/>.</summary>
+        public TaskCompletionSource SaveHeld { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>The "table": (instance, spawn guid) to respawn time.</summary>
+        public Dictionary<(uint Instance, uint Guid), long> Rows { get; } = [];
+
+        public async Task SaveAsync(IReadOnlyCollection<CreatureRespawnRecord> upserts, IReadOnlyCollection<CreatureRespawnKey> deletes, CancellationToken cancellationToken = default)
         {
-            if (Interlocked.Decrement(ref _failuresLeft) >= 0)
+            if (HoldSaves is { } hold)
+            {
+                SaveHeld.TrySetResult();
+                await hold.Task.ConfigureAwait(false);
+            }
+
+            if (Down || Interlocked.Decrement(ref _failuresLeft) >= 0)
             {
                 throw new InvalidOperationException("simulated outage");
             }
@@ -53,12 +71,36 @@ public sealed class CreatureRespawnQueueTests
             {
                 Log.AddRange(upserts.Select(u => $"save:{u.MapId}:{u.InstanceId}:{u.SpawnGuid}:{u.RespawnTime}"));
                 Log.AddRange(deletes.Select(d => $"delete:{d.InstanceId}:{d.SpawnGuid}"));
+                foreach (CreatureRespawnRecord u in upserts)
+                {
+                    Rows[(u.InstanceId, u.SpawnGuid)] = u.RespawnTime;
+                }
+
+                foreach (CreatureRespawnKey d in deletes)
+                {
+                    Rows.Remove((d.InstanceId, d.SpawnGuid));
+                }
+            }
+        }
+
+        public Task DeleteInstanceAsync(uint instanceId, CancellationToken cancellationToken = default)
+        {
+            if (Down)
+            {
+                throw new InvalidOperationException("simulated outage");
+            }
+
+            lock (Log)
+            {
+                Log.Add($"deleteinstance:{instanceId}");
+                foreach ((uint Instance, uint Guid) key in Rows.Keys.Where(k => k.Instance == instanceId).ToArray())
+                {
+                    Rows.Remove(key);
+                }
             }
 
             return Task.CompletedTask;
         }
-
-        public Task DeleteInstanceAsync(uint instanceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private static ServiceProvider Build(FakeStore? store, Action<IServiceCollection>? more = null)
@@ -162,6 +204,116 @@ public sealed class CreatureRespawnQueueTests
 
         Assert.Equal(Now + 100, queue.GetPending(0, 0)[1]); // memory still answers
         await queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task AWriteThatFailsAllAttempts_IsRetained_NotDropped_AndStopRetriesItAndReportsIt()
+    {
+        var store = new FakeStore { Down = true };
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = NewQueue(sp);
+        queue.Start();
+
+        queue.Save(0, 0, 1, Now + 100);
+        await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30)); // three attempts, then retained
+        Assert.Equal(1, queue.RetainedCount);
+        Assert.Empty(store.Log);
+
+        // Still down at shutdown: the final retry fails too and StopAsync names the spawn.
+        InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(() => queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.Contains("spawn 1 (instance 0)", ex.Message);
+        Assert.NotNull(ex.InnerException);
+        Assert.Equal(1, queue.RetainedCount);
+    }
+
+    [Fact]
+    public async Task ARetainedWrite_LandsAtStop_WhenTheStoreIsBack_AndANewerWriteOfTheSameSpawnSupersedesIt()
+    {
+        var store = new FakeStore { Down = true };
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = NewQueue(sp);
+        queue.Start();
+
+        queue.Save(0, 0, 1, Now + 100);
+        queue.Save(0, 0, 2, Now + 100);
+        await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(2, queue.RetainedCount);
+
+        store.Down = false;
+        queue.Save(0, 0, 2, Now + 500); // newer than the retained one: it lands and clears it
+        await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(1, queue.RetainedCount);
+
+        await queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(30)); // retries spawn 1, throws nothing
+        Assert.Equal(0, queue.RetainedCount);
+        Assert.Equal(new Dictionary<(uint, uint), long> { [(0, 1)] = Now + 100, [(0, 2)] = Now + 500 }, store.Rows);
+    }
+
+    [Fact]
+    public async Task ForgetInstance_RemovesTheMemoryCopy_AndTheRowsEvenWhenASaveOfItWasStillInFlight()
+    {
+        // The instance store deletes creature_respawn rows on its own consumer. A save still waiting in this queue would put a row back after
+        // that delete, so the forget is queued here, behind the save, and the order of the two consumers no longer matters.
+        var store = new FakeStore { HoldSaves = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = NewQueue(sp);
+        queue.Start();
+
+        queue.Save(409, 7, 1, Now + 100);
+        queue.Save(0, 0, 2, Now + 100); // the shared copy of a map is not an instance's
+        await store.SaveHeld.Task.WaitAsync(TimeSpan.FromSeconds(30)); // the first save is now in flight
+
+        store.Rows.Remove((7, 1)); // the instance store's DeleteInstanceAsync ran first: nothing to remove yet
+        queue.ForgetInstance(7);
+        Assert.Empty(queue.GetPending(409, 7));
+        Assert.Equal(Now + 100, queue.GetPending(0, 0)[2]);
+
+        store.HoldSaves.SetResult(); // the in-flight save lands and re-creates the row ...
+        await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
+
+        // ... and the forget, queued behind it, removes it again.
+        Assert.Equal(["save:409:7:1:" + (Now + 100), "save:0:0:2:" + (Now + 100), "deleteinstance:7"], store.Log);
+        Assert.Equal(new Dictionary<(uint, uint), long> { [(0, 2)] = Now + 100 }, store.Rows);
+        await queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task ForgetInstance_DropsRetainedWritesOfThatInstance_AndDoesNotRetainAnInFlightFailure()
+    {
+        var store = new FakeStore { Down = true };
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = NewQueue(sp);
+        queue.Start();
+
+        queue.Save(409, 7, 1, Now + 100);
+        queue.Save(409, 8, 1, Now + 100);
+        await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(2, queue.RetainedCount);
+
+        queue.ForgetInstance(7); // the retained save of instance 7 is dropped; the delete itself fails and is retained
+        await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(2, queue.RetainedCount); // save of instance 8, delete of instance 7
+
+        store.Down = false;
+        await queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(["deleteinstance:7", "save:409:8:1:" + (Now + 100)], store.Log);
+        Assert.Equal(new Dictionary<(uint, uint), long> { [(8, 1)] = Now + 100 }, store.Rows);
+    }
+
+    [Fact]
+    public async Task ForgetInstance_IgnoresInstanceZero()
+    {
+        var store = new FakeStore();
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = NewQueue(sp);
+        queue.Start();
+        queue.Save(0, 0, 1, Now + 100);
+
+        queue.ForgetInstance(0);
+
+        Assert.Equal(Now + 100, queue.GetPending(0, 0)[1]);
+        await queue.StopAsync();
+        Assert.Equal(["save:0:0:1:" + (Now + 100)], store.Log);
     }
 
     // --- the feature --------------------------------------------------------------------------

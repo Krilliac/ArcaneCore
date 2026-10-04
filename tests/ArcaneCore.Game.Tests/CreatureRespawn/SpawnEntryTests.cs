@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Tests.CreatureAi;
+using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -160,6 +161,45 @@ public sealed class SpawnEntryTests
         system.ForceRespawn(wolf);
 
         Assert.Equal(EntryA, wolf.Template.Entry);
+    }
+
+    private sealed class OneOverride(uint spawnGuid, GameEventCreatureOverride? data) : ICreatureEventData
+    {
+        public GameEventCreatureOverride? Data { get; set; } = data;
+
+        public GameEventCreatureOverride? For(uint guid) => guid == spawnGuid ? Data : null;
+
+        public IEnumerable<uint> Listed => [spawnGuid];
+    }
+
+    [Theory]
+    [InlineData(0u)]
+    [InlineData(EntryA)]
+    public void RefreshEventData_FindsASpawnWhoseLiveGuidCarriesTheChosenEntry(uint spawnEntry)
+    {
+        // The GUID holds the entry chosen at creation, not the spawn row's: with the seeds below the creature carries both variants, so the row's
+        // own entry (0, or EntryA) is the wrong one for at least one of them.
+        var carried = new HashSet<uint>();
+        for (int seed = 0; seed < 20; seed++)
+        {
+            (WorldRuntime w, CreatureMapSystem system, _, _) = Start(TwoVariants(spawnEntry, Variant(EntryA + 100, "Event Wolf")), seed: seed);
+            using WorldRuntime world = w;
+            Creature wolf = Assert.Single(system.Creatures);
+            carried.Add(wolf.Template.Entry);
+            var data = new OneOverride(1, null);
+            system.EventData = data;
+            Assert.Null(wolf.EventTemplate);
+
+            data.Data = new GameEventCreatureOverride(EntryA + 100, 0, 0, 0, 0); // the event starts
+            system.RefreshEventData([1]);
+            Assert.Equal(EntryA + 100, wolf.EventTemplate?.Entry);
+
+            data.Data = null; // and stops
+            system.RefreshEventData([1]);
+            Assert.Null(wolf.EventTemplate);
+        }
+
+        Assert.Equal([EntryA, EntryB], carried.Order());
     }
 
     [Fact]

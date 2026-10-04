@@ -59,7 +59,7 @@ public sealed partial class CreatureMapSystem
         foreach (uint guid in spawnGuids)
         {
             if (_spawnByGuid.TryGetValue(guid, out CreatureSpawn? spawn)
-                && _creatures.TryGetValue(ObjectGuid.WithEntry(HighGuid.Unit, spawn.Entry, spawn.Guid), out Creature? live))
+                && FindLive(spawn, _options.Respawn.AlternateEntries ? _content.GetSpawnEntries(spawn.Guid) : []) is { } live)
             {
                 ApplyEventData(live);
             }
