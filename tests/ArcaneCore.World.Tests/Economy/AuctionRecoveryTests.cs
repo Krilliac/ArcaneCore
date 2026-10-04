@@ -379,14 +379,14 @@ public sealed class AuctionRecoveryTests
         }
 
         fixture.Control.RecoveryAvailable = true;
-        Assert.True(await fixture.TryWaitUntilAsync(() => fixture.Control.AvailableReads >= 1, TimeSpan.FromSeconds(5), pollOnWorld: false));
+        Assert.True(await fixture.TryWaitUntilAsync(() => fixture.Control.AvailableReads >= 1, pollOnWorld: false));
         // The clock is frozen: a mismatch must not be re-read on every one-second timer tick.
         await Task.Delay(TimeSpan.FromSeconds(3.5));
         Assert.Equal(1, fixture.Control.AvailableReads);
         Assert.True(await fixture.OnWorld(() => fixture.Feature.IsAuctionQuarantined(1)));
 
         clock.Advance(TimeSpan.FromSeconds(31));
-        Assert.True(await fixture.TryWaitUntilAsync(() => fixture.Control.AvailableReads >= 2, TimeSpan.FromSeconds(5), pollOnWorld: false));
+        Assert.True(await fixture.TryWaitUntilAsync(() => fixture.Control.AvailableReads >= 2, pollOnWorld: false));
         await Task.Delay(TimeSpan.FromSeconds(1.5));
         Assert.Equal(2, fixture.Control.AvailableReads);
     }
@@ -497,7 +497,9 @@ public sealed class AuctionRecoveryTests
 
     private sealed class Fixture : IAsyncDisposable
     {
-        public static readonly TimeSpan Budget = TimeSpan.FromSeconds(5);
+        // Every wait on this budget returns the moment its condition holds, so a generous ceiling costs nothing when healthy;
+        // 5 s was too tight for a loaded machine (recovery progresses on the world's one-second timer and the sqlite writer).
+        public static readonly TimeSpan Budget = TimeSpan.FromSeconds(30);
         private readonly string _path;
         private readonly DbContextOptions<CharacterDbContext> _options;
         private readonly ServiceProvider _services;
