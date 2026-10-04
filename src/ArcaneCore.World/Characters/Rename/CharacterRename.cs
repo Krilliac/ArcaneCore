@@ -119,4 +119,44 @@ public static class CharacterRename
             ? await store.GetFlagsAsync(session.AccountId).ConfigureAwait(false)
             : new Dictionary<int, uint>();
     }
+
+    /// <summary>
+    /// The CHARACTER_FLAG_* word SMSG_CHAR_ENUM carries for a character with these at-login flags (mangos Player::BuildEnumData:
+    /// AT_LOGIN_RENAME sets CHARACTER_FLAG_RENAME); no other at-login bit has a character flag here.
+    /// </summary>
+    public static uint CharEnumFlags(uint atLoginFlags)
+        => (atLoginFlags & CharacterAtLoginFlags.Rename) != 0 ? CharacterRenamePackets.CharacterFlagRename : 0u;
+
+    /// <summary>
+    /// The CHARACTER_FLAG_* words of the account's characters for the character list, from <see cref="FlagsOfAccountAsync"/>:
+    /// only characters with a flag to show have an entry. A store failure is logged and shows no flag (the list is still sent;
+    /// the prompt returns with the next list), so the character screen never depends on the <c>character_at_login</c> table.
+    /// </summary>
+    public static async Task<IReadOnlyDictionary<int, uint>> CharEnumFlagsOfAccountAsync(WorldSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        IReadOnlyDictionary<int, uint> atLogin;
+        try
+        {
+            atLogin = await FlagsOfAccountAsync(session).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            session.Logger.LogError(ex, "[{Endpoint}] the at-login flags of account '{Account}' could not be read; the character list shows none",
+                session.RemoteEndpoint, session.AccountName);
+            return new Dictionary<int, uint>();
+        }
+
+        var flags = new Dictionary<int, uint>(atLogin.Count);
+        foreach ((int id, uint bits) in atLogin)
+        {
+            uint word = CharEnumFlags(bits);
+            if (word != 0)
+            {
+                flags[id] = word;
+            }
+        }
+
+        return flags;
+    }
 }

@@ -65,6 +65,9 @@ internal sealed class InMemoryRenameStore(InMemoryCharacterStore characters) : I
 
     public bool FailRenames;
 
+    /// <summary>While set, reading the flags of an account throws (a database outage during the character list).</summary>
+    public volatile bool FailFlagReads;
+
     public uint FlagsOf(int characterId) => _flags.GetValueOrDefault(characterId);
 
     public async Task<bool> SetFlagAsync(int characterId, uint flag, CancellationToken cancellationToken = default)
@@ -80,6 +83,11 @@ internal sealed class InMemoryRenameStore(InMemoryCharacterStore characters) : I
 
     public async Task<IReadOnlyDictionary<int, uint>> GetFlagsAsync(int accountId, CancellationToken cancellationToken = default)
     {
+        if (FailFlagReads)
+        {
+            throw new InvalidOperationException("the characters database is unavailable");
+        }
+
         IReadOnlyList<CharacterRecord> own = await characters.GetByAccountAsync(accountId, cancellationToken);
         return own.Where(c => _flags.GetValueOrDefault(c.Id) != 0).ToDictionary(c => c.Id, c => _flags[c.Id]);
     }

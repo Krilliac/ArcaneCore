@@ -18,8 +18,17 @@ public static class CharacterPackets
     /// <summary>Experience needed to leave level 1 (player_xp_for_level, level 1 = 400) until M8 imports the table.</summary>
     private const uint Level1NextLevelXp = 400;
 
-    /// <summary>SMSG_CHAR_ENUM: count followed by one block per character.</summary>
-    public static byte[] BuildCharEnum(IReadOnlyList<CharacterRecord> characters, IReadOnlyDictionary<int, CharEnumItem[]>? equipment = null)
+    /// <summary>
+    /// SMSG_CHAR_ENUM: count followed by one block per character. <paramref name="characterFlags"/> holds the CHARACTER_FLAG_* word
+    /// of a character by id (vmangos Player::BuildEnumData: the u32 after the guild id; today only
+    /// <see cref="ArcaneCore.Game.Characters.CharacterRenamePackets.CharacterFlagRename"/>); a character without an entry sends 0.
+    /// The position of the word is the existing builder's and the MockClient parser's (ScenarioWire.CharacterList); the repo's
+    /// generated wow_messages tables cover opcodes and update fields only, so it is UNVERIFIED against smsg_char_enum.wowm here.
+    /// </summary>
+    public static byte[] BuildCharEnum(
+        IReadOnlyList<CharacterRecord> characters,
+        IReadOnlyDictionary<int, CharEnumItem[]>? equipment = null,
+        IReadOnlyDictionary<int, uint>? characterFlags = null)
     {
         var writer = new PacketWriter(64 + (characters.Count * 200));
         writer.WriteByte((byte)characters.Count);
@@ -43,7 +52,7 @@ public static class CharacterPackets
             writer.WriteSingle(c.Y);
             writer.WriteSingle(c.Z);
             writer.WriteUInt32(0); // guild id
-            writer.WriteUInt32(0); // character flags
+            writer.WriteUInt32(characterFlags?.GetValueOrDefault(c.Id) ?? 0u); // character flags (CHARACTER_FLAG_*)
             writer.WriteByte((byte)(c.PlayedTime == 0 ? 1 : 0)); // first login
             writer.WriteUInt32(0); // pet display id
             writer.WriteUInt32(0); // pet level

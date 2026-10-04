@@ -17,6 +17,15 @@ From the character screen the player sends `CMSG_CHAR_RENAME` (u64 guid, CString
 | The database fails | `CHAR_CREATE_ERROR`, logged; the session continues |
 | Otherwise | one commit changes the name and clears the flag; `SMSG_CHAR_RENAME` = `0, guid, name`; the character directory takes the new name; `SMSG_INVALIDATE_PLAYER` (the guid) goes to every online client so they drop the cached name (`World::InvalidatePlayerDataToAllClient`) |
 
+### The prompt: the character list
+
+`SMSG_CHAR_ENUM` (`CharacterPackets.BuildCharEnum`, called by `CharacterHandlers.HandleCharEnumAsync`) writes `CHARACTER_FLAG_RENAME`
+(0x4000, mangos `Player.cpp:179`) in the flags word of a character whose at-login flags carry `AT_LOGIN_RENAME`
+(`CharacterRename.CharEnumFlagsOfAccountAsync` → `FlagsOfAccountAsync` → `ICharacterRenameStore.GetFlagsAsync`, mapped by
+`CharacterRename.CharEnumFlags`); every other character sends 0, as before. Only the account's own characters are read. If the
+`character_at_login` read fails, the error is logged and the list is still sent without flags (the prompt returns with the next list),
+so the character screen never depends on that table.
+
 The name is normalized first (first letter upper case, the rest lower case) like creation. The rename itself is atomic and race-safe: the
 unique index on `characters.name` decides when two renames, or a rename and a creation, take the same name together (the loser is
 "taken", not a fault).
@@ -39,12 +48,6 @@ written off the world thread; a database failure is reported to the caller. Unkn
 
 ## Known gaps
 
-* **The character list does not show the flag yet.** The client only offers the rename when `SMSG_CHAR_ENUM` carries
-  `CHARACTER_FLAG_RENAME` (0x4000) in the flags word of the character. `World/Packets/CharacterPackets.cs` (`BuildCharEnum` writes a
-  fixed 0 there) and `Handlers/CharacterHandlers.cs` (`HandleCharEnumAsync`) are outside this lane. Everything else is ready:
-  `CharacterRename.FlagsOfAccountAsync(session)` returns the flags of the account's characters,
-  `CharacterRenamePackets.CharacterFlagRename` is the bit; the list must pass `flags[id] & 1 != 0 ? 0x4000 : 0` to the builder.
-  Until then the handler works for a client that sends the packet and the flag can be set and read, but the stock client is not prompted.
 * **Invalid names at login.** vmangos flags a character at login whose stored name no longer passes the name rules
   (`Player::LoadFromDB`, PlayerLoad.cpp:233-239) and refuses the login; ArcaneCore does neither.
 * **Reserved names.** The `reserved_name` list is not enforced, here or at creation (see [character-creation](character-creation.md)).
@@ -59,9 +62,17 @@ written off the world thread; a database failure is reported to the caller. Unkn
   (`RESPONSE_SUCCESS` = 0 is its first `ResponseCodes` entry, SharedDefines.h:2283); no client or capture was available. Whether the
   stock client shows the rename prompt for flag 0x4000, and what text it shows for `CHAR_CREATE_ERROR`, is untested.
 * That `SMSG_INVALIDATE_PLAYER` (796) is honoured by the 1.12.1 client the way the reference expects.
+* The position of the flags word in `SMSG_CHAR_ENUM` (the u32 after the guild id) is the existing builder's, taken from vmangos
+  `Player::BuildEnumData` and shared with the mock client's parser (`ScenarioWire.CharacterList`). The repo's generated wow_messages
+  tables (`tools/codegen/gen_wow_tables.py`: opcodes and update fields) do not describe the body of this message, so the layout is
+  **UNVERIFIED** against `smsg_char_enum.wowm` here.
 
 ## Tests
 
 `tests/ArcaneCore.Game.Tests/Characters/CharacterRenamePacketsTests.cs`; `tests/ArcaneCore.World.Tests/Characters/CharacterRenameTests.cs`
 (handler end to end, name rules, duplicates, ownership, flag clearing, the command online and offline, security);
-`tests/ArcaneCore.Data.Tests/CharacterRestAndRenameStoreTests.cs` (the real store on every engine, including the concurrent race).
+`tests/ArcaneCore.World.Tests/Characters/CharEnumRenameFlagTests.cs` (the flags word of the list: builder, mapping, the flagged
+character only, its own account only, `.character rename` of an offline character prompts its owner, a flag-read outage);
+`tests/ArcaneCore.MockClient.Tests/CharacterRenameEnumFlagTests.cs` (real SQLite store, the mock client's parser reads 0x4000 and the
+rename clears it); `tests/ArcaneCore.Data.Tests/CharacterRestAndRenameStoreTests.cs` (the real store on every engine, including the
+concurrent race).
