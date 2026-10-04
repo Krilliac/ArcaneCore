@@ -298,6 +298,15 @@ public sealed partial record SpellInfo
                 {
                     return false;
                 }
+
+                // vmangos SpellEntry::IsPositiveEffect (SpellEntry.cpp:976-987): "non-positive immunities". Recently Bandaged (11196) is a
+                // MECHANIC_IMMUNITY to the bandage mechanic that must block the positive bandage heal (crafting lane, First Aid).
+                if (effect.Effect == SpellEffectName.ApplyAura && effect.AuraType == AuraType.MechanicImmunity
+                    && (Rules.SpellMechanic)effect.MiscValue is Rules.SpellMechanic.Bandage or Rules.SpellMechanic.Shield
+                        or Rules.SpellMechanic.Mount or Rules.SpellMechanic.Invulnerability)
+                {
+                    return false;
+                }
             }
 
             return true;

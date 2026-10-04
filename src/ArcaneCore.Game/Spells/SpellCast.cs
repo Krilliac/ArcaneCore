@@ -42,6 +42,8 @@ public sealed class SpellCast
     /// tells the client for COOLDOWN_ON_EVENT spells, Player.cpp:22139-22250), so the client's own timer keeps running.
     /// </summary>
     internal bool AutoRepeatShot { get; set; }
+    /// <summary>The item the spell is cast from (vmangos Spell::m_CastItem; CMSG_USE_ITEM, recipes, bandages, poisons), or null. Set once at prepare.</summary>
+    public Items.Item? CastItem { get; internal set; }
 
     public SpellCastState State { get; internal set; } = SpellCastState.Preparing;
 

@@ -111,6 +111,13 @@ public class Item : WorldObject
     /// <summary>The permanent enchantment id of enchantment slot <paramref name="slot"/> (0..6).</summary>
     public uint EnchantmentId(int slot) => GetUInt32(UpdateFields.ItemFieldEnchantment + (slot * 3));
 
+    /// <summary>
+    /// The remaining time in ms of each enchantment slot while its owner is online (crafting lane). vmangos keeps it in <c>Player::m_enchantDuration</c> and
+    /// writes the item field only when the timer stops; the field is also the value the client displays, so a running timer must not rewrite it. Null
+    /// until a timer starts. <see cref="ToData"/> saves this value in place of the field, so a relog resumes with the time that was left.
+    /// </summary>
+    internal uint?[]? LiveEnchantDuration { get; set; }
+
     public bool IsBag => Template.IsBag();
 
     /// <summary>
@@ -155,6 +162,17 @@ public class Item : WorldObject
         for (int i = 0; i < EnchantmentValues; i++)
         {
             enchantments[i] = GetUInt32(UpdateFields.ItemFieldEnchantment + i);
+        }
+
+        if (LiveEnchantDuration is { } live)
+        {
+            for (int slot = 0; slot < live.Length && (slot * 3) + 1 < EnchantmentValues; slot++)
+            {
+                if (live[slot] is { } left && enchantments[slot * 3] != 0)
+                {
+                    enchantments[(slot * 3) + 1] = left;
+                }
+            }
         }
 
         return new ItemInstanceData

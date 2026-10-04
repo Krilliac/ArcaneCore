@@ -114,6 +114,9 @@ public sealed class SpellAuraHolder
     /// </summary>
     internal ObjectGuid ChannelTarget { get; set; }
 
+    /// <summary>The item the spell was cast from (vmangos <c>SpellAuraHolder::m_castItemGuid</c>), empty for a plain cast: an item-granted aura is removed with that item (<see cref="SpellSystem.RemoveAurasDueToItemSpell"/>).</summary>
+    public ObjectGuid CastItemGuid { get; internal set; }
+
     public byte CasterLevel { get; }
 
     internal AuraCasterOwner CasterOwner { get; }

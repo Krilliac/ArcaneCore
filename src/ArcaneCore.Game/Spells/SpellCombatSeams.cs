@@ -75,8 +75,9 @@ public static class SpellCastCheckOrder
 /// <param name="Target">The resolved explicit unit target (the caster for a self cast of a unit-target spell), or null.</param>
 /// <param name="Triggered">True for server-initiated casts.</param>
 /// <param name="Strict">True at cast start (vmangos CheckCast(true)), false when the cast lands (CheckCast(false)).</param>
+/// <param name="CastItem">The item the spell is cast from (CMSG_USE_ITEM, vmangos Spell::m_CastItem), or null for a plain cast (crafting lane).</param>
 public readonly record struct SpellCastCheckContext(
-    SpellSystem System, Unit Caster, SpellInfo Spell, SpellCastTargets Targets, Unit? Target, bool Triggered, bool Strict);
+    SpellSystem System, Unit Caster, SpellInfo Spell, SpellCastTargets Targets, Unit? Target, bool Triggered, bool Strict, Items.Item? CastItem = null);
 
 /// <summary>
 /// An extra requirement of a cast. Returning anything but <see cref="SpellCastResult.CastOk"/> vetoes the

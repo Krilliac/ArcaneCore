@@ -21,7 +21,8 @@ public sealed record SpellEffectCheckContext(
     SpellCastTargets Targets,
     Unit? UnitTarget,
     bool Triggered,
-    bool Strict)
+    bool Strict,
+    Items.Item? CastItem = null)
 {
     public SpellEffectInfo Effect => Spell.Effects[EffectIndex];
 }
@@ -42,7 +43,7 @@ public sealed partial class SpellSystem
     public void RegisterEffectCheck(SpellEffectName effect, SpellEffectCheck check)
         => _effectChecks[effect] = check ?? throw new ArgumentNullException(nameof(check));
 
-    private SpellCastResult CheckEffects(Unit caster, SpellInfo spell, SpellCastTargets targets, Unit? unitTarget, bool triggered, bool strict)
+    private SpellCastResult CheckEffects(Unit caster, SpellInfo spell, SpellCastTargets targets, Unit? unitTarget, bool triggered, bool strict, Items.Item? castItem = null)
     {
         if (_effectChecks.Count == 0)
         {
@@ -54,7 +55,7 @@ public sealed partial class SpellSystem
             SpellEffectInfo effect = spell.Effects[i];
             if (!effect.IsEmpty && _effectChecks.TryGetValue(effect.Effect, out SpellEffectCheck? check))
             {
-                SpellCastResult result = check(new SpellEffectCheckContext(this, caster, spell, i, targets, unitTarget, triggered, strict));
+                SpellCastResult result = check(new SpellEffectCheckContext(this, caster, spell, i, targets, unitTarget, triggered, strict, castItem));
                 if (result != SpellCastResult.CastOk)
                 {
                     return result;

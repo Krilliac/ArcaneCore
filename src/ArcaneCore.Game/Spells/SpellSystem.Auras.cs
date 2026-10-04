@@ -64,6 +64,11 @@ public sealed partial class SpellSystem
             context.Spell, context.Target, context.Caster,
             _auraCasterOwners.GetValue(context.Caster, static caster => new AuraCasterOwner(caster)),
             context.Cast.State == SpellCastState.Casting ? context.Cast.Timer : context.Cast.Duration);
+        if (context.Cast.CastItem is { } castItem && context.PendingHolder.CastItemGuid.IsEmpty)
+        {
+            context.PendingHolder.CastItemGuid = castItem.Guid;
+        }
+
         if (context.Cast.State == SpellCastState.Casting && context.PendingHolder.ChannelTarget == default)
         {
             context.PendingHolder.ChannelTarget = new ObjectGuid(context.Caster.GetUInt64(UpdateFields.UnitFieldChannelObject));

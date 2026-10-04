@@ -163,12 +163,12 @@ public sealed partial class PlayerInventory
     public Item? GetItemByGuid(ObjectGuid guid) => AllItems.FirstOrDefault(i => i.Guid == guid);
 
     /// <summary>vmangos Player::GetItemCount: equipment, bags, backpack, keyring and bag contents; the bank only when asked.</summary>
-    public uint GetItemCount(uint entry, bool inBankAlso = false, Item? skip = null)
+    public uint GetItemCount(uint entry, bool inBankAlso = false, Item? skip = null, Func<Item, bool>? exclude = null)
     {
         uint count = 0;
         foreach (Item item in AllItems)
         {
-            if (item != skip && item.Entry == entry && (inBankAlso || !IsInBank(item)))
+            if (item != skip && item.Entry == entry && (inBankAlso || !IsInBank(item)) && exclude?.Invoke(item) != true)
             {
                 count += item.Count;
             }

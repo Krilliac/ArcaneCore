@@ -132,6 +132,8 @@ public static class SpellStoreFactory
             EquippedItemClass = row.EquippedItemClass,
             EquippedItemSubClassMask = row.EquippedItemSubClassMask,
             EquippedItemInventoryTypeMask = row.EquippedItemInventoryTypeMask,
+            Reagents = Reagents(row),
+            Totems = Totems(row),
             StartRecoveryCategory = row.StartRecoveryCategory,
             StartRecoveryTime = row.StartRecoveryTime,
             DamageClass = (SpellDamageClass)row.DmgClass,
@@ -160,6 +162,43 @@ public static class SpellStoreFactory
                     row.EffectMiscValue3, row.EffectTriggerSpell3, row.EffectPointsPerComboPoint3) with { DamageMultiplier = row.DmgMultiplier3 },
             ],
         };
+    }
+
+    // Crafting lane: Reagent[8]/ReagentCount[8]/Totem[2] (vmangos SpellEntry.h:635-637). A reagent slot with a non-positive item id is
+    // absent (Spell.cpp:7254), a zero Totem slot is absent (Spell.cpp:7292).
+    private static IReadOnlyList<SpellReagent> Reagents(SpellTemplateRow row)
+    {
+        (int Item, uint Count)[] slots =
+        [
+            (row.Reagent1, row.ReagentCount1), (row.Reagent2, row.ReagentCount2), (row.Reagent3, row.ReagentCount3), (row.Reagent4, row.ReagentCount4),
+            (row.Reagent5, row.ReagentCount5), (row.Reagent6, row.ReagentCount6), (row.Reagent7, row.ReagentCount7), (row.Reagent8, row.ReagentCount8),
+        ];
+        var list = new List<SpellReagent>(slots.Length);
+        foreach ((int item, uint count) in slots)
+        {
+            if (item > 0)
+            {
+                list.Add(new SpellReagent((uint)item, count));
+            }
+        }
+
+        return list;
+    }
+
+    private static IReadOnlyList<uint> Totems(SpellTemplateRow row)
+    {
+        var list = new List<uint>(2);
+        if (row.Totem1 != 0)
+        {
+            list.Add(row.Totem1);
+        }
+
+        if (row.Totem2 != 0)
+        {
+            list.Add(row.Totem2);
+        }
+
+        return list;
     }
 
     private static SpellEffectInfo Effect(

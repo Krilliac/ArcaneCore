@@ -43,9 +43,9 @@ internal sealed class SpellTestKit : IDisposable
     public SpellSystem System { get; }
 
     /// <summary>A player in the world (map 0) whose spawn packets are already cleared.</summary>
-    public (Player Player, FakeSession Session) AddPlayer(uint guid, float x = 0, float y = 0)
+    public (Player Player, FakeSession Session) AddPlayer(uint guid, float x = 0, float y = 0, ArcaneCore.Kernel.Accounts.AccountSecurity security = ArcaneCore.Kernel.Accounts.AccountSecurity.Player)
     {
-        var session = new FakeSession((int)guid);
+        var session = new FakeSession((int)guid, security);
         Player player = TestWorld.CreatePlayer(guid, x, y, session);
         World.AddPlayer(player);
         World.RunTick(0);

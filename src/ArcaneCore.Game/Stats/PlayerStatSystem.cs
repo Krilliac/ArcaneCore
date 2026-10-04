@@ -321,7 +321,7 @@ public sealed class PlayerStatSystem : ICombatStatSource
             TotalAttackPower: TotalAttackPower(player, attackType),
             BaseValue: 0.0f,
             BasePct: 1.0f,
-            TotalValue: 0.0f,
+            TotalValue: state.TotalDamage(attackType),
             TotalPct: UnitModConstants.Default(UnitModifierType.TotalPct, offHand ? UnitMods.DamageOffHand : UnitMods.DamageMainHand),
             TotalPhysical: 0.0f,
             WeaponMin: weapon.Min,
