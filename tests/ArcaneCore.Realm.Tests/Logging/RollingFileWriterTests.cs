@@ -149,4 +149,90 @@ public sealed class RollingFileWriterTests : IDisposable
         Assert.Single(diagnostics.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries));
         Assert.Contains("cannot write", diagnostics.ToString(), StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// A failure on an already open file (ENOSPC/EIO at flush time, the buffered write itself having succeeded): disposing the dirty
+    /// stream re-flushes and throws again. That second exception must not escape <c>Fail()</c>, or the writer keeps a closed stream
+    /// and every later call dies with ObjectDisposedException instead of dropping, retrying and reporting the lost count.
+    /// </summary>
+    [Fact]
+    public void FlushFailureOnAnOpenFile_ReportsOnce_DropsForRetryDelay_ThenReopensAndReportsLost()
+    {
+        var diagnostics = new StringWriter();
+        var disk = new FailingDisk();
+        using var writer = new RollingFileWriter(LogPath, new RollingFilePolicy(0, false, 0), () => _now, diagnostics, disk.Open);
+
+        writer.Write("one\n"); // buffered: succeeds
+        writer.Flush();        // the disk is full: Flush throws, and so does the flush inside Dispose
+
+        Assert.Equal(1, writer.Failures);
+        Assert.Equal(1, writer.LostLines);
+        Assert.Contains("cannot write", diagnostics.ToString(), StringComparison.Ordinal);
+
+        writer.Write("two\n"); // inside RetryDelay: dropped, no disk access, no exception
+        writer.Flush();
+        Assert.Equal(2, writer.LostLines);
+        Assert.Equal(1, disk.Opens);
+
+        disk.Full = false;
+        _now += RollingFileWriter.RetryDelay;
+        writer.Write("three\n"); // reopened on a working disk
+        writer.Flush();
+
+        Assert.Equal(2, disk.Opens);
+        Assert.Equal(2, writer.LostLines);
+        Assert.Equal(1, writer.Failures);
+        string[] lines = diagnostics.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, lines.Length);
+        Assert.Contains("resumed; 2 line(s) were lost", lines[1], StringComparison.Ordinal);
+        Assert.Equal("three\n", File.ReadAllText(LogPath));
+    }
+
+    /// <summary>Opens real files, but while <see cref="Full"/> every flush, including the one <see cref="FileStream.Dispose()"/> performs on a dirty buffer, fails with ENOSPC.</summary>
+    private sealed class FailingDisk
+    {
+        public bool Full { get; set; } = true;
+
+        public int Opens { get; private set; }
+
+        public FileStream Open(string path)
+        {
+            Opens++;
+            return new FullStream(this, path);
+        }
+
+        private sealed class FullStream(FailingDisk disk, string path) : FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, bufferSize: 4096)
+        {
+            private bool _dirty;
+
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                _dirty = true;
+                if (!disk.Full)
+                {
+                    base.Write(buffer, offset, count);
+                }
+            }
+
+            public override void Flush()
+            {
+                if (disk.Full && _dirty)
+                {
+                    throw new IOException("No space left on device");
+                }
+
+                base.Flush();
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                base.Dispose(disposing);
+                if (disposing && disk.Full && _dirty)
+                {
+                    _dirty = false;
+                    throw new IOException("No space left on device");
+                }
+            }
+        }
+    }
 }

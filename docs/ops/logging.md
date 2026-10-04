@@ -51,7 +51,10 @@ Section `Logging:ArcaneCore` (every key also in `docs/reference/configuration.md
 numbers (`QueueCapacity` 1..1000000, `RollSizeMb`/`Retain` ≥ 0), an empty or directory-shaped `Path` on an enabled sink,
 the text and JSON paths equal with both sinks enabled. The world lists them with its other config problems and exits 78;
 the realm throws from `AddArcaneCoreLogging` before the host is built (one exception with every problem listed). The
-same rules run on every reload; an invalid reload is logged and rejected as a whole, and the running settings stay.
+raw-configuration check (`Check`, behind `check-config`) and the bound-options check (`ThrowIfInvalid`, run when the
+provider is built and on every reload) are one rule set over the same typed values, defaults filled in, so a configuration
+`check-config` accepts cannot fail at host build. An invalid reload is logged and rejected as a whole, and the running
+settings stay.
 
 **Hot reload.** The host re-reads `appsettings.json` on change (the generic host's `reloadOnChange`), and
 `ArcaneLoggerProvider` follows `IOptionsMonitor<ArcaneLoggingOptions>`: the console mode, `Timestamps` and
@@ -90,8 +93,10 @@ values, anything else its invariant string. Both formats cap a line at 256 KiB c
 
 **Colour decision** (`ConsoleColorSupport`): colour only when `Console:Mode=Color`, stdout is not redirected,
 `NO_COLOR` is unset or empty, and on Windows `SetConsoleMode(ENABLE_VIRTUAL_TERMINAL_PROCESSING)` succeeds (three
-`kernel32` P/Invokes behind `OperatingSystem.IsWindows()`; any failure, including no console, means plain). The decision is
-made once at start; a reload to `Color` on a redirected stdout stays plain.
+`kernel32` P/Invokes behind `OperatingSystem.IsWindows()`; any failure, including no console, means plain). The terminal's
+half of the decision (`TerminalAllowsColor`) is probed once, the first time `Color` is applied, and kept for the process; the
+mode half is applied at start and on every reload. So a daemon started `Plain` or `Off` on a real terminal renders colour
+after a reload to `Color`, and a reload to `Color` on a redirected stdout stays plain.
 
 ## Rolling and retention
 

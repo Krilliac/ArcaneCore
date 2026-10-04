@@ -25,7 +25,8 @@ public sealed class ArcaneLoggerProvider : ILoggerProvider, ISupportExternalScop
     private readonly ConcurrentDictionary<string, ArcaneLogger> _loggers = new(StringComparer.Ordinal);
     private readonly TextLogSink _console;
     private readonly IDisposable? _reload;
-    private readonly bool _colorAllowed;
+    private readonly Func<bool> _terminalAllowsColor;
+    private bool? _colorAllowed;
     private ArcaneLoggingOptions _current;
     private volatile Func<DateTime> _clock;
     private volatile bool _includeScopes;
@@ -34,7 +35,18 @@ public sealed class ArcaneLoggerProvider : ILoggerProvider, ISupportExternalScop
 
     /// <summary>The host constructor: builds the sinks from the current options and follows reloads.</summary>
     public ArcaneLoggerProvider(IOptionsMonitor<ArcaneLoggingOptions> options)
-        : this(options.CurrentValue, ConsoleColorSupport.Resolve(options.CurrentValue.Console.Mode), BuildSinks(options.CurrentValue), options)
+        : this(options, ConsoleColorSupport.TerminalAllowsColor, BuildSinks(options.CurrentValue))
+    {
+    }
+
+    /// <summary>
+    /// The host constructor over an explicit terminal probe and sinks (tests). <paramref name="terminalAllowsColor"/> is the
+    /// environment's verdict alone (terminal, NO_COLOR, VT), independent of the configured mode; it is asked at most once, the first
+    /// time a mode of <see cref="ConsoleMode.Color"/> is applied, so a daemon started Plain or Off renders colour after a reload to
+    /// Color when the terminal allows it, and a daemon that never asks for colour never touches the console mode.
+    /// </summary>
+    public ArcaneLoggerProvider(IOptionsMonitor<ArcaneLoggingOptions> options, Func<bool> terminalAllowsColor, LogSink[] sinks)
+        : this(options.CurrentValue, terminalAllowsColor, sinks, options)
     {
     }
 
@@ -44,8 +56,14 @@ public sealed class ArcaneLoggerProvider : ILoggerProvider, ISupportExternalScop
     /// null when nothing reloads (tests).
     /// </summary>
     public ArcaneLoggerProvider(ArcaneLoggingOptions initial, bool colorAllowed, LogSink[] sinks, IOptionsMonitor<ArcaneLoggingOptions>? options = null)
+        : this(initial, () => colorAllowed, sinks, options)
+    {
+    }
+
+    private ArcaneLoggerProvider(ArcaneLoggingOptions initial, Func<bool> terminalAllowsColor, LogSink[] sinks, IOptionsMonitor<ArcaneLoggingOptions>? options)
     {
         ArgumentNullException.ThrowIfNull(initial);
+        ArgumentNullException.ThrowIfNull(terminalAllowsColor);
         ArgumentNullException.ThrowIfNull(sinks);
         LoggingConfigChecks.ThrowIfInvalid(initial);
         if (sinks.Length == 0 || sinks[0] is not TextLogSink console)
@@ -55,7 +73,7 @@ public sealed class ArcaneLoggerProvider : ILoggerProvider, ISupportExternalScop
 
         Sinks = sinks;
         _console = console;
-        _colorAllowed = colorAllowed;
+        _terminalAllowsColor = terminalAllowsColor;
         _current = Snapshot(initial);
         _clock = initial.Timestamps == TimestampKind.Local ? LocalClock : UtcClock;
         _includeScopes = initial.IncludeScopes;
@@ -67,7 +85,7 @@ public sealed class ArcaneLoggerProvider : ILoggerProvider, ISupportExternalScop
     /// <summary>Every sink, console first. Immutable after construction.</summary>
     public LogSink[] Sinks { get; }
 
-    /// <summary>True when the active console mode renders colour (mode Color and the environment allows it).</summary>
+    /// <summary>True when the active console mode renders colour (mode Color, applied at start or by a reload, and the terminal allows it).</summary>
     public bool ConsoleColor => _console.Color && _console.Enabled;
 
     public bool IncludeScopes => _includeScopes;
@@ -215,9 +233,10 @@ public sealed class ArcaneLoggerProvider : ILoggerProvider, ISupportExternalScop
         }
     }
 
+    /// <summary>Combines the mode (per reload) with the terminal's capability (probed once, when colour is first asked for).</summary>
     private void ApplyConsoleMode(ConsoleMode mode)
     {
-        _console.Color = mode == ConsoleMode.Color && _colorAllowed;
+        _console.Color = mode == ConsoleMode.Color && (_colorAllowed ??= _terminalAllowsColor());
         _console.Enabled = mode != ConsoleMode.Off;
     }
 

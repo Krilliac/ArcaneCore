@@ -7,21 +7,34 @@ namespace ArcaneCore.Kernel.Logging;
 /// Decides whether the console sink may emit ANSI colour. Colour is on only when the mode asks for it, stdout is a terminal (not a
 /// file or pipe), <c>NO_COLOR</c> is unset or empty (https://no-color.org) and, on Windows, the console accepts virtual terminal
 /// processing (enabled here through <c>SetConsoleMode</c>; any failure, including no console at all, means plain output).
-/// Pure where it can be: <see cref="Resolve(ConsoleMode, bool, string?, Func{bool})"/> takes every environmental fact as a parameter.
+/// The two halves are separate: <see cref="TerminalAllowsColor()"/> is the environment's verdict, fixed for the process, and the
+/// mode is the configuration's, which reloads. Pure where it can be: the overloads taking explicit facts are the tested core.
 /// </summary>
 public static class ConsoleColorSupport
 {
     private const int StdOutputHandle = -11;
     private const uint EnableVirtualTerminalProcessing = 0x0004;
 
-    /// <summary>The decision for the running process.</summary>
+    /// <summary>The decision for the running process, for the mode it runs in now.</summary>
     public static bool Resolve(ConsoleMode mode)
         => Resolve(mode, Console.IsOutputRedirected, Environment.GetEnvironmentVariable("NO_COLOR"), TryEnableWindowsVirtualTerminal);
 
     /// <summary>The decision from explicit facts (tests). <paramref name="enableTerminal"/> runs only when everything else allows colour.</summary>
     public static bool Resolve(ConsoleMode mode, bool outputRedirected, string? noColor, Func<bool> enableTerminal)
+        => mode == ConsoleMode.Color && TerminalAllowsColor(outputRedirected, noColor, enableTerminal);
+
+    /// <summary>
+    /// The environment's half of the decision, independent of the configured mode: stdout is a terminal, <c>NO_COLOR</c> is unset or
+    /// empty, and the terminal accepts SGR. The provider probes it once (the first time <c>Color</c> is asked for) and combines it
+    /// with the mode of every reload, so Plain to Color works on a real terminal.
+    /// </summary>
+    public static bool TerminalAllowsColor()
+        => TerminalAllowsColor(Console.IsOutputRedirected, Environment.GetEnvironmentVariable("NO_COLOR"), TryEnableWindowsVirtualTerminal);
+
+    /// <summary>The capability from explicit facts (tests). <paramref name="enableTerminal"/> runs only when the two cheap facts allow colour.</summary>
+    public static bool TerminalAllowsColor(bool outputRedirected, string? noColor, Func<bool> enableTerminal)
     {
-        if (mode != ConsoleMode.Color || outputRedirected || !string.IsNullOrEmpty(noColor))
+        if (outputRedirected || !string.IsNullOrEmpty(noColor))
         {
             return false;
         }

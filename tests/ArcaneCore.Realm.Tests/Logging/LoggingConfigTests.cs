@@ -81,6 +81,95 @@ public sealed class LoggingConfigTests
         LoggingConfigChecks.ThrowIfInvalid(new ArcaneLoggingOptions());
     }
 
+    /// <summary>
+    /// The IConfiguration check (check-config, exit 78) and the bound-options check (provider construction and reload) are one rule
+    /// set: a configuration that one rejects, the other rejects too. The text and JSON sinks sharing a file is the rule that used to
+    /// live only in <see cref="LoggingConfigChecks.ThrowIfInvalid"/>, so check-config passed and the host then crashed building the
+    /// provider; here both paths of the same path are tried, one spelled out in config and one from the sink's default.
+    /// </summary>
+    [Fact]
+    public void Check_AndThrowIfInvalid_BothRejectTheTextAndJsonSinksOnOneFile()
+    {
+        (string Key, string Value)[] explicitSame =
+        [
+            ("Logging:ArcaneCore:File:Enabled", "true"),
+            ("Logging:ArcaneCore:File:Path", "logs/world.log"),
+            ("Logging:ArcaneCore:Json:Enabled", "true"),
+            ("Logging:ArcaneCore:Json:Path", "logs/world.log"),
+        ];
+        (string Key, string Value)[] defaultSame =
+        [
+            ("Logging:ArcaneCore:File:Enabled", "true"),
+            ("Logging:ArcaneCore:Json:Enabled", "true"),
+            ("Logging:ArcaneCore:Json:Path", "logs/arcanecore.log"), // the text sink's default path
+        ];
+        (string Key, string Value)[] differ =
+        [
+            ("Logging:ArcaneCore:File:Enabled", "true"),
+            ("Logging:ArcaneCore:File:Path", "logs/world.log"),
+            ("Logging:ArcaneCore:Json:Enabled", "true"),
+            ("Logging:ArcaneCore:Json:Path", "logs/world.jsonl"),
+        ];
+        (string Key, string Value)[] sameButOneDisabled =
+        [
+            ("Logging:ArcaneCore:File:Enabled", "false"),
+            ("Logging:ArcaneCore:File:Path", "logs/world.log"),
+            ("Logging:ArcaneCore:Json:Enabled", "true"),
+            ("Logging:ArcaneCore:Json:Path", "logs/world.log"),
+        ];
+
+        foreach ((string Key, string Value)[] rejected in new[] { explicitSame, defaultSame })
+        {
+            IConfiguration configuration = Config(rejected);
+            ConfigIssue issue = Assert.Single(new LoggingConfigChecks().Check(configuration));
+            Assert.Equal(ConfigSeverity.Error, issue.Severity);
+            Assert.Equal("Logging:ArcaneCore:Json:Path", issue.Key);
+            Assert.Contains("must differ", issue.Problem, StringComparison.Ordinal);
+
+            var ex = Assert.Throws<OptionsValidationException>(() => LoggingConfigChecks.ThrowIfInvalid(Bind(configuration)));
+            string failure = Assert.Single(ex.Failures);
+            Assert.Contains("Logging:ArcaneCore:Json:Path", failure, StringComparison.Ordinal);
+            Assert.Contains("must differ", failure, StringComparison.Ordinal);
+        }
+
+        foreach ((string Key, string Value)[] accepted in new[] { differ, sameButOneDisabled })
+        {
+            IConfiguration configuration = Config(accepted);
+            Assert.Empty(new LoggingConfigChecks().Check(configuration));
+            LoggingConfigChecks.ThrowIfInvalid(Bind(configuration));
+        }
+    }
+
+    /// <summary>Every rule the bound-options check knows is reported by the raw-configuration check with the same key, and vice versa.</summary>
+    [Fact]
+    public void Check_AndThrowIfInvalid_AgreeOnEveryRule()
+    {
+        IConfiguration configuration = Config(
+            ("Logging:ArcaneCore:Console:QueueCapacity", "0"),
+            ("Logging:ArcaneCore:File:Enabled", "true"),
+            ("Logging:ArcaneCore:File:Path", "logs/"),
+            ("Logging:ArcaneCore:File:RollSizeMb", "-1"),
+            ("Logging:ArcaneCore:File:Retain", "-3"),
+            ("Logging:ArcaneCore:File:QueueCapacity", "1000001"),
+            ("Logging:ArcaneCore:Json:Enabled", "true"),
+            ("Logging:ArcaneCore:Json:Path", " "),
+            ("Logging:ArcaneCore:Json:QueueCapacity", "0"));
+
+        string[] checkKeys = [.. new LoggingConfigChecks().Check(configuration).Select(i => i.Key).Order(StringComparer.Ordinal)];
+        var ex = Assert.Throws<OptionsValidationException>(() => LoggingConfigChecks.ThrowIfInvalid(Bind(configuration)));
+        string[] throwKeys = [.. ex.Failures.Select(f => f[..f.IndexOf(' ', StringComparison.Ordinal)]).Order(StringComparer.Ordinal)];
+
+        Assert.Equal(7, checkKeys.Length);
+        Assert.Equal(checkKeys, throwKeys);
+    }
+
+    private static ArcaneLoggingOptions Bind(IConfiguration configuration)
+    {
+        var options = new ArcaneLoggingOptions();
+        configuration.GetSection(ArcaneLoggingOptions.SectionName).Bind(options);
+        return options;
+    }
+
     [Fact]
     public void AddArcaneCoreLogging_RefusesAnInvalidSection_BeforeTheHostIsBuilt()
     {
@@ -159,6 +248,65 @@ public sealed class LoggingConfigTests
         bad.Console.QueueCapacity = 0;
         monitor.Change(bad);
         Assert.False(sinks[0].Enabled);
+    }
+
+    /// <summary>
+    /// The terminal's capability (a tty, NO_COLOR unset, VT accepted) is independent of the configured mode: a daemon started with
+    /// <c>Console:Mode=Plain</c> or <c>Off</c> on a colour-capable terminal must render colour after a reload to <c>Color</c>, as the
+    /// options' "live" promise says. The capability is probed once, and only when colour is first asked for.
+    /// </summary>
+    [Theory]
+    [InlineData(ConsoleMode.Plain)]
+    [InlineData(ConsoleMode.Off)]
+    public void Reload_ToColor_RendersColour_WhenTheProcessStartedPlainOrOff(ConsoleMode start)
+    {
+        var output = new StringWriter();
+        var initial = new ArcaneLoggingOptions();
+        initial.Console.Mode = start;
+        var monitor = new FakeMonitor(initial);
+        LogSink[] sinks = [new TextLogSink("console", new TextWriterLineWriter(output), color: false)];
+        int probes = 0;
+        using var provider = new ArcaneLoggerProvider(monitor, () => { probes++; return true; }, sinks);
+        Assert.False(provider.ConsoleColor);
+        Assert.Equal(0, probes);
+
+        var color = new ArcaneLoggingOptions();
+        color.Console.Mode = ConsoleMode.Color;
+        monitor.Change(color);
+
+        Assert.True(provider.ConsoleColor);
+        Assert.True(sinks[0].Enabled);
+        Assert.Equal(1, probes);
+        Assert.Contains("Logging:ArcaneCore:Console:Mode changed to Color.", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains('\u001b', output.ToString());
+
+        // Color -> Plain -> Color: the verdict is reused, not probed again
+        var plain = new ArcaneLoggingOptions();
+        plain.Console.Mode = ConsoleMode.Plain;
+        monitor.Change(plain);
+        Assert.False(provider.ConsoleColor);
+        monitor.Change(color);
+        Assert.True(provider.ConsoleColor);
+        Assert.Equal(1, probes);
+    }
+
+    [Fact]
+    public void Reload_ToColor_StaysPlain_WhenTheTerminalRefusesColour()
+    {
+        var output = new StringWriter();
+        var initial = new ArcaneLoggingOptions();
+        initial.Console.Mode = ConsoleMode.Plain;
+        var monitor = new FakeMonitor(initial);
+        LogSink[] sinks = [new TextLogSink("console", new TextWriterLineWriter(output), color: false)];
+        using var provider = new ArcaneLoggerProvider(monitor, static () => false, sinks);
+
+        var color = new ArcaneLoggingOptions();
+        color.Console.Mode = ConsoleMode.Color;
+        monitor.Change(color);
+
+        Assert.False(provider.ConsoleColor);
+        Assert.Contains("Logging:ArcaneCore:Console:Mode changed to Color.", output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain('\u001b', output.ToString());
     }
 
     private sealed class FakeMonitor(ArcaneLoggingOptions current) : IOptionsMonitor<ArcaneLoggingOptions>

@@ -38,6 +38,7 @@ public sealed class RollingFileWriter : ILineWriter
     private readonly RollingFilePolicy _policy;
     private readonly Func<DateTime> _clock;
     private readonly TextWriter _diagnostics;
+    private readonly Func<string, FileStream> _open;
     private readonly Encoder _encoder = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetEncoder();
     private FileStream? _stream;
     private long _size;
@@ -48,7 +49,8 @@ public sealed class RollingFileWriter : ILineWriter
     /// <param name="path">The active file; its directory is created on first open.</param>
     /// <param name="clock">The clock daily rolling and segment names use (the provider passes the configured timestamp clock).</param>
     /// <param name="diagnostics">Where open/write failures are reported, once per failure streak; null means stderr.</param>
-    public RollingFileWriter(string path, RollingFilePolicy policy, Func<DateTime>? clock = null, TextWriter? diagnostics = null)
+    /// <param name="open">How the active file is opened for appending (tests inject a stream that fails); null means <see cref="OpenAppend"/>.</param>
+    public RollingFileWriter(string path, RollingFilePolicy policy, Func<DateTime>? clock = null, TextWriter? diagnostics = null, Func<string, FileStream>? open = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         _path = Path.GetFullPath(path);
@@ -58,7 +60,12 @@ public sealed class RollingFileWriter : ILineWriter
         _policy = policy;
         _clock = clock ?? (static () => DateTime.UtcNow);
         _diagnostics = diagnostics ?? Console.Error;
+        _open = open ?? OpenAppend;
     }
+
+    /// <summary>The production open: append, shared read/write (tail -f and a second daemon on the same file work), 64 KiB buffer.</summary>
+    public static FileStream OpenAppend(string path)
+        => new(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, bufferSize: 64 * 1024);
 
     /// <summary>Bytes in the active file.</summary>
     public long CurrentSize => _size;
@@ -151,9 +158,18 @@ public sealed class RollingFileWriter : ILineWriter
 
     public void Dispose()
     {
-        Flush();
-        _stream?.Dispose();
+        Flush(); // a failed flush has already closed and released the stream through Fail()
+        FileStream? stream = _stream;
         _stream = null;
+        try
+        {
+            stream?.Dispose();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Failures++;
+            _diagnostics.WriteLine($"ArcaneCore logging: cannot close {_path}: {ex.Message}.");
+        }
     }
 
     private void Open(DateTime now)
@@ -177,7 +193,7 @@ public sealed class RollingFileWriter : ILineWriter
             _segmentDate = now.Date;
         }
 
-        _stream = new FileStream(_path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, bufferSize: 64 * 1024);
+        _stream = _open(_path);
     }
 
     private void Roll(DateTime now)
@@ -206,7 +222,7 @@ public sealed class RollingFileWriter : ILineWriter
 
         _size = 0;
         _segmentDate = now.Date;
-        _stream = new FileStream(_path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, bufferSize: 64 * 1024);
+        _stream = _open(_path);
     }
 
     private void Prune()
@@ -231,16 +247,31 @@ public sealed class RollingFileWriter : ILineWriter
         }
     }
 
+    /// <summary>
+    /// Enters the failure streak: the state (<c>_stream</c> released, <c>_retryAt</c>, <c>_failing</c>) is set before anything that can
+    /// throw, because disposing a <see cref="FileStream"/> with a dirty buffer re-flushes and raises the same IOException again; that
+    /// second exception is swallowed here (the file is closed either way) so it can never leave the writer holding a closed stream.
+    /// </summary>
     private void Fail(Exception ex)
     {
         Failures++;
         LostLines++;
-        _stream?.Dispose();
+        FileStream? stream = _stream;
         _stream = null;
         _retryAt = _clock() + RetryDelay;
-        if (!_failing)
+        bool first = !_failing;
+        _failing = true;
+        try
         {
-            _failing = true;
+            stream?.Dispose();
+        }
+        catch (Exception disposeEx) when (disposeEx is IOException or UnauthorizedAccessException or ObjectDisposedException)
+        {
+            // the dirty buffer could not be flushed on close; the lines in it are what LostLines already counts
+        }
+
+        if (first)
+        {
             _diagnostics.WriteLine($"ArcaneCore logging: cannot write {_path}: {ex.Message}. Lines are dropped until the file can be reopened (retry every {RetryDelay.TotalSeconds.ToString(CultureInfo.InvariantCulture)} s).");
         }
     }

@@ -168,8 +168,14 @@ public sealed class LogFormatTests
         Assert.False(ConsoleColorSupport.Resolve(ConsoleMode.Plain, outputRedirected: false, noColor: null, () => terminalAsked = true));
         Assert.False(ConsoleColorSupport.Resolve(ConsoleMode.Off, outputRedirected: false, noColor: null, () => terminalAsked = true));
         Assert.False(terminalAsked);
-        // this test process has stdout redirected by the runner, or a terminal; either way the real probe must not throw
+        // the capability alone knows nothing of the mode
+        Assert.True(ConsoleColorSupport.TerminalAllowsColor(outputRedirected: false, noColor: null, static () => true));
+        Assert.False(ConsoleColorSupport.TerminalAllowsColor(outputRedirected: true, noColor: null, static () => true));
+        Assert.False(ConsoleColorSupport.TerminalAllowsColor(outputRedirected: false, noColor: "1", static () => true));
+        Assert.False(ConsoleColorSupport.TerminalAllowsColor(outputRedirected: false, noColor: null, static () => false));
+        // this test process has stdout redirected by the runner, or a terminal; either way the real probes must not throw
         _ = ConsoleColorSupport.Resolve(ConsoleMode.Color);
+        _ = ConsoleColorSupport.TerminalAllowsColor();
     }
 
     [Fact]
