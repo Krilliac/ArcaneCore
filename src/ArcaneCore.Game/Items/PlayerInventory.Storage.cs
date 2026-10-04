@@ -48,6 +48,14 @@ public sealed partial class PlayerInventory
     /// </summary>
     public event Action<Item, byte, bool>? BagEquipChanged;
 
+    /// <summary>
+    /// The one equip/unequip hook of the equipment slots (0-18), shared by item sets and Equip: item spells (<see cref="EquipmentChange"/> says
+    /// which transition). Raised on the world thread, inside the inventory operation, after the stat hook for <see cref="EquipmentChange.Worn"/>
+    /// and before it for <see cref="EquipmentChange.Removed"/> (mangos order). Not raised while the inventory loads or for a shadow inventory
+    /// without a player: login replays the worn items to its subscriber instead.
+    /// </summary>
+    public event Action<Item, byte, EquipmentChange>? EquipmentChanged;
+
     /// <summary>Raise <see cref="BagEquipChanged"/> (equipped) for every bag already worn, in slot order: for login, after the equipment is loaded.</summary>
     public void ReplayBagEquips()
     {
@@ -76,6 +84,10 @@ public sealed partial class PlayerInventory
         if (slot < InventorySlots.EquipmentEnd)
         {
             ApplyMods(item, slot, apply: true);
+            if (Player is not null)
+            {
+                EquipmentChanged?.Invoke(item, slot, EquipmentChange.Worn);
+            }
         }
         else if (slot < InventorySlots.BagEnd)
         {
@@ -102,6 +114,11 @@ public sealed partial class PlayerInventory
         {
             if (slot < InventorySlots.EquipmentEnd)
             {
+                if (Player is not null)
+                {
+                    EquipmentChanged?.Invoke(item, slot, EquipmentChange.Removed);
+                }
+
                 ApplyMods(item, slot, apply: false);
                 SetVisibleItemSlot(slot, null);
             }
@@ -540,11 +557,13 @@ public sealed partial class PlayerInventory
             if (_modsApplied.Add(item))
             {
                 StatsApplier.Apply(Player, item, slot, apply: true);
+                EquipmentChanged?.Invoke(item, slot, EquipmentChange.ModsApplied);
             }
         }
         else if (_modsApplied.Remove(item))
         {
             StatsApplier.Apply(Player, item, slot, apply: false);
+            EquipmentChanged?.Invoke(item, slot, EquipmentChange.ModsRemoved);
         }
     }
 

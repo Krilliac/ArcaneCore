@@ -86,7 +86,7 @@ Config (section `Items`, `ItemMechanicsOptions`): `DurabilityLossEnable=true`, `
 ### Not delivered (needs another lane's primitive, data or a decision)
 
 - `CMSG_USE_ITEM`, item charges and consumption (`TakeCastItem`), item-defined cooldown category/duration pick, bind-on-use, the 1.11 full-health/power consumable refusal: need `SpellCast.CastItem` (skills-professions `skills-spell-items`). References: `SpellHandler.cpp:36-140`, `Spell.cpp:4991-5046, 7109-7175`, `Player.cpp:22139-22214`.
-- ON_EQUIP item spells, item sets, chance-on-hit item spells and temp-enchant procs, the enchantment engine, random properties: need the `ItemSet`, `ItemRandomProperties` and `SpellItemEnchantment` DBCs (developer-supplied build-5875 files, not in any reference) and spell-aura breadth plus the melee-outcome event of the warrior lane.
+- Chance-on-hit item spells and temp-enchant procs, the enchantment engine, random properties: need the `ItemRandomProperties` and `SpellItemEnchantment` DBCs (developer-supplied build-5875 files, not in any reference) and the proc engine. (ON_EQUIP item spells and item sets are delivered, see the next section.)
 - Item loot containers (`CMSG_OPEN_ITEM`, `generated_loot`), lockboxes: need coordination with the loot-service owner (group-loot-xp).
 - Equip cooldown and combat weapon-swap GCD, food/drink sit and `MOD_REGEN` (aura 84), elixir exclusivity, offline rules (conjured items after 15 minutes offline, REAL_DURATION offline tick; need `logout_time` from death-persistence).
 - Gift wrapping (`CMSG_WRAP_ITEM`): classic-db `item_template` has no `WrappedGift` column, so no wrapper can be created from the data; READ_ITEM page text needs `page_text` content and `CMSG_PAGE_TEXT_QUERY`.
@@ -99,3 +99,31 @@ None of the new packets (`SMSG_ITEM_TIME_UPDATE`, `SMSG_READ_ITEM_*`, `SMSG_ITEM
 ### Tests (this lane)
 
 `tests/ArcaneCore.Game.Tests/ItemMechanics/` (load fixes, trade and durability, misc handlers, maintenance, spell create, ammo), `tests/ArcaneCore.Data.Tests/CharacterItemStateStoreTests.cs` (provider matrix), `tests/ArcaneCore.World.Tests/Items/` (`ItemMiscWorldTests`, `ItemMaintenanceWorldTests`, `AmmoWorldTests`). The Game test namespace is `...Tests.ItemMechanics`, not `...Tests.Items`, because the latter would shadow `ArcaneCore.Game.Items` in older tests.
+
+## Item sets and ON_EQUIP item spells (L5-item-sets-and-equip-spells)
+
+### Implemented
+
+- **One equip hook.** `PlayerInventory.EquipmentChanged(item, slot, EquipmentChange)` is raised for the equipment slots from `EquipItem`, `RemoveItem` (so `DestroyItem` too) and from the stat hook. `Worn` / `Removed` are placement, `ModsApplied` / `ModsRemoved` are the stat-mod flips (equipped and unbroken, repaired, broken, taken off). Not raised while the inventory loads or for a shadow inventory; login replays instead. The four equipped bag slots keep the existing `BagEquipChanged`.
+- **ON_EQUIP item spells** (`Items/ItemUse/ItemEquipSpells.cs`, mangos `ApplyItemEquipSpell` / `ApplyEquipSpell`). Spells with trigger 1 are cast triggered on the wearer with the item as cast item when the item starts counting as worn (so a broken item has none, and repairing it brings them back). When it stops counting, every aura of every spell of the item that was cast from that item is removed, except an on-use spell with negative charges. No charge is consumed. Non-quiver equipped bags take part too.
+- **Item sets** (`Items/ItemSets/ItemSetBonuses.cs`, mangos `AddItemsSetItem` / `RemoveItemsSetItem`). Each worn piece counts once (two rings of one set count two); a bonus spell is cast when its threshold is reached and removed as soon as the count drops below it, so unequipping a piece removes the highest bonus. A broken piece still counts. A set whose required skill (ItemSet.dbc) the wearer lacks when the piece is worn does not count that piece, and removing it is a no-op (mangos checks only then). Per player state is `PlayerItemSets` (`ItemEquipSpells.SetsOf(inventory)`), world thread only, changed per equip event, nothing per tick.
+- **Content.** `Kernel/Items/ItemSetContent.cs` (`ItemSetRecord`, immutable `ItemSetCatalog`) and `Data/Items/ItemSetDbcReader.cs`: ItemSet.dbc, 45 fields (id, names, 17 item ids, 8 spell ids at 27, 8 thresholds at 35, required skill 43, rank 44; mangos `ItemSetEntryfmt`). Strict field count, duplicate ids and a string offset outside the string block refuse the file. `item_template.set_id` already existed.
+- **World.** `ItemEquipSpellFeature` loads the catalog once at startup and binds `ItemEquipSpells.Attach` to `PlayerLoggedIn`. Attach replays: sets for every worn piece, then the spells of the unbroken ones, removing a saved aura of the same spell id first so logout and login never stack. A set id missing from the catalog is logged once per set and applies nothing (mangos logs the same).
+- **Quivers** are left to `QuiverHaste` (class Quiver bags are skipped here), so its ranged-weapon condition and aura guard are unchanged. A test attaches both and checks the aura exists once.
+
+### Options
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ItemSets:DbcPath` | unset | Developer-supplied build-5875 `ItemSet.dbc`. Unset: no set bonuses (a warning is logged), Equip: spells still work. Configured but unreadable or another layout: startup is refused. |
+
+### Known gaps
+
+- **Shapeshift form checks are not applied.** Mangos skips an equip or set spell the current form forbids and re-evaluates on a form change (`UpdateEquipSpellsAtFormChange`). Here the triggered cast does not check the form and nothing re-evaluates, so a form-restricted Equip: spell can apply in the wrong form. Needs a form-change event from the stance feature.
+- The catalog is not hot-reloadable (it mirrors the client's own DBC); a changed file needs a restart.
+- Whether the saved-aura list is restored before `PlayerLoggedIn` fires was not verified; the replay is written to be correct either way (removes by spell id, then casts).
+- UNVERIFIED against a real 1.12.1 client: the tooltip text of set bonuses and the set item list come from the client's own DBC; the server only supplies the spells. The ItemSet.dbc field layout is taken from the mangos reference (`DBCStructure.h` / `DBCfmt.h`), not from a developer file in this repo.
+
+### Tests (this lane)
+
+`ItemSetsAndEquipSpellsTests` (Game.Tests/ItemUse: 2 then 4 pieces, unequip and destroy removal, broken pieces, skill requirement, unknown set, equip spell apply/remove/break/repair, on-use negative-charge exemption, bags, login replay without stacking, quiver haste next to it), `ItemSetDbcReaderTests` (Data.Tests/Items), `ItemEquipSpellFeatureTests` (World.Tests/Items).
