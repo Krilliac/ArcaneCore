@@ -3,6 +3,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Stealth;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
@@ -73,17 +74,27 @@ public sealed partial class CreatureMapSystem
 
     /// <summary>
     /// vmangos CallAIMoveLOS (Maps/GridNotifiersImpl.h:57-69): a creature that is alive, not evading, in control and has an AI
-    /// gets <c>MoveInLineOfSight</c> for the unit that moved near it.
+    /// gets <c>MoveInLineOfSight</c> for the unit that moved near it when it can see that unit; a stealthed player it cannot see, but
+    /// whose stealth it nearly breaks (inside the alert band), gets <c>OnMoveInStealth</c> instead
+    /// (<see cref="StealthServices.CanCreatureSee"/>, vmangos IsVisibleForOrDetect with the creature as detector).
     /// </summary>
     internal void CallAiMoveInLineOfSight(Creature creature, Unit moving)
     {
         if (creature.IsAlive && !creature.IsEvading && (creature.UnitFlags & LostControl) == 0
             && _creatures.ContainsKey(creature.Guid) && creature.AI is { } ai)
         {
-            ai.MoveInLineOfSight(moving);
+            bool alert = false;
+            bool visible = moving is not Player player || StealthServices.Find(Map) is not { } stealth || stealth.CanCreatureSee(creature, player, out alert);
+            if (visible)
+            {
+                ai.MoveInLineOfSight(moving);
+            }
+            else if (alert)
+            {
+                ai.OnMoveInStealth(moving);
+            }
         }
     }
-
     private void TrySubscribeCombat()
     {
         if (_combatSubscribed || Map.FindUpdater<MapCombat>() is not { } combat)
@@ -97,7 +108,7 @@ public sealed partial class CreatureMapSystem
 
     private void CreateAi(Creature creature)
     {
-        CreatureAI ai = _ai.Factory.Create(creature, _content, out bool unknown);
+        CreatureAI ai = _ai.Factory.Create(creature, _content, out bool unknown, _options.ImplicitEventAi);
         string aiName = creature.Template.AIName;
         if (unknown && _reportedAi.Add($"name:{aiName}"))
         {

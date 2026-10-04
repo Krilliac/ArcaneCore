@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Combat;
@@ -626,13 +627,14 @@ public sealed partial class MapCombat
     /// combat; the attacker earns rage; lethal damage kills; otherwise health drops, a player
     /// attacker without a victim starts attacking, non-player victims gain threat and player
     /// victims earn rage. <paramref name="outcome"/> / <paramref name="cleanDamage"/> carry the
-    /// dodge/parry rage case. <paramref name="startsCombat"/> false skips the combat link and the auto-attack start. Returns the damage dealt. Public for the spells area (direct
+    /// dodge/parry rage case. <paramref name="startsCombat"/> false skips the combat link and the auto-attack start. Returns the damage dealt. <paramref name="threatSpell"/> and <paramref name="critical"/>: the spell the damage comes from and whether it crit, for the threat formula (<see cref="AddDamageThreat"/>). Public for the spells area (direct
     /// spell damage uses <paramref name="direct"/> = false for DoTs, and
     /// <paramref name="meleeDamage"/> = false for every spell). vmangos Unit.cpp DealDamage
     /// distinguishes DIRECT_DAMAGE from SPELL_DIRECT_DAMAGE: only weapon damage rewards
     /// outgoing rage, and its auto-start Attack call enables melee only for DIRECT_DAMAGE.
     /// </summary>
-    public uint DealDamage(Unit attacker, Unit victim, uint damage, MeleeHitOutcome outcome = MeleeHitOutcome.Normal, uint cleanDamage = 0, bool direct = true, bool meleeDamage = true, bool startsCombat = true)
+    public uint DealDamage(Unit attacker, Unit victim, uint damage, MeleeHitOutcome outcome = MeleeHitOutcome.Normal, uint cleanDamage = 0, bool direct = true, bool meleeDamage = true, bool startsCombat = true,
+        SpellInfo? threatSpell = null, bool critical = false)
     {
         if (IsQuestSettlementPending(attacker) || IsQuestSettlementPending(victim) || !IsAliveState(victim))
         {
@@ -720,7 +722,7 @@ public sealed partial class MapCombat
         {
             if (enterCombat)
             {
-                victim.Combat.Threat.AddThreat(attacker, damage);
+                AddDamageThreat(attacker, victim, damage, critical || outcome == MeleeHitOutcome.Crit, threatSpell);
             }
         }
         else if (enterCombat && victim.PowerType == PowerType.Rage)

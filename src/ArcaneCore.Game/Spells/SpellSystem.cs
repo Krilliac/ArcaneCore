@@ -429,6 +429,7 @@ public sealed partial class SpellSystem
 
             if (ApplyEffects(cast, target, entry.EffectMask, entry.Multipliers) is { } outcome)
             {
+                ApplySpellThreat(cast, target, outcome); // SpellSystem.Threat.cs: combat on a harmless hostile hit, assist, flat spell_threat
                 NotifyOutcome(cast, outcome);
             }
         }

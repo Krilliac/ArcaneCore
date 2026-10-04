@@ -102,10 +102,22 @@ public abstract class CreatureAI
         }
     }
 
+    /// <summary>
+    /// A stealthed player the creature cannot see stands just outside its detection range (vmangos CreatureAI::OnMoveInStealth,
+    /// AI/CreatureAI.cpp:349-353): a hostile creature that qualifies reacts with the alert (<see cref="CreatureMapSystem.TriggerAlert"/>).
+    /// </summary>
+    public virtual void OnMoveInStealth(Unit who)
+    {
+        if (System is { } system && system.CanTriggerAlert(Me, who))
+        {
+            system.TriggerAlert(Me, who);
+        }
+    }
+
     // --- helpers --------------------------------------------------------------------------
 
     /// <summary>Attack <paramref name="target"/>: melee, threat, combat state, chase and the assistance call.</summary>
-    public bool AttackStart(Unit target) => System?.AttackStart(Me, target) ?? false;
+    public virtual bool AttackStart(Unit target) => System?.AttackStart(Me, target) ?? false;
 
     /// <summary>Choose the victim from the threat list; evades and returns false when there is none (vmangos SelectHostileTarget).</summary>
     protected bool UpdateVictim() => System?.SelectHostileTarget(Me) ?? false;

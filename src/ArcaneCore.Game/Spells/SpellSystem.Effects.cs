@@ -233,7 +233,7 @@ public sealed partial class SpellSystem
                 : (uint)(amount * CombatRules.CritMultiplier(context.Spell));
         }
 
-        uint healed = Damage.Heal(context.Caster, context.Target, context.Spell, amount);
+        uint healed = Damage.Heal(context.Caster, context.Target, context.Spell, amount, periodic: false);
         RecordHealing(context.Caster, context.Target, context.Spell, healed, crit);
         SendToSet(context.Caster, WorldOpcode.SmsgSpellheallog,
             SpellPackets.BuildSpellHealLog(context.Target.Guid, context.Caster.Guid, context.Spell.Id, healed, crit), includeSelf: true);

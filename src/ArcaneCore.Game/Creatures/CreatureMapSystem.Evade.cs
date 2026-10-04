@@ -2,6 +2,7 @@ using System.Numerics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -13,10 +14,14 @@ namespace ArcaneCore.Game.Creatures;
 public sealed partial class CreatureMapSystem
 {
     /// <summary>
-    /// vmangos CreatureAI::EnterEvadeMode: stop the cast, every fight and the threat list, the AI's evade hook (health
-    /// and mana are NOT restored: regeneration does it, see <see cref="CreatureMovementOptions.EvadeRestoresFullHealth"/>), and run home: to the default generator's reset
-    /// position (a waypoint mover's last reached node), else to the spawn point. The creature
-    /// refuses attacks until it arrives (<see cref="Creature.IsInEvadeMode"/>).
+    /// vmangos CreatureAI::EnterEvadeMode (AI/CreatureAI.cpp:323-346): stop the cast, drop the auras an evade removes
+    /// (<see cref="ICreatureAuraReset"/>, not for a charmed creature), stop every fight and clear the threat list, the AI's evade hook,
+    /// and run home: to the combat start point for waypoint movers (they resume the path there), else to the spawn point. The creature
+    /// refuses attacks until it arrives (<see cref="Creature.IsInEvadeMode"/>). Health and mana are not touched: the creature regenerates a
+    /// third of its maximum per 5 s tick once out of combat (<c>Creatures:Movement:EvadeRestoresFullHealth</c> restores the old instant snap).
+    /// Not delivered: combo points other players hold on the creature are not cleared (no evade event reaches the combo service), a
+    /// creature's pets and totems are not sent home (creatures have no controlled-unit links), the loot recipient is not cleared.
+    /// <see cref="Evaded"/> is raised once per evade.
     /// </summary>
     public void EnterEvadeMode(Creature creature)
     {
@@ -30,7 +35,13 @@ public sealed partial class CreatureMapSystem
         // point: vmangos HomeMovementGenerator::_setTargetLocation, HomeMovementGenerator.cpp:52-56.
         CreatureHome home = creature.Motion.Default.GetResetPosition(creature) ?? creature.Home;
 
+        bool charmed = !creature.CharmerGuid.IsEmpty;
         _ai.Spells?.Interrupt(creature);
+        if (!charmed && _options.EvadeResetsAuras && _ai.Spells is ICreatureAuraReset reset)
+        {
+            reset.ResetAuras(creature, (creature.Template.Behaviour & CreatureBehaviourFlags.KeepPositiveAurasOnEvade) != 0);
+        }
+
         Map.Combat.CombatStop(creature);
         if (creature.Combat.HasThreatList)
         {
@@ -55,8 +66,16 @@ public sealed partial class CreatureMapSystem
             return;
         }
 
-        creature.Motion.MoveTargetedHome(home);
+        if (!charmed)
+        {
+            creature.Motion.MoveTargetedHome(home);
+        }
+
+        Evaded?.Invoke(creature);
     }
+
+    /// <summary>Raised after a creature entered evade mode (once per evade; not for a dead creature).</summary>
+    public event Action<Creature>? Evaded;
 
     private void ResetAiState(Creature creature)
     {

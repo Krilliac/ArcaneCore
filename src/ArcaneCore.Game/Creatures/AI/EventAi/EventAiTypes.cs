@@ -28,6 +28,8 @@ public enum EventAiActionType : byte
     Text = 1,
     Cast = 11,
     Summon = 12,
+    ThreatSingle = 13,
+    ThreatAllPercent = 14,
     AutoAttack = 20,
     CombatMovement = 21,
     SetPhase = 22,

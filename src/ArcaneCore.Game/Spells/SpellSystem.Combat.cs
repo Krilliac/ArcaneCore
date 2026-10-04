@@ -75,7 +75,7 @@ public sealed partial class SpellSystem
         uint resisted = ApplyResist(caster, target, spell, ref amount, periodic: false);
         uint absorbed = AbsorbDamage(caster, target, spell.SchoolMask(), amount, spell); // shields, mana shield, split (Unit.cpp:1920-2200)
         amount -= absorbed;
-        uint dealt = Damage.DealSpellDamage(caster, target, spell, amount, periodic: false, startsCombat: StartsCombat(caster, target));
+        uint dealt = Damage.DealSpellDamage(caster, target, spell, amount, periodic: false, startsCombat: StartsCombat(caster, target), critical: crit);
         OnDamageTaken(target, caster, dealt, periodic: false, absorbed, spell.Id);
         RecordDamage(caster, target, spell, dealt, crit);
         SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog, SpellPackets.BuildSpellNonMeleeDamageLog(
