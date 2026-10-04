@@ -17,6 +17,14 @@ namespace ArcaneCore.Game.Tests.Skills;
 /// </summary>
 public sealed class CombatSkillsTests
 {
+    private sealed class OffhandStatSource : ICombatStatSource
+    {
+        public bool? HasOffhandWeapon(Unit unit) => true;
+        public bool? PlayerCanParry(Player player) => null;
+        public bool? PlayerCanBlock(Player player) => null;
+        public uint? ShieldBlockValue(Unit unit) => null;
+    }
+
     private const uint OneHandSword = 91100;   // weapon 2/7, inventory type 13 (one hand: main or off hand)
     private const uint Greatshield = 91101;    // armor 4/6 with a block value
 
@@ -197,6 +205,24 @@ public sealed class CombatSkillsTests
 
         MeleeRollInput incoming = rig.Map.Combat.BuildRollInput(rig.Creature, rig.Player, WeaponAttackType.BaseAttack);
         Assert.Equal(15, incoming.VictimDefenseSkill);               // the player's defense skill, not level x 5
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(20)]
+    [InlineData(50)]
+    public void OffhandHitTableUsesLearnedSkillEvenWithTheStatsSource(int weaponSkill)
+    {
+        var rig = new Rig();
+        rig.Skills.Set(SkillIds.Swords, (ushort)weaponSkill, 50);
+        rig.Skills.CanDualWield = true;
+        rig.Equip(OneHandSword, InventorySlots.OffHand);
+        rig.Map.Combat.Stats = new OffhandStatSource();
+
+        MeleeRollInput input = rig.Map.Combat.BuildRollInput(rig.Player, rig.Creature, WeaponAttackType.OffAttack);
+        Assert.Equal(weaponSkill, input.AttackerWeaponSkill);
+        Assert.Equal(50, input.AttackerMaxSkill);
+        Assert.True(input.DualWield);
     }
 
     [Fact]

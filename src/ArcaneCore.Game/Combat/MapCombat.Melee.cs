@@ -1,4 +1,6 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Combat;
@@ -25,10 +27,16 @@ public sealed class MeleeDamageInfo
     public uint CleanDamage { get; set; }
 
     public uint Blocked { get; set; }
+
+    /// <summary>Damage removed by physical school and mana shields after armor and block.</summary>
+    public uint Absorbed { get; set; }
 }
 
 public sealed partial class MapCombat
 {
+    /// <summary>The world's spell system, installed by SpellFeature for white-swing absorbs and damage interrupts.</summary>
+    public SpellSystem? SpellMitigation { get; set; }
+
     // --- attack start / stop (vmangos Unit::Attack, AttackStop, CombatStop) ------------
 
     /// <summary>
@@ -373,7 +381,7 @@ public sealed partial class MapCombat
 
         MeleeDamageInfo info = CalculateMeleeDamage(attacker, victim, attackType);
         MeleeSwingResolved?.Invoke(info);   // vmangos ProcDamageAndSpell, before the packet and the damage (Unit.cpp:2260-2271)
-        SubDamage[] sub = [new SubDamage(0, info.TotalDamage, 0, 0)]; // physical: first school index 0, no absorb/resist without auras
+        SubDamage[] sub = [new SubDamage(0, info.TotalDamage, info.Absorbed, 0)]; // vmangos Unit.cpp:1510-1565; physical school after block/absorb
         CombatPackets.SendToSet(attacker, WorldOpcode.SmsgAttackerstateupdate,
             CombatPackets.AttackerStateUpdate(info.HitInfo, attacker.Guid, victim.Guid, info.TotalDamage, sub, info.TargetState, info.Blocked));
 
@@ -429,7 +437,7 @@ public sealed partial class MapCombat
             AttackerWeaponSkill = WeaponSkill(attacker, attackType, victim),
             VictimDefenseSkill = hooks.GetDefenseSkill(victim, attacker),
             DualWield = HasOffhandWeapon(attacker),
-            HitBonus = 0f,
+            HitBonus = SpellMitigation?.GetTotalAuraModifier(attacker, AuraType.ModHitChance) ?? 0f, // vmangos SpellCaster.cpp:389-390; weapon filters remain a limit
             BaseCritChance = attacker is Player pa ? pa.GetFloat(UpdateFields.PlayerCritPercentage) : 5f,
             DodgeChance = dodge,
             ParryChance = parry,
@@ -515,11 +523,20 @@ public sealed partial class MapCombat
                 break;
         }
 
-        // SetDamageDependentHitInfoFlags (no absorb/resist for physical swings without auras)
-        uint total = damage + clean;
+        // vmangos Unit.cpp:1510-1565,1920-2083: block first, then school/mana absorbs.
+        uint absorbed = damage > 0
+            ? SpellMitigation?.AbsorbDamage(attacker, victim, SpellSchoolMasks.Of(SpellSchool.Normal), damage, null) ?? 0
+            : 0;
+        damage -= absorbed;
+        uint total = damage + absorbed + clean;
         if (blocked > 0)
         {
             hit |= HitInfo.RolledBlock | HitInfo.Block;
+        }
+
+        if (absorbed > 0)
+        {
+            hit |= HitInfo.Absorb;
         }
 
         if (state is VictimState.Dodge or VictimState.Parry or VictimState.Blocks or VictimState.Deflects or VictimState.Evades
@@ -530,7 +547,7 @@ public sealed partial class MapCombat
 
         if (victim is Player)
         {
-            uint spurt = state is VictimState.Dodge or VictimState.Parry ? total : damage;
+            uint spurt = state is VictimState.Dodge or VictimState.Parry ? total : damage + absorbed;
             if (spurt > victim.MaxHealth * 20 / 100)
             {
                 hit |= HitInfo.BloodSpurt;
@@ -542,6 +559,7 @@ public sealed partial class MapCombat
         info.TotalDamage = damage;
         info.CleanDamage = clean;
         info.Blocked = blocked;
+        info.Absorbed = absorbed;
         return info;
     }
 
@@ -606,7 +624,13 @@ public sealed partial class MapCombat
             }
         }
 
-        DealDamage(info.Attacker, victim, info.TotalDamage, info.Outcome, info.CleanDamage, direct: true);
+        uint dealt = DealDamage(info.Attacker, victim, info.TotalDamage, info.Outcome, info.CleanDamage, direct: true);
+        // DealDamage publishes positive hits through DamageDealt. Fully absorbed hits have no
+        // health loss and need the zero-damage spell interruption path (vmangos Unit.cpp:733-746).
+        if (dealt == 0 && info.Absorbed > 0)
+        {
+            SpellMitigation?.OnDamageTaken(victim, info.Attacker, 0, periodic: false, absorbed: info.Absorbed);
+        }
     }
 
     // --- damage, combat state, kill (vmangos Unit::DealDamage, Kill) ---------------------

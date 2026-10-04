@@ -223,7 +223,12 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             foreach (MapCombat combat in _combatSubscriptions)
             {
                 combat.DamageDealt -= OnDamageDealt;
+                if (ReferenceEquals(combat.SpellMitigation, System))
+                {
+                    combat.SpellMitigation = null;
+                }
                 combat.UnitKilled -= OnUnitKilled;
+                combat.MeleeSwingFinished -= OnMeleeSwingFinished;
             }
 
             _combatSubscriptions.Clear();
@@ -259,6 +264,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         {
             if (_combatSubscriptions.Add(combat))
             {
+                combat.SpellMitigation = System;
                 combat.DamageDealt += OnDamageDealt;
                 combat.UnitKilled += OnUnitKilled;
                 combat.MeleeSwingFinished += OnMeleeSwingFinished;
