@@ -59,10 +59,23 @@ is introduced. The earlier characters v5 known-node mask remains authoritative.
   (`D:\refs\vmangos\src\game\ObjectMgr.cpp:7438-7449`). ArcaneCore currently
   uses the first nonzero creature-template display for the chosen team mount.
 * The route write at logout and the character-position save use separate stores.
-  They are not one database transaction. If the route store fails, logout moves
-  the player to the departure node. A crash between either save still needs a
-  live-client recovery test. Similarly, completed-flight route deletion and the
-  final position save are separate operations.
+  They are not one database transaction. The logout save and the landing delete
+  go through `TaxiFlightWriteQueue` (off the world thread, in order, one
+  outstanding operation per character, a failed write retained until it is
+  durable); the login barrier in `OnPlayerLoadingAsync` refuses the relog while
+  the character's write is retained, and `StopAsync` drains the queue (throwing,
+  naming the characters, when a write still cannot be persisted). When the save
+  fails every attempt the queue falls back to what the synchronous save did: a
+  snapshot of the character at the departure node of its leg is queued behind
+  the logout snapshot through the character save queue and the route row is
+  deleted (that delete is retained until durable), so the character row never
+  stays mid-air without a route. The fallback is unavailable, and the save is
+  simply retained, when the departure node is unknown or on another map. Retention
+  is in process: a crash while a write is retained loses it (logged loudly), and
+  a store that flips back up between the character barrier and the route barrier
+  of one relog is a window a live-client recovery test still has to cover.
+  Similarly, completed-flight route deletion and the final position save are
+  separate operations.
 * Cross-map TaxiPathNode flights and spell-triggered taxi rides are refused by
   this owner. The game data and a client capture are needed before implementing
   the teleport split that vmangos uses. The mount-aura removal and full casting
@@ -73,8 +86,12 @@ is introduced. The earlier characters v5 known-node mask remains authoritative.
 Release solution build: zero warnings, zero errors. Game (3660), Data (773, five
 skipped), Cryptography, Realm and World suites pass on SQLite; the MockClient
 self-test runs its 59 checks. The logout-save and login-resume wiring in
-`NpcServicesFeature` is covered only by the flight-system suspend/resume test and
-the store round trip; no test drives the feature hooks end to end. No real-client
-capture or hosted MariaDB/PostgreSQL run has occurred. The route row is deleted
-only for characters whose route was persisted (loaded at login or saved at a
-failed logout), so an ordinary landing issues no database call.
+`NpcServicesFeature` is driven by `NpcServicesFeatureTaxiTests` (World tests):
+the logout save and landing delete reaching the queue, resume after a relog, the
+departure-node fallback and route clear when the store is down, the login barrier
+refusing and then passing, a later logout retrying a retained write, and
+`WorldFeatures.StopWorldFeaturesAsync` draining the queue; the queue itself has
+`TaxiFlightWriteQueueTests`. No real-client capture or hosted MariaDB/PostgreSQL
+run has occurred. The route row is deleted only for characters whose route was
+persisted (loaded at login, or abandoned at a failed logout save), so an ordinary
+landing issues no database call.
