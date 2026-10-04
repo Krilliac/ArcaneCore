@@ -90,6 +90,26 @@ public sealed class ChairCameraTests
     }
 
     [Fact]
+    public async Task ClosestSlot_ClampsAnImportedHugeSlotCount_InsteadOfLoopingBillionsOfTimes()
+    {
+        // Security (wave-3 scan finding 4): data0 = uint.MaxValue is a malformed import; one use packet must stay cheap.
+        GameObject chair = Chair(ThreeSeatEntry, 10, 20, 0, slots: uint.MaxValue, scale: 1.0f);
+        Task<(float X, float Y)> work = Task.Run(() => GameObjectChairs.ClosestSlot(chair, 10, 20));
+        Task finished = await Task.WhenAny(work, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.True(ReferenceEquals(finished, work), "ClosestSlot did not finish: the slot loop is unbounded");
+        (float _, float y) = await work;
+        Assert.InRange(y, 20 - 64f, 20 + 64f);
+    }
+
+    [Fact]
+    public void ClosestSlot_ZeroMaxSlots_KeepsTheUnclampedVmangosLoop()
+    {
+        GameObject chair = Chair(ThreeSeatEntry, 10, 20, 0, slots: 200, scale: 1.0f);
+        (float _, float y) = GameObjectChairs.ClosestSlot(chair, 10, 20 + 99.5f, maxSlots: 0);
+        Assert.Equal(119.5f, y, 3);
+    }
+
+    [Fact]
     public void ClosestSlot_RotatesWithTheOrientation_AndTheLaterSlotWinsATie()
     {
         // Two slots of size 1 at orientation pi/2: the line is the x axis (orthogonal = pi); slot 0 is at x + 0.5 and slot 1 at x - 0.5.
