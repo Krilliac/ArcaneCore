@@ -47,6 +47,10 @@ public sealed class WorldHandshakeTests
         Assert.Equal(WorldOpcode.SmsgAuthResponse, op);
         Assert.Equal((byte)AuthResponseCode.Ok, payload[0]);
 
+        // wow_messages smsg_auth_response.wowm AUTH_OK: u8 result, u32 billing_time, u8 billing_flags, u32 billing_rested
+        // (vmangos World.cpp:324-333, mangos-classic WorldSession::SendAuthOk): ten bytes, the billing fields zero.
+        Assert.Equal(new byte[] { 0x0C, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, payload);
+
         // 4. SMSG_ADDON_INFO follows.
         (op, _) = await ReadServerPacketAsync(client, crypt);
         Assert.Equal(WorldOpcode.SmsgAddonInfo, op);
@@ -80,6 +84,7 @@ public sealed class WorldHandshakeTests
         (WorldOpcode op, byte[] resp) = await ReadServerPacketAsync(client, crypt);
         Assert.Equal(WorldOpcode.SmsgAuthResponse, op);
         Assert.Equal((byte)AuthResponseCode.Failed, resp[0]);
+        Assert.Single(resp); // a failure reply stays the single result byte (wowm AUTH_FAILED test vector)
     }
 
     // --- digest + packet construction --------------------------------------------

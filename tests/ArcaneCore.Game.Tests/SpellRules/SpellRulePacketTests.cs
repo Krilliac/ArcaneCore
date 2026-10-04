@@ -29,6 +29,17 @@ public sealed class SpellRulePacketTests
     }
 
     [Fact]
+    public void SpellDelayed_IsAFullEightByteGuidThenU32Delay()
+    {
+        // wow_messages smsg_spell_delayed.wowm (Guid, u32); vmangos Packets/Spell.cpp:656 and mangos-classic
+        // Spell.cpp:6834 write ObjectGuid, whose operator<< is a raw u64 (not a packed guid).
+        byte[] bytes = ArcaneCore.Game.Spells.SpellPackets.BuildSpellDelayed(Caster, 500);
+
+        Assert.Equal("0201000000000000" + "f4010000", Convert.ToHexString(bytes).ToLowerInvariant());
+        Assert.Equal(12, bytes.Length);
+    }
+
+    [Fact]
     public void DispelFailed_IsGuidGuidThenSpellsToTheEnd()
     {
         byte[] bytes = SpellRulePackets.BuildDispelFailed(Caster, Target, [7, 8]);
