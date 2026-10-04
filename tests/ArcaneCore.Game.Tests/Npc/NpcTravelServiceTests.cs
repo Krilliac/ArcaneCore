@@ -112,10 +112,11 @@ public sealed class NpcTravelServiceTests
 
     private sealed class TaxiRig : IDisposable
     {
-        public TaxiRig(float discount = 1, bool learnAll = true)
+        public TaxiRig(float discount = 1, bool learnAll = true, Action<Player>? beforeFlight = null)
         {
             NpcContent content = TaxiContent();
-            Flights = new TaxiFlightSystem(new NpcStore(content), PathNodes, e => e == Gryphon ? GryphonDisplay : 0u, () => 0u);
+            Flights = new TaxiFlightSystem(new NpcStore(content), PathNodes, e => e == Gryphon ? GryphonDisplay : 0u, () => 0u,
+                beforeFlight: beforeFlight);
             Flights.Landed += (_, node) => Landings.Add(node);
             Kit = new NpcServiceKit(NpcFlags.FlightMaster | NpcFlags.Gossip, content,
                 new QuestNpcDependencies(Flights: Flights, Reputation: new NpcVendorServiceTests.FixedReputation(discount)));
@@ -141,6 +142,22 @@ public sealed class NpcTravelServiceTests
     }
 
     private static uint Reply(NpcServiceKit kit) => BitConverter.ToUInt32(kit.Single(WorldOpcode.SmsgActivatetaxireply));
+
+    [Fact]
+    public void ScriptedTaxiStart_CallsMountCleanupBeforeApplyingTheFlightDisplay()
+    {
+        int calls = 0;
+        using var rig = new TaxiRig(beforeFlight: player =>
+        {
+            calls++;
+            player.SetUInt32(UpdateFields.UnitFieldMountdisplayid, 0);
+        });
+        rig.Player.SetUInt32(UpdateFields.UnitFieldMountdisplayid, 999);
+
+        Assert.True(rig.Flights.StartFlight(rig.Player, [1, 2], [10], Gryphon));
+        Assert.Equal(1, calls);
+        Assert.Equal(GryphonDisplay, rig.Player.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
+    }
 
     [Fact]
     public void TaxiQueryAvailableNodes_LearnsTheNearestNodeFirstThenShowsTheMap()

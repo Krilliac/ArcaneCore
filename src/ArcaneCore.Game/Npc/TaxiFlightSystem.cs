@@ -44,6 +44,7 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     private readonly TaxiPathNodeCatalog _pathNodes;
     private readonly Func<uint, uint> _mountDisplay;
     private readonly Func<uint> _nowMs;
+    private readonly Action<Player>? _beforeFlight;
     private readonly ILogger _logger;
     private uint _splineId;
 
@@ -52,13 +53,15 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     /// <param name="mountDisplay">Mount creature entry → display id (vmangos ObjectMgr::GetTaxiMountDisplayId; 0 = unknown).</param>
     /// <param name="nowMs">World time in milliseconds (movement timestamps).</param>
     /// <param name="logger">Diagnostics.</param>
-    public TaxiFlightSystem(NpcStore npcs, TaxiPathNodeCatalog pathNodes, Func<uint, uint> mountDisplay, Func<uint> nowMs, ILogger? logger = null)
+    /// <param name="beforeFlight">Removes a scripted flight's old spell mount after the route is validated.</param>
+    public TaxiFlightSystem(NpcStore npcs, TaxiPathNodeCatalog pathNodes, Func<uint, uint> mountDisplay, Func<uint> nowMs, ILogger? logger = null, Action<Player>? beforeFlight = null)
     {
         _npcs = npcs;
         _pathNodes = pathNodes;
         _mountDisplay = mountDisplay;
         _nowMs = nowMs;
         _logger = logger ?? NullLogger.Instance;
+        _beforeFlight = beforeFlight;
     }
 
     /// <summary>Raised after a flight ended at its destination (the player was put down).</summary>
@@ -100,6 +103,9 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
         }
 
         var flight = new Flight(player, map, hops, nodes[^1]);
+        // vmangos Player::ActivateTaxiPathTo removes a spell mount before a scripted flight
+        // (Player.cpp:17889-17893). The flight-master path already rejects a mounted player.
+        _beforeFlight?.Invoke(player);
         _flights[player.Guid] = flight;
 
         // Unit::Mount + FlightPathMovementGenerator::Initialize.

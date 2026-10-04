@@ -15,6 +15,7 @@ public sealed class MountAura : ISpellHandlerModule
     {
         ArgumentNullException.ThrowIfNull(system);
         system.RegisterAura(AuraType.Mounted, new AuraHandler(Apply, null));
+        system.RegisterCastCheck(new MountCastCheck());
     }
 
     private static void Apply(SpellSystem system, SpellAuraHolder holder, SpellAura aura, bool apply)

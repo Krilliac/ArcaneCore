@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
@@ -78,7 +79,8 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
             () => services.GetService<ItemsFeature>()?.Templates ?? ItemTemplateStore.Empty,
             tables.Repair, tables.BankSlots, () => DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         IItemService items = dependencies.Items ?? _items;
-        Flights = new TaxiFlightSystem(npcs, tables.PathNodes, MountDisplay, () => _world?.NowMs ?? 0, logger);
+        Flights = new TaxiFlightSystem(npcs, tables.PathNodes, MountDisplay, () => _world?.NowMs ?? 0, logger,
+            player => services.GetService<SpellFeature>()?.System.RemoveAurasByType(player, AuraType.Mounted));
         return dependencies with
         {
             Creatures = dependencies.Creatures is { } creatures && Options.NpcTemplates.Count > 0
