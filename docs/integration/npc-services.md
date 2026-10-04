@@ -1,5 +1,9 @@
 # Integration notes: NPC services and flight paths (`feat/npc-services`)
 
+> Historical round-2 behavior. The current taxi implementation, including per-leg fares,
+> DBC loading, required path nodes and logout resume, is described in
+> [docs/areas/taxi.md](../areas/taxi.md). The flight claims below describe the original lane.
+
 Base: `codex/integrate-feature-fleet-20261003` (draft PR #11, `0d32fba`). Fleet round 2 area:
 gossip, vendor, repair, trainer, innkeeper, banker, spirit healer and flight master
 interactions that the #11 ledger listed as missing. There is **no schema change and no
