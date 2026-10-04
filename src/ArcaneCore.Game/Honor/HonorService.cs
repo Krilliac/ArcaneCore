@@ -57,7 +57,7 @@ public sealed class HonorService : IPlayerHonor, IHonorAwards
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(stored);
-        var state = new HonorState(stored);
+        var state = new HonorState(stored) { LoadedWeek = _weekBeginDay() };
         Refresh(player, state);
         return state;
     }
@@ -165,14 +165,18 @@ public sealed class HonorService : IPlayerHonor, IHonorAwards
     /// A null <paramref name="update"/> is a player the week did not rank: only the standing clears and the old rows go.
     /// The honor tab is refreshed and the state queued again so a write still waiting cannot bring the old numbers back.
     /// <paramref name="cityProtector"/> null leaves the City Protector title alone.
+    /// <paramref name="newLastDay"/> is the week begin day the calculation moves to: a state built under that week (loaded from the row the
+    /// transaction already wrote) or a later one already holds the result, so nothing is added a second time.
     /// </summary>
-    public void ApplyMaintenance(Player player, HonorRankUpdate? update, uint deleteCpBefore, bool? cityProtector)
+    public void ApplyMaintenance(Player player, HonorRankUpdate? update, uint deleteCpBefore, bool? cityProtector, uint newLastDay)
     {
         ArgumentNullException.ThrowIfNull(player);
-        if (For(player) is not { } state)
+        if (For(player) is not { } state || state.LoadedWeek >= newLastDay)
         {
             return;
         }
+
+        state.LoadedWeek = newLastDay;
 
         if (update is not null)
         {

@@ -38,6 +38,9 @@ public sealed class HonorState
 
     public HonorRankInfo HighestRank { get; internal set; }
 
+    /// <summary>The honor week begin day this state was built under; a weekly result for a week at or before it is already in the loaded row.</summary>
+    public uint LoadedWeek { get; internal set; }
+
     public uint Standing { get; internal set; }
 
     public uint LastWeekHk { get; internal set; }

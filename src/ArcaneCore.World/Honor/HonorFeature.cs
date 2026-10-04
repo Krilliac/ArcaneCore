@@ -35,6 +35,13 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
     private HonorOptions _options = new();
     private uint _weekBegin;
 
+    /// <summary>
+    /// Held by a login from before its honor read until its state is tracked, and by the weekly job from before its store
+    /// transaction until the week begin day moves. A login therefore sees the week wholly before (old row, old week: the result is
+    /// applied to it in memory later) or wholly after (new row, new week: nothing to add).
+    /// </summary>
+    internal SemaphoreSlim WeekGate { get; } = new(1, 1);
+
     /// <summary>The bound <c>World:Honor</c> options (after the first access to <see cref="Service"/> or <see cref="Attach"/>).</summary>
     public HonorOptions Options
     {
@@ -140,15 +147,24 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
             return;
         }
 
-        if (_writes is not null)
+        await WeekGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            await _writes.FlushCharacterAsync(character.Id).ConfigureAwait(false);
+            if (_writes is not null)
+            {
+                await _writes.FlushCharacterAsync(character.Id).ConfigureAwait(false);
+            }
+
+            CharacterHonorData stored = session.Services.GetService<IHonorStore>() is { } store
+                ? await store.LoadAsync(character.Id).ConfigureAwait(false)
+                : CharacterHonorData.Empty;
+            service.Track(player, service.Create(player, stored));
+        }
+        finally
+        {
+            WeekGate.Release();
         }
 
-        CharacterHonorData stored = session.Services.GetService<IHonorStore>() is { } store
-            ? await store.LoadAsync(character.Id).ConfigureAwait(false)
-            : CharacterHonorData.Empty;
-        service.Track(player, service.Create(player, stored));
         service.RestorePvpFlags(player);
         HonorItemRequirements.Install(player.Inventory, service);
     }

@@ -52,12 +52,21 @@ public sealed class HonorMaintenanceRunner(HonorFeature honor, IServiceScopeFact
                 scores, race => RaceClassRules.TeamForRace(race) == Team.Alliance, options.Maintenance);
             IReadOnlyCollection<int>? protectors = options.CityProtector ? CityProtectors(scores, plan.Updates) : null;
 
-            await store.ApplyMaintenanceAsync(
-                new HonorMaintenanceBatch(plan.Updates, period.DeleteCpBefore, new HonorMaintenanceState(period.NewLast, period.NewNext, false), protectors),
-                cancellationToken).ConfigureAwait(false);
+            await honor.WeekGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await store.ApplyMaintenanceAsync(
+                    new HonorMaintenanceBatch(plan.Updates, period.DeleteCpBefore, new HonorMaintenanceState(period.NewLast, period.NewNext, false), protectors),
+                    cancellationToken).ConfigureAwait(false);
+                honor.SetWeekBegin(period.NewLast);
+            }
+            finally
+            {
+                honor.WeekGate.Release();
+            }
+
             applied++;
             PeriodsApplied++;
-            honor.SetWeekBegin(period.NewLast);
             logger.LogInformation(
                 "Honor maintenance applied for week {Begin}-{End}: Alliance {Alliance}, Horde {Horde}, inactive {Inactive}",
                 period.WeekBegin, period.WeekEnd, plan.AllianceCount, plan.HordeCount, plan.InactiveCount);
@@ -120,7 +129,7 @@ public sealed class HonorMaintenanceRunner(HonorFeature honor, IServiceScopeFact
             foreach (Player player in world.OnlinePlayers)
             {
                 int id = (int)player.Guid.Low;
-                service.ApplyMaintenance(player, byCharacter.GetValueOrDefault(id), period.DeleteCpBefore, titled?.Contains(id));
+                service.ApplyMaintenance(player, byCharacter.GetValueOrDefault(id), period.DeleteCpBefore, titled?.Contains(id), period.NewLast);
             }
 
             return true;

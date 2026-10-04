@@ -120,6 +120,7 @@ public sealed class HonorConsumersTests
         HonorOptions defaults = settings.ToOptions();
         Assert.Equal(new HonorOptions().Maintenance, defaults.Maintenance);
         Assert.Equal(3u, defaults.MaintenanceDay);
+        Assert.Equal(HonorMaintenanceMode.Startup, defaults.MaintenanceMode); // vmangos flags the week and runs it after a restart (HonorMgr.cpp:617-633)
 
         IConfigurationSection section = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {

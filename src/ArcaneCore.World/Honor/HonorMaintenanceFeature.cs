@@ -8,9 +8,9 @@ namespace ArcaneCore.World.Honor;
 
 /// <summary>
 /// Schedules the weekly honor calculation (<see cref="HonorMaintenanceRunner"/>). It first catches up at attach (before the world
-/// thread starts, so nobody is online), then, in <see cref="HonorMaintenanceMode.Live"/>, checks once a minute whether a week
+/// thread starts, so nobody is online), then, only in <see cref="HonorMaintenanceMode.Live"/> mode (opt-in), checks once a minute whether a week
 /// has ended (vmangos World.cpp:2121-2127 checks the same way, but only flags the work and needs a restart, HonorMgr.cpp:617-633;
-/// running in-process is a deliberate deviation, <c>World:Honor:MaintenanceMode = Startup</c> restores the vmangos timing).
+/// running in-process is a deliberate, opt-in deviation: the default <c>World:Honor:MaintenanceMode = Startup</c> is the vmangos timing).
 /// A failed run is logged and retried on the next tick; the transaction is atomic so nothing is applied twice.
 /// </summary>
 public sealed class HonorMaintenanceFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers) : IWorldFeature, IAsyncDisposable

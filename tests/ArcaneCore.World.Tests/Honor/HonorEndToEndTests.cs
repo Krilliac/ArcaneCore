@@ -24,7 +24,7 @@ public sealed class HonorEndToEndTests
     {
         var store = new MemoryHonorStore();
         uint today = HonorMaintenancePlanner.GameDay(DateTimeOffset.UtcNow.ToUnixTimeSeconds(), 0);
-        uint thisWeek = HonorMaintenancePlanner.LastMaintenanceDay(today, new HonorOptions().MaintenanceDay);
+        uint thisWeek = today - 3; // the honor week the players log in under; the week ends later in the test (a consistent state: the next maintenance day is thisWeek + 7)
         await store.SaveMaintenanceAsync(new HonorMaintenanceState(thisWeek, thisWeek + 7, false)); // not due: attach leaves it alone
         await using WorldTestHost host = HonorTestServices.Start(store);
 
@@ -79,7 +79,7 @@ public sealed class HonorEndToEndTests
         Assert.Equal(1u, await host.PlayerStateAsync("Hekiller", p => p.GetUInt32(UpdateFields.PlayerFieldLifetimeHonorbaleKills)));
 
         // The week ends: only 1 kill is below the 15 needed, so he stays unranked (inactive); a character with 15 would not.
-        await store.SaveMaintenanceAsync(new HonorMaintenanceState(thisWeek, thisWeek, false));
+        await store.SaveMaintenanceAsync(new HonorMaintenanceState(thisWeek, today, false));
         HonorMaintenanceFeature maintenance = await host.PlayerStateAsync("Hekiller",
             p => ((WorldSession)p.Session).Services.GetRequiredService<HonorMaintenanceFeature>());
         Assert.Equal(1, await maintenance.RunAsync(live: true));

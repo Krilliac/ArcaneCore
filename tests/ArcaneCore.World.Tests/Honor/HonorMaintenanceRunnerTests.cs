@@ -103,6 +103,26 @@ public sealed class HonorMaintenanceRunnerTests
     }
 
     [Fact]
+    public async Task The_store_transaction_waits_for_a_login_that_is_reading_honor_and_the_week_moves_with_it()
+    {
+        // A login holds WeekGate from before its honor read until its state is tracked, so it sees the week wholly before or wholly after.
+        await using Rig rig = Week();
+        await rig.Honor.WeekGate.WaitAsync();
+        Task<int> run = rig.Runner.RunDueAsync(107, null);
+
+        await Task.Delay(200);
+        Assert.False(run.IsCompleted);
+        Assert.Equal(new HonorMaintenanceState(100, 107, false), rig.Store.Maintenance); // nothing committed yet
+        Assert.Equal(100u, rig.Honor.WeekBeginDay);
+
+        rig.Honor.WeekGate.Release();
+        Assert.Equal(1, await run);
+        Assert.Equal(new HonorMaintenanceState(107, 114, false), rig.Store.Maintenance);
+        Assert.Equal(107u, rig.Honor.WeekBeginDay);
+        Assert.Equal(1, rig.Honor.WeekGate.CurrentCount); // released again
+    }
+
+    [Fact]
     public async Task Standings_follow_contribution_within_each_faction_and_inactive_players_have_none()
     {
         await using Rig rig = Week();
@@ -235,12 +255,12 @@ public sealed class HonorMaintenanceRunnerTests
         Assert.Equal(20u, await host.PlayerStateAsync("Honweekly", p => p.GetUInt32(UpdateFields.PlayerFieldThisWeekKills)));
 
         // The week ends: the rows are not due for the store until we say so.
-        await store.SaveMaintenanceAsync(new HonorMaintenanceState(thisWeek, thisWeek, false));
+        await store.SaveMaintenanceAsync(new HonorMaintenanceState(thisWeek, today, false));
         HonorMaintenanceFeature maintenance = await host.PlayerStateAsync("Honweekly",
             p => ((ArcaneCore.World.Net.WorldSession)p.Session).Services.GetRequiredService<HonorMaintenanceFeature>());
         Assert.Equal(1, await maintenance.RunAsync(live: true));
 
-        Assert.Equal(thisWeek + 7, store.Maintenance!.NextDay);
+        Assert.Equal(today + 7, store.Maintenance!.NextDay);
         (uint thisWeekKills, uint lastWeekKills, uint standing, int rank, uint lifetime) = await host.PlayerStateAsync("Honweekly", p => (
             p.GetUInt32(UpdateFields.PlayerFieldThisWeekKills),
             p.GetUInt32(UpdateFields.PlayerFieldLastWeekKills),

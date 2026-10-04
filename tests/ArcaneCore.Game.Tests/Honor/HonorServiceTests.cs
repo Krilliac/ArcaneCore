@@ -255,6 +255,38 @@ public sealed class HonorServiceTests
     }
 
     [Fact]
+    public void The_weekly_result_is_applied_once_to_a_player_loaded_before_the_commit()
+    {
+        var update = new HonorRankUpdate(1, 1200f, 3, 4, WeekHk: 20, WeekDk: 2, WeekCp: 500f);
+        _service.ApplyMaintenance(_player, update, 19_990, null, newLastDay: 20_004);
+        HonorState state = _service.For(_player)!;
+        Assert.Equal((20, 2), (state.StoredHk, state.StoredDk));
+        Assert.Single(_sink.States);
+
+        // The same period again (a duplicate delivery) must not add the week a second time.
+        _service.ApplyMaintenance(_player, update, 19_990, null, newLastDay: 20_004);
+        Assert.Equal((20, 2), (state.StoredHk, state.StoredDk));
+        Assert.Single(_sink.States);
+    }
+
+    [Fact]
+    public void A_player_loaded_after_the_commit_already_holds_the_week_and_is_left_alone()
+    {
+        // Loaded from the row the transaction already wrote (the service reports the new week begin), so StoredHk already includes the week.
+        var service = new HonorService(new HonorOptions(), _clock, () => 20_004, _sink);
+        Player late = TestWorld.CreatePlayer(5, 0, 0, new FakeSession());
+        var stored = CharacterHonorData.Empty with { State = CharacterHonorState.Empty with { StoredHk = 20, StoredDk = 2, RankPoints = 1200f } };
+        service.Track(late, service.Create(late, stored));
+        _sink.Clear();
+
+        service.ApplyMaintenance(late, new HonorRankUpdate(5, 1200f, 3, 4, 20, 2, 500f), 19_990, null, newLastDay: 20_004);
+
+        HonorState state = service.For(late)!;
+        Assert.Equal((20, 2), (state.StoredHk, state.StoredDk));
+        Assert.Empty(_sink.States);
+    }
+
+    [Fact]
     public void Options_default_to_retail()
     {
         var o = new HonorOptions();
@@ -267,7 +299,7 @@ public sealed class HonorServiceTests
         Assert.Equal(0u, o.PoolSizePerFaction);
         Assert.False(o.CityProtector);
         Assert.Empty(o.RacialLeaderExcludedEntries);
-        Assert.Equal(HonorMaintenanceMode.Live, o.MaintenanceMode);
+        Assert.Equal(HonorMaintenanceMode.Startup, o.MaintenanceMode);
         Assert.Equal(new HonorMaintenanceOptions(0.2f, 0, 0), o.Maintenance);
     }
 

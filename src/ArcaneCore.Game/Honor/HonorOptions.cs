@@ -46,7 +46,7 @@ public sealed record HonorOptions
     /// <summary>Creature entries that are never racial leaders for honor (retail data: none).</summary>
     public IReadOnlyList<uint> RacialLeaderExcludedEntries { get; init; } = [];
 
-    public HonorMaintenanceMode MaintenanceMode { get; init; } = HonorMaintenanceMode.Live;
+    public HonorMaintenanceMode MaintenanceMode { get; init; } = HonorMaintenanceMode.Startup;
 
     /// <summary>Directory for the HCR calculation report; empty writes none.</summary>
     public string ReportDirectory { get; init; } = string.Empty;

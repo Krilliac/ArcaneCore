@@ -29,7 +29,7 @@ public sealed class HonorSettings
 
     public uint[] RacialLeaderExcludedEntries { get; set; } = [];
 
-    public HonorMaintenanceMode MaintenanceMode { get; set; } = HonorMaintenanceMode.Live;
+    public HonorMaintenanceMode MaintenanceMode { get; set; } = HonorMaintenanceMode.Startup;
 
     public string ReportDirectory { get; set; } = string.Empty;
 
