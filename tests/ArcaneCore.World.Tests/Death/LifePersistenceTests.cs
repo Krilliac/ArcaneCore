@@ -44,9 +44,9 @@ public sealed class LifePersistenceTests
         {
             Player player = host.World.FindOnlinePlayer("Liferelog")!;
             player.Health = Math.Max(1u, player.MaxHealth / 2);
-            player.SetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Rage, 37);
+            player.SetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Rage, 900); // large enough that out-of-combat decay cannot reach 0 however long a loaded machine takes to relog
             player.SetUInt32(UpdateFields.PlayerXp, 123);
-            return (player.Health, 37u);
+            return (player.Health, 900u);
         });
 
         await using WorldTestClient again = await RelogAsync(host, first, "LIFE1", key, "Liferelog");
