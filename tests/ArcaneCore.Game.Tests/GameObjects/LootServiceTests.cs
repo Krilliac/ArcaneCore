@@ -164,7 +164,8 @@ public sealed class LootServiceTests
         rig.Loot.TakeItem(player, 0);
         rig.Loot.TakeMoney(player);
         rig.Loot.Release(player, wolf.Guid);
-        Assert.Equal(50_000u, wolf.CorpseDecayMs);
+        // Rate.Corpse.Decay.Looted = 0 (retail default): a third of the 120 s respawn delay, which is longer than the 100 s corpse delay (Creature.cpp:3369-3380).
+        Assert.Equal(40_000u, wolf.CorpseDecayMs);
         Assert.False(wolf.UnitFlags.HasFlag(UnitFlags.Skinnable));
     }
 

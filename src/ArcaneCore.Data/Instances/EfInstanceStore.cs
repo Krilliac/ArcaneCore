@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Creatures;
 using ArcaneCore.Data.Loot;
 using ArcaneCore.Kernel.Instances;
 using Microsoft.EntityFrameworkCore;
@@ -61,6 +62,9 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
         await db.Set<LootStatePlayerRow>().Where(r => r.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<LootStateItemRow>().Where(r => r.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<LootStateRow>().Where(r => r.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+
+        // The dead creatures of a reset instance come back with it (vmangos MapPersistentState deletes its creature_respawn rows).
+        await db.Set<CreatureRespawnRow>().Where(r => r.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<InstanceRow>().Where(i => i.Id == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }

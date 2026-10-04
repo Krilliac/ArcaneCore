@@ -80,13 +80,19 @@ public sealed class CreatureContentReloadable(IServiceProvider services) : ICont
             }
         }
 
+        // A spawn with creature_spawn_entry rows is orphaned only when none of its entries has a template any more.
+        private bool IsOrphaned(CreatureContent current, CreatureSpawn spawn)
+            => current.GetSpawnEntries(spawn.Guid) is { Count: > 0 } entries
+                ? entries.All(entry => fresh.FindTemplate(entry) is null)
+                : fresh.FindTemplate(spawn.Entry) is null;
+
         private (int Spawns, string Entries) OrphanedSpawns(CreatureContent current)
         {
             var entries = new SortedSet<uint>();
             int count = 0;
             foreach (uint mapId in current.MapsWithSpawns)
             {
-                foreach (CreatureSpawn spawn in current.GetSpawns(mapId).Where(spawn => fresh.FindTemplate(spawn.Entry) is null))
+                foreach (CreatureSpawn spawn in current.GetSpawns(mapId).Where(spawn => IsOrphaned(current, spawn)))
                 {
                     count++;
                     entries.Add(spawn.Entry);

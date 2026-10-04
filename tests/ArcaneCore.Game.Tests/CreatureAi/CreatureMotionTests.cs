@@ -16,7 +16,7 @@ namespace ArcaneCore.Game.Tests.CreatureAi;
 public sealed class CreatureMotionTests
 {
     [Fact]
-    public void PathPacket_PacksMiddleOffsets_AndRoundTripsEveryPointToAQuarterYard()
+    public void PathPacket_PacksDestinationOffsets_AndRoundTripsEveryPointToAQuarterYard()
     {
         var guid = ObjectGuid.WithEntry(HighGuid.Unit, WolfEntry, 7);
         var start = new Vector3(100, 200, 50);
@@ -208,7 +208,9 @@ public sealed class CreatureMotionTests
             (1u, new CreatureWaypoint(2, 10, 10, 83.5f, 100, 0)),
             (1u, new CreatureWaypoint(3, 0, 10, 83.5f, 100, 0)),
         ]);
-        (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(content);
+        var options = new CreatureOptions();
+        options.Movement.HonorWaypointRunColumn = true; // the Run column is not retail: this test is about the column
+        (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(content, options: options);
         using WorldRuntime world = runtime;
         AddPlayer(world, 1, -5, -5);
         Creature wolf = Assert.Single(system.Creatures);
@@ -232,34 +234,6 @@ public sealed class CreatureMotionTests
         Run(world, 4200);
         Assert.Equal(0, path.CurrentIndex); // looped back to the first node
         Assert.True(wolf.Spline!.Run);
-    }
-
-    [Fact]
-    public void WaypointMover_EvadesToWhereCombatBegan_ThenResumesThePath()
-    {
-        CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 0, 0, movementType: 2)],
-        [
-            (1u, new CreatureWaypoint(1, 40, 0, 83.5f, 100, 0)),
-            (1u, new CreatureWaypoint(2, 0, 0, 83.5f, 100, 0)),
-        ]);
-        (WorldRuntime runtime, Map map, CreatureMapSystem system) = CreateAiSystem(content);
-        using WorldRuntime world = runtime;
-        (Player player, _) = AddPlayer(world, 1, 20, 10);
-        Creature wolf = Assert.Single(system.Creatures);
-        Run(world, 4000); // walked 10 yd towards the first node
-        float startX = wolf.X;
-        Assert.InRange(startX, 8f, 12f);
-
-        map.Combat.DealDamage(player, wolf, 1, direct: false);
-        Run(world, 2000);
-        wolf.AI!.EnterEvadeMode(); // the leash itself is covered by LeashTests; this test is about where an evading waypoint mover goes
-        Assert.True(wolf.IsInEvadeMode);
-
-        Run(world, 3000);
-        Assert.False(wolf.IsInEvadeMode);
-        Assert.Equal(MovementGeneratorType.Waypoint, wolf.Motion.CurrentType);
-        Assert.True(wolf.IsMoving);
-        Assert.Equal(40f, wolf.Spline!.EndX); // heading for the same node again
     }
 
     [Fact]

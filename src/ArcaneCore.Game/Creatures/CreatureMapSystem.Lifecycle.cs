@@ -50,6 +50,7 @@ public sealed partial class CreatureMapSystem
         creature.SkinningForOthersMs = Creature.SkinningForOthersDefaultMs; // Creature.cpp:822-825: a new life, a new corpse
         creature.LootedForSkin = false;
         creature.RespawnAtMs = _clockMs + (creature.NextRespawnDelaySeconds() * 1000L);
+        SaveRespawnOnDeath(creature);
     }
 
     /// <summary>Respawn a dead creature now (GM command / script).</summary>
@@ -129,32 +130,60 @@ public sealed partial class CreatureMapSystem
 
         foreach (CreatureSpawn spawn in spawns)
         {
-            CreatureTemplate? template = _content.FindTemplate(spawn.Entry);
-            if (template is null)
+            // A spawn with creature_spawn_entry rows becomes one of them; the entry part of its GUID is the one chosen when the object was
+            // created, so a spawn that is already loaded is looked up under every entry it may carry.
+            IReadOnlyList<uint> alternatives = _options.Respawn.AlternateEntries ? _content.GetSpawnEntries(spawn.Guid) : [];
+            Creature? moved = null;
+            foreach (uint candidate in alternatives.Count > 0 ? alternatives : [spawn.Entry])
             {
-                if (_warnedMissingTemplates.Add(spawn.Entry))
+                if (_creatures.TryGetValue(ObjectGuid.WithEntry(HighGuid.Unit, candidate, spawn.Guid), out moved))
                 {
-                    _logger.LogWarning("creature spawn {Guid} on map {MapId} uses missing creature_template {Entry}; skipped", spawn.Guid, Map.MapId, spawn.Entry);
+                    break;
                 }
-
-                continue;
             }
 
-            ObjectGuid guid = ObjectGuid.WithEntry(HighGuid.Unit, template.Entry, spawn.Guid);
-            if (_creatures.TryGetValue(guid, out Creature? moved))
+            if (moved is not null)
             {
                 grid.Creatures.Add(moved);
                 continue; // a live spawn walked away before its home grid unloaded
             }
 
-            var creature = new Creature(spawn.Guid, template, spawn, _content, _random);
-            if (_respawnAt.Remove(spawn.Guid, out long respawnAt) && respawnAt > _clockMs)
+            CreatureTemplate? template = alternatives.Count > 0 ? SpawnEntryChooser.Choose(_content, alternatives, _random) : _content.FindTemplate(spawn.Entry);
+            if (template is null)
             {
-                creature.Health = 0;
-                creature.NpcFlags = 0;
-                creature.DeathState = CreatureDeathState.Dead;
-                creature.Combat.DeathState = DeathState.Dead;
-                creature.RespawnAtMs = respawnAt;
+                uint warnKey = alternatives.Count > 0 ? spawn.Guid | 0x8000_0000u : spawn.Entry;
+                if (_warnedMissingTemplates.Add(warnKey))
+                {
+                    _logger.LogWarning(
+                        alternatives.Count > 0
+                            ? "creature spawn {Guid} on map {MapId} has no creature_template for any of its creature_spawn_entry rows; skipped"
+                            : "creature spawn {Guid} on map {MapId} uses missing creature_template {Entry}; skipped",
+                        spawn.Guid, Map.MapId, spawn.Entry);
+                }
+
+                continue;
+            }
+
+            var creature = new Creature(spawn.Guid, template, spawn, _content, _random);
+            if (_options.Respawn.DrawDelayAtLoad)
+            {
+                creature.DrawRespawnDelay(); // m_respawnDelay is drawn once per loaded object (Creature.cpp:1963)
+            }
+
+            if (_respawnAt.Remove(spawn.Guid, out long respawnAt))
+            {
+                if (respawnAt > _clockMs)
+                {
+                    creature.Health = 0;
+                    creature.NpcFlags = 0;
+                    creature.DeathState = CreatureDeathState.Dead;
+                    creature.Combat.DeathState = DeathState.Dead;
+                    creature.RespawnAtMs = respawnAt;
+                }
+                else
+                {
+                    DeletePersistedRespawn(creature); // "respawn time set but expired" (vmangos Creature.cpp:1984-1989)
+                }
             }
 
             AddToWorld(creature, grid);
@@ -181,6 +210,7 @@ public sealed partial class CreatureMapSystem
             if (creature.Spawn is not null && creature.DeathState != CreatureDeathState.Alive)
             {
                 _respawnAt[creature.Spawn.Guid] = creature.RespawnAtMs;
+                SaveRespawnOnRemoval(creature);
             }
 
             RemoveFromWorld(creature);
@@ -233,14 +263,16 @@ public sealed partial class CreatureMapSystem
                 return new RandomMovementGenerator();
 
             case CreatureMovementType.Waypoint:
-                IReadOnlyList<CreatureWaypoint> path = creature.Spawn is null ? [] : _content.GetWaypoints(creature.Spawn.Guid);
-                if (path.Count == 0)
+                // The spawn's own creature_movement rows, else the entry's creature_movement_template path (a summon has no spawn row and
+                // takes the entry path): mangos-classic WaypointManager::GetDefaultPath.
+                CreatureWaypointPath path = _content.ResolveWaypointPath(creature.Spawn?.Guid ?? 0, creature.Template.Entry);
+                if (path.Points.Count == 0)
                 {
-                    _logger.LogWarning("{Creature} has waypoint movement but no creature_movement path; idling", creature.Guid);
+                    _logger.LogWarning("{Creature} has waypoint movement but no creature_movement or creature_movement_template path; idling", creature.Guid);
                     return IdleMovementGenerator.Instance;
                 }
 
-                return new WaypointMovementGenerator(path);
+                return new WaypointMovementGenerator(path.Points);
 
             default:
                 return IdleMovementGenerator.Instance;
@@ -273,6 +305,7 @@ public sealed partial class CreatureMapSystem
             // The creature died after walking out of an unloaded home grid. Keep its deadline
             // as dormant spawn data; do not respawn into a grid no player has loaded.
             _respawnAt[creature.Spawn.Guid] = creature.RespawnAtMs;
+            SaveRespawnOnRemoval(creature);
             RemoveFromWorld(creature);
         }
     }
@@ -285,6 +318,16 @@ public sealed partial class CreatureMapSystem
             return;
         }
 
+        // A spawn with several entries picks again at every respawn (vmangos Creature.cpp:830-841); the GUID stays, the AI follows the template.
+        bool entryChanged = false;
+        if (creature.Spawn is { } spawn && _options.Respawn.AlternateEntries && _content.GetSpawnEntries(spawn.Guid) is { Count: > 0 } alternatives
+            && SpawnEntryChooser.Choose(_content, alternatives, _random) is { } chosen && chosen.Entry != creature.Template.Entry)
+        {
+            ForgetAi(creature);
+            creature.ChangeTemplate(chosen);
+            entryChanged = true;
+        }
+
         Map.Combat.Untrack(creature);
         creature.Combat.DeathState = DeathState.Alive;
         MapCombat.ClearInCombat(creature);
@@ -292,6 +335,7 @@ public sealed partial class CreatureMapSystem
         creature.InitializeFields();
         creature.DeathState = CreatureDeathState.Alive;
         creature.RespawnAtMs = 0;
+        DeletePersistedRespawn(creature);
 
         // vmangos Creature::Update DEAD -> respawn (Objects/Creature.cpp:877-878): 5 s before it may initiate an attack.
         creature.PacifiedMs = _options.RespawnPacifyMs;
@@ -302,6 +346,11 @@ public sealed partial class CreatureMapSystem
         Map.AddObject(creature);
         ResetAiState(creature);
         creature.Motion.Initialize(creature.Motion.Default, this, start: true);
+        if (entryChanged)
+        {
+            CreateAi(creature);
+        }
+
         creature.AI?.OnRespawn();
     }
 
@@ -343,6 +392,7 @@ public sealed partial class CreatureMapSystem
             if (creature.Spawn is not null && creature.DeathState != CreatureDeathState.Alive)
             {
                 _respawnAt[creature.Spawn.Guid] = creature.RespawnAtMs;
+                SaveRespawnOnRemoval(creature);
             }
 
             foreach (LoadedGrid loaded in _grids.Values)

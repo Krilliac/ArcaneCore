@@ -13,9 +13,9 @@ namespace ArcaneCore.Game.Creatures;
 public sealed partial class CreatureMapSystem
 {
     /// <summary>
-    /// vmangos CreatureAI::EnterEvadeMode: stop the cast, every fight and the threat list, full
-    /// health (and mana), the AI's evade hook, and run home: to the combat start point for
-    /// waypoint movers (they resume the path there), else to the spawn point. The creature
+    /// vmangos CreatureAI::EnterEvadeMode: stop the cast, every fight and the threat list, the AI's evade hook (health
+    /// and mana are NOT restored: regeneration does it, see <see cref="CreatureMovementOptions.EvadeRestoresFullHealth"/>), and run home: to the default generator's reset
+    /// position (a waypoint mover's last reached node), else to the spawn point. The creature
     /// refuses attacks until it arrives (<see cref="Creature.IsInEvadeMode"/>).
     /// </summary>
     public void EnterEvadeMode(Creature creature)
@@ -26,10 +26,9 @@ public sealed partial class CreatureMapSystem
             return;
         }
 
-        CreatureHome home = creature.Motion.Default.GetResetPosition(creature)
-            ?? (creature.Motion.DefaultType == MovementGeneratorType.Waypoint && creature.CombatStart is { } start
-                ? start
-                : creature.Home);
+        // The default generator's reset position (the last reached waypoint, where a wanderer stands inside its disc), else the spawn
+        // point: vmangos HomeMovementGenerator::_setTargetLocation, HomeMovementGenerator.cpp:52-56.
+        CreatureHome home = creature.Motion.Default.GetResetPosition(creature) ?? creature.Home;
 
         _ai.Spells?.Interrupt(creature);
         Map.Combat.CombatStop(creature);
@@ -40,10 +39,14 @@ public sealed partial class CreatureMapSystem
 
         ResetAiState(creature);
         creature.IsEvading = true;
-        creature.Health = creature.MaxHealth;
-        if (creature.PowerType == PowerType.Mana)
+        if (_options.Movement.EvadeRestoresFullHealth)
         {
-            MapCombat.SetPower(creature, PowerType.Mana, MapCombat.GetMaxPower(creature, PowerType.Mana));
+            // Not retail: vmangos' evade leaves health and mana alone and the regeneration brings them back (Creature.cpp:1087-1160).
+            creature.Health = creature.MaxHealth;
+            if (creature.PowerType == PowerType.Mana)
+            {
+                MapCombat.SetPower(creature, PowerType.Mana, MapCombat.GetMaxPower(creature, PowerType.Mana));
+            }
         }
 
         creature.AI?.OnEvade();

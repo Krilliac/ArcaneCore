@@ -190,12 +190,12 @@ public sealed class CreatureDataTests : IAsyncLifetime
         Assert.Equal((1u, 1u), (noStats.MinLevelHealth, noStats.MaxLevelHealth));
         Assert.Contains(report.Warnings, w => w.Contains("900012", StringComparison.Ordinal));
 
-        // Spawns whose patch range contains 10; id2 is reported, not imported.
+        // Spawns whose patch range contains 10; id2 becomes a creature_spawn_entry row (see CreatureSpawnEntryTests).
         Assert.Equal([10u, 12u], spawns.Select(s => s.Guid).Order());
         CreatureSpawnRow s10 = spawns.Single(s => s.Guid == 10);
         Assert.Equal((60u, 90u, 4f, (byte)1), (s10.SpawnTimeMinSeconds, s10.SpawnTimeMaxSeconds, s10.WanderDistance, s10.MovementType));
         Assert.Equal(2, report.SkippedSpawns);
-        Assert.Contains(report.Warnings, w => w.Contains("id2", StringComparison.Ordinal));
+        Assert.Equal([(12u, 900010u), (12u, 900011u)], importer.SpawnEntrySnapshot().OrderBy(e => e.Entry).Select(e => (e.SpawnGuid, e.Entry)));
 
         // Display info: the newest build ≤ 5875.
         CreatureModelInfoRow model = Assert.Single(models);

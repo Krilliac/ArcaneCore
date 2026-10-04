@@ -85,6 +85,12 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         }
     }
 
+    /// <summary>Every creature system, shared maps and dungeon instances (world thread, or after the world stopped).</summary>
+    public IEnumerable<CreatureMapSystem> Systems => _systems.Values.Concat(_instanceSystems.Values);
+
+    // The durable respawn times (CreatureRespawnFeature), when that feature is active; looked up when a system is made, which is after every feature attached.
+    private CreatureRespawnFeature? RespawnFeature => services.GetService<CreatureRespawnFeature>();
+
     /// <summary>The creature system of a map's shared copy (instance 0), if it has one (world thread).</summary>
     public CreatureMapSystem? FindSystem(uint mapId) => _systems.GetValueOrDefault(mapId);
 
@@ -105,7 +111,8 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         if (!_instanceSystems.TryGetValue(map, out CreatureMapSystem? system))
         {
             WorldRuntime world = _world ?? throw new InvalidOperationException("the creature feature is not attached");
-            system = new CreatureMapSystem(map, Content, Options, _height, new Random(), () => world.NowMs, logger, _aiServices);
+            system = new CreatureMapSystem(
+                map, Content, Options, _height, new Random(), () => world.NowMs, logger, _aiServices, RespawnFeature?.Persistence, RespawnFeature?.Clock);
             map.AddUpdater(system);
             _instanceSystems[map] = system;
         }
@@ -120,7 +127,8 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         if (!_systems.TryGetValue(mapId, out CreatureMapSystem? system))
         {
             Map map = world.GetMap(mapId);
-            system = new CreatureMapSystem(map, Content, Options, _height, new Random(), () => world.NowMs, logger, _aiServices);
+            system = new CreatureMapSystem(
+                map, Content, Options, _height, new Random(), () => world.NowMs, logger, _aiServices, RespawnFeature?.Persistence, RespawnFeature?.Clock);
             map.AddUpdater(system);
             _systems[mapId] = system;
         }
@@ -138,7 +146,14 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         }
     }
 
-    private void OnMapUnloading(Map map) => _instanceSystems.Remove(map);
+    private void OnMapUnloading(Map map)
+    {
+        // With Creatures:Respawn:SaveImmediately off the dead creatures of an unloading instance are saved now (vmangos Map::Remove / ObjectGridUnloader).
+        if (_instanceSystems.Remove(map, out CreatureMapSystem? system))
+        {
+            system.SaveRespawnTimes();
+        }
+    }
 
     // The services are assembled (and bound from the container by reflection) in CreatureAiServicesBinder.
     private CreatureAiServices BuildAiServices() => CreatureAiServicesBinder.Build(services, Options);

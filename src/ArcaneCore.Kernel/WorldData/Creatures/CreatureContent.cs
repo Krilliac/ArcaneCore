@@ -194,6 +194,25 @@ public sealed record CreatureWaypoint(uint Point, float X, float Y, float Z, flo
     public bool Run { get; init; }
 }
 
+/// <summary>Where a creature's waypoint path came from (mangos-classic MotionGenerators/WaypointManager.h WaypointPathOrigin).</summary>
+public enum CreatureWaypointOrigin
+{
+    /// <summary>No path: the creature idles (vmangos logs a DB error and does not move).</summary>
+    None = 0,
+
+    /// <summary>The spawn's own <c>creature_movement</c> rows (PATH_FROM_GUID).</summary>
+    Guid = 1,
+
+    /// <summary>The entry's <c>creature_movement_template</c> default path (PATH_FROM_ENTRY).</summary>
+    Entry = 2,
+}
+
+/// <summary>A resolved waypoint path: where it came from and its nodes in point-id order.</summary>
+public sealed record CreatureWaypointPath(CreatureWaypointOrigin Origin, IReadOnlyList<CreatureWaypoint> Points)
+{
+    public static readonly CreatureWaypointPath None = new(CreatureWaypointOrigin.None, []);
+}
+
 /// <summary>Per-display model data (cmangos creature_model_info, vmangos creature_display_info_addon).</summary>
 public sealed record CreatureModelInfo(uint DisplayId, float BoundingRadius, float CombatReach, byte Gender, uint DisplayIdOtherGender);
 
@@ -212,13 +231,15 @@ public sealed class CreatureDefinitions
         Dictionary<uint, CreatureModelInfo> models,
         Dictionary<uint, CreatureAddon> addons,
         Dictionary<uint, IReadOnlyList<CreatureWaypoint>> waypoints,
-        CreatureAiContent ai)
+        CreatureAiContent ai,
+        Dictionary<(uint Entry, uint PathId), IReadOnlyList<CreatureWaypoint>> entryWaypoints)
     {
         Templates = templates;
         Models = models;
         Addons = addons;
         Waypoints = waypoints;
         Ai = ai;
+        EntryWaypoints = entryWaypoints;
     }
 
     internal Dictionary<uint, CreatureTemplate> Templates { get; }
@@ -228,6 +249,8 @@ public sealed class CreatureDefinitions
     internal Dictionary<uint, CreatureAddon> Addons { get; }
 
     internal Dictionary<uint, IReadOnlyList<CreatureWaypoint>> Waypoints { get; }
+
+    internal Dictionary<(uint Entry, uint PathId), IReadOnlyList<CreatureWaypoint>> EntryWaypoints { get; }
 
     internal CreatureAiContent Ai { get; }
 }
@@ -245,6 +268,7 @@ public sealed class CreatureContent
     public static readonly CreatureContent Empty = new([], [], [], [], []);
 
     private readonly Dictionary<uint, IReadOnlyList<CreatureSpawn>> _spawnsByMap;
+    private readonly Dictionary<uint, IReadOnlyList<uint>> _spawnEntries;
     private volatile CreatureDefinitions _definitions;
     private int _version;
 
@@ -254,7 +278,9 @@ public sealed class CreatureContent
         IEnumerable<(uint SpawnGuid, CreatureWaypoint Point)> waypoints,
         IEnumerable<CreatureModelInfo> models,
         IEnumerable<CreatureAddon> addons,
-        CreatureAiContent? ai = null)
+        CreatureAiContent? ai = null,
+        IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryWaypoints = null,
+        IEnumerable<(uint SpawnGuid, uint Entry)>? spawnEntries = null)
     {
         _definitions = new CreatureDefinitions(
             templates.ToDictionary(t => t.Entry),
@@ -263,7 +289,13 @@ public sealed class CreatureContent
             waypoints
                 .GroupBy(w => w.SpawnGuid)
                 .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureWaypoint>)[.. g.Select(w => w.Point).OrderBy(p => p.Point)]),
-            ai ?? CreatureAiContent.Empty);
+            ai ?? CreatureAiContent.Empty,
+            (entryWaypoints ?? [])
+                .GroupBy(w => (w.Entry, w.PathId))
+                .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureWaypoint>)[.. g.Select(w => w.Point).OrderBy(p => p.Point)]));
+        _spawnEntries = (spawnEntries ?? [])
+            .GroupBy(e => e.SpawnGuid)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<uint>)[.. g.Select(e => e.Entry).Distinct().Order()]);
         CreatureSpawn[] all = [.. spawns];
         SpawnCount = all.Length;
         _spawnsByMap = all.GroupBy(s => s.MapId)
@@ -293,6 +325,33 @@ public sealed class CreatureContent
     public CreatureAddon? FindAddon(uint spawnGuid) => _definitions.Addons.GetValueOrDefault(spawnGuid);
 
     public IReadOnlyList<CreatureWaypoint> GetWaypoints(uint spawnGuid) => _definitions.Waypoints.GetValueOrDefault(spawnGuid) ?? [];
+
+    /// <summary>One path of an entry (<c>creature_movement_template</c>), in point-id order; empty when there is none.</summary>
+    public IReadOnlyList<CreatureWaypoint> GetEntryWaypoints(uint entry, uint pathId = 0)
+        => _definitions.EntryWaypoints.GetValueOrDefault((entry, pathId)) ?? [];
+
+    /// <summary>
+    /// The path a creature walks by default: its spawn's own <c>creature_movement</c> rows, else the entry's default (PathId 0)
+    /// <c>creature_movement_template</c> path (mangos-classic WaypointManager::GetDefaultPath, MotionGenerators/WaypointManager.h:69-93;
+    /// vmangos Movement/WaypointManager.h:77-93). A creature that is not a database spawn passes guid 0 and gets the entry path.
+    /// </summary>
+    public CreatureWaypointPath ResolveWaypointPath(uint spawnGuid, uint entry)
+    {
+        if (spawnGuid != 0 && _definitions.Waypoints.TryGetValue(spawnGuid, out IReadOnlyList<CreatureWaypoint>? own) && own.Count > 0)
+        {
+            return new CreatureWaypointPath(CreatureWaypointOrigin.Guid, own);
+        }
+
+        return _definitions.EntryWaypoints.TryGetValue((entry, 0u), out IReadOnlyList<CreatureWaypoint>? template) && template.Count > 0
+            ? new CreatureWaypointPath(CreatureWaypointOrigin.Entry, template)
+            : CreatureWaypointPath.None;
+    }
+
+    /// <summary>
+    /// The creature entries a spawn row can become (cmangos <c>creature_spawn_entry</c>; vmangos <c>id</c>, <c>id2</c> ... <c>id5</c>),
+    /// ascending and distinct; empty for a spawn with one fixed entry. Part of the spawn data, so a definitions swap does not touch it.
+    /// </summary>
+    public IReadOnlyList<uint> GetSpawnEntries(uint spawnGuid) => _spawnEntries.GetValueOrDefault(spawnGuid) ?? [];
 
     public IReadOnlyList<CreatureSpawn> GetSpawns(uint mapId) => _spawnsByMap.GetValueOrDefault(mapId) ?? [];
 

@@ -298,7 +298,11 @@ internal sealed class HomeMovementGenerator(CreatureHome home) : ICreatureMoveme
     {
         _arrived = false;
         var destination = new Vector3(home.X, home.Y, home.Z);
-        mover.MovePath(creature, mover.FindPath(creature, destination), run: true, SplineFacing.ToAngle(home.Orientation));
+
+        // vmangos sets the final facing only when the spawn point is the target (HomeMovementGenerator.cpp:54-56, 64-65); a position a
+        // movement generator supplied (GetResetPosition) carries no orientation (NaN here) and the creature faces its travel direction.
+        SplineFacing facing = float.IsNaN(home.Orientation) ? SplineFacing.None : SplineFacing.ToAngle(home.Orientation);
+        mover.MovePath(creature, mover.FindPath(creature, destination), run: true, facing);
     }
 
     public bool Update(Creature creature, ICreatureMover mover, uint diffMs)

@@ -204,6 +204,10 @@ public sealed partial class CreatureMapSystem
                 creature.AI?.OnReachedHome();
                 break;
 
+            case MovementGeneratorType.Waypoint:
+                creature.AI?.OnMovementInform(type, pointId); // vmangos WaypointMovementGenerator::OnArrived (:158-160): the node id
+                break;
+
             case MovementGeneratorType.Point:
                 if (pointId == FleeForAssistancePointId && creature.IsAlive)
                 {

@@ -104,10 +104,9 @@ internal static class CreatureAiTestSupport
         uint count = r.ReadUInt32();
         var destination = new Vector3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
         var points = new List<Vector3>();
-        Vector3 middle = (start + destination) / 2f;
         for (uint i = 1; i < count; i++)
         {
-            points.Add(middle - CreatureMovePackets.UnpackXYZ(r.ReadUInt32()));
+            points.Add(destination - CreatureMovePackets.UnpackXYZ(r.ReadUInt32())); // retail layout: destination - point
         }
 
         points.Add(destination);

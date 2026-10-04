@@ -367,7 +367,7 @@ public sealed class CreatureTests
     }
 
     [Fact]
-    public void CorpseDecay_DefaultsByRank_TemplateOverrides()
+    public void CorpseDecay_DefaultsByRank_TemplateOverrideOnlyWhenSwitchedOn()
     {
         var options = new CreatureOptions();
         Creature Make(uint rank, uint decay = 0) => new(1, Template(1, t =>
@@ -381,6 +381,8 @@ public sealed class CreatureTests
         Assert.Equal(1200u, Make(2).CorpseDecaySeconds(options));
         Assert.Equal(3600u, Make(3).CorpseDecaySeconds(options));
         Assert.Equal(900u, Make(4).CorpseDecaySeconds(options));
+        Assert.Equal(600u, Make(1, 42).CorpseDecaySeconds(options)); // vmangos ignores the cmangos CorpseDecay column (Creature.cpp:1326-1343)
+        options.Respawn.HonorTemplateCorpseDecay = true;
         Assert.Equal(42u, Make(1, 42).CorpseDecaySeconds(options));
     }
 

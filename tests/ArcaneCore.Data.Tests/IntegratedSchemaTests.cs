@@ -11,6 +11,7 @@ using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Honor;
+using ArcaneCore.Data.Creatures;
 using ArcaneCore.Data.Instances;
 using ArcaneCore.Data.Loot;
 using ArcaneCore.Data.Economy;
@@ -70,6 +71,8 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(StartActionWorldModule), DatabaseComponent.World, StartActionWorldModule.Version),
             (typeof(ArcaneCore.Data.World.Creatures.CreatureNpcMetadataDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Creatures.CreatureNpcMetadataDataModule.Version),
             (typeof(ReputationTemplatesWorldModule), DatabaseComponent.World, ReputationTemplatesWorldModule.Version),
+            (typeof(CreatureMovementTemplateDataModule), DatabaseComponent.World, CreatureMovementTemplateDataModule.Version),
+            (typeof(CreatureSpawnEntryDataModule), DatabaseComponent.World, CreatureSpawnEntryDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -90,6 +93,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.Bank.CharacterBankSlotsDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Bank.CharacterBankSlotsDataModule.Version),
             (typeof(CharacterTaxiFlightDataModule), DatabaseComponent.Characters, CharacterTaxiFlightDataModule.Version),
             (typeof(CharacterHonorDataModule), DatabaseComponent.Characters, CharacterHonorDataModule.Version),
+            (typeof(CreatureRespawnDataModule), DatabaseComponent.Characters, CreatureRespawnDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),

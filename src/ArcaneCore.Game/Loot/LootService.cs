@@ -356,15 +356,14 @@ public sealed partial class LootService : IViewerFieldFilter
 
     /// <summary>
     /// vmangos Creature::AllLootRemovedFromCorpse (Creature.cpp:3355-3395): the tapper's skinning head start restarts; a corpse that is not
-    /// (or no longer) skinnable decays sooner: a skinned one at once, an unskinned one after <see cref="LootOptions.LootedCorpseDecayRate"/> of its time.
+    /// (or no longer) skinnable decays sooner: the decay arithmetic is <see cref="Creature.OnAllLootRemoved"/> (a skinned one at once, an unskinned one after a third of the respawn delay or <see cref="LootOptions.LootedCorpseDecayRate"/> of the corpse delay).
     /// </summary>
     private void AllLootRemovedFromCorpse(Creature creature)
     {
         creature.SkinningForOthersMs = Creature.SkinningForOthersDefaultMs;
         if ((creature.UnitFlags & UnitFlags.Skinnable) == 0 && creature.DeathState == CreatureDeathState.Corpse)
         {
-            uint looted = creature.LootedForSkin ? 0 : (uint)(creature.CorpseDecaySeconds(CreatureOptions) * 1000.0 * Options.LootedCorpseDecayRate);
-            creature.CorpseDecayMs = Math.Min(creature.CorpseDecayMs, looted);
+            creature.OnAllLootRemoved(Options.LootedCorpseDecayRate);
         }
     }
 

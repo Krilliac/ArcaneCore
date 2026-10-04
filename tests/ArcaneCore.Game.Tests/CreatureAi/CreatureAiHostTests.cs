@@ -195,7 +195,7 @@ public sealed class CreatureAiHostTests
     }
 
     [Fact]
-    public void Leash_TargetBeyondThreatRadius_EvadesWithFullResetAndRunsHome()
+    public void Leash_TargetBeyondThreatRadius_EvadesWithAResetAndRunsHome()
     {
         CreatureContent content = Content([Template(configure: t => t.AIName = RecorderName)], [Spawn(1, WolfEntry, 10, 0)]);
         var spells = new FakeCaster();
@@ -222,7 +222,7 @@ public sealed class CreatureAiHostTests
         Run(world, 4000);
 
         Assert.True(wolf.IsInEvadeMode);
-        Assert.Equal(wolf.MaxHealth, wolf.Health);
+        Assert.True(wolf.Health < wolf.MaxHealth); // evade does not heal (vmangos CreatureAI::EnterEvadeMode); regeneration does, see EvadeHealthTests
         Assert.Empty(wolf.Combat.Threat.Entries);
         Assert.Null(wolf.Combat.Victim);
         Assert.False(wolf.Combat.IsInCombat);

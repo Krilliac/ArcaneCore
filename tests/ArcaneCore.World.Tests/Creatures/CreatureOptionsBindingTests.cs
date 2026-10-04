@@ -58,4 +58,42 @@ public sealed class CreatureOptionsBindingTests
         Assert.Equal((250u, true, false), (options.EventAi.UpdateIntervalMs, options.EventAi.DebugOnlyEvents, options.EventAi.ReportUnsupported));
         Assert.Equal(2f, options.AggroRate);
     }
+
+    [Fact]
+    public void MovementOptions_DefaultToRetail_AndBindFromTheSection()
+    {
+        Assert.Equal((MonsterMoveOffsetBase.Destination, 15u, false, false), (new CreatureOptions().Movement.MonsterMoveOffsetBase, new CreatureOptions().Movement.RunDuringWanderChancePercent, new CreatureOptions().Movement.EvadeRestoresFullHealth, new CreatureOptions().Movement.HonorWaypointRunColumn));
+
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Creatures:Movement:MonsterMoveOffsetBase"] = "Midpoint",
+            ["Creatures:Movement:RunDuringWanderChancePercent"] = "40",
+            ["Creatures:Movement:EvadeRestoresFullHealth"] = "true",
+            ["Creatures:Movement:HonorWaypointRunColumn"] = "true",
+        }).Build();
+        var bound = new CreatureOptions();
+        configuration.GetSection(CreatureOptions.SectionName).Bind(bound);
+
+        Assert.Equal((MonsterMoveOffsetBase.Midpoint, 40u, true, true), (bound.Movement.MonsterMoveOffsetBase, bound.Movement.RunDuringWanderChancePercent, bound.Movement.EvadeRestoresFullHealth, bound.Movement.HonorWaypointRunColumn));
+    }
+
+    [Fact]
+    public void RespawnOptions_DefaultToRetail_AndBindFromTheSection()
+    {
+        var defaults = new CreatureOptions();
+        Assert.Equal((true, false, true, true, true), (defaults.Respawn.DrawDelayAtLoad, defaults.Respawn.HonorTemplateCorpseDecay, defaults.Respawn.AlternateEntries, defaults.Respawn.Persist, defaults.Respawn.SaveImmediately));
+
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Creatures:Respawn:DrawDelayAtLoad"] = "false",
+            ["Creatures:Respawn:HonorTemplateCorpseDecay"] = "true",
+            ["Creatures:Respawn:AlternateEntries"] = "false",
+            ["Creatures:Respawn:Persist"] = "false",
+            ["Creatures:Respawn:SaveImmediately"] = "false",
+        }).Build();
+        var bound = new CreatureOptions();
+        configuration.GetSection(CreatureOptions.SectionName).Bind(bound);
+
+        Assert.Equal((false, true, false, false, false), (bound.Respawn.DrawDelayAtLoad, bound.Respawn.HonorTemplateCorpseDecay, bound.Respawn.AlternateEntries, bound.Respawn.Persist, bound.Respawn.SaveImmediately));
+    }
 }

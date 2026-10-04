@@ -40,6 +40,12 @@ public sealed record CreatureImportReport(
 
     /// <summary><c>creature_ai_summons</c> rows.</summary>
     public int AiSummons { get; init; }
+
+    /// <summary><c>creature_spawn_entry</c> rows (the entries a spawn can become; vmangos <c>id2</c> ... <c>id5</c> included).</summary>
+    public int SpawnEntries { get; init; }
+
+    /// <summary><c>creature_movement_template</c> rows (the entry paths a spawn without its own path walks).</summary>
+    public int MovementTemplates { get; init; }
 }
 
 /// <summary>
@@ -66,6 +72,9 @@ public sealed class CreatureDumpImporter
     private readonly Dictionary<uint, (int Patch, CreatureTemplateRow Row, VMangosStats? Stats)> _templates = [];
     private readonly Dictionary<uint, CreatureSpawnRow> _spawns = [];
     private readonly Dictionary<(uint, uint), CreatureMovementRow> _movement = [];
+    private readonly Dictionary<(uint Entry, uint PathId, uint Point), CreatureMovementTemplateRow> _movementTemplates = [];
+    private readonly HashSet<(uint Owner, uint Path, uint Point)> _scriptedNodes = [];
+    private readonly Dictionary<(uint SpawnGuid, uint Entry), CreatureSpawnEntryRow> _spawnEntries = [];
     private readonly Dictionary<uint, (int Build, CreatureModelInfoRow Row)> _models = [];
     private readonly Dictionary<uint, CreatureAddonRow> _addons = [];
     private readonly Dictionary<(byte Class, byte Level), ClassLevelStats> _classLevelStats = [];
@@ -107,6 +116,12 @@ public sealed class CreatureDumpImporter
                     break;
                 case "creature_movement":
                     ReadMovement(row);
+                    break;
+                case "creature_movement_template":
+                    ReadMovementTemplate(row);
+                    break;
+                case "creature_spawn_entry":
+                    ReadSpawnEntry(row);
                     break;
                 case "creature_model_info":
                 case "creature_display_info_addon":
@@ -191,6 +206,8 @@ public sealed class CreatureDumpImporter
                 await db.Set<CreatureAiSummonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureAddonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureMovementRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<CreatureMovementTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<CreatureSpawnEntryRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureSpawnRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureModelInfoRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
@@ -200,6 +217,8 @@ public sealed class CreatureDumpImporter
             await InsertBatchedAsync(db, _models.Values.Select(m => m.Row), cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _spawns.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _movement.Values, cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _movementTemplates.Values, cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _spawnEntries.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _addons.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _aiScripts.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _aiTexts.Values, cancellationToken).ConfigureAwait(false);
@@ -257,14 +276,32 @@ public sealed class CreatureDumpImporter
             [.. _models.Values.Select(m => m.Row)], [.. _addons.Values]);
     }
 
+    private IReadOnlyList<string> ReportWarnings()
+    {
+        if (_scriptedNodes.Count == 0)
+        {
+            return _warnings;
+        }
+
+        return [.. _warnings, $"{_scriptedNodes.Count} waypoint node(s) carry a ScriptId; creature movement scripts are not executed, the nodes are walked without them"];
+    }
+
     public CreatureImportReport BuildReport() => new(
-        Dialect, _templates.Count, _spawns.Count, _movement.Count, _models.Count, _addons.Count, _skippedSpawns, [.. _warnings])
+        Dialect, _templates.Count, _spawns.Count, _movement.Count, _models.Count, _addons.Count, _skippedSpawns, [.. ReportWarnings()])
     {
         AiEvents = _aiScripts.Count,
         AiTexts = _aiTexts.Count,
         BroadcastTexts = _broadcastTexts.Count,
         AiSummons = _aiSummons.Count,
+        MovementTemplates = _movementTemplates.Count,
+        SpawnEntries = _spawnEntries.Count,
     };
+
+    /// <summary>The spawn entry lists that would be written (for inspection and tests).</summary>
+    public IReadOnlyCollection<CreatureSpawnEntryRow> SpawnEntrySnapshot() => [.. _spawnEntries.Values];
+
+    /// <summary>The entry waypoint paths that would be written (for inspection and tests).</summary>
+    public IReadOnlyCollection<CreatureMovementTemplateRow> PathSnapshot() => [.. _movementTemplates.Values];
 
     /// <summary>The EventAI rows that would be written (for inspection and tests).</summary>
     public (IReadOnlyCollection<CreatureAiScriptRow> Scripts, IReadOnlyCollection<CreatureAiTextRow> Texts) AiSnapshot()
@@ -515,9 +552,16 @@ public sealed class CreatureDumpImporter
 
         uint min = row.TryGet(out _, "spawntimesecsmin") ? U32(row, "spawntimesecsmin") : U32Or(row, 120, "spawntimesecs");
         uint max = row.TryGet(out _, "spawntimesecsmax") ? U32(row, "spawntimesecsmax") : min;
-        if (row.Has("id2") && U32(row, "id2") != 0)
+
+        // vmangos spells the alternatives id2 ... id5 (CreatureData::creature_id[5]); the spawn can become any non-zero one, id included.
+        uint spawnGuid = U32(row, "guid");
+        uint[] alternatives = [U32(row, "id2"), U32(row, "id3"), U32(row, "id4"), U32(row, "id5")];
+        if (alternatives.Any(id => id != 0))
         {
-            Warn($"creature {U32(row, "guid")}: alternative ids (id2-id5) are not imported; using id {U32(row, "id")}");
+            foreach (uint entry in new[] { U32(row, "id") }.Concat(alternatives).Where(id => id != 0))
+            {
+                _spawnEntries[(spawnGuid, entry)] = new CreatureSpawnEntryRow { SpawnGuid = spawnGuid, Entry = entry };
+            }
         }
 
         var spawn = new CreatureSpawnRow
@@ -551,6 +595,48 @@ public sealed class CreatureDumpImporter
             Run = U32(row, "Run", "run") != 0,
         };
         _movement[(point.SpawnGuid, point.Point)] = point;
+        NoteScript(point.SpawnGuid, 0, point.Point, row);
+    }
+
+    // cmangos creature_spawn_entry (guid, entry); the primary key makes a repeated pair one row.
+    private void ReadSpawnEntry(DumpRow row)
+    {
+        var entry = new CreatureSpawnEntryRow { SpawnGuid = U32(row, "guid"), Entry = U32(row, "entry") };
+        if (entry.Entry != 0)
+        {
+            _spawnEntries[(entry.SpawnGuid, entry.Entry)] = entry;
+        }
+    }
+
+    private void ReadMovementTemplate(DumpRow row)
+    {
+        var point = new CreatureMovementTemplateRow
+        {
+            Entry = U32(row, "Entry"),
+            PathId = U32(row, "PathId", "path_id"),
+            Point = U32(row, "Point"),
+            X = F32(row, 0f, "PositionX", "position_x"),
+            Y = F32(row, 0f, "PositionY", "position_y"),
+            Z = F32(row, 0f, "PositionZ", "position_z"),
+            Orientation = F32(row, 0f, "Orientation"),
+            WaitTimeMs = U32(row, "WaitTime", "waittime"),
+        };
+        _movementTemplates[(point.Entry, point.PathId, point.Point)] = point;
+        NoteScript(point.Entry, point.PathId + 1, point.Point, row);
+    }
+
+    // creature_movement scripts (dbscripts_on_creature_movement) are not run by ArcaneCore; count the nodes that carried one so the
+    // loss is reported, not silent. The owner/path pair keeps a node of creature_movement apart from one of creature_movement_template.
+    private void NoteScript(uint owner, uint path, uint point, DumpRow row)
+    {
+        if (U32(row, "ScriptId", "script_id") != 0)
+        {
+            _scriptedNodes.Add((owner, path, point));
+        }
+        else
+        {
+            _scriptedNodes.Remove((owner, path, point));
+        }
     }
 
     private void ReadModel(DumpRow row)
