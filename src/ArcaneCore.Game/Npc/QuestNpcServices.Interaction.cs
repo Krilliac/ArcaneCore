@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Protocol;
@@ -20,8 +21,10 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        // vmangos HandleQuestgiverStatusQueryOpcode (QuestHandler.cpp:36-77) only refuses hostile creatures; it never tests the
+        // quest-giver npc flag (four relation NPCs of classic-db lack it and still show their marks).
         DialogStatus status = DialogStatus.None;
-        if (!npc.IsHostile && (npc.NpcFlags & NpcFlags.QuestGiver) != 0)
+        if (!npc.IsHostile)
         {
             foreach (uint id in EndersOf(npc))
             {
@@ -30,13 +33,12 @@ public sealed partial class QuestNpcServices
                     continue;
                 }
 
-                DialogStatus candidate = state.Quests.GetStatus(id) switch
-                {
-                    QuestStatus.Complete when !state.Quests.RewardStatus(quest) => DialogStatus.Reward2,
-                    QuestStatus.Incomplete => DialogStatus.Incomplete,
-                    _ when quest.IsAutoComplete && CanTakeQuest(state, quest, []) => quest.IsRepeatable ? DialogStatus.RewardRep : DialogStatus.Reward2,
-                    _ => DialogStatus.None,
-                };
+                // GetDialogStatus (QuestHandler.cpp:517-526): a finished-and-unrewarded quest or a takeable autocomplete quest
+                // is Reward2, or RewardRep when it is an autocomplete repeatable one; otherwise an incomplete quest.
+                DialogStatus candidate = (state.Quests.GetStatus(id) == QuestStatus.Complete && !state.Quests.RewardStatus(quest))
+                    || (quest.IsAutoComplete && CanTakeQuest(state, quest, []))
+                    ? quest.IsAutoComplete && quest.IsRepeatable ? DialogStatus.RewardRep : DialogStatus.Reward2
+                    : state.Quests.GetStatus(id) == QuestStatus.Incomplete ? DialogStatus.Incomplete : DialogStatus.None;
                 if ((byte)candidate > (byte)status)
                 {
                     status = candidate;
@@ -54,7 +56,7 @@ public sealed partial class QuestNpcServices
                 DialogStatus candidate = player.Level < quest.MinLevel ? DialogStatus.Unavailable
                     : quest.IsAutoComplete || (quest.IsRepeatable && !quest.HasFlag(QuestFlags.Unk2) && state.Quests.Get(id)?.Rewarded == true)
                         ? DialogStatus.RewardRep
-                    : Options.LowLevelHideDiff < 0 || player.Level <= (long)(quest.QuestLevel < 0 ? player.Level : quest.QuestLevel) + Options.LowLevelHideDiff
+                    : Options.LowLevelHideDiff < 0 || player.Level <= (long)QuestLevelForPlayer(player, quest) + Options.LowLevelHideDiff
                         ? DialogStatus.Available : DialogStatus.Chat;
                 if ((byte)candidate > (byte)status)
                 {
@@ -69,6 +71,9 @@ public sealed partial class QuestNpcServices
         body.WriteUInt32((uint)status);
         Send(player, WorldOpcode.SmsgQuestgiverStatus, body);
     }
+
+    /// <summary>vmangos Player::GetQuestLevelForPlayer (Player.h:1114): the quest's level when positive, else the player's own (14 classic-db quests have level 0).</summary>
+    private static int QuestLevelForPlayer(Player player, Quest quest) => quest.QuestLevel > 0 ? quest.QuestLevel : player.Level;
 
     public void QuestgiverQueryQuest(Player player, ObjectGuid guid, uint questId)
     {
@@ -87,8 +92,10 @@ public sealed partial class QuestNpcServices
     /// CMSG_QUESTGIVER_ACCEPT_QUEST (vmangos HandleQuestgiverAcceptQuestOpcode, QuestHandler.cpp:108-196). A
     /// refusal from CanTakeQuest sends SMSG_QUESTGIVER_QUEST_INVALID with the reason of the first failing
     /// check; a full log sends SMSG_QUESTLOG_FULL; a source item that cannot be given sends
-    /// SMSG_QUESTGIVER_QUEST_FAILED. The gossip window closes in every case. Returns true only after
-    /// creating a journal entry and handing its delta to persistence.
+    /// SMSG_QUESTGIVER_QUEST_FAILED. The gossip window closes in every case and the player's pending share offer is
+    /// consumed (QuestHandler.cpp:131-189). The giver is a quest NPC or game object, or the player who shares the
+    /// quest (<see cref="AcceptFromPlayer"/>). Returns true only after creating a journal entry and handing its
+    /// delta to persistence.
     /// </summary>
     public bool AcceptQuest(Player player, ObjectGuid guid, uint questId)
     {
@@ -98,49 +105,94 @@ public sealed partial class QuestNpcServices
         }
 
         bool accepted = false;
-        if (InteractableNpc(player, guid, NpcFlags.QuestGiver) is { } npc && Quests.Get(questId) is { } quest
+        if (guid.IsPlayer)
+        {
+            accepted = AcceptFromPlayer(player, state, guid, questId);
+        }
+        else if (InteractableNpc(player, guid, NpcFlags.QuestGiver) is { } npc && Quests.Get(questId) is { } quest
             && StartersOf(npc).Contains(questId))
         {
-            if (RefuseTakeQuest(state, quest, []) is { } refusal)
-            {
-                if (refusal.Message is { } reason)
-                {
-                    Send(player, WorldOpcode.SmsgQuestgiverQuestInvalid, QuestPackets.QuestInvalid(reason));
-                }
-            }
-            else if ((state.Quests.Get(questId)?.Rewarded != true || quest.IsRepeatable) && AcceptableQuest(quest))
-            {
-                int slot = state.Quests.FindSlot(0);
-                if (slot == QuestConstants.MaxQuestLogSize)
-                {
-                    player.Session.Send(WorldOpcode.SmsgQuestlogFull, []);
-                }
-                else if (CanReceiveSourceItem(player, quest))
-                {
-                    QuestStatusData data = state.Quests.GetOrAdd(questId);
-                    data.Status = QuestStatus.Incomplete;
-                    data.Explored = false;
-                    Array.Clear(data.CreatureOrGOCount);
-                    Array.Clear(data.ItemCount);
-                    data.TimerEndUnix = quest.HasSpecialFlag(QuestSpecialFlags.Timed) ? checked(UnixNow + quest.Template.LimitTime) : 0;
-                    if (data.TimerEndUnix != 0)
-                    {
-                        state.Quests.AddTimed(questId);
-                    }
-
-                    state.Quests.SetSlot(slot, questId, (uint)Math.Clamp(data.TimerEndUnix, 0, uint.MaxValue));
-                    state.Quests.MarkChanged(questId);
-                    GiveSourceItem(player, quest);
-                    AdjustRequiredItemCounts(state, quest, data);
-                    RefreshCompletion(state, quest, data, slot);
-                    Flush(state);
-                    accepted = true;
-                }
-            }
+            accepted = AddQuestFrom(player, state, quest, sharedTimerEnd: null);
         }
 
+        if (accepted && Quests.Get(questId) is { } taken && taken.HasFlag(QuestFlags.PartyAccept))
+        {
+            // The fan-out belongs to the accept handler alone (QuestHandler.cpp:166-191); AddQuest and the confirm handler (332-381) have none.
+            OfferPartyAccept(player, taken);
+        }
+
+        ClearShareInfo(player);
         CloseGossip(player);
+        if (accepted && Quests.Get(questId) is { Template.SrcSpell: not 0 } sourceSpell && Deps.SpellCaster is { } spellCaster)
+        {
+            // vmangos HandleQuestgiverAcceptQuestOpcode (QuestHandler.cpp:202-203): the source spell is cast on the player
+            // after the quest is in the log and the gossip window is closed.
+            spellCaster.CastOnSelf(player, sourceSpell.Template.SrcSpell);
+        }
+
         return accepted;
+    }
+
+    /// <summary>
+    /// The common part of every accept (vmangos CanTakeQuest(msg), CanAddQuest(msg), AddQuest, then
+    /// the completion check, QuestHandler.cpp:131-196 and Player.cpp:12820-12934; the party fan-out is the caller's, see <see cref="AcceptQuest"/>). A refusal sends its message and returns
+    /// false. <paramref name="sharedTimerEnd"/> is the sharer's timer end for a shared timed quest (Player.cpp:12855-12860).
+    /// </summary>
+    private bool AddQuestFrom(Player player, PlayerNpcState state, Quest quest, long? sharedTimerEnd)
+    {
+        if (RefuseTakeQuest(state, quest, []) is { } refusal)
+        {
+            if (refusal.Message is { } reason)
+            {
+                Send(player, WorldOpcode.SmsgQuestgiverQuestInvalid, QuestPackets.QuestInvalid(reason));
+            }
+
+            return false;
+        }
+
+        if (!((state.Quests.Get(quest.Id)?.Rewarded != true || quest.IsRepeatable) && AcceptableQuest(quest)))
+        {
+            return false;
+        }
+
+        int slot = state.Quests.FindSlot(0);
+        if (slot == QuestConstants.MaxQuestLogSize)
+        {
+            player.Session.Send(WorldOpcode.SmsgQuestlogFull, []);
+            return false;
+        }
+
+        if (!CanReceiveSourceItem(player, quest))
+        {
+            return false;
+        }
+
+        QuestStatusData data = state.Quests.GetOrAdd(quest.Id);
+        data.Status = QuestStatus.Incomplete;
+        data.Explored = false;
+        Array.Clear(data.CreatureOrGOCount);
+        Array.Clear(data.ItemCount);
+        data.TimerEndUnix = !quest.HasSpecialFlag(QuestSpecialFlags.Timed) ? 0
+            : sharedTimerEnd is { } shared ? checked(UnixNow + Math.Max(0, shared - UnixNow))
+            : checked(UnixNow + quest.Template.LimitTime);
+        if (data.TimerEndUnix != 0)
+        {
+            state.Quests.AddTimed(quest.Id);
+        }
+
+        state.Quests.SetSlot(slot, quest.Id, (uint)Math.Clamp(data.TimerEndUnix, 0, uint.MaxValue));
+        if (quest.Template.Type == QuestNeeds.PvpType)
+        {
+            // vmangos Player::AddQuest (Player.cpp:12866-12867): a PvP quest flags the player.
+            MapCombat.UpdatePvp(player, true);
+        }
+
+        state.Quests.MarkChanged(quest.Id);
+        GiveSourceItem(player, quest);
+        AdjustRequiredItemCounts(state, quest, data);
+        RefreshCompletion(state, quest, data, slot);
+        Flush(state);
+        return true;
     }
 
     /// <summary>
@@ -195,12 +247,4 @@ public sealed partial class QuestNpcServices
         state.Quests.SwapSlots(slot1, slot2);
     }
 
-    // Source spells, loot-source counters, party confirmation, PvP activation and auto rewards
-    // still lack adapters; reputation objectives need a reputation owner (docs/integration/quest-progression.md).
-    private bool AcceptableQuest(Quest quest) => quest.Template.Type is 0 or 1 or 21 or 62 or 81
-        && quest.Template.SrcSpell == 0 && (quest.Template.RepObjectiveFaction == 0 || Deps.Reputation is not null)
-        && quest.ReqSourceId.All(id => id == 0) && quest.ReqSourceCount.All(count => count == 0)
-        && !quest.HasFlag(QuestFlags.PartyAccept | QuestFlags.AutoRewarded | QuestFlags.StayAlive)
-        && (!(quest.HasSpecialFlag(QuestSpecialFlags.ExplorationOrEvent) || quest.HasFlag(QuestFlags.Exploration))
-            || HasAreaTrigger(quest.Id));
 }

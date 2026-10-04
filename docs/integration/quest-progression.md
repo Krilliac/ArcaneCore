@@ -140,7 +140,10 @@ No GPL text was copied.
   reputation objectives without a reputation owner, and exploration quests without a
   relation.
 
-## Allowlist (not bypassed)
+## Allowlist (superseded by wave 4: see quests-advanced.md)
+Since the advanced-quests lane the allowlist is only the Quests:RewardMode = AllowlistOnly fallback; by default every quest
+whose adapters exist is rewardable (docs/integration/quests-advanced.md). The text below describes the allowlist mode.
+
 `Quests:OrdinaryRewardQuestIds` is still required for every reward. Supported rewards
 are broader now. XP needs an `IQuestExperience` owner, reward spells need
 `IQuestRewardEffects.CanCastRewardSpell`, reputation rewards need an `IQuestReputationSettlement`. Objectives must be coherent (counts with ids,

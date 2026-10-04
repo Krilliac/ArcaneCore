@@ -17,8 +17,9 @@ public sealed class QuestRewardPlan
     internal QuestRewardPlan(QuestNpcServices services, Player player, ObjectGuid questGiver, uint choice, uint moneyAfter,
         uint summaryMoney, uint experience, byte levelAfter, CharacterQuestStatus expectedQuest,
         CharacterQuestStatus rewardedQuest, InventoryRewardStage stage, QuestRewardSpellGrant spellGrant,
-        QuestReputationStage reputation)
+        QuestReputationStage reputation, bool insertIfMissing = false)
     {
+        InsertIfMissing = insertIfMissing;
         Services = services;
         Player = player;
         QuestGiver = questGiver;
@@ -55,6 +56,12 @@ public sealed class QuestRewardPlan
     /// <summary>The quest ender; reward spells use it as caster when they teach or target others.</summary>
     public ObjectGuid QuestGiver { get; }
     public CharacterQuestStatus ExpectedQuest { get; }
+
+    /// <summary>
+    /// The autocomplete turn-in (Method 0): <see cref="ExpectedQuest"/> is the virtual complete row and the store inserts
+    /// or claims the durable row (<see cref="CharacterQuestRewardRequest.InsertIfMissing"/>).
+    /// </summary>
+    public bool InsertIfMissing { get; }
     public CharacterQuestStatus RewardedQuest { get; }
 
     /// <summary>The reward spell's share of the settlement: the spells to learn (persisted with the reward), created-item counts, and whether a transient cast follows.</summary>

@@ -21,7 +21,8 @@ internal sealed class QuestFlowKit : IDisposable
 
     public QuestFlowKit(IReadOnlyList<QuestTemplate> templates, IReadOnlyList<CharacterQuestStatus>? rows = null,
         IReadOnlyList<uint>? starters = null, IReadOnlyList<uint>? enders = null, IReadOnlyList<uint>? rewardable = null,
-        Race race = Race.Human, byte level = 5, Class cls = Class.Warrior, Action<QuestNpcOptions>? configure = null)
+        Race race = Race.Human, byte level = 5, Class cls = Class.Warrior, Action<QuestNpcOptions>? configure = null,
+        IPlayerReputation? reputation = null, IQuestSpellCaster? spellCaster = null, uint npcFlags = 2)
     {
         Player = TestWorld.CreatePlayer(1, 0, 0, Session, race: race);
         Player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)cls);
@@ -30,7 +31,7 @@ internal sealed class QuestFlowKit : IDisposable
         Player.Inventory.Load([]);
         Player.Money = 50;
         World.AddPlayer(Player);
-        var template = new CreatureTemplate { Entry = CreatureEntry, Name = "Flow questgiver", Faction = 2, NpcFlags = 2 };
+        var template = new CreatureTemplate { Entry = CreatureEntry, Name = "Flow questgiver", Faction = 2, NpcFlags = npcFlags };
         Creature = new Creature(910020, template,
             new CreatureSpawn { Guid = 910020, Entry = CreatureEntry, MapId = 0, X = 0, Y = 0, Z = Player.Z }, CreatureContent.Empty, new Random(1));
         Player.Map!.AddObject(Creature);
@@ -40,7 +41,7 @@ internal sealed class QuestFlowKit : IDisposable
             (enders ?? []).Select(id => new CreatureQuestRelation { Id = CreatureEntry, Quest = id }).ToArray());
         var factions = new FactionTemplateCatalog([new(1, 1, 0, 1, 0, 0), new(2, 0, 0, 8, 0, 0), new(3, 0, 0, 8, 0, 1)]);
         Services = new QuestNpcServices(new QuestStore(content), NpcStore.Empty,
-            new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions)),
+            new QuestNpcDependencies(Creatures: new CreatureQuestLookup(factions), Reputation: reputation, SpellCaster: spellCaster),
             Configure(new QuestNpcOptions { OrdinaryRewardQuestIds = (rewardable ?? []).ToArray() }, configure), Sink, () => 100, NullLogger.Instance);
         State = Services.Track(Player);
         Services.CompleteLoad(State, new CharacterQuestData(rows ?? [], []));

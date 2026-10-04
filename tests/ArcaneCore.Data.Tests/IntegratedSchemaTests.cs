@@ -59,6 +59,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(GameObjectLootDataModule), DatabaseComponent.World, 7),
             (typeof(CreatureAiDataModule), DatabaseComponent.World, CreatureAiDataModule.Version),
             (typeof(QuestReputationRewardWorldModule), DatabaseComponent.World, QuestReputationRewardWorldModule.Version),
+            (typeof(QuestAdvancedWorldModule), DatabaseComponent.World, QuestAdvancedWorldModule.Version),
             (typeof(PlayerStatsDataModule), DatabaseComponent.World, PlayerStatsDataModule.Version),
             (typeof(CreatureBehaviourDataModule), DatabaseComponent.World, CreatureBehaviourDataModule.Version),
             (typeof(ConditionsWorldModule), DatabaseComponent.World, ConditionsWorldModule.Version),

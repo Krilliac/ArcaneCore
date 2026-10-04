@@ -102,7 +102,8 @@ public sealed partial class QuestNpcFeature
                     Money = plan.MoneyAfter, Inventory = plan.InventoryAfter, Level = plan.LevelAfter,
                     LevelPlayedTime = plan.LevelAfter != plan.LevelBefore ? 0 : before.LevelPlayedTime,
                 },
-                plan.ExpectedQuest, plan.RewardedQuest, plan.SpellGrant.LearnedSpells.ToArray(), plan.Reputation.After.ToArray());
+                plan.ExpectedQuest, plan.RewardedQuest, plan.SpellGrant.LearnedSpells.ToArray(), plan.Reputation.After.ToArray(),
+                InsertIfMissing: plan.InsertIfMissing);
             saves.HoldCharacter(id);
             if (!player.BeginQuestSettlement(operationId))
             {
@@ -341,7 +342,11 @@ public sealed partial class QuestNpcFeature
                 && row.Standing == expected.Standing && row.Flags == expected.Flags));
         }
 
-        if (quest == request.ExpectedQuest && character.Money == request.Before.Money && character.Level == request.Before.Level
+        // An autocomplete turn-in expects no durable row (or the virtual complete row apart from its status).
+        bool questBefore = request.InsertIfMissing
+            ? quest is null ? !request.ExpectedQuest.Rewarded : quest with { Status = request.ExpectedQuest.Status } == request.ExpectedQuest
+            : quest == request.ExpectedQuest;
+        if (questBefore && character.Money == request.Before.Money && character.Level == request.Before.Level
             && SameInventory(inventory, request.Before.Inventory!.Items))
         {
             return RewardOutcome.Before;

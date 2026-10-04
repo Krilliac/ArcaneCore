@@ -3,13 +3,13 @@ using ArcaneCore.Game.Quests;
 
 namespace ArcaneCore.Game.Npc;
 
-/// <summary>Reputation objectives (vmangos Player::ReputationChanged, Player.cpp:14239-14264).</summary>
 public sealed partial class QuestNpcServices
 {
     /// <summary>
-    /// A faction's standing was set: every logged quest whose reputation objective names it is re-evaluated, so an Incomplete
-    /// quest completes when the standing reaches RepObjectiveValue (and all other objectives are met, CanCompleteQuest) and a
-    /// Complete one reverts to Incomplete when the standing falls below it.
+    /// vmangos Player::ReputationChanged (Player.cpp:14239-14264): a logged quest whose reputation objective names
+    /// <paramref name="factionId"/> completes when the standing reaches RepObjectiveValue (CanCompleteQuest, which also
+    /// re-checks every other objective) and reverts to incomplete when it falls below it. Quests that are not in the
+    /// log, are failed, or name another faction are untouched.
     /// </summary>
     public void ReputationChanged(Player player, uint factionId)
     {
@@ -20,7 +20,7 @@ public sealed partial class QuestNpcServices
 
         foreach ((Quest quest, QuestStatusData data, int slot) in LoggedQuests(state))
         {
-            if (quest.Template.RepObjectiveFaction == factionId)
+            if (quest.Template.RepObjectiveFaction == factionId && data.Status is QuestStatus.Incomplete or QuestStatus.Complete)
             {
                 RefreshCompletion(state, quest, data, slot);
             }
