@@ -70,6 +70,9 @@ public static class GmAuditStrings
     public static string MuteState(AccountMuteRecord? mute, long now)
         => mute is null ? "enabled" : $"muted for {Span(mute.MutedUntil - now)} by {mute.MutedBy} ({mute.Reason})";
 
+    /// <summary>Not a core text: the player is held only by the chat lane's anti-flood mute.</summary>
+    public static string FloodMuteState(string left) => $"muted for {left} (anti-flood)";
+
     // ---- tickets ----
 
     /// <summary>LANG_COMMAND_TICKETNEW (289), sent to online staff.</summary>
@@ -110,6 +113,9 @@ public static class GmAuditStrings
 
     /// <summary>Not a core text: what a player is told when staff delete their ticket.</summary>
     public const string YourTicketDeleted = "Your ticket has been deleted by staff.";
+
+    /// <summary>Not a core text: the player sent more ticket packets than <c>World:GmCommands:TicketMutationsPerMinute</c> allows.</summary>
+    public const string TicketTooFast = "You are sending ticket requests too quickly. Wait a minute and try again.";
 
     /// <summary>Not a core text: a staff answer delivered to the ticket's owner.</summary>
     public static string TicketAnswer(string gm, string text) => $"<GM>{gm} answers your ticket: {text}";

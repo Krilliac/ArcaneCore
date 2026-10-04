@@ -1,10 +1,13 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Gm;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Audit;
+using ArcaneCore.World.Gm.Core;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -16,6 +19,26 @@ namespace ArcaneCore.World.Tests.Gm.Audit;
 /// </summary>
 public sealed class TicketTests
 {
+    private sealed class Clock : TimeProvider
+    {
+        private readonly DateTimeOffset _start = new(2026, 10, 3, 12, 0, 0, TimeSpan.Zero);
+        private long _advanced;
+
+        internal void Advance(long seconds) => Interlocked.Add(ref _advanced, seconds);
+
+        public override DateTimeOffset GetUtcNow() => _start.AddSeconds(Interlocked.Read(ref _advanced));
+    }
+
+    /// <summary>A host on a settable clock with <c>World:GmCommands:TicketMutationsPerMinute</c> configured.</summary>
+    private static WorldTestHost StartLimited(Clock clock, int perMinute) => WorldTestHost.Start(configureServices: services =>
+    {
+        services.AddSingleton<TimeProvider>(clock);
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["World:GmCommands:TicketMutationsPerMinute"] = perMinute.ToString(CultureInfo.InvariantCulture),
+        }).Build());
+    });
+
     internal static string Link(string name) => $"|cffffffff|Hplayer:{name}|h[{name}]|h|r";
 
     internal static byte[] CreatePayload(string text, byte category = 1)
@@ -203,6 +226,80 @@ public sealed class TicketTests
 
         await player.SendAsync(WorldOpcode.CmsgGmticketDeleteticket, []);   // again, with no ticket: still answered
         Assert.Equal(GmTicketHandlers.ResponseDeleted, U32(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketDeleteticket)));
+    }
+
+    [Fact]
+    public async Task Mutations_AreRateLimitedPerAccount_RefusedUnreadBeyondTheLimit_AndStaffHearOnlyOfChanges()
+    {
+        var clock = new Clock();
+        await using WorldTestHost host = StartLimited(clock, perMinute: 3);
+        await using WorldTestClient gm = await host.EnterWorldAsync("GMA", "Gmaaa", AccountSecurity.GameMaster);
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plain");
+        await gm.CollectAsync();
+        await player.CollectAsync();
+        Assert.Equal(3, AuditOf(host).TicketMutationsPerMinute);
+
+        Assert.Equal(GmTicketHandlers.ResponseCreated, await CreateAsync(player, "one"));                 // 1
+        Assert.Equal($"New ticket from {Link("Plain")} (ID 1)", (await gm.ReadChatAsync()).Text);
+        await player.SendAsync(WorldOpcode.CmsgGmticketUpdatetext, TextPayload("two"));                 // 2
+        Assert.Equal(GmTicketHandlers.ResponseUpdated, U32(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketUpdatetext)));
+        Assert.Equal($"Player {Link("Plain")} has updated his ticket (ID 1).", (await gm.ReadChatAsync()).Text);
+        long stamped = AuditOf(host).OpenTickets()[0].UpdatedAt;
+
+        // The same text again is answered "updated" but changes nothing, so staff are not told again.
+        clock.Advance(5);
+        await player.SendAsync(WorldOpcode.CmsgGmticketUpdatetext, TextPayload("two"));                 // 3
+        Assert.Equal(GmTicketHandlers.ResponseUpdated, U32(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketUpdatetext)));
+        Assert.DoesNotContain(await gm.CollectAsync(), p => p.Opcode == WorldOpcode.SmsgMessagechat);
+        Assert.Equal(stamped, AuditOf(host).OpenTickets()[0].UpdatedAt);
+
+        // The fourth packet inside the minute is refused before its text is read: the error code, a line to the player, nothing to staff.
+        await player.SendAsync(WorldOpcode.CmsgGmticketUpdatetext, TextPayload("three"));               // 4: over
+        Assert.Equal(GmTicketHandlers.ResponseUpdateError, U32(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketUpdatetext)));
+        Assert.Equal(GmAuditStrings.TicketTooFast, (await player.ReadChatAsync()).Text);
+        Assert.Equal("two", AuditOf(host).OpenTickets()[0].Text);
+        Assert.DoesNotContain(await gm.CollectAsync(), p => p.Opcode == WorldOpcode.SmsgMessagechat);
+
+        // A refused delete deletes nothing and does not say it did: the client gets the ticket's real state.
+        await player.SendAsync(WorldOpcode.CmsgGmticketDeleteticket, []);
+        List<(WorldOpcode Opcode, byte[] Payload)> answer = await player.CollectAsync();
+        Assert.DoesNotContain(answer, p => p.Opcode == WorldOpcode.SmsgGmticketDeleteticket);
+        Assert.Equal(GmTicketHandlers.StatusHasTicket, U32(Assert.Single(answer, p => p.Opcode == WorldOpcode.SmsgGmticketGetticket).Payload));
+        Assert.Contains(answer, p => p.Opcode == WorldOpcode.SmsgMessagechat && ChatMessage.Parse(p.Payload).Text == GmAuditStrings.TicketTooFast);
+        Assert.Single(AuditOf(host).OpenTickets());
+
+        // Another account is not held back by this one's flood.
+        await using WorldTestClient other = await host.EnterWorldAsync("OTHER", "Otherone");
+        await other.CollectAsync();
+        Assert.Equal(GmTicketHandlers.ResponseCreated, await CreateAsync(other, "mine"));
+
+        // The minute passes: the account may act again.
+        clock.Advance(60);
+        await player.SendAsync(WorldOpcode.CmsgGmticketDeleteticket, []);
+        Assert.Equal(GmTicketHandlers.ResponseDeleted, U32(await player.ReadUntilAsync(WorldOpcode.SmsgGmticketDeleteticket)));
+        Assert.Equal("mine", Assert.Single(AuditOf(host).OpenTickets()).Text);
+    }
+
+    [Fact]
+    public async Task RateLimit_FailsClosed_ZeroRefusesEveryMutation_ANegativeValueIsTheDefault()
+    {
+        var clock = new Clock();
+        await using (WorldTestHost host = StartLimited(clock, perMinute: 0))
+        {
+            await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plain");
+            await player.CollectAsync();
+            Assert.Equal(0, AuditOf(host).TicketMutationsPerMinute);
+
+            Assert.Equal(GmTicketHandlers.ResponseCreateError, await CreateAsync(player, "nobody may file"));
+            Assert.Equal(GmAuditStrings.TicketTooFast, (await player.ReadChatAsync()).Text);
+            Assert.Empty(AuditOf(host).OpenTickets());
+        }
+
+        await using (WorldTestHost host = StartLimited(clock, perMinute: -5))
+        {
+            Assert.Equal(new GmOptions().TicketMutationsPerMinute, AuditOf(host).TicketMutationsPerMinute);
+            Assert.True(AuditOf(host).TicketMutationsPerMinute > 0);
+        }
     }
 
     // ---- staff commands ----

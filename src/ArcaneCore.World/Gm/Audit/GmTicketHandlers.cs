@@ -23,6 +23,11 @@ namespace ArcaneCore.World.Gm.Audit;
 /// the fixed part is answered with the create-error code and stores nothing. The response codes (1 exists, 2 created, 3
 /// error, 4 updated, 5 update error, 9 deleted) are mangos-zero's GMTicketMgr.h:39-46 and likewise unverified on the wire.
 /// </para>
+/// <para>
+/// The three mutations are rate limited per account (<see cref="GmOptions.TicketMutationsPerMinute"/>, ArcaneCore's own,
+/// fail-closed): a packet over the limit is refused before it is read and the player is told. Staff are told of a create
+/// and of a text that actually changed, so the limit also bounds those notices.
+/// </para>
 /// </summary>
 public sealed class GmTicketHandlers : IOpcodeHandlerGroup
 {
@@ -82,6 +87,13 @@ public sealed class GmTicketHandlers : IOpcodeHandlerGroup
     private static void HandleCreate(WorldSession session, Player player, byte[] payload)
     {
         GmAuditFeature audit = Audit(session);
+        if (!audit.TryAdmitTicketMutation(player.AccountId))
+        {
+            session.Send(WorldOpcode.SmsgGmticketCreate, BuildResponse(ResponseCreateError));
+            player.SendSystemMessage(GmAuditStrings.TicketTooFast);
+            return;
+        }
+
         if (payload.Length < CreateFixedBytes)
         {
             session.Send(WorldOpcode.SmsgGmticketCreate, BuildResponse(ResponseCreateError));
@@ -112,19 +124,39 @@ public sealed class GmTicketHandlers : IOpcodeHandlerGroup
 
     private static void HandleUpdateText(WorldSession session, Player player, byte[] payload)
     {
+        GmAuditFeature audit = Audit(session);
+        if (!audit.TryAdmitTicketMutation(player.AccountId))
+        {
+            session.Send(WorldOpcode.SmsgGmticketUpdatetext, BuildResponse(ResponseUpdateError));
+            player.SendSystemMessage(GmAuditStrings.TicketTooFast);
+            return;
+        }
+
         var reader = new PacketReader(payload);
         string text = CleanText(reader.ReadCString());
-        GmTicketRecord? ticket = text.Length == 0 ? null : Audit(session).UpdateTicketText((int)player.Guid.Low, text);
+        bool changed = false;
+        GmTicketRecord? ticket = text.Length == 0 ? null : audit.UpdateTicketText((int)player.Guid.Low, text, out changed);
         session.Send(WorldOpcode.SmsgGmticketUpdatetext, BuildResponse(ticket is null ? ResponseUpdateError : ResponseUpdated));
-        if (ticket is not null)
+        if (ticket is not null && changed)
         {
+            // Staff hear of a change, not of the same text sent again.
             NotifyStaff(session, GmAuditStrings.TicketUpdated(GmStrings.PlayerLink(player.Name), ticket.Id));
         }
     }
 
     private static void HandleDeleteTicket(WorldSession session, Player player, byte[] payload)
     {
-        Audit(session).DeleteTicketOf((int)player.Guid.Low);
+        GmAuditFeature audit = Audit(session);
+        if (!audit.TryAdmitTicketMutation(player.AccountId))
+        {
+            // Nothing was deleted, so the deleted code is not sent; the client is given the ticket's real state instead
+            // (the same status answer that follows a delete). UNVERIFIED on a retail client, as the layouts above.
+            session.Send(WorldOpcode.SmsgGmticketGetticket, audit.OpenTicketOf((int)player.Guid.Low) is { } open ? BuildTicketStatus(open.Text) : MiscPackets.BuildNoGmTicket());
+            player.SendSystemMessage(GmAuditStrings.TicketTooFast);
+            return;
+        }
+
+        audit.DeleteTicketOf((int)player.Guid.Low);
         session.Send(WorldOpcode.SmsgGmticketDeleteticket, BuildResponse(ResponseDeleted));
         session.Send(WorldOpcode.SmsgGmticketGetticket, MiscPackets.BuildNoGmTicket());
     }

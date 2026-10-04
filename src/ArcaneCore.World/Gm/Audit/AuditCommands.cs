@@ -20,6 +20,8 @@ namespace ArcaneCore.World.Gm.Audit;
 /// <see cref="GmAuditFeature"/>; the chat gates read it as an <see cref="IChatMuteSource"/>. Muting needs an online target
 /// of strictly lower security (vmangos HasLowerSecurity with strong = true, CommunicationCommands.cpp:88-140); unmuting also
 /// works on an offline character's account, where the muting staff member's stored security stands in for the target's.
+/// A mute set by higher staff is never shortened or lifted by lower staff, the muted staff member included.
+/// <c>.unmute</c> also clears the chat lane's flood mute (vmangos clears <c>m_muteTime</c> outright).
 /// </summary>
 public sealed class AuditCommands : ICommandGroup
 {
@@ -82,7 +84,19 @@ public sealed class AuditCommands : ICommandGroup
         }
 
         GmTicketRecord? ticket = audit.OpenTicketOf(characterId);
-        context.Reply(GmAuditStrings.PinfoState(player?.IsGameMaster, GmAuditStrings.MuteState(audit.MuteOf(accountId), audit.NowUnixSeconds), ticket?.Id));
+        string muteState = GmAuditStrings.MuteState(audit.MuteOf(accountId), audit.NowUnixSeconds);
+        if (player is not null && audit.MuteOf(accountId) is null)
+        {
+            // No account mute, but the chat lane's flood mute may still hold the player: say so rather than "enabled".
+            ChatFeature chat = context.Session.Services.GetRequiredService<ChatFeature>();
+            long floodUntil = chat.MutedUntil(player);
+            if (floodUntil > chat.NowUnixSeconds)
+            {
+                muteState = GmAuditStrings.FloodMuteState(GmAuditStrings.Span(floodUntil - chat.NowUnixSeconds));
+            }
+        }
+
+        context.Reply(GmAuditStrings.PinfoState(player?.IsGameMaster, muteState, ticket?.Id));
         return true;
     }
 
@@ -113,8 +127,10 @@ public sealed class AuditCommands : ICommandGroup
             return true;
         }
 
+        // The mute's AUTHOR decides, whoever the target is: CanActOn lets staff target themselves, and a muted staff member
+        // can still reach the command table (a whisper is not gated by the mute), so a self-target must not skip this.
         GmAuditFeature audit = context.Session.Services.GetRequiredService<GmAuditFeature>();
-        if (!ReferenceEquals(target, context.Player) && audit.MuteOf(target.AccountId) is { } existing && existing.MutedBySecurity > (byte)context.Security)
+        if (audit.MuteOf(target.AccountId) is { } existing && existing.MutedBySecurity > (byte)context.Security)
         {
             context.Reply(GmAuditStrings.MuteSetByHigher);
             return true;
@@ -164,19 +180,29 @@ public sealed class AuditCommands : ICommandGroup
         }
 
         int accountId = target?.AccountId ?? offline!.AccountId;
-        if (audit.MuteOf(accountId) is not { } mute)
-        {
-            context.Reply(GmAuditStrings.ChatAlreadyEnabled);
-            return true;
-        }
+        AccountMuteRecord? mute = audit.MuteOf(accountId);
 
-        if (!ReferenceEquals(target, context.Player) && mute.MutedBySecurity > (byte)context.Security)
+        // Checked against the mute's author for every target, the invoker included (see Mute).
+        if (mute is not null && mute.MutedBySecurity > (byte)context.Security)
         {
             context.Reply(GmStrings.SecurityTooLow);
             return true;
         }
 
-        audit.Unmute(accountId);
+        // vmangos .unmute clears m_muteTime entirely, so the chat lane's own flood mute goes too (it is keyed by account,
+        // so an offline character's account is covered); "already enabled" is only said when neither mute was in force.
+        bool floodMuteCleared = context.Session.Services.GetRequiredService<ChatFeature>().ClearMute(accountId);
+        if (mute is null && !floodMuteCleared)
+        {
+            context.Reply(GmAuditStrings.ChatAlreadyEnabled);
+            return true;
+        }
+
+        if (mute is not null)
+        {
+            audit.Unmute(accountId);
+        }
+
         target?.SendSystemMessage(GmAuditStrings.YourChatEnabled);
         context.Reply(GmAuditStrings.YouEnableChat(GmStrings.PlayerLink(target?.Name ?? offline!.Name)));
         return true;

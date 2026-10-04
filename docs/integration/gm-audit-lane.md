@@ -25,7 +25,14 @@ syntax below are ArcaneCore's decision. `BanCommands.cs` and `Honor/` are untouc
 
 Player side: `CMSG_GMTICKET_GETTICKET`, `_CREATE`, `_UPDATETEXT` and `_DELETETICKET` are handled by `GmTicketHandlers` (the old
 "always no ticket" stub of `PlayerHandlers` moved there; with no ticket the answer is unchanged). Staff with GameMaster or higher are told in
-chat when a ticket is created or updated.
+chat when a ticket is created or its text actually changes (the same text sent again is answered "updated" but neither written nor announced).
+
+The three mutations are rate limited per account, ArcaneCore's own (no reference core limits them): `World:GmCommands:TicketMutationsPerMinute`
+(default 10) is the most create, update-text and delete packets one account may send in a fixed minute from its first; the rest are refused
+before the payload is read and the player gets a system line. A refused create or update answers with its error code (3 / 5); a refused
+delete answers with the ticket's real state (the status answer that normally follows a delete) and never the "deleted" code, since nothing
+was deleted (UNVERIFIED on a retail client, as the layouts below). Fail-closed: 0 refuses every ticket mutation, a negative value falls
+back to the default, and the limit holds the staff notices to the same bound.
 
 ### Why these names and levels
 
@@ -38,7 +45,11 @@ chat when a ticket is created or updated.
   existing chat gates (`ChatFeature`, vmangos HandleChatMessageOpcode order) already took `IChatMuteSource`s; `GmAuditFeature` is one, so
   nothing in the chat handlers changed. Strong security check as vmangos `HasLowerSecurity(strong)`: equal security is refused too.
   A mute set by higher staff cannot be shortened or lifted by lower staff (`MutedBySecurity`); that is what lets `.unmute` work on an
-  offline account without loading its security.
+  offline account without loading its security. The check is against the mute's AUTHOR whoever the target is, the invoker included:
+  `CanActOn` lets staff target themselves and a muted staff member can still reach the command table (a whisper is not gated by the
+  mute), so a self-target gets no exemption. `.unmute` also clears `ChatFeature`'s own flood mute (vmangos `.unmute` sets `m_muteTime`
+  to 0, the field the flood mute shares) and says "already enabled" only when neither mute was in force; `.pinfo` shows a flood mute as
+  `muted for ... (anti-flood)`.
 * **Duration** is minutes when a bare number (mangos-zero, vmangos), else `1d2h30m` groups as `.ban`. Unlike vmangos' 32-bit
   `TimeStringToSecs` the arithmetic is checked, so `4294967297s` is refused instead of wrapping into one second; zero is refused and
   there is no permanent mute (use a ban); maximum 365 days. A word with a digit is a duration, otherwise a name, so `.mute 30m` mutes the selection.
@@ -55,7 +66,7 @@ Levels are each core's own scale (mangos-zero 0-4 PLAYER..CONSOLE, acore/Trinity
 |---|---|---|---|---|---|
 | `pinfo` | 2 | 2 | 2 | - | GameMaster. No e-mail, last IP or latency (not shown in chat); offline form shows no security (account not loaded) |
 | `mute` | 1, minutes only, online or offline | 2 | 1 | - | Moderator, minutes or `1d2h`, reason, online target only, reason and duration notice to the target |
-| `unmute` | 1 | 2 | 1 | - | Moderator, online or offline, cannot lift a mute of higher staff |
+| `unmute` | 1 | 2 | 1 | - | Moderator, online or offline, cannot lift a mute of higher staff (not even one's own), clears the flood mute too |
 | `gm list` | 3, reads the account table | 3 | 3 | ArcEmu 0 | Administrator, online staff only (see deferred) |
 | `gm ingame` | 0 | 0 | 1 | - | Moderator |
 | `gm visible` | 1 | 2 | 1 | - | not provided: there is no GM-invisibility state |
@@ -105,7 +116,6 @@ and say so.
 * `.arcane queues` reads the pending counts that the existing queues expose (character saves, social, reputation, instances, creature
   respawns, explored zones) and the retained keys of the GM audit queue only; the others expose retained state per character, not as a
   list. The honor queue is left out because its files belong to another lane.
-* A flood mute (`ChatFeature`'s own, 10 s) is not cleared by `.unmute`: it expires by itself.
 
 ## Tests
 

@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Gm;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Chat;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Audit;
 using Microsoft.Extensions.DependencyInjection;
@@ -227,6 +228,73 @@ public sealed class AuditCommandTests
 
         Assert.Equal($"You have enabled {Link("Targetone")}'s chat.", await ReplyAsync(admin, ".unmute targetone"));
         Assert.Null(audit.MuteOf(account));
+    }
+
+    /// <summary>
+    /// A command sent as a WHISPER: the mute gate of the chat handler does not apply to whispers, and the command table is
+    /// reached before the whisper is delivered, so this is how a muted staff member can still type commands.
+    /// </summary>
+    private static async Task<string> WhisperedReplyAsync(WorldTestClient client, string command, string to)
+    {
+        await client.SendChatAsync(ChatType.Whisper, Language.Common, command, target: to);
+        return (await client.ReadChatAsync()).Text;
+    }
+
+    [Fact]
+    public async Task Mute_AMutedStaffMember_CannotLiftOrShortenTheirOwnMuteSetByHigherStaff()
+    {
+        await using WorldTestHost host = Start(new Clock());
+        await using WorldTestClient mod = await host.EnterWorldAsync("MOD", "Moddy", AccountSecurity.Moderator);
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADM", "Admiral", AccountSecurity.Administrator);
+        await mod.CollectAsync();
+        await admin.CollectAsync();
+        GmAuditFeature audit = host.WorldServices.GetRequiredService<GmAuditFeature>();
+        int account = await AccountIdAsync(host, "MOD");
+
+        Assert.StartsWith("You have disabled", await ReplyAsync(admin, ".mute moddy 1d abusing players"));
+        Assert.StartsWith("Your chat has been disabled for 1 Day", (await mod.ReadChatAsync()).Text, StringComparison.Ordinal);
+
+        // Saying anything, a command line included, is stopped by the mute ...
+        await mod.SendChatAsync(ChatType.Say, Language.Common, ".unmute");
+        Assert.StartsWith("You must wait 1 Day", NotificationOf(await mod.ReadUntilAsync(WorldOpcode.SmsgNotification)), StringComparison.Ordinal);
+        Assert.NotNull(audit.MuteOf(account));
+
+        // ... but a whispered command line runs, with the invoker as the target: the mute's author still outranks them.
+        Assert.Equal("You have low security level for this.", await WhisperedReplyAsync(mod, ".unmute", "Admiral"));
+        Assert.Equal(GmAuditStrings.MuteSetByHigher, await WhisperedReplyAsync(mod, ".mute 1s", "Admiral"));
+        Assert.Equal(GmAuditStrings.MuteSetByHigher, await WhisperedReplyAsync(mod, ".mute moddy 1s", "Admiral"));
+        Assert.Equal(86400, audit.MuteOf(account)!.MutedUntil - audit.NowUnixSeconds);
+        Assert.DoesNotContain(await admin.CollectAsync(), p => p.Opcode == WorldOpcode.SmsgMessagechat);   // the whispers never arrived as whispers
+    }
+
+    [Fact]
+    public async Task Unmute_ClearsTheFloodMuteToo_AndSaysAlreadyEnabledOnlyWhenItIs()
+    {
+        var clock = new Clock();
+        await using WorldTestHost host = Start(clock);
+        await using WorldTestClient gm = await host.EnterWorldAsync("GMA", "Gmaaa", AccountSecurity.GameMaster);
+        await using WorldTestClient target = await host.EnterWorldAsync("TARGET", "Targetone");
+        await using WorldTestClient listener = await host.EnterWorldAsync("LISTENER", "Listener");
+        await gm.CollectAsync();
+        await target.CollectAsync();
+        await listener.CollectAsync();
+        GmAuditFeature audit = host.WorldServices.GetRequiredService<GmAuditFeature>();
+        int account = await AccountIdAsync(host, "TARGET");
+
+        // The chat lane's own anti-flood mute, not an account mute: GmAuditFeature knows nothing of it.
+        await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<ChatFeature>().MuteUntil(host.World.FindOnlinePlayer("Targetone")!, clock.UnixNow + 600));
+        await target.SendChatAsync(ChatType.Say, Language.Common, "anyone?");
+        Assert.StartsWith("You must wait 10 Minutes", NotificationOf(await target.ReadUntilAsync(WorldOpcode.SmsgNotification)), StringComparison.Ordinal);
+        Assert.Null(audit.MuteOf(account));
+        Assert.Equal("GM mode: off Chat: muted for 10 Minutes (anti-flood) Ticket: none", (await LinesAsync(gm, ".pinfo targetone"))[3]);
+
+        Assert.Equal($"You have enabled {Link("Targetone")}'s chat.", await ReplyAsync(gm, ".unmute targetone"));
+        Assert.Equal("Your chat has been enabled.", (await target.ReadChatAsync()).Text);
+
+        await target.SendChatAsync(ChatType.Say, Language.Common, "free again");
+        Assert.Equal("free again", (await listener.ReadChatAsync()).Text);
+        Assert.Equal("GM mode: off Chat: enabled Ticket: none", (await LinesAsync(gm, ".pinfo targetone"))[3]);
+        Assert.Equal("Player's chat is already enabled.", await ReplyAsync(gm, ".unmute targetone"));
     }
 
     [Fact]

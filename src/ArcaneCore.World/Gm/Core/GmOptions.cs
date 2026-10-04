@@ -69,6 +69,15 @@ public sealed class GmOptions
     /// </summary>
     public int LookupMaxResults { get; set; }
 
+    /// <summary>
+    /// ArcaneCore only (no reference core limits these): the most ticket mutations (<c>CMSG_GMTICKET_CREATE</c>,
+    /// <c>_UPDATETEXT</c>, <c>_DELETETICKET</c>) one account may send per minute. Beyond it the packet is refused
+    /// before anything is read (create and update answer with their error code, a delete is answered with the
+    /// ticket's unchanged state) and the player is told; every accepted create or changed text tells all GameMasters
+    /// online, so this also bounds that. Fail-closed: 0 refuses every ticket mutation, a negative value is the default.
+    /// </summary>
+    public int TicketMutationsPerMinute { get; set; } = 10;
+
     /// <summary>The retail level of a stored account security (unmapped values count as Player).</summary>
     public int LevelOf(AccountSecurity security) => SecurityMap.GetValueOrDefault(security, (byte)0);
 

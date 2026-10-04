@@ -146,6 +146,18 @@ public sealed class ChatFeature : IWorldFeature
     /// <summary>vmangos MasterPlayer::ClearAllowedWhisperers (<c>.whispers off</c>).</summary>
     public void ClearAllowedWhisperers(Player player) => State(player).AllowedWhisperers?.Clear();
 
+    /// <summary>
+    /// Drop the account's flood mute (<c>.unmute</c>; vmangos HandleUnmuteCommand sets <c>m_muteTime</c> to 0, the same
+    /// field the flood mute lives in). True when a mute still in force was removed. Keyed by account, so it also covers a
+    /// character that logged out to the character screen.
+    /// </summary>
+    public bool ClearMute(int accountId)
+    {
+        bool inForce = SessionMute(accountId) > 0;
+        _sessionMutes.Remove(accountId);
+        return inForce;
+    }
+
     private long SessionMute(int accountId)
     {
         if (!_sessionMutes.TryGetValue(accountId, out long until))

@@ -1,6 +1,7 @@
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Gm;
 using ArcaneCore.World.Characters;
+using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Net;
 
 namespace ArcaneCore.World.Gm.Audit;
@@ -9,7 +10,45 @@ namespace ArcaneCore.World.Gm.Audit;
 public sealed partial class GmAuditFeature
 {
     private readonly Dictionary<int, GmTicketRecord> _tickets = [];
+    private readonly Dictionary<int, (long WindowStart, int Count)> _ticketPacketWindows = [];
     private int _lastTicketId;
+
+    /// <summary>The per-account limit in force (<see cref="GmOptions.TicketMutationsPerMinute"/> after the fail-closed bind).</summary>
+    public int TicketMutationsPerMinute { get; private set; } = new GmOptions().TicketMutationsPerMinute;
+
+    /// <summary>
+    /// Count one ticket mutation packet (create, update text, delete) of the account against
+    /// <see cref="TicketMutationsPerMinute"/>: true when it may be handled, false when the account has already sent the
+    /// limit within the last minute (a fixed window from its first packet) and the packet must be refused unread.
+    /// </summary>
+    public bool TryAdmitTicketMutation(int accountId)
+    {
+        long now = NowUnixSeconds;
+        lock (_gate)
+        {
+            if (_ticketPacketWindows.Count > 1024)
+            {
+                foreach (int stale in _ticketPacketWindows.Where(w => now - w.Value.WindowStart >= 60).Select(w => w.Key).ToArray())
+                {
+                    _ticketPacketWindows.Remove(stale);
+                }
+            }
+
+            if (!_ticketPacketWindows.TryGetValue(accountId, out (long WindowStart, int Count) window) || now - window.WindowStart >= 60)
+            {
+                window = (now, 0);
+            }
+
+            if (window.Count >= TicketMutationsPerMinute)
+            {
+                _ticketPacketWindows[accountId] = window;
+                return false;
+            }
+
+            _ticketPacketWindows[accountId] = (window.WindowStart, window.Count + 1);
+            return true;
+        }
+    }
 
     /// <summary>The character's open ticket, if any.</summary>
     public GmTicketRecord? OpenTicketOf(int characterId)
@@ -61,8 +100,12 @@ public sealed partial class GmAuditFeature
         return ticket;
     }
 
-    /// <summary>Replace the text of the character's open ticket (vmangos HandleGMTicketUpdateTextOpcode). Null when it has none.</summary>
-    public GmTicketRecord? UpdateTicketText(int characterId, string text)
+    /// <summary>
+    /// Replace the text of the character's open ticket (vmangos HandleGMTicketUpdateTextOpcode). Null when it has none.
+    /// <paramref name="changed"/> is false when the text was already that: nothing is then written or stamped, and the
+    /// caller does not tell staff.
+    /// </summary>
+    public GmTicketRecord? UpdateTicketText(int characterId, string text, out bool changed)
     {
         GmTicketRecord updated;
         lock (_gate)
@@ -70,7 +113,14 @@ public sealed partial class GmAuditFeature
             GmTicketRecord? ticket = _tickets.Values.FirstOrDefault(t => t.CharacterId == characterId);
             if (ticket is null)
             {
+                changed = false;
                 return null;
+            }
+
+            if (string.Equals(ticket.Text, text, StringComparison.Ordinal))
+            {
+                changed = false;
+                return ticket;
             }
 
             updated = ticket with { Text = text, UpdatedAt = NowUnixSeconds };
@@ -78,6 +128,7 @@ public sealed partial class GmAuditFeature
         }
 
         PersistTicket(updated);
+        changed = true;
         return updated;
     }
 

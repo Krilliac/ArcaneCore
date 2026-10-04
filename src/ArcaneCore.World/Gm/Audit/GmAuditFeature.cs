@@ -48,7 +48,10 @@ public sealed partial class GmAuditFeature(
         ArgumentNullException.ThrowIfNull(world);
         if (configuration is not null)
         {
-            _tailSize = Math.Max(0, GmOptions.Bind(configuration).AuditTailSize);
+            GmOptions options = GmOptions.Bind(configuration);
+            _tailSize = Math.Max(0, options.AuditTailSize);
+            // Fail-closed: a negative value cannot mean "unlimited", it falls back to the default; 0 is literally none.
+            TicketMutationsPerMinute = options.TicketMutationsPerMinute < 0 ? new GmOptions().TicketMutationsPerMinute : options.TicketMutationsPerMinute;
         }
 
         // Fail closed: a database that cannot be read must not start the world with every mute forgotten.
