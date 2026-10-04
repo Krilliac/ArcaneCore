@@ -73,24 +73,34 @@ public sealed class NpcBankSpiritServiceTests
         kit.Services.BuyBankSlot(kit.Player, kit.Npc.Guid); // 15000 needed
         Assert.Equal(2, kit.Player.Inventory.BankBagSlotCount);
         Assert.Equal(500u, kit.Player.Money);
+        Assert.Equal(1u, BitConverter.ToUInt32(kit.Single(WorldOpcode.SmsgBuyBankSlotResult)));
         Assert.Equal([1, 2], stored);
 
         kit.Player.Inventory.BankBagSlotCount = QuestNpcServices.MaxBankBagSlots;
         kit.Player.Money = 1_000_000;
         kit.Services.BuyBankSlot(kit.Player, kit.Npc.Guid);
         Assert.Equal(1_000_000u, kit.Player.Money);
+        Assert.Equal(0u, BitConverter.ToUInt32(kit.Single(WorldOpcode.SmsgBuyBankSlotResult)));
         Assert.Equal([1, 2], stored);
     }
 
     [Fact]
-    public void BuyBankSlot_WithoutPersistencePricesOrRange_BuysNothing()
+    public void BuyBankSlot_WithoutPricesOrRange_BuysNothing()
     {
         using (var unpersisted = new NpcServiceKit(NpcFlags.Banker, bankPrices: Prices()))
         {
             unpersisted.Player.Money = 9000;
             unpersisted.Services.BuyBankSlot(unpersisted.Player, unpersisted.Npc.Guid);
-            Assert.Equal(0, unpersisted.Player.Inventory.BankBagSlotCount);
-            Assert.Equal(9000u, unpersisted.Player.Money);
+            Assert.Equal(1, unpersisted.Player.Inventory.BankBagSlotCount);
+            Assert.Equal(8000u, unpersisted.Player.Money);
+        }
+
+        using (var vetoed = new NpcServiceKit(NpcFlags.Banker, bankPrices: Prices(), persistBankSlots: (_, _) => false))
+        {
+            vetoed.Player.Money = 9000;
+            vetoed.Services.BuyBankSlot(vetoed.Player, vetoed.Npc.Guid);
+            Assert.Equal(0, vetoed.Player.Inventory.BankBagSlotCount);
+            Assert.Equal(9000u, vetoed.Player.Money);
         }
 
         using (var unpriced = new NpcServiceKit(NpcFlags.Banker, persistBankSlots: (_, _) => true))
@@ -99,6 +109,7 @@ public sealed class NpcBankSpiritServiceTests
             unpriced.Services.BuyBankSlot(unpriced.Player, unpriced.Npc.Guid);
             Assert.Equal(0, unpriced.Player.Inventory.BankBagSlotCount);
             Assert.Equal(9000u, unpriced.Player.Money);
+            Assert.Equal(0u, BitConverter.ToUInt32(unpriced.Single(WorldOpcode.SmsgBuyBankSlotResult)));
         }
 
         using var far = new NpcServiceKit(NpcFlags.Banker, npcDistance: 8, bankPrices: Prices(), persistBankSlots: (_, _) => true);
@@ -106,6 +117,7 @@ public sealed class NpcBankSpiritServiceTests
         far.Services.BuyBankSlot(far.Player, far.Npc.Guid);
         Assert.Equal(0, far.Player.Inventory.BankBagSlotCount);
         Assert.Equal(9000u, far.Player.Money);
+        Assert.Equal(2u, BitConverter.ToUInt32(far.Single(WorldOpcode.SmsgBuyBankSlotResult)));
     }
 
     // ---- spirit healer ------------------------------------------------------------------------

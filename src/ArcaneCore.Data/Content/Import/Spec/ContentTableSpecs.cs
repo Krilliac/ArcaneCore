@@ -30,6 +30,9 @@ public static class ContentTableSpecs
         "DisplayIdProbability1", "DisplayIdProbability2", "DisplayIdProbability3", "DisplayIdProbability4",
         "display_probability1", "display_probability2", "display_probability3", "display_probability4",
         "Scale", "display_scale1", "Faction", "FactionAlliance", "faction", "NpcFlags", "npc_flags",
+        // CreatureNpcMetadataDataModule (vmangos CreatureDefines.h:242,272-275)
+        "GossipMenuId", "gossip_menu_id", "TrainerType", "trainer_type", "TrainerClass", "trainer_class",
+        "TrainerRace", "trainer_race", "TrainerSpell", "trainer_spell",
         "UnitFlags", "DynamicFlags", "CreatureTypeFlags", "CreatureType", "type", "Family", "pet_family", "Rank",
         "UnitClass", "unit_class", "InhabitType", "inhabit_type", "Civilian", "RacialLeader", "racial_leader",
         "SpeedWalk", "speed_walk", "SpeedRun", "speed_run",

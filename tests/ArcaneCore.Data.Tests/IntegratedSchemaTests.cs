@@ -67,6 +67,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(GameObjectSpawnDataModule), DatabaseComponent.World, GameObjectSpawnDataModule.Version),
             (typeof(SpecialLootDataModule), DatabaseComponent.World, SpecialLootDataModule.Version),
             (typeof(StartActionWorldModule), DatabaseComponent.World, StartActionWorldModule.Version),
+            (typeof(ArcaneCore.Data.World.Creatures.CreatureNpcMetadataDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Creatures.CreatureNpcMetadataDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -84,6 +85,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.WorldState.ExploredZonesDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ExploredZonesDataModule.Version),
             (typeof(ItemLootDataModule), DatabaseComponent.Characters, ItemLootDataModule.Version),
             (typeof(PetitionDataModule), DatabaseComponent.Characters, PetitionDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.Bank.CharacterBankSlotsDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Bank.CharacterBankSlotsDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
@@ -157,8 +159,9 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             SchemaDefinition prefix = ThroughVersion(CharacterDbContext.Schema, step.Version);
             await EnsureAndInspectAsync(characters, prefix, CharacterDbContext.Schema);
             await EnsureAndInspectAsync(characters, prefix, CharacterDbContext.Schema);
-            Assert.Equal("Existing", (await characters.Characters.SingleAsync()).Name);
-            Assert.Equal(123u, (await characters.Characters.SingleAsync()).PlayedTime);
+            // Query only v1 columns while later steps have not added every current-model column.
+            Assert.Equal(("Existing", 123u), await characters.Characters
+                .Select(c => new ValueTuple<string, uint>(c.Name, c.PlayedTime)).SingleAsync());
         }
 
         foreach (SchemaStep step in WorldDbContext.Schema.Steps)

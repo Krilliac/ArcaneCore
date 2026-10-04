@@ -10,7 +10,7 @@ public sealed class ContentImportReportTests
     private const string Dump =
         "CREATE TABLE `db_version` (`version` varchar(120));\n"
         + "INSERT INTO `db_version` VALUES ('Synthetic DB 1');\n"
-        + "CREATE TABLE `creature_template` (`Entry` int, `Name` text, `MinLevel` int, `MaxLevel` int, `ModelId1` int, `TrainerType` int);\n"
+        + "CREATE TABLE `creature_template` (`Entry` int, `Name` text, `MinLevel` int, `MaxLevel` int, `ModelId1` int, `ResistanceFire` int);\n"
         + "INSERT INTO `creature_template` VALUES (1,'A',1,1,5,0),(2,'B',1,1,6,0);\n"
         + "UPDATE `creature_template` SET `Name`='x';\n";
 
@@ -36,7 +36,7 @@ public sealed class ContentImportReportTests
         JsonElement table = root.GetProperty("tables").GetProperty("creature_template");
         Assert.Equal(2, table.GetProperty("rows").GetInt64());
         Assert.Equal("CMangosClassic", table.GetProperty("dialect").GetString());
-        Assert.Contains("TrainerType", table.GetProperty("unmappedColumns").EnumerateArray().Select(e => e.GetString()));
+        Assert.Contains("ResistanceFire", table.GetProperty("unmappedColumns").EnumerateArray().Select(e => e.GetString()));
         Assert.Equal(1, root.GetProperty("unappliedStatements").GetProperty("UPDATE creature_template").GetInt32());
 
         string notice = root.GetProperty("licenseNotice").GetString()!;

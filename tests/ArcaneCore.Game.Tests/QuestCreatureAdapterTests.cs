@@ -15,6 +15,15 @@ namespace ArcaneCore.Game.Tests;
 public sealed class QuestCreatureAdapterTests
 {
     [Fact]
+    public void VisibleCreature_ExposesImportedTrainerAndGossipMetadata()
+    {
+        using var kit = new Kit();
+        NpcInfo info = kit.Services.Deps.Creatures!.Find(kit.Player, kit.Creature.Guid)!;
+        Assert.Equal((42u, TrainerType.TradeSkills, (byte)1, (byte)1, 201u),
+            (info.GossipMenuId, info.TrainerType, info.TrainerClass, info.TrainerRace, info.TrainerSpell));
+    }
+
+    [Fact]
     public void ActualVisibleCreature_CanAcceptOnce_AbandonAndReacceptWithFreshTimer()
     {
         using var kit = new Kit();
@@ -184,7 +193,8 @@ public sealed class QuestCreatureAdapterTests
         {
             Player = TestWorld.CreatePlayer(1, 0, 0, Session);
             World.AddPlayer(Player);
-            var template = new CreatureTemplate { Entry = 900010, Name = "Synthetic questgiver", Faction = 2, NpcFlags = 2 };
+            var template = new CreatureTemplate { Entry = 900010, Name = "Synthetic questgiver", Faction = 2, NpcFlags = 2,
+                GossipMenuId = 42, TrainerType = (uint)TrainerType.TradeSkills, TrainerClass = 1, TrainerRace = 1, TrainerSpell = 201 };
             var spawn = new CreatureSpawn { Guid = 900020, Entry = template.Entry, MapId = 0, X = 0, Y = 0, Z = Player.Z };
             Creature = new Creature(spawn.Guid, template, spawn, CreatureContent.Empty, new Random(1));
             Player.Map!.AddObject(Creature);

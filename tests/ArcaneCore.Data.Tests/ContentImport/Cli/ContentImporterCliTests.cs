@@ -30,7 +30,7 @@ public sealed class ContentImporterCliTests : IDisposable
         -- synthetic cmangos-layout dump
         CREATE TABLE `db_version` (`version` varchar(120));
         INSERT INTO `db_version` VALUES ('Synthetic DB 1');
-        CREATE TABLE `creature_template` (`Entry` int unsigned NOT NULL, `Name` varchar(100), `MinLevel` tinyint, `MaxLevel` tinyint, `ModelId1` int, `TrainerType` int, `LootId` int, PRIMARY KEY (`Entry`));
+        CREATE TABLE `creature_template` (`Entry` int unsigned NOT NULL, `Name` varchar(100), `MinLevel` tinyint, `MaxLevel` tinyint, `ModelId1` int, `ResistanceFire` int, `LootId` int, PRIMARY KEY (`Entry`));
         INSERT INTO `creature_template` VALUES (1001,'Wolf',1,2,100,0,5),(1002,'Boar',2,3,101,0,0);
         CREATE TABLE `creature` (`guid` int unsigned NOT NULL, `id` int unsigned NOT NULL, `map` int, `spawnMask` tinyint, `position_x` float, `position_y` float, `position_z` float, `orientation` float, `spawntimesecsmin` int, `spawntimesecsmax` int, `spawndist` float, `MovementType` tinyint, PRIMARY KEY (`guid`));
         INSERT INTO `creature` VALUES (1,1001,0,1,10.5,20.5,30.5,0,60,120,0,0),(2,1002,1,1,1,2,3,0,60,60,5,1);
@@ -121,8 +121,8 @@ public sealed class ContentImporterCliTests : IDisposable
         Line template = TableLine(output, "creature_template");
         Assert.Contains("CMangosClassic", template.Text, StringComparison.Ordinal);
         Assert.Contains("rows 2", template.Text, StringComparison.Ordinal);
-        Assert.Contains("TrainerType", template.Unmapped, StringComparison.Ordinal);
-        Assert.DoesNotContain("TrainerType", template.Mapped, StringComparison.Ordinal);
+        Assert.Contains("ResistanceFire", template.Unmapped, StringComparison.Ordinal);
+        Assert.DoesNotContain("ResistanceFire", template.Mapped, StringComparison.Ordinal);
         Assert.Contains("ModelId1", template.Mapped, StringComparison.Ordinal);
         Assert.Contains("Synthetic DB 1", output, StringComparison.Ordinal);
         Assert.Contains("sha256", output, StringComparison.Ordinal);

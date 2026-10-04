@@ -298,6 +298,37 @@ public sealed class NpcVendorServiceTests
     }
 
     [Fact]
+    public void LimitedStock_IsIndependentForTwoSpawnsOfTheSameVendorEntry()
+    {
+        using var kit = new NpcServiceKit(NpcFlags.Vendor, Vendor(Row(Lantern, maxCount: 1, incrTime: 60)));
+        kit.Player.Money = 1000;
+        ObjectGuid first = kit.Npc.Guid;
+        kit.Services.BuyItem(kit.Player, first, Lantern, 1);
+        kit.Drain();
+
+        kit.Npc = kit.Npc with { Guid = ObjectGuid.WithEntry(HighGuid.Unit, Entry, 78), SpawnId = 78 };
+        kit.Services.ListInventory(kit.Player, kit.Npc.Guid);
+        Assert.Equal(1u, BitConverter.ToUInt32(kit.Single(WorldOpcode.SmsgListInventory), 9 + 12));
+        kit.Services.BuyItem(kit.Player, kit.Npc.Guid, Lantern, 1);
+        Assert.Equal(2u, kit.Player.Inventory.GetItemCount(Lantern));
+    }
+
+    [Fact]
+    public void RepairItem_DiscountRoundsHalfCopperUp()
+    {
+        using var kit = new NpcServiceKit(NpcFlags.Repair,
+            extra: new QuestNpcDependencies(Reputation: new FixedReputation(0.75f)), repair: Repair());
+        Item sword = kit.Give(Sword);
+        sword.Durability = 40; // base cost 30; discounted cost 22.5 rounds to 23
+        kit.Player.Money = 23;
+
+        kit.Services.RepairItem(kit.Player, kit.Npc.Guid, sword.Guid);
+
+        Assert.Equal(50u, sword.Durability);
+        Assert.Equal(0u, kit.Player.Money);
+    }
+
+    [Fact]
     public void RepairItem_All_RepairsWhatIsAffordableInOrder()
     {
         using var kit = new NpcServiceKit(NpcFlags.Repair, repair: Repair());
