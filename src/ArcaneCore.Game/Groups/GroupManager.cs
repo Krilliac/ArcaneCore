@@ -16,8 +16,11 @@ public sealed class GroupManager(SocialContext context)
 
     private readonly Dictionary<ObjectGuid, Group> _memberOf = [];
     private readonly Dictionary<ObjectGuid, Group> _invitedTo = [];
-    private readonly Dictionary<ObjectGuid, MemberStats> _sentStats = [];
+    private readonly Dictionary<ObjectGuid, GroupMemberStatsSnapshot> _sentStats = [];
     private uint _nextId = 1;
+
+    /// <summary>Clock seam for deterministic offline-leader tests; world time in Unix seconds.</summary>
+    internal Func<long> UnixSecondsClock { get; set; } = static () => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
     /// <summary>A member was added; the first is the leader when the group is created (world thread; instance binds follow it).</summary>
     public event Action<Group, ObjectGuid>? MemberAdded;
@@ -53,6 +56,14 @@ public sealed class GroupManager(SocialContext context)
         if (target is null)
         {
             SendResult(inviter, PartyOperation.Invite, name, PartyResult.BadPlayerName);
+            return;
+        }
+
+        // D:\refs\vmangos\src\game\Handlers\GroupHandler.cpp:120-143:
+        // AddLeaderInvite succeeds, then AddInvite(self)
+        // fails because the inviter already has an invite; the temporary group is discarded.
+        if (target.Guid == inviter.Guid && GetGroup(inviter.Guid) is null && GetInvite(inviter.Guid) is null)
+        {
             return;
         }
 
@@ -101,7 +112,12 @@ public sealed class GroupManager(SocialContext context)
                 return;
             }
 
-            group = new Group(_nextId++) { LeaderGuid = inviter.Guid, LeaderName = inviter.Name };
+            group = new Group(_nextId++)
+            {
+                LeaderGuid = inviter.Guid,
+                LeaderName = inviter.Name,
+                LeaderLastOnlineUnixSeconds = UnixSecondsClock(),
+            };
             AddInvite(group, inviter.Guid);
         }
 
@@ -479,7 +495,7 @@ public sealed class GroupManager(SocialContext context)
     {
         Player? member = context.World.FindOnlinePlayer(guid);
         byte[] packet = member is not null && AreInSameGroup(player.Guid, guid)
-            ? GroupPackets.BuildPartyMemberStats(member, GroupUpdateFlags.Full)
+            ? GroupPackets.BuildPartyMemberStats(GroupMemberStatsSnapshot.Capture(member), GroupUpdateFlags.Full)
             : GroupPackets.BuildPartyMemberStatsOffline(guid);
         player.Session.Send(WorldOpcode.SmsgPartyMemberStatsFull, packet);
     }
@@ -527,10 +543,16 @@ public sealed class GroupManager(SocialContext context)
             return;
         }
 
+        if (group.IsLeader(player.Guid))
+        {
+            group.LeaderLastOnlineUnixSeconds = UnixSecondsClock();
+        }
+
         SendUpdate(group);
         _sentStats.Remove(player.Guid);
-        SendStatsOutOfRange(group, player, GroupUpdateFlags.Full);
-        _sentStats[player.Guid] = MemberStats.Of(player);
+        GroupMemberStatsSnapshot stats = GroupMemberStatsSnapshot.Capture(player);
+        SendStatsOutOfRange(group, player, stats, GroupUpdateFlags.Full);
+        _sentStats[player.Guid] = stats;
     }
 
     /// <summary>
@@ -543,6 +565,11 @@ public sealed class GroupManager(SocialContext context)
         _sentStats.Remove(player.Guid);
         if (GetGroup(player.Guid) is { } group)
         {
+            if (group.IsLeader(player.Guid))
+            {
+                group.LeaderLastOnlineUnixSeconds = UnixSecondsClock();
+            }
+
             SendUpdate(group, offline: player.Guid);
         }
     }
@@ -561,13 +588,48 @@ public sealed class GroupManager(SocialContext context)
                 continue;
             }
 
-            MemberStats now = MemberStats.Of(player);
-            GroupUpdateFlags changed = _sentStats.TryGetValue(guid, out MemberStats before) ? now.Diff(before) : GroupUpdateFlags.Full;
+            GroupMemberStatsSnapshot now = GroupMemberStatsSnapshot.Capture(player);
+            GroupMemberStatsSnapshot? before = _sentStats.GetValueOrDefault(guid);
+            GroupUpdateFlags changed = before is null ? GroupUpdateFlags.Full : now.Diff(before);
             _sentStats[guid] = now;
             if (changed != GroupUpdateFlags.None)
             {
-                SendStatsOutOfRange(group, player, changed);
+                SendStatsOutOfRange(group, player, now, changed, before);
             }
+        }
+
+        UpdateOfflineLeaders();
+    }
+
+    /// <summary>
+    /// D:\refs\vmangos\src\game\World.cpp:2063-2072 and Group/Group.cpp:1448-1471:
+    /// after the configured delay, choose an online assistant first, then another online member.
+    /// If nobody is online, keep the offline leader.
+    /// </summary>
+    public void UpdateOfflineLeaders()
+    {
+        int delay = context.Options.OfflineLeaderDelaySeconds;
+        if (delay <= 0)
+        {
+            return;
+        }
+
+        long now = UnixSecondsClock();
+        foreach (Group group in _memberOf.Values.Distinct().ToArray())
+        {
+            if (context.World.FindOnlinePlayer(group.LeaderGuid) is not null)
+            {
+                group.LeaderLastOnlineUnixSeconds = now;
+                continue;
+            }
+
+            if (now - group.LeaderLastOnlineUnixSeconds < delay || !ChooseLeader(group, onlineOnly: true))
+            {
+                continue;
+            }
+
+            Broadcast(group, WorldOpcode.SmsgGroupSetLeader, GroupPackets.BuildName(group.LeaderName));
+            SendUpdate(group);
         }
     }
 
@@ -723,7 +785,7 @@ public sealed class GroupManager(SocialContext context)
     }
 
     /// <summary>vmangos Group::_chooseLeader: an online member, in raids an assistant first; otherwise the first member.</summary>
-    private void ChooseLeader(Group group)
+    private bool ChooseLeader(Group group, bool onlineOnly = false)
     {
         GroupMemberSlot? first = null;
         GroupMemberSlot? chosen = null;
@@ -744,11 +806,14 @@ public sealed class GroupManager(SocialContext context)
             break;
         }
 
-        chosen ??= first ?? group.Members.FirstOrDefault();
-        if (chosen is not null)
+        chosen ??= first ?? (onlineOnly ? null : group.Members.FirstOrDefault());
+        if (chosen is null)
         {
-            ChangeLeader(group, chosen);
+            return false;
         }
+
+        ChangeLeader(group, chosen);
+        return true;
     }
 
     /// <summary>vmangos Group::_setLeader: move the leader flag.</summary>
@@ -757,6 +822,7 @@ public sealed class GroupManager(SocialContext context)
         ObjectGuid old = group.LeaderGuid;
         group.LeaderGuid = slot.Guid;
         group.LeaderName = slot.Name;
+        group.LeaderLastOnlineUnixSeconds = UnixSecondsClock();
         if (context.World.FindOnlinePlayer(old) is { } oldLeader)
         {
             UpdateLeaderFlag(oldLeader);
@@ -807,13 +873,10 @@ public sealed class GroupManager(SocialContext context)
         }
     }
 
-    private void SendStatsOutOfRange(Group group, Player player, GroupUpdateFlags mask)
+    private void SendStatsOutOfRange(
+        Group group, Player player, GroupMemberStatsSnapshot stats, GroupUpdateFlags mask,
+        GroupMemberStatsSnapshot? previous = null)
     {
-        if ((mask & GroupUpdateFlags.PowerType) != 0)
-        {
-            mask |= GroupUpdateFlags.CurrentPower | GroupUpdateFlags.MaxPower; // vmangos BuildPartyMemberStatsChangedPacket
-        }
-
         byte[]? packet = null;
         foreach (GroupMemberSlot member in group.Members)
         {
@@ -823,7 +886,7 @@ public sealed class GroupManager(SocialContext context)
                 continue;
             }
 
-            packet ??= GroupPackets.BuildPartyMemberStats(player, mask);
+            packet ??= GroupPackets.BuildPartyMemberStats(stats, mask, previous);
             mate.Session.Send(WorldOpcode.SmsgPartyMemberStats, packet);
         }
     }
@@ -846,67 +909,4 @@ public sealed class GroupManager(SocialContext context)
     private static void SendResult(Player player, PartyOperation operation, string name, PartyResult result)
         => player.Session.Send(WorldOpcode.SmsgPartyCommandResult, GroupPackets.BuildPartyCommandResult(operation, name, result));
 
-    /// <summary>The stats last sent for a member, to find what changed (vmangos m_groupUpdateMask).</summary>
-    private readonly record struct MemberStats(
-        GroupMemberStatus Status, uint Hp, uint MaxHp, PowerType Power, uint CurPower, uint MaxPower, byte Level, uint Zone, short X, short Y)
-    {
-        public static MemberStats Of(Player p)
-        {
-            int index = (int)p.PowerType <= 4 ? (int)p.PowerType : 0;
-            return new(GroupPackets.StatusOf(p), p.Health, p.MaxHealth, p.PowerType,
-                p.GetUInt32(UpdateFields.UnitFieldPower1 + index), p.GetUInt32(UpdateFields.UnitFieldMaxpower1 + index),
-                p.Level, p.ZoneId, (short)p.X, (short)p.Y);
-        }
-
-        public GroupUpdateFlags Diff(MemberStats o)
-        {
-            GroupUpdateFlags f = GroupUpdateFlags.None;
-            if (Status != o.Status)
-            {
-                f |= GroupUpdateFlags.Status;
-            }
-
-            if (Hp != o.Hp)
-            {
-                f |= GroupUpdateFlags.CurrentHp;
-            }
-
-            if (MaxHp != o.MaxHp)
-            {
-                f |= GroupUpdateFlags.MaxHp;
-            }
-
-            if (Power != o.Power)
-            {
-                f |= GroupUpdateFlags.PowerType;
-            }
-
-            if (CurPower != o.CurPower)
-            {
-                f |= GroupUpdateFlags.CurrentPower;
-            }
-
-            if (MaxPower != o.MaxPower)
-            {
-                f |= GroupUpdateFlags.MaxPower;
-            }
-
-            if (Level != o.Level)
-            {
-                f |= GroupUpdateFlags.Level;
-            }
-
-            if (Zone != o.Zone)
-            {
-                f |= GroupUpdateFlags.Zone;
-            }
-
-            if (X != o.X || Y != o.Y)
-            {
-                f |= GroupUpdateFlags.Position;
-            }
-
-            return f;
-        }
-    }
 }

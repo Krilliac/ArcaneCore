@@ -70,6 +70,12 @@ public sealed class SocialOptions
     public const string SectionName = "World:Social";
 
     /// <summary>
+    /// Seconds before an offline group leader yields to an online member. Zero disables the
+    /// handoff. D:\refs\vmangos\src\game\World.cpp:811,2063-2072 defaults to 300 seconds.
+    /// </summary>
+    public int OfflineLeaderDelaySeconds { get; set; } = 300;
+
+    /// <summary>
     /// Most channels one player may be in; 0 = unlimited. vmangos has no cap (ChannelMgr.cpp:52-69),
     /// so the retail default is 0; a positive value is opt-in hardening (World:Social:MaxJoinedChannels).
     /// </summary>

@@ -135,6 +135,27 @@ public sealed class GroupManagerTests
     }
 
     [Fact]
+    public void Invite_Self_DoesNotLeaveAnUnjoinablePendingGroup()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        f.ClearAll();
+
+        f.Context.Groups.Invite(a, a.Name);
+
+        Assert.Null(f.Context.Groups.GetInvite(a.Guid));
+        Assert.Empty(f.Sent(a, WorldOpcode.SmsgGroupInvite));
+        Assert.Empty(f.Sent(a, WorldOpcode.SmsgPartyCommandResult));
+
+        Player b = f.AddPlayer(2);
+        f.Context.Groups.Invite(b, a.Name);
+        f.ClearAll();
+        f.Context.Groups.Invite(a, a.Name);
+        Assert.Equal((uint)PartyResult.AlreadyInGroup,
+            ReadResult(f.Single(a, WorldOpcode.SmsgPartyCommandResult)).Result);
+    }
+
+    [Fact]
     public void Decline_TellsTheLeader_AndDropsTheUncreatedGroup()
     {
         using var f = new SocialFixture();
@@ -188,6 +209,69 @@ public sealed class GroupManagerTests
     }
 
     [Fact]
+    public void OfflineRaidLeader_PassesLeadershipToAnOnlineAssistantAfterTheConfiguredDelay()
+    {
+        using var f = new SocialFixture(new SocialOptions { OfflineLeaderDelaySeconds = 300 });
+        long now = 1_000;
+        f.Context.Groups.UnixSecondsClock = () => now;
+        Player leader = f.AddPlayer(1);
+        Player member = f.AddPlayer(2);
+        Player assistant = f.AddPlayer(3);
+        Group group = MakeParty(f, leader, member, assistant);
+        f.Context.Groups.ConvertToRaid(leader);
+        f.Context.Groups.SetAssistant(leader, assistant.Guid, true);
+        f.Context.Groups.OnLoggingOut(leader);
+        f.World.RemovePlayer(leader);
+        f.ClearAll();
+
+        now = 1_299;
+        f.Context.Groups.UpdateOfflineLeaders();
+        Assert.Equal(leader.Guid, group.LeaderGuid);
+
+        now = 1_300;
+        f.Context.Groups.UpdateOfflineLeaders();
+        Assert.Equal(assistant.Guid, group.LeaderGuid);
+        Assert.Equal("P3", new PacketReader(f.Single(member, WorldOpcode.SmsgGroupSetLeader)).ReadCString());
+        Assert.True((assistant.Flags & PlayerFlags.GroupLeader) != 0);
+    }
+
+    [Fact]
+    public void OfflineLeader_WithNoOnlineReplacement_KeepsLeadership()
+    {
+        using var f = new SocialFixture();
+        long now = 1_000;
+        f.Context.Groups.UnixSecondsClock = () => now;
+        Player leader = f.AddPlayer(1);
+        Player member = f.AddPlayer(2);
+        Group group = MakeParty(f, leader, member);
+        f.Context.Groups.OnLoggingOut(leader);
+        f.Context.Groups.OnLoggingOut(member);
+        f.World.RemovePlayer(leader);
+        f.World.RemovePlayer(member);
+
+        now = 2_000;
+        f.Context.Groups.UpdateOfflineLeaders();
+        Assert.Equal(leader.Guid, group.LeaderGuid);
+    }
+
+    [Fact]
+    public void OfflineLeaderDelayZero_DisablesAutomaticHandoff()
+    {
+        using var f = new SocialFixture(new SocialOptions { OfflineLeaderDelaySeconds = 0 });
+        long now = 1_000;
+        f.Context.Groups.UnixSecondsClock = () => now;
+        Player leader = f.AddPlayer(1);
+        Player member = f.AddPlayer(2);
+        Group group = MakeParty(f, leader, member);
+        f.Context.Groups.OnLoggingOut(leader);
+        f.World.RemovePlayer(leader);
+
+        now = 2_000;
+        f.Context.Groups.UpdateOfflineLeaders();
+        Assert.Equal(leader.Guid, group.LeaderGuid);
+    }
+
+    [Fact]
     public void Uninvite_ByLeader_KicksTheMember()
     {
         using var f = new SocialFixture();
@@ -225,6 +309,59 @@ public sealed class GroupManagerTests
         Assert.True(group.IsRaid);
         Assert.Equal(1, group.Find(sixth.Guid)!.SubGroup);
         Assert.Equal(5, group.SubGroupCount(0));
+    }
+
+    [Fact]
+    public void Raid_StopsAtForty_AndEverySubgroupStopsAtFive()
+    {
+        using var f = new SocialFixture();
+        Player leader = f.AddPlayer(1);
+        Player second = f.AddPlayer(2);
+        Group group = MakeParty(f, leader, second);
+        f.Context.Groups.ConvertToRaid(leader);
+        for (uint id = 3; id <= 40; id++)
+        {
+            Player member = f.AddPlayer(id);
+            f.Context.Groups.Invite(leader, member.Name);
+            f.Context.Groups.Accept(member);
+        }
+
+        Assert.Equal(40, group.MemberCount);
+        Assert.True(group.IsFull);
+        for (byte subgroup = 0; subgroup < Group.MaxRaidSubGroups; subgroup++)
+        {
+            Assert.Equal(5, group.SubGroupCount(subgroup));
+        }
+
+        Player extra = f.AddPlayer(41);
+        f.ClearAll();
+        f.Context.Groups.Invite(leader, extra.Name);
+        Assert.Equal((uint)PartyResult.GroupFull, ReadResult(f.Single(leader, WorldOpcode.SmsgPartyCommandResult)).Result);
+        Assert.Empty(f.Sent(extra, WorldOpcode.SmsgGroupInvite));
+    }
+
+    [Fact]
+    public void RaidAssistant_CanMoveAndSwapSubgroups_ButCannotAppointAssistants()
+    {
+        using var f = new SocialFixture();
+        Player leader = f.AddPlayer(1);
+        Player assistant = f.AddPlayer(2);
+        Player third = f.AddPlayer(3);
+        Group group = MakeParty(f, leader, assistant, third);
+        f.Context.Groups.ConvertToRaid(leader);
+        f.Context.Groups.SetAssistant(leader, assistant.Guid, true);
+        Assert.True(group.IsAssistant(assistant.Guid));
+
+        f.Context.Groups.ChangeSubGroup(assistant, third.Name, 1);
+        Assert.Equal(1, group.Find(third.Guid)!.SubGroup);
+        f.Context.Groups.SwapSubGroup(assistant, assistant.Name, third.Name);
+        Assert.Equal(1, group.Find(assistant.Guid)!.SubGroup);
+        Assert.Equal(0, group.Find(third.Guid)!.SubGroup);
+        Assert.Equal(2, group.SubGroupCount(0));
+        Assert.Equal(1, group.SubGroupCount(1));
+
+        f.Context.Groups.SetAssistant(assistant, third.Guid, true);
+        Assert.False(group.IsAssistant(third.Guid));
     }
 
     [Fact]
@@ -346,6 +483,51 @@ public sealed class GroupManagerTests
         Assert.Equal(1, reader.ReadByte());
         Assert.Equal(3, reader.ReadByte());
         Assert.Equal(mob.Value, reader.ReadUInt64());
+        Assert.Equal(0, reader.Remaining);
+    }
+
+    [Fact]
+    public void RequestMemberStats_ContainsPositiveAndNegativeAuras()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2);
+        MakeParty(f, a, b);
+        a.SetUInt32(UpdateFields.UnitFieldAura + 2, 12345);
+        a.SetUInt32(UpdateFields.UnitFieldAura + 33, 23456);
+        f.ClearAll();
+
+        f.Context.Groups.RequestMemberStats(b, a.Guid);
+
+        var reader = new PacketReader(f.Single(b, WorldOpcode.SmsgPartyMemberStatsFull));
+        Assert.Equal(a.Guid.Value, reader.ReadPackedGuid());
+        Assert.Equal((uint)GroupUpdateFlags.Full, reader.ReadUInt32());
+        reader.Skip(1 + 2 + 2 + 1 + 2 + 2 + 2 + 2 + 2 + 2);
+        Assert.Equal(1u << 2, reader.ReadUInt32());
+        Assert.Equal((ushort)12345, reader.ReadUInt16());
+        Assert.Equal((ushort)(1 << 1), reader.ReadUInt16());
+        Assert.Equal((ushort)23456, reader.ReadUInt16());
+    }
+
+    [Fact]
+    public void OutOfRangeAuraRemoval_ReportsTheClearedSlot()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2, x: 5000);
+        MakeParty(f, a, b);
+        a.SetUInt32(UpdateFields.UnitFieldAura + 2, 12345);
+        f.Context.Groups.UpdateOutOfRangeStats();
+        f.ClearAll();
+
+        a.SetUInt32(UpdateFields.UnitFieldAura + 2, 0);
+        f.Context.Groups.UpdateOutOfRangeStats();
+
+        var reader = new PacketReader(f.Single(b, WorldOpcode.SmsgPartyMemberStats));
+        Assert.Equal(a.Guid.Value, reader.ReadPackedGuid());
+        Assert.Equal((uint)GroupUpdateFlags.Auras, reader.ReadUInt32());
+        Assert.Equal(1u << 2, reader.ReadUInt32());
+        Assert.Equal((ushort)0, reader.ReadUInt16());
         Assert.Equal(0, reader.Remaining);
     }
 
