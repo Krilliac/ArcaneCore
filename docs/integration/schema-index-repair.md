@@ -104,7 +104,10 @@ upgrade to Characters 11 refuses to start and names the table and index. On SQLi
 ## Delivered scope and evidence
 
 All tests are in `tests/ArcaneCore.Data.Tests` (xunit). SQLite runs everywhere; MariaDB and PostgreSQL run
-where `ARCANECORE_TEST_MARIADB` / `ARCANECORE_TEST_POSTGRES` are set (hosted CI sets them).
+where `ARCANECORE_TEST_MARIADB` / `ARCANECORE_TEST_POSTGRES` are set (hosted CI sets them). The interrupted-startup
+theories of `SchemaStartupResilienceTests` run the injected faults of one case `ARCANECORE_TEST_FAULT_PARALLELISM` at a
+time (default 4; anything that is not a positive integer means 4), each against its own database, dropped as soon as
+its fault is checked. Measured timings are in `wave4-integration.md` (Verification).
 
 - `SchemaIndexParityTests`: a legacy v1 database upgraded step by step has exactly the indexes of a fresh database
   and of the EF model; a populated frozen baseline upgrades with every row preserved and model index and column parity;

@@ -8,17 +8,23 @@ using Xunit;
 
 namespace ArcaneCore.Data.Tests.WorldState;
 
-/// <summary>A test that needs the (GPL, never committed) classic-db dump and is skipped, visibly, without it.</summary>
+/// <summary>
+/// A test that needs the (GPL, never committed) classic-db dump and is skipped, visibly, without it. Note the variable
+/// name: it is not the <c>ARCANECORE_CLASSICDB_DUMP</c> of the creature and game-object import tests, and unset it falls
+/// back to a Windows path.
+/// </summary>
 public sealed class ClassicDbDumpFactAttribute : FactAttribute
 {
-    public static string DumpPath { get; } = Environment.GetEnvironmentVariable("ARCANE_CLASSICDB_DUMP")
+    public const string Variable = "ARCANE_CLASSICDB_DUMP";
+
+    public static string DumpPath { get; } = Environment.GetEnvironmentVariable(Variable)
         ?? @"D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz";
 
     public ClassicDbDumpFactAttribute()
     {
         if (!File.Exists(DumpPath))
         {
-            Skip = $"classic-db dump not found at {DumpPath} (set ARCANE_CLASSICDB_DUMP)";
+            Skip = $"classic-db dump not found at {DumpPath} (set {Variable})";
         }
     }
 }

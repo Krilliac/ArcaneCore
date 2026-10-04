@@ -177,13 +177,46 @@ Final head, one pass per project, no failures:
 | Realm.Tests | 37 | 37 | 0 |
 | World.Tests | 1684 | 1683 | 1 |
 
-Data.Tests skips are all environment-gated facts, none is provider-only when a MariaDB or PostgreSQL server is configured. Eight need the classic-db dump
-(`ARCANECORE_CLASSICDB_DUMP` for `CreatureMovementTemplateTests`, `CreatureBehaviourImportTests`, `GameObjectSpawnDataTests`, `CreatureSpawnEntryTests`,
-`WeatherImportCliTests`, `GameEventImporterTests` and `WorldStateDataTests`; `ARCANECORE_CLASSIC_DB` for `TotemSpellDataTests`) and three need a build-5875 DBC
-directory (`ARCANECORE_TEST_DBC_DIR`: `SkillDbcReaderTests`, `ShapeshiftFormDbcTests`, `EnchantDbcReaderTests`). One more, the read-committed bid/deletion theory in
+Data.Tests skips are all environment-gated facts, none is provider-only when a MariaDB or PostgreSQL server is configured. Eight need the classic-db dump, under
+three different variable names (`ARCANECORE_CLASSICDB_DUMP` for `CreatureMovementTemplateTests`, `CreatureBehaviourImportTests`, `GameObjectSpawnDataTests` and
+`CreatureSpawnEntryTests`; `ARCANE_CLASSICDB_DUMP`, the spelling of `ClassicDbDumpFactAttribute` in `tests/ArcaneCore.Data.Tests/WorldState`, which falls back to
+`D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz` when unset, for `WeatherImportCliTests`, `GameEventImporterTests` and `WorldStateDataTests`;
+`ARCANECORE_CLASSIC_DB` for `TotemSpellDataTests`) and three need a build-5875 DBC directory (`ARCANECORE_TEST_DBC_DIR`: `SkillDbcReaderTests`,
+`ShapeshiftFormDbcTests`, `EnchantDbcReaderTests`). `DataTestsSkipAttributionTests` checks this paragraph against the attributes. One more, the read-committed bid/deletion theory in
 `EconomyCharacterDeletionRaceTests`, skips only when neither `ARCANECORE_TEST_MARIADB` nor `ARCANECORE_TEST_POSTGRES` is set. With no variables set a run skips 12; with the
 two database variables and no dump or DBC (the CI configuration in `.github/workflows/ci.yml`) it skips 11. The 9 above is neither, so some of the dump or DBC variables
 were set on the machine that produced it; which ones is UNVERIFIED (the run was not logged). The CI skip count was not read from a CI log.
+
+Resilience theory timing (`SchemaStartupResilienceTests.InterruptedFreshCreate_ResumesOnRestart`, all three providers, the one filter, Debug, `--no-build`,
+MariaDB 10.11 and PostgreSQL 16 on the same 4-CPU Linux box, which other jobs were loading at 3-7 the whole time, so every number below is noisy). Before
+(serial faults, every database kept until the class ends) versus after (`ARCANECORE_TEST_FAULT_PARALLELISM` 4, each database dropped when its fault is
+checked), per case:
+
+| Case | Before | After |
+|---|---|---|
+| MariaDB world | 48 s, 1 m 18 s | 52 s, 28 s |
+| MariaDB characters | 20 s, 28 s | 31 s |
+| PostgreSQL world | 1 m 12 s, 1 m 28 s | 43 s |
+| PostgreSQL characters | 36 s, 37 s | 29 s |
+| SQLite world | 13 s, 12 s | 18 s |
+| SQLite characters | 3 s, 4 s | 8 s, 7 s |
+| Whole filter, wall | 243 s (includes a first build), 293 s | 196 s |
+
+Two "before" runs; one complete "after" run plus the first cases of a second that had not finished when this was written (`ARCANECORE_TEST_FAULT_PARALLELISM`
+is new; both "after" runs are the branch at its default of 4). The gain is real on
+PostgreSQL, unclear on MariaDB (52 s then 28 s against 48 s and 78 s; the machine's load moves these numbers more than the change does) and negative on
+SQLite (four writers of four files on one disk). The cost that dominates is unchanged: a fault after DDL #k replays k
+statements, then the restart plans and replays the rest, so a fresh create with N DDL statements costs about N squared statements per provider; parallelism
+only overlaps the round trips. The full class still takes many minutes with both servers configured. Measurements of other widths were started but not
+finished before this was written; they are UNVERIFIED and the default stays 4.
+
+The `FATAL:  database "arcane_t_..." does not exist` lines in the PostgreSQL service-container log on CI are not failures. Every database this project
+creates is named `arcane_t_` plus 16 hex digits, and the bootstrapper (`SchemaBootstrapper.EnsureAsync`) asks EF's relational database creator whether the
+database exists before creating it; on PostgreSQL that probe connects to the named database, the server refuses the connection with SQLSTATE 3D000 and
+logs it at FATAL severity, and the creator reports "does not exist". One line per probe: the first bootstrap of every test database, the explicit
+`ExistsAsync` of `ExistingEmptyDatabase_StartsLikeAFreshOne`, and `EnsureDeletedAsync` when a database is dropped. On this machine the local server log
+held 5597 such lines after the Data test runs, every one of them for an `arcane_t_` database and none at another severity. A test run with no other
+output from the container is healthy; a line naming another database would not be.
 
 MockClient self-test: outcome passed, `checkCount` 59, 59 checks passed, 0 failed.
 

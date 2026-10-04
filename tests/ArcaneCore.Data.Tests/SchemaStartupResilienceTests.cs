@@ -18,7 +18,13 @@ namespace ArcaneCore.Data.Tests;
 /// </summary>
 public sealed class SchemaStartupResilienceTests : IAsyncLifetime
 {
-    private const int FaultParallelism = 4;
+    /// <summary>The environment variable that overrides <see cref="FaultParallelism"/> (an integer, at least 1).</summary>
+    internal const string FaultParallelismVariable = "ARCANECORE_TEST_FAULT_PARALLELISM";
+
+    internal const int DefaultFaultParallelism = 4;
+
+    /// <summary>How many injected faults of one theory case run at once; see <see cref="RunFaultsAsync{T}"/>.</summary>
+    internal static int FaultParallelism { get; } = ReadFaultParallelism(Environment.GetEnvironmentVariable(FaultParallelismVariable));
 
     private readonly TestDatabases _databases = new();
 
@@ -88,7 +94,7 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
 
         faults.Add(("after the version write", isVersionWrite, 1));
 
-        await RunFaultsAsync(faults, async fault =>
+        await RunFaultsAsync(faults, FaultParallelism, async fault =>
         {
             (string label, Func<string, bool> when, int on) = fault;
             DatabaseConnectionOptions connection = await PrepareLegacyAsync(provider, component, stepVersion - 1, stepVersion);
@@ -138,7 +144,7 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
 
         faults.Add(("before the version write", isVersionInsert, 1, true));
 
-        await RunFaultsAsync(faults, async fault =>
+        await RunFaultsAsync(faults, FaultParallelism, async fault =>
         {
             (string label, Func<string, bool> when, int on, bool before) = fault;
             DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
@@ -320,12 +326,14 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
     public Task DisposeAsync() => _databases.DisposeAsync().AsTask();
 
     /// <summary>
-    /// Every injected fault runs against its own database, so they are independent: run a few at a time. Serial, one
-    /// theory case spends minutes creating a database and replaying the upgrade line per fault point.
+    /// Every injected fault runs against its own database, so they are independent: run <paramref name="parallelism"/>
+    /// at a time. Every fault runs even when an earlier one fails (each releases its own database in its own
+    /// <c>finally</c>); the first failure is rethrown once all have finished.
     /// </summary>
-    private static async Task RunFaultsAsync<T>(IReadOnlyList<T> faults, Func<T, Task> run)
+    internal static async Task RunFaultsAsync<T>(IReadOnlyList<T> faults, int parallelism, Func<T, Task> run)
     {
-        using var slots = new SemaphoreSlim(FaultParallelism);
+        ArgumentOutOfRangeException.ThrowIfLessThan(parallelism, 1);
+        using var slots = new SemaphoreSlim(parallelism);
         await Task.WhenAll(faults.Select(async fault =>
         {
             await slots.WaitAsync();
@@ -339,6 +347,16 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
             }
         }));
     }
+
+    /// <summary>
+    /// <see cref="DefaultFaultParallelism"/> unless <paramref name="value"/> (the environment variable) is a positive
+    /// integer. Anything else, including 0 and negative numbers, means the default: a misspelt override must not turn
+    /// the theory serial or unbounded silently.
+    /// </summary>
+    internal static int ReadFaultParallelism(string? value)
+        => int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int parsed) && parsed >= 1
+            ? parsed
+            : DefaultFaultParallelism;
 
     /// <summary>The startup must die of the injected fault (EF wraps it in a DbUpdateException for SaveChanges), not of anything else.</summary>
     private static async Task AssertInjectedAsync(Func<Task> startup, string label, CommandTap tap)
