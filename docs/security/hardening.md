@@ -128,13 +128,16 @@ The full list of every key and its default is the generated
 
 ## Not delivered (limits)
 
-* The wrong-password throttle (vmangos `LoginThrottle.cpp`, `WrongPass.MaxAttempts = 10` / 60 s). The ban tables,
+* The wrong-password throttle (vmangos `LoginThrottle.cpp`, `WrongPass.MaxAttempts = 10` / 60 s) as retail shapes it,
+  per account and address with a temporary ban row. A per-address failure budget with the same numbers
+  (`Net:Protection:AuthFailureBurstPerIp`) is delivered by the netguard lane (`docs/ops/netguard.md`). The ban tables,
   IP bans, expiry, reasons, `IBanStore` and `AccountTool` ban verbs were delivered by the live-ban lane
   (`docs/security/live-bans.md`).
 * World session-key age (vmangos `WorldSocket.cpp:287-290`), char-screen idle kick (900 s),
-  overspeed-ping kick, malformed-packet strike policy, `AddonInfo` response cap (F11),
-  opcode >= 828 rejection. (The pre-auth deadline and the inbound world-queue bounds are delivered:
-  see "Pre-auth deadline and inbound queue bounds" above.)
+  overspeed-ping kick, malformed-packet strike policy, opcode >= 828 rejection. (The pre-auth deadline and the
+  inbound world-queue bounds are delivered: see "Pre-auth deadline and inbound queue bounds" above. The `AddonInfo`
+  response cap (F11), the frame read deadline and the per-address connection caps and rates are delivered by the
+  netguard lane, `docs/ops/netguard.md`.)
 * `IPacketGate`, generated per-opcode payload bounds, and the vmangos antiflood port.
   The antiflood must run at the drain point with per-pass counters; the update cadence has not
   been verified, so a kick default is not safe to ship yet.

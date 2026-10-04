@@ -11,6 +11,7 @@ HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
 
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
 builder.Services.Configure<RealmSeedOptions>(builder.Configuration.GetSection(RealmSeedOptions.SectionName));
+builder.Services.AddNetProtection(builder.Configuration);
 builder.Services.AddAuthDatabase(builder.Configuration);
 builder.Services.AddHostedService<LogonServer>();
 

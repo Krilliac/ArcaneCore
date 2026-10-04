@@ -105,49 +105,81 @@ public struct MovementInfo
             Flags &= ~(a | b);
         }
     }
-    /// <summary>Parse a movement block; throws <see cref="ArgumentOutOfRangeException"/> if truncated.</summary>
+    /// <summary>Parse a movement block; throws <see cref="ArgumentOutOfRangeException"/> (the <see cref="MalformedPacket"/> outcome) if truncated.</summary>
     public static MovementInfo Read(ref PacketReader reader)
     {
-        var info = new MovementInfo
+        if (!TryRead(ref reader, out MovementInfo info))
         {
-            Flags = (MovementFlags)reader.ReadUInt32(),
-            Time = reader.ReadUInt32(),
-            X = reader.ReadSingle(),
-            Y = reader.ReadSingle(),
-            Z = reader.ReadSingle(),
-            Orientation = reader.ReadSingle(),
-        };
-
-        if (info.HasFlag(MovementFlags.OnTransport))
-        {
-            info.TransportGuid = reader.ReadUInt64();
-            info.TransportX = reader.ReadSingle();
-            info.TransportY = reader.ReadSingle();
-            info.TransportZ = reader.ReadSingle();
-            info.TransportOrientation = reader.ReadSingle();
-        }
-
-        if (info.HasFlag(MovementFlags.Swimming))
-        {
-            info.Pitch = reader.ReadSingle();
-        }
-
-        info.FallTime = reader.ReadUInt32();
-
-        if (info.HasFlag(MovementFlags.Jumping))
-        {
-            info.JumpZSpeed = reader.ReadSingle();
-            info.JumpCosAngle = reader.ReadSingle();
-            info.JumpSinAngle = reader.ReadSingle();
-            info.JumpXySpeed = reader.ReadSingle();
-        }
-
-        if (info.HasFlag(MovementFlags.SplineElevation))
-        {
-            info.SplineElevation = reader.ReadSingle();
+            MalformedPacket.Throw("movement block past the end of the payload");
         }
 
         return info;
+    }
+
+    /// <summary>
+    /// Parse a movement block without throwing: false (and the cursor left at the block's start) when
+    /// the payload is too short for the fields its own flags announce. Allocation-free.
+    /// </summary>
+    public static bool TryRead(ref PacketReader reader, out MovementInfo info)
+    {
+        info = default;
+        int start = reader.Position;
+        PacketReader cursor = reader;
+        if (!cursor.TryReadUInt32(out uint flags)
+            || !cursor.TryReadUInt32(out info.Time)
+            || !cursor.TryReadSingle(out info.X)
+            || !cursor.TryReadSingle(out info.Y)
+            || !cursor.TryReadSingle(out info.Z)
+            || !cursor.TryReadSingle(out info.Orientation))
+        {
+            return Fail(ref info);
+        }
+
+        info.Flags = (MovementFlags)flags;
+
+        if (info.HasFlag(MovementFlags.OnTransport)
+            && (!cursor.TryReadUInt64(out info.TransportGuid)
+                || !cursor.TryReadSingle(out info.TransportX)
+                || !cursor.TryReadSingle(out info.TransportY)
+                || !cursor.TryReadSingle(out info.TransportZ)
+                || !cursor.TryReadSingle(out info.TransportOrientation)))
+        {
+            return Fail(ref info);
+        }
+
+        if (info.HasFlag(MovementFlags.Swimming) && !cursor.TryReadSingle(out info.Pitch))
+        {
+            return Fail(ref info);
+        }
+
+        if (!cursor.TryReadUInt32(out info.FallTime))
+        {
+            return Fail(ref info);
+        }
+
+        if (info.HasFlag(MovementFlags.Jumping)
+            && (!cursor.TryReadSingle(out info.JumpZSpeed)
+                || !cursor.TryReadSingle(out info.JumpCosAngle)
+                || !cursor.TryReadSingle(out info.JumpSinAngle)
+                || !cursor.TryReadSingle(out info.JumpXySpeed)))
+        {
+            return Fail(ref info);
+        }
+
+        if (info.HasFlag(MovementFlags.SplineElevation) && !cursor.TryReadSingle(out info.SplineElevation))
+        {
+            return Fail(ref info);
+        }
+
+        System.Diagnostics.Debug.Assert(cursor.Position >= start + 28, "a movement block is at least 28 bytes");
+        reader = cursor;
+        return true;
+
+        static bool Fail(ref MovementInfo info)
+        {
+            info = default;
+            return false;
+        }
     }
 
     /// <summary>Serialize in the same layout <see cref="Read"/> parses.</summary>

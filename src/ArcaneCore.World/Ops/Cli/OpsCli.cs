@@ -46,5 +46,5 @@ public static class OpsCli
     }
 
     public static ConfigReport Validate(IConfiguration configuration)
-        => ConfigReport.Run(configuration, [new WorldConfigChecks()]);
+        => ConfigReport.Run(configuration, [new WorldConfigChecks(), new NetProtectionConfigChecks()]);
 }

@@ -30,6 +30,7 @@ How to read the tables:
 - [`Items`](#items)
 - [`Locomotion`](#locomotion)
 - [`Loot`](#loot)
+- [`Net:Protection`](#netprotection)
 - [`NpcServices`](#npcservices)
 - [`PerformanceLog`](#performancelog)
 - [`Pets`](#pets)
@@ -297,6 +298,21 @@ How to read the tables:
 | `Loot:LootedCorpseDecayRate` | `float` | `0` | - | vmangos CONFIG_FLOAT_RATE_CORPSE_DECAY_LOOTED (Rate.Corpse.Decay.Looted, mangosd.conf.dist.in:1542; cmangos World.cpp:457 too): a looted-out corpse stays this share of its decay time. The retail default 0 means a third of the creature's respawn delay (Creature.cpp:3369-3370). |
 | `Loot:MoneyRate` | `float` | `1` | - | vmangos Rate.Drop.Money. |
 | `Loot:RaidMapsUnlimitedRewardDistance` | `bool` | `true` | - | Raid maps have no reward distance limit (vmangos Object.cpp:1482-1483). False applies `GroupLootDistance` there too. |
+
+## `Net:Protection`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Net:Protection:AddressIdleEviction` | `TimeSpan` | `00:10:00` | - | How long after its last connection or attempt an address's slot counts as idle and may be reused for another address. Must be longer than the time a full burst takes to refill, or a limited address could be forgotten and start over. |
+| `Net:Protection:AuthFailureBurstPerIp` | `int` | `10` | - | How many failed authentication attempts (unknown account, wrong proof or digest, banned account) one IP address may make before further attempts are refused; 0 disables. An attempt is checked before any database lookup and refused with the connection closed, so a guessing client costs no query. Successful logins never consume the budget, so players behind one address are not affected. vmangos realmd has WrongPass.MaxCount (default 10 per 60 s, LoginThrottle); the same shape, keyed by address. |
+| `Net:Protection:AuthFailuresPerMinutePerIp` | `int` | `10` | - | How many failed attempts per minute an address gets back once its burst is used up (the refill rate of the failure budget). Only read when `AuthFailureBurstPerIp` is set. |
+| `Net:Protection:ConnectionBurstPerIp` | `int` | `100` | - | How many connections one IP address may open at once before the per-minute rate below applies (the token bucket's capacity); 0 disables the connection-rate limit. A refused connection is closed before any session, DI scope or database context exists. |
+| `Net:Protection:ConnectionsPerMinutePerIp` | `int` | `300` | - | Sustained new connections per minute one IP address may open once its burst is used up (the token bucket's refill rate). Only read when `ConnectionBurstPerIp` is set. |
+| `Net:Protection:FrameReadTimeout` | `TimeSpan` | `00:00:30` | - | Longest a client may take to deliver the rest of a frame once its first byte has arrived (the remaining header bytes and the payload); the connection is closed when it expires (slowloris). 00:00:00 disables. A retail client writes each frame in one send. On the logon daemon Auth:ReadTimeoutSeconds, when set, takes precedence over this value. |
+| `Net:Protection:LogInterval` | `TimeSpan` | `00:00:10` | - | Shortest interval between two log lines about the same kind of refusal (refused connection, refused attempt, saturated table, frame timeout). Refusals in between are counted and the count is printed with the next line, so a flood costs one line per interval, never one per packet. 00:00:00 logs every refusal. |
+| `Net:Protection:LogonUnauthenticatedLifetime` | `TimeSpan` | `00:00:30` | - | Longest a logon connection may exist without a successful proof, counted from accept; the connection is closed when it expires. 00:00:00 disables. Auth:MaxSessionDurationSeconds (300, vmangos MaxSessionDuration) still bounds the whole connection; this closes an idle or guessing one much sooner. The world daemon's equivalent is World:PreAuthTimeout (retail). |
+| `Net:Protection:MaxConnectionsPerIp` | `int` | `16` | - | Simultaneous connections one client IP address may hold on a listener; 0 disables. Applied together with the daemon's own cap (Auth:MaxConnectionsPerIp, World:MaxConnectionsPerIp): when both are set the lower one wins. A retail client holds one connection per daemon. Deviation from retail (vmangos has no per-address cap), on by default. |
+| `Net:Protection:MaxTrackedAddresses` | `int` | `4096` | - | Most client addresses the per-address table tracks (rounded up to a power of two). Memory is fixed at start (about 48 bytes per slot) and nothing is allocated per connection. When the table is full and no idle slot exists the newcomer is refused (fail closed), with one rate-limited log line, rather than evicting an address that is being limited. |
 
 ## `NpcServices`
 

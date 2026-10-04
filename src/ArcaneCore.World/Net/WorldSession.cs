@@ -9,6 +9,8 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Net;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using Microsoft.Extensions.DependencyInjection;
@@ -82,6 +84,14 @@ public sealed class WorldSessionOptions
 /// world thread cannot be stalled by a slow client.
 /// </para>
 /// Verified against vmangos WorldSocket.cpp / WorldSession.cpp.
+/// <para>
+/// Transport protections (docs/ops/netguard.md): the frame read deadline comes from
+/// <c>Net:Protection</c> (through the listener's <see cref="NetGuard"/>, or the defaults when a
+/// host constructs the session without one, so it is never off by accident); the per-address
+/// failure budget needs the guard's table and is skipped without it. A malformed packet, whether
+/// it surfaces as the controlled <see cref="MalformedPacket"/> outcome or as a handler indexing a
+/// short payload, closes the connection and never leaves the session or the world thread.
+/// </para>
 /// </summary>
 public sealed class WorldSession : IPlayerSession
 {
@@ -91,11 +101,16 @@ public sealed class WorldSession : IPlayerSession
     /// <summary>The SMSG size field is 16 bits and counts the 2 opcode bytes.</summary>
     public const int MaxServerPayload = ushort.MaxValue - 2;
 
+    private static readonly NetProtectionOptions DefaultProtection = new();
+
     private readonly Stream _stream;
     private readonly OpcodeTable _opcodes;
     private readonly SessionRegistry _registry;
     private readonly WorldSessionOptions _options;
     private readonly ILogger _logger;
+    private readonly NetGuard? _guard;
+    private readonly NetProtectionOptions _protection;
+    private readonly IpKey? _address;
     private readonly WorldHeaderCrypt _crypt = new();
     private readonly object _sendLock = new();
     private readonly Channel<byte[]> _outbound = Channel.CreateUnbounded<byte[]>(
@@ -117,17 +132,21 @@ public sealed class WorldSession : IPlayerSession
         WorldRuntime world,
         SessionRegistry registry,
         WorldSessionOptions options,
-        ILogger logger)
+        ILogger logger,
+        NetGuard? guard = null)
     {
         _stream = stream;
         RemoteEndpoint = remoteEndpoint;
         RemoteAddress = AccountBanEvaluator.AddressOfEndpoint(remoteEndpoint);
+        _address = IpKey.TryParse(remoteEndpoint, out IpKey parsed) ? parsed : null; // once per connection, never per attempt
         Services = services;
         _opcodes = opcodes;
         World = world;
         _registry = registry;
         _options = options;
         _logger = logger;
+        _guard = guard;
+        _protection = guard?.Options ?? DefaultProtection;
     }
 
     public string RemoteEndpoint { get; }
@@ -287,8 +306,11 @@ public sealed class WorldSession : IPlayerSession
                 packet.Handler.World!(this, player, packet.Payload);
                 LogIfSlowPacket(packet.Handler.Opcode, handlerStart);
             }
-            catch (ArgumentOutOfRangeException)
+            catch (Exception ex) when (IsMalformed(ex))
             {
+                // The controlled outcome of PacketReader, or a handler that indexed a short payload
+                // directly: either way the packet did not fit its layout. Contained here so nothing
+                // reaches the map update on the world thread.
                 _logger.LogWarning("[{Endpoint}] malformed {Opcode}; disconnecting",
                     RemoteEndpoint, WorldOpcodeNames.GetName(packet.Handler.Opcode));
                 Kick();
@@ -398,6 +420,13 @@ public sealed class WorldSession : IPlayerSession
     private async Task ReadLoopAsync(CancellationToken token)
     {
         byte[] header = new byte[WorldHeaderCrypt.IncomingHeaderLength];
+
+        // Net:Protection:FrameReadTimeout: once the first byte of a header is in, the rest of the
+        // header and the payload must follow within the budget (slowloris). One deadline per
+        // connection, re-armed per frame: no timer or token source is allocated per packet. Waiting
+        // for the first byte is idle time and is not bounded here (World:PreAuthTimeout bounds it
+        // before authentication; a retail client may idle at the character screen).
+        using var deadline = new ReadDeadline(token, _protection.FrameReadTimeout);
         while (true)
         {
             int read = await _stream.ReadAsync(header.AsMemory(0, 1), token).ConfigureAwait(false);
@@ -406,25 +435,46 @@ public sealed class WorldSession : IPlayerSession
                 return;
             }
 
-            await _stream.ReadExactlyAsync(header.AsMemory(1), token).ConfigureAwait(false);
-            _crypt.DecryptHeader(header);
-
-            ushort size = BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(0, 2));
-            uint rawOpcode = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(2, 4));
-            if (size < 4 || size > MaxClientPacketSize || rawOpcode > ushort.MaxValue)
+            deadline.Arm();
+            byte[] payload;
+            uint rawOpcode;
+            try
             {
-                _logger.LogWarning("[{Endpoint}] bad packet header (size {Size}, opcode 0x{Opcode:X}); disconnecting",
-                    RemoteEndpoint, size, rawOpcode);
+                await _stream.ReadExactlyAsync(header.AsMemory(1), deadline.Token).ConfigureAwait(false);
+                _crypt.DecryptHeader(header);
+
+                // The size is checked against the frame bound before anything is allocated for it.
+                ushort size = BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(0, 2));
+                rawOpcode = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(2, 4));
+                if (size < 4 || size > MaxClientPacketSize || rawOpcode > ushort.MaxValue)
+                {
+                    _logger.LogWarning("[{Endpoint}] bad packet header (size {Size}, opcode 0x{Opcode:X}); disconnecting",
+                        RemoteEndpoint, size, rawOpcode);
+                    return;
+                }
+
+                int payloadLength = size - 4;
+                payload = payloadLength > 0 ? new byte[payloadLength] : [];
+                if (payloadLength > 0)
+                {
+                    await _stream.ReadExactlyAsync(payload, deadline.Token).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) when (deadline.Expired)
+            {
+                if (_guard is not null)
+                {
+                    _guard.ReportFrameTimeout(RemoteEndpoint);
+                }
+                else
+                {
+                    _logger.LogWarning("[{Endpoint}] frame not completed within {Timeout}; disconnecting", RemoteEndpoint, deadline.Timeout);
+                }
+
                 return;
             }
 
-            int payloadLength = size - 4;
-            byte[] payload = payloadLength > 0 ? new byte[payloadLength] : [];
-            if (payloadLength > 0)
-            {
-                await _stream.ReadExactlyAsync(payload, token).ConfigureAwait(false);
-            }
-
+            deadline.Disarm();
             if (!await DispatchAsync((WorldOpcode)rawOpcode, payload).ConfigureAwait(false))
             {
                 return;
@@ -432,13 +482,21 @@ public sealed class WorldSession : IPlayerSession
         }
     }
 
+    /// <summary>The exception types a packet that does not fit its layout may surface as (never anything else is treated as malformed).</summary>
+    private static bool IsMalformed(Exception exception) => MalformedPacket.Is(exception) || exception is IndexOutOfRangeException;
+
     private async Task<bool> DispatchAsync(WorldOpcode opcode, byte[] payload)
     {
         try
         {
             if (opcode == WorldOpcode.CmsgPing)
             {
-                HandlePing(payload); // vmangos answers pings in WorldSocket, in any state
+                if (!TryHandlePing(payload)) // vmangos answers pings in WorldSocket, in any state
+                {
+                    _logger.LogWarning("[{Endpoint}] malformed {Opcode}; disconnecting", RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
+                    return false;
+                }
+
                 return true;
             }
 
@@ -497,7 +555,7 @@ public sealed class WorldSession : IPlayerSession
             await handler.Session!(this, payload).ConfigureAwait(false);
             return true;
         }
-        catch (ArgumentOutOfRangeException)
+        catch (Exception ex) when (IsMalformed(ex))
         {
             _logger.LogWarning("[{Endpoint}] malformed {Opcode}; disconnecting", RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
             return false;
@@ -519,31 +577,48 @@ public sealed class WorldSession : IPlayerSession
         }
     }
 
-    private void HandlePing(byte[] payload)
+    /// <summary>CMSG_PING: u32 sequence, u32 latency → SMSG_PONG: u32 sequence (vmangos WorldSocket::HandlePing). False when the sequence is missing.</summary>
+    private bool TryHandlePing(byte[] payload)
     {
-        // CMSG_PING: u32 sequence, u32 latency → SMSG_PONG: u32 sequence (vmangos WorldSocket::HandlePing).
         var reader = new PacketReader(payload);
-        uint sequence = reader.ReadUInt32();
+        if (!reader.TryReadUInt32(out uint sequence))
+        {
+            return false;
+        }
+
         Span<byte> pong = stackalloc byte[4];
         BinaryPrimitives.WriteUInt32LittleEndian(pong, sequence);
         Send(WorldOpcode.SmsgPong, pong);
+        return true;
     }
 
     private async Task<bool> HandleAuthSessionAsync(byte[] payload)
     {
         // CMSG_AUTH_SESSION (vmangos WorldSocket::HandleAuthSession, build 5875 layout):
         // u32 build, u32 server id, CString account, u32 client seed, u8[20] digest, addon block.
-        var reader = new PacketReader(payload);
-        uint build = reader.ReadUInt32();
-        _ = reader.ReadUInt32();
-        string account = reader.ReadCString().ToUpperInvariant();
-        uint clientSeed = reader.ReadUInt32();
-        byte[] clientDigest = reader.ReadBytes(20).ToArray();
-        byte[] addonBlock = reader.ReadToEnd().ToArray();
+        // Parsed without throwing or copying; a packet that does not fit is malformed and charged.
+        if (!AuthSessionRequest.TryParse(payload, out AuthSessionRequest request))
+        {
+            _logger.LogWarning("[{Endpoint}] malformed CMSG_AUTH_SESSION; disconnecting", RemoteEndpoint);
+            _guard?.RecordAuthFailure(_address);
+            return false;
+        }
+
+        // Net:Protection:AuthFailureBurstPerIp: an address whose failure budget is spent is refused
+        // before the account lookup (no query for a guesser). AUTH_FAILED, then close.
+        if (_guard is not null && !_guard.AllowsAuthAttempt(_address))
+        {
+            SendAuthResponse(AuthResponseCode.Failed);
+            return false;
+        }
+
+        uint build = request.Build;
+        string account = request.Account;
+        uint clientSeed = request.ClientSeed;
 
         if (build != ClientBuild.Vanilla1121)
         {
-            SendAuthResponse(AuthResponseCode.VersionMismatch);
+            SendAuthResponse(AuthResponseCode.VersionMismatch); // a wrong client, not a guess: not charged
             return false;
         }
 
@@ -551,14 +626,16 @@ public sealed class WorldSession : IPlayerSession
         Account? stored = await accounts.FindByUsernameAsync(account).ConfigureAwait(false);
         if (stored?.SessionKey is null)
         {
+            _guard?.RecordAuthFailure(_address);
             SendAuthResponse(AuthResponseCode.UnknownAccount);
             return false;
         }
 
         // digest = SHA1(account, u32 0, clientSeed, serverSeed, K) (vmangos WorldSocket::HandleAuthSession)
         byte[] expected = Sha1.Hash(Encoding.ASCII.GetBytes(account), new byte[4], Le(clientSeed), Le(_serverSeed), stored.SessionKey);
-        if (!CryptographicOperations.FixedTimeEquals(expected, clientDigest))
+        if (!CryptographicOperations.FixedTimeEquals(expected, request.ClientDigest.Span))
         {
+            _guard?.RecordAuthFailure(_address);
             SendAuthResponse(AuthResponseCode.Failed);
             return false;
         }
@@ -570,6 +647,7 @@ public sealed class WorldSession : IPlayerSession
         if (stored.Status != AccountStatus.Active)
         {
             _logger.LogInformation("[{Endpoint}] refused world login for {Status} account", RemoteEndpoint, stored.Status);
+            _guard?.RecordAuthFailure(_address);
             SendAuthResponse(AuthResponseCode.Banned);
             return false;
         }
@@ -580,6 +658,7 @@ public sealed class WorldSession : IPlayerSession
         if (bans is not null && await IsBannedAsync(bans, stored.Id).ConfigureAwait(false))
         {
             _logger.LogInformation("[{Endpoint}] refused world login for banned account or address", RemoteEndpoint);
+            _guard?.RecordAuthFailure(_address);
             SendAuthResponse(AuthResponseCode.Banned);
             return false;
         }
@@ -606,6 +685,7 @@ public sealed class WorldSession : IPlayerSession
             || (bans is not null && await IsBannedAsync(bans, stored.Id).ConfigureAwait(false)))
         {
             _logger.LogInformation("[{Endpoint}] '{Account}' was banned while authenticating; refusing", RemoteEndpoint, account);
+            _guard?.RecordAuthFailure(_address);
             SendAuthResponse(AuthResponseCode.Banned); // still plain: the header cipher is not initialised yet
             return false;
         }
@@ -627,7 +707,7 @@ public sealed class WorldSession : IPlayerSession
         _logger.LogInformation("[{Endpoint}] '{Account}' authenticated", RemoteEndpoint, account);
 
         SendAuthResponse(AuthResponseCode.Ok);
-        Send(WorldOpcode.SmsgAddonInfo, AddonInfo.BuildResponse(addonBlock));
+        Send(WorldOpcode.SmsgAddonInfo, AddonInfo.BuildResponse(request.AddonBlock.Span));
         return true;
     }
 

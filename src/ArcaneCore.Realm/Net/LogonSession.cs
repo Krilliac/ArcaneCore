@@ -6,6 +6,7 @@ using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Logging;
+using ArcaneCore.Kernel.Net;
 using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Realm.Protocol;
 using Microsoft.Extensions.Logging;
@@ -18,6 +19,12 @@ namespace ArcaneCore.Realm.Net;
 ///
 /// Flow and packet shapes verified against vmangos src/realmd/AuthSocket.cpp; the
 /// auto-create-on-login behavior follows WCell Services/WCell.AuthServer/Authentication.cs.
+/// <para>
+/// Transport protections (docs/ops/netguard.md): the unauthenticated lifetime and the frame read
+/// deadline come from <c>Net:Protection</c> (through the <see cref="NetGuard"/> of the listener,
+/// or the defaults when a host constructs the session without one, so they are never off by
+/// accident); the per-address failure budget needs the guard's table and is skipped without it.
+/// </para>
 /// </summary>
 public sealed class LogonSession(
     NetworkStream stream,
@@ -26,9 +33,14 @@ public sealed class LogonSession(
     AuthOptions options,
     ILogger logger,
     string remoteEndpoint,
-    IBanStore? banStore = null)
+    IBanStore? banStore = null,
+    NetGuard? guard = null)
 {
+    private static readonly NetProtectionOptions DefaultProtection = new();
+
     private readonly IBanStore? _banStore = banStore; // optional: null keeps every pre-ban call site unchanged
+    private readonly NetProtectionOptions _protection = guard?.Options ?? DefaultProtection;
+    private readonly IpKey? _address = IpKey.TryParse(remoteEndpoint, out IpKey parsedAddress) ? parsedAddress : null;
     private string _username = string.Empty;
     private Srp6Server? _srp;
     private bool _isAutocreate;
@@ -36,6 +48,8 @@ public sealed class LogonSession(
     private bool _authenticated;
     private bool _closeRequested;
     private CancellationToken _sessionToken;
+    private CancellationTokenSource? _unauthenticatedLifetime;
+    private ReadDeadline? _deadline;
 
     // vmangos AuthSocket.cpp:248-262: the challenge body is sizeof(sAuthLogonChallengeBody) = 47 at
     // most and 47 - AUTH_LOGON_MAX_NAME (16) = 31 at least; username_len above 16 is dropped.
@@ -58,13 +72,60 @@ public sealed class LogonSession(
             session.CancelAfter(TimeSpan.FromSeconds(options.MaxSessionDurationSeconds));
         }
 
+        // Net:Protection:LogonUnauthenticatedLifetime: a connection without a successful proof is
+        // closed well before the 300 s session cap. Disarmed (never re-armed) by the first good proof.
+        using var unauthenticated = CancellationTokenSource.CreateLinkedTokenSource(session.Token);
+        TimeSpan lifetime = _protection.LogonUnauthenticatedLifetime;
+        if (lifetime > TimeSpan.Zero)
+        {
+            unauthenticated.CancelAfter(lifetime);
+        }
+
+        _unauthenticatedLifetime = unauthenticated;
+
+        // Net:Protection:FrameReadTimeout (Auth:ReadTimeoutSeconds, when set, wins): one deadline per
+        // connection, re-armed per packet, so no timer or token source is allocated per read.
+        TimeSpan frameTimeout = options.ReadTimeoutSeconds > 0 ? TimeSpan.FromSeconds(options.ReadTimeoutSeconds) : _protection.FrameReadTimeout;
+        using var deadline = new ReadDeadline(unauthenticated.Token, frameTimeout);
+        _deadline = deadline;
+
         try
         {
-            await RunCommandsAsync(session.Token).ConfigureAwait(false);
+            await RunCommandsAsync(unauthenticated.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            logger.LogInformation("[{Endpoint}] logon connection timed out; closing", remoteEndpoint);
+            if (deadline.Expired)
+            {
+                if (guard is not null)
+                {
+                    guard.ReportFrameTimeout(remoteEndpoint);
+                }
+                else
+                {
+                    logger.LogWarning("[{Endpoint}] packet not completed within {Timeout}; closing", remoteEndpoint, frameTimeout);
+                }
+            }
+            else if (unauthenticated.IsCancellationRequested && !session.IsCancellationRequested)
+            {
+                if (guard is not null)
+                {
+                    guard.ReportUnauthenticatedTimeout(remoteEndpoint, lifetime);
+                }
+                else
+                {
+                    logger.LogInformation("[{Endpoint}] not authenticated within {Lifetime}; closing", remoteEndpoint, lifetime);
+                }
+            }
+            else
+            {
+                logger.LogInformation("[{Endpoint}] logon connection timed out; closing", remoteEndpoint);
+            }
+        }
+        finally
+        {
+            _deadline = null;
+            _unauthenticatedLifetime = null;
         }
     }
 
@@ -120,6 +181,7 @@ public sealed class LogonSession(
         {
             logger.LogInformation("[{Endpoint}] challenge body size {Size} outside {Min}..{Max}; closing",
                 remoteEndpoint, bodySize, ChallengeMinBody, ChallengeMaxBody);
+            RecordFailure();
             _closeRequested = true;
             return;
         }
@@ -127,9 +189,20 @@ public sealed class LogonSession(
         byte[] body = new byte[bodySize];
         await ReadPacketPartAsync(body, cancellationToken).ConfigureAwait(false);
 
+        // Net:Protection:AuthFailureBurstPerIp: an address whose failure budget is spent is refused
+        // before the locale check, the ban lookup and the account lookup (no query for a guesser).
+        // FAIL_NOACCESS is what realmd answers a refused address (AuthSocket.cpp:338-352); then close.
+        if (guard is not null && !guard.AllowsAuthAttempt(_address))
+        {
+            await SendChallengeFailureAsync(AuthResult.FailNoAccess, cancellationToken).ConfigureAwait(false);
+            _closeRequested = true;
+            return;
+        }
+
         if (body[29] > MaxUsernameLength || !AllowedLocales.Contains(ReadLocale(body)))
         {
             logger.LogInformation("[{Endpoint}] challenge with bad username length or locale; closing", remoteEndpoint);
+            RecordFailure();
             _closeRequested = true;
             return;
         }
@@ -137,6 +210,7 @@ public sealed class LogonSession(
         if (!LogonChallengeRequest.TryParse(body, out LogonChallengeRequest? request) || request is null)
         {
             logger.LogWarning("[{Endpoint}] malformed logon challenge", remoteEndpoint);
+            RecordFailure();
             await SendChallengeFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
             return;
         }
@@ -154,6 +228,7 @@ public sealed class LogonSession(
         {
             logger.LogInformation("[{Endpoint}] rejected account name '{Account}' (not printable ASCII)",
                 remoteEndpoint, LogSafe.Escape(username));
+            RecordFailure();
             await SendChallengeFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
             return;
         }
@@ -167,6 +242,7 @@ public sealed class LogonSession(
         {
             logger.LogInformation("[{Endpoint}] banned address tried to log in as '{Account}'",
                 remoteEndpoint, LogSafe.Escape(username));
+            RecordFailure();
             await SendChallengeFailureAsync(AuthResult.FailNoAccess, cancellationToken).ConfigureAwait(false);
             return;
         }
@@ -178,6 +254,7 @@ public sealed class LogonSession(
             if (!options.AutocreateAccounts)
             {
                 logger.LogInformation("[{Endpoint}] unknown account '{Account}'", remoteEndpoint, LogSafe.Escape(username));
+                RecordFailure();
                 await SendChallengeFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
                 return;
             }
@@ -197,9 +274,11 @@ public sealed class LogonSession(
             switch (account.Status)
             {
                 case AccountStatus.Banned:
+                    RecordFailure();
                     await SendChallengeFailureAsync(AuthResult.Banned, cancellationToken).ConfigureAwait(false);
                     return;
                 case AccountStatus.Suspended:
+                    RecordFailure();
                     await SendChallengeFailureAsync(AuthResult.Suspended, cancellationToken).ConfigureAwait(false);
                     return;
             }
@@ -211,6 +290,7 @@ public sealed class LogonSession(
             {
                 logger.LogInformation("[{Endpoint}] banned account '{Account}' tried to log in ({Kind})",
                     remoteEndpoint, LogSafe.Escape(username), ban.IsPermanent ? "permanent" : "temporary");
+                RecordFailure();
                 await SendChallengeFailureAsync(
                     ban.IsPermanent ? AuthResult.Banned : AuthResult.Suspended, cancellationToken).ConfigureAwait(false);
                 return;
@@ -254,6 +334,7 @@ public sealed class LogonSession(
             || request is null)
         {
             logger.LogWarning("[{Endpoint}] logon proof without a valid challenge", remoteEndpoint);
+            RecordFailure();
             await SendProofFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
             return;
         }
@@ -271,6 +352,7 @@ public sealed class LogonSession(
             || srp.SessionKey is null || srp.ServerProof is null)
         {
             logger.LogInformation("[{Endpoint}] invalid proof for '{Account}'", remoteEndpoint, LogSafe.Escape(username));
+            RecordFailure();
             await SendProofFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
             return;
         }
@@ -296,22 +378,31 @@ public sealed class LogonSession(
         }
 
         _authenticated = true;
+        _unauthenticatedLifetime?.CancelAfter(Timeout.InfiniteTimeSpan); // proven: the pre-proof lifetime no longer applies
         logger.LogInformation("[{Endpoint}] '{Account}' authenticated", remoteEndpoint, LogSafe.Escape(username));
         await SendProofSuccessAsync(srp.ServerProof, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Read the rest of a packet whose command byte has arrived, bounded by the read timeout.</summary>
+    /// <summary>Charge one failed attempt to this connection's address (Net:Protection:AuthFailureBurstPerIp).</summary>
+    private void RecordFailure() => guard?.RecordAuthFailure(_address);
+
+    /// <summary>
+    /// Read the rest of a packet whose command byte has arrived, bounded by the frame deadline
+    /// (Auth:ReadTimeoutSeconds, else Net:Protection:FrameReadTimeout). The deadline is armed for the
+    /// read and disarmed after it; its expiry surfaces as the OperationCanceledException RunAsync reports.
+    /// </summary>
     private async Task ReadPacketPartAsync(byte[] buffer, CancellationToken cancellationToken)
     {
-        if (options.ReadTimeoutSeconds <= 0)
+        ReadDeadline? deadline = _deadline;
+        if (deadline is null || !deadline.Enabled)
         {
             await stream.ReadExactlyAsync(buffer, cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(options.ReadTimeoutSeconds));
-        await stream.ReadExactlyAsync(buffer, timeout.Token).ConfigureAwait(false);
+        deadline.Arm();
+        await stream.ReadExactlyAsync(buffer, deadline.Token).ConfigureAwait(false);
+        deadline.Disarm();
     }
 
     /// <summary>The country field (body offset 17), reversed on the wire (AuthSocket.cpp:301-304).</summary>

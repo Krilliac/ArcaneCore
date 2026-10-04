@@ -16,6 +16,7 @@ unfinished parts documented as limits).
 | [Database schema reference](reference/schema.md) | Every schema version of the auth, characters and world databases, which module owns it, and which modules clean up on character delete. **Generated.** |
 | [Database upgrade tooling](ops/database-upgrade.md) | The `arcane-db` runbook: status, plan, upgrade, backups, exit codes and the `Database:Upgrade` policy. |
 | [Security hardening](security/hardening.md) | The opt-in hardening switches and their defaults, and what is not delivered. |
+| [Network and packet protections](ops/netguard.md) | The `Net:Protection` limits (per-address caps, rates and failure budgets, frame deadlines), the bounds-checked packet readers and the fuzz harness. |
 | [Live bans](security/live-bans.md) | Ban tables, IP bans and the live enforcement options. |
 | [Operations and performance](areas/ops-perf.md) | `check-config`, exit codes, the performance log and shutdown commands. |
 | [Live reload](areas/hot-reload.md) | The `.reload` command tree and which configuration is applied live. |

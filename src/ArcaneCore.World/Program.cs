@@ -57,6 +57,7 @@ builder.Services.AddAuthDatabase(builder.Configuration);
 builder.Services.AddCharacterDatabase(builder.Configuration);
 builder.Services.AddWorldDatabase(builder.Configuration);
 builder.Services.AddWorldDaemon(builder.Configuration);
+builder.Services.AddNetProtection(builder.Configuration);
 
 IHost host = builder.Build();
 
