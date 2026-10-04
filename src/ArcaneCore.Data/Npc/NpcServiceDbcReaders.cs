@@ -12,6 +12,45 @@ namespace ArcaneCore.Data.Npc;
 /// </summary>
 public static class NpcServiceDbcReaders
 {
+    /// <summary>vmangos Database/DBCfmt.h:83, TaxiNodesEntryfmt "nifffssssssssxii".</summary>
+    public static IReadOnlyList<TaxiNode> LoadTaxiNodes(string path) => ReadTaxiNodes(DbcFile.Load(path));
+
+    public static IReadOnlyList<TaxiNode> ReadTaxiNodes(DbcFile file)
+    {
+        Require(file, 16, "TaxiNodes.dbc");
+        var rows = new List<TaxiNode>(file.RecordCount);
+        for (int row = 0; row < file.RecordCount; row++)
+        {
+            rows.Add(new TaxiNode
+            {
+                Id = file.GetUInt32(row, 0), MapId = file.GetUInt32(row, 1),
+                X = Finite(file.GetFloat(row, 2)), Y = Finite(file.GetFloat(row, 3)), Z = Finite(file.GetFloat(row, 4)),
+                Name = file.GetString(row, 5), MountHorde = file.GetUInt32(row, 14), MountAlliance = file.GetUInt32(row, 15),
+            });
+        }
+
+        return rows;
+    }
+
+    /// <summary>vmangos Database/DBCfmt.h:84, TaxiPathEntryfmt "niii".</summary>
+    public static IReadOnlyList<TaxiPath> LoadTaxiPaths(string path) => ReadTaxiPaths(DbcFile.Load(path));
+
+    public static IReadOnlyList<TaxiPath> ReadTaxiPaths(DbcFile file)
+    {
+        Require(file, 4, "TaxiPath.dbc");
+        var rows = new List<TaxiPath>(file.RecordCount);
+        for (int row = 0; row < file.RecordCount; row++)
+        {
+            rows.Add(new TaxiPath
+            {
+                Id = file.GetUInt32(row, 0), FromNode = file.GetUInt32(row, 1),
+                ToNode = file.GetUInt32(row, 2), Price = file.GetUInt32(row, 3),
+            });
+        }
+
+        return rows;
+    }
+
     /// <summary>Canonical SkillLineAbility.dbc width (vmangos DBCfmt.h:68 "niiiixxiiiiixxi").</summary>
     public const int SkillLineAbilityFields = 15;
 

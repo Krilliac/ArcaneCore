@@ -108,6 +108,8 @@ public sealed class NpcTravelServiceTests
         new TaxiPathNodeRecord(1, 10, 0, 0, 0, 0, Z, 0, 0),
         new TaxiPathNodeRecord(2, 10, 1, 0, 32, 0, 90, 0, 0),
         new TaxiPathNodeRecord(3, 10, 2, 0, 64, 0, Z, 0, 0),
+        new TaxiPathNodeRecord(4, 11, 0, 0, 64, 0, Z, 0, 0),
+        new TaxiPathNodeRecord(5, 11, 1, 0, 64, 64, Z, 0, 0),
     ]);
 
     private sealed class TaxiRig : IDisposable
@@ -256,11 +258,12 @@ public sealed class NpcTravelServiceTests
         NpcServiceKit kit = rig.Kit;
         kit.Player.Money = 1000;
         kit.Services.ActivateTaxiExpress(kit.Player, kit.Npc.Guid, [1, 2, 3]);
-        Assert.Equal(1000u - 143u, kit.Player.Money); // ceil(150 × 0.95)
+        Assert.Equal(905u, kit.Player.Money); // first leg: uint(100 * 0.95f + 0.5f)
         kit.Drain();
 
         rig.Flights.Update(rig.Map, 2100); // end of hop 1 → hop 2 starts from node 2
         Assert.True(rig.Flights.IsFlying(kit.Player));
+        Assert.Equal(857u, kit.Player.Money); // second leg: uint(50 * 0.95f + 0.5f)
         Assert.Equal((64f, 0f, Z), (kit.Player.X, kit.Player.Y, kit.Player.Z));
         var hop2 = new PacketReader(kit.Single(WorldOpcode.SmsgMonsterMove));
         hop2.ReadBytes(2 + 12 + 4 + 1 + 4);
@@ -404,6 +407,47 @@ public sealed class NpcTravelServiceTests
     }
 
     [Fact]
+    public void Flight_SuspendsAndResumesAtTheCurrentLegWithoutChargingItAgain()
+    {
+        using var rig = new TaxiRig();
+        rig.Player.Money = 1000;
+        rig.Kit.Services.ActivateTaxiExpress(rig.Player, rig.Kit.Npc.Guid, [1, 2, 3]);
+        Assert.Equal(900u, rig.Player.Money);
+        rig.Flights.Update(rig.Map, 1000);
+        float x = rig.Player.X;
+        TaxiFlightRoute route = Assert.IsType<TaxiFlightRoute>(rig.Flights.SuspendForLogout(rig.Player));
+        Assert.Equal([1u, 2u, 3u], route.Nodes);
+        Assert.Equal([0u, 50u], route.LegCosts);
+        Assert.False(rig.Flights.IsFlying(rig.Player));
+        Assert.True(rig.Flights.ResumeFlight(rig.Player, route, Gryphon, (player, amount) =>
+        {
+            player.Money -= amount;
+            return true;
+        }));
+        Assert.Equal(900u, rig.Player.Money);
+        Assert.InRange(rig.Player.X, x - 0.01f, x + 0.01f);
+        rig.Flights.Update(rig.Map, 1200);
+        Assert.Equal(850u, rig.Player.Money);
+        rig.Flights.Update(rig.Map, 2000);
+        Assert.False(rig.Flights.IsFlying(rig.Player));
+        Assert.Equal((64f, 64f), (rig.Player.X, rig.Player.Y));
+    }
+
+    [Fact]
+    public void Flight_DeathReturnsToItsCurrentDepartureNodeAndDismounts()
+    {
+        using var rig = new TaxiRig();
+        rig.Player.Money = 1000;
+        rig.Kit.Services.ActivateTaxi(rig.Player, rig.Kit.Npc.Guid, 1, 2);
+        rig.Flights.Update(rig.Map, 500);
+        rig.Player.Health = 0;
+        rig.Flights.Update(rig.Map, 100);
+        Assert.False(rig.Flights.IsFlying(rig.Player));
+        Assert.Equal((0f, 0f, Z), (rig.Player.X, rig.Player.Y, rig.Player.Z));
+        Assert.Equal(0u, rig.Player.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
+    }
+
+    [Fact]
     public void BuildFlightMove_MatchesTheMonsterMoveFlyingLayout()
     {
         byte[] packet = TaxiFlightSystem.BuildFlightMove(ObjectGuid.Player(0x0102), 1, 2, 3, 7, 1234,
@@ -429,6 +473,7 @@ public sealed class NpcTravelServiceTests
         Assert.False(rig.Flights.StartFlight(rig.Player, [1], [], Gryphon));
         Assert.False(rig.Flights.StartFlight(rig.Player, [1, 2], [10, 11], Gryphon));
         Assert.False(rig.Flights.StartFlight(rig.Player, [1, 2], [10], 1));
+        Assert.False(rig.Flights.StartFlight(rig.Player, [6, 2], [14], Gryphon)); // no TaxiPathNode rows
         Assert.True(rig.Flights.StartFlight(rig.Player, [1, 2], [10], Gryphon));
         Assert.False(rig.Flights.StartFlight(rig.Player, [1, 2], [10], Gryphon));
         Assert.Equal(3, rig.Flights.CurrentHop(rig.Player)!.Count);

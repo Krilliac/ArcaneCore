@@ -297,6 +297,11 @@ public interface ITaxiFlights
     /// </summary>
     bool StartFlight(Player player, IReadOnlyList<uint> nodes, IReadOnlyList<uint> pathIds, uint mountCreatureEntry);
 
+    /// <summary>Start a fare-bearing route. Charge the first leg at launch and each later leg at its transition
+    /// (vmangos Player.cpp:18074-18090, WaypointMovementGenerator.cpp:411-424).</summary>
+    bool StartFlight(Player player, IReadOnlyList<uint> nodes, IReadOnlyList<uint> pathIds, uint mountCreatureEntry,
+        IReadOnlyList<uint> legCosts, Func<Player, uint, bool> chargeLeg);
+
     /// <summary>Whether the player is on a flight started here.</summary>
     bool IsFlying(Player player) => false;
 }

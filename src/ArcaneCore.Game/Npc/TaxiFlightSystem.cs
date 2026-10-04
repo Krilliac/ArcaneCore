@@ -19,11 +19,10 @@ namespace ArcaneCore.Game.Npc;
 /// </summary>
 /// <remarks>
 /// <para>
-/// A path without TaxiPathNode rows flies straight between the two TaxiNodes positions. Paths
-/// that change map are refused (vmangos splits them at the teleport node; vanilla has none on
-/// the continents). A player logging out mid-flight is put down at the final destination before
-/// the save (vmangos instead stores the remaining route and resumes it at login). A teleport or
-/// map change aborts the flight where the player is.
+/// A path without TaxiPathNode rows is refused. Paths
+/// that change map are refused (vmangos splits them at the teleport node). A player logging out
+/// mid-flight saves the remaining route and resumes near the saved position on login. A teleport
+/// or map change aborts the flight where the player is.
 /// </para>
 /// <para>
 /// The client interpolates the flying spline as Catmull-Rom; the server follows the polyline
@@ -67,6 +66,9 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     /// <summary>Raised after a flight ended at its destination (the player was put down).</summary>
     public event Action<Player, uint>? Landed;
 
+    /// <summary>Raised when a route finishes or is interrupted, so its persisted resume state can be cleared.</summary>
+    public event Action<Player>? FlightEnded;
+
     public int ActiveFlights => _flights.Count;
 
     public bool IsFlying(Player player) => _flights.TryGetValue(player.Guid, out Flight? f) && ReferenceEquals(f.Player, player);
@@ -75,11 +77,28 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     public IReadOnlyList<Waypoint>? CurrentHop(Player player) => IsFlying(player) ? _flights[player.Guid].Hops[_flights[player.Guid].Hop] : null;
 
     public bool StartFlight(Player player, IReadOnlyList<uint> nodes, IReadOnlyList<uint> pathIds, uint mountCreatureEntry)
+        => StartFlight(player, nodes, pathIds, mountCreatureEntry,
+            new uint[(pathIds ?? throw new ArgumentNullException(nameof(pathIds))).Count], static (_, _) => true);
+
+    public bool StartFlight(Player player, IReadOnlyList<uint> nodes, IReadOnlyList<uint> pathIds, uint mountCreatureEntry,
+        IReadOnlyList<uint> legCosts, Func<Player, uint, bool> chargeLeg)
+        => StartFlightCore(player, nodes, pathIds, mountCreatureEntry, legCosts, chargeLeg, resuming: false);
+
+    /// <summary>Resume the saved route from the character's stored position without another OK reply or first-leg fare.</summary>
+    public bool ResumeFlight(Player player, TaxiFlightRoute route, uint mountCreatureEntry, Func<Player, uint, bool> chargeLeg)
+        => route.IsValid && StartFlightCore(player, route.Nodes, route.PathIds, mountCreatureEntry,
+            route.LegCosts, chargeLeg, resuming: true);
+
+    private bool StartFlightCore(Player player, IReadOnlyList<uint> nodes, IReadOnlyList<uint> pathIds, uint mountCreatureEntry,
+        IReadOnlyList<uint> legCosts, Func<Player, uint, bool> chargeLeg, bool resuming)
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(nodes);
         ArgumentNullException.ThrowIfNull(pathIds);
-        if (player.Map is not { } map || !player.IsInWorld || nodes.Count < 2 || pathIds.Count != nodes.Count - 1 || IsFlying(player))
+        ArgumentNullException.ThrowIfNull(legCosts);
+        ArgumentNullException.ThrowIfNull(chargeLeg);
+        if (player.Map is not { } map || !player.IsInWorld || nodes.Count < 2 || pathIds.Count != nodes.Count - 1
+            || legCosts.Count != pathIds.Count || IsFlying(player))
         {
             return false;
         }
@@ -102,18 +121,46 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
             hops.Add(hop);
         }
 
-        var flight = new Flight(player, map, hops, nodes[^1]);
+        if (!resuming && !chargeLeg(player, legCosts[0]))
+        {
+            return false;
+        }
+
         // vmangos Player::ActivateTaxiPathTo removes a spell mount before a scripted flight
         // (Player.cpp:17889-17893). The flight-master path already rejects a mounted player.
         _beforeFlight?.Invoke(player);
+
+        var flight = new Flight(player, map, hops, nodes.ToArray(), pathIds.ToArray(), legCosts.ToArray(), chargeLeg)
+        {
+            Resuming = resuming,
+        };
         _flights[player.Guid] = flight;
 
         // Unit::Mount + FlightPathMovementGenerator::Initialize.
         player.SetUInt32(UpdateFields.UnitFieldMountdisplayid, display);
         player.UnitFlags |= UnitFlags.RemoveClientControl | UnitFlags.TaxiFlight;
-        player.Session.Send(WorldOpcode.SmsgActivatetaxireply, NpcPackets.ActivateTaxiReply(ActivateTaxiReply.Ok).AsSpan());
+        if (!resuming)
+        {
+            player.Session.Send(WorldOpcode.SmsgActivatetaxireply, NpcPackets.ActivateTaxiReply(ActivateTaxiReply.Ok).AsSpan());
+        }
+
         LaunchHop(flight);
         return true;
+    }
+
+    /// <summary>Save the unpaid tail for logout; the ordinary character snapshot saves this position.</summary>
+    public TaxiFlightRoute? SuspendForLogout(Player player)
+    {
+        if (!_flights.TryGetValue(player.Guid, out Flight? flight) || !ReferenceEquals(flight.Player, player))
+        {
+            return null;
+        }
+
+        var costs = flight.LegCosts[flight.Hop..];
+        costs[0] = 0; // the active leg was already paid for.
+        var route = new TaxiFlightRoute(flight.Nodes[flight.Hop..], flight.PathIds[flight.Hop..], costs);
+        Finish(flight, landed: false, retainRoute: true);
+        return route;
     }
 
     public void Update(Map map, uint diffMs)
@@ -137,7 +184,7 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
         }
     }
 
-    /// <summary>Put a flying player down at the final destination now (logout before the save).</summary>
+    /// <summary>Force a flying player down at the final destination now (administrative recovery).</summary>
     public void LandNow(Player player)
     {
         if (!_flights.TryGetValue(player.Guid, out Flight? flight) || !ReferenceEquals(flight.Player, player))
@@ -193,18 +240,14 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     /// <summary>The waypoints of one hop, or null when the path is unusable from this map.</summary>
     private Waypoint[]? BuildHop(uint pathId, uint from, uint to, uint mapId)
     {
-        IReadOnlyList<TaxiPathNodeRecord> rows = _pathNodes.Nodes(pathId);
-        if (rows.Count > 0)
-        {
-            return rows.Any(r => r.MapId != mapId) ? null : rows.Select(r => new Waypoint(r.X, r.Y, r.Z)).ToArray();
-        }
-
-        if (_npcs.Node(from) is not { } a || _npcs.Node(to) is not { } b || a.MapId != mapId || b.MapId != mapId)
+        if (_npcs.Path(from, to)?.Id != pathId || _npcs.Node(from)?.MapId != mapId || _npcs.Node(to)?.MapId != mapId)
         {
             return null;
         }
 
-        return [new Waypoint(a.X, a.Y, a.Z), new Waypoint(b.X, b.Y, b.Z)];
+        IReadOnlyList<TaxiPathNodeRecord> rows = _pathNodes.Nodes(pathId);
+        return rows.Count < 2 || rows.Any(r => r.MapId != mapId)
+            ? null : rows.Select(r => new Waypoint(r.X, r.Y, r.Z)).ToArray();
     }
 
     private void LaunchHop(Flight flight)
@@ -214,7 +257,11 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
 
         // MoveSplineInit::Launch replaces the first control point with the current position.
         var segments = new List<Waypoint>(hop.Length) { new(player.X, player.Y, player.Z) };
-        segments.AddRange(hop.Skip(1));
+        // vmangos Player::ContinueTaxiFlight finds the nearest path segment to the saved
+        // position (Player.cpp:18128-18167); do not fly back to the first waypoint on relog.
+        int next = flight.Resuming ? NearestSegment(hop, player.X, player.Y, player.Z) + 1 : 1;
+        segments.AddRange(hop.Skip(next));
+        flight.Resuming = false;
         if (segments.Count == 1)
         {
             segments.Add(hop[0]);
@@ -239,6 +286,19 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     private void Advance(Flight flight, uint diffMs)
     {
         Player player = flight.Player;
+        if (!player.IsAlive)
+        {
+            // Death in flight is exceptional; put the body at a valid taxi node rather than in the air.
+            if (_npcs.Node(flight.Nodes[0]) is { } start)
+            {
+                player.Relocate(start.X, start.Y, start.Z, player.Orientation, _nowMs());
+                player.NeedsVisibilityUpdate = true;
+            }
+
+            Finish(flight, landed: false);
+            return;
+        }
+
         if (!player.IsInWorld || !ReferenceEquals(player.Map, flight.Map)
             || Math.Abs(player.X - flight.Expected.X) > DriftTolerance || Math.Abs(player.Y - flight.Expected.Y) > DriftTolerance
             || Math.Abs(player.Z - flight.Expected.Z) > DriftTolerance)
@@ -255,6 +315,13 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
             if (flight.Hop + 1 < flight.Hops.Count)
             {
                 flight.Hop++;
+                // vmangos FlightPathMovementGenerator::Update charges a subsequent leg at its path boundary.
+                if (!flight.ChargeLeg(player, flight.LegCosts[flight.Hop]))
+                {
+                    Finish(flight, landed: false);
+                    return;
+                }
+
                 LaunchHop(flight);
             }
             else
@@ -300,7 +367,7 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     }
 
     /// <summary>FlightPathMovementGenerator::Finalize: unmount, clear the flags, stop the spline.</summary>
-    private void Finish(Flight flight, bool landed)
+    private void Finish(Flight flight, bool landed, bool retainRoute = false)
     {
         Player player = flight.Player;
         _flights.Remove(player.Guid);
@@ -317,6 +384,34 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
         {
             Landed?.Invoke(player, flight.Destination);
         }
+
+        if (!retainRoute)
+        {
+            FlightEnded?.Invoke(player);
+        }
+    }
+
+    private static int NearestSegment(Waypoint[] path, float x, float y, float z)
+    {
+        int nearest = 0;
+        double best = double.PositiveInfinity;
+        for (int i = 0; i < path.Length - 1; i++)
+        {
+            Waypoint a = path[i];
+            Waypoint b = path[i + 1];
+            double dx = b.X - a.X, dy = b.Y - a.Y, dz = b.Z - a.Z;
+            double length2 = dx * dx + dy * dy + dz * dz;
+            double t = length2 == 0 ? 0 : Math.Clamp(((x - a.X) * dx + (y - a.Y) * dy + (z - a.Z) * dz) / length2, 0, 1);
+            double ex = x - (a.X + t * dx), ey = y - (a.Y + t * dy), ez = z - (a.Z + t * dz);
+            double distance2 = ex * ex + ey * ey + ez * ez;
+            if (distance2 < best)
+            {
+                best = distance2;
+                nearest = i;
+            }
+        }
+
+        return nearest;
     }
 
     private static double Distance(Waypoint a, Waypoint b)
@@ -330,7 +425,8 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     /// <summary>A flight waypoint.</summary>
     public readonly record struct Waypoint(float X, float Y, float Z);
 
-    private sealed class Flight(Player player, Map map, List<Waypoint[]> hops, uint destination)
+    private sealed class Flight(Player player, Map map, List<Waypoint[]> hops, uint[] nodes, uint[] pathIds,
+        uint[] legCosts, Func<Player, uint, bool> chargeLeg)
     {
         public Player Player { get; } = player;
 
@@ -338,9 +434,19 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
 
         public List<Waypoint[]> Hops { get; } = hops;
 
-        public uint Destination { get; } = destination;
+        public uint Destination => Nodes[^1];
+
+        public uint[] Nodes { get; } = nodes;
+
+        public uint[] PathIds { get; } = pathIds;
+
+        public uint[] LegCosts { get; } = legCosts;
+
+        public Func<Player, uint, bool> ChargeLeg { get; } = chargeLeg;
 
         public int Hop { get; set; }
+
+        public bool Resuming { get; set; }
 
         public List<Waypoint> Segments { get; set; } = [];
 
