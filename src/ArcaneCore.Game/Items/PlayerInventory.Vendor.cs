@@ -245,11 +245,14 @@ public sealed partial class PlayerInventory
             return;
         }
 
-        item.Durability = (uint)after;
+        // vmangos Player.cpp:4879-4881: the stats come off _before_ the durability reaches 0, because the stat system
+        // (Player::_ApplyItemMods) ignores a broken item in both directions and would leave its deltas applied.
         if (after == 0 && item.Container is null && item.Slot < InventorySlots.EquipmentEnd && ReferenceEquals(_items[item.Slot], item))
         {
             ApplyMods(item, item.Slot, apply: false);
         }
+
+        item.Durability = (uint)after;
     }
 
     /// <summary>
