@@ -1,9 +1,11 @@
 using System.Globalization;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
+using ArcaneCore.World.Teleport;
 
 namespace ArcaneCore.World.Gm.Objects;
 
@@ -151,6 +153,14 @@ public sealed class GmObjectCommands : ICommandGroup
             return true;
         }
 
+        // The same check .go xyz / .tele apply (GridDefines.IsValidMapCoord, as TrinityCore's HandleGameObjectMoveCommand uses
+        // MapManager::IsValidMapCoord): ExtractFloat accepts exponents, so "1e40" parses to infinity and "1e9" is far outside the map.
+        if (!GridDefines.IsValidMapCoord(x, y, z, go.Orientation))
+        {
+            TeleportCommands.ReplyInvalid(context, x, y, player.MapId);
+            return true;
+        }
+
         if (!system.Relocate(go, x, y, z, go.Orientation))
         {
             context.Reply(NotSpawned(counter));
@@ -177,6 +187,13 @@ public sealed class GmObjectCommands : ICommandGroup
         if (go.Spawn is not null)
         {
             context.Reply(DatabaseSpawn(counter));
+            return true;
+        }
+
+        // A non-finite orientation (or one beyond ±4π, the IsValidMapCoord bound) would be written to the facing and rotation fields as is.
+        if (!GridDefines.IsValidMapCoord(go.X, go.Y, go.Z, orientation))
+        {
+            TeleportCommands.ReplyInvalid(context, go.X, go.Y, context.Player.MapId);
             return true;
         }
 

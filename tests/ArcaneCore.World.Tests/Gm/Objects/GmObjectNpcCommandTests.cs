@@ -1,8 +1,10 @@
+using System.Globalization;
 using System.Text;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
@@ -13,6 +15,7 @@ using ArcaneCore.World.Creatures;
 using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Gm.Npc;
 using ArcaneCore.World.Gm.Objects;
+using ArcaneCore.World.Teleport;
 using ArcaneCore.World.Tests.Creatures;
 using ArcaneCore.World.Tests.GameObjects;
 using Xunit;
@@ -253,6 +256,58 @@ public sealed class GmObjectNpcCommandTests
         Assert.StartsWith("Syntax: .gobject move", (await SendAsync(gm, $".gobject move {guid} 1 2")).Replies[0], StringComparison.Ordinal);
         Assert.StartsWith("Syntax: .gobject move", (await SendAsync(gm, ".gobject move")).Replies[0], StringComparison.Ordinal);
         Assert.StartsWith("Syntax: .gobject turn", (await SendAsync(gm, $".gobject turn {guid} north")).Replies[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GobjectMoveAndTurn_RefuseInvalidCoordinates_LikeTeleport()
+    {
+        Scene scene = Start();
+        await using WorldTestHost host = scene.Host;
+        await using WorldTestClient gm = await GmAsync(scene, "GOBAD", "Gobad");
+        uint guid = await PlaceDoorAsync(scene);
+        await gm.CollectAsync(Quiet);
+
+        // ExtractFloat accepts exponents: "1e40" overflows a float to infinity, "1e9" is finite but far outside the map.
+        string infinite = string.Format(CultureInfo.InvariantCulture, TeleportCommands.InvalidTargetText, float.PositiveInfinity, 0f, 0u);
+        Run moved = await SendAsync(gm, $".gobject move {guid} 1e40 0 0");
+        Assert.Equal(infinite, moved.Single);
+        Assert.DoesNotContain(moved.Packets, p => p.Opcode == WorldOpcode.SmsgDestroyObject);
+        Assert.Equal(string.Format(CultureInfo.InvariantCulture, TeleportCommands.InvalidTargetText, 1e9f, 0f, 0u), (await SendAsync(gm, $".gobject move {guid} 1e9 0 0")).Single);
+        Assert.Equal(string.Format(CultureInfo.InvariantCulture, TeleportCommands.InvalidTargetText, -8950f, -133f, 0u), (await SendAsync(gm, $".gobject move {guid} -8950 -133 1e40")).Single);
+        Assert.Equal(string.Format(CultureInfo.InvariantCulture, TeleportCommands.InvalidTargetText, -8950f, -133f, 0u), (await SendAsync(gm, $".gobject turn {guid} 1e40")).Single);
+
+        (float x, float y, float z, float orientation, bool spawned) = await host.OnWorldAsync(() =>
+        {
+            GameObject go = ObjectSystem(scene).GameObjects.Single(g => g.Guid.Counter == guid);
+            return (go.X, go.Y, go.Z, go.Orientation, go.IsSpawned);
+        });
+        Assert.Equal((-8950f, -133f, 83.5f, 1f, true), (x, y, z, orientation, spawned));
+    }
+
+    [Fact]
+    public async Task GobjectMove_AcrossAGridLine_KeepsTheObjectTrackedInItsNewGrid()
+    {
+        Scene scene = Start();
+        await using WorldTestHost host = scene.Host;
+        await using WorldTestClient gm = await GmAsync(scene, "GOFAR", "Gofar");
+        uint guid = await PlaceDoorAsync(scene);
+        await gm.CollectAsync(Quiet);
+
+        // 600 yards east is at least one grid (533.33 yards) away, outside the invoker's activation range: the object system has not loaded it.
+        Assert.False(await host.OnWorldAsync(() => ObjectSystem(scene).IsGridLoaded(-8350f, -133f)));
+        Assert.Equal(GmObjectCommands.Moved(guid, -8350f, -133f, 83.5f), (await SendAsync(gm, $".gobject move {guid} -8350 -133 83.5")).Single);
+        Assert.True(await host.OnWorldAsync(() => ObjectSystem(scene).IsGridLoaded(-8350f, -133f)));
+
+        // Unloading that grid takes the object with it, as it does for a runtime object placed at the invoker.
+        bool gone = await host.OnWorldAsync(() =>
+        {
+            GameObjectMapSystem system = ObjectSystem(scene);
+            GameObject go = system.GameObjects.Single(g => g.Guid.Counter == guid);
+            Map map = host.World.FindOnlinePlayer("Gofar")!.Map!;
+            return map.Grids.UnloadGrid(map.Grids.CellOf(go)!.Value.Grid, force: true) && system.Find(go.Guid) is null && map.FindObject(go.Guid) is null;
+        });
+        Assert.True(gone);
+        Assert.Equal(GmObjectCommands.NotFound(guid), (await SendAsync(gm, $".gobject info {guid}")).Single);
     }
 
     [Fact]
@@ -500,6 +555,36 @@ public sealed class GmObjectNpcCommandTests
 
         Assert.Equal(GmSpawnCommands.Respawned(0, 0, 100f), (await SendAsync(gm, ".respawn")).Single);
         Assert.Equal(CreatureDeathState.Corpse, await host.OnWorldAsync(() => CreatureSystem(scene).Creatures.Single(c => c.Spawn is null).DeathState));
+    }
+
+    [Fact]
+    public async Task NpcInfoAndSpawnInfo_SayADeadTemporaryCreatureDoesNotRespawn()
+    {
+        Scene scene = Start();
+        await using WorldTestHost host = scene.Host;
+        await using WorldTestClient gm = await GmAsync(scene, "NPCTMP", "Npctmp");
+        await SendAsync(gm, $".npc add {WolfEntry}");
+        Creature temporary = await host.OnWorldAsync(() =>
+        {
+            CreatureMapSystem creatures = CreatureSystem(scene);
+            Creature added = creatures.Creatures.Single(c => c.Spawn is null);
+            creatures.KillCreature(added);
+            host.World.FindOnlinePlayer("Npctmp")!.Selection = added.Guid;
+            return added;
+        });
+        await gm.CollectAsync(Quiet);
+
+        // OnCreatureDied sets RespawnAtMs from the template delay, but only creatures with a Spawn are respawned by the update loop.
+        Run info = await SendAsync(gm, ".npc info");
+        Assert.Equal(4, info.Replies.Count);
+        Assert.StartsWith($"Test Wolf entry {WolfEntry} guid {temporary.Guid.Counter} ", info.Replies[0], StringComparison.Ordinal);
+        Assert.Equal("temporary (not saved); corpse, no respawn", info.Replies[1]);
+
+        Run near = await SendAsync(gm, ".spawninfo creature");
+        Assert.Equal("Creatures within 40 yards: 2", near.Replies[0]);
+        Assert.Contains(near.Replies, r => r.StartsWith($"{temporary.Guid.Counter} entry {WolfEntry} Test Wolf: temporary, corpse, no respawn, ", StringComparison.Ordinal));
+        Assert.Contains(near.Replies, r => r.StartsWith($"{WolfSpawn} entry {WolfEntry} Test Wolf: database spawn {WolfSpawn}, alive, ", StringComparison.Ordinal));
+        Assert.DoesNotContain(near.Replies, r => r.Contains("temporary, corpse, respawns in", StringComparison.Ordinal));
     }
 
     [Fact]

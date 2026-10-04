@@ -181,10 +181,14 @@ public sealed class GmSpawnCommands : ICommandGroup
     private static string Origin(GameObject go)
         => go.Spawn is { } spawn ? string.Create(CultureInfo.InvariantCulture, $"database spawn {spawn.Guid}") : "runtime";
 
-    private static string State(CreatureMapSystem system, Creature creature)
+    /// <summary>
+    /// The life state and respawn countdown of a creature: "alive", "corpse, respawns in N s" for a dead database spawn, or
+    /// "corpse, no respawn" for a dead temporary creature (<c>.npc add</c>), which never comes back (<see cref="CreatureMapSystem.RespawnRemainingMs"/>).
+    /// </summary>
+    internal static string State(CreatureMapSystem system, Creature creature)
         => system.RespawnRemainingMs(creature) is { } ms
             ? string.Create(CultureInfo.InvariantCulture, $"{GmNpcCommands.Describe(creature.DeathState)}, respawns in {(ms + 999) / 1000} s")
-            : "alive";
+            : creature.DeathState == CreatureDeathState.Alive ? "alive" : $"{GmNpcCommands.Describe(creature.DeathState)}, no respawn";
 
     private static string State(GameObjectMapSystem system, GameObject go)
         => system.RespawnRemainingMs(go) is { } ms

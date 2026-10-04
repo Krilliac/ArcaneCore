@@ -911,16 +911,29 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
     }
 
+    /// <summary>
+    /// The object list of the grid under (<paramref name="x"/>, <paramref name="y"/>), loading that grid here first when it is not loaded yet
+    /// (as <see cref="CreatureMapSystem.SpawnTemporary"/> does). A runtime object placed or moved into a grid nobody is near must still sit in
+    /// a grid list: <see cref="UnloadGrid"/> only removes what the lists hold, and a later <see cref="LoadGrid"/> builds a fresh list without
+    /// it, so an object outside every list would stay in <see cref="_objects"/> and in the map until <see cref="Remove"/>.
+    /// </summary>
+    private List<GameObject> GridListOf(float x, float y)
+    {
+        GridCoord coord = CreatureMapSystem.ComputeGrid(x, y);
+        if (!_grids.TryGetValue(coord, out List<GameObject>? list))
+        {
+            LoadGrid(coord);
+            list = _grids[coord];
+        }
+
+        return list;
+    }
+
     private void AddToWorld(GameObject go)
     {
         go.System = this;
         _objects[go.Guid] = go;
-        GridCoord coord = CreatureMapSystem.ComputeGrid(go.X, go.Y);
-        if (_grids.TryGetValue(coord, out List<GameObject>? list))
-        {
-            list.Add(go);
-        }
-
+        GridListOf(go.X, go.Y).Add(go);
         ConfigureQuestFlags(go);
         go.ClearChangedFields();
         Map.AddObject(go);

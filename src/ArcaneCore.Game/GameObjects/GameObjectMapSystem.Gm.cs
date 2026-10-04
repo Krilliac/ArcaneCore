@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Grid;
 
 namespace ArcaneCore.Game.GameObjects;
 
@@ -29,15 +30,21 @@ public sealed partial class GameObjectMapSystem
         return ActivateDoorOrButton(go, go.Template.AutoCloseSeconds()) == GameObjectUseResult.Ok;
     }
 
+    /// <summary>True when this system has loaded the grid under (<paramref name="x"/>, <paramref name="y"/>) and tracks the objects in it.</summary>
+    public bool IsGridLoaded(float x, float y) => _grids.ContainsKey(CreatureMapSystem.ComputeGrid(x, y));
+
     /// <summary>
     /// Move and turn a runtime object (no database spawn: its row would still say the old place). Clients that saw it get it destroyed and
-    /// created again at the new place, which is how a static object is relocated without a movement packet. False when the object is not a
-    /// tracked, spawned runtime object.
+    /// created again at the new place, which is how a static object is relocated without a movement packet. A destination grid this system
+    /// has not loaded is loaded first (as <see cref="CreatureMapSystem.SpawnTemporary"/> does), so the object stays in a grid list and goes
+    /// away with that grid's unload. False when the object is not a tracked, spawned runtime object, or when the position is not a valid
+    /// map position (<see cref="GridDefines.IsValidMapCoord(float, float, float, float)"/>): a non-finite or out-of-map coordinate would
+    /// leave the object unplaced in the grid index and invisible to everyone.
     /// </summary>
     public bool Relocate(GameObject go, float x, float y, float z, float orientation)
     {
         ArgumentNullException.ThrowIfNull(go);
-        if (!Tracks(go) || go.Spawn is not null || !go.IsSpawned)
+        if (!Tracks(go) || go.Spawn is not null || !go.IsSpawned || !GridDefines.IsValidMapCoord(x, y, z, orientation))
         {
             return false;
         }
@@ -58,11 +65,7 @@ public sealed partial class GameObjectMapSystem
         go.SetFloat(UpdateFields.GameobjectRotation + 1, ry);
         go.SetFloat(UpdateFields.GameobjectRotation + 2, rz);
         go.SetFloat(UpdateFields.GameobjectRotation + 3, rw);
-        if (_grids.TryGetValue(CreatureMapSystem.ComputeGrid(x, y), out List<GameObject>? list))
-        {
-            list.Add(go);
-        }
-
+        GridListOf(x, y).Add(go);
         go.ClearChangedFields();
         Map.AddObject(go);
         return true;

@@ -30,8 +30,8 @@ Levels are retail account levels (`World:GmCommands`, see `gm-commands.md`): 3 i
 |---|---|---|---|
 | `gobject add` | 3 | `#entry [#despawnSeconds]` | Place a runtime game object at the invoker (`GameObjectMapSystem.Summon`); with seconds it expires |
 | `gobject delete` | 3 | `#guid` | Remove a runtime object; a database spawn is refused |
-| `gobject move` | 3 | `#guid [#x #y #z]` | Move a runtime object (to the invoker when no coordinates); clients get destroy then create |
-| `gobject turn` | 3 | `#guid [#orientation]` | Turn a runtime object (radians; the invoker's facing when omitted); rotation fields follow |
+| `gobject move` | 3 | `#guid [#x #y #z]` | Move a runtime object (to the invoker when no coordinates); clients get destroy then create. Coordinates go through `GridDefines.IsValidMapCoord`, the check `.go xyz` uses; an invalid one gets the teleport commands' "Target map or coordinates is invalid" reply |
+| `gobject turn` | 3 | `#guid [#orientation]` | Turn a runtime object (radians; the invoker's facing when omitted); rotation fields follow. The orientation goes through the same check (finite, within ±4π) |
 | `gobject activate` | 3 | `#guid` | Make ready, then flip the state with the in-use flag and the template auto-close (any spawned object, database spawns included) |
 | `gobject near` | 2 | `[#radius]` | Objects within the radius (default 10, at most 1000), nearest first, 20 rows then a count |
 | `gobject info` | 2 | `#guid` | Entry, type, origin, respawn timer, state, flags, position |
@@ -40,7 +40,7 @@ Levels are retail account levels (`World:GmCommands`, see `gm-commands.md`): 3 i
 | `npc playemote` | 3 | `#emote` | One-shot SMSG_EMOTE to the creature's observers |
 | `npc add` | 3 | `#entry` | The existing temporary spawn (`CreatureCommands.Add`) under the retail name |
 | `npc delete` | 3 | (selection) | The existing delete (`CreatureCommands.Delete`): temporary creatures only |
-| `npc info` | 2 | (selection) | Entry, level, health, origin, life state and respawn timer, flags, position, home |
+| `npc info` | 2 | (selection) | Entry, level, health, origin, life state and respawn timer, flags, position, home. A dead temporary creature reads "corpse, no respawn": `CreatureMapSystem.RespawnRemainingMs` is null for a creature without a spawn, since the update loop respawns only spawned creatures |
 | `npc near` | 2 | `[#radius]` | Creatures within the radius, nearest first (pets excluded) |
 | `respawn` | 3 | `[#radius]` | Respawn dead database creatures and despawned database objects that wait on a timer, within the radius (default 100) |
 | `spawninfo creature` | 2 | `[#radius]` | **Native.** Creatures within the radius (default 40) with origin and respawn state |
@@ -94,9 +94,14 @@ Levels in the reference columns are the matrix's (ArcEmu letters: `o` operator-l
 
 ## Changes outside the new files (for the integrator)
 
-* `Game/GameObjects/GameObjectMapSystem.Gm.cs` (new): `Activate`, `Relocate` (runtime objects only), `RespawnRemainingMs`, `RespawnPending`,
-  `DormantRespawnCount`.
-* `Game/Creatures/CreatureMapSystem.Gm.cs` (new): `RespawnRemainingMs`, `DormantRespawnCount`.
+* `Game/GameObjects/GameObjectMapSystem.Gm.cs` (new): `Activate`, `Relocate` (runtime objects only; refuses a position that fails
+  `GridDefines.IsValidMapCoord`), `IsGridLoaded`, `RespawnRemainingMs`, `RespawnPending`, `DormantRespawnCount`.
+* `Game/GameObjects/GameObjectMapSystem.cs`: `AddToWorld` and `Relocate` now load the destination grid in this system when it is not loaded
+  yet (new private `GridListOf`, the pattern `CreatureMapSystem.SpawnTemporary` already follows), so a runtime object placed or moved into a
+  grid nobody is near sits in that grid's list and is removed when the grid unloads. Before, such an object stayed in `_objects` and in the map
+  until `.gobject delete`: `UnloadGrid` removes only what the lists hold and a later `LoadGrid` built a fresh list without it.
+* `Game/Creatures/CreatureMapSystem.Gm.cs` (new): `RespawnRemainingMs` (null for a temporary creature as well as a living one; the
+  GameObject version already returned null for runtime objects), `DormantRespawnCount`.
 * `World/Gm/Objects/*`, `World/Gm/Npc/*` (new): `GmObjectCommands` (`gobject`), `GmNpcCommands` (`npc`), `GmSpawnCommands` (`respawn`,
   `spawninfo`), `GmDistance`.
 * `World/Creatures/CreatureCommands.cs`: `Add` and `Delete` changed from `private` to `internal` so `.npc add|delete` share them. The older
@@ -121,5 +126,8 @@ Levels in the reference columns are the matrix's (ArcEmu letters: `o` operator-l
 
 `tests/ArcaneCore.World.Tests/Gm/Objects/GmObjectNpcCommandTests.cs`: every command on its success path, target-resolution failures (unknown
 guid, no selection, dead creature, non-creature selection, unknown player, despawned object, database spawn on an edit),
-argument failures (syntax text), and account gating (a table level check for every path, and a live refusal for a `Moderator` and a `Player`
-account with no object created).
+argument failures (syntax text), invalid coordinates on `.gobject move|turn` (`1e40`, `1e9`), a `.gobject move` across a grid line whose
+destination grid then unloads with the object, a dead `.npc add` creature in `.npc info` and `.spawninfo creature`, and account gating (a table
+level check for every path, and a live refusal for a `Moderator` and a `Player` account with no object created).
+`tests/ArcaneCore.Game.Tests/GameObjects/GameObjectTests.cs`: `Relocate` and `Summon` into an unloaded grid, `Relocate` with non-finite or
+out-of-map positions. `tests/ArcaneCore.Game.Tests/CreatureTests.cs`: `RespawnRemainingMs` for a temporary versus a database creature.

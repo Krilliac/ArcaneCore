@@ -417,6 +417,28 @@ public sealed class CreatureTests
         Assert.Null(system.FindCreature(temp.Guid));
     }
 
+    [Fact]
+    public void RespawnRemainingMs_IsNullForATemporaryCreature_AndCountsDownForADatabaseSpawn()
+    {
+        CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 30, 0)]);
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateSystem(content);
+        world.AddPlayer(TestWorld.CreatePlayer(1, 0, 0, new FakeSession(1)));
+        world.RunTick(50);
+        Creature wolf = Assert.Single(system.Creatures);
+        Creature temp = system.SpawnTemporary(Template(), 10, 10, 83.5f, 0);
+        Assert.Null(system.RespawnRemainingMs(wolf));
+        Assert.Null(system.RespawnRemainingMs(temp));
+
+        system.KillCreature(wolf);
+        system.KillCreature(temp);
+        Assert.Equal(CreatureDeathState.Corpse, temp.DeathState);
+        long? remaining = system.RespawnRemainingMs(wolf);
+        Assert.NotNull(remaining);
+        Assert.True(remaining > 0);
+        // The update loop only respawns creatures with a Spawn, so a dead temporary creature has no countdown to report.
+        Assert.Null(system.RespawnRemainingMs(temp));
+    }
+
     // --- movement ---------------------------------------------------------------------------
 
     [Fact]

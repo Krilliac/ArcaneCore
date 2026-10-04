@@ -210,9 +210,7 @@ public sealed class GmNpcCommands : ICommandGroup
     {
         CreatureTemplate t = creature.Template;
         string origin = creature.Spawn is { } spawn ? string.Create(CultureInfo.InvariantCulture, $"database spawn {spawn.Guid}") : "temporary (not saved)";
-        string state = system.RespawnRemainingMs(creature) is { } ms
-            ? string.Create(CultureInfo.InvariantCulture, $"{Describe(creature.DeathState)}, respawns in {(ms + 999) / 1000} s")
-            : "alive";
+        string state = GmSpawnCommands.State(system, creature);
         return string.Create(CultureInfo.InvariantCulture,
             $"{t.Name} entry {t.Entry} guid {creature.Guid.Counter} level {creature.Level} health {creature.Health}/{creature.MaxHealth}\n" +
             $"{origin}; {state}\n" +
