@@ -161,12 +161,12 @@ public sealed class DumpScannerTests
     [Fact]
     public void MappedAndUnmappedColumns_AreSplitAgainstTheSpec()
     {
-        TableScan table = Scan(CMangosZ2815Template.Replace("`ModelId1` int", "`ModelId1` int, `TrainerType` int", StringComparison.Ordinal)
+        TableScan table = Scan(CMangosZ2815Template.Replace("`ModelId1` int", "`ModelId1` int, `ResistanceFire` int", StringComparison.Ordinal)
             + "INSERT INTO `creature_template` VALUES (1,'A',1,1,10,0);\n").Tables["creature_template"];
 
         Assert.Contains("Entry", table.MappedColumns);
         Assert.Contains("ModelId1", table.MappedColumns);
-        Assert.Equal(["TrainerType"], table.UnmappedColumns);
+        Assert.Equal(["ResistanceFire"], table.UnmappedColumns);
     }
 
     [Fact]
