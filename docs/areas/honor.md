@@ -27,7 +27,7 @@ the SQLite results do not prove the other two (see "Hosted CI").
 | WorldDefense channel speech (internal rank 15) and the rank byte in channel messages; the PvP_RANK condition (internal rank) | `HonorHooks.InternalRank`, `Channel.Say`, `ConditionFeature` | `Channel.cpp:636-648, 670`; classic-db / mangos-classic condition type 11 |
 | Persistence: characters schema (state, contribution rows, maintenance row), deletion cleanup, ordered write queue with retention, login barrier, reuse-of-id cleanup | `CharacterHonorDataModule`, `EfHonorStore`, `HonorWriteQueue`, `HonorFeature`, `HonorCharacterDeleteHook` | `CharacterHandler.cpp:82,90`, `HonorMgr.cpp:638-790` |
 | PvP flag and desire persisted at logout, restored at login | `HonorService.CapturePvpFlags/RestorePvpFlags` | `Player.cpp:14674-14677, 16337` |
-| Weekly job: minute tick (Live) or startup only, one DML transaction per week, online players updated in memory, optional City Protector and HCR file | `HonorMaintenanceRunner`, `HonorMaintenanceFeature` | `HonorMgr.cpp:238-326, 617-669`, `World.cpp:2121-2127` |
+| Weekly job: startup only (default) or minute tick (Live), one DML transaction per week, online players updated in memory, optional City Protector and HCR file | `HonorMaintenanceRunner`, `HonorMaintenanceFeature` | `HonorMgr.cpp:238-326, 617-669`, `World.cpp:2121-2127` |
 | `CMSG_INSPECT`, `MSG_INSPECT_HONOR_STATS` (50 bytes) | `InspectHandlers`, `HonorPackets.InspectHonorStats` | `MiscHandler.cpp:943-1036`, wow_messages `msg_inspect_honor_stats_server.wowm` |
 | `.honor add|addkill|show|setrp|reset`, `.modify honor` | `HonorCommands` | `CharacterCommands.cpp:2321-2570`, `Chat.cpp:467-475, 596` |
 
@@ -41,8 +41,13 @@ the SQLite results do not prove the other two (see "Hosted CI").
   is unchanged; only its two persisted bits are new. The teleport-arrival Honorless cast additionally needs an arrival hook `TeleportService` does not have.
 - **Hall of Legends / Champions' Hall rank gate** (areatriggers 2527, 2532, visual rank 6): present in mangos-classic, absent in vmangos, and there is no
   area-trigger requirement framework on the base. A later lane can read `IPlayerHonor.VisualRank`.
-- **Creature honor goes to the player who landed the blow (or its owner), not to the loot recipient.** vmangos pays the tap (`Unit.cpp:1020-1050`); the
-  experience path here uses the killing-blow player too. A pet's or totem's kill is credited to its controlling player.
+- **Creature honor follows the tap, with a simplified tap.** `HonorKillRewards` taps a non-pet creature on the first damage from a player (or a player's pet
+  or totem, credited to the controlling player), as `Unit::DealDamage` does (`Unit.cpp:804-807`), and `Unit::Kill` rewards that tapper or its group whoever lands
+  the blow (`Unit.cpp:988-1001, 1076-1079`). Not modelled: `IsLootAllowedDueToDamageOrigin` (the share of damage done by players), the pet-to-owner tap swap
+  (`Unit.cpp:809-820`), and the tap's group id (the tapper's current group is used while it still contains the tapper, otherwise the group as it was at the
+  first hit). An evade or respawn clears the tap in vmangos (`CreatureAI.cpp:344`, `Creature.cpp:2306`); damage dealt to a creature at full health starts a new
+  tap here, so a creature healed to full mid-fight also loses its tap. A creature nobody tapped rewards the killer's controlling player (vmangos's pPlayerTap fallback).
+  The loot and experience paths still use the killing-blow player (the combat layer has no tap list); that is theirs to change, honor does not depend on it.
 - **`IsHonorOrXPTarget`** implements the gray level, totem and pet terms only. The `xp_multiplier == 0` and `UNIT_STATE_NO_KILL_REWARD` terms have no data here
   (`CreatureContent` carries neither). The pet and totem terms are exercised only through the code path, no test builds a summoned totem.
 - **CHARACTER_FLAG_HAS_PVP_RANK** in the character list is not delivered (ArcaneCore has no `character_flags` column).
@@ -83,12 +88,12 @@ Every default is the retail 1.12 value; a different value is a deliberate deviat
 | `PoolSizePerFaction` | `0` | Standing pool size; 0 uses the number of ranked players |
 | `CityProtector` | `false` | City Protector titles (vmangos default off); assigned from the standings just calculated, vmangos reads the previous ones |
 | `RacialLeaderExcludedEntries` | empty | Creature entries that are never racial leaders (classic-db flags Kaldorei Infantry 15423, 30 spawns, as a leader) |
-| `MaintenanceMode` | `Live` | `Live`: in-process, checked every minute. `Startup`: only at process start, like vmangos (which flags the work and restarts) |
+| `MaintenanceMode` | `Startup` | `Startup`: only at process start, like vmangos (which flags the work and restarts, `HonorMgr.cpp:617-633`). `Live`: in-process, checked every minute (deviation, opt-in) |
 | `ReportDirectory` | empty | Writes the vmangos "HCR" calculation report there |
 
 ## Deviations from vmangos (all deliberate and documented)
 
-- The weekly calculation runs in process (`Live`); the results are the same, only the timing differs from vmangos' flag-and-restart flow.
+- `World:Honor:MaintenanceMode = Live` (opt-in, default `Startup`) runs the weekly calculation in process with players online; the results are the same, only the timing differs from vmangos' flag-and-restart flow. Online players are then updated in memory exactly as the transaction updated the rows; a login is serialised against the transaction (`HonorFeature.WeekGate`) and each loaded state remembers the week begin day it was loaded under, so a week already in a freshly loaded row is never added a second time. A player whose login read the old row but who is not yet in the world when the update runs keeps the old numbers until the next maintenance or restart.
 - Honor storage is its own tables instead of columns of `characters`/`saved_variables`.
 - `.honor show` names ranks by internal rank (vmangos indexes with the visual rank and prints wrong names; a negative rank wraps and prints "CrashAlert").
 - A negative victim visual rank is clamped to 0 when computing kill points (vmangos converts it to an unsigned index and the exponential overflows to
@@ -111,7 +116,6 @@ database. **They have not been run on MariaDB or PostgreSQL.**
 - `MaintenanceDay`: 3 (documented) or 4 (vmangos code)? Retail vanilla ran the weekly reset on the maintenance day (Tuesday US, Wednesday EU).
 - Did retail 1.12 award City Protector titles? (vmangos default is off.)
 - Keep Kaldorei Infantry (15423) as a racial leader (classic-db data, 488 honor each) or add it to the exclusion list?
-- `Live` or `Startup` as the default maintenance mode?
 - Vendor prices: the NPC services floor the discounted price, vmangos (`Player.cpp:18443`) adds 0.5 before truncating. Existing behaviour from an earlier
   wave, noticed here; not changed by this lane.
 

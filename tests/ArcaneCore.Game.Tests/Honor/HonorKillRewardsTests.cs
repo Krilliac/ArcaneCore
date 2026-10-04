@@ -307,6 +307,76 @@ public sealed class HonorKillRewardsTests : IDisposable
     }
 
     [Fact]
+    public void Creature_honor_goes_to_the_tapper_not_to_the_player_who_lands_the_killing_blow()
+    {
+        // Unit::DealDamage taps on the first damage (Unit.cpp:804-807); Unit::Kill then rewards the loot recipient (:988-1001, 1076-1079).
+        Player thief = AddHuman(5, 1);
+        (Creature leader, _, _) = CreatureAt(Template(3057, level: 63, leader: true), 5);
+
+        _map.Combat.DealDamage(_a, leader, 1);
+        Hit(thief, leader);
+
+        Assert.False(leader.IsAlive);
+        Assert.Single(RowsOf(_a));
+        Assert.Empty(RowsOf(thief));
+    }
+
+    [Fact]
+    public void Creature_honor_goes_to_the_tappers_group_and_not_to_a_stranger_who_kills()
+    {
+        Player b = AddHuman(3, -2);
+        Group(_a, b);
+        Player stranger = AddHuman(5, 1);
+        (Creature leader, _, _) = CreatureAt(Template(3057, level: 63, leader: true), 5);
+
+        _map.Combat.DealDamage(_a, leader, 1);
+        Hit(stranger, leader);
+
+        Assert.Single(RowsOf(_a));
+        Assert.Single(RowsOf(b));
+        Assert.Empty(RowsOf(stranger));
+    }
+
+    [Fact]
+    public void A_pet_tap_belongs_to_its_owner()
+    {
+        Player stranger = AddHuman(5, 1);
+        var pet = new OwnedUnit(_a);
+        pet.Spawn(_map, 1, 0);
+        (Creature leader, _, _) = CreatureAt(Template(3057, level: 63, leader: true), 5);
+
+        _map.Combat.DealDamage(pet, leader, 1);
+        Hit(stranger, leader);
+
+        Assert.Single(RowsOf(_a));
+        Assert.Empty(RowsOf(stranger));
+    }
+
+    [Fact]
+    public void A_tap_lost_to_an_evade_is_taken_again_by_the_next_attacker()
+    {
+        // CreatureAI::EnterEvadeMode clears the loot recipient (CreatureAI.cpp:344).
+        Player b = AddHuman(5, 1);
+        (Creature leader, _, _) = CreatureAt(Template(3057, level: 63, leader: true), 5);
+
+        _map.Combat.DealDamage(_a, leader, 1);
+        _map.Combat.DealDamage(_a, leader, 1);
+        leader.Health = leader.MaxHealth; // evaded: EnterEvadeMode restores full health
+        Hit(b, leader);
+
+        Assert.Empty(RowsOf(_a));
+        Assert.Single(RowsOf(b));
+    }
+
+    [Fact]
+    public void A_creature_nobody_tapped_rewards_the_killer()
+    {
+        (Creature leader, _, _) = CreatureAt(Template(3057, level: 63, leader: true), 5);
+        Hit(_a, leader); // one blow: it is tapped and killed by the same hit
+        Assert.Single(RowsOf(_a));
+    }
+
+    [Fact]
     public void An_ordinary_creature_above_gray_is_an_honor_target()
         => Assert.True(HonorKillRewards.IsHonorOrXpTarget(_a, MakeUnattached(Template(1002, level: 60))));
 
