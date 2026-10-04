@@ -72,6 +72,35 @@ public sealed class InvisibilityTests
     }
 
     [Fact]
+    public void AnInvisiblePetOrCharmedUnit_IsAlwaysVisibleToItsOwnerOrCharmer_ButHiddenFromEveryoneElse()
+    {
+        // vmangos Unit::IsVisibleForOrDetect (Unit.cpp:6359-6361): "always seen by owner", ahead of every stealth and invisibility test.
+        static SpellInfo Permanent(uint id, AuraType aura, int amount, int type) =>
+            Spell(id, Effect(SpellEffectName.ApplyAura, amount, aura: aura, misc: type)) with
+            { Duration = new SpellDuration(-1, 0, -1), SpellVisual = 1, StartRecoveryCategory = 0, StartRecoveryTime = 0 };
+
+        using var kit = new SpellTestKit(Permanent(Invisibility, AuraType.ModInvisibility, 10, 0));
+        var registry = new StealthRegistry();
+        kit.System.RegisterAura(AuraType.ModInvisibility, InvisibilityAuras.InvisibilityHandler(registry));
+        var rule = new StealthVisibilityRule(kit.System, registry);
+        (Player owner, _) = kit.AddPlayer(1);
+        (Player stranger, _) = kit.AddPlayer(2, 5);
+        var pet = new CombatTestUnit(10);
+        pet.Spawn(kit.World.GetMap(0), 1f, 0, 83.5f, MathF.PI);
+        pet.SetUInt64(UpdateFields.UnitFieldSummonedby, owner.Guid.Value);
+        kit.System.CastSpell(pet, Invisibility, SpellCastTargets.ForSelf(), triggered: true);
+
+        Assert.True(rule.CanSee(owner, pet, alreadyVisible: false, detect: true));
+        Assert.False(rule.CanSee(stranger, pet, alreadyVisible: false, detect: true));
+
+        // A charmer wins over the owner field the same way (GetCharmerOrOwnerGuid).
+        pet.SetUInt64(UpdateFields.UnitFieldSummonedby, 0);
+        pet.SetUInt64(UpdateFields.UnitFieldCharmedby, stranger.Guid.Value);
+        Assert.True(rule.CanSee(stranger, pet, alreadyVisible: false, detect: true));
+        Assert.False(rule.CanSee(owner, pet, alreadyVisible: false, detect: true));
+    }
+
+    [Fact]
     public void ACreature_DoesNotSeeAnInvisiblePlayerAtPointBlank_UntilItSharesTheTypeOrDetectsIt()
     {
         static SpellInfo Permanent(uint id, AuraType aura, int amount, int type) =>
