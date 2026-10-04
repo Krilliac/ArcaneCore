@@ -13,6 +13,7 @@ public enum StealthVisibility
     On,
     Stealth,
     NoDetect,
+    Invisibility,
 }
 
 /// <summary>
@@ -24,6 +25,7 @@ public sealed class StealthRegistry
 {
     private readonly ConditionalWeakTable<Unit, StrongBox> _states = new();
     private readonly HashSet<Unit> _stealthed = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<Unit> _hiddenUnits = new(ReferenceEqualityComparer.Instance);
     private int _hidden;
 
     private sealed class StrongBox
@@ -60,6 +62,15 @@ public sealed class StealthRegistry
         }
 
         box.Visibility = visibility;
+        if (visibility == StealthVisibility.On)
+        {
+            _hiddenUnits.Remove(unit);
+        }
+        else
+        {
+            _hiddenUnits.Add(unit);
+        }
+
         if (visibility == StealthVisibility.Stealth)
         {
             _stealthed.Add(unit);
@@ -77,12 +88,12 @@ public sealed class StealthRegistry
     public void Prune(Func<Unit, bool> isGone)
     {
         ArgumentNullException.ThrowIfNull(isGone);
-        if (_stealthed.Count == 0)
+        if (_hiddenUnits.Count == 0)
         {
             return;
         }
 
-        foreach (Unit gone in _stealthed.Where(u => isGone(u)).ToArray())
+        foreach (Unit gone in _hiddenUnits.Where(u => isGone(u)).ToArray())
         {
             SetVisibility(gone, StealthVisibility.On);
         }

@@ -9,8 +9,8 @@ namespace ArcaneCore.Game.Stealth;
 /// is not exempt loses sight of the unit at once) and cancels the hostile casts in progress at the unit. Removing the last
 /// MOD_STEALTH aura clears the flags and makes the unit visible again.
 /// <para>
-/// Not modelled here: the GM-invisibility guard (VISIBILITY_OFF; the gm-commands lane owns it), the invisibility restore on
-/// removal, the Silithus flag drop (29519) and the cancel-removes-Vanish rule (RG-04 in docs/areas/rogue.md).
+/// Not modelled here: the GM-invisibility guard (VISIBILITY_OFF; the gm-commands lane owns it),
+/// the Silithus flag drop (29519) and the cancel-removes-Vanish rule (RG-04 in docs/areas/rogue.md).
 /// </para>
 /// </summary>
 public static class StealthAuras
@@ -79,7 +79,18 @@ public static class StealthAuras
             RemoveByteFlag(target, UpdateFields.PlayerFieldBytes2, PlayerFlagsByte, PlayerStealthFlag);
         }
 
-        registry.SetVisibility(target, StealthVisibility.On);
+        if (spells.HasAuraType(target, AuraType.ModInvisibility))
+        {
+            // vmangos SpellAuras.cpp:3698-3705 restores invisibility after the last stealth aura fades.
+            registry.SetVisibility(target, StealthVisibility.NoDetect);
+            target.Map?.RefreshVisibility(target);
+            registry.SetVisibility(target, StealthVisibility.Invisibility);
+        }
+        else
+        {
+            registry.SetVisibility(target, StealthVisibility.On);
+        }
+
         target.Map?.RefreshVisibility(target);
     }
 
