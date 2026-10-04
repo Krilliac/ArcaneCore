@@ -171,3 +171,53 @@ consumed), the weapon-entry zeroing above.
 - `PlayerStatsImportTests`: dump layouts, migration statements in the real wrapper shape, fail-closed cases,
   gap fill, validation, atomic write on every available provider.
 - `StatsFeatureTests`: login through the real daemon test host with imported rows and a starting outfit.
+
+## Percent and flat stat auras (lane `L2-percent-stat-auras`)
+
+Code: `Spells/Auras/PercentStatAuras.cs`, `Stats/UnitMods.cs` (`PercentFactor`, `UnitModLedger`), `PlayerStatState.cs`, `PlayerStatSystem.cs`,
+`Spells/Auras/StatAuras.cs`. Tests: `tests/ArcaneCore.Game.Tests/Stats/PercentStatAurasTests.cs`. Reference: mangos zero
+(`SpellAuraPeriodic.cpp` `HandleModPercentStat`, `HandleModTotalPercentStat`, `HandleAuraModIncreaseHealth`, `HandleAuraModIncreaseEnergy`,
+`HandleModBaseResistance`, `HandleAuraModBaseResistancePCT`, `HandleModResistancePercent`, `HandleAuraModAttackPowerPercent`, `HandleAuraModParryPercent`;
+`SpellAuras.cpp:1454-1530` block and shield block value; `UnitStatModifier.cpp` `HandleStatModifier`; `StatSystem.cpp` `UpdateMaxHealth`, `UpdateArmor`,
+`UpdateAttackPowerAndDamage`).
+
+### Implemented
+
+| Aura | Effect |
+|---|---|
+| `MOD_PERCENT_STAT` (80) | BASE_PCT of the stat, players only; scales the level base, not what items and flat auras added (those sit in `PLAYER_FIELD_POSSTAT/NEGSTAT`). |
+| `MOD_TOTAL_STAT_PERCENTAGE` (137) | TOTAL_PCT of the stat, every unit. Stamina of a spell with the ability attribute keeps the health ratio. Heart of the Wild now takes effect. |
+| `MOD_INCREASE_HEALTH` (34) / `_PERCENT` (133) | Flat maximum health, and TOTAL_PCT of it. Last Stand (12976) also adds to current health; Bear and Dire Bear Form passives (1178, 9635) keep the health percentage. |
+| `MOD_INCREASE_ENERGY` (35) / `_PERCENT` (132) | Flat / TOTAL_PCT of the maximum of the unit's own power type (misc = power type, else ignored). Removal uses the group the apply recorded. |
+| `MOD_BASE_RESISTANCE` (83) | Flat per school of the mask, players only, no buff counter. |
+| `MOD_BASE_RESISTANCE_PCT` (142) / `MOD_RESISTANCE_PCT` (101) | BASE_PCT (players, scales the worn items' armor or resistance) / TOTAL_PCT (every unit). Holy has no field. |
+| `MOD_ATTACK_POWER_PCT` (166) / `MOD_RANGED_ATTACK_POWER_PCT` (167) | TOTAL_PCT, written as `TotalPct - 1` to the multiplier field `StatFormulas.TotalAttackPower` reads; the damage fields are recomputed. Wand users take no ranged AP. |
+| `MOD_PARRY/DODGE/BLOCK_PERCENT` (47/49/51) | Players: the sum of the amounts is the aura term of `ParryPercentage` / `DodgePercentage` / `BlockPercentage`. |
+| `MOD_SHIELD_BLOCKVALUE` (158) / `_PCT` (150) | Players: flat term and multiplier of `ShieldBlockValue`. |
+
+All sixteen rows of the aura support baseline are `Handler` now.
+
+### Design
+
+Items, level-ups and flat auras still write the update fields as deltas, so a field holds the flat sum. The percent slots live in a
+`UnitModLedger` (`PlayerStatState.Mods` for a player, a `ConditionalWeakTable` entry created by the first percent aura for any other unit) together with
+`Applied`, the amount the percentages currently add to that field. A refresh recomputes `Applied` from `pre = field - Applied`:
+`((base * BasePct) + (pre - base)) * TotalPct`, truncated like the reference. That gives the reference's order (flat, then percent) whichever aura
+was applied first. The flat handlers (`StatAuras`, the flat health, energy and base resistance auras) refresh after their delta, and
+`PlayerStatSystem.UpdateAll` refreshes stats, then (after `StatBonuses.Update`) health and powers, then (after the agility armor) armor and resistances, so an
+item put on or a level gained while a percent is active is scaled too. `PercentFactor` keeps a count of active modifiers and resets the product to exactly 1 when the
+last goes, so repeated apply and remove cannot drift. `UnitMods` gained `AttackPower` and `AttackPowerRanged` after the existing values.
+Threading: world thread only; nothing runs per tick, an aura change allocates one record per aura (and one ledger on a non-player unit's first percent aura).
+
+Base values: the stat base of BASE_PCT is the field minus the player's buff counters; the armor and resistance base is the worn items' value, kept in
+`PlayerStatState.ItemResistance` from the item hook calls that move the field.
+
+### Known gaps
+
+- `PLAYER_FIELD_POSSTAT/NEGSTAT` and the resistance buff mods are not scaled by the percent auras (the reference does, for the client UI). UNVERIFIED how the 1.12.1 client
+  draws a percent buffed stat without it; the stat value itself is correct.
+- Pets get no base armor modifiers (`MOD_BASE_RESISTANCE`, `_PCT` on a pet's armor); other creatures never have them in the reference.
+- The `SPELLMOD_ATTACK_POWER` caster modifier on the attack power percent auras does not exist (no such spell mod class here).
+- Mana regeneration and spell power after a stat change are not recomputed (no system for them yet); parry from weapon-specific talents is not modelled.
+- A druid who changes power type keeps the percent on the old power's group until the aura ends (the reference re-evaluates per power type).
+- The support matrix table in `aura-engine.md` still lists these rows as Unsupported; it is regenerated at integration (`AuraSupportBaseline.cs` is the source).

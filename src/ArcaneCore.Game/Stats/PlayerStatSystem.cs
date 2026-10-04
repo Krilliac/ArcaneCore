@@ -98,6 +98,7 @@ public sealed class PlayerStatSystem : ICombatStatSource
 
         state.ResetWeaponDamage();
         state.ShieldBlockFlat = 0;
+        state.ResetItemResistances();
         foreach ((byte slot, Item item) in inventory.Equipped)
         {
             ApplyItemCore(player, item, slot, apply: true, resetTimer: false);
@@ -110,8 +111,13 @@ public sealed class PlayerStatSystem : ICombatStatSource
     public void UpdateAll(Player player)
     {
         ArgumentNullException.ThrowIfNull(player);
+        // Flat first, then percent (UnitStatModifier.cpp:117-125): the stat percentages first, because the health and mana bonuses and the
+        // agility armor read the modified stat; then the maximum pools, then armor and resistances once the dynamic armor is in.
+        PercentStatAuras.RefreshStats(player);
         StatBonuses.Update(player);
+        PercentStatAuras.RefreshPools(player);
         UpdateArmor(player);
+        PercentStatAuras.RefreshResistances(player);
         UpdateAttackPowerAndDamage(player, ranged: false);
         UpdateAttackPowerAndDamage(player, ranged: true);
         UpdateAllCritPercentages(player);
@@ -147,6 +153,8 @@ public sealed class PlayerStatSystem : ICombatStatSource
         {
             state.ShieldBlockFlat += apply ? template.Block : -(float)template.Block;
         }
+
+        state.AddItemResistances(template, apply ? 1 : -1);
 
         if (template.Class == ItemClassWeapon)
         {
@@ -378,20 +386,20 @@ public sealed class PlayerStatSystem : ICombatStatSource
 
     internal void UpdateBlockPercentage(Player player)
     {
-        float value = StatFormulas.BlockPercentage(player.StatState.CanBlock, _skills.DefenseSkill(player), player.Level * 5, 0.0f);
+        float value = StatFormulas.BlockPercentage(player.StatState.CanBlock, _skills.DefenseSkill(player), player.Level * 5, player.StatState.BlockAuraBonus);
         SetStatFloat(player, UpdateFields.PlayerBlockPercentage, value);
     }
 
     internal void UpdateParryPercentage(Player player)
     {
-        float value = StatFormulas.ParryPercentage(player.StatState.CanParry, _skills.DefenseSkill(player), player.Level * 5, 0.0f);
+        float value = StatFormulas.ParryPercentage(player.StatState.CanParry, _skills.DefenseSkill(player), player.Level * 5, player.StatState.ParryAuraBonus);
         SetStatFloat(player, UpdateFields.PlayerParryPercentage, value);
     }
 
-    private void UpdateDodgePercentage(Player player)
+    internal void UpdateDodgePercentage(Player player)
     {
         float fromAgility = _rates?.DodgeFromAgility(player.Class, player.Level, Stat(player, 1)) ?? 0.0f;
-        float value = StatFormulas.DodgePercentage(player.Class, fromAgility, _skills.DefenseSkill(player), player.Level * 5, 0.0f);
+        float value = StatFormulas.DodgePercentage(player.Class, fromAgility, _skills.DefenseSkill(player), player.Level * 5, player.StatState.DodgeAuraBonus);
         SetStatFloat(player, UpdateFields.PlayerDodgePercentage, value);
     }
 
@@ -419,7 +427,7 @@ public sealed class PlayerStatSystem : ICombatStatSource
 
     /// <inheritdoc/>
     public uint? ShieldBlockValue(Unit unit)
-        => unit is Player player ? StatFormulas.ShieldBlockValue(player.StatState.ShieldBlockFlat, Stat(player, 0), 1.0f) : null;
+        => unit is Player player ? StatFormulas.ShieldBlockValue(player.StatState.ShieldBlockFlat + player.StatState.ShieldBlockAuraFlat, Stat(player, 0), player.StatState.ShieldBlockPct) : null;
 
     // --- vmangos helpers -------------------------------------------------------------
 
@@ -463,7 +471,7 @@ public sealed class PlayerStatSystem : ICombatStatSource
             && (attackType != WeaponAttackType.BaseAttack || (player.UnitFlags & UnitFlags.Disarmed) == 0);
 
     /// <summary>vmangos Item::IsBroken: a maximum durability and none left.</summary>
-    private static bool IsBroken(Item item) => item.MaxDurability > 0 && item.Durability == 0;
+    internal static bool IsBroken(Item item) => item.MaxDurability > 0 && item.Durability == 0;
 
     /// <summary>ItemPrototype::IsRangedWeapon (ItemPrototype.h:534).</summary>
     private static bool IsRangedWeapon(ItemTemplate template)

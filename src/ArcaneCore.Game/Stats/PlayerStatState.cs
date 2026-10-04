@@ -53,6 +53,81 @@ public sealed class PlayerStatState
     /// <summary>The sum of the block values of the worn, unbroken items (SHIELD_BLOCK_VALUE FLAT_MOD).</summary>
     public float ShieldBlockFlat { get; internal set; }
 
+    /// <summary>
+    /// The percent slots of this player's modifier groups and what they add to the fields (<see cref="UnitModLedger"/>); written by
+    /// the percent stat auras, read back by every <see cref="PlayerStatSystem"/> update. World thread only.
+    /// </summary>
+    public UnitModLedger Mods { get; } = new();
+
+    /// <summary>
+    /// The sum of the amounts of the dodge percent auras (SPELL_AURA_MOD_DODGE_PERCENT; vmangos adds GetTotalAuraModifier of the type
+    /// in Player::UpdateDodgePercentage, StatSystem.cpp:607-640). Kept by the stat auras, which recompute the percentage when it changes.
+    /// </summary>
+    public float DodgeAuraBonus { get; private set; }
+
+    /// <summary>The sum of the parry percent auras (SPELL_AURA_MOD_PARRY_PERCENT, Player::UpdateParryPercentage).</summary>
+    public float ParryAuraBonus { get; private set; }
+
+    /// <summary>The sum of the block percent auras (SPELL_AURA_MOD_BLOCK_PERCENT, Player::UpdateBlockPercentage).</summary>
+    public float BlockAuraBonus { get; private set; }
+
+    /// <summary>The flat shield block value the auras add (SHIELD_BLOCK_VALUE FLAT_MOD, SPELL_AURA_MOD_SHIELD_BLOCKVALUE).</summary>
+    public float ShieldBlockAuraFlat { get; private set; }
+
+    private PercentFactor _shieldBlockPct;
+
+    /// <summary>The shield block value multiplier of the auras (SHIELD_BLOCK_VALUE PCT_MOD, SPELL_AURA_MOD_SHIELD_BLOCKVALUE_PCT; 1 when none).</summary>
+    public float ShieldBlockPct => _shieldBlockPct.Value;
+
+    /// <summary>Add (or take back) a dodge percent aura amount and recompute the dodge percentage.</summary>
+    public void AddDodgeBonus(float delta)
+    {
+        DodgeAuraBonus += delta;
+        Maintainer?.UpdateDodgePercentage(Owner);
+    }
+
+    /// <summary>Add (or take back) a parry percent aura amount and recompute the parry percentage.</summary>
+    public void AddParryBonus(float delta)
+    {
+        ParryAuraBonus += delta;
+        Maintainer?.UpdateParryPercentage(Owner);
+    }
+
+    /// <summary>Add (or take back) a block percent aura amount and recompute the block percentage.</summary>
+    public void AddBlockBonus(float delta)
+    {
+        BlockAuraBonus += delta;
+        Maintainer?.UpdateBlockPercentage(Owner);
+    }
+
+    /// <summary>Player::HandleBaseModValue(SHIELD_BLOCK_VALUE, FLAT_MOD, ...): the shield block value is read on demand, so nothing is recomputed.</summary>
+    public void AddShieldBlockFlat(float delta) => ShieldBlockAuraFlat += delta;
+
+    /// <summary>Player::HandleBaseModValue(SHIELD_BLOCK_VALUE, PCT_MOD, ...): multiply in or divide out a percent.</summary>
+    public void ApplyShieldBlockPct(float amount, bool apply) => _shieldBlockPct.Apply(amount, apply);
+
+    private readonly int[] _itemResistance = new int[7];
+
+    /// <summary>
+    /// The armor (school 0) or resistance the worn items give to a school: BASE_VALUE of that group in the reference (Player::_ApplyItemBonuses),
+    /// what MOD_BASE_RESISTANCE_PCT scales. Kept by <see cref="PlayerStatSystem"/> from the same item hook calls that move the fields, so it is right
+    /// while an item is being put on or taken off (the inventory's own list is not).
+    /// </summary>
+    public int ItemResistance(int school) => _itemResistance[school];
+
+    internal void ResetItemResistances() => Array.Clear(_itemResistance);
+
+    internal void AddItemResistances(ItemTemplate template, int sign)
+    {
+        _itemResistance[0] += template.Armor * sign;
+        _itemResistance[1] += template.HolyRes * sign;
+        _itemResistance[2] += template.FireRes * sign;
+        _itemResistance[3] += template.NatureRes * sign;
+        _itemResistance[4] += template.FrostRes * sign;
+        _itemResistance[5] += template.ShadowRes * sign;
+        _itemResistance[6] += template.ArcaneRes * sign;
+    }
+
     /// <summary>The health from stamina already included in the maximum health field (<see cref="StatBonuses"/>).</summary>
     internal uint HealthBonusIncluded { get; set; }
 
