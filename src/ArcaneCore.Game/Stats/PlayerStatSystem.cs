@@ -141,8 +141,13 @@ public sealed class PlayerStatSystem : ICombatStatSource
 
     private void ApplyItemCore(Player player, Item item, byte slot, bool apply, bool resetTimer)
     {
-        // Player::_ApplyItemMods: nothing for slots past the equipment and for broken items (Player.cpp:6828-6833).
-        if (slot >= InventorySlots.EquipmentEnd || IsBroken(item))
+        // Player::_ApplyItemMods: nothing for slots past the equipment and for broken items (Player.cpp:6828-6833). The reference sees an unbroken
+        // item on the remove of a breaking item because DurabilityPointsLoss calls _ApplyItemMods(false) before it writes the 0 ("modify item stats
+        // _before_ Durability set to 0 to pass _ApplyItemMods internal check": mangos PlayerDurability.cpp:230-236, azerothcore Player.cpp:4898-4902);
+        // PlayerInventory writes the durability first, so the broken check here guards the apply only. The hook pairs its calls (an item is removed
+        // only when it was counted), so a remove always has a matching apply to undo: skipping it would leave the item's armor, resistances, block
+        // value and weapon damage behind, and a repair would count them a second time.
+        if (slot >= InventorySlots.EquipmentEnd || (apply && IsBroken(item)))
         {
             return;
         }

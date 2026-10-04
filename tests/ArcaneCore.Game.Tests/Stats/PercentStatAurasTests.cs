@@ -60,11 +60,17 @@ public sealed class PercentStatAurasTests
 
     private const uint Chestpiece = 940100;
     private const uint Shield = 940101;
+    private const uint ResistRobe = 940102;
 
     private static readonly ItemTemplateStore s_items = new(
     [
         new() { Entry = Chestpiece, Class = 4, SubClass = 2, Name = "Test Chest", InventoryType = 5, Armor = 200, MaxDurability = 50 },
         new() { Entry = Shield, Class = 4, SubClass = 6, Name = "Test Shield", InventoryType = 14, Block = 20, Armor = 5, MaxDurability = 40 },
+        new()
+        {
+            Entry = ResistRobe, Class = 4, SubClass = 1, Name = "Test Robe", InventoryType = 20, Armor = 100, MaxDurability = 60,
+            HolyRes = 5, FireRes = 10, NatureRes = 15, FrostRes = 20, ShadowRes = 25, ArcaneRes = 30,
+        },
     ], []);
 
     private static SpellInfo Aura(uint id, int amount, AuraType type, int misc = 0, bool enemy = false, SpellAttributes attributes = SpellAttributes.None)
@@ -468,6 +474,85 @@ public sealed class PercentStatAurasTests
         kit.System.RemoveAuras(player, BaseArmorFlat50);
         kit.System.RemoveAuras(player, ArmorFlat100);
         Assert.Equal(0, Armor(player));
+    }
+
+    /// <summary>Every UNIT_FIELD_RESISTANCES entry (armor and the six resistance schools) and the item ledger the percent auras scale.</summary>
+    private static (int[] Fields, int[] Ledger) Resistances(Player player)
+    {
+        int[] fields = new int[7];
+        int[] ledger = new int[7];
+        for (int school = 0; school < 7; school++)
+        {
+            fields[school] = player.GetInt32(UpdateFields.UnitFieldResistances + school);
+            ledger[school] = player.StatState.ItemResistance(school);
+        }
+
+        return (fields, ledger);
+    }
+
+    [Fact]
+    public void BrokenItem_UnderABasePercentAura_LosesItsArmorAndResistances_AndARepairGivesThemBackOnce()
+    {
+        using SpellTestKit kit = Kit();
+        (Player player, _) = kit.AddPlayer(1);
+        player.Level = 60;
+        var system = new PlayerStatSystem();
+        system.Attach(player);
+        Item robe = Equip(player, ResistRobe);
+        Item shield = Equip(player, Shield);
+        (int[] wornFields, int[] wornLedger) = Resistances(player);
+        Assert.Equal(new[] { 105, 5, 10, 15, 20, 25, 30 }, wornFields);
+        Assert.Equal(wornFields, wornLedger);
+        Assert.Equal(20.0f, player.StatState.ShieldBlockFlat);
+
+        CastOn(kit, player, BaseArmorPct20);
+        Assert.Equal(126, Armor(player));              // 105 * 1.2
+
+        // The robe and the shield break (durability 0): vmangos _ApplyItemMods(false) runs for a worn item that breaks, so nothing of them is left.
+        player.Inventory.DurabilityPointsLoss(robe, (int)robe.MaxDurability);
+        player.Inventory.DurabilityPointsLoss(shield, (int)shield.MaxDurability);
+        Assert.Equal(0u, robe.Durability);
+        Assert.Equal(0u, shield.Durability);
+        (int[] brokenFields, int[] brokenLedger) = Resistances(player);
+        Assert.Equal(new int[7], brokenLedger);        // the item ledger forgets the broken items ...
+        Assert.Equal(new int[7], brokenFields);        // ... so the percent has nothing to scale: no phantom armor
+        Assert.Equal(0.0f, player.StatState.ShieldBlockFlat);
+
+        // Repaired: the items count once more, once.
+        player.Inventory.RepairDurability(robe);
+        player.Inventory.RepairDurability(shield);
+        (int[] repairedFields, int[] repairedLedger) = Resistances(player);
+        Assert.Equal(wornLedger, repairedLedger);
+        Assert.Equal(126, repairedFields[0]);
+        Assert.Equal(wornFields[1..], repairedFields[1..]);
+        Assert.Equal(20.0f, player.StatState.ShieldBlockFlat);
+
+        kit.System.RemoveAuras(player, BaseArmorPct20);
+        Assert.Equal(wornFields, Resistances(player).Fields);
+    }
+
+    [Fact]
+    public void BreakAndRepairWithoutAnAura_KeepsTheItemLedger_SoALaterBasePercentScalesTheItemOnce()
+    {
+        using SpellTestKit kit = Kit();
+        (Player player, _) = kit.AddPlayer(1);
+        player.Level = 60;
+        new PlayerStatSystem().Attach(player);
+        Item chest = Equip(player, Chestpiece);
+        (int[] wornFields, int[] wornLedger) = Resistances(player);
+        Assert.Equal(200, wornFields[0]);
+
+        player.Inventory.DurabilityPointsLoss(chest, (int)chest.MaxDurability);
+        Assert.Equal(0, Armor(player));
+        Assert.Equal(0, player.StatState.ItemResistance(0));
+        player.Inventory.RepairDurability(chest);
+        Assert.Equal(wornFields, Resistances(player).Fields);
+        Assert.Equal(wornLedger, Resistances(player).Ledger);
+
+        CastOn(kit, player, BaseArmorPct20);
+        Assert.Equal(240, Armor(player));              // 200 * 1.2, not 200 + 400 * 0.2
+        kit.System.RemoveAuras(player, BaseArmorPct20);
+        Assert.Equal(200, Armor(player));
     }
 
     [Fact]

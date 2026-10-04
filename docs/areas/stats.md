@@ -210,7 +210,12 @@ last goes, so repeated apply and remove cannot drift. `UnitMods` gained `AttackP
 Threading: world thread only; nothing runs per tick, an aura change allocates one record per aura (and one ledger on a non-player unit's first percent aura).
 
 Base values: the stat base of BASE_PCT is the field minus the player's buff counters; the armor and resistance base is the worn items' value, kept in
-`PlayerStatState.ItemResistance` from the item hook calls that move the field.
+`PlayerStatState.ItemResistance` from the item hook calls that move the field. A worn item that breaks (durability 0) is removed through the same hook
+after its durability was already written, so the stat system's broken-item check guards the apply only (the reference gets the same effect by calling
+`_ApplyItemMods(false)` before writing the 0: mangos PlayerDurability.cpp:230-236, azerothcore Player.cpp:4898-4902; the vmangos lines were not checked
+here); otherwise the broken item's armor, resistances, block value and weapon damage would
+stay counted and a repair would add them a second time. Tests `BrokenItem_UnderABasePercentAura_...` and `BreakAndRepairWithoutAnAura_...` cover
+break and repair with and without an active BASE_PCT aura.
 
 ### Known gaps
 
