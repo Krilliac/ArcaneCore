@@ -18,11 +18,14 @@ namespace ArcaneCore.Game.Spells;
 /// The amount that was applied is remembered per aura so removal subtracts exactly that amount.
 /// </para>
 /// <para>
-/// Limits (documented in docs/areas/spells.md): percent modifiers (MOD_PERCENT_STAT, MOD_RESISTANCE_PCT,
-/// MOD_BASE_RESISTANCE, MOD_ATTACK_POWER_PCT ...) are other aura types and are not handled, so the flat sum is
-/// exact only while none of them is active; the derived values vmangos recomputes besides max health and max
-/// mana (armor from agility, attack power from strength and agility, crit and dodge, spell power, mana
-/// regeneration) are not recomputed for any source of stats in the repo; the Improved Scorpid Sting stamina
+/// The percent and base variants (MOD_PERCENT_STAT, MOD_RESISTANCE_PCT, MOD_ATTACK_POWER_PCT ...) are
+/// <see cref="PercentStatAuras"/>; every flat change here is followed by a refresh of the percentages on that field, so the order
+/// is flat first and percent second whichever aura came first.
+/// </para>
+/// <para>
+/// Limits (documented in docs/areas/spells.md): MOD_STAT recomputes the derived values of a player attached to a
+/// <see cref="PlayerStatSystem"/> (armor from agility, attack power, crit, dodge) but not those the repo has no system for (spell power,
+/// mana regeneration); the Improved Scorpid Sting stamina
 /// reduction (:4650-4677), the Faerie Fire dispel immunities (:4574-4581) and the SPELLMOD_ATTACK_POWER talent
 /// modifier need systems that do not exist yet; attack power polarity is the spell's, not per effect.
 /// </para>
@@ -106,45 +109,62 @@ public sealed class StatAuras : ISpellHandlerModule
                 target.SetInt32(buffField, target.GetInt32(buffField) + delta);
             }
 
-            if (stat == 2)
-            {
-                if (target is Player staminaPlayer)
-                {
-                    int healthDelta = (int)ExperienceFormulas.HealthBonusFromStamina((uint)Math.Max(0, before + delta))
-                        - (int)ExperienceFormulas.HealthBonusFromStamina((uint)Math.Max(0, before));
-                    ChangeMaxHealth(target, healthDelta);
+            // The flat amount is in; the stat percentages (PercentStatAuras) now apply on top of the new flat sum, so the health and
+            // mana bonuses follow the stat as it finally reads.
+            PercentStatAuras.RefreshStat(target, stat);
+            OnStatMoved(target, stat, before, target.GetInt32(field));
+        }
 
-                    // The stats lane recomputes this bonus from the total stamina on every item and level update and keeps a
-                    // ledger of what the maximum already includes: tell it, or the next update counts the aura a second time.
-                    StatBonuses.NoteHealthMoved(staminaPlayer, healthDelta);
-                }
-                else
+        PercentStatAuras.RefreshPools(target);
+        PercentStatAuras.UpdateDerived(target);
+    }
+
+    /// <summary>
+    /// A stat field moved from <paramref name="before"/> to <paramref name="after"/>: stamina and intellect move the maximum health and mana
+    /// by the difference of the stat bonus (Player::UpdateMaxHealth / UpdateMaxPower, StatSystem.cpp:165-190, bonus curves :134-150;
+    /// creatures 10 health per stamina and 15 mana per intellect, :775-806). Shared with <see cref="PercentStatAuras"/>, whose
+    /// percentages move the same fields.
+    /// </summary>
+    internal static void OnStatMoved(Unit target, int stat, int before, int after)
+    {
+        if (stat == 2)
+        {
+            if (target is Player staminaPlayer)
+            {
+                int healthDelta = (int)ExperienceFormulas.HealthBonusFromStamina((uint)Math.Max(0, after))
+                    - (int)ExperienceFormulas.HealthBonusFromStamina((uint)Math.Max(0, before));
+                ChangeMaxHealth(target, healthDelta);
+
+                // The stats lane recomputes this bonus from the total stamina on every item and level update and keeps a
+                // ledger of what the maximum already includes: tell it, or the next update counts the aura a second time.
+                StatBonuses.NoteHealthMoved(staminaPlayer, healthDelta);
+            }
+            else
+            {
+                ChangeMaxHealth(target, (after - before) * 10);
+            }
+        }
+        else if (stat == 3)
+        {
+            if (target is Player player)
+            {
+                if (player.PowerType == PowerType.Mana)
                 {
-                    ChangeMaxHealth(target, delta * 10);
+                    int manaDelta = (int)ExperienceFormulas.ManaBonusFromIntellect((uint)Math.Max(0, after))
+                        - (int)ExperienceFormulas.ManaBonusFromIntellect((uint)Math.Max(0, before));
+                    ChangeMaxMana(target, manaDelta);
+                    StatBonuses.NoteManaMoved(player, manaDelta); // see NoteHealthMoved above
                 }
             }
-            else if (stat == 3)
+            else
             {
-                if (target is Player player)
-                {
-                    if (player.PowerType == PowerType.Mana)
-                    {
-                        int manaDelta = (int)ExperienceFormulas.ManaBonusFromIntellect((uint)Math.Max(0, before + delta))
-                            - (int)ExperienceFormulas.ManaBonusFromIntellect((uint)Math.Max(0, before));
-                        ChangeMaxMana(target, manaDelta);
-                        StatBonuses.NoteManaMoved(player, manaDelta); // see NoteHealthMoved above
-                    }
-                }
-                else
-                {
-                    ChangeMaxMana(target, delta * 15);
-                }
+                ChangeMaxMana(target, (after - before) * 15);
             }
         }
     }
 
     /// <summary>vmangos Unit::SetMaxHealth: the maximum is at least 1 and drags the current health down with it.</summary>
-    private static void ChangeMaxHealth(Unit target, int delta)
+    internal static void ChangeMaxHealth(Unit target, int delta)
     {
         if (delta == 0)
         {
@@ -160,7 +180,7 @@ public sealed class StatAuras : ISpellHandlerModule
     }
 
     /// <summary>vmangos Unit::SetMaxPower (mana): never negative, and the current mana follows it down.</summary>
-    private static void ChangeMaxMana(Unit target, int delta)
+    internal static void ChangeMaxMana(Unit target, int delta)
     {
         if (delta == 0)
         {
@@ -204,6 +224,7 @@ public sealed class StatAuras : ISpellHandlerModule
             {
                 int field = UpdateFields.UnitFieldResistances + school;
                 target.SetInt32(field, target.GetInt32(field) + delta);
+                PercentStatAuras.RefreshResistance(target, school); // flat first, then the resistance percentages
             }
 
             if (target is Player)
