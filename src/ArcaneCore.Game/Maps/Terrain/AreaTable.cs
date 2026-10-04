@@ -26,6 +26,9 @@ public sealed class AreaTable
 
     public int Count => _byEntry.Length;
 
+    /// <summary>Every area in entry order (GM lookups).</summary>
+    public IReadOnlyList<AreaTemplate> All => _byEntry;
+
     public AreaTemplate? GetById(uint id) => _byId.GetValueOrDefault(id);
 
     /// <summary>
