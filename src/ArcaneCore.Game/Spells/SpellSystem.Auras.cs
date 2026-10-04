@@ -205,9 +205,20 @@ public sealed partial class SpellSystem
                 continue;
             }
 
+            bool runs = !holder.IsPermanent && holder.Duration > 0;
             if (!holder.IsPermanent)
             {
                 holder.Duration = Math.Max(0, holder.Duration - (int)diffMs);
+            }
+
+            // vmangos SpellAuraHolder::Update: the per-second power cost (Health Funnel) comes right after the duration step.
+            if (runs)
+            {
+                ChargePerSecondCost(holder, diffMs);
+                if (holder.IsRemoved)
+                {
+                    continue;
+                }
             }
 
             foreach (SpellAura aura in holder.Auras.OfType<SpellAura>())

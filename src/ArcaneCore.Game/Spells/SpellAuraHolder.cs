@@ -130,6 +130,9 @@ public sealed class SpellAuraHolder
 
     public int MaxDuration { get; internal set; }
 
+    /// <summary>ms to the next per-second power cost (vmangos SpellAuraHolder::m_timeCla, 1000 at construction); see <c>SpellSystem.ChargePerSecondCost</c>.</summary>
+    internal int PerSecondTimer { get; set; } = 1000;
+
     /// <summary>
     /// When this holder was put on its target, in whole Unix seconds (vmangos SpellAuraHolder::m_applyTime, set when the
     /// holder is constructed: SpellAuras.cpp:6665, getter SpellAuras.h:473). A stack refresh keeps the original value; a
@@ -146,6 +149,12 @@ public sealed class SpellAuraHolder
     public int Charges { get; internal set; }
 
     public bool IsRemoved { get; internal set; }
+
+    /// <summary>
+    /// Whether the holder was removed because its target died (vmangos AURA_REMOVE_BY_DEATH): set by <c>SpellSystem.RemoveAurasOnDeath</c> just before
+    /// the remove handlers run, so a handler (Soul Shard creation) can tell death from expiry, a dispel or a cancel. Warlock lane (wlm-07).
+    /// </summary>
+    internal bool RemovedByDeath { get; set; }
 
     /// <summary>For an aura a party area aura put on a group member: the caster's source holder (vmangos AreaAura owner).</summary>
     public SpellAuraHolder? AreaParent { get; internal set; }

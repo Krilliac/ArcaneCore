@@ -26,6 +26,7 @@ public sealed partial class SpellSystem
         {
             AuraType.PeriodicDamage or AuraType.PeriodicLeech => SpellAmountStage.DamageOverTimeSnapshot,
             AuraType.PeriodicHeal => SpellAmountStage.HealOverTimeSnapshot,
+            AuraType.SchoolAbsorb => SpellAmountStage.AbsorbShield, // vmangos HandleSchoolAbsorb: int32 m_amount += bonus (truncation)
             _ => null,
         };
         return AmountModifier is null || stage is null
