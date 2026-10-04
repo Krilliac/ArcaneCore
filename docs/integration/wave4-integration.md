@@ -116,22 +116,20 @@ unscheduled aura-stat ledger. Open item.
 | InsertMail_WithRecipientCap_RechecksTheBoxInsideTheCommit (SQLite) | commit-time recount disabled (`RecipientCap > 100000000`) | failed (1 of 1), passes restored |
 | BanList_StopsAtMaxListedEntries_AndSaysSo | `Capped` never truncates | failed (1 of 1), passes restored |
 
-Setting `MaxListedEntries` default to 0 did **not** fail the ban test (the test sets the option to 2 itself), so the default of 200 is
-unpinned. The test covers only `.banlist ip`; the `.baninfo`, account and character listing caps have no test. The mail test ran on SQLite only.
+At integration, setting the `MaxListedEntries` default to 0 did **not** fail the ban test (the test set the option to 2 itself) and only `.banlist ip` was covered. The release-review fixes pin the default (200) with a default-host test and add cap tests for `.baninfo account`, `.banlist account` and `.banlist character`. The mail test ran on SQLite only.
 
 ## Deviations (from retail or vmangos) found across the lanes
 
 Config-gated and default-off or retail: `Forms:ResetFistAttackTimeOnFormLoss` (off), `Creatures:Movement:EvadeRestoresFullHealth` (off),
 `Combat:CastingConsumesSwing` (off), `Combat:CastResetsMeleeSwing` (retail on), honor `MaintenanceMode` Startup (Live is opt-in),
-`Reputation:SendForcedReactions` (off), `World:GameEvents:ManualStartLengthUnit` (Seconds), `Creatures:ImplicitEventAi` (off),
-`ProcEngineBreaksDamageAuras` (off).
+`Reputation:SendForcedReactions` (off), `World:GameEvents:ManualStartLengthUnit` (Seconds), `Creatures:ImplicitEventAi` (off), `Auras:ProcEngineBreaksDamageAuras` (off: no proc engine exists; Wyvern Sting and Prowl are exempted by spell id instead).
 
 Not switchable (flagged for a decision; none is default-on non-retail by intent, but these are unswitched deviations):
 
 * Pet and totem casts never spend the owner's spell-mod charges (retail leaves a stuck -1 mod); `PassiveReapply` depth cap of 2.
 * `EffectHealthLeech` and the periodic leech tick treat an unset multiple value as 1.0 (vmangos heals 0).
 * `SpellInfo.GetCastTime` ignores the all-zero cast time row, so Throw and Multi-Shot miss the +500 ms ranged slot time.
-* With `ProcEngineBreaksDamageAuras=false` (no proc engine exists), auras with proc flags (Wyvern Sting, Prowl) break on their own damage.
+* With `Auras:ProcEngineBreaksDamageAuras=false` (no proc engine exists) the damage break still removes auras that carry proc flags so Polymorph, Sap, Gouge and Freezing Trap stay breakable; Wyvern Sting and Prowl (`SpellSystem.DamageBreakExemptSpells`) are spared, as vmangos does through `checkProcFlags`. Set the key once a proc engine exists.
 * Enchant spells fail closed with no `SpellItemEnchantment.dbc` or `Enchanting:Enabled=false` (no retail counterpart; safe direction).
 * Reputation: hardened packet length checks, kill credit by killer's group (no loot-tap primitive), forced reactions not sent by default.
 * Honor: tap model simplified, Live mode limits (documented in docs/areas/honor.md).
@@ -147,20 +145,33 @@ Config-defaulted-on behaviours worth a second look because their default is "on"
 * Aura 52 crit percent on the character sheet and weapon-dependent crit mods (above).
 * `QuestReputationBinding` logs "No reputation change source is registered" at startup because the reputation lane calls the quest service
   directly; either register `ReputationService` as the source and drop the direct call, or remove the binding.
-* Quest `IsActive` toggling by game events versus `quest_template` hot reload: a reload rebuilds `Quest` objects, so an event-driven active
-  state is not carried (game-events and hot-reload lanes both flagged it).
 * Per-entry `.reload creature_template <entry>` is not supported (no entry-aware contract on `IContentReloadable`).
 * Spell mods: should pet/totem casts spend charges, should `PassiveReapply` be uncapped, should the leech multiplier follow vmangos?
 * Ranged: SpellRange.dbc numbers unverified, projectile flight time (S09) not built, ON_EQUIP engine owner, real-client playtest.
 * Battlegrounds S3/S5/S6/S7 need the integrator's schema numbers (now free: Characters 26+, World 29+) and a composite map resolver.
 * Reputation: wire widths (u16 versus u32 slots, forced reactions) need a client capture; forced reactions across login unproven.
 * Graveyards: durability exemption `NO_DURABILITY_LOSS` not modelled; resurrection request packet layout vs real client unverified.
-* Warlock-mage: `PaysPerSecondCost` is a heuristic verified on Health Funnel only; the dropped invisibility rule's group-mate and
-  Hunter's Mark clauses should be compared against `StealthVisibilityRule` (the stealth lane may lack them).
+* Warlock-mage: `PaysPerSecondCost` is a heuristic verified on Health Funnel only. (The dropped invisibility rule's group-mate and Hunter's Mark clauses were compared against `StealthVisibilityRule` at release review and are present; its owner/charmer clause was missing and is now restored.)
 * Aura lane: real Spell.dbc flags of Polymorph, Sap, Gouge, Freezing Trap, Wyvern Sting, Prowl need checking.
 * Hot reload: `LootService.Content`/`Generator` are plain fields swapped on the world thread; make them volatile if a session thread reads them.
 * Threat: `Player.SetGameMaster` does not call `CombatStopWithPets`; no taxi producer for the offline threat state.
 * druid-forms: the Transform guard in shapeshift display code has no test.
+
+## Release notes
+
+* **Command abbreviations changed.** The chat command table resolves an abbreviation to the first command (in table order) that starts with it.
+  The new top-level names `.event`, `.honor`, `.character`, `.deplenish`, `.replenish`, `.neargrave` and `.wchange` take over short prefixes that used
+  to reach other commands: `.e` now means `.event` (it was `.explorecheat`), `.h` now means `.honor` (it was `.help`), and `.n` / `.ne` resolve differently
+  too. Use the full command name in scripts and macros. vmangos resolves abbreviations by the same rule.
+* **`.reload` abbreviations became ambiguous.** `.reload spell` (`spell_template` and `spell_threats`) and `.reload creature` (`creature_template`,
+  `creature_loot_template`, `creature_onkill_reputation`) now match more than one reloadable and are refused rather than guessed; type enough of the
+  name (`.reload spell_te`, `.reload creature_te`).
+* **Developer databases that applied a lane branch will not match.** Five lanes (taxi, honor, creature respawn, game events, reputation templates)
+  each allocated schema version 21 for their own tables; the integrated numbers are Characters 21-25 and World 21-28 (table above). A database that
+  applied one of those lane branches records 21 for a different step and will not line up. Recreate it, or run the upgrader against a copy and review
+  the drift report. A release database upgraded from main (Characters 20, World 20) is not affected.
+* **New switch:** `Auras:ProcEngineBreaksDamageAuras` (default false). **New GM-visible default:** `Bans:MaxListedEntries` = 200 (0 restores the
+  unbounded retail listing).
 
 ## Verification (local, Release, through the throttle `dn.ps1`)
 
