@@ -159,12 +159,52 @@ public sealed class GameEventServiceTests
     }
 
     [Fact]
+    public void AManualStart_AddsTheLengthAsSeconds_ByDefault_LikeBothReferences()
+    {
+        // vmangos GameEventMgr.cpp:95 and mangos-classic add `length` (minutes in the table) as raw seconds
+        Assert.Equal(GameEventManualLengthUnit.Seconds, new GameEventOptions().ManualStartLengthUnit);
+        GameEventContent content = Content(
+            [Event(24, 1, 1440, 90)],
+            [new GameEventTimeRecord(24, "2020-01-01 00:00:00", "2020-01-02 00:00:00")]);
+        (GameEventService service, _, Clock clock) = Make(content, Utc(2026, 10, 3, 12));
+        service.Initialize(new HashSet<ushort>());
+
+        Assert.True(service.StartEvent(24, overwrite: true));
+
+        GameEventDefinition def = service.Find(24)!;
+        Assert.Equal(clock.Now.AddSeconds(-1), def.Start);
+        Assert.Equal(clock.Now.AddSeconds(-1).AddSeconds(90), def.End);
+    }
+
+    [Fact]
+    public void ADisabledFlagInAClassicDbRow_IsHonoured_AndSurvivesAReload()
+    {
+        static GameEventContent Table(bool disabled) => new(
+            [new GameEventRecord(7, 1, 1440, 600, 0, 0, "event 7", Disabled: disabled)], [new GameEventTimeRecord(7, "2026-10-03 11:00:00", "2030-12-31 22:59:59")], [], [], [], [], []);
+        var persisted = new List<(ushort Id, bool Disabled)>();
+
+        (GameEventService first, _, _) = Make(Table(false), Utc(2026, 10, 3, 12), persistDisabled: (id, d) => persisted.Add((id, d)));
+        first.Initialize(new HashSet<ushort>());
+        Assert.True(first.IsActiveEvent(7));
+        Assert.True(first.EnableEvent(7, enable: false));
+        Assert.Equal([((ushort)7, true)], persisted);
+
+        // a restart (or .reload game_event) reads the stored flag back through the loader: the event stays off
+        (GameEventService second, _, Clock clock2) = Make(Table(persisted[^1].Disabled), Utc(2026, 10, 3, 12));
+        Assert.True(second.Find(7)!.Disabled);
+        second.Initialize(new HashSet<ushort>());
+        clock2.Now = Utc(2026, 10, 3, 12, 5);
+        second.Update();
+        Assert.False(second.IsActiveEvent(7));
+    }
+
+    [Fact]
     public void AManualStart_IgnoresTheLink_AndOverwriteRewritesTheSchedule()
     {
         GameEventContent content = Content(
             [Event(12, 1, 1440, 600), Event(24, 1, 1440, 90, linkedTo: 12)],
             [new GameEventTimeRecord(12, "2026-10-03 13:00:00", "2030-12-31 22:59:59"), new GameEventTimeRecord(24, "2020-01-01 00:00:00", "2020-01-02 00:00:00")]);
-        (GameEventService service, _, Clock clock) = Make(content, Utc(2026, 10, 3, 12));
+        (GameEventService service, _, Clock clock) = Make(content, Utc(2026, 10, 3, 12), new GameEventOptions { ManualStartLengthUnit = GameEventManualLengthUnit.Minutes });
         service.Initialize(new HashSet<ushort>());
 
         Assert.True(service.StartEvent(24, overwrite: true)); // its table end (2020) has passed

@@ -26,6 +26,7 @@ handler is logged and does not stop the others.
 | `Enabled` | `true` | Whether the event service runs. |
 | `Dialect` | `Auto` | `CMangos` (classic-db: `schedule_type`, `linkedTo`, `game_event_time`) or `VMangos` (`start_time`, `end_time`, `hardcoded`, `disabled` on `game_event`); `Auto` decides from the table's columns. |
 | `LeapDayMode` | `DateStable` | Existing (wave 3): `VmangosLiteral` reproduces the vmangos leap-day loop. |
+| `ManualStartLengthUnit` | `Seconds` | Retail adds the length (minutes) as raw seconds when `.event start` rewrites an end (vmangos GameEventMgr.cpp:95, :111); `Minutes` uses it as minutes. |
 | `StartBoundary` | `Auto` | `Inclusive` is vmangos `start <= now` (GameEventMgr.cpp:42), `Exclusive` mangos-classic `start < now` (:39); `Auto` follows the dialect. |
 | `DateTimeInterpretation` | `Wall` | `Wall`: a zone-less `start_time` is the wall clock in the game zone, daylight saving included (vmangos MySQL `UNIX_TIMESTAMP`, GameEventMgr.cpp:183). `StandardTime`: never daylight saving (mangos-classic `mktime` with `tm_isdst` 0, Field.cpp:24-31). |
 | `YearlyRebase` | `SpanNewYear` | See "Computed schedules". `MangosLiteral` is the mangos-classic code. |
@@ -145,8 +146,9 @@ Pure maths in `Game/WorldState/Events`, every function taking the time and the z
   start. `IGameEventStatusSink` receives the running set after every change; `Initialize` first reports the empty set (vmangos
   TRUNCATEs `game_event_status` after reading it), then events that were running resume (`resume = true`, listeners see it).
 - **Manual start/stop arithmetic**: `StartEvent(overwrite)` sets the start to now and, if the end is not after it, the end to start
-  plus the length; both references add the length as SECONDS (`start + length`) although it is minutes everywhere else, which
-  would end a manually started event after `length` seconds. Minutes are used. Under the mangos-classic boundary (`start < now`)
+  plus the length; both references add the length as SECONDS (`start + length`, vmangos GameEventMgr.cpp:95 and :111) although it
+  is minutes everywhere else, so a hand-started event whose end has passed stops after about `length` seconds. That is the
+  default (`ManualStartLengthUnit = Seconds`); `Minutes` lets it run its whole length. Under the mangos-classic boundary (`start < now`)
   the manual start is dated one second back so an update in the same second does not stop the event just started.
   `StopEvent(overwrite)` back-dates the start by the length so the schedule does not restart it.
 - `GameEventLoader` builds the definitions: dialect (`Auto`: vmangos when any row carries its own `start_time`), start
@@ -207,7 +209,8 @@ Pure maths in `Game/WorldState/Events`, every function taking the time and the z
   vmangos-only ids 1600-1603 (disabled, enabled, already enabled, already disabled) are in no dump available here, so their
   English wording is ArcaneCore's.
 - `.event enable|disable` write `game_event.disabled` (`IGameEventDataStore.SetDisabledAsync`, in order, off the world thread; a
-  failure is logged and the in-memory flag stays until restart).
+  failure is logged and the in-memory flag stays until restart). The stored flag is read back on load in both dialects (a
+  classic-db table carries the column too), so a disabled event stays off after a restart.
 - `.lookup event <name>` (`LookupEventCommand`, an `ICommandExtension` on `.lookup`; LookupCommands.cpp:1480-1526; retail level 2).
 - Not delivered: the event lines of `.npc info` and `.gobject info` (they need the creature and gameobject info commands' owners).
 

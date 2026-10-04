@@ -305,9 +305,10 @@ public sealed class GameEventService : IGameEventState
 
     /// <summary>
     /// <c>StartEvent</c>: apply the event, and with <paramref name="overwrite"/> make the schedule agree (start now; an end
-    /// that is not after it becomes now plus the length). Both references add the length as SECONDS to the end, which would end a
-    /// manually started event after <c>length</c> seconds; the length is minutes (<c>length * MINUTE</c> everywhere else), so
-    /// minutes are used. Returns false for an unknown or unusable event.
+    /// that is not after it becomes now plus the length). Both references add the length as SECONDS to the end (so a manually started
+    /// event whose end has passed is stopped after about <c>length</c> seconds); that is the default, and
+    /// <see cref="GameEventOptions.ManualStartLengthUnit"/> = Minutes uses the length as minutes (<c>length * MINUTE</c> everywhere
+    /// else). Returns false for an unknown or unusable event.
     /// </summary>
     public bool StartEvent(ushort eventId, bool overwrite = false, bool resume = false)
     {
@@ -333,12 +334,18 @@ public sealed class GameEventService : IGameEventState
                 start = start.AddSeconds(-1);
             }
 
-            DateTimeOffset end = definition.End <= start ? start + TimeSpan.FromMinutes(definition.LengthMinutes) : definition.End;
+            DateTimeOffset end = definition.End <= start ? start + ManualLength(definition) : definition.End;
             _definitions[eventId] = definition with { Start = start, End = end };
         }
 
         return true;
     }
+
+    /// <summary>The length added to a start when a manual start or stop rewrites an end (vmangos cpp:95 and :111: seconds, unless configured).</summary>
+    private TimeSpan ManualLength(GameEventDefinition definition)
+        => _options.ManualStartLengthUnit == GameEventManualLengthUnit.Minutes
+            ? TimeSpan.FromMinutes(definition.LengthMinutes)
+            : TimeSpan.FromSeconds(definition.LengthMinutes);
 
     /// <summary><c>StopEvent</c>: unapply the event, and with <paramref name="overwrite"/> back-date its start by its length so the schedule does not restart it.</summary>
     public bool StopEvent(ushort eventId, bool overwrite = false)
@@ -354,7 +361,7 @@ public sealed class GameEventService : IGameEventState
         {
             GameEventDefinition definition = _definitions[eventId];
             DateTimeOffset start = DateTimeOffset.FromUnixTimeSeconds(Now.ToUnixTimeSeconds()) - TimeSpan.FromMinutes(definition.LengthMinutes);
-            DateTimeOffset end = definition.End <= start ? start + TimeSpan.FromMinutes(definition.LengthMinutes) : definition.End;
+            DateTimeOffset end = definition.End <= start ? start + ManualLength(definition) : definition.End;
             _definitions[eventId] = definition with { Start = start, End = end };
         }
 

@@ -18,6 +18,22 @@ public enum LeapDayMode
 }
 
 /// <summary>
+/// The unit a manual <c>StartEvent</c> / <c>StopEvent</c> (with overwrite) adds the event length in when it rewrites an end
+/// (<c>World:GameEvents:ManualStartLengthUnit</c>).
+/// </summary>
+public enum GameEventManualLengthUnit
+{
+    /// <summary>
+    /// Retail: vmangos GameEventMgr.cpp:95 and :111 (and mangos-classic) add <c>length</c>, a count of minutes, as raw seconds, so a
+    /// hand-started event whose table end has passed is stopped by the next update after about <c>length</c> seconds. Default.
+    /// </summary>
+    Seconds,
+
+    /// <summary>The length is minutes, as everywhere else (<c>length * MINUTE</c>): a hand-started event runs its whole length.</summary>
+    Minutes,
+}
+
+/// <summary>
 /// One event of the vmangos <c>game_event</c> table (GameEventMgr.h:43-60): when it first starts and last ends,
 /// how often it recurs and how long each occurrence lasts (both in minutes).
 /// </summary>

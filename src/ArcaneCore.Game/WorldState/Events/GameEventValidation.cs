@@ -52,6 +52,7 @@ public static class GameEventValidation
         {
             ScheduleType = source.ScheduleType,
             LinkedTo = source.LinkedTo,
+            Disabled = source.Disabled, // the persisted `.event disable` flag (game_event.disabled) is honoured in both dialects
         };
 
         switch (source.ScheduleType)

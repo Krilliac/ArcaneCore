@@ -115,6 +115,13 @@ public sealed class GameEventOptions
     public Events.LeapDayMode LeapDayMode { get; set; } = Events.LeapDayMode.DateStable;
 
     /// <summary>
+    /// The unit a manual <c>.event start</c> adds the event length in when its end has passed (<see cref="Events.GameEventManualLengthUnit"/>).
+    /// Default <c>Seconds</c>: retail (vmangos GameEventMgr.cpp:95, mangos-classic) adds the minutes count as seconds, so such an event
+    /// is stopped again after about <c>length</c> seconds; <c>Minutes</c> lets it run its whole length.
+    /// </summary>
+    public Events.GameEventManualLengthUnit ManualStartLengthUnit { get; set; } = Events.GameEventManualLengthUnit.Seconds;
+
+    /// <summary>
     /// Whether the game-event service runs at all. Default true. With false no event ever starts: holiday
     /// content, event quests and event spawns stay off (the pre-wave-4 behaviour).
     /// </summary>
