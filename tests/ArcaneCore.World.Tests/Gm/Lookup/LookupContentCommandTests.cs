@@ -264,6 +264,36 @@ public sealed class LookupContentCommandTests
         Assert.Equal(2, lines.Count);
     }
 
+    /// <summary>
+    /// Regression: the per-instance lines honour World:GmCommands:LookupMaxResults like every other list (the summary line is not a
+    /// result and is always sent). Two dungeon instances are created directly on the world thread next to the continent the GM stands on.
+    /// </summary>
+    [Fact]
+    public async Task ArcaneMaps_CapsThePerInstanceLinesByLookupMaxResults()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("AMCGM", "Amcgm", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        await host.OnWorldAsync(() =>
+        {
+            host.World.GetMap(33, 101);
+            host.World.GetMap(33, 102);
+        });
+        host.WorldServices.GetRequiredService<CommandTableSource>().Current.Gm.LookupMaxResults = 2;
+
+        List<string> lines = await SayAsync(gm, ".arcane maps");
+
+        Assert.Equal("3 map(s) running, 1 player(s) online.", lines[0]);
+        Assert.Matches(@"^map 0 instance 0 \[.*\]: 1 player\(s\), \d+ object\(s\), 0 in transit$", lines[1]);
+        Assert.Matches(@"^map 33 instance 101 \[.*\]: 0 player\(s\), \d+ object\(s\), 0 in transit$", lines[2]);
+        Assert.Equal(["More results were omitted (World:GmCommands:LookupMaxResults)."], lines.Skip(3));
+
+        host.WorldServices.GetRequiredService<CommandTableSource>().Current.Gm.LookupMaxResults = 0;
+        lines = await SayAsync(gm, ".arcane maps");
+        Assert.Equal(4, lines.Count);
+        Assert.Matches(@"^map 33 instance 102 \[.*\]: 0 player\(s\), \d+ object\(s\), 0 in transit$", lines[3]);
+    }
+
     [Fact]
     public async Task ArcaneReloads_ShowsTheCreatureGeneration_AndEachReloadable()
     {

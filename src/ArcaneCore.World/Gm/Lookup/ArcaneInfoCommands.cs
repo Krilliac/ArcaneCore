@@ -60,18 +60,23 @@ public sealed class ArcaneInfoCommands : ICommandGroup
         return true;
     }
 
+    /// <summary>
+    /// The summary line is always sent; the per-instance lines go through <see cref="LookupContentText.Send"/> so that a server with
+    /// hundreds of live dungeon or battleground instances answers at most <c>World:GmCommands:LookupMaxResults</c> lines plus the
+    /// "omitted" line, like every other list, instead of one chat packet per instance.
+    /// </summary>
     private static bool Maps(CommandContext context, string args)
     {
         CultureInfo c = CultureInfo.InvariantCulture;
         Map[] maps = [.. context.World.Maps.OrderBy(m => m.MapId).ThenBy(m => m.InstanceId)];
         context.Reply(string.Create(c, $"{maps.Length} map(s) running, {context.World.OnlinePlayerCount} player(s) online."));
-        foreach (Map map in maps)
-        {
-            string name = map.Template?.Name is { Length: > 0 } n ? n : "?";
-            context.Reply(string.Create(c, $"map {map.MapId} instance {map.InstanceId} [{name}]: {map.PlayerCount} player(s), {map.ObjectCount} object(s), {map.TransitCount} in transit"));
-        }
+        return maps.Length == 0 || LookupContentText.Send(context, maps.Select(map => MapLine(map, c)), string.Empty);
+    }
 
-        return true;
+    private static string MapLine(Map map, CultureInfo c)
+    {
+        string name = map.Template?.Name is { Length: > 0 } n ? n : "?";
+        return string.Create(c, $"map {map.MapId} instance {map.InstanceId} [{name}]: {map.PlayerCount} player(s), {map.ObjectCount} object(s), {map.TransitCount} in transit");
     }
 
     private static bool Reloads(CommandContext context, string args)

@@ -54,7 +54,7 @@ command. Gated by the GameMaster tier (`World:GmCommands` level map), no retail 
 | Command | What it shows |
 |---|---|
 | `.arcane content` | rows loaded per content table: maps, areas, tele locations, area triggers, item templates, creature templates and spawns, gameobject templates and spawns, quests, taxi nodes, spells, skill lines (or "not active") |
-| `.arcane maps` | every running map instance: map id, instance id, name, players, objects, objects in transit |
+| `.arcane maps` | a summary line (how many map instances run, how many players are online), then one line per running map instance ordered by map and instance id: map id, instance id, name, players, objects, objects in transit. The per-instance lines are capped by `World:GmCommands:LookupMaxResults` like every other list, so a server with hundreds of live dungeon or battleground instances answers the cap plus the "More results were omitted" line, not one chat packet per instance |
 | `.arcane reloads` | the creature definitions generation (`CreatureContent.DefinitionsVersion`, how many times a `.reload` swapped the definitions since start) and how each reloadable last ended (the same data as `.reload status`) |
 
 "Reload generations" exist only for creature definitions: no other store keeps a generation counter, and none was added. The per-reloadable
