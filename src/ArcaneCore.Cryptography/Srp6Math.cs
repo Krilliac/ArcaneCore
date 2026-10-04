@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Text;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Cryptography;
 
@@ -36,6 +37,10 @@ internal static class Srp6Math
     /// <summary>SHA1-interleave of S into the 40-byte session key K.</summary>
     internal static byte[] Interleave(BigInteger s)
     {
+        // The interleave is defined on a 32-byte little-endian S (the client's SHA1Interleave reads exactly
+        // that buffer; the gtker KAT rows exercise 32-byte values that are not residues of N, so this is
+        // the width, not N, that is the precondition). ToFixedLittleEndian would throw on a wider value.
+        Invariant.Assert(s.Sign >= 0 && s.GetByteCount(isUnsigned: true) <= WowSrp6.KeyLength, $"the shared secret S must fit {WowSrp6.KeyLength} bytes, got {s.GetByteCount(isUnsigned: true)}");
         byte[] full = WowSrp6.ToFixedLittleEndian(s, 32);
 
         // Strip an even number of leading (low-order) zero bytes.
@@ -51,6 +56,7 @@ internal static class Srp6Math
         }
 
         int sliceLength = full.Length - lead;
+        Invariant.Assert((sliceLength & 1) == 0, $"the interleave splits an even number of bytes into two halves; {lead} stripped of {full.Length}");
         int half = sliceLength / 2;
 
         byte[] even = new byte[half];

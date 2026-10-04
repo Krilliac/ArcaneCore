@@ -4,7 +4,12 @@
     <RootNamespace>ArcaneCore.Cryptography</RootNamespace>
   </PropertyGroup>
 
-  <!-- Pure crypto: System.Security.Cryptography + System.Numerics.BigInteger only. -->
+  <!-- Pure crypto: System.Security.Cryptography + System.Numerics.BigInteger, plus the Kernel for its
+       invariant facility (ArcaneCore.Kernel.Diagnostics.Invariant; the Kernel references no project). -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\ArcaneCore.Kernel\ArcaneCore.Kernel.csproj" />
+  </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="ArcaneCore.Cryptography.Tests" />

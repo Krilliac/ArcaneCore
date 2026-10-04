@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Numerics;
 using System.Security.Cryptography;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Cryptography;
 
@@ -81,6 +82,10 @@ public static class WowSrp6
         byte[] salt = new byte[SaltLength];
         RandomNumberGenerator.Fill(salt);
         salt[^1] |= 0x80; // top big-endian byte (last little-endian byte) non-zero
+
+        // A salt this method makes must pass the same test the logon applies to stored salts
+        // (Srp6Validation.IsUsableSalt), or every auto-created account would be refused at its first login.
+        Invariant.Assert(Srp6Validation.IsUsableSalt(salt), "a generated salt must be usable (32 bytes, not all zero)");
         return salt;
     }
 

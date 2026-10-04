@@ -33,6 +33,8 @@ if (startupReport.IsInvalid)
     return ExitCodes.InvalidConfiguration;
 }
 
+ArcaneCore.World.Ops.Diagnostics.WorldDiagnosticsExtensions.UseWorldDiagnostics(builder); // crash hooks, invariants and the tick context (docs/ops/invariants.md); after the validation so a bad Diagnostics key is listed with the rest
+
 // Code hot reload gate (docs/areas/code-hot-reload.md). It runs before the host is built and
 // before any schema initializer below touches a database, so a refused start has changed nothing.
 HotCodeOptions hotCode = builder.Configuration.GetSection(HotCodeOptions.SectionName).Get<HotCodeOptions>() ?? new HotCodeOptions();

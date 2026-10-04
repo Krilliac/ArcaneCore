@@ -8,6 +8,8 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.0.0" />
     <PackageReference Include="Microsoft.Extensions.Options" Version="9.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.0" />
+    <!-- Binds the Diagnostics section in UseArcaneDiagnostics; already in both daemons' graphs through Microsoft.Extensions.Hosting. -->
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="9.0.0" />
   </ItemGroup>
 
 </Project>

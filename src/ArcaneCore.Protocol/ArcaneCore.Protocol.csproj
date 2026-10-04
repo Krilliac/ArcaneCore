@@ -5,6 +5,11 @@
   </PropertyGroup>
 
   <!-- World protocol: opcodes, SMSG/CMSG header read/write, the vanilla header cipher,
-       and packet (de)serialization. No external dependencies. -->
+       and packet (de)serialization. No external dependencies beyond the Kernel's invariant
+       facility (ArcaneCore.Kernel.Diagnostics.Invariant). -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\ArcaneCore.Kernel\ArcaneCore.Kernel.csproj" />
+  </ItemGroup>
 
 </Project>

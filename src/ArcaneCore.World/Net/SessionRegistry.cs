@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.World.Net;
 
@@ -15,6 +16,9 @@ public sealed class SessionRegistry
 
     public void Register(WorldSession session)
     {
+        // Keyed by account: the session must have taken its account id from the authenticated row first,
+        // or every unauthenticated session would share key 0 and kick each other.
+        Invariant.Assert(session.AccountId != 0, "a session is registered only after authentication assigned its account id");
         WorldSession? previous = null;
         _byAccount.AddOrUpdate(
             session.AccountId,

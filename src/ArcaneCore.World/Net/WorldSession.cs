@@ -9,6 +9,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using Microsoft.Extensions.DependencyInjection;
@@ -254,6 +255,8 @@ public sealed class WorldSession : IPlayerSession
     /// <summary>Handle queued in-world packets (world thread, from the player's map update).</summary>
     public void ProcessWorldPackets(Player player)
     {
+        // Player and map state are owned by the world thread; this is the only consumer of _worldQueue.
+        Invariant.Assert(World.IsWorldThread, "in-world packets are handled on the world thread");
         for (int budget = _options.MaxWorldPacketsPerTick; budget > 0 && _worldQueue.TryDequeue(out QueuedPacket packet); budget--)
         {
             Release(packet);
@@ -350,6 +353,7 @@ public sealed class WorldSession : IPlayerSession
     /// </summary>
     public void OnLoggedOut()
     {
+        Invariant.Assert(World.IsWorldThread, "logout completes on the world thread");
         lock (_sendLock)
         {
             if (_state != SessionState.InWorld)
@@ -368,6 +372,7 @@ public sealed class WorldSession : IPlayerSession
     /// <summary>Loading → in world (world thread). False if the client went away meanwhile.</summary>
     public bool TryEnterWorld(Player player)
     {
+        Invariant.Assert(World.IsWorldThread, "a player enters the world on the world thread");
         lock (_sendLock)
         {
             if (_state != SessionState.LoggingIn)
@@ -375,6 +380,10 @@ public sealed class WorldSession : IPlayerSession
                 return false;
             }
 
+            // LoggingIn is reached from CharacterSelect only, and both OnLoggedOut and Close clear Player
+            // before the session can get back there; a player still set here would be a second character
+            // for one session, which the online registry and the save path never expect.
+            Invariant.Assert(Player is null, $"session {RemoteEndpoint} enters the world while still holding player {Player?.Guid}");
             Player = player;
             _state = SessionState.InWorld;
             return true;
@@ -384,6 +393,7 @@ public sealed class WorldSession : IPlayerSession
     /// <summary>Loading failed: back to the character screen.</summary>
     public void AbortLogin()
     {
+        Invariant.Assert(World.IsWorldThread, "a login is abandoned on the world thread");
         lock (_sendLock)
         {
             if (_state == SessionState.LoggingIn)
@@ -506,8 +516,12 @@ public sealed class WorldSession : IPlayerSession
 
     private void Release(QueuedPacket packet)
     {
-        Interlocked.Decrement(ref _queuedPackets);
-        Interlocked.Add(ref _queuedBytes, -packet.Payload.Length);
+        // The bound in DispatchAsync is only as good as this accounting: every dequeue releases exactly
+        // what its enqueue added, so neither counter can go below zero. A negative value would turn the
+        // queue bound off for this session (the comparison would never trip again).
+        int packets = Interlocked.Decrement(ref _queuedPackets);
+        long bytes = Interlocked.Add(ref _queuedBytes, -packet.Payload.Length);
+        Invariant.Check(packets >= 0 && bytes >= 0, $"world queue accounting went negative ({packets} packets, {bytes} bytes) for {RemoteEndpoint}");
     }
 
     /// <summary>Drop every queued packet, keeping the count and byte accounting exact.</summary>
@@ -552,6 +566,15 @@ public sealed class WorldSession : IPlayerSession
         if (stored?.SessionKey is null)
         {
             SendAuthResponse(AuthResponseCode.UnknownAccount);
+            return false;
+        }
+
+        // The stored K is the 40-byte SRP6 interleave the realm wrote (account.sessionkey); the digest below
+        // and the header cipher are both keyed with it. Another length is a damaged or foreign row: refuse the
+        // login rather than key the cipher with it (the client would then fail to decrypt every header).
+        if (!Invariant.Check(stored.SessionKey.Length == WowSrp6.SessionKeyLength, $"account {stored.Id} holds a session key of {stored.SessionKey.Length} bytes"))
+        {
+            SendAuthResponse(AuthResponseCode.Failed);
             return false;
         }
 

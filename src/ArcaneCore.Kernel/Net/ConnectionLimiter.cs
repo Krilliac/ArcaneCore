@@ -1,4 +1,5 @@
 using System.Net;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Kernel.Net;
 
@@ -60,8 +61,14 @@ public sealed class ConnectionLimiter(Func<int> maxConnections, Func<int> maxPer
     {
         lock (_gate)
         {
-            _total--;
-            if (_perIp.TryGetValue(key, out int current))
+            // Every release pairs with one admitted lease (Lease.Dispose is guarded against a second
+            // call), so the counters cannot go below zero; a negative total would silently disable the cap.
+            if (Invariant.Check(_total > 0, "a connection lease was released without a matching admission (global count)"))
+            {
+                _total--;
+            }
+
+            if (Invariant.Check(_perIp.TryGetValue(key, out int current), $"a connection lease was released for {key} without a matching admission (per-address count)"))
             {
                 if (current <= 1)
                 {

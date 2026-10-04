@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Migrations.Operations;
 using Microsoft.EntityFrameworkCore.Storage;
 using ArcaneCore.Data.Schema.Upgrade;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Data.Schema;
@@ -207,12 +208,17 @@ public static class SchemaBootstrapper
         int? version = await TryReadVersionAsync(db, definition, ct).ConfigureAwait(false);
         if (version is null)
         {
+            // A database without a version table was either empty (created fresh, at the current version)
+            // or a pre-M5 layout adopted as version 1; CreateOrAdoptAsync throws for anything in between.
             version = await CreateOrAdoptAsync(db, definition, logger, ct).ConfigureAwait(false);
+            Invariant.Assert(version == 1 || version == definition.CurrentVersion, $"{definition.Component}: create-or-adopt returned version {version}, expected 1 or {definition.CurrentVersion}");
             options.Report(definition, version.Value);
         }
         else if (version == CreatingVersion)
         {
+            // A resumed create ends by writing CurrentVersion (CreateFreshAsync's last statement).
             version = await CreateFreshAsync(db, definition, logger, ct).ConfigureAwait(false);
+            Invariant.Assert(version == definition.CurrentVersion, $"{definition.Component}: a resumed create returned version {version}, expected {definition.CurrentVersion}");
             options.Report(definition, version.Value);
         }
 
@@ -255,6 +261,14 @@ public static class SchemaBootstrapper
             .FirstOrDefaultAsync(r => r.Id == 1, ct).ConfigureAwait(false);
         if (row is not null)
         {
+            // Versions are 0 (a create in progress) or a released version from 1 up; a negative row is a
+            // damaged table, and the bootstrap fails closed on it like on any other unexpected state.
+            if (!Invariant.Check(row.Version >= CreatingVersion, $"the {definition.VersionTable} row holds version {row.Version}"))
+            {
+                throw new SchemaMismatchException(
+                    $"The {definition.Component} schema version table holds {row.Version}, which is not a version this build knows; the table is damaged.");
+            }
+
             return row.Version;
         }
 
@@ -470,6 +484,16 @@ public static class SchemaBootstrapper
         }
         else
         {
+            // Monotonic: the row only ever moves up (each step writes version + 1, a fresh create writes
+            // CurrentVersion after its 0 marker). The 0 marker may be rewritten while a create is resumed.
+            // A downgrade write would make a newer database look older and let a later start "upgrade"
+            // over tables it does not understand, so it is refused and the start fails closed.
+            if (!Invariant.Check(version == CreatingVersion || version > row.Version, $"schema version row would move from {row.Version} to {version}"))
+            {
+                throw new SchemaMismatchException(
+                    $"Refusing to move the schema version row from {row.Version} to {version}: versions only increase.");
+            }
+
             row.Version = version;
         }
 

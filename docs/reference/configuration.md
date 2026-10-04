@@ -23,6 +23,7 @@ How to read the tables:
 - [`Conditions`](#conditions)
 - [`Creatures`](#creatures)
 - [`Database`](#database)
+- [`Diagnostics`](#diagnostics)
 - [`Economy`](#economy)
 - [`Enchanting`](#enchanting)
 - [`GameObjects`](#gameobjects)
@@ -206,6 +207,17 @@ How to read the tables:
 | `Database:Upgrade:Policy` | `SchemaPolicy` | `Always` | - | What a start may do to the schema. `Always` (default) creates and upgrades; `CreateOnly` creates an empty database but refuses to upgrade an existing one (the retail-like setting for production, where `arcane-db upgrade` applies updates); `Never` only verifies. See docs/ops/database-upgrade.md. Values: `Always`, `CreateOnly`, `Never`. |
 | `Database:World:ConnectionString` | `string` | `""` | - | The connection string of this component's database. The shipped files carry the development placeholder user `arcane`; change it for any real deployment. |
 | `Database:World:Provider` | `DatabaseProvider` | `MariaDb` | - | The relational engine of this component's database (`Database:Auth`, `Database:Characters` or `Database:World`). Values: `MariaDb`, `MySql`, `PostgreSql`, `Sqlite`. |
+
+## `Diagnostics`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Diagnostics:BreakOnInvariant` | `bool` | `false` | - | Stop in the debugger on a failed invariant (`Debugger.Break`). Only acts when a debugger is attached, so it is safe to leave on in a development configuration; default off, because an unattended process must never wait for a debugger prompt. |
+| `Diagnostics:FirstChanceExceptions` | `bool` | `false` | - | Log every exception at the moment it is thrown (`AppDomain.FirstChanceException`), before any handler sees it, at Debug level. A development aid for finding swallowed exceptions; it is honoured only by a Debug build of the Kernel (the hook is compiled out of Release), where a Release daemon logs once that the key is ignored. Default off: the hook runs on every throw, caught or not. |
+| `Diagnostics:InvariantLogLimit` | `int` | `10` | - | How many failures of one invariant (one call site) are written to the log; later failures of that site are only counted (the counters are part of every crash report). 0 logs none, every failure is still counted. Default 10: a hot-path check that fails per packet cannot flood the log. |
+| `Diagnostics:OnInvariant` | `InvariantPolicy` | `Continue` | - | What a failed `Invariant.Check` (the release-mode check) does after it is logged and counted. `Continue` (default): the caller goes on with its own fail-closed handling (refuse the packet, drop the connection, throw). `FailFast`: the process aborts at once with the message, as the mangos `MANGOS_ASSERT` macro does in every build. Debug-build `Invariant.Assert` throws `InvariantViolationException` under `Continue` and aborts under `FailFast`. Values: `Continue`, `FailFast`. |
+| `Diagnostics:OnUnhandled` | `UnhandledExceptionPolicy` | `FailFast` | - | What ends the process after an unhandled exception (`AppDomain.UnhandledException`): the report is always written first. `FailFast` (default): `Environment.FailFast`, which is what the runtime does on its own; the process aborts (exit status 134, SIGABRT, on Linux; 0x80131623 / Watson on Windows) and a dump is written when `DOTNET_DbgEnableMiniDump=1`. `Exit`: `Environment.Exit(70)` (`ExitCodes.UnhandledException`, sysexits EX_SOFTWARE), an exit code a supervisor can match; no dump. Values: `FailFast`, `Exit`. |
+| `Diagnostics:OnUnobservedTask` | `UnobservedTaskPolicy` | `Log` | - | What an exception a faulted `Task` nobody awaited does when the finalizer finds it (`TaskScheduler.UnobservedTaskException`). `Log` (default): the report is written and the exception marked observed, which is the .NET runtime's own behaviour (since .NET 4.5) made visible. `Exit` and `FailFast` end the process as `OnUnhandled` describes. Values: `Log`, `Exit`, `FailFast`. |
 
 ## `Economy`
 
