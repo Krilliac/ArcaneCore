@@ -87,7 +87,7 @@ Tips after integration: **Characters 25, World 28, Auth 3**. The lane docs that 
 * **ReputationChanged**: reputation lane and quests-advanced both implemented `QuestNpcServices.ReputationChanged`; kept the quests-advanced
   (status filtered) version. The reputation feature calls it directly; the quests lane's `QuestReputationBinding` finds no
   `IReputationChangeSource` and logs one information line (see open questions).
-* **Evade health snap**: creature-movement-spawns (`Creatures:Movement:EvadeRestoresFullHealth`) and threat (`Creatures:EvadeRestoresFullHealth`)
+* **Evade health snap**: creature-movement-spawns (`Creatures:Movement:EvadeRestoresFullHealth`) and threat (a top-level duplicate)
   added the same switch. One switch remains: `Creatures:Movement:EvadeRestoresFullHealth` (default false = retail). The threat lane's
   `EvadeResetsAuras` stays.
 * **Threat**: the threat lane's `ThreatCalc` is used; its SPELLMOD_THREAT step now goes through the mod engine's `ModFloat` (charges).
