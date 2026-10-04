@@ -21,7 +21,7 @@ asserts). ArcaneCore fails closed and says why, once.
 | `CircuitBreaker` | Closed → Open → HalfOpen → Closed. Trips on a run of consecutive failures (`FailureThreshold`) **or** a failure rate over a sliding window of fixed buckets (`FailureRateThreshold` of the calls in `SamplingWindow`, judged once `MinimumThroughput` calls are in it). Open for `OpenDuration`, then lets `HalfOpenMaxProbes` through; one probe success closes, one probe failure re-opens for a full period. `Isolate()`/`Reset()` are manual overrides. State changes go to a callback outside the lock. | One uncontended `Lock` per call, no I/O, no allocation when closed and the call succeeds (`Execute` sync, `ExecuteAsync` with a synchronously completing `ValueTask`). A refusal allocates its `CircuitOpenException`; `TryEnter`/`OnSuccess`/`OnFailure`/`OnNeutral` are the exception-free protocol. |
 | `RetryPolicy` | Bounded attempts, exponential backoff `min(MaxDelay, BaseDelay·2^(n-1))`, full jitter (`[0, delay]`, uniform) or none, optional total budget, a transient-exception classifier (`TransientFailure.IsTransient` by default) and a per-retry callback. `ExecuteUntilAsync` is the poll shape (retry on a `false` result, last poll at the deadline). | A first attempt that completes synchronously is returned as is: no state machine. Delays use `Task.Delay(…, TimeProvider, …)`, so tests drive them with a fake clock. |
 | `Bulkhead` | `MaxConcurrency` slots + `MaxQueue` waiters; anything beyond is refused at once with `BulkheadRejectedException`. | `SemaphoreSlim.Wait(0)` fast path, interlocked queue counter; nothing allocated when a slot is free. |
-| `TimeoutPolicy` | Per-call deadline. `Cooperative` cancels the operation's token; `Pessimistic` additionally stops waiting (for APIs that block or ignore their token, e.g. Microsoft.Data.Sqlite's async methods). | One linked `CancellationTokenSource` and one timer per call, by nature. Keep it on I/O, never on per-packet in-memory work. |
+| `TimeoutPolicy` | Per-call deadline. `Cooperative` cancels the operation's token; `Pessimistic` additionally stops waiting (for APIs that block or ignore their token, e.g. Microsoft.Data.Sqlite's async methods). The deadline is a `CancellationTokenSource(timeout, timeProvider)`, never a separate timer calling `Cancel()`: a timer's `Dispose()` does not wait for a callback already dequeued, and a call completing at the deadline would let that callback throw `ObjectDisposedException` on a timer thread and abort the process (`TimeoutPolicyDeadlineRaceTests` pins the race, by hand and under a 64-worker stress with first-chance and unobserved-exception hooks). | One `CancellationTokenSource` carrying the deadline timer per call, plus a linked one when the caller's token can be cancelled, by nature. Keep it on I/O, never on per-packet in-memory work. |
 | `Policy.Builder(name)…Build()` → `ResiliencePipeline` | Composes the four in the fixed order bulkhead → retry → breaker → timeout (each optional). | A struct frame threaded through cached `static` lambdas: no allocation beyond the layers' own. |
 | `TransientFailure` | The default classifier: `TimeoutException`, `SocketException`, `IOException`, `DbException.IsTransient`, `TimeoutRejectedException`, `DependencyUnavailableException` (walking inner exceptions, depth 8). Never: caller cancellation, `CircuitOpenException`, `BulkheadRejectedException`, business exceptions. | Pure. |
 | `ResilienceException` family | `CircuitOpenException`, `BulkheadRejectedException`, `TimeoutRejectedException`, `DependencyUnavailableException`: one base type to catch for "the dependency is the problem". | – |
@@ -50,6 +50,17 @@ contain no `async` state machine).
   through bulkhead → breaker → timeout; a transient failure counts and is rethrown as `DependencyUnavailableException`;
   anything else passes through. `BootstrapAsync` wraps the start-up schema initialisation in the
   `Resilience:Database:Bootstrap` retry. `PipelineFor(component)` exposes the composed pipeline for callers adding their own layer.
+  The timeout strategy follows each component's `Database:<Component>:Provider` (`DatabaseGuard.TimeoutStrategyFor`):
+  `Cooperative` for MariaDB/MySQL (MySqlConnector) and PostgreSQL (Npgsql), which honour the cancellation token;
+  `Pessimistic` for `Sqlite`, because Microsoft.Data.Sqlite's async methods run synchronously and ignore the token.
+  Measured on Linux: a guarded EF read against a file another connection holds (`PRAGMA locking_mode=EXCLUSIVE` +
+  `BEGIN EXCLUSIVE`) blocked 30 082 ms under the cooperative strategy, SQLite's busy timeout, whatever `QueryTimeoutMs`
+  said; with the pessimistic strategy the caller gets `TimeoutRejectedException` at the deadline. **Cost of the
+  pessimistic strategy:** the abandoned call keeps its thread-pool thread until SQLite gives up (the connection's
+  `Default Timeout`, 30 s) or the lock is released, its result is discarded, and disposing the scope whose connection it
+  still uses may block until that statement returns (SQLite serialises the calls on one connection; measured only after
+  the lock release, where it took under 5 s, UNVERIFIED while the lock is still held). One parked thread per refused
+  call is the price of a bounded answer on the zero-setup engine; the network providers pay nothing extra.
 - `DatabaseStartup.InitializeAsync` (both daemons' start-up path) runs the initializers through `BootstrapAsync` when
   the guard is registered and turns a final transient failure into one scrubbed line,
   `database unreachable: MySqlException: Unable to connect to any of the specified MySQL hosts.`, and exit code **6**
@@ -90,7 +101,7 @@ section stops the process before a port is bound.
 | Key | Default | Meaning | Fail-closed behaviour |
 |---|---|---|---|
 | `Resilience:Database:Enabled` | `true` | `false` turns the guard off: calls go straight to the store, start-up is not retried (pre-lane behaviour). | With the guard off a dead database is a per-call exception again (`session error` with a stack per client). |
-| `Resilience:Database:QueryTimeoutMs` | `5000` | Longest one guarded call may take; 0 disables. 1..600000. | A call past the deadline is cancelled, counted as a failure, and answered with the refusal. |
+| `Resilience:Database:QueryTimeoutMs` | `5000` | Longest one guarded call may take; 0 disables. 1..600000. | A call past the deadline is cancelled, counted as a failure, and answered with the refusal. With the `Sqlite` provider the call is abandoned instead of cancelled (the driver ignores the token); the abandoned call parks a thread-pool thread until SQLite's own 30 s busy timeout or the lock release. |
 | `Resilience:Database:Breaker:FailureThreshold` | `5` | Consecutive failures that open the circuit; 0 disables this trip. | Open: every call refused for `OpenDurationMs`. |
 | `Resilience:Database:Breaker:FailureRateThreshold` | `0.5` | Failed share (0..1) of the calls in the window that opens the circuit; 0 disables this trip. Both trips cannot be 0. | Same. |
 | `Resilience:Database:Breaker:MinimumThroughput` | `10` | Calls that must be in the window before the rate is judged. ≥ 1. | Protects against one early failure tripping a quiet server. |
@@ -160,7 +171,9 @@ stops it at once, which is what those loops wanted); a transient error is retrie
 waiting through three connection timeouts, so the queue retains it and the next trigger (login barrier, logout, stop)
 retries it after the circuit has probed. The `FlushCharacterAsync` and `StopAsync` contracts are unchanged: they still
 fault while a character's write is not durable. Do not put a `TimeoutPolicy` around a multi-statement transaction with
-`Pessimistic`: the abandoned transaction would hold its locks until the provider gives up.
+`Pessimistic`: the abandoned transaction would hold its locks until the provider gives up. The guard's own timeout is
+pessimistic for the `Sqlite` provider (see above), so a queue that runs a multi-statement transaction through
+`DatabaseGuard.ExecuteAsync` against SQLite must keep the transaction inside one store call, as the realm stores do.
 
 ## Tests
 
@@ -171,17 +184,28 @@ fault while a character's write is not durable. Do not put a `TimeoutPolicy` aro
   cancellation mid-wait, total budget, `ExecuteUntil` poll times `0, 250, 500, 600`), `BulkheadTests` (reject fast,
   queue, cancel while queued, slot release on failure, 200 concurrent callers never exceed the cap), `TimeoutPolicyTests`
   (cooperative deadline, caller cancellation is not a timeout, pessimistic abandonment of a blocking call),
+  `TimeoutPolicyDeadlineRaceTests` (a hand-fired clock runs the deadline callback after the call has disposed its
+  source, cooperative and pessimistic, 250 times without an exception; 64 workers × 300 calls completing on either side
+  of a 2 ms deadline under the system clock, with `AppDomain.FirstChanceException` and
+  `TaskScheduler.UnobservedTaskException` hooked, raise nothing from `TimeoutPolicy`; before the fix the hand-fired test
+  returned the `ObjectDisposedException` and the stress aborted the test host),
   `PolicyPipelineTests` (retry stops at an open circuit, timeout counts as a failure, bulkhead outermost, classifier
   table), `ResilienceOptionsTests` (defaults, every bad key named, `ResilienceConfigChecks`),
   `AuthDatabaseOutageTests`: the daemon composed as `Program.cs` composes it, against an SQLite file in a missing
-  directory and against a MariaDB connection string to a closed loopback port; two real challenge packets are answered
-  `WOW_FAIL_DB_BUSY` each within the 2 s query timeout, the Auth circuit is open afterwards, the third client is
-  refused in under 2 s with `Rejected` incremented and no database attempt, the three log lines are present and no
-  `session error` or password appears in the log.
+  directory, against a bootstrapped SQLite file another connection holds in exclusive locking mode, and against a
+  MariaDB connection string to a closed loopback port; two real challenge packets are answered `WOW_FAIL_DB_BUSY` each
+  within the 2 s query timeout (the locked file would otherwise take 30 s each), the Auth circuit is open afterwards,
+  the third client is refused in under 2 s with `Rejected` incremented and no database attempt, the three log lines are
+  present and no `session error` or password appears in the log.
 - `tests/ArcaneCore.Data.Tests/Resilience`: `DatabaseTransienceTests` (SQLite codes, Npgsql `IsTransient`, EF wrapping),
   `DatabaseStartupResilienceTests` (closed port: three attempts logged, exit 6, password scrubbed; unopenable SQLite
   file: exit 6; schema refusal not retried; a reachable SQLite bootstraps and serves guarded calls; the guard translates
-  transient errors, passes domain errors, trips per component and honours `Enabled=false`).
+  transient errors, passes domain errors, trips per component and honours `Enabled=false`),
+  `DatabaseGuardSqliteLockTests` (the strategy follows each component's provider: MariaDB and PostgreSQL cooperative,
+  Sqlite pessimistic; a guarded read against a locked, bootstrapped SQLite file is refused with
+  `TimeoutRejectedException` within the 500 ms `QueryTimeoutMs` and counted as one failure, the next call after the
+  lock is released succeeds and clears the count, and disposing the abandoned call's scope then takes under 5 s; before
+  the fix the same call took 31 s and surfaced as `DependencyUnavailableException`).
 - Existing suites still pass: `LogonHandshakeTests`, the Realm `Security` tests, `SchemaLock*`.
 
 ## Limits and not done

@@ -15,9 +15,18 @@ public enum TimeoutStrategy
 }
 
 /// <summary>
-/// Bounds one call. <b>Allocation:</b> one linked <see cref="CancellationTokenSource"/> and one timer per call (the
-/// price of a per-call deadline); pessimistic mode adds a thread-pool work item and a <see cref="Task.WhenAny(Task[])"/>.
-/// Use it around I/O that already allocates, never around a per-packet in-memory step. Immutable and thread-safe.
+/// Bounds one call. <b>Allocation:</b> one <see cref="CancellationTokenSource"/> carrying the deadline timer per call,
+/// plus a second, linked one when the caller's token can be cancelled (the price of a per-call deadline); pessimistic
+/// mode adds a thread-pool work item and a <see cref="Task.WhenAny(Task[])"/>. Use it around I/O that already
+/// allocates, never around a per-packet in-memory step. Immutable and thread-safe.
+/// <para>
+/// <b>Deadline versus disposal.</b> The deadline is <c>new CancellationTokenSource(Timeout, timeProvider)</c>, never a
+/// separate timer whose callback calls <see cref="CancellationTokenSource.Cancel()"/>: a timer's <c>Dispose()</c> does
+/// not wait for a callback the timer queue has already dequeued, so an operation completing at the deadline would let
+/// that callback find a disposed source and throw on a timer thread, which aborts the process. The source's own timer
+/// callback is the runtime's, written for exactly that race (a late firing against a disposed source is a no-op).
+/// <c>TimeoutPolicyDeadlineRaceTests</c> pins this down.
+/// </para>
 /// </summary>
 public sealed class TimeoutPolicy
 {
@@ -44,16 +53,18 @@ public sealed class TimeoutPolicy
         Func<TState, CancellationToken, ValueTask<TResult>> operation, TState state, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(operation);
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        using ITimer timer = _time.CreateTimer(static s => ((CancellationTokenSource)s!).Cancel(), deadline, Timeout, System.Threading.Timeout.InfiniteTimeSpan);
+        using var deadline = new CancellationTokenSource(Timeout, _time);
+        using CancellationTokenSource? linked = cancellationToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token)
+            : null;
+        CancellationToken token = linked?.Token ?? deadline.Token;
         try
         {
             if (Strategy == TimeoutStrategy.Cooperative)
             {
-                return await operation(state, deadline.Token).ConfigureAwait(false);
+                return await operation(state, token).ConfigureAwait(false);
             }
 
-            CancellationToken token = deadline.Token;
             Task<TResult> work = Task.Run(() => operation(state, token).AsTask(), CancellationToken.None);
             Task expiry = Task.Delay(System.Threading.Timeout.InfiniteTimeSpan, _time, token);
             Task first = await Task.WhenAny(work, expiry).ConfigureAwait(false);

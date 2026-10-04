@@ -19,6 +19,8 @@ namespace ArcaneCore.Data.Resilience;
 /// <b>Threads and allocation.</b> Singleton, thread-safe, immutable after construction. The fast path adds no
 /// allocation of its own to the store call (the pipeline threads a struct frame through cached static lambdas);
 /// with a timeout configured, each call allocates the deadline's token source and timer, see <see cref="TimeoutPolicy"/>.
+/// The timeout strategy follows each component's provider (<see cref="TimeoutStrategyFor"/>): cooperative for the
+/// network providers, pessimistic for SQLite, whose driver ignores the token.
 /// The World write queues keep their own ordering and retention; their migration is described in docs/ops/resilience.md.
 /// </para>
 /// </summary>
@@ -28,13 +30,16 @@ public sealed class DatabaseGuard
     private readonly RetryPolicy _bootstrapRetry;
     private readonly ILogger<DatabaseGuard> _logger;
 
-    public DatabaseGuard(IOptions<ResilienceOptions> options, DatabaseCircuits circuits, ILogger<DatabaseGuard> logger, TimeProvider? timeProvider = null)
+    public DatabaseGuard(
+        IOptions<ResilienceOptions> options, IOptions<DatabaseOptions> databases, DatabaseCircuits circuits, ILogger<DatabaseGuard> logger, TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(databases);
         ArgumentNullException.ThrowIfNull(circuits);
         ArgumentNullException.ThrowIfNull(logger);
         _logger = logger;
         DatabaseResilienceOptions settings = options.Value.Database;
+        DatabaseOptions connections = databases.Value;
         Enabled = settings.Enabled;
         Circuits = circuits;
         QueryTimeout = TimeSpan.FromMilliseconds(settings.QueryTimeoutMs);
@@ -52,7 +57,7 @@ public sealed class DatabaseGuard
 
             if (settings.QueryTimeoutMs > 0)
             {
-                builder.WithTimeout(new TimeoutPolicy(QueryTimeout, timeProvider));
+                builder.WithTimeout(new TimeoutPolicy(QueryTimeout, timeProvider, TimeoutStrategyFor(connections.Resolve(component).Provider)));
             }
 
             _pipelines[(int)component] = builder.Build();
@@ -71,6 +76,21 @@ public sealed class DatabaseGuard
 
     /// <summary>The pipeline of one logical database (for callers that compose further, e.g. a queue adding its own retry).</summary>
     public ResiliencePipeline PipelineFor(DatabaseComponent component) => _pipelines[(int)component];
+
+    /// <summary>
+    /// How <c>Resilience:Database:QueryTimeoutMs</c> is enforced for a provider. MySqlConnector and Npgsql honour the
+    /// cancellation token, so the deadline cancels the call (<see cref="TimeoutStrategy.Cooperative"/>).
+    /// Microsoft.Data.Sqlite's async methods run synchronously and ignore the token: against a file another connection
+    /// holds, they sit in SQLite's busy handler for the connection's <c>Default Timeout</c> (30 s) however short the
+    /// deadline is, so for <see cref="DatabaseProvider.Sqlite"/> the guard stops waiting on its own
+    /// (<see cref="TimeoutStrategy.Pessimistic"/>) and answers the refusal on time. The cost, documented in
+    /// docs/ops/resilience.md: the abandoned call keeps its thread-pool thread until SQLite gives up or the lock is
+    /// released, its result is discarded, and disposing its scope (the connection it still uses) may block until that
+    /// statement returns, SQLite serialising the calls on one connection (measured only after the lock release: under
+    /// 5 s). SQLite is the zero-setup development and test engine; a bounded answer is worth one parked thread there.
+    /// </summary>
+    public static TimeoutStrategy TimeoutStrategyFor(DatabaseProvider provider)
+        => provider == DatabaseProvider.Sqlite ? TimeoutStrategy.Pessimistic : TimeoutStrategy.Cooperative;
 
     /// <summary>Run one store call against <paramref name="component"/> under its pipeline.</summary>
     public ValueTask<TResult> ExecuteAsync<TState, TResult>(

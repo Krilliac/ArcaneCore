@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using ArcaneCore.Data;
+using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Resilience;
 using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Accounts;
@@ -11,6 +12,7 @@ using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Kernel.Resilience;
 using ArcaneCore.Realm.Net;
 using ArcaneCore.Realm.Protocol;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -21,8 +23,10 @@ namespace ArcaneCore.Realm.Tests.Resilience;
 
 /// <summary>
 /// The daemon composed as Program.cs composes it (AddAuthDatabase + AddRealmResilience), against an auth database
-/// that is not there: an SQLite file in a directory that does not exist (SQLITE_CANTOPEN on the first query) and a
-/// MariaDB connection string pointing at a closed loopback port (connection refused while the context is built).
+/// that is not there or does not answer: an SQLite file in a directory that does not exist (SQLITE_CANTOPEN on the
+/// first query), an SQLite file another connection holds exclusively (the driver ignores its token and would wait the
+/// 30 s busy timeout) and a MariaDB connection string pointing at a closed loopback port (connection refused while the
+/// context is built).
 /// A real 1.12.1-shaped challenge must be answered WOW_FAIL_DB_BUSY within the configured time, the circuit must
 /// open after the configured failures and refuse the next client without touching the database, with the log lines.
 /// </summary>
@@ -36,6 +40,55 @@ public sealed class AuthDatabaseOutageTests
     {
         string missing = Path.Combine(Path.GetTempPath(), "arcanecore-missing-" + Guid.NewGuid().ToString("N"), "auth.db");
         await RunOutageAsync(("Database:Provider", "Sqlite"), ("Database:ConnectionString", $"Data Source={missing}"));
+    }
+
+    [Fact]
+    public async Task LockedSqliteFile_RefusesLogonWithDbBusy_WithinTheQueryTimeout_AndOpensTheCircuit()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "arcanecore-locked-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string file = Path.Combine(directory, "auth.db");
+        (string, string?)[] database = [("Database:Provider", "Sqlite"), ("Database:ConnectionString", $"Data Source={file}")];
+        try
+        {
+            // The schema exists, as after a normal start; then another connection takes the file for itself. The
+            // bootstrap leaves the file in WAL mode, where only exclusive locking mode stops readers as well as writers.
+            await using (ServiceProvider bootstrap = BuildAuthDatabase(database))
+            {
+                await bootstrap.GetRequiredService<AuthDbInitializer>().InitializeAsync();
+            }
+
+            await using var holder = new SqliteConnection($"Data Source={file}");
+            await holder.OpenAsync();
+            await ExecuteAsync(holder, "PRAGMA locking_mode=EXCLUSIVE");
+            await ExecuteAsync(holder, "BEGIN EXCLUSIVE");
+            await ExecuteAsync(holder, "SELECT count(*) FROM sqlite_master");
+
+            // Without the pessimistic strategy each of these logons would wait SQLite's 30 s busy timeout, not 2 s.
+            var watch = Stopwatch.StartNew();
+            await RunOutageAsync(database);
+            Assert.True(watch.Elapsed < TimeSpan.FromSeconds(20), $"the outage scenario took {watch.Elapsed}");
+
+            await ExecuteAsync(holder, "ROLLBACK");
+            await ExecuteAsync(holder, "PRAGMA locking_mode=NORMAL");
+            await ExecuteAsync(holder, "SELECT count(*) FROM sqlite_master");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    Directory.Delete(directory, recursive: true);
+                    break;
+                }
+                catch (IOException) when (attempt < 100)
+                {
+                    await Task.Delay(100);
+                }
+            }
+        }
     }
 
     [Fact]
@@ -175,6 +228,21 @@ public sealed class AuthDatabaseOutageTests
 
     private static IConfiguration Config(params (string Key, string? Value)[] values)
         => new ConfigurationBuilder().AddInMemoryCollection(values.ToDictionary(v => v.Key, v => v.Value)).Build();
+
+    private static ServiceProvider BuildAuthDatabase(params (string Key, string? Value)[] database)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddAuthDatabase(Config(database));
+        return services.BuildServiceProvider();
+    }
+
+    private static async Task ExecuteAsync(SqliteConnection connection, string sql)
+    {
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync();
+    }
 
     private static int FreePort()
     {
