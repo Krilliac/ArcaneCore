@@ -10,10 +10,11 @@ using static ArcaneCore.Game.Tests.ItemTestData;
 namespace ArcaneCore.Game.Tests.ItemMechanics;
 
 /// <summary>
-/// Durability loss from combat damage (vmangos Unit::DealDamage, Unit.cpp:1093-1108, with Player::DurabilityPointLossForEquipSlot,
-/// Player.cpp:4896): a surviving player victim wears one uniformly chosen equipment slot, a connecting swing wears the weapon of
-/// its hand, both at <c>Items:DurabilityLossChanceDamage</c> percent; a broken item stops contributing; the death penalty is the
-/// existing one (<see cref="Death.PlayerDeathDurabilityTests"/>).
+/// Durability loss from combat damage (mangosserver Unit::DealDamage, Unit.cpp:1093-1108, with Player::DurabilityPointLossForEquipSlot,
+/// PlayerDurability.cpp:253-259): a surviving player victim wears one uniformly chosen worn piece of armor with durability (the
+/// reference rolls over all 19 slots, Unit.cpp:1096, and wastes the roll on an empty or durability-less slot; the pool here is the
+/// armor only, docs/areas/items.md), a connecting swing wears the weapon of its hand, both at <c>Items:DurabilityLossChanceDamage</c>
+/// percent; a broken item stops contributing; the death penalty is the existing one (<see cref="Death.PlayerDeathDurabilityTests"/>).
 /// </summary>
 public sealed class CombatDurabilityTests
 {
@@ -27,6 +28,17 @@ public sealed class CombatDurabilityTests
     private static readonly byte[] DurableSlots =
         [InventorySlots.Head, InventorySlots.Shoulders, InventorySlots.Chest, InventorySlots.Waist, InventorySlots.Legs, InventorySlots.Feet,
             InventorySlots.Wrists, InventorySlots.Hands, InventorySlots.Back, InventorySlots.MainHand, InventorySlots.OffHand, InventorySlots.Ranged];
+
+    /// <summary>
+    /// The hit-taken pool on that victim, in slot order: the armor pieces of <see cref="DurableSlots"/> (the off hand is a shield).
+    /// The main-hand sword and the ranged bow are weapons and wear on the hit done only.
+    /// </summary>
+    private static readonly byte[] ArmorSlots =
+        [InventorySlots.Head, InventorySlots.Shoulders, InventorySlots.Chest, InventorySlots.Waist, InventorySlots.Legs, InventorySlots.Feet,
+            InventorySlots.Wrists, InventorySlots.Hands, InventorySlots.Back, InventorySlots.OffHand];
+
+    /// <summary>The worn items of <see cref="DurableSlots"/> that the hit-taken roll never touches: the weapons.</summary>
+    private static readonly byte[] WeaponSlots = [InventorySlots.MainHand, InventorySlots.Ranged];
 
     private static readonly ItemTemplateStore Store = new(
         [
@@ -212,10 +224,10 @@ public sealed class CombatDurabilityTests
         }
     }
 
-    // --- hit taken: one of the 19 equipment slots, uniformly ------------------------------------------
+    // --- hit taken: one of the worn armor pieces with durability, uniformly -----------------------------
 
     [Fact]
-    public void HitsTaken_WearUniformlyChosenSlots_AtTheConfiguredChance_AndSkipItemsWithoutDurability()
+    public void HitsTaken_WearTheWornArmorUniformly_AtTheConfiguredChance_AndNeverAWeaponOrAnItemWithoutDurability()
     {
         Scene s = Create(seeded: true, seed: 11);
         using (s.World)
@@ -226,21 +238,41 @@ public sealed class CombatDurabilityTests
 
             Swing(s, WeaponAttackType.BaseAttack, 5000);
 
-            uint total = (uint)DurableSlots.Sum(slot => Lost(s.Victim, slot));
-            // 10% of 5000 = 500 events, 12 of the 19 slots hold a durable item: ~316 points (sd 11).
-            Assert.InRange(total, 250u, 380u);
-            foreach (byte slot in DurableSlots)
+            uint total = (uint)ArmorSlots.Sum(slot => Lost(s.Victim, slot));
+            // 10% of 5000 = 500 events, every one of them on one of the 10 armor pieces: ~500 points (sd 21).
+            Assert.InRange(total, 420u, 580u);
+            foreach (byte slot in ArmorSlots)
             {
-                Assert.InRange(Lost(s.Victim, slot), 10u, 45u); // ~26 each (sd 5): the slots weigh the same
+                Assert.InRange(Lost(s.Victim, slot), 25u, 80u); // ~50 each (sd 7): the pieces weigh the same
             }
 
+            Assert.All(WeaponSlots, slot => Assert.Equal(0u, Lost(s.Victim, slot))); // the weapons wear on the hit done only
             Assert.Equal(0u, At(s.Victim, InventorySlots.Finger1).MaxDurability);
             Assert.Equal(0u, At(s.Victim, InventorySlots.Finger1).Durability);
         }
     }
 
     [Fact]
-    public void EachRolledSlot_WearsExactlyThatSlot_ByOnePoint()
+    public void HitsTaken_WithOnePieceOfArmorWorn_PutEveryWearEventOnIt()
+    {
+        Scene s = Create(seeded: true, seed: 5);
+        using (s.World)
+        {
+            s.Victim.Inventory.Load([Row(InventorySlots.Chest, ArmorEntryBase + InventorySlots.Chest), Row(InventorySlots.MainHand, SwordEntry), Row(InventorySlots.Finger1, RingEntry, 0)]);
+            SetChance(s.Victim, 10);
+            SetChance(s.Attacker, 0);
+
+            Swing(s, WeaponAttackType.BaseAttack, 2000);
+
+            // 10% of 2000 = 200 events (sd 13), none wasted on the 16 empty slots, the ring or the sword
+            // (the reference core's 19-slot roll would land about 200 / 19 = 10 of them on the chest).
+            Assert.InRange(Lost(s.Victim, InventorySlots.Chest), 140u, 260u);
+            Assert.Equal(0u, Lost(s.Victim, InventorySlots.MainHand));
+        }
+    }
+
+    [Fact]
+    public void EachRolledIndex_WearsExactlyThatWornArmorPiece_ByOnePoint()
     {
         Scene s = Create();
         using (s.World)
@@ -249,22 +281,82 @@ public sealed class CombatDurabilityTests
             SetChance(s.Attacker, 0);
             s.Scripted.DefaultFraction = 0.004f; // the percent roll lands on 0.4: below the default 0.5
 
-            for (int slot = 0; slot < InventorySlots.EquipmentEnd; slot++)
+            for (int index = 0; index < ArmorSlots.Length; index++)
             {
                 uint[] before = DurableSlots.Select(d => At(s.Victim, d).Durability).ToArray();
                 s.Scripted.Ints.Enqueue(CombatConstants.RollRange - 1); // the hit table: a plain hit
-                s.Scripted.Ints.Enqueue(slot);                           // then the slot pick
+                s.Scripted.Ints.Enqueue(index);                          // then the pick: the index into the worn armor, in slot order
 
                 Swing(s);
 
                 for (int i = 0; i < DurableSlots.Length; i++)
                 {
-                    uint expected = DurableSlots[i] == slot ? before[i] - 1 : before[i];
+                    uint expected = DurableSlots[i] == ArmorSlots[index] ? before[i] - 1 : before[i];
                     Assert.Equal(expected, At(s.Victim, DurableSlots[i]).Durability);
                 }
 
                 Assert.Empty(s.Scripted.Ints);
             }
+        }
+    }
+
+    [Fact]
+    public void TheSlotRoll_IsBoundedByTheWornArmorCount_NotTheNineteenSlots()
+    {
+        Scene s = Create();
+        using (s.World)
+        {
+            s.Victim.Inventory.Load([Row(InventorySlots.Head, ArmorEntryBase + InventorySlots.Head), Row(InventorySlots.Legs, ArmorEntryBase + InventorySlots.Legs), Row(InventorySlots.MainHand, SwordEntry)]);
+            SetChance(s.Attacker, 0);
+            s.Scripted.DefaultFraction = 0.004f;
+            s.Scripted.Ints.Enqueue(CombatConstants.RollRange - 1);
+            s.Scripted.Ints.Enqueue(InventorySlots.Tabard); // the scripted source clamps to the requested range: [0, 1] here, so the legs
+
+            Swing(s);
+
+            Assert.Equal(1u, Lost(s.Victim, InventorySlots.Legs));
+            Assert.Equal(0u, Lost(s.Victim, InventorySlots.Head));
+            Assert.Equal(0u, Lost(s.Victim, InventorySlots.MainHand));
+            Assert.Empty(s.Scripted.Ints);
+        }
+    }
+
+    [Fact]
+    public void NoArmorWorn_DrawsNoSlot_AndWearsNothing()
+    {
+        Scene s = Create();
+        using (s.World)
+        {
+            s.Victim.Inventory.Load([Row(InventorySlots.MainHand, SwordEntry), Row(InventorySlots.Finger1, RingEntry, 0)]);
+            SetChance(s.Attacker, 0);
+            s.Scripted.DefaultFraction = 0.004f; // the percent roll succeeds
+            s.Scripted.Ints.Enqueue(CombatConstants.RollRange - 1);
+            s.Scripted.Ints.Enqueue(InventorySlots.MainHand);
+
+            Swing(s);
+
+            Assert.Equal(0u, Lost(s.Victim, InventorySlots.MainHand));
+            Assert.Single(s.Scripted.Ints); // no pool, no pick
+        }
+    }
+
+    [Fact]
+    public void ABrokenPieceOfArmor_StaysInThePool_AndItsRollDoesNothing()
+    {
+        Scene s = Create();
+        using (s.World)
+        {
+            s.Victim.Inventory.Load([Row(InventorySlots.Head, ArmorEntryBase + InventorySlots.Head, durability: 0), Row(InventorySlots.Chest, ArmorEntryBase + InventorySlots.Chest)]);
+            SetChance(s.Attacker, 0);
+            s.Scripted.DefaultFraction = 0.004f;
+            s.Scripted.Ints.Enqueue(CombatConstants.RollRange - 1);
+            s.Scripted.Ints.Enqueue(0); // the head: broken, absorbs the roll as in the reference core
+
+            Swing(s);
+
+            Assert.Equal(0u, At(s.Victim, InventorySlots.Head).Durability);
+            Assert.Equal(0u, Lost(s.Victim, InventorySlots.Chest));
+            Assert.Empty(s.Scripted.Ints);
         }
     }
 
@@ -297,7 +389,7 @@ public sealed class CombatDurabilityTests
             var creature = new CombatTestUnit();
             creature.Spawn(s.Map, 2, 1);
             s.Scripted.DefaultFraction = 0.004f;
-            s.Scripted.Ints.Enqueue(InventorySlots.Legs);
+            s.Scripted.Ints.Enqueue(Array.IndexOf(ArmorSlots, InventorySlots.Legs));
 
             uint dealt = s.Map.Combat.DealDamage(creature, s.Victim, 10);
 

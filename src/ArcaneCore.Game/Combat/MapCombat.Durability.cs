@@ -9,13 +9,17 @@ public sealed partial class MapCombat
     private const float DurabilityChancePercentScale = 100f;
 
     /// <summary>
-    /// Armor wear on a hit taken (vmangos Unit::DealDamage, "random durability for items (HIT TAKEN)", Unit.cpp:1093-1098):
-    /// when a player victim survives a damage event, <c>Items:DurabilityLossChanceDamage</c> percent of the time one equipment
-    /// slot is picked uniformly (vmangos <c>urand(0, EQUIPMENT_SLOT_END - 1)</c>: all 19 slots weigh the same, and a slot that is
-    /// empty or holds an item without durability, such as the neck, rings, trinkets, body and tabard, takes nothing) and the item
-    /// there loses one point. Called from <see cref="DealDamage"/> on the survivor path only, so the killing blow wears nothing
-    /// and the 10% death penalty (<see cref="ApplyDeathDurabilityLoss"/>) is untouched. Self damage (environment) counts as taken
-    /// damage here as it does in vmangos. World thread only; allocation free (one float roll, one integer roll on a hit).
+    /// Armor wear on a hit taken (mangosserver Unit::DealDamage, "random durability for items (HIT TAKEN)", Unit.cpp:1093-1098):
+    /// when a player victim survives a damage event, <c>Items:DurabilityLossChanceDamage</c> percent of the time one worn piece
+    /// of armor with durability is picked uniformly and loses one point. The reference rolls <c>urand(0, EQUIPMENT_SLOT_END - 1)</c>
+    /// over all 19 slots with equal weight (Unit.cpp:1096) and lets an empty slot (PlayerDurability.cpp:253-259) or an item without
+    /// durability (PlayerDurability.cpp:213-228) absorb the roll; no reference core weights the slots. Here the pool is the worn
+    /// armor only (<see cref="PlayerInventory.CollectWornArmorWithDurability"/>: no empty slot, no neck, ring, trinket, shirt or
+    /// tabard, no weapon, since the weapon wears on the hit done), still uniform within the pool, so every successful percent roll
+    /// wears a piece of armor (docs/areas/items.md, deliberate difference). Nothing is drawn when no armor is worn. Called from
+    /// <see cref="DealDamage"/> on the survivor path only, so the killing blow wears nothing and the 10% death penalty
+    /// (<see cref="ApplyDeathDurabilityLoss"/>) is untouched. Self damage (environment) counts as taken damage here as it does in
+    /// the reference. World thread only; allocation free (one float roll, a stack-allocated slot list, one integer roll on a hit).
     /// </summary>
     private void RollHitTakenDurability(Unit victim)
     {
@@ -24,7 +28,14 @@ public sealed partial class MapCombat
             return;
         }
 
-        player.Inventory.DurabilityPointLossForEquipSlot((byte)Random.Next(0, InventorySlots.EquipmentEnd - 1));
+        Span<byte> armor = stackalloc byte[InventorySlots.EquipmentEnd];
+        int count = player.Inventory.CollectWornArmorWithDurability(armor);
+        if (count == 0)
+        {
+            return;
+        }
+
+        player.Inventory.DurabilityPointLossForEquipSlot(armor[Random.Next(0, count - 1)]);
     }
 
     /// <summary>
