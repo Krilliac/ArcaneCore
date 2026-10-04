@@ -41,7 +41,7 @@ every deliberate difference sits behind the `Auras` configuration section (class
 - Visible-slot overflow eviction (16 debuffs), `IsNeedVisibleSlot` special cases, `UpdateAuraForGroup` party aura slots, area aura rank selection and
   pet/owner areas, persistent area auras (no dynamic object entity exists), channel aura rules (per-second cost, range), heartbeat resist of crowd control,
   interrupt sources (`Moving`, `Turning`, `Interacting`, ... have no trigger), holder permanence rules for passive-with-visual spells.
-- Polymorph health regeneration (needs the transform aura), `Transform`, proc trigger auras and charge consumption, spell modifier auras, percent stat auras,
+- Polymorph health regeneration (the transform aura exists now, `transform-and-charge.md`), proc trigger auras and charge consumption, spell modifier auras, percent stat auras,
   skill auras, creature spawn addon auras: owned by other wave-4 lanes or unscheduled; each row in the matrix names the owner.
 - `CMSG_CANCEL_AURA` possess exception (remote control is not modelled: a player is always its own mover).
 
@@ -110,7 +110,7 @@ disagrees with the live registrations of a composed world host.
 | 53 | PeriodicLeech | Handler | `HandlePeriodicLeech` (SpellAuras.cpp:118) | DrainAuras.cs, SpellCoefficients.cs, SpellInfoRuleExtensions.cs |  |
 | 54 | ModHitChance | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:119) |  |  |
 | 55 | ModSpellHitChance | Referenced | `HandleModSpellHitChance` (SpellAuras.cpp:120) | SpellCombatRules.cs, SpellSystem.Feign.cs |  |
-| 56 | Transform | Unsupported | `HandleAuraTransform` (SpellAuras.cpp:121) |  | aura-transform (not scheduled) |
+| 56 | Transform | Handler | `HandleAuraTransform` (SpellAuras.cpp:121) | TransformAuras.cs, ShapeshiftService.cs, CombatOptions.cs |  |
 | 57 | ModSpellCritChance | Referenced | `HandleModSpellCritChance` (SpellAuras.cpp:122) | SpellCombatRules.cs |  |
 | 58 | ModIncreaseSwimSpeed | Handler | `HandleAuraModIncreaseSwimSpeed` (SpellAuras.cpp:123) | SpeedAuras.cs, UnitSpeed.cs |  |
 | 59 | ModDamageDoneCreature | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:124) |  |  |
