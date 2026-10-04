@@ -37,9 +37,16 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
         byte srcSlot = reader.ReadByte();
         PlayerInventory inventory = player.Inventory;
 
-        if (!inventory.IsValidPosition(srcBag, srcSlot, explicitPos: true) || !inventory.IsValidPosition(dstBag, dstSlot, explicitPos: true))
+        if (!inventory.IsValidPosition(srcBag, srcSlot, explicitPos: true))
         {
             inventory.SendEquipError(InventoryResult.ItemNotFound, null, null);
+            return;
+        }
+
+        // vmangos ItemHandler.cpp:115-126 distinguishes an invalid destination from a missing source.
+        if (!inventory.IsValidPosition(dstBag, dstSlot, explicitPos: true))
+        {
+            inventory.SendEquipError(InventoryResult.ItemDoesntGoToSlot, null, null);
             return;
         }
 
@@ -70,9 +77,16 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        if (!inventory.IsValidPosition(InventorySlots.Bag0, srcSlot, explicitPos: true) || !inventory.IsValidPosition(InventorySlots.Bag0, dstSlot, explicitPos: true))
+        if (!inventory.IsValidPosition(InventorySlots.Bag0, srcSlot, explicitPos: true))
         {
             inventory.SendEquipError(InventoryResult.ItemNotFound, null, null);
+            return;
+        }
+
+        // vmangos ItemHandler.cpp:52-64 reports the destination separately.
+        if (!inventory.IsValidPosition(InventorySlots.Bag0, dstSlot, explicitPos: true))
+        {
+            inventory.SendEquipError(InventoryResult.ItemDoesntGoToSlot, null, null);
             return;
         }
 
@@ -134,9 +148,16 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
             return; // vmangos: "check count - if zero it's fake packet"
         }
 
-        if (!inventory.IsValidPosition(srcBag, srcSlot, explicitPos: true) || !inventory.IsValidPosition(dstBag, dstSlot, explicitPos: true))
+        if (!inventory.IsValidPosition(srcBag, srcSlot, explicitPos: true))
         {
             inventory.SendEquipError(InventoryResult.ItemNotFound, null, null);
+            return;
+        }
+
+        // vmangos ItemHandler.cpp:36-48 accepts an automatic destination and uses a distinct error.
+        if (!inventory.IsValidPosition(dstBag, dstSlot, explicitPos: false))
+        {
+            inventory.SendEquipError(InventoryResult.ItemDoesntGoToSlot, null, null);
             return;
         }
 
