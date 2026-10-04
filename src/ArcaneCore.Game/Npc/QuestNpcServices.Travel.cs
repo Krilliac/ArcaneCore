@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
@@ -188,17 +189,9 @@ public sealed partial class QuestNpcServices
             }
 
             paths[i - 1] = path.Id;
-            // vmangos Player.cpp:17963-17997 and PlayerTaxi.cpp:126-136 round each leg
-            // separately before checking the total. The first leg is paid on launch;
-            // later legs are paid at their path transition.
-            float discountedLeg = path.Price * discount;
-            if (!float.IsFinite(discountedLeg) || discountedLeg < 0 || discountedLeg >= uint.MaxValue)
-            {
-                TaxiReply(player, ActivateTaxiReply.UnspecifiedServerError);
-                return;
-            }
-
-            legCosts[i - 1] = (uint)(discountedLeg + 0.5f);
+            // vmangos Player.cpp:17963-17997 and PlayerTaxi.cpp:126-136 round each leg separately before checking the total. The first leg is paid
+            // on launch; later legs are paid at their path transition.
+            legCosts[i - 1] = ReputationPricing.Round(path.Price, discount); // Player.cpp:17977, 17997
             total += legCosts[i - 1];
         }
 

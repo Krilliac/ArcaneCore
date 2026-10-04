@@ -6,7 +6,8 @@ using ArcaneCore.Kernel.Reputation;
 namespace ArcaneCore.Game.Reputation;
 
 /// <summary>One quest reputation reward slot (quest_template RewRepFaction1..5 / RewRepValue1..5).</summary>
-public readonly record struct QuestReputationReward(uint FactionId, int Value);
+/// <param name="NoSpillover">The vmangos per-quest RewRepSpilloverMask bit (QuestDef.h:256): skip the spillover of this pair. No importer feeds it yet (classic-db has no such column).</param>
+public readonly record struct QuestReputationReward(uint FactionId, int Value, bool NoSpillover = false);
 
 /// <summary>
 /// The quest-settlement seam (vmangos Player::RewardReputation(Quest const*)). The quest owner

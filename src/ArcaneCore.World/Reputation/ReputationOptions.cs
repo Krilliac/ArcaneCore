@@ -17,4 +17,26 @@ public sealed class ReputationOptions
     public float RateGain { get; set; } = 1f;
 
     public float RateLowLevelKill { get; set; } = 0.2f;
+
+    /// <summary>
+    /// Retail (false) lets forced peace be lifted by the RELATIVE standing only (ReputationMgr.cpp:334-336);
+    /// true compares the effective rank including the race base. Deliberate deviation, default retail.
+    /// </summary>
+    public bool PeaceForcedUsesEffectiveStanding { get; set; }
+
+    /// <summary>Retail (true): reputation_spillover_template applies (ReputationMgr.cpp:211-243). False switches every spillover off.</summary>
+    public bool SpilloverEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Retail (true): combat attackability and creature aggro follow player reputation (at war, Hated guards, contested guards,
+    /// forced reactions; Object.cpp:3608-3816). False keeps the template-only hooks. Needs Faction.dbc and FactionTemplate.dbc.
+    /// </summary>
+    public bool CombatReactions { get; set; } = true;
+
+    /// <summary>
+    /// Send SMSG_SET_FORCED_REACTIONS when a forced-reaction aura applies or fades (default false). The layout is vmangos (u32 faction, u32 rank);
+    /// gtker/wow_messages types the faction as a u16, so the width is unconfirmed by a real client. The forced reaction itself works
+    /// on the server either way; only the client display of it needs the packet.
+    /// </summary>
+    public bool SendForcedReactions { get; set; }
 }

@@ -12,7 +12,7 @@ namespace ArcaneCore.Game.Reputation;
 /// as a u16 Faction; vmangos and TrinityCore read a u32 reputation-list index, which this
 /// server follows (docs/integration/reputation.md).
 /// </summary>
-public static class ReputationPackets
+public static partial class ReputationPackets
 {
     /// <summary>SMSG_INITIALIZE_FACTIONS: u32 64, then 64 × (u8 flags, u32 standing relative to the base) by list slot.</summary>
     public static byte[] InitializeFactions(PlayerReputation? reputation)

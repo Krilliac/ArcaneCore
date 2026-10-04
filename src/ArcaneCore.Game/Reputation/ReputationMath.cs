@@ -117,7 +117,7 @@ public static class ReputationMath
     /// aura for kills) and are scaled for gray kills or low quests (patch 1.9 table).
     /// </summary>
     public static float GainBeforeDither(ReputationSource source, int rep, uint playerLevel, uint creatureOrQuestLevel,
-        ReputationRates rates, float gainModifierPercent = 0)
+        ReputationRates rates, float gainModifierPercent = 0, float? factionRate = null)
     {
         ArgumentNullException.ThrowIfNull(rates);
         float percent = 100f;
@@ -133,7 +133,23 @@ public static class ReputationMath
             percent *= rate;
         }
 
-        return percent <= 0 ? 0 : rates.Gain * rep * percent / 100f;
+        if (percent <= 0)
+        {
+            return 0;
+        }
+
+        // reputation_reward_rate (Player.cpp:6325-6350): the faction rate scales the percentage; zero disables gain.
+        if (factionRate is { } factionScale)
+        {
+            if (factionScale <= 0f)
+            {
+                return 0;
+            }
+
+            percent *= factionScale;
+        }
+
+        return rates.Gain * rep * percent / 100f;
     }
 
     /// <summary>Patch 1.9: 20% less per level once the quest is five or more levels below, down to 20%.</summary>
@@ -150,7 +166,10 @@ public static class ReputationMath
         };
     }
 
-    /// <summary>vmangos rand_dither: floor plus one with probability of the fractional part.</summary>
+    /// <summary>
+    /// vmangos rand_dither (Random.cpp:80-83): copysign(floor(|v| + frand(0,1)), v). <paramref name="roll"/> is the
+    /// frand(0,1) draw in [0,1); the magnitude rounds up with the probability of its fraction.
+    /// </summary>
     public static int Dither(float value, double roll)
     {
         if (!float.IsFinite(value))
@@ -158,8 +177,8 @@ public static class ReputationMath
             return 0;
         }
 
-        double floor = Math.Floor(value);
-        double result = floor + (roll < value - floor ? 1 : 0);
+        double magnitude = Math.Floor(Math.Abs((double)value) + roll);
+        double result = value < 0 ? -magnitude : magnitude;
         return (int)Math.Clamp(result, int.MinValue, int.MaxValue);
     }
 }

@@ -28,10 +28,11 @@ public sealed class FactionState(FactionRecord faction, FactionStateFlags flags)
 /// World thread once the player is in the world; the session task only builds it.
 /// Re-implemented from vmangos/core 4b3d241 ReputationMgr.cpp; no GPL source is copied.
 /// </summary>
-public sealed class PlayerReputation
+public sealed partial class PlayerReputation
 {
     private readonly SortedDictionary<int, FactionState> _states = [];
     private readonly List<int> _newlyVisible = [];
+    private readonly List<uint> _changed = [];
 
     public PlayerReputation(FactionCatalog factions, Race race, Class playerClass)
     {
@@ -52,6 +53,7 @@ public sealed class PlayerReputation
         RaceMask = source.RaceMask;
         ClassMask = source.ClassMask;
         WatchedFaction = source.WatchedFaction;
+        PeaceForcedUsesEffectiveStanding = source.PeaceForcedUsesEffectiveStanding;
         foreach ((int listId, FactionState state) in source._states)
         {
             _states[listId] = new FactionState(state.Faction, state.Flags)
@@ -71,6 +73,12 @@ public sealed class PlayerReputation
 
     /// <summary>PLAYER_FIELD_WATCHED_FACTION_INDEX: a reputation-list slot, -1 for none.</summary>
     public int WatchedFaction { get; internal set; } = -1;
+
+    /// <summary>
+    /// Option <c>Reputation:PeaceForcedUsesEffectiveStanding</c>. Retail (default false) compares the RELATIVE standing in the
+    /// forced-peace exception of SetAtWar (ReputationMgr.cpp:334-336); true compares the effective rank (base included).
+    /// </summary>
+    public bool PeaceForcedUsesEffectiveStanding { get; init; }
 
     public IEnumerable<FactionState> States => _states.Values;
 
@@ -161,6 +169,7 @@ public sealed class PlayerReputation
             SetAtWar(state, true);
         }
 
+        _changed.Add(faction.Id);
         return true;
     }
 
@@ -279,9 +288,10 @@ public sealed class PlayerReputation
             return false;
         }
 
-        // vmangos compares the relative standing here; the effective reputation is used so a
-        // nonzero race base cannot open or close the forced-peace exception.
-        if (atWar && (state.Flags & FactionStateFlags.PeaceForced) != 0 && Rank(state.Faction) > ReputationRank.Hated)
+        // ReputationMgr.cpp:334-336: ReputationToRank(faction->Standing) is the RELATIVE standing. The effective
+        // rank is only used behind Reputation:PeaceForcedUsesEffectiveStanding.
+        ReputationRank peaceRank = PeaceForcedUsesEffectiveStanding ? Rank(state.Faction) : ReputationMath.ToRank(state.Standing);
+        if (atWar && (state.Flags & FactionStateFlags.PeaceForced) != 0 && peaceRank > ReputationRank.Hated)
         {
             return false;
         }

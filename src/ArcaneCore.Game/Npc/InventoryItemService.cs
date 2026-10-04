@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Npc;
@@ -100,10 +101,8 @@ public sealed class InventoryItemService(
                 continue; // vmangos: unknown item level / quality row — nothing repaired
             }
 
-            // vmangos Player.cpp:4953-4958 truncates the base DBC cost first, then rounds
-            // the reputation-discounted copper amount with +0.5f (minimum one copper).
-            double discounted = baseCost * discount + 0.5f;
-            uint cost = discounted >= uint.MaxValue ? uint.MaxValue : (uint)Math.Max(discounted, 0);
+            // vmangos Player.cpp:4953-4958 truncates the base DBC cost first, then rounds the reputation-discounted amount with +0.5f.
+            uint cost = ReputationPricing.Round(baseCost, discount); // Player.cpp:4955 uint32(costs * discountMod + 0.5f)
             cost = Math.Max(cost, 1u); // vmangos "fix for ITEM_QUALITY_ARTIFACT"
             if (!pay(cost))
             {

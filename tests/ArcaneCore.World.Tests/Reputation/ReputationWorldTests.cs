@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Reputation;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
@@ -273,8 +274,22 @@ internal sealed class ReputationTestServices : IWorldTestServices
 {
     public static readonly AsyncLocal<MemoryReputationStore?> Current = new();
 
+    /// <summary>Spillover/reward-rate rows served by a fake <see cref="IReputationContentSource"/> (null: none registered).</summary>
+    public static readonly AsyncLocal<ReputationContentRows?> ContentRows = new();
+
+    /// <summary>A FactionTemplate catalog for the combat and creature features (null: none registered).</summary>
+    public static readonly AsyncLocal<FactionTemplateCatalog?> Templates = new();
+
+    /// <summary>A mutable content source (spillover, reward rates, kill rows) so reload tests can change the tables between loads.</summary>
+    public static readonly AsyncLocal<MutableReputationContent?> Mutable = new();
+
     public void Register(IServiceCollection services)
     {
+        if (Templates.Value is { } templates)
+        {
+            services.AddSingleton(templates);
+        }
+
         if (Current.Value is not { } store)
         {
             return;
@@ -287,6 +302,21 @@ internal sealed class ReputationTestServices : IWorldTestServices
             new FactionRecord(469, 10, [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0x04, 0, 0, 0], 0, "Alliance"),
             new FactionRecord(BootyBay, 0, [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], 0, "Booty Bay"),
         ]));
+        if (ContentRows.Value is { } rows)
+        {
+            services.AddSingleton<IReputationContentSource>(new FixedContentSource(rows));
+        }
+
+        if (Mutable.Value is { } mutable)
+        {
+            services.AddSingleton<IReputationContentSource>(mutable);
+            services.AddSingleton<IReputationOnKillSource>(mutable);
+        }
+    }
+
+    private sealed class FixedContentSource(ReputationContentRows rows) : IReputationContentSource
+    {
+        public Task<ReputationContentRows> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(rows);
     }
 
     private const uint Stormwind = 72;
@@ -386,4 +416,17 @@ internal sealed class MemoryReputationStore : ICharacterReputationStore
     /// <summary>This in-memory store has no characters table, so a deleted character's id never has a live row.</summary>
     public Task DeleteDeletedCharacterAsync(int characterId, CancellationToken cancellationToken = default)
         => DeleteCharacterAsync(characterId, cancellationToken);
+}
+
+/// <summary>Both reputation world-table sources over a holder a test edits between loads.</summary>
+internal sealed class MutableReputationContent : IReputationContentSource, IReputationOnKillSource
+{
+    public ReputationContentRows Rows { get; set; } = ReputationContentRows.Empty;
+
+    public List<ReputationOnKillEntry> OnKill { get; } = [];
+
+    public Task<ReputationContentRows> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(Rows);
+
+    Task<IReadOnlyList<ReputationOnKillEntry>> IReputationOnKillSource.LoadAsync(CancellationToken cancellationToken)
+        => Task.FromResult<IReadOnlyList<ReputationOnKillEntry>>([.. OnKill]);
 }

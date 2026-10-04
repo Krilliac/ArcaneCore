@@ -21,7 +21,7 @@ public sealed class QuestReputationSettlementTests
     public QuestReputationSettlementTests()
     {
         _player = TestWorld.CreatePlayer(1, 0, 0, _session);
-        _service = new ReputationService(Factions, sink: _sink, roll: () => 0.999);
+        _service = new ReputationService(Factions, sink: _sink, roll: () => 0.0);
         _service.Track(_player, _service.Create(_player, new CharacterReputationData([], 7)));
         _service.BuildInitializeFactions(_player);
         _session.Clear();
@@ -92,7 +92,7 @@ public sealed class QuestReputationSettlementTests
         var referenceSession = new FakeSession();
         var referenceSink = new RecordingReputationSink();
         Player reference = TestWorld.CreatePlayer(1, 0, 0, referenceSession);
-        var referenceService = new ReputationService(Factions, sink: referenceSink, roll: () => 0.999);
+        var referenceService = new ReputationService(Factions, sink: referenceSink, roll: () => 0.0);
         referenceService.Track(reference, referenceService.Create(reference, new CharacterReputationData([], 7)));
         referenceService.BuildInitializeFactions(reference);
         referenceSession.Clear();
@@ -116,14 +116,14 @@ public sealed class QuestReputationSettlementTests
     [Fact]
     public void TryStage_FreezesTheDitherRoll_SoPublicationReplaysTheSameGains()
     {
-        double roll = 0.0;
+        double roll = 0.999; // rand_dither: the fraction rounds up
         var service = new ReputationService(Factions, sink: _sink, roll: () => roll);
         Player player = TestWorld.CreatePlayer(2, 0, 0, new FakeSession());
         service.Track(player, service.Create(player, CharacterReputationData.Empty));
         Assert.True(service.TryStage(player, 0, [new(BootyBay, 3)], out QuestReputationStage stage));
         int staged = stage.After.Single().Standing;
 
-        roll = 0.999; // a fresh roll could now round the other way
+        roll = 0.0; // a fresh roll could now round the other way
         Assert.True(service.Publish(player, stage));
         Assert.Equal(staged, service.GetReputation(player, BootyBay));
     }

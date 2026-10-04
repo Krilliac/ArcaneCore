@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
 
@@ -330,16 +331,9 @@ public sealed partial class QuestNpcServices
 
     private float PriceDiscount(Player player, NpcInfo npc) => Deps.Reputation?.GetPriceDiscount(player, npc) ?? 1.0f;
 
-    /// <summary>
-    /// vmangos uint32(price * GetReputationPriceDiscount + 0.5f): round half up, in single precision (vendor buy Player.cpp:18442-18445,
-    /// vendor list ItemHandler.cpp:763, trainer cost NPCHandler.cpp:114 and :309). The price is a ulong here (vmangos multiplies in uint32 and
-    /// would wrap on a huge stack), so an overflow clamps to uint.MaxValue, which the caller's money check then refuses.
-    /// </summary>
-    private static uint Discounted(ulong price, float discount)
-    {
-        float value = price * discount + 0.5f; // float arithmetic as vmangos: 25 x 0.9f is 22.5 -> 23
-        return value >= uint.MaxValue ? uint.MaxValue : value <= 0 ? 0 : (uint)value;
-    }
+    /// <summary>vmangos uint32(price × GetReputationPriceDiscount() + 0.5f) (vendors and trainers): <see cref="ReputationPricing"/>.</summary>
+    private static uint Discounted(ulong price, float discount) => ReputationPricing.Round(price, discount);
+
     /// <summary>vmangos Creature::GetVendorItemCurrentCount (restock by BuyCount every incrtime seconds).</summary>
     private uint CurrentStock(ObjectGuid vendor, VendorItem item, ItemInfo proto)
     {

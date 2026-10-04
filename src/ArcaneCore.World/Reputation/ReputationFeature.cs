@@ -3,12 +3,15 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Npc;
+using ArcaneCore.World.Progression;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -21,7 +24,7 @@ namespace ArcaneCore.World.Reputation;
 /// direct creature-kill rewards and the reaction source the NPC adapter uses. Other features
 /// reach <see cref="Reputation"/> with <c>GetService&lt;ReputationFeature&gt;()</c>.
 /// </summary>
-public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers)
+public sealed partial class ReputationFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers)
     : IWorldFeature, ICharacterHooks, IAsyncDisposable
 {
     private readonly ILogger _logger = loggers.CreateLogger<ReputationFeature>();
@@ -30,6 +33,7 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
     private ReputationWriteQueue? _writes;
     private WorldRuntime? _world;
     private ReputationService? _service;
+    private Func<Player, RewardGroup?>? _groups;
 
     public ReputationOptions Options { get; } = new();
 
@@ -64,7 +68,10 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
         }
 
         world.PlayerLoggingOut += OnPlayerLoggingOut;
-        _logger.LogInformation("Loaded {Factions} factions and {OnKill} kill reputation entries", service.Factions.Count, service.OnKillCount);
+        service.ReputationChanged += OnReputationChanged;
+        _logger.LogInformation("Loaded {Factions} factions, {OnKill} kill reputation entries, {Spillovers} spillover templates and {Rates} reward rates",
+            service.Factions.Count, service.OnKillCount, service.Content.SpilloverCount, service.Content.RateCount);
+        ReportStatus(service);
     }
 
     /// <summary>Clear rows left by a deleted character whose id was reused (after older writes drain).</summary>
@@ -101,6 +108,11 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
             ? await store.LoadAsync(character.Id).ConfigureAwait(false)
             : CharacterReputationData.Empty;
         Service.Track(player, Service.Create(player, stored));
+        if (Service.Factions.Count > 0)
+        {
+            // Item reputation gates read the real rank (Player.cpp:10045). Without a catalog the fail-closed default stays.
+            player.Inventory.Requirements = new ReputationItemRequirements(player.Inventory.Requirements, Service);
+        }
     }
 
     /// <summary>
@@ -139,6 +151,10 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
             world.MapCreated -= OnMapCreated;
             world.MapUnloading -= OnMapUnloading;
             world.PlayerLoggingOut -= OnPlayerLoggingOut;
+            if (_service is { } service)
+            {
+                service.ReputationChanged -= OnReputationChanged;
+            }
         }
 
         foreach (MapCombat combat in _combat)
@@ -158,6 +174,10 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
         }
     }
 
+    /// <summary>Player::ReputationChanged: reputation-objective quests complete or revert (resolved lazily, the quest feature attaches first).</summary>
+    private void OnReputationChanged(Player player, uint factionId)
+        => services.GetService<QuestNpcFeature>()?.Services?.ReputationChanged(player, factionId);
+
     private void OnPlayerLoggingOut(Player player)
     {
         Service.Untrack(player);
@@ -176,17 +196,22 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
         }
     }
 
-    /// <summary>Player::RewardReputation(Unit*, 1.0) for a direct, live, same-map player kill.</summary>
+    /// <summary>
+    /// Player::RewardReputation(Unit*, 1.0) for a same-map creature kill by a player: every group member at reward distance
+    /// gets it, dead or alive, and a dead killer still counts (<see cref="ReputationKillCredit"/>).
+    /// </summary>
     private void OnUnitKilled(Unit? killer, Unit victim)
     {
-        if (killer is not Player { IsAlive: true, IsInWorld: true } player || victim is not Creature creature
+        if (killer is not Player { IsInWorld: true } player || victim is not Creature creature
             || player.Map is not { } map || !creature.IsInWorld || !ReferenceEquals(creature.Map, map)
             || !ReferenceEquals(map.FindPlayer(player.Guid), player))
         {
             return;
         }
 
-        Service.RewardKill(player, creature);
+        _groups ??= RewardGroups.Resolver(services);
+        float distance = (services.GetService<ProgressionFeature>()?.Progression.Options ?? new ProgressionOptions()).GroupXpDistance;
+        ReputationKillCredit.Award(Service, player, creature, _groups(player), distance);
     }
 
     /// <summary>Startup content failures (malformed Faction.dbc, duplicate kill rows) stop attachment.</summary>
@@ -203,16 +228,43 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
             FactionCatalog factions = services.GetService<FactionCatalog>()
                 ?? (string.IsNullOrWhiteSpace(Options.FactionDbcPath) ? FactionCatalog.Empty : FactionDbcReader.Load(Options.FactionDbcPath));
             IReadOnlyList<ReputationOnKillEntry> onKill;
+            ReputationContentRows contentRows;
             using (IServiceScope scope = scopes.CreateScope())
             {
                 onKill = scope.ServiceProvider.GetService<IReputationOnKillSource>() is { } source
                     ? source.LoadAsync().GetAwaiter().GetResult()
                     : [];
+                contentRows = scope.ServiceProvider.GetService<IReputationContentSource>() is { } contentSource
+                    ? contentSource.LoadAsync().GetAwaiter().GetResult()
+                    : ReputationContentRows.Empty;
+            }
+
+            if (factions.Count > 0)
+            {
+                // ObjectMgr::LoadReputationOnKill skips a row whose faction does not exist (ObjectMgr.cpp:8935-8957): once, loudly, here.
+                ReputationOnKillValidation valid = ReputationContentValidator.FilterOnKill(onKill, factions);
+                onKill = valid.Entries;
+                foreach (string warning in valid.Warnings)
+                {
+                    _logger.LogWarning("Reputation content: {Warning}", warning);
+                }
+            }
+
+            ReputationContent content = ReputationContent.Create(contentRows, factions);
+            foreach (string warning in content.Warnings)
+            {
+                _logger.LogWarning("Reputation content: {Warning}", warning);
             }
 
             _writes = new ReputationWriteQueue(scopes, loggers.CreateLogger<ReputationWriteQueue>());
             var rates = new ReputationRates { Gain = Options.RateGain, LowLevelKill = Options.RateLowLevelKill };
-            return _service = new ReputationService(factions, onKill, rates, new Sink(_writes));
+            return _service = new ReputationService(factions, onKill, rates, new Sink(_writes))
+            {
+                PeaceForcedUsesEffectiveStanding = Options.PeaceForcedUsesEffectiveStanding,
+                SpilloverEnabled = Options.SpilloverEnabled,
+                SendForcedReactions = Options.SendForcedReactions,
+                Content = content,
+            };
         }
     }
 

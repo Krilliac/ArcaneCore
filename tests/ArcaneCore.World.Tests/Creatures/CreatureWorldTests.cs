@@ -110,7 +110,8 @@ public sealed class CreatureWorldTests
 
         // The spell feature is registered by the host, so creature AI casts through its system.
         Assert.IsType<Game.Creatures.SpellSystemCreatureCaster>(feature.AiServices.Spells);
-        Assert.IsType<Game.Creatures.FactionCreatureHostility>(feature.AiServices.Hostility);
+        // The reputation combat feature is the world's ICreatureHostility; without Faction.dbc it answers like the template-only default.
+        Assert.IsType<ArcaneCore.World.Reputation.ReputationCombatFeature>(feature.AiServices.Hostility);
 
         await using WorldTestClient client = await host.EnterWorldAsync("CRWAI", "Crwai");
         await ReadUntilCreateAsync(client, WolfGuid());

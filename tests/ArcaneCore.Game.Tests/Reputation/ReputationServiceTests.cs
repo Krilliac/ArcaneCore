@@ -22,7 +22,7 @@ public sealed class ReputationServiceTests
     private readonly RecordingReputationSink _sink = new();
     private readonly Player _player;
     private readonly ReputationService _service;
-    private double _roll = 0.999;
+    private double _roll = 0.0; // frand(0,1) = 0: fractions floor
 
     public ReputationServiceTests()
     {
@@ -119,9 +119,9 @@ public sealed class ReputationServiceTests
     public void Gain_DithersTheFraction()
     {
         _player.Level = 20;
-        _roll = 0.49; // gray kill: 12 * 20% = 2.4, rounded up only when the roll is below 0.4
+        _roll = 0.59; // gray kill: 12 * 20% = 2.4, rand_dither rounds up only when the roll reaches 0.6
         Assert.Equal(2, _service.Gain(ReputationSource.Kill, _player, 12, BootyBay, 1));
-        _roll = 0.39;
+        _roll = 0.61;
         Assert.Equal(3, _service.Gain(ReputationSource.Kill, _player, 12, BootyBay, 1));
     }
 
