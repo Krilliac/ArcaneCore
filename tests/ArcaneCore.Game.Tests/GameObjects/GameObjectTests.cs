@@ -580,6 +580,62 @@ public sealed class GameObjectTests
     }
 
     [Fact]
+    public void Relocate_IntoAnUnloadedGrid_LoadsIt_SoTheObjectLeavesWithThatGrid()
+    {
+        Rig rig = CreateRig([]);
+        rig.Join(1);
+        GameObject door = rig.System.Summon(DoorEntry, 2, 0, 83.5f, 0)!;
+        Assert.False(rig.System.IsGridLoaded(5000, 5000)); // nobody is near: the game object system has not loaded that grid
+
+        Assert.True(rig.System.Relocate(door, 5000, 5000, 83.5f, 1f));
+        Assert.True(rig.System.IsGridLoaded(5000, 5000));
+        Assert.Same(door, rig.System.Find(door.Guid));
+        Assert.Same(rig.Map, door.Map);
+        Assert.Equal((5000f, 5000f, 83.5f, 1f), (door.X, door.Y, door.Z, door.Orientation));
+
+        // Before the fix the object was in _objects and in the map but in no grid list, so unloading its grid left it behind for good.
+        ArcaneCore.Game.Maps.Grid.GridCoord coord = rig.Map.Grids.CellOf(door)!.Value.Grid;
+        Assert.True(rig.Map.Grids.UnloadGrid(coord, force: true));
+        Assert.False(rig.System.IsGridLoaded(5000, 5000));
+        Assert.Null(rig.System.Find(door.Guid));
+        Assert.Null(rig.Map.FindObject(door.Guid));
+        Assert.DoesNotContain(door, rig.System.GameObjects);
+    }
+
+    [Fact]
+    public void Summon_IntoAnUnloadedGrid_LoadsIt_SoTheObjectLeavesWithThatGrid()
+    {
+        Rig rig = CreateRig([]);
+        rig.Join(1);
+        GameObject door = rig.System.Summon(DoorEntry, 5000, 5000, 83.5f, 0)!;
+        Assert.True(rig.System.IsGridLoaded(5000, 5000));
+
+        Assert.True(rig.Map.Grids.UnloadGrid(rig.Map.Grids.CellOf(door)!.Value.Grid, force: true));
+        Assert.Null(rig.System.Find(door.Guid));
+        Assert.Null(rig.Map.FindObject(door.Guid));
+    }
+
+    [Fact]
+    public void Relocate_RefusesANonFiniteOrOutOfMapPosition_AndLeavesTheObjectWhereItWas()
+    {
+        Rig rig = CreateRig([]);
+        rig.Join(1);
+        GameObject door = rig.System.Summon(DoorEntry, 2, 0, 83.5f, 0)!;
+
+        Assert.False(rig.System.Relocate(door, float.PositiveInfinity, 0, 83.5f, 0)); // "1e40" parsed to a float
+        Assert.False(rig.System.Relocate(door, 1e9f, 0, 83.5f, 0)); // finite, far outside the map
+        Assert.False(rig.System.Relocate(door, 2, float.NaN, 83.5f, 0));
+        Assert.False(rig.System.Relocate(door, 2, 0, 500_000f, 0)); // beyond IsValidZCoord
+        Assert.False(rig.System.Relocate(door, 2, 0, 83.5f, float.NegativeInfinity));
+
+        Assert.True(door.IsSpawned);
+        Assert.Same(rig.Map, door.Map);
+        Assert.Equal((2f, 0f, 83.5f, 0f), (door.X, door.Y, door.Z, door.Orientation));
+        Assert.Equal(2f, door.GetFloat(UpdateFields.GameobjectPosX));
+        Assert.True(rig.System.Relocate(door, 3, 0, 83.5f, 0));
+    }
+
+    [Fact]
     public void TextMailboxAndSpellFocus_Seams()
     {
         Rig rig = CreateRig([GoSpawn(1, TextEntry, 3, 0), GoSpawn(2, MailboxEntry, 0, 3), GoSpawn(3, FocusEntry, -3, 0)]);

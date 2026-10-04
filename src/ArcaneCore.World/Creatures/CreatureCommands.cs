@@ -26,7 +26,7 @@ public sealed class CreatureCommands : ICommandGroup
         ]),
     ];
 
-    private static bool Add(CommandContext context, string args)
+    internal static bool Add(CommandContext context, string args)
     {
         if (!uint.TryParse(args.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out uint entry))
         {
@@ -82,7 +82,7 @@ public sealed class CreatureCommands : ICommandGroup
         return true;
     }
 
-    private static bool Delete(CommandContext context, string args)
+    internal static bool Delete(CommandContext context, string args)
     {
         if (Selected(context) is not { } creature)
         {
