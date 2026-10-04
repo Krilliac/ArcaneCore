@@ -117,124 +117,166 @@ public static class GroupPackets
     }
 
     /// <summary>
-    /// SMSG_PARTY_MEMBER_STATS / _FULL body (vmangos WorldSession::BuildPartyMemberStatsPacket):
-    /// packed guid, u32 mask, then the masked fields in bit order. Auras and pets do not exist
-    /// yet, so aura masks are empty and pet fields are the "no pet" values vmangos writes.
+    /// SMSG_PARTY_MEMBER_STATS / _FULL body: packed guid, u32 mask, then masked fields in bit
+    /// order. Aura masks and pet fields follow D:\refs\vmangos\src\game\Handlers\GroupHandler.cpp:599-755;
+    /// D:\refs\wow_messages\wow_message_parser\wowm\world\social\smsg_party_member_stats.wowm:1-70
+    /// has the 1.12 field order but omits the server's negative aura fields.
     /// </summary>
     public static byte[] BuildPartyMemberStats(Player player, GroupUpdateFlags mask)
+        => BuildPartyMemberStats(GroupMemberStatsSnapshot.Capture(player), mask);
+
+    internal static byte[] BuildPartyMemberStats(
+        GroupMemberStatsSnapshot stats, GroupUpdateFlags mask, GroupMemberStatsSnapshot? previous = null)
     {
         var writer = new PacketWriter(64);
-        writer.WritePackedGuid(player.Guid.Value);
+        writer.WritePackedGuid(stats.Guid.Value);
         writer.WriteUInt32((uint)mask);
-        PowerType power = player.PowerType;
-        int powerIndex = (int)power <= 4 ? (int)power : 0;
         if ((mask & GroupUpdateFlags.Status) != 0)
         {
-            writer.WriteByte((byte)StatusOf(player));
+            writer.WriteByte((byte)stats.Status);
         }
 
         if ((mask & GroupUpdateFlags.CurrentHp) != 0)
         {
-            writer.WriteUInt16((ushort)Math.Min(player.Health, ushort.MaxValue));
+            writer.WriteUInt16(Clamp16(stats.Hp));
         }
 
         if ((mask & GroupUpdateFlags.MaxHp) != 0)
         {
-            writer.WriteUInt16((ushort)Math.Min(player.MaxHealth, ushort.MaxValue));
+            writer.WriteUInt16(Clamp16(stats.MaxHp));
         }
 
         if ((mask & GroupUpdateFlags.PowerType) != 0)
         {
-            writer.WriteByte((byte)power);
+            writer.WriteByte((byte)stats.Power);
         }
 
         if ((mask & GroupUpdateFlags.CurrentPower) != 0)
         {
-            writer.WriteUInt16((ushort)Math.Min(player.GetUInt32(UpdateFields.UnitFieldPower1 + powerIndex), ushort.MaxValue));
+            writer.WriteUInt16(Clamp16(stats.CurrentPower));
         }
 
         if ((mask & GroupUpdateFlags.MaxPower) != 0)
         {
-            writer.WriteUInt16((ushort)Math.Min(player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + powerIndex), ushort.MaxValue));
+            writer.WriteUInt16(Clamp16(stats.MaxPower));
         }
 
         if ((mask & GroupUpdateFlags.Level) != 0)
         {
-            writer.WriteUInt16(player.Level);
+            writer.WriteUInt16(stats.Level);
         }
 
         if ((mask & GroupUpdateFlags.Zone) != 0)
         {
-            writer.WriteUInt16((ushort)player.ZoneId);
+            writer.WriteUInt16((ushort)stats.Zone);
         }
 
         if ((mask & GroupUpdateFlags.Position) != 0)
         {
-            writer.WriteUInt16(unchecked((ushort)(short)player.X));
-            writer.WriteUInt16(unchecked((ushort)(short)player.Y));
+            writer.WriteUInt16(unchecked((ushort)stats.X));
+            writer.WriteUInt16(unchecked((ushort)stats.Y));
         }
 
         if ((mask & GroupUpdateFlags.Auras) != 0)
         {
-            writer.WriteUInt32(0);
+            WriteAuras(writer, stats.Auras, previous?.Auras, 0, 32);
         }
 
         if ((mask & GroupUpdateFlags.AurasNegative) != 0)
         {
-            writer.WriteUInt16(0);
+            WriteAuras(writer, stats.Auras, previous?.Auras, 32, 16);
         }
 
         if ((mask & GroupUpdateFlags.PetGuid) != 0)
         {
-            writer.WriteUInt64(0);
+            writer.WriteUInt64(stats.PetGuid.Value);
         }
 
         if ((mask & GroupUpdateFlags.PetName) != 0)
         {
-            writer.WriteByte(0);
+            writer.WriteCString(stats.PetName);
         }
 
         if ((mask & GroupUpdateFlags.PetModelId) != 0)
         {
-            writer.WriteUInt16(0);
+            writer.WriteUInt16(Clamp16(stats.PetDisplayId));
         }
 
         if ((mask & GroupUpdateFlags.PetCurrentHp) != 0)
         {
-            writer.WriteUInt16(0);
+            writer.WriteUInt16(Clamp16(stats.PetHp));
         }
 
         if ((mask & GroupUpdateFlags.PetMaxHp) != 0)
         {
-            writer.WriteUInt16(0);
+            writer.WriteUInt16(Clamp16(stats.PetMaxHp));
         }
 
         if ((mask & GroupUpdateFlags.PetPowerType) != 0)
         {
-            writer.WriteByte(0);
+            writer.WriteByte((byte)stats.PetPower);
         }
 
         if ((mask & GroupUpdateFlags.PetCurrentPower) != 0)
         {
-            writer.WriteUInt16(0);
+            writer.WriteUInt16(Clamp16(stats.PetCurrentPower));
         }
 
         if ((mask & GroupUpdateFlags.PetMaxPower) != 0)
         {
-            writer.WriteUInt16(0);
+            writer.WriteUInt16(Clamp16(stats.PetMaxPower));
         }
 
         if ((mask & GroupUpdateFlags.PetAuras) != 0)
         {
-            writer.WriteUInt32(0);
+            WriteAuras(writer, stats.PetAuras,
+                previous is not null && previous.PetGuid == stats.PetGuid ? previous.PetAuras : null, 0, 32);
         }
 
         if ((mask & GroupUpdateFlags.PetAurasNegative) != 0)
         {
-            writer.WriteUInt16(0);
+            WriteAuras(writer, stats.PetAuras,
+                previous is not null && previous.PetGuid == stats.PetGuid ? previous.PetAuras : null, 32, 16);
         }
 
         return writer.ToArray();
+    }
+
+    private static ushort Clamp16(uint value) => (ushort)Math.Min(value, ushort.MaxValue);
+
+    /// <summary>
+    /// D:\refs\vmangos\src\game\Handlers\GroupHandler.cpp:636-657,719-754:
+    /// u32 positive mask or u16 negative mask,
+    /// followed by one u16 spell id per set bit. A delta includes a cleared slot with id zero.
+    /// </summary>
+    private static void WriteAuras(PacketWriter writer, uint[] current, uint[]? previous, int start, int count)
+    {
+        uint bits = 0;
+        for (int i = 0; i < count; i++)
+        {
+            int slot = start + i;
+            if (previous is null ? current[slot] != 0 : current[slot] != previous[slot])
+            {
+                bits |= 1u << i;
+            }
+        }
+
+        if (start == 0)
+        {
+            writer.WriteUInt32(bits);
+        }
+        else
+        {
+            writer.WriteUInt16((ushort)bits);
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            if ((bits & (1u << i)) != 0)
+            {
+                writer.WriteUInt16((ushort)current[start + i]);
+            }
+        }
     }
 
     /// <summary>SMSG_PARTY_MEMBER_STATS_FULL for a stranger or offline player: packed guid, mask STATUS, u8 offline (vmangos HandleRequestPartyMemberStatsOpcode).</summary>
