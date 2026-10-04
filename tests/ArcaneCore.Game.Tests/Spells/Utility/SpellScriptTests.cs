@@ -190,7 +190,9 @@ public sealed class SpellScriptTests
         var plain = new SpellSystem(plainKit.Store, () => plainKit.Now, spellbook: plainKit.Spellbook, random: new Random(1), logger: before);
         (Player player, _) = plainKit.AddPlayer(1);
         plain.CastSpell(player, TeleportShape, SpellCastTargets.ForSelf(), triggered: true);
-        Assert.Contains(before.Lines, l => l.Contains("is not implemented yet", StringComparison.Ordinal)); // the base behaviour this slice removes
+        // The druid lane's ScriptEffectModule is built in, so a plain spell system already owns SCRIPT_EFFECT (it used to be reported as not implemented).
+        Assert.DoesNotContain(before.Lines, l => l.Contains("is not implemented yet", StringComparison.Ordinal));
+        Assert.True(plain.HasEffectHandler(SpellEffectName.ScriptEffect));
 
         var after = new CapturingLogger();
         var scripted = new SpellSystem(plainKit.Store, () => plainKit.Now, spellbook: plainKit.Spellbook, random: new Random(1), logger: after);
