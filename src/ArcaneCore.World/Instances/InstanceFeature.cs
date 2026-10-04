@@ -47,6 +47,22 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
     /// <summary>The instance manager (world thread only; available after <see cref="Attach"/>).</summary>
     public InstanceManager Instances => _manager ?? throw new InvalidOperationException("the instance feature is not attached");
 
+    /// <summary>
+    /// Raised on the world thread for every instance that is deleted, including the saves dropped at load (see <see cref="InstanceWriteQueue.InstanceRemoved"/>).
+    /// Subscribe from a world command, after <see cref="Attach"/> ran and before the load command does.
+    /// </summary>
+    public event Action<uint>? InstanceRemoved
+    {
+        add => (_writes ?? throw new InvalidOperationException("the instance feature is not attached")).InstanceRemoved += value;
+        remove
+        {
+            if (_writes is { } writes)
+            {
+                writes.InstanceRemoved -= value;
+            }
+        }
+    }
+
     public InstanceOptions Options { get; } = new();
 
     /// <summary>How long the post-delete drain waits for the queued removal (tests shorten it).</summary>

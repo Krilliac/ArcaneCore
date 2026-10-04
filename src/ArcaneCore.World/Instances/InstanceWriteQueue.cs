@@ -33,7 +33,17 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
         Enqueue(store => store.SaveInstanceAsync(record));
     }
 
-    public void InstanceDeleted(uint instanceId) => Enqueue(store => store.DeleteInstanceAsync(instanceId));
+    /// <summary>
+    /// Raised on the calling (world) thread for every instance whose deletion is queued, before it is queued: a deleted save, and also the saves
+    /// the manager drops while it loads (which do not reach <c>InstanceManager.InstanceDeleted</c>).
+    /// </summary>
+    public event Action<uint>? InstanceRemoved;
+
+    public void InstanceDeleted(uint instanceId)
+    {
+        InstanceRemoved?.Invoke(instanceId);
+        Enqueue(store => store.DeleteInstanceAsync(instanceId));
+    }
 
     public void PlayerBound(uint characterId, uint instanceId, bool permanent)
         => Enqueue(store => store.SaveBindAsync(new CharacterInstanceBindRecord((int)characterId, instanceId, permanent)));

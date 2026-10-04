@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Instances;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -12,7 +13,7 @@ namespace ArcaneCore.World.Creatures;
 /// Durable creature respawn times in the world daemon (an <see cref="IWorldFeature"/>, discovered): loads the stored times from
 /// <see cref="ICreatureRespawnStore"/> when the world starts (rows that expired, or belong to a dungeon instance that is gone, are dropped by the
 /// store), hands them to every map's <see cref="CreatureMapSystem"/> through <see cref="Persistence"/>, and drains the write queue at shutdown after
-/// every system saved the creatures that are still dead. Inactive without a store or with <c>Creatures:Respawn:Persist=false</c>: the timers are then
+/// every system saved the creatures that are still dead (it throws if a write is still not durable), and clears a deleted instance's times through <see cref="CreatureRespawnQueue.ForgetInstance"/>. Inactive without a store or with <c>Creatures:Respawn:Persist=false</c>: the timers are then
 /// kept in memory only, as before.
 /// </summary>
 public sealed class CreatureRespawnFeature(IServiceProvider services, ILogger<CreatureRespawnFeature> logger) : IWorldFeature
@@ -56,6 +57,17 @@ public sealed class CreatureRespawnFeature(IServiceProvider services, ILogger<Cr
         _queue = new CreatureRespawnQueue(scopes, services.GetRequiredService<ILoggerFactory>().CreateLogger<CreatureRespawnQueue>());
         _queue.LoadInitial(stored);
         _queue.Start();
+
+        // A reset or deleted instance takes its respawn times with it. Features attach in type-name order, so the instance feature attaches after this
+        // one; the subscription is a world command queued before the instance feature's own load, so the saves it drops at start reach it.
+        CreatureRespawnQueue queue = _queue;
+        world.Post(() =>
+        {
+            if (services.GetService<InstanceFeature>() is { } instances)
+            {
+                instances.InstanceRemoved += queue.ForgetInstance;
+            }
+        });
         logger.LogInformation("creature respawn persistence: {Count} dead spawn(s) still waiting to respawn", stored.Count);
     }
 

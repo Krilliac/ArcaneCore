@@ -161,6 +161,48 @@ public sealed class RespawnCoreTests
         }
     }
 
+    private static Creature SpawnlessCorpse(out CreatureMapSystem system, out WorldRuntime world)
+    {
+        (world, _, system) = CreateAiSystem(Content([Template()], []));
+        AddPlayer(world, 1, 0, 0);
+        Creature summoned = system.SpawnTemporary(Template(), 10, 0, 83.5f, 0);
+        system.KillCreature(summoned);
+        Assert.Equal(CreatureDeathState.Corpse, summoned.DeathState);
+        return summoned;
+    }
+
+    [Fact]
+    public void AllLootRemoved_ASpawnlessCorpse_IsNotTreatedAsPastItsRespawnTime()
+    {
+        // GM-added and summoned creatures have no spawn row: their respawn delay is 0, so the "respawn time already passed" branch would drop the corpse at once.
+        Creature summoned = SpawnlessCorpse(out CreatureMapSystem system, out WorldRuntime world);
+        using (world)
+        {
+            world.RunTick(50);
+            Assert.True(summoned.RespawnAtMs < system.ClockMs);
+            uint before = summoned.CorpseDecayMs;
+
+            summoned.OnAllLootRemoved(lootedDecayRate: 0f);
+            Assert.Equal(before, summoned.CorpseDecayMs);
+            Assert.NotEqual(0u, summoned.CorpseDecayMs);
+
+            summoned.OnAllLootRemoved(lootedDecayRate: 0.25f); // a configured rate still shortens it: 300 s * 0.25
+            Assert.Equal(75_000u, summoned.CorpseDecayMs);
+        }
+    }
+
+    [Fact]
+    public void AllLootRemoved_ASkinnedSpawnlessCorpse_StillGoesAtOnce()
+    {
+        Creature summoned = SpawnlessCorpse(out _, out WorldRuntime world);
+        using (world)
+        {
+            summoned.LootedForSkin = true;
+            summoned.OnAllLootRemoved(lootedDecayRate: 0f);
+            Assert.Equal(0u, summoned.CorpseDecayMs);
+        }
+    }
+
     [Fact]
     public void TheRespawnOptions_DefaultToRetail()
     {

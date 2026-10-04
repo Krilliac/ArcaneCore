@@ -132,6 +132,20 @@ public sealed partial class CreatureMapSystem
         return grid;
     }
 
+    /// <summary>The live creature of a database spawn: its GUID carries the entry chosen at creation, so every entry the spawn may take is tried.</summary>
+    private Creature? FindLive(CreatureSpawn spawn, IReadOnlyList<uint> alternatives)
+    {
+        foreach (uint candidate in alternatives.Count > 0 ? alternatives : [spawn.Entry])
+        {
+            if (_creatures.TryGetValue(ObjectGuid.WithEntry(HighGuid.Unit, candidate, spawn.Guid), out Creature? live))
+            {
+                return live;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>Create the creatures of <paramref name="spawns"/> in an already registered grid (a grid load, or one event spawn coming back: <see cref="RefreshSpawns"/>).</summary>
     private void LoadSpawns(LoadedGrid grid, IEnumerable<CreatureSpawn> spawns)
     {
@@ -145,15 +159,7 @@ public sealed partial class CreatureMapSystem
             // A spawn with creature_spawn_entry rows becomes one of them; the entry part of its GUID is the one chosen when the object was
             // created, so a spawn that is already loaded is looked up under every entry it may carry.
             IReadOnlyList<uint> alternatives = _options.Respawn.AlternateEntries ? _content.GetSpawnEntries(spawn.Guid) : [];
-            Creature? moved = null;
-            foreach (uint candidate in alternatives.Count > 0 ? alternatives : [spawn.Entry])
-            {
-                if (_creatures.TryGetValue(ObjectGuid.WithEntry(HighGuid.Unit, candidate, spawn.Guid), out moved))
-                {
-                    break;
-                }
-            }
-
+            Creature? moved = FindLive(spawn, alternatives);
             if (moved is not null)
             {
                 grid.Creatures.Add(moved);

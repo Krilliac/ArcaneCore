@@ -171,11 +171,19 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// The looted delay is 0 when the corpse was skinned, else <paramref name="lootedDecayRate"/> x the corpse delay, or (vmangos'
     /// default rate 0) a third of the respawn delay. While the respawn time has not passed, a respawn delay above the corpse delay always
     /// takes the looted delay, a shorter one only when it is shorter than the time left; once the respawn time has passed the
-    /// corpse goes at once.
+    /// corpse goes at once. A creature without a spawn row never has a respawn time to be past (ArcaneCore decision: its respawn delay is 0, so
+    /// the check above would otherwise always read as past): it only shortens its corpse delay, by the looted rate or after a skin.
     /// </summary>
     internal void OnAllLootRemoved(float lootedDecayRate)
     {
         if (System is not { } system || DeathState != CreatureDeathState.Corpse)
+        {
+            return;
+        }
+
+        // A creature with no spawn row (GM-added, summoned) has no respawn time to be past: its delay is 0 and RespawnAtMs only the moment of death.
+        // It takes the looted delay from the corpse delay alone, and keeps its corpse delay when no rate is configured.
+        if (Spawn is null && !LootedForSkin && lootedDecayRate <= 0f)
         {
             return;
         }
@@ -188,7 +196,14 @@ public sealed partial class Creature : Unit, ICombatCreature
                 : _respawnDelaySeconds * 1000L / 3;
         uint looted = (uint)Math.Min(lootedMs, uint.MaxValue);
 
-        if (RespawnAtMs >= system.ClockMs)
+        if (Spawn is null)
+        {
+            if (CorpseDecayMs > looted)
+            {
+                CorpseDecayMs = looted;
+            }
+        }
+        else if (RespawnAtMs >= system.ClockMs)
         {
             if (_respawnDelaySeconds > corpseDelaySeconds)
             {

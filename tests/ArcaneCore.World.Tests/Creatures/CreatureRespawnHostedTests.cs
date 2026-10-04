@@ -1,7 +1,9 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Kernel.Instances;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Creatures;
+using ArcaneCore.World.Tests.Instances;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -59,7 +61,26 @@ public sealed class CreatureRespawnHostedTests
             return Task.CompletedTask;
         }
 
-        public Task DeleteInstanceAsync(uint instanceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task DeleteInstanceAsync(uint instanceId, CancellationToken cancellationToken = default)
+        {
+            lock (_rows)
+            {
+                foreach ((uint Instance, uint Guid) key in _rows.Keys.Where(k => k.Instance == instanceId).ToArray())
+                {
+                    _rows.Remove(key);
+                }
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public void Add(CreatureRespawnRecord record)
+        {
+            lock (_rows)
+            {
+                _rows[(record.InstanceId, record.SpawnGuid)] = record;
+            }
+        }
     }
 
     private static WorldTestHost StartWithWolf(SharedStore store, out CreatureTestContext context)
@@ -109,6 +130,32 @@ public sealed class CreatureRespawnHostedTests
         await second.WaitForWorldAsync(() => feature_Loaded(restarted), "the wolf loads again");
 
         Assert.NotEqual(CreatureDeathState.Alive, await second.OnWorldAsync(() => Wolf(restarted).DeathState));
+    }
+
+    [Fact]
+    public async Task ADeletedInstance_TakesItsRespawnTimesWithIt_ThroughTheCreatureQueue()
+    {
+        // The stored instance 5 has no binds and an unknown map, so the instance manager drops it while it loads; that deletion must reach the
+        // creature respawn queue, which forgets the instance's times in memory and removes its rows behind any save of it still queued.
+        var store = new SharedStore();
+        long future = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 100_000;
+        store.Add(new CreatureRespawnRecord(99999, 5, 77, future));
+        store.Add(new CreatureRespawnRecord(0, 0, 78, future));
+        InMemoryInstanceStore.Seed.Value = new InstanceStoreSnapshot([new InstanceRecord(5, 99999, 0)], [], [], []);
+        try
+        {
+            await using WorldTestHost host = StartWithWolf(store, out _);
+            CreatureRespawnFeature feature = host.WorldServices.GetRequiredService<CreatureRespawnFeature>();
+            await host.WaitForWorldAsync(() => feature.Persistence!.GetPending(99999, 5).Count == 0, "the deleted instance's times are forgotten");
+            await feature.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
+
+            CreatureRespawnRecord remaining = Assert.Single(store.Rows);
+            Assert.Equal((0u, 0u, 78u), (remaining.MapId, remaining.InstanceId, remaining.SpawnGuid)); // the shared copy of a map stays
+        }
+        finally
+        {
+            InMemoryInstanceStore.Seed.Value = null;
+        }
     }
 
     private static bool feature_Loaded(CreatureWorldFeature feature)

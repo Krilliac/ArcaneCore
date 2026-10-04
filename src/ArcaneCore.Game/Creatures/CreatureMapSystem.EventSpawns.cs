@@ -47,12 +47,12 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
-            ObjectGuid objectGuid = ObjectGuid.WithEntry(HighGuid.Unit, spawn.Entry, spawn.Guid);
+            Creature? live = FindLive(spawn, _options.Respawn.AlternateEntries ? _content.GetSpawnEntries(spawn.Guid) : []);
             bool allowed = _spawnGate?.AllowsCreature(guid) ?? true;
             if (!allowed)
             {
                 _respawnAt.Remove(guid);
-                if (_creatures.TryGetValue(objectGuid, out Creature? live))
+                if (live is not null)
                 {
                     Despawn(live);
                 }
@@ -60,7 +60,7 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
-            if (!_creatures.ContainsKey(objectGuid) && _grids.TryGetValue(ComputeGrid(spawn.X, spawn.Y), out LoadedGrid? grid))
+            if (live is null && _grids.TryGetValue(ComputeGrid(spawn.X, spawn.Y), out LoadedGrid? grid))
             {
                 _respawnAt.Remove(guid); // a stale death of an earlier run of the event
                 LoadSpawns(grid, [spawn]);
