@@ -27,7 +27,9 @@ public sealed class SchemaVersionInvariantTests : IAsyncLifetime
             await db.SaveChangesAsync();
         }
 
-        long before = Invariant.FailureCount;
+        // Invariant.FailureCount is process-wide and xunit runs other test classes of this assembly in parallel,
+        // so the exact count is taken from a capture scoped to this test's call flow (it follows the awaits).
+        using InvariantCapture capture = Invariant.Capture();
         await using (var db = new WidgetContext(TestContexts.Options<WidgetContext>(cs)))
         {
             SchemaMismatchException ex = await Assert.ThrowsAsync<SchemaMismatchException>(() => SchemaBootstrapper.EnsureAsync(db, WidgetContext.Schema));
@@ -35,7 +37,10 @@ public sealed class SchemaVersionInvariantTests : IAsyncLifetime
             Assert.Contains("-1", ex.Message, StringComparison.Ordinal);
         }
 
-        Assert.Equal(before + 1, Invariant.FailureCount);
+        InvariantFailureEvent failure = Assert.Single(capture.Failures);
+        Assert.Equal("Check", failure.Kind);
+        Assert.Equal("SchemaBootstrapper.cs", failure.File);
+        Assert.Contains("holds version -1", failure.Message, StringComparison.Ordinal);
         Assert.Contains(Invariant.Failures(), f => f.File == "SchemaBootstrapper.cs" && f.LastMessage!.Contains("holds version -1", StringComparison.Ordinal));
 
         // Nothing was changed by the refused start.

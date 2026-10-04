@@ -152,7 +152,10 @@ The write queues (`CharacterSaveQueue`, the social write queue) live in `src/Arc
 
 - `Invariant`: static, any thread. Pass path: a branch, no allocation (proven). Failure path: `Interlocked` counters, a
   `ConcurrentDictionary` keyed by (member, file, line), one formatted string, one log call; the per-site counter stops logging at
-  the limit.
+  the limit. `Invariant.Capture()` opens a flow-scoped (`AsyncLocal`) recorder of the failures raised on the calling thread and
+  in the work it awaits; it is read on the failure path only. Tests use it for exact counts, because `FailureCount` is
+  process-wide and xunit runs the other test classes of an assembly in parallel (`Srp6InvariantTests`,
+  `SchemaVersionInvariantTests`; `InvariantTests.Capture_*` prove the scoping against a failure on an unflowed thread).
 - `CrashHandler`: one per process (`Install` is idempotent, `Reconfigure` swaps sink/options/providers under a `volatile` read).
   Hooks run on the crashing thread; a thread-static guard makes a nested report (a sink or provider that throws, or a first-chance
   event raised by the report itself) a no-op. Nothing allocates until a hook fires.

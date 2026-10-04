@@ -69,6 +69,59 @@ public sealed class InvariantTests : IDisposable
     }
 
     [Fact]
+    public void Capture_SeesOnlyTheFailuresOfItsOwnFlow_WhileTheProcessCounterSeesEveryThread()
+    {
+        // The flake this guards against: a test snapshots FailureCount, another test class (xunit runs classes
+        // in parallel) trips a Check in between, and `before + 1` is off by one. A thread started without
+        // ExecutionContext flow stands in for that other test class.
+        long before = Invariant.FailureCount;
+        using InvariantCapture capture = Invariant.Capture();
+
+        Thread other;
+        using (ExecutionContext.SuppressFlow())
+        {
+            other = new Thread(() => Invariant.Check(false, "an unrelated site failing on another thread"));
+            other.Start();
+        }
+
+        other.Join();
+        Assert.False(Invariant.Check(false, "the site under test"));
+
+        // The process counter saw both (and possibly more, from classes outside this collection); the capture saw one.
+        Assert.True(Invariant.FailureCount >= before + 2, $"process-wide count moved by {Invariant.FailureCount - before}, expected at least 2");
+        InvariantFailureEvent seen = Assert.Single(capture.Failures);
+        Assert.Equal("Check", seen.Kind);
+        Assert.Equal("the site under test", seen.Message);
+        Assert.Equal(nameof(Capture_SeesOnlyTheFailuresOfItsOwnFlow_WhileTheProcessCounterSeesEveryThread), seen.Member);
+        Assert.Equal("InvariantTests.cs", seen.File);
+        Assert.True(seen.Line > 0);
+    }
+
+    [Fact]
+    public async Task Capture_FollowsAwaitedWork_NestsAndEndsOnDispose()
+    {
+        using InvariantCapture outer = Invariant.Capture();
+        await Task.Run(() => Invariant.Check(false, "raised on a pool thread inside the flow"));
+        await Task.Yield();
+        Invariant.Check(false, "raised after the awaits");
+        Assert.Equal(["raised on a pool thread inside the flow", "raised after the awaits"], outer.Failures.Select(f => f.Message));
+
+        using (InvariantCapture inner = Invariant.Capture())
+        {
+            Invariant.Check(false, "raised in the inner scope");
+            Assert.Equal("raised in the inner scope", Assert.Single(inner.Failures).Message);
+        }
+
+        Invariant.Check(false, "raised after the inner scope ended");
+        Assert.Equal(4, outer.Failures.Count);
+        Assert.Equal("raised after the inner scope ended", outer.Failures[^1].Message);
+
+        outer.Dispose();
+        Invariant.Check(false, "raised after the outer scope ended");
+        Assert.Equal(4, outer.Failures.Count);
+    }
+
+    [Fact]
     public void LogLimit_StopsLoggingButKeepsCounting()
     {
         var log = new CapturingLogger();

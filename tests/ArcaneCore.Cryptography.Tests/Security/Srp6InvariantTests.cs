@@ -18,16 +18,24 @@ public sealed class Srp6InvariantTests
         var server = new Srp6Server(salt, verifier);
         byte[] a = WowSrp6.ToFixedLittleEndian(BigInteger.ModPow(WowSrp6.G, 12345, WowSrp6.N), WowSrp6.KeyLength);
 
+        // Invariant.FailureCount is process-wide and xunit runs other test classes of this assembly in parallel,
+        // so the exact count is taken from a capture scoped to this test's call flow.
+        using InvariantCapture capture = Invariant.Capture();
+
         // A failed proof leaves the server without a session key: it may be judged once more (the realm never does).
         Assert.False(server.TryAcceptProof("ERIN", a, new byte[Sha1.DigestLength]));
         Assert.Null(server.SessionKey);
+        Assert.Empty(capture.Failures);
 
         // After a success the state is consumed: the exact same (valid) proof is refused and the failure is counted.
         SimulatedClient client = SimulatedClient.Login("ERIN", "PW", salt, server.PublicEphemeral);
         Assert.True(server.TryAcceptProof("ERIN", client.PublicKey, client.Proof));
-        long before = Invariant.FailureCount;
+        Assert.Empty(capture.Failures);
         Assert.False(server.TryAcceptProof("ERIN", client.PublicKey, client.Proof));
-        Assert.Equal(before + 1, Invariant.FailureCount);
+        InvariantFailureEvent failure = Assert.Single(capture.Failures);
+        Assert.Equal("Check", failure.Kind);
+        Assert.Equal(nameof(Srp6Server.TryAcceptProof), failure.Member);
+        Assert.Equal("Srp6Server.cs", failure.File);
         Assert.Contains(Invariant.Failures(), f => f.Member == nameof(Srp6Server.TryAcceptProof) && f.File == "Srp6Server.cs");
     }
 

@@ -28,13 +28,14 @@ namespace ArcaneCore.Kernel.Diagnostics;
 /// Ownership and threads: process-wide static state. <see cref="Configure"/> is called by the host at
 /// start (and once more when the logger exists); the checks run on any thread. Counters use
 /// <see cref="Interlocked"/>, the per-site table is a <see cref="ConcurrentDictionary{TKey,TValue}"/> touched
-/// only on the failure path. Before <see cref="Configure"/> runs (tests, tools) failures are written
-/// to standard error.
+/// only on the failure path, as is the flow-scoped <see cref="Capture"/>. Before <see cref="Configure"/> runs
+/// (tests, tools) failures are written to standard error.
 /// </para>
 /// </summary>
 public static class Invariant
 {
     private static readonly ConcurrentDictionary<InvariantSite, SiteCounter> Sites = new();
+    private static readonly AsyncLocal<InvariantCapture?> ActiveCapture = new();
     private static long _failures;
     private static volatile InvariantPolicy _policy = InvariantPolicy.Continue;
     private static volatile bool _breakOnFailure;
@@ -78,6 +79,27 @@ public static class Invariant
 
         list.Sort(static (a, b) => b.Count.CompareTo(a.Count));
         return list;
+    }
+
+    /// <summary>
+    /// Record the failures raised in the current logical call flow (this thread and the tasks it awaits or
+    /// starts) until the result is disposed. For tests: <see cref="FailureCount"/> and <see cref="Failures()"/>
+    /// are process-wide and move when an unrelated test class fails a check in parallel, so an exact count is
+    /// asserted on a capture. The pass path of every check is unaffected (the scope is read on failure only).
+    /// </summary>
+    public static InvariantCapture Capture()
+    {
+        var capture = new InvariantCapture(ActiveCapture.Value);
+        ActiveCapture.Value = capture;
+        return capture;
+    }
+
+    internal static void EndCapture(InvariantCapture capture)
+    {
+        if (ReferenceEquals(ActiveCapture.Value, capture))
+        {
+            ActiveCapture.Value = capture.Outer;
+        }
     }
 
     /// <summary>
@@ -203,6 +225,7 @@ public static class Invariant
             }
         }
 
+        ActiveCapture.Value?.Add(new InvariantFailureEvent(kind, member, fileName, line, message));
         DebugBreak();
 
         if (_policy == InvariantPolicy.FailFast)
