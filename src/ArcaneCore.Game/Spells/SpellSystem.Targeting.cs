@@ -112,7 +112,7 @@ public sealed partial class SpellSystem
                     return [];
                 }
 
-                return effect.ChainTarget > 1 ? Chain(cast, effect, selector, explicitOrSelf) : [(explicitOrSelf, 1.0f)];
+                return ChainTargetsOf(cast, effect) > 1 ? Chain(cast, effect, selector, explicitOrSelf) : [(explicitOrSelf, 1.0f)];
             case SpellImplicitTarget.UnitParty:
             case SpellImplicitTarget.UnitRaid:
                 return explicitOrSelf is not null && IsGroupMember(caster, explicitOrSelf, raid: selector == SpellImplicitTarget.UnitRaid)
@@ -124,9 +124,9 @@ public sealed partial class SpellSystem
                 return RandomNearCaster(cast, effect, selector);
             case SpellImplicitTarget.EnumUnitsEnemyAoeAtSrcLoc:
             case SpellImplicitTarget.EnumUnitsEnemyWithinCasterRange:
-                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(spell, effect, selector), u => IsEnemy(caster, u), cone: false);
+                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, selector), u => IsEnemy(caster, u), cone: false);
             case SpellImplicitTarget.EnumUnitsFriendAoeAtSrcLoc:
-                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(spell, effect, selector), u => IsFriend(cast, u), cone: false);
+                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, selector), u => IsFriend(cast, u), cone: false);
             case SpellImplicitTarget.EnumUnitsEnemyAoeAtDestLoc:
             case SpellImplicitTarget.EnumUnitsFriendAoeAtDestLoc:
             case SpellImplicitTarget.EnumUnitsPartyAoeAtDestLoc:
@@ -138,27 +138,27 @@ public sealed partial class SpellSystem
                     SpellImplicitTarget.EnumUnitsFriendAoeAtDestLoc => u => IsFriend(cast, u),
                     _ => u => IsAliveGroupMember(cast, caster, u, raid: false),
                 };
-                return Area(cast, effect, x, y, z, AreaRadius(spell, effect, selector), filter, cone: false);
+                return Area(cast, effect, x, y, z, AreaRadius(cast, effect, selector), filter, cone: false);
             }
 
             case SpellImplicitTarget.EnumUnitsPartyAoeAtSrcLoc:
             case SpellImplicitTarget.EnumUnitsPartyWithinCasterRange:
-                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(spell, effect, selector),
+                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, selector),
                     u => IsAliveGroupMember(cast, caster, u, raid: false), cone: false);
             case SpellImplicitTarget.EnumUnitsRaidWithinCasterRange:
-                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(spell, effect, selector),
+                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, selector),
                     u => IsAliveGroupMember(cast, caster, u, raid: true), cone: false);
             case SpellImplicitTarget.UnitFriendAndParty:
             {
                 // vmangos TARGET_AREAEFFECT_PARTY: the explicit (or self) target's party around it.
                 Unit centre = explicitOrSelf ?? caster;
-                return Area(cast, effect, centre.X, centre.Y, centre.Z, AreaRadius(spell, effect, selector),
+                return Area(cast, effect, centre.X, centre.Y, centre.Z, AreaRadius(cast, effect, selector),
                     u => IsAliveGroupMember(cast, centre, u, raid: false), cone: false);
             }
 
             case SpellImplicitTarget.EnumUnitsEnemyInCone24:
             case SpellImplicitTarget.EnumUnitsEnemyInCone54:
-                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(spell, effect, selector), u => IsEnemy(caster, u), cone: true);
+                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, selector), u => IsEnemy(caster, u), cone: true);
             default:
                 // Class lanes register further targets (SpellSystem.TargetSelectors.cs); null = not implemented.
                 return TrySelectRegistered(cast, effect, selector, unitTarget);
@@ -171,19 +171,28 @@ public sealed partial class SpellSystem
             or SpellImplicitTarget.LocationCasterDest or SpellImplicitTarget.LocationCasterSrc
             or SpellImplicitTarget.LocationCasterTargetPosition;
 
-    /// <summary>EffectRadius, or for "within caster range" targets without a radius the spell's maximum range.</summary>
-    private static float AreaRadius(SpellInfo spell, SpellEffectInfo effect, SpellImplicitTarget selector)
+    /// <summary>
+    /// EffectRadius, or for "within caster range" targets without a radius the spell's maximum range, with the caster's
+    /// SPELLMOD_RADIUS (vmangos Spell::SetTargetMap, Spell.cpp:2050-2062: the mod applies to either source).
+    /// </summary>
+    private float AreaRadius(SpellCast cast, SpellEffectInfo effect, SpellImplicitTarget selector)
     {
-        if (effect.Radius > 0)
-        {
-            return effect.Radius;
-        }
-
-        return selector is SpellImplicitTarget.EnumUnitsEnemyWithinCasterRange or SpellImplicitTarget.EnumUnitsPartyWithinCasterRange
-            or SpellImplicitTarget.EnumUnitsRaidWithinCasterRange
-            ? spell.Range.Max
-            : 0f;
+        SpellInfo spell = cast.Spell;
+        float radius = effect.Radius > 0
+            ? effect.Radius
+            : selector is SpellImplicitTarget.EnumUnitsEnemyWithinCasterRange or SpellImplicitTarget.EnumUnitsPartyWithinCasterRange
+                or SpellImplicitTarget.EnumUnitsRaidWithinCasterRange
+                ? spell.Range.Max
+                : 0f;
+        return radius > 0 ? ModFloat(cast.Caster, spell, SpellModOp.Radius, radius) : radius;
     }
+
+    /// <summary>
+    /// The effect's chain length with the caster's SPELLMOD_JUMP_TARGETS (vmangos Spell.cpp:2058-2062 and
+    /// InitializeDamageMultipliers :1945-1948).
+    /// </summary>
+    private int ChainTargetsOf(SpellCast cast, SpellEffectInfo effect)
+        => Math.Max(ModInt(cast.Caster, cast.Spell, SpellModOp.JumpTargets, (int)effect.ChainTarget), 0);
 
     /// <summary>The destination of a dest-location area: the client's destination, else the explicit target, else the caster.</summary>
     private static (float X, float Y, float Z) DestinationCentre(SpellCast cast, Unit? unitTarget)
@@ -317,6 +326,7 @@ public sealed partial class SpellSystem
     {
         Unit caster = cast.Caster;
         float radius = effect.Radius > 0 ? effect.Radius : cast.Spell.Range.Max;
+        radius = radius > 0 ? ModFloat(caster, cast.Spell, SpellModOp.Radius, radius) : radius;
         if (caster.Map is not { } map || radius <= 0)
         {
             return [];
@@ -328,7 +338,7 @@ public sealed partial class SpellSystem
             SpellImplicitTarget.UnitFriendNearCaster => IsFriend(cast, u),
             _ => u.IsAlive && !ReferenceEquals(u, caster),
         } && IsInLineOfSight(cast.Spell, caster, u)).ToList();
-        int count = (int)Math.Max(1u, effect.ChainTarget);
+        int count = Math.Max(1, ChainTargetsOf(cast, effect));
         if (cast.Spell.MaxAffectedTargets > 0)
         {
             count = Math.Min(count, (int)cast.Spell.MaxAffectedTargets);
@@ -361,7 +371,7 @@ public sealed partial class SpellSystem
             return chain;
         }
 
-        int max = (int)effect.ChainTarget;
+        int max = ChainTargetsOf(cast, effect);
         if (cast.Spell.MaxAffectedTargets > 0)
         {
             max = Math.Min(max, (int)cast.Spell.MaxAffectedTargets);
@@ -371,7 +381,9 @@ public sealed partial class SpellSystem
             || (selector == SpellImplicitTarget.Unit && Relations.IsHostile(caster, primary));
         bool heal = selector == SpellImplicitTarget.UnitFriendChainHeal;
         float jumpRadius = ChainJumpRadiusFor(cast, effect);
+        // vmangos Spell.cpp:1766 / :1920: SPELLMOD_EFFECT_PAST_FIRST on the per-jump multiplier (Improved Chain Heal shape).
         float factor = effect.DamageMultiplier is > 0f and not 1.0f ? effect.DamageMultiplier : 1.0f;
+        factor = ModFloat(caster, cast.Spell, SpellModOp.EffectPastFirst, factor);
         float multiplier = 1.0f;
         var used = new HashSet<Unit>(ReferenceEqualityComparer.Instance) { primary };
         Unit last = primary;

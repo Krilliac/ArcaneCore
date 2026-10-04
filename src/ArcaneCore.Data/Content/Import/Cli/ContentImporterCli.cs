@@ -44,6 +44,9 @@ public static class ContentImporterCli
                                 (and the starting outfit, playercreateinfo_item)
           import-dbc <dir>      import the five spell DBCs from a client DBFilesClient directory
           verify                count the imported tables and check references
+          class-masks <dump>... read spell_affect (the 64-bit class masks of the talent modifier auras)
+                                and write the overlay file Spells:Mods:ClassMaskFile reads
+                                (--class-mask-file <file>, outside the repository; --dry-run writes nothing)
 
         a <dump> is a .sql or .sql.gz file (the gzip magic number decides, not the name); several
         dumps are read in order as one, later rows replacing earlier ones with the same key.
@@ -95,6 +98,7 @@ public static class ContentImporterCli
                 "import" => await ImportAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "import-dbc" => await ImportDbcAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "verify" => await VerifyAsync(arguments, output, cancellationToken).ConfigureAwait(false),
+                "class-masks" => ClassMasks(arguments, output),
                 _ => throw new UsageException($"unknown command '{arguments.Command}'"),
             };
         }
@@ -146,6 +150,53 @@ public static class ContentImporterCli
         PrintWarnings(o, warnings);
         WriteReport(reportPath, ContentImportReport.Create("plan", files, scan, warnings, dryRun: false));
         return Task.FromResult(ExitCodes.Ok);
+    }
+
+    // --- class-masks -------------------------------------------------------------------------
+
+    private static int ClassMasks(CliArguments a, TextWriter o)
+    {
+        RequireInputs(a);
+        string path = a.Value("--class-mask-file") ?? throw new UsageException("class-masks needs --class-mask-file <file>");
+        GuardPath(path);
+        (IReadOnlyList<DumpInput> inputs, _) = OpenInputs(a.Positional);
+        var importer = new SpellAffectDumpImporter();
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            importer.Read(reader);
+        }
+
+        SpellAffectImportReport report = importer.BuildReport();
+        if (report.Rows == 0)
+        {
+            throw new CliException(ExitCodes.Schema, "the dump has no spell_affect rows (is it a classic-db world dump?)");
+        }
+
+        o.WriteLine($"spell_affect: {report.Rows} row(s), {report.WideMasks} above 32 bits, {report.ZeroMasks} empty, {report.SkippedRows} skipped");
+        foreach (string warning in report.Warnings)
+        {
+            o.WriteLine($"warning: {warning}");
+        }
+
+        if (a.Flag("--dry-run"))
+        {
+            o.WriteLine("class mask file: would write the overlay to the --class-mask-file path (dry run)");
+            return ExitCodes.Ok;
+        }
+
+        string? directory = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        using (var writer = new StreamWriter(path, append: false, new System.Text.UTF8Encoding(false)))
+        {
+            importer.WriteOverlay(writer);
+        }
+
+        o.WriteLine($"class mask file: wrote {report.Rows} row(s) to {Path.GetFullPath(path)}; set Spells:Mods:ClassMaskFile to it");
+        return ExitCodes.Ok;
     }
 
     // --- import ------------------------------------------------------------------------------

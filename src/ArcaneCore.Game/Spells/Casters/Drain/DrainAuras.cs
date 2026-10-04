@@ -56,7 +56,9 @@ public static class DrainAuras
             spells.CancelChannel(caster);
         }
 
-        float multiplier = spell.Effects[aura.EffectIndex].MultipleValue > 0 ? spell.Effects[aura.EffectIndex].MultipleValue : 1.0f;
+        // SPELLMOD_MULTIPLE_VALUE on the leech multiple (vmangos Aura::PeriodicTick, SpellAuras.cpp:6008).
+        float multiplier = spells.ModFloat(caster, spell, SpellModOp.MultipleValue,
+            spell.Effects[aura.EffectIndex].MultipleValue > 0 ? spell.Effects[aura.EffectIndex].MultipleValue : 1.0f);
         uint gain = (uint)(dealt * multiplier);
         if (gain > 0 && caster.IsAlive)
         {
@@ -89,8 +91,9 @@ public static class DrainAuras
         uint drained = Math.Min(available, (uint)Math.Max(aura.Amount, 0));
         SpellSystem.SetPower(target, power, available - drained);
 
+        // SPELLMOD_MULTIPLE_VALUE on the gain multiplier, only when the caster has the power at all (SpellAuras.cpp:6171-6175).
         float multiplier = caster.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)power) > 0
-            ? holder.Spell.Effects[aura.EffectIndex].MultipleValue
+            ? spells.ModFloat(caster, holder.Spell, SpellModOp.MultipleValue, holder.Spell.Effects[aura.EffectIndex].MultipleValue)
             : 0f;
         SpellSystem.SendToSet(target, WorldOpcode.SmsgPeriodicauralog,
             CasterPeriodicPackets.BuildManaLeechLog(target.Guid, caster.Guid, holder.Spell.Id, (uint)power, drained, multiplier), includeSelf: true);

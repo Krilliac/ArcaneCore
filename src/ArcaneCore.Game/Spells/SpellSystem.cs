@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Ranged;
+using ArcaneCore.Game.Spells.Mods;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -299,8 +300,16 @@ public sealed partial class SpellSystem
             return result;
         }
 
-        int castTime = triggered ? 0 : CastTimeFor(caster, spell);
-        var cast = new SpellCast(spell, caster, targets, triggered, castTime, PowerCostFor(caster, spell), DurationFor(caster, spell));
+        // vmangos Spell::prepare (Spell.cpp:3395, :3436): the cost is read without spending mod charges, the cast time after the
+        // first CheckCast with them ("to prevent charge counting for first CheckCast fail"), the duration never.
+        SpellModScope? modScope = ModEngine?.CreateScope(caster, spell);
+        int castTime;
+        using (BeginModWindow(modScope))
+        {
+            castTime = triggered ? 0 : CastTimeFor(caster, spell);
+        }
+
+        var cast = new SpellCast(spell, caster, targets, triggered, castTime, PowerCostFor(caster, spell), DurationFor(caster, spell)) { ModScope = modScope };
         if (!triggered)
         {
             state.CurrentCast = cast;
@@ -345,6 +354,14 @@ public sealed partial class SpellSystem
             return result;
         }
 
+        // vmangos Spell::cast (Spell.cpp:3646-3658): the cost is read again, now spending mod charges, and everything the cast
+        // reads from here until it returns (effects, crit rolls) spends the charges of the mods it uses.
+        using SpellModWindow modWindow = BeginModWindow(cast.ModScope);
+        if (cast.ModScope is not null && !cast.IsTriggered)
+        {
+            cast.PowerCost = PowerCostFor(caster, spell);
+        }
+
         InterruptAtCastCompletion(cast); // rogue lane: ACTION_LATE / ATTACKING half (vmangos Spell.cpp:3697-3714), docs/integration/rogue-aura-interrupt.md
         AddCooldown(state, spell, cast.IsTriggered);
         TakePower(caster, spell, cast.PowerCost, cast.IsTriggered);
@@ -379,6 +396,7 @@ public sealed partial class SpellSystem
         {
             cast.State = SpellCastState.Casting;
             cast.Timer = duration;
+            SealModScope(cast); // vmangos Spell.cpp:3834: a channel ends its mods when it starts, not when it ends
             cast.CastX = caster.X;
             cast.CastY = caster.Y;
             cast.CastZ = caster.Z;
@@ -674,7 +692,7 @@ public sealed partial class SpellSystem
         {
             Unit target = checkedTarget!;
             // ranged (hunter lane): a cast from a game object (trap) ignores range and the owner being far or dead (vmangos triggered casts).
-            SpellCastResult range = _objectCastDepth > 0 ? SpellCastResult.CastOk : CheckRange(caster, spell, target, strict, RangedOptions.Range.Leeway == RangeLeewayMode.Retail);
+            SpellCastResult range = _objectCastDepth > 0 ? SpellCastResult.CastOk : CheckRange(caster, spell, target, strict, RangedOptions.Range.Leeway == RangeLeewayMode.Retail, SpellModifiers);
             if (range != SpellCastResult.CastOk)
             {
                 return range;
@@ -689,7 +707,7 @@ public sealed partial class SpellSystem
         }
         else if (targets.HasDest)
         {
-            SpellCastResult range = CheckDestRange(caster, spell, targets, strict);
+            SpellCastResult range = CheckDestRange(caster, spell, targets, strict, SpellModifiers);
             if (range != SpellCastResult.CastOk)
             {
                 return range;
@@ -737,7 +755,7 @@ public sealed partial class SpellSystem
     /// (1.25 yd at cast start, 6.25 yd on landing) against the combat distance (3D distance minus
     /// both combat reaches), with the minimum range giving TOO_CLOSE.
     /// </summary>
-    internal static SpellCastResult CheckRange(Unit caster, SpellInfo spell, Unit target, bool strict, bool movementLeeway = true)
+    internal static SpellCastResult CheckRange(Unit caster, SpellInfo spell, Unit target, bool strict, bool movementLeeway = true, Rules.ISpellModifiers? modifiers = null)
     {
         if (spell.RangeIndex == SpellConstants.RangeIndexSelfOnly || ReferenceEquals(caster, target))
         {
@@ -757,7 +775,15 @@ public sealed partial class SpellSystem
             // vmangos WorldObject::CanReachWithMeleeSpellAttack with Spell::CheckRange's range_mod
             // 1.0: reach = both combat reaches + 1.0 + BASE_MELEERANGE_OFFSET (4/3), at least
             // ATTACK_DISTANCE, compared in 2D ("melee spells ignore Z-axis checks").
-            float meleeRange = Math.Max(SpellConstants.AttackDistance, reach + 1.0f + (4.0f / 3.0f));
+            // The SPELLMOD_RANGE spell mod is read on ATTACK_DISTANCE and its difference is added to the 1.0 (Spell.cpp:6890-6899:
+            // "range_mod += ApplySpellMod(..., base = ATTACK_DISTANCE)"): a vmangos quirk reproduced, not corrected.
+            float rangeMod = 1.0f;
+            if (modifiers is not null)
+            {
+                rangeMod += modifiers.Apply(caster, spell, SpellModOp.Range, SpellConstants.AttackDistance) - SpellConstants.AttackDistance;
+            }
+
+            float meleeRange = Math.Max(SpellConstants.AttackDistance, reach + rangeMod + (4.0f / 3.0f));
             float dx = caster.X - target.X;
             float dy = caster.Y - target.Y;
             return (dx * dx) + (dy * dy) < meleeRange * meleeRange ? SpellCastResult.CastOk : SpellCastResult.OutOfRange;
@@ -773,8 +799,10 @@ public sealed partial class SpellSystem
             leeway += RangeLeeway.Bonus(caster, target);
         }
 
+        // vmangos Spell.cpp:6915-6917: SPELLMOD_RANGE on the maximum range, before the leeway is added.
+        float maxRange = modifiers?.Apply(caster, spell, SpellModOp.Range, spell.Range.Max) ?? spell.Range.Max;
         float combatDistance = Math.Max(0.0f, distance - reach);
-        if (combatDistance > spell.Range.Max + leeway)
+        if (combatDistance > maxRange + leeway)
         {
             return SpellCastResult.OutOfRange;
         }
@@ -782,7 +810,7 @@ public sealed partial class SpellSystem
         return spell.Range.Min > 0 && combatDistance < spell.Range.Min ? SpellCastResult.TooClose : SpellCastResult.CastOk;
     }
 
-    private static SpellCastResult CheckDestRange(Unit caster, SpellInfo spell, SpellCastTargets targets, bool strict)
+    private static SpellCastResult CheckDestRange(Unit caster, SpellInfo spell, SpellCastTargets targets, bool strict, Rules.ISpellModifiers? modifiers = null)
     {
         if (spell.RangeIndex == SpellConstants.RangeIndexSelfOnly || spell.Range.Max <= 0)
         {
@@ -791,7 +819,8 @@ public sealed partial class SpellSystem
 
         float leeway = caster is Player ? (strict ? SpellConstants.PlayerStrictRangeLeeway : SpellConstants.PlayerLandingRangeLeeway) : 0.0f;
         float distance = Distance3D(caster, targets.Dest.X, targets.Dest.Y, targets.Dest.Z);
-        if (distance > spell.Range.Max + leeway)
+        float maxRange = modifiers?.Apply(caster, spell, SpellModOp.Range, spell.Range.Max) ?? spell.Range.Max;
+        if (distance > maxRange + leeway)
         {
             return SpellCastResult.OutOfRange;
         }
@@ -911,8 +940,11 @@ public sealed partial class SpellSystem
 
     // --- costs and cooldowns ------------------------------------------------------------
 
-    /// <summary>Power cost including UNIT_FIELD_POWER_COST_MODIFIER for the spell's school (vmangos Spell::CalculatePowerCost).</summary>
-    public static uint CalculatePowerCost(Unit caster, SpellInfo spell)
+    /// <summary>
+    /// Power cost including UNIT_FIELD_POWER_COST_MODIFIER for the spell's school (vmangos Spell::CalculatePowerCost).
+    /// <paramref name="modifyCost"/> is the stage hook for the caster's cost spell mod (see below); null leaves the cost unmodified.
+    /// </summary>
+    public static uint CalculatePowerCost(Unit caster, SpellInfo spell, Func<int, int>? modifyCost = null)
     {
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(spell);
@@ -930,6 +962,13 @@ public sealed partial class SpellSystem
         if (!spell.HasAttribute(SpellAttributesEx.UseAllMana))
         {
             cost += caster.GetInt32(UpdateFields.UnitFieldPowerCostModifier + (int)spell.School);
+
+            // vmangos Spell.cpp:7019-7023: the SPELLMOD_COST spell mod runs after the school flat modifier and before the
+            // creature-level scaling and the school percent multiplier below (spell-modifier-engine).
+            if (modifyCost is not null)
+            {
+                cost = modifyCost(cost);
+            }
 
             // vmangos Spell::CalculatePowerCost (Spell.cpp:7026-7036): creature-level scaling, then the school
             // percent multiplier (aura 72: Clearcasting, cost talents). Casters lane, mana-spend-rule.
@@ -981,6 +1020,10 @@ public sealed partial class SpellSystem
             return;
         }
 
+        // vmangos Player::AddGCD (Player.cpp:22101-22105): SPELLMOD_GLOBAL_COOLDOWN before the haste scaling, so a modified
+        // duration no longer equals 1500 and is not scaled.
+        duration = ModInt(state.Unit, spell, SpellModOp.GlobalCooldown, duration);
+
         if (spell.StartRecoveryCategory == SpellConstants.GlobalCooldownCategory && duration == 1500
             && spell.DamageClass is not (SpellDamageClass.Melee or SpellDamageClass.Ranged)
             && !spell.HasAttribute(SpellAttributes.UsesRangedSlot) && !spell.HasAttribute(SpellAttributes.IsAbility))
@@ -1018,20 +1061,32 @@ public sealed partial class SpellSystem
             return;
         }
 
+        // vmangos Player::AddCooldown (Player.cpp:22200-22206): the cooldown spell mod applies to the spell's own time when it
+        // has one, otherwise to the category time ("blizzlike code for choosing which is recTime > categoryRecTime").
+        uint categoryRecovery = spell.CategoryRecoveryTime;
+        if (recovery > 0)
+        {
+            recovery = (uint)Math.Max(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)recovery), 0);
+        }
+        else if (spell.Category != 0 && categoryRecovery > 0)
+        {
+            categoryRecovery = (uint)Math.Max(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)categoryRecovery), 0);
+        }
+
         uint now = NowMs;
         if (recovery > 0)
         {
             state.SpellCooldowns[spell.Id] = now + recovery;
         }
 
-        if (spell.Category != 0 && spell.CategoryRecoveryTime > 0)
+        if (spell.Category != 0 && categoryRecovery > 0)
         {
-            state.CategoryCooldowns[spell.Category] = now + spell.CategoryRecoveryTime;
+            state.CategoryCooldowns[spell.Category] = now + categoryRecovery;
         }
 
         if (triggered && state.Unit is Player player)
         {
-            uint ms = Math.Max(recovery, spell.CategoryRecoveryTime);
+            uint ms = Math.Max(recovery, categoryRecovery);
             player.Session.Send(WorldOpcode.SmsgSpellCooldown, SpellPackets.BuildSpellCooldown(player.Guid, [(spell.Id, ms)]));
         }
     }

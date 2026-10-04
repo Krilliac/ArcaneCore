@@ -177,7 +177,8 @@ public sealed partial class SpellSystem
         }
 
         SpellDamageResult result = DealDirectDamage(context.Caster, context.Target, context.Spell, ModifyDirect(SpellAmountStage.DirectDamage, context, (uint)context.Value), allowCrit: true);
-        float multiple = context.Effect.MultipleValue > 0 ? context.Effect.MultipleValue : 1.0f;
+        // SPELLMOD_MULTIPLE_VALUE on the leech multiple (vmangos EffectHealthLeech, SpellEffects.cpp:1866-1869).
+        float multiple = ModFloat(context.Caster, context.Spell, SpellModOp.MultipleValue, context.Effect.MultipleValue > 0 ? context.Effect.MultipleValue : 1.0f);
         uint gain = (uint)(result.Dealt * multiple);
         if (gain > 0 && context.Caster.IsAlive)
         {
@@ -244,6 +245,9 @@ public sealed partial class SpellSystem
         WeaponAttackType attack = context.Spell.DamageClass == SpellDamageClass.Ranged ? WeaponAttackType.RangedAttack : WeaponAttackType.BaseAttack;
         float weapon = WeaponDamageRoll(context.Caster, attack, normalized);
         float total = Math.Max(0f, (weapon + bonus) * percent);
+
+        // The DAMAGE spell mod on the done amount, before armor and crit (vmangos MeleeDamageBonusDone, SpellCaster.cpp:1446).
+        total = ModFloat(context.Caster, context.Spell, SpellModOp.Damage, total);
         if (total < 1f)
         {
             return;

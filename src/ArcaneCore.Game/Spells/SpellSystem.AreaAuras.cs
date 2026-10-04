@@ -41,6 +41,8 @@ public sealed partial class SpellSystem
             }
 
             float radius = source.Spell.Effects.Where(e => e.Effect == SpellEffectName.ApplyAreaAuraParty).Select(e => e.Radius).DefaultIfEmpty(0).Max();
+            // vmangos AreaAura::AreaAura (SpellAuras.cpp:420-422): SPELLMOD_RADIUS of the caster on the area radius.
+            radius = radius > 0 ? ModFloat(state.Unit, source.Spell, SpellModOp.Radius, radius) : radius;
             var inRange = new HashSet<ObjectGuid>();
             if (state.Unit.IsAlive)
             {

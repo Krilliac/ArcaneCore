@@ -169,7 +169,8 @@ public sealed partial class SpellSystem
 
     /// <summary>The power cost with the registered cost modifiers (vmangos Spell::CalculatePowerCost).</summary>
     private uint PowerCostFor(Unit caster, SpellInfo spell)
-        => (uint)Math.Max(ModifyValue(SpellValueKind.PowerCost, caster, spell, -1, (int)CalculatePowerCost(caster, spell)), 0);
+        => (uint)Math.Max(ModifyValue(SpellValueKind.PowerCost, caster, spell, -1,
+            (int)CalculatePowerCost(caster, spell, cost => ModInt(caster, spell, SpellModOp.Cost, cost))), 0);
 
     // --- chain range --------------------------------------------------------------------------
 

@@ -110,8 +110,10 @@ hosted CI matrix.
 
 ## Limits and recorded decisions
 
-- **Talent effects.** About half of the talent rank spells need the spell-modifier engine (`AddFlatModifier` / `AddPctModifier`)
-  and many need procs; none is implemented here. Run the server and read the coverage log line for the real numbers.
+- **Talent effects.** Spell-modifier talents (aura 107 / 108) are live since the spell-modifier engine ([spell-mods](spell-mods.md)):
+  learning a rank casts the passive, the engine registers the modifier, a respec or a higher rank removes it. Talents that need procs,
+  class scripts (aura 112) or stat auras the spell system lacks still do nothing here. Run the server and read the two coverage log
+  lines (`TalentEffectCoverage`, `TalentModCoverage`) for the real numbers.
 - **Level changes that bypass `GiveXp`** (GM `.level`, templates) do not raise `LevelChanged`; call `TalentService.InitTalentForLevel`
   from those paths, or the points catch up at the next login.
 - **No `.reset talents` / `.modify talentpoints` commands.** A duplicate command root throws at startup, so the GM lane should call
