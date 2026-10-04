@@ -68,8 +68,13 @@ public sealed class GraveyardStoreTests : IAsyncLifetime
         Assert.Equal([1u, 7u, 4000000000u], content.SafeLocs.Select(l => l.Id));
         WorldSafeLoc elwynn = content.SafeLocs[0];
         Assert.Equal((0u, "Elwynn Forest, Goldshire"), (elwynn.MapId, elwynn.Name));
-        Assert.InRange(elwynn.X, -9100.123f - 1e-3f, -9100.123f + 1e-3f);
-        Assert.InRange(elwynn.Orientation, 3.14159f - 1e-4f, 3.14159f + 1e-4f);
+        // SQLite and PostgreSQL (real) return the full single-precision value, so they keep the tight tolerance. MariaDB FLOAT is single
+        // precision too, but the text the driver returns carries ~6 significant digits (-9100.123 comes back as -9100.12), so its tolerance
+        // is relative: half a unit of the sixth significant digit, about 5e-6 of the value, with margin.
+        float xTolerance = provider == DatabaseProvider.MariaDb ? MathF.Abs(-9100.123f) * 1e-5f : 1e-3f;
+        float oTolerance = provider == DatabaseProvider.MariaDb ? 3.14159f * 1e-5f : 1e-4f;
+        Assert.InRange(elwynn.X, -9100.123f - xTolerance, -9100.123f + xTolerance);
+        Assert.InRange(elwynn.Orientation, 3.14159f - oTolerance, 3.14159f + oTolerance);
         Assert.Equal("Zul'Gurub Entrance, éè", content.SafeLocs[2].Name);
         Assert.Equal(
             [(1u, 12u, 469u), (1u, 40u, 0u), (4000000000u, 33u, 67u)],
