@@ -410,16 +410,21 @@ public sealed class NpcVendorServiceTests
         return snapshots;
     }
 
-    [Fact]
-    public void Discounts_AreFlooredAsVmangosDoes()
+    // vmangos Player::BuyItemFromVendor (Player.cpp:18442-18445): uint32(price * GetReputationPriceDiscount + 0.5f), i.e. round half up in
+    // single precision, NOT floor. Bread costs 25: 25 x 0.9 = 22.5 -> 23, 25 x 0.95 = 23.75 -> 24, 25 x 0.85 = 21.25 -> 21.
+    [Theory]
+    [InlineData(1.0f, 25u)]
+    [InlineData(0.9f, 23u)]
+    [InlineData(0.95f, 24u)]
+    [InlineData(0.85f, 21u)]
+    public void Discounts_RoundHalfUpAsVmangosDoes(float discount, uint expectedPrice)
     {
-        var reputation = new FixedReputation(0.9f);
+        var reputation = new FixedReputation(discount);
         using var kit = new NpcServiceKit(NpcFlags.Vendor, Vendor(Row(Bread)), new QuestNpcDependencies(Reputation: reputation));
         kit.Player.Money = 100;
         kit.Services.BuyItem(kit.Player, kit.Npc.Guid, Bread, 1);
-        Assert.Equal(78u, kit.Player.Money); // floor(25 × 0.9) = 22
+        Assert.Equal(100u - expectedPrice, kit.Player.Money);
     }
-
     internal sealed class FixedReputation(float discount, byte rank = 4) : IPlayerReputation
     {
         public int GetReputation(Player player, uint factionId) => 0;
