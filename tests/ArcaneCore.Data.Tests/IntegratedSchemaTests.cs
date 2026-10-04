@@ -77,6 +77,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.World.WorldState.GameEventDataModule), DatabaseComponent.World, ArcaneCore.Data.World.WorldState.GameEventDataModule.Version),
             (typeof(ArcaneCore.Data.World.Threat.SpellThreatDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Threat.SpellThreatDataModule.Version),
             (typeof(ArcaneCore.Data.Graveyards.GraveyardDataModule), DatabaseComponent.World, ArcaneCore.Data.Graveyards.GraveyardDataModule.Version),
+            (typeof(ArcaneCore.Data.World.Rest.AreaTriggerTavernDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Rest.AreaTriggerTavernDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -99,6 +100,8 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(CharacterHonorDataModule), DatabaseComponent.Characters, CharacterHonorDataModule.Version),
             (typeof(CreatureRespawnDataModule), DatabaseComponent.Characters, CreatureRespawnDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.WorldState.GameEventStatusDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.GameEventStatusDataModule.Version),
+            (typeof(CharacterRestDataModule), DatabaseComponent.Characters, CharacterRestDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.Rename.CharacterRenameDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Rename.CharacterRenameDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),

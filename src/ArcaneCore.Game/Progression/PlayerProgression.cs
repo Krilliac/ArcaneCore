@@ -205,7 +205,10 @@ public sealed class PlayerProgression : IQuestExperience
         BaseValuesApplied?.Invoke(player);
     }
 
-    /// <summary>vmangos Player::GetRestBonus (rested XP pool; not persisted and not accumulated by this slice).</summary>
+    /// <summary>
+    /// vmangos Player::GetRestBonus: the rested XP pool. This class owns the pool and what it does to kill XP; <see cref="RestService"/>
+    /// fills it (resting, offline time) and the rest feature persists it.
+    /// </summary>
     public float RestBonus(Player player) => _states.TryGetValue(player, out State? s) ? s.RestBonus : 0;
 
     /// <summary>vmangos Player::SetRestBonus: clamp to 1.5 levels / 2, publish the rest state byte and PLAYER_REST_STATE_EXPERIENCE.</summary>

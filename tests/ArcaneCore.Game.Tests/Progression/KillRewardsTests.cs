@@ -72,6 +72,29 @@ public sealed class KillRewardsTests
         Assert.Equal([238u], KillRewards.AwardExperience(progression, [killer], kit.Victim, nonRaidDungeon: true));
     }
 
+    [Fact]
+    public void KillExperience_IsDoubledFromTheRestedPool_UntilThePoolRunsOut()
+    {
+        using var kit = new Kit(creatureLevel: 10);
+        Player killer = kit.AddPlayer(1, 5, 0, level: 10);
+        var progression = new PlayerProgression(new ProgressionOptions());
+        progression.InitializeLoadedPlayer(killer);
+        progression.SetRestBonus(killer, 150);
+        Assert.Equal(PlayerProgression.RestStateRested, killer.GetByte(UpdateFields.PlayerBytes2, 3));
+
+        // A kill is worth 95 at equal level: the pool adds as much, up to the whole pool.
+        Assert.Equal([190u], KillRewards.AwardExperience(progression, [killer], kit.Victim, nonRaidDungeon: false));
+        Assert.Equal(55f, progression.RestBonus(killer));
+        Assert.Equal(190u, PlayerProgression.CurrentXp(killer));
+
+        Assert.Equal([150u], KillRewards.AwardExperience(progression, [killer], kit.Victim, nonRaidDungeon: false)); // 95 + the last 55
+        Assert.Equal(0f, progression.RestBonus(killer));
+        Assert.Equal(PlayerProgression.RestStateNormal, killer.GetByte(UpdateFields.PlayerBytes2, 3));
+
+        Assert.Equal([95u], KillRewards.AwardExperience(progression, [killer], kit.Victim, nonRaidDungeon: false)); // an empty pool adds nothing
+        Assert.Equal(190u + 150u + 95u, PlayerProgression.CurrentXp(killer));
+    }
+
     private sealed class Kit : IDisposable
     {
         private readonly Dictionary<uint, FakeSession> _sessions = [];

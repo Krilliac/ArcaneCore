@@ -200,7 +200,7 @@ table or catalog from the database).
 |---|---|---|---|
 | `all` (796), `all_area` (797) | itself; all_area = areatrigger_teleport, areatrigger_tavern, game_graveyard_zone (:910-912) | `.reload all` | delivered |
 | `areatrigger_teleport` (813) | yes, via all_area (:910) | `areatrigger_teleport` | delivered |
-| `areatrigger_tavern` (812) | yes, via all_area (:911) | none | no store |
+| `areatrigger_tavern` (812) | yes, via all_area (:911) | `areatrigger_tavern` (the inn triggers of the rest feature, [rested-xp](rested-xp.md)) | delivered |
 | `game_graveyard_zone` (835) | yes, via all_area (:912) | none | owner lane (graveyards-resurrection) |
 | `areatrigger_involvedrelation` (811) | yes, via all_quest (:937) | none: the quest area triggers are the configuration key `Quests:AreaTriggerQuests`, bound when the world starts | no store (restart) |
 | `config` (808) | no | `config` | delivered |
@@ -258,7 +258,7 @@ retail variant of (no switch is possible); they are limits, not options.
   lane's store (spell modifiers, procs and chains, threat, weather and events, graveyards, creature groups and spawns, reputation,
   battlegrounds, conditions: each of those lanes adds an `IContentReloadable` class, discovered without a registry edit, once its store is
   an immutable object behind a stable holder) or has no table here at all (`mangos_string`, `command`, `reserved_name`, `page_text`,
-  `item_enchantment_template`, `item_required_target`, the locales, `*_scripts`, `areatrigger_tavern`, `creature_spells`: nothing reads
+  `item_enchantment_template`, `item_required_target`, the locales, `*_scripts`, `creature_spells`: nothing reads
   them from the database, so there is nothing to reload; the quest area triggers are the configuration key `Quests:AreaTriggerQuests`,
   read at start). The map registry, areas, terrain and collision data are restart-only, as in vmangos.
 - The `<entry>` argument of `creature_template` and `gameobject_template` (one template) is not supported (see the creature section).
