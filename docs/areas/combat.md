@@ -169,9 +169,14 @@ CMSG_TOGGLE_PVP: an optional u8 state (gtker `pvp/cmsg_toggle_pvp.wowm`, vmangos
 The swing reaches the spell system through `IMeleeSpellHooks` (`CombatEnvironment.MeleeSpells`, installed by the
 world daemon's `MeleeSpellFeature` as `SpellSystemMeleeHooks`; without it nothing is cast from a swing):
 
-- **No swing while casting.** `MapCombat.AttackerStateUpdate` returns without a swing while the unit has a generic
-  cast or a channel in progress (vmangos `Unit::AttackerStateUpdate`, `Unit.cpp:2240-2241`). The attack timer still
-  restarts, so the swing is lost, not delayed. `Combat:MeleeCastingBlocksSwing` (default true, retail) turns it off.
+- **No swing while casting.** While the unit has a generic cast, a channel or an auto-repeat spell (Auto Shot) in
+  progress, `MapCombat.UpdateMeleeAttackingState` returns before it looks at any swing timer, so the swing happens as soon
+  as the cast ends (vmangos `Unit::UpdateMeleeAttackingState`, `Unit.cpp:415-421`; `AttackerStateUpdate` keeps its own gate,
+  `Unit.cpp:2240-2241`). `Combat:MeleeCastingBlocksSwing` (default true, retail) turns it off. Wave 4 (ranged lane) changed
+  this: before, the swing timer was consumed and restarted while casting, so the swing was lost, not delayed;
+  `Combat:CastingConsumesSwing=true` keeps that old behaviour. A non-triggered cast of a spell with the combat interrupt
+  bit (0x08) and without Ex2 0x20000 also restarts the main-hand and off-hand timers (`Combat:CastResetsMeleeSwing`,
+  default true; `docs/areas/ranged/swing-interplay.md`).
 - **Queued next-swing spell.** The main-hand swing casts the spell queued in `UnitSpellState.MeleeCast` at the victim
   instead of the white hit (`Unit.cpp:2249-2257`): power is taken, effects applied, SMSG_SPELL_GO sent. A cast that fails
   (no rage left) drops the spell and the white hit is still lost, as vmangos returns when the slot is empty. The

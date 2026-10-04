@@ -2,6 +2,8 @@
 
 Branch `claude/vw2-class-hunter`. Integration notes (shared-file edits, schema constant, hand-offs to other lanes): `docs/integration/hunter.md`.
 
+> **Corrections (ranged lane, wave 4).** Two statements below are stale. (1) classic-db `spell_template` is a **full Spell.dbc dump** (22374 rows, every attribute, effect and range column), not eight stub rows; Auto Shot 75 (Attributes 0x50012, Ex2 0x20), wand Shoot 5019 (category 351, Ex2 0x20, Ex3 0x408000) and the others were verified from it (`docs/areas/ranged/auto-repeat.md`). Only the SpellRange.dbc distances are still unverified. (2) Throw 2764 and Shoot Bow/Gun/Crossbow 2480/7918/7919 are **not** auto-repeat spells (Ex2 0x20 is only on 75 and 5019); they are single ranged abilities whose cooldown is the weapon speed. The auto-repeat slot now exists: see `docs/areas/ranged/auto-repeat.md`.
+
 Everything defaults to the vmangos / retail 1.12.1 behaviour; every deliberate deviation is a `Ranged:*` option whose default is retail. The reference repositories carry **no Spell.dbc** (classic-db `spell_template` holds eight stub rows), so no spell attribute, range index or trap summon slot could be verified from them. All spell tests use synthetic `SpellInfo` records; the checklist for the developer's client DBC is at the end.
 
 ## What is in
@@ -45,7 +47,7 @@ Everything defaults to the vmangos / retail 1.12.1 behaviour; every deliberate d
 
 Not done in this lane, with the primitive they wait on:
 
-- **Auto Shot / wand Shoot / Throw (H5):** needs the spell-breadth lane's auto-repeat slot (`CMSG_CANCEL_AUTO_REPEAT_SPELL`, breakage matrix) and the stats lane's ranged attack time from the weapon with haste. The pieces it will use are in place: weapon and ammo checks, ammo use, the projectile trailer, the ranged cooldown term, `GetCastTime(autoRepeat)`, and the wind-up rules written down in `docs/integration/hunter.md`. `CheckCast` does **not** yet return `MOVING` for an auto-repeat cast by a moving player (vmangos `Spell.cpp:5395-5403`).
+- **Auto Shot / wand Shoot / Throw (H5): delivered by the ranged lane (wave 4), see `docs/areas/ranged/auto-repeat.md`; the paragraph below is the original note.** Needs the spell-breadth lane's auto-repeat slot (`CMSG_CANCEL_AUTO_REPEAT_SPELL`, breakage matrix) and the stats lane's ranged attack time from the weapon with haste. The pieces it will use are in place: weapon and ammo checks, ammo use, the projectile trailer, the ranged cooldown term, `GetCastTime(autoRepeat)`, and the wind-up rules written down in `docs/integration/hunter.md`. `CheckCast` does **not** yet return `MOVING` for an auto-repeat cast by a moving player (vmangos `Spell.cpp:5395-5403`).
 - **Ranged haste values** (`RangedAttackSpeedPct` seam, aura 140), **quiver haste (aura 141)** and its AmmoType 0 rule (needs the attack-time percent primitive and equip spells of equipped bags), Rapid Fire, Aspect of the Hawk, Trueshot Aura values.
 - **Aspect / sting / tracker stacking classes** (`SpellSpecific`), Aspect of the Cheetah / Pack daze, Entrapment, Counterattack / Mongoose Bite reactive states, Raptor Strike / Wing Clip next-swing, Volley, Distracting Shot and Disengage threat, hunter `spell_bonus_data` terms: spell-breadth, warrior and content-import lanes.
 - **Pets** (Mend Pet, Call / Revive / Dismiss Pet, Tame Beast, Beast Lore, Eyes of the Beast, Bestial Wrath, Intimidation) and the Feign Death pet-combat rule.

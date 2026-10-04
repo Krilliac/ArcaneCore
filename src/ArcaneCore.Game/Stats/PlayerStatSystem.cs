@@ -92,6 +92,10 @@ public sealed class PlayerStatSystem : ICombatStatSource
             player.SetUInt32(UpdateFields.UnitFieldRangedattacktime, CombatConstants.BaseAttackTimeMs);
         }
 
+        // ranged (autorepeat lane): the ammo DPS is part of the ranged damage (StatSystem.cpp:440-443); recompute when the ammo changes.
+        inventory.AmmoChanged -= OnAmmoChanged;
+        inventory.AmmoChanged += OnAmmoChanged;
+
         state.ResetWeaponDamage();
         state.ShieldBlockFlat = 0;
         foreach ((byte slot, Item item) in inventory.Equipped)
@@ -188,11 +192,9 @@ public sealed class PlayerStatSystem : ICombatStatSource
         }
 
         uint time = apply ? template.Delay : CombatConstants.BaseAttackTimeMs;
-        player.SetUInt32(UpdateFields.UnitFieldBaseattacktime + (int)attackType, time);
-        if (resetTimer)
-        {
-            player.Combat.ResetAttackTimer(attackType);
-        }
+        // ranged (autorepeat lane): SetAttackTime stores time * speed multiplier (vmangos Unit::SetAttackTime), so a weapon swap
+        // under haste keeps the haste.
+        player.Combat.SetAttackTime(attackType, time, resetTimer);
 
         UpdateDamagePhysical(player, attackType);
     }
@@ -295,6 +297,14 @@ public sealed class PlayerStatSystem : ICombatStatSource
         }
     }
 
+    private void OnAmmoChanged(PlayerInventory inventory)
+    {
+        if (inventory.Player is { } player && ReferenceEquals(player.StatState.Maintainer, this))
+        {
+            UpdateDamagePhysical(player, WeaponAttackType.RangedAttack);
+        }
+    }
+
     /// <summary>Player::UpdateDamagePhysical (StatSystem.cpp:457-480): the min/max damage fields of one hand.</summary>
     private void UpdateDamagePhysical(Player player, WeaponAttackType attackType)
     {
@@ -319,7 +329,7 @@ public sealed class PlayerStatSystem : ICombatStatSource
             Mode: FormQueries.IsAttackSpeedOverridden(FormQueries.GetForm(player)) ? WeaponDamageMode.ShapeshiftForm
                 : CanUseEquippedWeapon(player, attackType) ? WeaponDamageMode.Weapon : WeaponDamageMode.CannotUseWeapon,
             Level: player.Level,
-            AmmoDps: 0.0f);
+            AmmoDps: attackType == WeaponAttackType.RangedAttack ? player.Inventory.AmmoDps : 0.0f); // ranged (autorepeat lane): StatSystem.cpp:440-443
         DamageRange range = StatFormulas.CalculateMinMaxDamage(inputs);
 
         (int min, int max) = attackType switch

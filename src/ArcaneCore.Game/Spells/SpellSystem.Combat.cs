@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Ranged;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Protocol;
 
@@ -242,9 +243,17 @@ public sealed partial class SpellSystem
             }
         }
 
-        WeaponAttackType attack = context.Spell.DamageClass == SpellDamageClass.Ranged ? WeaponAttackType.RangedAttack : WeaponAttackType.BaseAttack;
+        // ranged (autorepeat lane): SpellEntry::GetWeaponAttackType (SpellEntry.cpp:434-455): a ranged class spell, and any other class that
+        // carries the auto-repeat attribute (wand Shoot, damage class magic), swings the RANGED weapon.
+        WeaponAttackType attack = RangedSpellFacts.UsesRangedWeapon(context.Spell) ? WeaponAttackType.RangedAttack : WeaponAttackType.BaseAttack;
         float weapon = WeaponDamageRoll(context.Caster, attack, normalized);
-        float total = Math.Max(0f, (weapon + bonus) * percent);
+        float total = (weapon + bonus) * percent;
+        if (attack == WeaponAttackType.RangedAttack)
+        {
+            total += RangedDamageBonus.FlatBonus(this, context.Caster, context.Target, normalized); // auras 127, 131 and 113
+        }
+
+        total = Math.Max(0f, total);
 
         // The DAMAGE spell mod on the done amount, before armor and crit (vmangos MeleeDamageBonusDone, SpellCaster.cpp:1446).
         total = ModFloat(context.Caster, context.Spell, SpellModOp.Damage, total);
@@ -253,7 +262,25 @@ public sealed partial class SpellSystem
             return;
         }
 
-        DealDirectDamage(context.Caster, context.Target, context.Spell, (uint)total, allowCrit: true);
+        DealDirectDamage(context.Caster, context.Target, WithWandSchool(context.Spell, context.Caster, attack), (uint)total, allowCrit: true);
+    }
+
+    /// <summary>
+    /// A ranged attack of a priest, mage or warlock deals the school of the wielded ranged weapon's first damage entry (a fire wand
+    /// burns, an arcane wand is arcane): vmangos Spell::Spell "wand case" (Spell.cpp:68-71) overrides the spell's school mask with
+    /// <c>GetWeaponDamageSchool(RANGED_ATTACK)</c> for those classes. Done here for the damage only (absorb, resist and the damage log);
+    /// the hit roll keeps the spell's own school.
+    /// </summary>
+    private static SpellInfo WithWandSchool(SpellInfo spell, Unit caster, WeaponAttackType attack)
+    {
+        if (attack != WeaponAttackType.RangedAttack || caster is not Player player || !RangedSpellFacts.IsWandUser(player.Class)
+            || PlayerAmmo.RangedWeapon(player, nonBroken: true) is not { } weapon || weapon.Template.Damages.Count == 0)
+        {
+            return spell;
+        }
+
+        var school = (SpellSchool)weapon.Template.Damages[0].School;
+        return school == spell.School ? spell : spell with { School = school };
     }
 
     /// <summary>
@@ -290,7 +317,8 @@ public sealed partial class SpellSystem
 
         // vmangos Unit::GetTotalAttackPowerValue (Unit.cpp:8037): AP + positive mods + negative mods (the halves of *_MODS are int16, the negative one is <= 0).
         float attackPower = Math.Max(0, unit.GetInt32(apIndex) + (short)(unit.GetUInt32(apIndex + 1) & 0xFFFF) + (short)(unit.GetUInt32(apIndex + 1) >> 16));
-        float speed = unit.GetUInt32(timeIndex) / 1000.0f;
+        // ranged (autorepeat lane): the UNHASTED speed (Unit::GetAttackTime), so haste does not change damage per hit (SpellCaster.cpp:1826-1833).
+        float speed = unit.Combat.GetUnhastedTime(attack) / 1000.0f;
         float normalizedSpeed = NormalizedWeaponSpeed(unit, attack);
         return Math.Max(0f, roll + ((normalizedSpeed - speed) * attackPower / 14.0f));
     }

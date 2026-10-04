@@ -22,6 +22,12 @@ internal sealed class SpellTestServices : IWorldTestServices
     public const uint DeathStun = 9008;
     public const uint DeathRoot = 9009;
 
+    /// <summary>An auto-repeat spell (ranged slot 0x2, Ex2 0x20) that heals the caster: the Auto Shot toggle without weapon or ammo checks (ranged lane).</summary>
+    public const uint SelfShoot = 9010;
+
+    /// <summary>Spell 14824 of classic-db (the Light Quiver equip spell): passive, aura 141 MOD_RANGED_AMMO_HASTE +10 (ranged lane).</summary>
+    public const uint QuiverHasteSpell = 14824;
+
     public void Register(IServiceCollection services)
     {
         services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(Content()));
@@ -65,6 +71,19 @@ internal sealed class SpellTestServices : IWorldTestServices
                 s.EffectApplyAuraName1 = 12; // SPELL_AURA_MOD_STUN
                 s.DurationIndex = 3;
                 s.SpellVisual = 1;
+            }),
+            With(Spell(QuiverHasteSpell, "Test Quiver Haste", effect: 6, value: 10, targetA: 1), q =>
+            {
+                q.EffectApplyAuraName1 = 141;
+                q.Attributes = 0x40; // passive
+                q.SpellVisual = 1;
+            }),
+            With(Spell(SelfShoot, "Test Self Shoot", effect: 10, value: 1, targetA: 1), s =>
+            {
+                s.Attributes = 0x12;
+                s.AttributesEx2 = 0x20;
+                s.StartRecoveryCategory = 0;
+                s.StartRecoveryTime = 0;
             }),
             With(Spell(DeathRoot, "Test Death Root", effect: 6, value: 0, targetA: 1), s =>
             {

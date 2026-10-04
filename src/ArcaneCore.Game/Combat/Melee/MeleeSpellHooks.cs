@@ -30,7 +30,10 @@ public sealed class SpellSystemMeleeHooks(SpellSystem spells) : IMeleeSpellHooks
     public bool IsNonMeleeSpellCasted(Unit unit)
     {
         ArgumentNullException.ThrowIfNull(unit);
-        return _spells.GetState(unit.Guid)?.CurrentCast is { State: not SpellCastState.Finished };
+        // ranged (autorepeat lane): an auto-repeat spell counts as casting (skipAutorepeat defaults to false, SpellCaster.cpp:2018-2019), which
+        // is what keeps white melee swings off while Auto Shot is on.
+        UnitSpellState? state = _spells.GetState(unit.Guid);
+        return state?.CurrentCast is { State: not SpellCastState.Finished } || state?.AutoRepeatCast is not null;
     }
 
     public bool TryCastQueuedSwingSpell(Unit attacker, Unit victim)

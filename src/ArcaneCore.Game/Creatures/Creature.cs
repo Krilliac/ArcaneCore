@@ -298,6 +298,11 @@ public sealed partial class Creature : Unit, ICombatCreature
 
         SetFloat(UpdateFields.UnitFieldMindamage, t.MinMeleeDamage);
         SetFloat(UpdateFields.UnitFieldMaxdamage, t.MaxMeleeDamage);
+        // ranged (autorepeat lane): the ranged damage and attack power fields (vmangos Creature.cpp:1840-1843 SetBaseWeaponDamage(RANGED_ATTACK)),
+        // from the template exactly like the melee pair above (the importer derives them from creature_classlevelstats).
+        SetFloat(UpdateFields.UnitFieldMinrangeddamage, t.MinRangedDamage);
+        SetFloat(UpdateFields.UnitFieldMaxrangeddamage, t.MaxRangedDamage);
+        SetUInt32(UpdateFields.UnitFieldRangedAttackPower, t.RangedAttackPower);
         SetUInt32(UpdateFields.UnitFieldResistances, t.Armor);
     }
 

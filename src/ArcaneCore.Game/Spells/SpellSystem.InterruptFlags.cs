@@ -48,6 +48,9 @@ public sealed partial class SpellSystem
         {
             Cancel(cast);
         }
+
+        // ranged (autorepeat lane): InterruptNonMeleeSpells covers the auto-repeat slot too (SpellCaster.cpp:2068-2081).
+        CancelAutoRepeat(unit);
     }
 
     /// <summary>

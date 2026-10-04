@@ -42,6 +42,8 @@ public sealed partial class SpellSystem
             Cancel(cast);
         }
 
+        CancelAutoRepeat(unit); // ranged (autorepeat lane): Unit::SetDeathState(JUST_DIED) interrupts the auto-repeat spell with the rest
+
         foreach (SpellAuraHolder holder in state.Auras.Where(h => !h.Spell.IsPassive && !h.Spell.IsDeathPersistent).ToArray())
         {
             RemoveHolder(state, holder);

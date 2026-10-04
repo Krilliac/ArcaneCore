@@ -27,8 +27,15 @@ public sealed partial class PlayerInventory
     /// <summary>PLAYER_AMMO_ID: the selected ammo item entry (0 = none).</summary>
     public uint AmmoId => Player?.GetUInt32(UpdateFields.PlayerAmmoId) ?? _ammoId;
 
+    /// <summary>
+    /// Raised after PLAYER_AMMO_ID changed (ranged (autorepeat lane)): the ammo DPS is part of the ranged damage fields (vmangos
+    /// Player::_ApplyAmmoBonuses, Player.cpp:7514-7535), so the stat system recomputes them.
+    /// </summary>
+    public event Action<PlayerInventory>? AmmoChanged;
+
     private void WriteAmmoId(uint entry)
     {
+        uint before = AmmoId;
         if (Player is { } player)
         {
             player.SetUInt32(UpdateFields.PlayerAmmoId, entry);
@@ -36,6 +43,11 @@ public sealed partial class PlayerInventory
         else
         {
             _ammoId = entry;
+        }
+
+        if (before != entry)
+        {
+            AmmoChanged?.Invoke(this);
         }
     }
 

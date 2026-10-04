@@ -93,15 +93,99 @@ public sealed class UnitCombat
 
     internal bool IsAttackReady(WeaponAttackType type) => _attackTimers[(int)type] == 0;
 
-    /// <summary>vmangos Unit::GetAttackTime: UNIT_FIELD_BASEATTACKTIME + slot (haste mods arrive with spells).</summary>
+    // --- attack speed (ranged (autorepeat lane); vmangos Unit::m_modAttackSpeedPct) -----------------------
+
+    private readonly float[] _speedPct = [1.0f, 1.0f, 1.0f];
+    private readonly float[] _field = new float[3];
+
+    /// <summary>
+    /// The attack-speed multiplier of one slot (vmangos Unit::m_modAttackSpeedPct; 1 = none, below 1 = faster).
+    /// Written only through <see cref="ApplyAttackTimePercentMod"/>.
+    /// </summary>
+    public float GetAttackSpeedPct(WeaponAttackType type) => _speedPct[(int)type];
+
+    /// <summary>
+    /// vmangos stores UNIT_FIELD_*ATTACKTIME as a float and sends it as uint32 (Object.cpp:752-756), so repeated percent
+    /// mods keep sub-millisecond precision. The update field here is a uint and many writers set it directly, so the float
+    /// is a shadow: whenever the uint no longer matches the truncated shadow someone wrote the field and the shadow
+    /// follows it.
+    /// </summary>
+    private float Field(WeaponAttackType type)
+    {
+        int slot = (int)type;
+        uint raw = Owner.GetUInt32(UpdateFields.UnitFieldBaseattacktime + slot);
+        if (_field[slot] < 0 || (uint)_field[slot] != raw)
+        {
+            _field[slot] = raw;
+        }
+
+        return _field[slot];
+    }
+
+    private void StoreField(WeaponAttackType type, float value)
+    {
+        int slot = (int)type;
+        _field[slot] = value;
+        Owner.SetUInt32(UpdateFields.UnitFieldBaseattacktime + slot, value < 0 ? 0u : (uint)value);
+    }
+
+    /// <summary>
+    /// vmangos Unit::GetAttackTime (Unit.h:406): the UNHASTED base time, the field divided by the speed multiplier. Damage
+    /// scaling (attack power per weapon speed, normalized weapon damage) reads this, so haste does not change damage per hit.
+    /// With no haste it is exactly the field value.
+    /// </summary>
     public uint GetAttackTime(WeaponAttackType type)
     {
-        uint time = Owner.GetUInt32(UpdateFields.UnitFieldBaseattacktime + (int)type);
+        uint time = GetUnhastedTime(type);
         return time == 0 && type == WeaponAttackType.BaseAttack ? CombatConstants.BaseAttackTimeMs : time;
     }
 
-    /// <summary>vmangos Unit::resetAttackTimer.</summary>
-    public void ResetAttackTimer(WeaponAttackType type = WeaponAttackType.BaseAttack) => _attackTimers[(int)type] = GetAttackTime(type);
+    /// <summary>The unhasted time without the 2000 ms default for an unset main hand (what damage scaling reads).</summary>
+    internal uint GetUnhastedTime(WeaponAttackType type) => (uint)(Field(type) / _speedPct[(int)type]);
+
+    /// <summary>vmangos Unit::SetAttackTime (Unit.h:407): the field holds <paramref name="value"/> times the speed multiplier.</summary>
+    public void SetAttackTime(WeaponAttackType type, uint value, bool resetTimer = true)
+    {
+        StoreField(type, value * _speedPct[(int)type]);
+        if (resetTimer)
+        {
+            ResetAttackTimer(type);
+        }
+    }
+
+    /// <summary>
+    /// vmangos Unit::ApplyAttackTimePercentMod (Unit.cpp:9678-9697) with Util.h:91-96 / Object.h:248-252: a positive
+    /// <paramref name="percent"/> is haste (the time shrinks by 100/(100+percent)), a negative one slows. The -100 guards
+    /// keep the multiplier and the field from reaching zero.
+    /// </summary>
+    public void ApplyAttackTimePercentMod(WeaponAttackType type, float percent, bool apply)
+    {
+        float field = Field(type);
+        if (percent > 0)
+        {
+            _speedPct[(int)type] = PercentVar(_speedPct[(int)type], percent, !apply);
+            StoreField(type, PercentVar(field, percent, !apply, fieldGuard: true));
+        }
+        else
+        {
+            _speedPct[(int)type] = PercentVar(_speedPct[(int)type], -percent, apply);
+            StoreField(type, PercentVar(field, -percent, apply, fieldGuard: true));
+        }
+    }
+
+    private static float PercentVar(float value, float percent, bool apply, bool fieldGuard = false)
+    {
+        if (percent == -100.0f)
+        {
+            percent = fieldGuard ? -99.9f : -99.99f;
+        }
+
+        return value * (apply ? (100.0f + percent) / 100.0f : 100.0f / (100.0f + percent));
+    }
+
+    /// <summary>vmangos Unit::resetAttackTimer (Unit.cpp:529-532): the unhasted time times the multiplier, which is the hasted field.</summary>
+    public void ResetAttackTimer(WeaponAttackType type = WeaponAttackType.BaseAttack)
+        => _attackTimers[(int)type] = (uint)(GetAttackTime(type) * _speedPct[(int)type]);
 
     /// <summary>
     /// The spell that last took mana (vmangos Unit::m_lastManaUseSpellId): while the unit still channels it, the

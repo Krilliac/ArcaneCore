@@ -234,6 +234,16 @@ public sealed partial class MapCombat
             return false;
         }
 
+        // ranged (autorepeat lane): vmangos returns here, before any swing timer is looked at, while a non-melee spell is cast
+        // (Unit::UpdateMeleeAttackingState, Unit.cpp:415-421), so the swing happens as soon as the cast ends. The auto-repeat
+        // slot counts as casting for the hook. Combat:CastingConsumesSwing keeps the older behaviour (AttackerStateUpdate below).
+        CombatEnvironment gate = CombatEnvironment.For(_world);
+        if (!gate.Options.CastingConsumesSwing && gate.Options.MeleeCastingBlocksSwing
+            && gate.MeleeSpells is { } castGate && castGate.IsNonMeleeSpellCasted(attacker))
+        {
+            return false;
+        }
+
         bool offhand = HasOffhandWeapon(attacker);
         if (!c.IsAttackReady(WeaponAttackType.BaseAttack) && !(offhand && c.IsAttackReady(WeaponAttackType.OffAttack)))
         {

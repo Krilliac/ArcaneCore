@@ -32,9 +32,16 @@ public sealed class SpellCast
 
     public Unit Caster { get; }
 
-    public SpellCastTargets Targets { get; }
+    public SpellCastTargets Targets { get; internal set; }
 
     public bool IsTriggered { get; }
+
+    /// <summary>
+    /// One shot of the auto-repeat spell (ranged (autorepeat lane)): a triggered copy of Auto Shot / Shoot cast by
+    /// <see cref="SpellSystem"/> every weapon period. It sends no SMSG_SPELL_COOLDOWN (vmangos Player::AddCooldown only
+    /// tells the client for COOLDOWN_ON_EVENT spells, Player.cpp:22139-22250), so the client's own timer keeps running.
+    /// </summary>
+    internal bool AutoRepeatShot { get; set; }
 
     public SpellCastState State { get; internal set; } = SpellCastState.Preparing;
 
@@ -88,8 +95,18 @@ public sealed class UnitSpellState
 
     public Unit Unit { get; }
 
-    /// <summary>The cast in progress (one generic/channeled slot; the auto-repeat slot belongs to combat).</summary>
+    /// <summary>The cast in progress (one generic/channeled slot; the auto-repeat spell has its own, <see cref="AutoRepeatCast"/>).</summary>
     public SpellCast? CurrentCast { get; internal set; }
+
+    /// <summary>
+    /// The auto-repeat spell toggled on (vmangos CURRENT_AUTOREPEAT_SPELL; Auto Shot, wand Shoot). It never casts itself: it stays in
+    /// the Preparing state until cancelled and <see cref="SpellSystem"/> fires a triggered copy of it each time the ranged swing
+    /// timer is ready (vmangos Unit::_UpdateAutoRepeatSpell). Ranged (autorepeat lane).
+    /// </summary>
+    public SpellCast? AutoRepeatCast { get; internal set; }
+
+    /// <summary>vmangos Unit::m_autoRepeatFirstCast: the next shot waits at least 500 ms (the wind-up) after a toggle, a cast or movement.</summary>
+    internal bool AutoRepeatFirstCast { get; set; }
 
     /// <summary>The queued next-swing spell (vmangos CURRENT_MELEE_SPELL); it casts when the melee swing fires, see <see cref="SpellSystem.CastQueuedMeleeSpell"/>.</summary>
     public SpellCast? MeleeCast { get; internal set; }
@@ -110,6 +127,6 @@ public sealed class UnitSpellState
 
     public IReadOnlyList<SpellAuraHolder> AuraHolders => Auras;
 
-    internal bool IsIdle => CurrentCast is null && MeleeCast is null && Auras.Count == 0 && SpellCooldowns.Count == 0
+    internal bool IsIdle => CurrentCast is null && MeleeCast is null && AutoRepeatCast is null && Auras.Count == 0 && SpellCooldowns.Count == 0
         && CategoryCooldowns.Count == 0 && GlobalCooldowns.Count == 0 && SchoolLockouts.Count == 0;
 }

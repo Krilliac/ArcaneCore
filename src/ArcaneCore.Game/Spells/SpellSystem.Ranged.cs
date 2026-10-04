@@ -19,10 +19,10 @@ public sealed partial class SpellSystem
     /// <summary>
     /// The unit's ranged attack speed modifier (vmangos Unit::m_modAttackSpeedPct[RANGED_ATTACK];
     /// 1.0 = none, 0.5 = twice as fast). It scales the cast time of ranged abilities such as
-    /// Aimed Shot (SpellEntry::GetCastTime). The attack-speed auras own the real value and install
-    /// the reader here; the default is neutral.
+    /// Aimed Shot (SpellEntry::GetCastTime). The default reads the unit's real multiplier, which the attack speed auras
+    /// (<see cref="AttackSpeedAuras"/>) move; a host may replace the reader.
     /// </summary>
-    public Func<Unit, float> RangedAttackSpeedPct { get; set; } = static _ => 1.0f;
+    public Func<Unit, float> RangedAttackSpeedPct { get; set; } = static unit => unit.Combat.GetAttackSpeedPct(Combat.WeaponAttackType.RangedAttack);
 
     /// <summary>The weapon/ammunition checks of vmangos Spell::CheckItems (Spell.cpp:7390-7455); players only.</summary>
     private SpellCastResult CheckRangedItems(Unit caster, SpellInfo spell)
