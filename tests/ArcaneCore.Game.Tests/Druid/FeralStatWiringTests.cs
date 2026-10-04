@@ -36,7 +36,7 @@ public sealed class FeralStatWiringTests : IDisposable
     private readonly Player _player;
     private readonly ShapeshiftService _service;
 
-    public FeralStatWiringTests() : this(true)
+    public FeralStatWiringTests() : this(false)
     {
     }
 
@@ -201,25 +201,25 @@ public sealed class FeralStatWiringTests : IDisposable
     }
 
     [Fact]
-    public void LeavingAForm_Unarmed_RestoresTheBaseAttackTime_ByDefault()
+    public void LeavingAForm_Unarmed_KeepsTheFormTime_ByDefault_LikeVmangos()
     {
         Cast(CatForm);
 
         Leave(CatForm);
 
-        Assert.Equal(2000u, AttackTime(WeaponAttackType.BaseAttack));     // Forms:ResetFistAttackTimeOnFormLoss (default on)
-        Assert.Equal(2000u, AttackTime(WeaponAttackType.OffAttack));
+        Assert.Equal(1000u, AttackTime(WeaponAttackType.BaseAttack));     // vmangos literal (Player.cpp:5158-5172): the default
+        Assert.Equal(1000u, AttackTime(WeaponAttackType.OffAttack));
     }
 
     [Fact]
-    public void LeavingAForm_Unarmed_KeepsTheFormTime_WhenTheVmangosLiteralOptionIsOff()
+    public void LeavingAForm_Unarmed_RestoresTheBaseAttackTime_WhenTheFistResetOptionIsOn()
     {
-        using var literal = new FeralStatWiringTests(false);
+        using var reset = new FeralStatWiringTests(true);
 
-        literal.Cast(BearForm);
-        literal.Leave(BearForm);
+        reset.Cast(BearForm);
+        reset.Leave(BearForm);
 
-        Assert.Equal(2500u, literal.AttackTime(WeaponAttackType.BaseAttack));   // SetRegularAttackTime only rewrites hands with a weapon
+        Assert.Equal(2000u, reset.AttackTime(WeaponAttackType.BaseAttack));   // opt-in deviation from vmangos
     }
 
     [Theory]

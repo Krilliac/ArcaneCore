@@ -11,9 +11,9 @@ namespace ArcaneCore.Game.Stats;
 /// SpellAuras.cpp:2164-2171, calls Player::UpdateAttackPowerAndDamage on apply and removal). Register it on the
 /// <see cref="ShapeshiftService"/> (<see cref="ShapeshiftService.AddListener"/>) and attach it to the spell system.
 /// </summary>
-public sealed class FormStatListener(bool resetFistAttackTime = true) : IFormChangeListener
+public sealed class FormStatListener(bool resetFistAttackTime = false) : IFormChangeListener
 {
-    /// <summary>Whether a hand without a weapon gets the 2.0 s base attack time when a form ends (see <see cref="PlayerStatSystem.OnFormChanged"/>).</summary>
+    /// <summary>Whether a hand without a weapon gets the 2.0 s base attack time when a form ends (opt-in deviation, default off) (see <see cref="PlayerStatSystem.OnFormChanged"/>).</summary>
     public bool ResetFistAttackTime { get; } = resetFistAttackTime;
 
     /// <summary>SpellIconID of the Predatory Strikes talent auras (SpellAuras.cpp:2166, StatSystem.cpp:259).</summary>

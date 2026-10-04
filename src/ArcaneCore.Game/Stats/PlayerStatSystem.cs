@@ -247,8 +247,8 @@ public sealed class PlayerStatSystem : ICombatStatSource
     /// <paramref name="newForm"/>: Cat sets both hands' attack time to 1.0 s, Bear and Dire Bear to 2.5 s, any other form
     /// restores the weapons' own delays (SetRegularAttackTime, Player.cpp:5158-5172); then attack power and damage are
     /// recomputed. vmangos' SetRegularAttackTime only rewrites a hand that holds a weapon, so an unarmed hand would keep
-    /// the 1.0 or 2.5 s of the form after it ends; <paramref name="resetFistAttackTime"/> (default, option
-    /// Forms:ResetFistAttackTimeOnFormLoss) gives such a hand the 2.0 s base time instead.
+    /// the 1.0 or 2.5 s of the form after it ends; <paramref name="resetFistAttackTime"/> (option Forms:ResetFistAttackTimeOnFormLoss,
+    /// default false = vmangos literal) is an opt-in deviation that gives such a hand the 2.0 s base time instead.
     /// </summary>
     public void OnFormChanged(Player player, byte newForm, bool resetFistAttackTime)
     {

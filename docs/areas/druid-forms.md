@@ -109,7 +109,7 @@ weapon-less forms are decided by the hard-coded `IsAttackSpeedOverridenForm` (1,
 | `Combat:ShapeshiftFormDbcPath` | empty | client `SpellShapeshiftForm.dbc`; wins over the built-in table |
 | `Combat:RequireShapeshiftFormDbc` | false | refuse startup when no DBC path is set |
 | `Combat:StanceShiftKeepsSelfBuffs` | false | existing option; now explicitly warrior-stance only (a druid form always takes its own buffs along) |
-| `Forms:ResetFistAttackTimeOnFormLoss` | true | a hand without a weapon gets the 2.0 s base attack time when Cat or Bear ends. **false is vmangos literal**: `SetRegularAttackTime` only rewrites hands that hold a weapon, so an unarmed druid keeps 1.0 / 2.5 s after the form. Default is the plausible retail behaviour, not the vmangos quirk (open question 3) |
+| `Forms:ResetFistAttackTimeOnFormLoss` | false | **false is vmangos literal and the default**: `SetRegularAttackTime` (Player.cpp:5158-5172) only rewrites hands that hold a weapon, so an unarmed druid keeps 1.0 / 2.5 s after Cat or Bear ends. **true** is an opt-in deviation: a hand without a weapon gets the 2.0 s base attack time. Whether retail resets the fist time is unverified (open question 3) |
 
 ## Deliberate differences from vmangos
 
@@ -168,7 +168,7 @@ weapon-less forms are decided by the hard-coded `IsAttackSpeedOverridenForm` (1,
    real client (set the form, read the update fields, compare the model size of a Tauren cat) would settle which is retail.
 2. Embedding the 32 form rows as `ShapeshiftFormCatalog.Retail` (read from the developer's client) is what makes rogue stealth and
    every druid form work out of the box. The alternative is `Combat:RequireShapeshiftFormDbc=true` with the DBC path set.
-3. `Forms:ResetFistAttackTimeOnFormLoss` defaults to the plausible retail behaviour; confirm or flip.
+3. `Forms:ResetFistAttackTimeOnFormLoss` defaults to the vmangos literal behaviour (off); retail evidence that the fist time resets would justify flipping the default.
 4. Furor can in principle roll at login in vmangos (the apply path runs for restored auras) but the saved power overwrites it, so
    there is no option for it.
 5. Bear Form (5487) and Aquatic Form (1066) are quest rewards, not trainer spells; the form engine is the prerequisite for

@@ -37,7 +37,7 @@ public sealed class FormStatFeatureTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Attach_WorksInEitherOrderWithTheStanceFeature_AndDefaultsToResettingFistAttackTime(bool statsFirst)
+    public async Task Attach_WorksInEitherOrderWithTheStanceFeature_AndDefaultsToTheVmangosLiteralFistBehaviour(bool statsFirst)
     {
         await using ServiceProvider sp = Services();
         using var world = NewWorld(sp);
@@ -57,19 +57,19 @@ public sealed class FormStatFeatureTests
 
         Assert.NotNull(stance.Service);
         Assert.NotNull(stats.Listener);
-        Assert.True(stats.Listener!.ResetFistAttackTime);
+        Assert.False(stats.Listener!.ResetFistAttackTime);
     }
 
     [Fact]
-    public async Task TheVmangosLiteralOption_TurnsTheFistReset_Off()
+    public async Task TheFistResetOption_TurnsTheFistReset_On()
     {
-        await using ServiceProvider sp = Services(new KeyValuePair<string, string?>(FormStatFeature.ResetFistKey, "false"));
+        await using ServiceProvider sp = Services(new KeyValuePair<string, string?>(FormStatFeature.ResetFistKey, "true"));
         using var world = NewWorld(sp);
         var stats = sp.GetRequiredService<FormStatFeature>();
 
         sp.GetRequiredService<StanceFeature>().Attach(world);
         stats.Attach(world);
 
-        Assert.False(stats.Listener!.ResetFistAttackTime);
+        Assert.True(stats.Listener!.ResetFistAttackTime);
     }
 }
