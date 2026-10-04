@@ -213,6 +213,22 @@ public sealed class BanCommandTests
         Assert.Equal("Set by: ext", lines[5]);
     }
 
+    [Fact] // Security (wave-3 scan finding 5): a list reply is bounded by Bans:MaxListedEntries
+    public async Task BanList_StopsAtMaxListedEntries_AndSaysSo()
+    {
+        await using var host = WorldTestHost.Start(banOptions: new BanOptions { MaxListedEntries = 2 });
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await Drain(admin);
+        host.Bans.AddIpRow("1.2.3.1", 100, 100);
+        host.Bans.AddIpRow("1.2.3.2", 100, 100);
+        host.Bans.AddIpRow("1.2.3.3", 100, 100);
+
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".banlist ip 1.2.3");
+        Assert.Equal(
+            ["The following IPs match your pattern:", "1.2.3.1", "1.2.3.2", "... more entries exist; only the first 2 are shown."],
+            await ReadLinesAsync(admin, 4));
+    }
+
     [Fact]
     public async Task BanList_Account_Character_Ip_ListMatchesAndPurgeExpiredIpsFirst()
     {

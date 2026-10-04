@@ -47,4 +47,12 @@ public sealed class BanOptions
     /// <c>.baninfo</c>, never filtered on, exactly as retail. Bound from Bans:RealmId; default 1.
     /// </summary>
     public int RealmId { get; set; } = 1;
+
+    /// <summary>
+    /// The most entries one <c>.baninfo</c> history or <c>.banlist</c> reply prints before it ends with a "not shown" line.
+    /// Retail prints everything; a long ban history or a one-letter prefix against a large realm would otherwise build and send
+    /// one unbounded chat reply (and, for <c>.banlist character</c>, one history query per matching account). 0 restores retail's
+    /// unbounded output. Bound from Bans:MaxListedEntries; default 200 (a deliberate deviation, only above that many entries).
+    /// </summary>
+    public int MaxListedEntries { get; set; } = 200;
 }

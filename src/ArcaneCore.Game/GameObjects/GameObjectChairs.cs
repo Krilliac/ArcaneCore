@@ -16,14 +16,27 @@ public static class GameObjectChairs
     public const float SlotSearchDistance = 100.0f;
 
     /// <summary>
+    /// Hardening beyond vmangos: the most slots <see cref="ClosestSlot"/> evaluates. Real chairs have 1 to 4 (<c>data0</c>); a malformed
+    /// imported value (up to 2^32-1) would otherwise run billions of trigonometric iterations on the world thread per use packet.
+    /// Pass 0 for vmangos's unbounded loop.
+    /// </summary>
+    public const uint DefaultMaxSlots = 64;
+
+    /// <summary>
     /// The slot position nearest to (<paramref name="userX"/>, <paramref name="userY"/>). With no slots, or no slot within
     /// <see cref="SlotSearchDistance"/> of the user, the chair centre. Of equally near slots the later one wins (the vmangos comparison is <c>&lt;=</c>).
     /// Uses the template size, not the spawn scale (<c>GetGOInfo()-&gt;size</c>).
     /// </summary>
-    public static (float X, float Y) ClosestSlot(GameObject chair, float userX, float userY)
+    public static (float X, float Y) ClosestSlot(GameObject chair, float userX, float userY, uint maxSlots = DefaultMaxSlots)
     {
         ArgumentNullException.ThrowIfNull(chair);
         uint slots = chair.Template.GetData(0);
+        if (maxSlots > 0 && slots > maxSlots)
+        {
+            // Imported data0 is a loop bound reached from one client packet: clamp it (see DefaultMaxSlots).
+            slots = maxSlots;
+        }
+
         float bestX = chair.X;
         float bestY = chair.Y;
         if (slots == 0)
