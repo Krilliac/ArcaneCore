@@ -56,6 +56,7 @@ public sealed partial class LootService : IViewerFieldFilter
         _random = random ?? new Random();
         _generator = new LootGenerator(content, _random);
         _logger = logger ?? NullLogger.Instance;
+        Rolls = new LootRollManager(this, _random);
     }
 
     // The content is immutable; the live reload (.reload all_loot, creature_loot_template, ...) swaps the whole of it on the
@@ -68,6 +69,12 @@ public sealed partial class LootService : IViewerFieldFilter
     public LootOptions Options { get; }
 
     public LootGenerator Generator => _generator;
+
+    /// <summary>
+    /// The need/greed rolls of this map's loot (group loot, need before greed). Attach it with <see cref="Maps.Map.AddUpdater"/>
+    /// so the roll timers run; votes arrive through <see cref="LootRollManager.Vote"/>.
+    /// </summary>
+    public LootRollManager Rolls { get; }
 
     /// <summary>Replace the loot tables (live reload, world thread); returns the content it replaced.</summary>
     public LootContent ReplaceContent(LootContent content)
@@ -225,10 +232,13 @@ public sealed partial class LootService : IViewerFieldFilter
     /// vmangos Unit::Kill's two Group::UpdateLooterGuid calls (Unit.cpp:1037 and 1078) without any
     /// side effect: the first (ifneed) settles who loots THIS source, the second advances the
     /// pointer for the next one. Free-for-all leaves the loot open; master loot never moves the
-    /// pointer and is held by the master looter while no master-give exists (documented limit,
-    /// docs/areas/group-loot-xp.md); a lone recipient needs no owner.
+    /// pointer. Only round robin loot is held by the looter the pointer names (<see cref="LootBag.Owner"/>); group loot and
+    /// need before greed hand their items out through rolls and master loot through the master looter's gives
+    /// (<see cref="ConfigureDistribution"/>), so they carry no owner. A lone recipient needs no owner.
+    /// <paramref name="durable"/> (a chest stored with its instance) keeps the legacy owner for group loot and master loot too:
+    /// a stored chest has no place for roll state or a master claim yet (docs/areas/group-loot-xp.md).
     /// </summary>
-    private static LooterPlan PlanLooter(Group? group, IReadOnlyList<Player> recipients, HashSet<ObjectGuid> bagRecipients)
+    private static LooterPlan PlanLooter(Group? group, IReadOnlyList<Player> recipients, HashSet<ObjectGuid> bagRecipients, bool durable = false)
     {
         if (group is null || group.LootMethod == LootMethod.FreeForAll)
         {
@@ -238,12 +248,49 @@ public sealed partial class LootService : IViewerFieldFilter
         ObjectGuid current = group.LooterGuid;
         if (group.LootMethod == LootMethod.MasterLoot)
         {
-            return new LooterPlan(recipients.Count > 1 && bagRecipients.Contains(current) ? current : default, current, false);
+            return new LooterPlan(durable && recipients.Count > 1 && bagRecipients.Contains(current) ? current : default, current, false);
         }
 
         LooterSelection first = GroupLooterSelection.Next(group, current, true, bagRecipients.Contains);
         LooterSelection next = GroupLooterSelection.Next(group, first.Looter, false, bagRecipients.Contains);
-        return new LooterPlan(recipients.Count > 1 ? first.Looter : default, next.Looter, next.Looter != current);
+        bool owned = recipients.Count > 1 && (durable || group.LootMethod == LootMethod.RoundRobin);
+        return new LooterPlan(owned ? first.Looter : default, next.Looter, next.Looter != current);
+    }
+
+    /// <summary>
+    /// Put the shared items of a freshly generated, non-durable bag under the group's loot method (vmangos Group::GroupLoot,
+    /// NeedBeforeGreed and MasterLoot set is_underthreshold per item): group loot and need before greed roll the items whose
+    /// quality reaches the threshold when the loot is first opened (<see cref="LootRollManager.Start"/>); master loot leaves
+    /// them to the master looter. Per-player and quest items stay under the threshold. Solo loot, free-for-all and round robin
+    /// stay open, and so does master loot whose master is not among the recipients.
+    /// </summary>
+    private void ConfigureDistribution(LootBag bag, Group? group, IReadOnlyList<Player> recipients)
+    {
+        if (group is null || recipients.Count < 2 || Items is not { } items)
+        {
+            return;
+        }
+
+        switch (group.LootMethod)
+        {
+            case LootMethod.GroupLoot or LootMethod.NeedBeforeGreed:
+                bag.Permission = LootPermission.Roll;
+                break;
+            case LootMethod.MasterLoot when bag.Recipients.Contains(group.LooterGuid):
+                bag.Permission = LootPermission.Master;
+                bag.MasterLooter = group.LooterGuid;
+                break;
+            default:
+                return;
+        }
+
+        foreach (LootItem item in bag.Items)
+        {
+            if (!item.IsQuestItem && !item.IsPerPlayer && items.Find(item.ItemId) is { } template && template.Quality >= group.LootThreshold)
+            {
+                item.IsUnderThreshold = false;
+            }
+        }
     }
 
     /// <summary>
@@ -323,6 +370,7 @@ public sealed partial class LootService : IViewerFieldFilter
 
         EnsureMasterLooterAvailable(group);
         ApplyLooterPlan(bag, group, PlanLooter(group, recipients, bag.Recipients));
+        ConfigureDistribution(bag, group, recipients);
         CloseReplacedBag(creature.Guid, bag);
         _bags[creature.Guid] = (creature, bag);
         creature.ViewerFieldFilter = this;
@@ -432,6 +480,7 @@ public sealed partial class LootService : IViewerFieldFilter
                 LootTableKind.GameObject, lootId, recipients);
             Group? looterGroup = UsesGroupLootRules(go) ? group : null;
             ApplyLooterPlan(fresh, looterGroup, PlanLooter(looterGroup, recipients, fresh.Recipients));
+            ConfigureDistribution(fresh, looterGroup, recipients);
             go.Loot = fresh;
             _bags[go.Guid] = (go, fresh);
         }
@@ -506,7 +555,7 @@ public sealed partial class LootService : IViewerFieldFilter
         LootBag fresh = Generate(go.Guid, LootSourceKind.GameObject, LootType.Corpse, LootTableKind.GameObject, lootId, recipients);
         fresh.DurableKey = key;
         Group? looterGroup = UsesGroupLootRules(go) ? group : null;
-        LooterPlan plan = PlanLooter(looterGroup, recipients, fresh.Recipients);
+        LooterPlan plan = PlanLooter(looterGroup, recipients, fresh.Recipients, durable: true);
         fresh.Owner = plan.Owner;
 
         LootStateRecord updated = fresh.ToRecord(key, go.Entry, (record?.Generation ?? 0) + 1, RespawnAtUnix(go, durable.UnixNow));
@@ -834,9 +883,47 @@ public sealed partial class LootService : IViewerFieldFilter
         _open[player] = bag;
         bag.Viewers.Add(player);
         player.UnitFlags |= UnitFlags.Looting;
+        if (bag.Permission == LootPermission.Roll && !bag.RollsStarted)
+        {
+            Rolls.Start(player, bag); // vmangos Player::SendLoot starts the rolls before the window is sent
+        }
+
         player.Session.Send(WorldOpcode.SmsgLootResponse, LootPackets.LootResponse(bag, player));
+        if (bag.Permission == LootPermission.Master && bag.MasterLooter == player.Guid)
+        {
+            SendMasterList(player, bag);
+        }
+
         return LootResult.Ok;
     }
+
+    /// <summary>
+    /// SMSG_LOOT_MASTER_LIST to the master looter: the group members who may be given items (the recipients of this loot that
+    /// are within reward distance now). The reference cores also send it to every other member in range; only the master
+    /// acts on it, so ArcaneCore sends it to the master alone.
+    /// </summary>
+    private void SendMasterList(Player master, LootBag bag)
+    {
+        if (!_bags.TryGetValue(bag.Source, out var entry))
+        {
+            return;
+        }
+
+        List<ObjectGuid> eligible = [];
+        foreach (Player candidate in RecipientsFor(master, entry.Source, out _))
+        {
+            if (bag.Recipients.Contains(candidate.Guid))
+            {
+                eligible.Add(candidate.Guid);
+            }
+        }
+
+        master.Session.Send(WorldOpcode.SmsgLootMasterList, GroupLootPackets.MasterList(eligible));
+    }
+
+    /// <summary>The object a registered bag belongs to, or null when the bag is no longer the one registered for its source.</summary>
+    internal WorldObject? SourceOf(LootBag bag)
+        => _bags.TryGetValue(bag.Source, out var entry) && ReferenceEquals(entry.Bag, bag) ? entry.Source : null;
 
     private static void Refuse(Player player, ObjectGuid guid)
         => player.Session.Send(WorldOpcode.SmsgLootReleaseResponse, LootPackets.ReleaseResponse(guid));
@@ -873,18 +960,36 @@ public sealed partial class LootService : IViewerFieldFilter
             return TakeDurableItem(player, bag, item, durableKey, durable);
         }
 
-        InventoryResult result = player.Inventory.AddItem(item.ItemId, item.Count, out _, received: false, created: false, showInChat: true);
+        InventoryResult result = AwardItem(player, bag, item);
         if (result != InventoryResult.Ok)
         {
             player.Inventory.SendEquipError(result, null, null, 0, item.ItemId);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Move one stack of an in-memory bag into <paramref name="recipient"/>'s bags: the shared tail of a plain take, a roll win
+    /// and a master give. On a refusal nothing changes and the store result is returned for the caller's report; otherwise the
+    /// stack is marked taken, the viewers' windows drop the slot (only the taker's for a quest or per-player copy) and the quest
+    /// journal and the bag's change callback hear of it. World thread.
+    /// </summary>
+    internal InventoryResult AwardItem(Player recipient, LootBag bag, LootItem item)
+    {
+        InventoryResult result = recipient.Inventory.AddItem(item.ItemId, item.Count, out _, received: false, created: false, showInChat: true);
+        if (result != InventoryResult.Ok)
+        {
             return result;
         }
 
-        bag.MarkTaken(item, player);
+        bag.MarkTaken(item, recipient);
+        item.RollActive = false;
+        item.Winner = default;
         byte[] removed = LootPackets.Removed(item.Slot);
         if (item.IsQuestItem || item.IsPerPlayer)
         {
-            player.Session.Send(WorldOpcode.SmsgLootRemoved, removed);
+            recipient.Session.Send(WorldOpcode.SmsgLootRemoved, removed);
         }
         else
         {
@@ -894,10 +999,89 @@ public sealed partial class LootService : IViewerFieldFilter
             }
         }
 
-        Quests?.ItemLooted(player, item.ItemId, item.Count);
+        Quests?.ItemLooted(recipient, item.ItemId, item.Count);
         RefreshLootable(bag);
         bag.Changed?.Invoke(bag);
         return InventoryResult.Ok;
+    }
+
+    /// <summary>
+    /// An item left the bag while nobody has its window open (a roll resolved): when that emptied it, the corpse stops being
+    /// lootable or the chest settles, exactly as the last viewer's release would have done.
+    /// </summary>
+    internal void SettleUnviewed(LootBag bag)
+    {
+        if (bag.Viewers.Count != 0 || !bag.IsEmpty || !_bags.TryGetValue(bag.Source, out var entry) || !ReferenceEquals(entry.Bag, bag))
+        {
+            return;
+        }
+
+        switch (entry.Source)
+        {
+            case Creature creature when bag.Kind == LootSourceKind.Creature:
+                CreatureLootedOut(creature, bag);
+                break;
+            case GameObject go:
+                go.System?.OnLootReleased(go, bag);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// CMSG_LOOT_MASTER_GIVE (vmangos HandleLootMasterGiveOpcode): the master looter of a master-loot group gives the item in
+    /// <paramref name="slot"/> of the loot he has open to <paramref name="targetGuid"/>. The target must be a recipient of
+    /// this loot within reward distance (the master list); a refusal of the target's bags tells the master with the error form
+    /// of SMSG_LOOT_RESPONSE and leaves the item in the window (vmangos instead stamps the item with the target as winner).
+    /// Not the master: the window is closed like vmangos does. Anything else that does not apply is ignored.
+    /// </summary>
+    public MasterGiveResult GiveMasterLoot(Player master, ObjectGuid lootGuid, byte slot, ObjectGuid targetGuid)
+    {
+        ArgumentNullException.ThrowIfNull(master);
+        Group? group = Groups?.GroupOf(master);
+        if (group is not { LootMethod: LootMethod.MasterLoot } || group.LooterGuid != master.Guid)
+        {
+            Release(master, lootGuid);
+            return MasterGiveResult.NotMaster;
+        }
+
+        if (!_open.TryGetValue(master, out LootBag? bag) || bag.Source != lootGuid || bag.Permission != LootPermission.Master || bag.MasterLooter != master.Guid)
+        {
+            return MasterGiveResult.NotApplicable;
+        }
+
+        if (!SourceStillValid(master, bag))
+        {
+            Release(master, bag.Source);
+            return MasterGiveResult.NotApplicable;
+        }
+
+        if (bag.FindSlot(slot) is not { IsLooted: false, IsQuestItem: false, IsPerPlayer: false } item || !item.Winner.IsEmpty)
+        {
+            return MasterGiveResult.NotApplicable;
+        }
+
+        WorldObject source = _bags[bag.Source].Source;
+        Player? target = master.Map?.FindPlayer(targetGuid);
+        if (target is null || !bag.Recipients.Contains(target.Guid) || !GroupRewardRange.IsAtGroupRewardDistance(target, source, Options.RewardRange))
+        {
+            master.Session.Send(WorldOpcode.SmsgLootResponse, GroupLootPackets.LootErrorResponse(lootGuid, LootError.PlayerNotFound));
+            return MasterGiveResult.TargetNotEligible;
+        }
+
+        InventoryResult stored = AwardItem(target, bag, item);
+        if (stored == InventoryResult.Ok)
+        {
+            return MasterGiveResult.Given;
+        }
+
+        (MasterGiveResult outcome, LootError error) = stored switch
+        {
+            InventoryResult.InventoryFull => (MasterGiveResult.TargetInventoryFull, LootError.MasterInventoryFull),
+            InventoryResult.CantCarryMoreOfThis => (MasterGiveResult.TargetUnique, LootError.MasterUniqueItem),
+            _ => (MasterGiveResult.TargetOther, LootError.MasterOther),
+        };
+        master.Session.Send(WorldOpcode.SmsgLootResponse, GroupLootPackets.LootErrorResponse(lootGuid, error));
+        return outcome;
     }
 
     /// <summary>

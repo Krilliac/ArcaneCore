@@ -26,6 +26,8 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgLootMoney, LootMoney);
         table.OnWorld(WorldOpcode.CmsgLootRelease, LootRelease);
         table.OnWorld(WorldOpcode.CmsgOpenItem, OpenItem);
+        table.OnWorld(WorldOpcode.CmsgLootRoll, LootRoll);
+        table.OnWorld(WorldOpcode.CmsgLootMasterGive, LootMasterGive);
     }
 
     private static GameObjectLootFeature? Feature(WorldSession session) => session.Services.GetService<GameObjectLootFeature>();
@@ -99,6 +101,24 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
 
         var reader = new PacketReader(payload);
         loot.Release(player, new ObjectGuid(reader.ReadUInt64()));
+    }
+
+    /// <summary>CMSG_LOOT_ROLL: u64 corpse, u32 slot, u8 vote (0 pass, 1 need, 2 greed; larger votes are dropped).</summary>
+    private static void LootRoll(WorldSession session, Player player, byte[] payload)
+    {
+        if (LootOf(session, player) is { } loot && GroupLootPackets.TryParseLootRoll(payload, out ObjectGuid corpse, out uint slot, out RollVote vote))
+        {
+            loot.Rolls.Vote(player, corpse, slot, vote);
+        }
+    }
+
+    /// <summary>CMSG_LOOT_MASTER_GIVE: u64 loot guid, u8 slot, u64 target player.</summary>
+    private static void LootMasterGive(WorldSession session, Player player, byte[] payload)
+    {
+        if (LootOf(session, player) is { } loot && GroupLootPackets.TryParseMasterGive(payload, out ObjectGuid guid, out byte slot, out ObjectGuid target))
+        {
+            loot.GiveMasterLoot(player, guid, slot, target);
+        }
     }
 
     /// <summary>CMSG_OPEN_ITEM: u8 bag, u8 slot.</summary>

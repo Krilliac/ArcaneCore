@@ -75,6 +75,12 @@ public sealed class LootOptions
     /// </summary>
     public float LootedCorpseDecayRate { get; set; }
 
+    /// <summary>
+    /// How long a need/greed roll waits for votes before the players who did not vote count as passed, in milliseconds
+    /// (vmangos Group.cpp:72 LOOT_ROLL_TIMEOUT, 1 minute; the same value goes into SMSG_LOOT_START_ROLL as the countdown).
+    /// </summary>
+    public uint RollTimeoutMs { get; set; } = 60000;
+
     /// <summary>vmangos Rate.Drop.Money.</summary>
     public float MoneyRate { get; set; } = 1.0f;
 }

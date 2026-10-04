@@ -206,6 +206,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         };
         var system = new GameObjectMapSystem(map, Content, loot, Quests, logger) { Options = ObjectOptions, Random = new Random() };
         map.AddUpdater(system);
+        map.AddUpdater(loot.Rolls); // the need/greed roll timers of this map's loot (LootRollManager)
         _systems.Add(map, system);
         map.Combat.UnitKilled += OnUnitKilled;
     }
