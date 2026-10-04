@@ -18,6 +18,8 @@ public sealed class AuraInterruptEngineTests
     private const uint SelfBreakingDot = 944003;
     private const uint Hit = 944004;
     private const uint StealthLike = 944005;
+    private const uint WyvernStingRank1 = 19386; // the real ids: DamageBreakExemptSpells is keyed by spell id
+    private const uint ProwlRank1 = 5215;
     private const AuraType Probe = SpellHandlerModuleTests.FixtureAura;
 
     private static SpellInfo Aura(uint id, ProcFlags proc = ProcFlags.None, uint dispel = 0) => Spell(
@@ -36,6 +38,8 @@ public sealed class AuraInterruptEngineTests
         Aura(Sleep),
         Aura(ProcSleep, proc: ProcFlags.TakenAnyDamage),
         Aura(StealthLike, dispel: 5),
+        Aura(WyvernStingRank1, proc: ProcFlags.TakenAnyDamage),
+        Aura(ProwlRank1, proc: ProcFlags.TakenAnyDamage, dispel: 5),
         Spell(SelfBreakingDot, Effect(SpellEffectName.ApplyAura, 4, SpellImplicitTarget.UnitEnemy, AuraType.PeriodicDamage, amplitude: 3000)) with
         {
             AuraInterruptFlags = SpellAuraInterruptFlags.Damage,
@@ -55,7 +59,7 @@ public sealed class AuraInterruptEngineTests
     public void DamageBreak_RemovesTheAuraWithoutProcFlags_AndSkipsOneThatHasThem()
     {
         using SpellTestKit kit = NewKit();
-        kit.System.ProcEngineBreaksDamageAuras = true;
+        kit.System.AuraOptions = new AuraOptions { ProcEngineBreaksDamageAuras = true };
         (Player attacker, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
         kit.System.CastSpell(victim, Sleep, SpellCastTargets.ForSelf(), triggered: true);
@@ -86,7 +90,7 @@ public sealed class AuraInterruptEngineTests
     public void DamageBreak_AlsoSkipsProcFlagAuras_WhenTheHitWasFullyAbsorbed()
     {
         using SpellTestKit kit = NewKit();
-        kit.System.ProcEngineBreaksDamageAuras = true;
+        kit.System.AuraOptions = new AuraOptions { ProcEngineBreaksDamageAuras = true };
         (Player attacker, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
         kit.System.CastSpell(victim, Sleep, SpellCastTargets.ForSelf(), triggered: true);
@@ -154,5 +158,35 @@ public sealed class AuraInterruptEngineTests
 
         Assert.Equal(1, removed);
         Assert.Equal(1, kit.System.RemoveAurasWithInterruptFlags(victim, (uint)SpellAuraInterruptFlags.Damage));
+    }
+
+    [Fact]
+    public void DamageBreak_WithoutAProcEngine_SparesWyvernStingAndProwl_ButStillBreaksOtherProcFlagAuras()
+    {
+        // The retail-safe default (vmangos checkProcFlags skips these two because of their procFlags): the hit their own effect causes
+        // must not remove them, while the engine keeps the crowd control shape (ProcSleep) breakable.
+        using SpellTestKit kit = NewKit();
+        Assert.False(kit.System.AuraOptions.ProcEngineBreaksDamageAuras);
+        (Player attacker, _) = kit.AddPlayer(1);
+        (Player victim, _) = kit.AddPlayer(2, 2);
+        kit.System.CastSpell(victim, WyvernStingRank1, SpellCastTargets.ForSelf(), triggered: true);
+        kit.System.CastSpell(victim, ProwlRank1, SpellCastTargets.ForSelf(), triggered: true);
+        kit.System.CastSpell(victim, ProcSleep, SpellCastTargets.ForSelf(), triggered: true);
+        kit.System.CastSpell(victim, Sleep, SpellCastTargets.ForSelf(), triggered: true);
+
+        kit.System.OnDamageTaken(victim, attacker, 10, periodic: false);
+
+        Assert.True(kit.System.HasAura(victim, WyvernStingRank1));
+        Assert.True(kit.System.HasAura(victim, ProwlRank1));
+        Assert.False(kit.System.HasAura(victim, ProcSleep));
+        Assert.False(kit.System.HasAura(victim, Sleep));
+    }
+
+    [Fact]
+    public void DamageBreakExemptSpells_ListEveryRankOfWyvernStingAndProwl()
+    {
+        Assert.Equivalent(
+            new uint[] { 19386, 24131, 24132, 24133, 24134, 24135, 5215, 6783, 9913 },
+            SpellSystem.DamageBreakExemptSpells, strict: false);
     }
 }

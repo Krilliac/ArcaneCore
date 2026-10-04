@@ -16,25 +16,27 @@ public sealed partial class SpellSystem
     public bool ImprovedSapRollPerPhase { get; set; }
 
     /// <summary>
+    /// The spells the damage break spares while no proc engine exists (<see cref="AuraOptions.ProcEngineBreaksDamageAuras"/> false): the
+    /// auras vmangos skips through <c>checkProcFlags</c> because their spells carry procFlags, and that are not crowd control the engine
+    /// has to keep breakable. Wyvern Sting (19386, 24132, 24133 and the DoT it triggers on expiry, 24131, 24134, 24135; vmangos
+    /// scripts/spells/spell_hunter.cpp) and Prowl (5215, 6783, 9913).
+    /// </summary>
+    public static IReadOnlySet<uint> DamageBreakExemptSpells { get; } = new HashSet<uint> { 19386, 24131, 24132, 24133, 24134, 24135, 5215, 6783, 9913 };
+
+    /// <summary>
     /// vmangos Unit::RemoveAurasWithInterruptFlags (Unit.cpp:3735-3751): remove every aura whose spell has any bit of
     /// <paramref name="flags"/> in its AuraInterruptFlags, except the spell <paramref name="exceptSpellId"/>,
     /// stealth auras (Dispel type 5) when <paramref name="skipStealth"/> and invisibility auras (Dispel type 6)
     /// when <paramref name="skipInvisibility"/>. Returns how many auras were removed.
     /// <para>
     /// <paramref name="checkProcFlags"/> (vmangos <c>checkProcFlags</c>): leave auras whose spell has procFlags alone. The damage
-    /// break passes it, so Wyvern Sting, Prowl and the like survive the hit that their own proc causes.
+    /// break passes it once a proc engine exists (<see cref="AuraOptions.ProcEngineBreaksDamageAuras"/>). <paramref name="exemptSpells"/>
+    /// spares the listed spell ids without the rest of the procFlags rule (the damage break passes <see cref="DamageBreakExemptSpells"/>
+    /// while no proc engine exists).
     /// </para>
     /// </summary>
-    /// <summary>
-    /// True once a proc engine exists that breaks procFlags crowd control on damage (vmangos Unit.cpp:688-692). Default false: the
-    /// engine has none (docs/areas/aura-engine.md), so the damage break keeps removing procFlags auras itself instead of leaving
-    /// Polymorph, Sap, Gouge and Freezing Trap unbreakable. Known retail gap until the proc lane lands: Wyvern Sting and Prowl
-    /// then break on their own hit.
-    /// </summary>
-    public bool ProcEngineBreaksDamageAuras { get; set; }
-
     public int RemoveAurasWithInterruptFlags(Unit unit, uint flags, uint exceptSpellId = 0, bool skipStealth = false, bool skipInvisibility = false,
-        bool checkProcFlags = false)
+        bool checkProcFlags = false, IReadOnlySet<uint>? exemptSpells = null)
     {
         ArgumentNullException.ThrowIfNull(unit);
         if (GetState(unit.Guid) is not { } state || !ReferenceEquals(state.Unit, unit))
@@ -47,6 +49,7 @@ public sealed partial class SpellSystem
         // vmangos restarts from the first holder after every removal: a removal can cascade into other auras.
         while (state.Auras.FirstOrDefault(h => !h.IsRemoved
             && (!checkProcFlags || h.Spell.ProcFlags == ProcFlags.None)
+            && (exemptSpells is null || !exemptSpells.Contains(h.Spell.Id))
             && (!skipStealth || h.Spell.Dispel != StealthBreakRules.DispelStealth)
             && (!skipInvisibility || h.Spell.Dispel != StealthBreakRules.DispelInvisibility)
             && ((uint)h.Spell.AuraInterruptFlags & flags) != 0

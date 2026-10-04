@@ -129,7 +129,7 @@ public sealed partial class SpellSystem
         // has procFlags (Wyvern Sting, Prowl).
         if (damage == 0)
         {
-            RemoveAurasWithInterruptFlags(victim, (uint)SpellAuraInterruptFlags.Damage, sourceSpellId, checkProcFlags: ProcEngineBreaksDamageAuras);
+            BreakAurasOnDamage(victim, sourceSpellId);
 
             if (!periodic && victim is Player && state.CurrentCast is { State: SpellCastState.Preparing } preparing
                 && preparing.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.DamageCancels))
@@ -140,7 +140,7 @@ public sealed partial class SpellSystem
             return;
         }
 
-        RemoveAurasWithInterruptFlags(victim, (uint)SpellAuraInterruptFlags.Damage, sourceSpellId, checkProcFlags: ProcEngineBreaksDamageAuras);
+        BreakAurasOnDamage(victim, sourceSpellId);
 
         // The cast or channel in progress: pushback, delay and damage cancels (retail rules in SpellSystem.Pushback.cs).
         // Self damage never pushes back or interrupts.
@@ -148,6 +148,18 @@ public sealed partial class SpellSystem
         {
             ApplyDamageToCurrentCast(victim, state, periodic);
         }
+    }
+
+    /// <summary>
+    /// The damage break of <see cref="OnDamageTaken"/>. With a proc engine (<see cref="AuraOptions.ProcEngineBreaksDamageAuras"/>) every
+    /// procFlags aura is skipped, as vmangos does. Without one only <see cref="DamageBreakExemptSpells"/> (Wyvern Sting, Prowl) are spared,
+    /// so Polymorph, Sap, Gouge and Freezing Trap still break here.
+    /// </summary>
+    private void BreakAurasOnDamage(Unit victim, uint sourceSpellId)
+    {
+        bool procEngine = AuraOptions.ProcEngineBreaksDamageAuras;
+        RemoveAurasWithInterruptFlags(victim, (uint)SpellAuraInterruptFlags.Damage, sourceSpellId, checkProcFlags: procEngine,
+            exemptSpells: procEngine ? null : DamageBreakExemptSpells);
     }
 
     /// <summary>

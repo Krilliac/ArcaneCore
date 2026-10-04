@@ -21,4 +21,13 @@ public sealed class AuraOptions
     /// SPELL_ATTR_EX4_AURA_EXPIRES_OFFLINE (Deserter), so every other aura resumes with the time it had at logout. Default false.
     /// </summary>
     public bool HarmfulAurasExpireOffline { get; set; }
+
+    /// <summary>
+    /// Set once a proc engine exists that breaks procFlags crowd control on damage (vmangos Unit.cpp:688-692); the damage break then skips
+    /// every aura whose spell has procFlags (vmangos <c>checkProcFlags</c>, Unit.cpp:735-745, 895-906). Default false: this engine has no proc
+    /// engine, so the damage break itself keeps removing procFlags auras, otherwise Polymorph, Sap, Gouge and Freezing Trap could not be
+    /// broken. In that mode <see cref="SpellSystem.DamageBreakExemptSpells"/> (Wyvern Sting and Prowl, which vmangos leaves alone because
+    /// of their procFlags) are still spared, so they do not break on the hit their own effect causes.
+    /// </summary>
+    public bool ProcEngineBreaksDamageAuras { get; set; }
 }
