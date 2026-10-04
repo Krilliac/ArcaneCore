@@ -25,7 +25,6 @@ public sealed class PlayerHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgSetActionbarToggles, HandleSetActionBarToggles);
         table.OnWorld(WorldOpcode.CmsgZoneupdate, HandleZoneUpdate);
         table.OnWorld(WorldOpcode.CmsgSetActiveMover, HandleSetActiveMover);
-        table.OnWorld(WorldOpcode.CmsgGmticketGetticket, HandleGmTicketGetTicket);
     }
 
     /// <summary>CMSG_PLAYED_TIME (empty) → SMSG_PLAYED_TIME (vmangos HandlePlayedTime).</summary>
@@ -130,16 +129,5 @@ public sealed class PlayerHandlers : IOpcodeHandlerGroup
         {
             session.Logger.LogWarning("[{Endpoint}] active mover 0x{Guid:X16} is not {Player}", session.RemoteEndpoint, guid, player.Name);
         }
-    }
-
-    /// <summary>
-    /// CMSG_GMTICKET_GETTICKET: the server time, then the ticket status (vmangos
-    /// HandleGMTicketGetTicketOpcode). There is no ticket system yet, so the status is always
-    /// "no ticket".
-    /// </summary>
-    private static void HandleGmTicketGetTicket(WorldSession session, Player player, byte[] payload)
-    {
-        session.Send(WorldOpcode.SmsgQueryTimeResponse, QueryPackets.BuildQueryTimeResponse(DateTimeOffset.UtcNow));
-        session.Send(WorldOpcode.SmsgGmticketGetticket, MiscPackets.BuildNoGmTicket());
     }
 }

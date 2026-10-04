@@ -2,6 +2,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Gm.Audit;
 using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
@@ -201,7 +202,10 @@ public sealed class CommandTable(IReadOnlyList<ChatCommand> roots, GmOptions? gm
             Player invoker = context.Player;
             string selection = invoker.Selection.IsEmpty ? "none" : invoker.Selection.ToString();
             ILogger log = context.Session.Services.GetService<ILoggerFactory>()?.CreateLogger(GmCommandLog.Category) ?? context.Session.Logger;
-            log.LogInformation("{Line}", GmCommandLog.Describe(found.Rest.Length == 0 ? found.Path : $"{found.Path} {found.Rest}", context.Session.AccountId, invoker.Name, invoker.MapId, invoker.X, invoker.Y, invoker.Z, selection));
+            string commandLine = found.Rest.Length == 0 ? found.Path : $"{found.Path} {found.Rest}";
+            string line = GmCommandLog.Describe(commandLine, context.Session.AccountId, invoker.Name, invoker.MapId, invoker.X, invoker.Y, invoker.Z, selection);
+            log.LogInformation("{Line}", line);
+            context.Session.Services.GetService<GmAuditFeature>()?.RecordCommand(context.Session.AccountId, invoker.Name, commandLine, line);
         }
 
         if (!command.Handler!(context, found.Rest))

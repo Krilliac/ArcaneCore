@@ -30,6 +30,12 @@ public sealed class GmOptions
     public bool LogCommands { get; set; } = true;
 
     /// <summary>
+    /// How many of the latest audit lines <c>.arcane gmlog</c> can show (ArcaneCore only; the lines are the ones
+    /// <see cref="LogCommands"/> writes, kept in memory, lost on restart). 0 keeps none.
+    /// </summary>
+    public int AuditTailSize { get; set; } = 200;
+
+    /// <summary>
     /// vmangos GM.LowerSecurity (mangosd.conf.dist.in:2536). Retail default is false, which lets
     /// staff act on a higher account; ArcaneCore keeps the stricter true as its default so the
     /// existing refusal does not weaken. Strong checks (mute/unmute) are strict in both.
@@ -62,6 +68,15 @@ public sealed class GmOptions
     /// the world thread; an operator may cap it (a final line says results were left out).
     /// </summary>
     public int LookupMaxResults { get; set; }
+
+    /// <summary>
+    /// ArcaneCore only (no reference core limits these): the most ticket mutations (<c>CMSG_GMTICKET_CREATE</c>,
+    /// <c>_UPDATETEXT</c>, <c>_DELETETICKET</c>) one account may send per minute. Beyond it the packet is refused
+    /// before anything is read (create and update answer with their error code, a delete is answered with the
+    /// ticket's unchanged state) and the player is told; every accepted create or changed text tells all GameMasters
+    /// online, so this also bounds that. Fail-closed: 0 refuses every ticket mutation, a negative value is the default.
+    /// </summary>
+    public int TicketMutationsPerMinute { get; set; } = 10;
 
     /// <summary>The retail level of a stored account security (unmapped values count as Player).</summary>
     public int LevelOf(AccountSecurity security) => SecurityMap.GetValueOrDefault(security, (byte)0);
