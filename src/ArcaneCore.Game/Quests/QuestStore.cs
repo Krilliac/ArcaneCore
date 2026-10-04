@@ -15,6 +15,8 @@ public sealed class QuestStore
     private readonly FrozenDictionary<uint, uint[]> _enders;
     private readonly FrozenDictionary<uint, uint[]> _gameObjectStarters;
     private readonly FrozenDictionary<uint, uint[]> _gameObjectEnders;
+    private readonly FrozenDictionary<uint, uint[]> _areaTriggerQuests;
+    private readonly FrozenDictionary<uint, uint[]> _areaTriggerOfQuest;
     private readonly FrozenDictionary<int, uint[]> _exclusiveGroups;
     private readonly bool _hasRewXp;
 
@@ -93,6 +95,14 @@ public sealed class QuestStore
         _enders = Group(content.Enders, quests);
         _gameObjectStarters = Group(content.GameObjectStarters, quests);
         _gameObjectEnders = Group(content.GameObjectEnders, quests);
+
+        // areatrigger_involvedrelation: a trigger credits its quests (vmangos LoadQuestAreaTriggers skips a quest that is not loaded);
+        // the reverse index answers "has this quest an area trigger" without scanning the table.
+        _areaTriggerQuests = Group(content.AreaTriggerQuests, quests);
+        _areaTriggerOfQuest = _areaTriggerQuests
+            .SelectMany(p => p.Value.Select(quest => (quest, trigger: p.Key)))
+            .GroupBy(p => p.quest)
+            .ToFrozenDictionary(g => g.Key, g => g.Select(p => p.trigger).ToArray());
     }
 
     public static QuestStore Empty { get; } = new(QuestContent.Empty);
@@ -124,6 +134,12 @@ public sealed class QuestStore
 
     /// <summary>Quests the game object entry ends (gameobject_involvedrelation), in table order.</summary>
     public IReadOnlyList<uint> GameObjectEndersOf(uint gameObjectEntry) => _gameObjectEnders.GetValueOrDefault(gameObjectEntry) ?? [];
+
+    /// <summary>Quests the area trigger credits (areatrigger_involvedrelation), in table order. World thread, no allocation.</summary>
+    public IReadOnlyList<uint> AreaTriggerQuestsOf(uint triggerId) => _areaTriggerQuests.GetValueOrDefault(triggerId) ?? [];
+
+    /// <summary>Whether an area trigger row credits <paramref name="questId"/> (the exploration objective has a source).</summary>
+    public bool HasAreaTrigger(uint questId) => _areaTriggerOfQuest.ContainsKey(questId);
 
     /// <summary>vmangos Object::HasQuest for a creature.</summary>
     public bool Starts(uint creatureEntry, uint questId) => StartersOf(creatureEntry).Contains(questId);

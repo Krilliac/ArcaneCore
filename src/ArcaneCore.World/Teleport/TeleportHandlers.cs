@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Death.Travel;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -17,8 +18,8 @@ namespace ArcaneCore.World.Teleport;
 /// </summary>
 public sealed class TeleportHandlers : IOpcodeHandlerGroup
 {
-    /// <summary>mangos_string 49 (LANG_LEVEL_MINREQUIRED), cmangos-classic/vmangos world DB.</summary>
-    public const string LevelRequiredText = "You must be at least level {0} to enter.";
+    /// <summary>mangos_string 49 (LANG_LEVEL_MINREQUIRED), kept here for callers of the earlier handler; the text lives in <see cref="AreaTriggerRequirements"/>.</summary>
+    public const string LevelRequiredText = AreaTriggerRequirements.LevelRequiredText;
 
     public void Register(OpcodeTable table)
     {
@@ -41,7 +42,9 @@ public sealed class TeleportHandlers : IOpcodeHandlerGroup
 
     // vmangos WorldSession::HandleAreaTriggerOpcode (the parts ArcaneCore has systems for:
     // the zone check, area trigger listeners such as quest exploration, then the teleport with
-    // its level requirement).
+    // its entry requirements: level, items, quest, gates, condition). World thread; runs once per
+    // CMSG_AREATRIGGER (the client sends it on entering the volume, not per tick), so the feature
+    // discovery below is not a per-tick cost.
     private static void HandleAreaTrigger(WorldSession session, Player player, byte[] payload)
     {
         uint triggerId = TeleportPackets.ReadAreaTrigger(payload);
@@ -82,13 +85,17 @@ public sealed class TeleportHandlers : IOpcodeHandlerGroup
 
         teleport = ghostEntry.Trigger!;
 
-        // vmangos: players in GM mode (.gm on) skip the level requirement.
-        if (!player.IsGameMaster && player.Level < teleport.RequiredLevel)
+        // Level, items, quest and condition requirements; a game master passes them all (AreaTriggerRequirements).
+        IEnumerable<IWorldFeature> features = session.Services.GetServices<IWorldFeature>();
+        AreaTriggerVerdict verdict = AreaTriggerRequirements.Evaluate(player, teleport,
+            features.OfType<IConditionEvaluator>().FirstOrDefault(), features.OfType<IAreaTriggerGate>());
+        if (!verdict.Allowed)
         {
-            string text = teleport.Message.Length > 0
-                ? teleport.Message
-                : string.Format(System.Globalization.CultureInfo.InvariantCulture, LevelRequiredText, teleport.RequiredLevel);
-            session.Send(WorldOpcode.SmsgAreaTriggerMessage, TeleportPackets.BuildAreaTriggerMessage(text));
+            if (verdict.Message is { } text)
+            {
+                session.Send(WorldOpcode.SmsgAreaTriggerMessage, TeleportPackets.BuildAreaTriggerMessage(text));
+            }
+
             return;
         }
 

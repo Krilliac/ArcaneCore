@@ -77,6 +77,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.World.WorldState.GameEventDataModule), DatabaseComponent.World, ArcaneCore.Data.World.WorldState.GameEventDataModule.Version),
             (typeof(ArcaneCore.Data.World.Threat.SpellThreatDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Threat.SpellThreatDataModule.Version),
             (typeof(ArcaneCore.Data.Graveyards.GraveyardDataModule), DatabaseComponent.World, ArcaneCore.Data.Graveyards.GraveyardDataModule.Version),
+            (typeof(AreaTriggerQuestWorldModule), DatabaseComponent.World, AreaTriggerQuestWorldModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -231,6 +232,47 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             ArcaneCore.Kernel.Quests.QuestTemplate quest = await world.Set<ArcaneCore.Kernel.Quests.QuestTemplate>().SingleAsync(q => q.Entry == 4242);
             Assert.Equal((0u, 0u, 0u, 0u, 0u), (quest.RewRepFaction1, quest.RewRepFaction2, quest.RewRepFaction3, quest.RewRepFaction4, quest.RewRepFaction5));
             Assert.Equal((0, 0, 0, 0, 0), (quest.RewRepValue1, quest.RewRepValue2, quest.RewRepValue3, quest.RewRepValue4, quest.RewRepValue5));
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task WorldDatabaseBeforeTheAreaTriggerStep_GainsTheRequirementColumnsAndTheRelationTable_AndKeepsRows(DatabaseProvider provider)
+    {
+        // A database that predates the step: a complete schema whose areatrigger_teleport loses the four requirement columns, whose
+        // areatrigger_involvedrelation table does not exist and whose version row reads one step earlier.
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        string[] columns = [nameof(AreaTriggerTeleportRow.RequiredItem), nameof(AreaTriggerTeleportRow.RequiredItem2),
+            nameof(AreaTriggerTeleportRow.RequiredQuestDone), nameof(AreaTriggerTeleportRow.RequiredCondition)];
+        await using (WorldDbContext world = TestContexts.Create<WorldDbContext>(connection))
+        {
+            await SchemaBootstrapper.EnsureAsync(world, WorldDbContext.Schema);
+            world.Set<AreaTriggerTeleportRow>().Add(new AreaTriggerTeleportRow { Id = 78, Name = "Deadmines - Entering", RequiredLevel = 10, TargetMap = 36 });
+            await world.SaveChangesAsync();
+            ISqlGenerationHelper sql = world.GetService<ISqlGenerationHelper>();
+            foreach (string column in columns)
+            {
+                string drop = $"ALTER TABLE {sql.DelimitIdentifier(MapDataModule.AreaTriggerTeleportTable)} DROP COLUMN {sql.DelimitIdentifier(column)}";
+                await world.Database.ExecuteSqlRawAsync(drop);
+            }
+
+            string dropTable = $"DROP TABLE {sql.DelimitIdentifier(AreaTriggerQuestWorldModule.RelationTable)}";
+            await world.Database.ExecuteSqlRawAsync(dropTable);
+            SchemaVersionRow row = await world.Set<SchemaVersionRow>().SingleAsync();
+            row.Version = AreaTriggerQuestWorldModule.Version - 1;
+            await world.SaveChangesAsync();
+            world.ChangeTracker.Clear();
+        }
+
+        // Two startups: the step runs once and a repeat has nothing left to add.
+        for (int pass = 0; pass < 2; pass++)
+        {
+            await using WorldDbContext world = TestContexts.Create<WorldDbContext>(connection);
+            await EnsureAndInspectAsync(world, WorldDbContext.Schema);
+            AreaTriggerTeleportRow kept = await world.Set<AreaTriggerTeleportRow>().SingleAsync(r => r.Id == 78);
+            Assert.Equal((10, 36u), (kept.RequiredLevel, kept.TargetMap));
+            Assert.Equal((0u, 0u, 0u, 0u), (kept.RequiredItem, kept.RequiredItem2, kept.RequiredQuestDone, kept.RequiredCondition));
+            Assert.Empty(await world.Set<AreaTriggerQuestRow>().ToListAsync());
         }
     }
 

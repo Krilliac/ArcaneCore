@@ -32,6 +32,12 @@ public sealed record QuestContent(
 
     /// <summary><c>gameobject_involvedrelation</c>: the game object entry ends the quest.</summary>
     public IReadOnlyList<CreatureQuestRelation> GameObjectEnders { get; init; } = [];
+
+    /// <summary>
+    /// <c>areatrigger_involvedrelation</c> (vmangos/classic-db): stepping on the area trigger <see cref="CreatureQuestRelation.Id"/>
+    /// credits the exploration objective of <see cref="CreatureQuestRelation.Quest"/> (same row shape as the creature relations).
+    /// </summary>
+    public IReadOnlyList<CreatureQuestRelation> AreaTriggerQuests { get; init; } = [];
 }
 
 /// <summary>

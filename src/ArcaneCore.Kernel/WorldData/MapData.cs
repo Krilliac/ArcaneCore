@@ -89,9 +89,14 @@ public sealed record AreaTriggerTemplate(
     string Name);
 
 /// <summary>
-/// Where an area trigger sends a player (vmangos world DB <c>areatrigger_teleport</c>:
+/// Where an area trigger sends a player (world DB <c>areatrigger_teleport</c>:
 /// <c>id, name, message, required_level, target_map, target_position_x/y/z,
-/// target_orientation</c>; <c>required_condition</c> waits for the conditions system).
+/// target_orientation</c>) and what a player must have to be sent. The entry requirements are
+/// the classic-db / vmangos columns <c>required_item</c>, <c>required_item2</c>,
+/// <c>required_quest_done</c> and the conditions-table reference (<c>condition_id</c> in
+/// classic-db, <c>required_condition</c> in vmangos); 0 means none. <see cref="Message"/> is
+/// shown for any refused requirement when it is not empty
+/// (<c>AreaTriggerRequirements</c>, docs/areas/area-triggers.md).
 /// </summary>
 public sealed record AreaTriggerTeleport(
     uint Id,
@@ -102,7 +107,11 @@ public sealed record AreaTriggerTeleport(
     float TargetX,
     float TargetY,
     float TargetZ,
-    float TargetOrientation);
+    float TargetOrientation,
+    uint RequiredItem = 0,
+    uint RequiredItem2 = 0,
+    uint RequiredQuestDone = 0,
+    uint RequiredCondition = 0);
 
 /// <summary>A named teleport location for <c>.tele</c> (vmangos/cmangos world DB <c>game_tele</c>).</summary>
 public sealed record GameTele(uint Id, float X, float Y, float Z, float Orientation, uint MapId, string Name);

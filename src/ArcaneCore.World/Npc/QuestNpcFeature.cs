@@ -6,9 +6,11 @@ using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Quests.Adapters;
+using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
@@ -27,7 +29,7 @@ namespace ArcaneCore.World.Npc;
 /// with the quest service. Creature quest interactions use live map/visibility snapshots and
 /// optional faction templates; missing reaction data denies interaction.
 /// </summary>
-public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IAreaTriggerListener, IAsyncDisposable
+public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IAreaTriggerListener, IAreaTriggerGate, IAsyncDisposable
 {
     private readonly IServiceProvider _services;
     private readonly IServiceScopeFactory _scopes;
@@ -192,6 +194,16 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
         => _services.GetService<NpcServicesFeature>() is { } npcServices ? npcServices.Extend(dependencies, npcs) : dependencies;
 
     public void OnAreaTrigger(Player player, uint triggerId) => Services.AreaTriggerReached(player, triggerId);
+
+    /// <summary>
+    /// <c>areatrigger_teleport.required_quest_done</c>: the quest must be turned in (<see cref="QuestNpcServices.IsRewarded"/>, so a
+    /// repeatable quest never counts, as in the reference). A player whose journal is not loaded yet is refused (fail closed).
+    /// The refusal carries no text of its own: the reference sends none for an unfinished quest.
+    /// </summary>
+    public AreaTriggerVerdict Check(Player player, AreaTriggerTeleport teleport)
+        => teleport.RequiredQuestDone == 0 || Services.IsRewarded(player, teleport.RequiredQuestDone) == true
+            ? AreaTriggerVerdict.Allow
+            : AreaTriggerVerdict.Refuse(null);
 
     private void OnMapCreated(Map map)
     {

@@ -58,6 +58,21 @@ public sealed class AreaTriggerTeleportRow
     public float TargetPositionY { get; set; }
     public float TargetPositionZ { get; set; }
     public float TargetOrientation { get; set; }
+
+    /// <summary><c>required_item</c>: an item entry the player must carry (0 = none). Added by world schema step <c>AreaTriggerQuestWorldModule</c>.</summary>
+    public uint RequiredItem { get; set; }
+
+    /// <summary><c>required_item2</c>: a second item entry the player must carry (0 = none).</summary>
+    public uint RequiredItem2 { get; set; }
+
+    /// <summary><c>required_quest_done</c>: a quest the player must have turned in (0 = none).</summary>
+    public uint RequiredQuestDone { get; set; }
+
+    /// <summary>
+    /// <c>condition_id</c> (classic-db) or <c>required_condition</c> (vmangos): a <c>conditions</c> table id the player must satisfy
+    /// (0 = none). Both dump columns map here.
+    /// </summary>
+    public uint RequiredCondition { get; set; }
 }
 
 /// <summary><c>game_tele</c> row (vmangos/cmangos world DB). Keyed by <see cref="Id"/>.</summary>
