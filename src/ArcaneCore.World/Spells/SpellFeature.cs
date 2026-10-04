@@ -68,6 +68,14 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
     /// <summary>Wall clock (Unix ms) used for persisted cooldown ends and offline aura time.</summary>
     public long UnixNowMs => _clock.GetUtcNow().ToUnixTimeMilliseconds();
 
+    /// <summary>
+    /// Raised on the world thread right after this feature's <see cref="WorldRuntime.PlayerLoggedIn"/> handler restored a player's saved
+    /// auras and cast its passives. Login work that must see the restored auras (the equip replay of <c>ItemEquipSpellFeature</c>)
+    /// subscribes here: features attach in full-name order, so a feature sorting before this one cannot get behind the restore through
+    /// <see cref="WorldRuntime.PlayerLoggedIn"/> alone.
+    /// </summary>
+    public event Action<Player>? PlayerSpellsRestored;
+
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
@@ -333,6 +341,8 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
                 System.CastSpell(player, spellId, SpellCastTargets.ForSelf(), triggered: true);
             }
         }
+
+        PlayerSpellsRestored?.Invoke(player);
     }
 
     /// <summary>Player::SaveToDB at logout: capture cooldowns and auras before the unit leaves the spell system.</summary>

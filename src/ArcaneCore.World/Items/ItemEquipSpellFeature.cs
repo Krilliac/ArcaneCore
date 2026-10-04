@@ -26,9 +26,9 @@ public sealed class ItemSetOptions
 
 /// <summary>
 /// ON_EQUIP item spells and item set bonuses in the world daemon: loads ItemSet.dbc into the immutable <see cref="ItemSetCatalog"/> and
-/// attaches <see cref="ItemEquipSpells"/> to each player at login (world thread), where it follows the inventory's equip hook and replays
-/// the worn items so logout and login re-apply every bonus. The catalog is read once at startup (not part of hot reload: the client's own
-/// DBC cannot change under a running world).
+/// attaches <see cref="ItemEquipSpells"/> to each player at login (world thread, from <see cref="SpellFeature.PlayerSpellsRestored"/>, so
+/// the saved auras are already back), where it follows the inventory's equip hook and replays the worn items so logout and login re-apply
+/// every bonus. The catalog is read once at startup (not part of hot reload: the client's own DBC cannot change under a running world).
 /// </summary>
 public sealed class ItemEquipSpellFeature : IWorldFeature
 {
@@ -61,7 +61,8 @@ public sealed class ItemEquipSpellFeature : IWorldFeature
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
-        SpellSystem spells = _services.GetRequiredService<SpellFeature>().System;
+        SpellFeature spellFeature = _services.GetRequiredService<SpellFeature>();
+        SpellSystem spells = spellFeature.System;
         bool hasCatalog = !string.IsNullOrWhiteSpace(Options.DbcPath);
         if (hasCatalog)
         {
@@ -76,7 +77,10 @@ public sealed class ItemEquipSpellFeature : IWorldFeature
 
         var bonuses = new ItemSetBonuses(Catalog, spells, hasCatalog ? ReportUnknownSet : null);
         Spells = new ItemEquipSpells(spells, bonuses);
-        world.PlayerLoggedIn += Spells.Attach;
+        // The login replay runs after SpellFeature restored the saved auras, not from PlayerLoggedIn: features attach in full-name order
+        // (ArcaneCore.World.Items before ArcaneCore.World.Spells), so a PlayerLoggedIn handler here would replay first and the restore of
+        // a saved non-passive Equip: aura would then stack on (or replace) the item-bound holder instead of being removed by the replay.
+        spellFeature.PlayerSpellsRestored += Spells.Attach;
     }
 
     private void ReportUnknownSet(uint setId, uint itemEntry)

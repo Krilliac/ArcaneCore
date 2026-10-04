@@ -30,6 +30,7 @@ branch originally requested world v2 and characters v3.
 | `Game/Entities/WorldObject.cs` | `internal virtual Map? ValuesUpdateMap => Map`; `MarkChanged` queues on it | items are not on the map; their values updates go through the owner's map |
 | `Game/Maps/Map.cs` | `AddPlayer` writes the inventory create blocks before the player's own; `SendValuesUpdate` routes an `Item` to its owner only | vmangos `Player::BuildCreateUpdateBlockForPlayer`, item fields are owner-only |
 | `Game/Updates/UpdateBlockWriter.cs` | `VisibleFieldsFor` adds OwnerOnly + ItemOwner for the item's owner | vmangos `GetUpdateFieldFlagsForTarget` (UF_FLAG_OWNER_ONLY / UF_FLAG_UNK2) |
+| `World/Spells/SpellFeature.cs` | `PlayerSpellsRestored` event, raised at the end of its `PlayerLoggedIn` handler | the equip-spell login replay must run after the saved auras are restored; features attach in full-name order (Items before Spells), so `PlayerLoggedIn` alone cannot order it |
 
 ## Character hooks used
 
