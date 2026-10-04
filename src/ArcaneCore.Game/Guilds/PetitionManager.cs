@@ -81,7 +81,10 @@ public sealed class PetitionManager
             bool changed = false;
             foreach (PetitionSignatureData signature in data.Signatures)
             {
-                if (_context.Characters.Find((uint)signature.PlayerId) is null || petition.ForPlayer((uint)signature.PlayerId) is not null)
+                // Hardening: the sign path stops at ClientMaxSignatures, so a longer persisted list is malformed data (the packet
+                // count byte and its allocation follow the list length). Drop the excess and persist the trim.
+                if (petition.Signatures.Count >= PetitionConstants.ClientMaxSignatures
+                    || _context.Characters.Find((uint)signature.PlayerId) is null || petition.ForPlayer((uint)signature.PlayerId) is not null)
                 {
                     changed = true;
                     continue;

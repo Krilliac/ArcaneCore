@@ -880,6 +880,27 @@ public sealed class PetitionManagerTests
         Assert.NotNull(signer);
     }
 
+    [Fact] // Security (wave-3 scan finding 2): the signature cap of the sign path also holds for persisted rows
+    public void Load_CapsAnOversizedPersistedSignatureList_AtTheClientMaximum_AndPersistsTheTrim()
+    {
+        using var k = new PetitionKit();
+        k.Add(1);
+        var signatures = new List<PetitionSignatureData>();
+        for (uint guid = 2; guid < 22; guid++)
+        {
+            k.Add(guid);
+            signatures.Add(new PetitionSignatureData((int)guid, (int)guid));
+        }
+
+        k.Persistence.PetitionWrites.Clear();
+        var fresh = new PetitionManager(k.F.Context);
+        fresh.Load([new PetitionData(1, 1, 100, "Crowded", signatures)]);
+
+        Petition petition = Assert.Single(fresh.All);
+        Assert.Equal(PetitionConstants.ClientMaxSignatures, petition.Signatures.Count);
+        Assert.Contains("save:1:9", k.Persistence.PetitionWrites);
+    }
+
     [Fact] // Player.cpp:4353-4354
     public void OnCharacterDeleted_DropsThePetitionAndTheSignatures_WithoutWritingRows()
     {
