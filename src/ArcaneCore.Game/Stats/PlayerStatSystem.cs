@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Items;
 
 namespace ArcaneCore.Game.Stats;
@@ -223,7 +224,10 @@ public sealed class PlayerStatSystem : ICombatStatSource
     /// </summary>
     public void UpdateAttackPowerAndDamage(Player player, bool ranged)
     {
-        float baseAttackPower = StatFormulas.AttackPowerFromStrengthAndAgility(ranged, player.Class, player.Level, Stat(player, 0), Stat(player, 1));
+        // The form (UNIT_FIELD_BYTES_1 byte 2) and Predatory Strikes only matter for the druid forms (StatSystem.cpp:194-296).
+        var form = (ShapeshiftForm)FormQueries.GetForm(player);
+        float baseAttackPower = StatFormulas.AttackPowerFromStrengthAndAgility(ranged, player.Class, player.Level, Stat(player, 0), Stat(player, 1),
+            Enum.IsDefined(form) ? form : ShapeshiftForm.None, player.StatState.PredatoryStrikesPercent);
         player.SetInt32(ranged ? UpdateFields.UnitFieldRangedAttackPower : UpdateFields.UnitFieldAttackPower, (int)baseAttackPower);
         if (ranged)
         {
@@ -235,6 +239,59 @@ public sealed class PlayerStatSystem : ICombatStatSource
         if (player.StatState.CanDualWield && GetWeaponForAttack(player, WeaponAttackType.OffAttack, nonBroken: true, useable: true) is not null)
         {
             UpdateDamagePhysical(player, WeaponAttackType.OffAttack);
+        }
+    }
+
+    /// <summary>
+    /// The stat part of Player::InitDataForForm (Player.cpp:18271-18312), run after the player's form changed to
+    /// <paramref name="newForm"/>: Cat sets both hands' attack time to 1.0 s, Bear and Dire Bear to 2.5 s, any other form
+    /// restores the weapons' own delays (SetRegularAttackTime, Player.cpp:5158-5172); then attack power and damage are
+    /// recomputed. vmangos' SetRegularAttackTime only rewrites a hand that holds a weapon, so an unarmed hand would keep
+    /// the 1.0 or 2.5 s of the form after it ends; <paramref name="resetFistAttackTime"/> (option Forms:ResetFistAttackTimeOnFormLoss,
+    /// default false = vmangos literal) is an opt-in deviation that gives such a hand the 2.0 s base time instead.
+    /// </summary>
+    public void OnFormChanged(Player player, byte newForm, bool resetFistAttackTime)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        switch (newForm)
+        {
+            case (byte)ShapeshiftForm.Cat:
+                SetFormAttackTime(player, 1000);
+                break;
+            case (byte)ShapeshiftForm.Bear:
+            case (byte)ShapeshiftForm.DireBear:
+                SetFormAttackTime(player, 2500);
+                break;
+            default:
+                SetRegularAttackTime(player, resetFistAttackTime);
+                break;
+        }
+
+        UpdateAttackPowerAndDamage(player, ranged: false);
+        UpdateAttackPowerAndDamage(player, ranged: true);
+    }
+
+    private static void SetFormAttackTime(Player player, uint time)
+    {
+        player.SetUInt32(UpdateFields.UnitFieldBaseattacktime + (int)WeaponAttackType.BaseAttack, time);
+        player.SetUInt32(UpdateFields.UnitFieldBaseattacktime + (int)WeaponAttackType.OffAttack, time);
+    }
+
+    /// <summary>Player::SetRegularAttackTime (Player.cpp:5158-5172) without a swing timer reset.</summary>
+    private static void SetRegularAttackTime(Player player, bool resetFistAttackTime)
+    {
+        foreach (WeaponAttackType type in new[] { WeaponAttackType.BaseAttack, WeaponAttackType.OffAttack, WeaponAttackType.RangedAttack })
+        {
+            Item? item = GetWeaponForAttack(player, type, nonBroken: true, useable: false);
+            if (item is not null)
+            {
+                uint delay = item.Template.Delay;
+                player.SetUInt32(UpdateFields.UnitFieldBaseattacktime + (int)type, delay != 0 ? delay : CombatConstants.BaseAttackTimeMs);
+            }
+            else if (resetFistAttackTime && type != WeaponAttackType.RangedAttack)
+            {
+                player.SetUInt32(UpdateFields.UnitFieldBaseattacktime + (int)type, CombatConstants.BaseAttackTimeMs);
+            }
         }
     }
 
@@ -259,7 +316,8 @@ public sealed class PlayerStatSystem : ICombatStatSource
             TotalPhysical: 0.0f,
             WeaponMin: weapon.Min,
             WeaponMax: weapon.Max,
-            Mode: CanUseEquippedWeapon(player, attackType) ? WeaponDamageMode.Weapon : WeaponDamageMode.CannotUseWeapon,
+            Mode: FormQueries.IsAttackSpeedOverridden(FormQueries.GetForm(player)) ? WeaponDamageMode.ShapeshiftForm
+                : CanUseEquippedWeapon(player, attackType) ? WeaponDamageMode.Weapon : WeaponDamageMode.CannotUseWeapon,
             Level: player.Level,
             AmmoDps: 0.0f);
         DamageRange range = StatFormulas.CalculateMinMaxDamage(inputs);
@@ -387,11 +445,12 @@ public sealed class PlayerStatSystem : ICombatStatSource
             ?? GetWeaponForAttack(player, WeaponAttackType.OffAttack, nonBroken: true, useable: true);
 
     /// <summary>
-    /// Unit::CanUseEquippedWeapon (Unit.h:964-978): true except for a disarmed main hand. The shapeshift part
-    /// (IsAttackSpeedOverridenShapeShift) is the spell system's, which has no forms yet.
+    /// Unit::CanUseEquippedWeapon (Unit.h:963-978): false for every hand in Cat, Bear and Dire Bear Form
+    /// (IsAttackSpeedOverridenShapeShift), otherwise true except for a disarmed main hand.
     /// </summary>
     private static bool CanUseEquippedWeapon(Player player, WeaponAttackType attackType)
-        => attackType != WeaponAttackType.BaseAttack || (player.UnitFlags & UnitFlags.Disarmed) == 0;
+        => !FormQueries.IsAttackSpeedOverridden(FormQueries.GetForm(player))
+            && (attackType != WeaponAttackType.BaseAttack || (player.UnitFlags & UnitFlags.Disarmed) == 0);
 
     /// <summary>vmangos Item::IsBroken: a maximum durability and none left.</summary>
     private static bool IsBroken(Item item) => item.MaxDurability > 0 && item.Durability == 0;

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.Tests.Skills;
 using ArcaneCore.Kernel.WorldData;
 using Xunit;
 
@@ -58,6 +59,35 @@ public sealed class ShapeshiftFormDbcTests
     [Fact]
     public void Catalog_RejectsDuplicateForms()
         => Assert.Throws<ArgumentException>(() => new ShapeshiftFormCatalog([new ShapeshiftFormInfo(1, 0, 0), new ShapeshiftFormInfo(1, 1, 0)]));
+
+    [Fact]
+    public void ADbcRowOverridesTheBuiltInRetailRow_ByIdOnly()
+    {
+        // A configured DBC replaces the table wholesale (StanceFeature picks one or the other, never a merge).
+        ShapeshiftFormCatalog fromDbc = ShapeshiftFormDbcReader.Read(DbcFile.Parse(Image(14, [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0, 0])));
+
+        Assert.Equal(1, fromDbc.Count);
+        Assert.True(fromDbc.TryGet(1, out ShapeshiftFormInfo? cat));
+        Assert.Equal(0x40u, cat!.Flags1);
+        Assert.True(ShapeshiftFormCatalog.Retail.TryGet(1, out ShapeshiftFormInfo? retail));
+        Assert.Equal(0u, retail!.Flags1);
+    }
+
+    [RealDbcFact]
+    public void Retail_MatchesTheDevelopersClientDbc_RowForRow()
+    {
+        // Reports Skipped (with the variable name) when ARCANECORE_TEST_DBC_DIR is unset, never a silent pass.
+        string dir = Environment.GetEnvironmentVariable(RealDbcFactAttribute.Variable)!;
+        ShapeshiftFormCatalog client = ShapeshiftFormDbcReader.Load(Path.Combine(dir, "SpellShapeshiftForm.dbc"));
+
+        Assert.NotEqual(0, client.Count);
+        Assert.Equal(client.Count, ShapeshiftFormCatalog.Retail.Count);
+        foreach (ShapeshiftFormInfo row in client.Forms)
+        {
+            Assert.True(ShapeshiftFormCatalog.Retail.TryGet(row.Id, out ShapeshiftFormInfo? ours), $"form {row.Id}");
+            Assert.Equal(row, ours);
+        }
+    }
 
     private static byte[] Image(int fields, params uint[][] records)
     {
