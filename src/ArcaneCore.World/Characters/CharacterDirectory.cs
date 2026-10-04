@@ -31,6 +31,10 @@ public sealed class CharacterDirectory
 
     public CharacterIdentity? Find(int characterId) => _byId.GetValueOrDefault(characterId);
 
+    /// <summary>The distinct, ascending account ids owning a character whose name starts with <paramref name="prefix"/> (case-insensitive).</summary>
+    public int[] AccountIdsByNamePrefix(string prefix)
+        => [.. _byId.Values.Where(c => c.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).Select(c => c.AccountId).Distinct().Order()];
+
     /// <summary>
     /// The character called <paramref name="name"/> (case-insensitive), online or not, like
     /// vmangos ObjectMgr::GetPlayerGuidByName over its player cache. A linear scan: name lookups

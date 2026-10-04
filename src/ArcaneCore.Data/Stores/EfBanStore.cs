@@ -209,6 +209,22 @@ public sealed class EfBanStore(AuthDbContext db, TimeProvider? clock = null, Acc
         return [.. rows.Select(r => r.ToRecord())];
     }
 
+    public async Task<IReadOnlySet<int>> FindAccountsWithHistoryAsync(
+        IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(accountIds);
+        var found = new HashSet<int>();
+        foreach (int[] chunkArray in accountIds.Distinct().Chunk(ChunkSize))
+        {
+            List<int> chunk = [.. chunkArray]; // List.Contains: see FindBannedAccountsAsync
+            found.UnionWith(await db.Set<AccountBanRow>().AsNoTracking()
+                .Where(r => chunk.Contains(r.AccountId)).Select(r => r.AccountId).Distinct()
+                .ToListAsync(cancellationToken).ConfigureAwait(false));
+        }
+
+        return found;
+    }
+
     public async Task<IReadOnlyList<AccountBanRecord>> ListActiveAccountBansAsync(CancellationToken cancellationToken = default)
     {
         long now = Now;

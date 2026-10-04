@@ -111,6 +111,20 @@ public sealed class BanStoreTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task FindAccountsWithHistory_ReturnsAccountsWithAnyRow_ActiveOrNot(DatabaseProvider provider)
+    {
+        await using Fixture f = await Fixture.CreateAsync(_databases, provider, new BanClock(T0));
+        await f.Store.BanAccountAsync(new BanRequest(7, 60, "a", "GM"));
+        await f.Store.BanAccountAsync(new BanRequest(8, 0, "b", "GM"));
+        await f.Store.UnbanAccountAsync(8, "GM", "done"); // inactive rows only
+
+        Assert.Equal([7, 8], (await f.Store.FindAccountsWithHistoryAsync([7, 8, 9, 7])).Order());
+        Assert.Empty(await f.Store.FindAccountsWithHistoryAsync([9, 10]));
+        Assert.Empty(await f.Store.FindAccountsWithHistoryAsync([]));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task Unban_DeactivatesEveryRow_AndWritesTheInactiveAuditRow(DatabaseProvider provider)
     {
         var clock = new BanClock(T0);

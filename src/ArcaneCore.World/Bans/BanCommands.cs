@@ -30,6 +30,7 @@ public sealed class BanCommands : ICommandGroup
 {
     private const string DatabaseError = "The ban database is unavailable; see the server log.";
     private const int MaxAccountNameLength = 16;
+    private const int HistoryBatch = 200; // accounts per history query in .banlist character
 
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
@@ -125,7 +126,12 @@ public sealed class BanCommands : ICommandGroup
             if (kind == Kind.Ip)
             {
                 // The IpBanned event kicks the sessions from that address (the invoker's own account is skipped).
-                await bans.BanIpAsync(new IpBanRequest(display, seconds, reason, author, authorAccount)).ConfigureAwait(false);
+                if (!await bans.BanIpAsync(new IpBanRequest(display, seconds, reason, author, authorAccount)).ConfigureAwait(false))
+                {
+                    context.Reply(string.Format(BanCommandText.IpAlreadyBanned, display)); // the first row stays; nothing was written
+                    return;
+                }
+
                 ReplyBanned(context, display, seconds, reason);
                 return;
             }
@@ -402,31 +408,52 @@ public sealed class BanCommands : ICommandGroup
             IBanStore bans = services.GetRequiredService<IBanStore>();
             await bans.PurgeExpiredAsync().ConfigureAwait(false);
 
-            IReadOnlyList<CharacterIdentity> all = await services.GetRequiredService<ICharacterStore>().GetAllIdentitiesAsync().ConfigureAwait(false);
-            int[] accountIds = [.. all.Where(c => c.Name.StartsWith(filter, StringComparison.OrdinalIgnoreCase)).Select(c => c.AccountId).Distinct().Order()];
+            // The directory is loaded from the character store at startup and kept current by creation and deletion
+            // (BanInfoCharacter and ResolveAccountAsync rely on it too), so no all-characters query is needed.
+            int[] accountIds = services.GetRequiredService<CharacterDirectory>().AccountIdsByNamePrefix(filter);
             if (accountIds.Length == 0)
             {
                 context.Reply(BanCommandText.BanListNoCharacter);
                 return;
             }
 
-            // HandleBanListHelper: the header, then the name of every such account that has any ban row.
+            // HandleBanListHelper: the header, then the name of every such account that has any ban row. Accounts are
+            // checked HistoryBatch at a time (one query per batch) and the walk ends as soon as one more than
+            // Bans:MaxListedEntries names are known, so the work is bounded, not just the printed lines.
             context.Reply(BanCommandText.BanListMatchingAccount);
-            IReadOnlyDictionary<int, string> names = await services.GetRequiredService<IAccountAdmin>().GetUsernamesAsync(accountIds).ConfigureAwait(false);
+            IAccountAdmin admin = services.GetRequiredService<IAccountAdmin>();
             int max = OptionsOf(context).MaxListedEntries;
             var lines = new List<string>();
             bool truncated = false;
-            foreach (int id in accountIds)
+            foreach (int[] batch in accountIds.Chunk(HistoryBatch))
             {
-                if (names.TryGetValue(id, out string? name) && (await bans.GetHistoryAsync(id).ConfigureAwait(false)).Count > 0)
+                IReadOnlySet<int> withHistory = await bans.FindAccountsWithHistoryAsync(batch).ConfigureAwait(false);
+                int[] hits = [.. batch.Where(withHistory.Contains)];
+                if (hits.Length == 0)
                 {
+                    continue;
+                }
+
+                IReadOnlyDictionary<int, string> names = await admin.GetUsernamesAsync(hits).ConfigureAwait(false);
+                foreach (int id in hits)
+                {
+                    if (!names.TryGetValue(id, out string? name))
+                    {
+                        continue;
+                    }
+
                     if (max > 0 && lines.Count >= max)
                     {
-                        truncated = true; // stop here: no further history query per matching account
+                        truncated = true;
                         break;
                     }
 
                     lines.Add(name);
+                }
+
+                if (truncated)
+                {
+                    break;
                 }
             }
 
