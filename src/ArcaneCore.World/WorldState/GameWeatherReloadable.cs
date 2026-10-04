@@ -16,6 +16,9 @@ namespace ArcaneCore.World.WorldState;
 /// </summary>
 public sealed class GameWeatherReloadable(IServiceProvider services) : IContentReloadable
 {
+    /// <summary>Chat.cpp registers this table on its own; no all_* command reaches it (vmangos reload all), so neither does reload all here.</summary>
+    public bool IncludedInAll => false;
+
     public string Name => "game_weather";
 
     public async Task<ContentCandidate> BuildAsync(CancellationToken cancellationToken)

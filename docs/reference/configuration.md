@@ -14,14 +14,17 @@ How to read the tables:
 
 ## Sections
 
+- [`Auras`](#auras)
 - [`Auth`](#auth)
 - [`Bans`](#bans)
+- [`Battleground`](#battleground)
 - [`CharacterCreation`](#charactercreation)
 - [`Combat`](#combat)
 - [`Conditions`](#conditions)
 - [`Creatures`](#creatures)
 - [`Database`](#database)
 - [`Economy`](#economy)
+- [`Enchanting`](#enchanting)
 - [`GameObjects`](#gameobjects)
 - [`HotReload`](#hotreload)
 - [`Items`](#items)
@@ -39,6 +42,7 @@ How to read the tables:
 - [`SpecialLoot`](#specialloot)
 - [`SpellRules`](#spellrules)
 - [`Spells:Casters`](#spellscasters)
+- [`Spells:Mods`](#spellsmods)
 - [`Stats`](#stats)
 - [`Talents`](#talents)
 - [`Totems`](#totems)
@@ -51,6 +55,7 @@ How to read the tables:
 - [`World:GameEvents`](#worldgameevents)
 - [`World:GmCommands`](#worldgmcommands)
 - [`World:Guild`](#worldguild)
+- [`World:Honor`](#worldhonor)
 - [`World:HotCode`](#worldhotcode)
 - [`World:Instances`](#worldinstances)
 - [`World:Social`](#worldsocial)
@@ -62,6 +67,13 @@ How to read the tables:
 - [`World:Zones`](#worldzones)
 - [Keys read by name](#keys-read-by-name)
 - [Aliases and framework sections](#aliases-and-framework-sections)
+
+## `Auras`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Auras:HarmfulAurasExpireOffline` | `bool` | `false` | - | Harmful auras keep counting down while their owner is offline (the cmangos rule this engine used before). Retail (vmangos Player::LoadAura, Player.cpp:15363-15372) subtracts the offline time only from spells with SPELL_ATTR_EX4_AURA_EXPIRES_OFFLINE (Deserter), so every other aura resumes with the time it had at logout. Default false. |
+| `Auras:PeriodicCatchUp` | `bool` | `false` | - | Deliver every missed periodic tick in one update (the engine's behaviour before the periodic timing slice). Retail (vmangos Aura::Update, SpellAuras.cpp:553-572) delivers at most one tick per update, so a lag spike drops ticks instead of bursting them. Default false. |
 
 ## `Auth`
 
@@ -80,11 +92,25 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `Bans:MaxListedEntries` | `int` | `200` | - | The most entries one `.baninfo` history or `.banlist` reply prints before it ends with a "not shown" line. Retail prints everything; a long ban history or a one-letter prefix against a large realm would otherwise build and send one unbounded chat reply (and, for `.banlist character`, one history query per matching account). 0 restores retail's unbounded output. Bound from Bans:MaxListedEntries; default 200 (a deliberate deviation, only above that many entries). |
 | `Bans:ProtectHigherSecurity` | `bool` | `true` | - | Refuse `.ban account` / `.ban character` against an account whose security level is equal to or higher than the invoker's (an account banning itself is still allowed, as in retail). vmangos has NO such guard: a game master there can ban an administrator. The strict default closes the one path by which a compromised low staff account locks out the highest account; set false for exact vmangos parity. Does not apply to `.ban ip` (no per-address account list is kept) or to unbans. Bound from Bans:ProtectHigherSecurity; default true (a deliberate deviation from retail, in the safe direction). |
 | `Bans:RealmId` | `int` | `1` | - | The realm id written to `account_banned.realm` (vmangos `realmID`); recorded and shown by `.baninfo`, never filtered on, exactly as retail. Bound from Bans:RealmId; default 1. |
 | `Bans:RecheckIntervalSeconds` | `double` | `0` | - | How often connected sessions are re-checked against the ban rows, IP bans and the status column, so a ban written by another process is enforced. 0 (the default) is retail: vmangos never kicks for an externally written row; mangosd only reloads its IP cache (AccountMgr.cpp:317-327, World.cpp:697 BanListReloadTimer 60, mangosd.conf.dist.in:232-234 says 120). A very large realm should keep this at tens of seconds: each pass is a few indexed queries over the connected account ids. Bound from Bans:RecheckIntervalSeconds. |
 | `Bans:RejectUnparseableDuration` | `bool` | `false` | - | Refuse a `.ban` whose duration is not a clean `1d2h3m4s` string. Retail does not: any other character, or digits without a unit, make TimeStringToSecs return 0, which the command treats as a PERMANENT ban (Util.cpp:252-275), so a typo bans forever. Bound from Bans:RejectUnparseableDuration; default false. |
 | `Bans:RevokeSessionKeyOnBan` | `bool` | `false` | - | After a live ban the stored session key is nulled, so a world reconnect with the old key is refused (it then answers UnknownAccount instead of AUTH_BANNED). Retail keeps the key and relies on the ban check (WorldSocket.cpp:287-290, 333-345). Bound from Bans:RevokeSessionKeyOnBan; default false. |
+
+## `Battleground`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Battleground:CastDeserter` | `bool` | `true` | - | Cast Deserter on a player who leaves a running or starting match (vmangos Battleground.CastDeserter, World.cpp:781, mangosd.conf.dist.in:2929, default on). |
+| `Battleground:GroupQueueLimit` | `uint` | `40` | - | Groups larger than this are queued as individuals (vmangos BattleGround.GroupQueueLimit, default 40). |
+| `Battleground:InvitationType` | `uint` | `1` | - | 0 invites from the queue in order, 1 balances the two sides (vmangos Battleground.InvitationType; World.cpp:787 reads 0 when the key is missing but the shipped mangosd.conf.dist.in:2932 sets 1, which is the retail behaviour and the default here). |
+| `Battleground:PremadeGroupWaitForMatchMs` | `uint` | `0` | - | Wait for a premade-versus-premade match this long before premades fall back to the normal queue, ms; 0 turns it off (vmangos BattleGround.PremadeGroupWaitForMatch, default 0). |
+| `Battleground:PremadeQueueMinGroupSize` | `uint` | `6` | - | Smallest group that counts as a premade (vmangos BattleGround.PremadeQueue.MinGroupSize, default 6). |
+| `Battleground:PrematureFinishTimerMs` | `uint` | `300000` | - | How long a side may stay below the minimum before the match ends in favour of the other side, in ms; 0 turns it off (vmangos BattleGround.PrematureFinishTimer, World.cpp:788, default 5 minutes). |
+| `Battleground:QueuesCount` | `uint` | `0` | - | Queues a player may be in at once; 0 means the patch default, which is 3 from client patch 1.9 on and so 3 for 1.12.1 (vmangos BattleGround.QueuesCount, World.cpp:794-803). |
+| `Battleground:TagInBattlegrounds` | `bool` | `true` | - | Whether a player inside a battleground may be tagged into a group queue (vmangos BattleGround.TagInBattleGrounds, default on). |
 
 ## `CharacterCreation`
 
@@ -106,11 +132,14 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `Combat:CastResetsMeleeSwing` | `bool` | `true` | - | A non-triggered cast of a spell whose interrupt flags carry SPELL_INTERRUPT_FLAG_COMBAT (0x08), without Ex2 0x20000, restarts the main-hand (and off-hand) swing timer when it is cast (vmangos Spell::cast, Spell.cpp:3805-3810). Default true, retail; false is a deviation that leaves the timers alone. |
+| `Combat:CastingConsumesSwing` | `bool` | `false` | - | How a blocked swing is handled while `MeleeCastingBlocksSwing` applies (ranged (autorepeat lane)). Default false, retail: `Unit::UpdateMeleeAttackingState` returns before it looks at any swing timer while a non-melee spell is cast (Unit.cpp:415-421; mangos-classic Unit.cpp:650-654 has the same order), so the swing happens as soon as the cast ends. True is the deviation that predates this lane: the swing timer is consumed and restarted, the swing is lost, not delayed. |
 | `Combat:MeleeCastingBlocksSwing` | `bool` | `true` | - | Whether a unit casting a non-melee spell loses its melee swing (vmangos Unit::AttackerStateUpdate, Unit.cpp:2240-2241: `if (!extra && IsNonMeleeSpellCasted(false)) return`). Default true, the retail behaviour; the swing timer still restarts, so the swing is lost, not delayed. |
 | `Combat:RateEnergy` | `float` | `1` | - | vmangos Rate.Energy: multiplies the energy regeneration (Player.cpp:2320). |
 | `Combat:RateMana` | `float` | `1` | - | vmangos Rate.Mana: multiplies the mana regeneration (Player.cpp:2291). Must not be negative. |
 | `Combat:RateRageIncome` | `float` | `1` | - | vmangos Rate.Rage.Income: multiplies the rage a player gains from damage (Player.cpp:2264). |
 | `Combat:RateRageLoss` | `float` | `1` | - | vmangos Rate.Rage.Loss: multiplies the out-of-combat rage decay (Player.cpp:2313). Must not be negative. |
+| `Combat:RequireShapeshiftFormDbc` | `bool` | `false` | - | Refuse to start without `ShapeshiftFormDbcPath` instead of falling back to the built-in build-5875 table (`ShapeshiftFormCatalog.Retail`). Default false. |
 | `Combat:ShapeshiftFormDbcPath` | `string` | `""` | - | Path of the client's SpellShapeshiftForm.dbc (build 5875). Empty = only the three warrior stances are known. |
 | `Combat:StanceShiftKeepsSelfBuffs` | `bool` | `false` | - | Whether switching between warrior stances keeps the stance-bound buffs the unit cast on itself (Retaliation, Recklessness, Shield Wall). Default false: vmangos removes them with the old stance (SpellAuras.cpp:5565-5575, SpellAuraHolder::m_isRemovedOnShapeLost). Patch 1.7.0 is quoted by vmangos as saying they are no longer cancelled (SpellAuras.cpp:5537-5539), but its code for that sits in a block excluded from the 1.12.1 build, so the code is followed. |
 
@@ -118,8 +147,8 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
-| `Conditions:ActiveGameEvents` | `uint[]` | `[]` | - | Game event ids reported active to CONDITION_ACTIVE_GAME_EVENT (cmangos Conditions.cpp:245-248). Retail events are date driven (game_event + the calendar); that scheduler does not exist yet, so by default no event is active. This is a documented placeholder, not retail behaviour. |
-| `Conditions:ActiveHolidays` | `uint[]` | `[]` | - | Holiday ids reported active to CONDITION_ACTIVE_HOLIDAY (Conditions.cpp:318-321); default none, same placeholder. |
+| `Conditions:ActiveGameEvents` | `uint[]` | `[]` | - | Game event ids reported active to CONDITION_ACTIVE_GAME_EVENT (cmangos Conditions.cpp:245-248) IN ADDITION to the events the game-event service says are running (`GameEventFeature`, docs/areas/game-events-weather.md). Default none: an operator override for a world that runs no event service or wants an event forced on for its conditions only. |
+| `Conditions:ActiveHolidays` | `uint[]` | `[]` | - | Holiday ids reported active to CONDITION_ACTIVE_HOLIDAY (Conditions.cpp:318-321) in addition to the running events' holidays; default none, same override. |
 
 ## `Creatures`
 
@@ -136,18 +165,31 @@ How to read the tables:
 | `Creatures:CorpseDecayRareEliteSeconds` | `uint` | `1200` | - | Corpse.Decay.RAREELITE (s): 1200. |
 | `Creatures:CorpseDecayRareSeconds` | `uint` | `900` | - | Corpse.Decay.RARE (s): 900. |
 | `Creatures:CorpseDecayWorldBossSeconds` | `uint` | `3600` | - | Corpse.Decay.WORLDBOSS (s): 3600. |
+| `Creatures:EvadeResetsAuras` | `bool` | `true` | - | Whether an evading creature loses its auras (`Creatures:EvadeResetsAuras`): everything except a non-permanent positive aura cast by a player; with the KEEP_POSITIVE_AURAS_ON_EVADE flag only the negative ones (Creature::RemoveAurasAtReset, Objects/Creature.cpp:3611-3630). Retail is true. The evade health snap switch is `Creatures:Movement:EvadeRestoresFullHealth`. |
 | `Creatures:EventAi:DebugOnlyEvents` | `bool` | `false` | - | Run rows flagged EFLAG_DEBUG_ONLY (0x80); cmangos only does in a debug build. Off by default. |
 | `Creatures:EventAi:ReportUnsupported` | `bool` | `true` | - | Report rows with unsupported events, actions or conditions once per creature entry. |
 | `Creatures:EventAi:UpdateIntervalMs` | `uint` | `500` | - | How often the timer-driven events are evaluated (cmangos EVENT_UPDATE_TIME). 500 is retail behaviour. |
 | `Creatures:FactionTemplateDbcPath` | `string` | `null` | - | FactionTemplate.dbc for creature hostility when no catalog is registered (empty = nobody aggroes on sight). |
 | `Creatures:FleeAssistanceRadius` | `float` | `30` | - | CreatureFamilyFleeAssistanceRadius (yd): how far a fleeing creature looks for help. |
 | `Creatures:FleeDelayMs` | `uint` | `7000` | - | CreatureFamilyFleeDelay (ms): timed flight when no helper is found. |
+| `Creatures:ImplicitEventAi` | `bool` | `false` | - | `Creatures:ImplicitEventAi` (default off, retail): vmangos runs EventAI only for a template whose `AIName` is 'EventAI' (AI/CreatureAISelector.cpp:37-100, AI/EventAI/CreatureEventAI.cpp:51-56), and classic-db z2815 carries that column (`creature_template.AIName`, 4,325 templates say 'EventAI'; imported by CreatureDumpImporter). Switched on, a creature whose template has no AIName but whose entry (or spawn) has `creature_ai_scripts` rows also runs EventAI, the cmangos-classic permit (AI/EventAI/CreatureEventAI.cpp:51-63) for hand-edited data; an explicit AIName always wins. A deviation from retail. |
 | `Creatures:LeashCheckIntervalMs` | `uint` | `3000` | - | How often a creature in combat runs its periodic leash checks, in milliseconds of world time (vmangos `tickTime() % 3000 &lt;= diff`, Objects/Creature.cpp:976). 0 turns the template hard leash off. |
 | `Creatures:LeashExtensionSeconds` | `uint` | `12` | - | Whole seconds after the leash extension clock was last set before a victim outside the threat area leashes the creature (vmangos hard-coded 12, Objects/Creature.cpp:2813). |
 | `Creatures:MaxCreatureAttackRadius` | `float` | `40` | - | MaxCreaturesAttackRadius (yd): the relocation notify visits objects this far around the mover times the aggro rate; vmangos 40 (World.cpp:565, mangosd.conf.dist.in:1528). |
+| `Creatures:Movement:EvadeRestoresFullHealth` | `bool` | `false` | - | `Creatures:Movement:EvadeRestoresFullHealth`: a creature entering evade mode gets full health and mana at once. Retail (false): vmangos CreatureAI::EnterEvadeMode sets neither (AI/CreatureAI.cpp:323-346); health and mana return through the creature's own regeneration, a third of the maximum every 5 s (Objects/Creature.cpp:1087-1160). |
+| `Creatures:Movement:HonorWaypointRunColumn` | `bool` | `false` | - | `Creatures:Movement:HonorWaypointRunColumn`: a waypoint node whose `creature_movement.Run` column is set is travelled at run speed. Not retail: the column exists in neither classic-db nor vmangos (an ArcaneCore addition of the creature-AI step); vmangos waypoint legs walk unless the creature runs by default (`SetWalk(!UNIT_STATE_RUNNING ...)`, Movement/WaypointMovementGenerator.cpp:240). |
+| `Creatures:Movement:MonsterMoveOffsetBase` | `MonsterMoveOffsetBase` | `Destination` | - | `Creatures:Movement:MonsterMoveOffsetBase`. `MonsterMoveOffsetBase.Destination` is retail; the midpoint layout is the pre-fidelity ArcaneCore behaviour, kept only as a rollback switch. Values: `Destination`, `Midpoint`. |
+| `Creatures:Movement:RunDuringWanderChancePercent` | `uint` | `15` | - | `Creatures:Movement:RunDuringWanderChancePercent`: for a creature with the cmangos RUN_DURING_WANDER flag, the percent of random-movement legs that run (cmangos MotionGenerators/RandomMovementGenerator.cpp:135-136: `SetWalk(urand(0, 99) &gt;= 15)`). vmangos has no such flag (its 0x20 is NO_MOVEMENT_PAUSE), so the setting only reaches creatures imported in the cmangos dialect. |
 | `Creatures:MovementEnabled` | `bool` | `true` | - | Random and waypoint movement; off leaves every creature idle at its spawn point. |
+| `Creatures:Respawn:AlternateEntries` | `bool` | `true` | - | `Creatures:Respawn:AlternateEntries`: a spawn with `creature_spawn_entry` rows (vmangos `id2` ... `id5`) becomes one of those entries when it loads and again at every respawn (cmangos Creature::LoadFromDB / ResetEntry; vmangos Creature.cpp:830-841, :1936-1944). False ignores the rows: a spawn whose `id` is 0 then never spawns (the earlier behaviour). |
+| `Creatures:Respawn:DrawDelayAtLoad` | `bool` | `true` | - | `Creatures:Respawn:DrawDelayAtLoad`: a spawn's respawn delay (`urand(spawntimesecsmin, spawntimesecsmax)`) is drawn once when the creature object is created and reused at every death (vmangos Creature::LoadFromDB, Objects/Creature.cpp:1963; SetDeathState reads `m_respawnDelay`, :2246). False draws again at every death (the earlier ArcaneCore behaviour). |
+| `Creatures:Respawn:HonorTemplateCorpseDecay` | `bool` | `false` | - | `Creatures:Respawn:HonorTemplateCorpseDecay`: let a template's `CorpseDecay` column override the rank delay. It is a cmangos column; vmangos sets the corpse delay by rank alone (Creature.cpp:1326-1343), which is retail. |
+| `Creatures:Respawn:Persist` | `bool` | `true` | - | `Creatures:Respawn:Persist`: dead spawns keep their respawn time across restarts (vmangos `creature_respawn`, characters database). False keeps the timers in memory only, as before. |
+| `Creatures:Respawn:SaveImmediately` | `bool` | `true` | - | `Creatures:Respawn:SaveImmediately`: every database spawn saves its respawn time at death (vmangos SaveRespawnTimeImmediately = 1, mangosd.conf.dist.in:397, World.cpp:729). False saves a normal creature only when it leaves the map or at shutdown; a world boss is always saved at death (Creature.cpp:2262-2263). |
 | `Creatures:RespawnPacifyMs` | `uint` | `5000` | - | Milliseconds a creature cannot initiate attacks after it respawns (vmangos Creature::SetTempPacified(5000) on respawn, Objects/Creature.cpp:877-878). 0 disables. |
 | `Creatures:SendAiReaction` | `bool` | `true` | - | Send SMSG_AI_REACTION(hostile) when a creature starts attacking (vmangos Creature::SendAIReaction from Unit::Attack); the client plays the aggro sound from it. |
+| `Creatures:StealthAlertCooldownMs` | `uint` | `10000` | - | Milliseconds between two alerts of one creature (`Creatures:StealthAlertCooldownMs`): vmangos 10000 (AI/CreatureAI.cpp:366-367). |
+| `Creatures:StealthAlertEnabled` | `bool` | `true` | - | `Creatures:StealthAlertEnabled`: a hostile creature that notices a stealthed player just outside its detection range reacts (SMSG_AI_REACTION alert, it stops and turns to the player); vmangos CreatureAI::OnMoveInStealth, AI/CreatureAI.cpp:349-385. Retail is true. |
 | `Creatures:ThreatRadius` | `float` | `50` | - | ThreatRadius (yd): the soft leash sphere around where a fight began is `max(1.5 x aggro radius, ThreatRadius)`; none in instances (vmangos World.cpp:564, mangosd.conf.dist.in:1526: 50). |
 
 ## `Database`
@@ -198,6 +240,14 @@ How to read the tables:
 | `Economy:TradeScamPreventionWholeSeconds` | `bool` | `true` | - | Measure the delay in whole seconds like vmangos (time(nullptr): effectively "not within the same second"); false uses real milliseconds (a true 200 ms). Default true. |
 | `Economy:TradeSpaceNotifications` | `bool` | `true` | - | Report not enough gold / bag space with notifications 801-803 and keep the window open, as vmangos does (TradeHandler.cpp:274-290, 420-455); false closes the trade with the inventory error. Default true. |
 
+## `Enchanting`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Enchanting:Enabled` | `bool` | `true` | - | Master switch (default true): false leaves the enchantment engine and the enchant spell effects unregistered. |
+| `Enchanting:GmAllowTrades` | `bool` | `true` | - | vmangos `GM.AllowTrades` (default true, World.cpp:680): false keeps a game master's enchant spells from landing (SpellEffects.cpp:3029). |
+| `Enchanting:SpellItemEnchantmentDbcPath` | `string` | `null` | - | Build-5875 SpellItemEnchantment.dbc (24 fields). Without it the engine is inactive and says so in the log: no enchantment can be applied or resolved (a configured file that is unreadable or has another layout refuses startup). |
+
 ## `GameObjects`
 
 | Key | Type | Default | Reload | Meaning |
@@ -244,7 +294,7 @@ How to read the tables:
 | `Loot:BossRewardDistanceBonus` | `float` | `150` | - | Extra yards for a world boss victim (vmangos Object.cpp:1494). 0 restores the plain limit. |
 | `Loot:GroupLootDistance` | `float` | `74` | - | vmangos CONFIG_FLOAT_GROUP_XP_DISTANCE: group members within it share loot and money. |
 | `Loot:LootDistance` | `float` | `5` | - | INTERACTION_DISTANCE: how close a looter must stay to the corpse/chest (plus both radii). |
-| `Loot:LootedCorpseDecayRate` | `float` | `0.5` | - | vmangos CONFIG_FLOAT_RATE_CORPSE_DECAY_LOOTED: a looted-out corpse stays this share of its decay time. |
+| `Loot:LootedCorpseDecayRate` | `float` | `0` | - | vmangos CONFIG_FLOAT_RATE_CORPSE_DECAY_LOOTED (Rate.Corpse.Decay.Looted, mangosd.conf.dist.in:1542; cmangos World.cpp:457 too): a looted-out corpse stays this share of its decay time. The retail default 0 means a third of the creature's respawn delay (Creature.cpp:3369-3370). |
 | `Loot:MoneyRate` | `float` | `1` | - | vmangos Rate.Drop.Money. |
 | `Loot:RaidMapsUnlimitedRewardDistance` | `bool` | `true` | - | Raid maps have no reward distance limit (vmangos Object.cpp:1482-1483). False applies `GroupLootDistance` there too. |
 
@@ -255,8 +305,10 @@ How to read the tables:
 | `NpcServices:BankBagSlotPricesDbcPath` | `string` | `null` | - | Build-5875 BankBagSlotPrices.dbc. |
 | `NpcServices:DurabilityCostsDbcPath` | `string` | `null` | - | Build-5875 DurabilityCosts.dbc (repair multipliers by item level). |
 | `NpcServices:DurabilityQualityDbcPath` | `string` | `null` | - | Build-5875 DurabilityQuality.dbc (repair quality factors). |
-| `NpcServices:NpcTemplates` | `List<NpcTemplateMetadata>` | `[]` | - | creature_template gossip_menu_id and trainer_* per entry. The imported creature template has no such columns yet, so trainers and default gossip menus are configured here; a trainer without a row has trainer type Class and trainer class 0 and refuses everyone. |
+| `NpcServices:NpcTemplates` | `List<NpcTemplateMetadata>` | `[]` | - | Optional per-entry overrides for imported creature_template gossip_menu_id and trainer_*. Without an override, CreatureQuestLookup uses the World v21 imported fields. |
 | `NpcServices:SkillLineAbilityDbcPath` | `string` | `null` | - | Build-5875 SkillLineAbility.dbc (trainer rank prerequisites, race/class fit). |
+| `NpcServices:TaxiNodesDbcPath` | `string` | `null` | - | Build-5875 TaxiNodes.dbc; when set its node positions and faction mounts replace the imported table. |
+| `NpcServices:TaxiPathDbcPath` | `string` | `null` | - | Build-5875 TaxiPath.dbc; when set its routes and costs replace the imported table. |
 | `NpcServices:TaxiPathNodeDbcPath` | `string` | `null` | - | Build-5875 TaxiPathNode.dbc (flight waypoints). |
 
 ## `PerformanceLog`
@@ -293,12 +345,15 @@ How to read the tables:
 | `Quests:FactionTemplateDbcPath` | `string` | `null` | - | Optional developer-supplied build-5875 FactionTemplate.dbc; absent means unknown NPC factions. |
 | `Quests:HighLevelHideDiff` | `int` | `7` | - | Quests.HighLevelHideDiff (negative = never hide). |
 | `Quests:IgnoreRaid` | `bool` | `false` | - | Quests.IgnoreRaid (vmangos CONFIG_BOOL_QUEST_IGNORE_RAID, default off): every quest counts as allowed in raid groups (`Quest::IsAllowedInRaid`); otherwise raid group members get no kill credit and no quest drops for ordinary quests. |
+| `Quests:LogWithheld` | `bool` | `true` | - | Quests:LogWithheld (default true): log at startup how many quests are withheld and why. |
 | `Quests:LowLevelHideDiff` | `int` | `4` | - | Quests.LowLevelHideDiff (negative = never grey out). |
 | `Quests:MaxPlayerLevel` | `uint` | `60` | - | MaxPlayerLevel (quest XP turns into money at this level). |
 | `Quests:OrdinaryRewardQuestIds` | `uint[]` | `[]` | - | Developer-validated ordinary item/money quests. The imported template omits reputation, mail and script rewards, so a template alone cannot prove that rewarding it is supported. |
 | `Quests:RateDropMoney` | `float` | `1` | - | Rate.Drop.Money (quest money rewards). |
 | `Quests:RateXpQuest` | `float` | `1` | - | Rate.XP.Quest. |
+| `Quests:RewardMode` | `QuestRewardMode` | `AllSupported` | - | Quests:RewardMode. `QuestRewardMode.AllSupported` (default, retail) rewards every quest whose needs have adapters; `QuestRewardMode.AllowlistOnly` restores the earlier opt-in through `OrdinaryRewardQuestIds`. Values: `AllSupported`, `AllowlistOnly`. |
 | `Quests:SettlementBudgetSeconds` | `int` | `5` | - | Seconds one reward settlement may take end to end (save, drains, the reward transaction) before it is abandoned and reconciled from the stored rows. Operational, not a gameplay rule: 5 is the shipped value. A test that deliberately holds a settlement open raises it so its observation window is not a race against this deadline. |
+| `Quests:SharePushRequiresQuest` | `bool` | `false` | - | Quests:SharePushRequiresQuest (default false, retail): vmangos HandlePushQuestToParty (QuestHandler.cpp:403-459) offers any quest id to the party without checking that the pusher holds it; the receiver's accept does check (Player::CanShareQuest). Switch on to refuse such pushes up front. |
 | `Quests:XpSource` | `QuestXpSource` | `Auto` | - | Quests:XpSource. `QuestXpSource.Auto` (default) uses the RewXP column when the loaded quests have one (vmangos data) and derives the experience from RewMoneyMaxLevel otherwise (classic-db data). Values: `Auto`, `RewXpColumn`, `Derived`. |
 
 ## `Ranged`
@@ -320,9 +375,13 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `Reputation:CombatReactions` | `bool` | `true` | - | Retail (true): combat attackability and creature aggro follow player reputation (at war, Hated guards, contested guards, forced reactions; Object.cpp:3608-3816). False keeps the template-only hooks. Needs Faction.dbc and FactionTemplate.dbc. |
 | `Reputation:FactionDbcPath` | `string` | `null` | - | Optional developer-supplied build-5875 Faction.dbc. Absent means no reputation factions: SMSG_INITIALIZE_FACTIONS stays empty and nonzero NPC factions keep failing closed. |
+| `Reputation:PeaceForcedUsesEffectiveStanding` | `bool` | `false` | - | Retail (false) lets forced peace be lifted by the RELATIVE standing only (ReputationMgr.cpp:334-336); true compares the effective rank including the race base. Deliberate deviation, default retail. |
 | `Reputation:RateGain` | `float` | `1` | - | Multiplier on every reputation gain; the vmangos key `Rate.Reputation.Gain` (default 1, mangosd.conf.dist.in:2831). |
 | `Reputation:RateLowLevelKill` | `float` | `0.2` | - | Multiplier on reputation gained from killing low-level creatures; the vmangos key `Rate.Reputation.LowLevel.Kill` (default 0.2, mangosd.conf.dist.in:2832). |
+| `Reputation:SendForcedReactions` | `bool` | `false` | - | Send SMSG_SET_FORCED_REACTIONS when a forced-reaction aura applies or fades (default false). The layout is vmangos (u32 faction, u32 rank); gtker/wow_messages types the faction as a u16, so the width is unconfirmed by a real client. The forced reaction itself works on the server either way; only the client display of it needs the packet. |
+| `Reputation:SpilloverEnabled` | `bool` | `true` | - | Retail (true): reputation_spillover_template applies (ReputationMgr.cpp:211-243). False switches every spillover off. |
 
 ## `Skills`
 
@@ -375,6 +434,19 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `Spells:Casters:Bonus:Enabled` | `bool` | `true` | - | Retail (true): +damage, +healing, Amplify/Dampen Magic and healing-taken auras change spell damage and healing (vmangos SpellCaster.cpp:1457-1700, Unit.cpp:5175-5385). False keeps the raw spell data amounts and exists only to debug against base points. |
+
+## `Spells:Mods`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Spells:Mods:ClassMaskFile` | `string` | `null` | - | The class-mask overlay file (`arcane-content-importer class-masks`): 64-bit masks for the modifier auras, because the spell DBC's EffectItemType is read as 32 bits. Unset means the DBC masks only (a warning at startup counts the modifier effects that then have no mask at all). A missing or malformed file fails startup. |
+| `Spells:Mods:CustomCharges` | `bool` | `true` | - | Shadow Trance (17941) and Netherwind Focus (22008) start with one charge whatever the spell data says (vmangos SpellAuras.cpp:1090-1099). Retail is true. |
+| `Spells:Mods:Enabled` | `bool` | `true` | - | Kill switch: false makes aura 107/108 inert again (no mod is registered, every value comes back unchanged), as before this area existed. Retail is true. |
+| `Spells:Mods:HardcodedWardMods` | `bool` | `true` | - | Frost Warding (11189, 28332) and Improved Fire Ward (11094, 13043) carry their modifier in code, not in data: a flat RESIST_MISS_CHANCE with a literal class mask (vmangos SpellAuras.cpp:2117-2155, builds after 1.10.2). Retail is true. |
+| `Spells:Mods:InstantCastKeepsFlatCastTimeCharge` | `bool` | `true` | - | Patch 1.11: a flat CASTING_TIME mod (Nature's Grace) is not spent by a spell an instant-cast percent mod (Nature's Swiftness) already made instant (vmangos Player::ApplySpellMod, Player.cpp:22444-22453, builds after 1.10.2). Retail is true; false spends it anyway. |
+| `Spells:Mods:OwnerModsForPetsAndTotems` | `bool` | `true` | - | A pet or a totem reads the modifiers of the player that owns it (vmangos Unit::GetSpellModOwner, Unit.cpp:9008-9023): its spell cooldowns, costs and ranges follow the owner's talents. Retail is true. |
+| `Spells:Mods:ReapplyPassives` | `bool` | `true` | - | After a modifier is added or removed, permanent self-cast passives it affects are removed and cast again so an amount that read a modifier is recomputed (vmangos Aura::ReapplyAffectedPassiveAuras, SpellAuras.cpp:1005-1075). Retail is true. |
+| `Spells:Mods:SendClientModifiers` | `bool` | `true` | - | Tell the client about every modifier change (SMSG_SET_FLAT_SPELL_MODIFIER / SMSG_SET_PCT_SPELL_MODIFIER, one packet per mask bit): the client needs them to show modified costs and cast bars (vmangos Player::SendSpellMod). Retail is true. |
 
 ## `Stats`
 
@@ -471,6 +543,9 @@ How to read the tables:
 |---|---|---|---|---|
 | `World:Death:CorpseReclaimDelayPvE` | `bool` | `true` | - | vmangos `Death.CorpseReclaimDelay.PvE` (mangosd.conf.dist.in:2851, default 1), for non-PvP deaths. |
 | `World:Death:CorpseReclaimDelayPvP` | `bool` | `true` | - | vmangos `Death.CorpseReclaimDelay.PvP` (mangosd.conf.dist.in:2850, default 1): after a PvP death the corpse reclaim delay scales with recent deaths; off, it is always 30 s (Player.cpp:20184-20188). |
+| `World:Death:GhostFormAura` | `bool` | `true` | - | Whether a released spirit gets the real ghost aura (spell 8326, vmangos Player::ApplyGhostForm), default on, which is what gives the ghost its +25% run and swim speed and its visibility flag. Off keeps the earlier behaviour: only the ghost player flag and water walking, no aura. |
+| `World:Death:GraveyardFallbackToDefaults` | `bool` | `false` | - | Deviation switch, default off (retail/vmangos): when no graveyard is linked for the ghost's area or zone and team, vmangos leaves the ghost where it is (ObjectMgr.cpp:7512-7524 returns null; Player.cpp:5008). On, the mangos-classic fallback applies instead: the default graveyard of the team, safe location 4 (Alliance) or 10 (Horde) (GraveyardManager.cpp:146-147, 170-174). Matters where the classic-db data has a graveyard for one team only. |
+| `World:Death:SicknessLevel` | `int` | `11` | - | vmangos `Death.SicknessLevel` (mangosd.conf.dist.in:2744-2749, World.cpp:772, default 11): the level from which a spirit-healer resurrection gives resurrection sickness. It lasts one minute at that level and one more for each level above, up to the full ten minutes (Player.cpp:4675-4697). -10 gives full sickness at level 1; a level above the maximum player level gives none. |
 
 ## `World:Duel`
 
@@ -495,7 +570,16 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `World:GameEvents:AllowReload` | `bool` | `false` | - | Registers a `.reload game_event` sub-command. Retail has none, so the default is false; it still needs `HotReload:Commands` like every reload. |
+| `World:GameEvents:Announce` | `bool` | `false` | - | vmangos `Event.Announce` (GameEventMgr.cpp:788-789): tell every player in the world when an event starts. Default false (retail default). |
+| `World:GameEvents:DateTimeInterpretation` | `GameEventDateTimeInterpretation` | `Wall` | - | How a `start_time` / `end_time` that has no zone is read. Default `Wall` (vmangos: MySQL `UNIX_TIMESTAMP` reads the session zone, GameEventMgr.cpp:183); `StandardTime` reproduces mangos-classic, whose `std::mktime` on a zeroed `tm` never applies daylight saving (Field.cpp:24-31). Values: `Wall`, `StandardTime`. |
+| `World:GameEvents:Dialect` | `GameEventDialect` | `Auto` | - | Which `game_event` table layout the data is in (`Events.GameEventDialect`). Default `Auto`: decided from the table's own columns when it is loaded; set it only to override a wrong guess. Values: `Auto`, `CMangos`, `VMangos`. |
+| `World:GameEvents:Enabled` | `bool` | `true` | - | Whether the game-event service runs at all. Default true. With false no event ever starts: holiday content, event quests and event spawns stay off (the pre-wave-4 behaviour). |
 | `World:GameEvents:LeapDayMode` | `LeapDayMode` | `DateStable` | - | How yearly events count February 29th (`Events.LeapDayMode`). Default `DateStable` (holidays keep their calendar date, as in retail); `VmangosLiteral` reproduces the vmangos loop, whose yearly events start a day late in many years. Values: `DateStable`, `VmangosLiteral`. |
+| `World:GameEvents:ManualStartLengthUnit` | `GameEventManualLengthUnit` | `Seconds` | - | The unit a manual `.event start` adds the event length in when its end has passed (`Events.GameEventManualLengthUnit`). Default `Seconds`: retail (vmangos GameEventMgr.cpp:95, mangos-classic) adds the minutes count as seconds, so such an event is stopped again after about `length` seconds; `Minutes` lets it run its whole length. Values: `Seconds`, `Minutes`. |
+| `World:GameEvents:RestoreServersideEvents` | `bool` | `false` | - | mangos-classic never restores a serverside (`schedule_type` 0) event that was active at shutdown (its Update skips them and CheckOneGameEvent is false for their far-future start, GameEventMgr.cpp:634-690), vmangos leaves that state to its hardcoded handlers. Default false (retail); true re-applies the serverside events recorded in `game_event_status` with the resume flag, so their progress is not lost. |
+| `World:GameEvents:StartBoundary` | `GameEventStartBoundary` | `Auto` | - | Whether an event is active AT its start instant (vmangos `start &lt;= current`, GameEventMgr.cpp:41) or only after it (mangos-classic `start &lt; current`, GameEventMgr.cpp:36-40). Default `Auto`: the rule of the table's dialect (the vmangos rule for vmangos tables, the mangos-classic rule for classic-db tables). Values: `Auto`, `Inclusive`, `Exclusive`. |
+| `World:GameEvents:YearlyRebase` | `YearlyRebaseMode` | `SpanNewYear` | - | How yearly (`schedule_type` 11) events are moved to the current year (`Events.YearlyRebaseMode`). Default `SpanNewYear` (a holiday that crosses New Year keeps running, as in retail); `MangosLiteral` is the mangos-classic code, which cuts such a holiday at December 31st. Values: `SpanNewYear`, `MangosLiteral`. |
 
 ## `World:GmCommands`
 
@@ -519,6 +603,22 @@ How to read the tables:
 | `World:Guild:MinCharterNameLength` | `int` | `2` | - | MinCharterName (mangosd.conf.dist.in:1299, default 2, World.cpp:625 clamps to 2..24). |
 | `World:Guild:MinPetitionSigns` | `int` | `9` | - | MinPetitionSigns (mangosd.conf.dist.in:1341, default 9, World.cpp:666 clamps to 0..9). |
 | `World:Guild:StrictCharterNames` | `int` | `0` | - | StrictCharterNames (mangosd.conf.dist.in:1296, default 0 = any single script). Bit 0x1 accepts basic Latin only. Bit 0x2 (realm-zone language) is not supported: this server has no realm zone, so only the 0x1 bit is evaluated when the mask is non-zero (documented limit). |
+
+## `World:Honor`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Honor:CityProtector` | `bool` | `false` | - | Assign the City Protector titles (vmangos default off). |
+| `World:Honor:DishonorableKills` | `bool` | `true` | - | Civilian kills below gray cost honor (vmangos CONFIG_BOOL_ENABLE_DK). |
+| `World:Honor:Enabled` | `bool` | `true` | - | Master switch of the honor system (kills, ranks, the weekly calculation). |
+| `World:Honor:MaintenanceDay` | `uint` | `3` | - | Weekday of the weekly calculation (Sunday 0, clamped to 6). |
+| `World:Honor:MaintenanceMode` | `HonorMaintenanceMode` | `Startup` | - | When the weekly calculation runs: Startup (default) or Live (an opt-in in-process weekly job). Values: `Live`, `Startup`. |
+| `World:Honor:MinHonorKills` | `uint` | `0` | - | Honorable kills a week to be ranked; 0 selects 15 (MIN_HONOR_KILLS_POST_1_10). |
+| `World:Honor:PoolSizePerFaction` | `uint` | `0` | - | Standing pool size per faction; 0 uses the number of ranked players. |
+| `World:Honor:RacialLeaderExcludedEntries` | `uint[]` | `[]` | - | Creature entries that are never racial leaders. |
+| `World:Honor:ReportDirectory` | `string` | `""` | - | Directory that receives the vmangos HCR calculation report; empty writes none. |
+| `World:Honor:RpDecay` | `float` | `0.2` | - | Weekly rank point decay, clamped to 0..1. |
+| `World:Honor:TimeZoneOffsetHours` | `int` | `0` | - | Hours added to UTC for the game day and the weekday of the weekly calculation. |
 
 ## `World:HotCode`
 
@@ -554,6 +654,7 @@ How to read the tables:
 | `World:Social:AllowTwoSideGroup` | `bool` | `false` | live | AllowTwoSide.Interaction.Group. |
 | `World:Social:AllowTwoSideGuild` | `bool` | `false` | live | AllowTwoSide.Interaction.Guild. |
 | `World:Social:MaxJoinedChannels` | `int` | `0` | live | Most channels one player may be in; 0 = unlimited. vmangos has no cap (ChannelMgr.cpp:52-69), so the retail default is 0; a positive value is opt-in hardening (World:Social:MaxJoinedChannels). |
+| `World:Social:OfflineLeaderDelaySeconds` | `int` | `300` | live | Seconds before an offline group leader yields to an online member. Zero disables the handoff. D:\refs\vmangos\src\game\World.cpp:811,2063-2072 defaults to 300 seconds. |
 | `World:Social:VmangosChannelExtensions` | `bool` | `false` | live | The vmangos-only custom channel names: "World" becomes a General-flagged channel without join/leave announcements and "China" (or its Mandarin name) a Custom one without announcements (vmangos Channel.cpp:63-71). Retail 1.12 has neither, so they are ordinary custom channels unless this is on; it applies to channels created after the change. |
 
 ## `World:Social:WriteQueue`

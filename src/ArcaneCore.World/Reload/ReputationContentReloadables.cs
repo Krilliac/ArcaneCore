@@ -14,6 +14,9 @@ namespace ArcaneCore.World.Reload;
 /// </summary>
 public sealed class OnKillReputationReloadable(IServiceProvider services) : IContentReloadable
 {
+    /// <summary>Chat.cpp registers this table on its own; no all_* command reaches it (vmangos reload all), so neither does reload all here.</summary>
+    public bool IncludedInAll => false;
+
     public string Name => "creature_onkill_reputation";
 
     public async Task<ContentCandidate> BuildAsync(CancellationToken cancellationToken)
@@ -58,6 +61,9 @@ public sealed class OnKillReputationReloadable(IServiceProvider services) : ICon
 /// </summary>
 public abstract class ReputationTemplatesReloadable(IServiceProvider services) : IContentReloadable
 {
+    /// <summary>Chat.cpp registers this table on its own; no all_* command reaches it (vmangos reload all), so neither does reload all here.</summary>
+    public bool IncludedInAll => false;
+
     public abstract string Name { get; }
 
     public async Task<ContentCandidate> BuildAsync(CancellationToken cancellationToken)

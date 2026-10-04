@@ -103,7 +103,7 @@ public static partial class AuraSupport
         new(AuraType.PreventsFleeing, AuraSupportLevel.Referenced, "HandlePreventFleeing", 157, "CcAuraHandlers.cs, CcState.cs", ""),
         new(AuraType.ModUnattackable, AuraSupportLevel.Unsupported, "HandleModUnattackable", 158, "", ""),
         new(AuraType.InterruptRegen, AuraSupportLevel.Referenced, "HandleInterruptRegen", 159, "MapCombat.Regen.cs", ""),
-        new(AuraType.Ghost, AuraSupportLevel.Unsupported, "HandleAuraGhost", 160, "", "graveyards-resurrection"),
+        new(AuraType.Ghost, AuraSupportLevel.Handler, "HandleAuraGhost", 160, "GhostAuras.cs", ""),
         new(AuraType.SpellMagnet, AuraSupportLevel.Unsupported, "HandleNoImmediateEffect", 161, "", ""),
         new(AuraType.ManaShield, AuraSupportLevel.Referenced, "HandleManaShield", 162, "SpellSystem.Mitigation.cs", ""),
         new(AuraType.ModSkillTalent, AuraSupportLevel.Unsupported, "HandleAuraModSkill", 163, "", "aura-skill-bonus (not scheduled)"),

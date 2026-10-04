@@ -10,8 +10,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 3 | `account`, `realmlist` |
-| `characters` | 20 | `characters` |
-| `world` | 20 | `player_create_info`, `race_info`, `class_info` |
+| `characters` | 25 | `characters` |
+| `world` | 28 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -43,6 +43,11 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 18 | `Characters.WorldState.ExploredZonesDataModule` | creates `character_explored_zones` | yes |
 | 19 | `Characters.Items.ItemLootDataModule` | creates `item_loot_state`, `item_loot` | yes |
 | 20 | `Social.PetitionDataModule` | creates `petition`, `petition_sign` | yes |
+| 21 | `Characters.Bank.CharacterBankSlotsDataModule` | adds columns `characters.bank_bag_slots` | yes |
+| 22 | `Npc.CharacterTaxiFlightDataModule` | creates `character_taxi_flight` | yes |
+| 23 | `Honor.CharacterHonorDataModule` | creates `character_honor`, `character_honor_cp`, `honor_maintenance` | yes |
+| 24 | `Creatures.CreatureRespawnDataModule` | creates `creature_respawn` | yes |
+| 25 | `Characters.WorldState.GameEventStatusDataModule` | creates `game_event_status` | yes |
 
 ## `world`
 
@@ -67,5 +72,13 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 18 | `World.GameObjects.GameObjectSpawnDataModule` | adds columns `gameobject_spawn.SpawnTimeMaxSeconds`, `gameobject_spawn.SpawnFlags` |
 | 19 | `World.SpecialLoot.SpecialLootDataModule` | creates `fishing_loot_template`, `pickpocketing_loot_template`, `disenchant_loot_template`, `skill_fishing_base_level`, `creature_pickpocket_loot` |
 | 20 | `Content.Chr.StartActionWorldModule` | creates `playercreateinfo_action` |
+| 21 | `World.Creatures.CreatureNpcMetadataDataModule` | adds columns `creature_template.GossipMenuId`, `creature_template.TrainerType`, `creature_template.TrainerClass`, `creature_template.TrainerRace`, `creature_template.TrainerSpell` |
+| 22 | `Reputation.ReputationTemplatesWorldModule` | creates `reputation_spillover_template`, `reputation_reward_rate` |
+| 23 | `World.Creatures.CreatureMovementTemplateDataModule` | creates `creature_movement_template` |
+| 24 | `World.Creatures.CreatureSpawnEntryDataModule` | creates `creature_spawn_entry` |
+| 25 | `World.WorldState.GameEventDataModule` | creates `game_event`, `game_event_time`, `game_event_creature`, `game_event_gameobject`, `game_event_creature_data`, `game_event_quest`, `game_event_mail` |
+| 26 | `Quests.QuestAdvancedWorldModule` | adds columns `quest_template.RewMailTemplateId`, `quest_template.RewMailDelaySecs` |
+| 27 | `World.Threat.SpellThreatDataModule` | creates `spell_threat` |
+| 28 | `Graveyards.GraveyardDataModule` | creates `world_safe_locs`, `game_graveyard_zone` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.

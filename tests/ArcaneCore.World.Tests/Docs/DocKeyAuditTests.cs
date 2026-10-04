@@ -14,6 +14,10 @@ public sealed partial class DocKeyAuditTests
     /// <summary>Documented but not delivered (or a placeholder in prose), with the reason. Each must still be mentioned somewhere, or it is dead weight.</summary>
     private static readonly Dictionary<string, string> Allowed = new(StringComparer.Ordinal)
     {
+        ["Crafting:Enabled"] = "read straight from IConfiguration by CraftingFeature.EnabledKey, no options class (docs/areas/crafting.md)",
+        ["Forms:ResetFistAttackTimeOnFormLoss"] = "read straight from IConfiguration by FormStatFeature.ResetFistKey, no options class (docs/areas/druid-forms.md)",
+        ["Ranged:Projectile:FlightTime"] = "docs/areas/ranged.md: designed and not delivered (slice S09 needs a delayed cast state)",
+        ["Spells:Warlock:SoulShards:RequireTap"] = "docs/areas/warlock-mage-utility.md: states that this switch was not added",
         ["AutoShot:FireWhileMoving"] = "docs/areas/hunter.md states that this option does not exist (retail behaviour only)",
         ["FeignDeath:PlayerCanBeResisted"] = "docs/areas/hunter.md states that this option does not exist",
         ["Traps:PvpOwnerRule"] = "docs/areas/hunter.md states that this option does not exist",

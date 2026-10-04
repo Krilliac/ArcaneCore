@@ -26,7 +26,8 @@ public sealed class ReloadAllMembershipTests
         // reload all calls HandleReloadGameTeleCommand (:902).
         ["game_tele"] = true,
 
-        // all_spell calls HandleReloadSpellTemplateCommand (:971).
+        // all_spell calls HandleReloadSpellTemplateCommand (:971) and HandleReloadSpellThreatsCommand (:980, threat lane).
+        ["spell_threats"] = true,
         ["spell_template"] = true,
 
         // all_quest calls HandleReloadQuestTemplateCommand (:938) and reloads the quest relations (:940-942).
@@ -63,6 +64,12 @@ public sealed class ReloadAllMembershipTests
         ["config"] = false,
         ["item_template"] = false,
         ["creature_template"] = false,
+
+        // Registered in Chat.cpp (:826, :837, :886, :887) and not listed by any all_* command: the wave-4 reputation and game-event lanes.
+        ["creature_onkill_reputation"] = false,
+        ["game_weather"] = false,
+        ["reputation_reward_rate"] = false,
+        ["reputation_spillover_template"] = false,
     };
 
     /// <summary>
@@ -75,7 +82,7 @@ public sealed class ReloadAllMembershipTests
         "npc_gossip", "npc_text", "npc_trainer", "npc_vendor", "points_of_interest", "gossip_menu", "gossip_menu_option",
         "all_loot", "creature_loot_template", "gameobject_loot_template", "item_loot_template", "skinning_loot_template",
         "reference_loot_template", "fishing_loot_template", "pickpocketing_loot_template", "disenchant_loot_template",
-        "skill_fishing_base_level", "gameobject_template",
+        "skill_fishing_base_level", "gameobject_template", "spell_threats", "creature_onkill_reputation", "game_weather", "reputation_reward_rate", "reputation_spillover_template",
     };
 
     /// <summary>Names with no vmangos counterpart (none yet; each needs a reason in docs/areas/hot-reload.md).</summary>

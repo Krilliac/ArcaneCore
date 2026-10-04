@@ -35,9 +35,9 @@ round trip, delete/replace); on this machine only SQLite ran. The steps are sing
 
 ## Configuration (`Creatures:*`, every default is retail)
 
-`Movement:MonsterMoveOffsetBase` (Destination | Midpoint), `Movement:RunDuringWanderChancePercent` (15), `Movement:EvadeRestoresFullHealth` (false),
-`Movement:HonorWaypointRunColumn` (false), `Respawn:DrawDelayAtLoad` (true), `Respawn:HonorTemplateCorpseDecay` (false), `Respawn:AlternateEntries` (true),
-`Respawn:Persist` (true), `Respawn:SaveImmediately` (true).
+`Creatures:Movement:MonsterMoveOffsetBase` (Destination | Midpoint), `Creatures:Movement:RunDuringWanderChancePercent` (15), `Creatures:Movement:EvadeRestoresFullHealth` (false),
+`Creatures:Movement:HonorWaypointRunColumn` (false), `Creatures:Respawn:DrawDelayAtLoad` (true), `Creatures:Respawn:HonorTemplateCorpseDecay` (false), `Creatures:Respawn:AlternateEntries` (true),
+`Creatures:Respawn:Persist` (true), `Creatures:Respawn:SaveImmediately` (true).
 
 ## Behaviour changes existing tests had to follow (deliberately, not weakened)
 

@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 5 |
 | `Moderator` | 1 | 16 |
-| `GameMaster` | 3 | 54 |
-| `Administrator` | 6 | 87 |
+| `GameMaster` | 3 | 63 |
+| `Administrator` | 6 | 106 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -27,10 +27,24 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | Command | Retail level | Minimum account | Level source | Help |
 |---|---|---|---|---|
 | `.cast` | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast #spell — cast a spell (triggered) on the selected player or yourself. |
+| `.character` ... | 2 | GameMaster | declared retail level | Syntax: .character $subcommand |
+| `.character reputation` | 2 | GameMaster | declared retail level | Syntax: .character reputation [$player_name] Shows the reputation of the selected player or of the named online player. |
 | `.deplenish` | 3 | GameMaster | declared retail level | Syntax: .deplenish Set the health of the selected unit or yourself to 1 and its power to 0. |
 | `.replenish` | 3 | GameMaster | declared retail level | Syntax: .replenish Restore the health, and the mana of a mana user, of the selected unit or yourself. |
+| `.event` ... | 3 | GameMaster | declared retail level | Syntax: .event #event_id Show the information of an event. |
+| `.event list` | 3 | GameMaster | declared retail level | Syntax: .event list [all] Show the running events, or all of them with 'all'. |
+| `.event start` | 4 | Administrator | declared retail level | Syntax: .event start #event_id Start an event now (it is rescheduled to match). |
+| `.event stop` | 4 | Administrator | declared retail level | Syntax: .event stop #event_id Stop a running event now. |
+| `.event enable` | 5 | Administrator | declared retail level | Syntax: .event enable #event_id Enable an event again (stored in game_event.disabled). |
+| `.event disable` | 5 | Administrator | declared retail level | Syntax: .event disable #event_id Disable an event: a running one stops and the schedule never starts it (stored in game_event.disabled). |
 | `.gm` ... | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .gm [on/off] Enable or disable GM mode, or show the current state. |
 | `.gm chat` | 1 | Moderator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .gm chat [on/off] Enable or disable the GM badge on your chat, or show the current state. |
+| `.honor` ... | 3 | GameMaster | declared retail level | Syntax: .honor $subcommand Type .honor to see the list of possible subcommands or .help honor $subcommand to see info on subcommands. |
+| `.honor add` | 4 | Administrator | declared retail level | Syntax: .honor add #amount Add honor points to the selected player (or yourself). |
+| `.honor addkill` | 4 | Administrator | declared retail level | Syntax: .honor addkill Give yourself the honor of killing the selected creature (a civilian, a racial leader). |
+| `.honor show` | 2 | GameMaster | declared retail level | Syntax: .honor show Show the honor statistics of the selected player (or yourself). |
+| `.honor setrp` | 4 | Administrator | declared retail level | Syntax: .honor setrp #rankpoints Set the rank points of the selected player (or yourself). |
+| `.honor reset` | 4 | Administrator | declared retail level | Syntax: .honor reset Forget all honor of the selected player (or yourself). |
 | `.go` ... | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Teleport to a position. |
 | `.go xyz` | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .go xyz #x #y [#z [#mapid]] — teleport to a position; without #z, to the ground (or water surface) there. |
 | `.guild` ... | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Guild administration. |
@@ -49,10 +63,14 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.lookup creature` | 2 | GameMaster | declared retail level | Syntax: .lookup creature $namepart Looks up a creature by name. |
 | `.lookup object` | 2 | GameMaster | declared retail level | Syntax: .lookup object $objname Looks up a gameobject by name. |
 | `.lookup tele` | 2 | GameMaster | declared retail level | Syntax: .lookup tele $substring Search and output all teleport locations containing $substring. |
+| `.lookup faction` | 2 | GameMaster | declared retail level | Syntax: .lookup faction $name Attempts to find the ID of the faction with the provided $name (a substring, case-insensitive), with the standing of the selected player. |
+| `.lookup event` | 2 | GameMaster | declared retail level | Syntax: .lookup event $namepart List the events whose description contains the text. |
 | `.modify` ... | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .modify $subcommand |
 | `.modify money` | 4 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .modify money #money Add or remove money to the selected player; negative values take money (all of it when it would reach zero). |
 | `.modify hp` | 3 | GameMaster | declared retail level | Syntax: .modify hp #newhp [#newmaxhp] Change the HP (and maximum HP) of the selected player, or yours. |
 | `.modify mana` | 3 | GameMaster | declared retail level | Syntax: .modify mana #newmana [#newmaxmana] Change the mana (and maximum mana) of the selected player, or yours. |
+| `.modify honor` | 4 | Administrator | declared retail level | Syntax: .modify honor $field #value Fields: points rank todaykills yesterdaykills yesterdayhonor thisweekkills thisweekhonor lastweekkills lastweekhonor lastweekstanding lifetimedishonorablekills lifetimehonorablekills. |
+| `.modify rep` | 4 | Administrator | declared retail level | Syntax: .modify rep #repId (#repvalue \| $rankname [#delta]) Sets the reputation of the selected player with the faction to the value, or to the beginning of the rank plus the delta. |
 | `.reload` ... (development only) | 6 | Administrator | stored level through the map | Syntax: .reload #name \| all \| status — reload configuration or content without a restart (config, spell_template, …). |
 | `.reload all` (development only) | 6 | Administrator | stored level through the map | Syntax: .reload all — reload every content table (not the config). |
 | `.reload status` (development only) | 6 | Administrator | stored level through the map | Syntax: .reload status — what can be reloaded and how each reload last ended. |
@@ -76,7 +94,9 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.notify` | 4 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .notify $MessageToBroadcast Send a global message to all players online in screen. |
 | `.goname` | 2 | GameMaster | declared retail level | Syntax: .goname [$charactername] Teleport to the given character, or the selected one. |
 | `.namego` | 2 | GameMaster | declared retail level | Syntax: .namego [$charactername] Teleport the given character, or the selected one, to you. |
+| `.gocorpse` | 3 | GameMaster | stored level through the map | Syntax: .gocorpse [$playername] Teleport to the corpse of the selected player (or the named one, or yourself). |
 | `.commands` | 0 | Player | stored level through the map | Syntax: .commands Display a list of the commands available to you. |
+| `.revive` | 3 | GameMaster | stored level through the map | Syntax: .revive [$playername] Revive the selected player (or the named one, or yourself): half health and mana, the corpse gone. |
 | `.gps` | 1 | Moderator | stored level through the map | Syntax: .gps Display the position of the selected player, or yours. |
 | `.help` | 0 | Player | stored level through the map | Syntax: .help [command] Display usage instructions for the given command; without a command, the commands you can use. |
 | `.cooldown` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cooldown [#spell] — clear one or every spell cooldown of the selected player or yourself. |
@@ -101,6 +121,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.banlist account` | 1 | Moderator | stored level through the map | Syntax: .banlist account [$Name] — accounts with a ban whose name starts with $Name. |
 | `.banlist character` | 1 | Moderator | stored level through the map | Syntax: .banlist character $Name — banned accounts owning a character whose name starts with $Name. |
 | `.banlist ip` | 3 | GameMaster | stored level through the map | Syntax: .banlist ip [$Ip] — banned addresses starting with $Ip. |
+| `.neargrave` | 3 | GameMaster | stored level through the map | Syntax: .neargrave [alliance\|horde] Find the graveyard nearest to you that serves your zone (for the given team, or any). |
 | `.explorecheat` | 1 | Moderator | stored level through the map | Syntax: .explorecheat #flag - 1 reveals every zone, 0 hides them (vmangos: the effect lands on you). |
 | `.levelup` | 3 | GameMaster | declared retail level | Syntax: .levelup [$playername] [#numberoflevels] Increase/decrease the level of the selected player or the named one (default +1); the experience of the level is reset. |
 | `.showarea` | 1 | Moderator | stored level through the map | Syntax: .showarea #areaid - reveal an area on the selected player. |
