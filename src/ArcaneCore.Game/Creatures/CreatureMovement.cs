@@ -5,7 +5,7 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 namespace ArcaneCore.Game.Creatures;
 
 /// <summary>
-/// vmangos MovementGeneratorType values (Movement/MotionMaster.h:36-59) for the generators ArcaneCore runs. Cyclic (3), Confused (5),
+/// vmangos MovementGeneratorType values (Movement/MotionMaster.h:36-59) for the generators ArcaneCore runs. Cyclic (3),
 /// Flight (8) and the rest of that list are not run here. The numbers are internal: they are neither persisted nor sent.
 /// </summary>
 public enum MovementGeneratorType : byte
@@ -13,6 +13,7 @@ public enum MovementGeneratorType : byte
     Idle = 0,
     Random = 1,
     Waypoint = 2,
+    Confused = 5,
     Chase = 6,
     Home = 7,
     Point = 9,

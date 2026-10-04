@@ -1,4 +1,6 @@
+using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells.Rules.CrowdControl;
 
@@ -14,6 +16,28 @@ internal static class CcState
     private const uint TotemTypeMask = 1u << 10;
 
     public static bool IsTotem(Unit unit) => unit is Creatures.Creature && unit.CreatureTypeMask() == TotemTypeMask;
+
+    /// <summary>Who frightened a creature (the caster of its latest fear aura): the creature movement flees from it. Weak: the caster may leave the world.</summary>
+    private static readonly ConditionalWeakTable<Unit, WeakReference<Unit>> s_fearSources = new();
+
+    /// <summary>
+    /// The unit a feared creature runs from (vmangos SetFeared's casterGuid), or null when unknown, gone, or the creature fears
+    /// itself. Read by the creature movement hook when it starts a flight.
+    /// </summary>
+    public static Unit? FearSource(Unit unit)
+        => s_fearSources.TryGetValue(unit, out WeakReference<Unit>? source) && source.TryGetTarget(out Unit? caster) && caster.IsInWorld
+            ? caster
+            : null;
+
+    /// <summary>Record the caster of a fear aura just applied to a creature (the latest one wins).</summary>
+    public static void RememberFearSource(Unit unit, Unit? caster)
+    {
+        s_fearSources.Remove(unit);
+        if (caster is not null && !ReferenceEquals(caster, unit))
+        {
+            s_fearSources.Add(unit, new WeakReference<Unit>(caster));
+        }
+    }
 
     public static bool IsMounted(Unit unit) => unit.GetUInt32(UpdateFields.UnitFieldMountdisplayid) != 0;
 
@@ -47,6 +71,23 @@ internal static class CcState
     /// </summary>
     public static void RefreshRoot(SpellSystem system, Unit unit)
     {
+        if (unit is Creatures.Creature creature)
+        {
+            // A creature has no client to order: the server-owned root flag is what its movement code reads
+            // (CreatureMovementGates, the fear and confuse generators). The client-facing root packet of a creature
+            // is not sent here (UNVERIFIED for 1.12.1, docs/areas/creature-movement-spawns.md).
+            if (system.IsRooted(creature))
+            {
+                creature.AddMovementFlags(MovementFlags.Root);
+            }
+            else
+            {
+                creature.RemoveMovementFlags(MovementFlags.Root);
+            }
+
+            return;
+        }
+
         if (unit is not Player player)
         {
             return;

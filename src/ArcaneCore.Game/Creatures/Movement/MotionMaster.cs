@@ -16,6 +16,8 @@ public sealed class MotionMaster
     private readonly List<ICreatureMovementGenerator> _stack = [];
     private ICreatureMovementGenerator _default = IdleMovementGenerator.Instance;
     private ICreatureMover? _mover;
+    private ICreatureMovementGenerator? _crowdControl;
+    private CrowdControlMovement _crowdControlKind;
 
     internal MotionMaster(Creature owner) => _owner = owner;
 
@@ -37,6 +39,9 @@ public sealed class MotionMaster
 
     /// <summary>False when the generator on top has found its target unreachable (always true for generators that never do).</summary>
     public bool IsReachable => Top.IsReachable;
+
+    /// <summary>Which crowd-control generator (started by <see cref="SyncCrowdControl"/>) is in the stack, if any.</summary>
+    internal CrowdControlMovement ActiveCrowdControl => _crowdControl is null ? CrowdControlMovement.None : _crowdControlKind;
 
     /// <summary>Install the default generator and start it (spawn, respawn).</summary>
     internal void Initialize(ICreatureMovementGenerator defaultGenerator, ICreatureMover mover, bool start)
@@ -96,6 +101,62 @@ public sealed class MotionMaster
         Push(new FleeingMovementGenerator(source, durationMs));
     }
 
+    /// <summary>
+    /// Start, switch or end the generator a crowd-control aura drives (vmangos Unit::SetFeared / SetConfused: MoveFleeing /
+    /// MoveConfused on apply, the generator removed on removal so the one beneath resumes). Called by the map tick with what
+    /// the unit flags say; the flag itself is owned by the auras (<c>CcState</c>), so nothing here writes it.
+    /// <paramref name="source"/> is read only when a fear starts. A fear wins over a confuse when both flags are set.
+    /// A generator the stack lost (evade clears it) is started again while the flag holds; a plain flee that is already
+    /// on top (a critter running for help) is left to finish first.
+    /// </summary>
+    internal void SyncCrowdControl(CrowdControlMovement wanted, Unit? source)
+    {
+        if (_mover is null)
+        {
+            return;
+        }
+
+        if (_crowdControl is not null && _crowdControlKind != wanted)
+        {
+            RemoveCrowdControl();
+        }
+
+        if (wanted == CrowdControlMovement.None || _crowdControl is not null)
+        {
+            return;
+        }
+
+        if (wanted == CrowdControlMovement.Fear && Top.Type == MovementGeneratorType.Fleeing)
+        {
+            return;
+        }
+
+        ICreatureMovementGenerator generator = wanted == CrowdControlMovement.Fear
+            ? new CrowdControlFleeingMovementGenerator(source)
+            : new ConfusedMovementGenerator();
+        Push(generator);
+        _crowdControl = generator;
+        _crowdControlKind = wanted;
+    }
+
+    private void RemoveCrowdControl()
+    {
+        ICreatureMovementGenerator generator = _crowdControl!;
+        if (ReferenceEquals(_stack.Count > 0 ? _stack[^1] : null, generator))
+        {
+            Pop(completed: false); // the one beneath resumes
+            return;
+        }
+
+        int index = _stack.IndexOf(generator);
+        _crowdControl = null;
+        if (index >= 0 && _mover is not null)
+        {
+            _stack.RemoveAt(index);
+            generator.Finish(_owner, _mover, completed: false);
+        }
+    }
+
     /// <summary>vmangos MoveTargetedHome: clear the stack and run back to <paramref name="home"/>.</summary>
     public void MoveTargetedHome(CreatureHome home)
     {
@@ -148,6 +209,7 @@ public sealed class MotionMaster
         {
             ICreatureMovementGenerator top = _stack[^1];
             _stack.RemoveAt(_stack.Count - 1);
+            ForgetCrowdControl(top);
             top.Finish(_owner, _mover, completed: false);
         }
     }
@@ -157,6 +219,7 @@ public sealed class MotionMaster
         ICreatureMover mover = _mover!;
         ICreatureMovementGenerator top = _stack[^1];
         _stack.RemoveAt(_stack.Count - 1);
+        ForgetCrowdControl(top);
         int depth = _stack.Count;
         top.Finish(_owner, mover, completed);
 
@@ -186,16 +249,33 @@ public sealed class MotionMaster
         Top.Resume(_owner, mover);
     }
 
+    private void ForgetCrowdControl(ICreatureMovementGenerator removed)
+    {
+        if (ReferenceEquals(removed, _crowdControl))
+        {
+            _crowdControl = null;
+        }
+    }
+
     private void ClearStack(bool complete)
     {
         while (_stack.Count > 0)
         {
             ICreatureMovementGenerator top = _stack[^1];
             _stack.RemoveAt(_stack.Count - 1);
+            ForgetCrowdControl(top);
             if (_mover is not null)
             {
                 top.Finish(_owner, _mover, complete);
             }
         }
     }
+}
+
+/// <summary>The movement a crowd-control aura imposes on a creature (<see cref="MotionMaster.SyncCrowdControl"/>).</summary>
+internal enum CrowdControlMovement : byte
+{
+    None,
+    Fear,
+    Confuse,
 }
