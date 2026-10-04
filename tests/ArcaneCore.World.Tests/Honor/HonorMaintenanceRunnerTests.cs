@@ -1,6 +1,8 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Honor;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.World.Persistence;
 using ArcaneCore.Kernel.Honor;
 using ArcaneCore.World.Honor;
 using Microsoft.Extensions.Configuration;
@@ -160,6 +162,74 @@ public sealed class HonorMaintenanceRunnerTests
         Assert.Equal(1, await rig.Runner.RunDueAsync(107, null));
         Assert.Equal(20, s.State(3).StoredHk);       // applied exactly once
         Assert.Equal(new HonorMaintenanceState(107, 114, false), s.Maintenance);
+    }
+
+    private static readonly TimeSpan Budget = TimeSpan.FromSeconds(20);
+
+    private static WorldRuntime NewWorld()
+    {
+        ServiceProvider empty = new ServiceCollection().BuildServiceProvider();
+        var saves = new CharacterSaveQueue(empty.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance);
+        return new WorldRuntime(new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 }, saves, NullLogger<WorldRuntime>.Instance);
+    }
+
+    [Fact]
+    public async Task A_live_run_against_a_world_that_already_stopped_finishes_instead_of_waiting_for_a_thread_that_is_gone()
+    {
+        // WorldRuntime.Stop joins the world thread before the features stop, so a command posted afterwards would never run.
+        await using Rig rig = Week();
+        WorldRuntime world = NewWorld();
+        world.Start();
+        world.Stop();
+
+        Assert.Equal(1, await rig.Runner.RunDueAsync(107, world).WaitAsync(Budget));
+
+        Assert.Equal(new HonorMaintenanceState(107, 114, false), rig.Store.Maintenance); // the store transaction is not lost
+        Assert.Equal(107u, rig.Honor.WeekBeginDay);
+    }
+
+    [Fact]
+    public async Task Stopping_the_world_with_a_maintenance_run_in_flight_lets_the_run_finish()
+    {
+        await using Rig rig = Week();
+        WorldRuntime world = NewWorld();
+        world.Start();
+        using var hold = new ManualResetEventSlim();
+        world.Post(() => hold.Wait(Budget)); // the world thread is busy while the run reaches its in-memory step
+        Task<int> run = rig.Runner.RunDueAsync(107, world);
+        while (rig.Store.Maintenance != new HonorMaintenanceState(107, 114, false))
+        {
+            await Task.Delay(5).WaitAsync(Budget);
+        }
+
+        Task stop = Task.Run(world.Stop);
+        hold.Set();
+        await stop.WaitAsync(Budget);
+
+        Assert.Equal(1, await run.WaitAsync(Budget));
+    }
+
+    [Fact]
+    public async Task Cancelling_the_run_while_the_world_thread_is_busy_cancels_the_wait_and_leaves_the_world_usable()
+    {
+        await using Rig rig = Week();
+        WorldRuntime world = NewWorld();
+        world.Start();
+        using var hold = new ManualResetEventSlim();
+        world.Post(() => hold.Wait(Budget));
+        using var cts = new CancellationTokenSource();
+        Task<int> run = rig.Runner.RunDueAsync(107, world, null, cts.Token);
+        while (rig.Store.Maintenance != new HonorMaintenanceState(107, 114, false))
+        {
+            await Task.Delay(5).WaitAsync(Budget);
+        }
+
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run.WaitAsync(Budget));
+
+        hold.Set();
+        Assert.Equal(5, await world.InvokeAsync(() => 5).WaitAsync(Budget));
+        world.Stop();
     }
 
     [Fact]

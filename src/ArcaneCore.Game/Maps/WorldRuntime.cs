@@ -17,6 +17,8 @@ public sealed class WorldRuntime : IDisposable
     private readonly ILogger _logger;
     private readonly ICharacterSaveQueue _saveQueue;
     private readonly ConcurrentQueue<Action> _commands = new();
+    private readonly ConcurrentDictionary<Action, byte> _pendingInvocations = new();
+    private volatile bool _stopped;
     private readonly Dictionary<(uint MapId, uint InstanceId), Map> _maps = [];
     private readonly List<Map> _unloadRequests = [];
     private readonly ConcurrentDictionary<ObjectGuid, Player> _online = new();
@@ -145,6 +147,7 @@ public sealed class WorldRuntime : IDisposable
             throw new InvalidOperationException("world already started");
         }
 
+        _stopped = false;
         _thread = new Thread(Run) { IsBackground = true, Name = "world" };
         _thread.Start();
     }
@@ -167,28 +170,73 @@ public sealed class WorldRuntime : IDisposable
 
         // Commands posted before shutdown (e.g. a disconnect's save) still run.
         RunCommands();
+
+        // Nothing drains the queue any more: an InvokeAsync still waiting (or posted from now on) is cancelled instead of left hanging.
+        _stopped = true;
+        CancelPendingInvocations();
         SaveAll();
     }
 
     /// <summary>Queue work for the start of the next tick. Thread-safe.</summary>
     public void Post(Action command) => _commands.Enqueue(command);
 
-    /// <summary>Run <paramref name="func"/> on the world thread and return its result.</summary>
-    public Task<T> InvokeAsync<T>(Func<T> func)
+    /// <summary>
+    /// Run <paramref name="func"/> on the world thread and return its result. The task is cancelled when <paramref name="cancellationToken"/>
+    /// is (a command not yet run is then skipped) and when the world is stopped before the command ran, so a caller never waits on a
+    /// world thread that is gone.
+    /// </summary>
+    public Task<T> InvokeAsync<T>(Func<T> func, CancellationToken cancellationToken = default)
     {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromCanceled<T>(cancellationToken);
+        }
+
         var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Action cancel = () => completion.TrySetCanceled();
+        _pendingInvocations[cancel] = 0;
+        CancellationTokenRegistration registration = cancellationToken.Register(() =>
+        {
+            completion.TrySetCanceled(cancellationToken);
+            _pendingInvocations.TryRemove(cancel, out _);
+        });
+        completion.Task.ContinueWith(_ => registration.Dispose(), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         Post(() =>
         {
+            _pendingInvocations.TryRemove(cancel, out _);
+            if (completion.Task.IsCompleted)
+            {
+                return; // cancelled while queued
+            }
+
             try
             {
-                completion.SetResult(func());
+                completion.TrySetResult(func());
             }
             catch (Exception ex)
             {
-                completion.SetException(ex);
+                completion.TrySetException(ex);
             }
         });
+
+        // Stop sets the flag before it cancels, so either it sees this entry or this sees the flag.
+        if (_stopped)
+        {
+            CancelPendingInvocations();
+        }
+
         return completion.Task;
+    }
+
+    private void CancelPendingInvocations()
+    {
+        foreach (Action cancel in _pendingInvocations.Keys)
+        {
+            if (_pendingInvocations.TryRemove(cancel, out _))
+            {
+                cancel();
+            }
+        }
     }
 
     /// <summary>
