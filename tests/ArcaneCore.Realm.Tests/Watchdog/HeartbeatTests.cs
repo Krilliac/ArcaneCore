@@ -112,6 +112,75 @@ public sealed class HeartbeatTests
         Assert.Equal(2, writer.Sent);
     }
 
+    // Regression: a withheld beat used to advance the schedule by a full interval, so with the systemd default (interval =
+    // WATCHDOG_USEC/2) the retry after one withheld beat landed at or after systemd's deadline and a world that had already
+    // recovered from a short stall was killed anyway.
+    [Fact]
+    public void Writer_AfterOneWithheldBeat_BeatsAgainBeforeTheSupervisorDeadline_OnceTheSourceRecovers()
+    {
+        // The documented unit: WatchdogSec=30 -> WATCHDOG_USEC 30 s -> beats every 15 s; the watchdog thread rounds every
+        // CheckIntervalMs (1000) and a round that finds a beat due may run up to one period late.
+        const long watchdogMicros = 30 * 1_000_000L;
+        var sink = new FakeSink();
+        var world = new Source("tick");
+        HeartbeatWriter writer = Writer(sink, 15, world);
+        writer.Start();
+        writer.Check(_clock.NowMicros); // t = 0: beat
+        _clock.AdvanceMs(15_400);       // the round that finds the second beat due runs 0.4 s late
+        writer.Check(_clock.NowMicros); // t = 15.4: beat; systemd's deadline is now t = 45.4
+        Assert.Equal(2, writer.Sent);
+        long lastBeat = _clock.NowMicros;
+        long deadline = lastBeat + watchdogMicros;
+
+        // t = 30.4: a tick has been running longer than HangMs (one blocking gen2 collection); the beat must be withheld.
+        _clock.AdvanceMs(15_000);
+        world.Alive = false;
+        writer.Check(_clock.NowMicros);
+        long withheldAt = _clock.NowMicros;
+        Assert.Equal(2, writer.Sent);
+        Assert.Equal(1, writer.Withheld);
+
+        // The tick finishes half a second later; the watchdog thread keeps its one second rounds.
+        _clock.AdvanceMs(500);
+        world.Alive = true;
+        long recoveredAt = long.MinValue;
+        while (recoveredAt == long.MinValue && _clock.NowMicros < deadline + 30_000_000L)
+        {
+            _clock.AdvanceMs(1_000);
+            writer.Check(_clock.NowMicros);
+            if (writer.Sent == 3)
+            {
+                recoveredAt = _clock.NowMicros;
+            }
+        }
+
+        Assert.True(recoveredAt != long.MinValue, "the recovered world never beat again");
+        Assert.True(recoveredAt < deadline, $"the recovered world beat {(recoveredAt - lastBeat) / 1_000} ms after the last delivered beat, at or past the {watchdogMicros / 1_000} ms supervisor deadline");
+        // The retry is a quarter interval (3.75 s) after the withheld attempt, found by the next one second round.
+        Assert.InRange(recoveredAt - withheldAt, 0, 3_750_000L + 1_000_000L);
+        Assert.Equal(1, writer.Withheld);
+        Assert.Equal(["ready:ArcaneCore started", "beat", "beat", "beat"], sink.Calls);
+
+        // The regular cadence resumes from the recovered beat, not from the withheld attempt.
+        _clock.AdvanceMs(14_000);
+        writer.Check(_clock.NowMicros);
+        Assert.Equal(3, writer.Sent);
+        _clock.AdvanceMs(1_000);
+        writer.Check(_clock.NowMicros);
+        Assert.Equal(4, writer.Sent);
+
+        // While the source stays unhealthy the beats keep being withheld at the retry cadence, so the supervisor still acts.
+        world.Alive = false;
+        for (int i = 0; i < 60; i++)
+        {
+            _clock.AdvanceMs(1_000);
+            writer.Check(_clock.NowMicros);
+        }
+
+        Assert.Equal(4, writer.Sent);
+        Assert.InRange(writer.Withheld, 1 + 60 / 5, 1 + 60 / 3);
+    }
+
     [Fact]
     public void Writer_ReportsADeliveryFailure_RateLimited_AndKeepsTrying()
     {

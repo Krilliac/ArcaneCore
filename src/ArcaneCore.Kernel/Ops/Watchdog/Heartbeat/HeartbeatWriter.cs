@@ -66,11 +66,19 @@ public sealed record HeartbeatPlan(IHeartbeatSink Sink, int IntervalSeconds, str
 /// Sends the heartbeat every interval while every <see cref="ILivenessSource"/> says the process
 /// is healthy. A beat is withheld (fail closed) when any source is not alive, with a rate-limited
 /// warning naming the source and the reason: a supervisor watchdog then restarts a process whose
-/// world thread hung although the process is otherwise responsive. READY goes out at start,
-/// STOPPING at stop. Runs on the watchdog thread.
+/// world thread hung although the process is otherwise responsive. A withheld beat is re-attempted
+/// after a quarter of the interval (at most <see cref="MaxWithheldRetryMicros"/>), not a full one,
+/// so a stall that is already over does not cost the process its supervisor deadline. READY goes
+/// out at start, STOPPING at stop. Runs on the watchdog thread.
 /// </summary>
 public sealed class HeartbeatWriter : IWatchdogMonitor
 {
+    /// <summary>
+    /// Longest wait before a withheld beat is re-attempted; a quarter of the beat interval when that is shorter. The
+    /// watchdog thread rounds every <c>CheckIntervalMs</c>, so a retry shorter than that means "every check".
+    /// </summary>
+    public const long MaxWithheldRetryMicros = 5 * Micros.PerSecond;
+
     private readonly HeartbeatOptions _options;
     private readonly ILivenessSource[] _sources;
     private readonly ILogger _logger;
@@ -146,11 +154,14 @@ public sealed class HeartbeatWriter : IWatchdogMonitor
             return;
         }
 
-        _nextBeatMicros = nowMicros + interval;
         foreach (ILivenessSource source in _sources)
         {
             if (!source.IsAlive(nowMicros, out string? reason))
             {
+                // Fail closed, but do not give the whole interval away: with the systemd default (interval = WATCHDOG_USEC/2)
+                // a retry one full interval later lands on the supervisor's deadline, and a world that already recovered
+                // from the stall is restarted anyway. Re-check soon instead, so the first healthy check beats in time.
+                _nextBeatMicros = nowMicros + Math.Min(interval / 4, MaxWithheldRetryMicros);
                 _withheld.Increment();
                 if (_withheldLimiter.TryAcquire(nowMicros, out long suppressed))
                 {
@@ -161,6 +172,7 @@ public sealed class HeartbeatWriter : IWatchdogMonitor
             }
         }
 
+        _nextBeatMicros = nowMicros + interval;
         if (_plan.Sink.Beat())
         {
             _sent.Increment();

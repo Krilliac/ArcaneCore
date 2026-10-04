@@ -112,7 +112,10 @@ do because it would be starved too; one probe is outstanding at a time. Counters
 
 `IntervalSeconds` (default 0 = the systemd rule above, otherwise 10) is the beat period. **Fail closed**: before each beat every
 `ILivenessSource` is asked; if any reports not alive the beat is withheld, counted in `watchdog.heartbeat.withheld` and one rate-limited
-`Warning` names the source and the reason (event `HeartbeatWithheld`, 7130). The tick monitor is the one source today; a later lane can
+`Warning` names the source and the reason (event `HeartbeatWithheld`, 7130). A withheld beat is re-attempted after a quarter of the
+interval (at most 5 s), not a full interval later: with the systemd default of half `WATCHDOG_USEC`, a retry one interval later would land
+on the supervisor's deadline and a world that had already recovered from a short stall would be restarted anyway. While the source stays
+unhealthy the beats keep being withheld at that cadence and the supervisor acts. The tick monitor is the one source today; a later lane can
 register more (database reachability, listener accepting). A sink that cannot deliver (socket gone, file unwritable) is a rate-limited
 warning (event `HeartbeatSink`, 7131) and the writer keeps trying. Counters: `watchdog.heartbeat.sent`, `withheld`, `failed`.
 

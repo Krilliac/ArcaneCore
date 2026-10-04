@@ -2,6 +2,7 @@ using ArcaneCore.Data;
 using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Ops;
 using ArcaneCore.Realm.Net;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,4 +30,6 @@ if (startup != 0)
 }
 
 await host.RunAsync().ConfigureAwait(false);
-return 0;
+
+// 0 normal stop, 1 when a watchdog action stopped the host (Ops:Watchdog:Memory:Action=Stop), see ExitCodes.
+return ExitCodes.Current;
