@@ -47,7 +47,9 @@ public sealed partial class QuestNpcServices
     /// <summary>
     /// The quest relation part of vmangos HandleAreaTriggerOpcode
     /// (areatrigger_involvedrelation): every related quest the player is on becomes explored.
-    /// Returns the number of related quests that were updated.
+    /// The relations are the imported table (<see cref="QuestStore.AreaTriggerQuestsOf"/>, hot-reloaded with the quests) plus the
+    /// configuration rows of <c>Quests:AreaTriggerQuests</c>, which stay as an additive override for a world without the table.
+    /// Returns the number of related quests that were updated. World thread; allocation-free when the trigger has no relation.
     /// </summary>
     public int AreaTriggerReached(Player player, uint triggerId)
     {
@@ -57,12 +59,20 @@ public sealed partial class QuestNpcServices
         }
 
         int updated = 0;
+        foreach (uint questId in Quests.AreaTriggerQuestsOf(triggerId))
+        {
+            if (ExploreRelated(player, state, questId))
+            {
+                updated++;
+            }
+        }
+
         foreach (QuestAreaTrigger relation in Options.AreaTriggerQuests)
         {
-            if (relation.TriggerId == triggerId && state.Quests.Get(relation.QuestId) is { Status: QuestStatus.Incomplete }
-                && Quests.Get(relation.QuestId) is { } quest && AcceptableQuest(quest))
+            // A quest named by both sources is credited once: the table pass above already completed it.
+            if (relation.TriggerId == triggerId && !Quests.AreaTriggerQuestsOf(triggerId).Contains(relation.QuestId)
+                && ExploreRelated(player, state, relation.QuestId))
             {
-                AreaExploredOrEventHappens(player, relation.QuestId);
                 updated++;
             }
         }
@@ -70,8 +80,20 @@ public sealed partial class QuestNpcServices
         return updated;
     }
 
-    /// <summary>The area triggers configured for <paramref name="questId"/>.</summary>
-    public bool HasAreaTrigger(uint questId) => Options.AreaTriggerQuests.Any(r => r.QuestId == questId && r.TriggerId != 0);
+    private bool ExploreRelated(Player player, PlayerNpcState state, uint questId)
+    {
+        if (state.Quests.Get(questId) is not { Status: QuestStatus.Incomplete } || Quests.Get(questId) is not { } quest || !AcceptableQuest(quest))
+        {
+            return false;
+        }
+
+        AreaExploredOrEventHappens(player, questId);
+        return true;
+    }
+
+    /// <summary>Whether an area trigger (the imported table or the configuration rows) credits <paramref name="questId"/>.</summary>
+    public bool HasAreaTrigger(uint questId)
+        => Quests.HasAreaTrigger(questId) || Options.AreaTriggerQuests.Any(r => r.QuestId == questId && r.TriggerId != 0);
 
     /// <summary>
     /// Login reconciliation of delivery counters with the loaded inventory (vmangos AddQuest's

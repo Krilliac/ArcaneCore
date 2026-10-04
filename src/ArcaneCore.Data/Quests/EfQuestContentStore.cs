@@ -31,6 +31,12 @@ public sealed class EfQuestContentStore(WorldDbContext db) : IQuestContentStore
             .OrderBy(r => r.Id).ThenBy(r => r.Quest)
             .Select(r => new CreatureQuestRelation { Id = r.Id, Quest = r.Quest })
             .ToListAsync(cancellationToken).ConfigureAwait(false);
-        return new QuestContent(templates, starters, enders) { GameObjectStarters = goStarters, GameObjectEnders = goEnders };
+
+        // areatrigger_involvedrelation (AreaTriggerQuestWorldModule): the exploration objective of a quest.
+        List<CreatureQuestRelation> triggers = await db.Set<AreaTriggerQuestRow>().AsNoTracking()
+            .OrderBy(r => r.Id).ThenBy(r => r.Quest)
+            .Select(r => new CreatureQuestRelation { Id = r.Id, Quest = r.Quest })
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        return new QuestContent(templates, starters, enders) { GameObjectStarters = goStarters, GameObjectEnders = goEnders, AreaTriggerQuests = triggers };
     }
 }

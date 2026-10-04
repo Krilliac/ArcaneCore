@@ -193,6 +193,8 @@ public static class ContentTableSpecs
         new("player_levelstats", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("level")], [], [], PlayerCreateDumpImporter.ReadsLevelColumn),
         new("player_classlevelstats", [new KeyColumn("class"), new KeyColumn("level")], [], [], PlayerCreateDumpImporter.ReadsClassColumn),
         new("areatrigger_teleport", [new KeyColumn("id")], [], s_portalSignatures, LocationDumpImporter.ReadsPortalColumn),
+        // areatrigger_involvedrelation: id is the area trigger, quest the exploration quest it credits (LocationDumpImporter.ReadQuestTrigger).
+        new("areatrigger_involvedrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], s_relationSignatures),
         new("game_tele", [new KeyColumn("id")], [], [], LocationDumpImporter.ReadsTeleColumn),
         new("world_safe_locs", [new KeyColumn("id")], ["map", "x", "y", "z", "o", "name"], []),
         new("game_graveyard_zone", [new KeyColumn("id"), new KeyColumn("ghost_zone", "ghost_loc")], ["faction", "link_kind", "patch_min", "patch_max"], s_graveyardSignatures),

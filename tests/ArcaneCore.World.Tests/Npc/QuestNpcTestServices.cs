@@ -36,8 +36,14 @@ internal sealed class QuestJournalFixture : IQuestContentStore, INpcContentStore
     /// <summary>Replaces the default two journal quests when set.</summary>
     public IReadOnlyList<QuestTemplate>? Templates { get; init; }
 
+    /// <summary>The imported areatrigger_involvedrelation rows (<see cref="CreatureQuestRelation.Id"/> is the trigger).</summary>
+    public IReadOnlyList<CreatureQuestRelation> AreaTriggerQuests { get; init; } = [];
+
     public Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default)
-        => Task.FromResult(Templates is { } custom ? new QuestContent([.. custom], [], []) : new QuestContent(
+        => Task.FromResult(Content() with { AreaTriggerQuests = AreaTriggerQuests });
+
+    private QuestContent Content()
+        => Templates is { } custom ? new QuestContent([.. custom], [], []) : new QuestContent(
         [
             new QuestTemplate
             {
@@ -50,7 +56,7 @@ internal sealed class QuestJournalFixture : IQuestContentStore, INpcContentStore
                 Entry = Timed, Method = 2, QuestLevel = 1, MinLevel = 1,
                 Title = "Timed journal", LimitTime = 30,
             },
-        ], [], []));
+        ], [], []);
 
     Task<NpcContent> INpcContentStore.LoadAsync(CancellationToken cancellationToken)
         => Task.FromResult(NpcContent.Empty with

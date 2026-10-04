@@ -555,7 +555,7 @@ public sealed class ContentImporterCliTests : IDisposable
         """;
 
     [Fact]
-    public async Task Import_WritesPortalsAndGmTeleports_AndPlanNamesTheRequirementColumnsItIgnores()
+    public async Task Import_WritesPortalsAndGmTeleports_AndPlanMapsTheRequirementColumns()
     {
         string database = Db("world.db");
         string dump = WriteDump("loc.sql", LocationsDump);
@@ -564,7 +564,7 @@ public sealed class ContentImporterCliTests : IDisposable
         (int import, string output, _) = await RunAsync("import", dump, "--database", database);
         (int verify, string verifyOutput, _) = await RunAsync("verify", "--database", database);
 
-        Assert.Contains("required_item", TableLine(plan, "areatrigger_teleport").Unmapped, StringComparison.Ordinal);
+        Assert.Contains("required_item", TableLine(plan, "areatrigger_teleport").Mapped, StringComparison.Ordinal);
         Assert.Contains("status_failed_text", TableLine(plan, "areatrigger_teleport").Mapped, StringComparison.Ordinal);
         Assert.Equal(ExitCodes.Ok, import);
         Assert.Contains("areatrigger_teleport  1", output, StringComparison.Ordinal);
@@ -573,6 +573,28 @@ public sealed class ContentImporterCliTests : IDisposable
         Assert.Contains("game_tele  2", verifyOutput, StringComparison.Ordinal);
         await using WorldDbContext db = Open(database);
         Assert.Equal("You must be at least level 20 to enter.", (await db.Set<AreaTriggerTeleportRow>().AsNoTracking().SingleAsync()).Message);
+    }
+
+    [Fact]
+    public async Task Import_WritesTheExplorationQuestTriggers_AndVerifyCountsThem()
+    {
+        string database = Db("world.db");
+        string dump = WriteDump("quest-triggers.sql", """
+            CREATE TABLE `areatrigger_involvedrelation` (`id` mediumint unsigned NOT NULL, `quest` mediumint unsigned NOT NULL, PRIMARY KEY (`id`));
+            INSERT INTO `areatrigger_involvedrelation` VALUES (87,5441),(522,6481);
+            """);
+
+        (_, string plan, _) = await RunAsync("plan", dump);
+        (int import, string output, _) = await RunAsync("import", dump, "--database", database);
+        (int verify, string verifyOutput, _) = await RunAsync("verify", "--database", database);
+
+        Assert.Contains("areatrigger_involvedrelation", plan, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Ok, import);
+        Assert.Contains("areatrigger_involvedrelation  2", output, StringComparison.Ordinal);
+        Assert.Equal(ExitCodes.Ok, verify);
+        Assert.Contains("areatrigger_involvedrelation  2", verifyOutput, StringComparison.Ordinal);
+        await using WorldDbContext db = Open(database);
+        Assert.Equal([(87u, 5441u), (522u, 6481u)], (await db.Set<AreaTriggerQuestRow>().AsNoTracking().OrderBy(r => r.Id).ToListAsync()).Select(r => (r.Id, r.Quest)));
     }
 
     // --- import-dbc ---------------------------------------------------------------------------------------

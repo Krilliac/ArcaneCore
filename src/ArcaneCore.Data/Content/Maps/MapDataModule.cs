@@ -107,7 +107,8 @@ public sealed class EfMapDataStore(WorldDbContext db) : IMapDataStore
         List<AreaTriggerTeleport> teleports = (await db.Set<AreaTriggerTeleportRow>().AsNoTracking().OrderBy(r => r.Id)
                 .ToListAsync(cancellationToken).ConfigureAwait(false))
             .Select(r => new AreaTriggerTeleport(r.Id, r.Name, r.Message, r.RequiredLevel, r.TargetMap,
-                r.TargetPositionX, r.TargetPositionY, r.TargetPositionZ, r.TargetOrientation))
+                r.TargetPositionX, r.TargetPositionY, r.TargetPositionZ, r.TargetOrientation,
+                r.RequiredItem, r.RequiredItem2, r.RequiredQuestDone, r.RequiredCondition))
             .ToList();
 
         List<GameTele> teles = (await db.Set<GameTeleRow>().AsNoTracking().OrderBy(r => r.Id)

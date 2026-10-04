@@ -472,6 +472,7 @@ public static class ContentImporterCli
             ["spell_target_position"] = playerCreate.SpellTargetPositions,
             ["level_stats_rows"] = playerCreate.LevelStatRows,
             ["areatrigger_teleport"] = locations.Portals,
+            ["areatrigger_involvedrelation"] = locations.QuestTriggers,
             ["game_tele"] = locations.Teleports,
         };
         var skipped = new Dictionary<string, long>
@@ -586,6 +587,7 @@ public static class ContentImporterCli
                 ("playercreateinfo_action", await db.Set<PlayerCreateActionRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_target_position", await db.Set<SpellTargetPositionRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("areatrigger_teleport", await db.Set<AreaTriggerTeleportRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("areatrigger_involvedrelation", await db.Set<AreaTriggerQuestRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("game_tele", await db.Set<GameTeleRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_template", await db.Set<SpellTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
             };
