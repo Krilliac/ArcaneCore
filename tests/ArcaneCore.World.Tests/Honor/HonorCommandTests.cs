@@ -3,6 +3,8 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Honor;
@@ -158,5 +160,53 @@ public sealed class HonorCommandTests
         await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Hckill")!.Selection = new ObjectGuid(0xDEAD));
         Assert.Equal("Player not found!", await Run(gm, ".honor addkill"));
         Assert.Equal("Player not found!", await Run(gm, ".honor add 10"));
+    }
+
+    // Honor commands need level 4, which only a stored Administrator reaches by default, and nobody outranks one. Mapping GameMaster to
+    // level 6 lets a lower-security GM run them so the target check is what is under test.
+    private static WorldTestHost StartWithGameMasterAtLevel6(bool lowerSecurity = true)
+        => WorldTestHost.Start(configureServices: services => services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["World:GmCommands:SecurityMap:GameMaster"] = "6",
+                ["World:GmCommands:LowerSecurity"] = lowerSecurity ? "true" : "false",
+            }).Build()));
+
+    [Fact]
+    public async Task A_lower_security_gm_cannot_setrp_reset_modify_or_add_honor_on_a_higher_security_target()
+    {
+        await using WorldTestHost host = StartWithGameMasterAtLevel6();
+        await using WorldTestClient gm = await host.EnterWorldAsync("HCLOW", "Hclow", AccountSecurity.GameMaster);
+        await using WorldTestClient admin = await host.EnterWorldAsync("HCHIGH", "Hchigh", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        await admin.CollectAsync();
+        await SelectAsync(host, "Hclow", "Hchigh");
+
+        // The admin starts at rank 8 with a field set, so a reset or a write would be visible.
+        await Run(admin, ".honor setrp 12000");
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Hchigh")!.SetUInt32(UpdateFields.PlayerFieldThisWeekKills, 7));
+        const string refused = "You have low security level for this.";
+        Assert.Equal(refused, await Run(gm, ".honor setrp 0"));
+        Assert.Equal(refused, await Run(gm, ".honor reset"));
+        Assert.Equal(refused, await Run(gm, ".modify honor thisweekkills 99"));
+        Assert.Equal(refused, await Run(gm, ".honor add 100"));
+
+        Assert.Equal((byte)8, await host.PlayerStateAsync("Hchigh", p => p.GetByte(UpdateFields.PlayerBytes3, 3)));
+        Assert.Equal(7u, await host.PlayerStateAsync("Hchigh", p => p.GetUInt32(UpdateFields.PlayerFieldThisWeekKills)));
+        Assert.Equal(0u, await host.PlayerStateAsync("Hchigh", p => p.GetUInt32(UpdateFields.PlayerFieldThisWeekContribution)));
+    }
+
+    [Fact]
+    public async Task A_lower_security_gm_may_still_use_the_honor_commands_on_itself_and_on_everyone_when_lower_security_is_off()
+    {
+        await using WorldTestHost host = StartWithGameMasterAtLevel6(lowerSecurity: false);
+        await using WorldTestClient gm = await host.EnterWorldAsync("HCLOWOFF", "Hclowoff", AccountSecurity.GameMaster);
+        await using WorldTestClient admin = await host.EnterWorldAsync("HCHIGHOFF", "Hchighoff", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        await admin.CollectAsync();
+        await SelectAsync(host, "Hclowoff", "Hchighoff");
+
+        Assert.Equal("You have changed rank points of Hchighoff to 12000.", await Run(gm, ".honor setrp 12000"));
+        Assert.Equal("The thisweekkills field of Hchighoff was set to 9", await Run(gm, ".modify honor thisweekkills 9"));
     }
 }

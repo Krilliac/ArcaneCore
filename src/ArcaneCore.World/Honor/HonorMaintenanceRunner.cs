@@ -72,9 +72,9 @@ public sealed class HonorMaintenanceRunner(HonorFeature honor, IServiceScopeFact
                 period.WeekBegin, period.WeekEnd, plan.AllianceCount, plan.HordeCount, plan.InactiveCount);
             await WriteReportAsync(options, plan.Report, time, cancellationToken).ConfigureAwait(false);
 
-            if (world is not null)
+            if (world is not null && !await ApplyToOnlinePlayersAsync(world, plan, period, protectors, cancellationToken).ConfigureAwait(false))
             {
-                await ApplyToOnlinePlayersAsync(world, plan, period, protectors).ConfigureAwait(false);
+                world = null; // the world stopped: the store is already updated, and nobody is online to update in memory
             }
         }
 
@@ -115,25 +115,37 @@ public sealed class HonorMaintenanceRunner(HonorFeature honor, IServiceScopeFact
         return new HonorMaintenanceState(last, last + 7, false);
     }
 
-    private async Task ApplyToOnlinePlayersAsync(WorldRuntime world, HonorMaintenancePlan plan, HonorPeriod period, IReadOnlyCollection<int>? protectors)
+    // False when the world stopped before the command ran (WorldRuntime.Stop cancels it, the world thread being gone); the caller's own
+    // cancellation still propagates.
+    private async Task<bool> ApplyToOnlinePlayersAsync(
+        WorldRuntime world, HonorMaintenancePlan plan, HonorPeriod period, IReadOnlyCollection<int>? protectors, CancellationToken cancellationToken)
     {
         if (honor.ActiveService is not { } service)
         {
-            return;
+            return true;
         }
 
         Dictionary<int, HonorRankUpdate> byCharacter = plan.Updates.ToDictionary(u => u.CharacterId);
         HashSet<int>? titled = protectors is null ? null : [.. protectors];
-        await world.InvokeAsync(() =>
+        try
         {
-            foreach (Player player in world.OnlinePlayers)
+            await world.InvokeAsync(() =>
             {
-                int id = (int)player.Guid.Low;
-                service.ApplyMaintenance(player, byCharacter.GetValueOrDefault(id), period.DeleteCpBefore, titled?.Contains(id), period.NewLast);
-            }
+                foreach (Player player in world.OnlinePlayers)
+                {
+                    int id = (int)player.Guid.Low;
+                    service.ApplyMaintenance(player, byCharacter.GetValueOrDefault(id), period.DeleteCpBefore, titled?.Contains(id), period.NewLast);
+                }
 
+                return true;
+            }, cancellationToken).ConfigureAwait(false);
             return true;
-        }).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            logger.LogInformation("Honor maintenance applied to the store; the world stopped before the online players were updated in memory");
+            return false;
+        }
     }
 
     private async Task WriteReportAsync(HonorOptions options, string report, TimeProvider? time, CancellationToken cancellationToken)

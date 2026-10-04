@@ -169,6 +169,11 @@ public sealed class HonorCommands : ICommandGroup
             return false;
         }
 
+        if (!context.CanActOn(target))
+        {
+            return true;
+        }
+
         honor.SetRankPoints(target, value);
         context.Reply($"You have changed rank points of {target.Name} to {FormatG(value)}.");
         return true;
@@ -176,7 +181,7 @@ public sealed class HonorCommands : ICommandGroup
 
     private static bool Reset(CommandContext context, string args)
     {
-        if (Selected(context) is { } target && TryHonor(context, out HonorService honor))
+        if (Selected(context) is { } target && TryHonor(context, out HonorService honor) && context.CanActOn(target))
         {
             honor.Reset(target);
         }
@@ -205,6 +210,11 @@ public sealed class HonorCommands : ICommandGroup
         if (args.ExtractLiteral() is not { } field || !args.ExtractInt32(out int amount))
         {
             return false;
+        }
+
+        if (!context.CanActOn(target))
+        {
+            return true;
         }
 
         bool Is(string name) => field.StartsWith(name, StringComparison.OrdinalIgnoreCase);
