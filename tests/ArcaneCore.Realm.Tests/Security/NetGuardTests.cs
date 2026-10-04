@@ -120,31 +120,43 @@ public sealed class NetGuardTests
         guard.RecordAuthFailure(null);
     }
 
+    /// <summary>
+    /// A full table is not a reason to refuse anybody (the lockout lever of the first version): the
+    /// newcomer is admitted on connect and on an attempt, the table forgets an address, and one
+    /// rate-limited line tells the operator the budgets are measuring less.
+    /// </summary>
     [Fact]
-    public void SaturatedTable_RefusesAndLogsOnce_AndCountsSaturations()
+    public void FullTable_AdmitsTheNewcomer_LogsOnce_AndCountsForcedEvictions()
     {
         (NetGuard guard, CapturingLogger log, _) = Build(new NetProtectionOptions
         {
             MaxTrackedAddresses = 16, MaxConnectionsPerIp = 0, ConnectionBurstPerIp = 100, AuthFailureBurstPerIp = 10,
         });
-        for (int i = 1; guard.Table.Count < guard.Table.Capacity; i++)
+        foreach (IPAddress address in TableFiller.FreeSlotAddresses(guard.Table.Capacity, "10.5"))
         {
-            Assert.True(i < 100_000, "could not fill the table");
-            guard.TryAdmit(IPAddress.Parse($"10.5.{i / 256}.{i % 256}"));
+            Assert.NotNull(guard.TryAdmit(address));
         }
 
-        long saturations = guard.Saturations;
-        long refused = guard.RefusedConnections;
+        Assert.Equal(guard.Table.Capacity, guard.Table.Count);
+        Assert.Equal(0, guard.ForcedEvictions);
+        Assert.Empty(log.Messages);
+        long refusedConnections = guard.RefusedConnections;
+        long refusedAttempts = guard.RefusedAuthAttempts;
 
-        // Every slot is busy and none is idle: a new address is refused on connect and on an attempt.
-        Assert.Null(guard.TryAdmit(IPAddress.Parse("10.6.0.1")));
-        Assert.Equal(saturations + 1, guard.Saturations);
-        Assert.Equal(refused + 1, guard.RefusedConnections);
-        Assert.False(guard.AllowsAuthAttempt(IpKey.From(IPAddress.Parse("10.6.0.2"))));
-        Assert.Equal(saturations + 2, guard.Saturations);
+        // Every slot is busy and none is idle: a new address is admitted on connect and on an attempt.
+        using IDisposable? lease = guard.TryAdmit(IPAddress.Parse("10.6.0.1"));
+        Assert.NotNull(lease);
+        Assert.Equal(1, guard.ForcedEvictions);
+        Assert.True(guard.AllowsAuthAttempt(IpKey.From(IPAddress.Parse("10.6.0.2"))));
+        Assert.Equal(2, guard.ForcedEvictions);
+        Assert.Equal(refusedConnections, guard.RefusedConnections);
+        Assert.Equal(refusedAttempts, guard.RefusedAuthAttempts);
+        Assert.Equal(guard.Table.Capacity, guard.Table.Count);
 
-        // One line for all of it (the clock never moved).
-        Assert.Single(log.Messages, m => m.Contains("per-address table is full", StringComparison.Ordinal));
+        // One line for all of it (the clock never moved), and it says nothing was refused.
+        string line = Assert.Single(log.Messages, m => m.Contains("per-address table is full", StringComparison.Ordinal));
+        Assert.Contains("nothing was refused", line, StringComparison.Ordinal);
+        Assert.DoesNotContain(log.Messages, m => m.Contains("refused:", StringComparison.Ordinal));
     }
 
     [Fact]

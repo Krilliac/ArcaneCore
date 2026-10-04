@@ -108,7 +108,8 @@ default**. Tests: `CodexNetAuthWorldTests`, `InboundQueueCapTests`.
 ## Configuration summary
 
 The hardening switches below default to retail behaviour (a value of 0, off or unlimited), except
-the two inbound-queue bounds, which are on by default because vmangos has no equivalent.
+the two inbound-queue bounds and the shared per-address connection cap, which are on by default
+because vmangos has no equivalent (both are in the release-caveat register of `docs/guide/operations.md`).
 The full list of every key and its default is the generated
 [configuration reference](../reference/configuration.md).
 
@@ -119,6 +120,7 @@ The full list of every key and its default is the generated
 | `Auth:StrictUsernameCharset` | false | opt-in hardening |
 | `Auth:MaxConnections` / `MaxConnectionsPerIp` | 0 / 0 (unlimited) | opt-in hardening |
 | `World:MaxConnections` / `MaxConnectionsPerIp` | 0 / 0 (unlimited) | opt-in hardening |
+| `Net:Protection:MaxConnectionsPerIp` | 16 (on by default; 0 disables) | hardening, no vmangos cap; shared by both listeners, the lower of it and the daemon cap wins (`docs/ops/netguard.md`) |
 | `Auth:AutocreateAccounts` | false (also shipped) | retail has no autocreate |
 | `World:WriterDrainGrace` | 00:00:00 (wait forever) | opt-in hardening, for example `00:00:05` |
 | `World:PreAuthTimeout` | 00:00:10 | vmangos retail (`Network.TimeoutSecsIfNoAuth`) |

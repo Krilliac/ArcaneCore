@@ -27,7 +27,7 @@ dispatch paths. The audit found:
 | `WorldSession.HandlePing` | Threw the controlled exception on a short payload. | `TryHandlePing` uses `TryReadUInt32`; a short ping disconnects without an exception. |
 | `AddonInfo.BuildResponse` | Decompresses up to 1 MiB and read each addon name unbounded; a block with tens of thousands of records built a response larger than the SMSG size field, and `Send` then threw `ArgumentException` out of the authentication handler (the "AddonInfo response cap (F11)" limit in `docs/security/hardening.md`). | Names bounded at 256 bytes (`MaxAddonNameBytes`), at most 4096 records (`MaxAddons`), and the list ends before the response could exceed one SMSG payload (`MaxResponseBytes`). A record that does not fit ends the list; nothing throws. |
 | `LogonChallengeRequest.TryParse`, `LogonProofRequest.TryParse` (Realm) | Already `Try` readers with every slice bounded. | No change; covered by the fuzz. |
-| `WorldSession` catch clauses | Caught `ArgumentOutOfRangeException` only. | `IsMalformed`: the controlled outcome **or** `IndexOutOfRangeException` (a handler indexing a short payload directly). Both paths disconnect; the world thread never sees either. |
+| `WorldSession` catch clauses | Caught `ArgumentOutOfRangeException` only. | `IsMalformed` names the controlled outcome in one place (`MalformedPacket.Is`) and nothing else. An `IndexOutOfRangeException` (or any other exception) from a handler is a **server bug**, not a client fault: it is not caught as malformed, so it reaches the existing Error log with its stack trace (`WorldServer` "session error" on the session task, `Map.ProcessPackets` "packet handling failed" on the world thread) and the connection is closed there. The first version of this lane classified `IndexOutOfRangeException` as malformed, which kicked an innocent player with a Warning and no stack trace; `WorldProtectionTests` pins the split. |
 
 ### Why the controlled outcome is still `ArgumentOutOfRangeException`
 
@@ -72,7 +72,7 @@ values, plus the per-address table and the log gates. One `NetGuard` per listene
 
 | Protection | Where | Retail | Behaviour when hit |
 |---|---|---|---|
-| Per-address connection cap (`MaxConnectionsPerIp`, default 16) | `NetGuard.TryAdmit` in both accept callbacks, before a scope exists | none (vmangos has no per-address cap); the daemon keys stay 0 = "no daemon cap" and the shared cap applies | socket closed, no reply |
+| Per-address connection cap (`MaxConnectionsPerIp`, default 16) | `NetGuard.TryAdmit` in both accept callbacks, before a scope exists | none (vmangos has no per-address cap); the daemon keys stay 0 = "no daemon cap" and the shared cap applies. **A non-retail default that is on**: it bounds a crowd behind one NAT address at 16 simultaneous connections per listener, so it is listed in the release-caveat register of `docs/guide/operations.md` (asserted against the code default by `OperationsGuideTests`); `0` restores retail | socket closed, no reply |
 | Per-address connection rate (`ConnectionBurstPerIp` 100, `ConnectionsPerMinutePerIp` 300) | same | none | socket closed, no reply; the cap slot it took is released |
 | Per-address **failure** budget (`AuthFailureBurstPerIp` 10, `AuthFailuresPerMinutePerIp` 10) | `LogonSession.HandleChallengeAsync` after the body is read and before the locale check, the IP-ban lookup and the account lookup; `WorldSession.HandleAuthSessionAsync` after the parse and before the account lookup | the shape of vmangos realmd `WrongPass.MaxCount` (10 per 60 s, `LoginThrottle`), keyed by address | logon: `FAIL_NOACCESS` then close (what realmd answers a refused address, AuthSocket.cpp:338-352); world: `AUTH_FAILED` then close. Checked with `Peek` (consumes nothing); charged with `RecordAuthFailure` on unknown account, wrong proof or digest, banned or suspended account, bad locale or name length, malformed body. A wrong client build and a degenerate stored verifier are not the client's guess and are not charged. Successes never consume the budget, so players behind one NAT address are unaffected. |
 | Max frame size before allocation | `WorldSession.ReadLoopAsync` (`size` outside 4..0x2800 or an opcode above 16 bits; vmangos `handle_input_header`) and `LogonSession.HandleChallengeAsync` (body outside 31..47, realmd `sAuthLogonChallengeBody`) | retail | already present; verified: the payload array is allocated only after the check |
@@ -91,11 +91,28 @@ timestamp. Looking up, taking a token and evicting allocate nothing (pinned by a
 
 Eviction: a slot whose address has not been seen for `AddressIdleEviction` (default 10 min) may be
 reused by a newcomer; the least recently seen idle slot in the probe window is taken first. When
-every slot of a newcomer's window is busy and none is idle, the newcomer is **refused**
-(`RateVerdict.Saturated`, one `Saturations` count, one rate-limited line naming the key) rather
-than evicting a tracked address: an attacker who fills the table cannot use it to forget his own
-budget. `check-config` warns when `AddressIdleEviction` is shorter than the time a spent failure
-budget needs to refill, because a limited address could then idle out and start over.
+every slot of a newcomer's window is busy and none is idle, the newcomer is **still admitted**: the
+table forgets the least recently seen address of the window, preferring one that carries no
+limiting state (both buckets full after refill, so nothing is lost by forgetting it), counts it in
+`ForcedEvictions`, and `NetGuard` writes one rate-limited line ("the per-address table is full ...
+nothing was refused") so the operator can raise `MaxTrackedAddresses`. The table is a bounded
+measuring device: full, it measures less; it is never by itself the reason a connection or an
+authentication attempt is refused. The fail-closed limit on the number of clients is the global
+connection cap (`Auth:`/`World:MaxConnections`), which does not depend on the table.
+
+The first version of this lane refused newcomers on a full probe window (`RateVerdict.Saturated`).
+That turned the table into a lockout lever: one connection each from a few thousand distinct
+addresses (one IPv6 /64 suffices when the listener binds `::`) filled the windows for ten minutes
+and every fresh legitimate address whose window was full was closed on accept or answered
+`AUTH_FAILED` / `FAIL_NOACCESS`, while tracked players were unaffected and the operator saw one
+rate-limited line. The trade-off of evicting instead is accepted and stated: an address that is
+being limited can be forgotten (its budget starts over) if its whole probe window is crowded out
+by eight addresses seen more recently that are all themselves being limited; an attacker who can
+do that holds that many addresses and is bounded by the global cap and the per-address rates on
+each of them. `IpRateTableTests` pins that a full table admits a newcomer, prefers to forget an
+address that is not being limited, and allocates nothing while doing so. `check-config` warns
+when `AddressIdleEviction` is shorter than the time a spent failure budget needs to refill,
+because a limited address could then idle out and start over.
 
 Threading and ownership: one table per listener behind one lock; touched from the accept callback
 (`TryAdmit`) and from session tasks (`AllowsAuthAttempt`, `RecordAuthFailure`). A session computes
@@ -112,7 +129,7 @@ injectable for tests, monotonic so a wall-clock jump cannot refill or starve a b
 | `Net:Protection:ConnectionsPerMinutePerIp` | 300 | refill rate of the connection budget | `check-config` warns when 0 with a burst set (never refills) |
 | `Net:Protection:AuthFailureBurstPerIp` | 10 | failed authentication attempts per address before refusal; 0 disables | refused before any lookup, failure code sent, connection closed |
 | `Net:Protection:AuthFailuresPerMinutePerIp` | 10 | refill rate of the failure budget | `check-config` warns when 0 with a burst set |
-| `Net:Protection:MaxTrackedAddresses` | 4096 | table slots, allocated at start (1..1048576) | a full table refuses newcomers (fail closed), never evicts a busy address |
+| `Net:Protection:MaxTrackedAddresses` | 4096 | table slots, allocated at start (1..1048576) | a full table admits the newcomer and forgets the least recently seen address of its probe window (one rate-limited line); never a refusal, the connection caps are the fail-closed limit |
 | `Net:Protection:AddressIdleEviction` | 00:10:00 | after this long unseen, a slot may be reused | `check-config` warns when shorter than a failure budget's refill time |
 | `Net:Protection:FrameReadTimeout` | 00:00:30 | budget for the rest of a frame after its first byte; 00:00:00 disables | connection closed, one rate-limited line |
 | `Net:Protection:LogonUnauthenticatedLifetime` | 00:00:30 | longest a logon connection lives without a proof; 00:00:00 disables | connection closed, one rate-limited line |
@@ -140,7 +157,7 @@ skip only the per-address budgets, which need the guard's table.
 
 | Deviation | Switch |
 |---|---|
-| A per-address connection cap and connection rate exist and are on by default; vmangos has neither. | `Net:Protection:MaxConnectionsPerIp = 0`, `ConnectionBurstPerIp = 0` restore unlimited |
+| A per-address connection cap (16 simultaneous connections per address per listener) and connection rate exist and are on by default; vmangos has neither. The cap is in the release-caveat register (`docs/guide/operations.md`) as a non-retail default. | `Net:Protection:MaxConnectionsPerIp = 0`, `ConnectionBurstPerIp = 0` restore unlimited |
 | The failure budget is per address and counts every failure kind, including banned-account attempts and malformed bodies; vmangos `WrongPass` counts wrong passwords per account and address and is off by default. | `AuthFailureBurstPerIp = 0` |
 | A frame deadline after the first byte; vmangos has none (a client that stalls mid-frame holds its socket until the session cap). | `FrameReadTimeout = 00:00:00` |
 | A 30 s unauthenticated lifetime on the logon daemon in addition to the 300 s session cap. | `LogonUnauthenticatedLifetime = 00:00:00` |
@@ -167,9 +184,10 @@ which is one `ReadDeadline` (one linked `CancellationTokenSource`) per connectio
 
 `tests/ArcaneCore.Realm.Tests/Security`: `LogGateTests` (interval, counts, concurrency, zero
 allocation), `IpRateTableTests` (budgets, refill, independence of the buckets, peek, disabled
-bucket, saturation and idle eviction, key normalisation and hash spread, zero allocation of take /
-peek / evict and of `IpKey.From`), `NetGuardTests` (effective cap, shared and daemon caps,
-connection rate releasing the cap slot, failure budget charged on failure only, saturated table,
+bucket, idle eviction, a full table admitting a newcomer by forgetting the least recently seen or
+unlimited address, key normalisation and hash spread, zero allocation of take / peek / evict and of
+`IpKey.From`), `NetGuardTests` (effective cap, shared and daemon caps, connection rate releasing
+the cap slot, failure budget charged on failure only, full table admitting with one line,
 rate-limited lines with suppressed counts, zero allocation on the refusal path),
 `LogonProtectionTests` (over loopback: failure budget refusing with `FAIL_NOACCESS` and closing,
 success not consuming the budget, unauthenticated lifetime, frame deadline, `Auth:ReadTimeoutSeconds`
@@ -178,7 +196,8 @@ registered), `LogonPacketFuzzTests`. `tests/ArcaneCore.World.Tests/Net`: `Packet
 `PacketFuzzTests`, `AuthSessionRequestTests`, `WorldProtectionTests` (frame deadline fires on a
 stalled frame and not on an idle connection, failure budget before the lookup with `AUTH_FAILED`,
 the real listener refusing by rate before a session exists, a short in-world packet contained on
-the world thread and the sender kicked); `tests/ArcaneCore.World.Tests/Ops/NetProtectionConfigChecksTests`.
+the world thread and the sender kicked, a handler's `IndexOutOfRangeException` reported as a server
+fault and never as "malformed"); `tests/ArcaneCore.World.Tests/Ops/NetProtectionConfigChecksTests`.
 The pre-existing realm and world security suites (`ConnectionAdmissionTests`, `LogonServerLimitTests`,
 `CodexNetAuth*`, `InboundQueueCapTests`, `StalledWriterTests`) run unchanged against the composed guard.
 

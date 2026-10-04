@@ -6,8 +6,11 @@ namespace ArcaneCore.Kernel.Configuration;
 /// here ever throws into an accept loop or a session. 0 (or 00:00:00) disables a single limit.
 /// vmangos has none of these except the pre-auth timeouts (realmd MaxSessionDuration, mangosd
 /// Network.TimeoutSecsIfNoAuth), which stay where they are (Auth:MaxSessionDurationSeconds,
-/// World:PreAuthTimeout); the defaults below sit far above anything a retail client does and are
-/// sized so that many players behind one NAT address are never affected.
+/// World:PreAuthTimeout). The rates and the failure budget sit far above anything a retail client
+/// does and never affect players behind one NAT address (successes consume nothing). The
+/// per-address connection cap (<see cref="MaxConnectionsPerIp"/>, 16) is the one default here that
+/// does bound a crowd behind one address; it is a deliberate non-retail default, listed as such in
+/// the release-caveat register of docs/guide/operations.md with 0 as the switch that restores retail.
 /// </summary>
 public sealed class NetProtectionOptions
 {
@@ -53,8 +56,10 @@ public sealed class NetProtectionOptions
     /// <summary>
     /// Most client addresses the per-address table tracks (rounded up to a power of two). Memory is
     /// fixed at start (about 48 bytes per slot) and nothing is allocated per connection. When the
-    /// table is full and no idle slot exists the newcomer is refused (fail closed), with one
-    /// rate-limited log line, rather than evicting an address that is being limited.
+    /// table is full and no idle slot exists the newcomer is still admitted: the table forgets the
+    /// least recently seen address of the probe window (preferring one that is not being limited)
+    /// and writes one rate-limited log line. A full table measures less; it never refuses a
+    /// connection (the connection caps are the fail-closed limit).
     /// </summary>
     public int MaxTrackedAddresses { get; set; } = 4096;
 
@@ -83,7 +88,7 @@ public sealed class NetProtectionOptions
 
     /// <summary>
     /// Shortest interval between two log lines about the same kind of refusal (refused connection,
-    /// refused attempt, saturated table, frame timeout). Refusals in between are counted and the
+    /// refused attempt, full table, frame timeout). Refusals in between are counted and the
     /// count is printed with the next line, so a flood costs one line per interval, never one per
     /// packet. 00:00:00 logs every refusal.
     /// </summary>

@@ -55,6 +55,7 @@ internal static class DeviationRegister
         new("World:ListenRangeTextEmote", "25", Stance.OptIn, "vmangos code default 25 (World.cpp:558) but its shipped mangosd.conf.dist.in sets 40 (:1560).", "Set 40 to match a stock vmangos realm."),
         new("World:Maps:GridUnload", "true", Stance.OptIn, "vmangos code default true (World.cpp:582) but its shipped mangosd.conf.dist.in sets 0 (:399).", "Set false to keep grids loaded as the shipped vmangos configuration does."),
         new("Database:Upgrade:Policy", "Always", Stance.NonRetailDefault, "vmangos never creates or upgrades a database on start.", "Use `CreateOnly` or `Never` once the databases exist and upgrade with `arcane-db`."),
+        new("Net:Protection:MaxConnectionsPerIp", "16", Stance.NonRetailDefault, "No vmangos equivalent; unlimited. The daemon caps `Auth:`/`World:MaxConnectionsPerIp` stay 0, this shared cap is what applies.", "On by default as hardening: 16 simultaneous connections per client address on each listener, so a LAN party or campus NAT with more players than that behind one address is cut off at the 17th. Set 0 to restore the retail unlimited behaviour (restart to change)."),
     ];
 
     /// <summary>The markdown table the guide embeds between <see cref="Begin"/> and <see cref="End"/>.</summary>

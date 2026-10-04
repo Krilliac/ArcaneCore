@@ -26,12 +26,11 @@ public sealed class NetGuard
     private readonly LogGate _refusedCap;
     private readonly LogGate _refusedRate;
     private readonly LogGate _refusedAuth;
-    private readonly LogGate _saturated;
+    private readonly LogGate _tableFull;
     private readonly LogGate _frameTimeout;
     private readonly LogGate _unauthenticatedTimeout;
     private long _refusedConnections;
     private long _refusedAuthAttempts;
-    private long _saturations;
 
     /// <param name="options">The <c>Net:Protection</c> section.</param>
     /// <param name="daemonMaxConnections">The daemon's own global cap (Auth:/World:MaxConnections), read at each admission.</param>
@@ -56,7 +55,7 @@ public sealed class NetGuard
         _refusedCap = new LogGate(interval, ticks);
         _refusedRate = new LogGate(interval, ticks);
         _refusedAuth = new LogGate(interval, ticks);
-        _saturated = new LogGate(interval, ticks);
+        _tableFull = new LogGate(interval, ticks);
         _frameTimeout = new LogGate(interval, ticks);
         _unauthenticatedTimeout = new LogGate(interval, ticks);
     }
@@ -75,8 +74,12 @@ public sealed class NetGuard
     /// <summary>Authentication attempts refused by the failure budget so far.</summary>
     public long RefusedAuthAttempts => Interlocked.Read(ref _refusedAuthAttempts);
 
-    /// <summary>Refusals caused by a full address table so far.</summary>
-    public long Saturations => Interlocked.Read(ref _saturations);
+    /// <summary>
+    /// Times the per-address table was full for a newcomer and forgot its least recently seen
+    /// address to track the newcomer instead (<see cref="IpRateTable.ForcedEvictions"/>). Never a
+    /// refusal: a full table measures less, the connection caps are the fail-closed limit.
+    /// </summary>
+    public long ForcedEvictions => Table.ForcedEvictions;
 
     /// <summary>
     /// The per-address connection cap in force: the daemon's own and the shared one when both are
@@ -117,7 +120,9 @@ public sealed class NetGuard
             return lease;
         }
 
+        long forcedBefore = Table.ForcedEvictions;
         RateVerdict verdict = Table.TryTake(IpKey.From(address), RateBucket.Connections);
+        NoteTableFull(forcedBefore);
         if (verdict == RateVerdict.Allowed)
         {
             return lease;
@@ -125,25 +130,30 @@ public sealed class NetGuard
 
         lease.Dispose();
         Interlocked.Increment(ref _refusedConnections);
-        if (verdict == RateVerdict.Saturated)
+        if (_refusedRate.TryEnter(out int suppressedByRate))
         {
-            Interlocked.Increment(ref _saturations);
-            if (_saturated.TryEnter(out int suppressed))
-            {
-                _logger.LogWarning("[{Address}] connection refused: the per-address table is full ({Capacity} slots, Net:Protection:MaxTrackedAddresses; {Suppressed} more refusal(s) since the last line)", address, Table.Capacity, suppressed);
-            }
-        }
-        else if (_refusedRate.TryEnter(out int suppressed))
-        {
-            _logger.LogWarning("[{Address}] connection refused: connection rate exceeded ({Suppressed} more refusal(s) since the last line)", address, suppressed);
+            _logger.LogWarning("[{Address}] connection refused: connection rate exceeded ({Suppressed} more refusal(s) since the last line)", address, suppressedByRate);
         }
 
         return null;
     }
 
     /// <summary>
+    /// One rate-limited line when the table had to forget an address to track a newcomer (the table
+    /// is full of addresses seen within <see cref="NetProtectionOptions.AddressIdleEviction"/>): the
+    /// operator sees that the budgets are measuring less and can raise MaxTrackedAddresses. Not a refusal.
+    /// </summary>
+    private void NoteTableFull(long forcedBefore)
+    {
+        if (Table.ForcedEvictions > forcedBefore && _tableFull.TryEnter(out int suppressed))
+        {
+            _logger.LogWarning("the per-address table is full ({Capacity} slots, Net:Protection:MaxTrackedAddresses): forgot the least recently seen address to track a new one; nothing was refused ({Suppressed} more since the last line)", Table.Capacity, suppressed);
+        }
+    }
+
+    /// <summary>
     /// May a client at <paramref name="address"/> attempt to authenticate? False when its failure
-    /// budget is spent (or the table is full), already logged; the caller closes the connection
+    /// budget is spent, already logged; the caller closes the connection
     /// before any lookup. A connection without an IP address (a test harness, a Unix socket) is
     /// never limited: there is no key to count against.
     /// </summary>
@@ -154,22 +164,16 @@ public sealed class NetGuard
             return true;
         }
 
+        long forcedBefore = Table.ForcedEvictions;
         RateVerdict verdict = Table.Peek(key, RateBucket.AuthFailures);
+        NoteTableFull(forcedBefore);
         if (verdict == RateVerdict.Allowed)
         {
             return true;
         }
 
         Interlocked.Increment(ref _refusedAuthAttempts);
-        if (verdict == RateVerdict.Saturated)
-        {
-            Interlocked.Increment(ref _saturations);
-            if (_saturated.TryEnter(out int suppressed))
-            {
-                _logger.LogWarning("authentication attempt refused: the per-address table is full ({Capacity} slots, Net:Protection:MaxTrackedAddresses; {Suppressed} more refusal(s) since the last line)", Table.Capacity, suppressed);
-            }
-        }
-        else if (_refusedAuth.TryEnter(out int suppressed))
+        if (_refusedAuth.TryEnter(out int suppressed))
         {
             _logger.LogWarning("authentication attempt refused: too many failed attempts from one address ({Suppressed} more refusal(s) since the last line)", suppressed);
         }

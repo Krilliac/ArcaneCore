@@ -193,6 +193,66 @@ public sealed class WorldProtectionTests
         await host.OnWorldAsync(() => { }); // the world thread is alive and answering
     }
 
+    /// <summary>
+    /// A handler's own <see cref="IndexOutOfRangeException"/> is a server bug, not a client fault: it
+    /// must never be reported as "malformed" (a Warning without the exception, blaming the player).
+    /// On the session task it escapes the session as a session fault, which the production host logs
+    /// at Error with the stack trace; on the world thread Map.ProcessPackets does the same and kicks.
+    /// Before the fix both paths logged "malformed CMSG_X; disconnecting" and nothing else.
+    /// </summary>
+    [Fact]
+    public async Task HandlerIndexOutOfRange_IsAServerFault_NeverReportedAsMalformed()
+    {
+        var log = new CapturingLogger();
+        await using var host = WorldTestHost.Start(sessionLogger: log);
+        host.ExpectSessionFaults = true;
+
+        // Two opcodes nothing handles, one per dispatch path, each with a handler that has a bug.
+        WorldOpcode[] free = [.. Enum.GetValues<WorldOpcode>()
+            .Where(o => o is not WorldOpcode.CmsgPing and not WorldOpcode.CmsgAuthSession && !host.Opcodes.TryGet(o, out _))
+            .Take(2)];
+        Assert.Equal(2, free.Length);
+        WorldOpcode worldOpcode = free[0];
+        WorldOpcode sessionOpcode = free[1];
+        host.Opcodes.OnWorld(worldOpcode, (_, _, _) => { int[] table = new int[1]; _ = table[int.Parse("7", System.Globalization.CultureInfo.InvariantCulture)]; });
+        host.Opcodes.OnSession(sessionOpcode, SessionStates.Authenticated, (_, _) => { int[] table = new int[1]; _ = table[int.Parse("7", System.Globalization.CultureInfo.InvariantCulture)]; return Task.CompletedTask; });
+
+        // World thread: the player is kicked by Map.ProcessPackets, the world keeps ticking, and no line blames the client.
+        await using (WorldTestClient inWorld = await host.EnterWorldAsync("BUGGYW", "Buggyw"))
+        {
+            await inWorld.SendAsync(worldOpcode, new byte[4]);
+            Assert.True(await inWorld.IsClosedByServerAsync(), "a handler fault on the world thread disconnects the player");
+            await host.OnWorldAsync(() => { }); // the world thread is alive and answering
+            AssertNothingBlamedTheClient(log);
+        }
+
+        // Session task: the exception leaves the session (the host logs it at Error as a session error).
+        await using (WorldTestClient atCharScreen = await host.EnterWorldAsync("BUGGYS", "Buggys"))
+        {
+            await atCharScreen.SendAsync(sessionOpcode, new byte[4]);
+            Assert.True(await atCharScreen.IsClosedByServerAsync(), "a handler fault on the session task closes the connection");
+            AssertNothingBlamedTheClient(log);
+        }
+
+        await WorldTestHost.WaitForAsync(() => { lock (host.SessionFaults) { return host.SessionFaults.Count > 0; } }, "the session fault to be collected");
+        Exception fault;
+        lock (host.SessionFaults)
+        {
+            fault = Assert.Single(host.SessionFaults);
+        }
+
+        Assert.IsType<IndexOutOfRangeException>(fault);
+    }
+
+    /// <summary>No "malformed ...; disconnecting" line: that wording is reserved for the controlled reader outcome.</summary>
+    private static void AssertNothingBlamedTheClient(CapturingLogger log)
+    {
+        lock (log.Messages)
+        {
+            Assert.DoesNotContain(log.Messages, m => m.Contains("malformed", StringComparison.Ordinal));
+        }
+    }
+
     [Fact]
     public void Session_WithoutAGuard_StillHasTheDefaultFrameTimeout()
     {

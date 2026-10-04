@@ -11,9 +11,6 @@ public enum RateVerdict
 
     /// <summary>The address has used its budget; the caller refuses the client.</summary>
     Limited,
-
-    /// <summary>The table is full and no idle slot could be reused; the caller refuses the client (fail closed).</summary>
-    Saturated,
 }
 
 /// <summary>Which of the two budgets an entry carries.</summary>
@@ -33,9 +30,13 @@ public enum RateBucket
 /// allocate nothing (the test suite pins that with GC.GetAllocatedBytesForCurrentThread).
 /// <para>
 /// Eviction: an address that has not been seen for the idle window gives its slot to a newcomer. If
-/// every slot of a newcomer's probe window is busy and none is idle, the newcomer is refused
-/// (<see cref="RateVerdict.Saturated"/>) rather than resetting a tracked address: an attacker who
-/// fills the table cannot use it to forget his own budget.
+/// every slot of a newcomer's probe window is busy and none is idle, the newcomer still gets a slot:
+/// the table forgets the least recently seen address of the window, preferring one that carries no
+/// limiting state (both buckets full after refill), and counts it in <see cref="ForcedEvictions"/>.
+/// The table is a bounded measuring device that degrades to measuring less when it is full; it is
+/// never the reason a connection is refused (the global connection cap is the fail-closed limit).
+/// The cost is that an address can be forgotten while limited if its whole probe window is
+/// crowded out by addresses seen more recently; see docs/ops/netguard.md.
 /// </para>
 /// <para>
 /// Ownership and threading: one instance per listener, touched from the accept callback and from
@@ -56,6 +57,7 @@ public sealed class IpRateTable
     private readonly Budget[] _budgets = new Budget[2];
     private int _count;
     private long _evictions;
+    private long _forcedEvictions;
 
     /// <param name="capacity">Most addresses tracked; rounded up to a power of two (at least 16).</param>
     /// <param name="idleEviction">After this long without a touch a slot may be reused.</param>
@@ -96,6 +98,12 @@ public sealed class IpRateTable
 
     /// <summary>Idle slots handed to a different address so far (diagnostics and tests).</summary>
     public long Evictions => Interlocked.Read(ref _evictions);
+
+    /// <summary>
+    /// Busy (not idle) slots handed to a newcomer because its whole probe window was full: the table
+    /// forgot an address to keep admitting. Diagnostics; <c>NetGuard</c> logs one rate-limited line per interval.
+    /// </summary>
+    public long ForcedEvictions => Interlocked.Read(ref _forcedEvictions);
 
     /// <summary>
     /// Set a bucket's token-bucket parameters: <paramref name="burst"/> tokens at most, refilled at
@@ -162,11 +170,6 @@ public sealed class IpRateTable
 
             long now = _clock();
             int index = FindOrInsert(key, now);
-            if (index < 0)
-            {
-                return RateVerdict.Saturated;
-            }
-
             ref Entry entry = ref _slots[index];
             Debug.Assert(entry.Used && entry.Key == key, "FindOrInsert must hand back the slot of the key");
 
@@ -212,13 +215,22 @@ public sealed class IpRateTable
         return -1;
     }
 
-    /// <summary>The slot of <paramref name="key"/>, inserting it into a free or idle slot of its probe window; -1 when saturated. Caller holds the lock.</summary>
+    /// <summary>
+    /// The slot of <paramref name="key"/>, inserting it into its probe window when absent: a free slot
+    /// first, then the least recently seen idle slot, then (a full window) the least recently seen
+    /// slot that carries no limiting state, then the least recently seen slot of all. Always returns
+    /// a slot: a full table never refuses a newcomer. Caller holds the lock.
+    /// </summary>
     private int FindOrInsert(in IpKey key, long now)
     {
         int start = key.Mix() & _mask;
         int free = -1;
         int idle = -1;
         long idleSeen = long.MaxValue;
+        int unlimited = -1;
+        long unlimitedSeen = long.MaxValue;
+        int oldest = -1;
+        long oldestSeen = long.MaxValue;
         for (int i = 0; i < ProbeWindow; i++)
         {
             int index = (start + i) & _mask;
@@ -238,36 +250,77 @@ public sealed class IpRateTable
                 return index;
             }
 
-            // Prefer the least recently seen idle slot so a near-saturated table rotates fairly.
-            if (now - slot.LastSeenMs >= _idleMs && slot.LastSeenMs < idleSeen)
+            if (free >= 0)
             {
-                idle = index;
-                idleSeen = slot.LastSeenMs;
+                continue; // a free slot wins; no eviction candidate is needed
+            }
+
+            // Prefer the least recently seen idle slot so a near-full table rotates fairly.
+            if (now - slot.LastSeenMs >= _idleMs)
+            {
+                if (slot.LastSeenMs < idleSeen)
+                {
+                    idle = index;
+                    idleSeen = slot.LastSeenMs;
+                }
+
+                continue;
+            }
+
+            if (slot.LastSeenMs < oldestSeen)
+            {
+                oldest = index;
+                oldestSeen = slot.LastSeenMs;
+            }
+
+            // A busy slot whose buckets are both full carries no limiting state: forgetting it loses nothing.
+            if (slot.LastSeenMs < unlimitedSeen && !HasLimitingState(in slot, now))
+            {
+                unlimited = index;
+                unlimitedSeen = slot.LastSeenMs;
             }
         }
 
-        int target = free >= 0 ? free : idle;
-        if (target < 0)
+        int target;
+        if (free >= 0)
         {
-            return -1;
+            target = free;
+            _count++;
         }
-
-        ref Entry entry = ref _slots[target];
-        if (entry.Used)
+        else if (idle >= 0)
         {
+            target = idle;
             Interlocked.Increment(ref _evictions);
         }
         else
         {
-            _count++;
+            // The window is full of addresses seen within the idle window: measure less rather than refuse.
+            target = unlimited >= 0 ? unlimited : oldest;
+            Debug.Assert(target >= 0, "a probe window of used slots has a least recently seen one");
+            Interlocked.Increment(ref _forcedEvictions);
         }
 
+        ref Entry entry = ref _slots[target];
         entry.Used = true;
         entry.Key = key;
         entry.LastSeenMs = now;
         entry.Tokens0 = _budgets[0].Burst;
         entry.Tokens1 = _budgets[1].Burst;
         return target;
+    }
+
+    /// <summary>True when either enabled bucket of <paramref name="entry"/> would still be below its burst after refilling to <paramref name="now"/>.</summary>
+    private bool HasLimitingState(in Entry entry, long now)
+    {
+        long elapsed = now - entry.LastSeenMs;
+        Budget connections = _budgets[0];
+        if (connections.Burst > 0 && entry.Tokens0 + elapsed * connections.PerMs < connections.Burst)
+        {
+            return true;
+        }
+
+        Budget failures = _budgets[1];
+        return failures.Burst > 0 && entry.Tokens1 + elapsed * failures.PerMs < failures.Burst;
     }
 
     private readonly record struct Budget(int Burst, double PerMs);

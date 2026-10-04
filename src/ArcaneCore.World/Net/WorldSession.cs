@@ -88,9 +88,10 @@ public sealed class WorldSessionOptions
 /// Transport protections (docs/ops/netguard.md): the frame read deadline comes from
 /// <c>Net:Protection</c> (through the listener's <see cref="NetGuard"/>, or the defaults when a
 /// host constructs the session without one, so it is never off by accident); the per-address
-/// failure budget needs the guard's table and is skipped without it. A malformed packet, whether
-/// it surfaces as the controlled <see cref="MalformedPacket"/> outcome or as a handler indexing a
-/// short payload, closes the connection and never leaves the session or the world thread.
+/// failure budget needs the guard's table and is skipped without it. A malformed packet (the
+/// controlled <see cref="MalformedPacket"/> outcome of the readers) closes the connection with one
+/// Warning and never leaves the session or the world thread; any other exception from a handler is
+/// a server bug and is logged at Error with its stack trace by the host that owns the thread.
 /// </para>
 /// </summary>
 public sealed class WorldSession : IPlayerSession
@@ -308,9 +309,9 @@ public sealed class WorldSession : IPlayerSession
             }
             catch (Exception ex) when (IsMalformed(ex))
             {
-                // The controlled outcome of PacketReader, or a handler that indexed a short payload
-                // directly: either way the packet did not fit its layout. Contained here so nothing
-                // reaches the map update on the world thread.
+                // The controlled outcome of PacketReader: the packet did not fit its layout. Contained
+                // here so a client fault never reaches the map update. A server bug in a handler is
+                // not a client fault and propagates to Map.ProcessPackets (Error with the exception, kick).
                 _logger.LogWarning("[{Endpoint}] malformed {Opcode}; disconnecting",
                     RemoteEndpoint, WorldOpcodeNames.GetName(packet.Handler.Opcode));
                 Kick();
@@ -482,8 +483,14 @@ public sealed class WorldSession : IPlayerSession
         }
     }
 
-    /// <summary>The exception types a packet that does not fit its layout may surface as (never anything else is treated as malformed).</summary>
-    private static bool IsMalformed(Exception exception) => MalformedPacket.Is(exception) || exception is IndexOutOfRangeException;
+    /// <summary>
+    /// Only the controlled outcome the readers raise deliberately (<see cref="MalformedPacket"/>) is
+    /// a client fault. Anything else a handler throws (an <see cref="IndexOutOfRangeException"/> from
+    /// its own tables, a null, a cast) is a server bug: it is not caught here, so it reaches the
+    /// Error log with its stack trace (<c>WorldServer</c> "session error" on the session task,
+    /// <c>Map</c> "packet handling failed" on the world thread), and the connection is closed there.
+    /// </summary>
+    private static bool IsMalformed(Exception exception) => MalformedPacket.Is(exception);
 
     private async Task<bool> DispatchAsync(WorldOpcode opcode, byte[] payload)
     {
