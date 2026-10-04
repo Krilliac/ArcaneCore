@@ -14,9 +14,9 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | Stored account | Retail level (default map) | Commands reachable |
 |---|---|---|
 | `Player` | 0 | 5 |
-| `Moderator` | 1 | 16 |
-| `GameMaster` | 3 | 63 |
-| `Administrator` | 6 | 106 |
+| `Moderator` | 1 | 21 |
+| `GameMaster` | 3 | 110 |
+| `Administrator` | 6 | 157 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -39,6 +39,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.event disable` | 5 | Administrator | declared retail level | Syntax: .event disable #event_id Disable an event: a running one stops and the schedule never starts it (stored in game_event.disabled). |
 | `.gm` ... | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .gm [on/off] Enable or disable GM mode, or show the current state. |
 | `.gm chat` | 1 | Moderator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .gm chat [on/off] Enable or disable the GM badge on your chat, or show the current state. |
+| `.gm ingame` | 1 | Moderator | stored level through the map | Syntax: .gm ingame List the game masters online with their GM mode on, and whether they accept whispers. |
+| `.gm list` | 6 | Administrator | stored level through the map | Syntax: .gm list List every staff member online with their security level. |
 | `.honor` ... | 3 | GameMaster | declared retail level | Syntax: .honor $subcommand Type .honor to see the list of possible subcommands or .help honor $subcommand to see info on subcommands. |
 | `.honor add` | 4 | Administrator | declared retail level | Syntax: .honor add #amount Add honor points to the selected player (or yourself). |
 | `.honor addkill` | 4 | Administrator | declared retail level | Syntax: .honor addkill Give yourself the honor of killing the selected creature (a civilian, a racial leader). |
@@ -47,6 +49,14 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.honor reset` | 4 | Administrator | declared retail level | Syntax: .honor reset Forget all honor of the selected player (or yourself). |
 | `.go` ... | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Teleport to a position. |
 | `.go xyz` | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .go xyz #x #y [#z [#mapid]] — teleport to a position; without #z, to the ground (or water surface) there. |
+| `.gobject` ... | 2 | GameMaster | declared retail level | Syntax: .gobject $subcommand Type .gobject to see the list of possible subcommands or .help gobject $subcommand to see info on subcommands. |
+| `.gobject add` | 3 | GameMaster | declared retail level | Syntax: .gobject add #entry [#despawnSeconds] Place a game object where you stand. It is not saved: it is gone after a restart (or after #despawnSeconds). |
+| `.gobject delete` | 3 | GameMaster | declared retail level | Syntax: .gobject delete #guid Remove a game object that was placed with .gobject add. Database spawns are refused. |
+| `.gobject move` | 3 | GameMaster | declared retail level | Syntax: .gobject move #guid [#x #y #z] Move a game object that was placed with .gobject add to the given place (or to yours). |
+| `.gobject turn` | 3 | GameMaster | declared retail level | Syntax: .gobject turn #guid [#orientation] Turn a game object that was placed with .gobject add (radians; your own facing when omitted). |
+| `.gobject activate` | 3 | GameMaster | declared retail level | Syntax: .gobject activate #guid Activate a door, button or other object as if it had been used: its state flips and it returns after its auto-close time. |
+| `.gobject near` | 2 | GameMaster | declared retail level | Syntax: .gobject near [#radius] List the game objects within #radius yards (default 10), nearest first. |
+| `.gobject info` | 2 | GameMaster | declared retail level | Syntax: .gobject info #guid Show the details of a game object. |
 | `.guild` ... | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Guild administration. |
 | `.guild create` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .guild create [$GuildLeaderName] "$GuildName" — found a guild led by the character. |
 | `.guild invite` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .guild invite [$CharacterName] "$GuildName" — add the character to the guild. |
@@ -58,11 +68,21 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.instance unbind` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .instance unbind #mapid\|all — drop binds of the selected player (or yourself), except the map you are in. |
 | `.instance stats` | 4 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .instance stats — loaded instance maps and stored saves. |
 | `.learn` | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .learn #spell — teach a spell to the selected player or yourself. |
+| `.list` ... | 3 | GameMaster | declared retail level | Syntax: .list $subcommand |
+| `.list creature` | 3 | GameMaster | declared retail level | Syntax: .list creature #creature_id [#max_count] Output the database spawns of the creature template (default 10). |
+| `.list object` | 3 | GameMaster | declared retail level | Syntax: .list object #object_id [#max_count] Output the database spawns of the gameobject template (default 10). |
+| `.list auras` | 3 | GameMaster | declared retail level | Syntax: .list auras List the auras of the selected unit, or yours. |
 | `.lookup` ... | 1 | Moderator | declared retail level | Syntax: .lookup $subcommand |
 | `.lookup item` | 2 | GameMaster | declared retail level | Syntax: .lookup item $itemname Looks up an item by name. |
 | `.lookup creature` | 2 | GameMaster | declared retail level | Syntax: .lookup creature $namepart Looks up a creature by name. |
 | `.lookup object` | 2 | GameMaster | declared retail level | Syntax: .lookup object $objname Looks up a gameobject by name. |
 | `.lookup tele` | 2 | GameMaster | declared retail level | Syntax: .lookup tele $substring Search and output all teleport locations containing $substring. |
+| `.lookup quest` | 2 | GameMaster | declared retail level | Syntax: .lookup quest $namepart Looks up a quest by title. |
+| `.lookup skill` | 2 | GameMaster | declared retail level | Syntax: .lookup skill $namepart Looks up a skill line by name. |
+| `.lookup spell` | 2 | GameMaster | declared retail level | Syntax: .lookup spell $namepart Looks up a spell by name (the rank is part of the link text). |
+| `.lookup area` | 2 | GameMaster | declared retail level | Syntax: .lookup area $namepart Looks up an area or zone by name. |
+| `.lookup map` | 2 | GameMaster | declared retail level | Syntax: .lookup map $namepart Looks up a map by name. |
+| `.lookup taxinode` | 2 | GameMaster | declared retail level | Syntax: .lookup taxinode $namepart Looks up a flight-path node by name. |
 | `.lookup faction` | 2 | GameMaster | declared retail level | Syntax: .lookup faction $name Attempts to find the ID of the faction with the provided $name (a substring, case-insensitive), with the standing of the selected player. |
 | `.lookup event` | 2 | GameMaster | declared retail level | Syntax: .lookup event $namepart List the events whose description contains the text. |
 | `.modify` ... | 2 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .modify $subcommand |
@@ -71,6 +91,16 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.modify mana` | 3 | GameMaster | declared retail level | Syntax: .modify mana #newmana [#newmaxmana] Change the mana (and maximum mana) of the selected player, or yours. |
 | `.modify honor` | 4 | Administrator | declared retail level | Syntax: .modify honor $field #value Fields: points rank todaykills yesterdaykills yesterdayhonor thisweekkills thisweekhonor lastweekkills lastweekhonor lastweekstanding lifetimedishonorablekills lifetimehonorablekills. |
 | `.modify rep` | 4 | Administrator | declared retail level | Syntax: .modify rep #repId (#repvalue \| $rankname [#delta]) Sets the reputation of the selected player with the faction to the value, or to the beginning of the rank plus the delta. |
+| `.npc` ... | 2 | GameMaster | declared retail level | Syntax: .npc $subcommand Type .npc to see the list of possible subcommands or .help npc $subcommand to see info on subcommands. |
+| `.npc add` | 3 | GameMaster | declared retail level | Syntax: .npc add #entry Place a temporary creature where you stand. It is not saved and does not respawn. |
+| `.npc delete` | 3 | GameMaster | declared retail level | Syntax: .npc delete Remove the selected creature if it was placed with .npc add. Database spawns are refused. |
+| `.npc say` | 3 | GameMaster | declared retail level | Syntax: .npc say $message Make the selected creature say the message (heard within 25 yards). |
+| `.npc yell` | 3 | GameMaster | declared retail level | Syntax: .npc yell $message Make the selected creature yell the message (heard within 300 yards). |
+| `.npc textemote` | 3 | GameMaster | declared retail level | Syntax: .npc textemote $message Make the selected creature perform a text emote (seen within 25 yards). |
+| `.npc whisper` | 3 | GameMaster | declared retail level | Syntax: .npc whisper $playername $message Make the selected creature whisper the message to an online player on the same map. |
+| `.npc playemote` | 3 | GameMaster | declared retail level | Syntax: .npc playemote #emote Make the selected creature play an emote animation. The id is not checked against the client's emote table. |
+| `.npc info` | 2 | GameMaster | declared retail level | Syntax: .npc info Show the details of the selected creature. |
+| `.npc near` | 2 | GameMaster | declared retail level | Syntax: .npc near [#radius] List the creatures within #radius yards (default 10), nearest first. |
 | `.reload` ... (development only) | 6 | Administrator | stored level through the map | Syntax: .reload #name \| all \| status — reload configuration or content without a restart (config, spell_template, …). |
 | `.reload all` (development only) | 6 | Administrator | stored level through the map | Syntax: .reload all — reload every content table (not the config). |
 | `.reload status` (development only) | 6 | Administrator | stored level through the map | Syntax: .reload status — what can be reloaded and how each reload last ended. |
@@ -98,6 +128,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.commands` | 0 | Player | stored level through the map | Syntax: .commands Display a list of the commands available to you. |
 | `.revive` | 3 | GameMaster | stored level through the map | Syntax: .revive [$playername] Revive the selected player (or the named one, or yourself): half health and mana, the corpse gone. |
 | `.gps` | 1 | Moderator | stored level through the map | Syntax: .gps Display the position of the selected player, or yours. |
+| `.guid` | 2 | GameMaster | declared retail level | Syntax: .guid Show the GUID of the selected object. |
 | `.help` | 0 | Player | stored level through the map | Syntax: .help [command] Display usage instructions for the given command; without a command, the commands you can use. |
 | `.cooldown` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cooldown [#spell] — clear one or every spell cooldown of the selected player or yourself. |
 | `.unlearn` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .unlearn #spell — make the selected player or yourself forget a spell. |
@@ -129,15 +160,40 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.additem` | 3 | GameMaster | declared retail level | Syntax: .additem #itemId\|[#itemName]\|#shift-click-item-link #itemCount Adds the item to the selected player (or yourself); a negative count removes items, bank included in the check. |
 | `.deleteitem` | 3 | GameMaster | declared retail level | Syntax: .deleteitem #itemId\|[#itemName]\|#shift-click-item-link #itemCount [#playerName] Removes items from the named or selected player (or yourself), bank included. |
 | `.wchange` | 6 | Administrator | stored level through the map | Syntax: .wchange #weathertype #status — set the weather of your zone. Type: 0 fine, 1 rain, 2 snow, 3 sandstorm; status 0..1. |
+| `.ticket` ... | 3 | GameMaster | stored level through the map | Syntax: .ticket [$subcommand] Without a subcommand, show how many tickets are open. |
+| `.ticket list` | 3 | GameMaster | stored level through the map | Syntax: .ticket list List the open tickets, oldest first (at most 50). |
+| `.ticket onlinelist` | 3 | GameMaster | stored level through the map | Syntax: .ticket onlinelist List the open tickets of players who are online now. |
+| `.ticket show` | 3 | GameMaster | stored level through the map | Syntax: .ticket show $id Show the text (and answer, if any) of an open ticket. |
+| `.ticket respond` | 3 | GameMaster | stored level through the map | Syntax: .ticket respond $id $text Answer an open ticket; the player is told at once if online. The ticket stays open. |
+| `.ticket close` | 3 | GameMaster | stored level through the map | Syntax: .ticket close $id [$text] Close an open ticket, with an optional final answer. The player is told if online. |
+| `.ticket delete` | 6 | Administrator | stored level through the map | Syntax: .ticket delete $id Delete an open ticket without trace (the row is removed). |
 | `.maxskill` | 3 | GameMaster | stored level through the map | Syntax: .maxskill — set every level-dependent skill of the selected player (or yourself) to its maximum for the level. |
 | `.setskill` | 3 | GameMaster | stored level through the map | Syntax: .setskill #skill #level [#max] — set a skill the selected player (or yourself) already has. |
 | `.whispers` | 1 | Moderator | stored level through the map | Syntax: .whispers on\|off  Enable/disable accepting whispers by GM from players. By default use the World:Chat:GmWhisperingTo setting. |
+| `.pinfo` | 3 | GameMaster | stored level through the map | Syntax: .pinfo [$playername] Show account, level, position, chat-mute and ticket state of the named character (online or not), the selected player, or yourself. |
+| `.respawn` | 3 | GameMaster | declared retail level | Syntax: .respawn [#radius] Respawn the dead creatures and the despawned game objects within #radius yards (default 100) without waiting for their timers. Temporary objects and chests kept by an instance are left alone. |
+| `.mute` | 1 | Moderator | stored level through the map | Syntax: .mute [$playername] $duration [$reason] Disable the chat of the player's account. $duration is a number of minutes or like 1d2h30m (1 second to 365 days). The player must be online. |
+| `.unmute` | 1 | Moderator | stored level through the map | Syntax: .unmute [$playername] Enable the chat of the player's account again. The character may be offline. |
 | `.creature` ... | 3 | GameMaster | stored level through the map | Creature commands. |
 | `.creature add` | 3 | GameMaster | stored level through the map | Syntax: .creature add &lt;entry&gt; — spawn a temporary creature where you stand (not saved). |
 | `.creature info` | 3 | GameMaster | stored level through the map | Syntax: .creature info — details of the selected creature. |
 | `.creature kill` | 3 | GameMaster | stored level through the map | Syntax: .creature kill — kill the selected creature (corpse, then respawn timer). |
 | `.creature respawn` | 3 | GameMaster | stored level through the map | Syntax: .creature respawn — respawn the selected dead creature now. |
 | `.creature delete` | 3 | GameMaster | stored level through the map | Syntax: .creature delete — remove the selected temporary creature. |
+| `.arcane` ... | 3 | GameMaster | stored level through the map | ArcaneCore operator commands (read-only). Syntax: .arcane $subcommand |
+| `.arcane bancheck` | 3 | GameMaster | stored level through the map | Syntax: .arcane bancheck account\|character\|ip $value Show whether an account (by name), the account of a character, or an IP address is blocked from logging in right now. |
+| `.arcane mutes` | 3 | GameMaster | stored level through the map | Syntax: .arcane mutes List the chat mutes in force, with who set them and when they end. |
+| `.arcane gmlog` | 6 | Administrator | stored level through the map | Syntax: .arcane gmlog [$count] Show the latest audited GM commands (default 20, at most 100; kept in memory since the last restart). |
+| `.arcane queues` | 6 | Administrator | stored level through the map | Syntax: .arcane queues Show the pending and retained writes of the write-behind queues. |
+| `.arcane content` | 3 | GameMaster | stored level through the map | Syntax: .arcane content Show how many rows of each content table are loaded. |
+| `.arcane maps` | 3 | GameMaster | stored level through the map | Syntax: .arcane maps Show the players, objects and in-transit objects of every running map. |
+| `.arcane reloads` | 3 | GameMaster | stored level through the map | Syntax: .arcane reloads Show how each reloadable content table last ended, and the creature definitions generation. |
+| `.gmannounce` | 1 | Moderator | stored level through the map | Syntax: .gmannounce $message Send a chat message to every staff member online. |
+| `.gmnotify` | 1 | Moderator | stored level through the map | Syntax: .gmnotify $message Send an on-screen notification to every staff member online. |
+| `.spawninfo` ... | 2 | GameMaster | declared retail level | Syntax: .spawninfo $subcommand Type .spawninfo to see the list of possible subcommands. Read-only. |
+| `.spawninfo creature` | 2 | GameMaster | declared retail level | Syntax: .spawninfo creature [#radius] List the creatures within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
+| `.spawninfo gameobject` | 2 | GameMaster | declared retail level | Syntax: .spawninfo gameobject [#radius] List the game objects within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
+| `.spawninfo summary` | 2 | GameMaster | declared retail level | Syntax: .spawninfo summary Count the creatures and game objects of this map by state, including the respawn times kept for unloaded grids. |
 | `.hotcode` ... (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Code hot reload (development runner). |
 | `.hotcode status` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode status — generation, frozen/degraded state and whether the process differs from the build. |
 | `.hotcode refresh` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode refresh — rescan opcode handlers, chat commands and default map updaters now. |

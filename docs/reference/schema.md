@@ -10,7 +10,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 3 | `account`, `realmlist` |
-| `characters` | 25 | `characters` |
+| `characters` | 26 | `characters` |
 | `world` | 28 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
@@ -48,6 +48,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 23 | `Honor.CharacterHonorDataModule` | creates `character_honor`, `character_honor_cp`, `honor_maintenance` | yes |
 | 24 | `Creatures.CreatureRespawnDataModule` | creates `creature_respawn` | yes |
 | 25 | `Characters.WorldState.GameEventStatusDataModule` | creates `game_event_status` | yes |
+| 26 | `Gm.GmAuditDataModule` | creates `account_mute`, `gm_ticket` | yes |
 
 ## `world`
 

@@ -17,6 +17,15 @@
 
 The largest code a shutdown command may ask for is 125 (126-255 belong to shells).
 
+### Startup schema refusal
+
+Both daemons initialise their databases through `DatabaseStartup.InitializeAsync`. A refusal (policy, database newer than the code, unknown state, lock timeout) is one scrubbed line on stderr and one of these codes instead of a crash; they are the `arcane-db` codes of the same name, so the numbers below are not the ones in the table above.
+
+| Code | Name | Meaning |
+|---|---|---|
+| 4 | `Refused` | Refused: the database is newer than the code, in an unknown state, blocked (duplicate rows, conflicting index, mismatching table) or has other sessions; nothing was changed. |
+| 7 | `LockTimeout` | The wait for another process's schema lock ran out. |
+
 ## `arcane-db`
 
 The `arcane-db` codes (0-8) are documented in one place, the table of the [database upgrade runbook](../ops/database-upgrade.md); a test keeps that table complete.

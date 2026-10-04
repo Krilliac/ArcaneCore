@@ -33,7 +33,7 @@ Decisions:
   every lookup and what ArcaneCore already uses. `lookup faction` and `lookup event` come from other lanes and use the same level.
 - `list` is a new root at level 3, the MaNGOS Zero and TrinityCore level; AzerothCore's 1 would let a moderator enumerate spawn positions.
 - `lookup` result lines use the shift-click link shape of the existing lookups (`id - |cffffffff|H<kind>:<id>|h[name]|h|r`). The quest link
-  carries the quest level (`Hquest:id:level`, the vanilla client form); spell links carry name and rank. The `Hskill`, `Harea`, `Hmap` and
+  carries the quest level after the id (the `Hquest` kind with two fields, the vanilla client form); spell links carry name and rank. The `Hskill`, `Harea`, `Hmap` and
   `Htaxinode` link kinds follow the MaNGOS Zero result lines; whether the 1.12.1 client turns them into clickable links is UNVERIFIED (the
   text is shown either way).
 - "No quests/skills/spells/area/taxinodes found!" are mangos_string 446, 444, 445, 442, 466 (MaNGOS Zero `Language.h`); "No maps found!",
