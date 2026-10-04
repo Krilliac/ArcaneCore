@@ -10,7 +10,7 @@ namespace ArcaneCore.World.Stealth;
 
 /// <summary>
 /// Stealth in the world daemon (discovered <see cref="IWorldFeature"/>, docs/integration/rogue-stealth-core.md): registers the
-/// SPELL_AURA_MOD_STEALTH, MOD_STEALTH_LEVEL and MOD_STEALTH_DETECT handlers on the world's spell system and attaches, to every
+/// SPELL_AURA_MOD_STEALTH, MOD_STEALTH_LEVEL, MOD_STEALTH_DETECT and invisibility handlers on the world's spell system and attaches, to every
 /// map, the stealth visibility rule and the 2000 ms detection pass (<see cref="StealthDetectionUpdater"/>).
 /// <para>
 /// The shapeshift half of a Stealth rank (SPELL_AURA_MOD_SHAPESHIFT, form 30) and the movement slow (aura 33) belong to the stance
@@ -34,6 +34,8 @@ public sealed class StealthFeature(SpellFeature spells, IServiceProvider service
         system.ImprovedSapRollPerPhase = Options.ImprovedSapRollPerPhase;
         var stealthServices = new StealthServices(system, Registry, Options);
         system.RegisterAura(AuraType.ModStealth, StealthAuras.Handler(Registry));
+        system.RegisterAura(AuraType.ModInvisibility, InvisibilityAuras.InvisibilityHandler(Registry));
+        system.RegisterAura(AuraType.ModInvisibilityDetection, InvisibilityAuras.DetectionHandler());
         // Data auras: their amounts are read by the detection formula (SpellSystem.GetTotalAuraModifier), nothing happens at apply.
         system.RegisterAura(AuraType.ModStealthLevel, new AuraHandler(null, null));
         system.RegisterAura(AuraType.ModStealthDetect, new AuraHandler(null, null));

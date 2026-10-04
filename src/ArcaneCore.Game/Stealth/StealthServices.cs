@@ -7,13 +7,19 @@ using ArcaneCore.Game.Spells;
 namespace ArcaneCore.Game.Stealth;
 
 /// <summary>
-/// The stealth services of one map (installed by the world daemon's StealthFeature): what other areas call to ask whether a
-/// creature sees a stealthed player. Creature AI asks it in its line-of-sight/aggro check
+/// The visibility services of one map (installed by the world daemon's StealthFeature): what other areas call to ask whether a
+/// creature sees a stealthed or invisible player. Creature AI asks it in its line-of-sight/aggro check
 /// (vmangos GridNotifiersImpl.h:54-70 CallAIMoveLOS: <c>moving->IsVisibleForOrDetect(creature, creature, true, false, &amp;alert)</c>;
 /// a creature always detects, there is no "already visible" shortcut). Without an installed instance nothing is ever hidden from a
 /// creature, which is the behaviour before the stealth lane (docs/areas/creature-ai.md).
 /// </summary>
-public sealed class StealthServices(SpellSystem spells, StealthRegistry registry, StealthOptions options)
+public interface ICreatureVisibility
+{
+    /// <summary>Whether the creature detects this player for proximity aggro (vmangos GridNotifiersImpl.h:54-70).</summary>
+    bool CanCreatureSee(Unit creature, Player target, out bool alert);
+}
+
+public sealed class StealthServices(SpellSystem spells, StealthRegistry registry, StealthOptions options) : ICreatureVisibility
 {
     private static readonly ConditionalWeakTable<Map, StealthServices> s_installed = new();
 
@@ -39,7 +45,7 @@ public sealed class StealthServices(SpellSystem spells, StealthRegistry registry
     }
 
     /// <summary>
-    /// Whether <paramref name="creature"/> sees <paramref name="target"/>: always, unless the target is stealthed. A stealthed player is
+    /// Whether <paramref name="creature"/> sees <paramref name="target"/>: always, unless the target is stealthed or invisible. A stealthed player is
     /// seen when the vmangos formula says so for the creature's levels (<see cref="StealthDetection"/>, creature constants: 5/6 yard base
     /// and per level) and the creature has line of sight. A unit that has just stealthed is not seen (NO_DETECT).
     /// <paramref name="alert"/> is true when the target is beyond sight but inside the alert band (visible distance + 5 yards): the creature
@@ -60,6 +66,18 @@ public sealed class StealthServices(SpellSystem spells, StealthRegistry registry
         if (group == StealthVisibility.NoDetect)
         {
             return false;
+        }
+
+        // vmangos Unit.cpp:6401-6433: invisibility is checked before stealth detection.
+        if (Spells.HasAuraType(target, AuraType.ModInvisibility)
+            && !InvisibilityAuras.CanDetect(Spells, creature, target))
+        {
+            return false;
+        }
+
+        if (group == StealthVisibility.Invisibility)
+        {
+            return true;
         }
 
         float dx = creature.X - target.X;

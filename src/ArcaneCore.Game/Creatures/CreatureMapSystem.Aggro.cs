@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Stealth;
 using ArcaneCore.Kernel.WorldData.Creatures;
 
 namespace ArcaneCore.Game.Creatures;
@@ -96,6 +97,8 @@ public sealed partial class CreatureMapSystem
 
         return Map.Combat.Hooks.CanAttack(creature, player)
             && _ai.Hostility.IsHostile(creature, player)
+            && (StealthServices.Find(Map) is not ICreatureVisibility visibility
+                || visibility.CanCreatureSee(creature, player, out _))
             && InLineOfSight(creature, player);
     }
 }
