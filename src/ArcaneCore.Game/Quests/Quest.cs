@@ -37,8 +37,7 @@ public sealed class Quest
         OfferRewardEmote = [t.OfferRewardEmote1, t.OfferRewardEmote2, t.OfferRewardEmote3, t.OfferRewardEmote4];
         OfferRewardEmoteDelay = [t.OfferRewardEmoteDelay1, t.OfferRewardEmoteDelay2, t.OfferRewardEmoteDelay3, t.OfferRewardEmoteDelay4];
 
-        // vmangos Quest ctor: Method & QUEST_METHOD_DISABLED → inactive; the objective/reward counts.
-        IsActive = (t.Method & QuestConstants.MethodDisabled) == 0;
+        // vmangos Quest ctor: Method & QUEST_METHOD_DISABLED → inactive (see IsActive); the objective/reward counts.
         ReqItemsCount = ReqItemId.Count(i => i != 0);
         ReqCreatureOrGOCountTotal = ReqCreatureOrGOId.Count(i => i != 0);
         RewItemsCount = RewItemId.Count(i => i != 0);
@@ -91,7 +90,30 @@ public sealed class Quest
 
     public QuestSpecialFlags SpecialFlags { get; }
 
-    public bool IsActive { get; }
+    /// <summary>
+    /// vmangos <c>Quest::IsActive</c>: a quest whose <c>Method</c> carries QUEST_METHOD_DISABLED is inactive (QuestDef.cpp:143-151),
+    /// unless the game-event system has taken it over: a quest listed in <c>game_event_quest</c> is inactive from load and
+    /// active only while its event runs (<see cref="SetEventState"/>, vmangos GameEventMgr.cpp:578 and :1023-1036).
+    /// An inactive quest is neither offered nor acceptable.
+    /// </summary>
+    public bool IsActive => Volatile.Read(ref _eventState) switch
+    {
+        EventActive => true,
+        EventInactive => false,
+        _ => (Template.Method & QuestConstants.MethodDisabled) == 0,
+    };
+
+    private const int NotEventQuest = 0;
+    private const int EventActive = 1;
+    private const int EventInactive = 2;
+    private int _eventState = NotEventQuest;
+
+    /// <summary>
+    /// Hand the quest to the game-event system (<paramref name="active"/> true while an event it is listed under runs, false
+    /// otherwise), or give it back (null: the quest's own <c>Method</c> decides again). Only the active flag changes: a quest already in
+    /// a player's log keeps its state when the event ends (vmangos <c>SetQuestActiveState</c>). World thread.
+    /// </summary>
+    public void SetEventState(bool? active) => Volatile.Write(ref _eventState, active is null ? NotEventQuest : active.Value ? EventActive : EventInactive);
 
     /// <summary>vmangos Quest::IsAutoComplete: Method 0.</summary>
     public bool IsAutoComplete => Template.Method == 0;

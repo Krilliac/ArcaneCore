@@ -128,8 +128,20 @@ public sealed partial class CreatureMapSystem
             return grid;
         }
 
+        LoadSpawns(grid, spawns);
+        return grid;
+    }
+
+    /// <summary>Create the creatures of <paramref name="spawns"/> in an already registered grid (a grid load, or one event spawn coming back: <see cref="RefreshSpawns"/>).</summary>
+    private void LoadSpawns(LoadedGrid grid, IEnumerable<CreatureSpawn> spawns)
+    {
         foreach (CreatureSpawn spawn in spawns)
         {
+            if (_spawnGate is { } gate && !gate.AllowsCreature(spawn.Guid))
+            {
+                continue; // an event spawn whose event is not running (vmangos leaves game_event_creature guids out of the grid at load)
+            }
+
             // A spawn with creature_spawn_entry rows becomes one of them; the entry part of its GUID is the one chosen when the object was
             // created, so a spawn that is already loaded is looked up under every entry it may carry.
             IReadOnlyList<uint> alternatives = _options.Respawn.AlternateEntries ? _content.GetSpawnEntries(spawn.Guid) : [];
@@ -165,6 +177,7 @@ public sealed partial class CreatureMapSystem
             }
 
             var creature = new Creature(spawn.Guid, template, spawn, _content, _random);
+            ApplyEventData(creature); // a running game event may change its entry or model (game_event_creature_data)
             if (_options.Respawn.DrawDelayAtLoad)
             {
                 creature.DrawRespawnDelay(); // m_respawnDelay is drawn once per loaded object (Creature.cpp:1963)
@@ -188,8 +201,6 @@ public sealed partial class CreatureMapSystem
 
             AddToWorld(creature, grid);
         }
-
-        return grid;
     }
 
     private void UnloadGrid(GridCoord coord)

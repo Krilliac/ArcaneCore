@@ -69,13 +69,12 @@ public sealed class WorldStateHooks
     /// configured <see cref="TimeOptions.TimeZoneId"/> if set, UTC when
     /// <see cref="TimeOptions.UseServerLocalTime"/> is false.
     /// </summary>
-    public DateTimeOffset LocalNow()
-    {
-        TimeZoneInfo zone = !TimeSettings.UseServerLocalTime
-            ? TimeZoneInfo.Utc
-            : TimeSettings.TimeZoneId.Length == 0 ? Time.Zone : ResolveZone(TimeSettings.TimeZoneId);
-        return TimeZoneInfo.ConvertTime(Time.UtcNow, zone);
-    }
+    public DateTimeOffset LocalNow() => TimeZoneInfo.ConvertTime(Time.UtcNow, LocalZone);
+
+    /// <summary>The zone <see cref="LocalNow"/> reads (the one game events and weather seasons are computed in).</summary>
+    public TimeZoneInfo LocalZone => !TimeSettings.UseServerLocalTime
+        ? TimeZoneInfo.Utc
+        : TimeSettings.TimeZoneId.Length == 0 ? Time.Zone : ResolveZone(TimeSettings.TimeZoneId);
 
     private TimeZoneInfo? _namedZone;
 

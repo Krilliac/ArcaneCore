@@ -80,6 +80,11 @@ public sealed partial class Creature : Unit, ICombatCreature
     {
         get
         {
+            if (EventTemplate is { } swapped)
+            {
+                return swapped; // a running game event swapped the entry (Creature.EventData.cs)
+            }
+
             int version = Content.DefinitionsVersion;
             if (version != _templateVersion)
             {
@@ -268,7 +273,7 @@ public sealed partial class Creature : Unit, ICombatCreature
         SetUInt32(UpdateFields.ObjectFieldEntry, t.Entry);
 
         // ChooseDisplayId + GetCreatureDisplayInfoRandomGender (vmangos InitEntry).
-        uint displayId = ChooseDisplayId(t, _random);
+        uint displayId = EventDisplayId != 0 ? EventDisplayId : ChooseDisplayId(t, _random); // a running game event may force the model
         CreatureModelInfo? model = Content.FindModel(displayId);
         if (model is { DisplayIdOtherGender: not 0 } && _random.Next(2) == 0 && Content.FindModel(model.DisplayIdOtherGender) is { } other)
         {

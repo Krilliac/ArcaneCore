@@ -82,7 +82,10 @@ public sealed class MapWeather : IMapUpdater
     public void Update(Map map, uint diffMs)
     {
         WorldStateHooks hooks = Hooks;
-        if (!hooks.WeatherSettings.Enabled || _zones.Count == 0)
+        // Existing zone weathers keep ticking whatever World:Weather:Enabled says: vmangos only guards creating weather (zone entry,
+        // Player.cpp:6600, and .wchange, ServerCommands.cpp:101); Map::UpdateWeathers (Map.cpp:1042) and Weather::Update
+        // (Weather.cpp:67-84) read no switch.
+        if (_zones.Count == 0)
         {
             return;
         }
