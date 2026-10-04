@@ -411,7 +411,9 @@ public sealed class LootServiceTests
         Assert.Equal(bob.Guid, group.LooterGuid); // vmangos Group.cpp:2476-2481 returns for MASTER_LOOT
         Assert.Equal(LootMethod.MasterLoot, group.LootMethod);
         Assert.Empty(rig.Groups.LooterUpdates);
-        Assert.Equal(bob.Guid, rig.Loot.FindLoot(wolf.Guid)!.Owner); // limit: no master-give yet, the master holds the loot
+        LootBag bag = rig.Loot.FindLoot(wolf.Guid)!;
+        Assert.True(bag.Owner.IsEmpty); // master loot hands items out by master-give, not through an owner (GroupLootRollTests)
+        Assert.Equal((LootPermission.Master, bob.Guid), (bag.Permission, bag.MasterLooter));
         rig.Creatures.ForceRespawn(wolf);
         rig.KillWolf(alice);
         Assert.Equal(bob.Guid, group.LooterGuid);

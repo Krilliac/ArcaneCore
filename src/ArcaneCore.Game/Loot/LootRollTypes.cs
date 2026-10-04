@@ -56,3 +56,28 @@ public enum LootError : byte
     /// <summary>You can't do that while shapeshifted.</summary>
     NotWhileShapeshifted = 16,
 }
+
+/// <summary>The outcome of a master loot give (<see cref="LootService.GiveMasterLoot"/>).</summary>
+public enum MasterGiveResult
+{
+    /// <summary>The item went into the target's bags.</summary>
+    Given,
+
+    /// <summary>The caller is not the master looter of a group (vmangos closes the loot window).</summary>
+    NotMaster,
+
+    /// <summary>The caller does not have that master loot window open, or the slot is not a master-give item; ignored.</summary>
+    NotApplicable,
+
+    /// <summary>The target is not online in the map, not in the group or not within reward distance (<see cref="LootError.PlayerNotFound"/>).</summary>
+    TargetNotEligible,
+
+    /// <summary>The target's bags are full (<see cref="LootError.MasterInventoryFull"/>).</summary>
+    TargetInventoryFull,
+
+    /// <summary>The target cannot carry more of the item (<see cref="LootError.MasterUniqueItem"/>).</summary>
+    TargetUnique,
+
+    /// <summary>Any other store refusal (<see cref="LootError.MasterOther"/>).</summary>
+    TargetOther,
+}

@@ -67,6 +67,19 @@ public enum LootSourceKind
     Skinning,
 }
 
+/// <summary>How the shared items of one loot window are handed out (vmangos Loot permission: ALL, GROUP, MASTER).</summary>
+public enum LootPermission : byte
+{
+    /// <summary>Everyone allowed takes it (solo, free-for-all, round robin with its <see cref="LootBag.Owner"/>, chests without group rules).</summary>
+    Open,
+
+    /// <summary>Group loot and need-before-greed: items at or above the threshold are rolled for (<see cref="LootRollManager"/>).</summary>
+    Roll,
+
+    /// <summary>Master loot: items at or above the threshold are given by <see cref="LootBag.MasterLooter"/>.</summary>
+    Master,
+}
+
 /// <summary>One item stack in a loot window (vmangos LootItem).</summary>
 public sealed class LootItem
 {
@@ -103,6 +116,21 @@ public sealed class LootItem
 
     /// <summary>Who took their copy of a per-player item.</summary>
     public HashSet<ObjectGuid> LootedBy { get; } = [];
+
+    /// <summary>
+    /// False when the group loot threshold puts this shared item under roll or master-give control (vmangos is_underthreshold
+    /// is 1 by default). Only <see cref="LootService"/> sets it, at generation; per-player and quest items stay under the threshold.
+    /// </summary>
+    public bool IsUnderThreshold { get; internal set; } = true;
+
+    /// <summary>A need/greed roll for this item is running (vmangos is_blocked): viewers see it as view-only and nobody can take it.</summary>
+    public bool RollActive { get; internal set; }
+
+    /// <summary>
+    /// The roll winner whose bags were full (vmangos LootItem::winner): only that player may take the item afterwards.
+    /// Empty when nobody holds a claim.
+    /// </summary>
+    public ObjectGuid Winner { get; internal set; }
 }
 
 /// <summary>
@@ -162,6 +190,15 @@ public sealed class LootBag
     /// of a chest), or empty when every recipient may.
     /// </summary>
     public ObjectGuid Owner { get; internal set; }
+
+    /// <summary>How shared items are handed out (rolls, master give or open). World thread; set once at generation.</summary>
+    public LootPermission Permission { get; internal set; }
+
+    /// <summary>The group's master looter when <see cref="Permission"/> is <see cref="LootPermission.Master"/>.</summary>
+    public ObjectGuid MasterLooter { get; internal set; }
+
+    /// <summary>Rolls were started for the items above the threshold (they start once, when the first player opens the loot).</summary>
+    public bool RollsStarted { get; internal set; }
 
     /// <summary>Players with this loot window open (vmangos m_playersLooting).</summary>
     public HashSet<Player> Viewers { get; } = new(ReferenceEqualityComparer.Instance);
@@ -307,7 +344,32 @@ public sealed class LootBag
             return item.LootedBy.Contains(player.Guid) ? null : LootSlotType.AllowLoot;
         }
 
-        return Owner.IsEmpty || Owner == player.Guid ? LootSlotType.AllowLoot : null;
+        if (!Owner.IsEmpty && Owner != player.Guid)
+        {
+            return null;
+        }
+
+        // A roll winner whose bags were full keeps the only claim (vmangos LootItem::winner).
+        if (!item.Winner.IsEmpty && item.Winner != player.Guid)
+        {
+            return null;
+        }
+
+        switch (Permission)
+        {
+            case LootPermission.Roll:
+                return item.RollActive ? LootSlotType.RollOngoing : LootSlotType.AllowLoot;
+            case LootPermission.Master:
+                // Under the threshold (or a claim by this player): a plain take. Above it only the master sees the slot, as a master slot.
+                if (item.IsUnderThreshold || item.Winner == player.Guid)
+                {
+                    return LootSlotType.AllowLoot;
+                }
+
+                return player.Guid == MasterLooter ? LootSlotType.Master : null;
+            default:
+                return LootSlotType.AllowLoot;
+        }
     }
 
     /// <summary>Whether <paramref name="player"/> would see money or any item (vmangos Loot::IsLootedFor negated).</summary>
