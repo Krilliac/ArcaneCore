@@ -68,6 +68,12 @@ public sealed class GameObjectTemplateRow
 
     public uint Data23 { get; set; }
 
+    /// <summary><c>mingold</c>: the chest money lower bound in copper (world schema step <see cref="GameObjectTemplateGoldDataModule"/>); 0 when the dump has none.</summary>
+    public uint MinGold { get; set; }
+
+    /// <summary><c>maxgold</c>: the chest money upper bound in copper; 0 means no money (same step).</summary>
+    public uint MaxGold { get; set; }
+
     public uint[] GetData() =>
     [
         Data0, Data1, Data2, Data3, Data4, Data5, Data6, Data7, Data8, Data9, Data10, Data11,

@@ -201,6 +201,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             Items = new DeferredItemTemplates(services),
             Quests = Quests,
             Groups = new SocialGroups(services),
+            Conditions = new LootConditions(services).IsSatisfied,
             CreatureOptions = services.GetService<CreatureWorldFeature>()?.Options ?? new CreatureOptions(),
             Durable = _settlements,
         };
@@ -279,6 +280,21 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         public ItemTemplate? Find(uint entry) => Inner.Find(entry);
 
         public IReadOnlyList<StartingItem> StartingItems(byte race, byte cls) => Inner.StartingItems(race, cls);
+    }
+
+    /// <summary>
+    /// The <c>conditions</c> table for loot rows (mangos <c>LootItem::AllowedForPlayer</c>, Object/LootMgr.cpp:505:
+    /// <c>IsPlayerMeetToCondition(conditionId, player, map, lootTarget, CONDITION_FROM_LOOT)</c>) through the
+    /// <see cref="ConditionFeature"/>, resolved at use time: it attaches before this feature (type-name order) but may rebuild
+    /// its evaluator later (<see cref="ConditionFeature.RefreshCollaborators"/>), and it forwards to the current one. Without
+    /// the feature every conditioned row fails closed, like a missing condition row in cmangos. The loot source is not passed
+    /// (<see cref="LootService.Conditions"/> has no source parameter), so source-side condition types read "no source".
+    /// World thread; one lookup per conditioned row at generation, nothing per tick.
+    /// </summary>
+    private sealed class LootConditions(IServiceProvider services)
+    {
+        public bool IsSatisfied(Player player, uint conditionId)
+            => services.GetService<ConditionFeature>()?.IsSatisfied(conditionId, player, null) ?? false;
     }
 
     private sealed class SocialGroups(IServiceProvider services) : ILootGroups

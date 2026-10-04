@@ -96,7 +96,11 @@ public sealed partial class LootService : IViewerFieldFilter
     /// <summary>The creature options the maps run with (corpse decay); defaults when the creature feature is absent.</summary>
     public CreatureOptions CreatureOptions { get; set; } = new();
 
-    /// <summary>Evaluates a loot row's condition_id; null (no conditions area) skips conditioned rows.</summary>
+    /// <summary>
+    /// Evaluates a loot row's condition_id for one recipient (the world daemon wires the conditions feature here,
+    /// <c>GameObjectLootFeature</c>); null (no conditions area) skips conditioned rows, as a missing row does in cmangos.
+    /// A conditioned row is generated when any recipient satisfies it (see docs/areas/loot-conditions-chest-gold.md).
+    /// </summary>
     public Func<Player, uint, bool>? Conditions { get; set; }
 
     /// <summary>
@@ -468,7 +472,8 @@ public sealed partial class LootService : IViewerFieldFilter
     /// <summary>
     /// Open a chest-like object's loot (called by <see cref="GameObjectMapSystem"/> after its use
     /// checks). The loot is generated on first open from gameobject_loot_template (chest data1)
-    /// for the opener and their group and persists until the object despawns.
+    /// for the opener and their group, with the template's mingold..maxgold as money
+    /// (<see cref="LootMoneyRules.GenerateForGameObject"/>), and persists until the object despawns.
     /// </summary>
     internal LootResult OpenGameObject(Player player, GameObject go, uint lootId)
     {
@@ -478,6 +483,7 @@ public sealed partial class LootService : IViewerFieldFilter
             LootBag fresh = Generate(go.Guid, LootSourceKind.GameObject,
                 go.Type == GameObjectType.FishingNode ? LootType.Fishing : LootType.Corpse,
                 LootTableKind.GameObject, lootId, recipients);
+            fresh.Gold = Math.Min(LootMoneyRules.GenerateForGameObject(go.Template, lootId, Options.MoneyRate, _random), MaxMoneyAmount);
             Group? looterGroup = UsesGroupLootRules(go) ? group : null;
             ApplyLooterPlan(fresh, looterGroup, PlanLooter(looterGroup, recipients, fresh.Recipients));
             ConfigureDistribution(fresh, looterGroup, recipients);
@@ -550,7 +556,8 @@ public sealed partial class LootService : IViewerFieldFilter
         }
 
         // Nothing stored yet, or the chest was consumed and has respawned: a new generation. The
-        // group's round-robin position only moves when the generation committed.
+        // group's round-robin position only moves when the generation committed. No money: the durable record has no
+        // place for it yet (LootBag.ToRecord refuses a bag with gold), so a stored chest pays nothing (docs/areas/loot-conditions-chest-gold.md).
         List<Player> recipients = RecipientsFor(player, go, out Group? group);
         LootBag fresh = Generate(go.Guid, LootSourceKind.GameObject, LootType.Corpse, LootTableKind.GameObject, lootId, recipients);
         fresh.DurableKey = key;
@@ -1088,7 +1095,10 @@ public sealed partial class LootService : IViewerFieldFilter
     /// CMSG_LOOT_MONEY (vmangos HandleLootMoneyOpcode): corpse money is split evenly between the
     /// recipients still in the map within the group loot distance (each gets
     /// SMSG_LOOT_MONEY_NOTIFY with their share; the remainder is lost, as in vmangos); other loot
-    /// pays the looter. Every viewer then gets SMSG_LOOT_CLEAR_MONEY.
+    /// pays the looter. Chest money (the template's mingold..maxgold) pays the looter too: the reference splits every non-item
+    /// loot among the looter's group members in range (mangos WorldHandlers/LootHandler.cpp:344-385), but a chest's recipients
+    /// also include ungrouped late openers, so that split waits for a group-membership check (docs/areas/loot-conditions-chest-gold.md).
+    /// Every viewer then gets SMSG_LOOT_CLEAR_MONEY.
     /// </summary>
     public bool TakeMoney(Player player)
     {

@@ -79,6 +79,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Graveyards.GraveyardDataModule), DatabaseComponent.World, ArcaneCore.Data.Graveyards.GraveyardDataModule.Version),
             (typeof(AreaTriggerQuestWorldModule), DatabaseComponent.World, AreaTriggerQuestWorldModule.Version),
             (typeof(ArcaneCore.Data.World.Rest.AreaTriggerTavernDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Rest.AreaTriggerTavernDataModule.Version),
+            (typeof(GameObjectTemplateGoldDataModule), DatabaseComponent.World, GameObjectTemplateGoldDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
