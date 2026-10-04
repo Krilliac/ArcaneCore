@@ -267,6 +267,25 @@ public sealed class BanCommands : ICommandGroup
         return true;
     }
 
+    /// <summary>The first <see cref="BanOptions.MaxListedEntries"/> items (all when 0); <paramref name="truncated"/> says some were left out.</summary>
+    private static List<T> Capped<T>(IEnumerable<T> items, int max, out bool truncated)
+    {
+        var kept = new List<T>();
+        truncated = false;
+        foreach (T item in items)
+        {
+            if (max > 0 && kept.Count >= max)
+            {
+                truncated = true;
+                break;
+            }
+
+            kept.Add(item);
+        }
+
+        return kept;
+    }
+
     private static async Task ReplyHistoryAsync(IServiceProvider services, CommandContext context, int accountId, string accountName)
     {
         IReadOnlyList<AccountBanRecord> history = await services.GetRequiredService<IBanStore>().GetHistoryAsync(accountId).ConfigureAwait(false);
@@ -281,8 +300,10 @@ public sealed class BanCommands : ICommandGroup
             : [];
         long now = (services.GetService<TimeProvider>() ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds();
 
+        int max = OptionsOf(context).MaxListedEntries;
+        List<AccountBanRecord> shown = Capped(history, max, out bool historyTruncated);
         context.Reply(string.Format(BanCommandText.BanInfoHistory, accountName));
-        foreach (AccountBanRecord row in history)
+        foreach (AccountBanRecord row in shown)
         {
             // AccountCommands.cpp:781-803. Note retail's own comparison: active here means unbandate >= now.
             long length = row.UnbanDate - row.BanDate;
@@ -296,6 +317,11 @@ public sealed class BanCommands : ICommandGroup
                 active ? BanCommandText.Yes : BanCommandText.No,
                 row.Reason,
                 $"{row.BannedBy} ({realm})"));
+        }
+
+        if (historyTruncated)
+        {
+            context.Reply(string.Format(BanCommandText.ListTruncated, max));
         }
     }
 
@@ -343,15 +369,21 @@ public sealed class BanCommands : ICommandGroup
 
             int[] ids = [.. (await bans.ListActiveAccountBansAsync().ConfigureAwait(false)).Select(r => r.AccountId).Distinct().Order()];
             IReadOnlyDictionary<int, string> names = await services.GetRequiredService<IAccountAdmin>().GetUsernamesAsync(ids).ConfigureAwait(false);
-            string[] matching = [.. ids.Where(names.ContainsKey).Select(i => names[i])
-                .Where(n => n.StartsWith(filter, StringComparison.OrdinalIgnoreCase))];
-            if (matching.Length == 0)
+            int max = OptionsOf(context).MaxListedEntries;
+            List<string> matching = Capped(ids.Where(names.ContainsKey).Select(i => names[i])
+                .Where(n => n.StartsWith(filter, StringComparison.OrdinalIgnoreCase)), max, out bool truncated);
+            if (matching.Count == 0)
             {
                 context.Reply(BanCommandText.BanListNoAccount);
                 return;
             }
 
             context.Reply(BanCommandText.BanListMatchingAccount);
+            if (truncated)
+            {
+                matching.Add(string.Format(BanCommandText.ListTruncated, max));
+            }
+
             context.Reply(string.Join('\n', matching));
         });
         return true;
@@ -381,13 +413,26 @@ public sealed class BanCommands : ICommandGroup
             // HandleBanListHelper: the header, then the name of every such account that has any ban row.
             context.Reply(BanCommandText.BanListMatchingAccount);
             IReadOnlyDictionary<int, string> names = await services.GetRequiredService<IAccountAdmin>().GetUsernamesAsync(accountIds).ConfigureAwait(false);
+            int max = OptionsOf(context).MaxListedEntries;
             var lines = new List<string>();
+            bool truncated = false;
             foreach (int id in accountIds)
             {
                 if (names.TryGetValue(id, out string? name) && (await bans.GetHistoryAsync(id).ConfigureAwait(false)).Count > 0)
                 {
+                    if (max > 0 && lines.Count >= max)
+                    {
+                        truncated = true; // stop here: no further history query per matching account
+                        break;
+                    }
+
                     lines.Add(name);
                 }
+            }
+
+            if (truncated)
+            {
+                lines.Add(string.Format(BanCommandText.ListTruncated, max));
             }
 
             if (lines.Count > 0)
@@ -413,8 +458,15 @@ public sealed class BanCommands : ICommandGroup
                 return;
             }
 
+            int max = OptionsOf(context).MaxListedEntries;
+            List<string> ips = Capped(rows.Select(r => r.Ip), max, out bool truncated);
             context.Reply(BanCommandText.BanListMatchingIp);
-            context.Reply(string.Join('\n', rows.Select(r => r.Ip)));
+            if (truncated)
+            {
+                ips.Add(string.Format(BanCommandText.ListTruncated, max));
+            }
+
+            context.Reply(string.Join('\n', ips));
         });
         return true;
     }

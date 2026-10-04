@@ -33,6 +33,9 @@ public static class BanCommandText
     public const string BanListNoAccount = "There is no matching account.";                      // 425
     public const string BanListNoCharacter = "There is no banned account owning a character matching this part."; // 426
     public const string BanListMatchingIp = "The following IPs match your pattern:";             // 427
+
+    /// <summary>Not a retail string: the last line of a reply cut at <c>Bans:MaxListedEntries</c> ({0} entries shown).</summary>
+    public const string ListTruncated = "... more entries exist; only the first {0} are shown.";
     public const string BanListMatchingAccount = "The following accounts match your query:";     // 428
     public const string PlayerNotFound = "Player not found!";                                    // 499
 

@@ -44,6 +44,7 @@ Administrator for `ban ip` and every `unban`.
 | `Bans:RejectUnparseableDuration` | `false` (retail) | Make a malformed `.ban` duration a syntax error instead of a permanent ban. A duration that overflows 32 bits of seconds (about 136 years) is always refused, by `.ban` and `arcane-account ban`, whatever this is set to: it never wraps into a short or permanent ban |
 | `Bans:ProtectHigherSecurity` | `true` (stricter than retail) | Refuse `.ban account` / `.ban character` against an account whose security is equal to or higher than the invoker's (banning your own account still works). vmangos has no such guard; set `false` for exact parity. Not applied to `.ban ip` or to unbans |
 | `Bans:RealmId` | `1` | Written to `account_banned.realm` (vmangos `realmID`); never filtered on, as retail |
+| `Bans:MaxListedEntries` | `200` (stricter than retail) | The most entries one `.baninfo` history or `.banlist` reply prints before a "more entries exist" line; `.banlist character` also stops its per-account history queries there. Retail prints everything; `0` restores that |
 
 Behaviour retail mandates (kick on `.ban`, refusal at logon and world auth, IP-ban refusal, the
 author is not kicked by their own ban) has no switch.
