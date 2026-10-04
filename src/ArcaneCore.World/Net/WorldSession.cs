@@ -642,7 +642,13 @@ public sealed class WorldSession : IPlayerSession
         return RemoteAddress is { } address && await bans.GetActiveIpBanAsync(address).ConfigureAwait(false) is not null;
     }
 
-    private void SendAuthResponse(AuthResponseCode code) => Send(WorldOpcode.SmsgAuthResponse, [(byte)code]);
+    /// <summary>
+    /// SMSG_AUTH_RESPONSE. AUTH_OK carries u32 billing_time, u8 billing_flags, u32 billing_rested after the result
+    /// (wow_messages smsg_auth_response.wowm; vmangos World.cpp:324-333; mangos-classic WorldSession::SendAuthOk), all
+    /// zero here; every failure code is the bare result byte.
+    /// </summary>
+    private void SendAuthResponse(AuthResponseCode code) =>
+        Send(WorldOpcode.SmsgAuthResponse, code == AuthResponseCode.Ok ? new byte[10] { (byte)code, 0, 0, 0, 0, 0, 0, 0, 0, 0 } : [(byte)code]);
 
     // --- teardown ------------------------------------------------------------------
 
