@@ -24,6 +24,9 @@ public enum AuthResult : byte
     Banned = 0x03,
     UnknownAccount = 0x04,
     IncorrectPassword = 0x05,
+
+    /// <summary>WOW_FAIL_DB_BUSY (vmangos AuthCodes.h): the logon server could not use its database; the client is told to try again later.</summary>
+    FailDbBusy = 0x08,
     VersionInvalid = 0x09,
     Suspended = 0x0C,
 

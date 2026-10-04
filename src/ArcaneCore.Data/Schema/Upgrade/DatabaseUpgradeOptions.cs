@@ -55,7 +55,10 @@ public static class DatabaseStartup
     /// Run a daemon's schema initialization. A refusal (<see cref="SchemaMismatchException"/>: policy, newer database,
     /// unknown state, lock timeout) is one line on <paramref name="error"/> with every configured password removed and
     /// an exit code (<see cref="Cli.DbUpgradeExitCodes.Refused"/> or <see cref="Cli.DbUpgradeExitCodes.LockTimeout"/>)
-    /// instead of an unhandled-exception crash; any other failure propagates unchanged.
+    /// instead of an unhandled-exception crash. A server that cannot be reached (<see cref="Resilience.DatabaseTransience"/>)
+    /// is retried with the <c>Resilience:Database:Bootstrap</c> backoff when a <see cref="Resilience.DatabaseGuard"/> is
+    /// registered, then reported the same way with <see cref="Cli.DbUpgradeExitCodes.Unreachable"/> (docs/ops/resilience.md).
+    /// Any other failure propagates unchanged.
     /// </summary>
     /// <returns>0 when initialized, otherwise the exit code the process should return.</returns>
     public static async Task<int> InitializeAsync(Func<Task> initialize, IServiceProvider? services, TextWriter error)
@@ -64,24 +67,42 @@ public static class DatabaseStartup
         ArgumentNullException.ThrowIfNull(error);
         try
         {
-            await initialize().ConfigureAwait(false);
+            if (services?.GetService(typeof(Resilience.DatabaseGuard)) is Resilience.DatabaseGuard guard)
+            {
+                await guard.BootstrapAsync(initialize).ConfigureAwait(false);
+            }
+            else
+            {
+                await initialize().ConfigureAwait(false);
+            }
+
             return Cli.DbUpgradeExitCodes.Ok;
         }
         catch (SchemaMismatchException ex)
         {
-            string message = ex.Message.ReplaceLineEndings(" ");
-            DatabaseOptions? options = (services?.GetService(typeof(IOptions<DatabaseOptions>)) as IOptions<DatabaseOptions>)?.Value;
-            foreach (string? connectionString in new[] { options?.ConnectionString, options?.Auth?.ConnectionString, options?.Characters?.ConnectionString, options?.World?.ConnectionString })
-            {
-                if (!string.IsNullOrEmpty(connectionString))
-                {
-                    message = Content.Import.ConnectionStringRedactor.Scrub(message, connectionString);
-                }
-            }
-
-            message = Content.Import.ConnectionStringRedactor.Scrub(message, string.Empty);
-            await error.WriteLineAsync($"database schema refused: {message}").ConfigureAwait(false);
+            await error.WriteLineAsync($"database schema refused: {Scrub(ex.Message, services)}").ConfigureAwait(false);
             return ex.Reason == SchemaMismatchReason.LockTimeout ? Cli.DbUpgradeExitCodes.LockTimeout : Cli.DbUpgradeExitCodes.Refused;
         }
+        catch (Exception ex) when (Resilience.DatabaseTransience.IsTransient(ex))
+        {
+            await error.WriteLineAsync($"database unreachable: {Scrub(Resilience.DatabaseCircuits.Reason(ex), services)}").ConfigureAwait(false);
+            return Cli.DbUpgradeExitCodes.Unreachable;
+        }
+    }
+
+    /// <summary>One line with every configured connection string's secrets removed.</summary>
+    private static string Scrub(string text, IServiceProvider? services)
+    {
+        string message = text.ReplaceLineEndings(" ");
+        DatabaseOptions? options = (services?.GetService(typeof(IOptions<DatabaseOptions>)) as IOptions<DatabaseOptions>)?.Value;
+        foreach (string? connectionString in new[] { options?.ConnectionString, options?.Auth?.ConnectionString, options?.Characters?.ConnectionString, options?.World?.ConnectionString })
+        {
+            if (!string.IsNullOrEmpty(connectionString))
+            {
+                message = Content.Import.ConnectionStringRedactor.Scrub(message, connectionString);
+            }
+        }
+
+        return Content.Import.ConnectionStringRedactor.Scrub(message, string.Empty);
     }
 }

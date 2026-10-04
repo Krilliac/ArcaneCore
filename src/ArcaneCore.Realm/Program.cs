@@ -12,6 +12,7 @@ HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
 builder.Services.Configure<RealmSeedOptions>(builder.Configuration.GetSection(RealmSeedOptions.SectionName));
 builder.Services.AddAuthDatabase(builder.Configuration);
+builder.Services.AddRealmResilience(builder.Configuration); // after AddAuthDatabase: guards the auth stores (docs/ops/resilience.md)
 builder.Services.AddHostedService<LogonServer>();
 
 IHost host = builder.Build();

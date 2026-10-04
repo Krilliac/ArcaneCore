@@ -2,6 +2,7 @@ using System.Data;
 using System.Data.Common;
 using System.Globalization;
 using System.Text;
+using ArcaneCore.Kernel.Resilience;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -189,26 +190,38 @@ internal sealed class SchemaLock : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Try the lock statement every <see cref="PollInterval"/> until it answers 1, with <paramref name="timeout"/> as the
+    /// budget (<see cref="RetryPolicy.ExecuteUntilAsync{TState}"/>: fixed interval, no jitter, the last poll at the
+    /// deadline). A statement error propagates; only "not granted" is polled.
+    /// </summary>
     private async Task PollAsync(
         string sql, (string Name, object Value)[] parameters, TimeSpan timeout, CancellationToken cancellationToken)
     {
-        DateTime deadline = DateTime.UtcNow + timeout;
-        while (true)
+        var poll = new RetryPolicy(new RetryOptions
         {
-            object? result = await ExecuteScalarAsync(sql, parameters, cancellationToken).ConfigureAwait(false);
-            if (result is true || (result is not null && result is not DBNull && Convert.ToInt64(result, CultureInfo.InvariantCulture) == 1))
-            {
-                _heldByName = true;
-                return;
-            }
+            MaxAttempts = int.MaxValue,
+            BaseDelay = PollInterval,
+            MaxDelay = PollInterval,
+            Jitter = RetryJitter.None,
+            MaxTotalDuration = timeout,
+        });
 
-            if (DateTime.UtcNow >= deadline)
+        bool granted = await poll.ExecuteUntilAsync(
+            static async (s, ct) =>
             {
-                throw Timeout(timeout, null);
-            }
+                object? result = await s.Lock.ExecuteScalarAsync(s.Sql, s.Parameters, ct).ConfigureAwait(false);
+                return result is true || (result is not null && result is not DBNull && Convert.ToInt64(result, CultureInfo.InvariantCulture) == 1);
+            },
+            (Lock: this, Sql: sql, Parameters: parameters),
+            cancellationToken).ConfigureAwait(false);
 
-            await Task.Delay(PollInterval, cancellationToken).ConfigureAwait(false);
+        if (!granted)
+        {
+            throw Timeout(timeout, null);
         }
+
+        _heldByName = true;
     }
 
     private async Task<object?> ExecuteScalarAsync(string sql, (string Name, object Value)[] parameters, CancellationToken cancellationToken)
