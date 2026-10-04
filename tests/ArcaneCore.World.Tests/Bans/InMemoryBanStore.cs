@@ -135,6 +135,14 @@ internal sealed class InMemoryBanStore(AccountStatusEvents? events = null, TimeP
         }
 
         string ip = AccountBanEvaluator.NormalizeIp(request.Ip) ?? request.Ip;
+        lock (_gate)
+        {
+            if (_ipRows.Any(r => r.Ip == ip && AccountBanEvaluator.IsActive(r, Now)))
+            {
+                return Task.FromResult(false); // retail: the second INSERT fails on the primary key; the first row stays
+            }
+        }
+
         AddIpRow(ip, Now, Now + request.DurationSeconds);
         events?.Publish(new IpBanChange(ip, request.AuthorAccountId));
         return Task.FromResult(true);
@@ -178,6 +186,21 @@ internal sealed class InMemoryBanStore(AccountStatusEvents? events = null, TimeP
         lock (_gate)
         {
             return Task.FromResult<IReadOnlyList<AccountBanRecord>>([.. _accountRows.Where(r => r.AccountId == accountId).OrderBy(r => r.BanDate).ThenBy(r => r.BanId)]);
+        }
+    }
+
+    /// <summary>How many times <see cref="FindAccountsWithHistoryAsync"/> was called.</summary>
+    public int FindHistoryCalls => Volatile.Read(ref _historyCalls);
+
+    private int _historyCalls;
+
+    public Task<IReadOnlySet<int>> FindAccountsWithHistoryAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
+    {
+        MaybeFail();
+        Interlocked.Increment(ref _historyCalls);
+        lock (_gate)
+        {
+            return Task.FromResult<IReadOnlySet<int>>(_accountRows.Where(r => accountIds.Contains(r.AccountId)).Select(r => r.AccountId).ToHashSet());
         }
     }
 

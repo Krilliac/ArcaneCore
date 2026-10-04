@@ -36,6 +36,8 @@ public static class BanCommandText
 
     /// <summary>Not a retail string: the last line of a reply cut at <c>Bans:MaxListedEntries</c> ({0} entries shown).</summary>
     public const string ListTruncated = "... more entries exist; only the first {0} are shown.";
+    /// <summary>Not a retail string (retail ignores the failed INSERT and still reports success): <c>.ban ip</c> against an address with a ban in force.</summary>
+    public const string IpAlreadyBanned = "{0} is already banned; the existing ban is unchanged.";
     public const string BanListMatchingAccount = "The following accounts match your query:";     // 428
     public const string PlayerNotFound = "Player not found!";                                    // 499
 

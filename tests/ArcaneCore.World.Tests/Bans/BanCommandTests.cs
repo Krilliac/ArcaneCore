@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Bans;
 using Xunit;
@@ -227,6 +228,65 @@ public sealed class BanCommandTests
         Assert.Equal(
             ["The following IPs match your pattern:", "1.2.3.1", "1.2.3.2", "... more entries exist; only the first 2 are shown."],
             await ReadLinesAsync(admin, 4));
+    }
+
+    [Fact] // the cap bounds the history work of .banlist character, not only the printed lines
+    public async Task BanListCharacter_StopsQueryingOnceTheCapIsExceeded()
+    {
+        await using var host = WorldTestHost.Start(banOptions: new BanOptions { MaxListedEntries = 2 });
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        const int accounts = 450; // three batches of 200 when walked to the end
+        for (int i = 0; i < accounts; i++)
+        {
+            await host.AddAccountAsync($"ACC{i:D3}");
+            int id = (await host.Accounts.FindByUsernameAsync($"ACC{i:D3}"))!.Id;
+            host.Directory.Add(new CharacterIdentity(1000 + i, id, $"Zed{i:D3}", 1, 0, 1));
+            if (i < 3)
+            {
+                host.Bans.AddAccountRow(id, 100, 100); // only the first three have history, all in the first batch
+            }
+        }
+
+        await Drain(admin);
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".banlist character zed");
+        Assert.Equal(
+            ["The following accounts match your query:", "ACC000", "ACC001", "... more entries exist; only the first 2 are shown."],
+            await ReadLinesAsync(admin, 4));
+        Assert.Equal(1, host.Bans.FindHistoryCalls); // not 3 batches, and never one query per account
+    }
+
+    [Fact] // a small listing is identical to before: every account with history, in id order
+    public async Task BanListCharacter_UnderTheCap_ListsEveryAccountWithHistoryAcrossBatches()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        for (int i = 0; i < 250; i++)
+        {
+            await host.AddAccountAsync($"ACC{i:D3}");
+            int id = (await host.Accounts.FindByUsernameAsync($"ACC{i:D3}"))!.Id;
+            host.Directory.Add(new CharacterIdentity(1000 + i, id, $"Zed{i:D3}", 1, 0, 1));
+            if (i is 5 or 230)
+            {
+                host.Bans.AddAccountRow(id, 100, 200, active: false);
+            }
+        }
+
+        await Drain(admin);
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".banlist character zed");
+        Assert.Equal(["The following accounts match your query:", "ACC005", "ACC230"], await ReadLinesAsync(admin, 3));
+        Assert.Equal(2, host.Bans.FindHistoryCalls);
+    }
+
+    [Fact]
+    public async Task BanIp_AnAddressAlreadyBanned_ReportsItInsteadOfBanned()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await Drain(admin);
+
+        Assert.Equal("10.1.1.1 is banned permanently for first.", await CommandAsync(admin, ".ban ip 10.1.1.1 0 first"));
+        Assert.Equal("10.1.1.1 is already banned; the existing ban is unchanged.", await CommandAsync(admin, ".ban ip 10.1.1.1 1d second"));
+        Assert.True((await host.Bans.GetActiveIpBanAsync("10.1.1.1"))!.IsPermanent); // the 1d retry did not replace it
     }
 
     [Fact]

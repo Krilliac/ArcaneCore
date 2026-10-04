@@ -51,7 +51,8 @@ public sealed class BanOptions
     /// <summary>
     /// The most entries one <c>.baninfo</c> history or <c>.banlist</c> reply prints before it ends with a "not shown" line.
     /// Retail prints everything; a long ban history or a one-letter prefix against a large realm would otherwise build and send
-    /// one unbounded chat reply (and, for <c>.banlist character</c>, one history query per matching account). 0 restores retail's
+    /// one unbounded chat reply (and, for <c>.banlist character</c>, one history query per matching account). For <c>.banlist character</c> the cap also bounds the work: accounts are checked in
+    /// batches of 200 (one query each) and the walk stops once one more than the cap has history. 0 restores retail's
     /// unbounded output. Bound from Bans:MaxListedEntries; default 200 (a deliberate deviation, only above that many entries).
     /// </summary>
     public int MaxListedEntries { get; set; } = 200;

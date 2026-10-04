@@ -40,6 +40,12 @@ public interface IBanStore
     /// <summary>Every row of an account, oldest first (<c>.baninfo</c>).</summary>
     Task<IReadOnlyList<AccountBanRecord>> GetHistoryAsync(int accountId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Which of <paramref name="accountIds"/> have at least one ban row, active or not (<c>.banlist character</c>). The
+    /// caller passes a bounded batch: one query per call, so a listing never costs one query per account.
+    /// </summary>
+    Task<IReadOnlySet<int>> FindAccountsWithHistoryAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default);
+
     /// <summary>Ban rows in force now (<c>.banlist</c>).</summary>
     Task<IReadOnlyList<AccountBanRecord>> ListActiveAccountBansAsync(CancellationToken cancellationToken = default);
 
