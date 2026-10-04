@@ -63,8 +63,9 @@ already syncs the mode.
 * **Fear** (`CrowdControlFleeingMovementGenerator`, `Type = Fleeing`) wraps the existing `FleeingMovementGenerator` with no duration:
   legs run away from the fear source (the caster of the latest fear aura, remembered by `CcAuraHandlers` in `CcState.FearSource`; a
   creature that feared itself, or whose caster left the world, flees in a random direction), 0.5-1 s pause between legs. Unlike the
-  plain flight it does not own the flag: interrupting it or clearing the stack (evade) leaves `Fleeing` as the auras set it, and the hook
-  starts the flight again while the flag holds.
+  plain flight it does not own the flag: starting, resuming, interrupting it or clearing the stack (evade) leaves `Fleeing` as the auras
+  had it (a point pushed after the aura ended, before the hook ran, must not stick the flag back on), and the hook starts the flight again
+  while the flag holds. Removed while buried under a pushed generator, it leaves that generator's spline running.
 * **Confuse / Polymorph** (`ConfusedMovementGenerator`, new `MovementGeneratorType.Confused = 5`): a Polymorph carries a ModConfuse
   aura, so it staggers like any confuse. A walk to a random point within 10 yd of where it was confused, a new point every 800-1500 ms
   even mid-leg (mangosserver `MotionGenerators/ConfusedMovementGenerator.cpp`: `STAGGER_RADIUS`, `STAGGER_INTERVAL_*`, `MOVE_WALK`). The

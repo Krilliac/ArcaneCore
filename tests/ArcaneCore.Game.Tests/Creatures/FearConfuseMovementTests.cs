@@ -285,6 +285,75 @@ public sealed class FearConfuseMovementTests
     }
 
     [Fact]
+    public void PointPushedAfterTheFearEnded_BeforeTheHookRan_DoesNotLeaveTheFlagStuck()
+    {
+        (WorldRuntime w, _, Creature wolf, Player caster) = Start();
+        using WorldRuntime world = w;
+        CcState.RememberFearSource(wolf, caster);
+        wolf.UnitFlags |= UnitFlags.Fleeing;
+        Tick(world, 4);
+        Assert.Equal(MovementGeneratorType.Fleeing, wolf.Motion.CurrentType);
+
+        // The fear aura expires (CcState.RefreshFear clears the flag) and, in the same tick before the movement hook runs, the AI
+        // pushes a point. Push interrupts the crowd-control generator, which must not set the flag back: no aura will clear it.
+        wolf.UnitFlags &= ~UnitFlags.Fleeing;
+        wolf.Motion.MovePoint(1, wolf.X + 40f, wolf.Y, wolf.Z, run: true);
+        Assert.Equal(UnitFlags.None, wolf.UnitFlags & UnitFlags.Fleeing);
+
+        Tick(world, 100);
+
+        Assert.Equal(UnitFlags.None, wolf.UnitFlags & UnitFlags.Fleeing);
+        Assert.Equal(CrowdControlMovement.None, wolf.Motion.ActiveCrowdControl);
+        Assert.DoesNotContain(MovementGeneratorType.Fleeing, wolf.Motion.ActiveTypes);
+    }
+
+    [Fact]
+    public void FlightResumedAfterTheFearEnded_DoesNotSetTheFlagBack()
+    {
+        (WorldRuntime w, _, Creature wolf, Player caster) = Start();
+        using WorldRuntime world = w;
+        CcState.RememberFearSource(wolf, caster);
+        wolf.UnitFlags |= UnitFlags.Fleeing;
+        Tick(world, 4);
+        wolf.Motion.MovePoint(1, wolf.X + 40f, wolf.Y, wolf.Z, run: true);
+        Assert.Equal(MovementGeneratorType.Point, wolf.Motion.CurrentType);
+
+        // The aura ends while the point runs, and the point is dropped before the hook sees the cleared flag: the flight beneath
+        // resumes, and must take the flag as the auras left it.
+        wolf.UnitFlags &= ~UnitFlags.Fleeing;
+        Assert.True(wolf.Motion.Remove(MovementGeneratorType.Point));
+        Assert.Equal(MovementGeneratorType.Fleeing, wolf.Motion.CurrentType);
+        Assert.Equal(UnitFlags.None, wolf.UnitFlags & UnitFlags.Fleeing);
+
+        Tick(world, 100);
+
+        Assert.Equal(UnitFlags.None, wolf.UnitFlags & UnitFlags.Fleeing);
+        Assert.Equal(CrowdControlMovement.None, wolf.Motion.ActiveCrowdControl);
+    }
+
+    [Fact]
+    public void FearEndingUnderAPushedPoint_RemovesTheBuriedFlight_WithoutStoppingThePoint()
+    {
+        (WorldRuntime w, _, Creature wolf, Player caster) = Start();
+        using WorldRuntime world = w;
+        CcState.RememberFearSource(wolf, caster);
+        wolf.UnitFlags |= UnitFlags.Fleeing;
+        Tick(world, 4);
+        wolf.Motion.MovePoint(1, wolf.X + 40f, wolf.Y, wolf.Z, run: true);
+        world.RunTick(50);
+        Assert.Equal([MovementGeneratorType.Fleeing, MovementGeneratorType.Point], wolf.Motion.ActiveTypes);
+        Assert.True(wolf.IsMoving);
+        float endX = wolf.Spline!.EndX;
+
+        wolf.UnitFlags &= ~UnitFlags.Fleeing;
+        world.RunTick(50);
+
+        Assert.Equal([MovementGeneratorType.Point], wolf.Motion.ActiveTypes);
+        Assert.True(wolf.IsMoving, "the buried flight's Finish stopped the point's spline");
+        Assert.Equal(endX, wolf.Spline!.EndX);
+    }
+
+    [Fact]
     public void ResettingTheMotionMaster_ForgetsTheCrowdControlGenerator()
     {
         (WorldRuntime w, _, Creature wolf, _) = Start();

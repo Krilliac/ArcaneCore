@@ -31,32 +31,53 @@ internal static class CrowdControlGates
 internal sealed class CrowdControlFleeingMovementGenerator(Unit? source) : ICreatureMovementGenerator
 {
     private readonly FleeingMovementGenerator _flight = new(source, durationMs: 0);
+    private bool _interrupted;
 
     public MovementGeneratorType Type => MovementGeneratorType.Fleeing;
 
     public void Initialize(Creature creature, ICreatureMover mover)
     {
+        _interrupted = false;
         if (CrowdControlGates.IsHeldInPlace(creature))
         {
             return; // the first Update after the hold lifts starts the first leg (the pause timer is 0)
         }
 
+        // The plain flight sets the flag when it starts; here it follows the auras. Resume (a pushed point ended) comes
+        // through here too, and the aura may have ended under the point, before the hook sees it.
+        bool aurasHoldFlag = (creature.UnitFlags & UnitFlags.Fleeing) != 0;
         _flight.Initialize(creature, mover);
+        RestoreFlag(creature, aurasHoldFlag);
     }
 
     public void Interrupt(Creature creature, ICreatureMover mover)
     {
+        // The plain flight clears the flag; here it follows the auras. Setting it back unconditionally would stick it on a
+        // creature whose fear ended before the push, since no aura is left to clear it.
+        bool aurasHoldFlag = (creature.UnitFlags & UnitFlags.Fleeing) != 0;
         _flight.Interrupt(creature, mover);
-        creature.UnitFlags |= UnitFlags.Fleeing; // the flag follows the auras, not this generator
+        RestoreFlag(creature, aurasHoldFlag);
+        _interrupted = true;
     }
 
     public void Finish(Creature creature, ICreatureMover mover, bool completed)
     {
+        if (_interrupted)
+        {
+            return; // buried under a pushed generator: the running spline is that generator's, and the flag already follows the auras
+        }
+
         bool aurasHoldFlag = (creature.UnitFlags & UnitFlags.Fleeing) != 0;
         _flight.Finish(creature, mover, completed);
-        if (aurasHoldFlag)
+        RestoreFlag(creature, aurasHoldFlag);
+    }
+
+    /// <summary>Leave <c>UnitFlags.Fleeing</c> as the auras had it before the wrapped flight touched it.</summary>
+    private static void RestoreFlag(Creature creature, bool aurasHoldFlag)
+    {
+        if (aurasHoldFlag != ((creature.UnitFlags & UnitFlags.Fleeing) != 0))
         {
-            creature.UnitFlags |= UnitFlags.Fleeing;
+            creature.UnitFlags = aurasHoldFlag ? creature.UnitFlags | UnitFlags.Fleeing : creature.UnitFlags & ~UnitFlags.Fleeing;
         }
     }
 
