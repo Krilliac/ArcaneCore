@@ -38,6 +38,7 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
     private readonly ConditionalWeakTable<Player, TaxiFlightRoute> _stagedFlights = new();
     // Guids whose character_taxi_flight row may exist, so a landing does not issue a blocking delete on the map thread.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<uint, byte> _persistedRoutes = new();
+    private TaxiFlightWriteQueue? _routeWrites;
 
     public NpcServiceOptions Options { get; } = new();
 
@@ -48,6 +49,8 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
     {
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
+        _routeWrites = new TaxiFlightWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), logger);
+        _routeWrites.Start();
         EnsureLoaded();
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;
@@ -159,8 +162,26 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
         }
     }
 
+    /// <summary>Drain queued route writes on shutdown; throws, naming the characters, while a write is still not durable.</summary>
+    public async Task StopAsync()
+    {
+        if (_routeWrites is not null)
+        {
+            await _routeWrites.StopAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Waits for earlier route writes (a logout save or a landing delete) and faults the login while this character's write is
+    /// retained and still cannot be persisted, so a stale or missing stored route never becomes the live state.
+    /// </summary>
     public async Task OnPlayerLoadingAsync(WorldSession session, CharacterRecord character, Player player)
     {
+        if (_routeWrites is not null)
+        {
+            await _routeWrites.FlushCharacterAsync(character.Id).ConfigureAwait(false);
+        }
+
         if (session.Services.GetService<ICharacterTaxiFlightStore>() is { } store
             && await store.LoadAsync(character.Id).ConfigureAwait(false) is { } route)
         {
@@ -214,31 +235,13 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
     {
         if (Flights?.SuspendForLogout(player) is { } route)
         {
-            bool saved = true;
-            try
-            {
-                using IServiceScope scope = services.CreateScope();
-                scope.ServiceProvider.GetRequiredService<ICharacterTaxiFlightStore>()
-                    .SaveAsync((int)player.Guid.Low, route).GetAwaiter().GetResult();
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Could not save taxi route for character {Character}; returning to the departure node", player.Guid.Low);
-                _persistedRoutes[(uint)player.Guid.Low] = 0;
-                TaxiNode? start = services.GetService<QuestNpcFeature>()?.Services.Npcs.Node(route.Nodes[0]);
-                if (start is not null && start.MapId == player.MapId)
-                {
-                    player.Relocate(start.X, start.Y, start.Z, player.Orientation, _world?.NowMs ?? 0);
-                }
-
-                ClearSavedRoute(player);
-                saved = false;
-            }
-
-            if (saved)
-            {
-                _persistedRoutes.TryRemove((uint)player.Guid.Low, out _);
-            }
+            // The queue owns the write from here: retained until durable, and the login barrier refuses a relog while it is not.
+            _persistedRoutes.TryRemove((uint)player.Guid.Low, out _);
+            _routeWrites?.Save((int)player.Guid.Low, route);
+        }
+        else if (_routeWrites is { } writes && writes.HasRetainedFailure((int)player.Guid.Low))
+        {
+            writes.RequestRetry((int)player.Guid.Low); // an early retry; the login barrier and shutdown still retry
         }
 
         _items?.SessionEnded(player);
@@ -255,16 +258,7 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
             return;
         }
 
-        try
-        {
-            using IServiceScope scope = services.CreateScope();
-            scope.ServiceProvider.GetRequiredService<ICharacterTaxiFlightStore>()
-                .DeleteAsync((int)player.Guid.Low).GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Could not clear taxi route for character {Character}", player.Guid.Low);
-        }
+        _routeWrites?.Delete((int)player.Guid.Low);
     }
 
     private sealed record Tables(TaxiPathNodeCatalog PathNodes, SkillLineAbilityCatalog Abilities, RepairCostTable Repair, BankBagSlotPriceTable BankSlots);
