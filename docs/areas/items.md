@@ -1,6 +1,7 @@
 # Area: items and inventory
 
 Branch `feat/items`. Integration notes (schema versions, shared-file edits, seams): `docs/integration/items.md`.
+For the build-5875 bags, bank and move-error audit, see [inventory-bags.md](inventory-bags.md).
 
 ## What is in
 
