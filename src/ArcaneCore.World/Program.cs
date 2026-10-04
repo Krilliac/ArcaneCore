@@ -53,6 +53,7 @@ catch (HotCodeRefusedException ex)
 // The HostOptions section (e.g. ShutdownTimeout) is not bound by the default builder; a full save
 // drain for many players must not be cut short by the host default (docs/areas/ops-perf.md).
 builder.Services.Configure<HostOptions>(builder.Configuration.GetSection("HostOptions"));
+builder.Services.AddArcaneCoreLogging(builder.Configuration);
 builder.Services.AddAuthDatabase(builder.Configuration);
 builder.Services.AddCharacterDatabase(builder.Configuration);
 builder.Services.AddWorldDatabase(builder.Configuration);

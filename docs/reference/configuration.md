@@ -29,6 +29,7 @@ How to read the tables:
 - [`HotReload`](#hotreload)
 - [`Items`](#items)
 - [`Locomotion`](#locomotion)
+- [`Logging:ArcaneCore`](#loggingarcanecore)
 - [`Loot`](#loot)
 - [`NpcServices`](#npcservices)
 - [`PerformanceLog`](#performancelog)
@@ -286,6 +287,27 @@ How to read the tables:
 | `Locomotion:PendingAckResponseTimeMs` | `uint` | `4000` | - | How long the client has to acknowledge a server-ordered movement change before the server enforces it (vmangos Movement.PendingAckResponseTime, World.cpp:985, default 4000 ms; the wait is multiplied by 5 while the player is being teleported, Unit.cpp:6633). |
 | `Locomotion:RateDamageFall` | `float` | `1` | - | Fall damage multiplier (vmangos Rate.Damage.Fall, World.cpp:533, default 1; setConfigPos: a negative value becomes 1). |
 | `Locomotion:SlimeDamage` | `bool` | `false` | - | Deliberate deviation, off by default: hurt in slime like in lava. vmangos (Player.cpp:1030-1040) and mangos-classic (Player.cpp:1305-1311, "FIXME ... Undercity") damage only in magma although both define DAMAGE_SLIME; whether retail 1.12 hurt in slime cannot be proven from the references. When on, a slime pulse deals the same 605-610 as lava. |
+
+## `Logging:ArcaneCore`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Logging:ArcaneCore:Console:Mode` | `ConsoleMode` | `Color` | - | `Color` (default), `Plain` or `Off`. Live at reload; colour is still disabled when stdout is not a terminal or `NO_COLOR` is set. Values: `Color`, `Plain`, `Off`. |
+| `Logging:ArcaneCore:Console:QueueCapacity` | `int` | `4096` | - | Lines the console writer thread may hold before new lines are dropped (and the drop counted and reported). Restart-only. |
+| `Logging:ArcaneCore:File:Enabled` | `bool` | `false` | - | `true` writes the plain text log to `Path`. Default off. |
+| `Logging:ArcaneCore:File:Path` | `string` | `"logs/arcanecore.log"` | - | The active log file; relative paths resolve against the working directory. Rolled segments sit next to it as `name-yyyyMMdd-NNN.ext`. |
+| `Logging:ArcaneCore:File:QueueCapacity` | `int` | `8192` | - | Lines the file writer thread may hold before new lines are dropped (counted and reported in the file itself). The world thread never waits on the disk. |
+| `Logging:ArcaneCore:File:Retain` | `int` | `14` | - | Rolled segments kept next to the active file; the oldest beyond this count are deleted after each roll. 0 keeps all. |
+| `Logging:ArcaneCore:File:RollDaily` | `bool` | `true` | - | `true` rolls at the first line of a new day (in the `Timestamps` clock). |
+| `Logging:ArcaneCore:File:RollSizeMb` | `int` | `64` | - | Roll when the active file would exceed this many MiB; 0 never rolls by size. |
+| `Logging:ArcaneCore:IncludeScopes` | `bool` | `true` | - | `true` appends the active logger scopes to each line (`=&gt; scope`). Live at reload. |
+| `Logging:ArcaneCore:Json:Enabled` | `bool` | `false` | - | `true` writes one JSON object per log event to `Path`. Default off. |
+| `Logging:ArcaneCore:Json:Path` | `string` | `"logs/arcanecore.jsonl"` | - | The active JSON-lines file; relative paths resolve against the working directory. Rolls like the text file. |
+| `Logging:ArcaneCore:Json:QueueCapacity` | `int` | `8192` | - | Lines the JSON writer thread may hold before new lines are dropped (counted and reported as a JSON line). |
+| `Logging:ArcaneCore:Json:Retain` | `int` | `14` | - | Rolled segments kept; the oldest beyond this count are deleted after each roll. 0 keeps all. |
+| `Logging:ArcaneCore:Json:RollDaily` | `bool` | `true` | - | `true` rolls at the first line of a new day (in the `Timestamps` clock). |
+| `Logging:ArcaneCore:Json:RollSizeMb` | `int` | `64` | - | Roll when the active file would exceed this many MiB; 0 never rolls by size. |
+| `Logging:ArcaneCore:Timestamps` | `TimestampKind` | `Utc` | - | The clock timestamps are taken from: `Utc` (default) or `Local`. Live at reload. Values: `Utc`, `Local`. |
 
 ## `Loot`
 
