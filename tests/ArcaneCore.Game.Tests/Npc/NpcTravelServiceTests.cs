@@ -254,12 +254,16 @@ public sealed class NpcTravelServiceTests
     [Fact]
     public void ActivateTaxiExpress_RoundsEachLegHalfUp_NotTheCeilOfTheSum()
     {
-        // Player.cpp:17977 and 17997: every leg is uint32(price × discount + 0.5f). 100 -> 95 and 55 -> 52 = 147,
-        // where ceil(155 × 0.95f) = 148 charged one copper too much.
+        // Player.cpp:17977 and 17997: every leg is uint32(price × discount + 0.5f), paid when its path starts (taxi lane).
+        // 100 -> 95 and 55 -> 52 = 147, where ceil(155 × 0.95f) = 148 would charge one copper too much.
         using var rig = new TaxiRig(discount: 0.95f, secondLegPrice: 55);
         NpcServiceKit kit = rig.Kit;
         kit.Player.Money = 1000;
         kit.Services.ActivateTaxiExpress(kit.Player, kit.Npc.Guid, [1, 2, 3]);
+        Assert.Equal(1000u - 95u, kit.Player.Money);
+        kit.Drain();
+
+        rig.Flights.Update(rig.Map, 2100); // end of hop 1: the second leg is charged
         Assert.Equal(1000u - 147u, kit.Player.Money);
     }
 
