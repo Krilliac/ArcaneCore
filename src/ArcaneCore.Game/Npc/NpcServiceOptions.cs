@@ -5,12 +5,18 @@ namespace ArcaneCore.Game.Npc;
 /// <summary>
 /// NPC service settings (configuration section "NpcServices"). Every table is optional: without
 /// it the dependent service fails closed (no repair prices → nothing repaired; no bank slot
-/// prices → no bank slot sold; no TaxiPathNode → straight flights between nodes; no
+/// prices → no bank slot sold; no TaxiPathNode → paid flights are refused; no
 /// SkillLineAbility → no rank prerequisites and every spell fits every class/race).
 /// </summary>
 public sealed class NpcServiceOptions
 {
     public const string SectionName = "NpcServices";
+
+    /// <summary>Build-5875 TaxiNodes.dbc; when set its node positions and faction mounts replace the imported table.</summary>
+    public string? TaxiNodesDbcPath { get; set; }
+
+    /// <summary>Build-5875 TaxiPath.dbc; when set its routes and costs replace the imported table.</summary>
+    public string? TaxiPathDbcPath { get; set; }
 
     /// <summary>Build-5875 TaxiPathNode.dbc (flight waypoints).</summary>
     public string? TaxiPathNodeDbcPath { get; set; }

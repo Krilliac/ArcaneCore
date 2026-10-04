@@ -177,6 +177,8 @@ public sealed partial class QuestNpcServices
         }
 
         var paths = new uint[nodes.Count - 1];
+        var legCosts = new uint[paths.Length];
+        float discount = PriceDiscount(player, npc);
         ulong total = 0;
         for (int i = 1; i < nodes.Count; i++)
         {
@@ -186,7 +188,18 @@ public sealed partial class QuestNpcServices
             }
 
             paths[i - 1] = path.Id;
-            total += path.Price;
+            // vmangos Player.cpp:17963-17997 and PlayerTaxi.cpp:126-136 round each leg
+            // separately before checking the total. The first leg is paid on launch;
+            // later legs are paid at their path transition.
+            float discountedLeg = path.Price * discount;
+            if (!float.IsFinite(discountedLeg) || discountedLeg < 0 || discountedLeg >= uint.MaxValue)
+            {
+                TaxiReply(player, ActivateTaxiReply.UnspecifiedServerError);
+                return;
+            }
+
+            legCosts[i - 1] = (uint)(discountedLeg + 0.5f);
+            total += legCosts[i - 1];
         }
 
         uint mount = player.Team == Team.Alliance ? node.MountAlliance : node.MountHorde;
@@ -196,22 +209,23 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        double discounted = MathF.Ceiling(total * PriceDiscount(player, npc)); // single precision as vmangos
-        uint cost = discounted >= uint.MaxValue ? uint.MaxValue : (uint)discounted;
-        if (player.Money < cost)
+        if (player.Money < total)
         {
             TaxiReply(player, ActivateTaxiReply.NotEnoughMoney);
             return;
         }
 
-        if (Deps.Flights?.StartFlight(player, [.. nodes], paths, mount) != true)
+        if (Deps.Flights?.StartFlight(player, [.. nodes], paths, mount, legCosts, (flyingPlayer, legCost) =>
+            {
+                ModifyMoney(s, -(long)legCost);
+                Flush(s);
+                return true;
+            }) != true)
         {
             TaxiReply(player, ActivateTaxiReply.UnspecifiedServerError);
             return;
         }
 
-        ModifyMoney(s, -(long)cost);
-        Flush(s);
     }
 
     /// <summary>vmangos WorldSession::SendTaxiMenu.</summary>

@@ -73,6 +73,17 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             NpcContent npcs = scope.ServiceProvider.GetService<INpcContentStore>() is { } npcStore
                 ? npcStore.LoadAsync().GetAwaiter().GetResult()
                 : NpcContent.Empty;
+            var taxiOptions = new NpcServiceOptions();
+            _services.GetService<IConfiguration>()?.GetSection(NpcServiceOptions.SectionName).Bind(taxiOptions);
+            if (!string.IsNullOrWhiteSpace(taxiOptions.TaxiNodesDbcPath))
+            {
+                npcs = npcs with { TaxiNodes = NpcServiceDbcReaders.LoadTaxiNodes(taxiOptions.TaxiNodesDbcPath) };
+            }
+
+            if (!string.IsNullOrWhiteSpace(taxiOptions.TaxiPathDbcPath))
+            {
+                npcs = npcs with { TaxiPaths = NpcServiceDbcReaders.LoadTaxiPaths(taxiOptions.TaxiPathDbcPath) };
+            }
             FactionTemplateCatalog factions = _services.GetService<FactionTemplateCatalog>()
                 ?? (string.IsNullOrWhiteSpace(Options.FactionTemplateDbcPath)
                     ? FactionTemplateCatalog.Empty
