@@ -55,6 +55,31 @@ public sealed partial class SummonService : ISpellSummonSink
         spells.RegisterEffect(SpellEffectName.SummonWild, EffectSummonWild);
         spells.RegisterEffect(SpellEffectName.SummonGuardian, EffectSummonGuardian);
         spells.RegisterEffect(SpellEffectName.SummonCritter, EffectSummonCritter);
+        spells.RegisterEffect(SpellEffectName.SummonPet, context =>
+        {
+            if (context.Caster is Player player && player.Class == Class.Hunter && context.Effect.MiscValue == 0)
+            {
+                TryCallCurrentHunterPet(player, context.System);
+            }
+        });
+        spells.RegisterEffect(SpellEffectName.SummonDeadPet, context =>
+        {
+            if (context.Caster is Player player)
+            {
+                SummonDeadPet(player, context.Value, context.System);
+            }
+        });
+        spells.RegisterEffect(SpellEffectName.DismissPet, context =>
+        {
+            if (context.Caster is Player player && player.Class == Class.Hunter
+                && player.Map?.FindObject(player.PetGuid) is Creature { Summon.Kind: SummonKind.Pet } pet && pet.IsAlive
+                && pet.OwnerGuid == player.Guid
+                && (!DetachedPersistenceConfigured || DetachedPersistenceSupported))
+            {
+                QueueDetachedPetSave(player);
+                Unsummon(pet);
+            }
+        });
     }
 
     // --- unsummon -------------------------------------------------------------------------------
@@ -147,6 +172,10 @@ public sealed partial class SummonService : ISpellSummonSink
         pets.Register(pet, this);
         AttachPetAi(pet);
         PetInitializer.InitCreateSpells(pet, Content, _spells);
+        if (pet.Summon?.Charm?.RenameAllowed == true)
+        {
+            pet.UnitFlags |= UnitFlags.PetRename | UnitFlags.PetAbandon;
+        }
         caster.SetPetGuid(pet.Guid);
 
         // Player::PetSpellInitialize (SpellEffects.cpp:2417-2420)
@@ -185,6 +214,21 @@ public sealed partial class SummonService : ISpellSummonSink
     /// <summary>vmangos ObjectMgr::GeneratePetNumber: the pet number a summoned pet is named by (the GUID carries it).</summary>
     internal uint NextPetNumber() => Interlocked.Increment(ref _petNumbers);
 
+    /// <summary>Keep subsequently generated pet GUID counters above a loaded durable pet.</summary>
+    internal void ReservePetNumber(uint petNumber)
+    {
+        uint current;
+        do
+        {
+            current = Volatile.Read(ref _petNumbers);
+            if (current >= petNumber)
+            {
+                return;
+            }
+        }
+        while (Interlocked.CompareExchange(ref _petNumbers, petNumber, current) != current);
+    }
+
     /// <summary>
     /// What vmangos <c>Pet::Pet</c> and <c>Pet::Create</c> give every pet, guardian and mini pet:
     /// a charminfo (a mini pet is always passive, a guardian always aggressive, a summoned pet defensive
@@ -200,7 +244,16 @@ public sealed partial class SummonService : ISpellSummonSink
             SummonKind.Guardian => ReactState.Aggressive,
             _ => owner is Player ? ReactState.Defensive : ReactState.Aggressive,
         };
-        creature.Summon!.Charm = new CharmInfo(react) { PetNumber = petNumber };
+        creature.Summon!.Charm = new CharmInfo(react)
+        {
+            PetNumber = petNumber,
+            Name = creature.Template.Name,
+            RenameAllowed = kind == SummonKind.Pet && owner is Player { Class: Class.Hunter },
+        };
+        if (creature.Summon.Charm.RenameAllowed)
+        {
+            creature.UnitFlags |= UnitFlags.PetRename | UnitFlags.PetAbandon;
+        }
 
         // UNIT_BYTE2_FLAG_UNK3 | UNIT_BYTE2_FLAG_AURAS | UNIT_BYTE2_FLAG_UNK5 (Pet.cpp:2264)
         creature.SetByte(UpdateFields.UnitFieldBytes2, 1, 0x08 | 0x10 | 0x20);

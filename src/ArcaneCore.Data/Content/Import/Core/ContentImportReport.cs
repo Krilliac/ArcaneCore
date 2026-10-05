@@ -13,7 +13,7 @@ namespace ArcaneCore.Data.Content.Import;
 public sealed record ContentImportReport
 {
     /// <summary>Version of the report layout and of the table specs it describes.</summary>
-    public const int SpecVersion = 1;
+    public const int SpecVersion = 2;
 
     /// <summary>Printed in every report: the source data is not ours to relicense.</summary>
     public const string License =

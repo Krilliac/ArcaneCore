@@ -27,7 +27,8 @@ namespace ArcaneCore.World.Creatures;
 /// installed by the collision feature, feat/vmap-los).
 /// </para>
 /// </summary>
-public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<CreatureWorldFeature> logger) : IWorldFeature
+public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<CreatureWorldFeature> logger,
+    CreatureDisplayModelMetadataFeature displayModelMetadata) : IWorldFeature
 {
     private readonly Dictionary<uint, CreatureMapSystem> _systems = [];
     private readonly Dictionary<Map, CreatureMapSystem> _instanceSystems = new(ReferenceEqualityComparer.Instance);
@@ -52,6 +53,15 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
     public void Attach(WorldRuntime world)
     {
         _world = world;
+        world.PlayerDisplayModelResolver = displayId =>
+        {
+            CreatureModelInfo? addon = Content.FindModel(displayId);
+            CreatureDisplayModelMetadata? dbc = displayModelMetadata.Content.Find(displayId);
+            if (addon is null && dbc is null) return null;
+            return new ArcaneCore.Game.Spells.DisplayModelGeometry(
+                dbc?.NativeScale ?? 1.0f, addon?.BoundingRadius ?? 0, addon?.CombatReach ?? 0,
+                dbc?.CollisionHeight ?? 0, dbc?.ModelScale ?? 1.0f, dbc?.HasModelData ?? false);
+        };
         services.GetService<IConfiguration>()?.GetSection(CreatureOptions.SectionName).Bind(Options);
         _height = services.GetService<ICreatureHeightProvider>();
         _aiServices = BuildAiServices();
@@ -105,7 +115,9 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         if (!_instanceSystems.TryGetValue(map, out CreatureMapSystem? system))
         {
             WorldRuntime world = _world ?? throw new InvalidOperationException("the creature feature is not attached");
-            system = new CreatureMapSystem(map, Content, Options, _height, new Random(), () => world.NowMs, logger, _aiServices);
+            system = new CreatureMapSystem(map, Content, Options, _height, new Random(), () => world.NowMs, logger, _aiServices,
+                display => displayModelMetadata.Content.Find(display));
+            SubscribeSpellLifecycle(system);
             map.AddUpdater(system);
             _instanceSystems[map] = system;
         }
@@ -120,7 +132,9 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         if (!_systems.TryGetValue(mapId, out CreatureMapSystem? system))
         {
             Map map = world.GetMap(mapId);
-            system = new CreatureMapSystem(map, Content, Options, _height, new Random(), () => world.NowMs, logger, _aiServices);
+            system = new CreatureMapSystem(map, Content, Options, _height, new Random(), () => world.NowMs, logger, _aiServices,
+                display => displayModelMetadata.Content.Find(display));
+            SubscribeSpellLifecycle(system);
             map.AddUpdater(system);
             _systems[mapId] = system;
         }
@@ -139,6 +153,14 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
     }
 
     private void OnMapUnloading(Map map) => _instanceSystems.Remove(map);
+
+    private void SubscribeSpellLifecycle(CreatureMapSystem system)
+    {
+        // Resolve lazily: feature attachment order places creatures before the spell feature.
+        // Both callbacks run on the world thread before the retained object starts its next life.
+        system.CorpseRemoving += creature => services.GetService<SpellFeature>()?.System.OnCreatureCorpseRemoving(creature);
+        system.Respawning += creature => services.GetService<SpellFeature>()?.System.OnCreatureRespawning(creature);
+    }
 
     // The services are assembled (and bound from the container by reflection) in CreatureAiServicesBinder.
     private CreatureAiServices BuildAiServices() => CreatureAiServicesBinder.Build(services, Options);

@@ -28,7 +28,11 @@ public sealed class StanceFeature(IServiceProvider services, ILogger<StanceFeatu
         Options = CombatEnvironments.GetOrCreate(services, world, logger).Options;
 
         ShapeshiftFormCatalog forms;
-        if (string.IsNullOrWhiteSpace(Options.ShapeshiftFormDbcPath))
+        if (services.GetService<ShapeshiftFormCatalog>() is { } supplied)
+        {
+            forms = supplied;
+        }
+        else if (string.IsNullOrWhiteSpace(Options.ShapeshiftFormDbcPath))
         {
             forms = ShapeshiftFormCatalog.WarriorStances;
             logger.LogWarning("Combat:ShapeshiftFormDbcPath is not set: only the three warrior stances are known (SpellShapeshiftForm.dbc gives every form)");

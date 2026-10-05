@@ -57,6 +57,7 @@ public sealed class Map
     private readonly List<Action> _afterUpdate = [];
     private readonly List<WorldObject> _valuesQueue = [];
     private readonly List<IMapUpdater> _updaters = [];
+    private readonly List<Unit> _heartbeatUnits = [];
 
     // Consecutive failure count per updater; -1 means the fault breaker is skipping it. Empty
     // unless an updater throws and World:MaxConsecutiveUpdaterFaults is set.
@@ -473,6 +474,22 @@ public sealed class Map
             {
                 _world.LogoutPlayer(player);
             }
+        }
+
+        // Reuse a snapshot so heartbeat listeners may remove objects without
+        // invalidating enumeration, and keep each unit's timer across casts.
+        foreach (WorldObject obj in _objects.Values)
+            if (obj is Unit unit) _heartbeatUnits.Add(unit);
+        try
+        {
+            foreach (Unit unit in _heartbeatUnits)
+                if (ReferenceEquals(unit.Map, this) && unit.IsInWorld
+                    && unit is not Player { IsQuestSettlementPending: true })
+                    unit.UpdateHeartbeat(diffMs);
+        }
+        finally
+        {
+            _heartbeatUnits.Clear();
         }
 
         // (1c) per-map systems (creatures, …) — see IMapUpdater

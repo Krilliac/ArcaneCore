@@ -29,7 +29,7 @@ public static class ContentTableSpecs
         "display_id1", "display_id2", "display_id3", "display_id4",
         "DisplayIdProbability1", "DisplayIdProbability2", "DisplayIdProbability3", "DisplayIdProbability4",
         "display_probability1", "display_probability2", "display_probability3", "display_probability4",
-        "Scale", "display_scale1", "Faction", "FactionAlliance", "faction", "NpcFlags", "npc_flags",
+        "Scale", "display_scale1", "display_scale2", "display_scale3", "display_scale4", "Faction", "FactionAlliance", "faction", "NpcFlags", "npc_flags",
         "UnitFlags", "DynamicFlags", "CreatureTypeFlags", "CreatureType", "type", "Family", "pet_family", "Rank",
         "UnitClass", "unit_class", "InhabitType", "inhabit_type", "Civilian", "RacialLeader", "racial_leader",
         "SpeedWalk", "speed_walk", "SpeedRun", "speed_run",
@@ -44,6 +44,8 @@ public static class ContentTableSpecs
         "LootId", "loot_id", "SkinningLootId", "skinning_loot_id", "MinLootGold", "gold_min", "MaxLootGold", "gold_max",
         // GameObjectLootDumpImporter.ReadPickpocketId (classic-db PickpocketLootId, vmangos pickpocket_loot_id)
         "PickpocketLootId", "pickpocket_loot_id",
+        // TotemSpellDumpImporter: cmangos spell-list link and vmangos direct totem spell.
+        "SpellList", "spell_list_id", "totem_spell_id",
     ];
 
     private static readonly string[] s_spawnColumns =
@@ -144,6 +146,10 @@ public static class ContentTableSpecs
                 "action3_type", "action3_param1", "action3_param2", "action3_param3", "comment",
             ], []),
         new("creature_ai_texts", [new KeyColumn("entry")], ["content_default", "type", "language", "emote"], []),
+        new("creature_template_spells", [new KeyColumn("entry"), new KeyColumn("setId")], Enumerable.Range(1, 10).Select(i => "spell" + i), []),
+        new("creature_spell_list", [new KeyColumn("Id"), new KeyColumn("Position")], ["SpellId"], []),
+        new("spell_template", [new KeyColumn("Id")],
+            ["Effect1", "Effect2", "Effect3", "EffectMiscValue1", "EffectMiscValue2", "EffectMiscValue3"], []),
         new("gameobject_template", [new KeyColumn("entry")],
             [
                 "type", "displayId", "display_id", "name", "faction", "flags", "size", "patch",

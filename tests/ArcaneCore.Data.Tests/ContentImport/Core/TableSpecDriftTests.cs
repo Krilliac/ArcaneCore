@@ -2,6 +2,7 @@ using System.Text.Json;
 using ArcaneCore.Data.Content.Import;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
+using ArcaneCore.Data.World.Totems;
 using Xunit;
 
 namespace ArcaneCore.Data.Tests.ContentImport.Core;
@@ -22,6 +23,8 @@ public sealed class TableSpecDriftTests
     {
         "patch", "patch_min", "patch_max", "build", "id2",
         "health_multiplier", "mana_multiplier", "armor_multiplier", "damage_multiplier", "damage_variance",
+        // Totem links require another source table to supply spell-list entries.
+        "SpellList", "spell_list_id",
     };
 
     // Columns of the real classic-db tables that no importer reads (names taken from the cmangos schema).
@@ -129,7 +132,9 @@ public sealed class TableSpecDriftTests
             var snapshot = creature.Snapshot();
             var loot = new GameObjectLootDumpImporter();
             loot.Read(new StringReader(sql));
-            return JsonSerializer.Serialize(new object[] { snapshot.Templates, snapshot.Spawns, snapshot.Movement, snapshot.Models, snapshot.Addons, loot.BuildReport() }, json);
+            var totems = new TotemSpellDumpImporter();
+            totems.Read(new StringReader(sql));
+            return JsonSerializer.Serialize(new object[] { snapshot.Templates, snapshot.Spawns, snapshot.Movement, snapshot.Models, snapshot.Addons, loot.BuildReport(), totems.Resolve().Rows }, json);
         }
 
         var importer = new GameObjectLootDumpImporter();

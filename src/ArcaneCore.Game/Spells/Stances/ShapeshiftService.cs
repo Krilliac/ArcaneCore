@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Druid;
 using ArcaneCore.Kernel.WorldData;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -9,8 +10,8 @@ namespace ArcaneCore.Game.Spells;
 /// <summary>
 /// Warrior stances (Battle, Defensive, Berserker): the SPELL_AURA_MOD_SHAPESHIFT handler and the cast gate.
 /// Follows vmangos Aura::HandleAuraModShapeshift (SpellAuras.cpp:2420-2575) and HandleShapeshiftBoosts
-/// (:5433-5597) at the 1.12.1 build. Druid and priest forms (models, speed, energy/rage swap, Furor, Heart of
-/// the Wild, Leader of the Pack) are not implemented; their aura is left unhandled and reported once.
+/// (:5433-5597) at the 1.12.1 build. Catalog-backed druid display overlays are supported; druid
+/// power/speed/boost mechanics, model geometry and priest form producers remain separate slices.
 /// </summary>
 public sealed class ShapeshiftService
 {
@@ -48,6 +49,7 @@ public sealed class ShapeshiftService
     /// <summary>Install the aura handler and the stance cast check on the spell system.</summary>
     public void Install()
     {
+        _spells.ItemEquipFormCheck = CheckCast;
         _spells.RegisterAura(AuraType.ModShapeshift, new AuraHandler(OnShapeshiftAura, null));
         _spells.RegisterCastCheck(new StanceCastCheck(this));
     }
@@ -88,7 +90,42 @@ public sealed class ShapeshiftService
         var form = (ShapeshiftForm)aura.MiscValue;
         if (!IsWarriorStance(form))
         {
-            if (_reportedForms.Add((uint)form))
+            if (IsDruidForm(form) && _forms.TryGet((uint)form, out _))
+            {
+                if (apply)
+                {
+                    _spells.RemoveOtherShapeshiftHolders(holder.Target, holder);
+
+                    ApplyDruidPower(holder.Target, form);
+
+                    SetForm(holder.Target, form);
+                    holder.Target.FormHolder = holder;
+                    ApplyDruidFormBoosts(holder, form);
+                    if (holder.Target is Player changedPlayer)
+                    {
+                        changedPlayer.Inventory.EquipSpellSink?.OnPlayerFormChanged(changedPlayer);
+                    }
+                }
+
+                if (apply)
+                {
+                    ApplyFormVisual(_spells, holder.Target);
+                }
+                else if (ReferenceEquals(holder.Target.FormHolder, holder))
+                {
+                    RemoveDruidFormBoosts(holder, form);
+                    RemoveDruidPower(holder.Target);
+                    SetForm(holder.Target, ShapeshiftForm.None);
+                    holder.Target.FormHolder = null;
+                    if (holder.Target is Player changedPlayer)
+                    {
+                        changedPlayer.Inventory.EquipSpellSink?.OnPlayerFormChanged(changedPlayer);
+                    }
+                    RemoveShapeLostAurasAndInterrupt(holder.Target);
+                    ClearFormVisual(_spells, holder.Target);
+                }
+            }
+            else if (_reportedForms.Add((uint)form))
             {
                 _logger.LogInformation("Spell {Spell}: shapeshift form {Form} is not implemented yet", holder.Spell.Id, (uint)form);
             }
@@ -111,6 +148,240 @@ public sealed class ShapeshiftService
         {
             RemoveStance(holder, form);
         }
+
+    }
+
+    private void ApplyDruidPower(Unit target, ShapeshiftForm form)
+    {
+        if (form is not (ShapeshiftForm.Cat or ShapeshiftForm.Bear or ShapeshiftForm.DireBear))
+        {
+            return;
+        }
+
+        if (form == ShapeshiftForm.Cat)
+        {
+            PowerTypeSwitch.SetPowerType(target, PowerType.Energy);
+            MapCombat.SetPower(target, PowerType.Energy, 0);
+        }
+        else
+        {
+            uint rage = MapCombat.GetPower(target, PowerType.Rage);
+            PowerTypeSwitch.SetPowerType(target, PowerType.Rage);
+            MapCombat.SetPower(target, PowerType.Rage, rage);
+        }
+
+        int chance = FurorChance(target);
+        if (!FurorRules.Procs(chance, _spells.Random.Next(1, 101)))
+        {
+            return;
+        }
+
+        uint proc = FurorRules.ProcSpell((byte)form);
+        if (proc == 0)
+        {
+            return;
+        }
+
+        if (_spells.Store.Get(proc) is null)
+        {
+            _logger.LogWarning("Druid Furor proc spell {Spell} is missing for form {Form}; skipping proc", proc, form);
+            return;
+        }
+
+        _spells.CastSpell(target, proc, SpellCastTargets.ForSelf(), triggered: true);
+    }
+
+    private int FurorChance(Unit target)
+    {
+        foreach (SpellAuraHolder aura in _spells.GetAuras(target))
+        {
+            if (aura.IsRemoved || aura.Spell.SpellIconId != FurorRules.DummyIconId)
+            {
+                continue;
+            }
+
+            SpellAura? dummy = aura.Auras.FirstOrDefault(a => a is { Type: AuraType.Dummy });
+            if (dummy is not null)
+            {
+                return dummy.Amount;
+            }
+        }
+
+        return 0;
+    }
+
+    private static void RemoveDruidPower(Unit target)
+    {
+        if (target is not { Class: Class.Druid })
+        {
+            return;
+        }
+
+        PowerTypeSwitch.SetPowerType(target, PowerType.Mana);
+        MapCombat.SetPower(target, PowerType.Rage, 0);
+    }
+
+    private void ApplyDruidFormBoosts(SpellAuraHolder holder, ShapeshiftForm form)
+    {
+        Unit target = holder.Target;
+        FormBoosts boosts = FormBoostTable.Get((byte)form);
+        foreach (uint spellId in new[] { boosts.Spell1, boosts.Spell2 }.Where(id => id != 0).Distinct())
+        {
+            if (_spells.Store.Get(spellId) is null)
+            {
+                _logger.LogWarning("Druid form boost spell {Spell} is missing for form {Form}; skipping", spellId, form);
+                continue;
+            }
+
+            _spells.CastSpell(target, spellId, SpellCastTargets.ForSelf(), triggered: true, triggeringSpell: holder.Spell);
+        }
+
+        if (target is Player player)
+        {
+            foreach (uint spellId in _knownSpells(player).ToArray())
+            {
+                if (spellId != boosts.Spell1 && spellId != boosts.Spell2
+                    && _spells.Store.Get(spellId) is { } spell && spell.IsNeedCastSpellAtFormApply((uint)form))
+                {
+                    _spells.CastSpell(target, spellId, SpellCastTargets.ForSelf(), triggered: true, triggeringSpell: holder.Spell);
+                }
+            }
+
+            bool knowsLeader = _knownSpells(player).Contains(FormBoostTable.LeaderOfThePackKnownSpell);
+            if (knowsLeader && _spells.Store.Get(FormBoostTable.LeaderOfThePackEffectSpell) is not { })
+            {
+                _logger.LogWarning("Druid Leader of the Pack effect spell {Spell} is missing for form {Form}; skipping",
+                    FormBoostTable.LeaderOfThePackEffectSpell, form);
+            }
+            else if (knowsLeader && _spells.Store.Get(FormBoostTable.LeaderOfThePackEffectSpell) is { } leader
+                && FormBoostTable.LeaderOfThePackApplies(true, leader.Stances, (byte)form))
+            {
+                _spells.CastSpell(target, leader.Id, SpellCastTargets.ForSelf(), triggered: true, triggeringSpell: holder.Spell);
+            }
+        }
+
+        if (boosts.HeartOfTheWildSpell == 0 || _spells.Store.Get(boosts.HeartOfTheWildSpell) is not { } heart)
+        {
+            if (boosts.HeartOfTheWildSpell != 0)
+            {
+                _logger.LogWarning("Druid Heart of the Wild spell {Spell} is missing for form {Form}; skipping", boosts.HeartOfTheWildSpell, form);
+            }
+
+            return;
+        }
+
+        SpellAura? hotw = _spells.GetAuras(target)
+            .SelectMany(h => h.Auras.OfType<SpellAura>().Select(a => (Holder: h, Aura: a)))
+            .FirstOrDefault(x => x.Holder.Spell.SpellIconId == FormBoostTable.HeartOfTheWildIconId
+                && x.Aura.Type == AuraType.ModTotalStatPercentage && x.Aura.MiscValue == FormBoostTable.HeartOfTheWildMiscValue).Aura;
+        if (hotw is null)
+        {
+            return;
+        }
+
+        int effectIndex = -1;
+        for (int i = 0; i < heart.Effects.Count; i++)
+        {
+            if (heart.Effects[i].Effect == SpellEffectName.ApplyAura
+                && heart.Effects[i].AuraType == AuraType.ModTotalStatPercentage)
+            {
+                effectIndex = i;
+                break;
+            }
+        }
+        if (effectIndex >= 0)
+        {
+            _spells.CastSpellWithCustomAuraAmount(target, heart.Id, SpellCastTargets.ForSelf(), triggered: true,
+                triggeringSpell: holder.Spell, effectIndex: effectIndex, amount: hotw.Amount);
+        }
+        else
+        {
+            _logger.LogWarning("Druid Heart of the Wild spell {Spell} has no stat aura effect for form {Form}; skipping",
+                heart.Id, form);
+        }
+    }
+
+    private void RemoveDruidFormBoosts(SpellAuraHolder holder, ShapeshiftForm form)
+    {
+        FormBoosts boosts = FormBoostTable.Get((byte)form);
+        foreach (uint spellId in new[] { boosts.Spell1, boosts.Spell2, boosts.HeartOfTheWildSpell }.Where(id => id != 0).Distinct())
+        {
+            foreach (SpellAuraHolder linked in _spells.GetAuras(holder.Target)
+                .Where(h => h.Spell.Id == spellId && h.CasterGuid == holder.Target.Guid).ToArray())
+            {
+                _spells.RemoveAuraHolder(linked);
+            }
+        }
+    }
+
+    private void RemoveShapeLostAurasAndInterrupt(Unit target)
+    {
+        if (!(_switching && _options.StanceShiftKeepsSelfBuffs))
+        {
+            foreach (SpellAuraHolder buff in _spells.GetAuras(target).Where(h => !h.IsRemoved && IsRemovedOnShapeLost(h)).ToArray())
+            {
+                _spells.RemoveAuraHolder(buff);
+            }
+        }
+
+        if (_spells.GetState(target.Guid) is { } state)
+        {
+            foreach (SpellCast? cast in new[] { state.CurrentCast, state.MeleeCast })
+            {
+                if (cast is { State: not SpellCastState.Finished } && cast.Spell.IsRemovedOnShapeLost)
+                {
+                    _spells.Interrupt(cast);
+                }
+            }
+        }
+    }
+
+    private static bool IsDruidForm(ShapeshiftForm form)
+        => FormDisplayTable.Get((byte)form, alliance: true) is not null;
+
+    internal static void ApplyFormVisual(SpellSystem spells, Unit target)
+    {
+        ShapeshiftForm form = GetForm(target);
+        if (FormDisplayTable.Get((byte)form, target is not Player player || player.Race is Race.Human or Race.Dwarf or Race.Gnome or Race.NightElf) is not { } display)
+        {
+            return;
+        }
+
+        if (target.FormBaseScale == 0)
+        {
+            target.FormBaseScale = target.TransformSpellId != 0 ? target.TransformBaseScale
+                : target.GetFloat(UpdateFields.ObjectFieldScaleX) / VisualAuras.ActiveScaleFactor(spells, target);
+        }
+
+        target.FormDisplayId = display.DisplayId;
+        target.FormScale = display.Scale;
+        if (target.TransformSpellId != 0)
+        {
+            return;
+        }
+
+        target.DisplayId = display.DisplayId;
+        target.SetFloat(UpdateFields.ObjectFieldScaleX,
+            display.Scale * VisualAuras.ActiveScaleFactor(spells, target));
+        spells.UpdateDisplayModel(target);
+    }
+
+    private static void ClearFormVisual(SpellSystem spells, Unit target)
+    {
+        float baseScale = target.FormBaseScale;
+        target.FormDisplayId = 0;
+        target.FormScale = 1.0f;
+        target.FormBaseScale = 0;
+        if (target.TransformSpellId != 0)
+        {
+            return;
+        }
+
+        target.DisplayId = target.NativeDisplayId;
+        target.SetFloat(UpdateFields.ObjectFieldScaleX,
+            baseScale == 0 ? target.GetFloat(UpdateFields.ObjectFieldScaleX)
+                : baseScale * VisualAuras.ActiveScaleFactor(spells, target));
+        spells.UpdateDisplayModel(target);
     }
 
     private void ApplyStance(SpellAuraHolder holder, ShapeshiftForm form, ShapeshiftFormInfo info)
@@ -153,6 +424,10 @@ public sealed class ShapeshiftService
         }
 
         SetForm(target, form);
+        if (target is Player changedPlayer)
+        {
+            changedPlayer.Inventory.EquipSpellSink?.OnPlayerFormChanged(changedPlayer);
+        }
 
         // HandleShapeshiftBoosts(true): the stance passive, then every known passive bound to this form.
         uint boost = GetBoostSpell(form);
@@ -177,6 +452,10 @@ public sealed class ShapeshiftService
     {
         Unit target = holder.Target;
         SetForm(target, ShapeshiftForm.None);
+        if (target is Player changedPlayer)
+        {
+            changedPlayer.Inventory.EquipSpellSink?.OnPlayerFormChanged(changedPlayer);
+        }
 
         // HandleShapeshiftBoosts(false): drop the stance passive, then everything that needs a form.
         uint boost = GetBoostSpell(form);
@@ -192,7 +471,7 @@ public sealed class ShapeshiftService
 
         foreach (SpellAuraHolder buff in _spells.GetAuras(target).Where(h => !h.IsRemoved && IsRemovedOnShapeLost(h)).ToArray())
         {
-            _spells.RemoveAuras(target, buff.Spell.Id);
+            _spells.RemoveAuraHolder(buff);
         }
 
         // Interrupt current shape-specific spells (preparing, queued next swing, channel).

@@ -4,7 +4,7 @@ using ArcaneCore.Protocol;
 namespace ArcaneCore.Game.Items;
 
 /// <summary>One item grant; <paramref name="Created"/> marks a spell-created item (vmangos Spell::DoCreateItem reports it as created).</summary>
-internal readonly record struct InventoryRewardGrant(uint Entry, uint Count, bool Created = false);
+public readonly record struct InventoryRewardGrant(uint Entry, uint Count, bool Created = false);
 
 /// <summary>A detached reward inventory. Preparation consumes GUIDs, but never changes the owner's fields or sends packets.</summary>
 internal sealed class InventoryRewardStage(

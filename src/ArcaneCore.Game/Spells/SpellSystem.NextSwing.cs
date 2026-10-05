@@ -13,16 +13,22 @@ public sealed partial class SpellSystem
     /// Like any prepared spell it sends SMSG_SPELL_START and starts the global cooldown; power is taken, the
     /// result sent and the effects applied only when <see cref="CastQueuedMeleeSpell"/> casts it.
     /// </summary>
-    private SpellCastResult QueueNextSwing(UnitSpellState state, Unit caster, SpellInfo spell, SpellCastTargets targets, Unit? unitTarget)
+    private SpellCastResult QueueNextSwing(UnitSpellState state, Unit caster, SpellInfo spell, SpellCastTargets targets, Unit? unitTarget,
+        SpellInfo? triggeringSpell = null, ArcaneCore.Game.Items.Item? castItem = null, byte itemSpellIndex = 0,
+        int? itemCooldownMs = null, int? itemCategoryCooldownMs = null, uint? itemCategory = null)
     {
-        SpellCastResult result = CheckCast(state, spell, targets, unitTarget, triggered: false, strict: true);
+        SpellCastResult result = CheckCast(state, spell, targets, unitTarget, triggered: false, strict: true,
+            triggeringSpell: triggeringSpell, castItem: castItem, itemCategory: itemCategory);
         if (result != SpellCastResult.CastOk)
         {
             SendCastResult(caster, spell, result, triggered: false);
             return result;
         }
 
-        var cast = new SpellCast(spell, caster, targets, triggered: false, castTime: 0, PowerCostFor(caster, spell), DurationFor(caster, spell));
+        var cast = new SpellCast(spell, caster, targets, triggered: false, castTime: 0,
+            castItem is null ? PowerCostFor(caster, spell) : 0, DurationFor(caster, spell), triggeringSpell, castItem,
+            itemSpellIndex, castItem is null ? (byte)0 : castItem.BagSlot, castItem is null ? (byte)0 : castItem.Slot,
+            itemCooldownMs, itemCategoryCooldownMs, itemCategory);
         if (state.MeleeCast is { } queued)
         {
             Cancel(queued);   // vmangos InterruptSpell(CURRENT_MELEE_SPELL): the previous swing spell is interrupted
@@ -30,7 +36,7 @@ public sealed partial class SpellSystem
 
         state.MeleeCast = cast;
         SendToSet(caster, WorldOpcode.SmsgSpellStart, SpellPackets.BuildSpellStart(
-            caster.Guid, caster.Guid, spell.Id, SpellCastFlags.Unknown2, 0, targets), includeSelf: true);
+            castItem?.Guid ?? caster.Guid, caster.Guid, spell.Id, SpellCastFlags.Unknown2, 0, targets), includeSelf: true);
         AddGlobalCooldown(state, spell);
         NotifyPrepared(cast);
         return SpellCastResult.CastOk;

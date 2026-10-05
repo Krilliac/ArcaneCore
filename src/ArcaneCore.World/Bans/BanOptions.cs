@@ -47,4 +47,12 @@ public sealed class BanOptions
     /// <c>.baninfo</c>, never filtered on, exactly as retail. Bound from Bans:RealmId; default 1.
     /// </summary>
     public int RealmId { get; set; } = 1;
+
+    /// <summary>
+    /// Maximum distinct matching character-owner accounts checked by <c>.banlist character</c>.
+    /// 0 (default) is unlimited, as vmangos AccountCommands.cpp:835-910. Nonzero values are clamped to 1..500;
+    /// truncation prints a notice asking for a narrower prefix. Bounds candidates before checking ban history,
+    /// because character and auth rows live in separate databases. Bound from Bans:CharacterListMaxResults.
+    /// </summary>
+    public int CharacterListMaxResults { get; set; }
 }

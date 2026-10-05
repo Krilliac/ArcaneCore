@@ -31,14 +31,16 @@ internal sealed class AuraCasterOwner
 /// <summary>One effect's aura inside a holder (vmangos Aura / Modifier).</summary>
 public sealed class SpellAura
 {
-    internal SpellAura(int effectIndex, AuraType type, int amount, uint amplitude, int miscValue)
+    internal SpellAura(int effectIndex, AuraType type, int amount, uint amplitude, int miscValue, PowerType? targetPowerType = null)
     {
         EffectIndex = effectIndex;
         Type = type;
         Amount = amount;
-        Amplitude = amplitude;
+        Amplitude = type == AuraType.ModPowerRegen && amplitude == 0
+            ? targetPowerType == PowerType.Rage ? 3000u : 2000u
+            : amplitude;
         MiscValue = miscValue;
-        PeriodicTimer = (int)amplitude;
+        PeriodicTimer = type == AuraType.ModPowerRegen ? 5000 : (int)Amplitude;
     }
 
     public int EffectIndex { get; }
@@ -56,7 +58,9 @@ public sealed class SpellAura
 
     public bool IsPeriodic => Amplitude > 0;
 
-    /// <summary>Time to the next tick (vmangos Aura::m_periodicTimer, first tick one amplitude after application).</summary>
+    internal uint MaximumPeriodicTimer => Type == AuraType.ModPowerRegen ? Math.Max(Amplitude, 5000u) : Amplitude;
+
+    /// <summary>Time to the next tick; ModPowerRegen starts at 5000 ms, other auras at their amplitude.</summary>
     internal int PeriodicTimer { get; set; }
 
     /// <summary>Ticks delivered so far.</summary>
@@ -106,6 +110,11 @@ public sealed class SpellAuraHolder
     public Unit Target { get; }
 
     public ObjectGuid CasterGuid { get; }
+
+    /// <summary>The item instance behind an item-owned aura; empty for ordinary casts.</summary>
+    public ObjectGuid ItemGuid { get; internal set; }
+
+    internal bool IsItemEquipAura { get; set; }
 
     /// <summary>
     /// The unit in the caster's UNIT_FIELD_CHANNEL_OBJECT when this holder's channelled spell started (empty for anything

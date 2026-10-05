@@ -95,7 +95,7 @@ public sealed class TalentWorldTests
         => host.WorldServices.GetRequiredService<SpellFeature>().Spellbook.HasSpell(host.World.FindOnlinePlayer(name)!, spell);
 
     /// <summary>The first object block of a self create (build 5875 layout, as the quest journal tests read it).</summary>
-    private static Dictionary<int, uint> ReadSelfFields(byte[] body)
+    internal static Dictionary<int, uint> ReadSelfFields(byte[] body)
     {
         var reader = new PacketReader(body);
         Assert.True(reader.ReadUInt32() >= 1);

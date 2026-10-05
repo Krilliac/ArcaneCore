@@ -13,7 +13,8 @@ public enum SpellCooldownKind : byte
 }
 
 /// <summary>A cooldown saved at logout, as an absolute wall-clock end (cooldowns keep running offline, vmangos _SaveSpellCooldowns).</summary>
-public readonly record struct PersistedCooldown(SpellCooldownKind Kind, uint Id, long EndsAtUnixMs);
+public readonly record struct PersistedCooldown(SpellCooldownKind Kind, uint Id, long EndsAtUnixMs,
+    uint ItemId = 0, uint Category = 0, uint SpellId = 0);
 
 /// <summary>
 /// An aura saved at logout (vmangos character_aura: caster_guid, spell, stackcount, remaincharges,
@@ -82,7 +83,8 @@ public sealed partial class SpellSystem
         {
             if (until > now)
             {
-                cooldowns.Add(new PersistedCooldown(SpellCooldownKind.Spell, spellId, nowUnixMs + (until - now)));
+                ItemCooldownOwner owner = state.CooldownOwners.GetValueOrDefault(spellId);
+                cooldowns.Add(new PersistedCooldown(SpellCooldownKind.Spell, spellId, nowUnixMs + (until - now), owner.ItemId, owner.Category, owner.SpellId));
             }
         }
 
@@ -90,14 +92,18 @@ public sealed partial class SpellSystem
         {
             if (until > now)
             {
-                cooldowns.Add(new PersistedCooldown(SpellCooldownKind.Category, category, nowUnixMs + (until - now)));
+                ItemCooldownOwner[] owners = state.CooldownOwners.Values.Where(o => o.Category == category).ToArray();
+                if (owners.Length == 0)
+                    cooldowns.Add(new PersistedCooldown(SpellCooldownKind.Category, category, nowUnixMs + (until - now)));
+                foreach (ItemCooldownOwner owner in owners)
+                    cooldowns.Add(new PersistedCooldown(SpellCooldownKind.Category, category, nowUnixMs + (until - now), owner.ItemId, category, owner.SpellId));
             }
         }
 
         var auras = new List<PersistedAura>();
         foreach (SpellAuraHolder holder in state.Auras)
         {
-            if (!holder.IsSaveable || (!holder.IsPermanent && holder.Duration <= 0))
+            if (holder.IsItemEquipAura || !holder.IsSaveable || (!holder.IsPermanent && holder.Duration <= 0))
             {
                 continue;
             }
@@ -148,7 +154,10 @@ public sealed partial class SpellSystem
         foreach (PersistedCooldown cooldown in cooldowns)
         {
             long remaining = cooldown.EndsAtUnixMs - nowUnixMs;
-            if (remaining <= 0 || (cooldown.Kind == SpellCooldownKind.Spell && Store.Get(cooldown.Id) is null))
+            uint ownerSpellId = cooldown.Kind == SpellCooldownKind.Spell ? cooldown.Id : cooldown.SpellId;
+            if (!Enum.IsDefined(cooldown.Kind) || remaining <= 0
+                || (cooldown.Kind == SpellCooldownKind.Spell && Store.Get(cooldown.Id) is null)
+                || (cooldown.Kind == SpellCooldownKind.Category && ownerSpellId != 0 && Store.Get(ownerSpellId) is null))
             {
                 continue;
             }
@@ -157,6 +166,16 @@ public sealed partial class SpellSystem
             uint until = (uint)Math.Min(uint.MaxValue, now + remaining);
             Dictionary<uint, uint> table = cooldown.Kind == SpellCooldownKind.Spell ? state.SpellCooldowns : state.CategoryCooldowns;
             table[cooldown.Id] = Math.Max(until, table.GetValueOrDefault(cooldown.Id));
+            if (cooldown.ItemId != 0 || cooldown.Category != 0 || cooldown.SpellId != 0)
+            {
+                uint ownerSpell = cooldown.Kind == SpellCooldownKind.Spell ? cooldown.Id : cooldown.SpellId;
+                if (ownerSpell != 0)
+                {
+                    uint category = cooldown.Category != 0 ? cooldown.Category
+                        : cooldown.Kind == SpellCooldownKind.Category ? cooldown.Id : Store.Get(ownerSpell)?.Category ?? 0;
+                    state.CooldownOwners[ownerSpell] = new ItemCooldownOwner(cooldown.ItemId, category, ownerSpell);
+                }
+            }
             restored++;
         }
 
@@ -216,9 +235,9 @@ public sealed partial class SpellSystem
                     continue;
                 }
 
-                var aura = new SpellAura(i, effect.AuraType, saved.Amounts.ElementAtOrDefault(i), effect.Amplitude, effect.MiscValue);
+                var aura = new SpellAura(i, effect.AuraType, saved.Amounts.ElementAtOrDefault(i), effect.Amplitude, effect.MiscValue, unit.PowerType);
                 int timer = saved.PeriodicTimers.ElementAtOrDefault(i);
-                if (aura.IsPeriodic && timer > 0 && timer <= (int)aura.Amplitude)
+                if (aura.IsPeriodic && timer > 0 && timer <= (int)aura.MaximumPeriodicTimer)
                 {
                     aura.PeriodicTimer = timer;
                 }

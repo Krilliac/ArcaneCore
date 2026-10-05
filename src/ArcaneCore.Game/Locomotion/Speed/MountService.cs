@@ -75,6 +75,9 @@ public static class MountService
 
         if (unit is Player mounted)
         {
+            // vmangos Player::Mount clears pending extra attacks only after all mount
+            // validation succeeds; refused mounts preserve the pending batch.
+            mounted.Combat.ResetExtraAttacks();
             SendMountResult(mounted, MountResults.Ok);
         }
 

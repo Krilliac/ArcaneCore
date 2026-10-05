@@ -21,6 +21,12 @@ public sealed class PetController
     private readonly Func<SpellSystem?> _spells;
     private readonly Random _random;
 
+    /// <summary>A successful rename on the world thread; group observers may mark pet-name stats dirty.</summary>
+    public event Action<Player>? PetNameChanged;
+
+    /// <summary>World-owned name normalization/validation; null keeps the game seam permissive for isolated hosts.</summary>
+    public Func<string, string?>? PetNameNormalizer { get; set; }
+
     public PetController(SummonService summons, Func<SpellSystem?>? spells = null, Random? random = null)
     {
         ArgumentNullException.ThrowIfNull(summons);
@@ -440,16 +446,63 @@ public sealed class PetController
         }
 
         player.Session.Send(WorldOpcode.SmsgPetNameQueryResponse,
-            PetPackets.BuildNameQueryResponse(petNumber, pet.Template.Name, pet.GetUInt32(UpdateFields.UnitFieldPetNameTimestamp)));
+            PetPackets.BuildNameQueryResponse(petNumber, charm.Name, charm.NameTimestamp));
     }
 
-    /// <summary>vmangos HandlePetAbandon (PetHandler.cpp:405-430): a summoned pet is dismissed (a hunter pet would be deleted, which needs the pet store).</summary>
+    public void HandleRename(Player player, PetRenameRequest request)
+    {
+        if (!player.IsInWorld || player.IsQuestSettlementPending
+            || (_spells() is { } spells && spells.IsInTransit(player)))
+        {
+            return;
+        }
+
+        if (player.Class != Class.Hunter || player.PetGuid != request.Pet
+            || OwnedPet(player, request.Pet) is not { } owned
+            || owned.Pet.Summon?.Kind != SummonKind.Pet || !owned.Charm.RenameAllowed
+            || (owned.Pet.UnitFlags & UnitFlags.PetRename) == 0)
+        {
+            return;
+        }
+
+        string? name = PetNameNormalizer?.Invoke(request.Name);
+        if (name is null)
+        {
+            player.Session.Send(WorldOpcode.SmsgPetNameInvalid, PetPackets.BuildNameInvalid());
+            return;
+        }
+
+        owned.Charm.Name = name;
+        owned.Charm.NameTimestamp = checked((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        owned.Charm.RenameAllowed = false;
+        owned.Pet.UnitFlags &= ~UnitFlags.PetRename;
+        owned.Pet.SetUInt32(UpdateFields.UnitFieldPetNameTimestamp, owned.Charm.NameTimestamp);
+        _summons.QueueCurrentPetSave(player);
+        PetNameChanged?.Invoke(player);
+    }
+
+    /// <summary>vmangos HandlePetAbandon (PetHandler.cpp:347-368): an owned hunter pet is permanently deleted; other controlled summons are dismissed.</summary>
     public void HandleAbandon(Player player, ObjectGuid petGuid)
     {
-        if (player.Map?.FindObject(petGuid) is Creature { Summon.Charm: not null } pet && pet.OwnerGuid == player.Guid)
+        if (!player.IsInWorld || player.IsQuestSettlementPending
+            || (_spells() is { } spells && spells.IsInTransit(player)))
         {
-            _summons.Unsummon(pet);
+            return;
         }
+
+        if (player.Map?.FindObject(petGuid) is not Creature { Summon.Charm: not null } pet
+            || pet.OwnerGuid != player.Guid)
+        {
+            return;
+        }
+
+        if (player.Class == Class.Hunter && pet.Summon?.Kind == SummonKind.Pet
+            && player.PetGuid == pet.Guid)
+        {
+            _summons.QueueDeletePet(player);
+        }
+
+        _summons.Unsummon(pet);
     }
 
     /// <summary>

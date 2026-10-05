@@ -99,4 +99,21 @@ public sealed class SpellStoreFactoryCombatDataTests
         Assert.Equal(0x100, spell.EquippedItemInventoryTypeMask);
         Assert.Equal(-1, spell.EquippedItemClass);
     }
+
+    [Fact]
+    public void ReagentSlotsPreserveSignedIdsCountsAndOriginalOrdering()
+    {
+        SpellInfo spell = Convert(new SpellTemplateRow
+        {
+            Id = 21169, Reagent1 = 17030, ReagentCount1 = 1, Reagent2 = -1, ReagentCount2 = 2,
+            Reagent3 = 3, ReagentCount3 = 30, Reagent4 = 4, ReagentCount4 = 40,
+            Reagent5 = 5, ReagentCount5 = 50, Reagent6 = 6, ReagentCount6 = 60,
+            Reagent7 = 7, ReagentCount7 = 70, Reagent8 = 8, ReagentCount8 = 80,
+        });
+        Assert.Equal(new SpellReagent[]
+        {
+            new(17030, 1), new(-1, 2), new(3, 30), new(4, 40),
+            new(5, 50), new(6, 60), new(7, 70), new(8, 80),
+        }, spell.Reagents);
+    }
 }

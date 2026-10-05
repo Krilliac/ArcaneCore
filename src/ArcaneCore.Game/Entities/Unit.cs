@@ -18,6 +18,23 @@ public abstract class Unit : WorldObject
 
     private MovementInfo _movement;
 
+    /// <summary>vmangos Object.h: BATCHING_INTERVAL (400 ms) × 13.</summary>
+    public const uint HeartbeatIntervalMs = 5200;
+
+    private long _heartbeatTimer = HeartbeatIntervalMs;
+
+    public event Action<Unit>? Heartbeat;
+
+    internal void UpdateHeartbeat(uint diffMs)
+    {
+        _heartbeatTimer -= diffMs;
+        while (_heartbeatTimer <= 0)
+        {
+            _heartbeatTimer += HeartbeatIntervalMs;
+            Heartbeat?.Invoke(this);
+        }
+    }
+
     protected Unit(ObjectGuid guid, byte typeId, uint typeMask, int valuesCount)
         : base(guid, typeId, typeMask, valuesCount)
     {
@@ -92,6 +109,34 @@ public abstract class Unit : WorldObject
         get => GetUInt32(UpdateFields.UnitFieldNativedisplayid);
         set => SetUInt32(UpdateFields.UnitFieldNativedisplayid, value);
     }
+
+    /// <summary>DBC native scale for the current native display, retained for geometry restoration.</summary>
+    public float NativeScale { get; internal set; } = 1.0f;
+
+    /// <summary>Explicit native object-scale override selected from creature data, if any.</summary>
+    public float NativeScaleOverride { get; internal set; }
+
+    /// <summary>Active vmangos transform spell identity; zero means no transform.</summary>
+    public uint TransformSpellId { get; internal set; }
+
+    internal ArcaneCore.Game.Spells.SpellAuraHolder? TransformHolder { get; set; }
+
+    internal uint TransformBaseDisplayId { get; set; }
+
+    /// <summary>Object scale before the active transform was applied.</summary>
+    internal float TransformBaseScale { get; set; }
+
+    /// <summary>Scale selected by the active transform.</summary>
+    public float TransformScale { get; internal set; } = 1.0f;
+
+    /// <summary>Active druid/form display overlay; zero means the native display is active.</summary>
+    internal uint FormDisplayId { get; set; }
+
+    internal float FormScale { get; set; } = 1.0f;
+
+    internal float FormBaseScale { get; set; }
+
+    internal ArcaneCore.Game.Spells.SpellAuraHolder? FormHolder { get; set; }
 
     /// <summary>UNIT_FIELD_BYTES_0: race, class, gender, power type (vmangos Unit::GetRace etc.).</summary>
     public Race Race => (Race)GetByte(UpdateFields.UnitFieldBytes0, 0);

@@ -1,6 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 
@@ -37,12 +38,13 @@ public sealed partial class Creature : Unit, ICombatCreature
     private readonly Random _random;
     private CreatureTemplate _template;
     private int _templateVersion;
+    private readonly Func<uint, CreatureDisplayModelMetadata?>? _displayModelResolver;
 
     // highGuid: HIGHGUID_PET for pets, guardians and mini pets, HIGHGUID_UNIT for everything else
     // including totems (vmangos SpellEffects.cpp; docs/integration/pets.md). guidEntry: the entry part
     // of the GUID when it is not the template entry: a pet's GUID carries its pet number there
     // (vmangos Pet::Create: Object::_Create(guidlow, petNumber, HIGHGUID_PET)).
-    public Creature(uint counter, CreatureTemplate template, CreatureSpawn? spawn, CreatureContent content, Random random, HighGuid highGuid = HighGuid.Unit, uint guidEntry = 0)
+    public Creature(uint counter, CreatureTemplate template, CreatureSpawn? spawn, CreatureContent content, Random random, HighGuid highGuid = HighGuid.Unit, uint guidEntry = 0, Func<uint, CreatureDisplayModelMetadata?>? displayModelResolver = null)
         : base(ObjectGuid.WithEntry(highGuid, guidEntry != 0 ? guidEntry : template.Entry, counter), Game.TypeId.Unit, CreatureTypeMask, UpdateFields.UnitEnd)
     {
         ArgumentNullException.ThrowIfNull(template);
@@ -54,6 +56,7 @@ public sealed partial class Creature : Unit, ICombatCreature
         Content = content;
         _templateVersion = content.DefinitionsVersion;
         _random = random;
+        _displayModelResolver = displayModelResolver;
 
         if (spawn is not null)
         {
@@ -188,6 +191,11 @@ public sealed partial class Creature : Unit, ICombatCreature
 
         // ChooseDisplayId + GetCreatureDisplayInfoRandomGender (vmangos InitEntry).
         uint displayId = ChooseDisplayId(t, _random);
+        int selected = -1;
+        for (int i = 0; i < t.DisplayIds.Count; i++)
+        {
+            if (t.DisplayIds[i] == displayId) { selected = i; break; }
+        }
         CreatureModelInfo? model = Content.FindModel(displayId);
         if (model is { DisplayIdOtherGender: not 0 } && _random.Next(2) == 0 && Content.FindModel(model.DisplayIdOtherGender) is { } other)
         {
@@ -195,7 +203,11 @@ public sealed partial class Creature : Unit, ICombatCreature
             displayId = other.DisplayId;
         }
 
-        float scale = t.Scale > 0 ? t.Scale : 1.0f;
+        CreatureDisplayModelMetadata? native = _displayModelResolver?.Invoke(displayId);
+        NativeScale = native?.NativeScale is > 0 and var dbcScale ? dbcScale : 1.0f;
+        float templateScale = selected >= 0 && selected < t.DisplayScales.Count ? t.DisplayScales[selected] : t.Scale;
+        float scale = templateScale > 0 ? templateScale : NativeScale;
+        NativeScaleOverride = templateScale > 0 ? templateScale : 0;
         SetFloat(UpdateFields.ObjectFieldScaleX, scale);
         DisplayId = displayId;
         NativeDisplayId = displayId;
@@ -207,8 +219,19 @@ public sealed partial class Creature : Unit, ICombatCreature
 
         // Bounding radius / combat reach scale with the object (vmangos Unit::UpdateModelData;
         // the client model's native scale needs DBC data and is taken as 1 until it is imported).
-        SetFloat(UpdateFields.UnitFieldBoundingradius, scale * (model is { BoundingRadius: > 0 } ? model.BoundingRadius : Player.DefaultBoundingRadius));
-        SetFloat(UpdateFields.UnitFieldCombatreach, scale * (model is { CombatReach: > 0 } ? model.CombatReach : Player.DefaultCombatReach));
+        float normalized = scale / NativeScale;
+        SetFloat(UpdateFields.UnitFieldBoundingradius, normalized * (model is { BoundingRadius: > 0 } ? model.BoundingRadius : Player.DefaultBoundingRadius));
+        SetFloat(UpdateFields.UnitFieldCombatreach, normalized * (model is { CombatReach: > 0 } ? model.CombatReach : Player.DefaultCombatReach));
+        if (native is { HasModelData: true })
+        {
+            float height = normalized * (native.CollisionHeight > 0 && native.ModelScale > 0
+                ? native.CollisionHeight / native.ModelScale : 2.0f);
+            if (float.IsFinite(height) && height > 0)
+            {
+                this.Locomotion.CollisionHeight = height;
+                this.Locomotion.InvalidateEnvironmentSample();
+            }
+        }
 
         // > 1.11.2: UNIT_MOD_CAST_SPEED is a float 1.0 (vmangos InitEntry).
         SetFloat(UpdateFields.UnitModCastSpeed, 1.0f);

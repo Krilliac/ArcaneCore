@@ -127,6 +127,10 @@ Collected from the lane reports; none are on by default except where noted.
 
 ## Known follow-ups (from docs/integration/wave3-release-review.md; not fixed in this wave)
 
+Subsequent fixes and their verification are recorded in
+[the 2026-10-04 continuation](wave3-followups-20261004.md). The list below records
+the original wave-3 closeout findings.
+
 - F4 `Bans:RecheckIntervalSeconds` defaults to 0 (retail): a ban written outside the world process (`arcane-account ban`,
   SQL, another daemon) does not kick a connected player until they disconnect; they cannot log back in. Release note:
   operators who ban externally should set 30-60 s (one indexed query per pass).
@@ -154,3 +158,18 @@ Collected from the lane reports; none are on by default except where noted.
 - Whether a stricter all-level-3 `Bans:*` tier is wanted.
 - Hosted-only real-server test for applying a Missing upgrade plan with `RefuseActiveSessions`.
 - Provider (MariaDB/PostgreSQL) schema and store tests run only on hosted CI; the renumbering above is verified locally on SQLite only.
+## Latest server work
+
+The [2026-10-04 gameplay continuation](server-gameplay-20261004.md) adds active
+totem casting, skill bonus auras, their stat-field integration, and the totem
+content import path on top of the review fixes documented above.
+
+The [spell flow continuation](server-spell-flows-20261004.md) adds player resurrection
+offers and responses, intrinsic totem effect immunities, and Grounding spell redirection.
+
+The [revival continuation](server-revival-20261004.md) adds self-resurrection effect 94,
+production ghost forms and relog hydration, and death/respawn aura cleanup.
+
+The [death and item continuation](server-item-death-20261004.md) adds existing
+summoned-pet revival, ordinary PvE death durability, durability spell effects,
+and correct equipped-item bonus transitions on breaking and repair.

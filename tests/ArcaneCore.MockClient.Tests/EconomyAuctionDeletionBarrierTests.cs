@@ -200,5 +200,6 @@ public sealed class EconomyAuctionDeletionBarrierTests
         public Task SaveStateAsync(CharacterState state, CancellationToken ct = default) => inner.SaveStateAsync(state, ct);
         public Task<IReadOnlyList<ActionButton>> GetActionButtonsAsync(int id, CancellationToken ct = default) => inner.GetActionButtonsAsync(id, ct);
         public Task<IReadOnlyList<CharacterIdentity>> GetAllIdentitiesAsync(CancellationToken ct = default) => inner.GetAllIdentitiesAsync(ct);
+        public Task<IReadOnlyList<int>> FindAccountIdsByNamePrefixAsync(string prefix, int limit, CancellationToken ct = default) => inner.FindAccountIdsByNamePrefixAsync(prefix, limit, ct);
     }
 }

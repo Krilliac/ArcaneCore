@@ -125,7 +125,8 @@ public static class EnvironmentalDamage
 
         CombatPackets.SendToSet(player, WorldOpcode.SmsgEnvironmentaldamagelog, BuildLog(player.Guid.Value, type, damage, absorb, resist));
 
-        uint dealt = map.Combat.DealDamage(player, player, damage, direct: false, meleeDamage: false);
+        // Player::EnvironmentalDamage suppresses Unit::Kill wear, then charges it once below.
+        uint dealt = map.Combat.DealDamage(player, player, damage, direct: false, meleeDamage: false, durabilityLoss: false);
         if (!player.IsAlive)
         {
             player.Inventory.DurabilityLossAll(0.10, inventory: false);

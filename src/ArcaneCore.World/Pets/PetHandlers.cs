@@ -14,8 +14,7 @@ namespace ArcaneCore.World.Pets;
 /// on the world thread against the session's player and hand off to <see cref="PetController"/>;
 /// the layouts are in <see cref="PetPackets"/>.
 /// <para>
-/// Not registered: CMSG_PET_RENAME and CMSG_PET_UNLEARN (hunter pets only: they need the pet
-/// store and the training-point rules of the class-hunter lane).
+/// Not registered: CMSG_PET_UNLEARN (the remaining hunter training-point rules).
 /// </para>
 /// </summary>
 public sealed class PetHandlers : IOpcodeHandlerGroup
@@ -29,6 +28,7 @@ public sealed class PetHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgPetCastSpell, (session, player, payload) => Controller(session).HandleCast(player, PetPackets.ReadCast(payload)));
         table.OnWorld(WorldOpcode.CmsgPetCancelAura, HandleCancelAura);
         table.OnWorld(WorldOpcode.CmsgPetNameQuery, HandleNameQuery);
+        table.OnWorld(WorldOpcode.CmsgPetRename, (session, player, payload) => Controller(session).HandleRename(player, PetPackets.ReadRename(payload)));
         table.OnWorld(WorldOpcode.CmsgPetAbandon, (session, player, payload) => Controller(session).HandleAbandon(player, PetPackets.ReadGuid(payload)));
         table.OnWorld(WorldOpcode.CmsgRequestPetInfo, (session, player, _) => Controller(session).HandleRequestPetInfo(player));
     }

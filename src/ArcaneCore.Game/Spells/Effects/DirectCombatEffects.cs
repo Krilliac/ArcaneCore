@@ -38,7 +38,8 @@ public sealed class DirectCombatEffects : ISpellHandlerModule
         writer.WriteUInt64(target.Guid.Value);
         writer.WriteUInt32(context.Spell.Id);
         SpellSystem.SendToSet(context.Caster, WorldOpcode.SmsgSpellinstakilllog, writer.ToArray(), includeSelf: true);
-        context.System.Damage.DealSpellDamage(context.Caster, target, context.Spell, target.Health, periodic: false);
+        context.System.Damage.DealSpellDamage(context.Caster, target, context.Spell, target.Health,
+            periodic: false, startsCombat: true, durabilityLoss: false);
     }
 
     /// <summary>

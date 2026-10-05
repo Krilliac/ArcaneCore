@@ -20,7 +20,8 @@ public readonly record struct ClientChatMessage(ChatType Type, Language Language
 /// after the language checks and command parsing and before its own say/yell/emote/whisper/
 /// AFK/DND handling; the first handler that returns true consumes it. Addon messages
 /// (<see cref="Language.Addon"/>) are offered without language checks or command parsing and
-/// are dropped when no handler takes them, as vmangos does (HandleChatMessageOpcode skips
+/// are subject to mute/flood checks only when ChatOptions.AddonMuteAndFloodControl is enabled,
+/// and are dropped when no handler takes them, as vmangos does (HandleChatMessageOpcode skips
 /// both for LANG_ADDON; IsLanguageAllowedForChatType limits addon to group, guild,
 /// battleground and channel chat). World thread.
 /// </para>

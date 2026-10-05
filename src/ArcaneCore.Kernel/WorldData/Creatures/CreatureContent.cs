@@ -23,8 +23,11 @@ public sealed record CreatureTemplate
     /// <summary>Selection weights for <see cref="DisplayIds"/> (all 0 = equal chance, vmangos ChooseDisplayId).</summary>
     public IReadOnlyList<uint> DisplayProbabilities { get; init; } = [];
 
-    /// <summary>Object scale; 0 = 1.0 until display data is imported (cmangos Scale, vmangos display_scale).</summary>
+    /// <summary>cmangos explicit object scale for the selected display; zero means the DBC native scale.</summary>
     public float Scale { get; init; }
+
+    /// <summary>vmangos per-display object-scale overrides; zero means use the DBC native scale.</summary>
+    public IReadOnlyList<float> DisplayScales { get; init; } = [];
 
     public uint Faction { get; init; }
 

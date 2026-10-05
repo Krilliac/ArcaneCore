@@ -118,6 +118,13 @@ public static class SpellStoreFactory
             ManaPerSecond = row.ManaPerSecond,
             ManaPerSecondPerLevel = row.ManaPerSecondPerLevel,
             ManaCostPercentage = row.ManaCostPercentage,
+            Reagents =
+            [
+                new(row.Reagent1, row.ReagentCount1), new(row.Reagent2, row.ReagentCount2),
+                new(row.Reagent3, row.ReagentCount3), new(row.Reagent4, row.ReagentCount4),
+                new(row.Reagent5, row.ReagentCount5), new(row.Reagent6, row.ReagentCount6),
+                new(row.Reagent7, row.ReagentCount7), new(row.Reagent8, row.ReagentCount8),
+            ],
             RangeIndex = row.RangeIndex,
             Range = range,
             Speed = row.Speed,

@@ -40,6 +40,9 @@ public interface IBanStore
     /// <summary>Every row of an account, oldest first (<c>.baninfo</c>).</summary>
     Task<IReadOnlyList<AccountBanRecord>> GetHistoryAsync(int accountId, CancellationToken cancellationToken = default);
 
+    /// <summary>Which candidate accounts have any ban history, including expired/inactive and unban audit rows.</summary>
+    Task<IReadOnlySet<int>> FindAccountsWithHistoryAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default);
+
     /// <summary>Ban rows in force now (<c>.banlist</c>).</summary>
     Task<IReadOnlyList<AccountBanRecord>> ListActiveAccountBansAsync(CancellationToken cancellationToken = default);
 

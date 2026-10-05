@@ -321,7 +321,7 @@ public sealed partial class SpellSystem
         uint spellId = context.Effect.TriggerSpell;
         if (Store.Get(spellId) is not null)
         {
-            CastSpell(context.Caster, spellId, SpellCastTargets.ForUnit(context.Target.Guid), triggered: true);
+            CastSpell(context.Caster, spellId, SpellCastTargets.ForUnit(context.Target.Guid), triggered: true, triggeringSpell: context.Spell);
         }
     }
 

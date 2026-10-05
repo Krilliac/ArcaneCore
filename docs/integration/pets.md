@@ -210,6 +210,33 @@ lane's file, listed here so the integrator can apply it where the lane that owns
 
 ## Limits (what is not here, and why)
 
+### P7 persistent current hunter pet and effect 109
+
+The 2026-10-04 continuation adds a thin current hunter-pet lifecycle in
+`Game/Pets/PersistentPetService.cs`, `Data/Characters/Pets/PersistentPetDataModule.cs`, and
+`World/Pets/PersistentPetFeature.cs`. Character loading reads the detached snapshot before
+world entry through `ICharacterHooks`, then publishes synchronously on `PlayerLoggedIn`.
+Writes are captured before logout/map removal and before corpse decay, serialized per character,
+drained at shutdown, and drained/forgotten during character deletion. The stable pet number is
+preserved in the charm state while each world spawn receives a fresh transient GUID counter.
+
+Effect 109 (`SUMMON_DEAD_PET`) first revives a retained in-world corpse; otherwise it materializes
+only a cached dead current hunter pet and applies `maxHealth * effectValue / 100`. Guardians,
+demons, critters, wild summons, and static templates are excluded. The behavior is grounded in
+vmangos `SpellEffects.cpp:5533-5570`, mangos-classic `SpellEffects.cpp:5163-5199`, and vmangos
+`Objects/Pet.cpp:120-200`.
+
+This slice does not claim complete hunter-pet parity. Pet spell cooldowns, saveable non-passive
+auras, loyalty/training, tame/stable subtype, pet type, names, and their producers remain future
+work; the existing generic spell persistence primitives currently operate only through the player
+spell feature. See `work/pet-state-next.md` for the verified next-slice contract.
+
+The [2026-10-04 pet revival continuation](pet-revival-20261004.md) implements
+effect 113 for the retained corpse of the current controlled summoned pet. It
+preserves the existing pet object and action bar, restores health, resets AI,
+and removes the owner's Demonic Sacrifice override auras. This does not supply
+a persistent pet instance store, effect 109, or guardian/mini-pet revival.
+
 * **Totem spells.** vmangos reads `creature_template.totem_spell_id` (`Totem.cpp:220-223`). The
   `creature_template` of this build has no such column and classic-db does not carry it (cmangos
   reads the creature spell list). Until the content importer provides it, `ITotemSpellSource` has no

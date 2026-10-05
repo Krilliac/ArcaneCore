@@ -20,6 +20,17 @@ public sealed class CharacterSpellCooldownRow
     public uint Id { get; set; }
 
     public long EndsAtUnixMs { get; set; }
+
+}
+
+public sealed class CharacterSpellCooldownOwnerRow
+{
+    public int CharacterId { get; set; }
+    public uint SpellId { get; set; }
+    public uint ItemId { get; set; }
+    public uint Category { get; set; }
+    public long SpellEndsAtUnixMs { get; set; }
+    public long CategoryEndsAtUnixMs { get; set; }
 }
 
 /// <summary>
@@ -68,7 +79,8 @@ public sealed class CharacterAuraRow
 }
 
 /// <summary>The persisted cooldowns and auras of one character.</summary>
-public sealed record CharacterSpellState(IReadOnlyList<CharacterSpellCooldownRow> Cooldowns, IReadOnlyList<CharacterAuraRow> Auras);
+public sealed record CharacterSpellState(IReadOnlyList<CharacterSpellCooldownRow> Cooldowns, IReadOnlyList<CharacterAuraRow> Auras,
+    IReadOnlyList<CharacterSpellCooldownOwnerRow>? CooldownOwners = null);
 
 /// <summary>Persistence of cooldowns and auras across logout (characters database).</summary>
 public interface ICharacterSpellStateStore
@@ -110,6 +122,11 @@ public sealed class CharacterSpellStateDataModule : IDataModule, ICharacterDataC
             entity.ToTable(CooldownTable);
             entity.HasKey(r => new { r.CharacterId, r.Kind, r.Id });
         });
+        modelBuilder.Entity<CharacterSpellCooldownOwnerRow>(entity =>
+        {
+            entity.ToTable("character_item_cooldown_owner");
+            entity.HasKey(r => new { r.CharacterId, r.SpellId, r.ItemId });
+        });
 
         modelBuilder.Entity<CharacterAuraRow>(entity =>
         {
@@ -131,6 +148,8 @@ public sealed class CharacterSpellStateDataModule : IDataModule, ICharacterDataC
         ArgumentNullException.ThrowIfNull(db);
         await db.Set<CharacterSpellCooldownRow>().Where(r => r.CharacterId == characterId)
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<CharacterSpellCooldownOwnerRow>().Where(r => r.CharacterId == characterId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<CharacterAuraRow>().Where(r => r.CharacterId == characterId)
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -147,6 +166,8 @@ public sealed class EfCharacterSpellStateStore(CharacterDbContext db) : ICharact
         await db.Set<CharacterAuraRow>().AsNoTracking()
             .Where(r => r.CharacterId == characterId)
             .OrderBy(r => r.Seq)
+            .ToListAsync(cancellationToken).ConfigureAwait(false),
+        await db.Set<CharacterSpellCooldownOwnerRow>().AsNoTracking().Where(r => r.CharacterId == characterId)
             .ToListAsync(cancellationToken).ConfigureAwait(false));
 
     public async Task SaveAsync(int characterId, CharacterSpellState state, CancellationToken cancellationToken = default)
@@ -169,6 +190,14 @@ public sealed class EfCharacterSpellStateStore(CharacterDbContext db) : ICharact
                         EndsAtUnixMs = row.EndsAtUnixMs,
                     });
                 }
+            }
+            foreach (CharacterSpellCooldownOwnerRow row in state.CooldownOwners ?? [])
+            {
+                db.Set<CharacterSpellCooldownOwnerRow>().Add(new CharacterSpellCooldownOwnerRow
+                {
+                    CharacterId = characterId, SpellId = row.SpellId, ItemId = row.ItemId, Category = row.Category,
+                    SpellEndsAtUnixMs = row.SpellEndsAtUnixMs, CategoryEndsAtUnixMs = row.CategoryEndsAtUnixMs,
+                });
             }
 
             int seq = 0;
@@ -205,11 +234,16 @@ public sealed class EfCharacterSpellStateStore(CharacterDbContext db) : ICharact
         await db.Set<CharacterAuraRow>()
             .Where(r => r.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<CharacterSpellCooldownOwnerRow>()
+            .Where(r => r.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task DeleteRowsAsync(int characterId, CancellationToken cancellationToken)
     {
         await db.Set<CharacterSpellCooldownRow>().Where(r => r.CharacterId == characterId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<CharacterSpellCooldownOwnerRow>().Where(r => r.CharacterId == characterId)
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<CharacterAuraRow>().Where(r => r.CharacterId == characterId)
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);

@@ -63,6 +63,10 @@ public static class PlayerLife
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(life);
+        // PLAYER_SELF_RES_SPELL is a current-death selection, not a stored vital:
+        // vmangos SaveToDB (16347-16536) omits it, and LoadFromDB creates fresh
+        // fields. Explicitly clear it even when a loading adapter reuses an object.
+        player.SetUInt32(UpdateFields.PlayerSelfResSpell, 0);
         if (HasNoBodyToReturnTo(life))
         {
             MapCombat.RestoreFraction(player, CombatConstants.CorpseReclaimRestorePercent);

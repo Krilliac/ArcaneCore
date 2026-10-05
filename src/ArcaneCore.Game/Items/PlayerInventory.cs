@@ -40,6 +40,7 @@ public sealed partial class PlayerInventory
         ArgumentNullException.ThrowIfNull(player);
         Player = player;
         _ownerGuid = player.Guid;
+        _enchantLifetime = new(OnEnchantExpired, OnEnchantCleared);
     }
 
     /// <summary>An inventory with no player object (character creation: vmangos Player::Create → AddStartingItems).</summary>
@@ -49,6 +50,7 @@ public sealed partial class PlayerInventory
         _race = race;
         _class = cls;
         _level = level;
+        _enchantLifetime = new(OnEnchantExpired, OnEnchantCleared);
     }
 
     /// <summary>Raised with (entry, delta) when items enter or leave the inventory (quest item counters, vmangos ItemAddedQuestCheck / ItemRemovedQuestCheck).</summary>
@@ -79,6 +81,12 @@ public sealed partial class PlayerInventory
 
     /// <summary>The stat application hook (replaceable by the combat/spells areas).</summary>
     public IItemStatsApplier StatsApplier { get; set; } = EquipmentStatsApplier.Instance;
+
+    public IItemEquipSpellSink? EquipSpellSink { get; set; }
+
+    public IItemEnchantmentSink? EnchantmentSink { get; set; }
+
+    public IItemEnchantmentSpellSink? EnchantmentSpellSink { get; set; }
 
     /// <summary>
     /// Whether bank slots may be used now (vmangos Player::CanUseBank: a banker in range). The
@@ -206,6 +214,7 @@ public sealed partial class PlayerInventory
             {
                 ApplyMods(item, row.Slot, apply: true);
             }
+            RegisterEnchantDurations(item);
 
             if (item is Container bag)
             {
@@ -230,6 +239,7 @@ public sealed partial class PlayerInventory
             item.Load(row.Item);
             bag.StoreItem(row.Slot, item);
             item.Inventory = this;
+            RegisterEnchantDurations(item);
         }
 
         _loaded = true;
@@ -244,6 +254,7 @@ public sealed partial class PlayerInventory
     /// <summary>The complete inventory as stored rows (including rows that could not be loaded).</summary>
     public InventorySnapshot CreateSnapshot()
     {
+        FlushEnchantDurations();
         var rows = new List<InventoryItemData>();
         for (int slot = 0; slot < _items.Length; slot++)
         {

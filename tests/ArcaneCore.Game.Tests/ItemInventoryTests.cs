@@ -155,14 +155,14 @@ public sealed class ItemInventoryTests
         Assert.Equal(str, player.GetUInt32(UpdateFields.UnitFieldStat0)); // carried, not worn
         inv.AutoEquipItem(ring.BagSlot, ring.Slot);
         Assert.Equal(str + 5, player.GetUInt32(UpdateFields.UnitFieldStat0));
-        Assert.Equal(5u, player.GetUInt32(UpdateFields.PlayerFieldPosstat0));
+        Assert.Equal(5f, player.GetFloat(UpdateFields.PlayerFieldPosstat0));
         Assert.Equal(sta - 2, player.GetUInt32(UpdateFields.UnitFieldStat0 + 2));
-        Assert.Equal(unchecked((uint)-2), player.GetUInt32(UpdateFields.PlayerFieldNegstat0 + 2));
+        Assert.Equal(-2f, player.GetFloat(UpdateFields.PlayerFieldNegstat0 + 2));
         Assert.Equal(armor + 10, player.GetUInt32(UpdateFields.UnitFieldResistances));
 
         inv.SwapItem(InventorySlots.Bag0, InventorySlots.Finger1, InventorySlots.Bag0, InventorySlots.ItemStart);
         Assert.Equal((str, sta, armor), (player.GetUInt32(UpdateFields.UnitFieldStat0), player.GetUInt32(UpdateFields.UnitFieldStat0 + 2), player.GetUInt32(UpdateFields.UnitFieldResistances)));
-        Assert.Equal(0u, player.GetUInt32(UpdateFields.PlayerFieldPosstat0));
+        Assert.Equal(0f, player.GetFloat(UpdateFields.PlayerFieldPosstat0));
     }
 
     [Fact]

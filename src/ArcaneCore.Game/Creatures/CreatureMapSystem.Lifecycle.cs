@@ -3,6 +3,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using MapGrid = ArcaneCore.Game.Maps.Grid.Grid;
@@ -50,6 +51,12 @@ public sealed partial class CreatureMapSystem
         creature.SkinningForOthersMs = Creature.SkinningForOthersDefaultMs; // Creature.cpp:822-825: a new life, a new corpse
         creature.LootedForSkin = false;
         creature.RespawnAtMs = _clockMs + (creature.NextRespawnDelaySeconds() * 1000L);
+        // Capture the current pet while its corpse still belongs to the map.
+        // After decay, the owner's pet GUID no longer resolves to the removed object.
+        if (creature.Summon is { Kind: SummonKind.Pet } && creature.GetOwner() is Player owner)
+        {
+            Map.Pets?.SaveCurrentPet(owner);
+        }
     }
 
     /// <summary>Respawn a dead creature now (GM command / script).</summary>
@@ -77,7 +84,7 @@ public sealed partial class CreatureMapSystem
     public Creature SpawnTemporary(CreatureTemplate template, float x, float y, float z, float orientation)
     {
         ArgumentNullException.ThrowIfNull(template);
-        var creature = new Creature(_nextTemporaryCounter++ & 0x00FFFFFF, template, spawn: null, _content, _random);
+        var creature = new Creature(_nextTemporaryCounter++ & 0x00FFFFFF, template, spawn: null, _content, _random, displayModelResolver: _displayModelResolver);
         creature.MapId = Map.MapId;
         creature.SetHome(new CreatureHome(x, y, z, orientation));
         creature.ResetToHome(_serverTime());
@@ -147,7 +154,7 @@ public sealed partial class CreatureMapSystem
                 continue; // a live spawn walked away before its home grid unloaded
             }
 
-            var creature = new Creature(spawn.Guid, template, spawn, _content, _random);
+            var creature = new Creature(spawn.Guid, template, spawn, _content, _random, displayModelResolver: _displayModelResolver);
             if (_respawnAt.Remove(spawn.Guid, out long respawnAt) && respawnAt > _clockMs)
             {
                 creature.Health = 0;
@@ -254,6 +261,7 @@ public sealed partial class CreatureMapSystem
         creature.CorpseDecayMs = 0;
         creature.Combat.DeathState = DeathState.Dead;
         Map.Combat.Untrack(creature);
+        CorpseRemoving?.Invoke(creature);
         _ai.Spells?.OnCreatureRemoved(creature);
         Map.RemoveObject(creature);
         ForgetObservers(creature);
@@ -285,6 +293,7 @@ public sealed partial class CreatureMapSystem
             return;
         }
 
+        Respawning?.Invoke(creature);
         Map.Combat.Untrack(creature);
         creature.Combat.DeathState = DeathState.Alive;
         MapCombat.ClearInCombat(creature);

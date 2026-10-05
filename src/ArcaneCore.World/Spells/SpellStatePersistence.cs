@@ -120,6 +120,14 @@ public sealed class SpellStatePersistence
     public static CharacterSpellState ToRows(SpellStateSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        var owners = snapshot.Cooldowns.Where(c => c.SpellId != 0 && (c.ItemId != 0 || c.Category != 0))
+            .GroupBy(c => (c.SpellId, c.ItemId, c.Category))
+            .Select(group => new CharacterSpellCooldownOwnerRow
+            {
+                SpellId = group.Key.SpellId, ItemId = group.Key.ItemId, Category = group.Key.Category,
+                SpellEndsAtUnixMs = group.Where(c => c.Kind == SpellCooldownKind.Spell).Select(c => c.EndsAtUnixMs).DefaultIfEmpty().Max(),
+                CategoryEndsAtUnixMs = group.Where(c => c.Kind == SpellCooldownKind.Category).Select(c => c.EndsAtUnixMs).DefaultIfEmpty().Max(),
+            }).ToArray();
         return new CharacterSpellState(
             [.. snapshot.Cooldowns.Select(c => new CharacterSpellCooldownRow { Kind = (byte)c.Kind, Id = c.Id, EndsAtUnixMs = c.EndsAtUnixMs })],
             [.. snapshot.Auras.Select(a => new CharacterAuraRow
@@ -139,16 +147,27 @@ public sealed class SpellStatePersistence
                 PeriodicTimer1 = a.PeriodicTimers.ElementAtOrDefault(1),
                 PeriodicTimer2 = a.PeriodicTimers.ElementAtOrDefault(2),
                 SavedAtUnixMs = a.SavedAtUnixMs,
-            })]);
+            })],
+            owners);
     }
 
     /// <summary>The snapshot stored rows describe; unknown cooldown kinds are dropped.</summary>
     public static SpellStateSnapshot FromRows(CharacterSpellState rows)
     {
         ArgumentNullException.ThrowIfNull(rows);
+        var cooldowns = rows.Cooldowns.Where(c => Enum.IsDefined((SpellCooldownKind)c.Kind)
+                && !(c.Kind == (byte)SpellCooldownKind.Category && (rows.CooldownOwners ?? []).Any(owner => owner.Category == c.Id)))
+            .Select(c => new PersistedCooldown((SpellCooldownKind)c.Kind, c.Id, c.EndsAtUnixMs)).ToList();
+        foreach (CharacterSpellCooldownOwnerRow owner in rows.CooldownOwners ?? [])
+        {
+            cooldowns.Add(new PersistedCooldown(SpellCooldownKind.Spell, owner.SpellId, owner.SpellEndsAtUnixMs,
+                owner.ItemId, owner.Category, owner.SpellId));
+            if (owner.Category != 0 && owner.CategoryEndsAtUnixMs > 0)
+                cooldowns.Add(new PersistedCooldown(SpellCooldownKind.Category, owner.Category, owner.CategoryEndsAtUnixMs,
+                    owner.ItemId, owner.Category, owner.SpellId));
+        }
         return new SpellStateSnapshot(
-            [.. rows.Cooldowns.Where(c => Enum.IsDefined((SpellCooldownKind)c.Kind))
-                .Select(c => new PersistedCooldown((SpellCooldownKind)c.Kind, c.Id, c.EndsAtUnixMs))],
+            cooldowns,
             [.. rows.Auras.OrderBy(a => a.Seq).Select(a => new PersistedAura
             {
                 SpellId = a.Spell,

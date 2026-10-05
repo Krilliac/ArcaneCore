@@ -200,6 +200,10 @@ public sealed partial class MapCombat : IMapUpdater
 
         UnitCombat c = unit.Combat;
         c.Tracker = this;
+        // vmangos m_doExtraAttacks: a queue created during this update becomes eligible only
+        // at the beginning of the next Unit::Update pass, while its count remains visible to
+        // item-proc recursion guards immediately.
+        c.MarkExtraAttacksReady();
 
         // vmangos Unit::Update: five-second rule, combat timer, swing timers.
         // The timer does not run out while the unit still channels the spell that took the mana (vmangos

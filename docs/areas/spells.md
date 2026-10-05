@@ -57,7 +57,7 @@ When a server and the docs disagree, the server wins and the conflict is listed 
 
 | Topic | Finding | Choice |
 |---|---|---|
-| SpellCastTargets corpse GUID | cmangos and gtker read the corpse GUID after the string target. vmangos `ReadForCaster` reads it with the unit/object GUIDs. | Reading uses the cmangos/gtker order and writing uses the vmangos order. The two orders only differ when the corpse and string flags are both set, which no 1.12 client packet does. |
+| SpellCastTargets corpse GUID | cmangos and gtker read the corpse GUID after the string target. vmangos `ReadForCaster` reads it with the unit/object GUIDs. The server's outbound vmangos writer emits one unit/object/corpse GUID, while inbound combined flags require separate GUID fields. | Reading uses the cmangos/gtker order and writing uses the vmangos order. Client fixtures must serialize the inbound layout rather than reuse the server writer for combined unit/corpse targets. Corpse/string combinations also differ in ordering. |
 | SMSG_CAST_RESULT | gtker writes the reason when `result != FAILURE`, which is inverted against both servers. | vmangos: status 0 = success with nothing after it; 2 = failure, followed by the reason and its argument. |
 | SMSG_LEARNED_SPELL | vmangos writes u16 spell + i16 slot; gtker writes one u32. | One u32 (the same bytes for 1.12 spell ids). |
 | AURAFLAGS bits | vmangos: CANCELABLE 0x01, EFF0 0x08, EFF1 0x04, EFF2 0x02. cmangos-classic uses different values. | vmangos. |
@@ -93,13 +93,21 @@ as `SpellInfo.IsDeathPersistent`. Applying an aura to a dead target needs a pass
 dead-target spell (`Unit.cpp:3110`, `SpellEffects.cpp:1672`; `SpellInfo.CanTargetDead` = Ex2 ALLOW_DEAD_TARGET or
 death-only, `SpellEntry.h:931-942`), and the cast check accepts a dead explicit target for such a spell
 (`Spell.cpp:5572`). A dead player keeps the root `MapCombat` set on JUST_DIED. Cooldowns and auras the dead unit
-cast on others are untouched, so a death-then-logout save holds no auras.
+cast on others retain their existing behavior, with the Hunter's Mark exception below.
+
+The [death aura continuation](../integration/death-aura-lifecycle-20261004.md) removes the
+dying caster's own Hunter's Mark holders on its map, preserving other casters and ordinary
+foreign auras. Exact holder and caster ownership prevent GUID reuse from transferring cleanup.
+Held participants defer this death cleanup until quest settlement releases them. Creature
+corpse disposal now unapplies handler contributions before discarding spell state, and both
+natural and forced respawn clear recreated old-life auras before field initialization and AI.
 
 Deliberate limits:
 
-- The Hunter's Mark (`SPELL_AURA_MOD_STALKED`) carve-out at the top of `RemoveAllAurasOnDeath` has no handler
-  yet (vmangos-only; cmangos-classic lacks it).
-- The creature-respawn clear of death-persistent auras (`Creature.cpp:827`) is not implemented.
+- Hunter's Mark eligibility uses its known family/flag rather than the upstream database `Custom`
+  single-target flag; the general custom flag and single-target registry are not imported.
+- Natural corpse disposal still clears retained auras earlier than upstream respawn. The current
+  lifecycle now runs their handlers at that existing disposal point.
 - Player side effects of dying (shapeshift removal, pet, combo points) belong to other systems.
 - vmangos also treats `Attributes == DO_NOT_DISPLAY && DurationIndex == 21` as passive (`SpellAuras.cpp:6666`);
   `SpellInfo` carries the resolved duration, not the DBC index, so that case is not covered.
@@ -132,6 +140,15 @@ Delivered handlers (reference: vmangos `src/game/Spells`; only the 1.12.1 branch
 | `StatAuras` | `MOD_STAT`, `MOD_RESISTANCE`, `MOD_ATTACK_POWER`, `MOD_RANGED_ATTACK_POWER` | `SpellAuras.cpp:4641`, `:4551`, `:5169`, `:5181` | Flat amounts applied as deltas to the same update fields items and level-ups write (stats + `PLAYER_FIELD_POS/NEGSTAT`, resistances + the resistance buff fields, the two int16 halves of the attack power mods; the polarity of the spell picks the half). Stamina and intellect move max health and mana by the difference of the stat bonus curve (`StatSystem.cpp:134-190`). Wand users take no ranged AP. The applied amount is remembered per aura. |
 | `VisualAuras` | `MOD_SCALE`, `TRACK_CREATURES`, `TRACK_RESOURCES` | `SpellAuras.cpp:2948`, `:2909`, `:2923` | Scale, bounding radius and combat reach by the same factor; track bit `misc - 1`; a tracking spell (`EX_NO_AUTOCAST_AI` or `ALLOW_WHILE_MOUNTED`) removes other trackers (`SPELL_TRACKER`, `SpellEntry.cpp:152-157`). |
 | `LeechAuras` (+ `SpellSystem.Leech.cs`) | `PERIODIC_LEECH`, `PERIODIC_MANA_LEECH` | `SpellAuras.cpp:5927-6014`, `:6116-6190` | Drain Life, Siphon Life, Drain Mana: damage log with the periodic flag, heal by damage times `EffectMultipleValue`, channel stops when the target dies; mana drain with the periodic aura log (power, amount, float multiplier), caster gain, half the gain as threat, damage-cancel auras removed. No spell power, absorbs, immunities, procs, Mark of Kazzak or Improved Drain Mana. |
+| `ResurrectionEffects` | `RESURRECT` (18), `RESURRECT_NEW` (113) | `SpellEffects.cpp:5228-5248,209-263`; `Player.cpp:20065-20120` | Offer percentage or flat health/mana to a dead player, including an online corpse owner on another map. Acceptance validates the caster and uses the teleport ACK before restoration and persistence. Effect 113 also restores an existing current summoned pet, with fresh AI and Demonic Sacrifice cleanup; persistent hunter-pet recovery and other summon kinds remain separate. See [player resurrection](../integration/player-resurrection-20261004.md) and [pet revival](../integration/pet-revival-20261004.md). |
+| `SelfResurrectionEffects` | `SELF_RESURRECT` (94) | `SpellEffects.cpp:5334-5375` | Immediately restores a dead player at its current position with percentage or negative-value flat health/mana, fractional rounding, body cleanup and a normal World save. Release-dialog availability and reagents remain separate. See [self-resurrection](../integration/self-resurrection-20261004.md). |
+| `GhostAuras` | `GHOST` (95) | `SpellAuras.cpp:5639-5660`; `Player.cpp:4561-4578` | Sets the unit ghost visibility bit and player ghost flag. Production death hooks cast imported 8326 and known Wisp Spirit 20584, with content-free movement fallback. See [ghost form](../integration/ghost-form-20261004.md). |
+| `DurabilityEffects` | `DURABILITY_DAMAGE` (111), `DURABILITY_DAMAGE_PCT` (115) | `SpellEffects.cpp:5576-5640` | Signed points or percentage loss for a selected equipment/bag slot, all equipment, or equipment and carried contents. Uses existing durability options, stat transitions and item persistence. See [durability spells](../integration/durability-spells-20261004.md). |
+| `SpellMagnetAuras` (+ `Spells/Magnet`) | `SPELL_MAGNET` (96) | `SpellCaster.cpp:31-68`; `Spell.cpp:2227,249` | Eligible hostile magic spells select the live magnet caster, spend a protection charge, and report the redirected target. Mixed effects and channels share that selection. See [Grounding evidence and limits](../integration/grounding-totem-20261004.md). |
+
+Intrinsic [totem immunities](../integration/totem-immunity-20261004.md) use the installed immunity
+rules before hit reporting. Immune effects are removed individually from the target mask;
+an empty mask produces `IMMUNE2` in `SMSG_SPELL_GO`, while eligible mixed effects still land.
 
 Shared-file changes made for these handlers (all small and additive, each with a test):
 
@@ -285,7 +302,10 @@ the melee slot in `SpellSystem.NextSwing.cs`.
 ## What's left
 
 - Area, chain and cone target selection are implemented (`SpellSystem.Targeting.cs`, with a line-of-sight filter on area lists); only the remaining TargetB-based selections are missing.
-- Reagents, item casts, spell focus, non-warrior shapeshift forms, facing, area restrictions.
+- Spell focus, non-warrior shapeshift forms, remaining facing and area restrictions.
+  Eight-slot reagent costs and the build-5875 item-use path are now implemented
+  in the local continuation; item cooldown packet metadata and remaining
+  consumable target fidelity are still pending. See [item/pet integration](../integration/server-item-pets-20261004.md).
 - Talent spell effects (point accounting, learning, respec and persistence exist: [talents](talents.md)), ranks, the proc system (aura holders carry `procCharges`, but nothing consumes them). Hit, crit, resist, diminishing returns, immunities, dispel, crowd-control state, pushback and lockout, absorb and the caster-state gate exist: see [spell-rules.md](spell-rules.md) for scope, configuration and limits.
 - Complete spell combat modifiers. Integrated spell damage now uses map combat death/threat,
   and effective healing adds base distributed threat and enters combat.

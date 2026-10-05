@@ -55,9 +55,25 @@ public sealed class ReloadCommandTests
         await using var host = WorldTestHost.Start();
         await using WorldTestClient admin = await AdministratorAsync(host);
 
-        await SayAsync(admin, ".reload spell");
+        // "spell" now also matches enchantment reloads; this prefix is unique.
+        await SayAsync(admin, ".reload spell_t");
 
         Assert.Equal("Re-loading spell_template...", (await admin.ReadChatAsync()).Text);
+    }
+
+    [Fact]
+    public async Task SharedSpellPrefix_ReportsAmbiguityAndDoesNotStartAReload()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await AdministratorAsync(host);
+
+        await SayAsync(admin, ".reload spell");
+
+        string reply = (await admin.ReadChatAsync()).Text;
+        Assert.StartsWith("Ambiguous reloadable 'spell':", reply);
+        Assert.Contains("spell_template", reply);
+        Assert.Contains("spell_enchant_charges", reply);
+        Assert.Empty(host.WorldServices.GetRequiredService<ReloadFeature>().Coordinator.LastResults);
     }
 
     [Fact]

@@ -183,7 +183,8 @@ public sealed partial class SpellSystem
                 }
 
                 Unit source = attacker ?? target;
-                uint dealt = Damage.DealSpellDamage(source, splitTo, holder.Spell, splitted, periodic: true);
+                uint dealt = Damage.DealSpellDamage(source, splitTo, holder.Spell, splitted,
+                    periodic: true, startsCombat: true, durabilityLoss: false);
                 OnDamageTaken(splitTo, source, dealt, periodic: true, splitAbsorbed);
                 SendToSet(source, WorldOpcode.SmsgSpellnonmeleedamagelog,
                     SpellPackets.BuildSpellNonMeleeDamageLog(splitTo.Guid, source.Guid, holder.Spell.Id, dealt, SpellSchoolMasks.FirstSchoolIn(schoolMask)), includeSelf: true);

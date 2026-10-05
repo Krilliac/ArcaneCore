@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Stats;
 using ArcaneCore.Protocol;
 
@@ -250,9 +251,8 @@ public sealed class PlayerProgression : IQuestExperience
         PlayerLevelStats? old = state.Applied;
         for (int i = 0; i < 5; i++)
         {
-            int field = UpdateFields.UnitFieldStat0 + i;
             int delta = (int)stats.Stat(i) - (int)(old?.Stat(i) ?? 0);
-            player.SetUInt32(field, Add(player.GetUInt32(field), delta));
+            StatAuras.ApplyExternalStatDelta(player, i, delta, updateBuffFields: false);
         }
 
         // The class base health and mana move the maximums here; the stamina and intellect bonuses (level base values

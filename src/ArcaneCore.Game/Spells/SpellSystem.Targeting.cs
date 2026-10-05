@@ -47,6 +47,13 @@ public sealed partial class SpellSystem
             SpellImplicitTarget selector = IsLocationTarget(effect.TargetA) && effect.TargetB != SpellImplicitTarget.None && !IsLocationTarget(effect.TargetB)
                 ? effect.TargetB
                 : effect.TargetA;
+            // TARGET_UNIT_ENEMY updates the explicit target for later effects too, including
+            // UNIT / NONE selectors. Arcane Missiles' caster-selector exception leaves it alone.
+            if (cast.MagnetTarget is { } magnet && cast.Targets.Unit == magnet.Guid)
+            {
+                unitTarget = magnet;
+            }
+
             List<(Unit Unit, float Multiplier)>? units = SelectEffectTargets(cast, effect, selector, unitTarget);
             if (units is null)
             {
@@ -87,23 +94,47 @@ public sealed partial class SpellSystem
         switch (selector)
         {
             case SpellImplicitTarget.UnitCaster:
+                // Arcane Missiles' channel aura uses UNIT_CASTER / NONE but is placed on
+                // the enemy (vmangos Spell.cpp:249-255; SpellClassMask.h channel bit 11).
+                if (effect.TargetB == SpellImplicitTarget.None && spell.IsFitToFamily(3, 11) && unitTarget is not null)
+                {
+                    Unit missileTarget = SelectMagnetTarget(cast, unitTarget, updateExplicitTarget: false);
+                    return IsEnemy(caster, missileTarget) ? [(missileTarget, 1.0f)] : [];
+                }
+
                 return [(caster, 1.0f)];
             case SpellImplicitTarget.None:
                 return [(unitTarget ?? caster, 1.0f)];
             case SpellImplicitTarget.LocationCasterHomeBind:
             case SpellImplicitTarget.LocationDatabase:
-            case SpellImplicitTarget.LocationCasterDest:
             case SpellImplicitTarget.LocationCasterSrc:
             case SpellImplicitTarget.LocationCasterTargetPosition:
             case SpellImplicitTarget.LocationCasterFishingSpot: // vmangos Spell.cpp:2859: the caster
                 // A location-only effect (teleport, summon) acts on the caster.
                 return [(caster, 1.0f)];
+            case SpellImplicitTarget.LocationCasterDest:
+                // Spell.cpp:3110-3117: resurrection uses the explicit unit or resolved corpse
+                // owner here; other location-only effects still act on the caster.
+                return effect.Effect is SpellEffectName.Resurrect or SpellEffectName.ResurrectNew
+                    ? unitTarget is null ? [] : [(unitTarget, 1.0f)]
+                    : [(caster, 1.0f)];
             case SpellImplicitTarget.GameObject:
             case SpellImplicitTarget.GameObjectItem:
                 // The effect reads the explicit object or item of the target block itself (vmangos m_targets.getGOTarget /
                 // getItemTarget); the caster carries the effect.
                 return [(caster, 1.0f)];
             case SpellImplicitTarget.UnitEnemy:
+                if (explicitOrSelf is null)
+                {
+                    return [];
+                }
+
+                Unit enemy = SelectMagnetTarget(cast, explicitOrSelf);
+                // Spell::SetTargetMap: a redirected chain ends at the magnet; it never jumps
+                // back into the protected party after consuming Grounding's charge.
+                return !ReferenceEquals(enemy, explicitOrSelf) || cast.MagnetTarget is not null
+                    ? [(enemy, 1.0f)]
+                    : effect.ChainTarget > 1 ? Chain(cast, effect, selector, enemy) : [(enemy, 1.0f)];
             case SpellImplicitTarget.UnitFriend:
             case SpellImplicitTarget.Unit:
             case SpellImplicitTarget.UnitFriendChainHeal:

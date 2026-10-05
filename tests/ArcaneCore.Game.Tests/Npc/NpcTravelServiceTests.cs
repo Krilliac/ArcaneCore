@@ -416,4 +416,15 @@ public sealed class NpcTravelServiceTests
         Assert.False(rig.Flights.StartFlight(rig.Player, [1, 2], [10], Gryphon));
         Assert.Equal(3, rig.Flights.CurrentHop(rig.Player)!.Count);
     }
+
+    [Fact]
+    public void StartFlight_ClearsExtraAttacksOnlyAfterValidation()
+    {
+        using var rig = new TaxiRig();
+        Assert.True(rig.Player.Combat.QueueExtraAttacks(1));
+        Assert.False(rig.Flights.StartFlight(rig.Player, [1, 2], [10], 1));
+        Assert.Equal(1u, rig.Player.Combat.ExtraAttacks);
+        Assert.True(rig.Flights.StartFlight(rig.Player, [1, 2], [10], Gryphon));
+        Assert.Equal(0u, rig.Player.Combat.ExtraAttacks);
+    }
 }

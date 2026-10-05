@@ -37,6 +37,22 @@ copied). Each piece of code cites file:line.
   quest gates read real skills.
 - `SMSG_SET_PROFICIENCY` (0x0127: u8 class, u32 mask).
 
+**Skill bonus auras** (`Game/Spells/Auras/SkillAuras`; 2026-10-04 continuation)
+- `MOD_SKILL` (30) and `MOD_SKILL_TALENT` (98) are discovered spell modules. Temporary auras change
+  the low signed bonus half; talents and racial passives change the high signed half. Effective skill
+  checks include both, base skill checks include only the permanent bonus, and saved skill rows retain
+  the pure value and maximum. Reference: vmangos
+  [`Aura::HandleAuraModSkill`](https://github.com/vmangos/core/blob/0e3ff01e76d4758e8a7c3108b2717cc785ed56fa/src/game/Spells/SpellAuras.cpp#L2807).
+- Each aura remembers its applied amount. Stacking subtracts the previous amount before applying the
+  new amount, so expiration, dispelling and death remove exactly its contribution. Auras on unknown
+  skills remain pending; learning, forgetting and relearning apply or remove them once through
+  `SkillAdded` / `SkillRemoving` (vmangos `Player.cpp:5549-5560, 5627-5645`). The loading path notifies
+  aura owners after all restored slots exist, and the attachment hook also supports passives already
+  on a loading player. `SkillChanged` tells the stat owner to recompute after bonus changes.
+- Synthetic Game tests cover signed halves, composition and capped stacks, skill slot reuse, unknown
+  skills, both attachment/load orderings, stacked saved auras, pure snapshots, expiration and death.
+  World login tests cover passive restoration and saved active aura restoration on a fresh player.
+
 **Persistence** (`Data/Skills`, `World/Skills/SkillSaveCoordinator`; slice `skills-persistence`)
 - Characters schema `CharacterSkillsDataModule.Version` (**14**, Characters), tables `character_skills` and
   `character_forgotten_skills` (vmangos `characters.sql:199-204, 344-350`), with `ICharacterDataCleanup`.
@@ -115,11 +131,10 @@ copied). Each piece of code cites file:line.
 - **Shapeshift** forms: no weapon-skill override for a form without weapons (the form byte of `UNIT_FIELD_BYTES_1` is
   read for the "no weapon gain while shapeshifted" rule, nothing writes it yet); **pets** (the owner counts as a
   player-controlled victim in vmangos).
-- Derived stats (dodge, parry, block, crit percentages, defense bonuses) are not recomputed: nothing writes those fields in
-  this tree. `PlayerSkills.SkillChanged` is the hook for their owner.
-- `SkillAdded`, `SkillRemoving` and `SkillRemoved` have no subscriber: the MOD_SKILL / MOD_SKILL_TALENT auras (bonus
-  re-application, `Player.cpp:5549-5560, 5627-5645`) and the quest-log clean-up on skill removal (`:5576-5599`) belong to
-  the aura and quest areas.
+- The stat system reads attached effective weapon and defense skills and subscribes to `SkillChanged`
+  during login; its existing level-based fallback covers hosts without skills (see [stats](stats.md)).
+  `SkillAdded` and `SkillRemoving` now maintain skill auras; quest-log cleanup on skill removal
+  (`Player.cpp:5576-5599`) remains a separate quest hook.
 - Trainer rows: the `SkillRaceClassInfo` minimum level is not applied (the reference applies it only when training; the
   list and the state share one predicate here). `spell_chain` `req_spell` and the custom `spell_chain` table are not loaded.
   Learning rank N without rank N-1 does not learn the lower ranks (`Player.cpp:3621-3629`), the spellbook owner's rule.

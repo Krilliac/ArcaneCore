@@ -192,9 +192,9 @@ public class CombatHooks
 
     /// <summary>
     /// Apply the ghost form at spirit release (vmangos Player::ApplyGhostForm: cast 8326, or
-    /// 20584 too for night elves with 20585). The default does nothing and no production code
-    /// overrides it yet (nothing registers a <see cref="CombatHooks"/> subclass), so the ghost
-    /// aura is never cast; combat itself sets PLAYER_FLAGS_GHOST and water walking.
+    /// 20584 too for players who know 20585). The default does nothing. The world combat adapter
+    /// casts imported ghost-form spells and delegates the other selected hooks; combat also
+    /// provides PLAYER_FLAGS_GHOST and water walking when spell content is absent.
     /// </summary>
     public virtual void ApplyGhostForm(Player player)
     {

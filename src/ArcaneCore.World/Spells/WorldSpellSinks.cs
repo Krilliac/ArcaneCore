@@ -20,6 +20,9 @@ internal sealed class WorldSpellDamageSink : IDamageSink
         => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat: true);
 
     public uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat)
+        => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat, durabilityLoss: true);
+
+    public uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat, bool durabilityLoss)
     {
         if (caster.Map is not { } map || !ReferenceEquals(map, victim.Map))
         {
@@ -27,7 +30,8 @@ internal sealed class WorldSpellDamageSink : IDamageSink
         }
 
         uint health = victim.Health;
-        map.Combat.DealDamage(caster, victim, damage, direct: !periodic, meleeDamage: false, startsCombat: startsCombat);
+        map.Combat.DealDamage(caster, victim, damage, direct: !periodic, meleeDamage: false,
+            startsCombat: startsCombat, durabilityLoss: durabilityLoss, spell: spell);
         return health - Math.Min(health, victim.Health);
     }
 

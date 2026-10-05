@@ -31,6 +31,24 @@ public sealed class BanStoreTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task HistoryExistence_QueryIsDistinctChunked_AndIncludesExpiredInactiveAndAuditRows(DatabaseProvider provider)
+    {
+        var clock = new BanClock(T0);
+        await using Fixture f = await Fixture.CreateAsync(_databases, provider, clock);
+        await f.Store.BanAccountAsync(new BanRequest(7, 1, "expired", "GM"));
+        await f.Store.BanAccountAsync(new BanRequest(8, 0, "inactive", "GM"));
+        await f.Store.UnbanAccountAsync(8, "GM", "appeal");
+        await f.Store.UnbanAccountAsync(501, "GM", "audit only");
+        await f.Store.BanAccountAsync(new BanRequest(999, 0, "outside candidates", "GM"));
+        clock.Seconds = T0 + 2;
+
+        Assert.Equal([7, 8, 501], (await f.Store.FindAccountsWithHistoryAsync([.. Enumerable.Range(1, 600), 7, 8, 501])).Order());
+        Assert.Empty(await f.Store.FindAccountsWithHistoryAsync([]));
+        Assert.Empty(await f.Store.FindBannedAccountsAsync([7, 8, 501]));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task AuthDatabaseAtV2_UpgradesToBanVersion_KeepsAccounts_AndSecondStartupIsNoOp(DatabaseProvider provider)
     {
         DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);

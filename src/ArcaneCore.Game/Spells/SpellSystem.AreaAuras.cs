@@ -80,7 +80,9 @@ public sealed partial class SpellSystem
                     {
                         if (aura is not null && source.Spell.Effects[aura.EffectIndex].Effect == SpellEffectName.ApplyAreaAuraParty)
                         {
-                            child.SetAura(new SpellAura(aura.EffectIndex, aura.Type, aura.Amount, aura.Amplitude, aura.MiscValue));
+                            uint amplitude = aura.Type == AuraType.ModPowerRegen
+                                ? source.Spell.Effects[aura.EffectIndex].Amplitude : aura.Amplitude;
+                            child.SetAura(new SpellAura(aura.EffectIndex, aura.Type, aura.Amount, amplitude, aura.MiscValue, member.PowerType));
                         }
                     }
 

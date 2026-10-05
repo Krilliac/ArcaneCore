@@ -69,10 +69,15 @@ when the stored values are clamped to them.
 
 ## Limits (explicit, nothing is stubbed behind them)
 - Not delivered from the design: graveyard data and selection, so a released spirit stays at its body
-  (`CombatHooks.RepopAtGraveyard` still has no override); the real ghost aura (8326 / 20584) and
-  resurrection sickness (15007); durability loss on death; spirit visibility; ghost dungeon rules;
-  resurrection requests; rest state persistence; bank slot persistence; the Map.dbc import. These
+  (`CombatHooks.RepopAtGraveyard` still has no override); and
+  resurrection sickness (15007); spirit visibility; ghost dungeon rules;
+  rest state persistence; bank slot persistence; the Map.dbc import. These
   slices were not started.
+- Player resurrection requests, self-resurrection effect 94 and imported ghost-form spells
+  now use the production World flow. See the [revival continuation](server-revival-20261004.md).
+- Ordinary PvE combat death now applies equipment durability loss and its victim notification.
+  See the [death and item continuation](server-item-death-20261004.md) for caller suppression,
+  environmental single charging, and current-pet revival.
 - The body is not kept in the world while its owner is offline (vmangos keeps the corpse object in the
   world and saves it with the map). It is stored with the character and put back at the next login. Other
   players therefore do not see an offline player's body, and it does not decay to bones while its owner

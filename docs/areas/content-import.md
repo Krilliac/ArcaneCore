@@ -8,6 +8,45 @@ database or report inside a git work tree unless git ignores the path.
 
 ## Delivered
 
+### Totem spell CLI integration (2026-10-04; no schema change)
+
+`plan`, `import`, dry runs and JSON reports now include the totem spell source tables. The existing
+`TotemSpellDumpImporter` runs inside the CLI's shared transaction and writes the existing world-version-15
+`totem_spell` table. `--replace` replaces the table; without it, a duplicate target key fails the entire
+import and restores all earlier importer writes. Repeating an import with `--replace` produces the same mappings.
+
+- For classic-db, candidates come from summon-totem effects 74 and 87–90 in `spell_template`, or
+  `creature_template.AIName = TotemAI`. An explicit `creature_template.SpellList` (`spell_list_id`
+  is accepted as an alias) takes precedence and selects the lowest-position positive spell in
+  `creature_spell_list`. Otherwise the first nonzero `spell1..spell10` of default-set (`setId = 0`)
+  `creature_template_spells` is used. Later source rows replace earlier mappings, including zero values.
+- For vmangos, `creature_template.totem_spell_id` supplies the spell directly, including templates without
+  `TotemAI` in `AIName`. The highest template patch at or below 10 wins, matching the creature importer.
+  A direct field of zero stays zero and does not fall back to cmangos spell-list data.
+- Missing spell mappings are counted as `totem_creatures_without_spell`. Summoned creatures without a
+  mapping produce an advisory warning containing their entries: some, such as Sentry Totem, intentionally
+  have no spell. No source data or generated database is committed. Report `specVersion` is now 2.
+- `verify` counts `totem_spell` and rejects references to missing creature templates. Once spell DBC
+  content is imported, it also rejects missing spell references. With no imported spells it prints a note
+  that the spell check could not run; use `import-dbc` before starting the server.
+
+Synthetic CLI tests exercise persistence, repeat replacement, dry runs, schema refusal, vmangos direct
+fields, reference checks and rollback of earlier creature writes after a totem collision. Library tests
+exercise the caller's savepoint/transaction boundary and outer rollback. Real dump and non-SQLite provider
+checks remain environment-dependent; this continuation has no client DBCs or real dump available.
+
+The compatibility mapper does not reproduce cmangos list availability rolls, targeting validation, or
+skipping invalid spell IDs using DBC content during resolution. `verify` detects missing spell IDs once
+spell DBCs have been imported.
+
+References: cmangos core `8ec338a1704e7dcb1c0213eb7ed58f9231ade40f`,
+`src/game/Entities/Totem.cpp:171–176` (first creature-spell-list entry),
+`Creature.cpp:609–612` (explicit list precedence), `Globals/ObjectMgr.cpp:1032–1110,9757–9816`
+(list positions and nonzero legacy slots);
+vmangos core `0e3ff01e76d4758e8a7c3108b2717cc785ed56fa`, `src/game/Objects/Totem.cpp:220–222`
+(`totem_spell_id`). Both source trees were consulted as behavioral references; no GPL source or dump rows
+were copied into the implementation.
+
 ### `import-core-min` (library, `ArcaneCore.Data/Content/Import/{Sources,Spec,Core}`, no schema change)
 
 - **Sources.** `DumpFiles.OpenText` reads `.sql` or `.sql.gz`, recognising gzip by its magic number (`1F 8B`), not by name.

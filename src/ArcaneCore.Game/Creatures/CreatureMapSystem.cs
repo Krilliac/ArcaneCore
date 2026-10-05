@@ -47,6 +47,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
     private readonly Random _random;
     private readonly Func<uint> _serverTime;
     private readonly ILogger _logger;
+    private readonly Func<uint, CreatureDisplayModelMetadata?>? _displayModelResolver;
 
     private readonly Dictionary<GridCoord, List<CreatureSpawn>> _spawnsByGrid = [];
     private readonly Dictionary<GridCoord, LoadedGrid> _grids = [];
@@ -63,7 +64,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
 
     public CreatureMapSystem(
         Map map, CreatureContent content, CreatureOptions? options = null, ICreatureHeightProvider? height = null,
-        Random? random = null, Func<uint>? serverTime = null, ILogger? logger = null, CreatureAiServices? aiServices = null)
+        Random? random = null, Func<uint>? serverTime = null, ILogger? logger = null, CreatureAiServices? aiServices = null,
+        Func<uint, CreatureDisplayModelMetadata?>? displayModelResolver = null)
     {
         ArgumentNullException.ThrowIfNull(map);
         ArgumentNullException.ThrowIfNull(content);
@@ -74,6 +76,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
         _random = random ?? new Random();
         _serverTime = serverTime ?? (() => unchecked((uint)_clockMs));
         _logger = logger ?? NullLogger.Instance;
+        _displayModelResolver = displayModelResolver;
         _ai = aiServices ?? CreatureAiServices.Default;
         SubscribeAi();
 

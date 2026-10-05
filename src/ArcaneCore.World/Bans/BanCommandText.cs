@@ -36,6 +36,9 @@ public static class BanCommandText
     public const string BanListMatchingAccount = "The following accounts match your query:";     // 428
     public const string PlayerNotFound = "Player not found!";                                    // 499
 
+    /// <summary>ArcaneCore addition for an explicitly configured character-owner candidate limit.</summary>
+    public const string CharacterListOmitted = "More matching character-owner accounts were omitted (Bans:CharacterListMaxResults); use a narrower prefix.";
+
     /// <summary>ArcaneCore addition (Bans:ProtectHigherSecurity): vmangos has no such guard.</summary>
     public const string TargetSecurityTooHigh = "You may not ban an account whose security level is equal to or higher than yours.";
 

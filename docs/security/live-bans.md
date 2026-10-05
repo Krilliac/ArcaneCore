@@ -80,6 +80,15 @@ author is not kicked by their own ban) has no switch.
   async holder fails silently).
 * `.baninfo account`/`character` and `.banlist` of characters read the account name through `IAccountAdmin`; the
   `<hidden>` reason branch of vmangos is not implemented (it reads a `gmlevel` column no vmangos INSERT ever writes).
+* `.banlist character` applies a literal, case-insensitive prefix in the character store and reads only distinct
+  owner account ids. It checks whether those accounts have **any** history (expired, inactive and unban audit rows
+  included) in batches of 500, rather than loading every character identity or each owner's complete history.
+  `Bans:CharacterListMaxResults` defaults to `0` (unlimited, preserving retail). Set a nonzero value to bound the
+  candidate accounts checked: values are clamped to `1..500`, with one extra candidate fetched to detect truncation.
+  The cap applies **before** checking ban history because the characters and auth tables live in separate databases.
+  It therefore bounds work rather than guaranteeing that many banned accounts. A truncation notice always asks for
+  a narrower prefix, even when the retained candidates have no history. Duplicate character owners consume one slot;
+  candidates are ordered by account id. Without truncation the existing retail header/no-character replies remain.
 * `Bans:RequireNotHigherSecurityTarget` was designed and **not delivered**; retail has no hierarchy check on
   `.ban`, so (as retail) a GameMaster can ban an Administrator's account.
 * Command security is vmangos' (see above), mapped from its 0-7 scale onto ArcaneCore's four levels; classic-db's
@@ -91,6 +100,9 @@ author is not kicked by their own ban) has no switch.
   seconds on a large realm: each pass is a few indexed queries over the connected account ids).
 * To make a ban survive a world reconnect with a stale key, set `Bans:RevokeSessionKeyOnBan`.
 * Expired rows are purged at startup (`AuthDbInitializer`), at most hourly by the re-check, and by `.banlist`.
+* On large realms, set `Bans:CharacterListMaxResults` to `100` to bound `.banlist character` candidate lookups.
+  The default remains unlimited for retail compatibility; database prefix filtering and batched history existence
+  queries reduce transferred data and query count but do not bound all database scan work.
 
 ## Tests and what they do not prove
 
@@ -99,6 +111,10 @@ author is not kicked by their own ban) has no switch.
   transaction, MariaDB error 1062, implicit DDL commit between the two table steps, bool/bigint mapping) are written
   against real semantics (each `SaveChanges` owns its transaction, `BanIpAsync` re-reads and accepts a concurrently
   inserted active row) but are exercised on hosted CI only. The concurrent `BanIpAsync` theory is only meaningful there.
+* `CharacterNamePrefixTests` covers case-insensitive literal database prefix filtering, duplicate owners, ordering and
+  limits; `BanStoreTests` covers chunked history existence including expired/inactive/audit rows. `BanCommandTests`
+  covers capped candidates, duplicate owners, historical bans and the truncation notice when earlier clean accounts
+  consume the cap. MariaDB/PostgreSQL translation remains exercised only where those provider tests are configured.
 * Realm: `RealmBanEnforcementTests` over a real loopback `LogonSession`.
 * World: `WorldAuthBanTests`, `LiveKickTests`, `BanRecheckTests`, `BanCommandTests`, `BanTextTests` against the real
   `WorldTestHost` (real sockets, real world thread, in-memory stores).

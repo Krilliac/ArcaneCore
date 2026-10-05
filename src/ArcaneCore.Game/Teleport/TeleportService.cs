@@ -262,6 +262,10 @@ public sealed class TeleportService
             return;
         }
 
+        // vmangos Player::ExecuteTeleportFar (Player.cpp:2025): accepted far transfer clears
+        // pending extra attacks before the player leaves the source map. Failed/superseded
+        // transfers return above and preserve the queue.
+        player.Combat.ResetExtraAttacks();
         TeleportDestination dest = pending.Destination;
         player.Selection = ObjectGuid.Empty;
         player.Session.Send(WorldOpcode.SmsgTransferPending, TeleportPackets.BuildTransferPending(dest.MapId));

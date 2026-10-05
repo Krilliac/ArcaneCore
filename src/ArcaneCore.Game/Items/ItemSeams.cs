@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Items;
 
 namespace ArcaneCore.Game.Items;
@@ -95,9 +96,7 @@ public sealed class EquipmentStatsApplier : IItemStatsApplier
                 default:
                     if (StatIndex((ItemStatType)stat.Type) is { } index)
                     {
-                        player.SetUInt32(UpdateFields.UnitFieldStat0 + index, Add(player.GetUInt32(UpdateFields.UnitFieldStat0 + index), value));
-                        int bonusField = stat.Value > 0 ? UpdateFields.PlayerFieldPosstat0 : UpdateFields.PlayerFieldNegstat0;
-                        player.SetUInt32(bonusField + index, Add(player.GetUInt32(bonusField + index), value));
+                        StatAuras.ApplyExternalStatDelta(player, index, value, updateBuffFields: true, buffPositive: stat.Value > 0);
                     }
 
                     break;

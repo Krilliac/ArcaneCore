@@ -136,6 +136,11 @@ public sealed class EconomyRulesTests
         trade.Initiator.Accepted = trade.Target.Accepted = true;
         trade.ClearAccepted();
         Assert.False(trade.Initiator.Accepted || trade.Target.Accepted);
+        trade.Initiator.PendingEnchantment = new PendingTradeEnchantment(7001, ObjectGuid.Item(77));
+        trade.Target.PendingEnchantment = new PendingTradeEnchantment(7002, ObjectGuid.Item(78));
+        trade.ClearPendingEnchantments();
+        Assert.Null(trade.Initiator.PendingEnchantment);
+        Assert.Null(trade.Target.PendingEnchantment);
         trade.Initiator[TradeRules.NonTradedSlot] = ObjectGuid.Item(9);
         trade.Initiator[0] = ObjectGuid.Item(8);
         Assert.Equal([ObjectGuid.Item(8)], trade.Initiator.TradedItems);

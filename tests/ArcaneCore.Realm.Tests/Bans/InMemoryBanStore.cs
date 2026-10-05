@@ -134,6 +134,16 @@ internal sealed class InMemoryBanStore(TimeProvider? clock = null) : IBanStore
         }
     }
 
+    public Task<IReadOnlySet<int>> FindAccountsWithHistoryAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
+    {
+        MaybeFail();
+        lock (_gate)
+        {
+            return Task.FromResult<IReadOnlySet<int>>(_accountRows.Where(r => accountIds.Contains(r.AccountId))
+                .Select(r => r.AccountId).ToHashSet());
+        }
+    }
+
     public Task<IReadOnlyList<IpBanRecord>> ListIpBansAsync(string prefix, CancellationToken cancellationToken = default)
     {
         lock (_gate)

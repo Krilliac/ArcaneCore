@@ -111,6 +111,31 @@ public class Item : WorldObject
     /// <summary>The permanent enchantment id of enchantment slot <paramref name="slot"/> (0..6).</summary>
     public uint EnchantmentId(int slot) => GetUInt32(UpdateFields.ItemFieldEnchantment + (slot * 3));
 
+    /// <summary>Remaining duration for an enchantment slot (0..6).</summary>
+    public uint EnchantmentDuration(int slot) => GetUInt32(UpdateFields.ItemFieldEnchantment + (slot * 3) + 1);
+
+    /// <summary>Remaining charges for an enchantment slot (0 means unlimited).</summary>
+    public uint EnchantmentCharges(int slot) => GetUInt32(UpdateFields.ItemFieldEnchantment + (slot * 3) + 2);
+
+    /// <summary>Consume one temporary enchant charge; slot zero is permanent metadata.</summary>
+    public bool ConsumeEnchantmentCharge(int slot)
+    {
+        if (slot <= 0 || slot >= 7 || EnchantmentId(slot) == 0) return false;
+        uint charges = EnchantmentCharges(slot);
+        if (charges == 0) return false;
+        if (charges == 1)
+        {
+            if (Inventory is { Player: { } owner })
+                Inventory.EnchantmentSink?.ApplyEnchantment(owner, this, slot, apply: false);
+            SetUInt32(UpdateFields.ItemFieldEnchantment + (slot * 3), 0);
+            SetUInt32(UpdateFields.ItemFieldEnchantment + (slot * 3) + 1, 0);
+            SetUInt32(UpdateFields.ItemFieldEnchantment + (slot * 3) + 2, 0);
+            Inventory?.RefreshVisibleEnchantment(this, slot, 0);
+        }
+        else SetUInt32(UpdateFields.ItemFieldEnchantment + (slot * 3) + 2, charges - 1);
+        return true;
+    }
+
     public bool IsBag => Template.IsBag();
 
     /// <summary>

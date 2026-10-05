@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Bans;
 using Xunit;
@@ -13,6 +14,55 @@ namespace ArcaneCore.World.Tests.Bans;
 /// </summary>
 public sealed class BanCommandTests
 {
+    [Fact]
+    public async Task BanListCharacter_CapsDistinctCandidates_UsesHistoryExistence_AndReportsTruncation()
+    {
+        await using var host = WorldTestHost.Start(banOptions: new BanOptions { CharacterListMaxResults = 2 });
+        await using WorldTestClient moderator = await host.EnterWorldAsync("MOD", "Moderator", AccountSecurity.Moderator);
+        await host.AddAccountAsync("FIRST");
+        await host.AddAccountAsync("SECOND");
+        await host.AddAccountAsync("LATER");
+        int first = (await host.Accounts.FindByUsernameAsync("FIRST"))!.Id;
+        int second = (await host.Accounts.FindByUsernameAsync("SECOND"))!.Id;
+        int later = (await host.Accounts.FindByUsernameAsync("LATER"))!.Id;
+        await host.Characters.CreateAsync(new CharacterRecord { AccountId = first, Name = "Patfirst" });
+        await host.Characters.CreateAsync(new CharacterRecord { AccountId = first, Name = "Patduplicate" });
+        await host.Characters.CreateAsync(new CharacterRecord { AccountId = second, Name = "Patsecond" });
+        await host.Characters.CreateAsync(new CharacterRecord { AccountId = later, Name = "Patlater" });
+        host.Bans.AddAccountRow(first, 1, 2, active: false); // historical rows still appear, as retail
+        host.Bans.AddAccountRow(second, 1, 2, active: false, reason: "UNBAN: audit");
+        host.Bans.AddAccountRow(later, 1, 1);
+        await Drain(moderator);
+
+        await moderator.SendChatAsync(ChatType.Say, Language.Common, ".banlist character pAt");
+        Assert.Equal([BanCommandText.BanListMatchingAccount, "FIRST", "SECOND", BanCommandText.CharacterListOmitted],
+            await ReadLinesAsync(moderator, 4));
+        Assert.Equal([first, second], host.Bans.HistoryCandidates);
+        Assert.Equal(0, host.Bans.HistoryCalls);
+    }
+
+    [Fact]
+    public async Task BanListCharacter_CleanCandidatesBeforeLaterBannedOwner_StillReportsTruncation()
+    {
+        await using var host = WorldTestHost.Start(banOptions: new BanOptions { CharacterListMaxResults = 1 });
+        await using WorldTestClient moderator = await host.EnterWorldAsync("MOD", "Moderator", AccountSecurity.Moderator);
+        await host.AddAccountAsync("CLEAN");
+        await host.AddAccountAsync("BANNED");
+        int clean = (await host.Accounts.FindByUsernameAsync("CLEAN"))!.Id;
+        int banned = (await host.Accounts.FindByUsernameAsync("BANNED"))!.Id;
+        await host.Characters.CreateAsync(new CharacterRecord { AccountId = clean, Name = "Patclean" });
+        await host.Characters.CreateAsync(new CharacterRecord { AccountId = banned, Name = "Patbanned" });
+        host.Bans.AddAccountRow(banned, 1, 1);
+        await Drain(moderator);
+
+        await moderator.SendChatAsync(ChatType.Say, Language.Common, ".banlist character pat");
+        Assert.Equal([BanCommandText.BanListMatchingAccount, BanCommandText.CharacterListOmitted], await ReadLinesAsync(moderator, 2));
+        Assert.Equal([clean], host.Bans.HistoryCandidates);
+        await moderator.SendChatAsync(ChatType.Say, Language.Common, ".banlist character patb");
+        Assert.Equal([BanCommandText.BanListMatchingAccount, "BANNED"], await ReadLinesAsync(moderator, 2));
+        Assert.Equal([banned], host.Bans.HistoryCandidates);
+    }
+
     [Fact]
     public async Task BanAccount_Temporary_RepliesWithTheRetailText_KicksTheVictim_AndWritesTheRow()
     {

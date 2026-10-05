@@ -1,4 +1,6 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Combat;
@@ -235,7 +237,8 @@ public sealed partial class MapCombat
         }
 
         bool offhand = HasOffhandWeapon(attacker);
-        if (!c.IsAttackReady(WeaponAttackType.BaseAttack) && !(offhand && c.IsAttackReady(WeaponAttackType.OffAttack)))
+        if (!c.HasReadyExtraAttacks && !c.IsAttackReady(WeaponAttackType.BaseAttack)
+            && !(offhand && c.IsAttackReady(WeaponAttackType.OffAttack)))
         {
             return false;
         }
@@ -245,12 +248,34 @@ public sealed partial class MapCombat
         switch (result)
         {
             case AttackCheckResult.Ok:
+                bool extraAttackPerformed = false;
+                if (c.HasReadyExtraAttacks)
+                {
+                    c.ClearExtraAttacksReady();
+                    Unit? extraVictim = c.Victim;
+                    c.LockExtraAttacks();
+                    try
+                    {
+                        while (c.HasPendingExtraAttacks && extraVictim is not null)
+                        {
+                            AttackerStateUpdate(attacker, extraVictim, WeaponAttackType.BaseAttack);
+                            c.ConsumeExtraAttack();
+                            extraAttackPerformed = true;
+                        }
+                    }
+                    finally
+                    {
+                        c.UnlockExtraAttacks();
+                    }
+                    c.ResetAttackTimer(WeaponAttackType.BaseAttack);
+                }
+
                 if (player is not null)
                 {
                     TogglePlayerPvpFlagOnAttackVictim(player, victim);
                 }
 
-                if (c.IsAttackReady(WeaponAttackType.BaseAttack))
+                if (!extraAttackPerformed && c.IsAttackReady(WeaponAttackType.BaseAttack))
                 {
                     // never swing both hands at once: push the off-hand 200 ms
                     if (offhand && c.GetAttackTimer(WeaponAttackType.OffAttack) < CombatConstants.AttackDisplayDelayMs)
@@ -341,6 +366,9 @@ public sealed partial class MapCombat
     /// </summary>
     public event Action<MeleeDamageInfo>? MeleeSwingResolved;
 
+    /// <summary>Weapon item procs run after the white hit's damage (vmangos Unit.cpp:1755-1777).</summary>
+    public event Action<MeleeDamageInfo>? MeleeWeaponHitDealt;
+
     /// <summary>
     /// One white swing (vmangos Unit::AttackerStateUpdate): roll and calculate the damage,
     /// send SMSG_ATTACKERSTATEUPDATE to the set (before the damage, so the client can still
@@ -378,6 +406,7 @@ public sealed partial class MapCombat
             CombatPackets.AttackerStateUpdate(info.HitInfo, attacker.Guid, victim.Guid, info.TotalDamage, sub, info.TargetState, info.Blocked));
 
         DealMeleeDamage(info);
+        MeleeWeaponHitDealt?.Invoke(info);
         PlayerCombatSkills.OnMeleeResolved(attacker, victim, attackType, info.Outcome);
         MeleeSwingFinished?.Invoke(attacker, victim); // vmangos Unit.cpp:2285: the swing cancels ATTACKING auras
         return info;
@@ -622,7 +651,7 @@ public sealed partial class MapCombat
     /// distinguishes DIRECT_DAMAGE from SPELL_DIRECT_DAMAGE: only weapon damage rewards
     /// outgoing rage, and its auto-start Attack call enables melee only for DIRECT_DAMAGE.
     /// </summary>
-    public uint DealDamage(Unit attacker, Unit victim, uint damage, MeleeHitOutcome outcome = MeleeHitOutcome.Normal, uint cleanDamage = 0, bool direct = true, bool meleeDamage = true, bool startsCombat = true)
+    public uint DealDamage(Unit attacker, Unit victim, uint damage, MeleeHitOutcome outcome = MeleeHitOutcome.Normal, uint cleanDamage = 0, bool direct = true, bool meleeDamage = true, bool startsCombat = true, bool durabilityLoss = true, SpellInfo? spell = null)
     {
         if (IsQuestSettlementPending(attacker) || IsQuestSettlementPending(victim) || !IsAliveState(victim))
         {
@@ -680,7 +709,7 @@ public sealed partial class MapCombat
 
         if (victim.Health <= damage)
         {
-            Kill(attacker, victim);
+            Kill(attacker, victim, durabilityLoss, spell);
             if (duelEnded)
             {
                 AfterLethalDuelDamage((Player)victim); // Unit.cpp:825-843
@@ -711,6 +740,7 @@ public sealed partial class MapCombat
             RewardRage((Player)victim, damage, attacker: false, CombatEnvironment.For(_world));
         }
 
+        ApplyHitDurability(attacker, victim);
         DamageDealt?.Invoke(attacker, victim, damage, direct, meleeDamage);
         AttackedBy(victim, attacker);
         if (duelEnded)
@@ -760,13 +790,16 @@ public sealed partial class MapCombat
     /// 0 and JUST_DIED (combat stop, threat cleared, player rooted, power emptied), removal from
     /// every threat list, the PvP-death mark; creatures go straight to CORPSE.
     /// </summary>
-    public void Kill(Unit? killer, Unit victim)
+    public void Kill(Unit? killer, Unit victim, bool durabilityLoss = true, SpellInfo? spell = null)
     {
         if (IsQuestSettlementPending(killer) || IsQuestSettlementPending(victim) || !IsAliveState(victim))
         {
             return;
         }
 
+        // Wear eligibility follows the source's owner/charmer lookup. Existing kill credit
+        // and PvP corpse attribution retain their separate playerTap behavior.
+        Player? durabilityPlayerTap = killer?.GetCharmerOrOwnerPlayerOrSelf();
         var playerTap = killer as Player;
         if (playerTap is not null && !ReferenceEquals(playerTap, victim))
         {
@@ -789,6 +822,7 @@ public sealed partial class MapCombat
         if (victim is Player playerVictim)
         {
             playerVictim.Combat.PvpDeath = playerTap is not null;
+            ApplyDeathDurability(playerVictim, durabilityLoss, durabilityPlayerTap, spell);
         }
         else
         {
@@ -810,6 +844,7 @@ public sealed partial class MapCombat
         if (state is not (DeathState.Alive or DeathState.JustAlived))
         {
             CombatStop(unit);
+            unit.Combat.ResetExtraAttacks();
             if (unit.Combat.HasThreatList)
             {
                 unit.Combat.Threat.Clear();
@@ -817,10 +852,17 @@ public sealed partial class MapCombat
         }
 
         unit.Combat.DeathState = state;
+        if (unit is Player revived && state is DeathState.Alive or DeathState.JustAlived)
+        {
+            // vmangos Player.cpp:1566-1570: any resurrection clears the previous offer.
+            revived.SetUInt32(UpdateFields.PlayerSelfResSpell, 0);
+        }
+
         if (state == DeathState.JustDied)
         {
             if (unit is Player player)
             {
+                Death.PlayerResurrection.Clear(player);
                 player.SetRooted(true);
             }
 

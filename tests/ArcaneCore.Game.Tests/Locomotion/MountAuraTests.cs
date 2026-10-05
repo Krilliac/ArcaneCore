@@ -59,10 +59,12 @@ public sealed class MountAuraTests
     {
         using var kit = Kit();
         (Player player, FakeSession session) = kit.AddPlayer(1);
+        Assert.True(player.Combat.QueueExtraAttacks(2));
 
         kit.System.CastSpell(player, BrownHorse, SpellCastTargets.ForSelf(), triggered: true);
 
         Assert.Equal(14337u, player.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
+        Assert.Equal(0u, player.Combat.ExtraAttacks);
         Assert.Equal(MountService.ResultPacket(10), Assert.Single(Of(session, WorldOpcode.SmsgMountresult))); // MOUNTRESULT_OK = 10
         Assert.Equal(SpeedPackets.BuildForceChange(player.Guid.Value, 0, 14.0f), Assert.Single(Of(session, WorldOpcode.SmsgForceRunSpeedChange))); // 7 x (1 + 100%)
     }
@@ -149,11 +151,13 @@ public sealed class MountAuraTests
         using var kit = Kit();
         (Player player, FakeSession session) = kit.AddPlayer(1);
         player.UnitFlags |= UnitFlags.Looting;
+        Assert.True(player.Combat.QueueExtraAttacks(2));
 
         kit.System.CastSpell(player, BrownHorse, SpellCastTargets.ForSelf(), triggered: true);
 
         Assert.Equal(MountService.ResultPacket(6), Assert.Single(Of(session, WorldOpcode.SmsgMountresult))); // MOUNTRESULT_LOOTING
         Assert.Equal(0u, player.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
+        Assert.Equal(2u, player.Combat.ExtraAttacks);
         Assert.False(kit.System.HasAura(player, BrownHorse));
     }
 

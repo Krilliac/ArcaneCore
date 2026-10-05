@@ -1,4 +1,7 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Protocol;
 
@@ -17,6 +20,8 @@ public sealed class GroupManager(SocialContext context)
     private readonly Dictionary<ObjectGuid, Group> _memberOf = [];
     private readonly Dictionary<ObjectGuid, Group> _invitedTo = [];
     private readonly Dictionary<ObjectGuid, MemberStats> _sentStats = [];
+    private readonly HashSet<ObjectGuid> _pendingPetName = [];
+    private readonly Dictionary<ObjectGuid, (uint Positive, ushort Negative)> _pendingPetAuras = [];
     private uint _nextId = 1;
 
     /// <summary>A member was added; the first is the leader when the group is created (world thread; instance binds follow it).</summary>
@@ -39,6 +44,26 @@ public sealed class GroupManager(SocialContext context)
 
     /// <summary>Whether two players share a group (vmangos Player::IsInSameRaidWith).</summary>
     public bool AreInSameGroup(ObjectGuid a, ObjectGuid b) => a == b || (GetGroup(a) is { } g && g.IsMember(b));
+
+    /// <summary>Queues the current player's pet-name bit for the next out-of-range stats pass.</summary>
+    public void MarkPetNameChanged(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (GetGroup(player.Guid) is not null)
+        {
+            _pendingPetName.Add(player.Guid);
+        }
+    }
+
+    public void MarkPetAuraChanged(Player player, byte slot)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (GetGroup(player.Guid) is null || player.GetPet() is null || slot >= SpellSystem.MaxAuras) return;
+        _pendingPetAuras.TryGetValue(player.Guid, out (uint Positive, ushort Negative) masks);
+        if (slot < SpellSystem.MaxPositiveAuras) masks.Positive |= 1u << slot;
+        else masks.Negative |= (ushort)(1u << (slot - SpellSystem.MaxPositiveAuras));
+        _pendingPetAuras[player.Guid] = masks;
+    }
 
     // --- invites -------------------------------------------------------------------------------
 
@@ -540,6 +565,8 @@ public sealed class GroupManager(SocialContext context)
     public void OnLoggingOut(Player player)
     {
         UninviteFromGroup(player.Guid);
+        _pendingPetName.Remove(player.Guid);
+        _pendingPetAuras.Remove(player.Guid);
         _sentStats.Remove(player.Guid);
         if (GetGroup(player.Guid) is { } group)
         {
@@ -564,9 +591,30 @@ public sealed class GroupManager(SocialContext context)
             MemberStats now = MemberStats.Of(player);
             GroupUpdateFlags changed = _sentStats.TryGetValue(guid, out MemberStats before) ? now.Diff(before) : GroupUpdateFlags.Full;
             _sentStats[guid] = now;
+            if (_pendingPetName.Remove(guid))
+            {
+                changed |= GroupUpdateFlags.PetName;
+            }
+            uint petPositive = 0;
+            ushort petNegative = 0;
+            if (_pendingPetAuras.Remove(guid, out (uint Positive, ushort Negative) auraMasks))
+            {
+                petPositive = auraMasks.Positive;
+                petNegative = auraMasks.Negative;
+                if (petPositive != 0) changed |= GroupUpdateFlags.PetAuras;
+                if (petNegative != 0) changed |= GroupUpdateFlags.PetAurasNegative;
+            }
+            if ((changed & GroupUpdateFlags.PetGuid) != 0)
+            {
+                // Pending slots may belong to the former pet. Zero selects the
+                // new current pet's complete live baseline in the packet builder.
+                petPositive = 0;
+                petNegative = 0;
+                changed |= GroupUpdateFlags.PetAuras | GroupUpdateFlags.PetAurasNegative;
+            }
             if (changed != GroupUpdateFlags.None)
             {
-                SendStatsOutOfRange(group, player, changed);
+                SendStatsOutOfRange(group, player, changed, petPositive, petNegative);
             }
         }
     }
@@ -667,6 +715,8 @@ public sealed class GroupManager(SocialContext context)
         GroupMemberSlot slot = group.Find(guid)!;
         group.RemoveMemberSlot(slot);
         _memberOf.Remove(guid);
+        _pendingPetName.Remove(guid);
+        _pendingPetAuras.Remove(guid);
         _sentStats.Remove(guid);
         bool leaderChanged = group.LeaderGuid == guid;
         if (leaderChanged)
@@ -708,6 +758,8 @@ public sealed class GroupManager(SocialContext context)
         foreach (ObjectGuid guid in members)
         {
             _memberOf.Remove(guid);
+            _pendingPetName.Remove(guid);
+            _pendingPetAuras.Remove(guid);
             _sentStats.Remove(guid);
             if (context.World.FindOnlinePlayer(guid) is { } player)
             {
@@ -807,7 +859,7 @@ public sealed class GroupManager(SocialContext context)
         }
     }
 
-    private void SendStatsOutOfRange(Group group, Player player, GroupUpdateFlags mask)
+    private void SendStatsOutOfRange(Group group, Player player, GroupUpdateFlags mask, uint petPositive = 0, ushort petNegative = 0)
     {
         if ((mask & GroupUpdateFlags.PowerType) != 0)
         {
@@ -823,7 +875,7 @@ public sealed class GroupManager(SocialContext context)
                 continue;
             }
 
-            packet ??= GroupPackets.BuildPartyMemberStats(player, mask);
+            packet ??= GroupPackets.BuildPartyMemberStats(player, mask, petPositive, petNegative);
             mate.Session.Send(WorldOpcode.SmsgPartyMemberStats, packet);
         }
     }
@@ -846,16 +898,28 @@ public sealed class GroupManager(SocialContext context)
     private static void SendResult(Player player, PartyOperation operation, string name, PartyResult result)
         => player.Session.Send(WorldOpcode.SmsgPartyCommandResult, GroupPackets.BuildPartyCommandResult(operation, name, result));
 
+    private readonly record struct PetStats(ObjectGuid Guid, uint Model, uint Hp, uint MaxHp, PowerType Power, uint CurPower, uint MaxPower)
+        {
+            public static PetStats Of(Player p)
+            {
+                Creature? pet = p.GetPet();
+                if (pet is null) return default;
+                int index = (int)pet.PowerType <= 4 ? (int)pet.PowerType : 0;
+                return new(pet.Guid, pet.GetUInt32(UpdateFields.UnitFieldDisplayid), pet.Health, pet.MaxHealth,
+                    pet.PowerType, pet.GetUInt32(UpdateFields.UnitFieldPower1 + index), pet.GetUInt32(UpdateFields.UnitFieldMaxpower1 + index));
+            }
+        }
+
     /// <summary>The stats last sent for a member, to find what changed (vmangos m_groupUpdateMask).</summary>
     private readonly record struct MemberStats(
-        GroupMemberStatus Status, uint Hp, uint MaxHp, PowerType Power, uint CurPower, uint MaxPower, byte Level, uint Zone, short X, short Y)
+        GroupMemberStatus Status, uint Hp, uint MaxHp, PowerType Power, uint CurPower, uint MaxPower, byte Level, uint Zone, short X, short Y, PetStats Pet)
     {
         public static MemberStats Of(Player p)
         {
             int index = (int)p.PowerType <= 4 ? (int)p.PowerType : 0;
             return new(GroupPackets.StatusOf(p), p.Health, p.MaxHealth, p.PowerType,
                 p.GetUInt32(UpdateFields.UnitFieldPower1 + index), p.GetUInt32(UpdateFields.UnitFieldMaxpower1 + index),
-                p.Level, p.ZoneId, (short)p.X, (short)p.Y);
+                p.Level, p.ZoneId, (short)p.X, (short)p.Y, PetStats.Of(p));
         }
 
         public GroupUpdateFlags Diff(MemberStats o)
@@ -904,6 +968,27 @@ public sealed class GroupManager(SocialContext context)
             if (X != o.X || Y != o.Y)
             {
                 f |= GroupUpdateFlags.Position;
+            }
+
+            if (Pet.Guid != o.Pet.Guid)
+            {
+                f |= GroupUpdateFlags.PetGuid | GroupUpdateFlags.PetName | GroupUpdateFlags.PetModelId
+                    | GroupUpdateFlags.PetCurrentHp | GroupUpdateFlags.PetMaxHp | GroupUpdateFlags.PetPowerType
+                    | GroupUpdateFlags.PetCurrentPower | GroupUpdateFlags.PetMaxPower
+                    | GroupUpdateFlags.PetAuras | GroupUpdateFlags.PetAurasNegative;
+            }
+            else
+            {
+                if (Pet.Model != o.Pet.Model) f |= GroupUpdateFlags.PetModelId;
+                if (Pet.Hp != o.Pet.Hp) f |= GroupUpdateFlags.PetCurrentHp;
+                if (Pet.MaxHp != o.Pet.MaxHp) f |= GroupUpdateFlags.PetMaxHp;
+                if (Pet.Power != o.Pet.Power)
+                    f |= GroupUpdateFlags.PetPowerType | GroupUpdateFlags.PetCurrentPower | GroupUpdateFlags.PetMaxPower;
+                else
+                {
+                    if (Pet.CurPower != o.Pet.CurPower) f |= GroupUpdateFlags.PetCurrentPower;
+                    if (Pet.MaxPower != o.Pet.MaxPower) f |= GroupUpdateFlags.PetMaxPower;
+                }
             }
 
             return f;

@@ -9,6 +9,24 @@ namespace ArcaneCore.Game.Tests.Duel;
 /// <summary>vmangos Player::DuelComplete (Player.cpp:6726-6822): what a finished duel removes and resets.</summary>
 public sealed class DuelCompletionTests
 {
+    [Theory]
+    [InlineData(DuelCompleteType.Won, true)]
+    [InlineData(DuelCompleteType.Fled, true)]
+    [InlineData(DuelCompleteType.Interrupted, false)]
+    public void Completion_ResetsExtraAttacksOnlyForADecidedDuel(DuelCompleteType type, bool clears)
+    {
+        using var rig = new DuelRig();
+        rig.Challenge();
+        rig.AcceptAndStart();
+        Assert.True(rig.A.Combat.QueueExtraAttacks(2));
+        Assert.True(rig.B.Combat.QueueExtraAttacks(3));
+
+        rig.Service.Complete(rig.A, type);
+
+        Assert.Equal(clears ? 0u : 2u, rig.A.Combat.ExtraAttacks);
+        Assert.Equal(clears ? 0u : 3u, rig.B.Combat.ExtraAttacks);
+    }
+
     private static bool Has(DuelRig rig, Player target, uint spellId) => rig.Kit.System.GetAuras(target).Any(h => h.Spell.Id == spellId);
 
     private static void Cast(DuelRig rig, Unit caster, Player target, uint spellId)

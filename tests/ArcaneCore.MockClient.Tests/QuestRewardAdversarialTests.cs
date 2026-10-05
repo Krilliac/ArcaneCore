@@ -581,6 +581,7 @@ public sealed class QuestRewardAdversarialTests
             => inner.GetActionButtonsAsync(characterId, cancellationToken);
         public Task<IReadOnlyList<CharacterIdentity>> GetAllIdentitiesAsync(CancellationToken cancellationToken = default)
             => inner.GetAllIdentitiesAsync(cancellationToken);
+        public Task<IReadOnlyList<int>> FindAccountIdsByNamePrefixAsync(string prefix, int limit, CancellationToken cancellationToken = default) => inner.FindAccountIdsByNamePrefixAsync(prefix, limit, cancellationToken);
     }
 
     private sealed class RewardCommitFault(bool afterCommit, bool failReconciliationRead = false)

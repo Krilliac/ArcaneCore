@@ -53,8 +53,8 @@ public sealed class StatAuraModuleTests
         for (int i = 0; i < 5; i++)
         {
             Assert.Equal(before[i] + 4, player.GetInt32(UpdateFields.UnitFieldStat0 + i));
-            Assert.Equal(4, player.GetInt32(UpdateFields.PlayerFieldPosstat0 + i)); // ApplyStatBuffMod, Player.h:1506
-            Assert.Equal(0, player.GetInt32(UpdateFields.PlayerFieldNegstat0 + i));
+            Assert.Equal(4, player.GetFloat(UpdateFields.PlayerFieldPosstat0 + i)); // ApplyStatBuffMod, Player.h:1506
+            Assert.Equal(0, player.GetFloat(UpdateFields.PlayerFieldNegstat0 + i));
         }
 
         // An item-like delta between apply and remove survives (the contributions compose).
@@ -69,7 +69,7 @@ public sealed class StatAuraModuleTests
 
         for (int i = 0; i < 5; i++)
         {
-            Assert.Equal(0, player.GetInt32(UpdateFields.PlayerFieldPosstat0 + i));
+            Assert.Equal(0, player.GetFloat(UpdateFields.PlayerFieldPosstat0 + i));
         }
     }
 
@@ -84,12 +84,12 @@ public sealed class StatAuraModuleTests
         kit.System.CastSpell(enemy, Weaken, SpellCastTargets.ForUnit(player.Guid), triggered: true);
 
         Assert.Equal(strength - 6, player.GetInt32(UpdateFields.UnitFieldStat0));
-        Assert.Equal(-6, player.GetInt32(UpdateFields.PlayerFieldNegstat0));
-        Assert.Equal(0, player.GetInt32(UpdateFields.PlayerFieldPosstat0));
+        Assert.Equal(-6, player.GetFloat(UpdateFields.PlayerFieldNegstat0));
+        Assert.Equal(0, player.GetFloat(UpdateFields.PlayerFieldPosstat0));
 
         kit.System.RemoveAuras(player, Weaken);
         Assert.Equal(strength, player.GetInt32(UpdateFields.UnitFieldStat0));
-        Assert.Equal(0, player.GetInt32(UpdateFields.PlayerFieldNegstat0));
+        Assert.Equal(0, player.GetFloat(UpdateFields.PlayerFieldNegstat0));
     }
 
     [Fact]
@@ -154,6 +154,29 @@ public sealed class StatAuraModuleTests
 
         kit.System.RemoveAuras(mage, Intellect);
         Assert.Equal(300u, mage.GetUInt32(UpdateFields.UnitFieldMaxpower1));
+    }
+
+    [Fact]
+    public void ModStat_Intellect_UpdatesLatentManaPoolWhenBaseManaExists_RegardlessOfCurrentPowerType()
+    {
+        using var kit = Kit();
+        (Player player, _) = kit.AddPlayer(1);
+        player.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Energy);
+        player.SetUInt32(UpdateFields.UnitFieldBaseMana, 1);
+        player.SetUInt32(UpdateFields.UnitFieldMaxpower1, 100);
+        player.SetUInt32(UpdateFields.UnitFieldPower1, 100);
+        player.SetInt32(UpdateFields.UnitFieldStat0 + 3, 20);
+        var maintainer = new PlayerStatSystem();
+        maintainer.Attach(player);
+        maintainer.UpdateAll(player);
+        Assert.Equal(120u, player.GetUInt32(UpdateFields.UnitFieldMaxpower1)); // initial intellect-20 bonus
+
+        kit.System.CastSpell(player, Intellect, SpellCastTargets.ForSelf(), triggered: true);
+        Assert.Equal(270u, player.GetUInt32(UpdateFields.UnitFieldMaxpower1));
+        maintainer.UpdateAll(player); // attached refresh is idempotent
+        Assert.Equal(270u, player.GetUInt32(UpdateFields.UnitFieldMaxpower1));
+        kit.System.RemoveAuras(player, Intellect);
+        Assert.Equal(120u, player.GetUInt32(UpdateFields.UnitFieldMaxpower1));
     }
 
     /// <summary>
@@ -270,11 +293,11 @@ public sealed class StatAuraModuleTests
         kit.System.CastSpell(player, Armor, SpellCastTargets.ForSelf(), triggered: true);
 
         Assert.Equal(armor + 150, player.GetInt32(UpdateFields.UnitFieldResistances));
-        Assert.Equal(150, player.GetInt32(UpdateFields.PlayerFieldResistancebuffmodspositive));
+        Assert.Equal(150f, player.GetFloat(UpdateFields.PlayerFieldResistancebuffmodspositive), 3);
 
         kit.System.RemoveAuras(player, Armor);
         Assert.Equal(armor, player.GetInt32(UpdateFields.UnitFieldResistances));
-        Assert.Equal(0, player.GetInt32(UpdateFields.PlayerFieldResistancebuffmodspositive));
+        Assert.Equal(0f, player.GetFloat(UpdateFields.PlayerFieldResistancebuffmodspositive), 3);
     }
 
     [Fact]
@@ -289,13 +312,13 @@ public sealed class StatAuraModuleTests
         Assert.Equal(30, player.GetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Fire));
         // Player::UpdateResistances (StatSystem.cpp:117-126): holy is always 0 in 1.12.
         Assert.Equal(0, player.GetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Holy));
-        Assert.Equal(30, player.GetInt32(UpdateFields.PlayerFieldResistancebuffmodspositive + (int)SpellSchool.Fire));
-        Assert.Equal(30, player.GetInt32(UpdateFields.PlayerFieldResistancebuffmodspositive + (int)SpellSchool.Holy));
+        Assert.Equal(30f, player.GetFloat(UpdateFields.PlayerFieldResistancebuffmodspositive + (int)SpellSchool.Fire), 3);
+        Assert.Equal(30f, player.GetFloat(UpdateFields.PlayerFieldResistancebuffmodspositive + (int)SpellSchool.Holy), 3);
         Assert.Equal(0, player.GetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Frost));
 
         kit.System.RemoveAuras(player, FireAndHoly);
         Assert.Equal(0, player.GetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Fire));
-        Assert.Equal(0, player.GetInt32(UpdateFields.PlayerFieldResistancebuffmodspositive + (int)SpellSchool.Holy));
+        Assert.Equal(0f, player.GetFloat(UpdateFields.PlayerFieldResistancebuffmodspositive + (int)SpellSchool.Holy), 3);
     }
 
     [Fact]
@@ -313,11 +336,32 @@ public sealed class StatAuraModuleTests
 
         // Sunder Armor-shaped: -90 per stack, three stacks (re-applied as the stack grows), armor may go negative.
         Assert.Equal(100 - 270, target.GetInt32(UpdateFields.UnitFieldResistances));
-        Assert.Equal(-270, target.GetInt32(UpdateFields.PlayerFieldResistancebuffmodsnegative));
+        Assert.Equal(-270f, target.GetFloat(UpdateFields.PlayerFieldResistancebuffmodsnegative), 3);
 
         kit.System.RemoveAuras(target, Sunder);
         Assert.Equal(100, target.GetInt32(UpdateFields.UnitFieldResistances));
-        Assert.Equal(0, target.GetInt32(UpdateFields.PlayerFieldResistancebuffmodsnegative));
+        Assert.Equal(0f, target.GetFloat(UpdateFields.PlayerFieldResistancebuffmodsnegative), 3);
+    }
+
+    [Fact]
+    public void ModResistance_UsesFloatTooltipFields_AndPreservesBothPolarityFractions()
+    {
+        using var kit = Kit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 2);
+        target.SetFloat(UpdateFields.PlayerFieldResistancebuffmodspositive, 1.5f);
+        target.SetFloat(UpdateFields.PlayerFieldResistancebuffmodsnegative, -2.5f);
+
+        kit.System.CastSpell(target, Armor, SpellCastTargets.ForSelf(), triggered: true);
+        Assert.Equal(151.5f, target.GetFloat(UpdateFields.PlayerFieldResistancebuffmodspositive), 3);
+        Assert.Equal(-2.5f, target.GetFloat(UpdateFields.PlayerFieldResistancebuffmodsnegative), 3);
+
+        kit.System.CastSpell(caster, Sunder, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+        Assert.Equal(-92.5f, target.GetFloat(UpdateFields.PlayerFieldResistancebuffmodsnegative), 3);
+        kit.System.RemoveAuras(target, Armor);
+        kit.System.RemoveAuras(target, Sunder);
+        Assert.Equal(1.5f, target.GetFloat(UpdateFields.PlayerFieldResistancebuffmodspositive), 3);
+        Assert.Equal(-2.5f, target.GetFloat(UpdateFields.PlayerFieldResistancebuffmodsnegative), 3);
     }
 
     [Fact]

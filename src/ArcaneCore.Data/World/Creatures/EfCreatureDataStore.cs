@@ -60,6 +60,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         DisplayIds = [r.DisplayId1, r.DisplayId2, r.DisplayId3, r.DisplayId4],
         DisplayProbabilities = [r.DisplayProbability1, r.DisplayProbability2, r.DisplayProbability3, r.DisplayProbability4],
         Scale = r.Scale,
+        DisplayScales = [r.Scale, r.DisplayScale2, r.DisplayScale3, r.DisplayScale4],
         Faction = r.Faction,
         NpcFlags = r.NpcFlags,
         UnitFlags = r.UnitFlags,

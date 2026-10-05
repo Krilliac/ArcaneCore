@@ -25,6 +25,9 @@ public sealed class CombatOptions
     /// <summary>vmangos Rate.Mana: multiplies the mana regeneration (Player.cpp:2291). Must not be negative.</summary>
     public float RateMana { get; set; } = 1.0f;
 
+    /// <summary>vmangos Rate.Health: multiplies spirit health regeneration and the aura-161 flat bonus. Must not be negative.</summary>
+    public float RateHealth { get; set; } = 1.0f;
+
     /// <summary>
     /// Whether switching between warrior stances keeps the stance-bound buffs the unit cast on itself (Retaliation,
     /// Recklessness, Shield Wall). Default false: vmangos removes them with the old stance (SpellAuras.cpp:5565-5575,
@@ -45,7 +48,7 @@ public sealed class CombatOptions
     public string ShapeshiftFormDbcPath { get; set; } = string.Empty;
 
     /// <summary>
-    /// vmangos World::setConfigPos (World.cpp:2959-2967): Rate.Mana and Rate.Rage.Loss cannot be negative and fall
+    /// vmangos World::setConfigPos (World.cpp:2959-2967): Rate.Health, Rate.Mana and Rate.Rage.Loss cannot be negative and fall
     /// back to the default 1. Returns the names of the values that were replaced.
     /// </summary>
     public IReadOnlyList<string> Normalize()
@@ -55,6 +58,12 @@ public sealed class CombatOptions
         {
             RateMana = 1.0f;
             replaced.Add("Rate.Mana");
+        }
+
+        if (RateHealth < 0.0f)
+        {
+            RateHealth = 1.0f;
+            replaced.Add("Rate.Health");
         }
 
         if (RateRageLoss < 0.0f)
@@ -84,6 +93,20 @@ public interface IPowerAuraSource
     /// <paramref name="power"/> (vmangos Player::Regenerate, Player.cpp:2323-2328); 1 when there is none.
     /// </summary>
     float GetPowerRegenFactor(Unit unit, PowerType power);
+
+    float GetFoodHealthRegen(Unit unit, float tickMs) => 0;
+
+    float GetDrinkPowerRegen(Unit unit, PowerType power, float tickMs) => 0;
+
+    /// <summary>vmangos MOD_MANA_REGEN_INTERRUPT: percentage of spirit mana regen retained after a recent mana spend.</summary>
+    float GetManaRegenInterruptPercent(Unit unit) => 0;
+    float GetCombatHealthRegenPercent(Unit unit) => 0;
+
+    float GetHealthRegenInCombat(Unit unit) => 0;
+
+    float GetHealthRegenPercentFactor(Unit unit) => 1.0f;
+
+    bool IsPolymorphed(Unit unit) => false;
 }
 
 /// <summary>
@@ -182,6 +205,14 @@ public sealed class CombatEnvironment
     internal bool HasAuraType(Unit unit, AuraType type) => Auras?.HasAuraType(unit, type) ?? false;
 
     internal float GetPowerRegenFactor(Unit unit, PowerType power) => Auras?.GetPowerRegenFactor(unit, power) ?? 1.0f;
+
+    internal float GetCombatHealthRegenPercent(Unit unit) => Auras?.GetCombatHealthRegenPercent(unit) ?? 0;
+
+    internal float GetHealthRegenInCombat(Unit unit) => Auras?.GetHealthRegenInCombat(unit) ?? 0;
+
+    internal float GetHealthRegenPercentFactor(Unit unit) => Auras?.GetHealthRegenPercentFactor(unit) ?? 1.0f;
+
+    internal bool IsPolymorphed(Unit unit) => Auras?.IsPolymorphed(unit) ?? false;
 }
 
 /// <summary>The <see cref="IPowerAuraSource"/> backed by the world's <see cref="SpellSystem"/>.</summary>
@@ -231,4 +262,61 @@ public sealed class SpellSystemPowerAuras(SpellSystem spells) : IPowerAuraSource
 
         return factor;
     }
+
+    public float GetFoodHealthRegen(Unit unit, float tickMs)
+    {
+        float total = 0;
+        foreach (SpellAuraHolder holder in _spells.GetAuras(unit))
+        {
+            if (holder.IsRemoved) continue;
+            foreach (SpellAura? aura in holder.Auras)
+            {
+                if (aura is { Type: AuraType.ModRegen })
+                    total += aura.Amount * (tickMs / (aura.Amplitude > 0 ? aura.Amplitude : 5000.0f));
+            }
+        }
+        return total;
+    }
+
+    public float GetDrinkPowerRegen(Unit unit, PowerType power, float tickMs)
+    {
+        float total = 0;
+        foreach (SpellAuraHolder holder in _spells.GetAuras(unit))
+        {
+            if (holder.IsRemoved) continue;
+            foreach (SpellAura? aura in holder.Auras)
+            {
+                if (power == PowerType.Mana && aura is { Type: AuraType.ModPowerRegen, MiscValue: (int)PowerType.Mana })
+                    total += aura.Amount * (tickMs / 5000.0f);
+            }
+        }
+        return total;
+    }
+
+    public float GetManaRegenInterruptPercent(Unit unit)
+        => Math.Min(100.0f, _spells.GetTotalAuraModifier(unit, AuraType.ModManaRegenInterrupt));
+
+    public float GetCombatHealthRegenPercent(Unit unit)
+        => _spells.GetTotalAuraModifier(unit, AuraType.ModRegenDuringCombat);
+
+    public float GetHealthRegenInCombat(Unit unit)
+        => _spells.GetTotalAuraModifier(unit, AuraType.ModHealthRegenInCombat);
+
+    public float GetHealthRegenPercentFactor(Unit unit)
+    {
+        float factor = 1.0f;
+        foreach (SpellAuraHolder holder in _spells.GetAuras(unit))
+        {
+            if (holder.IsRemoved) continue;
+            foreach (SpellAura? aura in holder.Auras)
+            {
+                if (aura is { Type: AuraType.ModHealthRegenPercent })
+                    factor *= (aura.Amount + 100) / 100.0f;
+            }
+        }
+
+        return factor;
+    }
+
+    public bool IsPolymorphed(Unit unit) => _spells.IsPolymorphed(unit);
 }

@@ -28,6 +28,13 @@ public interface IDamageSink
     uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat)
         => DealSpellDamage(caster, victim, spell, damage, periodic);
 
+    /// <summary>
+    /// Carries Unit::DealDamage's durability-loss flag. Instant kill and split damage suppress
+    /// death wear (vmangos SpellEffects.cpp:285; Unit.cpp:2140,2179). Health-only sinks ignore it.
+    /// </summary>
+    uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat, bool durabilityLoss)
+        => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat);
+
     /// <summary>Heal <paramref name="amount"/>; returns the health actually restored.</summary>
     uint Heal(Unit caster, Unit target, SpellInfo spell, uint amount);
 }

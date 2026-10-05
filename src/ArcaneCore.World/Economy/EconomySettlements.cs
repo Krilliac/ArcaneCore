@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
@@ -32,14 +33,17 @@ public enum EconomyOutcome
 /// <summary>One online character whose money and inventory an operation changes.</summary>
 public sealed class EconomyActor
 {
-    internal EconomyActor(WorldSession session, Player player, EconomyInventoryStage stage, uint moneyAfter, CharacterState before)
+    internal EconomyActor(WorldSession session, Player player, EconomyInventoryStage stage, uint moneyAfter, CharacterState before,
+        CharacterLife? lifeAfter = null)
     {
         Session = session;
         Player = player;
         Stage = stage;
         MoneyAfter = moneyAfter;
         Before = before;
-        After = before with { Money = moneyAfter, Inventory = stage.After };
+        AppliesLife = lifeAfter is not null;
+        After = before with { Money = moneyAfter, Inventory = stage.After,
+            Life = lifeAfter is null ? before.Life : lifeAfter with { Powers = Array.AsReadOnly(lifeAfter.Powers.ToArray()) } };
     }
 
     public WorldSession Session { get; }
@@ -48,6 +52,7 @@ public sealed class EconomyActor
     public uint MoneyAfter { get; }
     public CharacterState Before { get; }
     public CharacterState After { get; }
+    public bool AppliesLife { get; }
     public int Id => Before.Id;
 }
 
@@ -108,7 +113,8 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
     }
 
     /// <summary>World thread: freeze the actor's planned money/inventory change.</summary>
-    public EconomyActor? CreateActor(WorldSession session, Player player, EconomyInventoryStage stage, uint moneyAfter)
+    public EconomyActor? CreateActor(WorldSession session, Player player, EconomyInventoryStage stage, uint moneyAfter,
+        CharacterLife? lifeAfter = null)
     {
         if (_world is not { } world || !CanAct(session, player))
         {
@@ -116,7 +122,7 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
         }
 
         CharacterState before = player.CreateSnapshot(world.NowMs) with { Inventory = stage.Before };
-        return new EconomyActor(session, player, stage, moneyAfter, before);
+        return new EconomyActor(session, player, stage, moneyAfter, before, lifeAfter);
     }
 
     /// <summary>
@@ -137,7 +143,7 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
 
         Guid operationId = Guid.NewGuid();
         var request = new EconomyCommitRequest(operationId,
-            actors.Select(a => new EconomyParticipant(a.Before, a.After)).ToArray(), changes.ToArray());
+            actors.Select(a => new EconomyParticipant(a.Before, a.After, a.Stage.ConsumedItemGuids)).ToArray(), changes.ToArray());
         var operation = new Operation(operationId, actors, request, finished);
         lock (_gate)
         {
@@ -334,6 +340,12 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
                     using (player.BeginQuestSettlementPublication(operation.Id))
                     {
                         player.Money = actor.MoneyAfter;
+                        if (actor.AppliesLife && actor.After.Life is { } life)
+                        {
+                            player.Health = life.Health;
+                            for (int i = 0; i < life.Powers.Count; i++)
+                                player.SetUInt32(UpdateFields.UnitFieldPower1 + i, life.Powers[i]);
+                        }
                         player.Inventory.ApplyEconomyTransfer(actor.Stage);
                     }
 

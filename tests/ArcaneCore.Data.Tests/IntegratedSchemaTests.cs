@@ -3,12 +3,14 @@ using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Characters.Life;
+using ArcaneCore.Data.Characters.Pets;
 using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Data.Characters.Talents;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Chr;
 using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Content.Maps;
+using ArcaneCore.Data.Content.Names;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Instances;
 using ArcaneCore.Data.Loot;
@@ -67,6 +69,10 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(GameObjectSpawnDataModule), DatabaseComponent.World, GameObjectSpawnDataModule.Version),
             (typeof(SpecialLootDataModule), DatabaseComponent.World, SpecialLootDataModule.Version),
             (typeof(StartActionWorldModule), DatabaseComponent.World, StartActionWorldModule.Version),
+            (typeof(ReservedNameWorldDataModule), DatabaseComponent.World, ReservedNameWorldDataModule.Version),
+            (typeof(ItemEnchantmentWorldDataModule), DatabaseComponent.World, ItemEnchantmentWorldDataModule.Version),
+            (typeof(CreatureDisplayScaleDataModule), DatabaseComponent.World, CreatureDisplayScaleDataModule.Version),
+            (typeof(SpellEnchantChargesWorldDataModule), DatabaseComponent.World, SpellEnchantChargesWorldDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -84,6 +90,10 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.WorldState.ExploredZonesDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.WorldState.ExploredZonesDataModule.Version),
             (typeof(ItemLootDataModule), DatabaseComponent.Characters, ItemLootDataModule.Version),
             (typeof(PetitionDataModule), DatabaseComponent.Characters, PetitionDataModule.Version),
+            (typeof(PersistentPetDataModule), DatabaseComponent.Characters, PersistentPetDataModule.Version),
+            (typeof(ItemCooldownOwnerDataModule), DatabaseComponent.Characters, ItemCooldownOwnerDataModule.Version),
+            (typeof(PetCooldownDataModule), DatabaseComponent.Characters, PetCooldownDataModule.Version),
+            (typeof(PetNamingDataModule), DatabaseComponent.Characters, PetNamingDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),

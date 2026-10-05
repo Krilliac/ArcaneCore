@@ -365,13 +365,17 @@ public sealed class BanCommands : ICommandGroup
             return false;
         }
 
+        int configuredLimit = OptionsOf(context).CharacterListMaxResults;
+        int limit = configuredLimit == 0 ? 0 : Math.Clamp(configuredLimit, 1, 500);
         Run(context, async services =>
         {
             IBanStore bans = services.GetRequiredService<IBanStore>();
             await bans.PurgeExpiredAsync().ConfigureAwait(false);
 
-            IReadOnlyList<CharacterIdentity> all = await services.GetRequiredService<ICharacterStore>().GetAllIdentitiesAsync().ConfigureAwait(false);
-            int[] accountIds = [.. all.Where(c => c.Name.StartsWith(filter, StringComparison.OrdinalIgnoreCase)).Select(c => c.AccountId).Distinct().Order()];
+            IReadOnlyList<int> candidates = await services.GetRequiredService<ICharacterStore>()
+                .FindAccountIdsByNamePrefixAsync(filter, limit == 0 ? 0 : limit + 1).ConfigureAwait(false);
+            bool omitted = limit > 0 && candidates.Count > limit;
+            int[] accountIds = [.. omitted ? candidates.Take(limit) : candidates];
             if (accountIds.Length == 0)
             {
                 context.Reply(BanCommandText.BanListNoCharacter);
@@ -380,11 +384,14 @@ public sealed class BanCommands : ICommandGroup
 
             // HandleBanListHelper: the header, then the name of every such account that has any ban row.
             context.Reply(BanCommandText.BanListMatchingAccount);
+            // AccountCommands.cpp:835-910: character candidates include accounts with ANY history,
+            // not only active bans. Query existence in batches without materializing per-account histories.
+            IReadOnlySet<int> withHistory = await bans.FindAccountsWithHistoryAsync(accountIds).ConfigureAwait(false);
             IReadOnlyDictionary<int, string> names = await services.GetRequiredService<IAccountAdmin>().GetUsernamesAsync(accountIds).ConfigureAwait(false);
             var lines = new List<string>();
             foreach (int id in accountIds)
             {
-                if (names.TryGetValue(id, out string? name) && (await bans.GetHistoryAsync(id).ConfigureAwait(false)).Count > 0)
+                if (withHistory.Contains(id) && names.TryGetValue(id, out string? name))
                 {
                     lines.Add(name);
                 }
@@ -393,6 +400,11 @@ public sealed class BanCommands : ICommandGroup
             if (lines.Count > 0)
             {
                 context.Reply(string.Join('\n', lines));
+            }
+
+            if (omitted)
+            {
+                context.Reply(BanCommandText.CharacterListOmitted);
             }
         });
         return true;

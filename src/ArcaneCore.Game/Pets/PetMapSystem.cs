@@ -123,8 +123,9 @@ public sealed class PetMapSystem : IMapUpdater
             {
                 // Killed and decayed, or its grid unloaded. vmangos Pet::Update unsummons a pet whose
                 // corpse timer ran out (Pet.cpp:679-686): the owner's pet link and action bar go too.
-                if (creature.Summon is { Kind: SummonKind.Pet } && _map.FindObject(creature.OwnerGuid) is Unit petOwner)
+                if (creature.Summon is { Kind: SummonKind.Pet } && _map.FindObject(creature.OwnerGuid) is Player petOwner)
                 {
+                    _service?.QueueCurrentPetSave(petOwner);
                     SummonService.ReleasePetLink(creature, petOwner);
                 }
 
@@ -147,6 +148,10 @@ public sealed class PetMapSystem : IMapUpdater
 
     public void OnPlayerRemoved(Map map, Player player)
     {
+        // A map removal also happens on far-map transfer. Save the stable pet identity and state
+        // before the transient world GUID is destroyed (vmangos Pet::SavePetToDB before removal).
+        _service?.QueueCurrentPetSave(player);
+
         // The owner leaves the map, so its summons cannot stay (vmangos unsummons totems and pets
         // when the player is removed from the world). A far teleport does not bring them back:
         // docs/integration/pets.md lists that under the limits.
@@ -155,6 +160,8 @@ public sealed class PetMapSystem : IMapUpdater
             _service?.Unsummon(creature);
         }
     }
+
+    internal void SaveCurrentPet(Player owner) => _service?.QueueCurrentPetSave(owner);
 
     /// <summary>
     /// vmangos TemporarySummon::Update, TEMPSUMMON_TIMED_DEATH_AND_DEAD_DESPAWN (TemporarySummon.cpp:200-218):
@@ -199,6 +206,10 @@ public sealed class PetMapSystem : IMapUpdater
             // system decays the corpse itself, and the removal is handled in Update.
             if (pet.DeathState == CreatureDeathState.Corpse && pet.CorpseDecayMs <= diffMs)
             {
+                if (owner is Player player)
+                {
+                    _service?.QueueCurrentPetSave(player);
+                }
                 _service?.Unsummon(pet);
             }
 
@@ -208,6 +219,10 @@ public sealed class PetMapSystem : IMapUpdater
         // Despawn if the owner is dead and the pet is out of combat.
         if (!owner.IsAlive && pet.Combat.Victim is null && pet.Combat.Attackers.Count == 0)
         {
+            if (owner is Player player)
+            {
+                _service?.QueueCurrentPetSave(player);
+            }
             _service?.Unsummon(pet);
             return;
         }

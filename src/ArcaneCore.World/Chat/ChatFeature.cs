@@ -24,6 +24,7 @@ public sealed class ChatFeature : IWorldFeature
     private readonly TimeProvider _clock;
     private readonly ConditionalWeakTable<Player, ChatState> _states = [];
     private readonly Dictionary<int, long> _sessionMutes = [];
+    private long _lastMuteSweepUnixSeconds = long.MinValue;
 
     public ChatFeature(IConfiguration? configuration = null, IEnumerable<IChatMuteSource>? muteSources = null, TimeProvider? timeProvider = null)
     {
@@ -38,7 +39,11 @@ public sealed class ChatFeature : IWorldFeature
     /// <summary>Whole seconds since the Unix epoch (vmangos time(nullptr)).</summary>
     public long NowUnixSeconds => _clock.GetUtcNow().ToUnixTimeSeconds();
 
-    public void Attach(WorldRuntime world) => _configuration?.GetSection(ChatOptions.SectionName).Bind(Options);
+    public void Attach(WorldRuntime world)
+    {
+        _configuration?.GetSection(ChatOptions.SectionName).Bind(Options);
+        world.Updated += ExpireSessionMutes;
+    }
 
     /// <summary>The unix time until which <paramref name="player"/> cannot speak (vmangos WorldSession::m_muteTime): the latest of the flood mute and every source.</summary>
     public long MutedUntil(Player player)
@@ -160,6 +165,23 @@ public sealed class ChatFeature : IWorldFeature
         }
 
         return until;
+    }
+
+    private void ExpireSessionMutes(uint diffMs)
+    {
+        long now = NowUnixSeconds;
+        if (now == _lastMuteSweepUnixSeconds)
+        {
+            return;
+        }
+
+        _lastMuteSweepUnixSeconds = now;
+        // Once per clock second on the world thread, including an idle world with no maps:
+        // disconnected accounts must not retain entries just because nobody queries them again.
+        foreach (int accountId in _sessionMutes.Where(pair => pair.Value <= now).Select(pair => pair.Key).ToArray())
+        {
+            _sessionMutes.Remove(accountId);
+        }
     }
 
     private ChatState State(Player player) => _states.GetValue(player, p => new ChatState(p.Security == AccountSecurity.Player || Options.GmWhisperingTo == 1));

@@ -308,4 +308,48 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
             .Select(c => new CharacterIdentity(c.Id, c.AccountId, c.Name, c.Race, c.Gender, c.Class, c.Level, c.ZoneId))
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
+
+    public async Task<IReadOnlyList<int>> FindAccountIdsByNamePrefixAsync(
+        string prefix, int limit, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(prefix);
+        ArgumentOutOfRangeException.ThrowIfNegative(limit);
+        cancellationToken.ThrowIfCancellationRequested();
+        // No stored name can match a longer prefix. Bound the generated predicates by the
+        // existing name-column limit rather than letting a command token exhaust SQL depth.
+        if (db.Model.FindEntityType(typeof(CharacterRecord))!.FindProperty(nameof(CharacterRecord.Name))!.GetMaxLength()
+            is int maxNameLength && prefix.Length > maxNameLength)
+        {
+            return [];
+        }
+
+        // Names permit extended Latin, Cyrillic and East Asian BMP characters (CharacterNameRules).
+        // SQLite UPPER is ASCII-only; MariaDB's default collation also treats accents as equivalent.
+        // Compare each prefix position with explicit CLR case variants using binary database equality
+        // so filtering precedes DISTINCT/TAKE and keeps the old OrdinalIgnoreCase prefix semantics.
+        string collation = db.Database.ProviderName switch
+        {
+            "Microsoft.EntityFrameworkCore.Sqlite" => "BINARY",
+            "Npgsql.EntityFrameworkCore.PostgreSQL" => "C",
+            "Pomelo.EntityFrameworkCore.MySql" => "utf8mb4_bin",
+            _ => throw new NotSupportedException($"No character prefix comparison for {db.Database.ProviderName}"),
+        };
+        IQueryable<CharacterRecord> matching = db.Characters.AsNoTracking().Where(c => c.Name.Length >= prefix.Length);
+        for (int i = 0; i < prefix.Length; i++)
+        {
+            int offset = i;
+            string letter = prefix[i].ToString();
+            List<string> variants = [.. new[] { letter, letter.ToUpperInvariant(), letter.ToLowerInvariant() }
+                .Distinct(StringComparer.Ordinal).Where(v => v.Equals(letter, StringComparison.OrdinalIgnoreCase))];
+            matching = matching.Where(c => variants.Contains(EF.Functions.Collate(c.Name.Substring(offset, 1), collation)));
+        }
+
+        IQueryable<int> query = matching.Select(c => c.AccountId).Distinct().OrderBy(id => id);
+        if (limit > 0)
+        {
+            query = query.Take(limit);
+        }
+
+        return await query.ToListAsync(cancellationToken).ConfigureAwait(false);
+    }
 }

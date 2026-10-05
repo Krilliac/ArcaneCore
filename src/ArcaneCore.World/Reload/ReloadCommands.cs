@@ -52,6 +52,11 @@ public sealed class ReloadCommands : ICommandGroup
         if (name is null)
         {
             string[] matches = [.. names.Where(n => n.StartsWith(word, StringComparison.OrdinalIgnoreCase))];
+            if (matches.Length > 1)
+            {
+                context.Reply($"Ambiguous reloadable '{word}': {string.Join(", ", matches)}.");
+                return true;
+            }
             name = matches.Length == 1 ? matches[0] : null;
         }
 

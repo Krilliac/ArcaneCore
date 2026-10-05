@@ -161,7 +161,7 @@ public sealed class StatsFeature : IWorldFeature, ICharacterHooks, IDisposable
                 content.LevelStatsCount, content.ClassLevelStatsCount, content.XpRowCount, content.CritPerAgility.Count, content.DodgePerAgility.Count,
                 problems.Count > 0 ? $" ({problems.Count} problems, first: {problems[0]})" : string.Empty);
 
-            var system = new PlayerStatSystem(rates);
+            var system = new PlayerStatSystem(rates, PlayerSkillStatSource.Instance);
             _source.Target = system;
             _system = system;
             return system;
@@ -177,6 +177,13 @@ public sealed class StatsFeature : IWorldFeature, ICharacterHooks, IDisposable
     {
         PlayerStatSystem system = await EnsureLoadedAsync().ConfigureAwait(false);
         system.Attach(player);
+        if (player.Skills is { } skills)
+        {
+            // Skills load before Stats; later skill gains and aura bonuses must refresh the
+            // client fields too (vmangos Player::UpdateCombatSkills / ModifySkillBonus).
+            // This subscription belongs to this player's skill state, so it ends with the player.
+            skills.SkillChanged += _ => system.UpdateAll(player);
+        }
     }
 
     private void OnMapCreated(Map map) => map.Combat.Stats = _source;

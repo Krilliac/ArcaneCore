@@ -7,8 +7,9 @@ namespace ArcaneCore.Game.Stats;
 
 /// <summary>
 /// The player's skill values the combat stats read (vmangos SpellCaster::GetWeaponSkillValue and
-/// GetDefenseSkillValue, SpellCaster.cpp:116-159). The skills area replaces
-/// <see cref="LevelMaximumSkills"/> when it lands.
+/// GetDefenseSkillValue, SpellCaster.cpp:116-159). The daemon uses
+/// <see cref="PlayerSkillStatSource"/> when skills are attached; standalone systems default
+/// to <see cref="LevelMaximumSkills"/>.
 /// </summary>
 public interface IPlayerSkillSource
 {
@@ -22,7 +23,7 @@ public interface IPlayerSkillSource
 /// <summary>
 /// Every skill at the maximum for the level (level × 5, vmangos SpellCaster::GetSkillMaxForLevel), and 0 for
 /// the off-hand and ranged skills without a weapon (SpellCaster.cpp:122-124). This is what the combat hooks
-/// assume until the skills area exists.
+/// assume when no skill content is configured.
 /// </summary>
 public sealed class LevelMaximumSkills : IPlayerSkillSource
 {
@@ -239,6 +240,12 @@ public sealed class PlayerStatSystem : ICombatStatSource
     }
 
     /// <summary>Player::UpdateDamagePhysical (StatSystem.cpp:457-480): the min/max damage fields of one hand.</summary>
+    internal void ApplyEnchantmentDamage(Player player, WeaponAttackType attackType, float delta)
+    {
+        player.StatState.ApplyEnchantmentDamageBonus(attackType, delta);
+        UpdateDamagePhysical(player, attackType);
+    }
+
     private void UpdateDamagePhysical(Player player, WeaponAttackType attackType)
     {
         PlayerStatState state = player.StatState;
@@ -254,7 +261,7 @@ public sealed class PlayerStatSystem : ICombatStatSource
             TotalAttackPower: TotalAttackPower(player, attackType),
             BaseValue: 0.0f,
             BasePct: 1.0f,
-            TotalValue: 0.0f,
+            TotalValue: state.EnchantmentDamageBonus[(int)attackType],
             TotalPct: UnitModConstants.Default(UnitModifierType.TotalPct, offHand ? UnitMods.DamageOffHand : UnitMods.DamageMainHand),
             TotalPhysical: 0.0f,
             WeaponMin: weapon.Min,

@@ -79,6 +79,8 @@ public sealed partial class PlayerInventory
             if (slot < InventorySlots.EquipmentEnd)
             {
                 ApplyMods(item, slot, apply: false);
+                if (slot is InventorySlots.MainHand or InventorySlots.OffHand or InventorySlots.Ranged)
+                    Player?.Combat.ResetExtraAttacks();
                 SetVisibleItemSlot(slot, null);
             }
 
@@ -512,10 +514,16 @@ public sealed partial class PlayerInventory
             if (_modsApplied.Add(item))
             {
                 StatsApplier.Apply(Player, item, slot, apply: true);
+                EquipSpellSink?.OnItemEquipped(Player, item, slot, apply: true);
+                for (int enchantmentSlot = 0; enchantmentSlot < Item.EnchantmentValues / 3; enchantmentSlot++)
+                    EnchantmentSink?.ApplyEnchantment(Player, item, enchantmentSlot, apply: true);
             }
         }
         else if (_modsApplied.Remove(item))
         {
+            EquipSpellSink?.OnItemEquipped(Player, item, slot, apply: false);
+            for (int enchantmentSlot = 0; enchantmentSlot < Item.EnchantmentValues / 3; enchantmentSlot++)
+                EnchantmentSink?.ApplyEnchantment(Player, item, enchantmentSlot, apply: false);
             StatsApplier.Apply(Player, item, slot, apply: false);
         }
     }
@@ -552,6 +560,14 @@ public sealed partial class PlayerInventory
         }
 
         player.SetUInt32(properties + 1, item?.SuffixFactor ?? 0);
+    }
+
+    internal void RefreshVisibleEnchantment(Item item, int enchantmentSlot, uint? displayedId = null)
+    {
+        if (Player is not { } player || item.Slot >= InventorySlots.EquipmentEnd || (uint)enchantmentSlot >= 2u)
+            return;
+        player.SetUInt32(UpdateFields.PlayerVisibleItem10 + item.Slot * VisibleItemStride + 1 + enchantmentSlot,
+            displayedId ?? item.EnchantmentId(enchantmentSlot));
     }
 
     /// <summary>A new item reaches the owner as its own create block, queued before the player's field changes (vmangos Item::SendCreateUpdateToPlayer).</summary>

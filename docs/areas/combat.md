@@ -103,7 +103,8 @@ with `GetMeleeMissChance`, `Unit::GetUnitCriticalChance` and the dodge/parry/blo
   - 6-minute auto release (`CORPSE_REPOP_TIME`), skipped in instances.
   - The recent-death window grows by 5 minutes per death, up to 3.
 - **CMSG_REPOP_REQUEST:** vmangos `HandleRepopRequestOpcode` → `BuildPlayerRepop`.
-  - Ghost flag; SMSG_MOVE_WATER_WALK.
+  - Imported ghost spell 8326, plus 20584 when the character knows 20585; ghost flag and SMSG_MOVE_WATER_WALK.
+    Content-free hosts retain the direct flag and movement fallback. See [ghost form](../integration/ghost-form-20261004.md).
   - Health 1; unrooted.
   - A corpse object at the body (vmangos `Player::CreateCorpse`: owner, display, bytes,
     items, flags, PvP type) is visible to observers.
@@ -217,8 +218,8 @@ system) for the world; worlds without it use `CombatEnvironment.Default`.
 - **Corpse lifetime.** Corpses are removed (out-of-range block) instead of turning to bones
   (DESTROY_OBJECT/bones corpse).
 - **Graveyard.** No teleport yet; the ghost stays at the corpse.
-- **Ghost form.** The ghost flag and water walk are set directly instead of through aura
-  8326/20584, so there is no ghost speed.
+- **Ghost content.** Ghost-form spells are now cast through the production spell system.
+  Their effects and speed depend on imported content; real client rendering remains unverified.
 - **Unit state.** UNIT_FLAG_STUNNED stands in for the root/unit state.
 - **Player stats.** Weapon damage, attack speed, attack power, crit/dodge/parry/block
   percentages and the agility part of armor are now written by the player stat system
@@ -227,7 +228,11 @@ system) for the world; worlds without it use `CombatEnvironment.Default`.
   weapon, parry, block and the shield block value for players; a map without the stats
   feature keeps the `CombatHooks` defaults. Still open: one sub-damage per swing, one armor
   value for every school, aura modifiers. Skills default to level×5.
-- **Durability.** No durability loss and no SMSG_DURABILITY_DAMAGE_DEATH.
+- **Durability.** Ordinary PvE deaths now lose 10% equipment durability and send the
+  victim-only death notification. Caller flags, source spell exemption, player control
+  and battleground map templates suppress this penalty; environmental damage charges
+  its existing penalty once. Random wear on ordinary hits remains separate. See
+  [death durability](../integration/death-durability-20261004.md).
 - **Emotes.** No EMOTE_ONESHOT_WOUNDCRITICAL.
 - **Create blocks.** No UPDATEFLAG_MELEE_ATTACKING.
 - **Visibility.** Ghosts and the living are not separated.

@@ -17,7 +17,8 @@ are opt-in at vmangos' values), and every option names the reference value it fo
 
 1. type `>= 0x5E` is dropped (`SharedDefines.h:1303` `MAX_CHAT_MSG_TYPE`);
 2. `IsLanguageAllowedForChatType` (`ChatHandler.cpp:78-108`, unchanged);
-3. addon language: dropped when `AddonChannel` is off, otherwise offered to the features with no further checks;
+3. addon language: dropped when `AddonChannel` is off, otherwise offered to the features without
+   language or command checks; mute/flood checks apply only when `AddonMuteAndFloodControl` is enabled;
 4. a language the character does not know: `SMSG_NOTIFICATION` "You don't know that language" (classic-db
    `mangos_string` 806, no full stop; the old text had one);
 5. GM mode speaks Universal; otherwise two-side chat turns Common/Orcish into Universal, then
@@ -33,7 +34,8 @@ are opt-in at vmangos' values), and every option names the reference value it fo
 | Flood counter: staff exempt; a message inside the delay window counts; the count reaching `FloodMessageCount` mutes for `FloodMuteSeconds` (never shortens a mute). The message that trips the mute is still delivered because the mute check precedes the counter, so with the defaults the 11th message in one window trips it and the 12th is refused | `World/Chat/ChatFeature.UpdateSpeakTime` | vmangos `Chat/MasterPlayerChat.cpp:10-35`, `ChatHandler.cpp:221-236`; options `mangosd.conf.dist.in:1666-1668` |
 | Mute notice "You must wait 10 Seconds. before speaking again." (the reference time formatter keeps the trailing spaces, the capital plural and the full stop; 0 and 1 are "Second.") | `World/Chat/ChatText.SecsToTimeString`, `ChatFeature.MuteNotice` | `shared/Util.cpp:197-248`, classic-db `mangos_string` 705 |
 | A muted player cannot emote or text-emote; can only whisper staff | `ChatHandlers.RejectMuted`, `Whisper` | `ChatHandler.cpp:417-428`, `:660-668`, `:713-721` |
-| AFK/DND and addon messages are neither counted nor blocked | `HandleMessageChat` | `ChatHandler.cpp:158-236` |
+| AFK/DND and, by default, addon messages are neither counted nor blocked | `HandleMessageChat` | `ChatHandler.cpp:158-236` |
+| Expired in-memory flood mutes are swept once per clock second on the world thread, including disconnected accounts and worlds with no maps; active mutes survive logout/relog | `ChatFeature`, `WorldRuntime.Updated` | ArcaneCore storage maintenance; preserves `m_muteTime <= now` expiry semantics |
 | `ChatFakeMessagePreventing`: runs of space/tab/bell/newline become one space | `World/Chat/ChatSanitizer.StripInvisibleChars` | `shared/Util.cpp:134-163`, `ChatHandler.cpp:44-53` |
 | `ChatStrictLinkChecking.Severity` 1 and 2 (pipe commands `c H h r |`, order `c H h h r`, 255 bytes), `.Kick` | `ChatSanitizer.IsValidChatMessage` | `Chat/Chat.cpp:2165-2208`, `ChatHandler.cpp:55-61` |
 | Staff hidden from plain players unless accepting whispers or having whispered them first; `.whispers [ON/OFF]`; the allowed list is cleared by `.whispers OFF` | `World/Chat/ChatFeature`, `WhisperCommands.cs`, `ChatHandlers.Whisper` | `ChatHandler.cpp:405-415`, `Chat/MasterPlayer.h:98-102`, `MasterPlayerChat.cpp:55-72`, `Commands/CharacterCommands.cpp:1283-1313`, `Chat/Chat.cpp:1285`, `Player.cpp:133-135`; strings 259/284-286 |
@@ -45,6 +47,7 @@ are opt-in at vmangos' values), and every option names the reference value it fo
 | Option | Default | Follows |
 |---|---|---|
 | `World:Chat:AddonChannel` | true | vmangos / mangos-classic `AddonChannel = 1` |
+| `World:Chat:AddonMuteAndFloodControl` | false | ArcaneCore extension: apply existing mute gates and the shared spoken-chat flood counter to addon traffic before feature dispatch, preserving staff counter exemption; uses `FloodMessageCount` / delay / mute settings |
 | `World:Chat:FloodMessageCount` / `FloodMessageDelaySeconds` / `FloodMuteSeconds` | 10 / 1 / 10 (0 count = off) | `ChatFlood.*`, both servers |
 | `World:Chat:FakeMessagePreventing` | false | mangos-classic `ChatFakeMessagePreventing = 0` (`World.cpp:681`, `mangosd.conf.dist.in:1155`); vmangos defaults to 1 (`World.cpp:756`), set true to match |
 | `World:Chat:StrictLinkSeverity` | 0 | mangos-classic `ChatStrictLinkChecking.Severity = 0` (`World.cpp:683`, `mangosd.conf.dist.in:1156`); vmangos defaults to 2 (`World.cpp:758`), set 2 to match; 3 behaves as 2 |
@@ -55,6 +58,17 @@ are opt-in at vmangos' values), and every option names the reference value it fo
 `ListenRange.Say/Yell/TextEmote` stay 25/300/25: that is the code default of both servers
 (`vmangos World.cpp:556-558`, `mangos-classic World.cpp:464-466`); vmangos' shipped conf raises
 Say and TextEmote to 40 (`mangosd.conf.dist.in:1559-1561`).
+
+The addon exemption was verified online against vmangos commit
+[`0e3ff01e76d4758e8a7c3108b2717cc785ed56fa`, `ChatHandler.cpp:165-236`](https://github.com/vmangos/core/blob/0e3ff01e76d4758e8a7c3108b2717cc785ed56fa/src/game/Handlers/ChatHandler.cpp#L165):
+its addon branch bypasses both the session mute check and `UpdateSpeakTime`, with the explicit
+comment "LANG_ADDON should not be changed nor be affected by flood control". The F6 protection
+therefore defaults off to retain reference parity. Enabling it makes addon and spoken messages
+share the existing count-based limit and mute, including `IChatMuteSource` account mutes. The
+message that trips the limit is still delivered; the next is refused with the existing mute
+notification. Setting `FloodMessageCount` to 0 disables counting but still honours an active
+mute. `AddonChannel = false` drops traffic before these gates. Addon payloads stay unmodified;
+no packet layout or byte-limit policy changed.
 
 ## Seams
 
@@ -77,6 +91,10 @@ Say and TextEmote to 40 (`mangosd.conf.dist.in:1559-1561`).
   survives a logout and relog but ends with the server process; the whisper state is the player's and
   resets at login (vmangos' account mute and the saved GM state are persisted). Persisting either is a Characters/Auth schema change that belongs to the live-ban lane.
   No store was touched by this lane, so there are no provider theories.
+* **Mute producer.** There is still no runtime `.mute` command or persisted account mute. The
+  `IChatMuteSource` and `ChatRestrictionService.Mute` seams remain available to producers; the
+  latter service's independent flood logic remains outside the runtime gate. The F7 cleanup
+  addresses `ChatFeature._sessionMutes` retention only and does not remove existing APIs.
 * **Link check level 3** (item, enchant and spell links against the catalogs, `Chat.cpp:2210-2535`)
   needs the item, enchant and spell catalogs inside the chat handlers; it is treated as level 2.
 * **Group/guild Universal conversion order.** vmangos converts party/raid/guild chat to Universal

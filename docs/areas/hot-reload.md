@@ -116,6 +116,8 @@ on the world thread, so every reader sees the new value on its next read.
   do (World.cpp:2949-2977); `HotReload:NegativeNumbers = Reject` rejects the whole reload instead. A test fails if a new `WorldRuntimeOptions` / `MapOptions` / `WorldOptions` property is
   not classified in `WorldConfigKeys`.
 
+**`reserved_name`** (`ReservedNameContentReloadable`, `NameCatalogFeature.ReplaceReservedExact`): the SQL exact-name set is loaded through the registered `IReservedNameStore` off the world thread and published as a complete immutable catalog on the world thread. The startup-loaded NamesProfanity/NamesReserved DBC regex arrays and provenance are retained across the swap. A failed read or publish leaves the previous catalog in place; an empty successful SQL snapshot removes only SQL exact names. Character creation captures one catalog reference for its request, while the existing pet veto resolves the feature catalog dynamically for each rename.
+
 ## Deviations from retail
 
 Every row with a switch defaults to retail. Rows marked *structural* are behaviours the design cannot offer a

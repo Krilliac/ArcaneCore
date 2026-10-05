@@ -5,6 +5,14 @@ using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Pets;
 
+/// <summary>vmangos PetTameFailureReason (SharedDefines.h:1707-1721).</summary>
+public enum PetTameFailureReason : byte
+{
+    NoPetAvailable = 7,
+    Dead = 10,
+    NotDead = 11, // vmangos SharedDefines.h:1720, PETTAME_NOTDEAD.
+}
+
 /// <summary>SMSG_PET_ACTION_FEEDBACK message (wow_messages PetFeedback; vmangos FEEDBACK_*).</summary>
 public enum PetFeedback : byte
 {
@@ -37,6 +45,8 @@ public sealed record PetSetActionRequest(ObjectGuid Pet, IReadOnlyList<(uint Pos
 /// <summary>CMSG_PET_SPELL_AUTOCAST (cmsg_pet_spell_autocast.wowm): u64 pet, u32 spell, u8 state.</summary>
 public readonly record struct PetAutocastRequest(ObjectGuid Pet, uint Spell, bool Enabled);
 
+public readonly record struct PetRenameRequest(ObjectGuid Pet, string Name);
+
 /// <summary>CMSG_PET_CAST_SPELL for 1.12 (cmsg_pet_cast_spell.wowm): u64 pet, u32 spell, SpellCastTargets.</summary>
 public sealed record PetCastRequest(ObjectGuid Pet, uint Spell, SpellCastTargets Targets);
 
@@ -47,6 +57,8 @@ public sealed record PetCastRequest(ObjectGuid Pet, uint Spell, SpellCastTargets
 /// </summary>
 public static class PetPackets
 {
+    /// <summary>SMSG_PET_TAME_FAILURE: one-byte PetTameFailureReason (vmangos Player::SendPetTameFailure).</summary>
+    public static byte[] BuildTameFailure(PetTameFailureReason reason) => [(byte)reason];
     // --- client packets -----------------------------------------------------------------------------
 
     public static PetActionRequest ReadAction(ReadOnlySpan<byte> payload)
@@ -101,6 +113,13 @@ public static class PetPackets
     {
         var reader = new PacketReader(payload);
         return (reader.ReadUInt32(), new ObjectGuid(reader.ReadUInt64()));
+    }
+
+    /// <summary>CMSG_PET_RENAME: u64 pet guid followed by a NUL-terminated name.</summary>
+    public static PetRenameRequest ReadRename(ReadOnlySpan<byte> payload)
+    {
+        var reader = new PacketReader(payload);
+        return new PetRenameRequest(new ObjectGuid(reader.ReadUInt64()), reader.ReadCString());
     }
 
     // --- server packets -----------------------------------------------------------------------------
@@ -163,6 +182,9 @@ public static class PetPackets
         w.WriteUInt64(0);
         return w.ToArray();
     }
+
+    /// <summary>Build-5875 SMSG_PET_NAME_INVALID has an empty body (vmangos Pet.cpp).</summary>
+    public static byte[] BuildNameInvalid() => [];
 
     /// <summary>SMSG_PET_MODE (smsg_pet_mode.wowm): u64 guid, react, command, a zero byte, the enabled byte.</summary>
     public static byte[] BuildPetMode(Creature pet, CharmInfo charm)

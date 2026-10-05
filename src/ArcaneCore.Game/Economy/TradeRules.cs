@@ -62,6 +62,9 @@ public static class TradeRules
     }
 }
 
+/// <summary>Spell and optional cast-item identity deferred until both trade sides accept.</summary>
+public readonly record struct PendingTradeEnchantment(uint SpellId, ObjectGuid CastItemGuid);
+
 /// <summary>One side of an open trade: its offered item GUIDs per slot, gold and acceptance.</summary>
 public sealed class TradeSide(Player player)
 {
@@ -72,6 +75,9 @@ public sealed class TradeSide(Player player)
     public uint Gold { get; set; }
 
     public bool Accepted { get; set; }
+
+    /// <summary>Deferred enchantment requested for this side's partner non-traded item.</summary>
+    public PendingTradeEnchantment? PendingEnchantment { get; set; }
 
     /// <summary>Unix milliseconds of the last modification or accept attempt (vmangos TradeData::m_lastModificationTime); 0 = never.</summary>
     public long LastModifiedMs { get; set; }
@@ -118,6 +124,13 @@ public sealed class TradeSession(Player initiator, Player target)
     {
         Initiator.Accepted = false;
         Target.Accepted = false;
+    }
+
+    /// <summary>Clear both deferred trade enchant requests when trade contents or settlement state changes.</summary>
+    public void ClearPendingEnchantments()
+    {
+        Initiator.PendingEnchantment = null;
+        Target.PendingEnchantment = null;
     }
 
     /// <summary>Whether two players stand close enough to trade (3D, as vmangos GetDistance3dToCenter).</summary>

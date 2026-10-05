@@ -24,18 +24,20 @@ References (read only, never copied): **vmangos** `D:\refs\vmangos` (primary), *
   unclamped offset at the caster's Z.
 
 ### 2. `totem_spell` data (`Kernel/WorldData/Totems`, `Data/World/Totems`)
-- classic-db has no totem spell column; mangos-classic takes the first spell of the creature's list
-  (`Entities/Totem.cpp:171-178`). `TotemSpellDumpImporter` resolves it by column name from
-  `creature_template_spells.spell1` (set 0), else position 0 of `creature_spell_list`, for every creature named
-  by a SUMMON_TOTEM / SLOT1-4 effect (`spell_template.EffectMiscValueN`) or with `AIName = TotemAI`.
+- classic-db has no direct totem spell column; cmangos takes the first spell of the creature's list.
+  `TotemSpellDumpImporter` resolves an explicit `SpellList` to its lowest-position positive spell;
+  otherwise it uses the first nonzero `spell1..spell10` of default-set `creature_template_spells`.
+  Candidates are creatures named by SUMMON_TOTEM / SLOT1-4 effects or with `AIName = TotemAI`.
+  vmangos instead supplies `creature_template.totem_spell_id` directly, including zero (no fallback).
+  See [content import](content-import.md) for pinned references, supported patch selection and limits.
 - Measured on `ClassicDB_1_12_1_z2815` (the env-gated test `RealClassicDb_TotemSpellCounts_AreMeasured_AndSentryHasNone`):
   95 totem creatures get a spell (none needs the list fallback) and 8 have none, Sentry Totem 3968 among them.
 - **Schema constant:** `TotemWorldDataModule.Version = 15` (World; table `totem_spell`; built as 11, renumbered by the wave-2 integrator);
   tests use the constant. No Characters schema change (totems are never persisted: vmangos unsummons them on logout).
-- **The `totem_spell` table stays empty until the import is run.** `TotemSpellDumpImporter` is a library class used by
-  tests only (like the other dump importers, no tool invokes it yet). With an empty table every totem is summoned
-  without its passive aura, and `TotemFeature.Attach` logs a warning saying so. Filling it needs a one-off call of
-  `TotemSpellDumpImporter` on the classic-db dump followed by the store write; no command-line wrapper exists.
+- **The `totem_spell` table stays empty until the import is run.** The production
+  `ArcaneCore.ContentImporter import` command now fills it inside the shared content transaction;
+  plan, dry-run, JSON reports and verify include its mappings. With an empty table totems have neither
+  passive auras nor active spells, and `TotemFeature.Attach` logs a warning naming the import command.
 - `ARCANECORE_CLASSIC_DB` (path to the dump, `.sql` or `.sql.gz`) enables the real-data audit; unset it is reported
   Skipped, never green.
 
@@ -50,9 +52,23 @@ References (read only, never copied): **vmangos** `D:\refs\vmangos` (primary), *
   built from a copy of its template with `AIName = NullAI` and idle movement, so the unknown `TotemAI` name never
   falls back to AggressorAI and nothing wanders or aggroes.
 - Passive totem spell (`Totem::Summon`, `Totem.cpp:94-112`): cast on itself, triggered, at summon; a spell with a cast
-  time marks an active totem and is not cast here. The periodic timer of the totem passives 8145, 6474, 8179, 8172,
+  time marks an active totem, whose normal casts are driven by the map updater. The periodic timer of the totem passives 8145, 6474, 8179, 8172,
   8167, 8515, 10609, 10612 and of Stoneclaw (`SpellVisual 0`, icon 689) starts at 0 (first tick on the next update),
   `SpellAuras.cpp:8053-8112`.
+- Active totems (`TotemSystem.Active.cs`, vmangos `AI/TotemAI.cpp:66-125` at
+  `0e3ff01e76d4758e8a7c3108b2717cc785ed56fa`): retain their spell victim while valid; otherwise use the owner's
+  current combat victim or first attacker, then the nearest hostile unit inside the spell range plus both bounding radii
+  (`Unit.h:1066-1074`, `Maps/GridNotifiers.h:880-898`). Selection checks the target's life, map and attackable flags,
+  the owner's attack permission and PvP gate; spontaneous acquisition must not enable the owner's PvP
+  (`Unit.cpp:9985-9992`). Stealthed targets are rejected with `detect=false`, including at point-blank range;
+  the totem's own stalk aura remains the earlier visibility exception (`Unit.cpp:6388-6452`).
+  Ordinary `CastSpell(..., triggered:false)` keeps cast time, power, cooldown and LOS checks. No second cast is
+  prepared while a generic cast or channel is running; no melee victim, threat chase or movement is started.
+- The totem is rooted using the existing server movement flag. A cast check rechecks owner life/world/leash at
+  preparation and landing, because the global spell update can precede the map lifecycle update. This prevents a
+  bolt from landing after a player owner's death even when the next world tick spans the whole cast time.
+  Unsummon drops the totem's live spell state immediately. Expiry remains a map lifecycle decision and may permit
+  the reference's last update before removal (`Totem.cpp:66-92`).
 - Lifecycle (`Totem::Update`, `Totem.cpp:66-92`) every map update: unsummon when the owner left the world, a
   player/pet owner is dead (a creature owner's death does not unsummon), the totem is dead, the owner is beyond
   `Map.IsWithinVisibilityDistance` (option `OwnerLeash`) or the summon spell's duration ran out. An owner leaving the
@@ -70,43 +86,68 @@ References (read only, never copied): **vmangos** `D:\refs\vmangos` (primary), *
 - `TotemSystem.Register` throws when any of its effects already has a handler, because `RegisterEffect` replaces by
   key and two lanes registering the same effect would silently clobber each other.
 
+### 4. Intrinsic immunity and Grounding protection
+
+- `TotemImmunity` applies the source's per-effect exclusions for foreign healing, energize,
+  taunts, negative auras and periodic regeneration. Self casts and the Shaman regeneration
+  family mask `0x4006000` bypass these checks. Damage in a mixed spell still lands;
+  a spell with every effect excluded reports an immune miss. See
+  [totem immunity evidence](../integration/totem-immunity-20261004.md).
+- `SPELL_AURA_SPELL_MAGNET` (96) redirects eligible hostile magic casts to the live aura caster,
+  spends one protection charge per cast, and updates the spell-go target and outcome.
+  Consuming the last charge removes the source protection and party children. Normal damage
+  can kill the totem; a miss or non-damaging cast consumes protection without creating a death.
+  Redirected channels clean up their actual target when interrupted or when that target disappears.
+  See [Grounding evidence and eligibility limits](../integration/grounding-totem-20261004.md).
+
+Ordinary resurrection effects used by Redemption/Ancestral Spirit now offer and accept player
+resurrection through the existing teleport handshake; real spell data and client acceptance remain pending.
+See [player resurrection](../integration/player-resurrection-20261004.md).
+
 ## Limits (retail behaviour not reproduced)
 - No collision/ground-pushed totem placement (see 1).
 - vmangos runs the totem's own `Creature::Update` once more before unsummoning so its last aura tick is not lost;
   here auras tick inside the spell system's own update, so the last tick can land up to one tick either side of expiry.
 - An unsummoned totem is removed at once; vmangos first sets it dead for the client animation.
-- The per-effect totem immunity rule (`Totem.cpp:180-216`: immune to heal, energize, negative auras and regeneration
-  auras except the Healing Stream / Mana Spring / Mana Tide family mask `0x4006000`) needs an immunity seam in the spell
-  core that does not exist; it is **not applied**.
 - A killed totem still fires `MapCombat.UnitKilled`, but `KillRewards.AwardExperience` returns no XP for it
   (`Player::IsHonorOrXPTarget`, `Player.cpp:19943-19954`; `MaNGOS::XP::Gain`, `Formulas.h:102-107`) and
   `QuestObjectiveAdapter` gives no kill credit for a player-owned totem (a player-owned victim is PvP in
   `RewardSinglePlayerAtKill`, `Player.cpp:19961-19982`). A creature-owned totem still credits the kill, as in vmangos.
-  Honor is not modelled by this tree. Totems are not rooted by flag (vmangos `AI/TotemAI.cpp` roots them): they never
-  move here only because they run NullAI with idle movement, so a forced movement effect is not blocked.
+  Honor is not modelled by this tree. The server root flag and NullAI keep totems stationary; forced movement effects
+  that ignore root remain the responsibility of the movement/spell core.
 - The totem area aura still lands on the totem itself (vmangos sets its aura name to NONE,
   `SpellAuras.cpp:424-436`); friendliness/PvP filters, tick synchronisation and per-member rank selection of the area
   aura are not ported (`SpellSystem.AreaAuras.cs` belongs to the spell-breadth lane).
-- Active (cast-time) totems, i.e. Searing Totem (6 ids), do not cast: no TotemAI port (`AI/TotemAI.cpp:66-111`).
+- Active targeting inherits the combat core's faction/reputation and controlling-player limitations. Ordinary
+  `Creature` does not expose `IPlayerControlledUnit`, so owner-linked pet/creature PvP and same-faction duel reaction
+  parity are not claimed. Stealth uses the installed registry; separate invisibility masks are not implemented.
+- Retail selection does not prefilter ordinary visible units by LOS: a nearest enemy behind a wall can remain selected
+  and prevent casts while a farther enemy is reachable. Normal spell casting refuses the blocked bolt.
 
 ## Not delivered (slices not done)
 Each needs a primitive another lane owns, data this tree does not have, or was not reached.
-- `totem-active-casting` (Searing Totem), `totem-grounding-magnet`, `totem-immunity`, `area-aura-fidelity`:
-  not reached this run; the first needs the creature-ai TotemAI decision, the third a spell immunity seam, the
-  fourth edits `SpellSystem.AreaAuras.cs` (spell-breadth S2).
+- `area-aura-fidelity`: the remaining rank, friendliness/PvP and tick synchronization work belongs to
+  `SpellSystem.AreaAuras.cs` (spell-breadth S2).
 - `weapon-imbue-core`, `totem-held-item-enchant`, `rockbiter-weapon-damage`, `imbue-combat-procs`: not reached; imbues
   need SpellItemEnchantment.dbc import, a temp-enchant lifecycle and the items lane's enchant plumbing.
 - Everything gated on the proc engine, script registry (`ISpellScript`), `ISpellCastCheck`, shapeshift service, aura-state
   service, immunity ledger or death lane: seals, Judgement, Holy Shock, Hammer of Wrath, blessings and Greater
   Blessings (target 61 now exists), paladin auras and Concentration, bubbles with Forbearance, Lay on Hands, Divine
   Intervention, creature-type targeting, Ghost Wolf, Lightning Shield, Reincarnation, Water Walking.
-- Consecration (persistent area aura), Redemption/Ancestral Spirit (resurrect effects), Far Sight, Sentry Totem camera,
+- Consecration (persistent area aura), Far Sight, Sentry Totem camera,
   Water Breathing: other lanes or no camera/breath system.
 
 ## Tests
 - `tests/ArcaneCore.Game.Tests/ClassSpells`: `LocationTargetTests` (13), `ShockCooldownGuardTests` (a labelled GUARD,
-  green on arrival; mutating a rank's category turns it red), `Totems/TotemSummonTests` and `TotemLifecycleTests` (23).
+  green on arrival; mutating a rank's category turns it red), `Totems/TotemSummonTests` and `TotemLifecycleTests` (24).
+- `Totems/ActiveTotemTests` (17): normal cast time and repeated casts, nearest/sticky/owner helper targets,
+  creature targets, strict bounding-radius range, target loss, PvP gates, stealth and ordinary cast LOS,
+  owner death on a long tick, and in-flight cleanup at logout/death/replacement/expiry. The initial 13-case suite
+  produced 12 failures before active casting was implemented.
 - `tests/ArcaneCore.Data.Tests/Totems/TotemSpellDataTests` (importer, schema step, EF round trip, real-data audit).
-- `tests/ArcaneCore.World.Tests/ClassSpells/Totems/TotemLoopbackTests`: the real host end to end.
+- `tests/ArcaneCore.World.Tests/ClassSpells/Totems/TotemLoopbackTests`: the real host end to end,
+  including active cast-start packets, bolt damage through the world spell timer, and owner-death cleanup.
+- `TotemImmunityTests`, `SpellMagnetTests`, `TotemImmunityWorldTests` and `GroundingTotemWorldTests`
+  cover effect filtering, source exceptions, redirected packets, protection charges and lifecycle cleanup.
 - Real-client checklist (not verifiable here): totem model and spawn animation, totem placement relative to the
   character, party buff icons from totem area auras, no totem bar.

@@ -23,4 +23,10 @@ public interface ICharacterStore
 
     /// <summary>Every character's identity, to fill the name cache at startup.</summary>
     Task<IReadOnlyList<CharacterIdentity>> GetAllIdentitiesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Distinct owner account ids for a literal, case-insensitive character-name prefix, ordered by account id.
+    /// Filters and limits in the store; <paramref name="limit"/> is the number of accounts (0 = unlimited).
+    /// </summary>
+    Task<IReadOnlyList<int>> FindAccountIdsByNamePrefixAsync(string prefix, int limit, CancellationToken cancellationToken = default);
 }

@@ -63,13 +63,21 @@ public sealed partial class SpellSystem
         context.PendingHolder ??= new SpellAuraHolder(
             context.Spell, context.Target, context.Caster,
             _auraCasterOwners.GetValue(context.Caster, static caster => new AuraCasterOwner(caster)),
-            context.Cast.State == SpellCastState.Casting ? context.Cast.Timer : context.Cast.Duration);
+            context.Cast.State == SpellCastState.Casting ? context.Cast.Timer : context.Cast.Duration)
+        {
+            ItemGuid = context.Cast.CastItem?.Guid ?? ObjectGuid.Empty,
+            IsItemEquipAura = context.Cast.IsItemEquipCast,
+        };
         if (context.Cast.State == SpellCastState.Casting && context.PendingHolder.ChannelTarget == default)
         {
             context.PendingHolder.ChannelTarget = new ObjectGuid(context.Caster.GetUInt64(UpdateFields.UnitFieldChannelObject));
         }
 
-        context.PendingHolder.SetAura(new SpellAura(context.EffectIndex, effect.AuraType, SnapshotAuraAmount(context), effect.Amplitude, effect.MiscValue));
+        int amount = context.Cast.CustomAuraAmounts is { } custom && custom.TryGetValue(context.EffectIndex, out int requested)
+            ? requested
+            : SnapshotAuraAmount(context);
+        context.PendingHolder.SetAura(new SpellAura(context.EffectIndex, effect.AuraType, amount, effect.Amplitude, effect.MiscValue,
+            context.Target.PowerType));
     }
 
     /// <summary>
@@ -83,6 +91,7 @@ public sealed partial class SpellSystem
     {
         UnitSpellState state = GetOrCreateState(holder.Target);
         SpellAuraHolder? existing = state.Auras.FirstOrDefault(h => h.Spell.Id == holder.Spell.Id
+            && (!h.IsItemEquipAura || !holder.IsItemEquipAura || h.ItemGuid == holder.ItemGuid)
             && (h.CasterGuid == holder.CasterGuid || holder.IsPositive));
         if (existing is not null)
         {
@@ -122,6 +131,7 @@ public sealed partial class SpellSystem
         if (holder.Slot != SpellAuraHolder.NoSlot)
         {
             WriteAuraFields(holder, add: true);
+            VisibleAuraSlotChanged?.Invoke(holder.Target, holder.Slot);
             SendAuraDuration(holder);
         }
 
@@ -137,7 +147,7 @@ public sealed partial class SpellSystem
     public void RemoveAuras(Unit target, uint spellId)
     {
         ArgumentNullException.ThrowIfNull(target);
-        if (GetState(target.Guid) is { } state)
+        if (!IsQuestSettlementPending(target) && GetState(target.Guid) is { } state && ReferenceEquals(state.Unit, target))
         {
             foreach (SpellAuraHolder holder in state.Auras.Where(h => h.Spell.Id == spellId).ToArray())
             {
@@ -150,7 +160,7 @@ public sealed partial class SpellSystem
     public void RemoveAurasByCaster(Unit target, uint spellId, ObjectGuid caster)
     {
         ArgumentNullException.ThrowIfNull(target);
-        if (GetState(target.Guid) is { } state)
+        if (!IsQuestSettlementPending(target) && GetState(target.Guid) is { } state && ReferenceEquals(state.Unit, target))
         {
             foreach (SpellAuraHolder holder in state.Auras.Where(h => h.Spell.Id == spellId && h.CasterGuid == caster).ToArray())
             {
@@ -163,7 +173,7 @@ public sealed partial class SpellSystem
     public IReadOnlyList<SpellAuraHolder> GetAuras(Unit unit)
     {
         ArgumentNullException.ThrowIfNull(unit);
-        return GetState(unit.Guid)?.AuraHolders ?? [];
+        return GetState(unit.Guid) is { } state && ReferenceEquals(state.Unit, unit) ? state.AuraHolders : [];
     }
 
     public bool HasAura(Unit unit, uint spellId) => GetAuras(unit).Any(h => h.Spell.Id == spellId);
@@ -240,6 +250,7 @@ public sealed partial class SpellSystem
         if (holder.Slot != SpellAuraHolder.NoSlot)
         {
             WriteAuraFields(holder, add: false);
+            VisibleAuraSlotChanged?.Invoke(holder.Target, holder.Slot);
         }
 
         foreach (SpellAura aura in holder.Auras.OfType<SpellAura>())
@@ -460,7 +471,7 @@ public sealed partial class SpellSystem
 
         if (Store.Get(triggerSpell) is not null)
         {
-            CastSpell(caster, triggerSpell, SpellCastTargets.ForUnit(triggerTarget.Guid), triggered: true);
+            CastSpell(caster, triggerSpell, SpellCastTargets.ForUnit(triggerTarget.Guid), triggered: true, triggeringSpell: holder.Spell);
         }
     }
 }

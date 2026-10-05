@@ -179,15 +179,30 @@ public sealed class ItemMaintenanceUpdater(ItemMechanicsOptions options, TimePro
 
     public void Update(Map map, uint diffMs)
     {
+        List<Exception>? failures = null;
+        foreach (Player player in map.Players.ToList())
+        {
+            try
+            {
+                if (player.Inventory.IsLoaded && player.CanMutateQuestSettlementState)
+                    player.Inventory.UpdateEnchantDurations(diffMs);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                (failures ??= []).Add(ex);
+            }
+        }
+
         _elapsedMs += diffMs;
         if (_elapsedMs < Math.Max(options.ZoneLimitCheckMs, 1))
         {
+            if (failures is not null)
+                throw new AggregateException("item enchantment maintenance failed for some players", failures);
             return;
         }
 
         _elapsedMs = 0;
         long now = clock.GetUtcNow().ToUnixTimeSeconds();
-        List<Exception>? failures = null;
         foreach (Player player in map.Players.ToList())
         {
             try

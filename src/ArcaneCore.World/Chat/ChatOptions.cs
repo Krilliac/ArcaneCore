@@ -21,6 +21,14 @@ public sealed class ChatOptions
     public bool AddonChannel { get; set; } = true;
 
     /// <summary>
+    /// ArcaneCore extension: apply the existing mute and flood gates to addon traffic before
+    /// offering it to chat features. Uses the same counter, limits and staff exemption as spoken
+    /// chat. Off by default: vmangos ChatHandler.cpp:165-236 explicitly exempts LANG_ADDON from
+    /// both gates (verified at commit 0e3ff01e76d4758e8a7c3108b2717cc785ed56fa).
+    /// </summary>
+    public bool AddonMuteAndFloodControl { get; set; }
+
+    /// <summary>
     /// ChatFlood.MessageCount (vmangos mangosd.conf.dist.in:1666, mangos-classic mangosd.conf.dist.in, default 10): how
     /// many messages inside the delay window mute the speaker; 0 disables flood control
     /// (vmangos MasterPlayer::UpdateSpeakTime, MasterPlayerChat.cpp:10).

@@ -175,9 +175,27 @@ internal sealed class InMemoryBanStore(AccountStatusEvents? events = null, TimeP
 
     public Task<IReadOnlyList<AccountBanRecord>> GetHistoryAsync(int accountId, CancellationToken cancellationToken = default)
     {
+        Interlocked.Increment(ref _historyCalls);
         lock (_gate)
         {
             return Task.FromResult<IReadOnlyList<AccountBanRecord>>([.. _accountRows.Where(r => r.AccountId == accountId).OrderBy(r => r.BanDate).ThenBy(r => r.BanId)]);
+        }
+    }
+
+    private int _historyCalls;
+
+    public int HistoryCalls => Volatile.Read(ref _historyCalls);
+
+    public IReadOnlyList<int> HistoryCandidates { get; private set; } = [];
+
+    public Task<IReadOnlySet<int>> FindAccountsWithHistoryAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
+    {
+        MaybeFail();
+        lock (_gate)
+        {
+            HistoryCandidates = [.. accountIds];
+            return Task.FromResult<IReadOnlySet<int>>(_accountRows.Where(r => accountIds.Contains(r.AccountId))
+                .Select(r => r.AccountId).ToHashSet());
         }
     }
 

@@ -23,6 +23,8 @@ internal sealed class TotemKit : IDisposable
     public const uint PartyPassive = 930010;       // Healing Stream passive shape: APPLY_AREA_AURA_PARTY, permanent
     public const uint ImmediatePassive = 8145;     // Tremor Totem Passive: first tick immediately (SpellAuras.cpp:8086-8110)
     public const uint SlowPassive = 930012;        // a periodic passive with the ordinary first tick one amplitude later
+    public const uint ActiveSummon = 930013;       // Searing Totem shape: an active, stationary fire totem
+    public const uint ActiveBolt = 930014;         // Searing Bolt: cast-time fire damage with a 20 yd range
 
     public const uint BrokenSummonId = 930020;     // a summon whose creature entry has no template
 
@@ -34,6 +36,7 @@ internal sealed class TotemKit : IDisposable
     public const uint TremorEntry = 940006;
     public const uint SlowEntry = 940007;
     public const uint SilentEntry = 940008;
+    public const uint ActiveEntry = 940009;
 
     public TotemKit(TotemOptions? options = null, int summonDurationMs = 60_000)
     {
@@ -47,6 +50,7 @@ internal sealed class TotemKit : IDisposable
             Template(TremorEntry, t => t.AIName = "TotemAI"),
             Template(SlowEntry, t => t.AIName = "TotemAI"),
             Template(SilentEntry, t => t.AIName = "TotemAI"),
+            Template(ActiveEntry, t => t.AIName = "TotemAI"),
             Template(WolfEntry),
         ], []);
         Content = content;
@@ -61,6 +65,16 @@ internal sealed class TotemKit : IDisposable
                 Summon(930007, SpellEffectName.SummonTotemSlot2, 41, TremorEntry, summonDurationMs),
                 Summon(930008, SpellEffectName.SummonTotemSlot2, 41, SlowEntry, summonDurationMs),
                 Summon(930009, SpellEffectName.SummonTotemSlot2, 41, SilentEntry, summonDurationMs),
+                Summon(ActiveSummon, SpellEffectName.SummonTotemSlot1, 44, ActiveEntry, summonDurationMs),
+                Spell(ActiveBolt, Effect(SpellEffectName.SchoolDamage, 15, SpellImplicitTarget.UnitEnemy)) with
+                {
+                    School = SpellSchool.Fire,
+                    CastTime = new SpellCastTime(1000, 0, 0),
+                    RangeIndex = 4,
+                    Range = new SpellRange(0, 20),
+                    StartRecoveryCategory = 0,
+                    StartRecoveryTime = 0,
+                },
                 Spell(DestroyAll, Effect(SpellEffectName.DestroyAllTotems, 0, SpellImplicitTarget.UnitCaster)) with { StartRecoveryCategory = 0, StartRecoveryTime = 0 },
                 Passive(PartyPassive, AuraType.Dummy, amplitude: 0, area: true),
                 Passive(ImmediatePassive, AuraType.PeriodicTriggerSpell, amplitude: 3000, area: false),
@@ -84,6 +98,7 @@ internal sealed class TotemKit : IDisposable
                 EarthEntry or FireEntry or WaterEntry or AirEntry or NoSlotEntry => PartyPassive,
                 TremorEntry => ImmediatePassive,
                 SlowEntry => SlowPassive,
+                ActiveEntry => ActiveBolt,
                 _ => null,
             },
             options);

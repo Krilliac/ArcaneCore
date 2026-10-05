@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
@@ -37,6 +38,8 @@ public enum Team
 /// </summary>
 public sealed partial class Player : Unit
 {
+    private bool _nativeDisplayModelInitialized;
+    public event Action<Player, StandState, StandState>? StandStateChanged;
     /// <summary>vmangos ObjectDefines.h DEFAULT_WORLD_OBJECT_SIZE (used until model data is imported).</summary>
     public const float DefaultBoundingRadius = 0.388999998569489f;
 
@@ -327,7 +330,9 @@ public sealed partial class Player : Unit
             return;
         }
 
+        StandState previous = StandState;
         StandState = state;
+        StandStateChanged?.Invoke(this, previous, state);
         Session.Send(WorldOpcode.SmsgStandstateUpdate, [(byte)state]);
     }
 
@@ -519,6 +524,44 @@ public sealed partial class Player : Unit
         SetUInt32(UpdateFields.PlayerNextLevelXp, appearance.NextLevelXp);
         Money = c.Money;
         ActionBarToggles = c.ActionBarToggles;
+    }
+
+    /// <summary>Apply native display geometry before the player enters a map or emits its create block.</summary>
+    internal void InitializeNativeDisplayModel(Func<uint, Spells.DisplayModelGeometry?>? resolver)
+    {
+        if (_nativeDisplayModelInitialized || TransformSpellId != 0 || FormDisplayId != 0 || resolver is null)
+        {
+            return;
+        }
+
+        Spells.DisplayModelGeometry? geometry = resolver(DisplayId);
+        if (geometry is not { } model || !float.IsFinite(model.NativeScale) || model.NativeScale <= 0)
+        {
+            NativeScale = 1.0f;
+            NativeScaleOverride = 0;
+            return;
+        }
+
+        NativeScale = model.NativeScale;
+        NativeScaleOverride = 0;
+        // Unit::InitPlayerDisplayIds selects the DBC scale before UpdateModelData.
+        SetFloat(UpdateFields.ObjectFieldScaleX, model.NativeScale);
+        _nativeDisplayModelInitialized = true;
+        float normalized = 1.0f;
+        SetFloat(UpdateFields.UnitFieldBoundingradius,
+            model.BoundingRadius > 0 ? normalized * model.BoundingRadius : DefaultBoundingRadius);
+        SetFloat(UpdateFields.UnitFieldCombatreach,
+            model.CombatReach > 0 ? normalized * model.CombatReach : DefaultCombatReach);
+        if (model.HasModelData)
+        {
+            float height = normalized * (model.CollisionHeight > 0 && model.ModelScale > 0
+                ? model.CollisionHeight / model.ModelScale : 2.0f);
+            if (float.IsFinite(height) && height > 0)
+            {
+                this.Locomotion.CollisionHeight = height;
+                this.Locomotion.InvalidateEnvironmentSample();
+            }
+        }
     }
 }
 

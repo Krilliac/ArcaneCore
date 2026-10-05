@@ -96,6 +96,12 @@ public sealed class CharmInfo
     /// <summary>vmangos CharmInfo::GetPetNumber (the name query key); 0 until one is assigned.</summary>
     public uint PetNumber { get; internal set; }
 
+    public string Name { get; internal set; } = "Pet";
+
+    public uint NameTimestamp { get; internal set; }
+
+    public bool RenameAllowed { get; internal set; }
+
     /// <summary>vmangos m_commandState: a new pet follows (CharmInfo constructor).</summary>
     public CommandState CommandState { get; internal set; } = CommandState.Follow;
 

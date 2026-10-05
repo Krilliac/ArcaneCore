@@ -73,11 +73,23 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
         if (language == Language.Addon)
         {
             // Disabled addon channel? (vmangos AddonChannel). Addon messages are not touched by the
-            // language or flood gates, skip command parsing (vmangos HandleChatMessageOpcode /
+            // language or flood gates by default, skip command parsing (vmangos HandleChatMessageOpcode /
             // SanitizeChatMessage) and only travel the group, guild, battleground and channel chat
             // that features serve; unserved, they are dropped.
             if (chat.Options.AddonChannel)
             {
+                // Optional protection, retaining the reference's default addon exemption:
+                // vmangos 0e3ff01e76d4758e8a7c3108b2717cc785ed56fa ChatHandler.cpp:165-236.
+                if (chat.Options.AddonMuteAndFloodControl)
+                {
+                    if (RejectMuted(session, player))
+                    {
+                        return;
+                    }
+
+                    chat.UpdateSpeakTime(player);
+                }
+
                 OfferToFeatures(session, player, new ClientChatMessage(type, language, target, message));
             }
 

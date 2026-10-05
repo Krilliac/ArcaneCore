@@ -1,8 +1,11 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Spells;
+using ArcaneCore.World.Economy;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Items;
@@ -18,6 +21,7 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
 {
     public void Register(OpcodeTable table)
     {
+        table.OnWorld(WorldOpcode.CmsgUseItem, HandleUseItem);
         table.OnWorld(WorldOpcode.CmsgSwapItem, HandleSwapItem);
         table.OnWorld(WorldOpcode.CmsgSwapInvItem, HandleSwapInvItem);
         table.OnWorld(WorldOpcode.CmsgAutoequipItem, HandleAutoEquipItem);
@@ -25,6 +29,59 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgSplitItem, HandleSplitItem);
         table.OnWorld(WorldOpcode.CmsgDestroyitem, HandleDestroyItem);
         table.OnSession(WorldOpcode.CmsgItemQuerySingle, SessionStates.LoggedIn, HandleItemQuerySingleAsync);
+    }
+
+    /// <summary>
+    /// CMSG_USE_ITEM build 5875: u8 bag, u8 slot, u8 item-spell index, SpellCastTargets.
+    /// Verified against gtker/wow_messages world/item/cmsg_use_item.wowm (1.12) and vmangos
+    /// SpellHandler.cpp:36-139; the later cast-count/item-GUID trailer is TBC-only.
+    /// </summary>
+    private static void HandleUseItem(WorldSession session, Player player, byte[] payload)
+    {
+        try
+        {
+            // The 5875 request always has the three-byte item prefix and the
+            // two-byte target mask, even for SELF (wow_messages 1.12).
+            if (payload.Length < 5)
+            {
+                return;
+            }
+
+            var reader = new PacketReader(payload);
+            byte bag = reader.ReadByte();
+            byte slot = reader.ReadByte();
+            byte spellIndex = reader.ReadByte();
+            SpellCastTargets targets = SpellCastTargets.Read(ref reader);
+            if (reader.Remaining != 0)
+            {
+                return;
+            }
+
+            Item? item = player.Inventory.GetItem(bag, slot);
+            if (item is null)
+            {
+                return;
+            }
+
+            // vmangos rejects a cast item that is currently offered in a trade. The economy
+            // feature owns the trade table; keep this guard at the world boundary rather than
+            // coupling the game spell system to a session-level trade service.
+            EconomyFeature? economy = session.Services.GetService<EconomyFeature>();
+            if (economy?.TradeOf(player) is { } trade && trade.SideOf(player).TradedItems.Contains(item.Guid))
+            {
+                return;
+            }
+
+            session.Services.GetRequiredService<SpellFeature>().System.HandleItemUse(player, bag, slot, spellIndex, targets);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            // Reject malformed or wrong-version payloads without touching inventory.
+        }
+        catch (IndexOutOfRangeException)
+        {
+            // PacketReader.ReadByte uses direct span indexing for short payloads.
+        }
     }
 
     /// <summary>CMSG_SWAP_ITEM: u8 dst bag, u8 dst slot, u8 src bag, u8 src slot (WorldSession::HandleSwapItem).</summary>

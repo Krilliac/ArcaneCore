@@ -1,4 +1,7 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Groups;
@@ -121,7 +124,7 @@ public static class GroupPackets
     /// packed guid, u32 mask, then the masked fields in bit order. Auras and pets do not exist
     /// yet, so aura masks are empty and pet fields are the "no pet" values vmangos writes.
     /// </summary>
-    public static byte[] BuildPartyMemberStats(Player player, GroupUpdateFlags mask)
+    public static byte[] BuildPartyMemberStats(Player player, GroupUpdateFlags mask, uint petPositiveAuraMask = 0, ushort petNegativeAuraMask = 0)
     {
         var writer = new PacketWriter(64);
         writer.WritePackedGuid(player.Guid.Value);
@@ -186,55 +189,81 @@ public static class GroupPackets
 
         if ((mask & GroupUpdateFlags.PetGuid) != 0)
         {
-            writer.WriteUInt64(0);
+            writer.WriteUInt64(player.GetPet()?.Guid.Value ?? 0);
         }
 
         if ((mask & GroupUpdateFlags.PetName) != 0)
         {
-            writer.WriteByte(0);
+            string name = player.GetPet()?.Summon?.Charm?.Name ?? string.Empty;
+            writer.WriteCString(name);
         }
 
         if ((mask & GroupUpdateFlags.PetModelId) != 0)
         {
-            writer.WriteUInt16(0);
+            writer.WriteUInt16(unchecked((ushort)(player.GetPet()?.GetUInt32(UpdateFields.UnitFieldDisplayid) ?? 0)));
         }
 
         if ((mask & GroupUpdateFlags.PetCurrentHp) != 0)
         {
-            writer.WriteUInt16(0);
+            writer.WriteUInt16(unchecked((ushort)(player.GetPet()?.Health ?? 0)));
         }
 
         if ((mask & GroupUpdateFlags.PetMaxHp) != 0)
         {
-            writer.WriteUInt16(0);
+            writer.WriteUInt16(unchecked((ushort)(player.GetPet()?.MaxHealth ?? 0)));
         }
 
         if ((mask & GroupUpdateFlags.PetPowerType) != 0)
         {
-            writer.WriteByte(0);
+            writer.WriteByte(player.GetPet() is { } pet ? (byte)pet.PowerType : (byte)0);
         }
 
         if ((mask & GroupUpdateFlags.PetCurrentPower) != 0)
         {
-            writer.WriteUInt16(0);
+            Creature? pet = player.GetPet();
+            int index = pet is not null && (int)pet.PowerType <= 4 ? (int)pet.PowerType : 0;
+            writer.WriteUInt16(unchecked((ushort)(pet?.GetUInt32(UpdateFields.UnitFieldPower1 + index) ?? 0)));
         }
 
         if ((mask & GroupUpdateFlags.PetMaxPower) != 0)
         {
-            writer.WriteUInt16(0);
+            Creature? pet = player.GetPet();
+            int index = pet is not null && (int)pet.PowerType <= 4 ? (int)pet.PowerType : 0;
+            writer.WriteUInt16(unchecked((ushort)(pet?.GetUInt32(UpdateFields.UnitFieldMaxpower1 + index) ?? 0)));
         }
 
         if ((mask & GroupUpdateFlags.PetAuras) != 0)
         {
-            writer.WriteUInt32(0);
+            uint auraMask = (mask & GroupUpdateFlags.Full) == GroupUpdateFlags.Full || petPositiveAuraMask == 0
+                ? PetAuraMask(player, true) : petPositiveAuraMask;
+            writer.WriteUInt32(auraMask);
+            for (int slot = 0; slot < SpellSystem.MaxPositiveAuras; slot++)
+                if ((auraMask & (1u << slot)) != 0)
+                    writer.WriteUInt16(unchecked((ushort)(player.GetPet()?.GetUInt32(UpdateFields.UnitFieldAura + slot) ?? 0)));
         }
 
         if ((mask & GroupUpdateFlags.PetAurasNegative) != 0)
         {
-            writer.WriteUInt16(0);
+            ushort auraMask = (mask & GroupUpdateFlags.Full) == GroupUpdateFlags.Full || petNegativeAuraMask == 0
+                ? (ushort)PetAuraMask(player, false) : petNegativeAuraMask;
+            writer.WriteUInt16(auraMask);
+            for (int slot = SpellSystem.MaxPositiveAuras; slot < SpellSystem.MaxAuras; slot++)
+                if ((auraMask & (1u << (slot - SpellSystem.MaxPositiveAuras))) != 0)
+                    writer.WriteUInt16(unchecked((ushort)(player.GetPet()?.GetUInt32(UpdateFields.UnitFieldAura + slot) ?? 0)));
         }
 
         return writer.ToArray();
+    }
+
+    private static uint PetAuraMask(Player player, bool positive)
+    {
+        if (player.GetPet() is not { } pet) return 0;
+        int start = positive ? 0 : SpellSystem.MaxPositiveAuras;
+        int end = positive ? SpellSystem.MaxPositiveAuras : SpellSystem.MaxAuras;
+        uint mask = 0;
+        for (int slot = start; slot < end; slot++)
+            if (pet.GetUInt32(UpdateFields.UnitFieldAura + slot) != 0) mask |= 1u << (slot - start);
+        return mask;
     }
 
     /// <summary>SMSG_PARTY_MEMBER_STATS_FULL for a stranger or offline player: packed guid, mask STATUS, u8 offline (vmangos HandleRequestPartyMemberStatsOpcode).</summary>

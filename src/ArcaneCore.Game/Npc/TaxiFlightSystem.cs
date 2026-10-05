@@ -100,6 +100,9 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
         }
 
         var flight = new Flight(player, map, hops, nodes[^1]);
+        // vmangos Player::ActivateTaxiPathTo (Player.cpp:18081): a validated taxi start
+        // consumes pending extra attacks before flight state and client-control fields publish.
+        player.Combat.ResetExtraAttacks();
         _flights[player.Guid] = flight;
 
         // Unit::Mount + FlightPathMovementGenerator::Initialize.

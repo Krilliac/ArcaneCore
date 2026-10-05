@@ -9,6 +9,7 @@ using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
 using ArcaneCore.Data.World.SpecialLoot;
+using ArcaneCore.Data.World.Totems;
 using ArcaneCore.Kernel.Quests;
 using Microsoft.EntityFrameworkCore;
 
@@ -40,7 +41,7 @@ public static class ContentImporterCli
                                 counts and which columns an importer reads; writes no database
           import <dump>...      import the creature, game object, loot, item, quest, kill-reputation and
                                 new-character (start position, starting spell, teleport target) and
-                                location (portal, GM teleport) tables
+                                location (portal, GM teleport) and totem spell tables
                                 (and the starting outfit, playercreateinfo_item)
           import-dbc <dir>      import the five spell DBCs from a client DBFilesClient directory
           verify                count the imported tables and check references
@@ -186,6 +187,7 @@ public static class ContentImporterCli
         var playerCreate = new PlayerCreateDumpImporter();
         var startActions = new PlayerCreateActionDumpImporter();
         var locations = new LocationDumpImporter();
+        var totems = new TotemSpellDumpImporter();
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             creatures.Read(reader);
@@ -221,6 +223,11 @@ public static class ContentImporterCli
             locations.Read(reader);
         }
 
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            totems.Read(reader);
+        }
+
         string? dbcDirectory = a.Value("--dbc-dir");
         if (dbcDirectory is not null)
         {
@@ -253,6 +260,7 @@ public static class ContentImporterCli
         PlayerCreateImportReport playerReport = playerCreate.BuildReport();
         PlayerCreateActionImportReport startActionReport = startActions.BuildReport();
         LocationImportReport locationReport = locations.BuildReport();
+        TotemSpellImportReport totemReport = totems.Resolve().Report;
         if (!dryRun)
         {
             o.WriteLine($"target: {target!.Describe}");
@@ -269,6 +277,7 @@ public static class ContentImporterCli
                     playerReport = await playerCreate.WriteAsync(db, replace, token).ConfigureAwait(false);
                     startActionReport = await startActions.WriteAsync(db, replace, token).ConfigureAwait(false);
                     locationReport = await locations.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    totemReport = await totems.WriteAsync(db, replace, token).ConfigureAwait(false);
                 }, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -284,6 +293,11 @@ public static class ContentImporterCli
         warnings.AddRange(playerReport.Warnings);
         warnings.AddRange(startActionReport.Warnings);
         warnings.AddRange(locationReport.Warnings);
+        if (totemReport.SummonedWithoutRow.Count > 0)
+        {
+            warnings.Add($"{totemReport.SummonedWithoutRow.Count} summoned totem creature(s) have no spell mapping "
+                + $"(this can be intentional, e.g. Sentry Totem): {string.Join(", ", totemReport.SummonedWithoutRow)}");
+        }
         if (itemQuestReport.DerivedQuestXp > 0)
         {
             warnings.Add(
@@ -291,7 +305,7 @@ public static class ContentImporterCli
                 "(the source has no RewXP; cmangos Quest::XPValue); XP reduced for grey quests can differ from cmangos by 1");
         }
 
-        (Dictionary<string, long> imported, Dictionary<string, long> skipped) = Counts(creatureReport, objectReport, itemQuestReport, onKillReport, playerReport, startActionReport, locationReport);
+        (Dictionary<string, long> imported, Dictionary<string, long> skipped) = Counts(creatureReport, objectReport, itemQuestReport, onKillReport, playerReport, startActionReport, locationReport, totemReport);
         o.WriteLine(dryRun ? "would import:" : "imported:");
         foreach ((string table, long count) in imported)
         {
@@ -327,7 +341,7 @@ public static class ContentImporterCli
 
     private static (Dictionary<string, long> Imported, Dictionary<string, long> Skipped) Counts(
         CreatureImportReport creatures, GameObjectLootImportReport objects, ItemQuestImportReport itemsAndQuests, ReputationOnKillImportReport onKill,
-        PlayerCreateImportReport playerCreate, PlayerCreateActionImportReport startActions, LocationImportReport locations)
+        PlayerCreateImportReport playerCreate, PlayerCreateActionImportReport startActions, LocationImportReport locations, TotemSpellImportReport totems)
     {
         var imported = new Dictionary<string, long>
         {
@@ -360,6 +374,7 @@ public static class ContentImporterCli
             ["level_stats_rows"] = playerCreate.LevelStatRows,
             ["areatrigger_teleport"] = locations.Portals,
             ["game_tele"] = locations.Teleports,
+            ["totem_spell"] = totems.Rows,
         };
         var skipped = new Dictionary<string, long>
         {
@@ -370,6 +385,7 @@ public static class ContentImporterCli
             ["player_create_rows"] = playerCreate.SkippedRows,
             ["playercreateinfo_action_rows"] = startActions.SkippedRows,
             ["areatrigger_teleport_rows"] = locations.SkippedRows,
+            ["totem_creatures_without_spell"] = totems.SkippedWithoutSpell,
         };
         return (imported, skipped);
     }
@@ -472,6 +488,7 @@ public static class ContentImporterCli
                 ("spell_target_position", await db.Set<SpellTargetPositionRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("areatrigger_teleport", await db.Set<AreaTriggerTeleportRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("game_tele", await db.Set<GameTeleRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("totem_spell", await db.Set<TotemSpellRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_template", await db.Set<SpellTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
             };
             foreach ((string table, int count) in counts)
@@ -495,6 +512,27 @@ public static class ContentImporterCli
             IQueryable<ItemTemplateRow> itemTemplates = db.Set<ItemTemplateRow>();
             int startingItemsMissing = await db.Set<PlayerCreateInfoItemRow>()
                 .CountAsync(r => !itemTemplates.Any(i => i.Entry == r.ItemId), ct).ConfigureAwait(false);
+            int totemsWithoutCreature = await db.Set<TotemSpellRow>()
+                .CountAsync(r => !templates.Any(t => t.Entry == r.CreatureEntry), ct).ConfigureAwait(false);
+            if (totemsWithoutCreature > 0)
+            {
+                problems.Add($"{totemsWithoutCreature} totem_spell row(s) name a creature that has no creature_template");
+            }
+
+            IQueryable<SpellTemplateRow> spells = db.Set<SpellTemplateRow>();
+            if (await spells.AnyAsync(ct).ConfigureAwait(false))
+            {
+                int totemsWithoutSpell = await db.Set<TotemSpellRow>()
+                    .CountAsync(r => !spells.Any(s => s.Id == r.SpellId), ct).ConfigureAwait(false);
+                if (totemsWithoutSpell > 0)
+                {
+                    problems.Add($"{totemsWithoutSpell} totem_spell row(s) name a spell that has no imported spell_template");
+                }
+            }
+            else if (await db.Set<TotemSpellRow>().AnyAsync(ct).ConfigureAwait(false))
+            {
+                o.WriteLine("note: totem spell references were not checked because no spell DBC content is imported; run import-dbc before starting the server");
+            }
             if (giversWithoutTemplate + endersWithoutTemplate > 0)
             {
                 o.WriteLine(

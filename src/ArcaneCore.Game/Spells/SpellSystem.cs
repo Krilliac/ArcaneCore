@@ -1,5 +1,9 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Ranged;
+using ArcaneCore.Game.Spells.Rules.Immunity;
+using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.WorldData.Items;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -33,7 +37,8 @@ public sealed partial class SpellSystem
         ITeleportSink? teleport = null,
         ISpellbook? spellbook = null,
         Random? random = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IItemEnchantmentCatalog? itemEnchantments = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
@@ -43,6 +48,7 @@ public sealed partial class SpellSystem
         Spellbook = spellbook;
         Random = random ?? Random.Shared;
         _logger = logger ?? NullLogger.Instance;
+        ItemEnchantments = itemEnchantments ?? new EmptyItemEnchantmentCatalog();
         EffectHandlers = CreateEffectHandlers();
         _builtInEffectHandlers = new Dictionary<SpellEffectName, SpellEffectHandler>(EffectHandlers);
         AuraHandlers = CreateAuraHandlers();
@@ -75,6 +81,11 @@ public sealed partial class SpellSystem
     public ISpellbook? Spellbook { get; set; }
 
     public Random Random { get; set; }
+
+    public IItemEnchantmentCatalog ItemEnchantments { get; set; }
+
+    /// <summary>World-owned trade/lifecycle veto for item casts; closed by default.</summary>
+    public Func<Player, Item, bool> ItemUseTradeGuard { get; set; } = static (_, _) => false;
 
     /// <summary>
     /// The map update interval subtracted from global cooldowns (vmangos Player::AddGCD: "spell
@@ -111,6 +122,9 @@ public sealed partial class SpellSystem
     /// player does not know and passive spells are ignored (logged, no reply); a negative spell
     /// explicitly aimed at oneself fails with BAD_TARGETS; everything else is prepared.
     /// </summary>
+    /// <summary>World-owned deferred trade request; no ordinary cast executes before acceptance.</summary>
+    public Func<Player, uint, SpellCastTargets, SpellCastResult>? TradeEnchantmentRequest { get; set; }
+
     public SpellCastResult HandleCastRequest(Player player, uint spellId, SpellCastTargets targets)
     {
         ArgumentNullException.ThrowIfNull(player);
@@ -134,16 +148,27 @@ public sealed partial class SpellSystem
             return SpellCastResult.BadTargets;
         }
 
+        if ((targets.Mask & SpellCastTargetFlags.TradeItem) != 0 && TradeEnchantmentRequest is { } deferred)
+        {
+            SpellCastResult result = deferred(player, spellId, targets);
+            SendCastResult(player, spell, result, triggered: false);
+            return result;
+        }
+
         return Prepare(player, spell, targets, triggered: false);
     }
 
     /// <summary>Cast a spell for the server (scripts, triggered spells, GM commands).</summary>
     public SpellCastResult CastSpell(Unit caster, uint spellId, SpellCastTargets targets, bool triggered)
+        => CastSpell(caster, spellId, targets, triggered, triggeringSpell: null);
+
+    /// <summary>Cast with the originating spell/aura's reagent policy (vmangos IgnoreItemRequirements).</summary>
+    public SpellCastResult CastSpell(Unit caster, uint spellId, SpellCastTargets targets, bool triggered, SpellInfo? triggeringSpell)
     {
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(targets);
         SpellInfo? spell = Store.Get(spellId);
-        return spell is null ? SpellCastResult.NotFound : Prepare(caster, spell, targets, triggered);
+        return spell is null ? SpellCastResult.NotFound : Prepare(caster, spell, targets, triggered, triggeringSpell);
     }
 
     /// <summary>
@@ -207,6 +232,7 @@ public sealed partial class SpellSystem
     /// <summary>Advance casts, channels, auras and cooldowns by <paramref name="diffMs"/> (world thread).</summary>
     public void Update(uint diffMs)
     {
+        ProcessDeathAuraRemovals();
         if (_states.Count == 0)
         {
             return;
@@ -254,6 +280,7 @@ public sealed partial class SpellSystem
     public void RemoveUnit(Unit unit)
     {
         ArgumentNullException.ThrowIfNull(unit);
+        ForgetFoodDrinkHeartbeat(unit);
         RevokeAuraCaster(unit);
         if (_states.TryGetValue(unit.Guid, out UnitSpellState? state) && ReferenceEquals(state.Unit, unit))
         {
@@ -263,9 +290,13 @@ public sealed partial class SpellSystem
 
     // --- cast pipeline ------------------------------------------------------------------
 
-    private SpellCastResult Prepare(Unit caster, SpellInfo spell, SpellCastTargets targets, bool triggered)
+    private SpellCastResult Prepare(Unit caster, SpellInfo spell, SpellCastTargets targets, bool triggered, SpellInfo? triggeringSpell = null,
+        Item? castItem = null, byte itemSpellIndex = 0, int? itemCooldownMs = null, int? itemCategoryCooldownMs = null,
+        uint? itemCategory = null, bool itemEquipCast = false, bool itemCombatProcCast = false,
+        IReadOnlyDictionary<int, int>? customAuraAmounts = null)
     {
-        if (IsQuestSettlementPending(caster))
+        if (castItem is not null && (IsQuestSettlementPending(caster) || IsInTransit(caster)
+            || (caster is Player player && !player.IsInWorld)))
         {
             SendCastResult(caster, spell, SpellCastResult.NotReady, triggered);
             return SpellCastResult.NotReady;
@@ -275,7 +306,8 @@ public sealed partial class SpellSystem
         if (!triggered && spell.IsNextMeleeSwing)
         {
             // Own slot: neither blocked by nor interrupting a generic cast or a channel.
-            return QueueNextSwing(state, caster, spell, targets, ResolveUnitTarget(caster, targets));
+            return QueueNextSwing(state, caster, spell, targets, ResolveUnitTarget(caster, targets, spell),
+                triggeringSpell, castItem, itemSpellIndex, itemCooldownMs, itemCategoryCooldownMs, itemCategory);
         }
 
         if (!triggered && state.CurrentCast is { } current)
@@ -291,8 +323,9 @@ public sealed partial class SpellSystem
             Cancel(current);
         }
 
-        Unit? unitTarget = ResolveUnitTarget(caster, targets);
-        SpellCastResult result = CheckCast(state, spell, targets, unitTarget, triggered, strict: true);
+        Unit? unitTarget = ResolveUnitTarget(caster, targets, spell);
+        SpellCastResult result = CheckCast(state, spell, targets, unitTarget, triggered, strict: true,
+            triggeringSpell: triggeringSpell, castItem: castItem, itemCategory: itemCategory);
         if (result != SpellCastResult.CastOk)
         {
             SendCastResult(caster, spell, result, triggered);
@@ -300,12 +333,16 @@ public sealed partial class SpellSystem
         }
 
         int castTime = triggered ? 0 : CastTimeFor(caster, spell);
-        var cast = new SpellCast(spell, caster, targets, triggered, castTime, PowerCostFor(caster, spell), DurationFor(caster, spell));
+        var cast = new SpellCast(spell, caster, targets, triggered, castTime,
+            castItem is null ? PowerCostFor(caster, spell) : 0, DurationFor(caster, spell), triggeringSpell, castItem, itemSpellIndex,
+            castItem is null ? (byte)0 : castItem.BagSlot, castItem is null ? (byte)0 : castItem.Slot,
+            itemCooldownMs, itemCategoryCooldownMs, itemCategory, customAuraAmounts)
+            { IsItemEquipCast = itemEquipCast, IsItemCombatProcCast = itemCombatProcCast };
         if (!triggered)
         {
             state.CurrentCast = cast;
             SendToSet(caster, WorldOpcode.SmsgSpellStart, SpellPackets.BuildSpellStart(
-                caster.Guid, caster.Guid, spell.Id, WithAmmoFlag(SpellCastFlags.Unknown2, spell), (uint)castTime, targets,
+                castItem?.Guid ?? caster.Guid, caster.Guid, spell.Id, WithAmmoFlag(SpellCastFlags.Unknown2, spell), (uint)castTime, targets,
                 RangedSpellFacts.IsRanged(spell) ? GetAmmoVisual(caster) : default), includeSelf: true); // ranged (hunter lane): ammo trailer
             AddGlobalCooldown(state, spell);
         }
@@ -331,8 +368,27 @@ public sealed partial class SpellSystem
         Unit caster = cast.Caster;
         SpellInfo spell = cast.Spell;
         UnitSpellState state = GetOrCreateState(caster);
-        Unit? unitTarget = ResolveUnitTarget(caster, cast.Targets);
-        SpellCastResult result = CheckCast(state, spell, cast.Targets, unitTarget, cast.IsTriggered, strict: false, skipCooldown: true);
+        if (cast.CastItem is { } castItem && (caster is not Player castOwner || !castOwner.Inventory.OwnsItemAt(castItem, cast.ItemBag, cast.ItemSlot)))
+        {
+            Finish(cast);
+            return SpellCastResult.ItemNotReady;
+        }
+
+        if (!cast.IsItemEquipCast && !cast.IsItemCombatProcCast && cast.CastItem is { } liveItem && caster is Player liveOwner
+            && !CanStartItemUse(liveOwner, liveItem, cast.ItemSpellIndex, out _, requireCharges: !cast.IsTriggered))
+        {
+            Finish(cast);
+            return SpellCastResult.ItemNotReady;
+        }
+        Unit? unitTarget = ResolveUnitTarget(caster, cast.Targets, spell);
+        SpellCastResult result = CheckCast(state, spell, cast.Targets, unitTarget, cast.IsTriggered, strict: false, skipCooldown: true,
+            triggeringSpell: cast.TriggeringSpell, castItem: cast.CastItem, itemCategory: cast.ItemCategory);
+        InventoryRewardStage? reagentStage = null;
+        if (result == SpellCastResult.CastOk)
+        {
+            InterruptAtCastCompletion(cast);
+            result = StageCastReagents(cast, out reagentStage);
+        }
         if (result != SpellCastResult.CastOk)
         {
             SendCastResult(caster, spell, result, cast.IsTriggered);
@@ -345,21 +401,62 @@ public sealed partial class SpellSystem
             return result;
         }
 
-        InterruptAtCastCompletion(cast); // rogue lane: ACTION_LATE / ATTACKING half (vmangos Spell.cpp:3697-3714), docs/integration/rogue-aura-interrupt.md
-        AddCooldown(state, spell, cast.IsTriggered);
+        if (!cast.IsItemEquipCast)
+            AddCooldown(state, spell, cast.IsTriggered, cast.ItemCooldownMs, cast.ItemCategoryCooldownMs, cast.ItemCategory, cast.CastItem?.Entry ?? 0);
         TakePower(caster, spell, cast.PowerCost, cast.IsTriggered);
+        if (reagentStage is not null)
+        {
+            // Spell.cpp:3716-3718: power, reagents, then ammunition. Apply the
+            // whole cost before callbacks, preserving every existing item identity.
+            reagentStage.Inventory.ApplyQuestRewardInventory(reagentStage);
+            reagentStage.Inventory.NotifyQuestRewardInventory(reagentStage);
+
+            // Spell.cpp:7268-7290 clears m_CastItem whenever a reagent entry
+            // matches, even when another stack supplied the reagent. This is
+            // what prevents TakeCastItem from charging/deleting the same item
+            // a second time. Matching item targets are cleared as well.
+            if (cast.CastItem is { } paidCastItem
+                && cast.Spell.Reagents.Any(r => r.Item > 0 && (uint)r.Item == paidCastItem.Entry))
+            {
+                cast.CastItem = null;
+                if (CurrentItemUseDispatch(paidCastItem) is { } dispatch)
+                    dispatch.ReagentCleared = true;
+                if ((cast.Targets.Mask & SpellCastTargetFlags.Item) != 0
+                    && caster is Player reagentPlayer
+                    && reagentPlayer.Inventory.GetItemByGuid(cast.Targets.Item) is { } targetItem
+                    && cast.Spell.Reagents.Any(r => r.Item > 0 && (uint)r.Item == targetItem.Entry))
+                {
+                    cast.Targets.Item = default;
+                    cast.Targets.Mask &= ~SpellCastTargetFlags.Item;
+                }
+            }
+        }
         TakeAmmo(caster, spell); // ranged (hunter lane): vmangos order TakePower, TakeReagents, TakeAmmo (Spell.cpp:3716-3718)
         SendCastResult(caster, spell, SpellCastResult.CastOk, cast.IsTriggered);
         cast.Completed = true;
         NotifyCast(cast);
 
         Dictionary<Unit, SpellTargetEntry> targetEffects = SelectTargets(cast, unitTarget);
+        // Magnet selection changes the explicit target; a channel must track that selected unit.
+        unitTarget = ResolveUnitTarget(caster, cast.Targets, spell);
         var hits = new List<ObjectGuid>();
         var misses = new List<(ObjectGuid Guid, SpellMissInfo Reason)>();
         foreach ((Unit target, SpellTargetEntry entry) in targetEffects)
         {
+            // Spell::AddUnitTarget removes immune effects before WriteSpellGoTargets. A target
+            // with no surviving effects is listed as IMMUNE2 rather than a successful hit.
+            for (int i = 0; i < SpellConstants.MaxEffects; i++)
+            {
+                if ((entry.EffectMask & (1 << i)) != 0
+                    && ImmunityRules.IsImmuneToSpellEffect(this, target, spell, i, ReferenceEquals(target, caster)))
+                {
+                    entry.EffectMask &= ~(1 << i);
+                }
+            }
+
             // vmangos Spell::AddUnitTarget → Unit::SpellHitResult, once per target.
-            entry.Miss = ReferenceEquals(target, caster) ? SpellMissInfo.None : CombatRules.RollHit(this, caster, target, spell);
+            entry.Miss = entry.EffectMask == 0 ? SpellMissInfo.Immune2
+                : ReferenceEquals(target, caster) ? SpellMissInfo.None : CombatRules.RollHit(this, caster, target, spell);
             if (entry.Miss == SpellMissInfo.None)
             {
                 hits.Add(target.Guid);
@@ -371,7 +468,7 @@ public sealed partial class SpellSystem
         }
 
         SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(
-            caster.Guid, caster.Guid, spell.Id, WithAmmoFlag(SpellCastFlags.Unknown9, spell), hits, misses, cast.Targets,
+            cast.CastItem?.Guid ?? caster.Guid, caster.Guid, spell.Id, WithAmmoFlag(SpellCastFlags.Unknown9, spell), hits, misses, cast.Targets,
             RangedSpellFacts.IsRanged(spell) ? GetAmmoVisual(caster) : default), includeSelf: true); // ranged (hunter lane): ammo trailer
 
         int duration = cast.Duration;
@@ -403,14 +500,26 @@ public sealed partial class SpellSystem
                     Damage.DealSpellDamage(caster, target, spell, 0, periodic: false, startsCombat: StartsCombat(caster, target));
                 }
 
+                HandleItemSpecialProc(cast, target, entry.Miss);
                 NotifyOutcome(cast, new SpellTargetOutcome(target, entry.Miss, 0, 0, false, entry.EffectMask));
                 continue;
             }
 
             if (ApplyEffects(cast, target, entry.EffectMask, entry.Multipliers) is { } outcome)
             {
+                HandleItemSpecialProc(cast, target, SpellMissInfo.None);
                 NotifyOutcome(cast, outcome);
             }
+        }
+
+        // vmangos sends SpellGo/effects before consuming the cast item. Cancellation and failed
+        // completion therefore leave both charges and stack count untouched.
+        if (!cast.IsTriggered && cast.CastItem is { } consumed && caster is Player owner)
+        {
+            if (CurrentItemUseDispatch(consumed) is { } dispatch)
+                dispatch.PendingConsume = true;
+            else
+                owner.Inventory.ConsumeItemUse(consumed);
         }
 
         if (cast.State != SpellCastState.Casting)
@@ -423,7 +532,23 @@ public sealed partial class SpellSystem
 
     private void UpdateCast(SpellCast cast, uint diffMs)
     {
-        if (cast.Targets.Unit is { IsEmpty: false } targetGuid && Units.Find(cast.Caster, targetGuid) is null)
+        if (cast.CastItem is { } castItem && (cast.Caster is not Player owner
+            || !owner.Inventory.OwnsItemAt(castItem, cast.ItemBag, cast.ItemSlot)))
+        {
+            Cancel(cast);
+            return;
+        }
+
+        if ((!cast.Targets.Unit.IsEmpty || HasResurrectionCorpseTarget(cast.Spell, cast.Targets))
+            && ResolveUnitTarget(cast.Caster, cast.Targets, cast.Spell) is null)
+        {
+            Cancel(cast);
+            return;
+        }
+
+        if (cast.State == SpellCastState.Casting && cast.MagnetTarget is { } magnet
+            && (!magnet.IsAlive || !magnet.IsInWorld || !ReferenceEquals(magnet.Map, cast.Caster.Map)
+                || !ReferenceEquals(Units.Find(cast.Caster, magnet.Guid), magnet)))
         {
             Cancel(cast);
             return;
@@ -489,9 +614,15 @@ public sealed partial class SpellSystem
         else
         {
             RemoveAurasByCaster(cast.Caster, cast.Spell.Id, cast.Caster.Guid);
-            if (ResolveUnitTarget(cast.Caster, cast.Targets) is { } target && target != cast.Caster)
+            if (ResolveUnitTarget(cast.Caster, cast.Targets, cast.Spell) is { } target && target != cast.Caster)
             {
                 RemoveAurasByCaster(target, cast.Spell.Id, cast.Caster.Guid);
+            }
+
+            // Arcane Missiles redirects its aura while retaining the original request target.
+            if (cast.MagnetTarget is { } magnet && !ReferenceEquals(magnet, cast.Caster))
+            {
+                RemoveAurasByCaster(magnet, cast.Spell.Id, cast.Caster.Guid);
             }
 
             EndChannel(cast, interrupted: true);
@@ -569,7 +700,8 @@ public sealed partial class SpellSystem
     /// Line of sight is delegated to the vmap-los seam. Reagents, items, shapeshift, facing and area restrictions belong to other
     /// areas (docs/areas/spells.md).
     /// </summary>
-    private SpellCastResult CheckCast(UnitSpellState state, SpellInfo spell, SpellCastTargets targets, Unit? unitTarget, bool triggered, bool strict, bool skipCooldown = false)
+    private SpellCastResult CheckCast(UnitSpellState state, SpellInfo spell, SpellCastTargets targets, Unit? unitTarget, bool triggered, bool strict,
+        bool skipCooldown = false, SpellInfo? triggeringSpell = null, Item? castItem = null, uint? itemCategory = null)
     {
         Unit caster = state.Unit;
         if (IsQuestSettlementPending(caster))
@@ -589,7 +721,7 @@ public sealed partial class SpellSystem
             return SpellCastResult.CasterDead;
         }
 
-        if (!triggered && !skipCooldown && !IsSpellReady(state, spell))
+        if (!triggered && !skipCooldown && !IsSpellReady(state, spell, itemCategory))
         {
             return SpellCastResult.NotReady;
         }
@@ -622,6 +754,12 @@ public sealed partial class SpellSystem
         if (rangedItems != SpellCastResult.CastOk)
         {
             return rangedItems;
+        }
+
+        SpellCastResult reagents = CheckReagents(caster, spell, targets, triggered, triggeringSpell, castItem);
+        if (reagents != SpellCastResult.CastOk)
+        {
+            return reagents;
         }
 
         // ranged (hunter lane): Hunter's Mark needs an attackable unit (Spell.cpp:6436-6447).
@@ -664,6 +802,12 @@ public sealed partial class SpellSystem
         }
 
         // Registered equipment checks: vmangos CheckItems (Spell.cpp:5698), before CheckRange (:5707) and CheckPower (:5721).
+        if (!triggered && castItem is { } resourceItem && caster is Player itemUser)
+        {
+            SpellCastResult resources = CheckItemResources(itemUser, resourceItem, spell, targets,
+                checkedTarget ?? unitTarget ?? caster, triggered);
+            if (resources != SpellCastResult.CastOk) return resources;
+        }
         SpellCastResult items = RunCastChecks(SpellCheckPhase.Items, caster, spell, targets, checkedTarget, triggered, strict);
         if (items != SpellCastResult.CastOk)
         {
@@ -673,18 +817,31 @@ public sealed partial class SpellSystem
         if (needsUnit)
         {
             Unit target = checkedTarget!;
-            // ranged (hunter lane): a cast from a game object (trap) ignores range and the owner being far or dead (vmangos triggered casts).
-            SpellCastResult range = _objectCastDepth > 0 ? SpellCastResult.CastOk : CheckRange(caster, spell, target, strict, RangedOptions.Range.Leeway == RangeLeewayMode.Retail);
-            if (range != SpellCastResult.CastOk)
+            if (HasResurrectionCorpseTarget(spell, targets))
             {
-                return range;
+                // Resolve a released spirit through its local body; retail checks the corpse's
+                // LOS here without measuring the distance to the ghost on another map.
+                SpellCastResult corpse = CheckResurrectionCorpseTarget(caster, spell, targets, target, triggered, strict);
+                if (corpse != SpellCastResult.CastOk)
+                {
+                    return corpse;
+                }
             }
-
-            // Line of sight (vmap-los seam, docs/integration/vmap-los.md).
-            SpellCastResult sight = Maps.Collision.SpellLineOfSight.Check(caster, spell, target, triggered);
-            if (sight != SpellCastResult.CastOk)
+            else
             {
-                return sight;
+                // ranged (hunter lane): a cast from a game object (trap) ignores range and the owner being far or dead (vmangos triggered casts).
+                SpellCastResult range = _objectCastDepth > 0 ? SpellCastResult.CastOk : CheckRange(caster, spell, target, strict, RangedOptions.Range.Leeway == RangeLeewayMode.Retail);
+                if (range != SpellCastResult.CastOk)
+                {
+                    return range;
+                }
+
+                // Line of sight (vmap-los seam, docs/integration/vmap-los.md).
+                SpellCastResult sight = Maps.Collision.SpellLineOfSight.Check(caster, spell, target, triggered);
+                if (sight != SpellCastResult.CastOk)
+                {
+                    return sight;
+                }
             }
         }
         else if (targets.HasDest)
@@ -721,7 +878,7 @@ public sealed partial class SpellSystem
             return beforePower;
         }
 
-        SpellCastResult power = CheckPower(caster, spell);
+        SpellCastResult power = castItem is null ? CheckPower(caster, spell) : SpellCastResult.CastOk;
         if (power != SpellCastResult.CastOk)
         {
             return power;
@@ -832,7 +989,7 @@ public sealed partial class SpellSystem
         return GetState(unit.Guid) is not { } state || IsSpellReady(state, spell);
     }
 
-    private bool IsSpellReady(UnitSpellState state, SpellInfo spell)
+    private bool IsSpellReady(UnitSpellState state, SpellInfo spell, uint? itemCategory = null)
     {
         // ranged (hunter lane): a COOLDOWN_ON_EVENT spell waits while the object it created lives (Unit::AddGameObject).
         if (spell.HasAttribute(SpellAttributes.CooldownOnEvent) && SpellObjects.IsCreatedBySpell(state.Unit, spell.Id))
@@ -846,7 +1003,8 @@ public sealed partial class SpellSystem
             return false;
         }
 
-        if (spell.Category != 0 && state.CategoryCooldowns.TryGetValue(spell.Category, out until) && until > now)
+        uint category = itemCategory.GetValueOrDefault(spell.Category);
+        if (category != 0 && state.CategoryCooldowns.TryGetValue(category, out until) && until > now)
         {
             return false;
         }
@@ -1004,7 +1162,8 @@ public sealed partial class SpellSystem
     /// SMSG_SPELL_COOLDOWN tells the client — decision recorded in docs/areas/spells.md.
     /// COOLDOWN_ON_EVENT spells are not started here (the event that starts them is not modelled yet).
     /// </summary>
-    private void AddCooldown(UnitSpellState state, SpellInfo spell, bool triggered, bool onEvent = false)
+    private void AddCooldown(UnitSpellState state, SpellInfo spell, bool triggered, int? itemCooldownMs = null,
+        int? itemCategoryCooldownMs = null, uint? itemCategory = null, uint itemId = 0, bool onEvent = false)
     {
         if (spell.IsPassive || (spell.HasAttribute(SpellAttributes.CooldownOnEvent) && !onEvent))
         {
@@ -1012,8 +1171,14 @@ public sealed partial class SpellSystem
         }
 
         // ranged (hunter lane): a ranged-slot spell also waits out the weapon speed (Player.cpp:22193-22197).
-        uint recovery = spell.RecoveryTime + RangedRecoveryMs(state.Unit, spell);
-        if (recovery == 0 && spell.CategoryRecoveryTime == 0)
+        // ItemPrototype cooldown -1 means use Spell.dbc recovery, matching
+        // Player.cpp:22139 rather than suppressing the cooldown.
+        uint recovery = itemCooldownMs is < 0 ? spell.RecoveryTime : (uint)(itemCooldownMs ?? (int)spell.RecoveryTime);
+        recovery += RangedRecoveryMs(state.Unit, spell);
+        uint categoryRecovery = itemCategoryCooldownMs is < 0 ? spell.CategoryRecoveryTime
+            : (uint)(itemCategoryCooldownMs ?? (int)spell.CategoryRecoveryTime);
+        uint category = itemCategory.GetValueOrDefault(spell.Category);
+        if (recovery == 0 && categoryRecovery == 0)
         {
             return;
         }
@@ -1024,14 +1189,23 @@ public sealed partial class SpellSystem
             state.SpellCooldowns[spell.Id] = now + recovery;
         }
 
-        if (spell.Category != 0 && spell.CategoryRecoveryTime > 0)
+        if (category != 0 && categoryRecovery > 0)
         {
-            state.CategoryCooldowns[spell.Category] = now + spell.CategoryRecoveryTime;
+            state.CategoryCooldowns[category] = now + categoryRecovery;
+        }
+
+        if (itemCategory is not null || itemCooldownMs is not null || itemCategoryCooldownMs is not null)
+        {
+            state.CooldownOwners[spell.Id] = new ItemCooldownOwner(itemId, category, spell.Id);
+        }
+        else
+        {
+            state.CooldownOwners.Remove(spell.Id);
         }
 
         if (triggered && state.Unit is Player player)
         {
-            uint ms = Math.Max(recovery, spell.CategoryRecoveryTime);
+            uint ms = Math.Max(recovery, categoryRecovery);
             player.Session.Send(WorldOpcode.SmsgSpellCooldown, SpellPackets.BuildSpellCooldown(player.Guid, [(spell.Id, ms)]));
         }
     }
@@ -1046,9 +1220,11 @@ public sealed partial class SpellSystem
         }
 
         bool removed = state.SpellCooldowns.Remove(spellId);
-        if (Store.Get(spellId) is { Category: not 0 } spell)
+        if (Store.Get(spellId) is { } spell)
         {
-            removed |= state.CategoryCooldowns.Remove(spell.Category);
+            uint category = state.CooldownOwners.GetValueOrDefault(spellId).Category;
+            removed |= state.CategoryCooldowns.Remove(category != 0 ? category : spell.Category);
+            state.CooldownOwners.Remove(spellId);
         }
 
         if (removed && unit is Player player)
@@ -1072,10 +1248,21 @@ public sealed partial class SpellSystem
         {
             if (until > now && Store.Get(spellId) is { } spell)
             {
-                uint category = spell.Category != 0 && state.CategoryCooldowns.TryGetValue(spell.Category, out uint catUntil) && catUntil > now
+                ItemCooldownOwner owner = state.CooldownOwners.GetValueOrDefault(spellId);
+                uint categoryId = owner.Category != 0 ? owner.Category : spell.Category;
+                uint category = categoryId != 0 && state.CategoryCooldowns.TryGetValue(categoryId, out uint catUntil) && catUntil > now
                     ? catUntil - now : 0;
-                result.Add(new InitialSpellCooldown(spellId, 0, spell.Category, until - now, category));
+                result.Add(new InitialSpellCooldown(spellId, owner.ItemId, categoryId, until - now, category));
             }
+        }
+
+        foreach ((uint spellId, ItemCooldownOwner owner) in state.CooldownOwners)
+        {
+            if ((state.SpellCooldowns.TryGetValue(spellId, out uint spellUntil) && spellUntil > now)
+                || owner.Category == 0 || !state.CategoryCooldowns.TryGetValue(owner.Category, out uint until) || until <= now
+                || Store.Get(spellId) is not { } spell)
+                continue;
+            result.Add(new InitialSpellCooldown(spellId, owner.ItemId, owner.Category, 0, until - now));
         }
 
         return result;
@@ -1162,11 +1349,14 @@ public sealed partial class SpellSystem
         return state;
     }
 
-    private Unit? ResolveUnitTarget(Unit caster, SpellCastTargets targets)
-        => (targets.Mask & (SpellCastTargetFlags.Unit | SpellCastTargetFlags.UnitEnemy)) != 0 ? Units.Find(caster, targets.Unit) : null;
+    private Unit? ResolveUnitTarget(Unit caster, SpellCastTargets targets, SpellInfo? spell = null)
+        => spell is not null && HasResurrectionCorpseTarget(spell, targets)
+            ? ResolveResurrectionCorpseTarget(caster, targets)
+            : (targets.Mask & (SpellCastTargetFlags.Unit | SpellCastTargetFlags.UnitEnemy)) != 0 ? Units.Find(caster, targets.Unit) : null;
 
     private static bool NeedsUnitTarget(SpellInfo spell)
-        => spell.Effects.Any(e => !e.IsEmpty && IsExplicitUnitTarget(e.TargetA));
+        => spell.Effects.Any(e => !e.IsEmpty && (IsExplicitUnitTarget(e.TargetA)
+            || (e.TargetA == SpellImplicitTarget.LocationCasterDest && e.Effect is SpellEffectName.Resurrect or SpellEffectName.ResurrectNew)));
 
     internal static bool IsExplicitUnitTarget(SpellImplicitTarget target)
         => target is SpellImplicitTarget.UnitEnemy or SpellImplicitTarget.UnitFriend or SpellImplicitTarget.Unit or SpellImplicitTarget.UnitParty

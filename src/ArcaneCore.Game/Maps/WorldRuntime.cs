@@ -36,6 +36,9 @@ public sealed class WorldRuntime : IDisposable
 
     public WorldRuntimeOptions Options { get; }
 
+    /// <summary>Optional native player display geometry, applied before <see cref="Map.AddPlayer"/>.</summary>
+    public Func<uint, ArcaneCore.Game.Spells.DisplayModelGeometry?>? PlayerDisplayModelResolver { get; set; }
+
     /// <summary>
     /// Tick duration, allocation and overrun statistics recorded by the world loop (docs/areas/ops-perf.md).
     /// Safe to read from any thread; only <see cref="Run"/> records into it.
@@ -84,6 +87,13 @@ public sealed class WorldRuntime : IDisposable
     /// state here (vmangos <c>MapManager::DeleteInstance</c> → <c>Map::UnloadAll</c>).
     /// </summary>
     public event Action<Map>? MapUnloading;
+
+    /// <summary>
+    /// Raised once per world tick after posted commands and map updates, even when no maps
+    /// exist. The argument is elapsed milliseconds. World features use this for global
+    /// maintenance; a failing handler is logged and does not stop the others.
+    /// </summary>
+    public event Action<uint>? Updated;
 
     /// <summary>
     /// Chooses the map (and instance) a player enters at login and after a far teleport. Null
@@ -236,6 +246,7 @@ public sealed class WorldRuntime : IDisposable
         _onlineByName[player.Name] = player;
         player.StartPlayedTime(NowMs);
         Map map = MapResolver?.ResolveLoginMap(player) ?? GetMap(player.MapId);
+        player.InitializeNativeDisplayModel(PlayerDisplayModelResolver);
         map.AddPlayer(player);
     }
 
@@ -296,6 +307,7 @@ public sealed class WorldRuntime : IDisposable
         }
 
         UnloadRequestedMaps();
+        Raise(Updated, diffMs, nameof(Updated));
 
         if (Options.AutosaveIntervalMs > 0)
         {

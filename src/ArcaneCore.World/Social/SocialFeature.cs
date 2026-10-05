@@ -3,6 +3,8 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Guilds;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Social;
+using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
@@ -14,6 +16,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+
+using ArcaneCore.World.Spells;
 
 namespace ArcaneCore.World.Social;
 
@@ -28,7 +32,8 @@ public sealed class SocialFeature(
     IServiceScopeFactory scopes,
     ILoggerFactory loggers,
     IConfiguration? configuration = null,
-    IOptions<SocialOptions>? socialOptions = null)
+    IOptions<SocialOptions>? socialOptions = null,
+    IServiceProvider? services = null)
     : IWorldFeature, IChatMessageHandler, IAsyncDisposable
 {
     /// <summary>How often grouped players' changed stats go to out-of-range members (vmangos sends them from the player update).</summary>
@@ -117,6 +122,8 @@ public sealed class SocialFeature(
         configuration?.GetSection(SocialOptions.SectionName + ":WriteQueue").Bind(WriteQueueOptions);
         _writes = new SocialWriteQueue(scopes, loggers.CreateLogger<SocialWriteQueue>(), WriteQueueOptions);
         _context = new SocialContext(world, new CharacterLookup(directory), _writes, Options);
+        if (services?.GetService<SpellFeature>() is { } spellFeature)
+            spellFeature.System.VisibleAuraSlotChanged += OnVisibleAuraSlotChanged;
         _context.Guilds.Options = GuildOptions;
         _writes.Start();
         world.PlayerLoggedIn += OnLoggedIn;
@@ -181,6 +188,8 @@ public sealed class SocialFeature(
             _world.PlayerLoggedIn -= OnLoggedIn;
             _world.PlayerLoggingOut -= OnLoggingOut;
         }
+        if (services?.GetService<SpellFeature>() is { } spellFeature)
+            spellFeature.System.VisibleAuraSlotChanged -= OnVisibleAuraSlotChanged;
 
         if (_statsTimer is not null)
         {
@@ -230,6 +239,12 @@ public sealed class SocialFeature(
                 }
             }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
+    }
+
+    private void OnVisibleAuraSlotChanged(Unit target, byte slot)
+    {
+        if (target.GetCharmerOrOwnerPlayer() is { } owner && ReferenceEquals(owner.GetPet(), target))
+            Context.Groups.MarkPetAuraChanged(owner, slot);
     }
 
     private async Task LoadSocialAsync(Player player)

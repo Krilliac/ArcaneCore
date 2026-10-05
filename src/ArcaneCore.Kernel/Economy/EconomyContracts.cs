@@ -116,7 +116,8 @@ public sealed record DeleteAuction(AuctionRecord Expected) : EconomyChange;
 /// the caller saved through the ordered queue immediately before the commit; After is the
 /// complete state to publish. Both carry complete inventories.
 /// </summary>
-public sealed record EconomyParticipant(CharacterState Before, CharacterState After);
+public sealed record EconomyParticipant(CharacterState Before, CharacterState After,
+    IReadOnlyList<uint>? ConsumedItemGuids = null);
 
 /// <summary>
 /// One atomic economy operation. <see cref="OperationId"/> is recorded in the same transaction

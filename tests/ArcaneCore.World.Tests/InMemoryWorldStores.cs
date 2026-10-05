@@ -98,6 +98,14 @@ internal sealed class InMemoryCharacterStore : ICharacterStore, ICharacterLifeSt
         => Task.FromResult<IReadOnlyList<CharacterIdentity>>(
             _characters.Values.Select(c => new CharacterIdentity(c.Id, c.AccountId, c.Name, c.Race, c.Gender, c.Class, c.Level, c.ZoneId)).ToList());
 
+    public Task<IReadOnlyList<int>> FindAccountIdsByNamePrefixAsync(string prefix, int limit, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(limit);
+        IEnumerable<int> matching = _characters.Values.Where(c => c.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Select(c => c.AccountId).Distinct().Order();
+        return Task.FromResult<IReadOnlyList<int>>([.. limit == 0 ? matching : matching.Take(limit)]);
+    }
+
     /// <summary>Number of state saves received.</summary>
     public int SaveCount => Volatile.Read(ref _saves);
 }

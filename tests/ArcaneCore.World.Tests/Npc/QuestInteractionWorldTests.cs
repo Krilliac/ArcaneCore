@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Quests;
@@ -111,7 +112,10 @@ public sealed class QuestInteractionWorldTests
             var creature = (Creature)map.FindObject(QuestInteractionFixture.Guid)!;
             switch (guard)
             {
-                case "visibility": player.VisibleObjects.Remove(creature.Guid); break;
+                case "visibility":
+                    player.Map!.AddVisibilityRule(new HideQuestTargetRule(player.Guid, creature.Guid));
+                    player.Map.RefreshVisibility(creature);
+                    break;
                 case "hostile": creature.FactionTemplate = 900012; break;
                 case "unknown": creature.FactionTemplate = 999999; break;
                 case "distance": creature.Relocate(player.X + 20, player.Y, player.Z, 0, host.World.NowMs); break;
@@ -223,7 +227,10 @@ public sealed class QuestInteractionWorldTests
             var creature = (Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
             switch (guard)
             {
-                case "visibility": player.VisibleObjects.Remove(creature.Guid); break;
+                case "visibility":
+                    player.Map!.AddVisibilityRule(new HideQuestTargetRule(player.Guid, creature.Guid));
+                    player.Map.RefreshVisibility(creature);
+                    break;
                 case "hostile": creature.FactionTemplate = 900012; break;
                 case "unknown": creature.FactionTemplate = 999999; break;
                 case "distance": creature.Relocate(player.X + 20, player.Y, player.Z, 0, host.World.NowMs); break;
@@ -292,6 +299,12 @@ public sealed class QuestInteractionWorldTests
         writer.WriteUInt64(QuestInteractionFixture.Guid.Value);
         writer.WriteUInt32(id);
         return writer.ToArray();
+    }
+
+    private sealed class HideQuestTargetRule(ObjectGuid viewer, ObjectGuid target) : IVisibilityRule
+    {
+        public bool CanSee(Player candidate, WorldObject visible, bool alreadyVisible, bool detect)
+            => candidate.Guid != viewer || visible.Guid != target;
     }
 }
 
