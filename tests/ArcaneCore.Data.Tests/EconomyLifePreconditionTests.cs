@@ -120,7 +120,9 @@ public sealed class EconomyLifePreconditionTests : IAsyncLifetime
         DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
         await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection);
         await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
-        CharacterRecord character = await new EfCharacterStore(db).CreateAsync(new CharacterRecord { AccountId = 1, Name = $"LifeEconomy{Guid.NewGuid():N}", Race = 1, Class = 1, Level = 10 });
+        // Each seed uses its own database; a legal name is sufficient and also
+        // respects the 12-character bound enforced by PostgreSQL and MariaDB.
+        CharacterRecord character = await new EfCharacterStore(db).CreateAsync(new CharacterRecord { AccountId = 1, Name = "Lifeseed", Race = 1, Class = 1, Level = 10 });
         CharacterState state = new(character.Id, 0, 12, 1, 2, 3, 0, 10, 50, Money: 100,
             Inventory: new InventorySnapshot([
                 new InventoryItemData(0, 23, new ItemInstanceData { Guid = 100, Entry = 117, Count = 2 }),

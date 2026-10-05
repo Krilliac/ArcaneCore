@@ -46,12 +46,14 @@ public sealed class CharacterNamePrefixTests : IAsyncLifetime
         await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection);
         await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
         var store = new EfCharacterStore(db);
-        await store.CreateAsync(new CharacterRecord { AccountId = 1, Name = "Remy" });
+        // Distinct suffixes permit accent/case-folding unique indexes while the
+        // prefix assertions still require ordinal matching before the cap.
+        await store.CreateAsync(new CharacterRecord { AccountId = 1, Name = "Remo" });
         await store.CreateAsync(new CharacterRecord { AccountId = 2, Name = "Rémy" });
         await store.CreateAsync(new CharacterRecord { AccountId = 3, Name = "Жанна" });
         await store.CreateAsync(new CharacterRecord { AccountId = 4, Name = "東京" });
-        await store.CreateAsync(new CharacterRecord { AccountId = 5, Name = "ẞanna" });
-        await store.CreateAsync(new CharacterRecord { AccountId = 6, Name = "ßanna" });
+        await store.CreateAsync(new CharacterRecord { AccountId = 5, Name = "ẞanka" });
+        await store.CreateAsync(new CharacterRecord { AccountId = 6, Name = "ßanni" });
         await store.CreateAsync(new CharacterRecord { AccountId = 7, Name = "Ёлка" });
         await store.CreateAsync(new CharacterRecord { AccountId = 8, Name = "Ａｌｐｈａ" });
         Assert.Equal([1], await store.FindAccountIdsByNamePrefixAsync("re", 1));
@@ -64,7 +66,7 @@ public sealed class CharacterNamePrefixTests : IAsyncLifetime
         Assert.Empty(await store.FindAccountIdsByNamePrefixAsync("AL", 1));
         Assert.Empty(await store.FindAccountIdsByNamePrefixAsync("жАнНадлиннее", 1));
         IReadOnlyList<int> sharpS = await store.FindAccountIdsByNamePrefixAsync("ß", 0);
-        Assert.Equal(new[] { (5, "ẞanna"), (6, "ßanna") }.Where(c => c.Item2.StartsWith("ß", StringComparison.OrdinalIgnoreCase))
+        Assert.Equal(new[] { (5, "ẞanka"), (6, "ßanni") }.Where(c => c.Item2.StartsWith("ß", StringComparison.OrdinalIgnoreCase))
             .Select(c => c.Item1), sharpS);
     }
 
