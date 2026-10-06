@@ -166,7 +166,8 @@ public sealed class DumpScannerTests
 
         Assert.Contains("Entry", table.MappedColumns);
         Assert.Contains("ModelId1", table.MappedColumns);
-        Assert.Equal(["TrainerType"], table.UnmappedColumns);
+        Assert.Contains("TrainerType", table.MappedColumns);
+        Assert.Empty(table.UnmappedColumns);
     }
 
     [Fact]

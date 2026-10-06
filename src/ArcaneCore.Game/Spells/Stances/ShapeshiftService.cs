@@ -15,6 +15,7 @@ namespace ArcaneCore.Game.Spells;
 /// </summary>
 public sealed class ShapeshiftService
 {
+    private static readonly FormDisplay GhostWolfDisplay = new(4613, 0.80f);
     /// <summary>
     /// vmangos AURA_INTERRUPT_SHAPESHIFTING_CANCELS (SpellDefines.h:592): auras with this interrupt flag end when a
     /// non-stance form is applied.
@@ -90,11 +91,66 @@ public sealed class ShapeshiftService
         var form = (ShapeshiftForm)aura.MiscValue;
         if (!IsWarriorStance(form))
         {
-            if (IsDruidForm(form) && _forms.TryGet((uint)form, out _))
+            if (form == ShapeshiftForm.Shadow && _forms.TryGet((uint)form, out _))
             {
                 if (apply)
                 {
                     _spells.RemoveOtherShapeshiftHolders(holder.Target, holder);
+                    RemoveShapeshiftingCancels(holder);
+                    SetForm(holder.Target, form);
+                    holder.Target.FormHolder = holder;
+                    if (holder.Target is Player changedPlayer)
+                    {
+                        changedPlayer.Inventory.EquipSpellSink?.OnPlayerFormChanged(changedPlayer);
+                    }
+                }
+                else if (ReferenceEquals(holder.Target.FormHolder, holder))
+                {
+                    SetForm(holder.Target, ShapeshiftForm.None);
+                    holder.Target.FormHolder = null;
+                    if (holder.Target is Player changedPlayer)
+                    {
+                        changedPlayer.Inventory.EquipSpellSink?.OnPlayerFormChanged(changedPlayer);
+                    }
+                    RemoveShapeLostAurasAndInterrupt(holder.Target);
+                }
+            }
+            else if (form == ShapeshiftForm.GhostWolf && _forms.TryGet((uint)form, out _))
+            {
+                if (apply)
+                {
+                    _spells.RemoveOtherShapeshiftHolders(holder.Target, holder);
+                    RemoveShapeshiftingCancels(holder);
+                    RemoveWaterWalk(holder.Target);
+                    SetForm(holder.Target, form);
+                    holder.Target.FormHolder = holder;
+                    if (holder.Target is Player changedPlayer)
+                    {
+                        changedPlayer.Inventory.EquipSpellSink?.OnPlayerFormChanged(changedPlayer);
+                    }
+                    ApplyGhostWolfVisual(_spells, holder.Target);
+                }
+                else if (ReferenceEquals(holder.Target.FormHolder, holder))
+                {
+                    SetForm(holder.Target, ShapeshiftForm.None);
+                    holder.Target.FormHolder = null;
+                    if (holder.Target is Player changedPlayer)
+                    {
+                        changedPlayer.Inventory.EquipSpellSink?.OnPlayerFormChanged(changedPlayer);
+                    }
+                    RemoveShapeLostAurasAndInterrupt(holder.Target);
+                    ClearFormVisual(_spells, holder.Target);
+                }
+            }
+            else if (IsDruidForm(form) && _forms.TryGet((uint)form, out ShapeshiftFormInfo druidInfo))
+            {
+                if (apply)
+                {
+                    _spells.RemoveOtherShapeshiftHolders(holder.Target, holder);
+                    if ((druidInfo.Flags1 & (uint)ShapeshiftFlags.Stance) == 0)
+                    {
+                        RemoveShapeshiftingCancels(holder);
+                    }
 
                     ApplyDruidPower(holder.Target, form);
 
@@ -339,14 +395,47 @@ public sealed class ShapeshiftService
     private static bool IsDruidForm(ShapeshiftForm form)
         => FormDisplayTable.Get((byte)form, alliance: true) is not null;
 
+    private void RemoveWaterWalk(Unit target)
+    {
+        foreach (SpellAura waterWalk in _spells.AurasOfType(target, AuraType.WaterWalk).ToArray())
+        {
+            foreach (SpellAuraHolder holder in _spells.GetAuras(target)
+                .Where(h => !h.IsRemoved && h.Auras.Any(a => ReferenceEquals(a, waterWalk))).ToArray())
+            {
+                _spells.RemoveAuraHolder(holder);
+            }
+        }
+    }
+
+    private void RemoveShapeshiftingCancels(SpellAuraHolder keep)
+    {
+        foreach (SpellAuraHolder holder in _spells.GetAuras(keep.Target)
+            .Where(h => !ReferenceEquals(h, keep) && !h.IsRemoved
+                && ((uint)h.Spell.AuraInterruptFlags & ShapeshiftingCancelsFlag) != 0).ToArray())
+        {
+            _spells.RemoveAuraHolder(holder);
+        }
+    }
+
+    private static void ApplyGhostWolfVisual(SpellSystem spells, Unit target)
+        => ApplyFormVisual(spells, target, GhostWolfDisplay);
+
     internal static void ApplyFormVisual(SpellSystem spells, Unit target)
     {
         ShapeshiftForm form = GetForm(target);
-        if (FormDisplayTable.Get((byte)form, target is not Player player || player.Race is Race.Human or Race.Dwarf or Race.Gnome or Race.NightElf) is not { } display)
+        FormDisplay? display = form == ShapeshiftForm.GhostWolf
+            ? GhostWolfDisplay
+            : FormDisplayTable.Get((byte)form, target is not Player player || player.Race is Race.Human or Race.Dwarf or Race.Gnome or Race.NightElf);
+        if (display is not { } formDisplay)
         {
             return;
         }
 
+        ApplyFormVisual(spells, target, formDisplay);
+    }
+
+    private static void ApplyFormVisual(SpellSystem spells, Unit target, FormDisplay display)
+    {
         if (target.FormBaseScale == 0)
         {
             target.FormBaseScale = target.TransformSpellId != 0 ? target.TransformBaseScale

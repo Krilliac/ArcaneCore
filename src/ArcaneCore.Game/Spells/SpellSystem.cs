@@ -492,6 +492,7 @@ public sealed partial class SpellSystem
         {
             if (entry.Miss != SpellMissInfo.None)
             {
+                SendNextMeleeSpellNoDamage(cast, target, entry.Miss);
                 // vmangos SpellCaster::SendSpellMiss; a missed hostile spell still starts combat (zero damage).
                 SendToSet(caster, WorldOpcode.SmsgSpelllogmiss, SpellPackets.BuildSpellLogMiss(spell.Id, caster.Guid, target.Guid, entry.Miss), includeSelf: true);
                 InterruptTargetOfHostileSpell(cast, target, hit: false, dealsDamage: false); // rogue lane (vmangos Spell.cpp:1893-1897)
@@ -505,8 +506,11 @@ public sealed partial class SpellSystem
                 continue;
             }
 
+            bool nextMeleeTarget = spell.IsNextMeleeSwing && ReferenceEquals(caster.Combat.Victim, target);
             if (ApplyEffects(cast, target, entry.EffectMask, entry.Multipliers) is { } outcome)
             {
+                if (outcome.Damage == 0)
+                    SendNextMeleeSpellNoDamage(cast, target, eligible: nextMeleeTarget);
                 HandleItemSpecialProc(cast, target, SpellMissInfo.None);
                 NotifyOutcome(cast, outcome);
             }
@@ -1027,6 +1031,12 @@ public sealed partial class SpellSystem
         if (!NeedsUnitTarget(spell) || (unitTarget ?? (targets.Mask == SpellCastTargetFlags.Self ? caster : null)) is not { } target)
         {
             return SpellCastResult.CastOk;
+        }
+
+        SpellCastResult helpful = CheckExplicitHelpfulTargetRules(caster, spell, target);
+        if (helpful != SpellCastResult.CastOk)
+        {
+            return helpful;
         }
 
         SpellCastResult group = CheckGroupTarget(caster, spell, target);

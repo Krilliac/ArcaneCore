@@ -100,6 +100,10 @@ public sealed class PlayerResurrectionTests
         await CastAsync(healer, SpellCastTargets.ForUnit(new ObjectGuid(guid)));
         await target.ReadUntilAsync(WorldOpcode.SmsgResurrectRequest);
         await target.SendAsync(WorldOpcode.CmsgResurrectResponse, Response(0, false));
+        // Declining sends no acknowledgement. A quiet socket is not proof that the world
+        // queue has processed the response; observe the owned state before asserting it.
+        await host.WaitForWorldAsync(() => PlayerResurrection.GetRequest(host.World.FindOnlinePlayer("Resnodead")!) is null,
+            "declined resurrection offer removal");
         await target.CollectAsync();
         Assert.Null(await host.PlayerStateAsync("Resnodead", PlayerResurrection.GetRequest));
         Assert.False(await host.PlayerStateAsync("Resnodead", p => p.IsAlive));

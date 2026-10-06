@@ -99,6 +99,7 @@ public sealed class TradeEnchantSettlementTests
             {
                 Assert.False(economy.TradeOf(caster)!.Initiator.Accepted);
                 Assert.False(economy.TradeOf(caster)!.Target.Accepted);
+                Assert.Null(economy.TradeOf(caster)!.Initiator.PendingEnchantment);
             }
             else Assert.Null(economy.TradeOf(caster));
             return true;

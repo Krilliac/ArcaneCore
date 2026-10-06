@@ -21,6 +21,9 @@ public sealed class MeleeSpellFeature(IServiceProvider services, ILogger<MeleeSp
         ArgumentNullException.ThrowIfNull(world);
         CombatEnvironment environment = CombatEnvironments.GetOrCreate(services, world, logger);
         Options = environment.Options;
-        environment.MeleeSpells = new SpellSystemMeleeHooks(services.GetRequiredService<SpellFeature>().System);
+        SpellFeature spells = services.GetRequiredService<SpellFeature>();
+        environment.ThreatModifier = (unit, schoolMask, threat)
+            => spells.System.ApplyTotalThreatModifier(unit, schoolMask, threat);
+        environment.MeleeSpells = new SpellSystemMeleeHooks(spells.System);
     }
 }

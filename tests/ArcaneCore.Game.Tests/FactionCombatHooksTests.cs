@@ -33,11 +33,12 @@ public sealed class FactionCombatHooksTests
     }
 
     [Fact]
-    public void FriendlyNpc_CannotBeAttacked_ButIsNotReportedFriendlyToSpellTargeting()
+    public void FriendlyNpc_CannotBeAttacked_AndIsReportedFriendlyToSpellTargeting()
     {
         (WorldRuntime world, Map map, Player player, CombatTestUnit npc) = Setup(11);
         using WorldRuntime w = world;
-        Assert.False(map.Combat.Hooks.IsFriendly(player, npc)); // IsFriendly (spell targeting, dispel polarity) is deliberately not overridden
+        Assert.True(map.Combat.Hooks.IsFriendly(player, npc));
+        Assert.True(map.Combat.Hooks.IsFriendly(npc, player));
         Assert.False(map.Combat.Hooks.CanAttack(player, npc));
     }
 
@@ -46,6 +47,7 @@ public sealed class FactionCombatHooksTests
     {
         (WorldRuntime world, Map map, Player player, CombatTestUnit npc) = Setup(35);
         using WorldRuntime w = world;
+        Assert.True(map.Combat.Hooks.IsFriendly(player, npc));
         Assert.False(map.Combat.Hooks.CanAttack(player, npc));
     }
 
@@ -57,6 +59,8 @@ public sealed class FactionCombatHooksTests
         Assert.False(map.Combat.Hooks.IsFriendly(player, npc));
         Assert.True(map.Combat.Hooks.CanAttack(player, npc));
         npc.FactionTemplate = 188;
+        Assert.False(map.Combat.Hooks.IsFriendly(player, npc));
+        Assert.False(map.Combat.Hooks.IsFriendly(npc, player));
         Assert.True(map.Combat.Hooks.CanAttack(player, npc));
     }
 
@@ -66,8 +70,10 @@ public sealed class FactionCombatHooksTests
         (WorldRuntime world, Map map, Player player, CombatTestUnit npc) = Setup(999);
         using WorldRuntime w = world;
         Assert.False(map.Combat.Hooks.IsFriendly(player, npc));
+        Assert.True(map.Combat.Hooks.IsFriendly(npc, npc));
         Assert.True(map.Combat.Hooks.CanAttack(player, npc));
         npc.FactionTemplate = 0;
+        Assert.False(map.Combat.Hooks.IsFriendly(player, npc));
         Assert.True(map.Combat.Hooks.CanAttack(player, npc));
     }
 
@@ -113,6 +119,7 @@ public sealed class FactionCombatHooksTests
         using WorldRuntime w = world;
         Assert.True(Catalog.Find(50)!.IsHostileTo(Catalog.Find(1)!));
         Assert.True(Catalog.Find(50)!.IsFriendlyTo(Catalog.Find(1)!));
+        Assert.False(map.Combat.Hooks.IsFriendly(player, npc));
         Assert.True(map.Combat.Hooks.CanAttack(player, npc));
         Assert.True(map.Combat.Hooks.CanAttack(npc, player));
     }
@@ -127,6 +134,9 @@ public sealed class FactionCombatHooksTests
         player.FactionTemplate = 60;
         Assert.False(Catalog.Find(62)!.IsFriendlyTo(Catalog.Find(60)!));
         Assert.True(Catalog.Find(60)!.IsFriendlyTo(Catalog.Find(62)!));
+        Assert.True(map.Combat.Hooks.IsFriendly(player, npc));
+        // The reverse source is explicitly hostile to template 60, so hostile-first precedence makes it unfriendly.
+        Assert.False(map.Combat.Hooks.IsFriendly(npc, player));
         Assert.False(map.Combat.Hooks.CanAttack(player, npc));
         Assert.False(map.Combat.Hooks.CanAttack(npc, player));
     }

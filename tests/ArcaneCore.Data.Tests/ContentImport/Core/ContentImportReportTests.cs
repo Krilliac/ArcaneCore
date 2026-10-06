@@ -36,7 +36,7 @@ public sealed class ContentImportReportTests
         JsonElement table = root.GetProperty("tables").GetProperty("creature_template");
         Assert.Equal(2, table.GetProperty("rows").GetInt64());
         Assert.Equal("CMangosClassic", table.GetProperty("dialect").GetString());
-        Assert.Contains("TrainerType", table.GetProperty("unmappedColumns").EnumerateArray().Select(e => e.GetString()));
+        Assert.Contains("TrainerType", table.GetProperty("mappedColumns").EnumerateArray().Select(e => e.GetString()));
         Assert.Equal(1, root.GetProperty("unappliedStatements").GetProperty("UPDATE creature_template").GetInt32());
 
         string notice = root.GetProperty("licenseNotice").GetString()!;

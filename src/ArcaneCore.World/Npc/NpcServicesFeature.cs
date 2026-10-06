@@ -81,8 +81,8 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
         Flights = new TaxiFlightSystem(npcs, tables.PathNodes, MountDisplay, () => _world?.NowMs ?? 0, logger);
         return dependencies with
         {
-            Creatures = dependencies.Creatures is { } creatures && Options.NpcTemplates.Count > 0
-                ? new NpcTemplateMetadataLookup(creatures, Options.NpcTemplates)
+            Creatures = dependencies.Creatures is { } creatures && tables.TemplateMetadata.Count > 0
+                ? new NpcTemplateMetadataLookup(creatures, tables.TemplateMetadata)
                 : dependencies.Creatures,
             Items = items,
             Spells = dependencies.Spells ?? new SpellSystemLearner(() => services.GetService<SpellFeature>()?.System, tables.Abilities,
@@ -118,11 +118,28 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
                     ? NpcServiceDbcReaders.LoadRepairCosts(Options.DurabilityCostsDbcPath!, Options.DurabilityQualityDbcPath!) : RepairCostTable.Empty),
                 services.GetService<BankBagSlotPriceTable>() ?? (Has(Options.BankBagSlotPricesDbcPath)
                     ? NpcServiceDbcReaders.LoadBankBagSlotPrices(Options.BankBagSlotPricesDbcPath!) : BankBagSlotPriceTable.Empty));
-            _tables = tables;
+            IReadOnlyList<NpcTemplateMetadata> sourceMetadata = [];
+            using (IServiceScope scope = services.CreateScope())
+            {
+                if (scope.ServiceProvider.GetService<INpcTemplateServiceMetadataSource>() is { } source)
+                {
+                    sourceMetadata = source.LoadAsync().GetAwaiter().GetResult()
+                        .Select(ConvertMetadata)
+                        .ToArray();
+                }
+            }
+
+            var metadata = sourceMetadata.ToDictionary(row => row.Entry);
+            foreach (NpcTemplateMetadata configured in Options.NpcTemplates)
+            {
+                ValidateMetadata(configured);
+                metadata[configured.Entry] = configured;
+            }
+            _tables = tables with { TemplateMetadata = metadata.Values.ToArray() };
             logger.LogInformation(
                 "NPC services: {Paths} flight paths with waypoints, {Abilities} skill line abilities, repair prices {Repair}",
                 tables.PathNodes.PathCount, tables.Abilities.Count, tables.Repair.IsEmpty ? "absent" : "loaded");
-            return tables;
+            return _tables!;
         }
     }
 
@@ -146,7 +163,40 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
         _items?.SessionEnded(player);
     }
 
-    private sealed record Tables(TaxiPathNodeCatalog PathNodes, SkillLineAbilityCatalog Abilities, RepairCostTable Repair, BankBagSlotPriceTable BankSlots);
+    private static NpcTemplateMetadata ConvertMetadata(NpcTemplateServiceMetadata row)
+    {
+        if (row.Entry == 0 || row.TrainerType > (uint)TrainerType.Pets
+            || !IsValidTrainerClass(row.TrainerClass) || row.TrainerRace > 8)
+        {
+            throw new InvalidDataException($"invalid NPC service metadata for entry {row.Entry}");
+        }
+
+        return new NpcTemplateMetadata
+        {
+            Entry = row.Entry,
+            GossipMenuId = row.GossipMenuId,
+            TrainerType = (TrainerType)row.TrainerType,
+            TrainerClass = row.TrainerClass,
+            TrainerRace = row.TrainerRace,
+            TrainerSpell = row.TrainerSpell,
+        };
+    }
+
+    private static void ValidateMetadata(NpcTemplateMetadata row)
+    {
+        if (row.Entry == 0 || !Enum.IsDefined(row.TrainerType)
+            || !IsValidTrainerClass(row.TrainerClass) || row.TrainerRace > 8)
+        {
+            throw new InvalidDataException($"invalid configured NPC service metadata for entry {row.Entry}");
+        }
+    }
+
+    private static bool IsValidTrainerClass(byte value) => value is 0 or 1 or 2 or 3 or 4 or 5 or 7 or 8 or 9 or 11;
+
+    private sealed record Tables(TaxiPathNodeCatalog PathNodes, SkillLineAbilityCatalog Abilities, RepairCostTable Repair, BankBagSlotPriceTable BankSlots)
+    {
+        public IReadOnlyList<NpcTemplateMetadata> TemplateMetadata { get; init; } = [];
+    }
 
     /// <summary>Forwards each map's update to the current flight system.</summary>
     private sealed class FlightUpdater(NpcServicesFeature feature) : IMapUpdater

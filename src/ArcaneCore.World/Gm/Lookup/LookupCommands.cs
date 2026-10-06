@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData;
@@ -7,6 +8,7 @@ using ArcaneCore.World.Commands;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Gm.Core;
+using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -55,10 +57,10 @@ public static class LookupText
 }
 
 /// <summary>
-/// <c>.lookup item|creature|object|tele</c> (vmangos LookupCommands.cpp; levels Chat.cpp:557-575:
+/// <c>.lookup item|spell|creature|object|tele</c> (vmangos LookupCommands.cpp; levels Chat.cpp:557-575:
 /// the root MODERATOR, these sub-commands TICKETMASTER). Lines come out ordered by entry (vmangos
 /// walks an unordered map). Locale-specific names are not used (ArcaneCore has one locale).
-/// <c>.lookup spell</c>, <c>itemset</c>, <c>quest</c>, <c>area</c>, <c>faction</c>, <c>skill</c>,
+/// <c>.lookup itemset</c>, <c>quest</c>, <c>area</c>, <c>faction</c>, <c>skill</c>,
 /// <c>taxinode</c>, <c>event</c>, <c>pool</c> and <c>player</c> are not provided (see the lane doc).
 /// </summary>
 public sealed class LookupCommands : ICommandGroup
@@ -68,6 +70,7 @@ public sealed class LookupCommands : ICommandGroup
         new ChatCommand("lookup", AccountSecurity.Moderator, "Syntax: .lookup $subcommand", Children:
         [
             new ChatCommand("item", AccountSecurity.Moderator, "Syntax: .lookup item $itemname\nLooks up an item by name.", LookupItem, RetailLevel: 2),
+            new ChatCommand("spell", AccountSecurity.Moderator, "Syntax: .lookup spell $spellname\nLooks up a spell by name.", LookupSpell, RetailLevel: 2),
             new ChatCommand("creature", AccountSecurity.Moderator, "Syntax: .lookup creature $namepart\nLooks up a creature by name.", LookupCreature, RetailLevel: 2),
             new ChatCommand("object", AccountSecurity.Moderator, "Syntax: .lookup object $objname\nLooks up a gameobject by name.", LookupObject, RetailLevel: 2),
             new ChatCommand("tele", AccountSecurity.Moderator, "Syntax: .lookup tele $substring\nSearch and output all teleport locations containing $substring.", LookupTele, RetailLevel: 2),
@@ -100,6 +103,29 @@ public sealed class LookupCommands : ICommandGroup
                 return $"{t.Entry} - {link} {usable}";
             });
         return Send(context, lines, GmStrings.NoItemsFound);
+    }
+
+    /// <summary>
+    /// The classic <c>HandleLookupSpellCommand</c> walks Spell.dbc and applies the same
+    /// case-insensitive substring test as item lookup (mangos-classic Level3.cpp:2633-2689;
+    /// vmangos Commands/LookupCommands.cpp:445-492). ArcaneCore has one resolved locale, so the
+    /// immutable SpellStore is the authoritative catalog. Results use the classic clickable
+    /// spell link shape and are ordered by spell id before the shared result cap is applied.
+    /// </summary>
+    private static bool LookupSpell(CommandContext context, string args)
+    {
+        string needle = args.Trim().ToLowerInvariant();
+        if (needle.Length == 0)
+        {
+            return false;
+        }
+
+        SpellFeature feature = context.Session.Services.GetRequiredService<SpellFeature>();
+        IEnumerable<string> lines = feature.System.Store.All
+            .Where(spell => LookupText.Fits(spell.Name, needle))
+            .OrderBy(spell => spell.Id)
+            .Select(spell => $"{spell.Id} - |cffffffff|Hspell:{spell.Id}|h[{spell.Name}]|h|r");
+        return Send(context, lines, "No spells found!");
     }
 
     private static bool LookupCreature(CommandContext context, string args)

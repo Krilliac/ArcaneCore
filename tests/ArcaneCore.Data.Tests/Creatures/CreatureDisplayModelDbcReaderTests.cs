@@ -40,13 +40,38 @@ public sealed class CreatureDisplayModelDbcReaderTests
     }
 
     [Fact]
-    public void WrongWidthAndInvalidScaleFailClosed()
+    public void WrongWidthAndNegativeScaleFailClosed()
     {
         DbcFile displays = DbcFile.Parse(Dbc(12, [Row(12, (0, 100u), (1, 1u), (4, 1.5f))]));
-        DbcFile models = DbcFile.Parse(Dbc(16, [Row(16, (0, 1u), (4, 0f), (15, 3f))]));
+        DbcFile models = DbcFile.Parse(Dbc(16, [Row(16, (0, 1u), (4, -1f), (15, 3f))]));
 
         Assert.Throws<InvalidDataException>(() => CreatureDisplayModelDbcReader.Read(displays, models));
         Assert.Throws<InvalidDataException>(() => CreatureDisplayModelDbcReader.Read(DbcFile.Parse(Dbc(11, [])), models));
+    }
+
+    [Fact]
+    public void ZeroPlaceholdersUseReferenceRuntimeFallbacks()
+    {
+        DbcFile displays = DbcFile.Parse(Dbc(12, [Row(12, (0, 100u), (1, 1u), (4, 0f))]));
+        DbcFile models = DbcFile.Parse(Dbc(16, [Row(16, (0, 1u), (4, 0f), (15, 0f))]));
+
+        var content = CreatureDisplayModelDbcReader.Read(displays, models, "zero-placeholder");
+        var row = content.Find(100)!;
+
+        Assert.Equal(0f, row.DisplayScale);
+        Assert.Equal(0f, row.ModelScale);
+        Assert.Equal(0f, row.CollisionHeight);
+        Assert.Equal(1f, row.NativeScale);
+        Assert.True(row.HasModelData);
+    }
+
+    [Fact]
+    public void NonFiniteDisplayScaleFailsClosed()
+    {
+        DbcFile displays = DbcFile.Parse(Dbc(12, [Row(12, (0, 100u), (1, 1u), (4, float.NaN))]));
+        DbcFile models = DbcFile.Parse(Dbc(16, [Row(16, (0, 1u), (4, 1f), (15, 2f))]));
+
+        Assert.Throws<InvalidDataException>(() => CreatureDisplayModelDbcReader.Read(displays, models));
     }
 
     private static byte[] Dbc(int fields, IReadOnlyList<byte[]> rows)

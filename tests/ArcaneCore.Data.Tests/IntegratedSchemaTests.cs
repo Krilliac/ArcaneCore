@@ -51,6 +51,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         (Type Type, DatabaseComponent Component, int Version)[] expected =
         [
             (typeof(BanDataModule), DatabaseComponent.Auth, BanDataModule.Version),
+            (typeof(ArcaneCore.Data.Auth.Playerbots.ManagedPlayerbotProvisionDataModule), DatabaseComponent.Auth, ArcaneCore.Data.Auth.Playerbots.ManagedPlayerbotProvisionDataModule.Version),
             (typeof(CreatureDataModule), DatabaseComponent.World, 2),
             (typeof(MapDataModule), DatabaseComponent.World, 3),
             (typeof(ItemWorldDataModule), DatabaseComponent.World, 4),
@@ -73,6 +74,8 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ItemEnchantmentWorldDataModule), DatabaseComponent.World, ItemEnchantmentWorldDataModule.Version),
             (typeof(CreatureDisplayScaleDataModule), DatabaseComponent.World, CreatureDisplayScaleDataModule.Version),
             (typeof(SpellEnchantChargesWorldDataModule), DatabaseComponent.World, SpellEnchantChargesWorldDataModule.Version),
+            (typeof(StartingSkillWorldDataModule), DatabaseComponent.World, StartingSkillWorldDataModule.Version),
+            (typeof(NpcTemplateServiceMetadataModule), DatabaseComponent.World, NpcTemplateServiceMetadataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -94,13 +97,14 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ItemCooldownOwnerDataModule), DatabaseComponent.Characters, ItemCooldownOwnerDataModule.Version),
             (typeof(PetCooldownDataModule), DatabaseComponent.Characters, PetCooldownDataModule.Version),
             (typeof(PetNamingDataModule), DatabaseComponent.Characters, PetNamingDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.Playerbots.ManagedPlayerbotDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Playerbots.ManagedPlayerbotDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
             DataModules.All.OrderBy(m => m.Component).ThenBy(m => m.SchemaVersion)
                 .Select(m => (m.GetType(), m.Component, m.SchemaVersion)));
         // The forward index repair is the top step of characters and world (the constants are what an integrator renumbers).
-        Assert.Equal(BanDataModule.Version, AuthDbContext.Schema.CurrentVersion);
+        Assert.Equal(DataModules.For(DatabaseComponent.Auth).Max(m => m.SchemaVersion), AuthDbContext.Schema.CurrentVersion);
         // The current version is the highest of the modules and the inline repair; versions are contiguous (Compose throws on gaps).
         Assert.Equal(
             Math.Max(CharacterDbContext.IndexRepairVersion, DataModules.For(DatabaseComponent.Characters).Max(m => m.SchemaVersion)),

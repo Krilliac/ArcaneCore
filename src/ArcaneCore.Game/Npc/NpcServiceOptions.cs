@@ -28,9 +28,10 @@ public sealed class NpcServiceOptions
     public string? BankBagSlotPricesDbcPath { get; set; }
 
     /// <summary>
-    /// creature_template gossip_menu_id and trainer_* per entry. The imported creature template
-    /// has no such columns yet, so trainers and default gossip menus are configured here; a
-    /// trainer without a row has trainer type Class and trainer class 0 and refuses everyone.
+    /// creature_template gossip_menu_id and trainer_* per entry. Imported metadata is loaded first
+    /// when an INpcTemplateServiceMetadataSource is registered; these explicit rows deliberately
+    /// replace the complete source row for the same entry. A trainer without a row has trainer type
+    /// Class and trainer class 0 and refuses everyone.
     /// </summary>
     public List<NpcTemplateMetadata> NpcTemplates { get; set; } = [];
 }

@@ -1,6 +1,7 @@
 using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.Kernel.Ops;
 using ArcaneCore.World.Ops.Validation;
+using ArcaneCore.World.Gm.FirstLogin;
 using Microsoft.Extensions.Configuration;
 
 namespace ArcaneCore.World.Ops.Cli;
@@ -46,5 +47,5 @@ public static class OpsCli
     }
 
     public static ConfigReport Validate(IConfiguration configuration)
-        => ConfigReport.Run(configuration, [new WorldConfigChecks()]);
+        => ConfigReport.Run(configuration, [new WorldConfigChecks(), new GmFirstLoginToolsConfigChecks()]);
 }

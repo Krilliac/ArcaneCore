@@ -30,8 +30,8 @@ namespace ArcaneCore.Game.Combat;
 /// reactions (GetForcedRankIfAny); the ordering with same-group / FFA reactions (Object.cpp:3654-3664) and
 /// the FFA parts of the PvP block (Object.cpp:3805-3815); the duel reaction and the duel PvP exemption ARE modelled, in the
 /// base <see cref="CombatHooks"/> (Object.cpp:3650-3652, 3797-3800; see <see cref="DuelRules"/>); resolving the affecting player of a pet or charm (no owner field exists).
-/// <see cref="CombatHooks.IsFriendly"/> is not overridden (vmangos IsFriendlyTo / IsValidHelpfulTarget polarity for
-/// friendly-NPC spells, heals and dispels is unchanged): spell targeting and other consumers keep the base rule.
+/// <see cref="CombatHooks.IsFriendly"/> uses the loaded template reaction for non-player pairs, exposing known
+/// friendly NPCs to friendly spell targeting while retaining the base player/team/duel and unknown-template rules.
 /// A world with no loaded catalog does not register these hooks at all (see WorldCombatHooksFeature), so the
 /// permissive <see cref="CombatHooks.Default"/> applies there.
 /// </para>
@@ -41,6 +41,31 @@ public sealed class FactionCombatHooks(FactionTemplateCatalog factions) : Combat
     private enum Reaction { Hostile, Neutral, Friendly }
 
     public FactionTemplateCatalog Factions { get; } = factions ?? throw new ArgumentNullException(nameof(factions));
+
+    /// <summary>
+    /// vmangos Unit::IsFriendlyTo / GetFactionReactionTo: hostile wins over friendly, then a friendly reaction is
+    /// reported for known template pairs. Player-vs-player team and duel rules, and unknown-template fallback,
+    /// remain owned by <see cref="CombatHooks.IsFriendly"/>.
+    /// </summary>
+    public override bool IsFriendly(Unit a, Unit b)
+    {
+        if (ReferenceEquals(a, b))
+        {
+            return true;
+        }
+
+        if (a is Player && b is Player)
+        {
+            return base.IsFriendly(a, b);
+        }
+
+        if (Factions.Find(a.FactionTemplate) is null || Factions.Find(b.FactionTemplate) is null)
+        {
+            return base.IsFriendly(a, b);
+        }
+
+        return ReactionTo(a, b) == Reaction.Friendly;
+    }
 
     public override bool CanAttack(Unit attacker, Unit victim)
     {

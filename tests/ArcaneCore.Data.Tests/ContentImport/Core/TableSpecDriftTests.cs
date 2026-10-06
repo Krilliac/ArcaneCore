@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ArcaneCore.Data.Content.Import;
+using ArcaneCore.Data.Npc;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
 using ArcaneCore.Data.World.Totems;
@@ -29,7 +30,7 @@ public sealed class TableSpecDriftTests
 
     // Columns of the real classic-db tables that no importer reads (names taken from the cmangos schema).
     private static readonly string[] s_unmappedSamples =
-        ["TrainerType", "KillCredit1", "ScriptName", "Comment", "StringId1", "ResistanceFire", "MechanicImmuneMask", "VendorTemplateId", "GossipMenuId"];
+        ["KillCredit1", "ScriptName", "Comment", "StringId1", "ResistanceFire", "MechanicImmuneMask", "VendorTemplateId"];
 
     public static IEnumerable<object[]> ObservableTables()
     {
@@ -85,7 +86,11 @@ public sealed class TableSpecDriftTests
 
     // Flag columns need bits the importer actually translates; everything else just needs a non-default value.
     private static string ValueFor(string column)
-        => column.StartsWith("static_flags", StringComparison.OrdinalIgnoreCase) ? "4294967295" : "7";
+        => column.StartsWith("static_flags", StringComparison.OrdinalIgnoreCase) ? "4294967295"
+            : column.Equals("trainer_type", StringComparison.OrdinalIgnoreCase) || column.Equals("TrainerType", StringComparison.OrdinalIgnoreCase) ? "2"
+            : column.Equals("trainer_class", StringComparison.OrdinalIgnoreCase) ? "1"
+            : column.Equals("trainer_race", StringComparison.OrdinalIgnoreCase) ? "1"
+            : "7";
 
     private static bool Changes(string table, TableSpec spec, string[] keys, string column)
     {
@@ -134,7 +139,9 @@ public sealed class TableSpecDriftTests
             loot.Read(new StringReader(sql));
             var totems = new TotemSpellDumpImporter();
             totems.Read(new StringReader(sql));
-            return JsonSerializer.Serialize(new object[] { snapshot.Templates, snapshot.Spawns, snapshot.Movement, snapshot.Models, snapshot.Addons, loot.BuildReport(), totems.Resolve().Rows }, json);
+            var metadata = new NpcTemplateServiceMetadataDumpImporter();
+            metadata.Read(new StringReader(sql));
+            return JsonSerializer.Serialize(new object[] { snapshot.Templates, snapshot.Spawns, snapshot.Movement, snapshot.Models, snapshot.Addons, loot.BuildReport(), totems.Resolve().Rows, metadata.Snapshot() }, json);
         }
 
         var importer = new GameObjectLootDumpImporter();

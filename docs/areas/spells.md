@@ -247,8 +247,10 @@ the melee slot in `SpellSystem.NextSwing.cs`.
   (`SpellConstants.ChainJumpRadius`); the melee-chain rule (`Spell.cpp:2256-2265`) is its first consumer (later slice).
 - The melee swing calls `CastQueuedMeleeSpell` and `CancelQueuedMeleeSpell` through `IMeleeSpellHooks` (see combat.md,
   "Melee spells and the swing").
-- Limit: the SMSG_ATTACKERSTATEUPDATE a swing spell sends (spell id, no-action flag) is not implemented; the spell's
-  damage goes through SMSG_SPELLNONMELEEDAMAGELOG only.
+- Queued next-swing spells now send their own original5875 SMSG_ATTACKERSTATEUPDATE with spell ID and NO_ACTION,
+  aggregated school/damage fields before the non-melee logs. White swing identity remains zero. Available zero/miss/lethal
+  outcomes are covered; complete spell block/melee-hit physics and original-client acceptance remain pending.
+  See [the local follow-up](../integration/helpful-next-swing-20261005.md).
 
 ## Warrior stances (warrior-mechanics S06)
 
@@ -279,7 +281,9 @@ the melee slot in `SpellSystem.NextSwing.cs`.
   Wall with the old stance (the code above). vmangos also quotes patch 1.7.0 as saying they are no longer cancelled
   (`SpellAuras.cpp:5537-5539`), but the code under that comment is compiled only for builds up to 1.6.1, so the code
   is followed. With the option on, switching stances keeps them; cancelling a stance still removes them.
-- **Limits**: forms other than 17-19 (druid, priest, shaman) are logged and left unhandled; no model/display, speed or
+- **Historical warrior tranche limits**: forms other than17-19 were left unhandled here. Later local work adds
+  cataloged Druid forms and [Ghost Wolf lifecycle](../integration/ghost-wolf-school-threat-20261005.md); unsupported
+  forms and original-client acceptance remain separate. The original tranche had no model/display, speed or
   rage/energy swap; the "talent that learns a spell" exemption of the gate needs the talent tree (not loaded);
   Tactical Mastery only matters once talents exist (the aura is read, nothing grants it yet); the stance-change
   cooldown and the quest-granted stance spells are spell data / quest rewards, not code.

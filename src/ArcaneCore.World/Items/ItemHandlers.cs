@@ -60,6 +60,7 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
             Item? item = player.Inventory.GetItem(bag, slot);
             if (item is null)
             {
+                player.Inventory.SendEquipError(InventoryResult.ItemNotFound, null, null);
                 return;
             }
 
@@ -69,10 +70,16 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
             EconomyFeature? economy = session.Services.GetService<EconomyFeature>();
             if (economy?.TradeOf(player) is { } trade && trade.SideOf(player).TradedItems.Contains(item.Guid))
             {
+                player.Inventory.SendEquipError(InventoryResult.ItemNotFound, item, null);
                 return;
             }
 
-            session.Services.GetRequiredService<SpellFeature>().System.HandleItemUse(player, bag, slot, spellIndex, targets);
+            SpellFeature spells = session.Services.GetRequiredService<SpellFeature>();
+            SpellCastResult result = spells.System.HandleItemUse(player, bag, slot, spellIndex, targets);
+            if (result == SpellCastResult.ItemNotReady && spellIndex >= item.Template.Spells.Count)
+            {
+                player.Inventory.SendEquipError(InventoryResult.ItemNotFound, item, null);
+            }
         }
         catch (ArgumentOutOfRangeException)
         {

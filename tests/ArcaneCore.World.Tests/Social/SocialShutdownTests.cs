@@ -129,6 +129,25 @@ public sealed class SocialShutdownTests
         Assert.Empty(session.SocialPackets);
     }
 
+    [Fact]
+    public async Task StopAsync_AfterDependencyProviderDisposalDoesNotMaskEarlierStartupFailure()
+    {
+        var probe = new StoreProbe();
+        await using ServiceProvider provider = CreateProvider(probe);
+        using WorldRuntime world = CreateWorld();
+        SocialFeature feature = CreateFeature(provider, provider);
+        feature.Attach(world);
+        world.Start();
+        await feature.GuildsLoaded.WaitAsync(Deadline);
+        world.Stop();
+
+        // A failed hosted start can dispose the root provider before feature teardown runs.
+        // SocialFeature must not query that disposed provider during cleanup.
+        await provider.DisposeAsync();
+        await feature.StopAsync().WaitAsync(Deadline);
+        await feature.StopAsync().WaitAsync(Deadline);
+    }
+
     private static ServiceProvider CreateProvider(StoreProbe probe)
     {
         var services = new ServiceCollection();
@@ -140,12 +159,12 @@ public sealed class SocialShutdownTests
         new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 },
         new NoopSaveQueue(), NullLogger<WorldRuntime>.Instance);
 
-    private static SocialFeature CreateFeature(ServiceProvider provider)
+    private static SocialFeature CreateFeature(ServiceProvider provider, IServiceProvider? services = null)
     {
         var directory = new CharacterDirectory();
         directory.Add(new CharacterIdentity(1, 1, "Alice", 1, 0, 1));
         directory.Add(new CharacterIdentity(2, 2, "Bob", 1, 0, 1));
-        return new SocialFeature(directory, provider.GetRequiredService<IServiceScopeFactory>(), NullLoggerFactory.Instance);
+        return new SocialFeature(directory, provider.GetRequiredService<IServiceScopeFactory>(), NullLoggerFactory.Instance, services: services);
     }
 
     private static Player CreatePlayer(IPlayerSession session)

@@ -37,6 +37,8 @@ public sealed partial class SpellSystem
     private static Dictionary<AuraType, AuraHandler> CreateAuraHandlers() => ImmunityAuraHandlers.Install(CcAuraHandlers.Install(new()
     {
         [AuraType.Dummy] = new AuraHandler(null, null),
+        // Threat reads installed modifiers by school when damage/healing is resolved.
+        [AuraType.ModThreat] = new AuraHandler(null, null),
         [AuraType.PeriodicDamage] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicDamage(h, a)),
         [AuraType.PeriodicDamagePercent] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicDamage(h, a)),
         [AuraType.PeriodicHeal] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicHeal(h, a)),
@@ -426,7 +428,7 @@ public sealed partial class SpellSystem
             : (uint)aura.Amount;
         Unit caster = ResolveAuraCaster(holder) ?? target;
         amount = ModifyTick(SpellAmountStage.HealOverTimeTick, holder, aura, caster, amount);
-        uint healed = Damage.Heal(caster, target, holder.Spell, amount);
+        uint healed = Damage.Heal(caster, target, holder.Spell, amount, IDamageSink.HealingOrigin.Periodic);
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
             target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, healed, 0)), includeSelf: true);
     }
@@ -448,9 +450,17 @@ public sealed partial class SpellSystem
         uint amount = aura.Type == AuraType.ObsModMana
             ? (uint)((ulong)target.GetUInt32(UpdateFields.UnitFieldMaxpower1 + powerType) * (uint)aura.Amount / 100)
             : (uint)aura.Amount;
-        SetPower(target, power, GetPower(target, power) + amount);
+        uint before = GetPower(target, power);
+        SetPower(target, power, before + amount);
+        uint after = GetPower(target, power);
+        uint effectiveGain = after > before ? after - before : 0;
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
             target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, amount, (uint)powerType)), includeSelf: true);
+        if (effectiveGain != 0 && power is not PowerType.Mana and not PowerType.Happiness
+            && ResolveAuraCaster(holder) is { } caster)
+        {
+            Damage.AssistPeriodicEnergizeThreat(caster, target, holder.Spell, effectiveGain, power);
+        }
     }
 
     /// <summary>vmangos Aura::PeriodicTick SPELL_AURA_PERIODIC_TRIGGER_SPELL: the caster casts EffectTriggerSpell at the target, triggered.</summary>

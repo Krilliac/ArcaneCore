@@ -4,13 +4,17 @@ using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Quests;
+using ArcaneCore.Data.Npc;
 using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
 using ArcaneCore.Data.World.SpecialLoot;
+using ArcaneCore.Data.World.PlayerStats;
 using ArcaneCore.Data.World.Totems;
 using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.WorldData.PlayerStats;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArcaneCore.Data.Content.Import;
@@ -44,6 +48,8 @@ public static class ContentImporterCli
                                 location (portal, GM teleport) and totem spell tables
                                 (and the starting outfit, playercreateinfo_item)
           import-dbc <dir>      import the five spell DBCs from a client DBFilesClient directory
+          import-map-dbc <Map.dbc> <AreaTable.dbc>
+                                import maps 0/1 and their areas using the build-5875 layouts
           verify                count the imported tables and check references
 
         a <dump> is a .sql or .sql.gz file (the gzip magic number decides, not the name); several
@@ -60,6 +66,9 @@ public static class ContentImporterCli
                                            (default derived), or none (RewXP 0: quests give no XP)
           --level-stats-file <file>        import: write the race/class/level base stats file that
                                            Progression:LevelStatsPath reads (outside the repository)
+          --player-stats-migrations-dir <dir>
+                                           import: replay supported player-stat migrations in name order
+                                           after base rows; source choice must be version checked
           --replace                        import: empty the importers' tables first
           --dry-run                        import: read and count everything, write nothing
           --report <file>                  write the JSON report (outside the repository)
@@ -95,6 +104,7 @@ public static class ContentImporterCli
                 "plan" => await PlanAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "import" => await ImportAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "import-dbc" => await ImportDbcAsync(arguments, output, cancellationToken).ConfigureAwait(false),
+                "import-map-dbc" => await ImportMapDbcAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "verify" => await VerifyAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 _ => throw new UsageException($"unknown command '{arguments.Command}'"),
             };
@@ -188,6 +198,11 @@ public static class ContentImporterCli
         var startActions = new PlayerCreateActionDumpImporter();
         var locations = new LocationDumpImporter();
         var totems = new TotemSpellDumpImporter();
+        var playerStats = new PlayerStatsDumpImporter();
+        var startingSkills = new StartingSkillDumpImporter();
+        var npc = new NpcDumpImporter();
+        var npcMetadata = new NpcTemplateServiceMetadataDumpImporter();
+        var conditions = new ConditionsDumpImporter();
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             creatures.Read(reader);
@@ -228,6 +243,49 @@ public static class ContentImporterCli
             totems.Read(reader);
         }
 
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            playerStats.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            startingSkills.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            npc.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            conditions.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            npcMetadata.Read(reader);
+        }
+
+        IReadOnlyList<string> appliedStatsMigrations = [];
+        if (a.Value("--player-stats-migrations-dir") is { } statsMigrationsDirectory)
+        {
+            if (!Directory.Exists(statsMigrationsDirectory))
+            {
+                throw new CliException(ExitCodes.Io, "player stats migration directory does not exist");
+            }
+
+            try
+            {
+                appliedStatsMigrations = playerStats.ApplyMigrationDirectory(statsMigrationsDirectory);
+            }
+            catch (NotSupportedException ex)
+            {
+                throw new CliException(ExitCodes.Schema, $"unsupported player stats migration: {ex.Message}", ex);
+            }
+        }
+
         string? dbcDirectory = a.Value("--dbc-dir");
         if (dbcDirectory is not null)
         {
@@ -261,6 +319,11 @@ public static class ContentImporterCli
         PlayerCreateActionImportReport startActionReport = startActions.BuildReport();
         LocationImportReport locationReport = locations.BuildReport();
         TotemSpellImportReport totemReport = totems.Resolve().Report;
+        PlayerStatsImportReport statsReport = playerStats.BuildReport();
+        StartingSkillImportReport startingSkillReport = startingSkills.BuildReport();
+        NpcImportReport npcReport = npc.BuildReport();
+        NpcTemplateServiceMetadataImportReport metadataReport = npcMetadata.BuildReport();
+        ConditionsImportReport conditionsReport = conditions.BuildReport();
         if (!dryRun)
         {
             o.WriteLine($"target: {target!.Describe}");
@@ -278,6 +341,15 @@ public static class ContentImporterCli
                     startActionReport = await startActions.WriteAsync(db, replace, token).ConfigureAwait(false);
                     locationReport = await locations.WriteAsync(db, replace, token).ConfigureAwait(false);
                     totemReport = await totems.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    statsReport = await playerStats.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    startingSkillReport = await startingSkills.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    npcReport = await npc.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    conditionsReport = await conditions.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    if (replace)
+                    {
+                        await db.Set<NpcTemplateServiceMetadata>().ExecuteDeleteAsync(token).ConfigureAwait(false);
+                    }
+                    await ImportBatch.InsertAsync(db, npcMetadata.Snapshot().ToArray(), token).ConfigureAwait(false);
                 }, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -293,6 +365,10 @@ public static class ContentImporterCli
         warnings.AddRange(playerReport.Warnings);
         warnings.AddRange(startActionReport.Warnings);
         warnings.AddRange(locationReport.Warnings);
+        warnings.AddRange(statsReport.Warnings);
+        warnings.AddRange(startingSkillReport.Warnings);
+        warnings.AddRange(npcReport.Diagnostics);
+        warnings.AddRange(metadataReport.Diagnostics);
         if (totemReport.SummonedWithoutRow.Count > 0)
         {
             warnings.Add($"{totemReport.SummonedWithoutRow.Count} summoned totem creature(s) have no spell mapping "
@@ -306,6 +382,24 @@ public static class ContentImporterCli
         }
 
         (Dictionary<string, long> imported, Dictionary<string, long> skipped) = Counts(creatureReport, objectReport, itemQuestReport, onKillReport, playerReport, startActionReport, locationReport, totemReport);
+        imported["player_classlevelstats"] = statsReport.ClassLevelStats;
+        imported["player_levelstats"] = statsReport.LevelStats;
+        imported["player_xp_for_level"] = statsReport.XpRows;
+        imported["player_crit_per_agility"] = statsReport.CritRows;
+        imported["player_dodge_per_agility"] = statsReport.DodgeRows;
+        skipped["player_stats_rows"] = statsReport.SkippedRows;
+        imported["playercreateinfo_skills"] = startingSkillReport.Rows;
+        skipped["playercreateinfo_skills_rows"] = startingSkillReport.SkippedRows;
+        imported["npc_gossip"] = npcReport.NpcGossips;
+        imported["gossip_menu"] = npcReport.GossipMenus;
+        imported["gossip_menu_option"] = npcReport.GossipOptions;
+        imported["npc_text"] = npcReport.NpcTexts;
+        imported["npc_vendor"] = npcReport.Vendors;
+        imported["npc_trainer"] = npcReport.Trainers;
+        imported["npc_template_service_metadata"] = metadataReport.Rows;
+        skipped["npc_template_service_metadata_rows"] = metadataReport.Skipped;
+        imported["conditions"] = conditionsReport.Conditions;
+        skipped["npc_service_rows"] = npcReport.Skipped;
         o.WriteLine(dryRun ? "would import:" : "imported:");
         foreach ((string table, long count) in imported)
         {
@@ -325,17 +419,24 @@ public static class ContentImporterCli
             }
             else
             {
-                WriteLevelStatsFile(levelStatsPath, playerCreate);
-                o.WriteLine($"level stats file: wrote {playerReport.LevelStatRows} row(s) to {Path.GetFullPath(levelStatsPath)}; set Progression:LevelStatsPath to it");
+                int writtenRows = WriteLevelStatsFile(levelStatsPath, playerCreate,
+                    appliedStatsMigrations.Count > 0 ? playerStats.ToContent() : null);
+                o.WriteLine($"level stats file: wrote {writtenRows} row(s) to {Path.GetFullPath(levelStatsPath)}; set Progression:LevelStatsPath to it");
             }
         }
         else if (playerReport.LevelStatRows > 0)
         {
-            warnings.Add($"{playerReport.LevelStatRows} level-stats row(s) were read but no --level-stats-file was given, so level-ups will not change base health, mana or stats");
+            warnings.Add($"{playerReport.LevelStatRows} level-stats row(s) were imported into the database; no external --level-stats-file was requested");
         }
 
         PrintWarnings(o, warnings);
-        WriteReport(reportPath, ContentImportReport.Create("import", files, scan, warnings, dryRun) with { Imported = imported, Skipped = skipped });
+        WriteReport(reportPath, ContentImportReport.Create("import", files, scan, warnings, dryRun) with
+        {
+            Imported = imported,
+            Skipped = skipped,
+            PlayerStatsMigrations = appliedStatsMigrations,
+            NpcMetadataReplacedRows = metadataReport.Replaced,
+        });
         return ExitCodes.Ok;
     }
 
@@ -432,6 +533,51 @@ public static class ContentImporterCli
         o.WriteLine(
             $"Imported {content.Spells.Count} spells, {content.CastTimes.Count} cast times, {content.Durations.Count} durations, " +
             $"{content.Ranges.Count} ranges and {content.Radii.Count} radii.");
+        return ExitCodes.Ok;
+    }
+
+    private static async Task<int> ImportMapDbcAsync(CliArguments a, TextWriter output, CancellationToken ct)
+    {
+        if (a.Positional.Count != 2)
+            throw new UsageException("import-map-dbc takes exactly Map.dbc and AreaTable.dbc paths");
+        Target target = ResolveTarget(a);
+        string? reportPath = a.Value("--report");
+        GuardPath(target.FilePath);
+        GuardPath(reportPath);
+        MapAreaDbcSnapshot snapshot;
+        try
+        {
+            // Validate the complete admission before opening or bootstrapping a destination database.
+            snapshot = MapAreaDbcImporter.ReadSnapshot(a.Positional[0], a.Positional[1]);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or UnauthorizedAccessException)
+        {
+            throw new CliException(ExitCodes.Io, "cannot read the map/area DBC inputs", ex);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or ArgumentException or OverflowException)
+        {
+            throw new CliException(ExitCodes.Schema, "map/area DBC layout or references were refused", ex);
+        }
+
+        MapAreaDbcImportReport report;
+        try
+        {
+            await using WorldDbContext db = OpenWorld(target);
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema, cancellationToken: ct).ConfigureAwait(false);
+            report = await MapAreaDbcImporter.ImportSnapshotAsync(db, snapshot, a.Flag("--replace"), ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
+        {
+            throw DatabaseError(ex, target);
+        }
+        if (reportPath is not null)
+        {
+            string? directory = Path.GetDirectoryName(Path.GetFullPath(reportPath));
+            if (directory is not null) Directory.CreateDirectory(directory);
+            File.WriteAllText(reportPath, System.Text.Json.JsonSerializer.Serialize(report,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase }));
+        }
+        output.WriteLine($"Imported {report.MappedMaps} continent maps and {report.MappedAreas} areas; skipped {report.SkippedAreas} foreign-map areas.");
         return ExitCodes.Ok;
     }
 
@@ -733,7 +879,7 @@ public static class ContentImporterCli
         return warnings;
     }
 
-    private static void WriteLevelStatsFile(string path, PlayerCreateDumpImporter importer)
+    private static int WriteLevelStatsFile(string path, PlayerCreateDumpImporter importer, PlayerStatsContent? migrated)
     {
         string? directory = Path.GetDirectoryName(Path.GetFullPath(path));
         if (!string.IsNullOrEmpty(directory))
@@ -742,7 +888,28 @@ public static class ContentImporterCli
         }
 
         using var writer = new StreamWriter(path, append: false, new System.Text.UTF8Encoding(false));
-        importer.WriteLevelStats(writer);
+        if (migrated is null)
+        {
+            return importer.WriteLevelStats(writer);
+        }
+
+        writer.Write("# race,class,level,basehp,basemana,str,agi,sta,int,spi\n");
+        writer.Write("# written by arcane-content-importer after opted-in player-stat migrations\n");
+        int rows = 0;
+        foreach (LevelStats row in migrated.LevelRows)
+        {
+            ClassLevelStats? health = migrated.ClassLevel(row.Class, row.Level);
+            if (health is null)
+            {
+                continue;
+            }
+
+            writer.Write(string.Create(CultureInfo.InvariantCulture,
+                $"{row.Race},{row.Class},{row.Level},{health.BaseHealth},{health.BaseMana},{row.Strength},{row.Agility},{row.Stamina},{row.Intellect},{row.Spirit}\n"));
+            rows++;
+        }
+
+        return rows;
     }
 
     private static void WriteReport(string? path, ContentImportReport report)

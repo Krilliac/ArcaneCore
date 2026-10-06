@@ -18,6 +18,16 @@ public interface ISpellUnitResolver
 /// </summary>
 public interface IDamageSink
 {
+    /// <summary>Origin of a healing operation for threat coefficients; legacy keeps the historical sink behavior.</summary>
+    enum HealingOrigin
+    {
+        Legacy,
+        Direct,
+        Periodic,
+        NoThreat,
+        PeriodicLeech,
+    }
+
     /// <summary>Deal <paramref name="damage"/> from a spell; returns the damage actually done.</summary>
     uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic);
 
@@ -37,6 +47,15 @@ public interface IDamageSink
 
     /// <summary>Heal <paramref name="amount"/>; returns the health actually restored.</summary>
     uint Heal(Unit caster, Unit target, SpellInfo spell, uint amount);
+
+    /// <summary>Heal with an explicit origin. Existing sinks retain their four-argument behavior by default.</summary>
+    uint Heal(Unit caster, Unit target, SpellInfo spell, uint amount, HealingOrigin origin)
+        => Heal(caster, target, spell, amount);
+
+    /// <summary>Assist hostile references for effective periodic power gain; default sinks have no threat model.</summary>
+    void AssistPeriodicEnergizeThreat(Unit caster, Unit target, SpellInfo spell, uint effectiveGain, PowerType power)
+    {
+    }
 }
 
 /// <summary>

@@ -320,8 +320,9 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
         IConfigurationRoot configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
         var services = new ServiceCollection();
         services.AddSingleton<IConfiguration>(_ => configuration);
-        services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
-        services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        // Keep the fixture silent without providers, while allowing a test to capture
+        // real feature/session failures through its configured logging provider.
+        services.AddLogging();
         services.Configure<AuthOptions>(configuration.GetSection(AuthOptions.SectionName));
         services.Configure<RealmSeedOptions>(options => options.Seed.Add(new RealmSeedEntry
         {
@@ -432,7 +433,7 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
                         services.GetRequiredService<OpcodeTable>(), World,
                         services.GetRequiredService<SessionRegistry>(),
                         services.GetRequiredService<IOptions<WorldSessionOptions>>().Value,
-                        NullLogger<WorldSession>.Instance);
+                        services.GetRequiredService<ILogger<WorldSession>>());
                     await session.RunAsync(_stop.Token).ConfigureAwait(false);
                 }
             }

@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using ArcaneCore.Data.Npc;
 
 namespace ArcaneCore.Data.Content.Import;
 
@@ -46,6 +47,9 @@ public static class ContentTableSpecs
         "PickpocketLootId", "pickpocket_loot_id",
         // TotemSpellDumpImporter: cmangos spell-list link and vmangos direct totem spell.
         "SpellList", "spell_list_id", "totem_spell_id",
+        // Direct NPC service metadata is imported alongside the creature template.
+        "GossipMenuId", "gossip_menu_id", "TrainerType", "trainer_type", "TrainerClass", "trainer_class",
+        "TrainerRace", "trainer_race", "TrainerSpell", "trainer_spell",
     ];
 
     private static readonly string[] s_spawnColumns =
@@ -181,9 +185,20 @@ public static class ContentTableSpecs
         new("playercreateinfo", [new KeyColumn("race"), new KeyColumn("class")], [], [], PlayerCreateDumpImporter.ReadsStartColumn),
         new("playercreateinfo_spell", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("spell")], [], s_buildRangeSignatures, PlayerCreateDumpImporter.ReadsSpellColumn),
         new("playercreateinfo_action", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("button")], [], [], PlayerCreateActionDumpImporter.ReadsColumn),
+        new("playercreateinfo_skills", [new KeyColumn("raceMask"), new KeyColumn("classMask"), new KeyColumn("skill")], ["step", "note"], []),
         new("spell_target_position", [new KeyColumn("id")], [], s_buildRangeSignatures, PlayerCreateDumpImporter.ReadsTargetColumn),
         new("player_levelstats", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("level")], [], [], PlayerCreateDumpImporter.ReadsLevelColumn),
         new("player_classlevelstats", [new KeyColumn("class"), new KeyColumn("level")], [], [], PlayerCreateDumpImporter.ReadsClassColumn),
+        new("player_xp_for_level", [new KeyColumn("lvl")], ["xp_for_next_level"], []),
+        new("player_crit_per_agility", [new KeyColumn("class"), new KeyColumn("level")], ["rate"], []),
+        new("player_dodge_per_agility", [new KeyColumn("class"), new KeyColumn("level")], ["rate"], []),
+        new("npc_gossip", [new KeyColumn("npc_guid")], [], [], c => NpcDumpImporter.ReadsColumn("npc_gossip", c)),
+        new("gossip_menu", [new KeyColumn("entry"), new KeyColumn("text_id"), new KeyColumn("condition_id")], [], [], c => NpcDumpImporter.ReadsColumn("gossip_menu", c)),
+        new("gossip_menu_option", [new KeyColumn("menu_id"), new KeyColumn("id")], [], [], c => NpcDumpImporter.ReadsColumn("gossip_menu_option", c)),
+        new("npc_text", [new KeyColumn("ID")], [], [], c => NpcDumpImporter.ReadsColumn("npc_text", c)),
+        new("npc_vendor", [new KeyColumn("entry"), new KeyColumn("item")], [], [], c => NpcDumpImporter.ReadsColumn("npc_vendor", c)),
+        new("npc_trainer", [new KeyColumn("entry"), new KeyColumn("spell")], [], [], c => NpcDumpImporter.ReadsColumn("npc_trainer", c)),
+        new("conditions", [new KeyColumn("condition_entry")], ["type", "value1", "value2", "value3", "value4", "flags"], []),
         new("areatrigger_teleport", [new KeyColumn("id")], [], s_portalSignatures, LocationDumpImporter.ReadsPortalColumn),
         new("game_tele", [new KeyColumn("id")], [], [], LocationDumpImporter.ReadsTeleColumn),
     ];

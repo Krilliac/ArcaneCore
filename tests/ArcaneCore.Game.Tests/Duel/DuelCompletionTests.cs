@@ -39,12 +39,12 @@ public sealed class DuelCompletionTests
         Player third = rig.Kit.AddPlayer(3, 14, 10).Player;
         rig.Challenge();
         Cast(rig, rig.B, rig.A, DebuffA);          // before the start: kept
+        Cast(rig, rig.B, rig.A, Buff);             // positive opponent buff must be applied before duel hostility starts
         rig.Now += 5;
         rig.AcceptAndStart();                      // start at Now + 3
         long start = rig.A.Duel!.StartTimeSeconds;
         Cast(rig, rig.B, rig.A, DebuffB);          // applied at the start second: removed
         Cast(rig, rig.A, rig.B, DebuffA);          // the other side: removed
-        Cast(rig, rig.B, rig.A, Buff);             // positive: kept
         Cast(rig, third, rig.A, 109);              // third party debuff (the stun): kept
 
         rig.Service.Complete(rig.A, DuelCompleteType.Won);

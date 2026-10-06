@@ -210,7 +210,15 @@ public sealed class AuctionRecoveryTests
         fixture.Control.RecoveryAvailable = true;
         clock?.Advance(TimeSpan.FromSeconds(31));
         // Exercise the dedicated bounded retry timer with optional expiry sweeping disabled.
-        await fixture.WaitUntilAsync(() => !fixture.Feature.IsAuctionQuarantined(1));
+        await fixture.WaitUntilAsync(() =>
+        {
+            // RecoveryFailed signals before the partial snapshot finishes and its world-thread
+            // callback publishes NotBeforeMs. That callback can follow the one-shot advance,
+            // so continue advancing the fake clock while the ordinary retry timer runs.
+            // The real five-second budget and all recovery/reservation assertions stay intact.
+            clock?.Advance(TimeSpan.FromSeconds(1));
+            return !fixture.Feature.IsAuctionQuarantined(1);
+        });
 
         await fixture.OnWorld(() =>
         {

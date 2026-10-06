@@ -82,7 +82,10 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         _services.GetService<IConfiguration>()?.GetSection(SectionName).Bind(Options);
         _world = world;
         if (_services.GetService<SpellFeature>() is { } spells)
+        {
             spells.System.TradeEnchantmentRequest = DeferTradeEnchantment;
+            spells.System.TradeItemEnchantmentRequest = DeferTradeItemEnchantment;
+        }
         _items = _services.GetService<ItemsFeature>();
         _directory = _services.GetService<CharacterDirectory>();
         Settlements.Attach(world, _services.GetService<CharacterSaveQueue>(), _services.GetService<TeleportFeature>());

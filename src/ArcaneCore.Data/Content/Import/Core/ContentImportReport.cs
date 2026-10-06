@@ -13,7 +13,7 @@ namespace ArcaneCore.Data.Content.Import;
 public sealed record ContentImportReport
 {
     /// <summary>Version of the report layout and of the table specs it describes.</summary>
-    public const int SpecVersion = 2;
+    public const int SpecVersion = 4;
 
     /// <summary>Printed in every report: the source data is not ours to relicense.</summary>
     public const string License =
@@ -52,6 +52,12 @@ public sealed record ContentImportReport
 
     /// <summary>Source rows an importer read but did not write, per table (patch filters, out-of-range ids).</summary>
     public IReadOnlyDictionary<string, long> Skipped { get; init; } = new Dictionary<string, long>();
+
+    /// <summary>Names of opt-in migrations applied to player-stat rows, never full host paths.</summary>
+    public IReadOnlyList<string> PlayerStatsMigrations { get; init; } = [];
+
+    /// <summary>Earlier direct NPC metadata rows superseded by a later row with the same creature key.</summary>
+    public int NpcMetadataReplacedRows { get; init; }
 
     public IReadOnlyList<string> Warnings { get; init; } = [];
 

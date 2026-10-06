@@ -217,9 +217,14 @@ public sealed partial class PlayerInventory
     /// ammo found there becomes the selected ammo (Player.cpp:570-575).
     /// </summary>
     public void AddStartingItems()
+        => AddStartingItems(Templates.StartingItems((byte)Race, (byte)Class));
+
+    /// <summary>Add ordered outfit and SQL starting rows through the same placement path.</summary>
+    public void AddStartingItems(IEnumerable<StartingItem> startingItems)
     {
+        ArgumentNullException.ThrowIfNull(startingItems);
         Player?.EnsureQuestSettlementMutationAllowed();
-        foreach (StartingItem starting in Templates.StartingItems((byte)Race, (byte)Class))
+        foreach (StartingItem starting in startingItems)
         {
             StoreNewItemInBestSlots(starting.ItemId, starting.Amount);
         }

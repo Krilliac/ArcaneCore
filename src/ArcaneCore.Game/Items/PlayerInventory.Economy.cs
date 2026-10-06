@@ -114,7 +114,7 @@ public sealed partial class PlayerInventory
 
     public InventoryResult TryStageEconomyTransfer(IReadOnlyList<ObjectGuid> remove, IReadOnlyList<ItemInstanceData> add,
         out EconomyInventoryStage? stage, bool trade, IReadOnlyList<ItemInstanceData>? replacements,
-        IReadOnlyList<InventoryRewardGrant>? consume)
+        IReadOnlyList<InventoryRewardGrant>? consume, ItemUsePaymentPlan? itemUse = null)
     {
         ArgumentNullException.ThrowIfNull(remove);
         ArgumentNullException.ThrowIfNull(add);
@@ -160,6 +160,62 @@ public sealed partial class PlayerInventory
         IReadOnlyList<ItemInstanceData> replacementInputs = replacements ?? [];
         if (replacementInputs.Select(data => data.Guid).Distinct().Count() != replacementInputs.Count)
             return InventoryResult.ItemNotFound;
+
+        // Cast-item payment is validated against the complete live image and the pure item-use
+        // recomputation. Its charge-only replacement is kept separate from enchant replacements.
+        if (itemUse is { } payment)
+        {
+            ObjectGuid castGuid = ObjectGuid.Item(payment.Before.Guid);
+            if (payment.Before.Guid == 0 || remove.Contains(castGuid) || add.Any(data => data.Guid == payment.Before.Guid)
+                || GetItemByGuid(castGuid) is not { } liveCast || !ReferenceEquals(liveCast.Inventory, this)
+                || liveCast.OwnerGuid != OwnerGuid
+                || CanUnequipItem(liveCast.BagSlot, liveCast.Slot, swap: false) != InventoryResult.Ok
+                || !SameRewardItem(payment.Before, liveCast.ToData()))
+                return InventoryResult.ItemNotFound;
+
+            ItemUsePaymentPlan recomputed = ItemUsePaymentPlan.Create(liveCast);
+            bool sameAfter = payment.After is null
+                ? recomputed.After is null
+                : recomputed.After is not null && SameRewardItem(payment.After, recomputed.After);
+            if (!SameRewardItem(payment.Before, recomputed.Before) || !sameAfter
+                || payment.DestroyCount != recomputed.DestroyCount)
+                return InventoryResult.ItemNotFound;
+
+            Item shadowCast = shadow.GetItemByGuid(castGuid)
+                ?? throw new InvalidOperationException("planned cast item disappeared");
+            if (replacementInputs.Any(data => data.Guid == payment.Before.Guid))
+                return InventoryResult.ItemNotFound;
+
+            if (payment.DestroyCount == 1)
+            {
+                // ConsumeItems owns count handling and exact GUID destruction. For a surviving
+                // stack, apply only the charge delta before consuming one unit in the shadow.
+                if (payment.After is not null)
+                {
+                    ItemInstanceData chargeOnly = payment.After with { Count = payment.Before.Count };
+                    if (!SameRewardItem(payment.Before, chargeOnly))
+                    {
+                        replacementPlan.Add((liveCast, chargeOnly));
+                        shadow.ReplaceDetached(shadowCast.Guid, chargeOnly);
+                    }
+                    shadowCast = shadow.GetItemByGuid(castGuid)
+                        ?? throw new InvalidOperationException("planned cast item disappeared after payment");
+                }
+
+                consumeItems.Add((liveCast, 1));
+                if (shadow.DestroyItemCount(shadowCast, 1) != 1)
+                    return InventoryResult.ItemNotFound;
+            }
+            else if (payment.After is { } paid)
+            {
+                if (!SameRewardItem(payment.Before, paid))
+                {
+                    replacementPlan.Add((liveCast, paid));
+                    shadow.ReplaceDetached(shadowCast.Guid, paid);
+                }
+            }
+        }
+
         foreach (ItemInstanceData data in replacementInputs)
         {
             if (data.Guid == 0 || remove.Contains(ObjectGuid.Item(data.Guid)) || shadow.GetItemByGuid(ObjectGuid.Item(data.Guid)) is not { } existing
@@ -189,6 +245,8 @@ public sealed partial class PlayerInventory
                 Item liveItem = GetItemByGuid(shadowItem.Guid)
                     ?? throw new InvalidOperationException("planned reagent item disappeared");
                 if (replacementPlan.Any(r => r.Existing.Guid == liveItem.Guid)
+                    || consumeItems.Any(c => c.Existing.Guid == liveItem.Guid)
+                    || (itemUse is not null && liveItem.Guid == ObjectGuid.Item(itemUse.Before.Guid))
                     || CanUnequipItem(liveItem.BagSlot, liveItem.Slot, swap: false) != InventoryResult.Ok)
                     return InventoryResult.ItemNotFound;
                 consumeItems.Add((liveItem, take));

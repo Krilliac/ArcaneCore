@@ -61,6 +61,8 @@ public sealed partial class SpellSystem
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(spell);
+        // Capture this before the sink: a lethal queued spell can stop combat and clear Victim.
+        bool queuedMeleeSpell = spell.IsNextMeleeSwing && ReferenceEquals(caster.Combat.Victim, target);
         uint amount = CombatRules.ApplyArmor(caster, target, spell, damage);
         bool crit = allowCrit && amount > 0 && CombatRules.RollCrit(this, caster, target, spell);
         if (crit)
@@ -74,11 +76,24 @@ public sealed partial class SpellSystem
         uint resisted = ApplyResist(caster, target, spell, ref amount, periodic: false);
         uint absorbed = AbsorbDamage(caster, target, spell.SchoolMask(), amount, spell); // shields, mana shield, split (Unit.cpp:1920-2200)
         amount -= absorbed;
+        SpellCast? packetCast = _outcome?.Cast;
         uint dealt = Damage.DealSpellDamage(caster, target, spell, amount, periodic: false, startsCombat: StartsCombat(caster, target));
         OnDamageTaken(target, caster, dealt, periodic: false, absorbed);
         RecordDamage(caster, target, spell, dealt, crit);
-        SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog, SpellPackets.BuildSpellNonMeleeDamageLog(
-            target.Guid, caster.Guid, spell.Id, dealt, spell.School, absorbed: absorbed, resisted: resisted, hitInfo: crit ? SpellHitTypeCrit : 0), includeSelf: true);
+        uint spellHitInfo = crit ? SpellHitTypeCrit : 0;
+        if (packetCast is not null && _outcome is { } outcome && outcome.MeleeSpellPacketEligible
+            && ReferenceEquals(outcome.Cast, packetCast) && ReferenceEquals(outcome.Target, target)
+            && ReferenceEquals(packetCast.Caster, caster) && packetCast.Spell.Id == spell.Id)
+        {
+            outcome.MeleeSpellDamage.Add(new MeleeSpellDamageComponent(spell.SchoolMask(), dealt, absorbed, resisted, crit));
+            outcome.DeferredNonMeleeLogs.Add(new DeferredNonMeleeDamageLog(target.Guid, caster.Guid, spell.Id, dealt, spell.School, absorbed, resisted, spellHitInfo));
+        }
+        else
+        {
+            SendNextMeleeSpellAttackerStateUpdate(caster, target, spell, queuedMeleeSpell, dealt, absorbed, resisted, crit, packetCast);
+            SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog, SpellPackets.BuildSpellNonMeleeDamageLog(
+                target.Guid, caster.Guid, spell.Id, dealt, spell.School, absorbed: absorbed, resisted: resisted, hitInfo: spellHitInfo), includeSelf: true);
+        }
         return new SpellDamageResult(dealt, resisted, crit, absorbed);
     }
 
@@ -181,7 +196,7 @@ public sealed partial class SpellSystem
         uint gain = (uint)(result.Dealt * multiple);
         if (gain > 0 && context.Caster.IsAlive)
         {
-            uint healed = Damage.Heal(context.Caster, context.Caster, context.Spell, gain);
+            uint healed = Damage.Heal(context.Caster, context.Caster, context.Spell, gain, IDamageSink.HealingOrigin.NoThreat);
             SendToSet(context.Caster, WorldOpcode.SmsgSpellheallog,
                 SpellPackets.BuildSpellHealLog(context.Caster.Guid, context.Caster.Guid, context.Spell.Id, healed), includeSelf: true);
         }

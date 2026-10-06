@@ -1,0 +1,13 @@
+# Reputation-aware helpful targeting — October 5 local qualification
+
+The current bounded change connects existing loaded reputation state to explicit helpful spell targeting. Complete local gate14732 passed/6existing skips/0failed; focus755/native59/clean Release. Previous505-file periodic-energize qualification remains preserved.
+
+`ReputationSpellTargetRelations` wraps the existing relation seam. It handles a known Player paired with an unowned Creature only when both faction templates, a reputation-capable Faction.dbc row and the tracked player state are available. Neutral and Unfriendly are assistable; Hostile/Hated and AtWar reject, using both existing reaction directions. Loaded reputation takes precedence over template hostility. Self, player/player, owned/charmed units, GM, contested-PvP guard cases, non-reputation factions and missing metadata retain the existing fallback. Attack and area-friendly relation methods delegate unchanged. Full PvP/group/forced-reaction/affecting-player policy remains pending.
+
+World wiring uses the optional registered FactionTemplateCatalog or existing `Creatures:FactionTemplateDbcPath` bounded reader and lazy ReputationFeature service. Existing per-player reputation ownership uses ConditionalWeakTable<Player,...>, so a same-GUID replacement cannot borrow the old actor's state. No schema or reputation persistence changes.
+
+Pinned vmangos0e3ff01e76d4758e8a7c3108b2717cc785ed56fa `Objects/Object.cpp:3590-3780,3800-3835` defines the helpful rank threshold belowREP_UNFRIENDLY and reputation/AtWar reaction policy. CMaNGOS8ec338a1704e7dcb1c0213eb7ed58f9231ade40f has related reaction machinery with different full group/PvP/forced ordering; that broader fork policy is not imported here.
+
+Nine Game cases include actual UnitFriend producers across five ranks, AtWar transitions without attack/AoE changes, fallback and same-GUID state ownership. One real WorldTestHost case verifies optional catalog wiring and actual same-map NPC healing/denial across Neutral/Unfriendly/Hostile/Hated/AtWar. Synthetic fixtures have explicit templates and valid coordinates; original build5875 DBC/client acceptance remains pending. Source and compile/fixture/resource failures are retained.
+
+The human requested this current work be completed, then a local server startup and private screen recording while only observing play. No new development waves are planned during that session; automation is paused. Later source changes remain local/unpublished; original external-provider qualification for them remains pending. WoWWiki1.12.1 and Wowhead Classic remain supplemental version-checked sources.

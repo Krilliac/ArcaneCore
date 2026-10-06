@@ -49,6 +49,7 @@ public sealed class SocialFeature(
     private Task _guildsLoaded = Task.CompletedTask;
     private WorldRuntime? _world;
     private SocialContext? _context;
+    private SpellFeature? _spellFeature;
     private readonly Lock _lifecycleLock = new();
     private readonly CancellationTokenSource _stop = new();
     private readonly HashSet<Task> _loginReads = [];
@@ -122,7 +123,8 @@ public sealed class SocialFeature(
         configuration?.GetSection(SocialOptions.SectionName + ":WriteQueue").Bind(WriteQueueOptions);
         _writes = new SocialWriteQueue(scopes, loggers.CreateLogger<SocialWriteQueue>(), WriteQueueOptions);
         _context = new SocialContext(world, new CharacterLookup(directory), _writes, Options);
-        if (services?.GetService<SpellFeature>() is { } spellFeature)
+        _spellFeature = services?.GetService<SpellFeature>();
+        if (_spellFeature is { } spellFeature)
             spellFeature.System.VisibleAuraSlotChanged += OnVisibleAuraSlotChanged;
         _context.Guilds.Options = GuildOptions;
         _writes.Start();
@@ -188,7 +190,7 @@ public sealed class SocialFeature(
             _world.PlayerLoggedIn -= OnLoggedIn;
             _world.PlayerLoggingOut -= OnLoggingOut;
         }
-        if (services?.GetService<SpellFeature>() is { } spellFeature)
+        if (_spellFeature is { } spellFeature)
             spellFeature.System.VisibleAuraSlotChanged -= OnVisibleAuraSlotChanged;
 
         if (_statsTimer is not null)

@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using ArcaneCore.Data.Npc;
 using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Content.Items;
@@ -7,12 +8,16 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Items;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
@@ -80,7 +85,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
         System.Units = new WorldSpellUnitResolver();
-        System.Damage = new WorldSpellDamageSink();
+        System.Damage = new WorldSpellDamageSink(System);
 
         // Attach runs once before the world thread starts, so blocking on the startup loads is
         // safe (WorldHost loads the character name cache the same way, just before this).
@@ -97,6 +102,22 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             SocialFeature? social = scope.ServiceProvider.GetService<SocialFeature>();
             System.Groups = social is null ? NoGroupResolver.Instance : new WorldSpellGroups(() => social.Context.Groups);
             System.Teleports = new WorldSpellTeleportSink(() => teleports.Teleports);
+            FactionTemplateCatalog? factionTemplates = scope.ServiceProvider.GetService<FactionTemplateCatalog>();
+            if (factionTemplates is null)
+            {
+                var creatureOptions = new CreatureOptions();
+                scope.ServiceProvider.GetService<IConfiguration>()?.GetSection(CreatureOptions.SectionName).Bind(creatureOptions);
+                if (!string.IsNullOrWhiteSpace(creatureOptions.FactionTemplateDbcPath))
+                    factionTemplates = FactionTemplateDbcReader.Load(creatureOptions.FactionTemplateDbcPath);
+            }
+            if (factionTemplates is not null
+                && scope.ServiceProvider.GetService<ArcaneCore.World.Reputation.ReputationFeature>() is { } reputationFeature)
+            {
+                System.Relations = new ReputationSpellTargetRelations(
+                    () => factionTemplates,
+                    () => reputationFeature.Reputation,
+                    CombatHookRelations.Instance);
+            }
             System.IsInTransit = unit => unit is Player player && world.IsOnline(player.Guid)
                 && teleports.Teleports.IsBeingTeleportedFar(player);
             ISpellContentStore? content = scope.ServiceProvider.GetService<ISpellContentStore>();

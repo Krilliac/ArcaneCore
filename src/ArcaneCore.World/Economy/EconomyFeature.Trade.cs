@@ -282,9 +282,9 @@ public sealed partial class EconomyFeature
         List<ItemInstanceData> aGives = [.. a.TradedItems.Select(g => a.Player.Inventory.GetItemByGuid(g)!.ToData())];
         List<ItemInstanceData> bGives = [.. b.TradedItems.Select(g => b.Player.Inventory.GetItemByGuid(g)!.ToData())];
         InventoryResult aResult = a.Player.Inventory.TryStageEconomyTransfer([.. a.TradedItems], bGives, out EconomyInventoryStage? aStage,
-            trade: true, replacements: bEnchant is null ? [] : [bEnchant.UpdatedRecipientItem], consume: aEnchant?.Reagents);
+            trade: true, replacements: bEnchant is null ? [] : [bEnchant.UpdatedRecipientItem], consume: aEnchant?.Reagents, itemUse: aEnchant?.ItemCast?.Payment);
         InventoryResult bResult = b.Player.Inventory.TryStageEconomyTransfer([.. b.TradedItems], aGives, out EconomyInventoryStage? bStage,
-            trade: true, replacements: aEnchant is null ? [] : [aEnchant.UpdatedRecipientItem], consume: bEnchant?.Reagents);
+            trade: true, replacements: aEnchant is null ? [] : [aEnchant.UpdatedRecipientItem], consume: bEnchant?.Reagents, itemUse: bEnchant?.ItemCast?.Payment);
         if ((aResult != InventoryResult.Ok || bResult != InventoryResult.Ok) && Options.TradeSpaceNotifications)
         {
             // vmangos TradeHandler.cpp:420-455: the trade stays open; the player who cannot receive is told (802) and the
@@ -447,6 +447,35 @@ public sealed partial class EconomyFeature
         return SpellCastResult.DontReport;
     }
 
+    private SpellCastResult DeferTradeItemEnchantment(Player player, Item castItem, byte spellIndex, SpellCastTargets targets)
+    {
+        if (!targets.IsRawNonTradedTradeTarget || OpenTradeOf(player) is not { } trade
+            || !TradeSession.InRange(player, trade.OtherSide(player).Player))
+            return SpellCastResult.ItemNotReady;
+        TradeSide mine = trade.SideOf(player);
+        TradeSide partner = trade.OtherSide(player);
+        if (mine.SlotOf(castItem.Guid) >= 0)
+            return SpellCastResult.ItemNotReady;
+        Item? target = partner.Player.Inventory.GetItemByGuid(partner[TradeRules.NonTradedSlot]);
+        if (target is null) return SpellCastResult.ItemNotReady;
+        SpellSystem spells = _services.GetRequiredService<SpellFeature>().System;
+        SpellCastResult result = spells.TryPlanTradeItemEnchantment(player, partner.Player, target,
+            castItem, spellIndex, out TradeEnchantmentPlan? plan);
+        if (result != SpellCastResult.CastOk || plan?.ItemCast is not { } itemCast)
+            return result;
+        var pending = new PendingTradeEnchantment(itemCast.ItemSpell.SpellId, castItem.Guid,
+            spellIndex, castItem.Entry, itemCast.ItemSpell);
+        if (mine.PendingEnchantment != pending)
+        {
+            mine.PendingEnchantment = pending;
+            trade.ClearAccepted();
+            SendBackToTrade(trade);
+            SendTradeView(mine, partner.Player, traderWindow: true);
+            SendTradeView(mine, player, traderWindow: false);
+        }
+        return SpellCastResult.DontReport;
+    }
+
     private bool TryPlanPendingEnchantment(TradeSession trade, TradeSide casterSide, out TradeEnchantmentPlan? plan)
     {
         plan = null;
@@ -454,10 +483,35 @@ public sealed partial class EconomyFeature
         TradeSide recipientSide = trade.OtherSide(casterSide.Player);
         Item? item = recipientSide.Player.Inventory.GetItemByGuid(recipientSide[TradeRules.NonTradedSlot]);
         SpellSystem spells = _services.GetRequiredService<SpellFeature>().System;
-        SpellCastResult result = item is null ? SpellCastResult.ItemNotReady : spells.TryPlanTradeEnchantment(
-            casterSide.Player, recipientSide.Player, item, pending.SpellId, pending.CastItemGuid, out plan, acceptance: true);
+        SpellCastResult result = SpellCastResult.ItemNotReady;
+        if (item is not null)
+        {
+            if (pending.CastItemGuid.IsEmpty)
+            {
+                result = spells.TryPlanTradeEnchantment(casterSide.Player, recipientSide.Player, item,
+                    pending.SpellId, ObjectGuid.Empty, out plan, acceptance: true);
+            }
+            else if (casterSide.Player.Inventory.GetItemByGuid(pending.CastItemGuid) is { } castItem
+                && casterSide.SlotOf(castItem.Guid) < 0 && castItem.Entry == pending.CastItemEntry
+                && pending.ClientSpellIndex < castItem.Template.Spells.Count
+                && pending.ItemSpellSnapshot is { } capturedSpell
+                && castItem.Template.Spells[pending.ClientSpellIndex] == capturedSpell
+                && capturedSpell.SpellId == pending.SpellId)
+            {
+                // vmangos resolves the accepted cast item by GUID; moving it between carried
+                // positions does not invalidate an otherwise eligible item-template request.
+                result = spells.TryPlanTradeItemEnchantment(casterSide.Player, recipientSide.Player, item,
+                    castItem, pending.ClientSpellIndex, out plan, acceptance: true);
+            }
+        }
         if (result == SpellCastResult.CastOk) return true;
         casterSide.Player.Session.Send(WorldOpcode.SmsgCastResult, SpellPackets.BuildCastResult(pending.SpellId, result));
+        // vmangos TradeHandler clears only the failing owner's stored spell (SetSpell(0)) while
+        // clearing both acceptance flags. Keep the partner's pending spell intact and refresh both
+        // views so a later accept cannot replay the failed request without a new cast packet.
+        casterSide.PendingEnchantment = null;
+        SendTradeView(casterSide, recipientSide.Player, traderWindow: true);
+        SendTradeView(casterSide, casterSide.Player, traderWindow: false);
         return false;
     }
 

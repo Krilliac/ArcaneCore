@@ -10,7 +10,19 @@ public sealed record TradeEnchantmentPlan(ItemInstanceData UpdatedRecipientItem,
     IReadOnlyList<InventoryRewardGrant> Reagents,
     CharacterLife? CasterLifeAfter = null,
     uint PowerCost = 0,
-    SpellInfo? SpellSnapshot = null);
+    SpellInfo? SpellSnapshot = null,
+    TradeItemCastContext? ItemCast = null);
+
+/// <summary>Immutable provenance captured while planning a deferred item cast.</summary>
+public sealed record TradeItemCastContext(
+    ObjectGuid CastItemGuid,
+    uint CastItemEntry,
+    byte ClientSpellIndex,
+    ItemSpell ItemSpell,
+    byte CastBagSlot,
+    byte CastSlot,
+    bool CastItemReagentPaymentWaived,
+    ItemUsePaymentPlan? Payment = null);
 
 public sealed partial class SpellSystem
 {
@@ -52,34 +64,10 @@ public sealed partial class SpellSystem
             return SpellCastResult.ItemNotReady;
         }
 
-        SpellEffectInfo? enchant = null;
-        foreach (SpellEffectInfo effect in spell.Effects)
-        {
-            if (effect.IsEmpty) continue;
-            if (effect.Effect is not (SpellEffectName.EnchantItem or SpellEffectName.EnchantItemTemporary) || enchant is not null)
-                return SpellCastResult.ItemNotReady;
-            enchant = effect;
-        }
-        if (enchant is null || ItemEnchantments.Find((uint)enchant.MiscValue) is null)
-            return SpellCastResult.ItemNotReady;
-        uint duration = 0;
-        uint charges = 0;
-        int slot = enchant.Effect == SpellEffectName.EnchantItem ? 0 : 1;
-        if (slot == 1)
-        {
-            // A plan must not advance the live RNG. Fixed enchant values use the
-            // same level/formula/modifier path as ordinary effects; randomized
-            // durations need a later acceptance-only roll seam.
-            if (enchant.DieSides is not (0 or 1) || enchant.DicePerLevel != 0)
-                return SpellCastResult.ItemNotReady;
-            int index = spell.Effects.ToList().IndexOf(enchant);
-            int value = ModifyValue(SpellValueKind.EffectValue, caster, spell, index,
-                spell.CalculateEffectValue(index, caster.Level, new Random(0)), target: null);
-            long milliseconds = Math.Max(0, (long)value) * 1000L;
-            if (milliseconds > uint.MaxValue) return SpellCastResult.ItemNotReady;
-            duration = (uint)milliseconds;
-            charges = SpellEnchantCharges.Find(spell.Id) ?? 0;
-        }
+        SpellCastResult imageResult = TryBuildTradeEnchantmentAfterImage(caster, target, spell,
+            out ItemInstanceData? updatedRecipientItem);
+        if (imageResult != SpellCastResult.CastOk)
+            return imageResult;
 
         if (!CollectReagents(spell, out IReadOnlyList<InventoryRewardGrant> reagents))
             return SpellCastResult.ItemNotReady;
@@ -102,6 +90,46 @@ public sealed partial class SpellSystem
         if (check != SpellCastResult.CastOk)
             return check;
 
+        plan = new TradeEnchantmentPlan(updatedRecipientItem!,
+            Array.AsReadOnly(reagents.ToArray()), powerCost == 0 ? null : lifeAfter, powerCost, spell with { });
+        return SpellCastResult.CastOk;
+    }
+
+    /// <summary>Builds the detached enchantment image shared by spellbook and item-cast trade plans.</summary>
+    private SpellCastResult TryBuildTradeEnchantmentAfterImage(Player caster, Item target, SpellInfo spell,
+        out ItemInstanceData? updatedRecipientItem)
+    {
+        updatedRecipientItem = null;
+        SpellEffectInfo? enchant = null;
+        foreach (SpellEffectInfo effect in spell.Effects)
+        {
+            if (effect.IsEmpty) continue;
+            if (effect.Effect is not (SpellEffectName.EnchantItem or SpellEffectName.EnchantItemTemporary) || enchant is not null)
+                return SpellCastResult.ItemNotReady;
+            enchant = effect;
+        }
+        if (enchant is null || ItemEnchantments.Find((uint)enchant.MiscValue) is null)
+            return SpellCastResult.ItemNotReady;
+
+        uint duration = 0;
+        uint charges = 0;
+        int slot = enchant.Effect == SpellEffectName.EnchantItem ? 0 : 1;
+        if (slot == 1)
+        {
+            // A plan must not advance the live RNG. Fixed enchant values use the
+            // same level/formula/modifier path as ordinary effects; randomized
+            // durations need a later acceptance-only roll seam.
+            if (enchant.DieSides is not (0 or 1) || enchant.DicePerLevel != 0)
+                return SpellCastResult.ItemNotReady;
+            int index = spell.Effects.ToList().IndexOf(enchant);
+            int value = ModifyValue(SpellValueKind.EffectValue, caster, spell, index,
+                spell.CalculateEffectValue(index, caster.Level, new Random(0)), target: null);
+            long milliseconds = Math.Max(0, (long)value) * 1000L;
+            if (milliseconds > uint.MaxValue) return SpellCastResult.ItemNotReady;
+            duration = (uint)milliseconds;
+            charges = SpellEnchantCharges.Find(spell.Id) ?? 0;
+        }
+
         uint[] enchantments = new uint[Item.EnchantmentValues];
         IReadOnlyList<uint> existing = target.ToData().Enchantments;
         for (int i = 0; i < enchantments.Length && i < existing.Count; i++) enchantments[i] = existing[i];
@@ -109,8 +137,7 @@ public sealed partial class SpellSystem
         enchantments[offset] = (uint)enchant.MiscValue;
         enchantments[offset + 1] = duration;
         enchantments[offset + 2] = charges;
-        plan = new TradeEnchantmentPlan(target.ToData() with { Enchantments = Array.AsReadOnly(enchantments) },
-            Array.AsReadOnly(reagents.ToArray()), powerCost == 0 ? null : lifeAfter, powerCost, spell with { });
+        updatedRecipientItem = target.ToData() with { Enchantments = Array.AsReadOnly(enchantments) };
         return SpellCastResult.CastOk;
     }
 

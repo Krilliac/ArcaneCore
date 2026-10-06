@@ -120,22 +120,26 @@ public sealed class CombatEnvironment
     private readonly bool _frozen;
     private IPowerAuraSource? _auras;
     private IMeleeSpellHooks? _meleeSpells;
+    private Func<Unit, uint, float, float>? _threatModifier;
 
-    public CombatEnvironment(CombatOptions options, IPowerAuraSource? auras = null, IMeleeSpellHooks? meleeSpells = null)
-        : this(options, auras, meleeSpells, frozen: false)
+    public CombatEnvironment(CombatOptions options, IPowerAuraSource? auras = null, IMeleeSpellHooks? meleeSpells = null,
+        Func<Unit, uint, float, float>? threatModifier = null)
+        : this(options, auras, meleeSpells, threatModifier, frozen: false)
     {
     }
 
-    private CombatEnvironment(CombatOptions options, IPowerAuraSource? auras, IMeleeSpellHooks? meleeSpells, bool frozen)
+    private CombatEnvironment(CombatOptions options, IPowerAuraSource? auras, IMeleeSpellHooks? meleeSpells,
+        Func<Unit, uint, float, float>? threatModifier, bool frozen)
     {
         Options = options ?? throw new ArgumentNullException(nameof(options));
         _auras = auras;
         _meleeSpells = meleeSpells;
+        _threatModifier = threatModifier;
         _frozen = frozen;
     }
 
     /// <summary>Retail rates, no links. Shared and read-only.</summary>
-    public static CombatEnvironment Default { get; } = new(new CombatOptions(), null, null, frozen: true);
+    public static CombatEnvironment Default { get; } = new(new CombatOptions(), null, null, null, frozen: true);
 
     public CombatOptions Options { get; }
 
@@ -158,6 +162,17 @@ public sealed class CombatEnvironment
         {
             ThrowIfFrozen();
             _meleeSpells = value;
+        }
+    }
+
+    /// <summary>Optional school-scoped threat modifier supplied by the spell feature.</summary>
+    public Func<Unit, uint, float, float>? ThreatModifier
+    {
+        get => _threatModifier;
+        set
+        {
+            ThrowIfFrozen();
+            _threatModifier = value;
         }
     }
 

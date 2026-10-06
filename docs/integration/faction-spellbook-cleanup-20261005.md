@@ -1,0 +1,9 @@
+# Faction friendship and spellbook deletion cleanup
+
+With loaded faction templates, the combat friendship seam now reports known NPC-friendly reactions using hostile-first precedence. The existing friendly area, near and chain spell selectors consume that seam, so friendly NPCs can receive their intended effects. Self friendship, player-player team/duel policy and unknown-template fallback are preserved. Attackability rules and no-catalog registration are unchanged.
+
+This follows vmangos Unit::IsFriendlyTo and template GetFactionReactionTo (0e3ff01e76d4758e8a7c3108b2717cc785ed56fa), corroborated by CMaNGOS classic 8ec338a1704e7dcb1c0213eb7ed58f9231ade40f. It does not claim a complete helpful-target implementation. In particular, vmangos IsValidHelpfulTarget rejects reactions below Unfriendly while CMaNGOS CanAssist requires Friendly; neutral helpful targeting needs its own contract. Explicit UnitFriend/UnitFriendChainHeal and mixed Unit selectors are unchanged in this slice. Reputation, forced ranks, GM/FFA and affecting-player resolution remain outside this template-only follow-up.
+
+Spell rows already participate in transactional character deletion. The repaired cache cleanup retires a prior failed-write marker only after a real store delete succeeds and no replacement book exists. Failed deletion remains retryable. A missing store cannot establish durable success, and a replacement book arriving during an outstanding delete keeps its recovery marker, so the current cached book can be reconciled afterward.
+
+Tests exercise friendship polarity and a real friendly-area heal, and use a provider-independent queued store to verify successful deletion avoids redundant retry, failed deletion can recover, and an intervening replacement book is preserved. No schema change, publication, deployment or service startup is part of this local follow-up. Verification is reported separately in the saved qualification evidence.

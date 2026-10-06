@@ -132,6 +132,18 @@ public static class GmStrings
     /// <summary>LANG_YOURS_MANA_CHANGED (121).</summary>
     public static string YoursManaChanged(string link, int mana, int max) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{link} changed your MANA to {mana}/{max}.");
 
+    /// <summary>LANG_YOU_CHANGE_ENERGY (122; mangos.sql).</summary>
+    public static string YouChangeEnergy(string link, uint energy, uint max) => string.Create(CultureInfo.InvariantCulture, $"You changed ENERGY of {link} to {energy}/{max}.");
+
+    /// <summary>LANG_YOURS_ENERGY_CHANGED (123; mangos.sql).</summary>
+    public static string YoursEnergyChanged(string link, uint energy, uint max) => string.Create(CultureInfo.InvariantCulture, $"{link} changed your ENERGY to {energy}/{max}.");
+
+    /// <summary>LANG_YOU_CHANGE_RAGE (125; mangos.sql).</summary>
+    public static string YouChangeRage(string link, uint rage, uint max) => string.Create(CultureInfo.InvariantCulture, $"You changed rage of {link} to {rage}/{max}.");
+
+    /// <summary>LANG_YOURS_RAGE_CHANGED (126; mangos.sql).</summary>
+    public static string YoursRageChanged(string link, uint rage, uint max) => string.Create(CultureInfo.InvariantCulture, $"{link} changed your rage to {rage}/{max}.");
+
     /// <summary>LANG_YOU_CHANGE_LVL (127): "You changed level of %s to %i.".</summary>
     public static string YouChangeLevel(string link, int level) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"You changed level of {link} to {level}.");
 

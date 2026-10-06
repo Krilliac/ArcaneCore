@@ -217,7 +217,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
             _spells.Remove(characterId);
         }
 
-        Enqueue(characterId, store => store.DeleteCharacterAsync(characterId));
+        Enqueue(characterId, store => DeleteCharacterAsync(store, characterId));
     }
 
     /// <summary>Wait until every queued write has been attempted (tests, shutdown).</summary>
@@ -335,6 +335,23 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
             }
 
             _failedCharacters.Remove(characterId);
+        }
+    }
+
+    private async Task DeleteCharacterAsync(ICharacterSpellStore store, int characterId)
+    {
+        await store.DeleteCharacterAsync(characterId).ConfigureAwait(false);
+        if (ReferenceEquals(store, NullCharacterSpellStore.Instance))
+        {
+            return;
+        }
+
+        lock (_lock)
+        {
+            if (!_spells.ContainsKey(characterId))
+            {
+                _failedCharacters.Remove(characterId);
+            }
         }
     }
 

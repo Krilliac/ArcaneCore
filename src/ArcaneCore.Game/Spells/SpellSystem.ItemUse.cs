@@ -8,6 +8,9 @@ namespace ArcaneCore.Game.Spells;
 public sealed partial class SpellSystem
 {
     private readonly Stack<ItemUseDispatch> _itemUseDispatches = [];
+
+    /// <summary>World-owned deferred trade callback for a caster-owned item use.</summary>
+    public Func<Player, Item, byte, SpellCastTargets, SpellCastResult>? TradeItemEnchantmentRequest { get; set; }
     /// <summary>
     /// CMSG_USE_ITEM entry point. The selected on-use template spell is validated, then every
     /// on-use spell is dispatched in template order: first normal, later triggered (vmangos
@@ -22,11 +25,37 @@ public sealed partial class SpellSystem
         {
             return SpellCastResult.ItemNotReady;
         }
-        if (!CanStartItemUse(player, item, spellIndex, out SpellCastResult eligibility)) return eligibility;
+        if (!CanStartItemUse(player, item, spellIndex, out SpellCastResult eligibility,
+                out InventoryResult? inventoryFailure, out SpellInfo? shapeshiftSpell))
+        {
+            if (inventoryFailure is { } failure)
+            {
+                player.Inventory.SendEquipError(failure, item, null);
+            }
+            if (eligibility == SpellCastResult.NoItemsWhileShapeshifted)
+            {
+                player.Inventory.SendEquipError(InventoryResult.None, item, null);
+                if (shapeshiftSpell is { } spell)
+                {
+                    SendCastResult(player, spell, eligibility, triggered: false);
+                }
+            }
+
+            return eligibility;
+        }
 
         if (item.Template.Bonding is (uint)ItemBonding.WhenUse or (uint)ItemBonding.WhenPickedUp or (uint)ItemBonding.QuestItem)
         {
             item.SetBinding(true);
+        }
+
+        // Item-use eligibility and binding intentionally precede deferral, matching the
+        // ordinary vmangos CastItemUseSpell path. The callback owns planning and settlement;
+        // no ordinary Prepare, charge consumption, or global cooldown may run here.
+        if ((targets.Mask & SpellCastTargetFlags.TradeItem) != 0
+            && TradeItemEnchantmentRequest is { } deferred)
+        {
+            return deferred(player, item, spellIndex, targets);
         }
 
         var dispatch = new ItemUseDispatch(item);
@@ -56,21 +85,43 @@ public sealed partial class SpellSystem
     }
 
     internal bool CanStartItemUse(Player player, Item item, byte spellIndex, out SpellCastResult result, bool requireCharges = true)
+        => CanStartItemUse(player, item, spellIndex, out result, out _, out _, requireCharges);
+
+    private bool CanStartItemUse(Player player, Item item, byte spellIndex, out SpellCastResult result,
+        out InventoryResult? inventoryFailure, out SpellInfo? shapeshiftSpell, bool requireCharges = true)
     {
         result = SpellCastResult.ItemNotReady;
+        inventoryFailure = null;
+        shapeshiftSpell = null;
         if (!player.IsInWorld || player.IsLoggingOut || IsInTransit(player) || IsQuestSettlementPending(player))
         {
             result = SpellCastResult.NotReady;
             return false;
         }
 
-        if (player.Inventory.CanUseItem(item) != InventoryResult.Ok || spellIndex >= item.Template.Spells.Count)
+        InventoryResult canUse = player.Inventory.CanUseItem(item);
+        if (canUse != InventoryResult.Ok || spellIndex >= item.Template.Spells.Count)
         {
+            if (canUse == InventoryResult.Ok && spellIndex >= item.Template.Spells.Count)
+            {
+                inventoryFailure = InventoryResult.ItemNotFound;
+            }
+            else if (canUse != InventoryResult.Ok)
+            {
+                inventoryFailure = canUse;
+            }
+
             return false;
         }
 
         ItemSpell selected = item.Template.Spells[spellIndex];
-        if (selected.SpellId == 0 || selected.Trigger != 0 || (requireCharges && !HasAllItemCharges(item)))
+        if (selected.SpellId == 0 || selected.Trigger != 0)
+        {
+            inventoryFailure = InventoryResult.ItemNotFound;
+            return false;
+        }
+
+        if (requireCharges && !HasAllItemCharges(item))
         {
             return false;
         }
@@ -78,6 +129,7 @@ public sealed partial class SpellSystem
         if (item.Template.GetInventoryType() != InventoryType.NonEquip
             && !(item.Container is null && item.Slot < InventorySlots.EquipmentEnd))
         {
+            inventoryFailure = InventoryResult.ItemNotFound;
             return false;
         }
 
@@ -85,6 +137,7 @@ public sealed partial class SpellSystem
         if (player.GetByte(UpdateFields.UnitFieldBytes1, 2) != 0 && !equipped)
         {
             result = SpellCastResult.NoItemsWhileShapeshifted;
+            shapeshiftSpell = Store.Get(selected.SpellId);
             return false;
         }
 
@@ -92,11 +145,13 @@ public sealed partial class SpellSystem
             && Store.Get(s.SpellId)?.HasAttribute(SpellAttributesCombat.NotInCombatOnlyPeaceful) == true))
         {
             result = SpellCastResult.AffectingCombat;
+            inventoryFailure = InventoryResult.NotInCombat;
             return false;
         }
 
         if (ItemUseTradeGuard(player, item))
         {
+            inventoryFailure = InventoryResult.ItemNotFound;
             return false;
         }
 

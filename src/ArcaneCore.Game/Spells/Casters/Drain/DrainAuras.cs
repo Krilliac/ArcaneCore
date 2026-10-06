@@ -9,7 +9,8 @@ namespace ArcaneCore.Game.Spells.Casters.Drain;
 /// <para>
 /// Not modelled (documented limits): damage absorption of the leech (the absorb framework is another lane), spell
 /// immunities, the PERIODIC_HEALTH_FUNNEL aura that shares vmangos' leech block (Health Funnel targets the caster's pet:
-/// pets lane), threat of the heal and of the drained mana, spell mods of the multiplier, and Mark of Kazzak.
+/// pets lane), threat of drained mana, spell mods of the multiplier, and Mark of Kazzak. Health-leech threat uses
+/// the explicit periodic-leech sink origin; direct health-leech threat is suppressed at its producer.
 /// </para>
 /// </summary>
 public static class DrainAuras
@@ -60,7 +61,7 @@ public static class DrainAuras
         uint gain = (uint)(dealt * multiplier);
         if (gain > 0 && caster.IsAlive)
         {
-            uint healed = spells.Damage.Heal(caster, caster, spell, gain);
+            uint healed = spells.Damage.Heal(caster, caster, spell, gain, IDamageSink.HealingOrigin.PeriodicLeech);
             SpellSystem.SendToSet(caster, WorldOpcode.SmsgSpellheallog,
                 SpellPackets.BuildSpellHealLog(caster.Guid, caster.Guid, spell.Id, healed), includeSelf: true);
         }

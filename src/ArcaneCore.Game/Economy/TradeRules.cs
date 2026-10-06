@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Items;
 
 namespace ArcaneCore.Game.Economy;
 
@@ -63,7 +64,8 @@ public static class TradeRules
 }
 
 /// <summary>Spell and optional cast-item identity deferred until both trade sides accept.</summary>
-public readonly record struct PendingTradeEnchantment(uint SpellId, ObjectGuid CastItemGuid);
+public readonly record struct PendingTradeEnchantment(uint SpellId, ObjectGuid CastItemGuid,
+    byte ClientSpellIndex = 0, uint CastItemEntry = 0, ItemSpell? ItemSpellSnapshot = null);
 
 /// <summary>One side of an open trade: its offered item GUIDs per slot, gold and acceptance.</summary>
 public sealed class TradeSide(Player player)

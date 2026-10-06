@@ -200,6 +200,22 @@ public sealed class ProtocolTests
         Assert.Equal(0x1234ul, ScenarioWire.SelfCreate([1, 0, 0, 0, 0, .. self]).Guid);
     }
 
+    [Fact]
+    public void FieldUpdates_EstablishOmittedUnitZerosOnlyForFullCreates()
+    {
+        byte[] create = [1, 0, 0, 0, 0, .. SelfCreateBlockVector()];
+        var fields = Assert.Single(ScenarioWire.FieldUpdates(create)).Fields;
+        Assert.Equal(0u, fields[ArcaneCore.Game.UpdateFields.UnitFieldTarget]);
+        Assert.Equal(0u, fields[ArcaneCore.Game.UpdateFields.UnitFieldTarget + 1]);
+        Assert.True(fields.ContainsKey(ArcaneCore.Game.UpdateFields.UnitFieldFlags));
+
+        byte[] values = [1, 0, 0, 0, 0, 0, 1, 18, 1, 1, 0, 0, 0, 18, 0, 0, 0];
+        var incremental = Assert.Single(ScenarioWire.FieldUpdates(values)).Fields;
+        Assert.False(incremental.ContainsKey(ArcaneCore.Game.UpdateFields.UnitFieldTarget));
+        Assert.False(incremental.ContainsKey(ArcaneCore.Game.UpdateFields.UnitFieldTarget + 1));
+        Assert.False(incremental.ContainsKey(ArcaneCore.Game.UpdateFields.UnitFieldFlags));
+    }
+
     [Theory]
     [InlineData(0u)]
     [InlineData(129u)]

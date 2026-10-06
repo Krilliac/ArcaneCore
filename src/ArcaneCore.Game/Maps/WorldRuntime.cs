@@ -294,16 +294,19 @@ public sealed class WorldRuntime : IDisposable
         foreach (Map map in _maps.Values.ToArray())
         {
             long mapStart = Stopwatch.GetTimestamp();
+            MapUpdateDiagnostics? diagnostics = Options.Perf.SlowMapUpdate > 0 && _logger.IsEnabled(LogLevel.Warning)
+                ? new MapUpdateDiagnostics()
+                : null;
             try
             {
-                map.Update(diffMs);
+                map.Update(diffMs, diagnostics);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "map {MapId} update failed", map.MapId);
             }
 
-            LogIfSlow(Options.Perf.SlowMapUpdate, mapStart, "Slow map update", map);
+            LogIfSlow(Options.Perf.SlowMapUpdate, mapStart, "Slow map update", map, diagnostics);
         }
 
         UnloadRequestedMaps();
@@ -326,7 +329,7 @@ public sealed class WorldRuntime : IDisposable
         _stopSignal.Dispose();
     }
 
-    private void LogIfSlow(int thresholdMs, long startTimestamp, string what, Map map)
+    private void LogIfSlow(int thresholdMs, long startTimestamp, string what, Map map, MapUpdateDiagnostics? diagnostics)
     {
         if (thresholdMs <= 0)
         {
@@ -336,8 +339,20 @@ public sealed class WorldRuntime : IDisposable
         long micros = (Stopwatch.GetTimestamp() - startTimestamp) * 1_000_000 / Stopwatch.Frequency;
         if (micros > thresholdMs * 1000L)
         {
-            _logger.LogWarning(PerformanceLogOptions.PerfEventId, "{What}: map {MapId} instance {InstanceId} took {DurationMs} ms",
-                what, map.MapId, map.InstanceId, micros / 1000);
+            if (diagnostics is { Completed: true } timing)
+            {
+                _logger.LogWarning(PerformanceLogOptions.PerfEventId,
+                    "{What}: map {MapId} instance {InstanceId} took {DurationMs} ms (simulation {SimulationMs} ms, visibility {VisibilityMs} ms, values {ValuesMs} ms, flush {FlushMs} ms, cleanup {CleanupMs} ms; players {Players}, moved {MovedObjects}, changed {ChangedObjects}, new {NewObjects})",
+                    what, map.MapId, map.InstanceId, micros / 1000, timing.SimulationMicros / 1000,
+                    timing.VisibilityMicros / 1000, timing.ValuesMicros / 1000, timing.FlushMicros / 1000,
+                    timing.CleanupMicros / 1000, timing.Players, timing.MovedObjects, timing.ChangedObjects,
+                    timing.NewObjects);
+            }
+            else
+            {
+                _logger.LogWarning(PerformanceLogOptions.PerfEventId, "{What}: map {MapId} instance {InstanceId} took {DurationMs} ms",
+                    what, map.MapId, map.InstanceId, micros / 1000);
+            }
         }
     }
 

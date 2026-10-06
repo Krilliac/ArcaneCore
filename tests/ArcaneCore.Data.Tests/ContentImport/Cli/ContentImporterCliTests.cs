@@ -13,7 +13,9 @@ using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
+using ArcaneCore.Data.World.PlayerStats;
 using ArcaneCore.Kernel.Quests;
+using ArcaneCore.Kernel.Npc;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 
@@ -111,6 +113,37 @@ public sealed class ContentImporterCliTests : IDisposable
     // --- plan -----------------------------------------------------------------------------------
 
     [Fact]
+    public async Task Import_WritesDirectNpcMetadataAndReplaceRetiresOldEntries()
+    {
+        string dump = WriteDump("npc-metadata.sql", """
+            CREATE TABLE `creature_template` (`Entry` int, `Name` varchar(20), `MinLevel` int, `ModelId1` int, `TrainerType` int,
+              `TrainerClass` int, `TrainerRace` int, `TrainerSpell` int, `GossipMenuId` int);
+            INSERT INTO `creature_template` VALUES (911,'Trainer',1,100,0,1,0,0,20),(911,'Trainer',1,100,0,1,0,0,21),(198,'Trainer',1,100,0,8,0,0,22);
+            """);
+        string database = Db("npc-metadata.db");
+        string report = Path.Combine(_directory, "npc-metadata-report.json");
+        (int code, _, string failure) = await RunAsync("import", dump, "--database", database, "--report", report);
+        Assert.True(code == ExitCodes.Ok, failure);
+        using (JsonDocument json = JsonDocument.Parse(File.ReadAllText(report)))
+        {
+            Assert.Equal(2, json.RootElement.GetProperty("imported").GetProperty("npc_template_service_metadata").GetInt32());
+            Assert.Equal(1, json.RootElement.GetProperty("npcMetadataReplacedRows").GetInt32());
+        }
+        await using (WorldDbContext context = new(new DbContextOptionsBuilder<WorldDbContext>().UseSqlite($"Data Source={database}").Options))
+        {
+            Assert.Equal(new byte[] { 8, 1 }, await context.Set<NpcTemplateServiceMetadata>().OrderBy(r => r.Entry).Select(r => r.TrainerClass).ToArrayAsync());
+        }
+        string replacement = WriteDump("npc-metadata-replacement.sql", """
+            CREATE TABLE `creature_template` (`Entry` int, `Name` varchar(20), `MinLevel` int, `ModelId1` int, `TrainerType` int,
+              `TrainerClass` int, `TrainerRace` int, `TrainerSpell` int, `GossipMenuId` int);
+            INSERT INTO `creature_template` VALUES (911,'Trainer',1,100,0,1,0,0,21);
+            """);
+        Assert.Equal(ExitCodes.Ok, (await RunAsync("import", replacement, "--database", database, "--replace")).Code);
+        await using WorldDbContext verify = new(new DbContextOptionsBuilder<WorldDbContext>().UseSqlite($"Data Source={database}").Options);
+        Assert.Equal(911u, (await verify.Set<NpcTemplateServiceMetadata>().SingleAsync()).Entry);
+    }
+
+    [Fact]
     public async Task Plan_PrintsPerTableDialectAndMappedAndUnmappedColumns_AndWritesNoDatabase()
     {
         string dump = WriteDump("cmangos.sql", CMangosDump);
@@ -121,8 +154,8 @@ public sealed class ContentImporterCliTests : IDisposable
         Line template = TableLine(output, "creature_template");
         Assert.Contains("CMangosClassic", template.Text, StringComparison.Ordinal);
         Assert.Contains("rows 2", template.Text, StringComparison.Ordinal);
-        Assert.Contains("TrainerType", template.Unmapped, StringComparison.Ordinal);
-        Assert.DoesNotContain("TrainerType", template.Mapped, StringComparison.Ordinal);
+        Assert.DoesNotContain("TrainerType", template.Unmapped, StringComparison.Ordinal);
+        Assert.Contains("TrainerType", template.Mapped, StringComparison.Ordinal);
         Assert.Contains("ModelId1", template.Mapped, StringComparison.Ordinal);
         Assert.Contains("Synthetic DB 1", output, StringComparison.Ordinal);
         Assert.Contains("sha256", output, StringComparison.Ordinal);
@@ -463,6 +496,50 @@ public sealed class ContentImporterCliTests : IDisposable
     }
 
     // --- new-character content ------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task PlayerStatsImport_PersistsBaseRowsAndOptedInRates_AndCsvReflectsFinalMigration()
+    {
+        string migrations = Path.Combine(_directory, "stat-migrations");
+        Directory.CreateDirectory(migrations);
+        File.WriteAllText(Path.Combine(migrations, "001_world.sql"), """
+            UPDATE `player_classlevelstats` SET `basehp`=70 WHERE `class`=1 AND `level`=1;
+            INSERT INTO `player_crit_per_agility` (`class`,`level`,`rate`) VALUES (1,1,4.0),(1,60,20.0);
+            INSERT INTO `player_dodge_per_agility` (`class`,`level`,`rate`) VALUES (1,1,5.0),(1,60,21.0);
+            """);
+        File.WriteAllText(Path.Combine(migrations, "002_world.sql"),
+            "UPDATE `player_classlevelstats` SET `basehp`=75 WHERE `class`=1 AND `level`=1;");
+        string database = Db("player-stats.db");
+        string csv = Path.Combine(_directory, "migrated-stats.csv");
+        string report = Path.Combine(_directory, "player-stats-report.json");
+
+        (int code, _, string error) = await RunAsync("import", WriteDump("base-stats.sql", PlayerCreateDump),
+            "--database", database, "--level-stats-file", csv, "--report", report,
+            "--player-stats-migrations-dir", migrations);
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.Empty(error);
+        await using WorldDbContext db = Open(database);
+        Assert.Equal(75u, (await db.Set<PlayerClassLevelStatsRow>().SingleAsync(row => row.Class == 1)).BaseHealth);
+        Assert.Equal(2, await db.Set<PlayerLevelStatsRow>().CountAsync());
+        Assert.Equal(2, await db.Set<PlayerCritPerAgilityRow>().CountAsync());
+        Assert.Equal(2, await db.Set<PlayerDodgePerAgilityRow>().CountAsync());
+        Assert.Contains("1,1,1,75,0,22,20,22,20,21", File.ReadAllLines(csv));
+        using JsonDocument json = JsonDocument.Parse(File.ReadAllText(report));
+        Assert.Equal(2, json.RootElement.GetProperty("playerStatsMigrations").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task MissingPlayerStatsMigrationDirectory_FailsBeforeDatabaseCreation()
+    {
+        string database = Db("missing-stats-source.db");
+
+        (int code, _, _) = await RunAsync("import", WriteDump("stats-source.sql", PlayerCreateDump),
+            "--database", database, "--player-stats-migrations-dir", Path.Combine(_directory, "missing-source"));
+
+        Assert.Equal(ExitCodes.Io, code);
+        Assert.False(File.Exists(database));
+    }
 
     private const string PlayerCreateDump = """
         CREATE TABLE `playercreateinfo` (`race` tinyint unsigned NOT NULL, `class` tinyint unsigned NOT NULL, `map` mediumint unsigned NOT NULL, `zone` mediumint unsigned NOT NULL, `position_x` float NOT NULL, `position_y` float NOT NULL, `position_z` float NOT NULL, `orientation` float NOT NULL, PRIMARY KEY (`race`, `class`));

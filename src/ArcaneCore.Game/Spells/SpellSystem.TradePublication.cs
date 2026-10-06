@@ -23,7 +23,28 @@ public sealed partial class SpellSystem
             || item.Inventory?.Player is not { IsInWorld: true } recipient || item.OwnerGuid != recipient.Guid
             || _tradePublications.TryGetValue(plan, out _)) return false;
 
+        if (plan.ItemCast is { } itemCast)
+        {
+            _tradePublications.Add(plan, new TradePublicationReceipt(operationId));
+
+            // A deferred item use has already applied its staged inventory payment and
+            // effects. Publish the same provenance as an ordinary item cast: source item
+            // GUID, owner as caster, real recipient item in the TradeItem target, and the
+            // selected template cooldown metadata. Item casts have no power or GCD payment.
+            var itemTargets = new SpellCastTargets { Mask = SpellCastTargetFlags.TradeItem, Item = item.Guid };
+            ObjectGuid castItemOrCaster = itemCast.CastItemReagentPaymentWaived ? caster.Guid : itemCast.CastItemGuid;
+            AddCooldown(GetOrCreateState(caster), spell, triggered: true,
+                itemCooldownMs: itemCast.ItemSpell.Cooldown,
+                itemCategoryCooldownMs: itemCast.ItemSpell.CategoryCooldown,
+                itemCategory: itemCast.ItemSpell.Category == 0 ? null : itemCast.ItemSpell.Category,
+                itemId: itemCast.CastItemEntry);
+            SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(castItemOrCaster, caster.Guid, spell.Id,
+                SpellCastFlags.Unknown9, [], [], itemTargets), includeSelf: true);
+            return true;
+        }
+
         _tradePublications.Add(plan, new TradePublicationReceipt(operationId));
+
         // vmangos Spell.cpp3679 updateTradeSlotItem: request slot6 becomes the
         // actual item GUID before SpellGo; the TRADE_ITEM mask remains set.
         var targets = new SpellCastTargets { Mask = SpellCastTargetFlags.TradeItem, Item = item.Guid };

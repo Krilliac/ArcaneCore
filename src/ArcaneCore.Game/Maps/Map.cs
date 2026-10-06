@@ -441,7 +441,11 @@ public sealed class Map
 
     /// <summary>One simulation step (world thread).</summary>
     public void Update(uint diffMs)
+        => Update(diffMs, diagnostics: null);
+
+    internal void Update(uint diffMs, MapUpdateDiagnostics? diagnostics)
     {
+        diagnostics?.Begin();
         // (1) in-world packets
         foreach (Player player in _players.Values.ToArray())
         {
@@ -515,6 +519,14 @@ public sealed class Map
             }
         }
 
+        if (diagnostics is not null)
+        {
+            diagnostics.Players = _players.Count;
+            diagnostics.MovedObjects = _movedObjects.Count;
+            diagnostics.NewObjects = _newObjects.Count;
+            diagnostics.EndSimulation();
+        }
+
         _inUpdatePhase = true;
         try
         {
@@ -550,7 +562,13 @@ public sealed class Map
 
             _newObjects.Clear();
 
+            diagnostics?.EndVisibility();
+
             // (3) values updates
+            if (diagnostics is not null)
+            {
+                diagnostics.ChangedObjects = _valuesQueue.Count;
+            }
             foreach (WorldObject obj in _valuesQueue)
             {
                 SendValuesUpdate(obj);
@@ -559,12 +577,14 @@ public sealed class Map
             }
 
             _valuesQueue.Clear();
+            diagnostics?.EndValues();
 
             // (4) flush
             foreach (Player player in _players.Values)
             {
                 FlushPlayer(player);
             }
+            diagnostics?.EndFlush();
         }
         finally
         {
@@ -592,6 +612,8 @@ public sealed class Map
                 }
             }
         }
+
+        diagnostics?.Complete();
     }
 
     /// <summary>

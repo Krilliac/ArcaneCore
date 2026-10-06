@@ -650,6 +650,8 @@ public sealed partial class EconomyFeature
         }
 
         long revision = box.Revision;
+        long readGeneration = ++box.ReadGeneration;
+        Mailbox requestedBox = box;
         Read(async (store, ct) =>
         {
             IReadOnlyList<MailRecord> mails = await store.GetMailsAsync(id, ct).ConfigureAwait(false);
@@ -659,7 +661,8 @@ public sealed partial class EconomyFeature
                 .Select(m => new MailView(m, m.HasItem ? items.GetValueOrDefault(m.ItemGuid) : null)).ToList();
         }, mails =>
         {
-            if (!ReferenceEquals(_world?.FindOnlinePlayer(player.Guid), player) || !_mailboxes.TryGetValue(id, out Mailbox? current))
+            if (!ReferenceEquals(_world?.FindOnlinePlayer(player.Guid), player) || !_mailboxes.TryGetValue(id, out Mailbox? current)
+                || !ReferenceEquals(current, requestedBox) || current.ReadGeneration != readGeneration)
             {
                 return;
             }
@@ -742,5 +745,6 @@ public sealed partial class EconomyFeature
         public List<MailView> Mails { get; set; } = [];
         public bool Loaded { get; set; }
         public long Revision { get; set; }
+        public long ReadGeneration { get; set; }
     }
 }

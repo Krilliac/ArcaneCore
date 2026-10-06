@@ -10,15 +10,16 @@ internal sealed class UsageException(string message) : Exception(message);
 internal sealed class CliArguments
 {
     private static readonly string[] s_valueOptions =
-        ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir", "--quest-xp", "--level-stats-file"];
+        ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir", "--quest-xp", "--level-stats-file", "--player-stats-migrations-dir"];
 
     private static readonly string[] s_flags = ["--replace", "--dry-run", "--verbose"];
 
     private static readonly Dictionary<string, string[]> s_allowed = new(StringComparer.Ordinal)
     {
         ["plan"] = ["--dialect", "--report", "--verbose"],
-        ["import"] = ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir", "--quest-xp", "--level-stats-file", "--replace", "--dry-run", "--verbose"],
+        ["import"] = ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir", "--quest-xp", "--level-stats-file", "--player-stats-migrations-dir", "--replace", "--dry-run", "--verbose"],
         ["import-dbc"] = ["--database", "--provider", "--connection-string"],
+        ["import-map-dbc"] = ["--database", "--provider", "--connection-string", "--replace", "--report"],
         ["verify"] = ["--database", "--provider", "--connection-string"],
     };
 

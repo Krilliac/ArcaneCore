@@ -237,6 +237,7 @@ public sealed class CreatureContent
     public static readonly CreatureContent Empty = new([], [], [], [], []);
 
     private readonly Dictionary<uint, IReadOnlyList<CreatureSpawn>> _spawnsByMap;
+    private readonly Dictionary<(uint MapId, uint Entry), IReadOnlyList<CreatureSpawn>> _spawnsByEntry;
     private volatile CreatureDefinitions _definitions;
     private int _version;
 
@@ -259,6 +260,8 @@ public sealed class CreatureContent
         CreatureSpawn[] all = [.. spawns];
         SpawnCount = all.Length;
         _spawnsByMap = all.GroupBy(s => s.MapId)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureSpawn>)[.. g.OrderBy(s => s.Guid)]);
+        _spawnsByEntry = all.GroupBy(s => (s.MapId, s.Entry))
             .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureSpawn>)[.. g.OrderBy(s => s.Guid)]);
     }
 
@@ -287,6 +290,10 @@ public sealed class CreatureContent
     public IReadOnlyList<CreatureWaypoint> GetWaypoints(uint spawnGuid) => _definitions.Waypoints.GetValueOrDefault(spawnGuid) ?? [];
 
     public IReadOnlyList<CreatureSpawn> GetSpawns(uint mapId) => _spawnsByMap.GetValueOrDefault(mapId) ?? [];
+
+    /// <summary>Static spawns for one map and entry, indexed at content construction.</summary>
+    public IReadOnlyList<CreatureSpawn> GetSpawns(uint mapId, uint entry)
+        => _spawnsByEntry.GetValueOrDefault((mapId, entry)) ?? [];
 
     /// <summary>
     /// Make the definitions of <paramref name="fresh"/> this content's definitions (its spawns are

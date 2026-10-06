@@ -57,12 +57,16 @@ CharacterHandlers, WorldRuntime, DbContexts, WorldTestHost).
    before creation succeeds. Login drains preceding queued writes, loads the character's
    persisted book, and fails closed on database errors. Failed queued writes are reconciled
    against the authoritative cache before reload. Startup preload remains for compatibility.
-3. **Character deletion event.** Deleting a character leaves its `character_spell` rows behind.
-   `SpellbookCache.DeleteCharacter(id)` is ready, but CharacterHandlers is on the avoid list.
+3. **Character deletion cleanup.** `CharacterSpellDataModule.DeleteCharacterDataAsync` removes spell
+   rows transactionally, with conditional store cleanup for an already deleted character. A successful
+   real-store `SpellbookCache.DeleteCharacter` now retires an earlier failed-write recovery marker when
+   no replacement cached book exists. Failed deletes, missing stores and replacement-book races retain
+   recovery. See [the bounded follow-up](faction-spellbook-cleanup-20261005.md).
 4. **Combat, creature lookup, and teleports are connected.** `WorldSpellSinks` resolves units
    through `Map.FindObject`, deals damage through `MapCombat`, and sends player teleports
    through `TeleportService` including far transfer and acknowledgement. Healing distributes
-   base effective healing threat and enters combat; class/spell threat modifiers remain.
+   effective healing threat and enters combat. The [school-threat follow-up](ghost-wolf-school-threat-20261005.md)
+   applies ModThreat once to generated spell damage/healing; flat metadata, threat talents and class coefficients remain.
 5. **Empty books across restart.** An intentionally emptied in-memory book is preserved on
    relog, but a restarted daemon cannot distinguish zero persisted rows from a legacy character
    awaiting defaults without additional metadata.

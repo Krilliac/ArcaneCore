@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Net.Sockets;
 using System.Numerics;
+using System.Security.Cryptography;
 using ArcaneCore.Cryptography;
 using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Accounts;
@@ -34,6 +35,8 @@ public sealed class LogonSession(
     private bool _isAutocreate;
     private byte[]? _autocreateVerifier;
     private bool _authenticated;
+    private byte[]? _reconnectChallenge;
+    private byte[]? _reconnectSessionKey;
     private bool _closeRequested;
     private CancellationToken _sessionToken;
 
@@ -89,6 +92,14 @@ public sealed class LogonSession(
 
                 case AuthCommand.LogonProof:
                     await HandleProofAsync(cancellationToken).ConfigureAwait(false);
+                    break;
+
+                case AuthCommand.ReconnectChallenge:
+                    await HandleReconnectChallengeAsync(cancellationToken).ConfigureAwait(false);
+                    break;
+
+                case AuthCommand.ReconnectProof:
+                    await HandleReconnectProofAsync(cancellationToken).ConfigureAwait(false);
                     break;
 
                 case AuthCommand.RealmList:
@@ -300,6 +311,107 @@ public sealed class LogonSession(
         await SendProofSuccessAsync(srp.ServerProof, cancellationToken).ConfigureAwait(false);
     }
 
+    private async Task HandleReconnectChallengeAsync(CancellationToken cancellationToken)
+    {
+        ResetChallengeState();
+        byte[] header = new byte[3];
+        await ReadPacketPartAsync(header, cancellationToken).ConfigureAwait(false);
+        ushort bodySize = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(1, 2));
+        if (bodySize < ChallengeMinBody || bodySize > ChallengeMaxBody)
+        {
+            _closeRequested = true;
+            return;
+        }
+
+        byte[] body = new byte[bodySize];
+        await ReadPacketPartAsync(body, cancellationToken).ConfigureAwait(false);
+        if (body[29] > MaxUsernameLength || !AllowedLocales.Contains(ReadLocale(body))
+            || !LogonChallengeRequest.TryParse(body, out LogonChallengeRequest? request) || request is null
+            || request.Build != ClientBuild.Vanilla1121)
+        {
+            await SendReconnectFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        string username = request.Username.ToUpperInvariant();
+        if (options.StrictUsernameCharset && !IsPrintableAscii(username))
+        {
+            await SendReconnectFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        string? address = AccountBanEvaluator.AddressOfEndpoint(remoteEndpoint);
+        if (_banStore is not null && address is not null
+            && await _banStore.GetActiveIpBanAsync(address, cancellationToken).ConfigureAwait(false) is not null)
+        {
+            await SendReconnectFailureAsync(AuthResult.FailNoAccess, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        Account? account = await accountStore.FindByUsernameAsync(username, cancellationToken).ConfigureAwait(false);
+        bool accountBanned = account?.Status == AccountStatus.Banned
+            || account is not null && _banStore is not null
+            && await _banStore.GetActiveAccountBanAsync(account.Id, cancellationToken).ConfigureAwait(false) is not null;
+        if (account is null || account.Status != AccountStatus.Active
+            || accountBanned
+            || account.SessionKey is not { Length: 40 } sessionKey)
+        {
+            AuthResult result = accountBanned ? AuthResult.Banned
+                : account?.Status == AccountStatus.Suspended ? AuthResult.Suspended : AuthResult.UnknownAccount;
+            await SendReconnectFailureAsync(result, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        _username = username;
+        _reconnectSessionKey = sessionKey.ToArray();
+        _reconnectChallenge = RandomNumberGenerator.GetBytes(16);
+        var writer = new PacketWriter(34);
+        writer.WriteByte((byte)AuthCommand.ReconnectChallenge);
+        writer.WriteByte((byte)AuthResult.Success);
+        writer.WriteBytes(_reconnectChallenge);
+        writer.WriteBytes(AuthConstants.VersionChallenge);
+        await stream.WriteAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task HandleReconnectProofAsync(CancellationToken cancellationToken)
+    {
+        const int bodyLength = 16 + 20 + 20 + 1;
+        byte[] body = new byte[bodyLength];
+        await ReadPacketPartAsync(body, cancellationToken).ConfigureAwait(false);
+        byte[]? challenge = _reconnectChallenge;
+        byte[]? sessionKey = _reconnectSessionKey;
+        string username = _username;
+        _authenticated = false;
+        _reconnectChallenge = null;
+        _reconnectSessionKey = null;
+
+        if (challenge is null || sessionKey is null || username.Length == 0 || body[^1] != 0)
+        {
+            CloseReconnectProof();
+            return;
+        }
+
+        byte[] input = new byte[username.Length + 16 + 16 + sessionKey.Length];
+        int offset = 0;
+        offset += System.Text.Encoding.ASCII.GetBytes(username, input.AsSpan(offset));
+        body.AsSpan(0, 16).CopyTo(input.AsSpan(offset)); offset += 16;
+        challenge.CopyTo(input, offset); offset += challenge.Length;
+        sessionKey.CopyTo(input, offset);
+        byte[] expected = SHA1.HashData(input);
+        bool valid = CryptographicOperations.FixedTimeEquals(expected, body.AsSpan(16, 20));
+        if (!valid)
+        {
+            CloseReconnectProof();
+            return;
+        }
+
+        _authenticated = true;
+        var writer = new PacketWriter(2);
+        writer.WriteByte((byte)AuthCommand.ReconnectProof);
+        writer.WriteByte((byte)AuthResult.Success);
+        await stream.WriteAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>Read the rest of a packet whose command byte has arrived, bounded by the read timeout.</summary>
     private async Task ReadPacketPartAsync(byte[] buffer, CancellationToken cancellationToken)
     {
@@ -346,6 +458,8 @@ public sealed class LogonSession(
         _autocreateVerifier = null;
         _username = string.Empty;
         _authenticated = false; // a new challenge or proof always revokes the previous authentication
+        _reconnectChallenge = null;
+        _reconnectSessionKey = null;
     }
 
     private async Task HandleRealmListAsync(CancellationToken cancellationToken)
@@ -414,4 +528,15 @@ public sealed class LogonSession(
         writer.WriteUInt16(0);
         await stream.WriteAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
     }
+
+    private async Task SendReconnectFailureAsync(AuthResult result, CancellationToken cancellationToken)
+    {
+        var writer = new PacketWriter(2);
+        writer.WriteByte((byte)AuthCommand.ReconnectChallenge);
+        writer.WriteByte((byte)result);
+        await stream.WriteAsync(writer.AsMemory(), cancellationToken).ConfigureAwait(false);
+        _closeRequested = true;
+    }
+
+    private void CloseReconnectProof() => _closeRequested = true;
 }

@@ -139,6 +139,39 @@ public sealed class WorldRuntimeTickTests
     }
 
     [Fact]
+    public void SlowMapUpdate_IncludesPhaseCounters_WhenDiagnosticsAreEnabled()
+    {
+        var log = new CapturingLogger();
+        using WorldRuntime world = Create(log, o => o.Perf.SlowMapUpdate = 1);
+        Map map = world.GetMap(1, 8);
+        map.AddUpdater(new SleepingUpdater(20));
+
+        world.RunTick(50);
+
+        CapturingLogger.Entry entry = Assert.Single(log.Entries, e => e.EventName == PerformanceLogOptions.EventName);
+        Assert.Contains("simulation", entry.Message);
+        Assert.Contains("visibility", entry.Message);
+        Assert.Contains("values", entry.Message);
+        Assert.Contains("flush", entry.Message);
+        Assert.Contains("cleanup", entry.Message);
+        Assert.Contains("players", entry.Message);
+        Assert.Contains("moved", entry.Message);
+        Assert.Matches(@"players \d+, moved \d+, changed \d+, new \d+", entry.Message);
+    }
+
+    [Fact]
+    public void SlowMapUpdate_DisabledDoesNotEmitDiagnostics()
+    {
+        var log = new CapturingLogger();
+        using WorldRuntime world = Create(log, o => o.Perf.SlowMapUpdate = 0);
+        world.GetMap(1).AddUpdater(new ThrowingUpdater());
+
+        world.RunTick(50);
+
+        Assert.DoesNotContain(log.Entries, e => e.EventName == PerformanceLogOptions.EventName);
+    }
+
+    [Fact]
     public void RunTick_CalledDirectly_StillWorksWithoutStats()
     {
         using WorldRuntime world = Create(new CapturingLogger());
@@ -156,6 +189,12 @@ public sealed class WorldRuntimeTickTests
         public void OnPlayerRemoved(Map map, Player player)
         {
         }
+    }
+
+    private sealed class ThrowingUpdater : IMapUpdater
+    {
+        public void Update(Map map, uint diffMs) => throw new InvalidOperationException("diagnostic test failure");
+        public void OnPlayerRemoved(Map map, Player player) { }
     }
 
     private sealed class CapturingLogger : ILogger<WorldRuntime>

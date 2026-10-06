@@ -651,7 +651,7 @@ public sealed partial class MapCombat
     /// distinguishes DIRECT_DAMAGE from SPELL_DIRECT_DAMAGE: only weapon damage rewards
     /// outgoing rage, and its auto-start Attack call enables melee only for DIRECT_DAMAGE.
     /// </summary>
-    public uint DealDamage(Unit attacker, Unit victim, uint damage, MeleeHitOutcome outcome = MeleeHitOutcome.Normal, uint cleanDamage = 0, bool direct = true, bool meleeDamage = true, bool startsCombat = true, bool durabilityLoss = true, SpellInfo? spell = null)
+    public uint DealDamage(Unit attacker, Unit victim, uint damage, MeleeHitOutcome outcome = MeleeHitOutcome.Normal, uint cleanDamage = 0, bool direct = true, bool meleeDamage = true, bool startsCombat = true, bool durabilityLoss = true, SpellInfo? spell = null, float? spellThreat = null, bool spellThreatApplies = true)
     {
         if (IsQuestSettlementPending(attacker) || IsQuestSettlementPending(victim) || !IsAliveState(victim))
         {
@@ -667,6 +667,7 @@ public sealed partial class MapCombat
         bool combatLink = enterCombat && startsCombat; // false: a hunter trap's hit on a player (vmangos Spell.cpp:1650)
         if (damage == 0)
         {
+            bool suppressedSpellThreat = spell is not null && !spellThreatApplies;
             if (outcome is MeleeHitOutcome.Parry or MeleeHitOutcome.Dodge
                 && cleanDamage > 0 && direct && meleeDamage && enterCombat && attacker is Player { PowerType: PowerType.Rage } ragePlayer)
             {
@@ -679,7 +680,7 @@ public sealed partial class MapCombat
                 SetInCombatWithVictim(attacker, victim);
             }
 
-            if (enterCombat)
+            if (enterCombat && !suppressedSpellThreat)
             {
                 if (victim is not Player)
                 {
@@ -689,7 +690,10 @@ public sealed partial class MapCombat
                 }
             }
 
-            AttackedBy(victim, attacker);
+            if (!suppressedSpellThreat)
+            {
+                AttackedBy(victim, attacker);
+            }
             return 0;
         }
 
@@ -732,7 +736,19 @@ public sealed partial class MapCombat
         {
             if (enterCombat)
             {
-                victim.Combat.Threat.AddThreat(attacker, damage);
+                // Spell damage supplies its already-scaled threat at the world sink. Ordinary and
+                // white damage retain the historical raw damage threat behavior.
+                if (spell is null)
+                {
+                    // White attacks are physical-school threat (school mask 1). Spell damage already
+                    // arrives with SpellThreat's school product applied and must never be multiplied here.
+                    float threat = CombatEnvironment.For(_world).ThreatModifier?.Invoke(attacker, 1u, damage) ?? damage;
+                    victim.Combat.Threat.AddThreat(attacker, threat);
+                }
+                else if (spellThreatApplies)
+                {
+                    victim.Combat.Threat.AddThreat(attacker, spellThreat ?? damage);
+                }
             }
         }
         else if (enterCombat && victim.PowerType == PowerType.Rage)
@@ -742,7 +758,12 @@ public sealed partial class MapCombat
 
         ApplyHitDurability(attacker, victim);
         DamageDealt?.Invoke(attacker, victim, damage, direct, meleeDamage);
-        AttackedBy(victim, attacker);
+        // A spell explicitly suppressed from threat must not enter CreatureAI's AttackedBy path:
+        // AttackStart would create a fresh zero-threat reference after the real damage consumer.
+        if (spell is null || spellThreatApplies)
+        {
+            AttackedBy(victim, attacker);
+        }
         if (duelEnded)
         {
             AfterClampedDuelDamage((Player)victim); // Unit.cpp:954-969

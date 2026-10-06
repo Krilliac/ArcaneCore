@@ -101,6 +101,14 @@ No schema version is consumed; nothing was added to Auth, Characters or World.
   there; talents are not recomputed (no talents area); a selected creature is not levelled (answers a clear message);
   the target is told unless it is the caller (vmangos also stays quiet for GMs invisible to it).
 * `.modify hp|mana` work on players only. `.modify mana` writes power index 0 whatever the power type, as vmangos does.
+* `.modify energy #value [#max]` and `.modify rage #value [#max]` work on the selected online player or the caller when
+  there is no selection. Energy uses displayed whole units; rage uses the classic ten-times wire value and displays
+  whole units in the response. An omitted maximum retains at least the current displayed maximum; an explicit maximum
+  below the requested value, an overflow, malformed optional argument, or an extra argument is rejected. The current
+  power is clamped after the maximum is written and the online player is queued through `World.SavePlayer`; the maximum
+  is runtime state only because this branch has no persisted power-cap schema. Responses use mangos LANG ids 122/123
+  (ENERGY) and 125/126 (rage), with invariant numeric formatting. A selected creature or offline/missing player returns
+  `No character selected.` and security checks run before mutation.
 * `.goname` does not create the GM's instance bind and has no battleground rule; the teleport service's instance rules
   apply and a refused teleport answers the invalid-coordinates text (vmangos is silent).
 * `.server info` prints "Core revision: ArcaneCore ...", the session count from the session registry (players in the world
@@ -130,7 +138,7 @@ Skipped because the primitive belongs to another lane or is absent, or because i
   gm-gobject, gm-spawn-persistence, gm-quest, gm-combat-cheats (`.damage`, `.cheat`): not started; several need the spell,
   creature-AI and quest lanes' primitives.
 * gm-items: `.additemset` (needs `ItemTemplate.ItemSet`), `.itemmove`, `.repairitems`.
-* gm-modify-speed (needs speed-change packets and acks), `.modify rage|energy|scale|faction|speed|...`, `.character level`,
+* gm-modify-speed (needs speed-change packets and acks), `.modify scale|faction|speed|...`, `.character level`,
   `.reset`.
 * gm-server-control: `.server plimit`, `corpses`, `resetallraids`, `log`, `exit`.
 * gm-moderation (bans, mutes), gm-tickets, gm-command-table-data: each needs a schema module (Auth / Characters /

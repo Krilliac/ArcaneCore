@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
@@ -16,6 +17,10 @@ internal sealed class WorldSpellUnitResolver : ISpellUnitResolver
 /// <summary>World-thread spell effects use map combat for damage, death and threat.</summary>
 internal sealed class WorldSpellDamageSink : IDamageSink
 {
+    private readonly SpellSystem _spells;
+
+    public WorldSpellDamageSink(SpellSystem spells) => _spells = spells;
+
     public uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic)
         => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat: true);
 
@@ -30,12 +35,17 @@ internal sealed class WorldSpellDamageSink : IDamageSink
         }
 
         uint health = victim.Health;
+        float? spellThreat = _spells.CalculateSpellThreat(caster, victim, spell, damage);
         map.Combat.DealDamage(caster, victim, damage, direct: !periodic, meleeDamage: false,
-            startsCombat: startsCombat, durabilityLoss: durabilityLoss, spell: spell);
+            startsCombat: startsCombat, durabilityLoss: durabilityLoss, spell: spell,
+            spellThreat: spellThreat, spellThreatApplies: spellThreat is not null);
         return health - Math.Min(health, victim.Health);
     }
 
     public uint Heal(Unit caster, Unit target, SpellInfo spell, uint amount)
+        => Heal(caster, target, spell, amount, IDamageSink.HealingOrigin.Legacy);
+
+    public uint Heal(Unit caster, Unit target, SpellInfo spell, uint amount, IDamageSink.HealingOrigin origin)
     {
         if (!target.IsAlive || caster.Map is not { } map || !ReferenceEquals(map, target.Map))
         {
@@ -46,18 +56,25 @@ internal sealed class WorldSpellDamageSink : IDamageSink
         target.Health += healed;
         // vmangos Spell::DoAllEffectOnTarget / HostileRefManager::threatAssist:
         // baseline healing threat is half the effective gain, split over hostile references.
-        // Class/spell threat modifiers and helpful-threat suppression need the threat metadata seam.
+        // School-scoped aura modifiers and helpful-threat suppression use the shared threat seam.
+        // Direct Paladin healing uses the vmangos quarter coefficient; periodic, periodic-leech and legacy healing retain half.
         // https://github.com/vmangos/core/blob/development/src/game/Spells/Spell.cpp
         // https://github.com/vmangos/core/blob/development/src/game/Threat/HostileRefManager.cpp
         Unit[] enemies = target.Combat.ThreatenedBy
             .Where(unit => unit.IsAlive && ReferenceEquals(unit.Map, map)).ToArray();
-        if (healed > 0 && enemies.Length > 0)
+        if (healed > 0 && enemies.Length > 0 && origin != IDamageSink.HealingOrigin.NoThreat)
         {
-            float threat = healed * 0.5f / enemies.Length;
+            float coefficient = origin == IDamageSink.HealingOrigin.Direct && caster.Class == Class.Paladin
+                ? 0.25f
+                : 0.5f;
+            float threat = healed * coefficient / enemies.Length;
             foreach (Unit enemy in enemies)
             {
-                enemy.Combat.Threat.AddThreat(caster, threat);
-                map.Combat.Track(enemy);
+                if (_spells.CalculateSpellThreat(caster, enemy, spell, threat, helpful: true) is { } scaled)
+                {
+                    enemy.Combat.Threat.AddThreat(caster, scaled);
+                    map.Combat.Track(enemy);
+                }
             }
 
             if (caster.Combat.ThreatenedBy.Count > 0)
@@ -67,6 +84,33 @@ internal sealed class WorldSpellDamageSink : IDamageSink
         }
 
         return healed;
+    }
+
+    public void AssistPeriodicEnergizeThreat(Unit caster, Unit target, SpellInfo spell, uint effectiveGain, PowerType power)
+    {
+        if (effectiveGain == 0 || power is PowerType.Mana or PowerType.Happiness
+            || caster.Map is not { } map || !ReferenceEquals(map, target.Map)
+            || !caster.IsAlive || !target.IsAlive)
+        {
+            return;
+        }
+
+        Unit[] enemies = target.Combat.ThreatenedBy
+            .Where(unit => unit is Creature { IsAlive: true } && ReferenceEquals(unit.Map, map)).ToArray();
+        if (enemies.Length == 0)
+        {
+            return;
+        }
+
+        float threat = effectiveGain * 0.5f / enemies.Length;
+        foreach (Creature enemy in enemies.OfType<Creature>())
+        {
+            if (_spells.CalculateSpellThreat(caster, enemy, spell, threat, helpful: true) is { } scaled)
+            {
+                enemy.Combat.Threat.AddThreat(caster, scaled);
+                map.Combat.Track(enemy);
+            }
+        }
     }
 }
 

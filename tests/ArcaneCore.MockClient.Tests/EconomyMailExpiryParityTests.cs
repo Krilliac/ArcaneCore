@@ -9,6 +9,8 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Economy;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 using Xunit;
 using static ArcaneCore.MockClient.Tests.EconomyMailSendParityTests;
 
@@ -101,7 +103,9 @@ public sealed class EconomyMailExpiryParityTests
     [Fact]
     public async Task Delete_removes_letters_with_attachments_but_refuses_cash_on_delivery_when_the_vmangos_option_is_on()
     {
-        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        var diagnostics = new SettlementDiagnostics();
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true,
+            configureServices: services => services.AddSingleton<ILogger<EconomyFeature>>(diagnostics));
         rig.Server.Services.GetRequiredService<EconomyFeature>().Options.AllowDeleteWithAttachments = true;
         long now = rig.Clock.GetUtcNow().ToUnixTimeSeconds();
         await SeedAsync(rig,
@@ -117,7 +121,9 @@ public sealed class EconomyMailExpiryParityTests
             var reader = new PacketReader(await rig.Receiver.ReadUntilAsync(WorldOpcode.SmsgSendMailResult, rig.Token));
             Assert.Equal(id, reader.ReadUInt32());
             Assert.Equal((uint)MailAction.Deleted, reader.ReadUInt32());
-            Assert.Equal(id == 6003 ? MailResult.InternalError : MailResult.Ok, (MailResult)reader.ReadUInt32());
+            MailResult expected = id == 6003 ? MailResult.InternalError : MailResult.Ok;
+            MailResult actual = (MailResult)reader.ReadUInt32();
+            Assert.True(expected == actual, $"Delete mail {id}: expected {expected}, got {actual}. {diagnostics.Summary}");
         }
 
         Assert.Equal(6003u, Assert.Single(await rig.MailsOfAsync(rig.ReceiverGuid)).Id);
@@ -137,6 +143,22 @@ public sealed class EconomyMailExpiryParityTests
             Subject = $"letter {id}", Money = money, ItemGuid = item, ItemEntry = item == 0 ? 0u : 117u,
             DeliverTime = now - 1000, ExpireTime = expired ? now - 10 : now + 86400,
         };
+    }
+
+    // Preserve the mail ID and storage failure if the full-suite timing exposes an intermittent refusal.
+    private sealed class SettlementDiagnostics : ILogger<EconomyFeature>
+    {
+        private readonly ConcurrentQueue<string> _messages = new();
+        public string Summary => string.Join(" | ", _messages);
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Information;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (!IsEnabled(logLevel)) return;
+            _messages.Enqueue(formatter(state, exception) + (exception is null ? string.Empty : $" [{exception.GetType().Name}: {exception.Message}]"));
+            while (_messages.Count > 16) _messages.TryDequeue(out _);
+        }
     }
 
     private static async Task SeedAsync(Rig rig, params MailRecord[] letters)
