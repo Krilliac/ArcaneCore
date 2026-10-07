@@ -68,6 +68,25 @@ public sealed class ZoneAreaUpdater : IMapUpdater
         return UpdateZone(player, GetState(player), zone, area, stored);
     }
 
+    /// <summary>
+    /// The player was moved inside this map by a teleport (vmangos <c>Unit::TeleportPositionRelocation</c>, Unit.cpp:9865-9873): the zone
+    /// update runs at once when the zone changed, otherwise the area update when only the area changed. A player the tracker has not
+    /// updated yet gets its first zone update.
+    /// </summary>
+    public void OnRelocated(Player player)
+    {
+        State state = GetState(player);
+        (uint zone, uint area, bool stored) = Resolve(player, state);
+        if (state.Timer == 0 || state.Zone != zone)
+        {
+            UpdateZone(player, state, zone, area, stored);
+        }
+        else if (state.Area != area)
+        {
+            UpdateArea(player, state, area);
+        }
+    }
+
     public void Update(Map map, uint diffMs)
     {
         foreach (Player player in map.Players)

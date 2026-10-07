@@ -131,7 +131,9 @@ and transport flags and resets the client time stamp, then:
   teleport is pending and the GUID is the player's; then observers near the old position get
   `MSG_MOVE_TELEPORT`, the player is moved, observers near the new position get it too, the
   zone is refreshed from terrain and a visibility pass is scheduled (vmangos
-  `ExecuteTeleportNear`).
+  `ExecuteTeleportNear`). Only the position of the movement block changes (swimming,
+  levitating and the other client state stay; the fall in progress ends), and the zone or
+  area update runs at once (`Unit::TeleportPositionRelocation`, `Unit.cpp:9845-9883`).
 - **Other map (far):** after the current map update (vmangos `ScheduleFarTeleport`): clear
   the selection, `SMSG_TRANSFER_PENDING` (u32 map), leave the map (observers get destroys),
   `SMSG_NEW_WORLD` (u32 map, f32 x, y, z, o). While loading, the player is in no map: the

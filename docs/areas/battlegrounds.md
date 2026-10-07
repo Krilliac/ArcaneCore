@@ -33,6 +33,14 @@ finish 300000 ms (0 = off), `InvitationType` 1, premade wait 0, premade minimum 
 - **Kill credit compares the match teams, not faction templates** (`BattleGround.cpp:1767`); the results differ only for a mind-controlled player.
 - **The dropped-flag guid is cleared when the flag is picked up or returned** (vmangos leaves the stale guid until the next drop
   overwrites it), so a later respawn never tries to delete an object that is already gone.
+- **Flag world states follow every return.** A player return and an offline carrier's respawn also write the flag's taken state 0 (vmangos
+  only does it on the timeout return, `BattleGroundWS.cpp:157`; mangos-classic resets it on a return); the offline path also puts the
+  carrier team's icon back to 1. A drop after the end leaves the flag's state at `OnBase` instead of `OnPlayer` with no carrier (nothing is sent).
+- **The flag rules do not lean on the object layer.** A base flag is only taken while its stand is spawned (vmangos relies on the client being
+  unable to use a despawned stand during the 23 s respawn), and `OnPlayerCapturedFlag` checks what the base trigger checks (the source carries
+  the enemy flag, its own flag is home), since vmangos reaches `EventPlayerCapturedFlag` only from that trigger.
+- **A late joiner into an ended match gets the frozen final board** (`FinalScore`), the one MSG_PVP_LOG_DATA answers during WAIT_LEAVE
+  (`BattleGroundHandler.cpp:341`); vmangos rebuilds it (`BattleGround.cpp:1818`), which drops the players who left after the end.
 - **The bracket clamp is `>= 5`** where vmangos tests `> 6` (`Player.cpp:19464`), which leaves bracket 6 for levels 70-79; identical for every
   level a battleground accepts.
 - **The premade wait does not wrap** (`getMSTime() - wait` is unsigned in vmangos and would move a premade group at once during the first

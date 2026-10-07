@@ -60,7 +60,9 @@ public sealed class EnchantingFeature(IServiceProvider services, ILogger<Enchant
         services.GetService<IConfiguration>()?.GetSection(EnchantingOptions.SectionName).Bind(Options);
         if (!CraftingFeature.IsEnabled(services.GetService<IConfiguration>()))
         {
+            // Reagents are taken by the spell core whether crafting is on or not, so the enchant effects must refuse here too.
             logger.LogInformation("Enchanting: disabled");
+            EnchantItemSpells.InstallUnavailable(services.GetRequiredService<SpellFeature>().System);
             return;
         }
 
