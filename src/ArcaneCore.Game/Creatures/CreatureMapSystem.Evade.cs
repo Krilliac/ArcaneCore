@@ -17,7 +17,8 @@ public sealed partial class CreatureMapSystem
     /// vmangos CreatureAI::EnterEvadeMode (AI/CreatureAI.cpp:323-346): stop the cast, drop the auras an evade removes
     /// (<see cref="ICreatureAuraReset"/>, not for a charmed creature), stop every fight and clear the threat list, the AI's evade hook,
     /// and run home: to the combat start point for waypoint movers (they resume the path there), else to the spawn point. The creature
-    /// refuses attacks until it arrives (<see cref="Creature.IsInEvadeMode"/>). Health and mana are not touched: the creature regenerates a
+    /// refuses attacks until it arrives (<see cref="Creature.IsInEvadeMode"/>); a charmed creature does not run home and is not left in evade
+    /// mode. Health and mana are not touched: the creature regenerates a
     /// third of its maximum per 5 s tick once out of combat (<c>Creatures:Movement:EvadeRestoresFullHealth</c> restores the old instant snap).
     /// Not delivered: combo points other players hold on the creature are not cleared (no evade event reaches the combo service), a
     /// creature's pets and totems are not sent home (creatures have no controlled-unit links), the loot recipient is not cleared.
@@ -53,7 +54,9 @@ public sealed partial class CreatureMapSystem
         creature.LootTapGroup = null;
         creature.SetUInt32(UpdateFields.UnitDynamicFlags,
             creature.GetUInt32(UpdateFields.UnitDynamicFlags) & ~(Loot.LootService.UnitDynFlagTapped | Loot.LootService.UnitDynFlagTappedByPlayer));
-        creature.IsEvading = true;
+        // vmangos Creature::IsInEvadeMode (Creature.cpp:3239-3260) is the home generator on top: a charmed creature is sent nowhere, so it
+        // is not in evade mode (and nothing but reaching home would clear the flag).
+        creature.IsEvading = !charmed;
         if (_options.Movement.EvadeRestoresFullHealth)
         {
             // Not retail: vmangos' evade leaves health and mana alone and the regeneration brings them back (Creature.cpp:1087-1160).
@@ -65,7 +68,7 @@ public sealed partial class CreatureMapSystem
         }
 
         creature.AI?.OnEvade();
-        if (!creature.IsAlive || !creature.IsEvading)
+        if (!creature.IsAlive || (!charmed && !creature.IsEvading))
         {
             return;
         }
