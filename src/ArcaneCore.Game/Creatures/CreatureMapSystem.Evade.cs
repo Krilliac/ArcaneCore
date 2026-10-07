@@ -88,6 +88,8 @@ public sealed partial class CreatureMapSystem
     private void ResetAiState(Creature creature)
     {
         creature.IsEvading = false;
+        creature.IsEvadingUnreachable = false; // vmangos Unit::CombatStop clears m_targetNotReachableTimer (Unit.cpp:4645)
+        creature.TargetNotReachableMs = 0;
         creature.HasAggroed = false;
         creature.CalledAssistance = false;
         creature.CombatStart = null;

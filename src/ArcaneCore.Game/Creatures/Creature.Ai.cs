@@ -10,13 +10,20 @@ namespace ArcaneCore.Game.Creatures;
 public sealed partial class Creature : Unit, ICombatCreature
 {
     /// <summary>
-    /// vmangos Creature::IsInEvadeMode: true from EnterEvadeMode until the creature is home.
+    /// vmangos Creature::IsInEvadeMode (Objects/Creature.cpp:3239-3245): true from EnterEvadeMode until the creature is home, and while it
+    /// has been unable to reach its victim for longer than <c>Creatures:UnreachableTargetSoftEvadeMs</c> (IsEvadeBecauseTargetNotReachable).
     /// Combat refuses new attacks on an evading creature (docs/integration/combat.md).
     /// </summary>
-    public bool IsInEvadeMode => IsEvading;
+    public bool IsInEvadeMode => IsEvading || IsEvadingUnreachable;
 
     /// <summary>Set by the map system while the creature runs home after leaving combat.</summary>
     internal bool IsEvading { get; set; }
+
+    /// <summary>vmangos Creature::IsEvadeBecauseTargetNotReachable (Creature.h:510): set by the map system from <see cref="TargetNotReachableMs"/>.</summary>
+    public bool IsEvadingUnreachable { get; internal set; }
+
+    /// <summary>vmangos <c>m_targetNotReachableTimer</c>: milliseconds the creature's chase has had an unreachable victim without a break.</summary>
+    public uint TargetNotReachableMs { get; internal set; }
 
     /// <summary>The script driving this creature (null outside a creature map system).</summary>
     public CreatureAI? AI { get; internal set; }

@@ -58,9 +58,10 @@ Creature victim selection now follows vmangos `Unit::SelectHostileTarget` (Objec
 Limits: stun/fear/confuse are read from `UnitFlags` (no aura-holder query), the "prevents fleeing" and pending-stun states are
 not modelled, second-choice targets are only feared or confused units (damage-immune, breakable-CC and the totem rule of
 `Unit::IsSecondaryThreatTarget`, Objects/Unit.cpp:9644-9676, need the aura engine and a spell catalog the host does not have).
-The unreachable-target timer (Creature.cpp:1017-1040) is delivered by lane L3: the chase generator reports a victim unreachable
-from the pathfinder's verdict and `SelectHostileTarget` gives the victim up after `Creatures:UnreachableTargetEvadeMs`
-(docs/areas/creature-ai.md, "Unreachable target").
+The unreachable-target timer (Creature.cpp:1013-1046): the chase generator reports a victim unreachable from the pathfinder's
+verdict; the host counts it before the AI, puts the creature in evade mode where it stands after 3 s
+(`Creatures:UnreachableTargetSoftEvadeMs`) and evades it home after 24 s (`Creatures:UnreachableTargetEvadeMs`). The victim is
+not dropped from the threat list (docs/areas/creature-ai.md, "Unreachable target").
 
 ### taunt and threat auras (Spells/Effects/ThreatEffects.cs, Spells/Auras/ThreatAuras.cs, Combat/Threat/Taunt.cs)
 

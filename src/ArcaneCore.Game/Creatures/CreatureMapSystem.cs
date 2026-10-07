@@ -308,7 +308,9 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
                         creature.PacifiedMs = creature.PacifiedMs <= diffMs ? 0 : creature.PacifiedMs - diffMs; // vmangos Creature::Update
                     }
 
-                    if (!CheckHardLeash(creature, diffMs))
+                    // vmangos Creature::Update (Creature.cpp:1037-1043): the leash or the 24 s unreachable count evades, and a creature
+                    // that has not reached its victim for 3 s does not run its AI.
+                    if (!CheckHardLeash(creature, diffMs) && !UpdateUnreachableTarget(creature, diffMs))
                     {
                         UpdateAi(creature, diffMs);
                     }

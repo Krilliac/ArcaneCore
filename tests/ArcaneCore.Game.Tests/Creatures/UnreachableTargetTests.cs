@@ -15,8 +15,9 @@ namespace ArcaneCore.Game.Tests.Creatures;
 
 /// <summary>
 /// The unreachable-target rule: the chase generator reports a victim unreachable when the pathfinder returns no path or a
-/// partial one, re-paths while stuck, and the host gives the victim up after <c>Creatures:UnreachableTargetEvadeMs</c> (evade
-/// when alone on the threat list, drop the victim otherwise; mangos Object/UnitThreat.cpp:342-361). EventAI's
+/// partial one, re-paths while stuck, and the host counts vmangos' m_targetNotReachableTimer (Objects/Creature.cpp:1013-1046): past
+/// <c>Creatures:UnreachableTargetSoftEvadeMs</c> (3 s) the creature is in evade mode on the spot, past
+/// <c>Creatures:UnreachableTargetEvadeMs</c> (24 s) it evades home. EventAI's
 /// EVENT_T_TARGET_NOT_REACHABLE (36) fires from the same flag. The synthetic map has no navmesh: the pathfinders below
 /// stand in for one.
 /// </summary>
@@ -120,75 +121,139 @@ public sealed class UnreachableTargetTests
         Assert.InRange(f.Paths.Calls - before, 8, 12); // TargetedMovementGenerator.RecheckMs = 100 while unreachable, 50 ms ticks
     }
 
-    // --- the timer -------------------------------------------------------------------------------------------
+    // --- the timer (vmangos Creature::Update, Objects/Creature.cpp:1013-1046; Creature.h:510) ----------------------------------
 
     [Fact]
-    public void AloneOnTheThreatList_TheCreatureEvades_AfterTheTimer_NotBefore()
+    public void AfterThreeSeconds_TheCreatureEvadesHits_KeepsItsVictim_AndStaysInCombat()
+    {
+        // vmangos IsEvadeBecauseTargetNotReachable (m_targetNotReachableTimer > 3000) makes IsInEvadeMode true: attacks on the creature
+        // evade (Unit.cpp:4498, SpellCaster.cpp:172) and its AI does not update (Creature.cpp:1041), but it stays in combat on its victim.
+        using Fight f = Start();
+        Pull(f, f.Player);
+
+        Run(f.World, 2900);
+        Assert.False(f.Wolf.IsInEvadeMode);
+        Assert.True(f.Map.Combat.Hooks.CanAttack(f.Player, f.Wolf));
+
+        Run(f.World, 300);
+        Assert.True(f.Wolf.IsInEvadeMode);
+        Assert.False(f.Map.Combat.Hooks.CanAttack(f.Player, f.Wolf));
+        Assert.Same(f.Player, f.Wolf.Combat.Victim);
+        Assert.True(f.Wolf.Combat.IsInCombat);
+        Assert.Equal(MovementGeneratorType.Chase, f.Wolf.Motion.CurrentType);
+    }
+
+    [Fact]
+    public void AloneOnTheThreatList_TheCreatureRunsHome_After24Seconds_NotBefore()
     {
         using Fight f = Start();
         Pull(f, f.Player);
 
-        Run(f.World, 4500);
-        Assert.False(f.Wolf.IsInEvadeMode);
+        Run(f.World, 23900);
         Assert.Same(f.Player, f.Wolf.Combat.Victim);
+        Assert.NotEqual(MovementGeneratorType.Home, f.Wolf.Motion.CurrentType);
 
-        Run(f.World, 1000);
+        Run(f.World, 300);
         Assert.True(f.Wolf.IsInEvadeMode);
         Assert.Null(f.Wolf.Combat.Victim);
+        Assert.False(f.Wolf.Combat.IsInCombat);
         Assert.Equal(MovementGeneratorType.Home, f.Wolf.Motion.CurrentType);
     }
 
     [Fact]
-    public void WithAnotherTargetOnTheList_TheUnreachableOneIsDropped_AndTheCreatureSwitches()
+    public void AnotherTargetOnTheList_IsNotASwitch_TheUnreachableVictimIsKept()
     {
+        // vmangos keeps the unreachable victim on the threat list (only Alterac Valley drops it, Creature.cpp:1026-1027) and the whole
+        // creature evades at 24 s; the mangos rule that dropped the victim and switched (UnitThreat.cpp:342-361) is not vmangos.
         using Fight f = Start();
         (Player reachable, _) = AddPlayer(f.World, 2, WolfX + 8, 0); // east of the wall: reachable
-        Pull(f, f.Player);                                           // threat 1 from the unreachable player
+        Pull(f, f.Player);
         f.Wolf.Combat.Threat.AddThreat(reachable, 0.5f);
-        Assert.Same(f.Player, f.Wolf.Combat.Victim);
 
-        Run(f.World, 4500);
+        Run(f.World, 10000);
         Assert.Same(f.Player, f.Wolf.Combat.Victim);
         Assert.Equal(2, f.Wolf.Combat.Threat.Entries.Count);
+        Assert.True(f.Wolf.IsInEvadeMode);
 
-        Run(f.World, 1000);
-        Assert.False(f.Wolf.IsInEvadeMode);
-        Assert.Same(reachable, f.Wolf.Combat.Victim);
-        Assert.DoesNotContain(f.Wolf.Combat.Threat.Entries, e => ReferenceEquals(e.Target, f.Player));
-        Assert.True(f.Wolf.Combat.IsInCombat);
-        Assert.True(f.Wolf.Motion.IsReachable); // the new chase has a path
+        Run(f.World, 14500);
+        Assert.Equal(MovementGeneratorType.Home, f.Wolf.Motion.CurrentType);
+        Assert.Null(f.Wolf.Combat.Victim);
     }
 
     [Fact]
-    public void TheTimerPauses_WhileTheCreatureCannotMove()
+    public void BecomingReachable_EndsTheEvadeState_AndRestartsTheCount()
     {
+        using Fight f = Start();
+        Pull(f, f.Player);
+        Run(f.World, 5000);
+        Assert.True(f.Wolf.IsInEvadeMode);
+
+        f.Player.Relocate(WallX + 1, 0, f.Player.Z, 0, 0); // steps to the wolf's side of the wall
+        Run(f.World, 1000);
+        Assert.True(f.Wolf.Motion.IsReachable);
+        Assert.False(f.Wolf.IsInEvadeMode);
+        Assert.True(f.Map.Combat.Hooks.CanAttack(f.Player, f.Wolf));
+
+        f.Player.Relocate(0, 0, f.Player.Z, 0, 0); // back behind the wall: a fresh count
+        Run(f.World, 2500);
+        Assert.False(f.Wolf.IsInEvadeMode);
+        Run(f.World, 1000);
+        Assert.True(f.Wolf.IsInEvadeMode);
+    }
+
+    [Fact]
+    public void TheTimerKeepsCounting_WhileTheCreatureCannotMove()
+    {
+        // vmangos counts on the generator's last verdict: a stunned chaser keeps its unreachable flag (Creature.cpp:1013-1025).
         using Fight f = Start();
         Pull(f, f.Player);
         Run(f.World, 1000);
 
         f.Wolf.UnitFlags |= UnitFlags.Stunned;
-        Run(f.World, 6000);
-        Assert.False(f.Wolf.IsInEvadeMode); // 1 s counted, the stunned 6 s did not
+        Run(f.World, 3000);
 
-        f.Wolf.UnitFlags &= ~UnitFlags.Stunned;
-        Run(f.World, 3500);
-        Assert.False(f.Wolf.IsInEvadeMode); // 4.5 s
-        Run(f.World, 1000);
-        Assert.True(f.Wolf.IsInEvadeMode);  // 5.5 s
+        Assert.True(f.Wolf.IsInEvadeMode);
     }
 
     [Fact]
-    public void ZeroDisablesTheEvade_TheFlagStays()
+    public void NoUnreachableEvade_KeepsTheCreatureFighting()
     {
-        using Fight f = Start(new CreatureOptions { UnreachableTargetEvadeMs = 0 });
+        // vmangos CREATURE_FLAG_EXTRA_NO_UNREACHABLE_EVADE (0x08, CreatureDefines.h:160).
+        using Fight f = Start(template: Template() with { ExtraFlags = 0x08, ExtraFlagsDialect = CreatureExtraFlagsDialect.VMangos });
         Pull(f, f.Player);
 
-        Run(f.World, 9000);
+        Run(f.World, 30000);
 
         Assert.False(f.Wolf.IsInEvadeMode);
         Assert.Same(f.Player, f.Wolf.Combat.Victim);
         Assert.False(f.Wolf.Motion.IsReachable);
-        Assert.False(f.System.IsTargetUnreachableForTooLong(f.Wolf));
+    }
+
+    [Fact]
+    public void ZeroDisablesBothStages_TheFlagStays()
+    {
+        using Fight f = Start(new CreatureOptions { UnreachableTargetEvadeMs = 0, UnreachableTargetSoftEvadeMs = 0 });
+        Pull(f, f.Player);
+
+        Run(f.World, 30000);
+
+        Assert.False(f.Wolf.IsInEvadeMode);
+        Assert.Same(f.Player, f.Wolf.Combat.Victim);
+        Assert.False(f.Wolf.Motion.IsReachable);
+    }
+
+    [Fact]
+    public void TheEvadingCreature_RegeneratesAsIfOutOfCombat()
+    {
+        // vmangos RegenerateAll(update_diff, IsEvadeBecauseTargetNotReachable()) skips the in-combat check (Creature.cpp:1057, :1094).
+        using Fight f = Start();
+        Pull(f, f.Player);
+        f.Wolf.Health = f.Wolf.MaxHealth / 4;
+
+        Run(f.World, 9000);
+
+        Assert.True(f.Wolf.Combat.IsInCombat);
+        Assert.True(f.Wolf.Health > f.Wolf.MaxHealth / 4);
     }
 
     [Fact]
@@ -198,7 +263,7 @@ public sealed class UnreachableTargetTests
         f.Wolf.AI!.CombatMovement = false;
         Pull(f, f.Player);
 
-        Run(f.World, 9000);
+        Run(f.World, 30000);
 
         Assert.NotEqual(MovementGeneratorType.Chase, f.Wolf.Motion.CurrentType);
         Assert.True(f.Wolf.Motion.IsReachable);
