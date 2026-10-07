@@ -561,15 +561,18 @@ public sealed class Channel
         }
     }
 
+    /// <summary>
+    /// vmangos normalizePlayerName(m_name, 128) only changes case; it does not trim. ChannelManager keys the channel on
+    /// the lowered request text, so trimming here would announce a name ("Foo") that no longer finds the channel ("foo ").
+    /// </summary>
     private static string NormalizeCustomName(string name)
     {
-        string trimmed = name.Trim();
-        if (trimmed.Length == 0 || trimmed.Length > 128)
+        if (name.Length == 0 || name.Length > 128)
         {
             return string.Empty;
         }
 
-        string lower = trimmed.ToLowerInvariant();
+        string lower = name.ToLowerInvariant();
         return char.ToUpperInvariant(lower[0]) + lower[1..];
     }
 }
