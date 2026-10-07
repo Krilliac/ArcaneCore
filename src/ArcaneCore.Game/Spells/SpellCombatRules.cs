@@ -204,12 +204,24 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
         WeaponAttackType attack = spell.DamageClass == SpellDamageClass.Ranged || (spell.AttributesEx3 & RangedSpellFacts.NormalRangedAttackEx3) != 0
             ? WeaponAttackType.RangedAttack : WeaponAttackType.BaseAttack;
         MapCombat? combat = caster.Map?.FindUpdater<MapCombat>();
+        // vmangos GetMeleeMissChance (SpellCaster.cpp:381-390): the RESIST_MISS_CHANCE spell mod acts on the hit chance bonus (a flat bonus
+        // that subtracts from the miss chance; a percent mod skips its zero base), then the weapon-checked MOD_HIT_CHANCE is added, then the
+        // first-percent rule; the victim's MOD_ATTACKER_MELEE/RANGED_HIT_CHANCE comes off afterwards (:414-418).
+        float hitBonus = (Modifiers ?? system.SpellModifiers).Apply(caster, spell, SpellModOp.ResistMissChance, 0f)
+            + WeaponAuraModifiers.Get(system, caster, attack, AuraType.ModHitChance);
+        int victimHitBonus = system.GetTotalAuraModifier(target, attack == WeaponAttackType.RangedAttack ? AuraType.ModAttackerRangedHitChance : AuraType.ModAttackerMeleeHitChance);
         float miss;
         float dodge = 0;
         float parry = 0;
         if (combat is not null)
         {
-            MeleeRollInput input = combat.BuildRollInput(caster, target, attack) with { DualWield = false };
+            MeleeRollInput input = combat.BuildRollInput(caster, target, attack) with
+            {
+                DualWield = false,
+                HitBonus = hitBonus,
+                VictimAttackerHitBonus = victimHitBonus,
+            };
+
             // fullSkillDiff = attacker weapon skill - victim defense (vmangos SpellCaster.cpp:457-465), the same sign as the white swing.
             miss = MeleeHitTable.MissChance(input, input.AttackerWeaponSkill - input.VictimDefenseSkill);
             if (attack != WeaponAttackType.RangedAttack)
@@ -220,18 +232,14 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
         }
         else
         {
-            miss = 5.0f + ((target.Level - caster.Level) * 5 * 0.1f);
+            miss = Math.Clamp(5.0f + ((target.Level - caster.Level) * 5 * 0.1f) - hitBonus - victimHitBonus, 0f, 60f);
         }
 
-        // vmangos GetMeleeMissChance (SpellCaster.cpp:381-388): the RESIST_MISS_CHANCE spell mod acts on the hit chance
-        // bonus (a flat bonus that subtracts from the miss chance; a percent mod skips its zero base).
-        miss -= (Modifiers ?? system.SpellModifiers).Apply(caster, spell, SpellModOp.ResistMissChance, 0f);
-        if (attack == WeaponAttackType.RangedAttack)
+        // SPELL_ATTR_EX3_ALWAYS_HIT: no miss (GetMeleeMissChance, SpellCaster.cpp:341-342); dodge and parry still roll.
+        if (spell.IsAlwaysHit())
         {
-            miss -= system.GetTotalAuraModifier(target, AuraType.ModAttackerRangedHitChance); // ranged (autorepeat lane): SpellCaster.cpp:416
+            miss = 0f;
         }
-
-        miss = Math.Clamp(miss, 0f, 60f);
         int roll = system.Random.Next(0, 10_000);
         int bound = (int)(miss * 100);
         if (roll < bound)
@@ -350,7 +358,8 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
                 AttackerMaxSkill = MeleeHitTable.SkillMaxForLevel(caster, target),
                 VictimDefenseSkill = MeleeHitTable.SkillMaxForLevel(target, caster),
             };
-        return MeleeHitTable.CritChance(input with { BaseCritChance = crit, VictimIsPlayer = target is Player });
+        // The victim's attacker crit aura is already in crit; BuildRollInput's copy of it is dropped so it counts once.
+        return MeleeHitTable.CritChance(input with { BaseCritChance = crit, VictimAttackerCritBonus = 0f, VictimIsPlayer = target is Player });
     }
     public virtual float CritMultiplier(SpellInfo spell)
     {

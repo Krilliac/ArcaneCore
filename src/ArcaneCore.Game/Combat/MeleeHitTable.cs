@@ -50,8 +50,23 @@ public readonly record struct MeleeRollInput
     /// <summary>Attacker dual wields (19% white-swing miss penalty).</summary>
     public bool DualWield { get; init; }
 
-    /// <summary>+hit from auras/gear, percent (SPELL_AURA_MOD_HIT_CHANCE).</summary>
+    /// <summary>
+    /// The attacker's +hit, percent: SPELL_AURA_MOD_HIT_CHANCE whose weapon requirement fits the hand (vmangos
+    /// GetWeaponBasedAuraModifier, SpellCaster.cpp:389-390), plus a melee spell's RESIST_MISS_CHANCE spell mod (:381-387).
+    /// </summary>
     public float HitBonus { get; init; }
+
+    /// <summary>
+    /// The victim's SPELL_AURA_MOD_ATTACKER_MELEE_HIT_CHANCE (SPELL_AURA_MOD_ATTACKER_RANGED_HIT_CHANCE for a ranged attack), percent:
+    /// subtracted from the miss chance after the attacker's +hit (vmangos SpellCaster.cpp:414-418).
+    /// </summary>
+    public float VictimAttackerHitBonus { get; init; }
+
+    /// <summary>
+    /// The victim's SPELL_AURA_MOD_ATTACKER_MELEE_CRIT_CHANCE (_RANGED_ for a ranged attack), percent: added to the attacker's crit
+    /// chance before the skill term (vmangos Unit::GetUnitCriticalChance, Unit.cpp:2577-2581).
+    /// </summary>
+    public float VictimAttackerCritBonus { get; init; }
 
     /// <summary>Attacker base crit before skill adjustments (PLAYER_CRIT_PERCENTAGE or 5 for creatures).</summary>
     public float BaseCritChance { get; init; }
@@ -119,13 +134,16 @@ public static class MeleeHitTable
         }
 
         miss -= hit;
+
+        // Hit chance depends on the victim's auras too, after the +hit (SpellCaster.cpp:414-418).
+        miss -= input.VictimAttackerHitBonus;
         return Math.Clamp(miss, 0f, 60f);
     }
 
     /// <summary>vmangos Unit::GetUnitCriticalChance (white swing), percent, floored at 0.</summary>
     public static float CritChance(in MeleeRollInput input)
     {
-        float crit = input.BaseCritChance;
+        float crit = input.BaseCritChance + input.VictimAttackerCritBonus;
         int skillDiff = input.AttackerWeaponSkill - input.VictimDefenseSkill;
         int minSkill = Math.Min(input.AttackerMaxSkill, input.AttackerWeaponSkill);
         int cappedSkillDiff = minSkill - input.VictimDefenseSkill;
