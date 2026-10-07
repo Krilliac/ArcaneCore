@@ -217,7 +217,7 @@ public sealed record BattlegroundStatusReport(uint QueueSlot, BattlegroundStatus
 /// queue order and the debug "testing" mode of vmangos (docs/areas/battlegrounds.md).
 /// </para>
 /// </summary>
-public sealed class BattlegroundManager : IBattlegroundLifecycle
+public sealed class BattlegroundManager : IBattlegroundLifecycle, Death.IBattlegroundPresence
 {
     private readonly Dictionary<BattlegroundType, BattlegroundTemplate> _templates = [];
     private readonly BattlegroundQueue[] _queues;
@@ -441,6 +441,15 @@ public sealed class BattlegroundManager : IBattlegroundLifecycle
     }
 
     internal BattlegroundQueue QueueOf(BattlegroundQueueType type) => _queues[(int)type];
+
+    /// <summary>
+    /// The status of the match the player is bound to, or null when it is in none (vmangos <c>Player::GetBattleGround</c>; the death
+    /// rules refuse a corpse reclaim while it is not <see cref="BattlegroundStatus.InProgress"/>). Creates no player state.
+    /// </summary>
+    public BattlegroundStatus? MatchStatusOf(ObjectGuid player)
+        => _states.TryGetValue(player, out BattlegroundPlayerState? state) && state.InBattleground
+            ? GetBattleground(state.InstanceId, state.Type)?.Status
+            : null;
 
     /// <summary>The queued group of a player, or null.</summary>
     public QueuedGroup? QueuedGroupOf(ObjectGuid player, BattlegroundType type) => _queues[(int)(BattlegroundQueueType)(byte)type]?.GroupOf(player);

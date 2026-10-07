@@ -218,8 +218,8 @@ public sealed partial class MapCombat
 
     /// <summary>
     /// CMSG_RECLAIM_CORPSE (vmangos HandleReclaimCorpseOpcode): a ghost with a corpse whose
-    /// reclaim delay has passed, within 39 yd (3D) of it, is resurrected at 50% and the corpse
-    /// goes away.
+    /// reclaim delay has passed, within 39 yd (3D) of it, is resurrected at 50% (100% in a
+    /// battleground, whose match must be in progress) and the corpse goes away.
     /// </summary>
     public bool TryReclaimCorpse(Player player)
     {
@@ -249,7 +249,17 @@ public sealed partial class MapCombat
             return false;
         }
 
-        ResurrectPlayer(player, CombatConstants.CorpseReclaimRestorePercent, applySickness: false);
+        // "Prevent exploit: die with hellfire during battleground preparation, and resurrect after the door"
+        // (MiscHandler.cpp:594-597): a match that is not in progress refuses the reclaim.
+        Battlegrounds.BattlegroundStatus? match = Death.DeathSeams.Find(_world)?.Battlegrounds?.MatchStatusOf(player.Guid);
+        if (match is { } status && status != Battlegrounds.BattlegroundStatus.InProgress)
+        {
+            return false;
+        }
+
+        // ResurrectPlayer(InBattleGround() ? 1.0f : 0.5f) (MiscHandler.cpp:599): bound to a match, or on a battleground map.
+        bool inBattleground = match is not null || player.Map?.Template is { IsBattleground: true };
+        ResurrectPlayer(player, inBattleground ? 1.0f : CombatConstants.CorpseReclaimRestorePercent, applySickness: false);
         RemoveCorpse(corpse);
         c.Corpse = null;
         return true;

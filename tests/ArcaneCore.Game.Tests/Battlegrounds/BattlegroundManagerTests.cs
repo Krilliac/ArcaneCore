@@ -649,6 +649,19 @@ public sealed class BattlegroundManagerTests
     }
 
     [Fact]
+    public void MatchStatusOf_IsTheBoundMatchsStatus_AndNullOutsideAnyMatch()
+    {
+        var (mgr, _, bg) = WithInvitations();
+        Assert.Null(mgr.MatchStatusOf(Alliance[0])); // invited, not bound yet
+
+        mgr.HandlePort(new BattlegroundPortRequest(Alliance[0], 489, 1, 60, false));
+
+        Assert.Equal(BattlegroundStatus.WaitJoin, bg.Status); // the doors are still closed
+        Assert.Equal(BattlegroundStatus.WaitJoin, mgr.MatchStatusOf(Alliance[0]));
+        Assert.Null(mgr.MatchStatusOf(Alliance[1]));
+    }
+
+    [Fact]
     public void ThePlayerWhoAcceptedIsNotRemovedWhenTheInvitationWouldHaveLapsed()
     {
         var (mgr, host, bg) = WithInvitations();

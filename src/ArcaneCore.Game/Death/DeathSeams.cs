@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using ArcaneCore.Game.Battlegrounds;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 
@@ -49,6 +50,16 @@ public interface IGhostForm
 public readonly record struct CorpsePlace(uint MapId, float X, float Y, float Z);
 
 /// <summary>
+/// The battleground match a player is bound to, as the death rules see it (vmangos <c>Player::GetBattleGround</c>; the
+/// <see cref="BattlegroundManager"/> implements it).
+/// </summary>
+public interface IBattlegroundPresence
+{
+    /// <summary>The status of the match <paramref name="player"/> is bound to, or null when it is in none.</summary>
+    BattlegroundStatus? MatchStatusOf(ObjectGuid player);
+}
+
+/// <summary>
 /// The per-world registry of the death area's own extension points. <see cref="Combat.CombatHooks"/>
 /// accepts one production registration (first wins, and its registered subclass is sealed) and
 /// <see cref="DeathHooks"/> can be replaced wholesale, so neither can carry features that several
@@ -63,6 +74,7 @@ public sealed class DeathSeams
 
     private IGraveyardRepop? _graveyards;
     private IGhostForm? _ghostForm;
+    private IBattlegroundPresence? _battlegrounds;
 
     private DeathSeams()
     {
@@ -73,6 +85,9 @@ public sealed class DeathSeams
 
     /// <summary>The ghost form implementation, or null (combat then sets the ghost flag itself, as before the ghost aura existed).</summary>
     public IGhostForm? GhostForm => _ghostForm;
+
+    /// <summary>The battleground matches, or null (no player is in a match: nothing is gated on one).</summary>
+    public IBattlegroundPresence? Battlegrounds => _battlegrounds;
 
     /// <summary>The seams of <paramref name="world"/>, created empty on first use (startup).</summary>
     public static DeathSeams Of(WorldRuntime world)
@@ -100,5 +115,12 @@ public sealed class DeathSeams
     {
         ArgumentNullException.ThrowIfNull(graveyards);
         return Interlocked.CompareExchange(ref _graveyards, graveyards, null) is null;
+    }
+
+    /// <summary>Register the battleground matches; the first registration wins and later ones return false.</summary>
+    public bool TryRegisterBattlegrounds(IBattlegroundPresence battlegrounds)
+    {
+        ArgumentNullException.ThrowIfNull(battlegrounds);
+        return Interlocked.CompareExchange(ref _battlegrounds, battlegrounds, null) is null;
     }
 }
