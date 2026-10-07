@@ -251,6 +251,9 @@ public sealed partial class SpellSystem
                 continue;
             }
 
+            // vmangos Unit::Update runs the unit's events (ChannelResetEvent) before _UpdateSpells.
+            UpdatePendingChannelReset(state, diffMs);
+
             if (state.AutoRepeatCast is { } autoRepeat)
             {
                 UpdateAutoRepeat(state, autoRepeat); // before the casts, as Unit::_UpdateSpells does (Unit.cpp:2673-2674)
@@ -471,6 +474,10 @@ public sealed partial class SpellSystem
         SendCastResult(caster, spell, SpellCastResult.CastOk, cast.IsTriggered);
         cast.Completed = true;
         NotifyCast(cast);
+        if (spell.IsChanneled)
+        {
+            ResetPendingChannelBeforeStart(state); // vmangos Spell::cast, after OnSpellLaunch and before the spell go (Spell.cpp:3460-3469)
+        }
 
         Dictionary<Unit, SpellTargetEntry> targetEffects = SelectTargets(cast, unitTarget);
         // Magnet selection changes the explicit target; a channel must track that selected unit.
@@ -774,10 +781,71 @@ public sealed partial class SpellSystem
         return combatDistance > maxRange;
     }
 
-    private static void EndChannel(SpellCast cast, bool interrupted)
+    /// <summary>How long the channel fields outlive a channel that ended normally (vmangos <c>AddEventAtOffset(ChannelResetEvent, 1000)</c>).</summary>
+    internal const uint ChannelResetDelayMs = 1000;
+
+    /// <summary>
+    /// vmangos Spell::SendChannelUpdate(0, interrupted) (Spell.cpp:4801-4823): when the caster still shows a channel, an interrupt
+    /// clears it at once (<see cref="CancelChannelingAnimation"/>), a normal end ("else, we have some visual bugs (arcane
+    /// projectile, last tick)") leaves it for <see cref="ChannelResetDelayMs"/> (ChannelResetEvent, run by <see cref="UpdatePendingChannelReset"/>).
+    /// </summary>
+    private void EndChannel(SpellCast cast, bool interrupted)
     {
-        _ = interrupted; // vmangos delays the field reset by 1 s on a normal end (ChannelResetEvent); reset at once here.
         Unit caster = cast.Caster;
+        if (caster.GetUInt32(UpdateFields.UnitChannelSpell) == 0 && caster.GetUInt64(UpdateFields.UnitFieldChannelObject) == 0)
+        {
+            return;
+        }
+
+        UnitSpellState state = GetOrCreateState(caster);
+        if (interrupted)
+        {
+            state.PendingChannelResetMs = 0;
+            CancelChannelingAnimation(caster);
+        }
+        else
+        {
+            state.PendingChannelResetMs = ChannelResetDelayMs;
+        }
+    }
+
+    /// <summary>
+    /// vmangos ChannelResetEvent::Execute / Abort (Spell.cpp:8341-8357): when the second is up the values go, unless a channel is
+    /// running again by then (its start already reset them, <see cref="ResetPendingChannelBeforeStart"/>).
+    /// </summary>
+    private static void UpdatePendingChannelReset(UnitSpellState state, uint diffMs)
+    {
+        if (state.PendingChannelResetMs == 0)
+        {
+            return;
+        }
+
+        if (diffMs < state.PendingChannelResetMs)
+        {
+            state.PendingChannelResetMs -= diffMs;
+            return;
+        }
+
+        state.PendingChannelResetMs = 0;
+        if (state.CurrentCast is not { State: SpellCastState.Casting } running || !running.Spell.IsChanneled)
+        {
+            CancelChannelingAnimation(state.Unit);
+        }
+    }
+
+    /// <summary>"Prevent animation from disappearing if casting another channel too soon after previous ends" (vmangos Spell.cpp:3463-3469).</summary>
+    private static void ResetPendingChannelBeforeStart(UnitSpellState state)
+    {
+        if (state.PendingChannelResetMs != 0)
+        {
+            state.PendingChannelResetMs = 0;
+            CancelChannelingAnimation(state.Unit);
+        }
+    }
+
+    /// <summary>vmangos Unit::CancelSpellChannelingAnimationInstantly (Unit.cpp:10747-10755): the zero channel update for a player, then the fields.</summary>
+    private static void CancelChannelingAnimation(Unit caster)
+    {
         if (caster is Player player)
         {
             player.Session.Send(WorldOpcode.MsgChannelUpdate, SpellPackets.BuildChannelUpdate(0));
@@ -830,6 +898,14 @@ public sealed partial class SpellSystem
         state.CurrentCast = null;
         state.MeleeCast = null;
         state.AutoRepeatCast = null;
+
+        // The unit's events die with it; ChannelResetEvent::Abort still clears the values (the unit is leaving, so no packet).
+        if (state.PendingChannelResetMs != 0)
+        {
+            state.PendingChannelResetMs = 0;
+            state.Unit.SetUInt64(UpdateFields.UnitFieldChannelObject, 0);
+            state.Unit.SetUInt32(UpdateFields.UnitChannelSpell, 0);
+        }
 
         foreach (SpellAuraHolder holder in state.Auras)
         {

@@ -193,6 +193,12 @@ public sealed class UnitSpellState
 
     public IReadOnlyList<SpellAuraHolder> AuraHolders => Auras;
 
+    /// <summary>
+    /// Milliseconds until the channel fields of a channel that ended normally are cleared (vmangos ChannelResetEvent and
+    /// UNIT_STATE_PENDING_CHANNEL_RESET, Spell.cpp:4814-4820); 0 when no reset is pending.
+    /// </summary>
+    internal uint PendingChannelResetMs { get; set; }
+
     internal bool IsIdle => CurrentCast is null && MeleeCast is null && AutoRepeatCast is null && Auras.Count == 0 && SpellCooldowns.Count == 0
-        && CategoryCooldowns.Count == 0 && GlobalCooldowns.Count == 0 && SchoolLockouts.Count == 0;
+        && CategoryCooldowns.Count == 0 && GlobalCooldowns.Count == 0 && SchoolLockouts.Count == 0 && PendingChannelResetMs == 0;
 }

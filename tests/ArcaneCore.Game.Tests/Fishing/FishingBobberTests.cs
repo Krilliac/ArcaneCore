@@ -30,6 +30,11 @@ public sealed class FishingBobberTests
         Assert.Null(rig.Bobber);
         byte[] last = Sent(rig, WorldOpcode.SmsgCastResult).Last();
         Assert.Equal((FishingRig.FishingSpell, (byte)SpellCastResultStatus.Failure, (byte)SpellCastResult.NotFishable), (BitConverter.ToUInt32(last, 0), last[4], last[5]));
+        Assert.Null(rig.Kit.System.GetState(rig.Player.Guid)?.CurrentCast);
+
+        // vmangos SendChannelUpdate(0) is a normal end: the channel values go 1000 ms later (ChannelResetEvent).
+        Assert.Equal(FishingRig.FishingSpell, rig.Player.GetUInt32(UpdateFields.UnitChannelSpell));
+        rig.Step(1000);
         Assert.Equal(0u, rig.Player.GetUInt32(UpdateFields.UnitChannelSpell));
         Assert.Equal(0ul, rig.Player.GetUInt64(UpdateFields.UnitFieldChannelObject));
         Assert.Equal(0, rig.Fishing.ActiveBobbers);
@@ -148,6 +153,11 @@ public sealed class FishingBobberTests
         Assert.Single(Sent(rig, WorldOpcode.SmsgFishNotHooked));
         Assert.Empty(Sent(rig, WorldOpcode.SmsgFishNotHooked).Single());
         Assert.Null(rig.Bobber);
+        Assert.Null(rig.Kit.System.GetState(rig.Player.Guid)?.CurrentCast);
+
+        // FinishSpell(CURRENT_CHANNELED_SPELL) is a normal end: the channel values go 1000 ms later (ChannelResetEvent).
+        Assert.Equal(FishingRig.FishingSpell, rig.Player.GetUInt32(UpdateFields.UnitChannelSpell));
+        rig.Step(1000);
         Assert.Equal(0u, rig.Player.GetUInt32(UpdateFields.UnitChannelSpell));
         Assert.Equal(0ul, rig.Player.GetUInt64(UpdateFields.UnitFieldChannelObject));
         Assert.Equal(0, rig.Fishing.ActiveBobbers);
@@ -206,10 +216,15 @@ public sealed class FishingBobberTests
 
         Assert.True(rig.Kit.System.FinishChannel(rig.Player));
 
-        Assert.Equal(0u, rig.Player.GetUInt32(UpdateFields.UnitChannelSpell));
         Assert.Empty(Sent(rig, WorldOpcode.SmsgSpellFailedOther)); // not an interrupt
-        Assert.Single(Sent(rig, WorldOpcode.MsgChannelUpdate));
         Assert.Null(rig.Bobber);
+
+        // A normal end: the zero channel update and the cleared values follow 1000 ms later (vmangos ChannelResetEvent).
+        Assert.Equal(FishingRig.FishingSpell, rig.Player.GetUInt32(UpdateFields.UnitChannelSpell));
+        Assert.Empty(Sent(rig, WorldOpcode.MsgChannelUpdate));
+        rig.Step(1000);
+        Assert.Equal(0u, rig.Player.GetUInt32(UpdateFields.UnitChannelSpell));
+        Assert.Single(Sent(rig, WorldOpcode.MsgChannelUpdate));
     }
 
     [Theory]

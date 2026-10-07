@@ -126,9 +126,11 @@ public sealed class FishingCatchTests
 
         Assert.Empty(Packets_(rig, WorldOpcode.SmsgFishNotHooked));
         Assert.Empty(Packets(rig.Session, WorldOpcode.SmsgLootResponse));
-        Assert.Equal(0u, rig.Player.GetUInt32(UpdateFields.UnitChannelSpell));
+        Assert.Null(rig.Kit.System.GetState(rig.Player.Guid)?.CurrentCast);
         rig.Step(100);
         Assert.Null(rig.Bobber);
+        rig.Step(900); // FinishSpell is a normal end: the channel values go 1000 ms later (ChannelResetEvent)
+        Assert.Equal(0u, rig.Player.GetUInt32(UpdateFields.UnitChannelSpell));
     }
 
     [Fact]
@@ -143,9 +145,12 @@ public sealed class FishingCatchTests
         ParsedLoot window = Window(rig);
         Assert.Equal((bobber.Guid.Value, LootType.Fishing), (window.Guid, window.Type));
         Assert.Equal(FishingRig.SubZoneFish, Assert.Single(window.Items).ItemId);
-        Assert.Equal(0u, rig.Player.GetUInt32(UpdateFields.UnitChannelSpell));   // FinishSpell(CURRENT_CHANNELED_SPELL) runs after every branch
+        Assert.Null(rig.Kit.System.GetState(rig.Player.Guid)?.CurrentCast);      // FinishSpell(CURRENT_CHANNELED_SPELL) runs after every branch
         Assert.NotNull(rig.Bobber);                                              // detached from the spell: the window still needs it
         Assert.Empty(Packets(rig.Session, WorldOpcode.SmsgFishEscaped));
+        Assert.Equal(FishingRig.FishingSpell, rig.Player.GetUInt32(UpdateFields.UnitChannelSpell)); // a normal end keeps the values 1000 ms
+        rig.Step(1000);
+        Assert.Equal(0u, rig.Player.GetUInt32(UpdateFields.UnitChannelSpell));
     }
 
     [Fact]
@@ -220,6 +225,8 @@ public sealed class FishingCatchTests
         Assert.Empty(Packets(rig.Session, WorldOpcode.SmsgLootResponse));
         Assert.Equal((ushort)54, rig.Skills.GetValuePure(SkillIds.Fishing));
         Assert.Null(rig.Bobber); // JUST_DEACTIVATED, and the ending channel deletes the bobber it still owns
+        Assert.Null(rig.Kit.System.GetState(rig.Player.Guid)?.CurrentCast);
+        rig.Step(1000); // a normal end: the channel values go 1000 ms later (ChannelResetEvent)
         Assert.Equal(0u, rig.Player.GetUInt32(UpdateFields.UnitChannelSpell));
     }
 
