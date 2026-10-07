@@ -214,6 +214,8 @@ public enum SpellImplicitTarget : uint
     GameObjectItem = 26,
     EnumUnitsFriendAoeAtSrcLoc = 30,
     EnumUnitsFriendAoeAtDestLoc = 31,
+    /// <summary>vmangos TARGET_LOCATION_UNIT_MINION_POSITION: caster-relative summon destination.</summary>
+    LocationUnitMinionPosition = 32,
     EnumUnitsPartyAoeAtSrcLoc = 33,
     EnumUnitsPartyAoeAtDestLoc = 34,
     UnitParty = 35,
@@ -246,6 +248,9 @@ public static class SpellConstants
 {
     /// <summary>Effects per spell (Spell.dbc MAX_EFFECT_INDEX).</summary>
     public const int MaxEffects = 3;
+
+    /// <summary>SpellEntry.h:636-637: eight reagent IDs (DBC 42-49) and counts (50-57).</summary>
+    public const int MaxReagents = 8;
 
     /// <summary>StartRecoveryCategory of the shared global cooldown (vmangos Player::AddGCD: 133).</summary>
     public const uint GlobalCooldownCategory = 133;

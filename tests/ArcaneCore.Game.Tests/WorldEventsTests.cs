@@ -72,4 +72,35 @@ public sealed class WorldEventsTests
 
         Assert.Same(player, seen);
     }
+
+    [Fact]
+    public void Updated_RunsOncePerTickWithoutMaps_AfterPostedCommands_AndIsolatesFailures()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        var observed = new List<(uint Diff, bool CommandsRun, bool WorldThread)>();
+        bool commandsRun = false;
+        world.Updated += _ => throw new InvalidOperationException("feature bug");
+        world.Updated += diff => observed.Add((diff, commandsRun, world.IsWorldThread));
+        world.Post(() => commandsRun = true);
+
+        world.RunTick(5);
+        world.RunTick(20);
+
+        Assert.Empty(world.Maps);
+        Assert.Equal([(5u, true, true), (20u, true, true)], observed);
+    }
+
+    [Fact]
+    public void Updated_RunsOnceWithSeveralMaps()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        world.GetMap(0);
+        world.GetMap(1);
+        int count = 0;
+        world.Updated += _ => count++;
+
+        world.RunTick(10);
+
+        Assert.Equal(1, count);
+    }
 }

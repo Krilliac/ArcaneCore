@@ -10,7 +10,8 @@ namespace ArcaneCore.Game.Spells.Utility.Targets;
 /// <item>5 TARGET_UNIT_CASTER_PET (Health Funnel, Dark Pact's pet side): the caster's pet, else its charm (vmangos Spell.cpp:2212-2222).</item>
 /// <item>27 TARGET_UNIT_CASTER_MASTER (Sacrifice): the charmer or owner of the caster (Spell.cpp:2770-2772).</item>
 /// <item>32 TARGET_LOCATION_UNIT_MINION_POSITION (every Summon Pet spell): the caster-relative point of the front-left family, +0.25 pi, radius 0
-/// when the effect has no radius index (Spell.cpp:2975-3022, the comment there notes it is not known how it differs from the others).</item>
+/// when the effect has no radius index (Spell.cpp:2975-3022, the comment there notes it is not known how it differs from the others).
+/// The spell system's built-in selector registry already serves 32 (with the duel case), so the install registers it only when it is missing.</item>
 /// </list>
 /// Install once per <see cref="SpellSystem"/>; a second install throws (two owners of one target id would disagree).
 /// LIMITS: the destination of 32 is the unclamped offset at the caster's Z (vmangos uses GetFirstCollisionPosition, as the existing
@@ -32,8 +33,11 @@ public static class PetTargets
             (_, cast, _, _) => PetOf(cast.Caster) is { } pet ? [(pet, 1.0f)] : [], locationOnly: false);
         spells.RegisterTargetSelector(CasterMaster,
             (_, cast, _, _) => cast.Caster.GetCharmerOrOwner() is { } master ? [(master, 1.0f)] : [], locationOnly: false);
-        spells.RegisterTargetSelector(MinionPosition,
-            (_, cast, effect, _) => Spells.Targets.SpellTargetSelectors.SelectCasterRelativeLocation(cast, effect, MathF.PI * 0.25f), locationOnly: true);
+        if (!spells.IsRegisteredLocationTarget(MinionPosition))
+        {
+            spells.RegisterTargetSelector(MinionPosition,
+                (_, cast, effect, _) => Spells.Targets.SpellTargetSelectors.SelectCasterRelativeLocation(cast, effect, MathF.PI * 0.25f), locationOnly: true);
+        }
         spells.RegisterCastCheck(new CasterPetCastCheck());
     }
 

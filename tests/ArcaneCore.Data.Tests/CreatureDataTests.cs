@@ -207,6 +207,39 @@ public sealed class CreatureDataTests : IAsyncLifetime
     }
 
     [Fact]
+    public void VMangosImport_RetainsPerDisplayScaleOverrides()
+    {
+        var importer = new CreatureDumpImporter();
+        importer.Read(new StringReader("INSERT INTO creature_template (entry,patch,name,level_min,level_max,display_id1,display_scale1,display_id2,display_scale2,display_id3,display_scale3,display_id4,display_scale4) VALUES (990001,0,'Scale test',1,1,101,0.8,102,1.2,103,1.4,104,1.6);"));
+        var (templates, _, _, _, _) = importer.Snapshot();
+        CreatureTemplateRow row = Assert.Single(templates);
+        Assert.Equal((0.8f, 1.2f, 1.4f, 1.6f), (row.Scale, row.DisplayScale2, row.DisplayScale3, row.DisplayScale4));
+    }
+
+    [Fact]
+    public async Task SqliteSchema23_ImportsAndReloadsAllFourDisplayScalesWithoutLosingPriorRows()
+    {
+        DatabaseConnectionOptions cs = await _databases.CreateAsync(DatabaseProvider.Sqlite);
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(cs))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, SchemaProbe.ThroughVersion(WorldDbContext.Schema, 22));
+            db.PlayerCreateInfo.Add(new PlayerCreateInfoRow { Race = 1, Class = 1, MapId = 0, X = 23 });
+            await db.SaveChangesAsync();
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+            Assert.Equal(23f, (await db.PlayerCreateInfo.SingleAsync()).X);
+            db.ChangeTracker.Clear();
+            var importer = new CreatureDumpImporter();
+            importer.Read(new StringReader("INSERT INTO creature_template (entry,patch,name,level_min,level_max,display_id1,display_scale1,display_id2,display_scale2,display_id3,display_scale3,display_id4,display_scale4) VALUES (990001,0,'Scale test',1,1,101,0.8,102,1.2,103,1.4,104,1.6);"));
+            await importer.WriteAsync(db, replace: false);
+        }
+
+        await using WorldDbContext reloaded = TestContexts.Create<WorldDbContext>(cs);
+        CreatureContent content = await new EfCreatureDataStore(reloaded).LoadAsync();
+        Assert.Equal([0.8f, 1.2f, 1.4f, 1.6f], content.FindTemplate(990001)!.DisplayScales);
+        Assert.Equal(23f, (await reloaded.PlayerCreateInfo.SingleAsync()).X);
+    }
+
+    [Fact]
     public void Importer_RejectsMixedDialects()
     {
         var importer = new CreatureDumpImporter();

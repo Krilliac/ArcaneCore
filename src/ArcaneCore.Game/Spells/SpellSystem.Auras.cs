@@ -37,6 +37,8 @@ public sealed partial class SpellSystem
     private static Dictionary<AuraType, AuraHandler> CreateAuraHandlers() => ImmunityAuraHandlers.Install(CcAuraHandlers.Install(new()
     {
         [AuraType.Dummy] = new AuraHandler(null, null),
+        // Threat reads installed modifiers by school when damage/healing is resolved.
+        [AuraType.ModThreat] = new AuraHandler(null, null),
         [AuraType.PeriodicDamage] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicDamage(h, a)),
         [AuraType.PeriodicDamagePercent] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicDamage(h, a)),
         [AuraType.PeriodicHeal] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicHeal(h, a)),
@@ -63,7 +65,10 @@ public sealed partial class SpellSystem
         context.PendingHolder ??= new SpellAuraHolder(
             context.Spell, context.Target, context.Caster,
             _auraCasterOwners.GetValue(context.Caster, static caster => new AuraCasterOwner(caster)),
-            context.Cast.State == SpellCastState.Casting ? context.Cast.Timer : context.Cast.Duration);
+            context.Cast.State == SpellCastState.Casting ? context.Cast.Timer : context.Cast.Duration)
+        {
+            IsItemEquipAura = context.Cast.IsItemEquipCast,
+        };
         if (context.Cast.CastItem is { } castItem && context.PendingHolder.CastItemGuid.IsEmpty)
         {
             context.PendingHolder.CastItemGuid = castItem.Guid;
@@ -74,7 +79,10 @@ public sealed partial class SpellSystem
             context.PendingHolder.ChannelTarget = new ObjectGuid(context.Caster.GetUInt64(UpdateFields.UnitFieldChannelObject));
         }
 
-        var aura = new SpellAura(context.EffectIndex, effect.AuraType, SnapshotAuraAmount(context), effect.Amplitude, effect.MiscValue);
+        int amount = context.Cast.CustomAuraAmounts is { } custom && custom.TryGetValue(context.EffectIndex, out int requested)
+            ? requested
+            : SnapshotAuraAmount(context);
+        var aura = new SpellAura(context.EffectIndex, effect.AuraType, amount, effect.Amplitude, effect.MiscValue, context.Target.PowerType);
         aura.PeriodicTimer = PeriodicTiming.InitialTimer(context.Spell, aura);
         context.PendingHolder.SetAura(aura);
     }
@@ -91,10 +99,14 @@ public sealed partial class SpellSystem
         holder.ResolvePolarity(Store.Get);
         UnitSpellState state = GetOrCreateState(holder.Target);
         SpellAuraHolder? existing = state.Auras.FirstOrDefault(h => h.Spell.Id == holder.Spell.Id
+            && (!h.IsItemEquipAura || !holder.IsItemEquipAura || h.ItemGuid == holder.ItemGuid)
             && (h.CasterGuid == holder.CasterGuid || holder.IsPositive));
         if (existing is not null)
         {
-            bool sameOwner = existing.CasterGuid == holder.CasterGuid && ReferenceEquals(existing.CasterOwner, holder.CasterOwner);
+            // vmangos Unit.cpp:3134-3135: the refresh and stack branch is for the same caster AND the same cast item; the same spell from
+            // another item of the caster replaces the holder ("can be only single").
+            bool sameOwner = existing.CasterGuid == holder.CasterGuid && ReferenceEquals(existing.CasterOwner, holder.CasterOwner)
+                && existing.CastItemGuid == holder.CastItemGuid;
             if (sameOwner && CanBeRefreshedBy(existing, holder))
             {
                 RefreshHolderInPlace(existing, holder);
@@ -118,6 +130,7 @@ public sealed partial class SpellSystem
         if (holder.Slot != SpellAuraHolder.NoSlot)
         {
             WriteAuraFields(holder, add: true);
+            VisibleAuraSlotChanged?.Invoke(holder.Target, holder.Slot);
             SendAuraDuration(holder);
         }
 
@@ -136,7 +149,7 @@ public sealed partial class SpellSystem
     public void RemoveAuras(Unit target, uint spellId, AuraRemoveMode mode)
     {
         ArgumentNullException.ThrowIfNull(target);
-        if (GetState(target.Guid) is { } state)
+        if (!IsQuestSettlementPending(target) && GetState(target.Guid) is { } state && ReferenceEquals(state.Unit, target))
         {
             foreach (SpellAuraHolder holder in state.Auras.Where(h => h.Spell.Id == spellId).ToArray())
             {
@@ -149,7 +162,7 @@ public sealed partial class SpellSystem
     public void RemoveAurasByCaster(Unit target, uint spellId, ObjectGuid caster)
     {
         ArgumentNullException.ThrowIfNull(target);
-        if (GetState(target.Guid) is { } state)
+        if (!IsQuestSettlementPending(target) && GetState(target.Guid) is { } state && ReferenceEquals(state.Unit, target))
         {
             foreach (SpellAuraHolder holder in state.Auras.Where(h => h.Spell.Id == spellId && h.CasterGuid == caster).ToArray())
             {
@@ -165,7 +178,7 @@ public sealed partial class SpellSystem
     public IReadOnlyList<SpellAuraHolder> GetAuras(Unit unit)
     {
         ArgumentNullException.ThrowIfNull(unit);
-        return GetState(unit.Guid)?.AuraHolders ?? [];
+        return GetState(unit.Guid) is { } state && ReferenceEquals(state.Unit, unit) ? state.AuraHolders : [];
     }
 
     public bool HasAura(Unit unit, uint spellId) => GetAuras(unit).Any(h => h.Spell.Id == spellId);
@@ -393,6 +406,7 @@ public sealed partial class SpellSystem
         if (holder.Slot != SpellAuraHolder.NoSlot)
         {
             WriteAuraFields(holder, add: false);
+            VisibleAuraSlotChanged?.Invoke(holder.Target, holder.Slot);
         }
 
         foreach (SpellAura aura in holder.Auras.OfType<SpellAura>())
@@ -590,9 +604,17 @@ public sealed partial class SpellSystem
         uint amount = aura.Type == AuraType.ObsModMana
             ? (uint)((ulong)target.GetUInt32(UpdateFields.UnitFieldMaxpower1 + powerType) * (uint)aura.Amount / 100)
             : (uint)aura.Amount;
-        SetPower(target, power, GetPower(target, power) + amount);
+        uint before = GetPower(target, power);
+        SetPower(target, power, before + amount);
+        uint after = GetPower(target, power);
+        uint effectiveGain = after > before ? after - before : 0;
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
             target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, amount, (uint)powerType)), includeSelf: true);
+        if (effectiveGain != 0 && power is not PowerType.Mana and not PowerType.Happiness
+            && ResolveAuraCaster(holder) is { } caster)
+        {
+            Damage.AssistPeriodicEnergizeThreat(caster, target, holder.Spell, effectiveGain, power);
+        }
     }
 
     /// <summary>vmangos Aura::PeriodicTick SPELL_AURA_PERIODIC_TRIGGER_SPELL: the caster casts EffectTriggerSpell at the target, triggered.</summary>
@@ -620,7 +642,7 @@ public sealed partial class SpellSystem
 
         if (Store.Get(triggerSpell) is not null)
         {
-            CastSpell(caster, triggerSpell, SpellCastTargets.ForUnit(triggerTarget.Guid), triggered: true);
+            CastSpell(caster, triggerSpell, SpellCastTargets.ForUnit(triggerTarget.Guid), triggered: true, triggeringSpell: holder.Spell);
         }
     }
 }

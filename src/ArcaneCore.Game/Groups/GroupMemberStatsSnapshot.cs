@@ -53,7 +53,7 @@ internal sealed class GroupMemberStatsSnapshot
             Y = (short)player.Y,
             Auras = ReadAuras(player),
             PetGuid = pet?.Guid ?? ObjectGuid.Empty,
-            PetName = pet?.Template.Name ?? string.Empty,
+            PetName = pet is null ? string.Empty : pet.Summon?.Charm?.Name ?? pet.Template.Name, // the name the pet name query answers
             PetDisplayId = pet?.DisplayId ?? 0,
             PetHp = pet?.Health ?? 0,
             PetMaxHp = pet?.MaxHealth ?? 0,

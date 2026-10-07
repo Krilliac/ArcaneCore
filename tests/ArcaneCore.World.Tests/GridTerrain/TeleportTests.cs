@@ -93,6 +93,8 @@ public sealed class TeleportTests
         await gm.CollectAsync(Quiet);
         await bob.CollectAsync(Quiet);
 
+        await host.OnWorldAsync(() => Assert.True(host.World.FindOnlinePlayer("Tpfargm")!.Combat.QueueExtraAttacks(1)));
+
         await gm.SendChatAsync(ChatType.Say, Language.Common, ".tele cross");
         byte[] pending = await gm.ReadUntilAsync(WorldOpcode.SmsgTransferPending);
         Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(pending));
@@ -100,6 +102,7 @@ public sealed class TeleportTests
         Assert.Equal(WorldOpcode.SmsgNewWorld, op);
         Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(newWorld));
         Assert.Equal(-441.8f, BinaryPrimitives.ReadSingleLittleEndian(newWorld.AsSpan(4)));
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Tpfargm")!.Combat.ExtraAttacks == 0, "far teleport clears extra attacks");
 
         // Bob's client drops the departed player.
         Assert.Contains(await bob.CollectAsync(Quiet), p => p.Opcode is WorldOpcode.SmsgDestroyObject);

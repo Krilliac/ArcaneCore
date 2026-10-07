@@ -29,6 +29,9 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Spells;
+using ArcaneCore.World.Spells;
 
 namespace ArcaneCore.MockClient.Tests;
 
@@ -36,7 +39,7 @@ namespace ArcaneCore.MockClient.Tests;
 /// Actual SRP/world sessions and persistent SQLite stores exercise logout and cold world startup.
 /// The ordinary logout delay is shortened only in these tests; this is not real-client acceptance.
 /// </summary>
-public sealed class WorldLifecyclePersistenceTests : IDisposable
+public sealed partial class WorldLifecyclePersistenceTests : IDisposable
 {
     private const string AccountName = "LIFECYCLE";
     private const string Password = "PASSWORD";
@@ -159,6 +162,46 @@ public sealed class WorldLifecyclePersistenceTests : IDisposable
     }
 
     public void Dispose() => _directory.Delete();
+
+    [Fact]
+    public async Task ColdStartupPreservesGhostBodyButDoesNotRestoreThePreviousSelfResOffer()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        CancellationToken token = deadline.Token;
+        ClientFixtureResult fixture = await PrepareAsync(token);
+        MockCharacter character;
+        await using (PersistentHost firstHost = await PersistentHost.StartAsync(fixture, new SaveControl(), token))
+        {
+            await using WorldClient client = await AuthenticateAsync(firstHost, token);
+            var first = new ScenarioConnection(client);
+            await first.CreateCharacterAsync(CharacterName, token);
+            character = Assert.Single(await first.EnumerateAsync(token));
+            await first.LoginAsync(character.Guid, token);
+            await firstHost.World.InvokeAsync(() =>
+            {
+                Player player = firstHost.World.FindOnlinePlayer(GuidOf(character.Guid))!;
+                player.Map!.Combat.Kill(null, player);
+                player.SetUInt32(ArcaneCore.Game.UpdateFields.PlayerSelfResSpell, 23700);
+                Assert.True(player.Map!.Combat.RepopPlayer(player));
+                return true;
+            }).WaitAsync(token);
+            await firstHost.StopWorldAsync(token);
+        }
+
+        await using PersistentHost restarted = await PersistentHost.StartAsync(fixture, new SaveControl(), token);
+        await using WorldClient freshClient = await AuthenticateAsync(restarted, token);
+        var next = new ScenarioConnection(freshClient);
+        await next.LoginAsync(character.Guid, token);
+        await restarted.World.InvokeAsync(() =>
+        {
+            Player player = restarted.World.FindOnlinePlayer(GuidOf(character.Guid))!;
+            Assert.False(player.IsAlive);
+            Assert.NotNull(player.Combat.Corpse);
+            Assert.Equal(0u, player.GetUInt32(ArcaneCore.Game.UpdateFields.PlayerSelfResSpell));
+            Assert.False(restarted.Services.GetRequiredService<SpellFeature>().System.TrySelfResurrect(player));
+            return true;
+        }).WaitAsync(token);
+    }
 
     private Task<ClientFixtureResult> PrepareAsync(CancellationToken token)
         => ClientFixture.PrepareAsync(new ClientFixtureOptions(Path.Combine(_directory.Path, "persisted"), AccountName, Password), token);

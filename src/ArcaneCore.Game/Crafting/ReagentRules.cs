@@ -8,17 +8,16 @@ namespace ArcaneCore.Game.Crafting;
 /// Reagent and tool rules of a cast (crafting lane), after vmangos <c>Spell::CheckItems</c> (Spells/Spell.cpp:7249-7306),
 /// <c>Spell::TakeReagents</c> (:5082-5128) and <c>Spell::IgnoreItemRequirements</c> (:7069-7083).
 /// <para>
-/// Triggered casts: vmangos only still requires reagents when the item target is not the caster's own or when the triggering spell
-/// has no first reagent of its own; ArcaneCore does not track the triggering spell (<c>m_triggeredBySpellInfo</c>), so every
-/// triggered cast ignores reagents and tools, which is the rule for the common case (a master spell that carries the reagents).
-/// Documented limit in docs/areas/crafting.md.
+/// The reagents themselves are checked and taken by the cast (<c>SpellSystem.CheckReagents</c> / <c>StageCastReagents</c>: every cast of a
+/// player, with vmangos' triggered-cast rule on the triggering spell's first reagent, Spell.cpp:7069-7083). What this adds is the tool check
+/// (Totem[2]) and the count that skips items offered in an open trade; a triggered cast skips both here.
 /// </para>
 /// </summary>
 public static class ReagentRules
 {
     /// <summary>
-    /// Register the check (<see cref="ReagentCastCheck"/>) and the taker (<see cref="ReagentCostTaker"/>) on <paramref name="system"/>.
-    /// A second call throws: the pair must exist exactly once or reagents would be checked or consumed twice.
+    /// Register the check (<see cref="ReagentCastCheck"/>) on <paramref name="system"/> and give the cast's reagent step the trade filter
+    /// (<see cref="SpellSystem.ReagentTradeFilter"/>). A second call throws.
     /// </summary>
     /// <param name="system">The spell system.</param>
     /// <param name="isInTrade">
@@ -30,18 +29,18 @@ public static class ReagentRules
         ArgumentNullException.ThrowIfNull(system);
         if (IsInstalled(system))
         {
-            throw new InvalidOperationException("the reagent check and cost taker are already installed");
+            throw new InvalidOperationException("the reagent check is already installed");
         }
 
         system.RegisterCastCheck(new ReagentCastCheck(isInTrade));
-        system.RegisterCostTaker(new ReagentCostTaker(isInTrade));
+        system.ReagentTradeFilter = isInTrade;
     }
 
     /// <summary>Whether <see cref="Install"/> already ran on <paramref name="system"/>.</summary>
     public static bool IsInstalled(SpellSystem system)
     {
         ArgumentNullException.ThrowIfNull(system);
-        return system.CostTakers.OfType<ReagentCostTaker>().Any();
+        return system.CastChecks.OfType<ReagentCastCheck>().Any();
     }
 
     /// <summary>vmangos <c>IgnoreItemRequirements</c>: only a player pays reagents, and a triggered cast never does (see the class remarks).</summary>
@@ -102,6 +101,11 @@ public sealed class ReagentCastCheck(Func<Player, Item, bool>? isInTrade = null)
         Func<Item, bool>? traded = ReagentRules.TradeFilter(player, isInTrade);
         foreach (SpellReagent reagent in spell.Reagents)
         {
+            if (!reagent.IsPresent)
+            {
+                continue;
+            }
+
             if (player.Inventory.GetItemCount(reagent.ItemId, exclude: traded) < ReagentRules.EffectiveCount(context.CastItem, reagent))
             {
                 return SpellCastResult.ItemNotReady;
@@ -117,29 +121,5 @@ public sealed class ReagentCastCheck(Func<Player, Item, bool>? isInTrade = null)
         }
 
         return SpellCastResult.CastOk;
-    }
-}
-
-/// <summary>Spell::TakeReagents (Spell.cpp:5082-5128): destroy every reagent (the bank is not touched) right after the power is spent.</summary>
-public sealed class ReagentCostTaker(Func<Player, Item, bool>? isInTrade = null) : ISpellCostTaker
-{
-    public void TakeCost(SpellCast cast)
-    {
-        if (ReagentRules.IgnoresItemRequirements(cast.Caster, cast.IsTriggered) || cast.Caster is not Player player)
-        {
-            return;
-        }
-
-        Func<Item, bool>? traded = ReagentRules.TradeFilter(player, isInTrade);
-        foreach (SpellReagent reagent in cast.Spell.Reagents)
-        {
-            uint count = ReagentRules.EffectiveCount(cast.CastItem, reagent);
-            if (cast.CastItem is { } item && item.Entry == reagent.ItemId)
-            {
-                cast.CastItem = null; // the cast item is consumed as a reagent: vmangos clears m_CastItem so TakeCastItem does not use it up twice
-            }
-
-            player.Inventory.DestroyItemCount(reagent.ItemId, count, includeBank: false, exclude: traded);
-        }
     }
 }

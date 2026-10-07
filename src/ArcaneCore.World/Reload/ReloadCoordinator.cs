@@ -103,7 +103,8 @@ public sealed class ReloadCoordinator
 
     /// <summary>
     /// Reload every reloadable that <see cref="IContentReloadable.IncludedInAll"/>, one after the
-    /// other in name order (vmangos <c>reload all</c>, ServerCommands.cpp:885-905, which leaves the config out).
+    /// other in dependency order, with names breaking ties (vmangos <c>reload all</c>,
+    /// ServerCommands.cpp:885-905, which leaves the config out).
     /// </summary>
     public async Task<IReadOnlyList<ReloadResult>> ReloadAllAsync(CancellationToken cancellationToken = default)
     {
@@ -114,7 +115,24 @@ public sealed class ReloadCoordinator
         }
 
         var results = new List<ReloadResult>(included.Length);
-        foreach (IContentReloadable reloadable in included)
+        var remaining = included.ToDictionary(r => r.Name, StringComparer.OrdinalIgnoreCase);
+        var ordered = new List<IContentReloadable>(included.Length);
+        while (remaining.Count > 0)
+        {
+            IContentReloadable? next = remaining.Values.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(r => !r.CommitAfter.Any(remaining.ContainsKey));
+            if (next is null)
+            {
+                long started = Stopwatch.GetTimestamp();
+                return included.Select(r => Finish(r.Name, ReloadStatus.Rejected,
+                    "reload dependency cycle; nothing was changed", [], started)).ToArray();
+            }
+
+            ordered.Add(next);
+            remaining.Remove(next.Name);
+        }
+
+        foreach (IContentReloadable reloadable in ordered)
         {
             results.Add(await ReloadAsync(reloadable.Name, cancellationToken).ConfigureAwait(false));
         }

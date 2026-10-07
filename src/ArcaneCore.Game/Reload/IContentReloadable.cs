@@ -18,6 +18,12 @@ public interface IContentReloadable
     /// <summary>Whether <c>.reload all</c> includes it. vmangos' <c>reload all</c> (ServerCommands.cpp:885-905) does not reload the config.</summary>
     bool IncludedInAll => true;
 
+    /// <summary>
+    /// Names that must finish before this reload within the selected reload-all batch.
+    /// An absent dependency uses its current live content. Cycles reject the batch before builds.
+    /// </summary>
+    IReadOnlyCollection<string> CommitAfter => [];
+
     /// <summary>Build a candidate from the current source of truth without touching live state (worker thread).</summary>
     Task<ContentCandidate> BuildAsync(CancellationToken cancellationToken);
 }

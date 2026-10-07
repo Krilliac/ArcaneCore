@@ -25,7 +25,7 @@ namespace ArcaneCore.World.Items;
 /// with no items (fails closed).
 /// </para>
 /// </summary>
-public sealed class ItemsFeature(IServiceScopeFactory scopes, ILogger<ItemsFeature> logger, IConfiguration? configuration = null) : IWorldFeature, ICharacterHooks
+public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<ItemsFeature> logger, IConfiguration? configuration = null) : IWorldFeature, ICharacterHooks
 {
     private readonly SemaphoreSlim _loadLock = new(1, 1);
     private readonly LiveItemTemplateStore _live = new();
@@ -95,6 +95,8 @@ public sealed class ItemsFeature(IServiceScopeFactory scopes, ILogger<ItemsFeatu
                 store = new ItemTemplateStore(templates, starting);
             }
 
+            LoadStartingOutfitCatalog();
+
             if (scope.ServiceProvider.GetService<IItemStore>() is { } items)
             {
                 GuidAllocator.Seed(await items.GetMaxItemGuidAsync(cancellationToken).ConfigureAwait(false));
@@ -125,7 +127,7 @@ public sealed class ItemsFeature(IServiceScopeFactory scopes, ILogger<ItemsFeatu
             GuidAllocator = GuidAllocator,
             Options = Options,
         };
-        inventory.AddStartingItems();
+        inventory.AddStartingItems(StartingItemsFor(character));
         await store.SaveInventoryAsync(character.Id, inventory.CreateSnapshot()).ConfigureAwait(false);
     }
 

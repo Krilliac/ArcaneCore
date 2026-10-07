@@ -343,7 +343,7 @@ public sealed class ShapeshiftService
     {
         if (FormDisplayTable.Get((byte)form, target is not Player player || player.Team == Team.Alliance) is { } display && !HasTransform(target))
         {
-            TransformScale.Set(target, display.Scale);
+            TransformScale.Set(target, display.Scale, _spells);
             target.DisplayId = display.DisplayId;
         }
     }
@@ -352,7 +352,7 @@ public sealed class ShapeshiftService
     {
         if (FormDisplayTable.Get((byte)form, true) is not null && !HasTransform(target))
         {
-            TransformScale.Reset(target);
+            TransformScale.Reset(target, _spells);
             target.DisplayId = target.NativeDisplayId;
         }
     }

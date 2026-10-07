@@ -26,6 +26,9 @@ public sealed class CombatOptions
     /// <summary>vmangos Rate.Mana: multiplies the mana regeneration (Player.cpp:2291). Must not be negative.</summary>
     public float RateMana { get; set; } = 1.0f;
 
+    /// <summary>vmangos Rate.Health: multiplies spirit health regeneration and the aura-161 flat bonus. Must not be negative.</summary>
+    public float RateHealth { get; set; } = 1.0f;
+
     /// <summary>
     /// Whether switching between warrior stances keeps the stance-bound buffs the unit cast on itself (Retaliation,
     /// Recklessness, Shield Wall). Default false: vmangos removes them with the old stance (SpellAuras.cpp:5565-5575,
@@ -67,7 +70,7 @@ public sealed class CombatOptions
     public bool RequireShapeshiftFormDbc { get; set; }
 
     /// <summary>
-    /// vmangos World::setConfigPos (World.cpp:2959-2967): Rate.Mana and Rate.Rage.Loss cannot be negative and fall
+    /// vmangos World::setConfigPos (World.cpp:2959-2967): Rate.Health, Rate.Mana and Rate.Rage.Loss cannot be negative and fall
     /// back to the default 1. Returns the names of the values that were replaced.
     /// </summary>
     public IReadOnlyList<string> Normalize()
@@ -77,6 +80,12 @@ public sealed class CombatOptions
         {
             RateMana = 1.0f;
             replaced.Add("Rate.Mana");
+        }
+
+        if (RateHealth < 0.0f)
+        {
+            RateHealth = 1.0f;
+            replaced.Add("Rate.Health");
         }
 
         if (RateRageLoss < 0.0f)
@@ -362,23 +371,19 @@ public sealed class SpellSystemPowerAuras(SpellSystem spells) : IPowerAuraSource
 
     /// <summary>
     /// vmangos Unit::IsPolymorphed is <c>GetSpellSpecific(GetTransForm()) == SPELL_MAGE_POLYMORPH</c> (SpellEntry.cpp:67-75: mage family, first effect
-    /// MOD_CONFUSE, silence prevention type). The unit's transform is not tracked here (the Transform aura has no handler yet), so a live holder
-    /// that carries a Transform aura and has that classification stands in for it: any such holder, not only the latest transform.
+    /// MOD_CONFUSE, silence prevention type): the unit's active transform (<see cref="TransformAuras.ActiveHolder"/>) has that classification.
     /// </summary>
     public bool IsPolymorphed(Unit unit)
     {
         ArgumentNullException.ThrowIfNull(unit);
-        foreach (SpellAuraHolder holder in _spells.GetAuras(unit))
+        if (TransformAuras.ActiveHolder(unit) is not { IsRemoved: false } holder)
         {
-            SpellInfo spell = holder.Spell;
-            if (!holder.IsRemoved && spell.SpellFamilyName == MageFamily && spell.PreventionType == SilencePrevention
-                && holder.HasAura(AuraType.Transform) && spell.Effects.Count > 0 && spell.Effects[0].AuraType == AuraType.ModConfuse)
-            {
-                return true;
-            }
+            return false;
         }
 
-        return false;
+        SpellInfo spell = holder.Spell;
+        return spell.SpellFamilyName == MageFamily && spell.PreventionType == SilencePrevention
+            && spell.Effects.Count > 0 && spell.Effects[0].AuraType == AuraType.ModConfuse;
     }
 
     private const uint MageFamily = 3;

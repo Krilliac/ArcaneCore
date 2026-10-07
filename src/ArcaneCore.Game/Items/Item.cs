@@ -118,6 +118,34 @@ public class Item : WorldObject
     /// </summary>
     internal uint?[]? LiveEnchantDuration { get; set; }
 
+    /// <summary>Remaining duration for an enchantment slot (0..6).</summary>
+    public uint EnchantmentDuration(int slot) => GetUInt32(UpdateFields.ItemFieldEnchantment + (slot * 3) + 1);
+
+    /// <summary>Remaining charges for an enchantment slot (0 means unlimited).</summary>
+    public uint EnchantmentCharges(int slot) => GetUInt32(UpdateFields.ItemFieldEnchantment + (slot * 3) + 2);
+
+    /// <summary>
+    /// Consume one charge of a charged (temporary) enchantment; slot zero is the permanent one. The last charge takes the enchantment off and clears
+    /// the slot (vmangos Player::CastItemCombatSpell → SetEnchantmentCharges / ClearEnchantment, Player.cpp:7325-7342).
+    /// </summary>
+    public bool ConsumeEnchantmentCharge(int slot)
+    {
+        if (slot <= 0 || slot >= Crafting.Enchanting.EnchantSlots.Count || EnchantmentId(slot) == 0) return false;
+        uint charges = EnchantmentCharges(slot);
+        if (charges == 0) return false;
+        if (charges == 1)
+        {
+            Inventory?.Player?.Enchantments?.Apply(this, slot, apply: false);
+            Crafting.Enchanting.ItemEnchantments.Clear(this, slot);
+        }
+        else
+        {
+            Crafting.Enchanting.ItemEnchantments.SetCharges(this, slot, charges - 1);
+        }
+
+        return true;
+    }
+
     public bool IsBag => Template.IsBag();
 
     /// <summary>

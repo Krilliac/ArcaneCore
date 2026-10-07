@@ -18,6 +18,23 @@ public abstract class Unit : WorldObject
 
     private MovementInfo _movement;
 
+    /// <summary>vmangos Object.h: BATCHING_INTERVAL (400 ms) × 13.</summary>
+    public const uint HeartbeatIntervalMs = 5200;
+
+    private long _heartbeatTimer = HeartbeatIntervalMs;
+
+    public event Action<Unit>? Heartbeat;
+
+    internal void UpdateHeartbeat(uint diffMs)
+    {
+        _heartbeatTimer -= diffMs;
+        while (_heartbeatTimer <= 0)
+        {
+            _heartbeatTimer += HeartbeatIntervalMs;
+            Heartbeat?.Invoke(this);
+        }
+    }
+
     protected Unit(ObjectGuid guid, byte typeId, uint typeMask, int valuesCount)
         : base(guid, typeId, typeMask, valuesCount)
     {
@@ -92,6 +109,12 @@ public abstract class Unit : WorldObject
         get => GetUInt32(UpdateFields.UnitFieldNativedisplayid);
         set => SetUInt32(UpdateFields.UnitFieldNativedisplayid, value);
     }
+
+    /// <summary>DBC native scale for the current native display, retained for geometry restoration.</summary>
+    public float NativeScale { get; internal set; } = 1.0f;
+
+    /// <summary>Explicit native object-scale override selected from creature data, if any.</summary>
+    public float NativeScaleOverride { get; internal set; }
 
     /// <summary>UNIT_FIELD_BYTES_0: race, class, gender, power type (vmangos Unit::GetRace etc.).</summary>
     public Race Race => (Race)GetByte(UpdateFields.UnitFieldBytes0, 0);

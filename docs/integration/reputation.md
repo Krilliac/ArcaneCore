@@ -185,6 +185,11 @@ installed (requirements fail closed).
   reactions, item rank gating, rep-objective quests, GM commands, price rounding): see
   [../areas/reputation.md](../areas/reputation.md), which also lists what is still open (honor discounts,
   temporary war, selection visibility, the tapper rule).
+- The gain auras (156 `MOD_REPUTATION_GAIN`, including Human Diplomacy, and the kills-only faction aura 190) are one formula,
+  `ReputationSpellHandlers.GainModifier`, which `ReputationFeature` binds to `ReputationService.GainModifier` (the Codex line's
+  `ReputationAuras.Bind`, merged onto it at the 2026-10-07 integration). The auras are read from live spell state when a reward is
+  computed, so removal and restored auras need no cache; quest settlement freezes the computed bonus before persistence and replays it
+  at publication. Losses stay unmodified (vmangos; cmangos differs on losses).
 - The u16/u32 CMSG question above is decided from server sources, not a client capture.
 
 ## Tests

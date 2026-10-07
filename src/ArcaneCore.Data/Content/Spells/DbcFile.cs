@@ -11,6 +11,8 @@ namespace ArcaneCore.Data.Content.Spells;
 public sealed class DbcFile
 {
     private const uint Magic = 0x43424457; // "WDBC" little-endian
+    private const long MaxFileBytes = 64L * 1024 * 1024;
+    private const uint MaxRecords = 1_000_000;
 
     private readonly byte[] _data;
     private readonly int _recordsOffset;
@@ -54,7 +56,8 @@ public sealed class DbcFile
             throw new InvalidDataException($"unsupported DBC layout: {fields} fields in {recordSize}-byte records");
         }
 
-        if ((ulong)20 + ((ulong)records * recordSize) + strings != (ulong)data.Length)
+        if (records > MaxRecords || strings > MaxFileBytes
+            || (ulong)20 + ((ulong)records * recordSize) + strings != (ulong)data.Length)
         {
             throw new InvalidDataException("DBC size does not match its header");
         }
@@ -62,7 +65,16 @@ public sealed class DbcFile
         return new DbcFile(data, (int)records, (int)fields, (int)recordSize, (int)strings);
     }
 
-    public static DbcFile Load(string path) => Parse(File.ReadAllBytes(path));
+    public static DbcFile Load(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: 64 * 1024, options: FileOptions.SequentialScan);
+        if (stream.Length > MaxFileBytes) throw new InvalidDataException($"DBC file exceeds {MaxFileBytes} bytes");
+        byte[] data = new byte[checked((int)stream.Length)];
+        stream.ReadExactly(data);
+        return Parse(data);
+    }
 
     public uint GetUInt32(int record, int field)
         => BinaryPrimitives.ReadUInt32LittleEndian(_data.AsSpan(FieldOffset(record, field)));
@@ -94,5 +106,18 @@ public sealed class DbcFile
         ArgumentOutOfRangeException.ThrowIfNegative(field);
         ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(field, FieldCount);
         return _recordsOffset + (record * RecordSize) + (field * 4);
+    }
+
+    /// <summary>Read a terminated UTF-8 policy string without replacement decoding.</summary>
+    public string GetStringStrict(int record, int field)
+    {
+        uint offset = GetUInt32(record, field);
+        if (offset >= _stringBlockSize)
+            throw new InvalidDataException("policy string offset is outside the DBC string block");
+        ReadOnlySpan<byte> block = _data.AsSpan(_stringsOffset + (int)offset, _stringBlockSize - (int)offset);
+        int end = block.IndexOf((byte)0);
+        if (end < 0) throw new InvalidDataException("policy string is not NUL terminated");
+        try { return new UTF8Encoding(false, true).GetString(block[..end]); }
+        catch (DecoderFallbackException error) { throw new InvalidDataException("policy string is not valid UTF-8", error); }
     }
 }

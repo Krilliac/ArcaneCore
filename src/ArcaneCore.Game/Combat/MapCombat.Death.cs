@@ -1,5 +1,5 @@
-using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Combat;
@@ -298,8 +298,8 @@ public sealed partial class MapCombat
 
         // The login relocation cleared the movement flags and the create block was built before
         // this: the ghost walks on water from the client's side only once told so.
-        SendGhostMovement(player, ghost: true);
         Hooks.ApplyGhostForm(player);
+        SendGhostMovement(player, ghost: true, force: true);
         player.NeedsVisibilityUpdate = true;
         SendCorpseReclaimDelayOnLoad(player);
     }
@@ -423,10 +423,27 @@ public sealed partial class MapCombat
     /// <summary>
     /// SMSG_MOVE_WATER_WALK / SMSG_MOVE_LAND_WALK: the client starts or stops walking on water. The order goes through
     /// the locomotion handshake (the server flag follows the client's ack, src/ArcaneCore.Game/Locomotion); it is always
-    /// sent, also while the player is not in a map yet (login restore: the create block was built without the flag).
+    /// forced at login because the create block was built without the flag. The fallback does
+    /// not duplicate an order that the ghost-form spell has already queued.
     /// </summary>
-    private static void SendGhostMovement(Player player, bool ghost)
-        => Locomotion.MovementControl.Order(player, Locomotion.MovementChangeType.WaterWalk, ghost);
+    private static void SendGhostMovement(Player player, bool ghost, bool force = false)
+    {
+        var type = Locomotion.MovementChangeType.WaterWalk;
+        var pending = player.Locomotion.Pending.Changes.LastOrDefault(change => change.Type == type);
+        if (pending?.Apply == ghost)
+        {
+            return;
+        }
+
+        if (force)
+        {
+            Locomotion.MovementControl.Order(player, type, ghost);
+        }
+        else
+        {
+            Locomotion.MovementControl.Request(player, type, ghost);
+        }
+    }
 
     /// <summary>
     /// vmangos Player::GetCorpseReclaimDelay: 30/60/120 s by deaths in the last 5-minute steps

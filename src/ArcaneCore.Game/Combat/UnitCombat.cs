@@ -12,6 +12,9 @@ public sealed class UnitCombat
 {
     private readonly uint[] _attackTimers = new uint[3];
     private ThreatList? _threat;
+    private uint _extraAttacks;
+    private bool _extraAttacksReady;
+    private bool _extraAttacksLocked;
 
     internal UnitCombat(Unit owner) => Owner = owner;
 
@@ -41,6 +44,45 @@ public sealed class UnitCombat
     public bool HasThreatList => _threat is { IsEmpty: false };
 
     public bool IsInCombat => (Owner.UnitFlags & UnitFlags.InCombat) != 0;
+
+    /// <summary>Pending vmangos extra attacks (Unit::m_extraAttacks).</summary>
+    public uint ExtraAttacks => _extraAttacks;
+
+    public bool HasPendingExtraAttacks => _extraAttacks != 0;
+
+    internal bool HasReadyExtraAttacks => _extraAttacksReady && _extraAttacks != 0;
+
+    public bool ExtraAttacksLocked => _extraAttacksLocked;
+
+    /// <summary>Queue one bounded extra-attack batch; while locked or already queued, ignore it like vmangos.</summary>
+    public bool QueueExtraAttacks(int count)
+    {
+        if (count <= 0 || !Owner.IsAlive || _extraAttacksLocked || _extraAttacks != 0) return false;
+        _extraAttacks = (uint)Math.Min(count, 100);
+        return true;
+    }
+
+    internal void MarkExtraAttacksReady()
+    {
+        _extraAttacksReady = _extraAttacks != 0;
+    }
+
+    internal void ClearExtraAttacksReady() => _extraAttacksReady = false;
+
+    internal void LockExtraAttacks() => _extraAttacksLocked = true;
+    internal void UnlockExtraAttacks() => _extraAttacksLocked = false;
+    /// <summary>Clear pending extra attacks during death/reset transitions; never unlocks an active drain.</summary>
+    public void ResetExtraAttacks()
+    {
+        _extraAttacks = 0;
+        _extraAttacksReady = false;
+    }
+    internal bool ConsumeExtraAttack()
+    {
+        if (_extraAttacks == 0) return false;
+        _extraAttacks--;
+        return true;
+    }
 
     /// <summary>Remaining PvP combat linger for players (vmangos Unit::m_CombatTimer).</summary>
     public uint CombatTimer { get; internal set; }

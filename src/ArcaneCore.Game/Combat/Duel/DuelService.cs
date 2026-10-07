@@ -116,8 +116,7 @@ public sealed partial class DuelService
     /// opponent, loser = this player) to this player's set; the flag object goes; the negative auras each side cast on the other since the start
     /// are removed; combo points aimed at the other player are cleared; arbiter and team are reset; both halves are marked finished (each owner
     /// drops its object on its next map update, so the rest of this tick still sees the duel, vmangos Player.cpp:1132-1137). Idempotent.
-    /// Limits: reflected holders are not removed (no reflected flag on this base), pets are not looked at (no pets), ResetExtraAttacks has nothing to reset
-    /// (no extra-attack counter).
+    /// Limits: reflected holders are not removed (no reflected flag on this base), pets are not looked at (no pets).
     /// </summary>
     public void Complete(Player player, DuelCompleteType type)
     {
@@ -157,6 +156,11 @@ public sealed partial class DuelService
             }
         }
 
+        if (type != DuelCompleteType.Interrupted)
+        {
+            player.Combat.ResetExtraAttacks();
+            opponent.Combat.ResetExtraAttacks();
+        }
         player.DuelArbiter = 0;
         player.DuelTeam = 0;
         opponent.DuelArbiter = 0;

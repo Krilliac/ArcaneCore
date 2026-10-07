@@ -112,8 +112,12 @@ public static class EconomyCharacterCleanup
 
         if (removedItems.Count > 0)
         {
-            db.RemoveRange(await db.Set<ItemInstanceRow>().Where(r => removedItems.Contains(r.Guid) && r.OwnerGuid == 0)
-                .ToListAsync(cancellationToken).ConfigureAwait(false));
+            List<ItemInstanceRow> escrowed = await db.Set<ItemInstanceRow>().Where(r => removedItems.Contains(r.Guid) && r.OwnerGuid == 0)
+                .ToListAsync(cancellationToken).ConfigureAwait(false);
+            // Loot is owned by the item, so discard both sidecar tables with the actual
+            // escrow deletions in this transaction. Returned mail and bid auctions stay intact.
+            await ItemLootPersistence.StageReplaceAsync(db, [], [.. escrowed.Select(r => r.Guid)], cancellationToken).ConfigureAwait(false);
+            db.RemoveRange(escrowed);
         }
 
         foreach (uint textId in textCandidates)

@@ -124,6 +124,7 @@ public static partial class MockScenarios
 
                 await connection.LogoutAsync(token).ConfigureAwait(false);
                 Require(server.World.OnlinePlayerCount == 0, "Instant logout left a player online.");
+                await server.FlushCharacterAsync(checked((int)characterGuid), token).ConfigureAwait(false);
                 Check(checks, "session.logout", "Received success/instant logout response and empty completion; the real world is empty.");
                 Require(SingleCharacter(await connection.EnumerateAsync(token).ConfigureAwait(false)).Guid == characterGuid,
                     "Logout did not retain the character at character select.");
@@ -165,6 +166,7 @@ public static partial class MockScenarios
                 Check(checks, "npc.greeting-abandon", "Abandoning 900002 restored both available quest entries in a subsequent real NPC greeting.");
                 await connection.LogoutAsync(token).ConfigureAwait(false);
                 Require(server.World.OnlinePlayerCount == 0, "Logout after quest abandonment left the character online.");
+                await server.FlushCharacterAsync(checked((int)characterGuid), token).ConfigureAwait(false);
                 await ValidatePersistedNpcQuestAsync(server, characterGuid, expectedStatus: 0, token).ConfigureAwait(false);
                 await ValidatePersistedJournalAsync(server, characterGuid, token).ConfigureAwait(false);
                 Check(checks, "npc.abandon-persisted", "The real quest store saved status None while retaining the separate seeded journal's progress.");
@@ -191,6 +193,7 @@ public static partial class MockScenarios
                 await WaitForCombatExitAsync(server, connection, characterGuid, token).ConfigureAwait(false);
                 await connection.LogoutAsync(token).ConfigureAwait(false);
                 Require(server.World.OnlinePlayerCount == 0, "Final logout left the character online.");
+                await server.FlushCharacterAsync(checked((int)characterGuid), token).ConfigureAwait(false);
                 await ValidatePersistedRewardAsync(server, characterGuid, rewarded: true, count: 2, token).ConfigureAwait(false);
                 framesReceived += connection.FramesReceived;
             }
@@ -220,6 +223,7 @@ public static partial class MockScenarios
                 Check(checks, "reward.greeting-relogin", "A fresh realm/world login offered only unaccepted 900002 and kept nonrepeatable rewarded 900003 out of greeting eligibility.");
                 await connection.LogoutAsync(token).ConfigureAwait(false);
                 Require(server.World.OnlinePlayerCount == 0, "Reward relog logout left the character online.");
+                await server.FlushCharacterAsync(checked((int)characterGuid), token).ConfigureAwait(false);
                 await connection.SendAsync(WorldOpcode.CmsgCharDelete, ScenarioWire.Guid(characterGuid), token).ConfigureAwait(false);
                 byte[] deletion = await connection.ExpectAsync(WorldOpcode.SmsgCharDelete, token).ConfigureAwait(false);
                 Require(deletion.AsSpan().SequenceEqual(new byte[] { 0x39 }), "Final character deletion did not succeed.");

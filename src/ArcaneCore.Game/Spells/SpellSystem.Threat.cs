@@ -10,6 +10,18 @@ namespace ArcaneCore.Game.Spells;
 /// </summary>
 public sealed partial class SpellSystem
 {
+    /// <summary>
+    /// Explicit spell threat (vmangos Unit::AddThreat with the spell, as SPELL_EFFECT_THREAT does): the threat formula once (SPELLMOD_THREAT, then the
+    /// caster's MOD_THREAT multiplier of the spell's school), NO_HARMFUL_THREAT adds nothing and EX_NO_THREAT only raises an existing entry.
+    /// </summary>
+    public void AddSpellThreat(Unit caster, Unit victim, SpellInfo spell, float threat)
+    {
+        ArgumentNullException.ThrowIfNull(caster);
+        ArgumentNullException.ThrowIfNull(victim);
+        ArgumentNullException.ThrowIfNull(spell);
+        SpellThreat.Add(this, caster, victim, spell, threat);
+    }
+
     /// <summary>vmangos SPELL_ATTR_EX2_NO_INITIAL_THREAT (SpellDefines.h:882): the hit starts no combat and creates no assist reference.</summary>
     private const uint AttributeEx2NoInitialThreat = 0x00400000;
 

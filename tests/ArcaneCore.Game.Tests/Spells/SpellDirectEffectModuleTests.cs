@@ -189,6 +189,7 @@ public sealed class SpellDirectEffectModuleTests
     public void Threat_IsScaledByTheCastersModThreatAuraOfTheSpellSchool()
     {
         using var kit = Kit();
+        Assert.True(kit.System.HasAuraHandler(AuraType.ModThreat));
         (Player caster, _) = kit.AddPlayer(1);
         Creature wolf = MakeCreature(kit);
 

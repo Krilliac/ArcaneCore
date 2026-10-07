@@ -45,6 +45,7 @@ public sealed class SelfResurrectionTests
         RecoveryTime = 3_600_000,
         StartRecoveryTime = 0,
         StartRecoveryCategory = 0,
+        Reagents = [new SpellReagent(SelfResurrection.Ankh, 1)], // spell 21169 Reagent1: the Ankh, taken by the cast (Spell::TakeReagents)
     };
 
     private static readonly ItemTemplateStore Items = new(

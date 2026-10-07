@@ -3,6 +3,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using MapGrid = ArcaneCore.Game.Maps.Grid.Grid;
@@ -51,6 +52,12 @@ public sealed partial class CreatureMapSystem
         creature.LootedForSkin = false;
         creature.RespawnAtMs = _clockMs + (creature.NextRespawnDelaySeconds() * 1000L);
         SaveRespawnOnDeath(creature);
+        // Capture the current pet while its corpse still belongs to the map.
+        // After decay, the owner's pet GUID no longer resolves to the removed object.
+        if (creature.Summon is { Kind: SummonKind.Pet } && creature.GetOwner() is Player owner)
+        {
+            Map.Pets?.SaveCurrentPet(owner);
+        }
     }
 
     /// <summary>Respawn a dead creature now (GM command / script).</summary>
@@ -78,7 +85,7 @@ public sealed partial class CreatureMapSystem
     public Creature SpawnTemporary(CreatureTemplate template, float x, float y, float z, float orientation)
     {
         ArgumentNullException.ThrowIfNull(template);
-        var creature = new Creature(_nextTemporaryCounter++ & 0x00FFFFFF, template, spawn: null, _content, _random);
+        var creature = new Creature(_nextTemporaryCounter++ & 0x00FFFFFF, template, spawn: null, _content, _random, displayModelResolver: _displayModelResolver);
         creature.MapId = Map.MapId;
         creature.SetHome(new CreatureHome(x, y, z, orientation));
         creature.ResetToHome(_serverTime());
@@ -182,7 +189,7 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
-            var creature = new Creature(spawn.Guid, template, spawn, _content, _random);
+            var creature = new Creature(spawn.Guid, template, spawn, _content, _random, displayModelResolver: _displayModelResolver);
             ApplyEventData(creature); // a running game event may change its entry or model (game_event_creature_data)
             if (_options.Respawn.DrawDelayAtLoad)
             {
@@ -303,6 +310,7 @@ public sealed partial class CreatureMapSystem
         creature.CorpseDecayMs = 0;
         creature.Combat.DeathState = DeathState.Dead;
         Map.Combat.Untrack(creature);
+        CorpseRemoving?.Invoke(creature);
         _ai.Spells?.OnCreatureRemoved(creature);
         Map.RemoveObject(creature);
         ForgetObservers(creature);
@@ -345,6 +353,7 @@ public sealed partial class CreatureMapSystem
             entryChanged = true;
         }
 
+        Respawning?.Invoke(creature);
         Map.Combat.Untrack(creature);
         creature.Combat.DeathState = DeathState.Alive;
         MapCombat.ClearInCombat(creature);

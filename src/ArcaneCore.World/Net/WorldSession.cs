@@ -95,7 +95,7 @@ public sealed class WorldSessionOptions
 /// a server bug and is logged at Error with its stack trace by the host that owns the thread.
 /// </para>
 /// </summary>
-public sealed class WorldSession : IPlayerSession
+public sealed partial class WorldSession : IPlayerSession
 {
     /// <summary>vmangos WorldSocket::handle_input_header rejects sizes outside [4, 0x2800].</summary>
     public const int MaxClientPacketSize = 0x2800;
@@ -244,6 +244,12 @@ public sealed class WorldSession : IPlayerSession
             throw new ArgumentException($"{WorldOpcodeNames.GetName(opcode)} payload of {payload.Length} bytes exceeds the SMSG size field");
         }
 
+        if (_managed)
+        {
+            CaptureManagedPacket(opcode, payload);
+            return;
+        }
+
         byte[] frame = new byte[WorldHeaderCrypt.OutgoingHeaderLength + payload.Length];
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(0, 2), (ushort)(payload.Length + 2));
         BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(2, 2), (ushort)opcode);
@@ -342,6 +348,10 @@ public sealed class WorldSession : IPlayerSession
 
     public void Kick()
     {
+        if (_managed)
+        {
+            CloseManaged();
+        }
         try
         {
             _kick.Cancel();

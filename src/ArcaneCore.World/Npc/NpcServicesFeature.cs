@@ -149,11 +149,18 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
                     ? NpcServiceDbcReaders.LoadRepairCosts(Options.DurabilityCostsDbcPath!, Options.DurabilityQualityDbcPath!) : RepairCostTable.Empty),
                 services.GetService<BankBagSlotPriceTable>() ?? (Has(Options.BankBagSlotPricesDbcPath)
                     ? NpcServiceDbcReaders.LoadBankBagSlotPrices(Options.BankBagSlotPricesDbcPath!) : BankBagSlotPriceTable.Empty));
+            // Configured overrides of the imported creature_template service fields fail closed: an entry 0, an unknown trainer type,
+            // a non-playable trainer class or a race above 8 refuses startup instead of silently refusing every trainee.
+            foreach (NpcTemplateMetadata configured in Options.NpcTemplates)
+            {
+                ValidateMetadata(configured);
+            }
+
             _tables = tables;
             logger.LogInformation(
                 "NPC services: {Paths} flight paths with waypoints, {Abilities} skill line abilities, repair prices {Repair}",
                 tables.PathNodes.PathCount, tables.Abilities.Count, tables.Repair.IsEmpty ? "absent" : "loaded");
-            return tables;
+            return _tables!;
         }
     }
 
@@ -291,6 +298,18 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
 
         _routeWrites?.Delete((int)player.Guid.Low);
     }
+
+    private static void ValidateMetadata(NpcTemplateMetadata row)
+    {
+        if (row.Entry == 0 || !Enum.IsDefined(row.TrainerType)
+            || !IsValidTrainerClass(row.TrainerClass) || row.TrainerRace > 8)
+        {
+            throw new InvalidDataException($"invalid configured NPC service metadata for entry {row.Entry}");
+        }
+    }
+
+    /// <summary>0 (none) or a vanilla playable class (vmangos Classes: no 6 or 10).</summary>
+    private static bool IsValidTrainerClass(byte value) => value is 0 or 1 or 2 or 3 or 4 or 5 or 7 or 8 or 9 or 11;
 
     private sealed record Tables(TaxiPathNodeCatalog PathNodes, SkillLineAbilityCatalog Abilities, RepairCostTable Repair, BankBagSlotPriceTable BankSlots);
 

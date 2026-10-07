@@ -71,6 +71,9 @@ internal static class ConfigExceptionTable
             "`false` stops enforcing `SpellInfo.RequiresSpellFocus` on casts (read once by `SpellFocusFeature`); `true` is the retail behaviour."),
         new("Startup:Strict", "bool", "false",
             "`true` makes a configuration warning fail start-up like an error (exit code 78); read by `ConfigValidation.Run`."),
+        new("Items:CharStartOutfitDbcPath", "string", "null",
+            "Build-5875 CharStartOutfit.dbc: a new character's starting items by race, class and gender, then the SQL starting items "
+            + "(read once by `ItemsFeature`). Unset keeps the SQL starting items only; a configured file that is unreadable or has another layout fails the item load (no silent fallback)."),
     ];
 
     /// <summary>The assemblies whose options classes are catalogued.</summary>

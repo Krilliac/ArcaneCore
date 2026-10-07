@@ -91,7 +91,7 @@ docs/integration/creature-ai.md.
     present, triggered and interrupt flags; a creature that is casting only casts again when the spell is
     triggered or interrupts; success is the cast being accepted), 12 summon, 13 threat single (direct add or percent) and 14 threat all percent (docs/areas/threat.md), 20 auto attack, 21 combat
     movement (no change or casting fails), 22 and 23 phases, 24 evade (with the combat-only parameter), 25
-    flee for assistance, 37 die, 39 call for help.
+    flee for assistance, 37 die, 39 call for help, 54 target-aware text (direct id or random template).
   - **Targets**: 0-6, 7 (the invoker; there are no pets), 10, 12 and 15 (no unit). Others fail the action.
   - Event 36 (target not reachable) is checked at every batch and fires while the chase generator reports its victim
     unreachable (see "Unreachable target" above; nothing is unreachable without navigation data); death-prevented (35) needs
@@ -106,9 +106,20 @@ docs/integration/creature-ai.md.
   carry an emote (SMSG_EMOTE).
 - **Data**: `CreatureDumpImporter` reads cmangos `creature_ai_scripts` (only when it has
   `action1_type`), `creature_ai_texts` (negative entries), `broadcast_text`,
-  `creature_ai_summons`, `AIName`, the movement `Run` column and the template behaviour columns
+  `creature_ai_summons`, `dbscript_random_templates` (string type 0), `AIName`, the movement `Run` column and the template behaviour columns
   described in "Content model" below. A vmangos `creature_ai_events` table is reported and not
   imported.
+
+Action 54 follows CMaNGOS `CreatureEventAI.cpp`'s `ACTION_T_TEXT_NEW`: parameter 2 resolves
+the target; parameter 3 selects a random string template when nonzero, otherwise parameter 1
+is the text id. Weighted choices run first with cumulative percentage thresholds; remaining
+probability chooses uniformly among chance-zero rows. A missing template or selected zero
+performs no chat, and a missing target fails the action. Positive ids resolve broadcast text,
+negative ids resolve the existing creature AI text catalog. World schema 27 stores signed
+text choices separately from relay templates; import reports count only string choices.
+The primary contract is `ScriptMgr::GetRandomScriptTemplateId` and
+`LoadDbScriptRandomTemplates` in CMaNGOS classic revision `8ec338a1704e7dcb1c0213eb7ed58f9231ade40f`.
+Legacy `MangosStringLocale` fallback and ranged action 57 remain pending.
 
 ## Code layout
 

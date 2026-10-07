@@ -39,6 +39,10 @@ public sealed class CreatureTemplateRow
 
     public float Scale { get; set; }
 
+    public float DisplayScale2 { get; set; }
+    public float DisplayScale3 { get; set; }
+    public float DisplayScale4 { get; set; }
+
     public uint Faction { get; set; }
 
     public uint NpcFlags { get; set; }

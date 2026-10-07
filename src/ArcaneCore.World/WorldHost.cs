@@ -36,20 +36,35 @@ public sealed class WorldHost(
         logger.LogInformation("Loaded {Count} character names", directory.Count);
         saveQueue.Start();
         world.Start();
+        await using (AsyncServiceScope scope = scopes.CreateAsyncScope())
+        {
+            if (scope.ServiceProvider.GetService<Playerbots.ManagedPlayerbotFeature>() is { } playerbots)
+                await playerbots.StartupAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        world.Stop();
+        List<Exception> failures = [];
+        try
+        {
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            if (scope.ServiceProvider.GetService<Playerbots.ManagedPlayerbotFeature>() is { } playerbots)
+                await playerbots.ShutdownBeforeWorldStopAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex) { failures.Add(ex); }
+        finally { world.Stop(); }
         try
         {
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             await scope.ServiceProvider.StopWorldFeaturesAsync().ConfigureAwait(false);
         }
+        catch (Exception ex) { failures.Add(ex); }
         finally
         {
             await saveQueue.StopAsync().ConfigureAwait(false);
         }
         logger.LogInformation("World saved and stopped");
+        if (failures.Count > 0) throw new AggregateException("World feature shutdown failed", failures);
     }
 }

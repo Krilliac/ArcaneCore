@@ -21,14 +21,15 @@ public sealed class CraftingFeatureTests
         Assert.Contains(typeof(CraftingFeature), ArcaneCore.World.Features.WorldFeatures.FeatureTypes);
         await using WorldTestHost host = WorldTestHost.Start(configureServices: Config(null));
 
-        (int checks, int takers) = await host.OnWorldAsync(() =>
+        (int checks, bool tradeFilter) = await host.OnWorldAsync(() =>
         {
             var system = host.WorldServices.GetRequiredService<SpellFeature>().System;
-            return (system.CastChecks.OfType<ReagentCastCheck>().Count(), system.CostTakers.OfType<ReagentCostTaker>().Count());
+            return (system.CastChecks.OfType<ReagentCastCheck>().Count(), system.ReagentTradeFilter is not null);
         });
 
+        // The reagents are taken by the cast itself (SpellSystem.StageCastReagents); the feature adds the tool check and the trade filter.
         Assert.Equal(1, checks);
-        Assert.Equal(1, takers);
+        Assert.True(tradeFilter);
         Assert.Equal(1, await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.Observers.OfType<FirstAidObserver>().Count()));
         Assert.True(await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.HasEffectHandler(ArcaneCore.Game.Spells.SpellEffectName.CreateItem)));
     }

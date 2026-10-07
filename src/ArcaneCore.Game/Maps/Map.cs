@@ -57,6 +57,7 @@ public sealed class Map
     private readonly List<Action> _afterUpdate = [];
     private readonly List<WorldObject> _valuesQueue = [];
     private readonly List<IMapUpdater> _updaters = [];
+    private readonly List<Unit> _heartbeatUnits = [];
 
     // Consecutive failure count per updater; -1 means the fault breaker is skipping it. Empty
     // unless an updater throws and World:MaxConsecutiveUpdaterFaults is set.
@@ -440,7 +441,11 @@ public sealed class Map
 
     /// <summary>One simulation step (world thread).</summary>
     public void Update(uint diffMs)
+        => Update(diffMs, diagnostics: null);
+
+    internal void Update(uint diffMs, MapUpdateDiagnostics? diagnostics)
     {
+        diagnostics?.Begin();
         // (1) in-world packets
         foreach (Player player in _players.Values.ToArray())
         {
@@ -475,6 +480,22 @@ public sealed class Map
             }
         }
 
+        // Reuse a snapshot so heartbeat listeners may remove objects without
+        // invalidating enumeration, and keep each unit's timer across casts.
+        foreach (WorldObject obj in _objects.Values)
+            if (obj is Unit unit) _heartbeatUnits.Add(unit);
+        try
+        {
+            foreach (Unit unit in _heartbeatUnits)
+                if (ReferenceEquals(unit.Map, this) && unit.IsInWorld
+                    && unit is not Player { IsQuestSettlementPending: true })
+                    unit.UpdateHeartbeat(diffMs);
+        }
+        finally
+        {
+            _heartbeatUnits.Clear();
+        }
+
         // (1c) per-map systems (creatures, …) — see IMapUpdater
         foreach (IMapUpdater updater in _updaters)
         {
@@ -496,6 +517,14 @@ public sealed class Map
                 _logger.LogError(ex, "map {MapId} updater {Updater} failed", MapId, updater.GetType().Name);
                 CountUpdaterFault(updater);
             }
+        }
+
+        if (diagnostics is not null)
+        {
+            diagnostics.Players = _players.Count;
+            diagnostics.MovedObjects = _movedObjects.Count;
+            diagnostics.NewObjects = _newObjects.Count;
+            diagnostics.EndSimulation();
         }
 
         _inUpdatePhase = true;
@@ -533,7 +562,13 @@ public sealed class Map
 
             _newObjects.Clear();
 
+            diagnostics?.EndVisibility();
+
             // (3) values updates
+            if (diagnostics is not null)
+            {
+                diagnostics.ChangedObjects = _valuesQueue.Count;
+            }
             foreach (WorldObject obj in _valuesQueue)
             {
                 SendValuesUpdate(obj);
@@ -542,12 +577,14 @@ public sealed class Map
             }
 
             _valuesQueue.Clear();
+            diagnostics?.EndValues();
 
             // (4) flush
             foreach (Player player in _players.Values)
             {
                 FlushPlayer(player);
             }
+            diagnostics?.EndFlush();
         }
         finally
         {
@@ -575,6 +612,8 @@ public sealed class Map
                 }
             }
         }
+
+        diagnostics?.Complete();
     }
 
     /// <summary>

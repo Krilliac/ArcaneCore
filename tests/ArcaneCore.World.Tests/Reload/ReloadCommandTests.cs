@@ -61,6 +61,21 @@ public sealed class ReloadCommandTests
     }
 
     [Fact]
+    public async Task SharedSpellPrefix_ReportsAmbiguityAndDoesNotStartAReload()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await AdministratorAsync(host);
+
+        await SayAsync(admin, ".reload spell");
+
+        string reply = (await admin.ReadChatAsync()).Text;
+        Assert.StartsWith("Ambiguous reloadable 'spell':", reply);
+        Assert.Contains("spell_template", reply);
+        Assert.Contains("spell_enchant_charges", reply);
+        Assert.Empty(host.WorldServices.GetRequiredService<ReloadFeature>().Coordinator.LastResults);
+    }
+
+    [Fact]
     public async Task ReloadConfig_AppliesLiveOptions_AndNamesTheRestartOnlyOnes()
     {
         await using var host = WorldTestHost.Start();

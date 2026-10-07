@@ -23,18 +23,23 @@ feature, discovered like every `IWorldFeature`.
 ### Transform aura
 
 * Misc value = creature entry. The display is the template's (`Creature.ChooseDisplayId`, weighted by the display probabilities; no gender swap, unlike the mount
-  aura). An entry that is not in the creature data gives the pink pig, display `16358` ("pig pink ^_^"), and the feature logs the entry. With no display source
-  registered every entry counts as unknown.
+  aura). An entry that is not in the creature data gives the box model, display `4` (vmangos `UNIT_DISPLAY_ID_BOX`; mangoszero uses the pink pig `16358`), and
+  the feature logs the entry. With no display source registered every entry counts as unknown.
 * Misc value 0 is defined for Orb of Deception (spell `16739`) only: the wearer's *native* display maps to the Orb model (16 race/gender rows, `10134-10149`,
   taken from the reference table). A native display with no row leaves the display alone. Any other misc-0 spell is reported through
   `ITransformDisplaySource.ReportNoModel` and changes nothing (the reference logs "need custom defined model").
-* Removal resets the display to `NativeDisplayId`, then re-applies one of the transform auras still on the unit, a negative spell by preference, else the first
-  (`GetAurasByType` order). So a second transform overrides the first, and the first comes back when the second ends; removing the older one while a newer one is on
-  re-applies the newer one.
-* The unit keeps an "active transform" record (`TransformAuras.ActiveHolder`, a static weak table keyed by unit, world thread only, like `TransformScale`). A new
-  transform always sets the display; it takes the record only when none is set, when it is negative, or when the record is positive (a positive transform over a
-  negative one changes the model without taking the record). The record is read by nothing else yet; it exists so the "negative wins" rule of the restore is the
-  reference's, and for later consumers (`GetTransform`).
+* The unit keeps an "active transform" record (`TransformAuras.ActiveHolder`, vmangos `GetTransForm`; a static weak table keyed by unit, world thread only, like
+  `TransformScale`). A new transform applies (display and record) only when none is set, when it is negative, or when the record is positive; a positive transform over
+  a negative one changes nothing (vmangos; mangoszero changes the model without taking the record).
+* Removal resets the cosmetics only when the removed aura is the active record (vmangos "reset cosmetics only if it's the current transform"): the display goes back
+  to `NativeDisplayId`, then one of the transform auras still on the unit is applied again, a negative spell by preference, else the latest (`GetAurasByType` walked
+  from the back). With none left the shapeshift form's display and scale come back (`GetShapeshiftDisplayInfo`). So a second transform overrides the first, the
+  first comes back when the second ends, and removing an older one while a newer one is on changes nothing.
+* A creature entry also sets the transform scale (`TransformScale`, vmangos `SetTransformScale` with `ChooseDisplayId`'s scale: the template's
+  `display_scale` of the chosen display, else the display's model scale from CreatureDisplayInfo/CreatureModelData when those files are configured, else 1);
+  Mod Scale auras stay multiplied in, and the end of the transform resets to the native scale (`ResetTransformScale`).
+* When the spell system has a display model resolver (the world daemon's `DisplayModelFeature`), bounding radius and combat reach follow the new display
+  (`SetDisplayId` then `UpdateModelData`).
 * The shapeshift service already skips a form's display while any Transform aura is on the unit (`ShapeshiftService.HasTransform`), and the polymorph regeneration
   rule in `CombatOptions` reads the same aura type.
 * Cost: apply and removal only, never per tick.
@@ -84,8 +89,8 @@ realm would tune, so no config key was added (the config catalog is untouched).
 * **Water uses terrain liquid only** (`map.GetLiquidStatus`); WMO liquid is not queried by the map yet.
 * **Transform equipment**: the reference reloads a creature target's equipment template (`LoadEquipment`) on a transform and restores it on removal. ArcaneCore has no
   creature equipment swap seam, so a transformed creature keeps its equipment. Players are unaffected.
-* **Transform end under a shapeshift form** restores the native display, not the form's (mangoszero does the same); a druid polymorphed out of a form needs the form
-  re-applied by the shapeshift service, which is not done on a transform end.
+* **Orb of Deception scale**: the reference adjusts the transform scale for taurens and gnomes wearing the Orb model; here the Orb keeps the
+  unit's scale.
 * The battleground rule of the face-caster/leap check (`TRY_AGAIN` before the battleground starts) belongs to the battleground area.
 
 ## Unverified (no client or reference evidence in this lane)
@@ -101,7 +106,7 @@ realm would tune, so no config key was added (the config catalog is untouched).
 
 ## Tests
 
-`tests/ArcaneCore.Game.Tests/Spells/TransformAuraTests.cs` (display set and restored, expiry, second transform overriding, restore order, positive over negative, pig for an
+`tests/ArcaneCore.Game.Tests/Spells/TransformAuraTests.cs` (display set and restored, expiry, second transform overriding, restore order, positive over negative, box for an
 unknown entry or no source, Orb of Deception table and misc-0 report), `ChargeEffectTests.cs` (adjacency with and without radii, spline packet fields, rage and stun through the
 triggered spell, attack start, positive charge, self target, navigation path and incomplete path, wall at the contact point, creature target and creature caster, rooted caster, blink
 distance, facing, wall stop, slope, edge of ground, falling, taxi and transport refusal, face-caster teleport to a radius point and to a destination),

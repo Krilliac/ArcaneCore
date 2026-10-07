@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using ArcaneCore.Data.Npc;
 
 namespace ArcaneCore.Data.Content.Import;
 
@@ -29,7 +30,7 @@ public static class ContentTableSpecs
         "display_id1", "display_id2", "display_id3", "display_id4",
         "DisplayIdProbability1", "DisplayIdProbability2", "DisplayIdProbability3", "DisplayIdProbability4",
         "display_probability1", "display_probability2", "display_probability3", "display_probability4",
-        "Scale", "display_scale1", "Faction", "FactionAlliance", "faction", "NpcFlags", "npc_flags",
+        "Scale", "display_scale1", "display_scale2", "display_scale3", "display_scale4", "Faction", "FactionAlliance", "faction", "NpcFlags", "npc_flags",
         // CreatureNpcMetadataDataModule (vmangos CreatureDefines.h:242,272-275)
         "GossipMenuId", "gossip_menu_id", "TrainerType", "trainer_type", "TrainerClass", "trainer_class",
         "TrainerRace", "trainer_race", "TrainerSpell", "trainer_spell",
@@ -47,6 +48,11 @@ public static class ContentTableSpecs
         "LootId", "loot_id", "SkinningLootId", "skinning_loot_id", "MinLootGold", "gold_min", "MaxLootGold", "gold_max",
         // GameObjectLootDumpImporter.ReadPickpocketId (classic-db PickpocketLootId, vmangos pickpocket_loot_id)
         "PickpocketLootId", "pickpocket_loot_id",
+        // TotemSpellDumpImporter: cmangos spell-list link and vmangos direct totem spell.
+        "SpellList", "spell_list_id", "totem_spell_id",
+        // Direct NPC service metadata is imported alongside the creature template.
+        "GossipMenuId", "gossip_menu_id", "TrainerType", "trainer_type", "TrainerClass", "trainer_class",
+        "TrainerRace", "trainer_race", "TrainerSpell", "trainer_spell",
     ];
 
     private static readonly string[] s_spawnColumns =
@@ -158,6 +164,11 @@ public static class ContentTableSpecs
                 "action3_type", "action3_param1", "action3_param2", "action3_param3", "comment",
             ], []),
         new("creature_ai_texts", [new KeyColumn("entry")], ["content_default", "type", "language", "emote"], []),
+        new("dbscript_random_templates", [new KeyColumn("id"), new KeyColumn("type"), new KeyColumn("target_id")], ["chance"], []),
+        new("creature_template_spells", [new KeyColumn("entry"), new KeyColumn("setId")], Enumerable.Range(1, 10).Select(i => "spell" + i), []),
+        new("creature_spell_list", [new KeyColumn("Id"), new KeyColumn("Position")], ["SpellId"], []),
+        new("spell_template", [new KeyColumn("Id")],
+            ["Effect1", "Effect2", "Effect3", "EffectMiscValue1", "EffectMiscValue2", "EffectMiscValue3"], []),
         new("gameobject_template", [new KeyColumn("entry")],
             [
                 "type", "displayId", "display_id", "name", "faction", "flags", "size", "patch",
@@ -189,9 +200,20 @@ public static class ContentTableSpecs
         new("playercreateinfo", [new KeyColumn("race"), new KeyColumn("class")], [], [], PlayerCreateDumpImporter.ReadsStartColumn),
         new("playercreateinfo_spell", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("spell")], [], s_buildRangeSignatures, PlayerCreateDumpImporter.ReadsSpellColumn),
         new("playercreateinfo_action", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("button")], [], [], PlayerCreateActionDumpImporter.ReadsColumn),
+        new("playercreateinfo_skills", [new KeyColumn("raceMask"), new KeyColumn("classMask"), new KeyColumn("skill")], ["step", "note"], []),
         new("spell_target_position", [new KeyColumn("id")], [], s_buildRangeSignatures, PlayerCreateDumpImporter.ReadsTargetColumn),
         new("player_levelstats", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("level")], [], [], PlayerCreateDumpImporter.ReadsLevelColumn),
         new("player_classlevelstats", [new KeyColumn("class"), new KeyColumn("level")], [], [], PlayerCreateDumpImporter.ReadsClassColumn),
+        new("player_xp_for_level", [new KeyColumn("lvl")], ["xp_for_next_level"], []),
+        new("player_crit_per_agility", [new KeyColumn("class"), new KeyColumn("level")], ["rate"], []),
+        new("player_dodge_per_agility", [new KeyColumn("class"), new KeyColumn("level")], ["rate"], []),
+        new("npc_gossip", [new KeyColumn("npc_guid")], [], [], c => NpcDumpImporter.ReadsColumn("npc_gossip", c)),
+        new("gossip_menu", [new KeyColumn("entry"), new KeyColumn("text_id"), new KeyColumn("condition_id")], [], [], c => NpcDumpImporter.ReadsColumn("gossip_menu", c)),
+        new("gossip_menu_option", [new KeyColumn("menu_id"), new KeyColumn("id")], [], [], c => NpcDumpImporter.ReadsColumn("gossip_menu_option", c)),
+        new("npc_text", [new KeyColumn("ID")], [], [], c => NpcDumpImporter.ReadsColumn("npc_text", c)),
+        new("npc_vendor", [new KeyColumn("entry"), new KeyColumn("item")], [], [], c => NpcDumpImporter.ReadsColumn("npc_vendor", c)),
+        new("npc_trainer", [new KeyColumn("entry"), new KeyColumn("spell")], [], [], c => NpcDumpImporter.ReadsColumn("npc_trainer", c)),
+        new("conditions", [new KeyColumn("condition_entry")], ["type", "value1", "value2", "value3", "value4", "flags"], []),
         new("areatrigger_teleport", [new KeyColumn("id")], [], s_portalSignatures, LocationDumpImporter.ReadsPortalColumn),
         // areatrigger_involvedrelation: id is the area trigger, quest the exploration quest it credits (LocationDumpImporter.ReadQuestTrigger).
         new("areatrigger_involvedrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], s_relationSignatures),

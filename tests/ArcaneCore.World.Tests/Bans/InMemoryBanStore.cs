@@ -183,6 +183,7 @@ internal sealed class InMemoryBanStore(AccountStatusEvents? events = null, TimeP
 
     public Task<IReadOnlyList<AccountBanRecord>> GetHistoryAsync(int accountId, CancellationToken cancellationToken = default)
     {
+        Interlocked.Increment(ref _historyCalls);
         lock (_gate)
         {
             return Task.FromResult<IReadOnlyList<AccountBanRecord>>([.. _accountRows.Where(r => r.AccountId == accountId).OrderBy(r => r.BanDate).ThenBy(r => r.BanId)]);
@@ -192,6 +193,12 @@ internal sealed class InMemoryBanStore(AccountStatusEvents? events = null, TimeP
     /// <summary>How many times <see cref="FindAccountsWithHistoryAsync"/> was called.</summary>
     public int FindHistoryCalls => Volatile.Read(ref _historyCalls);
 
+    /// <summary>Alias of <see cref="FindHistoryCalls"/>.</summary>
+    public int HistoryCalls => FindHistoryCalls;
+
+    /// <summary>The account ids of the last <see cref="FindAccountsWithHistoryAsync"/> call.</summary>
+    public IReadOnlyList<int> HistoryCandidates { get; private set; } = [];
+
     private int _historyCalls;
 
     public Task<IReadOnlySet<int>> FindAccountsWithHistoryAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
@@ -200,6 +207,7 @@ internal sealed class InMemoryBanStore(AccountStatusEvents? events = null, TimeP
         Interlocked.Increment(ref _historyCalls);
         lock (_gate)
         {
+            HistoryCandidates = [.. accountIds];
             return Task.FromResult<IReadOnlySet<int>>(_accountRows.Where(r => accountIds.Contains(r.AccountId)).Select(r => r.AccountId).ToHashSet());
         }
     }

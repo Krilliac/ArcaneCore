@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ArcaneCore.MockClient.Hosting;
 using ArcaneCore.MockClient.Scenarios;
+using ArcaneCore.MockClient.Playbots;
 
 namespace ArcaneCore.MockClient;
 
@@ -18,6 +19,21 @@ internal static class Program
         if (args.Length > 0 && args[0] == "live")
         {
             return await LiveSession.MainAsync(args[1..], Console.Out, Console.Error).ConfigureAwait(false);
+        }
+
+        if (args.Length > 0 && args[0] == "playbot")
+        {
+            return await PlaybotCommand.MainAsync(args[1..], Console.Out, Console.Error).ConfigureAwait(false);
+        }
+
+        if (args.Length > 0 && args[0] == "item-feedback")
+        {
+            return await ItemFeedbackProbe.MainAsync(args[1..], Console.Out, Console.Error).ConfigureAwait(false);
+        }
+
+        if (args.Length > 0 && args[0] == "starting-zone")
+        {
+            return await StartingZoneProbe.MainAsync(args[1..], Console.Out, Console.Error).ConfigureAwait(false);
         }
 
         ClientFixtureOptions? fixture = null;
@@ -60,7 +76,10 @@ internal static class Program
     private static void PrintUsage(TextWriter writer)
     {
         writer.WriteLine("Usage: arcane-mock self-test");
+        writer.WriteLine("       " + PlaybotCommand.Usage);
+        writer.WriteLine("       arcane-mock item-feedback --account NAME --character NAME --password-env VAR [--realm 127.0.0.1:3724]");
         writer.WriteLine("       arcane-mock live ...   (stay connected to a running dev server; run 'arcane-mock live' with no flags for details)");
+        writer.WriteLine("       arcane-mock starting-zone ...   (bounded Human Warrior starting-zone probe; password comes from an environment variable)");
         writer.WriteLine("       arcane-mock client-fixture --directory <new absolute directory> --account <name> --password <disposable password>");
     }
 }

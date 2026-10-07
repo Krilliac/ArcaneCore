@@ -9,6 +9,24 @@ namespace ArcaneCore.Game.Tests.Duel;
 /// <summary>vmangos Player::DuelComplete (Player.cpp:6726-6822): what a finished duel removes and resets.</summary>
 public sealed class DuelCompletionTests
 {
+    [Theory]
+    [InlineData(DuelCompleteType.Won, true)]
+    [InlineData(DuelCompleteType.Fled, true)]
+    [InlineData(DuelCompleteType.Interrupted, false)]
+    public void Completion_ResetsExtraAttacksOnlyForADecidedDuel(DuelCompleteType type, bool clears)
+    {
+        using var rig = new DuelRig();
+        rig.Challenge();
+        rig.AcceptAndStart();
+        Assert.True(rig.A.Combat.QueueExtraAttacks(2));
+        Assert.True(rig.B.Combat.QueueExtraAttacks(3));
+
+        rig.Service.Complete(rig.A, type);
+
+        Assert.Equal(clears ? 0u : 2u, rig.A.Combat.ExtraAttacks);
+        Assert.Equal(clears ? 0u : 3u, rig.B.Combat.ExtraAttacks);
+    }
+
     private static bool Has(DuelRig rig, Player target, uint spellId) => rig.Kit.System.GetAuras(target).Any(h => h.Spell.Id == spellId);
 
     private static void Cast(DuelRig rig, Unit caster, Player target, uint spellId)
@@ -21,12 +39,12 @@ public sealed class DuelCompletionTests
         Player third = rig.Kit.AddPlayer(3, 14, 10).Player;
         rig.Challenge();
         Cast(rig, rig.B, rig.A, DebuffA);          // before the start: kept
+        Cast(rig, rig.B, rig.A, Buff);             // positive opponent buff must be applied before duel hostility starts
         rig.Now += 5;
         rig.AcceptAndStart();                      // start at Now + 3
         long start = rig.A.Duel!.StartTimeSeconds;
         Cast(rig, rig.B, rig.A, DebuffB);          // applied at the start second: removed
         Cast(rig, rig.A, rig.B, DebuffA);          // the other side: removed
-        Cast(rig, rig.B, rig.A, Buff);             // positive: kept
         Cast(rig, third, rig.A, 109);              // third party debuff (the stun): kept
 
         rig.Service.Complete(rig.A, DuelCompleteType.Won);

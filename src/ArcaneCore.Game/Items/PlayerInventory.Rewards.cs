@@ -4,7 +4,7 @@ using ArcaneCore.Protocol;
 namespace ArcaneCore.Game.Items;
 
 /// <summary>One item grant; <paramref name="Created"/> marks a spell-created item (vmangos Spell::DoCreateItem reports it as created).</summary>
-internal readonly record struct InventoryRewardGrant(uint Entry, uint Count, bool Created = false);
+public readonly record struct InventoryRewardGrant(uint Entry, uint Count, bool Created = false);
 
 /// <summary>A detached reward inventory. Preparation consumes GUIDs, but never changes the owner's fields or sends packets.</summary>
 internal sealed class InventoryRewardStage(
@@ -49,7 +49,8 @@ public sealed partial class PlayerInventory
     /// outside the bank) followed by every reward grant, all in one detached inventory.
     /// </summary>
     internal InventoryResult TryStageQuestRewards(IReadOnlyList<InventoryRewardGrant> grants,
-        IReadOnlyList<InventoryRewardGrant> removals, out InventoryRewardStage? stage, out uint failedEntry)
+        IReadOnlyList<InventoryRewardGrant> removals, out InventoryRewardStage? stage, out uint failedEntry,
+        IReadOnlySet<ObjectGuid>? keepForRemovals = null)
     {
         stage = null;
         failedEntry = 0;
@@ -68,10 +69,13 @@ public sealed partial class PlayerInventory
         foreach (InventoryRewardGrant removal in removals)
         {
             failedEntry = removal.Entry;
+            // keepForRemovals: items that must neither count nor be taken (a spell's reagents skip the items offered in an open trade,
+            // vmangos Player::HasItemCount / DestroyItemCount and IsInTrade, Player.cpp:8681-8734).
+            Func<Item, bool>? keep = keepForRemovals is { Count: > 0 } kept ? item => kept.Contains(item.Guid) : null;
             if (removal.Entry == 0 || removal.Count is 0 or > int.MaxValue
-                || shadow.GetItemCount(removal.Entry) < removal.Count
+                || shadow.GetItemCount(removal.Entry, exclude: keep) < removal.Count
                 || shadow.AllItems.Any(i => i.Entry == removal.Entry && i is Container)
-                || shadow.DestroyItemCount(removal.Entry, removal.Count) != removal.Count)
+                || shadow.DestroyItemCount(removal.Entry, removal.Count, exclude: keep) != removal.Count)
             {
                 return InventoryResult.ItemNotFound;
             }

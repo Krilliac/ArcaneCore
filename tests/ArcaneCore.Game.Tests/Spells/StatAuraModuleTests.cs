@@ -156,6 +156,29 @@ public sealed class StatAuraModuleTests
         Assert.Equal(300u, mage.GetUInt32(UpdateFields.UnitFieldMaxpower1));
     }
 
+    [Fact]
+    public void ModStat_Intellect_UpdatesLatentManaPoolWhenBaseManaExists_RegardlessOfCurrentPowerType()
+    {
+        using var kit = Kit();
+        (Player player, _) = kit.AddPlayer(1);
+        player.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Energy);
+        player.SetUInt32(UpdateFields.UnitFieldBaseMana, 1);
+        player.SetUInt32(UpdateFields.UnitFieldMaxpower1, 100);
+        player.SetUInt32(UpdateFields.UnitFieldPower1, 100);
+        player.SetInt32(UpdateFields.UnitFieldStat0 + 3, 20);
+        var maintainer = new PlayerStatSystem();
+        maintainer.Attach(player);
+        maintainer.UpdateAll(player);
+        Assert.Equal(120u, player.GetUInt32(UpdateFields.UnitFieldMaxpower1)); // initial intellect-20 bonus
+
+        kit.System.CastSpell(player, Intellect, SpellCastTargets.ForSelf(), triggered: true);
+        Assert.Equal(270u, player.GetUInt32(UpdateFields.UnitFieldMaxpower1));
+        maintainer.UpdateAll(player); // attached refresh is idempotent
+        Assert.Equal(270u, player.GetUInt32(UpdateFields.UnitFieldMaxpower1));
+        kit.System.RemoveAuras(player, Intellect);
+        Assert.Equal(120u, player.GetUInt32(UpdateFields.UnitFieldMaxpower1));
+    }
+
     /// <summary>
     /// The stats lane keeps a ledger of the stamina and intellect bonus already inside the maximum fields and
     /// recomputes it from the TOTAL stat on every item and level update (vmangos recomputes max health from the stat

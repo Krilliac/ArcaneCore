@@ -18,12 +18,20 @@ public sealed class FallDamageEndToEndTests
         return writer.ToArray();
     }
 
-    private static async Task<List<(WorldOpcode Opcode, byte[] Payload)>> FallAsync(WorldTestClient client, float from, float to, uint fallTime)
+    private static async Task<List<(WorldOpcode Opcode, byte[] Payload)>> FallAsync(WorldTestClient client, float from, float to, uint fallTime,
+        bool expectDamage = false)
     {
         await client.SendAsync(WorldOpcode.MsgMoveJump, Block(MovementFlags.Jumping, from));
         await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, Block(MovementFlags.Jumping | MovementFlags.FallingFar, (from + to) / 2, 1500));
         await client.SendAsync(WorldOpcode.MsgMoveFallLand, Block(MovementFlags.None, to, fallTime));
-        return await client.CollectAsync();
+        var observed = new List<(WorldOpcode Opcode, byte[] Payload)>();
+        if (expectDamage)
+        {
+            observed.Add((WorldOpcode.SmsgEnvironmentaldamagelog,
+                await client.ReadUntilAsync(WorldOpcode.SmsgEnvironmentaldamagelog)));
+        }
+        observed.AddRange(await client.CollectAsync());
+        return observed;
     }
 
     [Fact]
@@ -39,7 +47,7 @@ public sealed class FallDamageEndToEndTests
             p.Health = 3000;
         });
 
-        List<(WorldOpcode Opcode, byte[] Payload)> got = await FallAsync(client, 100, 60, 3000);
+        List<(WorldOpcode Opcode, byte[] Payload)> got = await FallAsync(client, 100, 60, 3000, expectDamage: true);
 
         byte[] log = Assert.Single(got, p => p.Opcode == WorldOpcode.SmsgEnvironmentaldamagelog).Payload;
         Assert.Equal(2, log[8]);

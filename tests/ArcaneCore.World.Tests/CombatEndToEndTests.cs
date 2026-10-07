@@ -50,9 +50,11 @@ public sealed class CombatEndToEndTests
         Assert.Equal([0x01, 0x01, 0x01, 0x02], swing[4..8]); // packed attacker 1, packed victim 2
         await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Combata")!.Combat.IsInCombat, "A in combat");
 
+        await host.OnWorldAsync(() => Assert.True(host.World.FindOnlinePlayer("Combata")!.Combat.QueueExtraAttacks(1)));
         await a.SendAsync(WorldOpcode.CmsgAttackstop, []);
         byte[] stop = await b.ReadUntilAsync(WorldOpcode.SmsgAttackstop);
         Assert.Equal([0x01, 0x01, 0x01, 0x02, 0, 0, 0, 0], stop);
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Combata")!.Combat.ExtraAttacks == 0, "extra attacks cleared");
     }
 
     [Fact]

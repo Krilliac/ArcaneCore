@@ -194,6 +194,6 @@ python3 tools/codegen/gen_wow_tables.py --vmangos <vmangos/core> --wow-messages 
 ## References
 
 Protocol details are reimplemented (not copied) from the references listed in
-[`docs/ROADMAP.md`](docs/ROADMAP.md#reference-set-extended-2026-10-02-at-the-developers-request)
+[`docs/ROADMAP.md`](docs/ROADMAP.md#reference-set-extended-2026-10-02-and-2026-10-04-at-the-developers-request)
 — vmangos, cmangos-classic, mangoszero, AscEmu, gtker/wow_messages + wow_srp, WCell,
 MangosSharp and wowdev.wiki — each cited inline in the code.

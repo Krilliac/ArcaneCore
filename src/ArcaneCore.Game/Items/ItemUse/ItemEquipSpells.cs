@@ -19,10 +19,14 @@ namespace ArcaneCore.Game.Items.ItemUse;
 /// <item>The four equipped bag slots take part too (mangos applies for every slot below BAG_END), except quivers and ammo pouches, whose
 /// haste aura belongs to <c>QuiverHaste</c> (it has its own aura-stacking guard and condition on the ranged weapon).</item>
 /// </list>
+/// <item>An "Equip:" spell that the wearer's shapeshift form does not allow is not cast, and a form change re-checks every worn item: the auras
+/// that no longer fit go, the ones that now fit come (mangos ApplyEquipSpell's form check and Player::UpdateEquipSpellsAtFormChange,
+/// Player.cpp:7181-7254; <see cref="ReconcileAtFormChange"/>, run as an <see cref="IFormChangeListener"/>). Set bonus spells are not re-checked
+/// at a form change (a documented limit).</item>
 /// Everything runs on the world thread inside the inventory operation. State is one <see cref="PlayerItemSets"/> and two delegates per
 /// player, created at <see cref="Attach"/>; nothing allocates per tick.
 /// </summary>
-public sealed class ItemEquipSpells(SpellSystem spells, ItemSetBonuses? sets = null)
+public sealed class ItemEquipSpells(SpellSystem spells, ItemSetBonuses? sets = null) : IFormChangeListener
 {
     private static readonly ConditionalWeakTable<PlayerInventory, Binding> s_bindings = new();
 
@@ -91,6 +95,56 @@ public sealed class ItemEquipSpells(SpellSystem spells, ItemSetBonuses? sets = n
         }
     }
 
+    /// <summary>
+    /// mangos Player::UpdateEquipSpellsAtFormChange (Player.cpp:7231-7240): every worn, unbroken item's "Equip:" spells are re-checked against
+    /// the current form; an aura that no longer fits is removed, a fitting spell whose aura is missing is cast (an active one is not cast again).
+    /// </summary>
+    public void ReconcileAtFormChange(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        foreach ((byte slot, Item item) in player.Inventory.Equipped)
+        {
+            if (slot >= InventorySlots.BagEnd || IsBroken(item))
+            {
+                continue;
+            }
+
+            foreach (ItemSpell itemSpell in item.Template.Spells)
+            {
+                if (itemSpell.SpellId == 0 || itemSpell.Trigger != ItemSpellTriggers.OnEquip || _spells.Store.Get(itemSpell.SpellId) is not { } info)
+                {
+                    continue;
+                }
+
+                bool active = _spells.GetAuras(player).Any(h => !h.IsRemoved && h.Spell.Id == info.Id && h.CastItemGuid == item.Guid);
+                if (!FitsForm(player, info))
+                {
+                    if (active)
+                    {
+                        _spells.RemoveAurasDueToItemSpell(player, item, info.Id);
+                    }
+                }
+                else if (!active)
+                {
+                    _spells.CastItemSpell(player, item, info.Id, SpellCastTargets.ForSelf(), triggered: true);
+                }
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public void OnFormChanged(Unit unit, byte oldForm, byte newForm)
+    {
+        if (unit is Player player && s_bindings.TryGetValue(player.Inventory, out _))
+        {
+            ReconcileAtFormChange(player);
+        }
+    }
+
+    /// <summary>mangos ApplyEquipSpell: "Cannot be used in this stance/form" (SpellEntry::GetErrorAtShapeshiftedCast, Player.cpp:7186).</summary>
+    private static bool FitsForm(Player player, SpellInfo spell)
+        => spell.GetErrorAtShapeshiftedCast((uint)ShapeshiftService.GetForm(player), null) == SpellCastResult.CastOk;
+
     private void ApplyItem(Player player, Item item, bool replay)
     {
         foreach (ItemSpell itemSpell in item.Template.Spells)
@@ -98,6 +152,11 @@ public sealed class ItemEquipSpells(SpellSystem spells, ItemSetBonuses? sets = n
             if (itemSpell.SpellId == 0 || itemSpell.Trigger != ItemSpellTriggers.OnEquip)
             {
                 continue;
+            }
+
+            if (_spells.Store.Get(itemSpell.SpellId) is { } fitInfo && !FitsForm(player, fitInfo))
+            {
+                continue; // a spell of another form waits for the form change (ReconcileAtFormChange)
             }
 
             if (replay)

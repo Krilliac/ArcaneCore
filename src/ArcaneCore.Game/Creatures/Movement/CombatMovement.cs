@@ -225,6 +225,45 @@ internal sealed class ChaseMovementGenerator(Unit target) : TargetedMovementGene
     protected override bool Run(Creature creature) => true;
 }
 
+/// <summary>Keep a caster at its configured distance from the victim while retaining chase ownership.</summary>
+internal sealed class RangedMovementGenerator(Unit target, float distance) : TargetedMovementGenerator(target)
+{
+    public float Distance { get; } = distance;
+
+    public override MovementGeneratorType Type => MovementGeneratorType.Chase;
+
+    protected override bool IsInPosition(Creature creature)
+    {
+        float dx = creature.X - Target.X;
+        float dy = creature.Y - Target.Y;
+        float dz = creature.Z - Target.Z;
+        float actual = MathF.Sqrt((dx * dx) + (dy * dy) + (dz * dz));
+        // Ranged mode supplies a maximum approach distance. It does not automatically retreat
+        // when the victim closes; melee autoattack remains independently enabled by EventAI.
+        return actual <= Distance + TargetMoveTolerance;
+    }
+
+    protected override void OnInPosition(Creature creature)
+    {
+        float dx = Target.X - creature.X;
+        float dy = Target.Y - creature.Y;
+        if ((dx * dx) + (dy * dy) > 0.0001f)
+        {
+            creature.Orientation = Creature.NormalizeOrientation(MathF.Atan2(dy, dx));
+        }
+    }
+
+    protected override Vector3 Destination(Creature creature)
+    {
+        float dx = creature.X - Target.X;
+        float dy = creature.Y - Target.Y;
+        float angle = (dx * dx) + (dy * dy) > 0.0001f ? MathF.Atan2(dy, dx) : Target.Orientation;
+        return PointAround(Distance, angle);
+    }
+
+    protected override bool Run(Creature creature) => true;
+}
+
 /// <summary>
 /// vmangos FollowMovementGenerator: hold <c>distance</c> (beyond both radii) at <c>angle</c>
 /// relative to the target's facing; run while the target runs, walk while it walks.

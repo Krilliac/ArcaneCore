@@ -5,6 +5,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Death;
@@ -37,7 +38,12 @@ public sealed class LifePersistenceTests
     [Fact]
     public async Task HealthPowerAndExperience_SurviveARelog()
     {
-        await using WorldTestHost host = WorldTestHost.Start();
+        // Persistence is independent of the number of world regeneration ticks.
+        // Rage decay has its own producer tests; disable it here so a lost restore
+        // cannot be confused with a legitimate decay to zero before observation.
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(
+                new Dictionary<string, string?> { ["Combat:RateRageLoss"] = "0" }).Build()));
         (WorldTestClient first, byte[] key) = await CreateAsync(host, "LIFE1", "Liferelog");
         await first.LoginAsync(1);
         (uint health, uint rage) = await host.OnWorldAsync(() =>
@@ -52,9 +58,8 @@ public sealed class LifePersistenceTests
         await using WorldTestClient again = await RelogAsync(host, first, "LIFE1", key, "Liferelog");
 
         Assert.Equal(health, await host.PlayerStateAsync("Liferelog", p => p.Health));
-        // Out of combat, rage decays (vmangos Player::RegenerateAll), so it is at most what was stored; a lost restore reads 0.
         uint restoredRage = await host.PlayerStateAsync("Liferelog", p => p.GetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Rage));
-        Assert.InRange(restoredRage, 1u, rage);
+        Assert.Equal(rage, restoredRage);
         Assert.Equal(123u, await host.PlayerStateAsync("Liferelog", p => p.GetUInt32(UpdateFields.PlayerXp)));
     }
 

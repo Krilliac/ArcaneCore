@@ -11,7 +11,9 @@ namespace ArcaneCore.Game.Reputation;
 /// contested players, forced reactions and GM neutrality apply. Anything the resolver cannot answer (a reputation faction
 /// whose player state is not loaded yet) and player-versus-player pairs go to the wrapped hooks, so the behaviour of the
 /// template-only world is never made more permissive by a missing piece of data.
-/// <see cref="IsFriendly"/> is not overridden (spell polarity), as in the wrapped hooks.
+/// <see cref="IsFriendly"/> follows the same ladder for the pairs the resolver answers (vmangos WorldObject::IsFriendlyTo,
+/// GetReactionTo &gt;= REP_FRIENDLY), so the wrapped hooks' template-only friendliness (a guard is friendly to the player race)
+/// never vetoes an attack the reputation allows; player-versus-player pairs and unanswered pairs keep the wrapped rule.
 /// </summary>
 public sealed class ReputationCombatHooks(CombatHooks fallback, ReputationReactionResolver resolver) : CombatHooks
 {
@@ -22,7 +24,15 @@ public sealed class ReputationCombatHooks(CombatHooks fallback, ReputationReacti
 
     public ReputationReactionResolver Resolver => _resolver;
 
-    public override bool IsFriendly(Unit a, Unit b) => _fallback.IsFriendly(a, b);
+    public override bool IsFriendly(Unit a, Unit b)
+    {
+        if (a is Player && b is Player)
+        {
+            return _fallback.IsFriendly(a, b); // team, duel and PvP rules
+        }
+
+        return _resolver.TryGetReaction(a, b, out ReputationRank rank) ? rank >= ReputationRank.Friendly : _fallback.IsFriendly(a, b);
+    }
 
     public override bool IsHostileTo(Unit a, Unit b)
         => _resolver.TryGetReaction(a, b, out ReputationRank rank) ? rank <= ReputationRank.Hostile : _fallback.IsHostileTo(a, b);

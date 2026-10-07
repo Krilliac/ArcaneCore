@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Data.Content.Names;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
@@ -9,6 +10,7 @@ using ArcaneCore.World.Characters;
 using ArcaneCore.World.Characters.Creation;
 using ArcaneCore.World.Characters.Rename;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Names;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Packets;
 using ArcaneCore.World.Persistence;
@@ -126,7 +128,8 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             session.Security,
             options,
             session.World.Options.CharactersPerRealm,
-            new StoreFacts(characters, worldData, session.AccountId)).ConfigureAwait(false);
+            new StoreFacts(characters, worldData, session.AccountId,
+                session.Services.GetService<NameCatalogFeature>()?.Catalog ?? NameCatalog.Empty, session.Security)).ConfigureAwait(false);
         if (!decision.Accepted)
         {
             SendResult(session, WorldOpcode.SmsgCharCreate, decision.Result);
@@ -247,8 +250,22 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
     }
 
     /// <summary>The realm facts <see cref="CharacterCreationRules"/> asks for, read from the stores.</summary>
-    private sealed class StoreFacts(ICharacterStore characters, IWorldDataStore worldData, int accountId) : ICharacterCreationFacts
+    private sealed class StoreFacts(ICharacterStore characters, IWorldDataStore worldData, int accountId, NameCatalog catalog, AccountSecurity security) : ICharacterCreationFacts
     {
+        public CharResult? CheckNameCatalog(string name)
+        {
+            NameCatalogResult result = catalog.Check(name);
+            // vmangos staff may use SQL reserved names, while DBC profanity/reserved rules remain global.
+            if (result == NameCatalogResult.Reserved && security > AccountSecurity.Player && catalog.IsSqlReservedOnly(name))
+                return null;
+            return result switch
+            {
+                NameCatalogResult.Profane => CharResult.CharNameProfane,
+                NameCatalogResult.Reserved => CharResult.CharNameReserved,
+                _ => null,
+            };
+        }
+
         public Task<bool> IsNameTakenAsync(string name) => characters.IsNameTakenAsync(name);
 
         public Task<int> CountOnRealmAsync() => characters.CountByAccountAsync(accountId);

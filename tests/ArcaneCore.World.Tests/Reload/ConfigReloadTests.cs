@@ -84,7 +84,7 @@ public sealed class ConfigReloadTests : IDisposable
     [Fact]
     public async Task LiveOptions_AreAppliedInPlace_OnTheWorldThread()
     {
-        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Motd": "Reloaded", "ListenRangeSay": 40, "AllowTwoSideChat": true, "InstantLogoutSecurity": "GameMaster", "Maps": { "GridCleanUpDelayMs": 120000, "GridUnload": false, "GridActivationDistance": 50 } } }""");
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "MaxCommandsPerTick": 12, "CommandTimeBudgetMs": 0, "Motd": "Reloaded", "ListenRangeSay": 40, "AllowTwoSideChat": true, "InstantLogoutSecurity": "GameMaster", "Maps": { "GridCleanUpDelayMs": 120000, "GridUnload": false, "GridActivationDistance": 50 } } }""");
         MapOptions maps = _options.Maps;
         ReloadCoordinator coordinator = Reloader(FromFile(path));
 
@@ -93,6 +93,8 @@ public sealed class ConfigReloadTests : IDisposable
         Assert.Equal(ReloadStatus.Applied, result.Status);
         Assert.Same(_options, _world.Options);
         Assert.Same(maps, _options.Maps);
+        Assert.Equal(12, _options.MaxCommandsPerTick);
+        Assert.Equal(0, _options.CommandTimeBudgetMs);
         Assert.Equal("Reloaded", _options.Motd);
         Assert.Equal(40f, _options.ListenRangeSay);
         Assert.True(_options.AllowTwoSideChat);
@@ -116,6 +118,22 @@ public sealed class ConfigReloadTests : IDisposable
         Assert.Equal("Reloaded", _options.Motd);
         Assert.Contains("World:TickIntervalMs option can't be changed at reload, using current value (5).", result.Notes);
         Assert.Contains("World:Maps:DataDirectory option can't be changed at reload, using current value ().", result.Notes);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task InvalidCommandLimitRejectsTheWholeReload(int limit)
+    {
+        string path = Write($$"""{ "World": { "Motd": "Rejected", "MaxCommandsPerTick": {{limit}} } }""");
+        ReloadCoordinator coordinator = Reloader(FromFile(path));
+        int originalLimit = _options.MaxCommandsPerTick;
+
+        ReloadResult result = await coordinator.ReloadAsync("config");
+
+        Assert.Equal(ReloadStatus.Rejected, result.Status);
+        Assert.Equal(originalLimit, _options.MaxCommandsPerTick);
+        Assert.Equal("original", _options.Motd);
     }
 
     [Fact]

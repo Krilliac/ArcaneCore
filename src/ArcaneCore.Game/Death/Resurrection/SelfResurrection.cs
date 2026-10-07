@@ -118,31 +118,35 @@ public static class SelfResurrection
     }
 
     /// <summary>
-    /// CMSG_SELF_RES: cast the stored spell on the player and empty the field. The spell is cast the way the client asks, not triggered, so
-    /// its cooldown starts (Reincarnation's hour). Reincarnation's Ankh is taken here once the cast went through: the spell system has no
-    /// reagent step, which vmangos does in <c>Spell::TakeReagents</c>. Returns whether a spell was cast.
+    /// CMSG_SELF_RES: cast the stored spell on the player and empty the field, also when the spell is unknown or the cast is refused (vmangos
+    /// HandleSelfResOpcode, SpellHandler.cpp:461-473). The spell is cast the way the client asks, not triggered, so its cooldown starts
+    /// (Reincarnation's hour) and its reagent (the Ankh) is taken by the cast itself (Spell::TakeReagents). A living player, one outside the
+    /// world, in transit or held by a quest settlement is refused and keeps the field. Returns whether a spell was cast.
     /// </summary>
     public static bool Use(SpellSystem system, Player player)
     {
         ArgumentNullException.ThrowIfNull(system);
         ArgumentNullException.ThrowIfNull(player);
+        if (player.Combat.DeathState is Combat.DeathState.Alive or Combat.DeathState.JustAlived
+            || !player.IsInWorld || player.Map is null || system.IsInTransit(player) || player.IsQuestSettlementPending)
+        {
+            return false;
+        }
+
         uint spellId = player.GetUInt32(UpdateFields.PlayerSelfResSpell);
         if (spellId == 0)
         {
             return false;
         }
 
-        bool cast = false;
-        if (system.Store.Get(spellId) is not null)
+        try
         {
-            cast = system.CastSpell(player, spellId, SpellCastTargets.ForSelf(), triggered: false) == SpellCastResult.CastOk;
-            if (cast && spellId == ReincarnationEffect)
-            {
-                player.Inventory.DestroyItemCount(Ankh, 1);
-            }
+            return system.Store.Get(spellId) is not null
+                && system.CastSpell(player, spellId, SpellCastTargets.ForSelf(), triggered: false) == SpellCastResult.CastOk;
         }
-
-        player.SetUInt32(UpdateFields.PlayerSelfResSpell, 0);
-        return cast;
+        finally
+        {
+            player.SetUInt32(UpdateFields.PlayerSelfResSpell, 0);
+        }
     }
 }

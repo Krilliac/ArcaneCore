@@ -13,6 +13,8 @@ public sealed class QuestStore
     private readonly FrozenDictionary<uint, Quest> _quests;
     private readonly FrozenDictionary<uint, uint[]> _starters;
     private readonly FrozenDictionary<uint, uint[]> _enders;
+    private readonly FrozenDictionary<uint, uint[]> _creatureStartersByQuest;
+    private readonly FrozenDictionary<uint, uint[]> _creatureEndersByQuest;
     private readonly FrozenDictionary<uint, uint[]> _gameObjectStarters;
     private readonly FrozenDictionary<uint, uint[]> _gameObjectEnders;
     private readonly FrozenDictionary<uint, uint[]> _areaTriggerQuests;
@@ -93,6 +95,8 @@ public sealed class QuestStore
         _exclusiveGroups = exclusive.ToFrozenDictionary(p => p.Key, p => p.Value.ToArray());
         _starters = Group(content.Starters, quests);
         _enders = Group(content.Enders, quests);
+        _creatureStartersByQuest = Reverse(_starters);
+        _creatureEndersByQuest = Reverse(_enders);
         _gameObjectStarters = Group(content.GameObjectStarters, quests);
         _gameObjectEnders = Group(content.GameObjectEnders, quests);
 
@@ -129,6 +133,12 @@ public sealed class QuestStore
     /// <summary>Quests the creature entry ends (creature_involvedrelation), in table order.</summary>
     public IReadOnlyList<uint> EndersOf(uint creatureEntry) => _enders.GetValueOrDefault(creatureEntry) ?? [];
 
+    /// <summary>Creature entries starting a loaded quest, in entry order.</summary>
+    public IReadOnlyList<uint> CreatureStartersOf(uint questId) => _creatureStartersByQuest.GetValueOrDefault(questId) ?? [];
+
+    /// <summary>Creature entries ending a loaded quest, in entry order.</summary>
+    public IReadOnlyList<uint> CreatureEndersOf(uint questId) => _creatureEndersByQuest.GetValueOrDefault(questId) ?? [];
+
     /// <summary>Quests the game object entry starts (gameobject_questrelation), in table order.</summary>
     public IReadOnlyList<uint> GameObjectStartersOf(uint gameObjectEntry) => _gameObjectStarters.GetValueOrDefault(gameObjectEntry) ?? [];
 
@@ -149,6 +159,11 @@ public sealed class QuestStore
 
     /// <summary>Members of an exclusive group (vmangos m_ExclusiveQuestGroups).</summary>
     public IReadOnlyList<uint> ExclusiveGroup(int group) => _exclusiveGroups.GetValueOrDefault(group) ?? [];
+
+    private static FrozenDictionary<uint, uint[]> Reverse(FrozenDictionary<uint, uint[]> relations)
+        => relations.SelectMany(row => row.Value.Select(quest => (Quest: quest, Entry: row.Key)))
+            .GroupBy(row => row.Quest)
+            .ToFrozenDictionary(group => group.Key, group => group.Select(row => row.Entry).Distinct().Order().ToArray());
 
     private static FrozenDictionary<uint, uint[]> Group(IEnumerable<CreatureQuestRelation> relations, Dictionary<uint, Quest> quests)
         => relations.Where(r => quests.ContainsKey(r.Quest))

@@ -33,6 +33,10 @@ public sealed class CreatureEventAI : AggressorAI
     public const int MaxPhase = 32;
 
     private readonly EventAiEngine _engine;
+    private bool _rangedMode;
+    private bool _currentRangedMode;
+    private float _chaseDistance;
+    private int _rangedModeType;
 
     public CreatureEventAI(Creature creature, CreatureAiContent content)
         : this(creature, content, EventAiRegistry.Default)
@@ -58,6 +62,16 @@ public sealed class CreatureEventAI : AggressorAI
 
     public int EventCount => _engine.Holders.Count;
 
+    /// <summary>Whether the current combat state is ranged (cmangos m_currentRangedMode).</summary>
+    internal bool CurrentRangedMode => _currentRangedMode;
+
+    /// <summary>The configured ranged mode (cmangos m_rangedMode).</summary>
+    internal bool RangedMode => _rangedMode;
+
+    internal int RangedModeType => _rangedModeType;
+
+    internal float ChaseDistance => _chaseDistance;
+
     internal CreatureAiContent AiContent { get; }
 
     internal CreatureMapSystem? Host => System;
@@ -77,18 +91,39 @@ public sealed class CreatureEventAI : AggressorAI
         }
     }
 
+    /// <summary>
+    /// ACTION_T_SET_RANGED_MODE (57). Type 3 is TYPE_NO_MELEE_MODE: it keeps the creature in
+    /// ranged mode even when the victim is inside melee reach. Movement selection remains owned by
+    /// CreatureMapSystem; this state is the contract consumed by EventAI gates and melee control.
+    /// </summary>
+    internal bool SetRangedMode(bool enabled, float chaseDistance, int type)
+    {
+        if (type is not (0 or 3) || !float.IsFinite(chaseDistance) || chaseDistance < 0)
+        {
+            return false;
+        }
+
+        _rangedMode = enabled;
+        _chaseDistance = chaseDistance;
+        _rangedModeType = type;
+        _currentRangedMode = enabled;
+        return true;
+    }
+
     /// <summary>Back to the engine's reset state with combat movement and melee on (cmangos Reset).</summary>
     public void Reset()
     {
         CombatMovement = true;
-        MeleeEnabled = true;
+        _currentRangedMode = _rangedMode;
+        SetMeleeEnabled(true);
         _engine.Reset();
     }
 
     public override void OnRespawn()
     {
         CombatMovement = true;
-        MeleeEnabled = true;
+        _currentRangedMode = _rangedMode;
+        SetMeleeEnabled(true);
         _engine.Respawn();
     }
 
@@ -103,7 +138,8 @@ public sealed class CreatureEventAI : AggressorAI
     public override void OnReachedHome()
     {
         CombatMovement = true;
-        MeleeEnabled = true;
+        _currentRangedMode = _rangedMode;
+        SetMeleeEnabled(true);
         _engine.ReachedHome();
     }
 

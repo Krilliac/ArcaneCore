@@ -41,6 +41,19 @@ public sealed class WorldRuntimeTickTests
     }
 
     [Fact]
+    public void Run_RecordsLowLoadFrameCadenceAndEffectiveRate()
+    {
+        using WorldRuntime world = Create(new CapturingLogger());
+        world.Start();
+        WaitFor(() => world.Stats.Snapshot().FrameSamples >= 3);
+
+        TickStatsSnapshot snapshot = world.Stats.Snapshot();
+        Assert.True(snapshot.MeanFrameIntervalMicros > 0);
+        Assert.NotNull(snapshot.EffectiveTicksPerSecond);
+        Assert.True(snapshot.EffectiveTicksPerSecond > 0);
+    }
+
+    [Fact]
     public void SlowCommand_IsCountedAsAnOverrun_AndMeasuredInTheMaximum()
     {
         using WorldRuntime world = Create(new CapturingLogger());
@@ -52,6 +65,31 @@ public sealed class WorldRuntimeTickTests
         WaitFor(() => world.Stats.Snapshot().Overruns > before);
 
         Assert.True(world.Stats.Snapshot().MaxMicros >= 80_000 - 5_000);
+    }
+
+    [Fact]
+    public void SlowCommand_ContributesToFrameCadenceWithoutReplacingWorkDuration()
+    {
+        using WorldRuntime world = Create(new CapturingLogger());
+        world.Start();
+        WaitFor(() => world.Stats.Snapshot().FrameSamples >= 2);
+        TickStatsSnapshot before = world.Stats.Snapshot();
+        using var commandFinished = new ManualResetEventSlim();
+        long ticksAtCommand = 0;
+        world.Post(() =>
+        {
+            ticksAtCommand = world.Stats.Snapshot().TotalTicks;
+            Thread.Sleep(80);
+            commandFinished.Set();
+        });
+        Assert.True(commandFinished.Wait(TimeSpan.FromSeconds(10)));
+        WaitFor(() => world.Stats.Snapshot().TotalTicks > ticksAtCommand + 1);
+
+        TickStatsSnapshot snapshot = world.Stats.Snapshot();
+        Assert.True(snapshot.MeanFrameIntervalMicros > 0);
+        Assert.True(snapshot.EffectiveTicksPerSecond > 0);
+        Assert.True(snapshot.FrameOverruns > before.FrameOverruns);
+        Assert.True(snapshot.MaxMicros >= 80_000 - 5_000);
     }
 
     [Fact]
@@ -139,6 +177,39 @@ public sealed class WorldRuntimeTickTests
     }
 
     [Fact]
+    public void SlowMapUpdate_IncludesPhaseCounters_WhenDiagnosticsAreEnabled()
+    {
+        var log = new CapturingLogger();
+        using WorldRuntime world = Create(log, o => o.Perf.SlowMapUpdate = 1);
+        Map map = world.GetMap(1, 8);
+        map.AddUpdater(new SleepingUpdater(20));
+
+        world.RunTick(50);
+
+        CapturingLogger.Entry entry = Assert.Single(log.Entries, e => e.EventName == PerformanceLogOptions.EventName);
+        Assert.Contains("simulation", entry.Message);
+        Assert.Contains("visibility", entry.Message);
+        Assert.Contains("values", entry.Message);
+        Assert.Contains("flush", entry.Message);
+        Assert.Contains("cleanup", entry.Message);
+        Assert.Contains("players", entry.Message);
+        Assert.Contains("moved", entry.Message);
+        Assert.Matches(@"players \d+, moved \d+, changed \d+, new \d+", entry.Message);
+    }
+
+    [Fact]
+    public void SlowMapUpdate_DisabledDoesNotEmitDiagnostics()
+    {
+        var log = new CapturingLogger();
+        using WorldRuntime world = Create(log, o => o.Perf.SlowMapUpdate = 0);
+        world.GetMap(1).AddUpdater(new ThrowingUpdater());
+
+        world.RunTick(50);
+
+        Assert.DoesNotContain(log.Entries, e => e.EventName == PerformanceLogOptions.EventName);
+    }
+
+    [Fact]
     public void RunTick_CalledDirectly_StillWorksWithoutStats()
     {
         using WorldRuntime world = Create(new CapturingLogger());
@@ -149,6 +220,58 @@ public sealed class WorldRuntimeTickTests
         Assert.Equal(0, world.Stats.Snapshot().TotalTicks); // only the world loop records
     }
 
+    [Fact]
+    public void RunTick_BoundsCommandsButPreservesFifoAndSelfPosting()
+    {
+        using WorldRuntime world = Create(new CapturingLogger(), o =>
+        {
+            o.MaxCommandsPerTick = 2;
+            o.CommandTimeBudgetMs = 0;
+        });
+        var order = new List<int>();
+        world.Post(() => { order.Add(1); world.Post(() => order.Add(3)); });
+        world.Post(() => order.Add(2));
+
+        world.RunTick(50);
+        Assert.Equal([1, 2], order);
+        Assert.Equal(1, world.PendingCommandCount);
+
+        world.RunTick(50);
+        Assert.Equal([1, 2, 3], order);
+        Assert.Equal(0, world.PendingCommandCount);
+    }
+
+    [Fact]
+    public void Stop_DrainsCommandsAfterTheWorldThreadExits()
+    {
+        using WorldRuntime world = Create(new CapturingLogger(), o =>
+        {
+            o.TickIntervalMs = 10_000;
+            o.MaxCommandsPerTick = 1;
+            o.CommandTimeBudgetMs = 0;
+        });
+        using var entered = new ManualResetEventSlim();
+        bool ran = false;
+        int worldThread = 0;
+        int shutdownThread = 0;
+        world.Post(() =>
+        {
+            worldThread = Environment.CurrentManagedThreadId;
+            world.Post(() =>
+            {
+                shutdownThread = Environment.CurrentManagedThreadId;
+                ran = true;
+            });
+            entered.Set();
+        });
+        world.Start();
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+        world.Stop();
+        Assert.True(ran);
+        Assert.NotEqual(worldThread, shutdownThread);
+        Assert.Equal(0, world.PendingCommandCount);
+    }
+
     private sealed class SleepingUpdater(int ms) : IMapUpdater
     {
         public void Update(Map map, uint diffMs) => Thread.Sleep(ms);
@@ -156,6 +279,12 @@ public sealed class WorldRuntimeTickTests
         public void OnPlayerRemoved(Map map, Player player)
         {
         }
+    }
+
+    private sealed class ThrowingUpdater : IMapUpdater
+    {
+        public void Update(Map map, uint diffMs) => throw new InvalidOperationException("diagnostic test failure");
+        public void OnPlayerRemoved(Map map, Player player) { }
     }
 
     private sealed class CapturingLogger : ILogger<WorldRuntime>

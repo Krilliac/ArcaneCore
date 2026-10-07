@@ -140,11 +140,16 @@ public sealed class SkillsFeature : IWorldFeature, ISpellbookLoadObserver, IChar
 
         await Saves.FlushCharacterAsync(character.Id, DrainTimeout).ConfigureAwait(false);
         CharacterSkillSnapshot stored;
+        IReadOnlyList<StartingSkill> starting = [];
         await using (AsyncServiceScope scope = _scopes.CreateAsyncScope())
         {
             stored = scope.ServiceProvider.GetService<ICharacterSkillStore>() is { } store
                 ? await store.LoadAsync(character.Id).ConfigureAwait(false)
                 : new CharacterSkillSnapshot([], []);
+            if (scope.ServiceProvider.GetService<IStartingSkillSource>() is { } source)
+            {
+                starting = await source.GetAsync((byte)player.Race, (byte)player.Class).ConfigureAwait(false);
+            }
         }
 
         var host = new SkillSpellHost(_spells, player);
@@ -161,6 +166,12 @@ public sealed class SkillsFeature : IWorldFeature, ISpellbookLoadObserver, IChar
         {
             host.NotYetLoaded.Remove(spellId);
             skills.OnSpellLearned(spellId);
+        }
+
+        int starterCount = skills.ApplyStartingSkills(starting);
+        if (starterCount > 0)
+        {
+            _logger.LogInformation("Skills: applied {Count} missing starting skill(s) for {Player}", starterCount, player.Name);
         }
     }
 

@@ -74,6 +74,9 @@ public sealed class TotemInfo
     internal int SpawnAnimDelay { get; set; } = 1;
 
     internal bool SpawnAnimSent { get; set; }
+
+    /// <summary>TotemAI's retained spell victim; independent of the creature's melee/threat victim.</summary>
+    internal ObjectGuid ActiveVictim { get; set; }
 }
 
 /// <summary>

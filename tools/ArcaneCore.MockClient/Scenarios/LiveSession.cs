@@ -27,7 +27,8 @@ internal static class LiveSession
         TimeSpan Interval,
         TimeSpan Duration,
         string? StopFile,
-        string? ScriptFile);
+        string? ScriptFile,
+        bool CharacterExplicit);
 
     internal static async Task<int> MainAsync(string[] args, TextWriter output, TextWriter error)
     {
@@ -57,7 +58,7 @@ internal static class LiveSession
         {
             return 0;
         }
-        catch (Exception ex) when (ex is IOException or MockProtocolException or InvalidOperationException)
+        catch (Exception ex) when (ex is IOException or MockProtocolException or InvalidOperationException or TimeoutException)
         {
             error.WriteLine($"{Stamp()} live session failed: {ex.GetType().Name}: {ex.Message}");
             return 1;
@@ -83,6 +84,7 @@ internal static class LiveSession
         int durationSeconds = 120;
         string? stopFile = null;
         string? scriptFile = null;
+        bool characterExplicit = false;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -94,7 +96,7 @@ internal static class LiveSession
                 case "--account": account = Next(); break;
                 case "--password-env": passwordVariable = Next(); break;
                 case "--credentials-file": credentials = Next(); break;
-                case "--character": character = Next(); break;
+                case "--character": character = Next(); characterExplicit = true; break;
                 case "--say": say.Add(Next()); break;
                 case "--interval-ms": intervalMs = ParseInt(Next(), flag, 50, 3_600_000); break;
                 case "--duration-s": durationSeconds = ParseInt(Next(), flag, 1, 86_400); break;
@@ -149,7 +151,7 @@ internal static class LiveSession
 
         LoopbackOnly.Validate(realmEndpoint);
         return new Options(realmEndpoint, account, password, character, say, TimeSpan.FromMilliseconds(intervalMs),
-            TimeSpan.FromSeconds(durationSeconds), stopFile, scriptFile);
+            TimeSpan.FromSeconds(durationSeconds), stopFile, scriptFile, characterExplicit);
     }
 
     private static int ParseInt(string text, string flag, int min, int max)
@@ -173,16 +175,17 @@ internal static class LiveSession
 
         var connection = new ScenarioConnection(client);
         IReadOnlyList<MockCharacter> characters = await connection.EnumerateAsync(ct).ConfigureAwait(false);
-        MockCharacter? chosen = characters.FirstOrDefault(c => c.Name.Equals(options.Character, StringComparison.OrdinalIgnoreCase))
-            ?? characters.FirstOrDefault();
-        if (chosen is null)
+        MockCharacter? chosen = SelectCharacter(characters, options.Character, options.CharacterExplicit, out bool createRequested);
+        if (createRequested)
         {
             await connection.CreateCharacterAsync(options.Character, ct).ConfigureAwait(false);
             output.WriteLine($"{Stamp()} created character {options.Character}");
-            chosen = (await connection.EnumerateAsync(ct).ConfigureAwait(false)).First();
+            chosen = (await connection.EnumerateAsync(ct).ConfigureAwait(false))
+                .FirstOrDefault(c => c.Name.Equals(options.Character, StringComparison.OrdinalIgnoreCase))
+                ?? throw new MockProtocolException($"created character '{options.Character}' was not returned by character enumeration");
         }
 
-        await connection.LoginAsync(chosen.Guid, ct).ConfigureAwait(false);
+        await connection.LoginAsync((chosen ?? throw new MockProtocolException("no character was selected or created")).Guid, ct).ConfigureAwait(false);
         string local = client.LocalEndPoint?.ToString() ?? "?";
         output.WriteLine($"{Stamp()} IN WORLD as {chosen.Name}; connection {local} -> {world}");
 
@@ -222,16 +225,89 @@ internal static class LiveSession
 
         try
         {
-            await connection.LogoutAsync(ct).ConfigureAwait(false);
+            await LogoutAsync(connection, ct).ConfigureAwait(false);
             output.WriteLine($"{Stamp()} logged out cleanly; connection {local} stayed up for the whole session");
         }
         catch (Exception ex) when (ex is IOException or MockProtocolException or ObjectDisposedException)
         {
             output.WriteLine($"{Stamp()} logout did not complete cleanly: {ex.Message}");
+            return 1;
         }
 
         return 0;
     }
+
+    private static async Task LogoutAsync(ScenarioConnection connection, CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
+        CancellationToken bounded = timeout.Token;
+        try
+        {
+            await connection.SendAsync(WorldOpcode.CmsgLogoutRequest, [], bounded).ConfigureAwait(false);
+            byte[] response = await ReadLogoutUntilAsync(connection, WorldOpcode.SmsgLogoutResponse, bounded).ConfigureAwait(false);
+            if (!IsSuccessfulLogoutResponse(response))
+            {
+                throw new MockProtocolException("logout response was not a successful normal or immediate logout");
+            }
+
+            byte[] complete = await ReadLogoutUntilAsync(connection, WorldOpcode.SmsgLogoutComplete, bounded).ConfigureAwait(false);
+            if (complete.Length != 0)
+            {
+                throw new MockProtocolException("logout complete contained an unexpected body");
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new MockProtocolException("logout stage exceeded its bounded wait");
+        }
+        catch (TimeoutException error) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new MockProtocolException($"logout packet read timed out before stage completion: {error.Message}");
+        }
+    }
+
+    internal static async Task<byte[]> ReadLogoutUntilAsync(ScenarioConnection connection, WorldOpcode opcode, CancellationToken cancellationToken)
+    {
+        // The caller bounds the entire normal logout by 30 seconds. Nearby movement can exceed
+        // 128 frames during the server's 20-second delay; bound drained bytes rather than crowd size.
+        int receivedBytes = 0;
+        while (true)
+        {
+            await connection.WaitForTrafficAsync(cancellationToken).ConfigureAwait(false);
+            WorldFrame frame = await connection.ReadAsync(cancellationToken).ConfigureAwait(false);
+            receivedBytes += frame.Payload.Length + 4;
+            if (receivedBytes > 1024 * 1024)
+            {
+                throw new MockProtocolException("logout exceeded its one-megabyte traffic budget");
+            }
+            if (frame.Opcode == (ushort)opcode)
+            {
+                return frame.Payload;
+            }
+        }
+    }
+
+    internal static MockCharacter? SelectCharacter(IReadOnlyList<MockCharacter> characters, string requested,
+        bool explicitRequest, out bool createRequested)
+    {
+        createRequested = false;
+        MockCharacter? chosen = characters.FirstOrDefault(c => c.Name.Equals(requested, StringComparison.OrdinalIgnoreCase));
+        if (chosen is not null || explicitRequest)
+        {
+            createRequested = chosen is null;
+            return chosen;
+        }
+
+        MockCharacter? fallback = characters.FirstOrDefault();
+        createRequested = fallback is null;
+        return fallback;
+    }
+
+    internal static bool IsSuccessfulLogoutResponse(ReadOnlySpan<byte> payload)
+        => payload.Length == 5
+            && BinaryPrimitives.ReadUInt32LittleEndian(payload) == 0
+            && payload[4] <= 1;
 
     /// <summary>Lines appended to the script file since the last call (the file may not exist yet or be mid-write).</summary>
     private static List<string> NewScriptLines(string? path, ref int index)

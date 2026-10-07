@@ -145,9 +145,12 @@ The full list of every key and its default is the generated
   been verified, so a kick default is not safe to ship yet.
 * Chat hygiene (255-byte cap, invisible characters, link grammar, flood mute).
 * The seeded fuzz/property harness and source-guard tests.
-* Reconnect commands (0x02/0x03) are still unsupported by `LogonSession`.
-* A real 1.12.1 client has not been run against any of this; the logon and world
-  hardening is covered by protocol-level tests and the MockClient self-test only.
+* Reconnect commands (0x02/0x03) have a locally qualified source-grounded implementation;
+  see the complete gate described in `docs/integration/observed-play-protocol-20261005.md`.
+  Session expiry and strict R3 client-integrity checks remain unsupported.
+* A brief original 1.12.1 sandbox session covered authentication, creation, entry,
+  movement and basic chat/UI. The new reconnect path has not yet been accepted by
+  that client; protocol tests and MockClient checks remain separate evidence.
 
 ## Open questions for the developer
 

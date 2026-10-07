@@ -245,14 +245,21 @@ public sealed partial class PlayerInventory
             return;
         }
 
-        // vmangos Player.cpp:4879-4881: the stats come off _before_ the durability reaches 0, because the stat system
-        // (Player::_ApplyItemMods) ignores a broken item in both directions and would leave its deltas applied.
-        if (after == 0 && item.Container is null && item.Slot < InventorySlots.EquipmentEnd && ReferenceEquals(_items[item.Slot], item))
+        bool equipped = item.Container is null && item.Slot < InventorySlots.EquipmentEnd && ReferenceEquals(_items[item.Slot], item);
+        if (after == 0 && before > 0 && equipped)
         {
+            // The stat maintainer rejects broken items, so remove contributions while
+            // the item still has its old positive durability (Player.cpp:4884-4886).
             ApplyMods(item, item.Slot, apply: false);
         }
 
         item.Durability = (uint)after;
+        if (before == 0 && after > 0 && equipped)
+        {
+            // Signed negative points can repair a broken item; reapply only after it
+            // becomes usable again (Player.cpp:4890-4892).
+            ApplyMods(item, item.Slot, apply: true);
+        }
     }
 
     /// <summary>

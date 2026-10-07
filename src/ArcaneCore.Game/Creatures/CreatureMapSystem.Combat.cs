@@ -346,7 +346,14 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
 
         if (creature.Combat.Victim is { } victim && (creature.AI?.CombatMovement ?? true))
         {
-            creature.Motion.MoveChase(victim);
+            if (creature.AI is CreatureEventAI { CurrentRangedMode: true, ChaseDistance: > 0 } ranged)
+            {
+                creature.Motion.MoveChase(victim, ranged.ChaseDistance);
+            }
+            else
+            {
+                creature.Motion.MoveChase(victim);
+            }
         }
         else if (current == MovementGeneratorType.Chase)
         {

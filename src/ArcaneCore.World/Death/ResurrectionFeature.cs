@@ -27,6 +27,14 @@ public sealed class ResurrectionFeature(IServiceProvider services) : IWorldFeatu
         ArgumentNullException.ThrowIfNull(world);
         TeleportFeature? teleports = services.GetService<TeleportFeature>();
         Service = new ResurrectionService(world, () => teleports?.Teleports);
+        // Persist the restored life at once (the self-resurrection feature does the same for SELF_RESURRECT).
+        Service.Resurrected += player =>
+        {
+            if (ReferenceEquals(world.FindOnlinePlayer(player.Guid), player))
+            {
+                world.SavePlayer(player);
+            }
+        };
         if (services.GetService<SpellFeature>() is { } spells)
         {
             spells.System.Resurrection = Service;
@@ -57,6 +65,13 @@ public sealed class SelfResurrectionHandlers : IOpcodeHandlerGroup
 
     private static void HandleSelfRes(WorldSession session, Player player, byte[] payload)
     {
+        // The vanilla request is empty (NullClientPacket); a payload that is not empty is malformed and ignored, so extra bytes never select
+        // a spell or use the stored one.
+        if (payload.Length != 0)
+        {
+            return;
+        }
+
         if (session.Services.GetService<SpellFeature>()?.System is { } system)
         {
             SelfResurrection.Use(system, player);

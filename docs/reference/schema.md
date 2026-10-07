@@ -9,9 +9,9 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 
 | Component | Current version | Version-1 base tables |
 |---|---|---|
-| `auth` | 3 | `account`, `realmlist` |
-| `characters` | 28 | `characters` |
-| `world` | 31 | `player_create_info`, `race_info`, `class_info` |
+| `auth` | 4 | `account`, `realmlist` |
+| `characters` | 33 | `characters` |
+| `world` | 37 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -19,6 +19,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 |---|---|---|
 | 2 | `inline step of the database context` | adds columns `account.Security` |
 | 3 | `Auth.BanDataModule` | creates `account_banned`, `ip_banned` |
+| 4 | `Auth.Playerbots.ManagedPlayerbotProvisionDataModule` | creates `managed_playerbot_provision` |
 
 ## `characters`
 
@@ -51,6 +52,11 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 26 | `Gm.GmAuditDataModule` | creates `account_mute`, `gm_ticket` | yes |
 | 27 | `Characters.Life.CharacterRestDataModule` | creates `character_rest` | yes |
 | 28 | `Characters.Rename.CharacterRenameDataModule` | creates `character_at_login` | yes |
+| 29 | `Characters.Pets.PersistentPetDataModule` | creates `character_pet` | yes |
+| 30 | `Characters.Spells.ItemCooldownOwnerDataModule` | creates `character_item_cooldown_owner` | yes |
+| 31 | `Characters.Pets.PetCooldownDataModule` | creates `character_pet_cooldown` | yes |
+| 32 | `Characters.Pets.PetNamingDataModule` | adds columns `character_pet.Name`, `character_pet.NameTimestamp`, `character_pet.RenameAllowed` | yes |
+| 33 | `Characters.Playerbots.ManagedPlayerbotDataModule` | creates `managed_playerbot` | yes |
 
 ## `world`
 
@@ -86,5 +92,11 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 29 | `Quests.AreaTriggerQuestWorldModule` | creates `areatrigger_involvedrelation`; adds columns `areatrigger_teleport.RequiredItem`, `areatrigger_teleport.RequiredItem2`, `areatrigger_teleport.RequiredQuestDone`, `areatrigger_teleport.RequiredCondition` |
 | 30 | `World.Rest.AreaTriggerTavernDataModule` | creates `areatrigger_tavern` |
 | 31 | `World.GameObjects.GameObjectTemplateGoldDataModule` | adds columns `gameobject_template.MinGold`, `gameobject_template.MaxGold` |
+| 32 | `Content.Names.ReservedNameWorldDataModule` | creates `reserved_name` |
+| 33 | `Content.Items.ItemEnchantmentWorldDataModule` | creates `spell_proc_item_enchant` |
+| 34 | `World.Creatures.CreatureDisplayScaleDataModule` | adds columns `creature_template.DisplayScale2`, `creature_template.DisplayScale3`, `creature_template.DisplayScale4` |
+| 35 | `Content.Items.SpellEnchantChargesWorldDataModule` | creates `spell_enchant_charges` |
+| 36 | `Skills.StartingSkillWorldDataModule` | creates `playercreateinfo_skills` |
+| 37 | `World.Creatures.CreatureTextTemplateDataModule` | creates `creature_ai_text_template` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.

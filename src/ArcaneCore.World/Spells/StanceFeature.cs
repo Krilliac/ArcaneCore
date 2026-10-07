@@ -44,7 +44,11 @@ public sealed class StanceFeature(IServiceProvider services, ILogger<StanceFeatu
         Options = environment.Options;
 
         ShapeshiftFormCatalog forms;
-        if (string.IsNullOrWhiteSpace(Options.ShapeshiftFormDbcPath))
+        if (services.GetService<ShapeshiftFormCatalog>() is { } supplied)
+        {
+            forms = supplied;
+        }
+        else if (string.IsNullOrWhiteSpace(Options.ShapeshiftFormDbcPath))
         {
             if (Options.RequireShapeshiftFormDbc)
             {

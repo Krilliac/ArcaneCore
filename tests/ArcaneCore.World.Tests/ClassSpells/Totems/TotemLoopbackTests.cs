@@ -38,6 +38,103 @@ public sealed class TotemLoopbackTests
     private const uint SummonSpell = 960100;
 
     [Fact]
+    public async Task ActiveTotem_PreparesAndLandsBoltThroughProductionWorldTimer_ThenOwnerDeathRemovesIt()
+    {
+        var template = new CreatureTemplate
+        {
+            Entry = TotemTestServices.TotemEntry, Name = "Test Active Totem", MinLevel = 1, MaxLevel = 1,
+            DisplayIds = [903], Faction = 35, MinLevelHealth = 5, MaxLevelHealth = 5, AIName = "TotemAI",
+        };
+        var context = new CreatureTestContext(new CreatureContent([template], [], [], [], []));
+        CreatureTestStore.Current.Value = context;
+        WorldTestHost host;
+        try
+        {
+            host = WorldTestHost.Start();
+        }
+        finally
+        {
+            CreatureTestStore.Current.Value = null;
+        }
+
+        await using (host)
+        await using (WorldTestClient client = await host.EnterWorldAsync("SEARING", "Searing"))
+        {
+            await client.CollectAsync();
+            Creature? target = null;
+            Creature? totem = null;
+            await host.OnWorldAsync(() =>
+            {
+                Player owner = host.World.FindOnlinePlayer("Searing")!;
+                SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+                TotemSystem totems = host.WorldServices.GetRequiredService<TotemFeature>().System!;
+                spells.CombatRules = SpellCombatRules.Neutral; // deterministic damage, production sinks/timer unchanged
+                spells.Store = new SpellStore(
+                [
+                    .. spells.Store.All,
+                    new SpellInfo
+                    {
+                        Id = SummonSpell, Name = "Active Totem Summon", RangeIndex = SpellConstants.RangeIndexSelfOnly,
+                        Duration = new SpellDuration(60_000, 0, 60_000),
+                        Effects = [new SpellEffectInfo
+                        {
+                            Effect = SpellEffectName.SummonTotemSlot1, BasePoints = 4, BaseDice = 1, DieSides = 1,
+                            TargetA = (SpellImplicitTarget)44, MiscValue = (int)TotemTestServices.TotemEntry,
+                        }],
+                    },
+                    new SpellInfo
+                    {
+                        Id = TotemTestServices.TotemPassive, Name = "Test Searing Bolt", School = SpellSchool.Fire,
+                        CastTime = new SpellCastTime(400, 0, 0), RangeIndex = 4, Range = new SpellRange(0, 20),
+                        Effects = [new SpellEffectInfo
+                        {
+                            Effect = SpellEffectName.SchoolDamage, BasePoints = 14, BaseDice = 1, DieSides = 1,
+                            TargetA = SpellImplicitTarget.UnitEnemy,
+                        }],
+                    },
+                ], [], []);
+                target = host.WorldServices.GetRequiredService<CreatureWorldFeature>().GetOrCreateSystem(owner.Map!)
+                    .SpawnTemporary(template with { Entry = 960103, Name = "Bolt Target", Faction = 14, AIName = "NullAI" },
+                        owner.X + 8, owner.Y, owner.Z, 0);
+                target.MaxHealth = target.Health = 100;
+                Assert.True(owner.Map!.Combat.Attack(owner, target, melee: false));
+                Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(owner, SummonSpell, SpellCastTargets.ForSelf(), true));
+                totem = Assert.IsType<Creature>(totems.GetTotem(owner, TotemSlot.Fire));
+            });
+
+            byte[] start;
+            do
+            {
+                start = await client.ReadUntilAsync(WorldOpcode.SmsgSpellStart);
+            }
+            while (!IsActiveBoltStart(start, totem!.Guid.Value));
+            await client.ReadUntilAsync(WorldOpcode.SmsgSpellnonmeleedamagelog);
+            await host.WaitForWorldAsync(() => target!.Health < 100, "active totem bolt damage through world timer");
+            await host.OnWorldAsync(() =>
+            {
+                Assert.True(target!.Health <= 85);
+                Assert.IsType<NullCreatureAI>(totem!.AI);
+                Assert.Null(totem.Combat.Victim);
+                Player owner = host.World.FindOnlinePlayer("Searing")!;
+                owner.Map!.Combat.Kill(target, owner);
+            });
+            await host.WaitForWorldAsync(() => !totem!.IsInWorld, "active totem owner-death cleanup");
+            await host.OnWorldAsync(() => Assert.Null(host.WorldServices.GetRequiredService<SpellFeature>().System.GetState(totem!.Guid)));
+        }
+    }
+
+    private static bool IsActiveBoltStart(byte[] payload, ulong totemGuid)
+    {
+        var reader = new PacketReader(payload);
+        _ = reader.ReadPackedGuid();
+        ulong caster = reader.ReadPackedGuid();
+        uint spell = reader.ReadUInt32();
+        _ = reader.ReadUInt16();
+        uint castTime = reader.ReadUInt32();
+        return caster == totemGuid && spell == TotemTestServices.TotemPassive && castTime == 400;
+    }
+
+    [Fact]
     public async Task EarthTotemSummon_SpawnsTotemForTheClient_WithOwnerFields_AndNoTotemBarPacket()
     {
         var template = new CreatureTemplate

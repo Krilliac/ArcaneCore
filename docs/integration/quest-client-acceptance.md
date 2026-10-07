@@ -168,18 +168,22 @@ logout. Record those observations separately.
 
 ## Ordinary reward UI milestone: prepare these prerequisites first
 
-At the starting SHA, `QuestNpcInteractionHandlers` registers status/details/accept/
-abandon/complete/request/choose, but does **not** register `CMSG_GOSSIP_HELLO` or
-`CMSG_QUESTGIVER_HELLO`. The Game service already implements `GossipHello` and prepares
-quest menus. Normal client right-click cannot currently reach that service. This is a
-concrete adapter blocker, not a client setup problem. Add/qualify the strict eight-byte
-NPC greeting adapter before scheduling quest UI acceptance; the mock's direct details
-request does not prove the normal UI path.
+The current `QuestNpcInteractionHandlers` registers both `CMSG_GOSSIP_HELLO` and
+`CMSG_QUESTGIVER_HELLO` (alongside status/details/accept/abandon/complete/request/choose),
+and dispatches them to the Game service's `GossipHello`/`PrepareGossipMenu` path. This
+removes the former source-level greeting-adapter blocker. The registrations and strict
+eight-byte GUID validation are present in `src/ArcaneCore.World/Npc/QuestNpcInteractionHandlers.cs:19-39`.
+The normal client UI milestone is still pending: the disposable profile must contain
+client-valid guide/target/faction/display/content rows, and an actual build-5875 client
+must right-click the guide and complete the menu/details/accept/reward flow. The mock's
+direct details request does not prove that normal UI path.
 
-The stock daemons also have no manual fixture/content-seeding CLI. The mock executable
-offers only `self-test`: its 60-second deadline, ephemeral ports and automatic database
-cleanup make it unsuitable for hosting this manual session. Its faction/display IDs
-are synthetic and are not assumed to render in a real client.
+The mock's `self-test` still uses a 60-second deadline, ephemeral ports and automatic
+database cleanup, so it cannot host this manual session. The executable also offers
+`client-fixture` for a disposable manual fixture and `live`, `starting-zone` and
+`playbot` clients for owned loopback servers. Synthetic fixture faction/display IDs
+are not automatically assumed to render in a real client. The recipe below describes
+the legacy bounded reward-UI fixture, rather than the normal imported starting zone.
 
 Prepare one disposable content seed, before restarting the world, using the existing
 schema and standard SQLite tooling (Python 3 `sqlite3` is available on this desktop):
@@ -194,8 +198,8 @@ schema and standard SQLite tooling (Python 3 `sqlite3` is available on this desk
 | `Quests:FactionTemplateDbcPath` | Absolute path to the supplied build-5875 WDBC file: fourteen four-byte fields per record. Human faction-template 1 must resolve. Guide faction must resolve to a nonhostile NPC record whose Faction field is zero and contested-guard bit 0x1000 is clear; reputation-dependent NPCs are refused. Target faction must be attackable by the actual client. Record the verified IDs. |
 | `Quests:OrdinaryRewardQuestIds:0` | 900003 only; use the reviewed synthetic definition above, not an arbitrary imported quest. |
 
-There is no existing general quest importer to invoke. After the greeting adapter is
-qualified, stop the world normally and save the following as `$run\seed-world.py`.
+For this bounded fixture, stop its disposable world normally and save the following
+as `$run\seed-world.py`.
 Supply a verified guide faction, hostile target faction and item display from the
 user's build-5875 data. The script verifies the supplied faction records, inspects the
 actual SQLite column names, fills unused numeric/text fields with zero/empty values,

@@ -46,6 +46,9 @@ Status: implemented on `feat/creatures` (PR into `claude/friendly-hamilton-cuz4j
   - Corpse decay per rank: 300 / 600 / 1200 / 3600 / 900 s for normal / elite / rare elite / boss / rare, or the template's `CorpseDecay`.
   - The corpse is also removed when a database spawn's respawn time comes first.
   - Dead creatures are invisible and back at their home position. Respawn re-initializes the fields and restarts movement.
+  - Corpse disposal unapplies aura handlers before forgetting spell state. Both natural and forced
+    respawn clear old-life holders before field initialization and fresh AI passives. See
+    [death aura lifecycle](../integration/death-aura-lifecycle-20261004.md) for ownership and timing limits.
   - Temporary creatures do not respawn.
 - **Movement:**
   - Straight splines are interpolated on the map clock. SMSG_MONSTER_MOVE is sent to observers (layout below).

@@ -50,7 +50,7 @@ public sealed class ReputationSpellHandlers : ISpellHandlerModule
         return (player, source, faction) =>
             system.GetTotalAuraModifier(player, AuraType.ModReputationGain)
             + (source == ReputationSource.Kill
-                ? system.GetTotalAuraModifier(player, AuraType.ModFactionReputationGain, aura => (uint)aura.MiscValue == faction)
+                ? system.GetTotalAuraModifier(player, AuraType.ModFactionReputationGain, aura => aura.MiscValue >= 0 && (uint)aura.MiscValue == faction)
                 : 0);
     }
 

@@ -38,6 +38,9 @@ public sealed class WorldRuntime : IDisposable
 
     public WorldRuntimeOptions Options { get; }
 
+    /// <summary>Optional native player display geometry, applied before <see cref="Map.AddPlayer"/>.</summary>
+    public Func<uint, ArcaneCore.Game.Spells.DisplayModelGeometry?>? PlayerDisplayModelResolver { get; set; }
+
     /// <summary>
     /// Tick duration, allocation and overrun statistics recorded by the world loop (docs/areas/ops-perf.md).
     /// Safe to read from any thread; only <see cref="Run"/> records into it.
@@ -54,6 +57,9 @@ public sealed class WorldRuntime : IDisposable
     public TimeSpan Uptime => _clock.Elapsed;
 
     public int OnlinePlayerCount => _online.Count;
+
+    /// <summary>Approximate number of commands waiting for a world-thread tick.</summary>
+    public int PendingCommandCount => _commands.Count;
 
     /// <summary>True when the caller is the world thread (or no world thread is running).</summary>
     public bool IsWorldThread => _worldThreadId == -1 || Environment.CurrentManagedThreadId == _worldThreadId;
@@ -86,6 +92,13 @@ public sealed class WorldRuntime : IDisposable
     /// state here (vmangos <c>MapManager::DeleteInstance</c> → <c>Map::UnloadAll</c>).
     /// </summary>
     public event Action<Map>? MapUnloading;
+
+    /// <summary>
+    /// Raised once per world tick after posted commands and map updates, even when no maps
+    /// exist. The argument is elapsed milliseconds. World features use this for global
+    /// maintenance; a failing handler is logged and does not stop the others.
+    /// </summary>
+    public event Action<uint>? Updated;
 
     /// <summary>
     /// Chooses the map (and instance) a player enters at login and after a far teleport. Null
@@ -176,7 +189,7 @@ public sealed class WorldRuntime : IDisposable
         _worldThreadId = -1;
 
         // Commands posted before shutdown (e.g. a disconnect's save) still run.
-        RunCommands();
+        RunCommands(drainAll: true);
 
         // Nothing drains the queue any more: an InvokeAsync still waiting (or posted from now on) is cancelled instead of left hanging.
         _stopped = true;
@@ -299,6 +312,7 @@ public sealed class WorldRuntime : IDisposable
         _onlineByName[player.Name] = player;
         player.StartPlayedTime(NowMs);
         Map map = MapResolver?.ResolveLoginMap(player) ?? GetMap(player.MapId);
+        player.InitializeNativeDisplayModel(PlayerDisplayModelResolver);
         map.AddPlayer(player);
     }
 
@@ -347,19 +361,23 @@ public sealed class WorldRuntime : IDisposable
         foreach (Map map in _maps.Values.ToArray())
         {
             long mapStart = Stopwatch.GetTimestamp();
+            MapUpdateDiagnostics? diagnostics = Options.Perf.SlowMapUpdate > 0 && _logger.IsEnabled(LogLevel.Warning)
+                ? new MapUpdateDiagnostics()
+                : null;
             try
             {
-                map.Update(diffMs);
+                map.Update(diffMs, diagnostics);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "map {MapId} update failed", map.MapId);
             }
 
-            LogIfSlow(Options.Perf.SlowMapUpdate, mapStart, "Slow map update", map);
+            LogIfSlow(Options.Perf.SlowMapUpdate, mapStart, "Slow map update", map, diagnostics);
         }
 
         UnloadRequestedMaps();
+        Raise(Updated, diffMs, nameof(Updated));
 
         if (Options.AutosaveIntervalMs > 0)
         {
@@ -378,7 +396,7 @@ public sealed class WorldRuntime : IDisposable
         _stopSignal.Dispose();
     }
 
-    private void LogIfSlow(int thresholdMs, long startTimestamp, string what, Map map)
+    private void LogIfSlow(int thresholdMs, long startTimestamp, string what, Map map, MapUpdateDiagnostics? diagnostics)
     {
         if (thresholdMs <= 0)
         {
@@ -388,8 +406,20 @@ public sealed class WorldRuntime : IDisposable
         long micros = (Stopwatch.GetTimestamp() - startTimestamp) * 1_000_000 / Stopwatch.Frequency;
         if (micros > thresholdMs * 1000L)
         {
-            _logger.LogWarning(PerformanceLogOptions.PerfEventId, "{What}: map {MapId} instance {InstanceId} took {DurationMs} ms",
-                what, map.MapId, map.InstanceId, micros / 1000);
+            if (diagnostics is { Completed: true } timing)
+            {
+                _logger.LogWarning(PerformanceLogOptions.PerfEventId,
+                    "{What}: map {MapId} instance {InstanceId} took {DurationMs} ms (simulation {SimulationMs} ms, visibility {VisibilityMs} ms, values {ValuesMs} ms, flush {FlushMs} ms, cleanup {CleanupMs} ms; players {Players}, moved {MovedObjects}, changed {ChangedObjects}, new {NewObjects})",
+                    what, map.MapId, map.InstanceId, micros / 1000, timing.SimulationMicros / 1000,
+                    timing.VisibilityMicros / 1000, timing.ValuesMicros / 1000, timing.FlushMicros / 1000,
+                    timing.CleanupMicros / 1000, timing.Players, timing.MovedObjects, timing.ChangedObjects,
+                    timing.NewObjects);
+            }
+            else
+            {
+                _logger.LogWarning(PerformanceLogOptions.PerfEventId, "{What}: map {MapId} instance {InstanceId} took {DurationMs} ms",
+                    what, map.MapId, map.InstanceId, micros / 1000);
+            }
         }
     }
 
@@ -452,8 +482,14 @@ public sealed class WorldRuntime : IDisposable
         }
     }
 
-    private void RunCommands()
+    private void RunCommands(bool drainAll = false)
     {
+        int admitted = 0;
+        long started = Stopwatch.GetTimestamp();
+        int maxCommands = Math.Max(1, Options.MaxCommandsPerTick);
+        long budgetTicks = Options.CommandTimeBudgetMs > 0
+            ? Options.CommandTimeBudgetMs * Stopwatch.Frequency / 1000L
+            : 0;
         while (_commands.TryDequeue(out Action? command))
         {
             try
@@ -463,6 +499,18 @@ public sealed class WorldRuntime : IDisposable
             catch (Exception ex)
             {
                 _logger.LogError(ex, "world command failed");
+            }
+
+            if (drainAll)
+            {
+                continue;
+            }
+
+            admitted++;
+            if (admitted >= maxCommands || budgetTicks > 0
+                && Stopwatch.GetTimestamp() - started >= budgetTicks)
+            {
+                break;
             }
         }
     }
@@ -504,7 +552,8 @@ public sealed class WorldRuntime : IDisposable
             long stampBefore = Stopwatch.GetTimestamp();
             RunTick(diff);
             long durationMicros = (Stopwatch.GetTimestamp() - stampBefore) * 1_000_000 / Stopwatch.Frequency;
-            Stats.Record(durationMicros, GC.GetAllocatedBytesForCurrentThread() - allocatedBefore, interval * 1000L);
+            Stats.Record(durationMicros, GC.GetAllocatedBytesForCurrentThread() - allocatedBefore,
+                interval * 1000L, diff * 1000L);
             if (Options.Perf.SlowWorldUpdateMeasure == SlowWorldUpdateMeasure.TickDuration
                 && Options.Perf.SlowWorldUpdate > 0 && durationMicros > Options.Perf.SlowWorldUpdate * 1000L)
             {

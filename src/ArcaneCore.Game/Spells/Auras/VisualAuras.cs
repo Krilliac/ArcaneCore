@@ -45,6 +45,25 @@ public sealed class VisualAuras : ISpellHandlerModule
         {
             target.SetFloat(field, target.GetFloat(field) * factor);
         }
+        if (system.DisplayModelResolver is not null) system.UpdateDisplayModel(target);
+    }
+
+    internal static float ActiveScaleFactor(SpellSystem system, Unit target)
+    {
+        float factor = 1.0f;
+        foreach (SpellAuraHolder holder in system.GetAuras(target))
+        {
+            if (holder.IsRemoved) continue;
+            foreach (SpellAura? aura in holder.Auras)
+            {
+                if (aura is { Type: AuraType.ModScale })
+                {
+                    float percent = aura.Amount == -100 ? -99.9f : aura.Amount;
+                    factor *= (100.0f + percent) / 100.0f;
+                }
+            }
+        }
+        return factor;
     }
 
     /// <summary>

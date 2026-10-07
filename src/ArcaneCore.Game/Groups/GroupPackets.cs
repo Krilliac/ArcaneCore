@@ -1,4 +1,7 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Groups;
@@ -138,12 +141,12 @@ public static class GroupPackets
 
         if ((mask & GroupUpdateFlags.CurrentHp) != 0)
         {
-            writer.WriteUInt16(Clamp16(stats.Hp));
+            writer.WriteUInt16(Low16(stats.Hp));
         }
 
         if ((mask & GroupUpdateFlags.MaxHp) != 0)
         {
-            writer.WriteUInt16(Clamp16(stats.MaxHp));
+            writer.WriteUInt16(Low16(stats.MaxHp));
         }
 
         if ((mask & GroupUpdateFlags.PowerType) != 0)
@@ -153,12 +156,12 @@ public static class GroupPackets
 
         if ((mask & GroupUpdateFlags.CurrentPower) != 0)
         {
-            writer.WriteUInt16(Clamp16(stats.CurrentPower));
+            writer.WriteUInt16(Low16(stats.CurrentPower));
         }
 
         if ((mask & GroupUpdateFlags.MaxPower) != 0)
         {
-            writer.WriteUInt16(Clamp16(stats.MaxPower));
+            writer.WriteUInt16(Low16(stats.MaxPower));
         }
 
         if ((mask & GroupUpdateFlags.Level) != 0)
@@ -199,17 +202,17 @@ public static class GroupPackets
 
         if ((mask & GroupUpdateFlags.PetModelId) != 0)
         {
-            writer.WriteUInt16(Clamp16(stats.PetDisplayId));
+            writer.WriteUInt16(Low16(stats.PetDisplayId));
         }
 
         if ((mask & GroupUpdateFlags.PetCurrentHp) != 0)
         {
-            writer.WriteUInt16(Clamp16(stats.PetHp));
+            writer.WriteUInt16(Low16(stats.PetHp));
         }
 
         if ((mask & GroupUpdateFlags.PetMaxHp) != 0)
         {
-            writer.WriteUInt16(Clamp16(stats.PetMaxHp));
+            writer.WriteUInt16(Low16(stats.PetMaxHp));
         }
 
         if ((mask & GroupUpdateFlags.PetPowerType) != 0)
@@ -219,12 +222,12 @@ public static class GroupPackets
 
         if ((mask & GroupUpdateFlags.PetCurrentPower) != 0)
         {
-            writer.WriteUInt16(Clamp16(stats.PetCurrentPower));
+            writer.WriteUInt16(Low16(stats.PetCurrentPower));
         }
 
         if ((mask & GroupUpdateFlags.PetMaxPower) != 0)
         {
-            writer.WriteUInt16(Clamp16(stats.PetMaxPower));
+            writer.WriteUInt16(Low16(stats.PetMaxPower));
         }
 
         if ((mask & GroupUpdateFlags.PetAuras) != 0)
@@ -242,7 +245,8 @@ public static class GroupPackets
         return writer.ToArray();
     }
 
-    private static ushort Clamp16(uint value) => (ushort)Math.Min(value, ushort.MaxValue);
+    /// <summary>vmangos BuildPartyMemberStatsChangedPacket writes <c>uint16(value)</c> (GroupHandler.cpp:611-700): the low 16 bits, not a clamp.</summary>
+    private static ushort Low16(uint value) => unchecked((ushort)value);
 
     /// <summary>
     /// D:\refs\vmangos\src\game\Handlers\GroupHandler.cpp:636-657,719-754:

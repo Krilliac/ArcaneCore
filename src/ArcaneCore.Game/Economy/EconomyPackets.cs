@@ -240,14 +240,14 @@ public static class EconomyPackets
     /// SMSG_TRADE_STATUS_EXTENDED: whose window, slot counts (7, 7), gold, spell, then 7 slots
     /// of u8 index + 60 bytes (wow_messages TradeSlot 1.12; empty slots are 15 zero u32s).
     /// </summary>
-    public static byte[] TradeStatusExtended(bool traderWindow, uint gold, IReadOnlyList<ItemInstanceData?> slots, Func<uint, ItemTemplate?> templates)
+    public static byte[] TradeStatusExtended(bool traderWindow, uint gold, IReadOnlyList<ItemInstanceData?> slots, Func<uint, ItemTemplate?> templates, uint spellId = 0)
     {
         var w = new PacketWriter(17 + (TradeRules.SlotCount * 61));
         w.WriteByte(traderWindow ? (byte)1 : (byte)0);
         w.WriteUInt32(TradeRules.SlotCount);
         w.WriteUInt32(TradeRules.SlotCount);
         w.WriteUInt32(gold);
-        w.WriteUInt32(0);
+        w.WriteUInt32(spellId);
         for (int i = 0; i < TradeRules.SlotCount; i++)
         {
             w.WriteByte((byte)i);

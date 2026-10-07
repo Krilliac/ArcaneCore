@@ -311,6 +311,12 @@ public sealed class QuestInteractionWorldTests
         writer.WriteUInt32(id);
         return writer.ToArray();
     }
+
+    private sealed class HideQuestTargetRule(ObjectGuid viewer, ObjectGuid target) : IVisibilityRule
+    {
+        public bool CanSee(Player candidate, WorldObject visible, bool alreadyVisible, bool detect)
+            => candidate.Guid != viewer || visible.Guid != target;
+    }
 }
 
 internal sealed class QuestInteractionTestServices : IWorldTestServices

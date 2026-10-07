@@ -1,13 +1,17 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Chat;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Chat;
@@ -281,6 +285,111 @@ public sealed class ChatGateTests
         await human.SendChatAsync(ChatType.Say, Language.Common, "sync"); // a later message proves the earlier ones were handled
         await human.ReadChatAsync();
         Assert.Equal(1, spy.Count);
+    }
+
+    [Theory]
+    [InlineData(false, AccountSecurity.Player, 2)]
+    [InlineData(true, AccountSecurity.Player, 2)]
+    [InlineData(true, AccountSecurity.Moderator, 2)]
+    [InlineData(true, AccountSecurity.Player, 0)]
+    public async Task AddonMuteAndFloodControl_OnlyAppliesWhenEnabled(bool enabled, AccountSecurity security, uint messageCount)
+    {
+        var clock = new OffsetClock();
+        var spy = new ChatMessageSpy();
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<TimeProvider>(clock);
+            services.AddSingleton<IChatMessageHandler>(spy);
+            services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["World:Chat:AddonMuteAndFloodControl"] = enabled.ToString(),
+                ["World:Chat:FloodMessageCount"] = messageCount.ToString(),
+            }).Build());
+        });
+        await using WorldTestClient speaker = await host.EnterWorldAsync("SPEAKER", "Speaker", security);
+        await speaker.CollectAsync();
+
+        // Default parity: addons neither advance the counter nor respect the flood mute.
+        // Opt in for a plain player with counting enabled: the third message trips the shared
+        // mute and is delivered. Staff and a zero message count remain exempt from counting.
+        for (int i = 0; i < 3; i++)
+        {
+            await speaker.SendChatAsync(ChatType.Battleground, Language.Addon, "addon");
+        }
+
+        await host.WaitForWorldAsync(() => spy.Count == 3, "the first three addon messages");
+        ChatFeature chat = host.WorldServices.GetRequiredService<ChatFeature>();
+        Assert.Equal(enabled && security == AccountSecurity.Player && messageCount > 0,
+            await host.PlayerStateAsync("Speaker", player => !chat.CanSpeak(player)));
+
+        // A mute source extends the end time beyond the flood mute: addons respect it only
+        // when enabled, even for staff or with counting disabled, before any feature dispatch.
+        await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<ChatRestrictionFeature>().Service.Mute(
+            host.World.FindOnlinePlayer("Speaker")!.AccountId, clock.UnixNow + 30));
+        await speaker.SendChatAsync(ChatType.Battleground, Language.Addon, "muted addon");
+        if (enabled)
+        {
+            Assert.Equal("You must wait 30 Seconds. before speaking again.", new PacketReader(await speaker.ReadUntilAsync(WorldOpcode.SmsgNotification)).ReadCString());
+            Assert.Equal(3, spy.Count);
+        }
+        else
+        {
+            await host.WaitForWorldAsync(() => spy.Count == 4, "an addon message despite the default mute exemption");
+        }
+
+        clock.Advance(30);
+        await speaker.SendChatAsync(ChatType.Battleground, Language.Addon, "after expiry");
+        await host.WaitForWorldAsync(() => spy.Count == (enabled ? 4 : 5), "addon delivery after expiry");
+    }
+
+    [Fact]
+    public async Task ExpiredSessionMutes_ArePurgedWithoutTheAccountSpeakingAgain()
+    {
+        var clock = new OffsetClock();
+        await using WorldTestHost host = StartHost(clock);
+        await using WorldTestClient offline = await host.EnterWorldAsync("OFFLINE", "Offline");
+        await using WorldTestClient online = await host.EnterWorldAsync("ONLINE", "Online");
+        ChatFeature chat = host.WorldServices.GetRequiredService<ChatFeature>();
+        // Observe retained storage, rather than calling MutedUntil for the expired account:
+        // that call already pruned its own entry before this regression was fixed.
+        var mutes = (Dictionary<int, long>)typeof(ChatFeature).GetField("_sessionMutes", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(chat)!;
+        await host.OnWorldAsync(() =>
+        {
+            chat.MuteUntil(host.World.FindOnlinePlayer("Offline")!, clock.UnixNow + 30);
+            chat.MuteUntil(host.World.FindOnlinePlayer("Online")!, clock.UnixNow + 60);
+            chat.MuteUntil(host.World.FindOnlinePlayer("Online")!, clock.UnixNow + 10); // a shorter mute cannot replace an active one
+            Assert.Equal(2, mutes.Count);
+        });
+        await offline.DisposeAsync();
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Offline") is null, "muted account disconnect");
+
+        clock.Advance(30);
+        await host.WaitForWorldAsync(() => mutes.Count == 1, "idle expiry cleanup for a disconnected account");
+        Assert.False(await host.PlayerStateAsync("Online", chat.CanSpeak));
+        clock.Advance(30);
+        await host.WaitForWorldAsync(() => mutes.Count == 0, "idle expiry cleanup for an online account");
+    }
+
+    [Fact]
+    public async Task ExpiredSessionMutes_ArePurgedWhenTheWorldHasNoMaps()
+    {
+        var clock = new OffsetClock();
+        await using WorldTestHost host = StartHost(clock);
+        await using WorldTestClient client = await host.EnterWorldAsync("SPEAKER", "Speaker");
+        Player player = await host.PlayerAsync("Speaker");
+        using var world = new WorldRuntime(new WorldRuntimeOptions(), host.SaveQueue, NullLogger<WorldRuntime>.Instance);
+        var chat = new ChatFeature(timeProvider: clock);
+        chat.Attach(world);
+        var mutes = (Dictionary<int, long>)typeof(ChatFeature).GetField("_sessionMutes", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(chat)!;
+        chat.MuteUntil(player, clock.UnixNow + 10);
+        world.RunTick(5);
+        Assert.Single(mutes);
+
+        clock.Advance(10);
+        world.RunTick(5);
+
+        Assert.Empty(world.Maps);
+        Assert.Empty(mutes);
     }
 
     [Theory]

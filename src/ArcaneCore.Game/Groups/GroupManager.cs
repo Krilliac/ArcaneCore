@@ -1,4 +1,7 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Protocol;
 
@@ -17,6 +20,8 @@ public sealed class GroupManager(SocialContext context)
     private readonly Dictionary<ObjectGuid, Group> _memberOf = [];
     private readonly Dictionary<ObjectGuid, Group> _invitedTo = [];
     private readonly Dictionary<ObjectGuid, GroupMemberStatsSnapshot> _sentStats = [];
+    private readonly HashSet<ObjectGuid> _pendingPetName = [];
+    private readonly Dictionary<ObjectGuid, (uint Positive, ushort Negative)> _pendingPetAuras = [];
     private uint _nextId = 1;
 
     /// <summary>Clock seam for deterministic offline-leader tests; world time in Unix seconds.</summary>
@@ -42,6 +47,26 @@ public sealed class GroupManager(SocialContext context)
 
     /// <summary>Whether two players share a group (vmangos Player::IsInSameRaidWith).</summary>
     public bool AreInSameGroup(ObjectGuid a, ObjectGuid b) => a == b || (GetGroup(a) is { } g && g.IsMember(b));
+
+    /// <summary>Queues the current player's pet-name bit for the next out-of-range stats pass.</summary>
+    public void MarkPetNameChanged(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (GetGroup(player.Guid) is not null)
+        {
+            _pendingPetName.Add(player.Guid);
+        }
+    }
+
+    public void MarkPetAuraChanged(Player player, byte slot)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (GetGroup(player.Guid) is null || player.GetPet() is null || slot >= SpellSystem.MaxAuras) return;
+        _pendingPetAuras.TryGetValue(player.Guid, out (uint Positive, ushort Negative) masks);
+        if (slot < SpellSystem.MaxPositiveAuras) masks.Positive |= 1u << slot;
+        else masks.Negative |= (ushort)(1u << (slot - SpellSystem.MaxPositiveAuras));
+        _pendingPetAuras[player.Guid] = masks;
+    }
 
     // --- invites -------------------------------------------------------------------------------
 
@@ -562,6 +587,8 @@ public sealed class GroupManager(SocialContext context)
     public void OnLoggingOut(Player player)
     {
         UninviteFromGroup(player.Guid);
+        _pendingPetName.Remove(player.Guid);
+        _pendingPetAuras.Remove(player.Guid);
         _sentStats.Remove(player.Guid);
         if (GetGroup(player.Guid) is { } group)
         {
@@ -592,6 +619,18 @@ public sealed class GroupManager(SocialContext context)
             GroupMemberStatsSnapshot? before = _sentStats.GetValueOrDefault(guid);
             GroupUpdateFlags changed = before is null ? GroupUpdateFlags.Full : now.Diff(before);
             _sentStats[guid] = now;
+            // A marked pet rename or visible pet aura slot forces its bit even when the snapshot diff alone would not (a rename
+            // back to the same text, or a slot that changed and changed back inside one pass); the aura lists themselves are
+            // written as the snapshot delta, so a forced bit with nothing changed carries an empty mask.
+            if (_pendingPetName.Remove(guid))
+            {
+                changed |= GroupUpdateFlags.PetName;
+            }
+            if (_pendingPetAuras.Remove(guid, out (uint Positive, ushort Negative) auraMasks))
+            {
+                if (auraMasks.Positive != 0) changed |= GroupUpdateFlags.PetAuras;
+                if (auraMasks.Negative != 0) changed |= GroupUpdateFlags.PetAurasNegative;
+            }
             if (changed != GroupUpdateFlags.None)
             {
                 SendStatsOutOfRange(group, player, now, changed, before);
@@ -729,6 +768,8 @@ public sealed class GroupManager(SocialContext context)
         GroupMemberSlot slot = group.Find(guid)!;
         group.RemoveMemberSlot(slot);
         _memberOf.Remove(guid);
+        _pendingPetName.Remove(guid);
+        _pendingPetAuras.Remove(guid);
         _sentStats.Remove(guid);
         bool leaderChanged = group.LeaderGuid == guid;
         if (leaderChanged)
@@ -770,6 +811,8 @@ public sealed class GroupManager(SocialContext context)
         foreach (ObjectGuid guid in members)
         {
             _memberOf.Remove(guid);
+            _pendingPetName.Remove(guid);
+            _pendingPetAuras.Remove(guid);
             _sentStats.Remove(guid);
             if (context.World.FindOnlinePlayer(guid) is { } player)
             {

@@ -75,15 +75,20 @@ public sealed class MotionMaster
 
     /// <summary>vmangos MoveChase: run after <paramref name="target"/>; replaces a chase of another target.</summary>
     public void MoveChase(Unit target)
+        => MoveChase(target, null);
+
+    /// <summary>Move to melee reach or hold a requested caster distance from <paramref name="target"/>.</summary>
+    internal void MoveChase(Unit target, float? distance)
     {
         ArgumentNullException.ThrowIfNull(target);
-        if (Top is ChaseMovementGenerator chase && ReferenceEquals(chase.Target, target))
+        if (Top is TargetedMovementGenerator chase && ReferenceEquals(chase.Target, target)
+            && ((distance is null && chase is ChaseMovementGenerator) || (distance is not null && chase is RangedMovementGenerator ranged && ranged.Distance == distance.Value)))
         {
             return;
         }
 
         RemoveTop(MovementGeneratorType.Chase);
-        Push(new ChaseMovementGenerator(target));
+        Push(distance is { } yards ? new RangedMovementGenerator(target, yards) : new ChaseMovementGenerator(target));
     }
 
     /// <summary>vmangos MoveFollow: keep <paramref name="distance"/> yd at <paramref name="angle"/> from the target's facing.</summary>

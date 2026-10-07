@@ -7,6 +7,8 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using System.Text.Json;
 
 namespace ArcaneCore.World.GameObjects;
 
@@ -73,7 +75,13 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
         }
 
         var reader = new PacketReader(payload);
-        loot.Open(player, new ObjectGuid(reader.ReadUInt64()));
+        ObjectGuid source = new(reader.ReadUInt64());
+        LootResult result = loot.Open(player, source);
+        if (result != LootResult.Ok && session.Logger.IsEnabled(LogLevel.Debug))
+        {
+            string diagnostic = JsonSerializer.Serialize(loot.DescribeOpen(player, source, result));
+            session.Logger.LogDebug("Loot open refused: {Diagnostic}", diagnostic);
+        }
     }
 
     /// <summary>CMSG_AUTOSTORE_LOOT_ITEM: u8 loot slot.</summary>

@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Protocol;
@@ -253,7 +254,8 @@ public sealed partial class MapCombat
         }
 
         bool offhand = HasOffhandWeapon(attacker);
-        if (!c.IsAttackReady(WeaponAttackType.BaseAttack) && !(offhand && c.IsAttackReady(WeaponAttackType.OffAttack)))
+        if (!c.HasReadyExtraAttacks && !c.IsAttackReady(WeaponAttackType.BaseAttack)
+            && !(offhand && c.IsAttackReady(WeaponAttackType.OffAttack)))
         {
             return false;
         }
@@ -263,12 +265,34 @@ public sealed partial class MapCombat
         switch (result)
         {
             case AttackCheckResult.Ok:
+                bool extraAttackPerformed = false;
+                if (c.HasReadyExtraAttacks)
+                {
+                    c.ClearExtraAttacksReady();
+                    Unit? extraVictim = c.Victim;
+                    c.LockExtraAttacks();
+                    try
+                    {
+                        while (c.HasPendingExtraAttacks && extraVictim is not null)
+                        {
+                            AttackerStateUpdate(attacker, extraVictim, WeaponAttackType.BaseAttack);
+                            c.ConsumeExtraAttack();
+                            extraAttackPerformed = true;
+                        }
+                    }
+                    finally
+                    {
+                        c.UnlockExtraAttacks();
+                    }
+                    c.ResetAttackTimer(WeaponAttackType.BaseAttack);
+                }
+
                 if (player is not null)
                 {
                     TogglePlayerPvpFlagOnAttackVictim(player, victim);
                 }
 
-                if (c.IsAttackReady(WeaponAttackType.BaseAttack))
+                if (!extraAttackPerformed && c.IsAttackReady(WeaponAttackType.BaseAttack))
                 {
                     // never swing both hands at once: push the off-hand 200 ms
                     if (offhand && c.GetAttackTimer(WeaponAttackType.OffAttack) < CombatConstants.AttackDisplayDelayMs)
@@ -359,6 +383,9 @@ public sealed partial class MapCombat
     /// </summary>
     public event Action<MeleeDamageInfo>? MeleeSwingResolved;
 
+    /// <summary>Weapon item procs run after the white hit's damage (vmangos Unit.cpp:1755-1777).</summary>
+    public event Action<MeleeDamageInfo>? MeleeWeaponHitDealt;
+
     /// <summary>
     /// One white swing (vmangos Unit::AttackerStateUpdate): roll and calculate the damage,
     /// send SMSG_ATTACKERSTATEUPDATE to the set (before the damage, so the client can still
@@ -396,6 +423,7 @@ public sealed partial class MapCombat
             CombatPackets.AttackerStateUpdate(info.HitInfo, attacker.Guid, victim.Guid, info.TotalDamage, sub, info.TargetState, info.Blocked));
 
         DealMeleeDamage(info);
+        MeleeWeaponHitDealt?.Invoke(info);
         PlayerCombatSkills.OnMeleeResolved(attacker, victim, attackType, info.Outcome, environment.ShapeshiftForms);
         MeleeSwingFinished?.Invoke(attacker, victim); // vmangos Unit.cpp:2285: the swing cancels ATTACKING auras
         return info;
@@ -651,14 +679,17 @@ public sealed partial class MapCombat
     /// combat; the attacker earns rage; lethal damage kills; otherwise health drops, a player
     /// attacker without a victim starts attacking, non-player victims gain threat and player
     /// victims earn rage. <paramref name="outcome"/> / <paramref name="cleanDamage"/> carry the
-    /// dodge/parry rage case. <paramref name="startsCombat"/> false skips the combat link and the auto-attack start. Returns the damage dealt. <paramref name="threatSpell"/> and <paramref name="critical"/>: the spell the damage comes from and whether it crit, for the threat formula (<see cref="AddDamageThreat"/>). Public for the spells area (direct
+    /// dodge/parry rage case. <paramref name="startsCombat"/> false skips the combat link and the auto-attack start. Returns the damage dealt. <paramref name="threatSpell"/> and <paramref name="critical"/>: the spell the damage comes from and whether it crit, for the threat formula (<see cref="AddDamageThreat"/>);
+    /// the spell also decides the death durability exemption (SPELL_ATTR_EX3_NO_DURABILITY_LOSS) and, with no threat to create
+    /// (<see cref="SuppressesSpellThreat"/>), keeps the victim's AI out of AttackedBy. <paramref name="durabilityLoss"/> false is
+    /// vmangos DealDamage's durabilityLoss argument (instant kill, split damage: no death wear). Public for the spells area (direct
     /// spell damage uses <paramref name="direct"/> = false for DoTs, and
     /// <paramref name="meleeDamage"/> = false for every spell). vmangos Unit.cpp DealDamage
     /// distinguishes DIRECT_DAMAGE from SPELL_DIRECT_DAMAGE: only weapon damage rewards
     /// outgoing rage, and its auto-start Attack call enables melee only for DIRECT_DAMAGE.
     /// </summary>
     public uint DealDamage(Unit attacker, Unit victim, uint damage, MeleeHitOutcome outcome = MeleeHitOutcome.Normal, uint cleanDamage = 0, bool direct = true, bool meleeDamage = true, bool startsCombat = true,
-        SpellInfo? threatSpell = null, bool critical = false)
+        SpellInfo? threatSpell = null, bool critical = false, bool durabilityLoss = true)
     {
         if (IsQuestSettlementPending(attacker) || IsQuestSettlementPending(victim) || !IsAliveState(victim))
         {
@@ -674,6 +705,7 @@ public sealed partial class MapCombat
         bool combatLink = enterCombat && startsCombat; // false: a hunter trap's hit on a player (vmangos Spell.cpp:1650)
         if (damage == 0)
         {
+            bool suppressedSpellThreat = SuppressesSpellThreat(attacker, victim, threatSpell);
             if (outcome is MeleeHitOutcome.Parry or MeleeHitOutcome.Dodge
                 && cleanDamage > 0 && direct && meleeDamage && enterCombat && attacker is Player { PowerType: PowerType.Rage } ragePlayer)
             {
@@ -686,7 +718,7 @@ public sealed partial class MapCombat
                 SetInCombatWithVictim(attacker, victim);
             }
 
-            if (enterCombat)
+            if (enterCombat && !suppressedSpellThreat)
             {
                 if (victim is not Player)
                 {
@@ -696,7 +728,10 @@ public sealed partial class MapCombat
                 }
             }
 
-            AttackedBy(victim, attacker);
+            if (!suppressedSpellThreat)
+            {
+                AttackedBy(victim, attacker);
+            }
             return 0;
         }
 
@@ -723,7 +758,7 @@ public sealed partial class MapCombat
 
         if (victim.Health <= damage)
         {
-            Kill(attacker, victim);
+            Kill(attacker, victim, durabilityLoss, threatSpell);
             if (duelEnded)
             {
                 AfterLethalDuelDamage((Player)victim); // Unit.cpp:825-843
@@ -733,6 +768,7 @@ public sealed partial class MapCombat
         }
 
         victim.Health -= damage;
+        bool attackedBy = !SuppressesSpellThreat(attacker, victim, threatSpell); // before this damage's threat creates an entry
 
         if (direct && combatLink)
         {
@@ -756,7 +792,12 @@ public sealed partial class MapCombat
 
         RollHitTakenDurability(victim);
         DamageDealt?.Invoke(attacker, victim, damage, direct, meleeDamage);
-        AttackedBy(victim, attacker);
+        // A spell explicitly suppressed from threat must not enter CreatureAI's AttackedBy path:
+        // AttackStart would create a fresh zero-threat reference after the real damage consumer.
+        if (attackedBy)
+        {
+            AttackedBy(victim, attacker);
+        }
         if (duelEnded)
         {
             AfterClampedDuelDamage((Player)victim); // Unit.cpp:954-969
@@ -804,13 +845,18 @@ public sealed partial class MapCombat
     /// 0 and JUST_DIED (combat stop, threat cleared, player rooted, power emptied), removal from
     /// every threat list, the PvP-death mark; creatures go straight to CORPSE.
     /// </summary>
-    public void Kill(Unit? killer, Unit victim)
+    public void Kill(Unit? killer, Unit victim, bool durabilityLoss = true, SpellInfo? spell = null)
     {
         if (IsQuestSettlementPending(killer) || IsQuestSettlementPending(victim) || !IsAliveState(victim))
         {
             return;
         }
 
+        // Wear eligibility follows the source's owner/charmer lookup. Existing kill credit
+        // and PvP corpse attribution retain their separate playerTap behavior.
+        // pPlayerTap: the killer's charmer or owner player, or the killer itself (a unit standing in for a player-controlled one
+        // reports its player through IPlayerControlledUnit).
+        Player? durabilityPlayerTap = killer is null ? null : killer.GetCharmerOrOwnerPlayerOrSelf() ?? DuelRules.ControllingPlayer(killer);
         var playerTap = killer as Player;
         if (playerTap is not null && !ReferenceEquals(playerTap, victim))
         {
@@ -833,8 +879,7 @@ public sealed partial class MapCombat
         if (victim is Player playerVictim)
         {
             playerVictim.Combat.PvpDeath = playerTap is not null;
-            ApplyDeathDurabilityLoss(playerVictim, killer);
-            Death.Resurrection.ResurrectionRequests.Clear(playerVictim); // SetDeathState(JUST_DIED): ClearResurrectRequestData
+            ApplyDeathDurability(playerVictim, durabilityLoss, durabilityPlayerTap, spell);
         }
         else
         {
@@ -856,6 +901,7 @@ public sealed partial class MapCombat
         if (state is not (DeathState.Alive or DeathState.JustAlived))
         {
             CombatStop(unit);
+            unit.Combat.ResetExtraAttacks();
             if (unit.Combat.HasThreatList)
             {
                 unit.Combat.Threat.Clear();
@@ -863,10 +909,17 @@ public sealed partial class MapCombat
         }
 
         unit.Combat.DeathState = state;
+        if (unit is Player revived && state is DeathState.Alive or DeathState.JustAlived)
+        {
+            // vmangos Player.cpp:1566-1570: any resurrection clears the previous offer.
+            revived.SetUInt32(UpdateFields.PlayerSelfResSpell, 0);
+        }
+
         if (state == DeathState.JustDied)
         {
             if (unit is Player player)
             {
+                Death.Resurrection.ResurrectionRequests.Clear(player); // Player::SetDeathState(JUST_DIED): ClearResurrectRequestData (Player.cpp:1522)
                 player.SetRooted(true);
             }
 

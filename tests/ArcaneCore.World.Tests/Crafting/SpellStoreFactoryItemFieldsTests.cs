@@ -26,7 +26,7 @@ public sealed class SpellStoreFactoryItemFieldsTests
         // numbers below exercise the mapping, not the exact recipe.
         SpellInfo spell = Convert(new SpellTemplateRow { Id = 7421, Reagent1 = 2840, ReagentCount1 = 6, Reagent2 = 4470, ReagentCount2 = 1, Totem1 = 5956 });
 
-        Assert.Equal(new[] { new SpellReagent(2840, 6), new SpellReagent(4470, 1) }, spell.Reagents);
+        Assert.Equal(new[] { new SpellReagent(2840, 6), new SpellReagent(4470, 1) }, spell.Reagents.Where(r => r.IsPresent));
         Assert.Equal(new uint[] { 5956 }, spell.Totems);
     }
 
@@ -36,7 +36,9 @@ public sealed class SpellStoreFactoryItemFieldsTests
         // vmangos Spell.cpp:7254 "if (m_spellInfo->Reagent[i] <= 0) continue".
         SpellInfo spell = Convert(new SpellTemplateRow { Id = 1, Reagent1 = 0, ReagentCount1 = 5, Reagent2 = -1, ReagentCount2 = 5, Reagent3 = 2589, ReagentCount3 = 2 });
 
-        Assert.Equal(new[] { new SpellReagent(2589, 2) }, spell.Reagents);
+        // The eight slots keep their positions (vmangos Reagent[i]); only a positive item is a reagent.
+        Assert.Equal(new[] { new SpellReagent(2589, 2) }, spell.Reagents.Where(r => r.IsPresent));
+        Assert.Equal(new SpellReagent(2589, 2), spell.Reagents[2]);
     }
 
     [Fact]
@@ -64,7 +66,7 @@ public sealed class SpellStoreFactoryItemFieldsTests
     {
         SpellInfo spell = Convert(new SpellTemplateRow { Id = 3 });
 
-        Assert.Empty(spell.Reagents);
+        Assert.All(spell.Reagents, r => Assert.False(r.IsPresent));
         Assert.Empty(spell.Totems);
     }
 }

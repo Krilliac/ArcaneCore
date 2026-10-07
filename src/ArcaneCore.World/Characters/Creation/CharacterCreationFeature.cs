@@ -46,7 +46,7 @@ public sealed class CharacterCreationFeature : IWorldFeature
             options.GameType, options.CharactersCreatingDisabled, options.StrictPlayerNames, options.EffectiveMinPlayerName,
             options.StartPlayerLevel, options.StartMoney);
         _logger.LogWarning(
-            "CharacterCreation: appearance (CharSections.dbc), reserved and profane name lists, the cross-realm account limit and the starting outfit/action bar are not enforced by this build (docs/areas/character-creation.md)");
+            "CharacterCreation: appearance (CharSections.dbc), the cross-realm account limit and the starting outfit/action bar are not enforced by this build (docs/areas/character-creation.md); name catalogs are optional through Names configuration");
     }
 
     /// <summary>The effective MaxPlayerLevel (the progression options once loaded, else the vanilla 60).</summary>

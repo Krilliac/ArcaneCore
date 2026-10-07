@@ -147,6 +147,7 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
                 $"released {hold.IsReleased}, abandoned {hold.Abandoned.Task.IsCompleted}, readers " +
                 string.Join(",", rewardReaders.Select(r => r.Status)));
             output.WriteLine("Server warnings and errors:" + Environment.NewLine + string.Join(Environment.NewLine, serverLogs));
+            output.WriteLine("Capacity store outcomes: " + JsonSerializer.Serialize(hold.Results.OrderBy(p => p.Key)));
             throw;
         }
         finally
@@ -570,6 +571,7 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
     private sealed class CapacityHold
     {
         private readonly ConcurrentDictionary<int, CharacterQuestRewardRequest> _entered = new();
+        internal ConcurrentDictionary<int, QuestRewardCommitResult> Results { get; } = new();
         private int _attempts;
         internal int Attempts => Volatile.Read(ref _attempts);
         internal bool IsReleased => Released.Task.IsCompleted;
@@ -607,7 +609,9 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
         public async Task<QuestRewardCommitResult> CommitAsync(CharacterQuestRewardRequest request, CancellationToken cancellationToken = default)
         {
             await hold.WaitAsync(request, cancellationToken);
-            return await inner.CommitAsync(request, cancellationToken);
+            QuestRewardCommitResult result = await inner.CommitAsync(request, cancellationToken);
+            hold.Results[request.Before.Id] = result;
+            return result;
         }
     }
 

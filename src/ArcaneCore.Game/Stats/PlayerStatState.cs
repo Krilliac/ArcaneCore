@@ -137,6 +137,11 @@ public sealed class PlayerStatState
     /// <summary>The agility based armor already added to the armor field (Player::UpdateArmor's dynamic part).</summary>
     internal int AppliedDynamicArmor { get; set; }
 
+    internal float[] EnchantmentDamageBonus { get; } = new float[3];
+
+    internal void ApplyEnchantmentDamageBonus(WeaponAttackType attackType, float delta)
+        => EnchantmentDamageBonus[(int)attackType] += delta;
+
     /// <summary>Player::SetCanParry (Player.cpp:20421): a change recomputes the parry percentage.</summary>
     public void SetCanParry(bool value)
     {

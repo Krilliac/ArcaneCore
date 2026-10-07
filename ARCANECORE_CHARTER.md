@@ -100,6 +100,15 @@ code verbatim. Local clones live in `/home/user/refs` (outside this repo).
   socket and protocol reference.
 - **mangoszero/server** — additional vanilla cross-check.
 - **wowdev.wiki** — canonical protocol/opcode/format specs (the neutral source).
+- **WoWWiki's archived 1.12.1 material** — [build-5875 patch notes](https://wowwiki-archive.fandom.com/wiki/Patch_1.12.1),
+  historical mechanics and revision history. Confirm the cited revision applies
+  to vanilla 1.12.1; later expansions on an evolving wiki page are separate data.
+- **Wowhead Classic** — [Classic item/spell/quest database](https://www.wowhead.com/classic),
+  tooltips and dated archived observations. Record the selected game version,
+  page ID and date. Classic Era, Hardcore, Season of Discovery and Classic PTR
+  are not interchangeable with the original 1.12.1 client. Cross-check mechanics
+  with the 5875 client/data or the vanilla references before implementation;
+  page comments alone do not establish protocol fields or authoritative values.
 - **gtker/wow_messages, gtker/wow_srp** — machine-readable packet/opcode/SRP6
   definitions and known-answer test vectors.
 - **EmberEmu/Ember** — clean modern C++ vanilla auth daemon reference.

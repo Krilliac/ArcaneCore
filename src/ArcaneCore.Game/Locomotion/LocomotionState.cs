@@ -147,6 +147,8 @@ public sealed class LocomotionState
     /// <summary>The place the liquid flags were last evaluated for (null: never), so a tick only asks the terrain again after a move.</summary>
     internal (Maps.Map Map, float X, float Y, float Z)? LastEnvironmentSample { get; set; }
 
+    internal void InvalidateEnvironmentSample() => LastEnvironmentSample = null;
+
     /// <summary>Forget the fall in progress (vmangos SetFallInformation(0)); called on teleport, swim, knock back and login.</summary>
     public void ResetFall() => FallStartZ = 0.0f;
 

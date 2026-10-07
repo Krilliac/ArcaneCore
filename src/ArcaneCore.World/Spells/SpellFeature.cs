@@ -1,18 +1,29 @@
 using System.Runtime.CompilerServices;
+using ArcaneCore.Game.Crafting.Enchanting;
+using ArcaneCore.Data.Npc;
 using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.WorldData.Items;
+using ArcaneCore.Kernel.Skills;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
 
 namespace ArcaneCore.World.Spells;
 
@@ -46,18 +57,20 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
     private int _updateQueued;
     private uint _lastUpdateMs;
 
-    public SpellFeature(IServiceScopeFactory scopes, ILogger<SpellFeature> logger, TimeProvider? timeProvider = null)
+    public SpellFeature(IServiceScopeFactory scopes, ILogger<SpellFeature> logger, TimeProvider? timeProvider = null, IItemEnchantmentCatalog? itemEnchantments = null)
     {
         _scopes = scopes ?? throw new ArgumentNullException(nameof(scopes));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _clock = timeProvider ?? TimeProvider.System;
         Spellbook = new SpellbookCache(scopes, logger);
         State = new SpellStatePersistence(scopes, logger);
-        System = new SpellSystem(SpellStore.Empty, () => _world?.NowMs ?? 0, spellbook: Spellbook, logger: logger);
+        System = new SpellSystem(SpellStore.Empty, () => _world?.NowMs ?? 0, spellbook: Spellbook, logger: logger, itemEnchantments: itemEnchantments);
     }
 
     /// <summary>The world-thread spell system.</summary>
     public SpellSystem System { get; }
+
+    public ItemEnchantmentCatalogProvider? EnchantmentCatalogProvider { get; private set; }
 
     /// <summary>Known spells of every character.</summary>
     public SpellbookCache Spellbook { get; }
@@ -98,12 +111,56 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             SocialFeature? social = scope.ServiceProvider.GetService<SocialFeature>();
             System.Groups = social is null ? NoGroupResolver.Instance : new WorldSpellGroups(() => social.Context.Groups);
             System.Teleports = new WorldSpellTeleportSink(() => teleports.Teleports);
+            FactionTemplateCatalog? factionTemplates = scope.ServiceProvider.GetService<FactionTemplateCatalog>();
+            if (factionTemplates is null)
+            {
+                var creatureOptions = new CreatureOptions();
+                scope.ServiceProvider.GetService<IConfiguration>()?.GetSection(CreatureOptions.SectionName).Bind(creatureOptions);
+                if (!string.IsNullOrWhiteSpace(creatureOptions.FactionTemplateDbcPath))
+                    factionTemplates = FactionTemplateDbcReader.Load(creatureOptions.FactionTemplateDbcPath);
+            }
+            if (factionTemplates is not null
+                && scope.ServiceProvider.GetService<ArcaneCore.World.Reputation.ReputationFeature>() is { } reputationFeature)
+            {
+                System.Relations = new ReputationSpellTargetRelations(
+                    () => factionTemplates,
+                    () => reputationFeature.Reputation,
+                    CombatHookRelations.Instance);
+            }
             System.IsInTransit = unit => unit is Player player && world.IsOnline(player.Guid)
                 && teleports.Teleports.IsBeingTeleportedFar(player);
             ISpellContentStore? content = scope.ServiceProvider.GetService<ISpellContentStore>();
             System.Store = content is null
                 ? SpellStore.Empty
                 : SpellStoreFactory.Build(content.LoadAsync().GetAwaiter().GetResult(), _logger);
+
+            // The enchantments are the enchanting feature's SpellItemEnchantment.dbc catalog (Enchanting:SpellItemEnchantmentDbcPath; that feature
+            // attaches before this one); item combat procs and trade enchant planning read them through this catalog, layered with the SQL
+            // spell_proc_item_enchant PPM overrides (reloadable). An injected IItemEnchantmentCatalog (tests) is kept as the base.
+            IReadOnlyList<ItemEnchantmentDefinition> definitions =
+                scope.ServiceProvider.GetService<ArcaneCore.World.Crafting.EnchantingFeature>()?.Catalog is { Count: > 0 } enchantCatalog
+                    ? EnchantCatalogDefinitions.From(enchantCatalog)
+                    : [];
+            EnchantmentCatalogProvider = new ItemEnchantmentCatalogProvider(System.ItemEnchantments);
+            IReadOnlyList<ItemEnchantProc> procs = scope.ServiceProvider.GetService<IItemEnchantProcStore>() is { } procStore
+                ? procStore.LoadAsync().GetAwaiter().GetResult() : [];
+            if (definitions.Count != 0 || procs.Count != 0)
+            {
+                // SkillsFeature attaches before SpellFeature and owns the loaded DBC catalog.
+                SpellRankChains? ranks = scope.ServiceProvider.GetService<SkillCatalog>()?.Ranks
+                    ?? scope.ServiceProvider.GetService<ArcaneCore.World.Skills.SkillsFeature>()?.Catalog.Ranks;
+                EnchantmentCatalogProvider.Replace(definitions, procs, ranks);
+                System.ItemEnchantments = EnchantmentCatalogProvider.Current;
+            }
+            if (definitions.Count == 0 && procs.Count == 0)
+                System.ItemEnchantments = EnchantmentCatalogProvider.Current;
+            if (scope.ServiceProvider.GetService<ISpellEnchantChargesStore>() is { } chargesStore)
+            {
+                IReadOnlyList<SpellEnchantCharges> charges = chargesStore.LoadAsync().GetAwaiter().GetResult();
+                foreach (SpellEnchantCharges row in charges.Where(row => System.Store.Get(row.SpellId) is null))
+                    _logger.LogWarning("Ignoring spell_enchant_charges for unknown spell {SpellId}", row.SpellId);
+                System.SpellEnchantCharges = new SpellEnchantChargesCatalog(charges.Where(row => System.Store.Get(row.SpellId) is not null));
+            }
 
             ICharacterSpellStore? spellbooks = scope.ServiceProvider.GetService<ICharacterSpellStore>();
             if (spellbooks is not null)
@@ -336,7 +393,16 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
 
         if (staged is { Auras.Count: > 0 })
         {
-            System.RestoreAuras(player, staged.Auras, UnixNowMs);
+            // DeathFeature has already rebuilt the permanent canonical ghost form from life
+            // state. Replacing that self-owned holder with its saved duplicate would order
+            // water walk off and back on during the same login. Other saved auras still load.
+            IEnumerable<PersistedAura> auras = staged.Auras;
+            if (player.LoadedLife?.Stored is { IsGhost: true, Corpse: not null })
+            {
+                auras = auras.Where(saved => !IsRebuiltGhostAura(player, saved));
+            }
+
+            System.RestoreAuras(player, auras, UnixNowMs);
         }
 
         foreach (uint spellId in Spellbook.GetSpells(player))
@@ -350,6 +416,14 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
 
         PlayerSpellsRestored?.Invoke(player);
     }
+
+    private bool IsRebuiltGhostAura(Player player, PersistedAura saved)
+        => saved.SpellId is 8326 or 20584 && saved.CasterGuid == player.Guid
+            && (saved.MaxDurationMs == -1 || saved.RemainingMs == -1)
+            && System.GetAuras(player).Any(holder => holder.Spell.Id == saved.SpellId
+                && holder.IsPermanent && holder.HasAura(AuraType.Ghost)
+                && ReferenceEquals(holder.Target, player) && holder.CasterGuid == player.Guid
+                && SpellSystem.HasLiveCasterOwnership(holder));
 
     /// <summary>Player::SaveToDB at logout: capture cooldowns and auras before the unit leaves the spell system.</summary>
     private void OnPlayerLoggingOut(Player player)

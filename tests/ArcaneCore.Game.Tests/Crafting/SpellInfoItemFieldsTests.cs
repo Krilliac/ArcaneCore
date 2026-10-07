@@ -10,7 +10,9 @@ public sealed class SpellInfoItemFieldsTests
     {
         var spell = new SpellInfo { Id = 1 };
 
-        Assert.Empty(spell.Reagents);
+        // The eight Spell.dbc reagent slots are always there (vmangos Reagent[MAX_SPELL_REAGENTS]); an empty one names no item.
+        Assert.Equal(SpellConstants.MaxReagents, spell.Reagents.Count);
+        Assert.All(spell.Reagents, r => Assert.False(r.IsPresent));
         Assert.Empty(spell.Totems);
     }
 

@@ -18,6 +18,16 @@ public interface ISpellUnitResolver
 /// </summary>
 public interface IDamageSink
 {
+    /// <summary>Origin of a healing operation for threat coefficients; legacy keeps the historical sink behavior.</summary>
+    enum HealingOrigin
+    {
+        Legacy,
+        Direct,
+        Periodic,
+        NoThreat,
+        PeriodicLeech,
+    }
+
     /// <summary>Deal <paramref name="damage"/> from a spell; returns the damage actually done.</summary>
     uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic);
 
@@ -35,6 +45,13 @@ public interface IDamageSink
     uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat, bool critical)
         => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat);
 
+    /// <summary>
+    /// As above, carrying Unit::DealDamage's durability-loss flag. Instant kill and split damage suppress
+    /// death wear (vmangos SpellEffects.cpp:285; Unit.cpp:2140,2179). Health-only sinks ignore it.
+    /// </summary>
+    uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat, bool critical, bool durabilityLoss)
+        => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat, critical);
+
     /// <summary>Heal <paramref name="amount"/>; returns the health actually restored.</summary>
     uint Heal(Unit caster, Unit target, SpellInfo spell, uint amount);
 
@@ -43,6 +60,25 @@ public interface IDamageSink
     /// a direct heal 0.5 or, for a paladin, 0.25: Spell.cpp:1362-1366, SpellAuras.cpp:6013). Sinks that do not model threat ignore it.
     /// </summary>
     uint Heal(Unit caster, Unit target, SpellInfo spell, uint amount, bool periodic) => Heal(caster, target, spell, amount);
+
+    /// <summary>
+    /// Heal with an explicit origin: <see cref="HealingOrigin.Direct"/> and <see cref="HealingOrigin.Legacy"/> are direct heals,
+    /// <see cref="HealingOrigin.Periodic"/> and <see cref="HealingOrigin.PeriodicLeech"/> periodic ones (vmangos threatAssist with half
+    /// the gain, SpellAuras.cpp:6013 and the PERIODIC_LEECH tick); <see cref="HealingOrigin.NoThreat"/> is vmangos DealHeal alone
+    /// (SPELL_EFFECT_HEALTH_LEECH, SpellEffects.cpp:1876), which assists nobody. Sinks without a threat model only heal.
+    /// </summary>
+    uint Heal(Unit caster, Unit target, SpellInfo spell, uint amount, HealingOrigin origin)
+        => origin is HealingOrigin.Periodic or HealingOrigin.PeriodicLeech
+            ? Heal(caster, target, spell, amount, periodic: true)
+            : origin == HealingOrigin.NoThreat ? Heal(caster, target, spell, amount) : Heal(caster, target, spell, amount, periodic: false);
+
+    /// <summary>
+    /// Assist hostile references for effective periodic power gain (vmangos SPELL_AURA_PERIODIC_ENERGIZE, SpellAuras.cpp:6248-6256: half the
+    /// gain of a power other than mana or happiness); default sinks have no threat model.
+    /// </summary>
+    void AssistPeriodicEnergizeThreat(Unit caster, Unit target, SpellInfo spell, uint effectiveGain, PowerType power)
+    {
+    }
 }
 
 /// <summary>

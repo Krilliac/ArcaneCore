@@ -56,6 +56,9 @@ public sealed class EnchantCatalog
 
     public int Count => _byId.Count;
 
+    /// <summary>Every row, in no particular order.</summary>
+    public IEnumerable<SpellItemEnchantment> All => _byId.Values;
+
     /// <summary>The row with <paramref name="id"/>, or null (vmangos <c>sSpellItemEnchantmentStore.LookupEntry</c>).</summary>
     public SpellItemEnchantment? Find(uint id) => _byId.GetValueOrDefault(id);
 }

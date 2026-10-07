@@ -12,4 +12,9 @@
   <ItemGroup>
     <ProjectReference Include="../../tools/ArcaneCore.MockClient/ArcaneCore.MockClient.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Each collection owns real SQLite databases and realm/world hosts. Bound
+         simultaneous fixture startup; test-internal concurrency is unchanged. -->
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

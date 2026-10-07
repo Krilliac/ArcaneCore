@@ -12,10 +12,11 @@ public sealed partial class SpellSystem
     /// (<see cref="SpellInfo.IsDeathPersistent"/>, SPELL_ATTR_EX3_ALLOW_AURA_WHILE_DEAD), DoTs, stuns,
     /// roots and buffs alike, so none of them is ticked, shown or captured by <see cref="CaptureState"/>
     /// at logout. Each aura goes through the normal removal path, so its remove handler, the visible aura
-    /// slot and area-aura children are cleaned up. Cooldowns and auras the dead unit cast on others are
-    /// left alone. Deliberate limits: the Hunter's Mark (SPELL_AURA_MOD_STALKED) carve-out at the top of
-    /// RemoveAllAurasOnDeath has no handler yet (vmangos-only; cmangos-classic lacks it); the creature
-    /// respawn aura clear (Creature.cpp:827) is not here; player side effects of dying (shapeshift
+    /// slot and area-aura children are cleaned up. Cooldowns and ordinary auras the dead unit cast on
+    /// others are left alone. Hunter's Mark on this map is removed using its exact caster ownership;
+    /// quest settlement defers that removal until the held participant is released. The bounded
+    /// classifier and creature lifecycle callbacks are described in death-aura-lifecycle-20261004.md.
+    /// Deliberate limits: player side effects of dying (shapeshift
     /// removal, pet, combo points) belong to other systems; the passive test lacks vmangos'
     /// extra "Attributes == DO_NOT_DISPLAY and DurationIndex 21" case (SpellAuras.cpp:6666) because
     /// <see cref="SpellInfo"/> carries the resolved duration, not the DBC index. World thread.
@@ -29,6 +30,7 @@ public sealed partial class SpellSystem
             Death.Resurrection.SelfResurrection.OnPlayerDied(this, dying);
         }
 
+        RemoveOwnedTrackingAurasOnDeath(unit);
         RemoveAurasOnDeath(unit);
         if (!unit.IsAlive)
         {

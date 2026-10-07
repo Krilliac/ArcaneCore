@@ -4,6 +4,9 @@ using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Npc;
 
+/// <summary>A class-trainer offer that is safe for advisory callers to inspect.</summary>
+public sealed record ClassTrainerQuote(uint TeachingSpell, uint LearnedSpell, uint Cost);
+
 /// <summary>Trainers (vmangos SendTrainerList, HandleTrainerBuySpellOpcode, Creature::IsTrainerOf, Player::GetTrainerSpellState).</summary>
 public sealed partial class QuestNpcServices
 {
@@ -22,6 +25,45 @@ public sealed partial class QuestNpcServices
         {
             SendTrainerList(s, guid);
         }
+    }
+
+    /// <summary>
+    /// Returns the first affordable, currently learnable offer from a matching class trainer.
+    /// This is advisory only: it does not interact with the NPC, teach a spell, or change money.
+    /// When <paramref name="teachingSpell"/> is supplied, only that teaching spell is considered.
+    /// </summary>
+    public ClassTrainerQuote? GetClassTrainerQuote(Player player, NpcInfo npc, uint teachingSpell = 0)
+    {
+        if (npc is null || Ready(player) is not { } state || npc.IsGameObject
+            || npc.TrainerType != TrainerType.Class || !IsTrainerOf(state, npc, false)
+            || Deps.Spells is not { } spells)
+        {
+            return null;
+        }
+
+        float discount = PriceDiscount(player, npc);
+        int examined = 0;
+        foreach (TrainerSpell trainerSpell in Npcs.TrainerSpells(npc.Entry))
+        {
+            if (++examined > 128) break;
+            if ((teachingSpell != 0 && trainerSpell.Spell != teachingSpell)
+                || spells.DescribeTrainerSpell(trainerSpell.Spell) is not { } info
+                || info.LearnedSpell == 0
+                || GetTrainerSpellState(player, trainerSpell, info) != TrainerSpellState.Green)
+            {
+                continue;
+            }
+
+            uint cost = Discounted(trainerSpell.SpellCost, discount);
+            if (player.Money < cost)
+            {
+                continue;
+            }
+
+            return new ClassTrainerQuote(trainerSpell.Spell, info.LearnedSpell, cost);
+        }
+
+        return null;
     }
 
     /// <summary>

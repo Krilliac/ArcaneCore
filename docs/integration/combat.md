@@ -63,9 +63,13 @@ needs a characters-DB version from the lead.
   if the reaction is friendly in either direction (`Object.cpp:3767-3769`); neutral stays attackable. Player versus player is
   the base rule (team friendly, PvP flag). **With no catalog loaded (or an empty one) nothing is registered and
   the permissive `CombatHooks.Default` applies: a player may attack any non-player unit** (a warning is logged once).
-  **Only `CanAttack` is overridden; `IsFriendly` is deliberately untouched** (vmangos `IsFriendlyTo` /
-  `IsValidHelpfulTarget` polarity is not reproduced), so spell targeting (friendly AoE, chain heal, dispel
-  polarity) and `CombatHandlers` keep the base rule and friendly NPCs do not become friendly-spell targets.
+  `IsFriendly` now exposes known template-friendly reactions with hostile-first precedence, so friendly
+  area/near/chain spell selection can include friendly NPCs. Player-player team/duel handling and
+  unknown-template fallback retain the base rule. This is the template `IsFriendlyTo` relation, not the
+  whole `IsValidHelpfulTarget` policy. Positive explicit primary friend selectors now use a separate known-hostility
+  check that preserves neutral assistance, while broader reputation/PvP rules remain pending. vmangos and CMaNGOS
+  differ on the neutral threshold; see [the explicit-target follow-up](helpful-next-swing-20261005.md) and
+  [the faction/cache follow-up](faction-spellbook-cleanup-20261005.md).
   **Not modelled (backlog; needs Faction.dbc data and a reputation manager):** reputation / at-war making a
   reputation-capable faction hostile (`Object.cpp:3677-3693`, `3714-3731`, `FACTION_FLAG_AT_WAR`;
   `reputationListID >= 0` = `CanHaveReputation`, `DBCStructure.h:346`); neutral-versus-neutral attackable only when at war

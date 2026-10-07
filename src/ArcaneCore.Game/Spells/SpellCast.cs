@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -13,12 +14,31 @@ public enum SpellCastState : byte
 /// <summary>One cast in flight (vmangos Spell): preparing (cast bar) → casting (channel) → finished.</summary>
 public sealed class SpellCast
 {
-    internal SpellCast(SpellInfo spell, Unit caster, SpellCastTargets targets, bool triggered, int castTime, uint powerCost, int duration)
+    internal SpellCast(SpellInfo spell, Unit caster, SpellCastTargets targets, bool triggered, int castTime, uint powerCost, int duration,
+        SpellInfo? triggeringSpell = null, Item? castItem = null, byte itemSpellIndex = 0, byte itemBag = 0, byte itemSlot = 0,
+        int? itemCooldownMs = null, int? itemCategoryCooldownMs = null, uint? itemCategory = null,
+        IReadOnlyDictionary<int, int>? customAuraAmounts = null)
     {
         Spell = spell;
         Caster = caster;
-        Targets = targets;
+        // vmangos copies its SpellCastTargets into each Spell. Selection may redirect or set a
+        // destination, so keep those changes local when a caller reuses its request block.
+        Targets = new SpellCastTargets
+        {
+            Mask = targets.Mask, Unit = targets.Unit, GameObject = targets.GameObject,
+            Item = targets.Item, Corpse = targets.Corpse, Source = targets.Source,
+            Dest = targets.Dest, Text = targets.Text,
+        };
         IsTriggered = triggered;
+        TriggeringSpell = triggeringSpell;
+        CustomAuraAmounts = customAuraAmounts;
+        CastItem = castItem;
+        ItemSpellIndex = itemSpellIndex;
+        ItemBag = itemBag;
+        ItemSlot = itemSlot;
+        ItemCooldownMs = itemCooldownMs;
+        ItemCategoryCooldownMs = itemCategoryCooldownMs;
+        ItemCategory = itemCategory;
         CastTime = castTime;
         Timer = castTime;
         PowerCost = powerCost;
@@ -34,6 +54,10 @@ public sealed class SpellCast
 
     public SpellCastTargets Targets { get; internal set; }
 
+    // A redirected cast keeps the chosen unit for all its explicit enemy effects, even after
+    // selection consumed the last magnet charge and removed the protection aura.
+    internal Unit? MagnetTarget { get; set; }
+
     public bool IsTriggered { get; }
 
     /// <summary>
@@ -42,8 +66,39 @@ public sealed class SpellCast
     /// tells the client for COOLDOWN_ON_EVENT spells, Player.cpp:22139-22250), so the client's own timer keeps running.
     /// </summary>
     internal bool AutoRepeatShot { get; set; }
-    /// <summary>The item the spell is cast from (vmangos Spell::m_CastItem; CMSG_USE_ITEM, recipes, bandages, poisons), or null. Set once at prepare.</summary>
-    public Items.Item? CastItem { get; internal set; }
+
+    /// <summary>The original spell/aura behind a trigger (vmangos m_triggeredBySpellInfo).</summary>
+    public SpellInfo? TriggeringSpell { get; }
+
+    /// <summary>Per-effect aura values supplied by a narrow server-side triggered cast seam.</summary>
+    internal IReadOnlyDictionary<int, int>? CustomAuraAmounts { get; }
+
+    /// <summary>
+    /// The item the spell is cast from (vmangos Spell::m_CastItem; CMSG_USE_ITEM, recipes, bandages, poisons), or null. Set at prepare and
+    /// retained through delayed casts; cleared when the item is consumed as a reagent (Spell.cpp:7268-7290).
+    /// </summary>
+    public Item? CastItem { get; internal set; }
+
+    internal bool IsItemEquipCast { get; set; }
+
+    /// <summary>
+    /// A spell the cast item carries that is not one of its on-use spells (a weapon's chance-on-hit spell, an enchantment's combat or equip
+    /// spell): the on-use checks of the item (CanStartItemUse) do not apply.
+    /// </summary>
+    internal bool IsItemTriggeredCast { get; set; }
+
+    /// <summary>Template spell slot selected by CMSG_USE_ITEM.</summary>
+    public byte ItemSpellIndex { get; }
+
+    public byte ItemBag { get; }
+
+    public byte ItemSlot { get; }
+
+    public int? ItemCooldownMs { get; }
+
+    public int? ItemCategoryCooldownMs { get; }
+
+    public uint? ItemCategory { get; }
 
     public SpellCastState State { get; internal set; } = SpellCastState.Preparing;
 
@@ -121,6 +176,8 @@ public sealed class UnitSpellState
 
     /// <summary>StartRecoveryCategory → absolute expiry of the global cooldown.</summary>
     internal Dictionary<uint, uint> GlobalCooldowns { get; } = [];
+
+    internal Dictionary<uint, ItemCooldownOwner> CooldownOwners { get; } = [];
 
     /// <summary>School → absolute end of an interrupt lockout (vmangos Unit::ProhibitSpellSchool).</summary>
     internal Dictionary<SpellSchool, uint> SchoolLockouts { get; } = [];

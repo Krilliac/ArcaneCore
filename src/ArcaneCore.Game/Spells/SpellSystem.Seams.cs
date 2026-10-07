@@ -1,7 +1,12 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Ranged;
+using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells;
+
+internal readonly record struct MeleeSpellDamageComponent(uint SchoolMask, uint Dealt, uint Absorbed, uint Resisted, bool Critical);
+
+internal readonly record struct DeferredNonMeleeDamageLog(ObjectGuid Target, ObjectGuid Caster, uint SpellId, uint Damage, SpellSchool School, uint Absorbed, uint Resisted, uint HitInfo);
 
 public sealed partial class SpellSystem
 {
@@ -203,6 +208,12 @@ public sealed partial class SpellSystem
         public uint Healing { get; set; }
 
         public bool Critical { get; set; }
+
+        public bool MeleeSpellPacketEligible { get; } = cast.Spell.IsNextMeleeSwing && ReferenceEquals(cast.Caster.Combat.Victim, target);
+
+        public List<MeleeSpellDamageComponent> MeleeSpellDamage { get; } = [];
+
+        public List<DeferredNonMeleeDamageLog> DeferredNonMeleeLogs { get; } = [];
 
         public SpellTargetOutcome Build() => new(Target, SpellMissInfo.None, Damage, Healing, Critical, EffectMask);
     }

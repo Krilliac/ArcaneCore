@@ -39,6 +39,9 @@ public sealed partial class SpellSystem
 
     private static Dictionary<SpellImplicitTarget, TargetSelectorEntry> CreateDefaultTargetSelectors() => new()
     {
+        [SpellImplicitTarget.LocationUnitMinionPosition] = new((_, cast, effect, _) =>
+            effect.Effect == SpellEffectName.Duel ? [(cast.Caster, 1.0f)]
+                : SpellTargetSelectors.SelectCasterRelativeLocation(cast, effect, MathF.PI * 0.25f), LocationOnly: true),
         [(SpellImplicitTarget)SpellTargetSelectors.LocationCasterFrontRight] = Location(1.75f),
         [(SpellImplicitTarget)SpellTargetSelectors.LocationCasterBackRight] = Location(1.25f),
         [(SpellImplicitTarget)SpellTargetSelectors.LocationCasterBackLeft] = Location(0.75f),

@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -77,6 +78,25 @@ public sealed class CreatureTests
         Assert.Equal(2000u, creature.GetUInt32(UpdateFields.UnitFieldBaseattacktime));
         Assert.Equal(new CreatureHome(-8900, -110, 83.5f, 1.5f), creature.Home);
         Assert.Equal((-8900f, -110f), (creature.X, creature.Y));
+    }
+
+    [Fact]
+    public void Creature_NativeDisplayMetadataNormalizesGeometryBeforeMapAdd()
+    {
+        CreatureTemplate template = Template(GuardEntry, t =>
+        {
+            t.DisplayIds = [3167, 3168];
+            t.DisplayProbabilities = [100, 0];
+        }) with { DisplayScales = [1.25f, 0.8f] };
+        CreatureContent content = Content([template], [], models: [new CreatureModelInfo(3167, 0.5f, 2.0f, 0, 0)]);
+        var native = new CreatureDisplayModelMetadata(3167, 7, 1.2f, 1.5f, 3.0f);
+        var creature = new Creature(1, template, null, content, new Random(1), displayModelResolver: _ => native);
+
+        Assert.Equal(1.8f, creature.NativeScale, 5);
+        Assert.Equal(1.25f, creature.GetFloat(UpdateFields.ObjectFieldScaleX), 5);
+        Assert.Equal(1.25f / 1.8f * 0.5f, creature.GetFloat(UpdateFields.UnitFieldBoundingradius), 5);
+        Assert.Equal(1.25f / 1.8f * 2.0f, creature.GetFloat(UpdateFields.UnitFieldCombatreach), 5);
+        Assert.Equal(1.25f / 1.8f * 2.0f, creature.Locomotion.CollisionHeight, 5);
     }
 
     [Fact]

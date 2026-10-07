@@ -10,19 +10,21 @@ namespace ArcaneCore.Game.Pets;
 public sealed partial class SummonService
 {
     /// <summary>
-    /// Register SPELL_EFFECT_SUMMON_PET on <paramref name="spells"/>. Throws when the effect already has a handler (another lane claimed it: two owners of one
-    /// effect would disagree silently). Call it once, next to <see cref="Install"/>; the world installs it from <c>WarlockDemonFeature</c>.
+    /// Serve the demon half of SPELL_EFFECT_SUMMON_PET (a non-zero creature entry) on <paramref name="spells"/>; the hunter's Call Pet half (entry 0) is
+    /// <see cref="Install"/>'s. Throws when the demons are installed twice, or when another owner (not this service) already handles the effect: two owners
+    /// of one effect would disagree silently. Call it once, next to <see cref="Install"/>; the world installs it from <c>WarlockDemonFeature</c>.
     /// </summary>
     public void InstallDemons(SpellSystem spells)
     {
         ArgumentNullException.ThrowIfNull(spells);
-        if (spells.HasEffectHandler(SpellEffectName.SummonPet))
+        if (_demonsInstalled)
         {
-            throw new InvalidOperationException("SPELL_EFFECT_SUMMON_PET already has a handler");
+            throw new InvalidOperationException("SPELL_EFFECT_SUMMON_PET demons are already installed");
         }
 
         _spells ??= spells;
-        spells.RegisterEffect(SpellEffectName.SummonPet, EffectSummonPet);
+        RegisterSummonPet(spells);
+        _demonsInstalled = true;
     }
 
     /// <summary>
@@ -33,7 +35,7 @@ public sealed partial class SummonService
     /// gets the owner's faction, the spell, level stats from <c>pet_levelstats</c>, its create spells and the pet bar, and the Demonic Sacrifice buffs
     /// (override class script 2228) of the owner end.
     /// <para>
-    /// LIMITS: entry 0 (the hunter's Call Pet) is not served; no demon is saved or loaded (vmangos <c>LoadPetFromDB</c> / <c>SavePetToDB</c>: a warlock gets a
+    /// LIMITS: entry 0 (the hunter's Call Pet) is the persistent hunter pet path of <see cref="Install"/>; no demon is saved or loaded (vmangos <c>LoadPetFromDB</c> / <c>SavePetToDB</c>: a warlock gets a
     /// fresh demon of its level each time and no saved name, level or happiness), the random pet name (<c>GeneratePetName</c>) is not generated so the pet keeps
     /// the creature name, and the soul shard of Summon Voidwalker, Succubus and Felhunter is a reagent, not charged here.
     /// </para>

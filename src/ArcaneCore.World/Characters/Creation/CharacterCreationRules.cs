@@ -6,6 +6,8 @@ namespace ArcaneCore.World.Characters.Creation;
 /// <summary>What the creation rules need to know about the realm (each answer is read lazily, in pipeline order).</summary>
 public interface ICharacterCreationFacts
 {
+    /// <summary>Configured immutable name catalogs; absent catalogs leave the existing rules unchanged.</summary>
+    CharResult? CheckNameCatalog(string name) => null;
     /// <summary>The name is already used by a character (vmangos GetPlayerGuidByName).</summary>
     Task<bool> IsNameTakenAsync(string name);
 
@@ -99,6 +101,11 @@ public static class CharacterCreationRules
         if (CharacterNames.ValidateUtf8(request.RawName, NameRuleSettings.From(options, create: true), out string? name) is { } nameError)
         {
             return Refuse(nameError);
+        }
+
+        if (facts.CheckNameCatalog(name!) is { } catalogError)
+        {
+            return Refuse(catalogError);
         }
 
         // 7. Name in use.

@@ -103,7 +103,7 @@ public static class InvisibilityAuras
         return false;
     }
 
-    private static uint Mask(SpellSystem spells, Unit unit, AuraType type)
+    internal static uint Mask(SpellSystem spells, Unit unit, AuraType type)
     {
         uint mask = 0;
         foreach (SpellAura aura in spells.GetAuras(unit).Where(h => !h.IsRemoved).SelectMany(h => h.Auras).OfType<SpellAura>())

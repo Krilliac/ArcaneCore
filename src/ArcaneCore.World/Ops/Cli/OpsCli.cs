@@ -2,6 +2,7 @@ using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Kernel.Ops;
 using ArcaneCore.World.Ops.Validation;
+using ArcaneCore.World.Gm.FirstLogin;
 using Microsoft.Extensions.Configuration;
 
 namespace ArcaneCore.World.Ops.Cli;
@@ -55,5 +56,6 @@ public static class OpsCli
             new ResilienceConfigChecks(),
             new NetProtectionConfigChecks(),
             new ArcaneCore.Kernel.Ops.Watchdog.WatchdogOptionsValidation(),
+            new GmFirstLoginToolsConfigChecks(),
         ]);
 }

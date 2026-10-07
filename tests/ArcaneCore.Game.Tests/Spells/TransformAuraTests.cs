@@ -5,7 +5,7 @@ using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
 namespace ArcaneCore.Game.Tests.Spells;
 
-/// <summary>SPELL_AURA_TRANSFORM (mangoszero Aura::HandleAuraTransform, SpellAuraShapeshift.cpp:502-598): the display change, its restore and the override rules.</summary>
+/// <summary>SPELL_AURA_TRANSFORM (vmangos Aura::HandleAuraTransform, SpellAuras.cpp:2632-2780): the display change, its restore and the override rules.</summary>
 public sealed class TransformAuraTests
 {
     private const uint SheepEntry = 1001;
@@ -175,7 +175,7 @@ public sealed class TransformAuraTests
     }
 
     [Fact]
-    public void APositiveTransformOverANegativeOne_ChangesTheModel_ButTheNegativeStaysTheActiveRecord()
+    public void APositiveTransformOverANegativeOne_ChangesNothing_AndTheNegativeStaysTheActiveRecord()
     {
         using SpellTestKit kit = Kit(out _);
         (Player _, Player victim) = Pair(kit);
@@ -187,10 +187,13 @@ public sealed class TransformAuraTests
 
         kit.System.CastSpell(victim, PotionOfCat, SpellCastTargets.ForSelf(), triggered: true);
 
-        Assert.Equal(CatDisplay, victim.DisplayId);                  // the display always follows the newest transform
-        Assert.Same(sheep, TransformAuras.ActiveHolder(victim));             // "not overwriting negative by positive"
+        // vmangos: "update active transform spell only not set or not overwriting negative by positive case" covers the display too
+        // (mangoszero changes the display without taking the record).
+        Assert.True(kit.System.HasAura(victim, PotionOfCat));
+        Assert.Equal(SheepDisplay, victim.DisplayId);
+        Assert.Same(sheep, TransformAuras.ActiveHolder(victim));
 
-        // The positive one ends: native, then the preferred remaining transform (the negative sheep) is applied again.
+        // The positive one ends: it is not the current transform, so nothing is reset.
         kit.System.RemoveAuras(victim, PotionOfCat);
         Assert.Equal(SheepDisplay, victim.DisplayId);
         Assert.Same(sheep, TransformAuras.ActiveHolder(victim));
@@ -215,15 +218,15 @@ public sealed class TransformAuraTests
     }
 
     [Fact]
-    public void AnUnknownCreatureEntry_TurnsTheTargetIntoThePig()
+    public void AnUnknownCreatureEntry_TurnsTheTargetIntoTheBox()
     {
         using SpellTestKit kit = Kit(out FakeDisplays displays);
         (Player caster, Player victim) = Pair(kit);
 
         Cast(kit, caster, PolymorphGhost, victim);
 
-        Assert.Equal(TransformAuras.PigDisplay, victim.DisplayId);
-        Assert.Equal(16358u, TransformAuras.PigDisplay);
+        Assert.Equal(TransformAuras.BoxDisplay, victim.DisplayId);
+        Assert.Equal(4u, TransformAuras.BoxDisplay); // vmangos UNIT_DISPLAY_ID_BOX (mangoszero: the pink pig 16358)
         Assert.Equal([99999u], displays.Lookups);
         kit.System.RemoveAuras(victim, PolymorphGhost);
         Assert.Equal(NativeHuman, victim.DisplayId);
@@ -238,7 +241,7 @@ public sealed class TransformAuraTests
 
         Cast(kit, caster, PolymorphSheep, victim);
 
-        Assert.Equal(TransformAuras.PigDisplay, victim.DisplayId);
+        Assert.Equal(TransformAuras.BoxDisplay, victim.DisplayId);
     }
 
     [Theory]

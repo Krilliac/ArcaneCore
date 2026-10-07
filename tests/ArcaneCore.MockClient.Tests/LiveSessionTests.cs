@@ -72,4 +72,51 @@ public sealed class LiveSessionTests : IDisposable
         Assert.Throws<ArgumentException>(() => LiveSession.Parse(["--account", "A", "--password-env", "ARCANE_LIVE_TEST_UNSET_" + Guid.NewGuid().ToString("N")]));
         Assert.Throws<ArgumentException>(() => LiveSession.Parse(["--credentials-file", file, "--bogus"]));
     }
+
+    [Fact]
+    public void ExplicitCharacterSelection_IsMarkedAndDoesNotUseImplicitFallback()
+    {
+        string file = Path.Combine(_dir, "c-explicit.txt");
+        File.WriteAllLines(file, ["account=A", "password=B"]);
+
+        LiveSession.Options explicitOptions = LiveSession.Parse(["--credentials-file", file, "--character", "Fresh"]);
+        LiveSession.Options implicitOptions = LiveSession.Parse(["--credentials-file", file]);
+
+        Assert.True(explicitOptions.CharacterExplicit);
+        Assert.False(implicitOptions.CharacterExplicit);
+    }
+
+    [Theory]
+    [InlineData((byte)0)]
+    [InlineData((byte)1)]
+    public void LogoutResponseAcceptsImmediateAndDelayedSuccess(byte instant)
+        => Assert.True(LiveSession.IsSuccessfulLogoutResponse([0, 0, 0, 0, instant]));
+
+    [Fact]
+    public void LogoutResponseRejectsFailureAndMalformedBodies()
+    {
+        Assert.False(LiveSession.IsSuccessfulLogoutResponse([1, 0, 0, 0, 1]));
+        Assert.False(LiveSession.IsSuccessfulLogoutResponse([0, 0, 0, 0]));
+        Assert.False(LiveSession.IsSuccessfulLogoutResponse([0, 0, 0, 0, 2]));
+    }
+
+    [Fact]
+    public void SelectionHelperRequiresExactExplicitName_ButKeepsImplicitFallback()
+    {
+        MockCharacter[] characters = [new(7, "Existing", 1, 1, 0, [], 1, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, [])];
+
+        MockCharacter? exact = LiveSession.SelectCharacter(characters, "existing", true, out bool exactCreate);
+        MockCharacter? missing = LiveSession.SelectCharacter(characters, "Fresh", true, out bool missingCreate);
+        MockCharacter? implicitChoice = LiveSession.SelectCharacter(characters, "Fresh", false, out bool implicitCreate);
+
+        Assert.Equal((ulong)7, exact!.Guid);
+        Assert.False(exactCreate);
+        Assert.Null(missing);
+        Assert.True(missingCreate);
+        Assert.Equal((ulong)7, implicitChoice!.Guid);
+        Assert.False(implicitCreate);
+
+        Assert.Null(LiveSession.SelectCharacter([], "Fresh", false, out bool emptyCreate));
+        Assert.True(emptyCreate);
+    }
 }

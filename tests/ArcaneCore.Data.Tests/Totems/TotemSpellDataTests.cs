@@ -1,7 +1,9 @@
 using System.IO.Compression;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.Content.Import;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.Totems;
+using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Kernel.WorldData.Totems;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -102,6 +104,74 @@ public sealed class TotemSpellDataTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Importer_SpellListWithoutPositionZero_UsesItsFirstAvailableSpell()
+    {
+        var importer = new TotemSpellDumpImporter();
+        importer.Read(new StringReader("""
+            INSERT INTO `spell_template` (`Id`,`Effect1`,`EffectMiscValue1`) VALUES (3599,89,5878);
+            INSERT INTO `creature_template` (`entry`,`AIName`,`SpellList`) VALUES (5878,'TotemAI',9100);
+            INSERT INTO `creature_spell_list` (`Id`,`Position`,`SpellId`) VALUES (9100,1,2222);
+            """));
+
+        var result = importer.Resolve();
+        Assert.Equal(2222u, Assert.Single(result.Rows).SpellId);
+        Assert.Empty(result.Report.SummonedWithoutRow);
+    }
+
+    [Fact]
+    public void Importer_ExplicitListTakesPrecedence_AndLegacyDefaultUsesFirstNonzeroSlot()
+    {
+        var importer = new TotemSpellDumpImporter();
+        importer.Read(new StringReader("""
+            INSERT INTO `creature_template` (`entry`,`AIName`,`SpellList`) VALUES (3,'TotemAI',0),(5878,'TotemAI',9100);
+            INSERT INTO `creature_template_spells` (`entry`,`setId`,`spell1`,`spell2`) VALUES (3,0,0,5728),(5878,0,9999,0);
+            INSERT INTO `creature_spell_list` (`Id`,`Position`,`SpellId`) VALUES (9100,0,0),(9100,2,2222),(9100,1,1111);
+            """));
+
+        Assert.Equal([(3u, 5728u), (5878u, 1111u)], importer.Resolve().Rows.Select(r => (r.CreatureEntry, r.SpellId)));
+    }
+
+    [Fact]
+    public void Importer_VmangosDirectField_UsesHighestRetailPatch_AndZeroDoesNotFallBack()
+    {
+        var importer = new TotemSpellDumpImporter();
+        importer.Read(new StringReader("""
+            INSERT INTO `creature_template` (`entry`,`patch`,`totem_spell_id`,`SpellList`,`AIName`) VALUES
+              (5878,10,2222,9100,''),(5878,0,1111,9100,''),(5878,11,9999,9100,''),(3968,10,0,9100,'TotemAI');
+            INSERT INTO `creature_spell_list` (`Id`,`Position`,`SpellId`) VALUES (9100,0,7777);
+            INSERT INTO `creature_template_spells` (`entry`,`setId`,`spell1`) VALUES (5878,0,6666),(3968,0,8888);
+            """));
+
+        var result = importer.Resolve();
+        Assert.Equal((5878u, 2222u), result.Rows.Select(r => (r.CreatureEntry, r.SpellId)).Single());
+        Assert.Equal(1, result.Report.FromTemplateField);
+        Assert.Equal(1, result.Report.SkippedWithoutSpell);
+    }
+
+    [Fact]
+    public void Importer_LaterRowsReplaceSummonAndListMappings_IncludingZero()
+    {
+        var importer = new TotemSpellDumpImporter();
+        importer.Read(new StringReader("""
+            INSERT INTO `spell_template` (`Id`,`Effect1`,`EffectMiscValue1`) VALUES (3599,89,5878);
+            INSERT INTO `creature_template` (`entry`,`AIName`,`SpellList`) VALUES (5878,'TotemAI',9100);
+            INSERT INTO `creature_spell_list` (`Id`,`Position`,`SpellId`) VALUES (9100,0,2222);
+            """));
+        Assert.Single(importer.Resolve().Rows);
+
+        importer.Read(new StringReader("INSERT INTO `creature_spell_list` (`Id`,`Position`,`SpellId`) VALUES (9100,0,0);"));
+        Assert.Empty(importer.Resolve().Rows);
+        Assert.Equal([5878u], importer.Resolve().Report.SummonedWithoutRow);
+
+        importer.Read(new StringReader("""
+            INSERT INTO `spell_template` (`Id`,`Effect1`,`EffectMiscValue1`) VALUES (3599,0,0);
+            INSERT INTO `creature_template` (`entry`,`AIName`,`SpellList`) VALUES (5878,'',0);
+            """));
+        Assert.Equal(0, importer.Resolve().Report.SkippedWithoutSpell);
+        Assert.Empty(importer.Resolve().Report.SummonedWithoutRow);
+    }
+
+    [Fact]
     public void WorldSchema_HasTheTotemStep_WithItsTable()
     {
         SchemaStep step = Assert.Single(WorldDbContext.Schema.Steps, s => s.Version == TotemWorldDataModule.Version);
@@ -148,6 +218,72 @@ public sealed class TotemSpellDataTests : IAsyncLifetime
         db.Set<TotemSpellRow>().Add(new TotemSpellRow { CreatureEntry = 9, SpellId = 9 });
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => new TotemSpellDumpImporter().WriteAsync(db));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task WriteAsync_OuterFailure_RestoresEarlierContentAndTotems(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(cs))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+            db.Set<TotemSpellRow>().Add(new TotemSpellRow { CreatureEntry = 9, SpellId = 9 });
+            await db.SaveChangesAsync();
+            db.ChangeTracker.Clear();
+            var importer = new TotemSpellDumpImporter();
+            importer.Read(new StringReader(Dump));
+            var creatures = new CreatureDumpImporter();
+            creatures.Read(new StringReader("INSERT INTO `creature_template` (`Entry`,`Name`,`MinLevel`,`ModelId1`) VALUES (3,'Replacement',1,1);"));
+
+            await Assert.ThrowsAsync<IOException>(() => ImportTransaction.RunAsync(db, async token =>
+            {
+                await creatures.WriteAsync(db, replace: true, token);
+                await importer.WriteAsync(db, replace: true, token);
+                Assert.Equal(3, await db.Set<TotemSpellRow>().CountAsync());
+                throw new IOException("synthetic failure after totem import");
+            }));
+            Assert.Null(db.Database.CurrentTransaction);
+            Assert.Empty(db.ChangeTracker.Entries());
+        }
+
+        await using WorldDbContext verify = TestContexts.Create<WorldDbContext>(cs);
+        Assert.Equal(9u, (await verify.Set<TotemSpellRow>().AsNoTracking().SingleAsync()).SpellId);
+        Assert.Empty(await verify.Set<CreatureTemplateRow>().AsNoTracking().ToListAsync());
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task WriteAsync_NonReplaceCollision_ProtectsCallerWork_AndSuccessfulReplaceStaysUncommitted(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(cs))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+            db.Set<TotemSpellRow>().Add(new TotemSpellRow { CreatureEntry = 3, SpellId = 99 });
+            await db.SaveChangesAsync();
+            db.ChangeTracker.Clear();
+            var importer = new TotemSpellDumpImporter();
+            importer.Read(new StringReader(Dump));
+
+            await using var caller = await db.Database.BeginTransactionAsync();
+            db.ClassInfo.Add(new ClassInfoRow { Class = 2, BaseHealth = 222 });
+            await db.SaveChangesAsync();
+            db.ChangeTracker.Clear();
+            await Assert.ThrowsAsync<DbUpdateException>(() => importer.WriteAsync(db, replace: false));
+            Assert.Same(caller, db.Database.CurrentTransaction);
+            Assert.Equal(99u, (await db.Set<TotemSpellRow>().AsNoTracking().SingleAsync()).SpellId);
+            Assert.Equal(222u, (await db.ClassInfo.AsNoTracking().SingleAsync(r => r.Class == 2)).BaseHealth);
+
+            await importer.WriteAsync(db, replace: true);
+            Assert.Same(caller, db.Database.CurrentTransaction);
+            Assert.Equal(3, await db.Set<TotemSpellRow>().CountAsync());
+            await caller.RollbackAsync();
+        }
+
+        await using WorldDbContext verify = TestContexts.Create<WorldDbContext>(cs);
+        Assert.Equal(99u, (await verify.Set<TotemSpellRow>().AsNoTracking().SingleAsync()).SpellId);
+        Assert.Empty(await verify.ClassInfo.AsNoTracking().ToListAsync());
     }
 
     /// <summary>Real data (env-gated, measured on ClassicDB_1_12_1_z2815): 95 totem creatures get a spell from creature_template_spells (none needs the list fallback), 8 have none (Sentry Totem 3968 among them).</summary>

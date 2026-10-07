@@ -71,7 +71,8 @@ public sealed partial class MapCombat
             environment.GetTotalAuraModifier(player, AuraType.ModRegenDuringCombat),
             [.. environment.GetRegenAuras(player, AuraType.ModHealthRegenPercent).Select(a => a.Amount)],
             environment.GetRegenAuras(player, AuraType.ModRegen),
-            environment.GetTotalAuraModifier(player, AuraType.ModHealthRegenInCombat));
+            environment.GetTotalAuraModifier(player, AuraType.ModHealthRegenInCombat),
+            environment.Options.RateHealth);
 
         add += c.HealthRegenCarry;
         c.HealthRegenCarry = add - (int)add;

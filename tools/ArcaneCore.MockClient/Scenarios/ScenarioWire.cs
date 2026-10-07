@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
 using ArcaneCore.MockClient.Protocol;
+using ArcaneCore.Game;
 
 namespace ArcaneCore.MockClient.Scenarios;
 
@@ -133,7 +134,7 @@ internal static partial class ScenarioWire
             byte objectType = cursor.Byte();
             if (objectType != 4)
             {
-                SkipMovement(cursor);
+                _ = ReadMovement(cursor);
                 _ = ReadFields(cursor);
                 continue;
             }
@@ -198,19 +199,32 @@ internal static partial class ScenarioWire
 
             Require(type <= 3, "Object update contains an unknown block type.");
             ulong guid = cursor.PackedGuid();
+            MockPosition? position = null;
+            byte? objectType = null;
             if (type is 2 or 3)
             {
-                _ = cursor.Byte(); // object type id
+                objectType = cursor.Byte();
             }
 
             if (type != 0)
             {
-                SkipMovement(cursor);
+                position = ReadMovement(cursor);
             }
 
             if (type != 1)
             {
-                updates.Add(new MockFieldUpdate(guid, ReadFields(cursor)));
+                IReadOnlyDictionary<int, uint> values = ReadFields(cursor);
+                if (objectType is TypeId.Unit or TypeId.Player)
+                {
+                    // Full creates establish zero for omitted values. Incremental updates
+                    // cannot establish that baseline for an object we have not seen created.
+                    var initial = new Dictionary<int, uint>(values);
+                    initial.TryAdd(UpdateFields.UnitFieldTarget, 0);
+                    initial.TryAdd(UpdateFields.UnitFieldTarget + 1, 0);
+                    initial.TryAdd(UpdateFields.UnitFieldFlags, 0);
+                    values = initial;
+                }
+                updates.Add(new MockFieldUpdate(guid, values, position));
             }
         }
 
@@ -343,16 +357,90 @@ internal static partial class ScenarioWire
         return values;
     }
 
-    private static void SkipMovement(WireCursor cursor)
+    internal static MockMonsterMove MonsterMove(byte[] payload)
+    {
+        var cursor = new WireCursor(payload);
+        ulong guid = cursor.PackedGuid();
+        Require(guid != 0, "Monster move must identify a mover.");
+        MockPosition start = new(cursor.Single(), cursor.Single(), cursor.Single());
+        Require(start.IsFinite, "Monster move start must be finite.");
+        uint splineId = cursor.UInt32();
+        byte type = cursor.Byte();
+        if (type == 1)
+        {
+            cursor.End();
+            return new MockMonsterMove(guid, start, null, splineId, 0, 0, IsStop: true, Linear: false);
+        }
+
+        Require(type is 0 or 2 or 3 or 4, "Monster move has an unknown move type.");
+        if (type == 2)
+        {
+            MockPosition facing = new(cursor.Single(), cursor.Single(), cursor.Single());
+            Require(facing.IsFinite, "Monster move facing spot must be finite.");
+        }
+        else if (type == 3)
+        {
+            Require(cursor.UInt64() != 0, "Monster move facing target must identify a target.");
+        }
+        else if (type == 4)
+        {
+            float angle = cursor.Single();
+            Require(float.IsFinite(angle), "Monster move facing angle must be finite.");
+        }
+
+        _ = cursor.UInt32(); // spline flags
+        uint duration = cursor.UInt32();
+        uint count = cursor.UInt32();
+        Require(count is >= 1 and <= 128, "Monster move point count is outside the bounded decoder limit.");
+        MockPosition destination = new(cursor.Single(), cursor.Single(), cursor.Single());
+        Require(destination.IsFinite, "Monster move destination must be finite.");
+        for (uint i = 1; i < count; i++) _ = cursor.UInt32();
+        cursor.End();
+        return new MockMonsterMove(guid, start, destination, splineId, duration, count, IsStop: false, Linear: count == 1);
+    }
+
+    internal static IReadOnlyList<ulong> RemovedGuids(byte[] body)
+    {
+        var cursor = new WireCursor(body);
+        uint count = cursor.UInt32();
+        Require(count is > 0 and <= 128, "Object update exceeded the block limit.");
+        Require(cursor.Byte() == 0, "Synthetic update cannot contain a transport header.");
+        var removed = new List<ulong>();
+        for (uint index = 0; index < count; index++)
+        {
+            byte type = cursor.Byte();
+            if (type is 4 or 5)
+            {
+                uint guidCount = cursor.UInt32();
+                Require(guidCount <= 128, "Object update exceeded the GUID list limit.");
+                for (uint guidIndex = 0; guidIndex < guidCount; guidIndex++) removed.Add(cursor.PackedGuid());
+                continue;
+            }
+
+            Require(type <= 3, "Object update contains an unknown block type.");
+            _ = cursor.PackedGuid();
+            if (type is 2 or 3) _ = cursor.Byte();
+            if (type != 0) _ = ReadMovement(cursor);
+            if (type != 1) _ = ReadFields(cursor);
+        }
+
+        cursor.End();
+        return removed;
+    }
+
+    private static MockPosition? ReadMovement(WireCursor cursor)
     {
         byte flags = cursor.Byte();
         Require((flags & 0x80) == 0, "Object movement contains an unknown update flag.");
+        MockPosition? position = null;
         if ((flags & 0x20) != 0)
         {
             uint movement = cursor.UInt32();
             Require((movement & 0x00400000) == 0, "Synthetic object must not advertise an unsupported spline.");
             _ = cursor.UInt32();
-            _ = cursor.Bytes(16); // position and orientation
+            position = new MockPosition(cursor.Single(), cursor.Single(), cursor.Single());
+            _ = cursor.Single(); // orientation
+            Require(position.IsFinite, "Object movement position must be finite.");
             if ((movement & 0x02000000) != 0)
             {
                 _ = cursor.Bytes(24); // full transport GUID plus position/orientation
@@ -378,7 +466,9 @@ internal static partial class ScenarioWire
         }
         else if ((flags & 0x40) != 0)
         {
-            _ = cursor.Bytes(16);
+            position = new MockPosition(cursor.Single(), cursor.Single(), cursor.Single());
+            _ = cursor.Single();
+            Require(position.IsFinite, "Object position must be finite.");
         }
 
         if ((flags & 0x08) != 0)
@@ -400,6 +490,8 @@ internal static partial class ScenarioWire
         {
             _ = cursor.UInt32();
         }
+
+        return position;
     }
 
     internal static byte[] InflateUpdate(byte[] payload)
@@ -549,7 +641,15 @@ internal sealed record MockQuestQuery(uint Id, uint Method, int Level, uint[] He
     uint PointMap, float PointX, float PointY, uint PointOption, string Title, string Objectives, string Details,
     string EndText, MockQuestObjective[] Requirements, string[] ObjectiveTexts);
 
-internal sealed record MockFieldUpdate(ulong Guid, IReadOnlyDictionary<int, uint> Fields);
+internal sealed record MockFieldUpdate(ulong Guid, IReadOnlyDictionary<int, uint> Fields, MockPosition? Position = null);
+
+internal sealed record MockPosition(float X, float Y, float Z)
+{
+    internal bool IsFinite => float.IsFinite(X) && float.IsFinite(Y) && float.IsFinite(Z);
+}
+
+internal sealed record MockMonsterMove(ulong Guid, MockPosition Start, MockPosition? Destination, uint SplineId,
+    uint DurationMs, uint PointCount, bool IsStop, bool Linear);
 
 internal sealed record MockQuestgiverStatus(ulong Guid, uint Status);
 

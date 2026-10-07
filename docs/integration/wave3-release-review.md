@@ -147,6 +147,14 @@ survive a mail round trip, but add the two tables to the escrow delete.
 `BanCommands.cs:363-380`: loads every character identity and then one `GetHistory` query per matching account, at
 Moderator level. Prefix-filter in the store query and cap the result.
 
+Follow-up implementation: the store now filters a literal case-insensitive prefix before selecting distinct owner
+account ids, with binary per-position case comparisons for consistent extended Latin, Cyrillic and East Asian names
+on all supported providers. History existence is queried in batches rather than fetching each account's full history.
+(Superseded at the 2026-10-07 integration: the world keeps `Bans:MaxListedEntries` and the character directory prefix walk; the `CharacterListMaxResults` key described here no longer exists.) `CharacterListMaxResults` enabled a candidate cap (`1..500`), and a truncation notice asks for a narrower prefix
+even if retained candidates have no bans. Its default is `0` (unlimited), preserving the standing retail-default rule;
+operators must enable the cap to bound candidate results. This reduces query count and transferred data by default,
+but does not bound database scanning or unlimited candidate lists.
+
 ### F9 (Low) Extra uncached pre-auth DB read per logon challenge
 `src/ArcaneCore.Realm/Net/LogonSession.cs:161-172`. One more indexed read per unauthenticated connection, before SRP
 (retail caches the IP list). The realm already did `FindByUsername` per attempt, so the amplification is x2 at most;
@@ -188,9 +196,12 @@ Verdict: **APPROVE WITH FIXES**, and the fixes below are done (RED-first, each w
 | F3 Duration overflow / silent permanent ban | Medium | **Overflow fixed.** `BanTime.TryTimeStringToSecs` is checked; `.ban` and `arcane-account ban` refuse anything over 32 bits of seconds regardless of config. `RejectUnparseableDuration` stays default false (retail; flipping it changes command semantics): a typo is still a permanent ban, the reply says "permanently". |
 | F4 `RecheckIntervalSeconds` default 0 | Medium (design) | Follow-up / release note. |
 | F5 Kick during world auth undetected | Low | **Fixed.** The post-Register check also tests the kick token; a session kicked in that window gets no `AuthResponse OK`. |
-| F6 Addon chat bypasses mute/flood | Low | Follow-up. |
-| F7 Dead mute seam, `_sessionMutes` leak | Low | Follow-up. |
-| F8 Orphan `item_loot` rows for escrowed items | Low | Follow-up. |
-| F7b `.banlist character` unbounded | Low | Follow-up (listed as F9 in the integration notes). |
+| F6 Addon chat bypasses mute/flood | Low | **Opt-in protection added on 2026-10-04.** `World:Chat:AddonMuteAndFloodControl` defaults off, preserving the verified reference exemption. |
+| F7 Dead mute seam, `_sessionMutes` leak | Low | **Expiry fixed on 2026-10-04.** Idle/offline mute entries are swept on world ticks. Missing runtime mute producer and unused independent flood APIs remain follow-ups. |
+| F8 Orphan `item_loot` rows for escrowed items | Low | **Fixed on 2026-10-04.** Both loot sidecars are removed with actual escrow item deletions in their existing transaction; prior orphan rows are not swept. |
+| F7b `.banlist character` unbounded | Low | **Filtering/batched history lookup fixed; cap opt-in.** `CharacterListMaxResults` (superseded by `Bans:MaxListedEntries` at the 2026-10-07 integration) bounded distinct candidate owners with a truncation notice; default `0` remains unlimited for retail compatibility (listed as F9 in the integration notes). |
 | F9 Uncached IP-ban read per logon challenge | Low | Follow-up (listed as F10 in the integration notes). |
 | F10 Info items | Info | No action. |
+
+The [2026-10-04 continuation](wave3-followups-20261004.md) records the subsequent
+implementation and combined verification separately from this original release review.

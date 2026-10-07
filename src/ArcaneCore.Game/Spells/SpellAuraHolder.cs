@@ -31,15 +31,19 @@ internal sealed class AuraCasterOwner
 /// <summary>One effect's aura inside a holder (vmangos Aura / Modifier).</summary>
 public sealed class SpellAura
 {
-    internal SpellAura(int effectIndex, AuraType type, int amount, uint amplitude, int miscValue)
+    internal SpellAura(int effectIndex, AuraType type, int amount, uint amplitude, int miscValue, PowerType? targetPowerType = null)
     {
         EffectIndex = effectIndex;
         Type = type;
         Amount = amount;
         UnitAmount = amount;
-        Amplitude = amplitude;
+        // vmangos Aura::HandleModPowerRegen (SpellAuras.cpp:4822-4831): an amplitude-less MOD_POWER_REGEN ticks every 3000 ms on a rage
+        // user (Anger Management) and 2000 ms otherwise, and its first tick is 5000 ms away.
+        Amplitude = type == AuraType.ModPowerRegen && amplitude == 0
+            ? targetPowerType == PowerType.Rage ? 3000u : 2000u
+            : amplitude;
         MiscValue = miscValue;
-        PeriodicTimer = (int)Period;
+        PeriodicTimer = type == AuraType.ModPowerRegen ? PeriodicTiming.PowerRegenFirstTickMs : (int)Period;
     }
 
     /// <summary>
@@ -74,7 +78,10 @@ public sealed class SpellAura
 
     public bool IsPeriodic => Period > 0;
 
-    /// <summary>Time to the next tick (vmangos Aura::m_periodicTimer, first tick one amplitude after application).</summary>
+    /// <summary>The longest valid time to the next tick (a restored timer above it is reset): the period, or 5000 ms for MOD_POWER_REGEN.</summary>
+    internal uint MaximumPeriodicTimer => Type == AuraType.ModPowerRegen ? Math.Max(Period, (uint)PeriodicTiming.PowerRegenFirstTickMs) : Period;
+
+    /// <summary>Time to the next tick; ModPowerRegen starts at 5000 ms, other auras at their amplitude.</summary>
     internal int PeriodicTimer { get; set; }
 
     /// <summary>Ticks delivered so far.</summary>
@@ -123,6 +130,16 @@ public sealed class SpellAuraHolder
     public Unit Target { get; }
 
     public ObjectGuid CasterGuid { get; }
+
+    /// <summary>The item instance behind an item-owned aura; empty for ordinary casts. The same value as <see cref="CastItemGuid"/>.</summary>
+    public ObjectGuid ItemGuid
+    {
+        get => CastItemGuid;
+        internal set => CastItemGuid = value;
+    }
+
+    /// <summary>An aura of an item's ON_EQUIP spell (cast with the item as an equip cast): one per item.</summary>
+    internal bool IsItemEquipAura { get; set; }
 
     /// <summary>
     /// The unit in the caster's UNIT_FIELD_CHANNEL_OBJECT when this holder's channelled spell started (empty for anything

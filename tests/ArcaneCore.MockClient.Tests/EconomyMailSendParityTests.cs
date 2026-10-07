@@ -175,7 +175,7 @@ public sealed class EconomyMailSendParityTests
         public ulong SenderGuid { get; init; }
         public CancellationToken Token => _deadline.Token;
 
-        public static async Task<Rig> StartAsync(bool loginReceiver = false)
+        public static async Task<Rig> StartAsync(bool loginReceiver = false, Action<IServiceCollection>? configureServices = null)
         {
             var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
             CancellationToken token = deadline.Token;
@@ -186,6 +186,7 @@ public sealed class EconomyMailSendParityTests
                     services.AddSingleton<TimeProvider>(clock);
                     services.AddSingleton<IMailboxAccess>(new AnyMailbox());
                     services.AddSingleton<IAuctioneerAccess>(new AnyAuctioneer());
+                    configureServices?.Invoke(services);
                 }, token);
             await server.AddAccountAsync(SenderAccount, Password, token);
             await server.AddAccountAsync(ReceiverAccount, Password, token);

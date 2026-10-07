@@ -52,7 +52,7 @@ public static class DataServiceCollectionExtensions
     public static IServiceCollection AddWorldDatabase(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<DatabaseOptions>(configuration.GetSection(DatabaseOptions.SectionName));
-        services.AddDbContext<WorldDbContext>((provider, builder) =>
+        services.AddDbContextFactory<WorldDbContext>((provider, builder) =>
             ConfigureProvider(builder, provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.Resolve(DatabaseComponent.World)));
 
         services.AddScoped<IWorldDataStore, EfWorldDataStore>();

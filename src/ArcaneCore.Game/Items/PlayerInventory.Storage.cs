@@ -120,6 +120,8 @@ public sealed partial class PlayerInventory
                 }
 
                 ApplyMods(item, slot, apply: false);
+                if (slot is InventorySlots.MainHand or InventorySlots.OffHand or InventorySlots.Ranged)
+                    Player?.Combat.ResetExtraAttacks();
                 SetVisibleItemSlot(slot, null);
             }
             else if (slot >= InventorySlots.BagStart && slot < InventorySlots.BagEnd)
@@ -260,9 +262,14 @@ public sealed partial class PlayerInventory
     /// ammo found there becomes the selected ammo (Player.cpp:570-575).
     /// </summary>
     public void AddStartingItems()
+        => AddStartingItems(Templates.StartingItems((byte)Race, (byte)Class));
+
+    /// <summary>Add ordered outfit and SQL starting rows through the same placement path.</summary>
+    public void AddStartingItems(IEnumerable<StartingItem> startingItems)
     {
+        ArgumentNullException.ThrowIfNull(startingItems);
         Player?.EnsureQuestSettlementMutationAllowed();
-        foreach (StartingItem starting in Templates.StartingItems((byte)Race, (byte)Class))
+        foreach (StartingItem starting in startingItems)
         {
             StoreNewItemInBestSlots(starting.ItemId, starting.Amount);
         }
@@ -599,6 +606,14 @@ public sealed partial class PlayerInventory
         }
 
         player.SetUInt32(properties + 1, item?.SuffixFactor ?? 0);
+    }
+
+    internal void RefreshVisibleEnchantment(Item item, int enchantmentSlot, uint? displayedId = null)
+    {
+        if (Player is not { } player || item.Slot >= InventorySlots.EquipmentEnd || (uint)enchantmentSlot >= 2u)
+            return;
+        player.SetUInt32(UpdateFields.PlayerVisibleItem10 + item.Slot * VisibleItemStride + 1 + enchantmentSlot,
+            displayedId ?? item.EnchantmentId(enchantmentSlot));
     }
 
     /// <summary>A new item reaches the owner as its own create block, queued before the player's field changes (vmangos Item::SendCreateUpdateToPlayer).</summary>

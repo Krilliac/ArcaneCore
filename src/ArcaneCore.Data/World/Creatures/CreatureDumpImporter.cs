@@ -46,6 +46,7 @@ public sealed record CreatureImportReport(
 
     /// <summary><c>creature_movement_template</c> rows (the entry paths a spawn without its own path walks).</summary>
     public int MovementTemplates { get; init; }
+    public int AiTextTemplates { get; init; }
 }
 
 /// <summary>
@@ -82,6 +83,7 @@ public sealed class CreatureDumpImporter
     private readonly Dictionary<int, CreatureAiTextRow> _aiTexts = [];
     private readonly Dictionary<uint, BroadcastTextRow> _broadcastTexts = [];
     private readonly Dictionary<uint, CreatureAiSummonRow> _aiSummons = [];
+    private readonly Dictionary<(uint, int), CreatureTextTemplateRow> _textTemplates = [];
     private bool _warnedVMangosAiEvents;
     private readonly List<string> _warnings = [];
     private int _skippedSpawns;
@@ -138,6 +140,13 @@ public sealed class CreatureDumpImporter
                     break;
                 case "creature_ai_texts":
                     ReadAiText(row);
+                    break;
+                case "dbscript_random_templates":
+                    if (U32(row, "type") == 0)
+                    {
+                        var choice = new CreatureTextTemplateRow { Id = U32(row, "id"), TargetId = Int(Get(row, "target_id")), Chance = U32(row, "chance") };
+                        _textTemplates[(choice.Id, choice.TargetId)] = choice;
+                    }
                     break;
                 case "broadcast_text":
                     ReadBroadcastText(row);
@@ -204,6 +213,7 @@ public sealed class CreatureDumpImporter
                 await db.Set<CreatureAiTextRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<BroadcastTextRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureAiSummonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<CreatureTextTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureAddonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureMovementRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureMovementTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
@@ -224,6 +234,7 @@ public sealed class CreatureDumpImporter
             await InsertBatchedAsync(db, _aiTexts.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _broadcastTexts.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _aiSummons.Values, cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _textTemplates.Values, cancellationToken).ConfigureAwait(false);
 
             if (savepoint is not null)
             {
@@ -295,6 +306,7 @@ public sealed class CreatureDumpImporter
         AiSummons = _aiSummons.Count,
         MovementTemplates = _movementTemplates.Count,
         SpawnEntries = _spawnEntries.Count,
+        AiTextTemplates = _textTemplates.Count,
     };
 
     /// <summary>The spawn entry lists that would be written (for inspection and tests).</summary>
@@ -369,6 +381,9 @@ public sealed class CreatureDumpImporter
             DisplayProbability3 = U32(row, "DisplayIdProbability3", "display_probability3"),
             DisplayProbability4 = U32(row, "DisplayIdProbability4", "display_probability4"),
             Scale = F32(row, 0f, "Scale", "display_scale1"),
+            DisplayScale2 = F32(row, 0f, "display_scale2"),
+            DisplayScale3 = F32(row, 0f, "display_scale3"),
+            DisplayScale4 = F32(row, 0f, "display_scale4"),
             Faction = U32(row, "Faction", "FactionAlliance", "faction"),
             NpcFlags = U32(row, "NpcFlags", "npc_flags"),
             GossipMenuId = U32(row, "GossipMenuId", "gossip_menu_id"),

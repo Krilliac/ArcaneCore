@@ -19,7 +19,29 @@ public sealed partial class SpellSystem
         ArgumentNullException.ThrowIfNull(item);
         ArgumentNullException.ThrowIfNull(targets);
         SpellInfo? spell = Store.Get(spellId);
-        return spell is null ? SpellCastResult.NotFound : Prepare(player, spell, targets, triggered, castItem: item);
+        if (spell is null)
+        {
+            return SpellCastResult.NotFound;
+        }
+
+        // The item's template slot of the spell: the cast pipeline re-checks an on-use slot at completion (CanStartItemUse), and an
+        // ON_EQUIP spell is an equip cast (no item cooldown, an item-owned aura, one per item). A spell the template
+        // does not list (an enchantment's equip spell, Recently Bandaged after a bandage) is carried by the item without being its use.
+        byte index = 0;
+        bool equip = false;
+        bool listed = false;
+        for (byte i = 0; i < item.Template.Spells.Count; i++)
+        {
+            if (item.Template.Spells[i].SpellId == spellId)
+            {
+                index = i;
+                equip = item.Template.Spells[i].Trigger == ItemSpellTriggers.OnEquip;
+                listed = true;
+                break;
+            }
+        }
+
+        return Prepare(player, spell, targets, triggered, castItem: item, itemSpellIndex: index, itemEquipCast: equip, itemTriggeredCast: !listed);
     }
 
     /// <summary>Spell::TakeCastItem (Spell.cpp:4991-5048): charges and the destroy of a spent expendable item, see <see cref="ItemSpellCharges"/>.</summary>

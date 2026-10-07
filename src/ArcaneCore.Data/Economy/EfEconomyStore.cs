@@ -1,6 +1,7 @@
 using System.Data;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
+using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Economy;
@@ -58,6 +59,12 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
                 }
 
                 if (character.Money != participant.Before.Money)
+                {
+                    return EconomyCommitResult.Conflict;
+                }
+
+                if (participant.Before.Life is { } beforeLife
+                    && !await LifeMatchesAsync(id, beforeLife, cancellationToken).ConfigureAwait(false))
                 {
                     return EconomyCommitResult.Conflict;
                 }
@@ -161,6 +168,33 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
         {
             db.ChangeTracker.Clear();
         }
+    }
+
+    private async Task<bool> LifeMatchesAsync(int characterId, CharacterLife expected, CancellationToken cancellationToken)
+    {
+        CharacterVitalsRow? vitals = await db.Set<CharacterVitalsRow>().AsNoTracking()
+            .FirstOrDefaultAsync(row => row.CharacterId == characterId, cancellationToken).ConfigureAwait(false);
+        if (vitals is null || vitals.Health != expected.Health || vitals.Xp != expected.Xp
+            || vitals.DeathExpireTime != expected.DeathExpireUnix || vitals.IsGhost != expected.IsGhost
+            || expected.Powers.Count != 5
+            || vitals.Power1 != expected.Powers[0] || vitals.Power2 != expected.Powers[1]
+            || vitals.Power3 != expected.Powers[2] || vitals.Power4 != expected.Powers[3]
+            || vitals.Power5 != expected.Powers[4])
+        {
+            return false;
+        }
+
+        CharacterCorpseRow? corpse = await db.Set<CharacterCorpseRow>().AsNoTracking()
+            .FirstOrDefaultAsync(row => row.CharacterId == characterId, cancellationToken).ConfigureAwait(false);
+        if (expected.Corpse is not { } wanted)
+        {
+            return corpse is null;
+        }
+
+        return corpse is not null && corpse.MapId == wanted.MapId
+            && corpse.X == wanted.X && corpse.Y == wanted.Y && corpse.Z == wanted.Z
+            && corpse.Orientation == wanted.Orientation && corpse.GhostTime == wanted.GhostTimeUnix
+            && corpse.Type == wanted.Type;
     }
 
     public async Task<bool> IsCommittedAsync(Guid operationId, CancellationToken cancellationToken = default)
@@ -345,6 +379,7 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
                     return false;
                 }
 
+                await ItemLootPersistence.StageReplaceAsync(db, [], [row.Guid], cancellationToken).ConfigureAwait(false);
                 db.Remove(row);
                 touched.Add(delete.ItemGuid);
                 return true;
@@ -541,7 +576,8 @@ public static class EconomyRequestValidation
 {
     public static EconomyCommitRequest Freeze(EconomyCommitRequest request) => request with
     {
-        Participants = request.Participants.Select(p => new EconomyParticipant(Copy(p.Before), Copy(p.After))).ToArray(),
+        Participants = request.Participants.Select(p => new EconomyParticipant(Copy(p.Before), Copy(p.After),
+            p.ConsumedItemGuids is null ? null : p.ConsumedItemGuids.ToArray())).ToArray(),
         Changes = request.Changes.Select(c => c switch
         {
             EscrowFromInventory e => e with { Item = CopyItem(e.Item) },
@@ -566,6 +602,18 @@ public static class EconomyRequestValidation
 
             ValidateInventory(participant.Before.Inventory);
             ValidateInventory(participant.After.Inventory);
+            if (participant.ConsumedItemGuids is { } consumed)
+            {
+                if (consumed.Any(guid => guid == 0) || consumed.Distinct().Count() != consumed.Count
+                    || consumed.Any(guid => !participant.Before.Inventory!.Items.Any(item => item.Item.Guid == guid)
+                        || participant.After.Inventory!.Items.Any(item => item.Item.Guid == guid)
+                        || request.Participants.Any(other => other.Before.Id != participant.Before.Id
+                            && other.After.Inventory!.Items.Any(item => item.Item.Guid == guid))
+                        || request.Changes.OfType<EscrowFromInventory>().Any(change => change.Item.Guid == guid)))
+                {
+                    throw new ArgumentException("Consumed item GUIDs must be distinct, owned in Before, absent in After, and not handed to another participant or escrow.", nameof(request));
+                }
+            }
         }
 
         if (request.Changes.Count == 0 && request.Participants.Count == 0)
@@ -589,7 +637,8 @@ public static class EconomyRequestValidation
             {
                 bool handedOver = request.Participants.Any(o => o.Before.Id != id && Gained(o).Contains(guid));
                 bool escrowed = request.Changes.OfType<EscrowFromInventory>().Any(e => e.CharacterId == id && e.Item.Guid == guid);
-                if (handedOver == escrowed)
+                bool consumed = participant.ConsumedItemGuids?.Contains(guid) == true;
+                if ((handedOver ? 1 : 0) + (escrowed ? 1 : 0) + (consumed ? 1 : 0) != 1)
                 {
                     throw new ArgumentException($"item {guid} leaves character {id} without exactly one destination.", nameof(request));
                 }
@@ -650,6 +699,7 @@ public static class EconomyRequestValidation
             Inventory = state.Inventory is { } inventory
                 ? new InventorySnapshot(inventory.Items.Select(i => i with { Item = CopyItem(i.Item) }).ToArray(), inventory.AmmoId)
                 : null,
+            Life = state.Life is { } life ? life with { Powers = life.Powers.ToArray() } : null,
         };
     }
 

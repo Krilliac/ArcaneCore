@@ -14,6 +14,28 @@ public sealed partial class MapCombat
     /// <summary>vmangos SPELL_ATTR_EX_NO_THREAT (SpellDefines.h:880): the spell never creates a new threat reference.</summary>
     internal const uint AttributeExNoThreat = 0x00000400;
 
+    /// <summary>
+    /// Whether the damage of <paramref name="spell"/> creates no threat at all for <paramref name="attacker"/> on <paramref name="victim"/>:
+    /// SPELL_ATTR_EX4_NO_HARMFUL_THREAT, or SPELL_ATTR_EX_NO_THREAT when the victim's list does not hold the attacker yet (the two cases
+    /// <see cref="AddDamageThreat"/> adds nothing in). Such a hit does not give the victim's AI its AttackedBy call either: AttackStart
+    /// would create the zero-threat reference the attribute forbids (vmangos Spell::DoSpellHitOnUnit skips AttackedBy for EX_NO_THREAT).
+    /// </summary>
+    internal static bool SuppressesSpellThreat(Unit attacker, Unit victim, SpellInfo? spell)
+    {
+        if (spell is null)
+        {
+            return false;
+        }
+
+        if ((spell.AttributesEx4 & AttributeEx4NoHarmfulThreat) != 0)
+        {
+            return true;
+        }
+
+        return ((uint)spell.AttributesEx & AttributeExNoThreat) != 0
+            && !victim.Combat.Threat.Entries.Any(entry => ReferenceEquals(entry.Target, attacker));
+    }
+
     /// <summary>The aura and talent side of the threat formula; bound by the world's threat feature. Null: threat is the plain damage.</summary>
     public IThreatModifierSource? ThreatModifiers { get; set; }
 

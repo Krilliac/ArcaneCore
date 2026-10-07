@@ -28,7 +28,7 @@ public sealed class SelfResurrectEffect : ISpellHandlerModule
         float mana = 0;
         if (context.Value < 0)
         {
-            health = -context.Value;
+            health = -(float)context.Value; // negated as a float: int.MinValue does not wrap to a negative health
             mana = context.Effect.MiscValue;
         }
         else
@@ -42,8 +42,13 @@ public sealed class SelfResurrectEffect : ISpellHandlerModule
         }
 
         map.Combat.CompleteResurrection(player, Dither(context.System, health), Dither(context.System, mana));
+        if (player.Combat.DeathState is not (DeathState.Dead or DeathState.Corpse or DeathState.JustDied))
+        {
+            map.Combat.NotifySelfResurrected(player); // the world saves the result (SelfResurrectionFeature)
+        }
     }
 
+    /// <summary>vmangos rand_ditheru (Random.cpp:80-88): <c>floor(v + frand(0, 1))</c>, a negative value counts as 0.</summary>
     private static uint Dither(SpellSystem system, float value)
     {
         if (value <= 0f)
@@ -51,8 +56,7 @@ public sealed class SelfResurrectEffect : ISpellHandlerModule
             return 0;
         }
 
-        uint whole = (uint)value;
-        float fraction = value - whole;
-        return fraction > 0f && system.Random.NextDouble() < fraction ? whole + 1 : whole;
+        double dithered = Math.Floor(value + system.Random.NextDouble());
+        return dithered >= uint.MaxValue ? uint.MaxValue : (uint)dithered;
     }
 }

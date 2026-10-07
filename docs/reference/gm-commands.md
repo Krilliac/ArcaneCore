@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 5 |
 | `Moderator` | 1 | 21 |
-| `GameMaster` | 3 | 112 |
-| `Administrator` | 6 | 162 |
+| `GameMaster` | 3 | 121 |
+| `Administrator` | 6 | 174 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -90,6 +90,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.modify money` | 4 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .modify money #money Add or remove money to the selected player; negative values take money (all of it when it would reach zero). |
 | `.modify hp` | 3 | GameMaster | declared retail level | Syntax: .modify hp #newhp [#newmaxhp] Change the HP (and maximum HP) of the selected player, or yours. |
 | `.modify mana` | 3 | GameMaster | declared retail level | Syntax: .modify mana #newmana [#newmaxmana] Change the mana (and maximum mana) of the selected player, or yours. |
+| `.modify energy` | 3 | GameMaster | declared retail level | Syntax: .modify energy #newenergy [#newmaxenergy] Change the energy (and maximum energy) of the selected player, or yours. |
+| `.modify rage` | 3 | GameMaster | declared retail level | Syntax: .modify rage #newrage [#newmaxrage] Change the rage (and maximum rage) of the selected player, or yours. |
 | `.modify honor` | 4 | Administrator | declared retail level | Syntax: .modify honor $field #value Fields: points rank todaykills yesterdaykills yesterdayhonor thisweekkills thisweekhonor lastweekkills lastweekhonor lastweekstanding lifetimedishonorablekills lifetimehonorablekills. |
 | `.modify rep` | 4 | Administrator | declared retail level | Syntax: .modify rep #repId (#repvalue \| $rankname [#delta]) Sets the reputation of the selected player with the faction to the value, or to the beginning of the rank plus the delta. |
 | `.npc` ... | 2 | GameMaster | declared retail level | Syntax: .npc $subcommand Type .npc to see the list of possible subcommands or .help npc $subcommand to see info on subcommands. |
@@ -138,6 +140,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.help` | 0 | Player | stored level through the map | Syntax: .help [command] Display usage instructions for the given command; without a command, the commands you can use. |
 | `.cooldown` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cooldown [#spell] — clear one or every spell cooldown of the selected player or yourself. |
 | `.unlearn` | 3 | GameMaster | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .unlearn #spell — make the selected player or yourself forget a spell. |
+| `.distance` | 3 | GameMaster | stored level through the map | Syntax: .distance Display the 3D distance to the selected object. |
+| `.angle` | 3 | GameMaster | stored level through the map | Syntax: .angle Display the angle to the selected object. |
 | `.recall` | 1 | Moderator | declared retail level | Syntax: .recall [$playername] Teleport the selected player (or the named one, or yourself) back to where it was before the last command teleport. |
 | `.save` | 0 | Player | stored level through the map | Syntax: .save Save your character. |
 | `.saveall` | 6 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .saveall Save all characters in the game. |
@@ -180,6 +184,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.respawn` | 3 | GameMaster | declared retail level | Syntax: .respawn [#radius] Respawn the dead creatures and the despawned game objects within #radius yards (default 100) without waiting for their timers. Temporary objects and chests kept by an instance are left alone. |
 | `.mute` | 1 | Moderator | stored level through the map | Syntax: .mute [$playername] $duration [$reason] Disable the chat of the player's account. $duration is a number of minutes or like 1d2h30m (1 second to 365 days). The player must be online. |
 | `.unmute` | 1 | Moderator | stored level through the map | Syntax: .unmute [$playername] Enable the chat of the player's account again. The character may be offline. |
+| `.repairitems` | 3 | GameMaster | declared retail level | Syntax: .repairitems [#itemGuid] Repair durability on the selected online player or yourself. |
 | `.creature` ... | 3 | GameMaster | stored level through the map | Creature commands. |
 | `.creature add` | 3 | GameMaster | stored level through the map | Syntax: .creature add &lt;entry&gt; — spawn a temporary creature where you stand (not saved). |
 | `.creature info` | 3 | GameMaster | stored level through the map | Syntax: .creature info — details of the selected creature. |
@@ -196,10 +201,18 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.arcane reloads` | 3 | GameMaster | stored level through the map | Syntax: .arcane reloads Show how each reloadable content table last ended, and the creature definitions generation. |
 | `.gmannounce` | 1 | Moderator | stored level through the map | Syntax: .gmannounce $message Send a chat message to every staff member online. |
 | `.gmnotify` | 1 | Moderator | stored level through the map | Syntax: .gmnotify $message Send an on-screen notification to every staff member online. |
+| `.auras` | 3 | GameMaster | stored level through the map | Syntax: .auras [page] Display active auras on the selected player or yourself (12 per page). |
 | `.spawninfo` ... | 2 | GameMaster | declared retail level | Syntax: .spawninfo $subcommand Type .spawninfo to see the list of possible subcommands. Read-only. |
 | `.spawninfo creature` | 2 | GameMaster | declared retail level | Syntax: .spawninfo creature [#radius] List the creatures within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
 | `.spawninfo gameobject` | 2 | GameMaster | declared retail level | Syntax: .spawninfo gameobject [#radius] List the game objects within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
 | `.spawninfo summary` | 2 | GameMaster | declared retail level | Syntax: .spawninfo summary Count the creatures and game objects of this map by state, including the respawn times kept for unloaded grids. |
+| `.playerbot` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot &lt;create\|start\|stop\|status\|list\|inspect&gt; Manage server-owned autonomous players. |
+| `.playerbot create` | 6 | Administrator | stored level through the map | Syntax: .playerbot create $name [#race #class] Create a persistent bot character. |
+| `.playerbot start` | 6 | Administrator | stored level through the map | Syntax: .playerbot start $id\|$name Start a persistent bot. |
+| `.playerbot stop` | 6 | Administrator | stored level through the map | Syntax: .playerbot stop $id\|$name Stop a persistent bot. |
+| `.playerbot status` | 3 | GameMaster | stored level through the map | Syntax: .playerbot status [$id\|$name] Show bot lifecycle status. |
+| `.playerbot list` | 3 | GameMaster | stored level through the map | Syntax: .playerbot list List managed bots. |
+| `.playerbot inspect` | 3 | GameMaster | stored level through the map | Syntax: .playerbot inspect $id\|$name Read actual target, victim, cast and nearby trainer facts. |
 | `.hotcode` ... (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Code hot reload (development runner). |
 | `.hotcode status` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode status — generation, frozen/degraded state and whether the process differs from the build. |
 | `.hotcode refresh` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode refresh — rescan opcode handlers, chat commands and default map updaters now. |

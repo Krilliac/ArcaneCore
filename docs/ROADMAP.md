@@ -23,6 +23,21 @@ Each `MILESTONE_Mx.md` therefore has two status lines: **implemented** (CI) and
 **client-accepted** (developer). A failure found during client acceptance is fixed in
 place, before the next milestone that depends on it is built further.
 
+### Local continuation qualification — October 4, 2026
+
+The transform, group pet vitals and optional name-catalog slice has a complete
+local Release gate: 14,481 passing tests, six existing fixture skips, zero
+failures, zero build warnings/errors, and 59 native mock checks. The exported
+source was replay-checked against base `7313b9eb089197b253dc51bd8bb5ceb803adcc6b`.
+This is local qualification; CI publication and original build-5875 client
+acceptance remain pending. Source remains unstaged and uncommitted.
+
+The slice adds a live transform/polymorph producer, current pet body/power group
+fields, and paired developer-supplied NamesProfanity/NamesReserved DBC loading
+for character creation and pet naming. Original name catalogs, SQL reserved_name,
+changing druid-form display/model geometry, and pet aura group masks remain
+separate work. The integration documents record each boundary and source pin.
+
 ---
 
 ## Scope decisions — what goes in
@@ -156,7 +171,7 @@ deferred real-client acceptance retain their gates.
   it. Where references disagree, the comment says so and which one was chosen.
 * No GPL/AGPL code is copied; behaviour and wire formats are reimplemented (charter §4).
 
-### Reference set (extended 2026-10-02 at the developer's request)
+### Reference set (extended 2026-10-02 and 2026-10-04 at the developer's request)
 
 | Reference | Client | License | Used for |
 |---|---|---|---|
@@ -173,6 +188,15 @@ deferred real-client acceptance retain their gates.
 | Krilliac/Worldforge | 1.12.1 client side | (developer's) | Client file formats (ADT/WDT/DBC/MPQ) for future terrain/height work |
 | wowdev/noggit3, Noggit Red (gitlab prophecy-rp) | 1.12–3.3.5 map editors | GPL-3 | ADT/WDT terrain + liquid layout for height and terrain tooling |
 | wowdev.wiki | all | CC | Neutral format and protocol documentation |
+| [WoWWiki archive: patch 1.12.1](https://wowwiki-archive.fandom.com/wiki/Patch_1.12.1) | Original 1.12.1 / build 5875 when the cited revision confirms it | Site terms; research facts, do not vendor content | Patch notes, historical mechanics and revision history |
+| [Wowhead Classic](https://www.wowhead.com/classic) | Version-selected Classic data; verify original 1.12.1 applicability | Site terms; research facts, do not vendor content | Item, spell and quest data, tooltips, dated historical observations |
+
+Use the source-version policy in charter §4: identify the patch/expansion,
+page ID, date and supporting vanilla reference. Evolving wiki pages and
+Wowhead comments may include TBC/WotLK, Classic Era, Hardcore, Season of
+Discovery or PTR behavior. Those do not establish original build-5875 values.
+Corroborate gameplay observations against original client/data or vanilla
+references; byte-level protocol values retain the existing verified sources.
 
 **WotLK-era references (TrinityCore, ArcEmu) never supply 1.12.1 wire values** — opcodes,
 update fields and packet layouts differ by build (charter §2). They inform design only.
@@ -180,3 +204,13 @@ update fields and packet layouts differ by build (charter §2). They inform desi
 ## 2026-10-03 takeover
 
 NPC services, instances, AI, gameobjects/loot, progression, spell persistence and mail/auction/trade economy sources are consolidated in draft #11. [Exact scope](integration/takeover-20261003.md), [Claude handoff and remaining work](integration/claude-handoff-20261003.md). Earlier pending-source labels are historical; client acceptance and complete content/effects remain pending.
+
+## 2026-10-04 local continuation
+
+The reconstructed uncommitted source now includes Soulstone/Reincarnation,
+Twisting Nether, reagent costs, build-5875 item use and current-pet persistence
+with effect 109. Characters schema version 21 is composed for the pet store.
+This is a locally verified candidate; CI and client acceptance are separate,
+pending gates. [Item/pet scope and verification](integration/server-item-pets-20261004.md)
+and [next bounded slices](integration/next-slices-20261004.md) supersede earlier
+blanket absence labels without claiming complete vanilla fidelity.

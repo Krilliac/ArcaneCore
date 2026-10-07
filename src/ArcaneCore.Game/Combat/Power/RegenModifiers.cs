@@ -29,7 +29,11 @@ public static class RegenModifiers
         return recentCast ? mp5 + (spirit * interrupt / 100.0f) : mp5 + spirit;
     }
 
-    /// <summary>The health of one regeneration tick before the fractional carry (vmangos Player::RegenerateHealth up to <c>addValue += m_carryHealthRegen</c>).</summary>
+    /// <summary>
+    /// The health of one regeneration tick before the fractional carry (vmangos Player::RegenerateHealth up to <c>addValue += m_carryHealthRegen</c>).
+    /// <paramref name="healthRate"/> is Rate.Health (CONFIG_FLOAT_RATE_HEALTH): it scales the spirit part and the always-on MOD_HEALTH_REGEN_IN_COMBAT
+    /// part (Player.cpp:2372,2396).
+    /// </summary>
     public static float HealthPerTick(
         float spiritRegen,
         float maxHealth,
@@ -40,7 +44,8 @@ public static class RegenModifiers
         int regenDuringCombatTotal,
         IReadOnlyList<int> healthRegenPercent,
         IReadOnlyList<RegenAura> foodAuras,
-        int healthRegenInCombatTotal)
+        int healthRegenInCombatTotal,
+        float healthRate = 1f)
     {
         ArgumentNullException.ThrowIfNull(healthRegenPercent);
         ArgumentNullException.ThrowIfNull(foodAuras);
@@ -51,7 +56,7 @@ public static class RegenModifiers
         }
         else if (!inCombat || hasRegenDuringCombat)
         {
-            add = spiritRegen;
+            add = spiritRegen * healthRate;
             if (!inCombat)
             {
                 foreach (int percent in healthRegenPercent)
@@ -81,6 +86,6 @@ public static class RegenModifiers
         }
 
         // The always-on part, including combat; the function runs every 2 seconds.
-        return add + (2.0f * (healthRegenInCombatTotal / 5.0f));
+        return add + (healthRate * 2.0f * (healthRegenInCombatTotal / 5.0f));
     }
 }

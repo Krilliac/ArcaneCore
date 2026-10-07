@@ -71,6 +71,15 @@ public sealed class ReloadAllMembershipTests
         ["game_weather"] = false,
         ["reputation_reward_rate"] = false,
         ["reputation_spillover_template"] = false,
+
+        // reload all calls HandleReloadReservedNameCommand (ServerCommands.cpp:900); ReservedNameContentReloadable joins all only when a
+        // SQL reserved-name store is registered, which the test host has not (docs/areas/hot-reload.md).
+        ["reserved_name"] = false,
+
+        // all_spell calls HandleReloadSpellProcItemEnchantCommand (ServerCommands.cpp:972-981); spell_enchant_charges is an ArcaneCore table.
+        // Both join all only when their SQL store is registered, which the test host has not (docs/areas/hot-reload.md).
+        ["spell_proc_item_enchant"] = false,
+        ["spell_enchant_charges"] = false,
     };
 
     /// <summary>
@@ -84,10 +93,11 @@ public sealed class ReloadAllMembershipTests
         "all_loot", "creature_loot_template", "gameobject_loot_template", "item_loot_template", "skinning_loot_template",
         "reference_loot_template", "fishing_loot_template", "pickpocketing_loot_template", "disenchant_loot_template",
         "skill_fishing_base_level", "gameobject_template", "spell_threats", "creature_onkill_reputation", "game_weather", "reputation_reward_rate", "reputation_spillover_template",
+        "reserved_name", "spell_proc_item_enchant",
     };
 
-    /// <summary>Names with no vmangos counterpart (none yet; each needs a reason in docs/areas/hot-reload.md).</summary>
-    private static readonly HashSet<string> ArcaneCoreNames = new(StringComparer.Ordinal);
+    /// <summary>Names with no vmangos counterpart (each needs a reason in docs/areas/hot-reload.md).</summary>
+    private static readonly HashSet<string> ArcaneCoreNames = new(StringComparer.Ordinal) { "spell_enchant_charges" };
 
     private static ReloadCoordinator Coordinator(WorldTestHost host) => host.WorldServices.GetRequiredService<ReloadFeature>().Coordinator;
 

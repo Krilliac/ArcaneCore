@@ -30,8 +30,15 @@ public static class PeriodicTiming
             or 13797 or 14298 or 14299 or 14300 or 14301 or 23184 or 25041;
     }
 
-    /// <summary>The timer a freshly applied or refreshed aura starts with (vmangos CalculatePeriodic with create = true).</summary>
-    public static int InitialTimer(SpellInfo spell, SpellAura aura) => FirstTickImmediate(spell) ? 0 : (int)aura.Period;
+    /// <summary>vmangos Aura::HandleModPowerRegen (SpellAuras.cpp:4831): MOD_POWER_REGEN's first tick is 5000 ms after application.</summary>
+    public const int PowerRegenFirstTickMs = 5000;
+
+    /// <summary>
+    /// The timer a freshly applied or refreshed aura starts with (vmangos CalculatePeriodic with create = true); MOD_POWER_REGEN's handler then
+    /// sets it to <see cref="PowerRegenFirstTickMs"/>.
+    /// </summary>
+    public static int InitialTimer(SpellInfo spell, SpellAura aura)
+        => aura.Type == AuraType.ModPowerRegen ? PowerRegenFirstTickMs : FirstTickImmediate(spell) ? 0 : (int)aura.Period;
 
     /// <summary>
     /// vmangos Aura::UpdatePeriodicTimer(duration): after a pushback shortened the duration the tick timer follows it, so

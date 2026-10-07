@@ -198,7 +198,7 @@ internal sealed class InMemoryCharacterSpellStateStore : ICharacterSpellStateSto
         }
 
         Saves++;
-        _states[characterId] = new CharacterSpellState([.. state.Cooldowns], [.. state.Auras]);
+        _states[characterId] = new CharacterSpellState([.. state.Cooldowns], [.. state.Auras], [.. state.CooldownOwners ?? []]);
         return Task.CompletedTask;
     }
 

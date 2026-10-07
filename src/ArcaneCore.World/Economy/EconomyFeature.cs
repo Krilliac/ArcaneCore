@@ -13,6 +13,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Teleport;
+using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -80,6 +81,11 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
 
         _services.GetService<IConfiguration>()?.GetSection(SectionName).Bind(Options);
         _world = world;
+        if (_services.GetService<SpellFeature>() is { } spells)
+        {
+            spells.System.TradeEnchantmentRequest = DeferTradeEnchantment;
+            spells.System.TradeItemEnchantmentRequest = DeferTradeItemEnchantment;
+        }
         _items = _services.GetService<ItemsFeature>();
         _directory = _services.GetService<CharacterDirectory>();
         Settlements.Attach(world, _services.GetService<CharacterSaveQueue>(), _services.GetService<TeleportFeature>());

@@ -57,7 +57,8 @@ Stealth rank, `ClassScripts/Rogue.cpp:103-110`). By default one roll decides, wh
 - No COOLDOWN_ON_EVENT start for Stealth (10 s cooldown after the aura fades) and no cancel-removes-Vanish: both need the fade hook that spell-breadth owns.
 - Interaction breaks (gossip, trainer, vendor, quest NPC, game object use, item use): the dispatcher is public; each owning lane calls it after its own validation (list in `rogue-aura-interrupt.md`).
 - No proc-flag skip in the damage break (SpellInfo has no proc flags yet); the damaging spell is not excluded from its own damage break.
-- No GM-invisibility guard, no invisibility masks (potions, gnome devices), no Silithus flag drop; creatures that stealth are not re-evaluated until their next regular update.
+- Ordinary invisibility and detection auras18/19 now use active aura types/levels, immediate visibility refresh and player glow; removal and saved-aura restoration are covered. Alcohol-based type6 detection, GM-invisibility policy and original-client visual acceptance remain pending.
+- No Silithus flag drop; creatures that stealth are not re-evaluated until their next regular update.
 - Creature stealth alert behaviour (face the player, distract 5 s, 10 s cooldown, `SMSG_AI_REACTION`).
 
 ## Real-client acceptance (not automatable here)

@@ -33,11 +33,13 @@ How to read the tables:
 - [`Locomotion`](#locomotion)
 - [`Logging:ArcaneCore`](#loggingarcanecore)
 - [`Loot`](#loot)
+- [`Names`](#names)
 - [`Net:Protection`](#netprotection)
 - [`NpcServices`](#npcservices)
 - [`Ops:Watchdog`](#opswatchdog)
 - [`PerformanceLog`](#performancelog)
 - [`Pets`](#pets)
+- [`Pets:Names`](#petsnames)
 - [`Progression`](#progression)
 - [`Quests`](#quests)
 - [`Ranged`](#ranged)
@@ -61,10 +63,12 @@ How to read the tables:
 - [`World:Exploration`](#worldexploration)
 - [`World:GameEvents`](#worldgameevents)
 - [`World:GmCommands`](#worldgmcommands)
+- [`World:GmCommands:FirstLoginTools`](#worldgmcommandsfirstlogintools)
 - [`World:Guild`](#worldguild)
 - [`World:Honor`](#worldhonor)
 - [`World:HotCode`](#worldhotcode)
 - [`World:Instances`](#worldinstances)
+- [`World:Playerbots`](#worldplayerbots)
 - [`World:Social`](#worldsocial)
 - [`World:Social:WriteQueue`](#worldsocialwritequeue)
 - [`World:Stealth`](#worldstealth)
@@ -144,6 +148,7 @@ How to read the tables:
 | `Combat:CastingConsumesSwing` | `bool` | `false` | - | How a blocked swing is handled while `MeleeCastingBlocksSwing` applies (ranged (autorepeat lane)). Default false, retail: `Unit::UpdateMeleeAttackingState` returns before it looks at any swing timer while a non-melee spell is cast (Unit.cpp:415-421; mangos-classic Unit.cpp:650-654 has the same order), so the swing happens as soon as the cast ends. True is the deviation that predates this lane: the swing timer is consumed and restarted, the swing is lost, not delayed. |
 | `Combat:MeleeCastingBlocksSwing` | `bool` | `true` | - | Whether a unit casting a non-melee spell loses its melee swing (vmangos Unit::AttackerStateUpdate, Unit.cpp:2240-2241: `if (!extra && IsNonMeleeSpellCasted(false)) return`). Default true, the retail behaviour; the swing timer still restarts, so the swing is lost, not delayed. |
 | `Combat:RateEnergy` | `float` | `1` | - | vmangos Rate.Energy: multiplies the energy regeneration (Player.cpp:2320). |
+| `Combat:RateHealth` | `float` | `1` | - | vmangos Rate.Health: multiplies spirit health regeneration and the aura-161 flat bonus. Must not be negative. |
 | `Combat:RateMana` | `float` | `1` | - | vmangos Rate.Mana: multiplies the mana regeneration (Player.cpp:2291). Must not be negative. |
 | `Combat:RateRageIncome` | `float` | `1` | - | vmangos Rate.Rage.Income: multiplies the rage a player gains from damage (Player.cpp:2264). |
 | `Combat:RateRageLoss` | `float` | `1` | - | vmangos Rate.Rage.Loss: multiplies the out-of-combat rage decay (Player.cpp:2313). Must not be negative. |
@@ -174,6 +179,8 @@ How to read the tables:
 | `Creatures:CorpseDecayRareSeconds` | `uint` | `900` | - | Corpse.Decay.RARE (s): 900. |
 | `Creatures:CorpseDecayWorldBossSeconds` | `uint` | `3600` | - | Corpse.Decay.WORLDBOSS (s): 3600. |
 | `Creatures:CreatureAggroOnCreatures` | `bool` | `true` | - | Creatures aggro on other creatures in sight (`Creatures:CreatureAggroOnCreatures`): a moving creature notifies the creatures around it as well as the players (mangos CreatureCreatureRelocationWorker, WorldHandlers/GridNotifiersImpl.h:67-84), so a hostile mob and a guard, or a mob and an aggressive pet, acquire each other. Retail is true; false keeps the player-only notifies of the earlier build (cheaper on maps full of wanderers). |
+| `Creatures:CreatureDisplayInfoDbcPath` | `string` | `""` | - | Build-5875 CreatureDisplayInfo.dbc (display scale and model id). Empty = no display model data: the default geometry. |
+| `Creatures:CreatureModelDataDbcPath` | `string` | `""` | - | Build-5875 CreatureModelData.dbc (model scale and collision height), required with `CreatureDisplayInfoDbcPath`. |
 | `Creatures:EvadeResetsAuras` | `bool` | `true` | - | Whether an evading creature loses its auras (`Creatures:EvadeResetsAuras`): everything except a non-permanent positive aura cast by a player; with the KEEP_POSITIVE_AURAS_ON_EVADE flag only the negative ones (Creature::RemoveAurasAtReset, Objects/Creature.cpp:3611-3630). Retail is true. The evade health snap switch is `Creatures:Movement:EvadeRestoresFullHealth`. |
 | `Creatures:EventAi:DebugOnlyEvents` | `bool` | `false` | - | Run rows flagged EFLAG_DEBUG_ONLY (0x80); cmangos only does in a debug build. Off by default. |
 | `Creatures:EventAi:ReportUnsupported` | `bool` | `true` | - | Report rows with unsupported events, actions or conditions once per creature entry. |
@@ -348,6 +355,13 @@ How to read the tables:
 | `Loot:RaidMapsUnlimitedRewardDistance` | `bool` | `true` | - | Raid maps have no reward distance limit (vmangos Object.cpp:1482-1483). False applies `GroupLootDistance` there too. |
 | `Loot:RollTimeoutMs` | `uint` | `60000` | - | How long a need/greed roll waits for votes before the players who did not vote count as passed, in milliseconds (vmangos Group.cpp:72 LOOT_ROLL_TIMEOUT, 1 minute; the same value goes into SMSG_LOOT_START_ROLL as the countdown). |
 
+## `Names`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Names:NamesProfanityDbcPath` | `string` | `null` | - | Build-5875 NamesProfanity.dbc: the patterns a character or pet name may not contain (vmangos ObjectMgr::IsValidCharacterName). Set together with `NamesReservedDbcPath` or not at all; unset leaves only the SQL reserved names. |
+| `Names:NamesReservedDbcPath` | `string` | `null` | - | Build-5875 NamesReserved.dbc: the reserved-name patterns; required with `NamesProfanityDbcPath`. |
+
 ## `Net:Protection`
 
 | Key | Type | Default | Reload | Meaning |
@@ -426,6 +440,14 @@ How to read the tables:
 |---|---|---|---|---|
 | `Pets:MaxNpcGuardiansPerEntry` | `int` | `15` | - | vmangos Spell::EffectSummonGuardian: a non-player caster stops summoning an entry once it already has more than this many guardians of it (SpellEffects.cpp:2806). Retail 15. |
 | `Pets:PetLeashDistance` | `float` | `120` | - | vmangos Pet::Update: a pet farther than this from its owner is unsummoned (`IsWithinDistInMap(owner, 120.0f)`, Pet.cpp:662-690). |
+
+## `Pets:Names`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Pets:Names:MinPetName` | `int` | `2` | - | Shortest pet name accepted (vmangos MinPetName, clamped to 2..12; the longest is always 12). |
+| `Pets:Names:RealmZone` | `int` | `1` | - | vmangos RealmZone (RealmZone.h): picks the language type the strict name rules check; 1 = development. |
+| `Pets:Names:StrictPetNames` | `uint` | `0` | - | vmangos StrictPetNames: the alphabet rule of pet names as a mask (0 = any letters of the realm's language type). |
 
 ## `Progression`
 
@@ -617,6 +639,7 @@ How to read the tables:
 | `World:AutosaveIntervalMs` | `int` | `900000` | live | Periodic save of online characters, in milliseconds (vmangos PlayerSave.Interval default 900000). 0 disables. |
 | `World:BindAddress` | `string` | `"0.0.0.0"` | restart | Interface to bind the world listener to. |
 | `World:CharactersPerRealm` | `int` | `10` | live | Characters an account may have on this realm (vmangos CharactersPerRealm: default 10, at most 10). |
+| `World:CommandTimeBudgetMs` | `int` | `5` | live | Maximum command-drain time per tick in milliseconds; 0 disables the time bound. |
 | `World:GmLevelInWhoList` | `AccountSecurity` | `Administrator` | live | Highest staff level ordinary players see in /who (vmangos/cmangos GM.InWhoList.Level default SEC_ADMINISTRATOR, i.e. every account). Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
 | `World:InstantLogoutSecurity` | `AccountSecurity` | `Moderator` | live | Lowest security level that logs out instantly (vmangos/cmangos InstantLogout default SEC_MODERATOR). Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
 | `World:ListenRangeSay` | `float` | `25` | live | Distance /say reaches. vmangos and cmangos-classic World.cpp default to 25 (cmangos' shipped mangosd.conf keeps 25; vmangos' raises it to 40). 0 = the whole map. |
@@ -627,6 +650,7 @@ How to read the tables:
 | `World:Maps:GridActivationDistance` | `float` | `100` | live | Radius around players (and active objects) whose grids are loaded and kept alive (vmangos `Map::m_gridActivationDistance`, initialised from `Visibility.Distance.Continents` = 100). |
 | `World:Maps:GridCleanUpDelayMs` | `int` | `300000` | live | How long an idle grid stays loaded (vmangos `GridCleanUpDelay`, default 5 minutes, at least `MinGridDelayMs` — World.cpp `setConfigMin`). |
 | `World:Maps:GridUnload` | `bool` | `true` | live | Whether idle grids are unloaded at all (vmangos `GridUnload`, default on). |
+| `World:MaxCommandsPerTick` | `int` | `1024` | live | Maximum queued world commands admitted before the map pass of one tick. |
 | `World:MaxConnections` | `int` | `0` | restart | Global cap on simultaneous world connections; 0 = unlimited (retail, the default). Hardening (no vmangos equivalent). |
 | `World:MaxConnectionsPerIp` | `int` | `0` | restart | Cap per client IP address; 0 = unlimited (retail, the default). Hardening: a retail client holds one connection. |
 | `World:MaxConsecutiveUpdaterFaults` | `int` | `0` | live | A map updater that throws in this many consecutive ticks is skipped from then on, until `Map.ClearUpdaterFaults` (a code hot reload calls it after each applied edit). 0 (the default) never skips: a throwing updater is logged every tick and the others still run, as before. Only `World:HotCode:Enabled` sets it (docs/areas/code-hot-reload.md). |
@@ -648,6 +672,7 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `World:Chat:AddonChannel` | `bool` | `true` | - | AddonChannel (vmangos mangosd.conf.dist.in:419, mangos-classic mangosd.conf.dist.in, default 1): when off, messages in the addon language are dropped (vmangos ChatHandler.cpp HandleChatMessageOpcode "Disabled addon channel?"). |
+| `World:Chat:AddonMuteAndFloodControl` | `bool` | `false` | - | ArcaneCore extension: apply the existing mute and flood gates to addon traffic before offering it to chat features. Uses the same counter, limits and staff exemption as spoken chat. Off by default: vmangos ChatHandler.cpp:165-236 explicitly exempts LANG_ADDON from both gates (verified at commit 0e3ff01e76d4758e8a7c3108b2717cc785ed56fa). |
 | `World:Chat:FakeMessagePreventing` | `bool` | `false` | - | ChatFakeMessagePreventing (vmangos mangosd.conf.dist.in:1663, World.cpp:756, vmangos default on, mangos-classic World.cpp:681 and this option default off; opt in with true): collapse every run of space, tab, bell and newline in a chat message into one space (vmangos stripLineInvisibleChars, shared/Util.cpp:134). Addon messages are not touched. |
 | `World:Chat:FloodMessageCount` | `uint` | `10` | - | ChatFlood.MessageCount (vmangos mangosd.conf.dist.in:1666, mangos-classic mangosd.conf.dist.in, default 10): how many messages inside the delay window mute the speaker; 0 disables flood control (vmangos MasterPlayer::UpdateSpeakTime, MasterPlayerChat.cpp:10). |
 | `World:Chat:FloodMessageDelaySeconds` | `uint` | `1` | - | ChatFlood.MessageDelay (vmangos mangosd.conf.dist.in:1667, default 1 second). |
@@ -724,6 +749,17 @@ How to read the tables:
 | `World:GmCommands:SecurityMap` | `Dictionary<AccountSecurity, byte>` | `{Administrator: 6, GameMaster: 3, Moderator: 1, Player: 0}` | - | The retail account level (vmangos AccountTypes, D:\refs\vmangos\src\shared\Common.h:136-146: PLAYER 0, MODERATOR 1, TICKETMASTER 2, GAMEMASTER 3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6, CONSOLE 7) each stored `AccountSecurity` stands for. ArcaneCore stores four levels, so the retail levels 2, 4 and 5 are only reachable by mapping a stored level onto them (an operator may remap, e.g. GameMaster=4). |
 | `World:GmCommands:TicketMutationsPerMinute` | `int` | `10` | - | ArcaneCore only (no reference core limits these): the most ticket mutations (`CMSG_GMTICKET_CREATE`, `_UPDATETEXT`, `_DELETETICKET`) one account may send per minute. Beyond it the packet is refused before anything is read (create and update answer with their error code, a delete is answered with the ticket's unchanged state) and the player is told; every accepted create or changed text tells all GameMasters online, so this also bounds that. Fail-closed: 0 refuses every ticket mutation, a negative value is the default. |
 
+## `World:GmCommands:FirstLoginTools`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:GmCommands:FirstLoginTools:Enabled` | `bool` | `false` | - | Teach a staff character's first login the reviewed GM tool spells (off by default; when off the other keys are not read). |
+| `World:GmCommands:FirstLoginTools:ExcludedSpellIds` | `uint[]` | `[]` | - | Catalog spell ids never taught (at most 64, unique). |
+| `World:GmCommands:FirstLoginTools:IncludeDeveloperSpells` | `bool` | `true` | - | Also teach the catalog's developer-only spells. |
+| `World:GmCommands:FirstLoginTools:MinimumSecurity` | `AccountSecurity` | `GameMaster` | - | The lowest account security that gets the tools (Moderator, GameMaster or Administrator). Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `World:GmCommands:FirstLoginTools:ShowToolGuide` | `bool` | `true` | - | Show the staff member a short guide to the taught tools at that first login. |
+| `World:GmCommands:FirstLoginTools:SpellIds` | `uint[]` | `[]` | - | Optional operator subset. Empty means the reviewed rank-filtered catalog; populated values narrow it to known catalog IDs and never add new spells. |
+
 ## `World:Guild`
 
 | Key | Type | Default | Reload | Meaning |
@@ -775,6 +811,24 @@ How to read the tables:
 | `World:Instances:ResetExtendsOnKills` | `bool` | `true` | - | A creature kill in a normal dungeon moves the reset time to respawn + 2 h when later (vmangos Map::BindToInstanceOrRaid, Map.cpp:3536-3544). Default on (retail). |
 | `World:Instances:ResetTimeHour` | `int` | `4` | - | Hour of the day (UTC, 0–23) of global raid resets (vmangos `Instance.ResetTimeHour`, default 4). |
 | `World:Instances:UnloadDelayMs` | `int` | `1800000` | - | How long an empty instance map stays loaded before it is unloaded (vmangos `Instance.UnloadDelay`, default 30 minutes). Its save and binds survive the unload. |
+
+## `World:Playerbots`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Playerbots:AllowLocalLlm` | `bool` | `false` | - | Let a local language model choose among the bot's candidate goals (off by default; the rules choose otherwise). |
+| `World:Playerbots:AllowedMaps` | `uint[]` | `[0, 1]` | - | The maps bots may act and travel on (non-empty, no duplicates; a configured list replaces the default continents 0 and 1). |
+| `World:Playerbots:Enabled` | `bool` | `false` | - | Run server-managed playerbots (off by default). |
+| `World:Playerbots:LocalLlmContextSize` | `int` | `1024` | - | The local model's context size in tokens (512..2048). |
+| `World:Playerbots:LocalLlmModel` | `string` | `"R4C3R/qwen3-0.6b-heretic:q4_k_m"` | - | The local model name sent to the loopback inference endpoint (at most 128 characters). |
+| `World:Playerbots:LocalLlmTimeoutMs` | `int` | `5000` | - | Milliseconds a local model choice may take before the rules decide (100..10000). |
+| `World:Playerbots:MaxActionsPerTick` | `int` | `4` | - | The most managed client actions all bots may send in one world tick (1..64). |
+| `World:Playerbots:MaxBots` | `int` | `8` | - | The most managed bots online at once (0..64). |
+| `World:Playerbots:MaxPathPoints` | `int` | `128` | - | The most points of one bot route (1..4096). |
+| `World:Playerbots:MaxRouteYards` | `float` | `2000` | - | The longest bot route in yards (above 0, at most 100000). |
+| `World:Playerbots:MoveSpeed` | `float` | `7` | - | The bots' movement speed in yards per second, never above the player's run speed (above 0, at most 100). |
+| `World:Playerbots:RestoreOnStartup` | `bool` | `false` | - | Log the saved managed bots back in when the world starts. |
+| `World:Playerbots:ThinkIntervalMs` | `int` | `500` | - | Milliseconds between two decisions of a bot (50..60000). |
 
 ## `World:Social`
 
@@ -839,6 +893,7 @@ These keys are read directly rather than through an options class.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
+| `Items:CharStartOutfitDbcPath` | `string` | `null` | Build-5875 CharStartOutfit.dbc: a new character's starting items by race, class and gender, then the SQL starting items (read once by `ItemsFeature`). Unset keeps the SQL starting items only; a configured file that is unreadable or has another layout fails the item load (no silent fallback). |
 | `Spells:RequireSpellFocus` | `bool` | `true` | `false` stops enforcing `SpellInfo.RequiresSpellFocus` on casts (read once by `SpellFocusFeature`); `true` is the retail behaviour. |
 | `Startup:Strict` | `bool` | `false` | `true` makes a configuration warning fail start-up like an error (exit code 78); read by `ConfigValidation.Run`. |
 

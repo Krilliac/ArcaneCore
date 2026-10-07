@@ -9,6 +9,25 @@ public readonly record struct SpellDuration(int Base, int PerLevel, int Maximum)
 /// <summary>SpellRange.dbc row (cmangos-classic SpellRangeEntry: minRange, maxRange in yards).</summary>
 public readonly record struct SpellRange(float Min, float Max);
 
+/// <summary>
+/// One signed Spell.dbc reagent ID and its required count (vmangos SpellEntry.h:636-637). A slot whose item id is not positive is absent
+/// (Spell.cpp:7254 <c>Reagent[i] &lt;= 0</c>).
+/// </summary>
+public readonly record struct SpellReagent(int Item, uint Count)
+{
+    /// <summary>A present reagent by its (positive) item entry.</summary>
+    public SpellReagent(uint itemId, uint count)
+        : this(checked((int)itemId), count)
+    {
+    }
+
+    /// <summary>The item entry of a present slot, 0 for an absent one.</summary>
+    public uint ItemId => Item > 0 ? (uint)Item : 0;
+
+    /// <summary>Whether the slot names an item (vmangos <c>Reagent[i] &gt; 0</c>).</summary>
+    public bool IsPresent => Item > 0;
+}
+
 /// <summary>One of a spell's three effects (Spell.dbc fields 61-114, one column per effect index).</summary>
 public sealed record SpellEffectInfo
 {
@@ -64,6 +83,7 @@ public sealed record SpellEffectInfo
 public sealed partial record SpellInfo
 {
     private SpellEffectInfo[] _effects = [new(), new(), new()];
+    private IReadOnlyList<SpellReagent> _reagents = Array.AsReadOnly(new SpellReagent[SpellConstants.MaxReagents]);
 
     public uint Id { get; init; }
 
@@ -123,6 +143,24 @@ public sealed partial record SpellInfo
     public uint ManaPerSecondPerLevel { get; init; }
 
     public uint ManaCostPercentage { get; init; }
+
+    /// <summary>The eight original reagent slots, copied on initialization and immutable afterward.</summary>
+    public IReadOnlyList<SpellReagent> Reagents
+    {
+        get => _reagents;
+        init
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            if (value.Count > SpellConstants.MaxReagents)
+            {
+                throw new ArgumentException("a spell has at most eight reagent slots", nameof(value));
+            }
+
+            var slots = new SpellReagent[SpellConstants.MaxReagents];
+            for (int i = 0; i < value.Count; i++) slots[i] = value[i];
+            _reagents = Array.AsReadOnly(slots);
+        }
+    }
 
     public uint RangeIndex { get; init; }
 

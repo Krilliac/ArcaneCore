@@ -103,7 +103,8 @@ with `GetMeleeMissChance`, `Unit::GetUnitCriticalChance` and the dodge/parry/blo
   - 6-minute auto release (`CORPSE_REPOP_TIME`), skipped in instances.
   - The recent-death window grows by 5 minutes per death, up to 3.
 - **CMSG_REPOP_REQUEST:** vmangos `HandleRepopRequestOpcode` → `BuildPlayerRepop`.
-  - Ghost flag; SMSG_MOVE_WATER_WALK.
+  - Imported ghost spell 8326, plus 20584 when the character knows 20585; ghost flag and SMSG_MOVE_WATER_WALK.
+    Content-free hosts retain the direct flag and movement fallback. See [ghost form](../integration/ghost-form-20261004.md).
   - Health 1; unrooted.
   - A corpse object at the body (vmangos `Player::CreateCorpse`: owner, display, bytes,
     items, flags, PvP type) is visible to observers.
@@ -225,6 +226,8 @@ system) for the world; worlds without it use `CombatEnvironment.Default`.
   the repop is scheduled and the ghost is sent to its graveyard. Without graveyard data the ghost stays at the corpse.
 - **Ghost form.** Delivered by the same lane: the ghost aura 8326 (and the wisp 20584) with its speed, behind
   `World:Death:GhostFormAura`; without the spell in the store, the flag and water walk are set directly.
+- **Ghost content.** The ghost-form spells are cast through the production spell system, so their effects and speed depend
+  on the imported spell content; real client rendering remains unverified.
 - **Unit state.** UNIT_FLAG_STUNNED stands in for the root/unit state.
 - **Player stats.** Weapon damage, attack speed, attack power, crit/dodge/parry/block
   percentages and the agility part of armor are now written by the player stat system
@@ -233,8 +236,10 @@ system) for the world; worlds without it use `CombatEnvironment.Default`.
   weapon, parry, block and the shield block value for players; a map without the stats
   feature keeps the `CombatHooks` defaults. Still open: one sub-damage per swing, one armor
   value for every school, aura modifiers. Skills default to level×5.
-- **Durability.** A death by a creature loses 10% of the worn items and sends SMSG_DURABILITY_DAMAGE_DEATH
-  (graveyards-resurrection lane); not when a player tapped the kill or in a battleground.
+- **Durability.** A death by a creature loses 10% of the worn items and sends the victim-only
+  SMSG_DURABILITY_DAMAGE_DEATH; not when a player (or a unit it controls) tapped the kill, in a battleground, for a caller
+  that turns it off, or for a spell with SPELL_ATTR_EX3_NO_DURABILITY_LOSS. Environmental damage charges its own penalty once.
+  Random wear on ordinary hits is separate. See [death durability](../integration/death-durability-20261004.md).
 - **Emotes.** No EMOTE_ONESHOT_WOUNDCRITICAL.
 - **Create blocks.** No UPDATEFLAG_MELEE_ATTACKING.
 - **Visibility.** Ghosts and the living are separated by `GhostVisibilityRule` (graveyards-resurrection lane).

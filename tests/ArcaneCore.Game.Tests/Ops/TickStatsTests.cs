@@ -9,14 +9,39 @@ public sealed class TickStatsTests
     public void Record_DoesNotAllocate()
     {
         var stats = new TickStats(64);
-        stats.Record(100, 10, 50_000); // warm up (JIT, lock)
-        long before = GC.GetAllocatedBytesForCurrentThread();
+        // Tiered JIT promotion can occur well after the first call. Warm the actual
+        // hot path past that threshold before taking the allocation baseline; the
+        // assertion below is about steady-state Record, not runtime compilation.
+        for (int i = 0; i < 100_000; i++)
+        {
+            stats.Record(100, 10, 50_000);
+        }
+        long firstBefore = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 10_000; i++)
         {
             stats.Record(i, i, 50_000);
         }
+        long firstAllocated = GC.GetAllocatedBytesForCurrentThread() - firstBefore;
 
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        long secondBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 10_000; i++)
+        {
+            stats.Record(i, i, 50_000);
+        }
+        long secondAllocated = GC.GetAllocatedBytesForCurrentThread() - secondBefore;
+
+        long thirdBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 10_000; i++)
+        {
+            stats.Record(i, i, 50_000);
+        }
+        long thirdAllocated = GC.GetAllocatedBytesForCurrentThread() - thirdBefore;
+
+        // Keep all assertions outside the measured windows so assertion machinery
+        // cannot contaminate the next allocation sample.
+        Assert.Equal(0, firstAllocated);
+        Assert.Equal(0, secondAllocated);
+        Assert.Equal(0, thirdAllocated);
     }
 
     [Fact]
@@ -64,6 +89,47 @@ public sealed class TickStatsTests
         stats.Record(50_001, 0, 50_000);
         stats.Record(10, 0, 50_000);
         Assert.Equal(1, stats.Snapshot().Overruns);
+    }
+
+    [Fact]
+    public void FrameCadence_TracksMeanEffectiveRateAndFrameOverruns()
+    {
+        var stats = new TickStats(8);
+        stats.Record(100, 0, 1_000, 1_000);
+        stats.Record(100, 0, 1_000, 2_000);
+
+        TickStatsSnapshot snapshot = stats.Snapshot();
+        Assert.Equal(2, snapshot.FrameSamples);
+        Assert.Equal(1_500, snapshot.MeanFrameIntervalMicros);
+        Assert.Equal(1_000_000d / 1_500d, snapshot.EffectiveTicksPerSecond!.Value, 6);
+        Assert.Equal(1, snapshot.FrameOverruns);
+    }
+
+    [Fact]
+    public void FrameCadence_EmptyAndLegacyRecordsRemainUnmeasured()
+    {
+        var stats = new TickStats(4);
+        stats.Record(10, 0, 1_000);
+        TickStatsSnapshot snapshot = stats.Snapshot();
+
+        Assert.Equal(0, snapshot.FrameSamples);
+        Assert.Equal(0, snapshot.MeanFrameIntervalMicros);
+        Assert.Null(snapshot.EffectiveTicksPerSecond);
+        Assert.Equal(0, snapshot.FrameOverruns);
+    }
+
+    [Fact]
+    public void FrameCadence_RingWrapUsesRetainedFrameSamples()
+    {
+        var stats = new TickStats(2);
+        stats.Record(10, 0, 1_000, 1_000);
+        stats.Record(10, 0, 1_000, 2_000);
+        stats.Record(10, 0, 1_000, 3_000);
+
+        TickStatsSnapshot snapshot = stats.Snapshot();
+        Assert.Equal(2, snapshot.FrameSamples);
+        Assert.Equal(2_500, snapshot.MeanFrameIntervalMicros);
+        Assert.Equal(2, snapshot.FrameOverruns);
     }
 
     [Fact]

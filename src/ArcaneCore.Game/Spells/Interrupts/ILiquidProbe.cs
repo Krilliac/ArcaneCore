@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Terrain;
 
@@ -28,10 +29,11 @@ public sealed class TerrainLiquidProbe : ILiquidProbe
         ArgumentNullException.ThrowIfNull(map);
         ArgumentNullException.ThrowIfNull(player);
         LiquidStatus status = map.Terrain.GetLiquidStatus(player.X, player.Y, player.Z + 0.01f, LiquidTypeFlags.AllLiquids, out LiquidData liquid);
-        return IsHighLiquid(status, liquid.Level, player.Z);
+        return IsHighLiquid(status, liquid.Level, player.Z, player.Locomotion.CollisionHeight);
     }
 
     /// <summary>The flag rule: status is in-water or under-water and level is above z + minimum swim depth.</summary>
-    public static bool IsHighLiquid(LiquidStatus status, float liquidLevel, float z) =>
-        (status & (LiquidStatus.UnderWater | LiquidStatus.InWater)) != 0 && liquidLevel > z + MinSwimDepth;
+    public static bool IsHighLiquid(LiquidStatus status, float liquidLevel, float z, float collisionHeight = DefaultCollisionHeight) =>
+        (status & (LiquidStatus.UnderWater | LiquidStatus.InWater)) != 0
+        && liquidLevel > z + (MathF.Max(0.01f, collisionHeight) * 0.75f);
 }

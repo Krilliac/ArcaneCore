@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Totems;
 
 namespace ArcaneCore.Game.Spells.Rules.Immunity;
 
@@ -184,14 +185,25 @@ public static class ImmunityRules
     /// <summary>
     /// vmangos Unit::IsImmuneToSpellEffect (+ Creature override): the effect's mechanic (the creature mask for
     /// spells from others, mechanic and mechanic-mask auras), effect immunity by effect id, and state immunity by
-    /// the aura the effect applies.
+    /// the aura the effect applies. Summoned totems first apply their intrinsic override
+    /// (Totem.cpp:180-217), including its self-cast and Shaman regeneration-family exceptions.
     /// </summary>
     public static bool IsImmuneToSpellEffect(SpellSystem system, Unit target, SpellInfo spell, int index, bool castOnSelf)
     {
         ArgumentNullException.ThrowIfNull(system);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(spell);
-        if (!system.ImmunityEnforcement || IgnoresRestrictions(spell))
+        if (!system.ImmunityEnforcement)
+        {
+            return false;
+        }
+
+        if (TotemImmunity.TryGetEffectImmunity(target, spell, index, castOnSelf, out bool totemImmune))
+        {
+            return totemImmune;
+        }
+
+        if (IgnoresRestrictions(spell))
         {
             return false;
         }

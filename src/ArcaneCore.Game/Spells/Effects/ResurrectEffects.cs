@@ -2,6 +2,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Pets;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -17,7 +18,7 @@ namespace ArcaneCore.Game.Spells;
 /// </list>
 /// A target that is alive, not a player, or already holding a request is skipped. The cast check (Spell.cpp:5780-5790): an explicit
 /// corpse must be in the caster's map (else bad targets) and in its line of sight unless the spell ignores it.
-/// The dead pet of RESURRECT_NEW is not modelled (a limit, see <see cref="Death.Resurrection.ResurrectionService"/>).
+/// RESURRECT_NEW on a creature target is the dead current pet's revival (Revive Pet, SpellEffects.cpp:216-256).
 /// </summary>
 public sealed class ResurrectEffects : ISpellHandlerModule
 {
@@ -35,7 +36,26 @@ public sealed class ResurrectEffects : ISpellHandlerModule
 
     private static void EffectResurrectNew(SpellEffectContext context)
     {
-        if (context.Target is not Player target || target.IsAlive || !target.IsInWorld)
+        // SpellEffects.cpp:216-256: a dead current pet (Revive Pet) is restored with the effect value as health; the owner then loses every
+        // spell that carries Demonic Sacrifice's override script (2228), its other override-class scripts stay.
+        if (context.Target is Creatures.Creature pet)
+        {
+            if (pet.System?.TryReviveCurrentPet(pet, context.Caster, unchecked((uint)context.Value), context.System) == true
+                && pet.GetOwner() is { } owner)
+            {
+                uint[] sacrificeSpells = context.System.GetAuras(owner)
+                    .Where(holder => holder.Auras.Any(aura => aura is { Type: AuraType.OverrideClassScripts, MiscValue: 2228 }))
+                    .Select(holder => holder.Spell.Id).Distinct().ToArray();
+                foreach (uint spell in sacrificeSpells)
+                {
+                    context.System.RemoveAuras(owner, spell);
+                }
+            }
+
+            return;
+        }
+
+        if (context.Target is not Player target || target.Combat.DeathState == DeathState.Alive || !target.IsInWorld)
         {
             return;
         }
@@ -45,7 +65,7 @@ public sealed class ResurrectEffects : ISpellHandlerModule
 
     private static void EffectResurrect(SpellEffectContext context)
     {
-        if (context.Target is not Player target || target.IsAlive || !target.IsInWorld)
+        if (context.Target is not Player target || target.Combat.DeathState == DeathState.Alive || !target.IsInWorld)
         {
             return;
         }

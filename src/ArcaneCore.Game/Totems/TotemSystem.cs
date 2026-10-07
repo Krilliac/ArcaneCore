@@ -26,11 +26,11 @@ namespace ArcaneCore.Game.Totems;
 /// vmangos runs the totem's own <c>Creature::Update</c> once more before unsummoning so its last aura tick is
 /// not lost, here auras tick in the spell system's own update so the last tick can land up to one tick either
 /// side of expiry; an unsummoned totem is removed at once instead of first dying for the client animation;
-/// the per-effect totem immunity rule (Totem.cpp:180-216) needs an immunity seam in the spell core and is not applied.
+/// intrinsic per-effect immunity is applied through <see cref="TotemImmunity"/> and the spell immunity rules.
 /// There is no totem bar in 1.12.1 (SMSG_TOTEM_CREATED / CMSG_TOTEM_DESTROYED exist for 2.4.3+ only), so none is sent.
 /// </para>
 /// </summary>
-public sealed class TotemSystem
+public sealed partial class TotemSystem
 {
     /// <summary>MAX_TOTEM_SLOT.</summary>
     public const int SlotCount = 4;
@@ -103,6 +103,7 @@ public sealed class TotemSystem
         }
 
         _spells.RegisterEffect(SpellEffectName.DestroyAllTotems, EffectDestroyAllTotems);
+        _spells.RegisterCastCheck(new TotemOwnerCastCheck(this));
         return true;
     }
 
@@ -197,6 +198,9 @@ public sealed class TotemSystem
         }
 
         TotemQuery.Remove(info);
+        // An active totem may have a bolt preparing when its owner leaves or replaces it.
+        // Removal must interrupt that cast now, before the spell updater can land it later.
+        _spells.RemoveUnit(totem);
         if (totem.Map is { } map && _creatureSystems(map) is { } creatures)
         {
             creatures.Despawn(totem);
@@ -270,6 +274,7 @@ public sealed class TotemSystem
         (float x, float y) = PlacementPoint(caster, totem.BoundingRadius, Options.PlacementDistance, angle);
         totem.SetPosition(x, y, caster.Z, caster.Orientation);
         totem.SetHome(new CreatureHome(x, y, caster.Z, caster.Orientation));
+        totem.AddMovementFlags(MovementFlags.Root);
 
         // Totem::SetOwner and the rest of EffectSummonTotem.
         totem.SetUInt64(UpdateFields.UnitFieldCreatedby, caster.Guid.Value);
@@ -361,11 +366,7 @@ public sealed class TotemSystem
                 continue;
             }
 
-            Unit owner = info.Owner;
-            if (!owner.IsInWorld
-                || (owner is not Creature && !owner.IsAlive)
-                || !info.Creature.IsAlive
-                || (Options.OwnerLeash && !(ReferenceEquals(owner.Map, map) && Map.IsWithinVisibilityDistance(owner, info.Creature, alreadyVisible: false))))
+            if (!IsOwnerValid(info, map) || !info.Creature.IsAlive)
             {
                 Unsummon(info);
                 continue;
@@ -395,6 +396,8 @@ public sealed class TotemSystem
                     Send(info.Creature, WorldOpcode.SmsgGameobjectSpawnAnim, info.Creature.Guid);
                 }
             }
+
+            UpdateActiveTotem(info, map);
         }
     }
 

@@ -76,7 +76,12 @@ public sealed class CombatHandlers : IOpcodeHandlerGroup
 
     /// <summary>CMSG_ATTACKSTOP: empty (vmangos HandleAttackStopOpcode → AttackStop).</summary>
     private static void HandleAttackStop(WorldSession session, Player player, byte[] payload)
-        => player.Map?.Combat.AttackStop(player);
+    {
+        // vmangos WorldSession::HandleAttackStopOpcode / Player.cpp combat handler: cancelling
+        // the auto-attack also discards pending Reckoning/extra-attack charges.
+        player.Combat.ResetExtraAttacks();
+        player.Map?.Combat.AttackStop(player);
+    }
 
     /// <summary>CMSG_SETSHEATHED: u32 state (vmangos HandleSetSheathedOpcode → UNIT_FIELD_BYTES_2 byte 0).</summary>
     private static void HandleSetSheathed(WorldSession session, Player player, byte[] payload)

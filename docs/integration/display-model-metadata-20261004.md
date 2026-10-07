@@ -1,0 +1,9 @@
+# Optional display/model metadata
+
+The optional producer reads pinned build-5875-compatible WDBC layouts for `CreatureDisplayInfo.dbc` (12 fields) and `CreatureModelData.dbc` (16 fields). WDBC has no version header: matching layouts do not prove the files' client version. Opened streams are capped at 64 MiB per file and one million records; hashes describe the actual loaded bytes. Duplicate IDs, invalid scales/products, malformed headers and partial configured pairs fail startup. Unconfigured hosts retain optional behavior.
+
+Existing `creature_model_info` remains authoritative for bounding radius, combat reach, gender, and alternate display. DBC metadata contributes display/model native scale and collision height only. `SpellSystem.UpdateDisplayModel` normalizes verified radius/reach using current object scale and native display scale; missing/unverified metadata follows the pinned 1.5 radius/reach fallback rather than inventing model values.
+
+Transform and form overrides replace the previous visual scale rather than multiplying native scale twice; removal restores the saved native scale. Transform, form and ModScale paths refresh geometry. Known model collision height is divided by model scale and normalized by object/native display scale, with the source's height-2 fallback for a known model's absent height. A missing model retains display-scale lookup but does not invent model height. Height changes invalidate the liquid environment sample; the terrain probe consumes the updated swim-depth threshold.
+
+Tests load synthetic paired files through a real configured host and socket transform/scale casts, then verify display, object scale, radius, reach, collision height and native restoration. Original DBC/client acceptance, native login/spawn initialization from this optional catalog, and per-display template override/import parity remain separate work.

@@ -72,6 +72,10 @@ when the stored values are clamped to them.
   graveyards, the ghost aura, durability loss on death, spirit visibility, ghost dungeon rules and resurrection
   requests were delivered later by the graveyards-resurrection lane (docs/areas/graveyards-resurrection.md);
   resurrection sickness (15007) is applied by the spirit healer only.
+- Self-resurrection (effect 94) and the imported ghost-form spells run through the production World flow (the Codex continuation,
+  [revival continuation](server-revival-20261004.md)); the resurrection requests are the graveyards-resurrection lane's
+  `ResurrectionService`. The [death and item continuation](server-item-death-20261004.md) describes the death durability caller
+  suppression, environmental single charging and current-pet revival.
 - The body is not kept in the world while its owner is offline (vmangos keeps the corpse object in the
   world and saves it with the map). It is stored with the character and put back at the next login. Other
   players therefore do not see an offline player's body, and it does not decay to bones while its owner

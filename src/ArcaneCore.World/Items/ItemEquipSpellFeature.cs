@@ -81,6 +81,9 @@ public sealed class ItemEquipSpellFeature : IWorldFeature
         // (ArcaneCore.World.Items before ArcaneCore.World.Spells), so a PlayerLoggedIn handler here would replay first and the restore of
         // a saved non-passive Equip: aura would then stack on (or replace) the item-bound holder instead of being removed by the replay.
         spellFeature.PlayerSpellsRestored += Spells.Attach;
+
+        // A shapeshift re-checks the worn items' "Equip:" spells against the new form (Player::UpdateEquipSpellsAtFormChange).
+        _services.GetService<StanceFeature>()?.AddFormChangeListener(Spells);
     }
 
     private void ReportUnknownSet(uint setId, uint itemEntry)

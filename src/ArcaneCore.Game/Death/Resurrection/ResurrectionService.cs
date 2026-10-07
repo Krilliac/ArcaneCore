@@ -33,6 +33,12 @@ public sealed class ResurrectionService(WorldRuntime world, Func<TeleportService
     public Player? FindPlayer(ObjectGuid guid) => world.FindOnlinePlayer(guid);
 
     /// <summary>
+    /// Raised on the world thread after an accepted request brought its player back (after any teleport); the world daemon saves the
+    /// character then, as it does after a self-resurrection, so the restored life does not wait for the next autosave.
+    /// </summary>
+    public event Action<Player>? Resurrected;
+
+    /// <summary>
     /// Offer <paramref name="target"/> a resurrection (the body of both effects after their checks): refused, returning false, when it
     /// already has a request (<c>IsRessurectRequested</c>). The request carries the caster's place, so accepting teleports a player to the
     /// resurrector. <paramref name="sickness"/> is whether the caster is a spirit healer; <paramref name="noResTimer"/> is
@@ -63,9 +69,9 @@ public sealed class ResurrectionService(WorldRuntime world, Func<TeleportService
     public void Respond(Player player, ObjectGuid resurrector, bool accept)
     {
         ArgumentNullException.ThrowIfNull(player);
-        if (player.IsAlive)
+        if (player.Combat.DeathState == DeathState.Alive)
         {
-            return;
+            return; // vmangos IsAlive is the death state: a revived player at zero health is alive too
         }
 
         if (!accept)
@@ -168,11 +174,15 @@ public sealed class ResurrectionService(WorldRuntime world, Func<TeleportService
     }
 
     /// <summary>The resurrection itself, after any teleport: alive with the offered health and mana, no rage, full energy, the corpse gone.</summary>
-    private static void Complete(Player player, ResurrectionRequest request)
+    private void Complete(Player player, ResurrectionRequest request)
     {
         if (player.Map is { } map)
         {
             map.Combat.CompleteResurrection(player, request.Health, request.Mana);
+            if (player.IsAlive)
+            {
+                Resurrected?.Invoke(player);
+            }
         }
     }
 }

@@ -174,6 +174,8 @@ public sealed partial class SpellSystem
                 AddAuraHolder(holder);
             }
 
+            FlushQueuedMeleeSpellDamage(outcome);
+
             InterruptTargetOfHostileSpell(cast, target, hit: true, dealsDamage); // rogue lane (vmangos Spell.cpp:1622-1650)
             SpellHitTarget?.Invoke(cast.Caster, target, cast.Spell.Id);
             SpellHit?.Invoke(cast.Caster, target, cast.Spell);
@@ -323,7 +325,7 @@ public sealed partial class SpellSystem
         uint spellId = context.Effect.TriggerSpell;
         if (Store.Get(spellId) is not null)
         {
-            CastSpell(context.Caster, spellId, SpellCastTargets.ForUnit(context.Target.Guid), triggered: true);
+            CastSpell(context.Caster, spellId, SpellCastTargets.ForUnit(context.Target.Guid), triggered: true, triggeringSpell: context.Spell);
         }
     }
 

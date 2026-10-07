@@ -47,7 +47,7 @@ public static class CombatPackets
     /// </summary>
     public static byte[] AttackerStateUpdate(
         HitInfo hitInfo, ObjectGuid attacker, ObjectGuid victim, uint totalDamage,
-        ReadOnlySpan<SubDamage> subDamage, VictimState victimState, uint blocked)
+        ReadOnlySpan<SubDamage> subDamage, VictimState victimState, uint blocked, uint meleeSpellId = 0)
     {
         var w = new PacketWriter(64);
         w.WriteUInt32((uint)hitInfo);
@@ -66,7 +66,7 @@ public static class CombatPackets
 
         w.WriteUInt32((uint)victimState);
         w.WriteUInt32(0); // attacker state
-        w.WriteUInt32(0); // melee spell id (white swing)
+        w.WriteUInt32(meleeSpellId); // zero for a white swing; next-swing spells carry their spell id
         w.WriteUInt32(blocked);
         return w.ToArray();
     }

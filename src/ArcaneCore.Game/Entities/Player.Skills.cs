@@ -10,6 +10,9 @@ public sealed partial class Player
     /// </summary>
     public PlayerSkills? Skills { get; private set; }
 
+    /// <summary>Skill aura handlers may be installed before the loading player has its skill state.</summary>
+    internal event Action<PlayerSkills>? SkillsAttached;
+
     /// <summary>Attach the skill state once, before the player is handed to the world thread.</summary>
     public void AttachSkills(PlayerSkills skills)
     {
@@ -20,5 +23,6 @@ public sealed partial class Player
         }
 
         Skills = skills;
+        SkillsAttached?.Invoke(skills);
     }
 }

@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Progression;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
@@ -11,10 +12,11 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ArcaneCore.World.Gm.Character;
 
 /// <summary>
-/// <c>.modify hp</c> and <c>.modify mana</c> (vmangos UnitCommands.cpp:2283-2349, SEC_GAMEMASTER,
+/// <c>.modify hp</c>, <c>.modify mana</c>, <c>.modify energy</c> and <c>.modify rage</c>
+/// (vmangos UnitCommands.cpp:2283-2349, CharacterCommands.cpp:4733-4808, SEC_GAMEMASTER,
 /// Chat.cpp:582-583), added under the <c>.modify</c> root of the built-in commands, whose
 /// <c>.modify money</c> lives in <see cref="BuiltinCommands"/>. Player targets only: vmangos also
-/// accepts a selected creature. <c>.modify rage|energy|scale|faction|speed|aspeed|swim|bwalk|
+/// accepts a selected creature for HP/mana. <c>.modify scale|faction|speed|aspeed|swim|bwalk|
 /// mount|morph|drunk|exhaustion|talentpoints</c> and the rest are not provided.
 /// </summary>
 public sealed class ModifyExtension : ICommandExtension
@@ -25,6 +27,8 @@ public sealed class ModifyExtension : ICommandExtension
     [
         new ChatCommand("hp", AccountSecurity.GameMaster, "Syntax: .modify hp #newhp [#newmaxhp]\nChange the HP (and maximum HP) of the selected player, or yours.", (c, a) => Change(c, a, hp: true), RetailLevel: 3),
         new ChatCommand("mana", AccountSecurity.GameMaster, "Syntax: .modify mana #newmana [#newmaxmana]\nChange the mana (and maximum mana) of the selected player, or yours.", (c, a) => Change(c, a, hp: false), RetailLevel: 3),
+        new ChatCommand("energy", AccountSecurity.GameMaster, "Syntax: .modify energy #newenergy [#newmaxenergy]\nChange the energy (and maximum energy) of the selected player, or yours.", (c, a) => ChangePower(c, a, PowerType.Energy), RetailLevel: 3),
+        new ChatCommand("rage", AccountSecurity.GameMaster, "Syntax: .modify rage #newrage [#newmaxrage]\nChange the rage (and maximum rage) of the selected player, or yours.", (c, a) => ChangePower(c, a, PowerType.Rage), RetailLevel: 3),
     ];
 
     private static bool Change(CommandContext context, string text, bool hp)
@@ -86,6 +90,79 @@ public sealed class ModifyExtension : ICommandExtension
             // Power index 0 (mana) whatever the unit's own power type, as UnitCommands.cpp:2344-2345.
             target.SetUInt32(UpdateFields.UnitFieldMaxpower1, (uint)max);
             target.SetUInt32(UpdateFields.UnitFieldPower1, (uint)value);
+        }
+
+        return true;
+    }
+
+    private static bool ChangePower(CommandContext context, string text, PowerType power)
+    {
+        var args = new CommandArgs(text);
+        if (!args.ExtractUInt32(out uint requested))
+        {
+            return false;
+        }
+
+        bool hasExplicitMax = !args.IsEmpty;
+        if (!args.ExtractOptUInt32(out uint requestedMax, 0) || !args.IsEmpty)
+        {
+            return false;
+        }
+
+        uint factor = power == PowerType.Rage ? 10u : 1u;
+        if (requested > uint.MaxValue / factor)
+        {
+            context.Reply(GmStrings.BadValue);
+            return true;
+        }
+
+        Player? target = context.SelectedPlayerOrSelf();
+        if (target is null)
+        {
+            context.Reply(GmStrings.NoCharSelected);
+            return true;
+        }
+
+        if (!context.CanActOn(target))
+        {
+            return true;
+        }
+
+        uint currentMax = target.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)power);
+        uint displayedMax = hasExplicitMax
+            ? requestedMax
+            : Math.Max(currentMax / factor, requested);
+        if (displayedMax < requested || displayedMax > uint.MaxValue / factor)
+        {
+            context.Reply(GmStrings.BadValue);
+            return true;
+        }
+
+        uint max = displayedMax * factor;
+        uint value = requested * factor;
+        string link = GmStrings.PlayerLink(target.Name);
+        bool report = !ReferenceEquals(target, context.Player);
+        string caller = GmStrings.PlayerLink(context.Player.Name);
+
+        target.SetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)power, max);
+        SpellSystem.SetPower(target, power, value);
+        context.World.SavePlayer(target);
+
+        if (power == PowerType.Energy)
+        {
+            context.Reply(GmStrings.YouChangeEnergy(link, requested, displayedMax));
+            if (report)
+            {
+                target.SendSystemMessage(GmStrings.YoursEnergyChanged(caller, requested, displayedMax));
+            }
+        }
+        else
+        {
+            context.Reply(GmStrings.YouChangeRage(link, requested, displayedMax));
+            if (report)
+            {
+                target.SendSystemMessage(GmStrings.YoursRageChanged(caller, requested, displayedMax));
+            }
         }
 
         return true;

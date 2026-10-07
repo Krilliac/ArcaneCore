@@ -11,6 +11,7 @@ public sealed class GmOptions
 {
     public const string SectionName = "World:GmCommands";
 
+
     /// <summary>
     /// The retail account level (vmangos AccountTypes, D:\refs\vmangos\src\shared\Common.h:136-146:
     /// PLAYER 0, MODERATOR 1, TICKETMASTER 2, GAMEMASTER 3, BASIC_ADMIN 4, DEVELOPER 5,

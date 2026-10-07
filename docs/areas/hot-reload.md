@@ -219,11 +219,14 @@ table or catalog from the database).
 | `item_enchantment_template` (852), `page_text` (871), `item_required_target` (854) | yes, via all_item (:996-1002) | none | no store |
 | `gameobject_template` (845) | no | `gameobject_template` | delivered |
 | `gameobject` (838), `gameobject_requirement` (843) | no | none | owner lane (gameobject-types) |
-| `command` (817), `reserved_name` (888), `mangos_string` (864) | yes (:899-901) | none | no store |
+| `command` (817), `mangos_string` (864) | yes (:899-901) | none | no store |
+| `reserved_name` (888) | yes (:900) | `reserved_name` (in `all` when a SQL reserved-name store is registered; see below) | delivered |
 | `creature` (819), `creature_groups` (823), `creature_display_info_addon` (822), `cinematic_waypoints` (816) | no | none | owner lane (creature-movement-spawns) |
 | `creature_spells` (828) | no | none | no store |
 | `creature_onkill_reputation` (826), `reputation_reward_rate` (886), `reputation_spillover_template` (887) | no | none | owner lane (reputation-factions) |
-| `spell_area`, `spell_chain`, `spell_elixir`, `spell_learn_spell`, `spell_proc_event`, `spell_proc_item_enchant`, `spell_script_target`, `spell_target_position`, `spell_threats`, `spell_pet_auras` (891-906) | yes, via all_spell (:972-981) | none | owner lane (spell-modifier-engine, aura-engine-completeness, threat-and-aggro) |
+| `spell_proc_item_enchant` (901) | yes, via all_spell (:972-981) | `spell_proc_item_enchant` (in `all` when its SQL store is registered; see below) | delivered |
+| `spell_enchant_charges` (no vmangos reload command) | - | `spell_enchant_charges`, an ArcaneCore addition (in `all` when its SQL store is registered; see below) | delivered |
+| `spell_area`, `spell_chain`, `spell_elixir`, `spell_learn_spell`, `spell_proc_event`, `spell_script_target`, `spell_target_position`, `spell_threats`, `spell_pet_auras` (891-906) | yes, via all_spell (:972-981) | none | owner lane (spell-modifier-engine, aura-engine-completeness, threat-and-aggro) |
 | `spell_mod` (898), `spell_group` (895), `spell_group_stack_rules` (896), `spell_disabled` (893) | no | none | owner lane (spell-modifier-engine, aura-engine-completeness) |
 | `*_scripts` (829, 832, 844, 846, 849, 881, 883, 903), `all_scripts` (804) | not in `all` (:946-967) | none | no store (DB scripts are not interpreted) |
 | `game_weather` (837) | no | none | owner lane (game-events-weather) |
@@ -231,6 +234,13 @@ table or catalog from the database).
 | `locales_*` (856-862), `all_locales` (800) | yes (:897) | none | no store (only the default strings are read) |
 | `conditions` (818) | no | none | owner lane (condition evaluator content) |
 | `exploration_basexp` (833), `instance_buff_removal` (850), `map_template` (866), `map_loot_disabled` (865), `taxi_path_transitions` (907), `quest_greeting` (882), `trainer_greeting` (908), `pet_name_generation` (872), `variables` (909), `player_factionchange_*` (875-879), `petitions` (873), `character_pet` (815), `autobroadcast` (814), `anticheat` (807), `account_banned` (810), `ip_banned` (851) | no | none | no store, or another area's live store (bans are enforced live from the database, not from a cached list) |
+
+**`spell_proc_item_enchant`** and **`spell_enchant_charges`** (`ItemEnchantmentContentReloadables.cs`): the weapon-enchantment proc PPM
+overrides and the temporary-enchantment charge counts (vmangos loads `spell_enchant_charges` at startup only, SpellMgr.cpp:1890-1930, and
+has no reload command for it, so its reload name is an ArcaneCore addition) are read off the world thread and swapped on the world thread; a failed read keeps the previous table. Each joins
+`.reload all` only when its SQL store is registered.
+
+**`reserved_name`** (`ReservedNameContentReloadable`, `NameCatalogFeature.ReplaceReservedExact`): the SQL exact-name set is loaded through the registered `IReservedNameStore` off the world thread and published as a complete immutable catalog on the world thread. The startup-loaded NamesProfanity/NamesReserved DBC regex arrays and provenance are retained across the swap. A failed read or publish leaves the previous catalog in place; an empty successful SQL snapshot removes only SQL exact names. Character creation captures one catalog reference for its request, while the existing pet veto resolves the feature catalog dynamically for each rename.
 
 ## Deviations from retail
 
@@ -257,7 +267,7 @@ retail variant of (no switch is possible); they are limits, not options.
 - The reloadables are the delivered rows of the audit table above. Everything else in the vmangos reload table is either another wave-4
   lane's store (spell modifiers, procs and chains, threat, weather and events, graveyards, creature groups and spawns, reputation,
   battlegrounds, conditions: each of those lanes adds an `IContentReloadable` class, discovered without a registry edit, once its store is
-  an immutable object behind a stable holder) or has no table here at all (`mangos_string`, `command`, `reserved_name`, `page_text`,
+  an immutable object behind a stable holder) or has no table here at all (`mangos_string`, `command`, `page_text`,
   `item_enchantment_template`, `item_required_target`, the locales, `*_scripts`, `creature_spells`: nothing reads
   them from the database, so there is nothing to reload; the quest area triggers are the configuration key `Quests:AreaTriggerQuests`,
   read at start). The map registry, areas, terrain and collision data are restart-only, as in vmangos.

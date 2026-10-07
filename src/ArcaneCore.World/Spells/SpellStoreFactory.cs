@@ -118,6 +118,13 @@ public static class SpellStoreFactory
             ManaPerSecond = row.ManaPerSecond,
             ManaPerSecondPerLevel = row.ManaPerSecondPerLevel,
             ManaCostPercentage = row.ManaCostPercentage,
+            Reagents =
+            [
+                new(row.Reagent1, row.ReagentCount1), new(row.Reagent2, row.ReagentCount2),
+                new(row.Reagent3, row.ReagentCount3), new(row.Reagent4, row.ReagentCount4),
+                new(row.Reagent5, row.ReagentCount5), new(row.Reagent6, row.ReagentCount6),
+                new(row.Reagent7, row.ReagentCount7), new(row.Reagent8, row.ReagentCount8),
+            ],
             RangeIndex = row.RangeIndex,
             Range = range,
             Speed = row.Speed,
@@ -132,7 +139,6 @@ public static class SpellStoreFactory
             EquippedItemClass = row.EquippedItemClass,
             EquippedItemSubClassMask = row.EquippedItemSubClassMask,
             EquippedItemInventoryTypeMask = row.EquippedItemInventoryTypeMask,
-            Reagents = Reagents(row),
             Totems = Totems(row),
             StartRecoveryCategory = row.StartRecoveryCategory,
             StartRecoveryTime = row.StartRecoveryTime,
@@ -165,27 +171,7 @@ public static class SpellStoreFactory
         };
     }
 
-    // Crafting lane: Reagent[8]/ReagentCount[8]/Totem[2] (vmangos SpellEntry.h:635-637). A reagent slot with a non-positive item id is
-    // absent (Spell.cpp:7254), a zero Totem slot is absent (Spell.cpp:7292).
-    private static IReadOnlyList<SpellReagent> Reagents(SpellTemplateRow row)
-    {
-        (int Item, uint Count)[] slots =
-        [
-            (row.Reagent1, row.ReagentCount1), (row.Reagent2, row.ReagentCount2), (row.Reagent3, row.ReagentCount3), (row.Reagent4, row.ReagentCount4),
-            (row.Reagent5, row.ReagentCount5), (row.Reagent6, row.ReagentCount6), (row.Reagent7, row.ReagentCount7), (row.Reagent8, row.ReagentCount8),
-        ];
-        var list = new List<SpellReagent>(slots.Length);
-        foreach ((int item, uint count) in slots)
-        {
-            if (item > 0)
-            {
-                list.Add(new SpellReagent((uint)item, count));
-            }
-        }
-
-        return list;
-    }
-
+    // Crafting lane: Totem[2] (vmangos SpellEntry.h:635); a zero Totem slot is absent (Spell.cpp:7292). The eight reagent slots are kept as they are (SpellInfo.Reagents).
     private static IReadOnlyList<uint> Totems(SpellTemplateRow row)
     {
         var list = new List<uint>(2);

@@ -58,8 +58,8 @@ public static class LookupText
 /// <c>.lookup item|creature|object|tele</c> (vmangos LookupCommands.cpp; levels Chat.cpp:557-575:
 /// the root MODERATOR, these sub-commands TICKETMASTER). Lines come out ordered by entry (vmangos
 /// walks an unordered map). Locale-specific names are not used (ArcaneCore has one locale).
-/// <c>.lookup spell</c>, <c>itemset</c>, <c>quest</c>, <c>area</c>, <c>faction</c>, <c>skill</c>,
-/// <c>taxinode</c>, <c>event</c>, <c>pool</c> and <c>player</c> are not provided (see the lane doc).
+/// <c>.lookup quest|skill|spell|area|map|taxinode</c> are <see cref="LookupContentExtension"/>'s; <c>itemset</c>, <c>faction</c>,
+/// <c>event</c>, <c>pool</c> and <c>player</c> are not provided (see the lane doc).
 /// </summary>
 public sealed class LookupCommands : ICommandGroup
 {

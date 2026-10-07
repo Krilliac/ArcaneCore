@@ -19,6 +19,59 @@ public sealed class ReloadCoordinatorTests : IDisposable
 
     public void Dispose() => _world.Dispose();
 
+    [Fact]
+    public async Task ReloadAll_ResolvesDependenciesBeforeAlphabeticallyEarlierConsumers()
+    {
+        ReloadCoordinator coordinator = Attached();
+        bool spellsPublished = false;
+        var order = new List<string>();
+        coordinator.Register(new FakeReloadable("spell_enchant_charges")
+        {
+            CommitAfter = ["SPELL_TEMPLATE"],
+            CommitAction = (_, _) => { Assert.True(spellsPublished); order.Add("charges"); },
+        });
+        coordinator.Register(new FakeReloadable("spell_template")
+        {
+            CommitAction = (_, _) => { spellsPublished = true; order.Add("spells"); },
+        });
+
+        IReadOnlyList<ReloadResult> results = await coordinator.ReloadAllAsync();
+
+        Assert.All(results, r => Assert.Equal(ReloadStatus.Applied, r.Status));
+        Assert.Equal(["spells", "charges"], order);
+    }
+
+    [Fact]
+    public async Task ReloadAll_DependencyCycleRejectsBeforeAnyBuildOrPublication()
+    {
+        ReloadCoordinator coordinator = Attached();
+        var a = new FakeReloadable("a") { CommitAfter = ["b"] };
+        var b = new FakeReloadable("b") { CommitAfter = ["a"] };
+        coordinator.Register(a);
+        coordinator.Register(b);
+
+        IReadOnlyList<ReloadResult> results = await coordinator.ReloadAllAsync();
+
+        Assert.Equal(2, results.Count);
+        Assert.All(results, r => Assert.Equal(ReloadStatus.Rejected, r.Status));
+        Assert.False(a.BuildStarted.Task.IsCompleted);
+        Assert.False(b.BuildStarted.Task.IsCompleted);
+        Assert.Equal(0, a.Commits + b.Commits);
+    }
+
+    [Fact]
+    public async Task ReloadAll_AbsentDependencyUsesTheExistingLiveState()
+    {
+        ReloadCoordinator coordinator = Attached();
+        var consumer = new FakeReloadable("charges") { CommitAfter = ["spell_template"] };
+        coordinator.Register(consumer);
+
+        ReloadResult result = Assert.Single(await coordinator.ReloadAllAsync());
+
+        Assert.Equal(ReloadStatus.Applied, result.Status);
+        Assert.Equal(1, consumer.Commits);
+    }
+
     private ReloadCoordinator Attached(HotReloadOptions? options = null, bool startWorld = true)
     {
         var coordinator = new ReloadCoordinator(NullLogger.Instance, options);
@@ -257,6 +310,8 @@ public sealed class ReloadCoordinatorTests : IDisposable
         public bool InAll { get; init; } = true;
 
         public bool IncludedInAll => InAll;
+
+        public IReadOnlyCollection<string> CommitAfter { get; init; } = [];
 
         public Exception? BuildFailure { get; init; }
 

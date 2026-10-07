@@ -12,6 +12,14 @@ public interface ISpellTargetRelations
 
     /// <summary>vmangos Unit::IsFriendlyTo (friendly AoE, chain heal).</summary>
     bool IsFriendly(Unit caster, Unit target);
+
+    /// <summary>
+    /// Whether an explicit positive spell may assist the target. Unlike <see cref="IsFriendly"/>,
+    /// this preserves neutral targets; custom relation providers reject only hostility in either
+    /// direction by default.
+    /// </summary>
+    bool CanAssist(Unit caster, Unit target)
+        => !IsHostile(caster, target) && !IsHostile(target, caster);
 }
 
 /// <summary>Default <see cref="ISpellTargetRelations"/>: the map's <see cref="CombatHooks"/> (factions arrive through them).</summary>
@@ -24,6 +32,26 @@ public sealed class CombatHookRelations : ISpellTargetRelations
 
     public bool IsFriendly(Unit caster, Unit target)
         => ReferenceEquals(caster, target) || Hooks(caster).IsFriendly(caster, target);
+
+    public bool CanAssist(Unit caster, Unit target)
+    {
+        if (ReferenceEquals(caster, target))
+        {
+            return true;
+        }
+
+        CombatHooks hooks = Hooks(caster);
+        if (caster is Player && target is Player)
+        {
+            // Same-team and duel policy remain owned by the existing combat seam.
+            return hooks.IsFriendly(caster, target);
+        }
+
+        // A faction catalog can prove hostility in either direction. Unknown templates and
+        // worlds without the catalog remain neutral for explicit helpful targeting.
+        return hooks is not FactionCombatHooks factions
+            || (!factions.IsHostileTo(caster, target) && !factions.IsHostileTo(target, caster));
+    }
 
     private static CombatHooks Hooks(Unit caster) => caster.Map?.FindUpdater<MapCombat>()?.Hooks ?? CombatHooks.Default;
 }

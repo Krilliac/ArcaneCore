@@ -150,9 +150,13 @@ consumed), the weapon-entry zeroing above.
   weapon-specific parry talents, haste, shapeshift forms (druid AP, weaponless damage) and the disarm
   *trigger* are not modelled (disarm is honoured when the system recomputes, nothing recomputes on disarm).
   `UnitMods` / the modifier-group model of the design was deliberately not built: it would have no producer.
-- Skills: weapon and defense skill are the level maximum (`LevelMaximumSkills`); `StatFormulas.CombatSkillGainChance`
-  exists but no skill gain or skill persistence does.
 - ~~Ammo DPS is 0~~ Fixed by the ranged lane (wave 4): the ammo DPS is part of the ranged damage fields and is recomputed when the ammo changes (`docs/areas/ranged/damage-inputs.md`).
+- With retail skill content, `StatsFeature` uses `PlayerSkillStatSource` to read effective weapon and
+  defense skills, including temporary and permanent aura bonuses. Skill changes recompute the crit,
+  dodge, parry and block fields (vmangos `0e3ff01e`, `StatSystem.cpp:514-640`). Hosts without skill
+  content retain `LevelMaximumSkills`. Skill gain and persistence are implemented by the skills area.
+  `SkillAuraWorldTests` checks live recomputation and restoration across logout/login without storing
+  bonuses as pure skill values.
 - Not persisted: XP, rest, health and powers still reset on relog (design slice `character-progress-persistence`
   was not done: Characters schema, cleanup registration).
 - Melee fidelity beyond the stat inputs is untouched: one sub-damage per swing, one armor value for all

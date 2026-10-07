@@ -1,4 +1,5 @@
 using ArcaneCore.Protocol;
+using ArcaneCore.Game.Items;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -34,6 +35,12 @@ public sealed class SpellCastTargets
     public ObjectGuid Item { get; set; }
 
     public ObjectGuid Corpse { get; set; }
+
+    /// <summary>Set only by the server trade resolver after validating slot 6; never populated by wire parsing.</summary>
+    public Item? ServerValidatedTradeItem { get; set; }
+
+    public bool IsRawNonTradedTradeTarget
+        => Mask == SpellCastTargetFlags.TradeItem && Item.Value == 6;
 
     public (float X, float Y, float Z) Source { get; set; }
 

@@ -137,6 +137,13 @@ public sealed partial class PlayerSkills
         }
 
         _forgottenChanged = dropped;
+        // Restore every slot before notifying aura owners: a passive may already exist when skills
+        // load, and its bonus must be rebuilt after the zeroed bonus word, exactly once.
+        foreach ((ushort skill, _) in loaded)
+        {
+            SkillAdded?.Invoke(skill);
+        }
+
         foreach ((ushort skill, ushort value) in loaded)
         {
             UpdateSkillTrainedSpells(skill, value);

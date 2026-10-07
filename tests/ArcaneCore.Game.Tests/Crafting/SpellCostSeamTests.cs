@@ -54,6 +54,16 @@ public sealed class SpellCostSeamTests
     private static Item MakeItem(Player player) =>
         new(7001, new ItemTemplate { Entry = 2589, Name = "Linen Cloth", DisplayId = 1 }, player.Guid);
 
+    /// <summary>A Linen Cloth in <paramref name="player"/>'s backpack: the cast pipeline refuses a cast item its caster does not hold.</summary>
+    private static Item HeldItem(Player player)
+    {
+        player.Inventory.Templates = new ItemTemplateStore([new ItemTemplate { Entry = 2589, Name = "Linen Cloth", DisplayId = 1, Stackable = 20 }]);
+        player.Inventory.GuidAllocator = new ItemGuidAllocator();
+        player.Inventory.Load([]);
+        Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(2589, 1, out Item? item));
+        return item!;
+    }
+
     [Fact]
     public void Taker_RunsOnce_AfterPowerIsSpent_AndBeforeTheEffect()
     {
@@ -103,7 +113,7 @@ public sealed class SpellCostSeamTests
     {
         using var kit = new SpellTestKit(CostlySpell());
         (Player player, _) = kit.AddPlayer(1);
-        Item item = MakeItem(player);
+        Item item = HeldItem(player);
         var log = new List<string>();
         kit.System.RegisterCastCheck(new ItemSeenCheck(log));
         kit.System.RegisterCostTaker(new RecordingTaker(log, player));

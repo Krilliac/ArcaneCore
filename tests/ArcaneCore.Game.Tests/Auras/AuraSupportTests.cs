@@ -34,7 +34,8 @@ public sealed class AuraSupportTests
 
         foreach (AuraType type in Enum.GetValues<AuraType>().Distinct().Where(kit.System.HasAuraHandler))
         {
-            Assert.Equal(AuraSupportLevel.Handler, AuraSupport.Get(type).Level);
+            AuraSupportLevel level = AuraSupport.Get(type).Level;
+            Assert.True(level == AuraSupportLevel.Handler, $"{type} has a handler but its baseline row says {level}");
         }
     }
 

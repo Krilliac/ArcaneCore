@@ -1,0 +1,9 @@
+# Transform and polymorph producer slice
+
+This slice adds a bounded vmangos Transform aura contract. The active transform stores the exact `SpellAuraHolder` identity. Positive transforms may replace positive transforms, negative transforms take precedence, and removing a stale holder does not restore the display. Removing the active holder restores the pre-transform display snapshot and reselects a remaining transform. Object scale preserves active ModScale factors. Full druid form display production and model-derived bounding radius/combat reach updates remain pending; the snapshot does not prove changing-form interactions.
+
+World wiring resolves a transform's creature-entry `MiscValue` through loaded creature content and the existing `Creature.ChooseDisplayId` selection. A missing entry or display uses vmangos's deterministic display-box fallback (4). Zero-misc special transform customizations remain unsupported rather than inventing spell-id cases.
+
+Polymorph is classified from the active Transform spell itself: Mage family, effect 0 `ModConfuse`, and silence prevention. Generic Transform, Confuse, mechanic 17, and display state do not qualify. The map health tick uses `MaxHealth / 10` for live polymorph in or out of combat, then retains the existing Aura161 flat contribution and cap/carry/clamp ordering; normal spirit, Aura88, sitting, and food are excluded from the polymorph branch.
+
+Game coverage exercises real aura application, display resolver output, combat health gain, native restoration, and non-polymorph Transform rejection. World coverage uses a real socket cast and missing-template fallback display. Focused coordinator checks pass; the complete gate is recorded separately in the continuation checkpoint. Random template display selection is not persisted, so reapplication can select a different valid display.
