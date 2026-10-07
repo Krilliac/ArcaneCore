@@ -106,6 +106,31 @@ public sealed class ItemWorldTests
     }
 
     [Fact]
+    public async Task InvalidInventoryDestination_ReportsSlotError_WithoutMovingItems()
+    {
+        ItemTestContent content = Content();
+        await using WorldTestHost host = Start(content);
+        await using WorldTestClient client = await host.EnterWorldAsync(Account, Name);
+
+        await client.SendAsync(WorldOpcode.CmsgSwapInvItem, [InventorySlots.ItemStart, 200]);
+        Assert.Equal((byte)InventoryResult.ItemDoesntGoToSlot,
+            (await client.ReadUntilAsync(WorldOpcode.SmsgInventoryChangeFailure))[0]);
+
+        await client.SendAsync(WorldOpcode.CmsgSwapItem, [InventorySlots.Bag0, 200, InventorySlots.Bag0, InventorySlots.ItemStart]);
+        Assert.Equal((byte)InventoryResult.ItemDoesntGoToSlot,
+            (await client.ReadUntilAsync(WorldOpcode.SmsgInventoryChangeFailure))[0]);
+
+        await client.SendAsync(WorldOpcode.CmsgSplitItem, [InventorySlots.Bag0, InventorySlots.ItemStart, InventorySlots.Bag0, 200, 1]);
+        Assert.Equal((byte)InventoryResult.ItemDoesntGoToSlot,
+            (await client.ReadUntilAsync(WorldOpcode.SmsgInventoryChangeFailure))[0]);
+
+        await client.SendAsync(WorldOpcode.CmsgSwapInvItem, [200, InventorySlots.ItemStart]);
+        Assert.Equal((byte)InventoryResult.ItemNotFound,
+            (await client.ReadUntilAsync(WorldOpcode.SmsgInventoryChangeFailure))[0]);
+        Assert.Equal(4u, await host.PlayerStateAsync(Name, p => p.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.ItemStart)!.Count));
+    }
+
+    [Fact]
     public async Task ItemQuery_AnswersFromTheContent()
     {
         ItemTestContent content = Content();

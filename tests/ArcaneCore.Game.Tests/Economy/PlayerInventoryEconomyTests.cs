@@ -71,6 +71,29 @@ public sealed class PlayerInventoryEconomyTests
     }
 
     [Fact]
+    public void Stage_RefusesContainerItemWithGeneratedLoot()
+    {
+        (Player player, _) = Loaded();
+        PlayerInventory inventory = player.Inventory;
+        Item container = Give(inventory, RecruitsShirt);
+        container.Loot = new ItemLootData(0, [new ItemLootEntry(0, ToughJerky, 2, false)]);
+        InventorySnapshot before = inventory.CreateSnapshot();
+
+        Assert.Equal(InventoryResult.AlreadyLooted, inventory.CanBeTraded(container));
+        Assert.Equal(InventoryResult.AlreadyLooted, inventory.CanTransferOut(container));
+        Assert.Equal(InventoryResult.AlreadyLooted,
+            inventory.TryStageEconomyTransfer([container.Guid], [], out EconomyInventoryStage? tradeStage, trade: true));
+        Assert.Null(tradeStage);
+        Assert.Equal(InventoryResult.AlreadyLooted,
+            inventory.TryStageEconomyTransfer([container.Guid], [], out EconomyInventoryStage? mailStage));
+        Assert.Null(mailStage);
+        Assert.True(PlayerInventory.SameEconomySnapshot(before, inventory.CreateSnapshot()));
+
+        container.Loot = new ItemLootData(0, []);
+        Assert.Equal(InventoryResult.Ok, inventory.CanBeTraded(container));
+    }
+
+    [Fact]
     public void Stage_NeedsALoadedInventory()
     {
         (Player unloaded, _) = CreatePlayer(2);

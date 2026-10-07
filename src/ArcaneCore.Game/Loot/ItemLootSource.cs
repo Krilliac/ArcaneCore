@@ -18,8 +18,9 @@ namespace ArcaneCore.Game.Loot;
 /// <item>the window is the owner's alone, its money is not shared; closing it with nothing left destroys the item (the whole stack, see
 /// <see cref="ItemLootOptions.ConsumeWholeStack"/>); leftovers stay in the item.</item>
 /// </list>
-/// Not modelled: the taxi refusal (no taxi state on the base), the interlocks that stop splitting, moving, trading or selling an item that holds
-/// generated loot (item mechanics lane), and an immediate save at generation (a crash before the next character save can reroll, as in vmangos).
+/// Not modelled: the taxi refusal (no taxi state on the base), the temporary-loot interlocks on splitting and moving an open item,
+/// and an immediate save at generation (a crash before the next character save can reroll, as in vmangos). Trade, mail and auction
+/// reject generated loot through <see cref="PlayerInventory.CanBeTraded"/>.
 /// </summary>
 public sealed class ItemLootSource(LootService loot, ItemLootOptions? options = null, Random? random = null) : IItemLootSource, ILootReleaseHandler
 {

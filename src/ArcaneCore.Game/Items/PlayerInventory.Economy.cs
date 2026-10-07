@@ -68,6 +68,13 @@ public sealed partial class PlayerInventory
             return InventoryResult.CantDropSoulbound;
         }
 
+        // vmangos Item::CanBeTraded (Item.cpp:932-952) refuses an item whose generated
+        // loot still holds money or items. Mail and auction use this same departure gate.
+        if (item.Loot is { } loot && (loot.Gold != 0 || loot.Items.Count != 0))
+        {
+            return InventoryResult.AlreadyLooted;
+        }
+
         return item is Container { IsEmpty: false } ? InventoryResult.CanOnlyDoWithEmptyBags : InventoryResult.Ok;
     }
 
