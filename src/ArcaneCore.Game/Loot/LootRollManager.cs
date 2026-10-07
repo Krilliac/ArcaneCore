@@ -11,22 +11,27 @@ namespace ArcaneCore.Game.Loot;
 /// CountTheRoll, EndRoll; Group.cpp:1057-1100, 1175-1500). Re-implemented from the behaviour, not copied.
 /// <para>
 /// When the first player opens a bag generated under <see cref="LootPermission.Roll"/> (<see cref="LootService.Show"/>), every
-/// shared item whose quality reaches the group's loot threshold gets a roll among the group members who are recipients of that
-/// loot and within reward distance of its source (need before greed: only those who can use the item). A roll with fewer than
-/// two such members is not held: the item stays free to take. Rolled items are view-only until the roll resolves
+/// shared item whose quality reaches the group's loot threshold gets a roll among the members of the group that earned the loot
+/// (<see cref="LootBag.DistributionGroup"/>, whoever opens it) who are recipients of that loot and within reward distance of its
+/// source (need before greed: only those who can use the item). With no such member the item is not held and stays free to take;
+/// a lone one needs it with 100 and gets it at once. Rolled items are view-only until the roll resolves
 /// (<see cref="LootItem.RollActive"/>). Each vote is announced to the participants; the roll resolves when all have voted or
-/// <see cref="LootOptions.RollTimeoutMs"/> elapses, and whoever did not vote counts as passed. Need beats greed beats pass;
-/// within a vote the highest 1..100 roll wins and a tie goes to the member earlier in the group's order. A winner with full
-/// bags keeps the only claim to the item (<see cref="LootItem.Winner"/>); with everyone passed the item is free to take again.
+/// <see cref="LootOptions.RollTimeoutMs"/> elapses, and whoever did not vote counts as passed. A member who leaves the group or is
+/// removed from it drops out of its rolls, vote and all; a disbanded group's rolls resolve at once with the votes cast. Need beats
+/// greed beats pass; within a vote the highest 1..100 roll wins and a tie goes to the member earlier in the group's order. A winner
+/// with full bags keeps the only claim to the item (<see cref="LootItem.Winner"/>); with everyone passed the item is free to take again.
 /// </para>
 /// <para>
 /// State ownership: this manager owns the live rolls; the bag owns the items. Thread affinity: world thread only (map update,
-/// opcode handlers). Per-tick cost: one pass over the live rolls, nothing allocated while none is running; rolls are rare
-/// (one per item above the threshold per kill) and allocate once when started.
+/// opcode handlers). Per-tick cost: one pass over the live rolls (each checks its participants against its group's roster), nothing
+/// allocated while none is running; rolls are rare (one per item above the threshold per kill) and allocate once when started.
 /// </para>
 /// </summary>
 public sealed class LootRollManager(LootService service, Random random) : IMapUpdater
 {
+    /// <summary>vmangos CountSingleLooterRoll announces a lone looter's need as a roll of 100 (Group.cpp:1094).</summary>
+    private const byte SingleLooterRoll = 100;
+
     private readonly List<LootRoll> _rolls = [];
 
     /// <summary>One group member in a roll; <see cref="Vote"/> is null until the member voted.</summary>
@@ -37,7 +42,7 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
         public RollVote? Vote { get; set; }
     }
 
-    private sealed class LootRoll(LootBag bag, LootItem item, WorldObject source, Participant[] participants, long remainingMs)
+    private sealed class LootRoll(LootBag bag, LootItem item, WorldObject source, Group group, List<Participant> participants, long remainingMs)
     {
         public LootBag Bag { get; } = bag;
 
@@ -45,7 +50,10 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
 
         public WorldObject Source { get; } = source;
 
-        public Participant[] Participants { get; } = participants;
+        /// <summary>The group the roll is held for; its roster decides who is still in the roll.</summary>
+        public Group Group { get; } = group;
+
+        public List<Participant> Participants { get; } = participants;
 
         public long RemainingMs { get; set; } = remainingMs;
     }
@@ -66,9 +74,9 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
 
             LootRoll roll = _rolls[i];
             roll.RemainingMs -= diffMs;
-            if (roll.RemainingMs <= 0)
+            if (!Prune(roll) || roll.RemainingMs <= 0 || AllVoted(roll))
             {
-                Resolve(roll);
+                Resolve(roll); // disbanded, timed out, or everyone still in the group has voted since a member left it
             }
         }
     }
@@ -102,13 +110,17 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
     /// </summary>
     internal void Start(Player opener, LootBag bag)
     {
-        bag.RollsStarted = true;
-        if (service.SourceOf(bag) is not { } source || service.Groups?.GroupOf(opener) is not { } group
+        // The group that earned the loot rolls for it, not the opener's group of the moment (vmangos Player::SendLoot takes
+        // Creature::GetGroupLootRecipient, Player.cpp:7887-7901): an opener who left it, or an open while the leader has switched
+        // to another method, spends nothing, so a later open still starts the rolls. A disbanded group rolls nothing.
+        Group? group = bag.DistributionGroup ?? service.Groups?.GroupOf(opener);
+        if (service.SourceOf(bag) is not { } source || group is not { MemberCount: > 0 }
             || group.LootMethod is not (LootMethod.GroupLoot or LootMethod.NeedBeforeGreed) || source.Map is not { } map)
         {
             return;
         }
 
+        bag.RollsStarted = true;
         bool needBeforeGreed = group.LootMethod == LootMethod.NeedBeforeGreed;
         foreach (LootItem item in bag.Items)
         {
@@ -118,6 +130,7 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
             }
 
             var participants = new List<Participant>();
+            Player? lone = null;
             foreach (GroupMemberSlot member in group.Members)
             {
                 if (bag.Recipients.Contains(member.Guid) && map.FindPlayer(member.Guid) is { } player
@@ -125,15 +138,24 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
                     && (!needBeforeGreed || CanUse(player, item)))
                 {
                     participants.Add(new Participant(member.Guid));
+                    lone = player;
                 }
             }
 
-            if (participants.Count < 2)
+            if (participants.Count == 0)
             {
-                continue; // vmangos: a single looter auto-needs, the item is not held and anyone may take it
+                continue; // vmangos StartLootRoll "no looters": the item is not held and anyone may take it
             }
 
-            var roll = new LootRoll(bag, item, source, [.. participants], service.Options.RollTimeoutMs);
+            var roll = new LootRoll(bag, item, source, group, participants, service.Options.RollTimeoutMs);
+            if (participants.Count == 1)
+            {
+                // vmangos Group::CountSingleLooterRoll (Group.cpp:1090-1121): the lone looter needs it with 100; nothing is held.
+                participants[0].Vote = RollVote.Need;
+                Award(roll, lone!, SingleLooterRoll, RollVote.Need);
+                continue;
+            }
+
             item.RollActive = true;
             _rolls.Add(roll);
             Broadcast(roll, WorldOpcode.SmsgLootStartRoll,
@@ -159,7 +181,18 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
             }
         }
 
-        if (roll is null || FindParticipant(roll, player.Guid) is not { Vote: null } who)
+        if (roll is null)
+        {
+            return false;
+        }
+
+        if (!Prune(roll) || AllVoted(roll))
+        {
+            Resolve(roll); // the group was disbanded, or a member who left was the last one the roll waited for
+            return false;
+        }
+
+        if (FindParticipant(roll, player.Guid) is not { Vote: null } who)
         {
             return false;
         }
@@ -194,6 +227,30 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// vmangos Group::_removeRolls (Group.cpp:1780-1805, from Group::_removeMember): a member who is no longer in the roll's group
+    /// (he left it or was removed) drops out of the roll, vote and all, and is no longer told about it. False when the group was
+    /// disbanded: vmangos Group::Disband counts every roll at once with the votes cast (Group.cpp:605-606).
+    /// </summary>
+    private static bool Prune(LootRoll roll)
+    {
+        Group group = roll.Group;
+        if (group.MemberCount == 0)
+        {
+            return false;
+        }
+
+        for (int i = roll.Participants.Count - 1; i >= 0; i--)
+        {
+            if (!group.IsMember(roll.Participants[i].Guid))
+            {
+                roll.Participants.RemoveAt(i);
+            }
+        }
+
+        return true;
     }
 
     private static bool AllVoted(LootRoll roll)
@@ -249,6 +306,8 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
             return;
         }
 
+        Prune(roll); // a member who left the group since he voted takes no part
+
         (Player Player, byte Number)? winner = null;
         RollVote winningVote = RollVote.Need;
         foreach (RollVote vote in (ReadOnlySpan<RollVote>)[RollVote.Need, RollVote.Greed])
@@ -267,22 +326,31 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
             return;
         }
 
-        Broadcast(roll, WorldOpcode.SmsgLootRollWon,
-            GroupLootPackets.RollWon(bag.Source, item.Slot, item.ItemId, won.Player.Guid, won.Number, winningVote));
-        InventoryResult stored = service.AwardItem(won.Player, bag, item);
+        Award(roll, won.Player, won.Number, winningVote);
+    }
+
+    /// <summary>
+    /// Announce the winner to the participants and put the item into his bags. vmangos: when they cannot take it the item is
+    /// released again with the winner stamped on it; only he may take it, and he is told why not.
+    /// </summary>
+    private void Award(LootRoll roll, Player winner, byte number, RollVote vote)
+    {
+        LootBag bag = roll.Bag;
+        LootItem item = roll.Item;
+        Broadcast(roll, WorldOpcode.SmsgLootRollWon, GroupLootPackets.RollWon(bag.Source, item.Slot, item.ItemId, winner.Guid, number, vote));
+        InventoryResult stored = service.AwardItem(winner, bag, item);
         if (stored == InventoryResult.Ok)
         {
             service.SettleUnviewed(bag);
             return;
         }
 
-        // vmangos: the item is released again with the winner stamped on it; only he may take it, and he is told why not.
-        item.Winner = won.Player.Guid;
-        won.Player.Inventory.SendEquipError(stored, null, null, 0, item.ItemId);
+        item.Winner = winner.Guid;
+        winner.Inventory.SendEquipError(stored, null, null, 0, item.ItemId);
         byte[] removed = LootPackets.Removed(item.Slot);
         foreach (Player viewer in bag.Viewers)
         {
-            if (viewer.Guid != won.Player.Guid)
+            if (viewer.Guid != winner.Guid)
             {
                 viewer.Session.Send(WorldOpcode.SmsgLootRemoved, removed);
             }

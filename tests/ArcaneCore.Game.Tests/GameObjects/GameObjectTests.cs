@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.WorldData.GameObjects;
@@ -284,6 +285,52 @@ public sealed class GameObjectTests
         Assert.Equal(bob.Guid, group.LooterGuid);
         Assert.Equal(alice.Guid, rig.Single(RulesChestEntry).Loot!.Owner);
         Assert.Equal([group], groups.LooterUpdates);
+    }
+
+    [Theory]
+    [InlineData(LootMethod.GroupLoot, LootPermission.Roll)]
+    [InlineData(LootMethod.NeedBeforeGreed, LootPermission.Roll)]
+    [InlineData(LootMethod.MasterLoot, LootPermission.Master)]
+    public void GroupRulesChest_UnderRollsOrMasterLoot_IsNotWidenedToAPasserby(LootMethod method, LootPermission permission)
+    {
+        Rig rig = CreateRig([GoSpawn(1, RulesChestEntry, 3, 0)]);
+        var groups = new FakeGroups();
+        rig.Loot.Groups = groups;
+        (Player alice, _) = rig.Join(1);
+        (Player bob, _) = rig.Join(2, 1, 0);
+        (Player stranger, _) = rig.Join(3, 2, 0); // not in the group
+        groups.Create(method, alice, bob);
+        GameObject chest = rig.Single(RulesChestEntry);
+
+        Assert.Equal(LootResult.Ok, rig.Loot.OpenGameObject(alice, chest, ChestLoot));
+        LootBag bag = chest.Loot!;
+        Assert.Equal(permission, bag.Permission);
+        Assert.True(bag.Owner.IsEmpty); // rolls and master gives carry no owner, so the owner cannot be what keeps strangers out
+
+        Assert.Equal(LootResult.NotAllowed, rig.Loot.OpenGameObject(stranger, chest, ChestLoot));
+        Assert.DoesNotContain(stranger.Guid, bag.Recipients);
+        Assert.Equal(InventoryResult.LootCantLootThatNow, rig.Loot.TakeItem(stranger, 0));
+        if (method == LootMethod.MasterLoot)
+        {
+            Assert.Equal(MasterGiveResult.TargetNotEligible, rig.Loot.GiveMasterLoot(alice, chest.Guid, 0, stranger.Guid));
+        }
+    }
+
+    [Fact]
+    public void GroupRulesChest_UnderFreeForAll_StillLetsALateOpenerShare()
+    {
+        Rig rig = CreateRig([GoSpawn(1, RulesChestEntry, 3, 0)]);
+        var groups = new FakeGroups();
+        rig.Loot.Groups = groups;
+        (Player alice, _) = rig.Join(1);
+        (Player bob, _) = rig.Join(2, 1, 0);
+        (Player stranger, _) = rig.Join(3, 2, 0);
+        groups.Create(LootMethod.FreeForAll, alice, bob);
+        GameObject chest = rig.Single(RulesChestEntry);
+
+        Assert.Equal(LootResult.Ok, rig.Loot.OpenGameObject(alice, chest, ChestLoot));
+        Assert.Equal(LootResult.Ok, rig.Loot.OpenGameObject(stranger, chest, ChestLoot)); // vmangos ALL_PERMISSION for chests
+        Assert.Contains(stranger.Guid, chest.Loot!.Recipients);
     }
 
     [Fact]
