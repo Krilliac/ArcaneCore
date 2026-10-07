@@ -65,6 +65,12 @@ public sealed class AuditCommands : ICommandGroup
             return true;
         }
 
+        // vmangos HandlePInfoCommand: "check online security" (HasLowerSecurity) before anything about the target is shown.
+        if (player is not null && !context.CanActOn(player))
+        {
+            return true;
+        }
+
         int characterId;
         int accountId;
         if (player is not null)
