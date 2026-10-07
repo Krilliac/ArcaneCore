@@ -1,8 +1,10 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.WorldState.Zones;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
@@ -214,9 +216,13 @@ public sealed class TeleportService
 
         TeleportDestination dest = pending.Destination;
         SendTeleportToObservers(map, player, dest);
-        player.Relocate(dest.X, dest.Y, dest.Z, dest.Orientation, _world.NowMs);
+        ArriveNear(player, dest);
         SendTeleportToObservers(map, player, dest);
         UpdateZone(map, player);
+
+        // vmangos TeleportPositionRelocation runs the zone (or area) update at once; the 1 s zone timer would leave the world states
+        // and the zone listeners a second behind.
+        map.FindUpdater<ZoneAreaUpdater>()?.OnRelocated(player);
         player.NeedsVisibilityUpdate = true;
         TeleportCompleted?.Invoke(player);
         return true;
@@ -360,6 +366,23 @@ public sealed class TeleportService
         if (zoneId != 0)
         {
             player.ZoneId = zoneId;
+        }
+    }
+
+    // vmangos ExecuteTeleportNear → TeleportPositionRelocation (Unit.cpp:9855-9856): m_movementInfo.ChangePosition only. TeleportTo
+    // already stopped the motion; swimming, levitating and the other client state stay. The fall in progress ends (vmangos
+    // SetFallInformation(0) in the near branch of TeleportTo, Player.cpp:1932).
+    private void ArriveNear(Player player, TeleportDestination dest)
+    {
+        MovementInfo arrived = player.Movement;
+        arrived.X = dest.X;
+        arrived.Y = dest.Y;
+        arrived.Z = dest.Z;
+        arrived.Orientation = dest.Orientation;
+        player.ApplyMovement(arrived, _world.NowMs);
+        if (LocomotionStates.TryGet(player, out LocomotionState state))
+        {
+            state.ResetFall();
         }
     }
 
