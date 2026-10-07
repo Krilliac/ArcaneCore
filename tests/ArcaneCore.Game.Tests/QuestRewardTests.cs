@@ -349,13 +349,12 @@ public sealed class QuestRewardTests
     }
 
     [Fact]
-    public void TurnInRequestsCannotCreditMissingKills_AndTalkingCannotCreditOrdinaryKills()
+    public void TurnInRequestsCannotCreditMissingKills()
     {
         using var kit = new Kit(complete: false);
         kit.Services.CompleteQuest(kit.Player, kit.Creature.Guid, QuestId);
         Assert.Equal(WorldOpcode.SmsgQuestgiverRequestItems, kit.Session.Next().Opcode);
         kit.Services.RequestReward(kit.Player, kit.Creature.Guid, QuestId);
-        kit.Services.TalkedToCreature(kit.Player, 90, kit.Creature.Guid);
         Assert.Equal(QuestStatus.Incomplete, kit.State.Quests.Get(QuestId)!.Status);
         Assert.Equal(1u, kit.State.Quests.Get(QuestId)!.CreatureOrGOCount[0]);
         Assert.Empty(kit.Sink.Rows);
@@ -365,6 +364,29 @@ public sealed class QuestRewardTests
         kit.Session.Clear();
         kit.Services.RequestReward(kit.Player, kit.Creature.Guid, QuestId);
         Assert.Equal(WorldOpcode.SmsgQuestgiverOfferReward, kit.Session.Next().Opcode);
+    }
+
+    [Fact]
+    public void TalkingCreditsASpeakToObjective_OnAQuestWithoutTheExplorationFlag()
+    {
+        // vmangos Player::TalkedToCreature: KILL_OR_CAST | SPEAKTO and not EXPLORATION_OR_EVENT (Player.cpp TalkedToCreature).
+        using var kit = new Kit(complete: false);
+        kit.Services.TalkedToCreature(kit.Player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 2));
+        Assert.Equal(2u, kit.State.Quests.Get(QuestId)!.CreatureOrGOCount[0]);
+        Assert.Equal(QuestStatus.Complete, kit.State.Quests.Get(QuestId)!.Status);
+        Assert.Contains(kit.Session.Sent, p => p.Opcode == WorldOpcode.SmsgQuestupdateAddKill);
+    }
+
+    [Fact]
+    public void TalkingDoesNotCreditAnExplorationQuest_ThatAlsoNamesTheCreature()
+    {
+        var quest = new QuestTemplate { Entry = QuestId, Method = 2, ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 2,
+            SpecialFlags = (byte)QuestSpecialFlags.ExplorationOrEvent, RequestItemsText = "Bring it." };
+        using var kit = new Kit(quest, complete: false);
+        kit.Services.TalkedToCreature(kit.Player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 2));
+        Assert.Equal(1u, kit.State.Quests.Get(QuestId)!.CreatureOrGOCount[0]);
+        Assert.Equal(QuestStatus.Incomplete, kit.State.Quests.Get(QuestId)!.Status);
+        Assert.DoesNotContain(kit.Session.Sent, p => p.Opcode == WorldOpcode.SmsgQuestupdateAddKill);
     }
 
     private const uint QuestId = 900001;
