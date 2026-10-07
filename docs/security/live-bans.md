@@ -45,6 +45,7 @@ Administrator for `ban ip` and every `unban`.
 | `Bans:ProtectHigherSecurity` | `true` (stricter than retail) | Refuse `.ban account` / `.ban character` against an account whose security is equal to or higher than the invoker's (banning your own account still works). vmangos has no such guard; set `false` for exact parity. Not applied to `.ban ip` or to unbans |
 | `Auth:IpBanCacheSeconds` (realm daemon) | `60` (not retail) | How long the logon daemon uses its in-memory copy of `ip_banned` before reloading it; `0` reads the row on every challenge, as vmangos realmd |
 | `Bans:RealmId` | `1` | Written to `account_banned.realm` (vmangos `realmID`); never filtered on, as retail |
+| `Bans:BanListCharacterIncludesHistory` | `false` (narrower than retail) | `.banlist character` lists only accounts with a ban in force; `true` lists every account with any ban row, as vmangos |
 | `Bans:MaxListedEntries` | `200` (stricter than retail) | The most entries one `.baninfo` history or `.banlist` reply prints before a "more entries exist" line; `.banlist character` also stops its per-account history queries there. Retail prints everything; `0` restores that |
 
 Behaviour retail mandates (kick on `.ban`, refusal at logon and world auth, IP-ban refusal, the
@@ -91,9 +92,12 @@ author is not kicked by their own ban) has no switch.
   async holder fails silently).
 * `.baninfo account`/`character` and `.banlist` of characters read the account name through `IAccountAdmin`; the
   `<hidden>` reason branch of vmangos is not implemented (it reads a `gmlevel` column no vmangos INSERT ever writes).
-* `.banlist character` matches the name prefix in the world's character directory (`CharacterDirectory`) and checks the
-  owner accounts for **any** history (expired, inactive and unban audit rows included) in batches of 200, one query per
-  batch, stopping once one more than `Bans:MaxListedEntries` accounts with history were found. `Bans:MaxListedEntries`
+* `.banlist character` matches the name prefix in the world's character directory (`CharacterDirectory`) and lists the
+  owner accounts that have a ban **in force**, the same rule as `.banlist account` (since wave 2). vmangos lists every
+  owner account with **any** `account_banned` row, expired, lifted and unban audit rows included
+  (`AccountCommands.cpp:835-853, 886-905`), while its `.banlist account` requires `active = 1` (`:855-884`);
+  `Bans:BanListCharacterIncludesHistory = true` restores that broad listing. Owners are checked in batches of 200, one
+  query per batch, stopping once one more than `Bans:MaxListedEntries` matching accounts were found. `Bans:MaxListedEntries`
   (default 200, a deliberate deviation only above that many entries; `0` restores retail's unbounded output) caps every
   `.banlist` reply and therefore also the work of the character listing. (The Codex line's separate
   `CharacterListMaxResults` cap and store-side prefix query were superseded by this at the 2026-10-07 integration.)

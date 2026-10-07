@@ -55,7 +55,7 @@ public sealed class BanCommands : ICommandGroup
         new ChatCommand("banlist", AccountSecurity.Moderator, "List bans.", Children:
         [
             new ChatCommand("account", AccountSecurity.Moderator, "Syntax: .banlist account [$Name] — accounts with a ban whose name starts with $Name.", BanListAccount),
-            new ChatCommand("character", AccountSecurity.Moderator, "Syntax: .banlist character $Name — banned accounts owning a character whose name starts with $Name.", BanListCharacter),
+            new ChatCommand("character", AccountSecurity.Moderator, "Syntax: .banlist character $Name — accounts with a ban in force owning a character whose name starts with $Name.", BanListCharacter),
             new ChatCommand("ip", AccountSecurity.GameMaster, "Syntax: .banlist ip [$Ip] — banned addresses starting with $Ip.", BanListIp),
         ]),
     ];
@@ -417,17 +417,21 @@ public sealed class BanCommands : ICommandGroup
                 return;
             }
 
-            // HandleBanListHelper: the header, then the name of every such account that has any ban row. Accounts are
-            // checked HistoryBatch at a time (one query per batch) and the walk ends as soon as one more than
+            // HandleBanListHelper: the header, then the name of every such account that has a ban in force (by default,
+            // as .banlist account) or, with Bans:BanListCharacterIncludesHistory, any ban row at all (vmangos). Accounts
+            // are checked HistoryBatch at a time (one query per batch) and the walk ends as soon as one more than
             // Bans:MaxListedEntries names are known, so the work is bounded, not just the printed lines.
             context.Reply(BanCommandText.BanListMatchingAccount);
             IAccountAdmin admin = services.GetRequiredService<IAccountAdmin>();
-            int max = OptionsOf(context).MaxListedEntries;
+            BanOptions options = OptionsOf(context);
+            int max = options.MaxListedEntries;
             var lines = new List<string>();
             bool truncated = false;
             foreach (int[] batch in accountIds.Chunk(HistoryBatch))
             {
-                IReadOnlySet<int> withHistory = await bans.FindAccountsWithHistoryAsync(batch).ConfigureAwait(false);
+                IReadOnlySet<int> withHistory = options.BanListCharacterIncludesHistory
+                    ? await bans.FindAccountsWithHistoryAsync(batch).ConfigureAwait(false)
+                    : await bans.FindBannedAccountsAsync(batch).ConfigureAwait(false);
                 int[] hits = [.. batch.Where(withHistory.Contains)];
                 if (hits.Length == 0)
                 {

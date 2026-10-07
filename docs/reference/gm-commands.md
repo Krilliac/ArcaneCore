@@ -160,7 +160,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.baninfo ip` | 3 | GameMaster | stored level through the map | Syntax: .baninfo ip $Ip |
 | `.banlist` ... | 1 | Moderator | stored level through the map | List bans. |
 | `.banlist account` | 1 | Moderator | stored level through the map | Syntax: .banlist account [$Name] — accounts with a ban whose name starts with $Name. |
-| `.banlist character` | 1 | Moderator | stored level through the map | Syntax: .banlist character $Name — banned accounts owning a character whose name starts with $Name. |
+| `.banlist character` | 1 | Moderator | stored level through the map | Syntax: .banlist character $Name — accounts with a ban in force owning a character whose name starts with $Name. |
 | `.banlist ip` | 3 | GameMaster | stored level through the map | Syntax: .banlist ip [$Ip] — banned addresses starting with $Ip. |
 | `.neargrave` | 3 | GameMaster | stored level through the map | Syntax: .neargrave [alliance\|horde] Find the graveyard nearest to you that serves your zone (for the given team, or any). |
 | `.explorecheat` | 1 | Moderator | stored level through the map | Syntax: .explorecheat #flag - 1 reveals every zone, 0 hides them (vmangos: the effect lands on you). |

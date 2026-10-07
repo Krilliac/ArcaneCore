@@ -61,4 +61,13 @@ public sealed class BanOptions
     /// unbounded output. Bound from Bans:MaxListedEntries; default 200 (a deliberate deviation, only above that many entries).
     /// </summary>
     public int MaxListedEntries { get; set; } = 200;
+
+    /// <summary>
+    /// <c>.banlist character</c> also lists accounts whose only rows are expired, lifted (inactive) or unban audit rows. vmangos
+    /// does (HandleBanListCharacterCommand → HandleBanListHelper, AccountCommands.cpp:835-853, 886-905: any
+    /// <c>account_banned</c> row of the account), while its <c>.banlist account</c> lists only rows with <c>active = 1</c>
+    /// (:855-884). The default (false) narrows the character listing to accounts with a ban in force, the same rule as
+    /// <c>.banlist account</c> here; true restores vmangos' broad listing. Bound from Bans:BanListCharacterIncludesHistory.
+    /// </summary>
+    public bool BanListCharacterIncludesHistory { get; set; }
 }
