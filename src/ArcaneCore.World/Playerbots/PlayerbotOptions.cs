@@ -46,6 +46,9 @@ public sealed class PlayerbotOptions
     /// <summary>Milliseconds a local model choice may take before the rules decide (100..10000).</summary>
     public int LocalLlmTimeoutMs { get; set; } = 5000;
 
+    /// <summary>The scenario harness on a live world (<c>World:Playerbots:Scenarios</c>; off by default).</summary>
+    public PlayerbotScenarioOptions Scenarios { get; set; } = new();
+
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -80,5 +83,23 @@ public sealed class PlayerbotOptions
         if (string.IsNullOrWhiteSpace(LocalLlmModel) || LocalLlmModel.Length > 128 || LocalLlmModel.Any(char.IsControl)
             || LocalLlmContextSize is < 512 or > 2048 || LocalLlmTimeoutMs is < 100 or > 10_000)
             throw new InvalidOperationException($"{SectionName}: invalid bounded local model settings.");
+        if (Scenarios is null || Scenarios.MaxDurationSeconds is < 5 or > 600 || Scenarios.StepTimeoutSeconds is < 1 or > 300)
+            throw new InvalidOperationException($"{SectionName}:Scenarios: MaxDurationSeconds must be 5..600 and StepTimeoutSeconds 1..300.");
     }
+}
+
+/// <summary>
+/// <c>World:Playerbots:Scenarios</c>: whether an Administrator may run registered bot scenarios against the live world
+/// (<c>.playerbot scenario run</c>). Scenarios create/start their own managed bots in scripted mode and use world-thread
+/// setup helpers (placement, items, money, spells) that are never reachable by ordinary players.
+/// </summary>
+public sealed class PlayerbotScenarioOptions
+{
+    public bool Enabled { get; set; }
+
+    /// <summary>Wall-clock bound of one scenario run.</summary>
+    public int MaxDurationSeconds { get; set; } = 120;
+
+    /// <summary>Default bound of one WaitUntil step.</summary>
+    public int StepTimeoutSeconds { get; set; } = 20;
 }

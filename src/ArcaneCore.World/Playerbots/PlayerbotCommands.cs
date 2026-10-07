@@ -12,7 +12,7 @@ public sealed class PlayerbotCommands : ICommandGroup
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
         new ChatCommand("playerbot", AccountSecurity.GameMaster,
-            "Syntax: .playerbot <create|start|stop|status|list|inspect>\nManage server-owned autonomous players.",
+            "Syntax: .playerbot <create|start|stop|status|list|inspect|scenario>\nManage server-owned autonomous players.",
             Children:
             [
                 new ChatCommand("create", AccountSecurity.Administrator,
@@ -27,6 +27,7 @@ public sealed class PlayerbotCommands : ICommandGroup
                     "Syntax: .playerbot list\nList managed bots.", List),
                 new ChatCommand("inspect", AccountSecurity.GameMaster,
                     "Syntax: .playerbot inspect $id|$name\nRead actual target, victim, cast and nearby trainer facts.", Inspect),
+                Scenarios.PlayerbotScenarioCommands.Command,
             ])
     ];
 

@@ -149,7 +149,48 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         finally { _operations.Release(); }
     }
 
-    public async Task<PlayerbotOperationResult> StartAsync(string idOrName, CancellationToken cancellationToken = default)
+    public Task<PlayerbotOperationResult> StartAsync(string idOrName, CancellationToken cancellationToken = default)
+        => StartCoreAsync(idOrName, null, cancellationToken);
+
+    /// <summary>
+    /// Start a bot in scripted mode: <paramref name="controller"/> replaces <see cref="PlayerbotBrain"/> from the first
+    /// tick (the brain never runs). A bot that is already running is refused with "already-running"; switch it with
+    /// <see cref="SetControllerAsync"/> instead.
+    /// </summary>
+    public Task<PlayerbotOperationResult> StartScriptedAsync(string idOrName, IPlayerbotController controller,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(controller);
+        return StartCoreAsync(idOrName, controller, cancellationToken);
+    }
+
+    /// <summary>
+    /// Attach (scripted mode) or detach (null: back to autonomous mode) the controller of a running bot. Runs on the
+    /// world thread; false when the bot is not running.
+    /// </summary>
+    public Task<bool> SetControllerAsync(Guid botId, IPlayerbotController? controller)
+    {
+        if (_world is not { } world) return Task.FromResult(false);
+        return world.InvokeAsync(() =>
+        {
+            if (!_active.TryGetValue(botId, out ActiveBot? active) || active.Paused) return false;
+            IPlayerbotController? previous = active.Controller;
+            active.Controller = controller;
+            active.Session.ManagedBudget = null;
+            if (previous is not null && !ReferenceEquals(previous, controller)) previous.Detached(botId);
+            return true;
+        });
+    }
+
+    /// <summary>Whether a running bot is driven by a controller instead of the brain.</summary>
+    public bool IsScripted(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) && active.Controller is not null;
+
+    /// <summary>The ordinary session of a running bot (scenario harness; null when not running).</summary>
+    internal WorldSession? FindSession(Guid botId)
+        => _active.TryGetValue(botId, out ActiveBot? active) && !active.Paused ? active.Session : null;
+
+    private async Task<PlayerbotOperationResult> StartCoreAsync(string idOrName, IPlayerbotController? controller,
+        CancellationToken cancellationToken)
     {
         if (!_options.Enabled || _stopping) return new(false, "playerbots-disabled");
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -179,7 +220,8 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 .WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
             if (!entered) throw new InvalidOperationException("login-refused");
             bot = await PersistAsync(scope.ServiceProvider, bot with { State = ManagedPlayerbotState.Running }, cancellationToken).ConfigureAwait(false);
-            var active = new ActiveBot(bot, scope, session, new PlayerbotBrain(session, _options, _planner, _planningStop.Token));
+            var active = new ActiveBot(bot, scope, session, new PlayerbotBrain(session, _options, _planner, _planningStop.Token))
+            { Controller = controller };
             if (!_active.TryAdd(bot.BotId, active)) throw new InvalidOperationException("duplicate-bot");
             retained = true;
             logger.LogInformation("Started managed playerbot {BotId}, character {CharacterId}", bot.BotId, bot.CharacterId);
@@ -257,6 +299,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         {
             active.Paused = true;
             active.Brain.Stop();
+            if (Interlocked.Exchange(ref active.Controller, null) is { } controller) controller.Detached(bot.BotId);
             try
             {
                 active.Record = await PersistAsync(active.Scope.ServiceProvider, active.Record with
@@ -311,8 +354,20 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             {
                 uint sinceLast = unchecked(_world!.NowMs - active.LastUpdateMs);
                 active.LastUpdateMs = _world.NowMs;
-                active.Session.ManagedBudget = budget;
-                try { active.Brain.Update(sinceLast); }
+                try
+                {
+                    if (active.Controller is { } controller)
+                    {
+                        // Scripted mode: the brain is suppressed and the shared action budget does not apply.
+                        active.Session.ManagedBudget = null;
+                        controller.Tick(active.ControllerContext, sinceLast);
+                    }
+                    else
+                    {
+                        active.Session.ManagedBudget = budget;
+                        active.Brain.Update(sinceLast);
+                    }
+                }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 { logger.LogWarning("Playerbot {BotId} action failed ({Type})", active.Record.BotId, ex.GetType().Name); active.Session.Kick(); }
             }
@@ -424,5 +479,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         public uint MapId = session.Player!.Map!.MapId;
         public uint LastUpdateMs = session.World.NowMs;
         public volatile bool Paused;
+        public IPlayerbotController? Controller;
+        public PlayerbotControllerContext ControllerContext { get; } = new(record.BotId, session);
     }
 }

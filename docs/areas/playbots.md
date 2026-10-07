@@ -1,4 +1,135 @@
-# Autonomous protocol playtest clients
+# Playerbots and playtest clients
+
+ArcaneCore has two kinds of bot. **Managed playerbots** are server-owned P0 players inside the
+world daemon (`src/ArcaneCore.World/Playerbots/`); they run autonomously or are driven by a
+script, which is the **scenario harness** for automated testing of game systems. The
+**MockClient playbot** (`arcane-mock playbot`, last section) is an external build-5875
+protocol client.
+
+## Managed playerbots
+
+`ManagedPlayerbotFeature` (`IPlayerbotService`) owns persistent bot characters on random,
+password-less Player accounts and logs them in through an ordinary socketless `WorldSession`
+(`Net/ManagedWorldSession.cs`): every bot action is a real CMSG run through the real world
+handler (`TryManagedAction`), and server replies are captured into a bounded outbound queue.
+Configuration is `World:Playerbots` (`Enabled`, `MaxBots` 8, `ThinkIntervalMs` 500,
+`MaxActionsPerTick` 4, `AllowedMaps` [0, 1], `AllowLocalLlm`, ...; off by default).
+
+GM commands: `.playerbot create|start|stop` (Administrator), `.playerbot status|list|inspect`
+(GameMaster), `.playerbot scenario list|run` (Administrator, below). The autonomous brain's
+behaviour is described in `docs/integration/playerbot-*.md`.
+
+### Autonomous and scripted mode
+
+By default a running bot is **autonomous**: each world tick `PlayerbotBrain` chooses quest,
+town, trainer, combat, loot and recovery goals within the shared per-tick action budget.
+
+In **scripted mode** an `IPlayerbotController` replaces the brain.
+`ManagedPlayerbotFeature.StartScriptedAsync(idOrName, controller)` starts a bot that way;
+`SetControllerAsync(botId, controller)` switches a running bot (null returns it to autonomous
+mode). While scripted, the brain is never updated (no goals, no packets drained, no actions)
+and the shared action budget does not apply; the controller's `Tick` runs on the world thread
+every tick with a `PlayerbotControllerContext` (`TryAction`, `AcknowledgeServerOrders`).
+Stopping a bot detaches its controller; `IsScripted(botId)` reports the mode. Switching back
+to autonomous mode resumes the brain with whatever state it had before.
+
+## Scenario harness
+
+Namespace `ArcaneCore.World.Playerbots.Scenarios`. A scenario is an `IPlayerbotScenario`
+(`Name`, `Description`, `RunAsync(ScenarioContext)`) that logs managed bots in scripted mode
+and drives them step by step against the real world handlers, asserting server state.
+`ScenarioRunner.RunAsync(scenario, bots, world, services, clock, options)` runs it and returns
+a `ScenarioReport`; afterwards it stops (logs out and saves) the bots, or returns them to
+autonomous mode (`ScenarioRunOptions.StopBotsAfterRun`).
+
+**Bots.** `ScenarioContext.LoginAsync(name, race, class)` reuses the bot of that name or
+creates one, and starts it scripted. `ScenarioBot` is the controller: it records every packet
+it sends and every packet its session captures (`ScenarioPacketLog`, run-wide sequence
+numbers; the tap sits before the session's bounded drain queue, so bursts cannot evict a
+reply) and, by default, acknowledges server teleports and movement orders like a client.
+
+**Typed client actions** (`ScenarioBot`; each runs one CMSG through its handler and the bool
+is transport admission only, outcomes come from replies or state): `TargetAsync`,
+`AttackAsync` (selection + swing), `StopAttackAsync`, `CastAsync`; `LootAsync`,
+`LootMoneyAsync`, `LootItemAsync`, `ReleaseLootAsync`, `UseGameObjectAsync`; `InviteAsync`,
+`AcceptInviteAsync`, `DeclineInviteAsync`, `LeaveGroupAsync`, `SetLootMethodAsync`;
+`InitiateTradeAsync`, `BeginTradeAsync`, `SetTradeItemAsync` (item GUID; bag and slot are
+resolved), `SetTradeGoldAsync`, `AcceptTradeAsync`, `CancelTradeAsync`; `SendMailAsync`,
+`GetMailListAsync`, `TakeMailItemAsync`, `TakeMailMoneyAsync`; `RequestDuelAsync` (spell 7266),
+`AcceptDuelAsync`, `CancelDuelAsync`; `SayAsync`, `PartyAsync`, `WhisperAsync`, `ChatAsync`
+(in the bot's team language: the server refuses Universal outside AFK/DND); `QuestHelloAsync`,
+`AcceptQuestAsync`, `CompleteQuestAsync`, `RequestQuestRewardAsync`, `ChooseQuestRewardAsync`;
+`AreaTriggerAsync` (instance entry: the far teleport is then acknowledged automatically);
+`SendAsync(opcode, payload)` for anything else. Payload layouts are in `ScenarioPackets` and
+follow the server's own handler parsing. The MockClient keeps its own independent encodings
+on purpose (it is a second oracle), so the builders are not shared with it.
+
+**Typed decoders** (`ScenarioDecoders`, mirroring the server writers): group list, party
+command result, group invite, trade status, mail result and mail-list count, duel requested,
+duel complete, duel winner, loot response, loot-money share, attacker state update, spell go,
+cast result, spell failure, chat message, XP gain, quest kill update and quest complete.
+`ScenarioBot.WaitForPacketAsync(opcode, decoder, match, since)` waits for a decoded reply
+received after a `Mark()`.
+
+**Setup helpers** (`ScenarioContext`, world thread, harness only): `PlaceAsync` (an ordinary
+teleport, waited until acknowledged and arrived), `PlaceFacingAsync` (two bots face to face,
+two yards apart), `GiveItemAsync`, `GiveMoneyAsync`, `LearnSpellAsync`, `SetHealthAsync`. They
+exist only on the harness object, which only tests and the Administrator-only, config-gated
+scenario command construct; no opcode or player command reaches them.
+
+**Steps, waits, assertions, report.** `StepAsync(name, body)` records each step's wall and
+game time; the first failing step ends the run. `WaitUntilAsync(what, condition, timeout)`
+evaluates the condition on the world thread and is always bounded. `Expect`, `ExpectEqual`,
+`ExpectAsync(bot, fact)`, `ExpectMoneyAsync`, `ExpectItemCountAsync`, `ExpectGroupAsync` (server
+roster) and `QuestStateAsync` assert server state. `ScenarioReport` lists the steps (ok/FAIL,
+wall ms, game ms) and, on failure, the failing step, the message and each bot's last relevant
+packets (movement and object-update noise filtered).
+
+**Deterministic clock.** `WorldRuntime.UseManualClock(stepMs = 50)` is a code-only test seam
+(chosen before `Start`, never configuration). Game time (`NowMs`, `Uptime`, tick diffs) then
+advances only through `AdvanceClockAsync(ms)` or `AdvanceClockUntilAsync(max, condition)`, which
+run ticks of at most the step back to back and check the condition after every tick. Posted
+commands keep running every tick interval with a zero diff, so sessions and `InvokeAsync` work
+while the simulation stands still. `ScenarioClock.Manual(world, time)` drives it; a
+`ScenarioTimeProvider` registered as the host's `TimeProvider` follows game time tick by tick
+(mail delay, trade anti-scam window, duel countdown) and can jump ahead (`Advance`). On the
+manual clock a wait's timeout is game time, followed by a short wall-clock grace
+(`ManualWallGrace`, 3 s) for asynchronous I/O such as database commits. Code that reads
+`DateTime` or `Stopwatch` directly, rather than the world clock or `TimeProvider`, does not
+follow the manual clock. `ScenarioClock.Real` (live server) polls in wall time.
+
+**Built-in scenarios** (`PlayerbotScenarioCatalog`; bots `Scnalpha` and `Scnbeta`, created on
+first use): `smoke` (login, hear own /say), `group-chat` (invite, accept, both group lists and
+the server roster, party chat, leave), `trade` (Linen Cloth 2589 for 75 copper through the
+trade window; both inventories and purses), `duel` (spell 7266, accept, countdown, melee to the
+1-health finish; SMSG_DUEL_WINNER checked against server state). `IPlayerbotScenario` services
+registered in DI are listed too. `ScenarioSteps` holds reusable blocks (form a group, open and
+accept a trade, leave earlier groups).
+
+### Running scenarios on a live server
+
+`.playerbot scenario list` and `.playerbot scenario run <name>` (Administrator) run a registered
+scenario against the running world on the real clock and print the report lines to the GM.
+Both are refused unless `World:Playerbots:Enabled` and `World:Playerbots:Scenarios:Enabled` are
+true (default false). `World:Playerbots:Scenarios:MaxDurationSeconds` (120, 5..600) and
+`StepTimeoutSeconds` (20, 1..300) bound a run; one run at a time. Scenario bots are real,
+persistent characters (they count against `MaxBots`); they are placed where `Scnalpha`
+stands, and the setup helpers change their money, items and health. Enable it only on test
+realms.
+
+### Scenario tests
+
+`tests/ArcaneCore.World.Tests/Playerbots/Scenarios/`. `ScenarioTestWorld` is a `WorldTestHost`
+with the manual clock, a `ScenarioTimeProvider`, a SQLite character database (bots, items,
+mail, quests and spells persist through the real EF stores) and small synthetic content
+(`ScenarioTestContent`: a mailbox and a quest giver at the human start, a hostile wolf with
+loot and a kobold quest target 60+ yards away, the Duel spell and flag, faction templates).
+The tests run the built-ins plus `group-loot` (group, free-for-all loot, kill, money split,
+item), `mail-item` (persisted letter with item, delivery delay, take), `melee-kill` (swing,
+kill, XP credit) and `kill-quest` (accept, kill credit, turn in, settled reward row), and
+check database rows after the run. Setting `ARCANE_SCENARIO_REPORT_DIR` collects every report.
+
+## MockClient playbot (external protocol client)
 
 `arcane-mock playbot` runs one external build-5875 client against an owned numeric
 loopback realm. It uses the real SRP, world authentication, character creation,
