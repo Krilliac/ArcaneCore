@@ -25,7 +25,7 @@ enforcement.
 | Realm: IP ban -> `FAIL_NOACCESS 0x0D` before any SRP state; permanent -> `0x03`; temporary -> `0x0C` | `src/ArcaneCore.Realm/Net/LogonSession.cs` (optional trailing `IBanStore`) | `AuthSocket.cpp:338-352, 464-476` |
 | World authentication: `AUTH_BANNED 0x1C` for an account ban row or an IP ban, fail closed on a store error, post-`Register` re-check that closes the status-read/Register race | `src/ArcaneCore.World/Net/WorldSession.cs` | `WorldSocket.cpp:333-345` |
 | Live kick: a ban or status change disconnects the session (or every session from a banned address) through the normal close path, which saves the character; the banning author is skipped | `src/ArcaneCore.World/Bans/BanEnforcementFeature.cs` | `World.cpp:2469-2486, 2520-2570` (`LogoutPlayer(true)` + `KickPlayer`, author excluded at `:2552`) |
-| Optional periodic re-check for bans written by other processes | `src/ArcaneCore.World/Bans/BanRecheckFeature.cs` | none (see deviations) |
+| Periodic re-check for bans written by other processes (on by default, every 60 s) | `src/ArcaneCore.World/Bans/BanRecheckFeature.cs` | none (see deviations) |
 | `.ban`, `.unban`, `.baninfo`, `.banlist` x `account`/`character`/`ip` | `src/ArcaneCore.World/Bans/BanCommands.cs`, `BanCommandText.cs`, `Kernel/Accounts/BanTime.cs` | `AccountCommands.cpp:516-1010`, `World.cpp:2500-2665`, `Util.cpp:197-275`, `Chat.cpp:2818-2945` |
 | `arcane-account ban / unban / baninfo / banlist` | `tools/ArcaneCore.AccountTool/Program.cs` | n/a |
 
@@ -39,7 +39,7 @@ Administrator for `ban ip` and every `unban`.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `Bans:RecheckIntervalSeconds` | `0` (off, retail) | Re-check connected sessions against ban rows, IP bans and the status column every N seconds (fractions allowed) |
+| `Bans:RecheckIntervalSeconds` | `60` (stricter than retail) | Re-check connected sessions against ban rows, IP bans and the status column every N seconds (fractions allowed); `0` turns it off (retail). 60 is mangosd's `BanListReloadTimer` (`World.cpp:697`) |
 | `Bans:RevokeSessionKeyOnBan` | `false` (retail keeps the key) | Null the stored session key after a live ban; the next world reconnect then answers `UnknownAccount` instead of `AUTH_BANNED` |
 | `Bans:RejectUnparseableDuration` | `false` (retail) | Make a malformed `.ban` duration a syntax error instead of a permanent ban. A duration that overflows 32 bits of seconds (about 136 years) is always refused, by `.ban` and `arcane-account ban`, whatever this is set to: it never wraps into a short or permanent ban |
 | `Bans:ProtectHigherSecurity` | `true` (stricter than retail) | Refuse `.ban account` / `.ban character` against an account whose security is equal to or higher than the invoker's (banning your own account still works). vmangos has no such guard; set `false` for exact parity. Not applied to `.ban ip` or to unbans |
@@ -54,12 +54,13 @@ author is not kicked by their own ban) has no switch.
 * **The ban rows are the authority, the `Status` column stays an operator override** that is always honoured
   (existing tests and the Codex finding-4 tests are unchanged). Effective status: non-Active column wins, else a
   permanent row means Banned and a temporary one Suspended.
-* **Live re-check** (`Bans:RecheckIntervalSeconds`) is an ArcaneCore extension. Retail never kicks for an
-  externally written row: mangosd only reloads the IP cache every `BanListReloadTimer` and the account reload is
-  commented out (`AccountMgr.cpp:317-327`, `World.cpp:697` default 60, `mangosd.conf.dist.in:232-234,418` say 120).
+* **Live re-check** (`Bans:RecheckIntervalSeconds`) is an ArcaneCore extension, on by default since wave 2 (every
+  60 s, the period of mangosd's `BanListReloadTimer`). Retail never kicks for an externally written row: mangosd only
+  reloads the IP cache every `BanListReloadTimer` and the account reload is commented out (`AccountMgr.cpp:317-327`,
+  `World.cpp:697` default 60, `mangosd.conf.dist.in:232-234,418` say 120). Set `0` for exact retail.
 * **Events are in-process.** Only a ban written by this world process (`.ban`, the stores) kicks instantly. The
   realm daemon, `arcane-account` and raw SQL are separate processes; their bans apply at the next login or, with the
-  re-check on, within one interval. `arcane-account ban` says so when it runs.
+  re-check on (the default), within one interval. `arcane-account ban` says so when it runs.
 * **Fail open for live sessions, fail closed at authentication.** A store error during a re-check pass is logged,
   kicks nobody and the timer keeps running; a store error at logon or world auth closes the connection.
 * World IP check reads the rows at authentication; retail checks a cached list refreshed on a timer (stricter, not looser).
@@ -94,7 +95,7 @@ author is not kicked by their own ban) has no switch.
 
 ## Operator guidance
 
-* To enforce bans written by `arcane-account` or SQL on a running realm, set `Bans:RecheckIntervalSeconds` (tens of
+* Bans written by `arcane-account` or SQL reach a running realm within `Bans:RecheckIntervalSeconds` (60 s by default; tens of
   seconds on a large realm: each pass is a few indexed queries over the connected account ids).
 * To make a ban survive a world reconnect with a stale key, set `Bans:RevokeSessionKeyOnBan`.
 * Expired rows are purged at startup (`AuthDbInitializer`), at most hourly by the re-check, and by `.banlist`.

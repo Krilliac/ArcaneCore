@@ -106,4 +106,4 @@ Banned or Suspended, a fresh connection sends a correct `CMSG_AUTH_SESSION`.
   `AccountStatusEvents` the status-change event, and `BanEnforcementFeature` kicks the live world session through
   `SessionRegistry` (the normal close path, which saves the character). The stored key is revoked only with
   `Bans:RevokeSessionKeyOnBan` (default off, retail keeps it). Events are in-process; a ban written by another
-  process is enforced only with `Bans:RecheckIntervalSeconds` > 0.
+  process is enforced by the re-check, `Bans:RecheckIntervalSeconds` (60 s by default since wave 2; 0 turns it off).

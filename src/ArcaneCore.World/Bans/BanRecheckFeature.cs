@@ -13,8 +13,8 @@ namespace ArcaneCore.World.Bans;
 /// ban written outside this process (SQL, AccountTool in another process, another realm daemon) is enforced
 /// without waiting for the next login. This is an ArcaneCore extension: vmangos never kicks for an externally
 /// written row. Its mangosd only reloads the IP-ban cache every BanListReloadTimer seconds and the account-ban
-/// reload is commented out (AccountMgr.cpp:317-327, World.cpp:697). Off by default
-/// (<see cref="BanOptions.RecheckIntervalSeconds"/> = 0).
+/// reload is commented out (AccountMgr.cpp:317-327, World.cpp:697). On by default at that timer's 60 seconds;
+/// <see cref="BanOptions.RecheckIntervalSeconds"/> = 0 turns it off.
 /// <para>
 /// Fail open for live sessions: a store error is logged and the pass retried on the next tick, nobody is kicked
 /// on an error (a database blip must not disconnect the whole realm) and the timer never stops. Authentication
@@ -32,18 +32,22 @@ public sealed class BanRecheckFeature(IServiceProvider services, ILogger<BanRech
     private TimeProvider _clock = TimeProvider.System;
     private DateTimeOffset _lastPurge = DateTimeOffset.MinValue;
 
+    /// <summary>The re-check interval in force after <see cref="Attach"/>; null while the re-check is off (or not attached).</summary>
+    public TimeSpan? Interval { get; private set; }
+
     public void Attach(WorldRuntime world)
     {
-        double seconds = services.GetService<IOptions<BanOptions>>()?.Value.RecheckIntervalSeconds ?? 0;
+        double seconds = services.GetService<IOptions<BanOptions>>()?.Value.RecheckIntervalSeconds ?? BanOptions.DefaultRecheckIntervalSeconds;
         _registry = services.GetService<SessionRegistry>();
         _scopes = services.GetService<IServiceScopeFactory>();
         _clock = services.GetService<TimeProvider>() ?? TimeProvider.System;
         if (seconds <= 0 || _registry is null || _scopes is null)
         {
-            return; // retail: no re-check
+            return; // 0: no re-check (retail)
         }
 
         TimeSpan interval = TimeSpan.FromSeconds(seconds);
+        Interval = interval;
         logger.LogInformation("Live ban re-check every {Interval}", interval);
         _loop = Task.Run(() => RunAsync(interval, _stop.Token));
     }

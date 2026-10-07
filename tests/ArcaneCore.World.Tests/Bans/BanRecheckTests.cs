@@ -9,8 +9,9 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Bans;
 
 /// <summary>
-/// The optional periodic re-check enforces bans written outside the process (no event is published for them).
-/// Off by default: retail never kicks for an externally written row (AccountMgr.cpp:317-327).
+/// The periodic re-check enforces bans written outside the process (no event is published for them). On by default
+/// every 60 s (mangosd BanListReloadTimer); 0 turns it off, as retail never kicks for an externally written row
+/// (AccountMgr.cpp:317-327).
 /// </summary>
 public sealed class BanRecheckTests
 {
@@ -32,9 +33,26 @@ public sealed class BanRecheckTests
     }
 
     [Fact]
-    public async Task WithTheDefaultOff_AnExternalBanIsNotEnforced_AsInRetail()
+    public void TheDefaultInterval_IsMangosdsBanListReloadTimer_SixtySeconds()
+    {
+        // mangosd World.cpp:697 BanListReloadTimer = 60: a ban written by another process reaches a connected account
+        // within a minute by default; 0 is still accepted and turns the re-check off.
+        Assert.Equal(60, new BanOptions().RecheckIntervalSeconds);
+    }
+
+    [Fact]
+    public async Task WithNoBansSection_TheFeatureRunsAtTheDefaultInterval()
     {
         await using var host = WorldTestHost.Start();
+        BanRecheckFeature feature = host.WorldServices.GetServices<IWorldFeature>().OfType<BanRecheckFeature>().Single();
+        await WorldTestHost.WaitForAsync(() => feature.Interval is not null, "the feature to attach");
+        Assert.Equal(TimeSpan.FromSeconds(60), feature.Interval);
+    }
+
+    [Fact]
+    public async Task WithTheIntervalSetToZero_AnExternalBanIsNotEnforced_AsInRetail()
+    {
+        await using var host = WorldTestHost.Start(banOptions: new BanOptions { RecheckIntervalSeconds = 0 });
         await using WorldTestClient client = await host.EnterWorldAsync("RETAIL", "Retailer");
         int id = (await host.Accounts.FindByUsernameAsync("RETAIL"))!.Id;
 
