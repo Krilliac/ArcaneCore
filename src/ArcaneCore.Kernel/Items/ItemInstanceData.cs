@@ -31,6 +31,15 @@ public sealed record ItemInstanceData
 
     /// <summary>The generated, not yet taken loot of a container item, or null when none was generated (vmangos generated_loot + item_loot).</summary>
     public ItemLootData? Loot { get; init; }
+
+    /// <summary>
+    /// A gift-wrapped item's own entry (vmangos <c>character_gifts.item_id</c>); 0 when the item is not wrapped. While wrapped, <see cref="Entry"/>
+    /// is the wrapping paper's gift entry and <see cref="Flags"/> holds ITEM_DYNFLAG_WRAPPED.
+    /// </summary>
+    public uint GiftEntry { get; init; }
+
+    /// <summary>The wrapped item's own ITEM_FIELD_FLAGS (vmangos <c>character_gifts.flags</c>), restored when it is opened.</summary>
+    public uint GiftFlags { get; init; }
 }
 
 /// <summary>

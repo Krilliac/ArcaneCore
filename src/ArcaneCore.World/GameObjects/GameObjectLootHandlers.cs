@@ -132,6 +132,14 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_OPEN_ITEM: u8 bag, u8 slot.</summary>
     private static void OpenItem(WorldSession session, Player player, byte[] payload)
     {
+        // A wrapped gift opens into its contents (vmangos HandleOpenItemOpcode, SpellHandler.cpp:200-227), loot service or not.
+        if (payload.Length >= 2 && player.Inventory.GetItem(payload[0], payload[1]) is { } wrapped
+            && (wrapped.DynamicFlags & ItemDynFlags.Wrapped) != 0)
+        {
+            OpenGift(player, wrapped);
+            return;
+        }
+
         if (payload.Length < 2 || LootOf(session, player) is not { } loot)
         {
             return;
@@ -144,5 +152,23 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
         }
 
         loot.OpenItem(player, item);
+    }
+
+    /// <summary>The refusals before the wrapped branch, in vmangos order (SpellHandler.cpp:163-174): on a taxi, then dead.</summary>
+    private static void OpenGift(Player player, Item gift)
+    {
+        if ((player.UnitFlags & UnitFlags.TaxiFlight) != 0)
+        {
+            player.Inventory.SendEquipError(InventoryResult.CantDoRightNow, gift, null);
+            return;
+        }
+
+        if (!player.IsAlive)
+        {
+            player.Inventory.SendEquipError(InventoryResult.YouAreDead, gift, null);
+            return;
+        }
+
+        player.Inventory.OpenGift(gift);
     }
 }

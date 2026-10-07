@@ -42,7 +42,24 @@ public class Item : WorldObject
         SetUInt32(UpdateFields.ItemFieldDuration, template.Duration);
     }
 
-    public ItemTemplate Template { get; }
+    public ItemTemplate Template { get; private set; }
+
+    /// <summary>A gift-wrapped item's own entry (vmangos character_gifts.item_id); 0 when not wrapped (<see cref="PlayerInventory.WrapItem"/>).</summary>
+    public uint GiftEntry { get; internal set; }
+
+    /// <summary>A gift-wrapped item's own ITEM_FIELD_FLAGS (vmangos character_gifts.flags), restored when it is opened.</summary>
+    public uint GiftFlags { get; internal set; }
+
+    /// <summary>
+    /// vmangos Object::SetEntry on an item (gift wrapping and opening): the entry field and the template change, every other field stays, including
+    /// ITEM_FIELD_MAXDURABILITY. The owner sees the new entry in the next values update.
+    /// </summary>
+    internal void ChangeEntry(ItemTemplate template)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        Template = template;
+        SetUInt32(UpdateFields.ObjectFieldEntry, template.Entry);
+    }
 
     public uint Entry => Template.Entry;
 
@@ -226,6 +243,8 @@ public class Item : WorldObject
             Durability = Durability,
             TextId = GetUInt32(UpdateFields.ItemFieldItemTextId),
             Loot = Loot,
+            GiftEntry = GiftEntry,
+            GiftFlags = GiftFlags,
         };
     }
 
@@ -257,6 +276,11 @@ public class Item : WorldObject
             flags &= ~(uint)ItemDynFlags.Wrapped;
         }
 
+        // The gift contents exist only for a wrapped item (vmangos deletes the character_gifts row when it strips the flag, Item.cpp:452-458).
+        bool wrapped = (flags & (uint)ItemDynFlags.Wrapped) != 0 && data.GiftEntry != 0;
+        GiftEntry = wrapped ? data.GiftEntry : 0;
+        GiftFlags = wrapped ? data.GiftFlags : 0;
+
         SetUInt32(UpdateFields.ItemFieldFlags, flags);
         for (int i = 0; i < EnchantmentValues && i < data.Enchantments.Count; i++)
         {
@@ -264,7 +288,8 @@ public class Item : WorldObject
         }
 
         SetInt32(UpdateFields.ItemFieldRandomPropertiesId, data.RandomPropertyId);
-        SetUInt32(UpdateFields.ItemFieldDurability, Math.Min(data.Durability, MaxDurability));
+        // A wrapped item keeps its own durability: the gift template has none, and opening the gift restores the maximum (WrapItem/OpenGift).
+        SetUInt32(UpdateFields.ItemFieldDurability, wrapped ? data.Durability : Math.Min(data.Durability, MaxDurability));
         SetUInt32(UpdateFields.ItemFieldItemTextId, data.TextId);
         Loot = data.Loot;
     }
