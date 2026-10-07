@@ -18,6 +18,7 @@ namespace ArcaneCore.Game.Tests.Pets;
 /// </summary>
 public sealed class PetLifecycleFidelityTests
 {
+    private const uint PacifySpell = 910300;
     private const uint PetCastSpell = 910301;
 
     private static Creature Enemy(PetTestKit kit, float x, float y)
@@ -202,5 +203,28 @@ public sealed class PetLifecycleFidelityTests
         Assert.False(charm.IsReturning);
         float distance = MathF.Sqrt(((pet.X - owner.X) * (pet.X - owner.X)) + ((pet.Y - owner.Y) * (pet.Y - owner.Y)));
         Assert.True(distance < 6f, $"pet still {distance} yd from its owner");
+    }
+
+    [Fact]
+    public void APacifiedOwner_CannotSendItsPetToAttack()
+    {
+        // vmangos Unit::HandlePetCommand COMMAND_ATTACK: pCharmer->HasAuraType(SPELL_AURA_MOD_PACIFY) -> FEEDBACK_CANT_ATT_TARGET (Unit.cpp).
+        SpellInfo pacify = Spell(PacifySpell, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.ModPacify)) with
+        {
+            Duration = new SpellDuration(30_000, 0, 30_000),
+        };
+        using var kit = new PetTestKit([pacify]);
+        (Player owner, FakeSession session) = kit.AddPlayer(1, 5, 5);
+        kit.Cast(owner, PetSpell);
+        Creature pet = SummonOf(kit, SummonKind.Pet);
+        Creature enemy = Enemy(kit, 8, 5);
+        Assert.Equal(SpellCastResult.CastOk, kit.Cast(owner, PacifySpell));
+        session.Clear();
+
+        kit.Controller.HandleCommand(pet, CommandState.Attack, enemy);
+
+        Assert.Null(pet.Combat.Victim);
+        Assert.False(pet.Summon!.Charm!.IsCommandAttack);
+        Assert.Contains(session.Sent, p => p.Opcode == WorldOpcode.SmsgPetActionFeedback);
     }
 }

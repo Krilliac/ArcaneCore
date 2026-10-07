@@ -184,7 +184,8 @@ public sealed class PetController
             return;
         }
 
-        if (pet.Map is not { } map || !map.Combat.Hooks.CanAttack(owner, target))
+        // !pCharmer->IsValidAttackTarget(pTarget) || pCharmer->HasAuraType(SPELL_AURA_MOD_PACIFY)
+        if (pet.Map is not { } map || !map.Combat.Hooks.CanAttack(owner, target) || _spells()?.HasLiveAura(owner, AuraType.ModPacify) == true)
         {
             SendFeedback(owner, PetFeedback.CantAttackTarget);
             return;
