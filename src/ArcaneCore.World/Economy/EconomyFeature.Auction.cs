@@ -468,7 +468,13 @@ public sealed partial class EconomyFeature
         if (CharacterExists(auction.SellerId))
         {
             uint cut = AuctionHouseRules.Cut(house, auction.Bid, Options.AuctionRateCut);
-            uint proceeds = (uint)Math.Min(EconomyOptions.MaxMoney, (long)auction.Bid + auction.Deposit - cut);
+            if ((ulong)cut > (ulong)auction.Bid + auction.Deposit)
+            {
+                _logger.LogWarning("auction {Auction}: cut {Cut} of house {House} (cut percent {CutPercent}, rate {Rate}) exceeds bid {Bid} + deposit {Deposit}; the seller is paid nothing",
+                    auction.Id, cut, house.Id, house.CutPercent, Options.AuctionRateCut, auction.Bid, auction.Deposit);
+            }
+
+            uint proceeds = AuctionHouseRules.Proceeds(auction.Bid, auction.Deposit, cut);
             yield return AuctionMail(auction, auction.SellerId, AuctionMailAction.Successful, now, money: proceeds, cut: cut);
         }
     }

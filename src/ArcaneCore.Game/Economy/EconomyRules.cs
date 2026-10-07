@@ -205,6 +205,14 @@ public static class AuctionHouseRules
         float cut = (float)((ulong)house.CutPercent * bid) * rate / 100.0f;
         return cut >= uint.MaxValue ? uint.MaxValue : cut <= 0f ? 0u : (uint)cut;
     }
+
+    /// <summary>
+    /// The successful-sale letter's money: bid + deposit − cut (vmangos AuctionHouseMgr.cpp:226), capped at the money limit. A cut
+    /// above bid + deposit (a house row over 100%, or a large Rate.Auction.Cut) pays nothing; vmangos' uint32 subtraction wraps there.
+    /// </summary>
+    public static uint Proceeds(uint bid, uint deposit, uint cut)
+        => (uint)Math.Clamp((long)bid + deposit - cut, 0, EconomyOptions.MaxMoney);
+
     /// <summary>vmangos GetAuctionOutBid: 5% of the current bid in whole percents, at least 1 copper.</summary>
     public static uint OutBid(uint bid) => Math.Max(bid / 100 * 5, 1);
 

@@ -30,6 +30,25 @@ public sealed class AuctionFormulaTests
     }
 
     [Fact]
+    public void Proceeds_AreBidPlusDepositMinusCut_CappedAtTheMoneyLimit()
+    {
+        Assert.Equal(1045u, AuctionHouseRules.Proceeds(1000, 100, 55));
+        Assert.Equal(EconomyOptions.MaxMoney, AuctionHouseRules.Proceeds(uint.MaxValue, uint.MaxValue, 0));
+    }
+
+    [Fact]
+    public void Proceeds_ACutAboveBidPlusDepositPaysNothingInsteadOfWrapping()
+    {
+        // A house row with a cut percent above 100 (or a large Rate.Auction.Cut): vmangos' uint32 subtraction
+        // wraps to ~4 billion copper (AuctionHouseMgr.cpp:226); the seller gets nothing instead.
+        var greedy = new AuctionHouseEntry(AuctionHouseRules.AllianceHouse, 15, 250);
+        uint cut = AuctionHouseRules.Cut(greedy, 1000);
+        Assert.Equal(2500u, cut);
+        Assert.Equal(0u, AuctionHouseRules.Proceeds(1000, 100, cut));
+        Assert.Equal(0u, AuctionHouseRules.Proceeds(0, 0, 1));
+    }
+
+    [Fact]
     public void Cut_UsesTheRate_AndKeepsA64BitProductOnPurpose()
     {
         Assert.Equal(10u, AuctionHouseRules.Cut(Faction, 100, rate: 2f));
