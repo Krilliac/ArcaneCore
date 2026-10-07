@@ -35,7 +35,8 @@ when the stored values are clamped to them.
 ### Life persistence (characters schema module `CharacterLifeDataModule`)
 - `CharacterLifeDataModule.Version` (= 15 after the 2026-10-03 vanilla-wave integration, after skills at 14; it was 14 on the lane branch; tests use the
   constant): tables `character_vitals` (health, power1-5, xp, death_expire_time, is_ghost) and
-  `character_corpse` (map, position, orientation, ghost time, type). They mirror the vmangos
+  `character_corpse` (map, position, orientation, ghost time, type; the map instance, `InstanceId`, since
+  `CharacterCorpseInstanceDataModule`, characters v34 on the instances/death lane, vmangos `corpse.instance`). They mirror the vmangos
   `characters` columns `health, power1..power5, xp, death_expire_time`, the ghost flag, and the `corpse`
   table (`Player.cpp:16470-16476`, `14915-14917`), as separate tables so the shared `characters` row and
   its model are untouched; an absent row means "never saved with a life" and the fresh values stand.
