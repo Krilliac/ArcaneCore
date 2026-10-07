@@ -270,22 +270,21 @@ public sealed partial class SpellSystem
         // carries the auto-repeat attribute (wand Shoot, damage class magic), swings the RANGED weapon.
         WeaponAttackType attack = RangedSpellFacts.UsesRangedWeapon(context.Spell) ? WeaponAttackType.RangedAttack : WeaponAttackType.BaseAttack;
         float weapon = WeaponDamageRoll(context.Caster, attack, normalized);
-        float total = (weapon + bonus) * percent;
-        if (attack == WeaponAttackType.RangedAttack)
-        {
-            total += RangedDamageBonus.FlatBonus(this, context.Caster, context.Target, normalized); // auras 127, 131 and 113
-        }
+        float total = Math.Max(0f, (weapon + bonus) * percent);
 
-        total = Math.Max(0f, total);
-
-        // The DAMAGE spell mod on the done amount, before armor and crit (vmangos MeleeDamageBonusDone, SpellCaster.cpp:1446).
+        // vmangos MeleeDamageBonusDone (SpellCaster.cpp:1295-1455) for a weapon-based spell: creature type and attack power versus (auras 59,
+        // 102/131, 165/127 on the victim) and damage done versus (168); then the DAMAGE spell mod on the done amount, before armor and crit
+        // (:1446); then MeleeDamageBonusTaken (Unit.cpp:5676-5749: auras 125/113, 14, 87, 126/114).
+        SpellInfo damageSpell = WithWandSchool(context.Spell, context.Caster, attack);
+        total = MeleeDamageBonus.Done(this, context.Caster, context.Target, total, attack, normalized, context.Spell);
         total = ModFloat(context.Caster, context.Spell, SpellModOp.Damage, total);
+        total = MeleeDamageBonus.Taken(this, context.Caster, context.Target, total, attack, damageSpell.SchoolMask(), context.Spell);
         if (total < 1f)
         {
             return;
         }
 
-        DealDirectDamage(context.Caster, context.Target, WithWandSchool(context.Spell, context.Caster, attack), (uint)total, allowCrit: true);
+        DealDirectDamage(context.Caster, context.Target, damageSpell, (uint)total, allowCrit: true);
     }
 
     /// <summary>

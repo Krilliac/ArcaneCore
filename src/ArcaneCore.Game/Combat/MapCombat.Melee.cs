@@ -532,7 +532,20 @@ public sealed partial class MapCombat
             hit |= HitInfo.Pvp;
         }
 
-        uint damage = Dither(CalculateDamage(attacker, attackType));
+        // vmangos Unit::CalculateMeleeDamage (Unit.cpp:1362-1367): the weapon roll, the done bonuses (creature type and attack power versus,
+        // damage done versus), dithered, then the victim's taken modifiers, dithered again.
+        float rolled = CalculateDamage(attacker, attackType);
+        uint damage;
+        if (SpellMitigation is { } bonuses)
+        {
+            rolled = MeleeDamageBonus.Done(bonuses, attacker, victim, rolled, attackType);
+            damage = Dither(MeleeDamageBonus.Taken(bonuses, attacker, victim, Dither(rolled), attackType, SpellSchoolMasks.Of(SpellSchool.Normal)));
+        }
+        else
+        {
+            damage = Dither(rolled);
+        }
+
         uint afterArmor = Dither(MeleeHitTable.ApplyArmor(damage, victim.GetInt32(UpdateFields.UnitFieldResistances), attacker.Level));
         uint clean = damage > afterArmor ? damage - afterArmor : 0;
         damage = afterArmor;
