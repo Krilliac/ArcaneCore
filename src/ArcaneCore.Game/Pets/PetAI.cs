@@ -93,13 +93,8 @@ public sealed class PetAI : CreatureAI
             HandleReturnMovement(charm);
         }
 
-        // FOLLOW_MOTION_TYPE inform: the pet reached its follow point (PetAI::MovementInform)
-        if (charm.IsReturning && Me.Motion.CurrentType == MovementGeneratorType.Follow && !Me.IsMoving)
-        {
-            charm.ClearFlags();
-            charm.IsFollowing = true;
-        }
-
+        // Arrival at the follow point is the follow generator's FOLLOW_MOTION_TYPE inform (OnMovementInform), not a pause in
+        // the spline seen here: this tick runs before the motion update, and a pet that cannot move (casting) has not arrived.
         if (Me.IsAlive && Charm is not null)
         {
             Autocast(charm);
@@ -185,14 +180,25 @@ public sealed class PetAI : CreatureAI
     /// <summary>The point id of the move to the stay position (vmangos uses the pet's low GUID).</summary>
     private uint StayPointId => Me.Guid.Counter;
 
-    /// <summary>vmangos PetAI::MovementInform, POINT_MOTION_TYPE (PetAI.cpp:672-690).</summary>
+    /// <summary>vmangos PetAI::MovementInform (PetAI.cpp:663-698): the pet reached the stay point or its follow point.</summary>
     public override void OnMovementInform(MovementGeneratorType type, uint pointId)
     {
-        if (Charm is { } charm && type == MovementGeneratorType.Point && pointId == StayPointId && charm.IsReturning)
+        if (Charm is not { } charm || !charm.IsReturning)
+        {
+            return;
+        }
+
+        if (type == MovementGeneratorType.Point && pointId == StayPointId)
         {
             charm.ClearFlags();
             charm.IsAtStay = true;
             Me.Motion.Clear();
+        }
+        else if (type == MovementGeneratorType.Follow && pointId == Me.CharmerOrOwnerGuid.Counter)
+        {
+            // If data is owner's GUIDLow then we've reached follow point, otherwise we're probably chasing a creature
+            charm.ClearFlags();
+            charm.IsFollowing = true;
         }
     }
 

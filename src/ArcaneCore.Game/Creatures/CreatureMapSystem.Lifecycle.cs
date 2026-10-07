@@ -47,7 +47,12 @@ public sealed partial class CreatureMapSystem
         creature.NpcFlags = 0;
         creature.Target = default;
         creature.DeathState = CreatureDeathState.Corpse;
-        creature.CorpseDecayMs = creature.CorpseDecaySeconds(_options) * 1000;
+        creature.CorpseDecayMs = creature.Summon is { Kind: SummonKind.Pet or SummonKind.Guardian or SummonKind.MiniPet } petLinks
+            // vmangos Pet::SetDeathState(CORPSE) (Pet.cpp:649-653): every Pet object's corpse lasts 15 s, a hunter pet's an hour.
+            ? petLinks.Kind == SummonKind.Pet && creature.GetOwner() is Player { Class: Class.Hunter }
+                ? PetConstants.HunterPetCorpseDecayMs
+                : PetConstants.CorpseDecayMs
+            : creature.CorpseDecaySeconds(_options) * 1000;
         creature.SkinningForOthersMs = Creature.SkinningForOthersDefaultMs; // Creature.cpp:822-825: a new life, a new corpse
         creature.LootedForSkin = false;
         creature.RespawnAtMs = _clockMs + (creature.NextRespawnDelaySeconds() * 1000L);

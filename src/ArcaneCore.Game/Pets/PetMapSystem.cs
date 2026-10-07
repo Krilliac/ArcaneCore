@@ -194,8 +194,23 @@ public sealed class PetMapSystem : IMapUpdater
     /// <summary>vmangos Pet::Update (Pet.cpp:662-712) for the states a creature can be in here.</summary>
     private void UpdatePet(Creature pet, SummonLinks links, Unit? owner, uint diffMs)
     {
-        if (owner is null || !IsWithinLeash(pet, owner, Options) || (links.Kind == SummonKind.Pet && owner.PetGuid != pet.Guid))
+        // The leash does not hold a pet its owner is possessing (!(owner->GetCharmGuid() == GetObjectGuid()), Pet.cpp:670).
+        if (owner is null || (!IsWithinLeash(pet, owner, Options) && owner.CharmGuid != pet.Guid)
+            || (links.Kind == SummonKind.Pet && owner.PetGuid != pet.Guid))
         {
+            _service?.Unsummon(pet);
+            return;
+        }
+
+        // vmangos Player::SetDeathState(JUST_DIED): RemovePet(PET_SAVE_REAGENTS) and RemoveMiniPet() (Player.cpp:1527-1531)
+        // take a dead player's pet and mini pet at once, in combat or not; its guardians keep Pet::Update's rule below.
+        if (owner is Player deadOwner && !owner.IsAlive && links.Kind is SummonKind.Pet or SummonKind.MiniPet)
+        {
+            if (links.Kind == SummonKind.Pet)
+            {
+                _service?.QueueCurrentPetSave(deadOwner);
+            }
+
             _service?.Unsummon(pet);
             return;
         }
