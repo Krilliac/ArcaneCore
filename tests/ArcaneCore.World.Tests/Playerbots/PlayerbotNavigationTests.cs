@@ -94,8 +94,10 @@ public sealed class PlayerbotNavigationTests
                 Assert.False(PlayerbotNavigation.TryAdvance(session, route!, options, elapsed, host.World.NowMs));
                 Assert.Equal(before, new Vector3(player.X, player.Y, player.Z));
                 Assert.Equal(1, route!.NextPoint);
+                // One server time base for START and the heartbeat: the real clock keeps running between calls.
+                uint startedAt = host.World.NowMs;
                 session.ManagedBudget = new ManagedActionBudget(1);
-                Assert.True(PlayerbotNavigation.TryAdvance(session, route, options, elapsed, host.World.NowMs));
+                Assert.True(PlayerbotNavigation.TryAdvance(session, route, options, elapsed, startedAt));
                 Assert.Equal(0, session.ManagedBudget.Remaining);
                 Assert.Equal(before, new Vector3(player.X, player.Y, player.Z));
                 Assert.True(player.Movement.HasFlag(MovementFlags.Forward));
@@ -105,7 +107,7 @@ public sealed class PlayerbotNavigationTests
                 session.ManagedBudget = new ManagedActionBudget(1);
                 Assert.Equal(configuredSpeed < 7f, player.Movement.HasFlag(MovementFlags.WalkMode));
                 Assert.True(PlayerbotNavigation.TryAdvance(session, route, options, elapsed,
-                    unchecked(host.World.NowMs + elapsed)));
+                    unchecked(startedAt + elapsed)));
                 Assert.Equal(1, session.ManagedBudget.Remaining); // reporting its own motion costs no action budget
                 Assert.InRange(player.X - before.X, expected - 0.02f, expected + 0.02f);
                 Assert.InRange(Vector3.Distance(before, new(player.X, player.Y, player.Z)), expected - 0.02f, expected + 0.02f);
