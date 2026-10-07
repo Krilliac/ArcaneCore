@@ -828,6 +828,9 @@ How to read the tables:
 | `World:Playerbots:MaxRouteYards` | `float` | `2000` | - | The longest bot route in yards (above 0, at most 100000). |
 | `World:Playerbots:MoveSpeed` | `float` | `7` | - | The bots' movement speed in yards per second, never above the player's run speed (above 0, at most 100). |
 | `World:Playerbots:RestoreOnStartup` | `bool` | `false` | - | Log the saved managed bots back in when the world starts. |
+| `World:Playerbots:Scenarios:Enabled` | `bool` | `false` | - | Let an Administrator run registered bot scenarios against the live world (off by default). |
+| `World:Playerbots:Scenarios:MaxDurationSeconds` | `int` | `120` | - | Wall-clock bound of one scenario run in seconds (5..600). |
+| `World:Playerbots:Scenarios:StepTimeoutSeconds` | `int` | `20` | - | Default bound of one WaitUntil step in seconds (1..300). |
 | `World:Playerbots:ThinkIntervalMs` | `int` | `500` | - | Milliseconds between two decisions of a bot (50..60000). |
 
 ## `World:Social`

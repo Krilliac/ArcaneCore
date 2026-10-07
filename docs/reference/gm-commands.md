@@ -16,7 +16,7 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 5 |
 | `Moderator` | 1 | 21 |
 | `GameMaster` | 3 | 121 |
-| `Administrator` | 6 | 174 |
+| `Administrator` | 6 | 176 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -206,13 +206,16 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.spawninfo creature` | 2 | GameMaster | declared retail level | Syntax: .spawninfo creature [#radius] List the creatures within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
 | `.spawninfo gameobject` | 2 | GameMaster | declared retail level | Syntax: .spawninfo gameobject [#radius] List the game objects within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
 | `.spawninfo summary` | 2 | GameMaster | declared retail level | Syntax: .spawninfo summary Count the creatures and game objects of this map by state, including the respawn times kept for unloaded grids. |
-| `.playerbot` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot &lt;create\|start\|stop\|status\|list\|inspect&gt; Manage server-owned autonomous players. |
+| `.playerbot` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot &lt;create\|start\|stop\|status\|list\|inspect\|scenario&gt; Manage server-owned autonomous players. |
 | `.playerbot create` | 6 | Administrator | stored level through the map | Syntax: .playerbot create $name [#race #class] Create a persistent bot character. |
 | `.playerbot start` | 6 | Administrator | stored level through the map | Syntax: .playerbot start $id\|$name Start a persistent bot. |
 | `.playerbot stop` | 6 | Administrator | stored level through the map | Syntax: .playerbot stop $id\|$name Stop a persistent bot. |
 | `.playerbot status` | 3 | GameMaster | stored level through the map | Syntax: .playerbot status [$id\|$name] Show bot lifecycle status. |
 | `.playerbot list` | 3 | GameMaster | stored level through the map | Syntax: .playerbot list List managed bots. |
 | `.playerbot inspect` | 3 | GameMaster | stored level through the map | Syntax: .playerbot inspect $id\|$name Read actual target, victim, cast and nearby trainer facts. |
+| `.playerbot scenario` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot scenario &lt;list\|run $name&gt; Run scripted bot scenarios against the live world (World:Playerbots:Scenarios:Enabled). |
+| `.playerbot scenario list` | 6 | Administrator | stored level through the map | Syntax: .playerbot scenario list List the registered bot scenarios. |
+| `.playerbot scenario run` | 6 | Administrator | stored level through the map | Syntax: .playerbot scenario run $name Run one scenario with scripted bots and print its report. |
 | `.hotcode` ... (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Code hot reload (development runner). |
 | `.hotcode status` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode status — generation, frozen/degraded state and whether the process differs from the build. |
 | `.hotcode refresh` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode refresh — rescan opcode handlers, chat commands and default map updaters now. |
