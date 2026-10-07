@@ -214,7 +214,8 @@ public sealed class LootBag
 
     /// <summary>
     /// The durable record of this chest: the generation, who may take what and what was taken.
-    /// Chest loot holds no money (<c>mingold</c> is not imported), so a bag with gold cannot be stored.
+    /// The record has no money column, so a bag with gold cannot be stored; the durable open path generates no money
+    /// (<c>LootService.OpenDurableGameObject</c>) although the template's <c>mingold..maxgold</c> are imported.
     /// </summary>
     internal LootStateRecord ToRecord(LootStateKey key, uint sourceEntry, uint generation, long respawnAtUnix)
     {

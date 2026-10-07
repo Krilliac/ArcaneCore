@@ -31,6 +31,17 @@ public sealed record GameObjectTemplate
     /// <summary>The type-specific data columns, always <see cref="DataCount"/> long.</summary>
     public IReadOnlyList<uint> Data { get; init; } = new uint[DataCount];
 
+    /// <summary>
+    /// The money a loot-bearing object (a chest with a loot id) pays, in copper (<c>gameobject_template.mingold</c>; the two
+    /// fields after <c>data23</c> in the reference core's template struct, mangos <c>GameObjectInfo::MinMoneyLoot</c>,
+    /// Object/GameObject.h:415, rolled by <c>Loot::generateMoneyLoot</c> in Object/PlayerLoot.cpp:229). 0 for rows imported
+    /// before the column existed (world schema step <c>GameObjectTemplateGoldDataModule</c>).
+    /// </summary>
+    public uint MinGold { get; init; }
+
+    /// <summary><c>gameobject_template.maxgold</c> (mangos <c>GameObjectInfo::MaxMoneyLoot</c>); 0 means the object pays nothing.</summary>
+    public uint MaxGold { get; init; }
+
     /// <summary>A data column (0 when out of range).</summary>
     public uint GetData(int index) => index >= 0 && index < Data.Count ? Data[index] : 0;
 }

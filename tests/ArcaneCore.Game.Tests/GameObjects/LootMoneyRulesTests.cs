@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Loot;
+using ArcaneCore.Kernel.WorldData.GameObjects;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.GameObjects;
@@ -17,6 +18,43 @@ public sealed class LootMoneyRulesTests
 
     [Fact]
     public void MaxEqualMin_UsesMax() => Assert.Equal(77u, LootMoneyRules.Generate(77, 77, 1f, new Random(2)));
+
+    // --- game objects (mangos Object/PlayerLoot.cpp:222-229: generateMoneyLoot(MinMoneyLoot, MaxMoneyLoot) behind "if (!lootid) break;") ---
+
+    [Fact]
+    public void GameObject_WithoutALootId_PaysNothing_EvenWithAGoldRange()
+    {
+        var chest = new GameObjectTemplate { Entry = 1, Type = 3, MinGold = 100, MaxGold = 200 };
+        Assert.Equal(0u, LootMoneyRules.GenerateForGameObject(chest, 0, 1f, new Random(3)));
+    }
+
+    [Fact]
+    public void GameObject_WithoutAGoldRange_PaysNothing()
+    {
+        var chest = new GameObjectTemplate { Entry = 1, Type = 3 };
+        Assert.Equal(0u, LootMoneyRules.GenerateForGameObject(chest, 5, 1f, new Random(3)));
+    }
+
+    [Fact]
+    public void GameObject_WithALootId_RollsTheTemplateRange_AndAppliesTheRate()
+    {
+        var chest = new GameObjectTemplate { Entry = 1, Type = 3, MinGold = 30, MaxGold = 40 };
+        var random = new Random(9);
+        var seen = new HashSet<uint>();
+        for (int i = 0; i < 400; i++)
+        {
+            uint gold = LootMoneyRules.GenerateForGameObject(chest, 5, 1f, random);
+            Assert.InRange(gold, 30u, 40u);
+            seen.Add(gold);
+        }
+
+        Assert.Equal(11, seen.Count);
+        Assert.Equal(80u, LootMoneyRules.GenerateForGameObject(chest with { MinGold = 40 }, 5, 2f, random)); // max == min pays max, scaled
+    }
+
+    [Fact]
+    public void GameObject_NullTemplate_IsRejected()
+        => Assert.Throws<ArgumentNullException>(() => LootMoneyRules.GenerateForGameObject(null!, 5, 1f, new Random(1)));
 
     [Fact]
     public void RangeBelow32700_IsUniformInclusive()

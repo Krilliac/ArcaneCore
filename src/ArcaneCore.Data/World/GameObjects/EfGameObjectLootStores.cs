@@ -28,6 +28,8 @@ public sealed class EfGameObjectDataStore(WorldDbContext db) : IGameObjectDataSt
                 Flags = t.Flags,
                 Size = t.Size,
                 Data = t.GetData(),
+                MinGold = t.MinGold,
+                MaxGold = t.MaxGold,
             }),
             spawns.Select(s => new GameObjectSpawn
             {

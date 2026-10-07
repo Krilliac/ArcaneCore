@@ -112,7 +112,7 @@ All other files are new:
   - Quest items are only generated for players who need them.
   - The party-loot flag (0x800) gives each recipient a copy.
   - Unknown items are skipped.
-  - Rows with a condition are skipped unless `LootService.Conditions` (a `Func<Player, uint, bool>` seam) accepts them for a recipient. Nothing sets it yet.
+  - Rows with a condition are skipped unless `LootService.Conditions` (a `Func<Player, uint, bool>` seam) accepts them for a recipient. The world daemon wires it to the `ConditionFeature` (lane L9, [area doc](../areas/loot-conditions-chest-gold.md)).
 - **Corpse loot.**
   - The killer (or their group in range) are the recipients.
   - Creatures drop gold from `creature_loot_info`.
@@ -168,7 +168,7 @@ run fully in memory.
   startup purge in `EfLootStateStore.LoadInstanceStatesAsync` (rows of a missing instance go), which runs in
   `GameObjectLootFeature.Attach` before `InstanceManager.Load`; the co-delete is hygiene. A commit that
   finishes after its instance was deleted never re-enters the cache.
-- **Gold.** Chests hold no gold (`mingold` is not imported), so the record has no money. Corpse group
+- **Gold.** The record has no money column, so durable chests generate none (shared-copy chests pay the template's `mingold..maxgold` since lane L9, [area doc](../areas/loot-conditions-chest-gold.md)). Corpse group
   splits are unchanged: a split is deferred as a whole while any eligible sharer has a settlement
   pending, which now includes a recipient whose chest take is in flight; the original shares are
   paid after it ends.
@@ -223,7 +223,7 @@ reconcile to Before.
 - A character deleted after it was recorded keeps its id in chest rows (inert history, see
   [character-delete.md](character-delete.md)); on engines that reuse the highest character id a later
   character with that id would count as having been a recipient of those chests.
-- Temporary and runtime chests in instances stay Unsupported. Chest gold is not generated or stored.
+- Temporary and runtime chests in instances stay Unsupported. Durable chest gold is not generated or stored (the record has no money column).
 - A lost queued `InstanceSaved` write (three attempts) makes the chests of that instance refuse (`ScopeMissing`)
   until restart: visible, but safe.
 - Not run in this session: MariaDB and PostgreSQL (the Data tests run on SQLite here, there is no server on this
@@ -247,11 +247,11 @@ test hosts (`WorldTestHost.WorldServices`, `InMemoryInstanceStore.Live/Deleted/S
   - There is no master loot, need/greed or group-loot roll UI. Those methods fall back to round robin.
   - Looter changes are not broadcast to the group.
   - There is no tap list: the killer decides the recipients.
-- **Conditions.** `condition_id` rows are skipped: no conditions evaluator is wired into `LootService.Conditions` yet.
+- **Conditions.** Closed by lane L9: `LootService.Conditions` is wired to the `ConditionFeature`. A conditioned row is still generated for the whole group when any recipient meets it ([area doc](../areas/loot-conditions-chest-gold.md)).
 - **Spell side.**
   - No cast time, skill-ups or spell-driven opening (`OpenLock` is the hook for the spells area).
   - Chairs, traps, rituals, spell casters, meeting stones, flag stands and transports are not usable. Fishing nodes are used through the fishing area's use handler (`RegisterUseHandler`).
-- **Chest gold.** vmangos `gameobject_template` mingold/maxgold is not imported (so durable chest state has no money).
+- **Chest gold.** `gameobject_template` mingold/maxgold are imported (world step `GameObjectTemplateGoldDataModule`, lane L9) and paid by shared-copy chests; durable instance chests still pay nothing because their record has no money column.
 - **Quest givers.** The quest-giver object type only calls the seam; the quest area must implement `IGameObjectQuestGiver`.
 - **Polling.**
   - Quest flags are re-checked every 1 s by polling, not on quest events.

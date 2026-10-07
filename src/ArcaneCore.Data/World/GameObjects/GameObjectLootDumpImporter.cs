@@ -31,6 +31,7 @@ public sealed record GameObjectLootImportReport(
 /// cmangos columns: <c>gameobject_template.entry,type,displayId,name,faction,flags,size,data0..23</c>,
 /// <c>gameobject.guid,id,map,position_*,orientation,rotation0..3,spawntimesecs[min],spawntimesecsmax,animprogress,state</c>
 /// (cmangos classic-db keeps <c>animprogress</c> and <c>state</c> in <c>gameobject_addon</c>; vmangos adds <c>spawn_flags</c>),
+/// <c>gameobject_template.mingold,maxgold</c> (chest money, absent in older dumps),
 /// <c>*_loot_template.entry,item,ChanceOrQuestChance,groupid,mincountOrRef,maxcount,condition_id</c> and the
 /// <c>creature_template.LootId,SkinningLootId,MinLootGold,MaxLootGold</c> columns. vmangos uses
 /// <c>loot_id,skinning_loot_id,gold_min,gold_max</c> and patch-versioned rows: the template with the
@@ -335,6 +336,11 @@ public sealed class GameObjectLootDumpImporter
             Faction = U32(row, "faction"),
             Flags = U32(row, "flags"),
             Size = F32(row, 1.0f, "size"),
+
+            // cmangos classic-db and vmangos both carry the chest money as mingold/maxgold after data23 (the reference core reads
+            // them into GameObjectInfo::MinMoneyLoot/MaxMoneyLoot, the last two fields of its template format). Absent columns read 0.
+            MinGold = U32(row, "mingold"),
+            MaxGold = U32(row, "maxgold"),
         };
         t.SetData(data);
         _templates[entry] = (patch, t);
