@@ -342,7 +342,12 @@ public sealed class PlayerStatSystem : ICombatStatSource
             BaseValue: 0.0f,
             BasePct: 1.0f,
             TotalValue: state.TotalDamage(attackType),
-            TotalPct: UnitModConstants.Default(UnitModifierType.TotalPct, offHand ? UnitMods.DamageOffHand : UnitMods.DamageMainHand),
+            TotalPct: UnitModConstants.Default(UnitModifierType.TotalPct, attackType switch
+            {
+                WeaponAttackType.OffAttack => UnitMods.DamageOffHand,
+                WeaponAttackType.RangedAttack => UnitMods.DamageRanged, // vmangos Player::CalculateMinMaxDamage (StatSystem.cpp:358-370): UNIT_MOD_DAMAGE_RANGED
+                _ => UnitMods.DamageMainHand,
+            }),
             TotalPhysical: 0.0f,
             WeaponMin: weapon.Min,
             WeaponMax: weapon.Max,
