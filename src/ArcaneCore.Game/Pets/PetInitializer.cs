@@ -59,21 +59,24 @@ internal static class PetInitializer
             pet.SetUInt32(UpdateFields.UnitFieldStat0 + 4, row.Spirit);
         }
 
-        if ((owner.UnitFlags & UnitFlags.PlayerControlled) != 0)
-        {
-            pet.UnitFlags |= UnitFlags.PlayerControlled;
-        }
-
-        if ((owner.UnitFlags & UnitFlags.Pvp) != 0)
-        {
-            pet.UnitFlags |= UnitFlags.Pvp;
-        }
+        CopyOwnerControlFlags(pet, owner);
 
         pet.Health = pet.MaxHealth;
         if (pet.PowerType == PowerType.Mana)
         {
             pet.SetUInt32(UpdateFields.UnitFieldPower1, pet.GetUInt32(UpdateFields.UnitFieldMaxpower1));
         }
+    }
+
+    /// <summary>
+    /// The tail of vmangos <c>Pet::InitStatsForLevel</c> (Pet.cpp:1472-1479) for every pet but a mini pet, guardians included
+    /// (EffectSummonGuardian calls InitStatsForLevel too, SpellEffects.cpp:2884): <c>UNIT_FLAG_PLAYER_CONTROLLED</c> is set or
+    /// removed as the owner has it, and <c>SetPvP(owner->IsPvP())</c>.
+    /// </summary>
+    public static void CopyOwnerControlFlags(Creature pet, Unit owner)
+    {
+        const UnitFlags copied = UnitFlags.PlayerControlled | UnitFlags.Pvp;
+        pet.UnitFlags = (pet.UnitFlags & ~copied) | (owner.UnitFlags & copied);
     }
 
     /// <summary>

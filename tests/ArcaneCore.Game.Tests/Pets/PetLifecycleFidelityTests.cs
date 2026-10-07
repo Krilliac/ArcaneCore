@@ -91,4 +91,42 @@ public sealed class PetLifecycleFidelityTests
         Assert.Null(kit.Creatures.FindCreature(demon.Guid));
         Assert.True(warlock.PetGuid.IsEmpty);
     }
+
+    [Fact]
+    public void Guardian_TakesItsOwnersPlayerControlledAndPvpFlags()
+    {
+        // vmangos Pet::InitStatsForLevel (Pet.cpp:1472-1479), called by EffectSummonGuardian for every guardian (SpellEffects.cpp:2884):
+        // a non-mini pet copies UNIT_FLAG_PLAYER_CONTROLLED and the PvP flag from its owner.
+        using var kit = new PetTestKit();
+        (Player owner, _) = kit.AddPlayer(1);
+        owner.UnitFlags |= UnitFlags.PlayerControlled | UnitFlags.Pvp;
+
+        kit.Cast(owner, GuardianSpell);
+
+        Creature guardian = SummonOf(kit, SummonKind.Guardian);
+        Assert.Equal(UnitFlags.PlayerControlled, guardian.UnitFlags & UnitFlags.PlayerControlled);
+        Assert.Equal(UnitFlags.Pvp, guardian.UnitFlags & UnitFlags.Pvp);
+
+        // and a guardian of an unflagged owner carries neither
+        using var other = new PetTestKit();
+        (Player calm, _) = other.AddPlayer(2);
+        calm.UnitFlags &= ~(UnitFlags.PlayerControlled | UnitFlags.Pvp);
+        other.Cast(calm, GuardianSpell);
+        Creature calmGuardian = SummonOf(other, SummonKind.Guardian);
+        Assert.Equal(UnitFlags.None, calmGuardian.UnitFlags & (UnitFlags.PlayerControlled | UnitFlags.Pvp));
+    }
+
+    [Fact]
+    public void AMiniPet_LearnsItsCreateSpells()
+    {
+        // vmangos Spell::EffectSummonCritter: critter->InitPetCreateSpells() (SpellEffects.cpp:5452, "e.g. disgusting oozeling").
+        using var kit = new PetTestKit(petContent: new PetContent([], [new PetCreateSpells(MiniPetEntry, [PetPassiveSpell])]));
+        (Player owner, _) = kit.AddPlayer(1);
+
+        kit.Cast(owner, CritterSpell);
+
+        Creature mini = SummonOf(kit, SummonKind.MiniPet);
+        Assert.True(mini.Summon!.Charm!.HasSpell(PetPassiveSpell));
+        Assert.True(kit.Spells.System.HasAura(mini, PetPassiveSpell));
+    }
 }

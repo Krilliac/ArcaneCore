@@ -114,6 +114,7 @@ public sealed partial class SummonService
                 ApplyOwner(creature, caster, spell.Id);
                 InitPet(creature, SummonKind.Guardian, caster, petNumber);
                 creature.Level = (byte)level; // InitStatsForLevel(level, owner): the stats are the stats lane's
+                PetInitializer.CopyOwnerControlFlags(creature, caster); // ... and its owner-flag tail
                 return new CreatureHome(spawnX, spawnY, spawnZ, spawnO);
             }, petNumber);
 
@@ -265,6 +266,7 @@ public sealed partial class SummonService
         pets.Options = _options;
         pets.Register(critter, this);
         AttachPetAi(critter);
+        PetInitializer.InitCreateSpells(critter, Content, _spells); // "e.g. disgusting oozeling has a create spell as critter" (SpellEffects.cpp:5452)
     }
 
     // --- helpers --------------------------------------------------------------------------------------
