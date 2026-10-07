@@ -436,7 +436,11 @@ public sealed partial class MapCombat
         bool victimIsPlayer = victim is Player;
         var creatureVictim = victim as ICombatCreature;
         var creatureAttacker = attacker as ICombatCreature;
-        bool victimCanDefend = (victim.UnitFlags & UnitFlags.Stunned) == 0; // UNIT_STATE_STUNNED proxy; casting arrives with spells
+        // vmangos Unit::GetUnitDodgeChance / GetUnitParryChance / GetUnitBlockChance (Unit.cpp:2474-2550): nothing while stunned
+        // (UNIT_STATE_STUNNED proxy) or casting a non-melee spell (IsNonMeleeSpellCasted(false)), and a totem never defends.
+        bool victimCanDefend = (victim.UnitFlags & UnitFlags.Stunned) == 0
+            && CombatEnvironment.For(_world).MeleeSpells?.IsNonMeleeSpellCasted(victim) != true
+            && !IsTotem(victim);
 
         float dodge = 0f, parry = 0f, block = 0f;
         if (victimCanDefend)
@@ -482,6 +486,9 @@ public sealed partial class MapCombat
             BlockChance = block,
         };
     }
+
+    /// <summary>vmangos Creature::IsTotem (a summoned totem) or a creature of type TOTEM (GetUnitParryChance tests the type).</summary>
+    private static bool IsTotem(Unit unit) => Totems.TotemQuery.IsTotem(unit) || Spells.Rules.CrowdControl.CcState.IsTotem(unit);
 
     /// <summary>
     /// vmangos Unit::CalculateMeleeDamage for a white swing: weapon damage, armor, the hit
