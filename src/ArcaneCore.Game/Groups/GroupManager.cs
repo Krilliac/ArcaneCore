@@ -559,6 +559,9 @@ public sealed class GroupManager(SocialContext context)
     /// <summary>
     /// A member logged in (vmangos HandlePlayerLogin → Group::UpdatePlayerOnlineStatus): the
     /// leader flag, a fresh group list for everyone and the member's stats for those out of range.
+    /// Membership outlives a logout and a character can be renamed while offline, so the slot (and leader)
+    /// name is taken from the character again before the list goes out; uninvite and subgroup moves find
+    /// members by that name.
     /// </summary>
     public void OnLoggedIn(Player player)
     {
@@ -568,8 +571,14 @@ public sealed class GroupManager(SocialContext context)
             return;
         }
 
+        if (group.Find(player.Guid) is { } slot)
+        {
+            slot.Name = player.Name;
+        }
+
         if (group.IsLeader(player.Guid))
         {
+            group.LeaderName = player.Name;
             group.LeaderLastOnlineUnixSeconds = UnixSecondsClock();
         }
 
