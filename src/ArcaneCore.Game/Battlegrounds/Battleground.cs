@@ -406,7 +406,9 @@ public abstract class Battleground
         if (Status == BattlegroundStatus.WaitLeave)
         {
             Host.BlockMovement(guid);
-            Host.SendPvpLog(guid, BuildPvpLog());
+            // The frozen board, as MSG_PVP_LOG_DATA answers during WAIT_LEAVE (BattleGroundHandler.cpp:341). vmangos rebuilds it here
+            // (BattleGround.cpp:1818), which drops whoever left after the end from this one client's board.
+            Host.SendPvpLog(guid, FinalScore ?? BuildPvpLog());
             Host.SendStatus(guid, BattlegroundStatus.InProgress, (uint)EndTimeMs, StartTimeMs);
         }
 

@@ -52,6 +52,26 @@ public sealed class BattlegroundCoreTests
     }
 
     [Fact]
+    public void AJoinerIntoAnEndedMatchIsShownTheFrozenFinalScore_WithThePlayersWhoLeftAfterTheEnd()
+    {
+        var (bg, host, _) = NewWsg();
+        StartMatch(bg, perTeam: 2);
+        bg.RemovePlayerAtLeave(Horde[0], true, true);
+        Tick(bg, 310_000, 1000);
+        Assert.Equal(BattlegroundStatus.WaitLeave, bg.Status);
+        Assert.NotNull(bg.FinalScore);
+        bg.RemovePlayerAtLeave(Alliance[1], true, true);   // leaves after the end: still on the frozen board
+
+        bg.IncreaseInvitedCount(Team.Horde);
+        Assert.True(bg.AddPlayer(Horde[7], Team.Horde));
+
+        // MSG_PVP_LOG_DATA during WAIT_LEAVE answers the frozen board (vmangos BattleGroundHandler.cpp:341); the joiner sees the same one.
+        PvpLogSnapshot log = host.PvpLogs.Single().Log;
+        Assert.Same(bg.FinalScore, log);
+        Assert.Contains(log.Rows, r => r.Player == Alliance[1]);
+    }
+
+    [Fact]
     public void LeavingAMatchInProgressUpdatesEveryoneAndFreesTheSlot()
     {
         var (bg, host, ports) = NewWsg();

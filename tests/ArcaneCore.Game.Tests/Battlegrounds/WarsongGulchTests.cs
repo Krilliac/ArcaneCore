@@ -859,4 +859,98 @@ public sealed class WarsongGulchTests
         Assert.Equal(1, bg.TeamScore(Team.Alliance));
         Assert.Equal(WsgFlagState.WaitRespawn, bg.FlagState(Team.Horde));
     }
+
+    // ---------------------------------------------------------------- review findings (misc-systems lane)
+
+    [Fact]
+    public void AfterACapture_TheDespawnedHomeFlagCannotBeTakenUntilBothFlagsRespawn()
+    {
+        var (bg, _, ports) = NewWsg();
+        StartMatch(bg);
+        bg.OnFlagClicked(Alliance[0], HordeFlagOnBase);
+        bg.HandleAreaTrigger(Alliance[0], WarsongGulch.AreaTriggerAllianceFlagSpawn);
+        Assert.False(bg.IsActiveEvent(WarsongGulch.EventFlagAlliance, 0));
+        ports.Casts.Clear();
+
+        // A capture despawns both flag stands for the 23 s respawn (BattleGroundWS.cpp:225-227); a despawned stand is not a flag to take.
+        bg.OnFlagClicked(Horde[0], AllianceFlagOnBase);
+
+        Assert.Equal(WsgFlagState.OnBase, bg.FlagState(Team.Alliance));
+        Assert.True(bg.FlagPicker(Team.Alliance).IsEmpty);
+        Assert.Empty(ports.Casts);
+
+        Tick(bg, WarsongGulch.FlagRespawnTimeMs + 1);
+        bg.OnFlagClicked(Horde[0], AllianceFlagOnBase);
+        Assert.Equal(Horde[0], bg.FlagPicker(Team.Alliance));
+    }
+
+    [Fact]
+    public void ReturningADroppedFlag_ClearsItsTakenWorldState()
+    {
+        var (bg, host, _) = NewWsg();
+        StartMatch(bg);
+        bg.OnFlagClicked(Alliance[0], HordeFlagOnBase);
+        bg.OnPlayerDroppedFlag(Alliance[0]);
+        host.WorldStates.Clear();
+
+        bg.OnFlagClicked(Horde[0], HordeFlagOnGround);
+
+        // The timeout return writes 0 (BattleGroundWS.cpp:157); a player return must too (mangos-classic ProcessDroppedFlagActions sets it ON_BASE).
+        Assert.Contains((WarsongGulch.WorldStateFlagTakenHorde, 0u), host.WorldStates);
+    }
+
+    [Fact]
+    public void AnOfflineCarrier_PutsTheFlagBackWithTheIconAndTakenWorldStatesCleared()
+    {
+        var (bg, host, _) = NewWsg();
+        StartMatch(bg, perTeam: 3);
+        bg.OnFlagClicked(Alliance[0], HordeFlagOnBase);
+        host.WorldStates.Clear();
+
+        bg.RemovePlayerAtLeave(Alliance[0], teleportToEntryPoint: false, sendStatus: false, online: false);
+
+        Assert.Contains((WarsongGulch.WorldStateFlagStateAlliance, 1u), host.WorldStates);
+        Assert.Contains((WarsongGulch.WorldStateFlagTakenHorde, 0u), host.WorldStates);
+    }
+
+    [Fact]
+    public void ACaptureEvent_ScoresOnlyForTheCarrier_AndOnlyWithItsOwnFlagOnBase()
+    {
+        var (bg, _, ports) = NewWsg();
+        StartMatch(bg);
+        bg.OnFlagClicked(Alliance[0], HordeFlagOnBase);
+
+        bg.OnPlayerCapturedFlag(Alliance[1]);   // a teammate who carries nothing
+
+        Assert.Equal(0, bg.TeamScore(Team.Alliance));
+        Assert.Equal(Alliance[0], bg.FlagPicker(Team.Horde));
+        Assert.Equal(WsgFlagState.OnPlayer, bg.FlagState(Team.Horde));
+        Assert.Empty(ports.Removed);
+
+        bg.OnFlagClicked(Horde[0], AllianceFlagOnBase);
+        bg.OnPlayerCapturedFlag(Alliance[0]);   // the carrier, but the Alliance flag is away
+
+        Assert.Equal(0, bg.TeamScore(Team.Alliance));
+        Assert.Equal(Alliance[0], bg.FlagPicker(Team.Horde));
+    }
+
+    [Fact]
+    public void ADropAfterTheEnd_DoesNotLeaveTheFlagCarriedWithoutACarrier()
+    {
+        var (bg, host, _) = NewWsg();
+        StartMatch(bg, perTeam: 2);
+        bg.OnFlagClicked(Alliance[0], HordeFlagOnBase);
+        bg.RemovePlayerAtLeave(Horde[0], teleportToEntryPoint: true, sendStatus: true);
+        Tick(bg, 310_000, 1000);
+        Assert.Equal(BattlegroundStatus.WaitLeave, bg.Status);
+        host.WorldStates.Clear();
+
+        bg.OnPlayerDroppedFlag(Alliance[0]);
+
+        Assert.True(bg.FlagPicker(Team.Horde).IsEmpty);
+        Assert.Equal(WsgFlagState.OnBase, bg.FlagState(Team.Horde));
+        Assert.Contains((WarsongGulch.WorldStateFlagTakenHorde, 0), bg.InitialWorldStates());
+        Assert.Contains((WarsongGulch.WorldStateFlagStateAlliance, 1), bg.InitialWorldStates());
+        Assert.Empty(host.WorldStates);   // vmangos sends nothing once the match is over (BattleGroundWS.cpp:271-296)
+    }
 }

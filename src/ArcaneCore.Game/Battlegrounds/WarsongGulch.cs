@@ -300,6 +300,13 @@ public sealed class WarsongGulch : Battleground
             return;
         }
 
+        // Only the carrier of the enemy flag scores, and only while its own flag is home: the conditions of the base trigger, which is
+        // the only caller of vmangos EventPlayerCapturedFlag (BattleGroundWS.cpp:539-548). The public entry point must not skip them.
+        if (_flagKeepers[Idx(BattlegroundConstants.OtherTeam(team))] != source || _flagState[Idx(team)] != WsgFlagState.OnBase)
+        {
+            return;
+        }
+
         Team? winner = null;
         if (team == Team.Alliance)
         {
@@ -407,6 +414,10 @@ public sealed class WarsongGulch : Battleground
             {
                 _flagKeepers[Idx(flagTeam)] = ObjectGuid.Empty;
                 Ports.Spells.RemoveAura(source, carriedAura);
+
+                // vmangos leaves the state at ON_PLAYER with no carrier; a late joiner's initial world states would then show a carried
+                // flag. Nothing is sent and nothing respawns (the match is over), the state just stops claiming a carrier.
+                _flagState[Idx(flagTeam)] = WsgFlagState.OnBase;
             }
 
             return;
@@ -453,8 +464,9 @@ public sealed class WarsongGulch : Battleground
         BattlegroundChatKind kind = BattlegroundChatKind.Neutral;
         byte ev = flag.Event1;
 
-        // The Alliance flag taken from its base.
-        if (team == Team.Horde && FlagState(Team.Alliance) == WsgFlagState.OnBase && ev == EventFlagAlliance)
+        // The Alliance flag taken from its base. The stand must be spawned: a capture despawns both stands until the 23 s respawn, and
+        // vmangos relies on the client being unable to use a despawned object (BattleGroundWS.cpp:225-227).
+        if (team == Team.Horde && FlagState(Team.Alliance) == WsgFlagState.OnBase && ev == EventFlagAlliance && IsActiveEvent(EventFlagAlliance, 0))
         {
             messageId = BattlegroundTexts.WsPickedUpAllianceFlag;
             kind = BattlegroundChatKind.Horde;
@@ -462,7 +474,7 @@ public sealed class WarsongGulch : Battleground
         }
 
         // The Horde flag taken from its base.
-        if (team == Team.Alliance && FlagState(Team.Horde) == WsgFlagState.OnBase && ev == EventFlagHorde)
+        if (team == Team.Alliance && FlagState(Team.Horde) == WsgFlagState.OnBase && ev == EventFlagHorde && IsActiveEvent(EventFlagHorde, 0))
         {
             messageId = BattlegroundTexts.WsPickedUpHordeFlag;
             kind = BattlegroundChatKind.Alliance;
@@ -530,6 +542,10 @@ public sealed class WarsongGulch : Battleground
         // UpdateFlagState(other, WAIT_RESPAWN) is the literal value 1 of the other team's icon (BattleGroundWS.cpp:413).
         UpdateFlagState(BattlegroundConstants.OtherTeam(flagTeam), (uint)WsgFlagState.WaitRespawn);
         RespawnFlag(flagTeam, captured: false);
+
+        // The flag is home: its taken state goes back to 0 as on the timeout return (BattleGroundWS.cpp:157). vmangos omits it on a player
+        // return, so the client kept the ground marker; mangos-classic resets it (ProcessDroppedFlagActions).
+        Host.UpdateWorldState(flagTeam == Team.Alliance ? WorldStateFlagTakenAlliance : WorldStateFlagTakenHorde, 0);
         _droppedFlagGuid[Idx(flagTeam)] = ObjectGuid.Empty;
         Host.PlaySoundToAll(SoundFlagReturned);
         UpdatePlayerScore(source, BattlegroundScoreType.FlagReturns, 1);
@@ -547,9 +563,12 @@ public sealed class WarsongGulch : Battleground
             {
                 if (!online)
                 {
-                    // Removing an offline player who has the flag: clear the carrier and respawn the flag.
+                    // Removing an offline player who has the flag: clear the carrier and respawn the flag. vmangos stops there and the
+                    // clients keep the "carried" icon (2) and the taken state (1); reset both as a return does.
                     _flagKeepers[Idx(flagTeam)] = ObjectGuid.Empty;
                     RespawnFlag(flagTeam, captured: false);
+                    UpdateFlagState(BattlegroundConstants.OtherTeam(flagTeam), (uint)WsgFlagState.WaitRespawn);
+                    Host.UpdateWorldState(flagTeam == Team.Alliance ? WorldStateFlagTakenAlliance : WorldStateFlagTakenHorde, 0);
                 }
                 else
                 {
