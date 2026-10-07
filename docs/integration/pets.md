@@ -73,8 +73,14 @@ dead with the pet out of combat, or when the spell duration ends.
   `UNIT_FIELD_SUMMON`; keeps the template level and NPC flags (`SelectLevel`, `5458`); without a
   destination it appears at the caster, with one it appears `PET_FOLLOW_DIST` (2) away at
   `MINI_PET_SUMMON_ANGLE` (pi/4) from the caster's facing (vmangos ignores the destination,
-  `5433-5434`); faces the player (`5462`). Pet.cpp's owner-gone, range, dead-owner and duration rules
-  apply to guardians and mini pets as to pets (not the `IsControlled` pet-link rule).
+  `5433-5434`); faces the player (`5462`); learns its create spells (`InitPetCreateSpells`, `5452`).
+  Pet.cpp's owner-gone, range, dead-owner and duration rules apply to guardians and mini pets as to pets
+  (not the `IsControlled` pet-link rule). The 120-yard range rule skips a pet its owner possesses
+  (`owner->GetCharmGuid() == GetObjectGuid()`, `Pet.cpp:670`). A dying player loses its pet and its mini
+  pet at once, in combat or not (`Player::SetDeathState`, `Player.cpp:1527-1531`); its guardians keep the
+  dead-owner rule (unsummoned once out of combat). A dead pet, guardian or mini pet is unsummoned when its
+  corpse timer ends: 15 s, an hour for a hunter pet (`Pet::SetDeathState`, `Pet.cpp:649-653`). A guardian
+  takes its owner's player-controlled and PvP flags (the tail of `InitStatsForLevel`, `Pet.cpp:1472-1479`).
 
 ### P3 pet wire protocol and commands
 
@@ -106,7 +112,8 @@ dead with the pet out of combat, or when the spell duration ends.
 * **Client opcodes** (`PetHandlers`, in-world handlers calling `PetController`): `CMSG_PET_ACTION`
   (commands, reactions, spell buttons: `HandlePetAction`, `PetHandler.cpp:35-165`; the commands follow
   `Unit::HandlePetCommand`, `Unit.cpp:8646-8764`: stay saves the stay position, follow pushes the follow
-  generator, attack validates the target and starts the fight through the pet's AI with the 10% talk or the
+  generator, attack validates the target (refused while the owner has a `SPELL_AURA_MOD_PACIFY` aura) and
+  starts the fight through the pet's AI with the 10% talk or the
   aggro reaction, dismiss unsummons), `CMSG_PET_SET_ACTION` (the move/swap checks of `PetHandler.cpp:198-290`),
   `CMSG_PET_SPELL_AUTOCAST`, `CMSG_PET_STOP_ATTACK`, `CMSG_PET_CAST_SPELL` (the 1.12 layout: guid, spell,
   targets), `CMSG_PET_CANCEL_AURA`, `CMSG_PET_NAME_QUERY` (answered only for the matching pet number),
@@ -122,8 +129,9 @@ dead with the pet out of combat, or when the spell duration ends.
 Ported from `AI/PetAI.cpp`: `UpdateAI` (a valid victim is kept, otherwise the pet returns), `_needToStop`
 (disabled pet, creature owner evading or out of the threat area, target no longer attackable),
 `_stopAttack`, `HandleReturnMovement` (to the stay point, or follow at the stored angle), `MovementInform`
-(arrival at the stay point; arrival at the follow point is detected by the pet standing still on its follow
-generator), `DoAttack` (chase, or hold position while staying), `AttackStart` (as `AttackTarget`: the base
+(arrival at the stay point; arrival at the follow point is the follow generator's `FOLLOW_MOTION_TYPE` inform
+with the owner's low GUID, sent once its spline is finalized and never while the pet cannot move, as
+`FollowMovementGenerator::Update` does), `DoAttack` (chase, or hold position while staying), `AttackStart` (as `AttackTarget`: the base
 `CreatureAI.AttackStart` is not virtual), `CanAttack` in vmangos' order (passive, PvP-flagged targets,
 returning, stay, switching targets, follow), `SelectNextTarget` and `KilledUnit` (the pet's own attackers,
 then the owner's victim and attackers), `AttackedBy`, `OwnerAttackedBy`, `OwnerAttacked` and the imp's
@@ -276,7 +284,8 @@ a persistent pet instance store, effect 109, or guardian/mini-pet revival.
   owner, not to a hostile that merely stands nearby. Also from the creature area: a same-faction creature
   asking for assistance can recruit a pet (the assistance filter only excludes `NullCreatureAI`).
 * **Guardian level scaling.** The engineering-trinket level (`SpellEffects.cpp:2824-2832`) needs the
-  skills lane's skill values; a guardian's stats follow its template, not `InitStatsForLevel`.
+  skills lane's skill values; a guardian's stats follow its template, not `InitStatsForLevel` (only its
+  owner-flag tail runs).
 * **Random points** use a uniform disc at the terrain height (or the centre's Z), as the creature
   wander does, instead of the navmesh walk query of `GetRandomPoint` (`Object.cpp:1991-2063`).
 * **Summon limit.** vmangos `SummonCreature` refuses once the summoner has too many active summons
