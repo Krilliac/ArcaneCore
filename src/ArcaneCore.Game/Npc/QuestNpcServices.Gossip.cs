@@ -140,7 +140,8 @@ public sealed partial class QuestNpcServices
                 _ => false,
             };
 
-            if ((GossipOption)option.OptionId == GossipOption.TaxiVendor && LearnNewTaxiNode(s, npc))
+            // Only the creature branch learns a node (Player.cpp:12044-12047); a game object's taxi row is hidden and inert.
+            if (!npc.IsGameObject && (GossipOption)option.OptionId == GossipOption.TaxiVendor && LearnNewTaxiNode(s, npc))
             {
                 menu.DiscoveredNode = true;
             }

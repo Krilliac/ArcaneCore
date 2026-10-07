@@ -291,13 +291,9 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
         Player player = flight.Player;
         if (!player.IsAlive)
         {
-            // Death in flight is exceptional; put the body at a valid taxi node rather than in the air.
-            if (_npcs.Node(flight.Nodes[0]) is { } start)
-            {
-                player.Relocate(start.X, start.Y, start.Z, player.Orientation, _nowMs());
-                player.NeedsVisibilityUpdate = true;
-            }
-
+            // Death in flight is exceptional; put the body at the current hop's departure node rather than in the air
+            // (not the route's origin, which an express flight may have left several hops ago).
+            PutDownAtNode(flight, flight.Nodes[flight.Hop]);
             Finish(flight, landed: false);
             return;
         }
@@ -321,6 +317,8 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
                 // vmangos FlightPathMovementGenerator::Update charges a subsequent leg at its path boundary.
                 if (!flight.ChargeLeg(player, flight.LegCosts[flight.Hop]))
                 {
+                    // An express transition does not land: put the player down at the node just reached, not in the air.
+                    PutDownAtNode(flight, flight.Nodes[flight.Hop]);
                     Finish(flight, landed: false);
                     return;
                 }
@@ -352,6 +350,16 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
             }
 
             remaining -= length;
+        }
+    }
+
+    /// <summary>Relocate the player onto a taxi node of the flight's map; a node missing or on another map leaves it in place.</summary>
+    private void PutDownAtNode(Flight flight, uint nodeId)
+    {
+        if (_npcs.Node(nodeId) is { } node && node.MapId == flight.Map.MapId)
+        {
+            flight.Player.Relocate(node.X, node.Y, node.Z, flight.Player.Orientation, _nowMs());
+            flight.Player.NeedsVisibilityUpdate = true;
         }
     }
 
