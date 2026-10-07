@@ -163,7 +163,14 @@ public sealed class PetController
                 break;
 
             case CommandState.Dismiss:
-                // vmangos: dismissing a summoned pet is like killing it; a mini pet or guardian just goes.
+                // vmangos: dismissing a summoned pet is like killing it; a mini pet or guardian just goes. "Hunter pets are
+                // dismissed with a spell with a cast time" (Dismiss Pet, SPELL_EFFECT_DISMISS_PET), so the command leaves them.
+                // A charmed unit would be released (pCharmer->Uncharm()); charm is not modelled in this build.
+                if (pet.Summon?.Kind == SummonKind.Pet && owner is Player { Class: Class.Hunter })
+                {
+                    break;
+                }
+
                 _summons.Unsummon(pet);
                 break;
         }

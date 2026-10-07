@@ -25,6 +25,9 @@ public static class OwnerLinks
         /// <summary>vmangos Unit::GetCharmerGuid (UNIT_FIELD_CHARMEDBY).</summary>
         public ObjectGuid CharmerGuid => new(unit.GetUInt64(UpdateFields.UnitFieldCharmedby));
 
+        /// <summary>vmangos Unit::GetCharmGuid (UNIT_FIELD_CHARM): the unit this one charms or possesses.</summary>
+        public ObjectGuid CharmGuid => new(unit.GetUInt64(UpdateFields.UnitFieldCharm));
+
         /// <summary>vmangos Unit::GetCharmerOrOwnerGuid: the charmer when charmed, else the owner (the faction lane's owner resolution).</summary>
         public ObjectGuid CharmerOrOwnerGuid => unit.CharmerGuid.IsEmpty ? unit.OwnerGuid : unit.CharmerGuid;
 
