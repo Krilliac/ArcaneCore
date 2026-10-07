@@ -26,8 +26,13 @@ The ccr line's module versions were kept; the Codex modules moved above the high
 | characters | `ManagedPlayerbotDataModule` | 25 | 33 |
 | auth | `ManagedPlayerbotProvisionDataModule` | 4 | 4 |
 
-A database created by the Codex line at world 22 or more, or characters 22 or more, does not upgrade in place: its module rows sit at
-numbers the merged line gives to other modules. Recreate such a database, or move its rows over by hand.
+A database created by the Codex line records the Codex numbers, which the merged line gives to other modules. Such a database is
+recognised by its tables and migrated once to the merged numbering, keeping every row (characters 25 becomes 33, world 27 becomes 37;
+the rows of the dropped `npc_template_service_metadata` are copied into the `creature_template` NPC columns of world 21): automatically
+at a daemon start, or with `arcane-db migrate-codex` (dry run) and `--apply`. A database that matches neither line is refused untouched.
+Details: docs/ops/database-upgrade.md, "Databases created by the Codex line"; code: `Schema/Upgrade/CodexLine.cs`, `ForeignLine.cs`.
+Rehearsed on copies of the live 2026-10-07 databases: every original row identical afterwards, drift check clean, all 10 managed
+playerbots load and log in (`CodexLineBotLoadTests`, `ARCANECORE_CODEX_LIVE_COPIES`).
 
 ## Subsystems implemented on both lines
 

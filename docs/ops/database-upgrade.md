@@ -89,6 +89,7 @@ These differ from the content importer's codes (`arcane-content-importer`: 3 wro
 | `plan` | read-only dry run (never creates the database, takes the lock or writes); `--script`, `--json` |
 | `check` | drift check: version row, tables, columns and nullability, indexes, foreign tables, MariaDB engine and charset, PostgreSQL encoding; `--json` |
 | `upgrade` | plan everything, refuse before any change, require the backup acknowledgement, apply auth, characters, world in that order, then check |
+| `migrate-codex` | find databases the Codex line created and report their one-shot migration to this build's numbering (read-only); `--apply` runs only that migration, behind the same backup gate (see "Databases created by the Codex line") |
 | `backup-info` | print how to back each database up |
 
 | Option | Applies to | Meaning |
@@ -97,13 +98,44 @@ These differ from the content importer's codes (`arcane-content-importer`: 3 wro
 | `--script` | plan | print the SQL |
 | `--json` | status, plan, check | machine-readable output |
 | `--no-fail-on-pending` | status, plan | exit 0 when only an upgrade is pending |
-| `--confirm-backup` | upgrade | you hold a backup of every database that has pending steps |
-| `--backup-dir <directory>` | upgrade | also write a verified copy of each SQLite database there (server engines still need `--confirm-backup`) |
-| `--allow-active-sessions` | upgrade | do not refuse when other sessions are connected to the database |
-| `--lock-timeout <seconds>` | upgrade | wait for another process's schema lock (default 60) |
+| `--apply` | migrate-codex | migrate; without it `migrate-codex` is a read-only dry run |
+| `--confirm-backup` | upgrade, migrate-codex | you hold a backup of every database that has pending steps |
+| `--backup-dir <directory>` | upgrade, migrate-codex | also write a verified copy of each SQLite database there (server engines still need `--confirm-backup`) |
+| `--allow-active-sessions` | upgrade, migrate-codex | do not refuse when other sessions are connected to the database |
+| `--lock-timeout <seconds>` | upgrade, migrate-codex | wait for another process's schema lock (default 60) |
 
-`status`, `plan` and `check` open SQLite read-only and never create a file. All connections are unpooled so the session
-count only sees other processes. On a failure in one component the later ones are not run and the message names it.
+`status`, `plan`, `check` and `migrate-codex` without `--apply` open SQLite read-only and never create a file. All
+connections are unpooled so the session count only sees other processes. On a failure in one component the later ones
+are not run and the message names it.
+
+### Databases created by the Codex line
+
+Until the 2026-10-07 merge the Codex line (`codex/server-continue-20261004`, last commit 0e07c29b) numbered its own
+schema steps after the shared history: characters 21-25, world 21-27. The merged build gives those numbers to other
+steps and moved the Codex steps to characters 29-33 and world 32-37 (docs/integration/codex-merge-20261007.md). A
+database the Codex line created still records the old numbers, so it is migrated once:
+
+* **Recognition** (`ForeignLineDetector`, read-only, only for a version row in the overlapping range): every object of
+  this build's own steps up to the recorded version present means this build's line, left alone; otherwise every Codex
+  step up to the recorded version present and none after it means the Codex line; anything else (a recorded Codex
+  table missing, a step half there, a Codex table the version does not account for, neither line's tables) is refused
+  with nothing written. Auth needs nothing: the Codex auth step 4 is this build's auth step 4.
+* **Migration** (under the schema lock; on SQLite one transaction): this build's steps 21 up to the merged version are
+  applied idempotently (the Codex tables are verified against the model, the steps the Codex line never had are
+  created), the rows of the dropped Codex world step 26 (`npc_template_service_metadata`) are copied into the
+  `creature_template` NPC columns of world step 21 (the table itself is left in place and `check` reports it as a
+  foreign table), and the merged version is written last: characters 25 becomes 33, world 27 becomes 37. The ordinary
+  steps after it follow. No row is deleted or rewritten.
+* **When**: a daemon start with `Database:Upgrade:Policy` `Always` migrates automatically and logs a warning naming the
+  Codex version, the merged version and the steps found. `plan` and `status` show the migration as the first pending step
+  ("database version 25 (Codex (0e07c29b) numbering)"); `upgrade` applies it with everything else. `migrate-codex`
+  reports it on its own and `migrate-codex --apply` runs only the migration (`upgrade` or the next start does the rest).
+
+```
+arcane-db migrate-codex                               # dry run: exit 3 when a Codex-line database was found, 0 when none
+arcane-db migrate-codex --apply --backup-dir backups  # SQLite: verified copies first, then the migration
+arcane-db upgrade --confirm-backup                    # the steps after the migration, then the drift check
+```
 
 ## What can go wrong, per engine
 
