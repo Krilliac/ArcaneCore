@@ -90,8 +90,8 @@ file:line. Where vmangos and the other references disagree the choice is stated.
 - **Terrain**: water comes from the map's ADT liquid layer (`MapFishingTerrain`); fishing from WMO water is unsupported, and `|depth_level| < 1` is ported literally (shallow water that
   is not deep enough still takes the bobber, as in vmangos).
 - **Tap list**: combat keeps none; the corpse loot's recipients stand in for `IsTappedBy` (skinning head start). Skin loot reopen is the skinner's only.
-- **Fishing**: no pole skill bonus (`MOD_SKILL` aura) and no lures (temporary enchant): neither effect exists on the base; a hole in use by another fisher falls back to the
-  zone loot (vmangos shows its shared loot); a hole with leftover loot stays activated like in vmangos.
+- **Fishing**: no pole skill bonus (`MOD_SKILL` aura) and no lures (temporary enchant): neither effect exists on the base; a hole with leftover loot stays activated like in vmangos and
+  the next catch at it opens those leftovers (`Player.cpp:7697-7698`).
 - **Pick Pocket**: a missed cast does not break stealth or start combat (`Spell.cpp:1225-1243`; needs the stealth and threat primitives); the player-owned creature test
   (`PickpocketLoot.IsPlayerOwned`) is a seam for the pets lane; `LOOT_ERROR_ALREADY_PICKPOCKETED` is never sent (vmangos neither).
 - **Container items**: no wrapped gift opening, no taxi refusal, no immediate save at generation (a crash before the next character save can reroll, as in vmangos), and none of
