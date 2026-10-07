@@ -346,7 +346,7 @@ public sealed class GameObjectTests
     }
 
     [Fact]
-    public void Chest_ReleasedWithLootLeft_IsReady_AndKeepsTheSameLoot()
+    public void Chest_ReleasedWithLootLeft_StaysActivated_AndKeepsTheSameLoot()
     {
         Rig rig = CreateRig([GoSpawn(1, ChestEntry, 3, 0)]);
         (Player alice, _) = rig.Join(1);
@@ -356,7 +356,7 @@ public sealed class GameObjectTests
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(alice, chest.Guid));
         LootBag bag = chest.Loot!;
         rig.Loot.Release(alice, chest.Guid);
-        Assert.Equal(GameObjectLootState.Ready, chest.LootState);
+        Assert.Equal(GameObjectLootState.Activated, chest.LootState);
         rig.World.RunTick(50);
         Assert.True(chest.IsSpawned);
 
@@ -386,9 +386,9 @@ public sealed class GameObjectTests
         Assert.Equal([(player.Guid, GooberEntry, goober.Guid)], rig.Quests.Used);
         Assert.Equal([goober], used);
         Assert.Equal(BitConverter.GetBytes(goober.Guid.Value), Assert.Single(Packets(session, WorldOpcode.SmsgGameobjectPagetext)).Payload);
-        byte[] anim = Assert.Single(Packets(watcher, WorldOpcode.SmsgGameobjectCustomAnim)).Payload;
-        Assert.Equal(goober.Guid.Value, BitConverter.ToUInt64(anim, 0));
-        Assert.Equal(2u, BitConverter.ToUInt32(anim, 8));
+        // data4 (customAnim) without an auto-close time is no custom animation (GameObject.cpp:1601-1604): the goober shows its active state.
+        Assert.Empty(Packets(watcher, WorldOpcode.SmsgGameobjectCustomAnim));
+        Assert.Equal(GameObjectState.Active, goober.State);
 
         Assert.Equal(GameObjectUseResult.OnCooldown, rig.System.Use(player, goober.Guid));
         rig.World.RunTick(10_000);
@@ -410,6 +410,9 @@ public sealed class GameObjectTests
         GameObject goober = Assert.Single(system.GameObjects);
 
         Assert.Equal(GameObjectUseResult.Ok, system.Use(player, goober.Guid));
+        world.RunTick(50);
+        Assert.True(goober.IsSpawned); // activated until its auto-close time (0 s) passes on the whole-second clock
+        world.RunTick(1000);
         world.RunTick(50);
         Assert.False(goober.IsSpawned);
         world.RunTick(2000);
@@ -510,6 +513,9 @@ public sealed class GameObjectTests
             (LootTableKind.GameObject, Row(ChestLoot, ItemTestData.ToughJerky, 100)),
             (LootTableKind.GameObject, Row(ChestLoot, Hide, 100)),
         ]);
+
+        // The grid must unload before the partly looted chest's five-minute despawn (the default grid delay is five minutes too).
+        rig.Map.Grids.Options.GridCleanUpDelayMs = ArcaneCore.Game.Maps.Grid.MapOptions.MinGridDelayMs;
         (Player original, FakeSession originalSession) = rig.Join(1);
         GameObject oldChest = rig.Single(ChestEntry);
         originalSession.Clear();
@@ -706,7 +712,8 @@ public sealed class GameObjectTests
         rig.World.RunTick(50);
         Assert.Null(rig.Loot.OpenLootOf(player));
         Assert.False(player.UnitFlags.HasFlag(UnitFlags.Looting));
-        Assert.Equal(GameObjectLootState.Ready, chest.LootState);
+        Assert.Equal(GameObjectLootState.Activated, chest.LootState); // nothing taken: activated with its loot (DoLootRelease)
+        Assert.Equal(GameObjectState.Ready, chest.State);
     }
 
     private sealed class RecordingQuestGiver : IGameObjectQuestGiver

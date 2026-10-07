@@ -198,7 +198,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
             if (go.ResetAfterSecond is { } resetAfter && resetAfter < ClockSeconds)
             {
-                ResetToReady(go);
+                ActivationExpired(go);
             }
         }
 
@@ -452,6 +452,31 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         return GameObjectUseResult.Ok;
     }
 
+    /// <summary>
+    /// GameObject::Update, GO_ACTIVATED (GameObject.cpp:572-597), once the object's timer passed: a goober leaves use and is
+    /// deactivated (GO_JUST_DEACTIVATED sets its state back to ready, :606-623, then the next update despawns it unless it never
+    /// despawns); a partly looted chest is deactivated (despawns, respawns fresh); a door or button resets.
+    /// </summary>
+    private static void ActivationExpired(GameObject go)
+    {
+        switch (go.Type)
+        {
+            case GameObjectType.Goober:
+                go.Flags &= ~GameObjectFlags.InUse;
+                go.State = GameObjectState.Ready;
+                go.ResetAfterSecond = null;
+                go.LootState = GameObjectLootState.JustDeactivated;
+                break;
+            case GameObjectType.Chest:
+                go.ResetAfterSecond = null;
+                go.LootState = GameObjectLootState.JustDeactivated;
+                break;
+            default:
+                ResetToReady(go);
+                break;
+        }
+    }
+
     /// <summary>vmangos ResetDoorOrButton: back to the spawn state, not in use, ready again.</summary>
     private static void ResetToReady(GameObject go)
     {
@@ -544,9 +569,18 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     }
 
     /// <summary>
+    /// vmangos DoLootRelease (LootHandler.cpp:503-511): a partly looted chest stays GO_ACTIVATED with its loot and despawns this
+    /// many seconds after the release, so it comes back with fresh loot.
+    /// </summary>
+    public const uint PartlyLootedChestDespawnSeconds = 5 * 60;
+
+    /// <summary>
     /// Called by the loot service when the last viewer released a chest's loot (vmangos
-    /// DoLootRelease for a game object): looted out → despawn and respawn later; otherwise
-    /// ready again with the remaining loot kept.
+    /// DoLootRelease for a game object): looted out → despawn and respawn later; otherwise the
+    /// object stays activated with the remaining loot (LootHandler.cpp:503-511) and a chest
+    /// despawns <see cref="PartlyLootedChestDespawnSeconds"/> later. A dungeon chest whose
+    /// loot is stored with the instance save (<see cref="LootBag.DurableKey"/>) keeps its
+    /// stored leftovers and stays ready: despawning it would not reroll them.
     /// </summary>
     internal void OnLootReleased(GameObject go, LootBag bag)
     {
@@ -555,7 +589,28 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return;
         }
 
-        go.LootState = bag.IsEmpty ? GameObjectLootState.JustDeactivated : GameObjectLootState.Ready;
+        if (bag.IsEmpty)
+        {
+            go.LootState = GameObjectLootState.JustDeactivated;
+        }
+        else if (bag.DurableKey is not null)
+        {
+            go.LootState = GameObjectLootState.Ready;
+        }
+        else
+        {
+            ActivateWithLeftovers(go);
+        }
+    }
+
+    /// <summary>A chest holding leftovers: activated, despawning <see cref="PartlyLootedChestDespawnSeconds"/> from now (the whole-second clock).</summary>
+    private void ActivateWithLeftovers(GameObject go)
+    {
+        go.LootState = GameObjectLootState.Activated;
+        if (go.Type == GameObjectType.Chest)
+        {
+            go.ResetAfterSecond = ClockSeconds + PartlyLootedChestDespawnSeconds;
+        }
     }
 
     private GameObjectUseResult UseGoober(Player player, GameObject go, bool lockChecked = false)
@@ -592,26 +647,29 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             player.Session.Send(WorldOpcode.SmsgGameobjectPagetext, GameObjectPackets.PageText(go.Guid));
         }
 
-        if (go.Template.GetData(4) is var anim and not 0)
-        {
-            Map.BroadcastInRange(go, 0, WorldOpcode.SmsgGameobjectCustomAnim, GameObjectPackets.CustomAnim(go.Guid, anim), includeSelf: false);
-        }
-
         if (go.Template.GetData(6) is var cooldown and not 0)
         {
             go.CooldownUntilMs = _clockMs + (cooldown * 1000L);
         }
 
         go.UseCount++;
-        if (go.Template.GetData(5) != 0)
+
+        // GameObject::Use, goober (GameObject.cpp:1593-1606): in use and activated; an object with a custom animation (the display
+        // list, or goober.customAnim (data4) together with an auto-close time) plays animation 0, any other one shows its active
+        // state. The auto-close time (data3, whole seconds) runs out in GameObject::Update (:578-585): the object is deactivated
+        // then, and a consumable one (data5) or one that may despawn goes away (ActivationExpired, Despawn).
+        go.Flags |= GameObjectFlags.InUse;
+        go.LootState = GameObjectLootState.Activated;
+        if (GameObjectInfoView.HasCustomAnim(go.GetUInt32(UpdateFields.GameobjectDisplayid)) || (autoCloseSeconds > 0 && go.Template.GetData(4) != 0))
         {
-            go.LootState = GameObjectLootState.JustDeactivated; // consumable
+            Map.BroadcastInRange(go, 0, WorldOpcode.SmsgGameobjectCustomAnim, GameObjectPackets.CustomAnim(go.Guid, 0), includeSelf: false);
         }
-        else if (autoCloseSeconds > 0)
+        else
         {
-            ActivateDoorOrButton(go, autoCloseSeconds);
+            go.State = GameObjectState.Active;
         }
 
+        go.ResetAfterSecond = ClockSeconds + autoCloseSeconds;
         return GameObjectUseResult.Ok;
     }
 
@@ -897,7 +955,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
             if (_unloadedLoot.Remove(spawn.Guid, out LootBag? remaining))
             {
+                // The leftovers come back with the chest, which is still the partly looted one: its despawn timer starts again.
                 Loot!.RestoreGameObjectLoot(go, remaining);
+                if (go.Loot is not null)
+                {
+                    ActivateWithLeftovers(go);
+                }
             }
 
             bool pending = _respawnAt.Remove(spawn.Guid, out long respawnAt);
