@@ -14,6 +14,9 @@ internal sealed class MapUpdateDiagnostics
     internal int MovedObjects { get; set; }
     internal int ChangedObjects { get; set; }
     internal int NewObjects { get; set; }
+
+    /// <summary>Candidates the visibility phase evaluated (players' and moved objects' passes together).</summary>
+    internal long VisibilityCandidates { get; set; }
     internal bool Completed { get; private set; }
 
     internal void Begin() => _phaseStart = System.Diagnostics.Stopwatch.GetTimestamp();

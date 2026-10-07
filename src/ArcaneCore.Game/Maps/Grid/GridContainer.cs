@@ -274,6 +274,56 @@ public sealed class GridContainer
     }
 
     /// <summary>
+    /// Append every player in the cells a circle touches to <paramref name="results"/> — the
+    /// players-only visit vmangos <c>Map::UpdateObjectVisibility</c> (Map.cpp) makes with a
+    /// <c>WorldTypeMapContainer</c> visitor, which skips the cells' creatures and game objects.
+    /// Same cells and same caveats as <see cref="CollectObjects"/>: the caller applies its exact
+    /// distance test, and a player may appear twice (players at a non-finite position are always
+    /// included).
+    /// </summary>
+    public void CollectPlayers(float x, float y, float radius, List<Player> results)
+    {
+        CellArea area = default;
+        bool walkAll = !float.IsFinite(radius) || !float.IsFinite(x) || !float.IsFinite(y);
+        if (!walkAll)
+        {
+            area = GridDefines.CalculateCellArea(x, y, radius);
+            walkAll = (long)(area.High.X - area.Low.X + 1) * (area.High.Y - area.Low.Y + 1) > MaxCellsPerQuery;
+        }
+
+        if (walkAll)
+        {
+            foreach (WorldObject obj in _cells.Keys)
+            {
+                if (obj is Player player)
+                {
+                    results.Add(player);
+                }
+            }
+
+            return;
+        }
+
+        foreach (WorldObject obj in _unplaced)
+        {
+            if (obj is Player unplaced)
+            {
+                results.Add(unplaced);
+            }
+        }
+
+        for (int cx = area.Low.X; cx <= area.High.X; cx++)
+        {
+            int gx = cx / GridDefines.MaxNumberOfCells;
+            for (int cy = area.Low.Y; cy <= area.High.Y; cy++)
+            {
+                Grid? grid = _grids[(gx * GridDefines.MaxNumberOfGrids) + (cy / GridDefines.MaxNumberOfCells)];
+                grid?.AppendPlayers(cx % GridDefines.MaxNumberOfCells, cy % GridDefines.MaxNumberOfCells, results);
+            }
+        }
+    }
+
+    /// <summary>
     /// Advance every loaded grid's state machine (vmangos <c>Map::Update</c> →
     /// <c>MapManager::UpdateGridState</c>, GridStates.cpp):
     /// Active — every expiry/10 ms, if nothing active is in or near the grid it goes Idle,
