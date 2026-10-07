@@ -122,6 +122,7 @@ public sealed partial class CreatureMapSystem
         }
 
         creature.AI = ai;
+        ResetGuardCall(creature);
     }
 
     /// <summary>The AI half of a creature's tick: aggro scan over the map's players, then the script.</summary>

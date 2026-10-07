@@ -58,6 +58,15 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// </summary>
     internal LeashExtensionClock? LeashClock { get; set; }
 
+    /// <summary>
+    /// vmangos BasicAI::m_bCanSummonGuards (AI/BasicAI.cpp:22, 79-89, 104): a CALLS_GUARDS creature may call the guards on sight; a
+    /// successful call clears it until the called guard is gone or the creature respawns.
+    /// </summary>
+    internal bool CanCallGuardsOnSight { get; set; }
+
+    /// <summary>The guard this creature's last call summoned, while it is in the world.</summary>
+    internal ObjectGuid? CalledGuard { get; set; }
+
     /// <summary>A NO_MELEE_FLEE panic flight is running (cmangos ORDER_CRITTER_FLEE): the creature evades when it ends.</summary>
     internal bool InNoMeleePanic { get; set; }
 

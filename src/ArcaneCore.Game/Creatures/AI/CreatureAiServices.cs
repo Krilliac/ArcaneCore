@@ -242,4 +242,10 @@ public sealed class CreatureAiServices
 
     /// <summary>Aura stacks and casting state of any unit (EventAI aura and target-casting events); null: no auras, nobody casting.</summary>
     public IUnitSpellQueries? UnitSpells { get; init; }
+
+    /// <summary>The towns' guard posts (vmangos GuardMgr), shared by every map system built with these services.</summary>
+    public GuardPostTable GuardPosts { get; init; } = new();
+
+    /// <summary>The area id a creature stands in (vmangos GetAreaId); null asks the map's terrain (<c>Map.GetZoneAndAreaId</c>).</summary>
+    public Func<Creature, uint>? AreaOf { get; init; }
 }

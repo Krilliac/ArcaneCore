@@ -66,6 +66,21 @@ docs/integration/creature-ai.md.
   or any template named `GuardEventAI`, runs `CreatureEventAI` with `UsesGuardSightRules`: its script runs as usual and whom it attacks
   on sight is the guard rule. Not delivered: SMSG_ZONE_UNDER_ATTACK on a guard's death (mangos GuardAI::JustDied; neither vmangos AI
   sends it and the message layout is unverified) and the reference's `IsInAccessablePlaceFor` (water and air).
+- **Calling the guards** (static flag CALLS_GUARDS 0x08000000; `CreatureMapSystem.Guards.cs`, `Guards/GuardPostTable.cs`): vmangos
+  BasicAI::MoveInLineOfSight / SummonGuard (AI/BasicAI.cpp:49-105), Creature::OnEnterCombat (Creature.cpp:3689-3690), GuardMgr
+  (GuardMgr.cpp) and Creature::CallNearestGuard (Creature.cpp:3932-3949). A creature with the flag whose AI does not attack the unit
+  itself (a civilian, a defensive creature, or the unit is already its victim) calls the guards when a hostile player comes within its
+  detection range (3 yd of height, attackable, in sight), and any creature with the flag calls them when it enters combat. In an area
+  with a guard post (the 57 posts of vmangos GuardMgr at build 5875, keyed by area id, build 5875 elites for Sepulcher, Menethil and Hammerfall) the
+  post spends a charge (10 per post, one back per minute; 10 s cooldown after a use, shared by every map), the civilian says its call
+  (broadcast text by its model from CreatureDisplayInfo.dbc when the display metadata is installed, else by its faction template;
+  Razor Hill always says "Grunts! Attack!") and the post's guard for the team opposite the enemy's player appears 5 yd east of it,
+  attacks the enemy and despawns after 2 minutes. A post that is cooling down or empty refuses and the civilian keeps trying on sight;
+  after a successful call it stops calling on sight until the guard it called is gone or it respawns. In an area without a post the
+  nearest idle friendly guard within 50 yd in sight attacks. Data: classic-db z2815 sets CALLS_GUARDS on no template (vmangos data
+  does), so nothing calls until such rows are imported; a call against a creature that no player controls summons nobody (vmangos
+  takes the civilian's own team from Faction.dbc `team`, which the faction catalog does not carry). The area comes from the map
+  terrain (`CreatureAiServices.AreaOf` overrides it); without extracted maps the area is 0 and the nearest-guard fallback applies.
 - **Creature-versus-creature aggro** (`Creatures:CreatureAggroOnCreatures`, default true): `CanAggroOnSight` takes any living unit
   of the map (a GM player and an evading creature are excluded; the hostility seam decides: reputation for players, the faction
   templates between creatures, mangos AggressorAI::MoveInLineOfSight), and the relocation notify of a moving creature visits the

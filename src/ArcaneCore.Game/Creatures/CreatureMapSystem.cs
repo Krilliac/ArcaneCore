@@ -330,6 +330,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
                     }
 
                     CheckNoMeleePanicEnded(creature);
+                    CheckCalledGuard(creature);
 
                     break;
 

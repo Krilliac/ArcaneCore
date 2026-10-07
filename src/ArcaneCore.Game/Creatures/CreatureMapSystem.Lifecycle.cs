@@ -387,6 +387,7 @@ public sealed partial class CreatureMapSystem
             CreateAi(creature);
         }
 
+        ResetGuardCall(creature); // vmangos BasicAI::JustRespawned
         creature.AI?.OnRespawn();
     }
 

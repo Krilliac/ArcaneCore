@@ -61,6 +61,9 @@ public sealed class CreatureEventAI : AggressorAI
     /// </summary>
     public bool UsesGuardSightRules { get; init; }
 
+    /// <summary>vmangos CreatureEventAI::MoveInLineOfSight has no guard call (only BasicAI does; combat entry still calls).</summary>
+    protected override bool CallsGuardsOnSight => false;
+
     /// <summary>The guard rule for a GuardEventAI, else the aggressor rule (vmangos GuardEventAI::MoveInLineOfSight, GuardEventAI.cpp:50-77).</summary>
     public override void MoveInLineOfSight(Unit who)
     {

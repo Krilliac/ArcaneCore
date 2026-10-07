@@ -18,6 +18,9 @@ public sealed class CritterAI(Creature creature) : CreatureAI(creature)
 
     private uint _combatTimerMs;
 
+    /// <summary>vmangos CritterAI::MoveInLineOfSight does nothing.</summary>
+    protected override bool CallsGuardsOnSight => false;
+
     /// <summary>vmangos CritterAI::MoveInLineOfSight and AttackStart do nothing: a critter never attacks.</summary>
     public override bool AttackStart(Unit target) => false;
 
