@@ -21,6 +21,8 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         List<BroadcastTextRow> broadcastTexts = await db.Set<BroadcastTextRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureAiSummonRow> summons = await db.Set<CreatureAiSummonRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureTextTemplateRow> textTemplates = await db.Set<CreatureTextTemplateRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<RelayScriptRow> relaySteps = await db.Set<RelayScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<RelayScriptTemplateRow> relayTemplates = await db.Set<RelayScriptTemplateRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
 
         return new CreatureContent(
             templates.Select(ToTemplate),
@@ -47,7 +49,12 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
                 new BroadcastTextCatalog(broadcastTexts.Select(ToBroadcastText)),
                 summons.Select(s => new CreatureAiSummon(s.Id, s.X, s.Y, s.Z, s.Orientation, s.SpawnTimeSeconds)),
                 EventAiDialect.CMangos,
-                textTemplates.Select(row => new CreatureAiTextChoice(row.Id, row.TargetId, row.Chance))),
+                textTemplates.Select(row => new CreatureAiTextChoice(row.Id, row.TargetId, row.Chance)))
+            {
+                RelayScripts = new RelayScriptCatalog(
+                    relaySteps.Select(RelayScriptDataModule.ToStep),
+                    relayTemplates.Select(row => new RelayScriptTemplateChoice(row.Id, row.RelayId, row.Chance))),
+            },
             entryPaths.Select(p => (p.Entry, p.PathId, new CreatureWaypoint(p.Point, p.X, p.Y, p.Z, p.Orientation, p.WaitTimeMs))),
             spawnEntries.Select(e => (e.SpawnGuid, e.Entry)));
     }

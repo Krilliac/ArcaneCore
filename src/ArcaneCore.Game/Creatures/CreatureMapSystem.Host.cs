@@ -231,6 +231,10 @@ public sealed partial class CreatureMapSystem
                 {
                     CallForHelp(creature, _options.AssistanceRadius);
                 }
+                else if (pointId == RelayMovePointId)
+                {
+                    OnRelayMoveArrived(creature);
+                }
 
                 creature.AI?.OnMovementInform(type, pointId);
                 break;

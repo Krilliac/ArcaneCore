@@ -126,7 +126,8 @@ docs/integration/creature-ai.md.
     present, triggered and interrupt flags; a creature that is casting only casts again when the spell is
     triggered or interrupts; success is the cast being accepted), 12 summon, 13 threat single (direct add or percent) and 14 threat all percent (docs/areas/threat.md), 20 auto attack, 21 combat
     movement (no change or casting fails), 22 and 23 phases, 24 evade (with the combat-only parameter), 25
-    flee for assistance, 37 die, 39 call for help, 54 target-aware text (direct id or random template).
+    flee for assistance, 37 die, 39 call for help, 53 start relay script (see "Relay scripts" below), 54 target-aware
+    text (direct id or random template).
   - **Targets**: 0-6, 7 (the invoker; there are no pets), 10, 12 and 15 (no unit). Others fail the action.
   - Event 36 (target not reachable) is checked at every batch and fires while the chase generator reports its victim
     unreachable (see "Unreachable target" above; nothing is unreachable without navigation data); death-prevented (35) needs
@@ -155,6 +156,42 @@ text choices separately from relay templates; import reports count only string c
 The primary contract is `ScriptMgr::GetRandomScriptTemplateId` and
 `LoadDbScriptRandomTemplates` in CMaNGOS classic revision `8ec338a1704e7dcb1c0213eb7ed58f9231ade40f`.
 Legacy `MangosStringLocale` fallback and ranged action 57 remain pending.
+
+## Relay scripts (EventAI action 53)
+
+cmangos EventAI's ACTION_T_START_RELAY_SCRIPT (53: relay id, target; CreatureEventAI.cpp:1227-1247) starts a DB script of
+`dbscripts_on_relay` with the resolved target as the script's source and the creature as its target (a negative id is a relay
+template, `dbscript_random_templates` type 1). vmangos has no such action: its EventAI rows call generic scripts instead, so the
+semantics are cmangos'. classic-db z2815 has 141 action-53 rows reaching 109 relay ids.
+
+- **Scheduling** (`Scripts/RelayScriptRunner.cs`, cmangos Map::ScriptsStart / ScriptsProcess, Maps/Map.cpp:2166-2272): per map; a
+  relay already scheduled for the same source and target is not started again; steps without delay run at once, the rest at
+  start + delay in delay, priority and dump order; a TERMINATE_SCRIPT that fires drops the rest of that run.
+- **Who acts** (`CreatureMapSystem.RelayScripts.cs`, ScriptAction::GetScriptProcessTargets, DBScripts/ScriptMgr.cpp:1360-1645): the
+  buddy by entry (nearest creature of `buddy_entry` within `search_radius` of the source, dead with BUDDY_IS_DESPAWNED) replaces the
+  source, or the target with BUDDY_AS_TARGET; then REVERSE_DIRECTION swaps and SOURCE_TARGETS_SELF copies. A step whose buddy is not
+  found is skipped (except TERMINATE_SCRIPT). A `condition_id` is evaluated for the player among source and target (the conditions
+  table, as for EVENT_T_RECEIVE_EMOTE); without a player or a conditions table the step is skipped.
+- **Commands carried out** (ScriptAction::ExecuteDbscriptCommand): 0 TALK (dataint, one of dataint..4, or string template datalong;
+  creature speakers), 1 EMOTE (datalong or one of dataint..4; an EMOTE_STATE_* id becomes UNIT_NPC_EMOTESTATE, 0 clears it, others play
+  once: vmangos Unit::HandleEmote with the SharedDefines.h state ids standing in for Emotes.dbc), 3 MOVE_TO (home with dataint 1/2,
+  turn to `o`, move by z, or walk to x/y/z after clearing the pushed movement; datalong is a relay started on arrival), 15 CAST_SPELL
+  (datalong or a dataint at random; datalong2 bit 0x01 triggered; COMMAND_ADDITIONAL casts without a target), 18 DESPAWN_SELF
+  (temporary creatures, after datalong ms), 21 SET_ACTIVEOBJECT (nothing to do here), 25 SET_RUN (script moves run, and the client is
+  told), 28 STAND_STATE, 29 MODIFY_NPC_FLAGS (datalong2 0 remove, 1 add, 2 toggle: the code, not the header comment), 31
+  TERMINATE_SCRIPT (npc entry datalong within datalong2 yd, else the step's buddy; COMMAND_ADDITIONAL inverts), 32 PAUSE_WAYPOINTS
+  (MotionMaster::PauseWaypoints(0)/UnpauseWaypoints: the waypoint generator stops and later sets off for the same node), 36 SET_FACING
+  (face the target, or the reset facing with datalong), 45 START_RELAY_SCRIPT.
+- **Not carried out** (skipped and reported once per relay id): every other command, the data flags BUDDY_BY_GUID, BUDDY_IS_PET,
+  BUDDY_BY_POOL, BUDDY_BY_SPAWN_GROUP, ALL_ELIGIBLE_BUDDIES, BUDDY_BY_GO and BUDDY_BY_STRING_ID, game-object buddies, a player as the
+  speaker, emoter, mover or caster, the MOVE_TO teleport, speed and forced movement, DESPAWN_SELF of a database spawn (no forced
+  despawn with a respawn timer exists), TERMINATE_SCRIPT by pool and its waypoint pause adjustment. The commands the 109 relays reached
+  from EventAI use most: MOVE_TO 99, TALK 74, EMOTE 53, TERMINATE_SCRIPT 27, SET_ACTIVEOBJECT 24, SET_FACING 20, PAUSE_WAYPOINTS 16,
+  ACTIVATE_OBJECT 14, SET_RUN 14, MODIFY_NPC_FLAGS 14, TEMP_SPAWN_CREATURE 13, MOVEMENT 11, STAND_STATE 11.
+- **Data** (world step 40, `RelayScriptDataModule`): `dbscripts_on_relay` (every column but the comment, plus the dump order per id)
+  and `dbscript_relay_template`; `CreatureDumpImporter` reads `dbscripts_on_relay` and the type-1 rows of `dbscript_random_templates`
+  (a later dump file replaces every row of a relay id it carries), `EfCreatureDataStore` loads them into
+  `CreatureAiContent.RelayScripts`. A database imported before this step has no relay rows: re-import the dump.
 
 ## Code layout
 

@@ -89,6 +89,10 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(SpellEnchantChargesWorldDataModule), DatabaseComponent.World, SpellEnchantChargesWorldDataModule.Version),
             (typeof(StartingSkillWorldDataModule), DatabaseComponent.World, StartingSkillWorldDataModule.Version),
             (typeof(CreatureTextTemplateDataModule), DatabaseComponent.World, CreatureTextTemplateDataModule.Version),
+            // INTEGRATOR: 38 and 39 are this branch's empty placeholders for other lanes' reserved world steps (RelayScriptDataModule.cs).
+            (typeof(CreatureAiLaneSchemaGap38), DatabaseComponent.World, CreatureAiLaneSchemaGap38.Version),
+            (typeof(CreatureAiLaneSchemaGap39), DatabaseComponent.World, CreatureAiLaneSchemaGap39.Version),
+            (typeof(RelayScriptDataModule), DatabaseComponent.World, RelayScriptDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),

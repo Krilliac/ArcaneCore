@@ -47,6 +47,12 @@ public sealed record CreatureImportReport(
     /// <summary><c>creature_movement_template</c> rows (the entry paths a spawn without its own path walks).</summary>
     public int MovementTemplates { get; init; }
     public int AiTextTemplates { get; init; }
+
+    /// <summary><c>dbscripts_on_relay</c> rows (the relay DB scripts EventAI's START_RELAY_SCRIPT runs).</summary>
+    public int RelayScriptSteps { get; init; }
+
+    /// <summary>Type-1 (relay) rows of <c>dbscript_random_templates</c>.</summary>
+    public int RelayScriptTemplates { get; init; }
 }
 
 /// <summary>
@@ -84,6 +90,9 @@ public sealed class CreatureDumpImporter
     private readonly Dictionary<uint, BroadcastTextRow> _broadcastTexts = [];
     private readonly Dictionary<uint, CreatureAiSummonRow> _aiSummons = [];
     private readonly Dictionary<(uint, int), CreatureTextTemplateRow> _textTemplates = [];
+    private readonly Dictionary<uint, List<RelayScriptRow>> _relaySteps = [];
+    private readonly HashSet<uint> _relayIdsThisRead = [];
+    private readonly Dictionary<(uint, uint), RelayScriptTemplateRow> _relayTemplates = [];
     private bool _warnedVMangosAiEvents;
     private readonly List<string> _warnings = [];
     private int _skippedSpawns;
@@ -100,6 +109,7 @@ public sealed class CreatureDumpImporter
     /// <summary>Read one dump (call again for further files; later rows replace earlier ones with the same key).</summary>
     public void Read(TextReader dump)
     {
+        _relayIdsThisRead.Clear();
         var reader = new MySqlDumpReader(dump);
         foreach (object item in reader.Read())
         {
@@ -147,6 +157,15 @@ public sealed class CreatureDumpImporter
                         var choice = new CreatureTextTemplateRow { Id = U32(row, "id"), TargetId = Int(Get(row, "target_id")), Chance = U32(row, "chance") };
                         _textTemplates[(choice.Id, choice.TargetId)] = choice;
                     }
+                    else if (U32(row, "type") == 1 && Int(Get(row, "target_id")) > 0)
+                    {
+                        // cmangos RELAY_TEMPLATE: target_id is a dbscripts_on_relay id.
+                        var relay = new RelayScriptTemplateRow { Id = U32(row, "id"), RelayId = (uint)Int(Get(row, "target_id")), Chance = U32(row, "chance") };
+                        _relayTemplates[(relay.Id, relay.RelayId)] = relay;
+                    }
+                    break;
+                case "dbscripts_on_relay":
+                    ReadRelayStep(row);
                     break;
                 case "broadcast_text":
                     ReadBroadcastText(row);
@@ -214,6 +233,8 @@ public sealed class CreatureDumpImporter
                 await db.Set<BroadcastTextRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureAiSummonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureTextTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<RelayScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<RelayScriptTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureAddonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureMovementRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureMovementTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
@@ -235,6 +256,8 @@ public sealed class CreatureDumpImporter
             await InsertBatchedAsync(db, _broadcastTexts.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _aiSummons.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _textTemplates.Values, cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _relaySteps.Values.SelectMany(rows => rows), cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _relayTemplates.Values, cancellationToken).ConfigureAwait(false);
 
             if (savepoint is not null)
             {
@@ -307,7 +330,53 @@ public sealed class CreatureDumpImporter
         MovementTemplates = _movementTemplates.Count,
         SpawnEntries = _spawnEntries.Count,
         AiTextTemplates = _textTemplates.Count,
+        RelayScriptSteps = _relaySteps.Values.Sum(rows => rows.Count),
+        RelayScriptTemplates = _relayTemplates.Count,
     };
+
+    /// <summary>The relay DB script rows and relay templates that would be written (for inspection and tests).</summary>
+    public (IReadOnlyCollection<RelayScriptRow> Steps, IReadOnlyCollection<RelayScriptTemplateRow> Templates) RelaySnapshot()
+        => ([.. _relaySteps.Values.SelectMany(rows => rows)], [.. _relayTemplates.Values]);
+
+    /// <summary>
+    /// One <c>dbscripts_on_relay</c> row (cmangos mangos.sql column names). The table has no key: the rows of one id are kept in dump
+    /// order (<see cref="RelayScriptRow.Ordinal"/>), and a later dump file that carries an id replaces every row of that id.
+    /// </summary>
+    private void ReadRelayStep(DumpRow row)
+    {
+        uint id = U32(row, "id");
+        if (_relayIdsThisRead.Add(id) || !_relaySteps.ContainsKey(id))
+        {
+            _relaySteps[id] = [];
+        }
+
+        List<RelayScriptRow> rows = _relaySteps[id];
+        rows.Add(new RelayScriptRow
+        {
+            Id = id,
+            Ordinal = (uint)rows.Count,
+            Delay = U32(row, "delay"),
+            Priority = U32(row, "priority"),
+            Command = U32(row, "command"),
+            DataLong = U32(row, "datalong"),
+            DataLong2 = U32(row, "datalong2"),
+            DataLong3 = U32(row, "datalong3"),
+            BuddyEntry = U32(row, "buddy_entry"),
+            SearchRadius = U32(row, "search_radius"),
+            DataFlags = U32(row, "data_flags"),
+            DataInt = Int(Get(row, "dataint")),
+            DataInt2 = Int(Get(row, "dataint2")),
+            DataInt3 = Int(Get(row, "dataint3")),
+            DataInt4 = Int(Get(row, "dataint4")),
+            DataFloat = F32(row, 0f, "datafloat"),
+            X = F32(row, 0f, "x"),
+            Y = F32(row, 0f, "y"),
+            Z = F32(row, 0f, "z"),
+            O = F32(row, 0f, "o"),
+            Speed = F32(row, 0f, "speed"),
+            ConditionId = U32(row, "condition_id"),
+        });
+    }
 
     /// <summary>The spawn entry lists that would be written (for inspection and tests).</summary>
     public IReadOnlyCollection<CreatureSpawnEntryRow> SpawnEntrySnapshot() => [.. _spawnEntries.Values];

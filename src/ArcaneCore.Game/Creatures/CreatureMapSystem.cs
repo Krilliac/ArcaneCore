@@ -158,6 +158,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
         SendCatchUpMoves();
         UpdateCreatures(diffMs);
         UpdatePendingAi();
+        UpdateRelayScripts();
         Map.RunAfterUpdate(CaptureNewObservers);
     }
 

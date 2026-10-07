@@ -102,6 +102,8 @@ public sealed partial class CreatureMapSystem
     {
         ResetAiState(creature);
         _summons.RemoveAll(s => ReferenceEquals(s.Creature, creature));
+        _arrivalRelays.Remove(creature);
+        _scriptDespawns.RemoveAll(s => ReferenceEquals(s.Creature, creature));
         _ai.Spells?.OnCreatureRemoved(creature);
         creature.AI = null;
     }
