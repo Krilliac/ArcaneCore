@@ -268,7 +268,7 @@ public sealed partial class MapCombat
     /// <summary>
     /// Put a logged-in ghost's body back (world thread, the player is in this map; vmangos
     /// Player::LoadCorpse + Corpse loading). <paramref name="snapshot"/> is the stored body: the
-    /// corpse object is created at its place (in the map it was left in), the ghost time is the
+    /// corpse object is created at its place (in the map instance it was left in), the ghost time is the
     /// stored Unix second, the ghost form is applied, the "release timer" byte flag is set on a
     /// non-instanceable map (Player.cpp:15434), and the client is told what is left of the
     /// reclaim delay (Player::SendCorpseReclaimDelay(load = true), Player.cpp:20228-20260). The
@@ -290,7 +290,10 @@ public sealed partial class MapCombat
             RemoveCorpse(old);
         }
 
-        MapCombat corpseMap = snapshot.MapId == _map.MapId ? this : _world.GetMap(snapshot.MapId).Combat;
+        // The body goes back into the instance it was left in (vmangos corpse.instance), so a party still in the dungeon sees it.
+        MapCombat corpseMap = snapshot.MapId == _map.MapId && snapshot.InstanceId == _map.InstanceId
+            ? this
+            : _world.GetMap(snapshot.MapId, snapshot.InstanceId).Combat;
         var type = (CorpseType)snapshot.Type;
         Corpse corpse = Corpse.CreateAt(player, snapshot.MapId, snapshot.X, snapshot.Y, snapshot.Z, snapshot.Orientation,
             type is CorpseType.ResurrectablePvp ? type : CorpseType.ResurrectablePve);

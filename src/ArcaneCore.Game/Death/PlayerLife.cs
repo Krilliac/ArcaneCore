@@ -40,7 +40,7 @@ public static class PlayerLife
 
         UnitCombat c = player.Combat;
         CorpseSnapshot? corpse = c.Corpse is { } body
-            ? new CorpseSnapshot(body.MapId, body.X, body.Y, body.Z, body.Orientation, c.GhostTime, (byte)body.Type)
+            ? new CorpseSnapshot(body.MapId, body.X, body.Y, body.Z, body.Orientation, c.GhostTime, (byte)body.Type, body.Map?.InstanceId ?? 0)
             : null;
         return new CharacterLife(
             player.Health,

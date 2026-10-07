@@ -117,6 +117,24 @@ public sealed class GhostRestoreTests
     }
 
     [Fact]
+    public void RestoreGhost_PutsADungeonBodyBackIntoItsOwnInstance_AndTheNextSaveKeepsIt()
+    {
+        // vmangos keeps corpse.instance: the party still inside the dungeon instance sees the body and can resurrect it.
+        Rig r = Create();
+        using WorldRuntime world = r.World;
+        Login(r, GhostLife(corpse: new CorpseSnapshot(36, 5, 6, 7, 0, T - 10, (byte)CorpseType.ResurrectablePve, InstanceId: 105)));
+
+        Corpse corpse = Assert.IsType<Corpse>(r.Player.Combat.Corpse);
+        Map instance = Assert.IsType<Map>(world.FindMap(36, 105));
+        Assert.Same(instance, corpse.Map);
+        Assert.Contains(corpse, instance.Combat.Corpses);
+        Assert.Null(world.FindMap(36, 0)); // no shared copy of the dungeon
+
+        CorpseSnapshot saved = Assert.IsType<CorpseSnapshot>(PlayerLife.Capture(r.Player).Corpse);
+        Assert.Equal((36u, 105u), (saved.MapId, saved.InstanceId));
+    }
+
+    [Fact]
     public void RestoreGhost_ShowsTheReleaseTimerFlagOnAContinentLikeVmangosLoadCorpse()
     {
         Rig r = Create();

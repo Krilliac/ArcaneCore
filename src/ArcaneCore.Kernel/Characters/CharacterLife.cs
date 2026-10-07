@@ -24,9 +24,10 @@ public sealed record CharacterLife(
 /// <summary>
 /// A player's released body (vmangos <c>corpse</c> row: position, map, time, type). The ghost
 /// time is a Unix second (vmangos Corpse::m_time); <paramref name="Type"/> is the
-/// <c>CorpseType</c> value (1 = resurrectable PvE, 2 = resurrectable PvP).
+/// <c>CorpseType</c> value (1 = resurrectable PvE, 2 = resurrectable PvP). <paramref name="InstanceId"/> is the map
+/// instance the body lies in (vmangos <c>corpse.instance</c>): 0 on a continent, the dungeon instance otherwise.
 /// </summary>
-public sealed record CorpseSnapshot(uint MapId, float X, float Y, float Z, float Orientation, long GhostTimeUnix, byte Type);
+public sealed record CorpseSnapshot(uint MapId, float X, float Y, float Z, float Orientation, long GhostTimeUnix, byte Type, uint InstanceId = 0);
 
 /// <summary>Read side of <see cref="CharacterLife"/> (the write side is <see cref="CharacterState.Life"/>).</summary>
 public interface ICharacterLifeStore
