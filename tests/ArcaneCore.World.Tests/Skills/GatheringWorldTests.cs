@@ -183,7 +183,28 @@ public sealed class GatheringWorldTests
         Assert.Equal((ushort)121, await host.OnWorldAsync(() => player.Skills!.GetValuePure(SkillIds.Skinning)));   // red level 100, skill 120: orange, halved once by the steps = 500 per mille; the roll is the lowest (1)
     }
 
-    private static ulong VeinGuid() => ObjectGuid.WithEntry(HighGuid.GameObject, VeinEntry, VeinSpawn).Value;
+    [Fact]
+    public async Task AQuestVein_WithoutItsQuest_StaysClosed_AndGivesNoSkillUp()
+    {
+        // The chest quest gate (data8) of a use also holds for the open-lock spell, and a refused open raises no skill.
+        await using WorldTestHost host = Start(out GameObjectTestContext context, VeinLock, questId: 9876);
+        await using WorldTestClient client = await host.EnterWorldAsync("MINEQUEST", "Minequest");
+        Player player = await host.PlayerAsync("Minequest");
+        Game.Spells.SpellSystem spells = Spells(host);
+        spells.Random = new FixedRandom(int.MaxValue);
+        await host.OnWorldAsync(() => player.Skills!.Set(SkillIds.Mining, 1, 75, 1));
+
+        await client.SendAsync(WorldOpcode.CmsgCastSpell, CastAtVein(MiningCast));
+        await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo);
+        await host.OnWorldAsync(() => { });
+
+        GameObject vein = (await host.OnWorldAsync(() => context.Feature!.FindSystem(0)!.Find(new ObjectGuid(VeinGuid()))))!;
+        Assert.Null(vein.Loot);
+        Assert.Equal((ushort)1, await host.OnWorldAsync(() => player.Skills!.GetValuePure(SkillIds.Mining)));
+        Assert.DoesNotContain(player.Guid, vein.SkillupSet);
+    }
+
+    private static ulong VeinGuid() =>ObjectGuid.WithEntry(HighGuid.GameObject, VeinEntry, VeinSpawn).Value;
 
     private static Game.Spells.SpellSystem Spells(WorldTestHost host) => host.WorldServices.GetRequiredService<global::ArcaneCore.World.Spells.SpellFeature>().System;
 
@@ -195,11 +216,12 @@ public sealed class GatheringWorldTests
         return w.ToArray();
     }
 
-    private static WorldTestHost Start(out GameObjectTestContext context, uint veinLock)
+    private static WorldTestHost Start(out GameObjectTestContext context, uint veinLock, uint questId = 0)
     {
         uint[] data = new uint[GameObjectTemplate.DataCount];
         data[0] = veinLock;
         data[1] = VeinLoot;
+        data[8] = questId;
         var vein = new GameObjectTemplate { Entry = VeinEntry, Type = (uint)GameObjectType.Chest, DisplayId = 311, Name = "Copper Vein", Data = data };
         // Human start is (-8949.95, -132.49, 83.53): the vein is 2 yd away.
         var spawn = new GameObjectSpawn { Guid = VeinSpawn, Entry = VeinEntry, MapId = 0, X = -8948f, Y = -132.5f, Z = 83.5f };

@@ -129,6 +129,9 @@ public enum GameObjectUseResult
 
     /// <summary>The object needs line of sight to the user and has none (chairs).</summary>
     LineOfSight,
+
+    /// <summary>The user carries UNIT_FLAG_IMMUNE and the object cannot be used under immunity (vmangos CannotBeUsedUnderImmunity).</summary>
+    Immune,
 }
 
 /// <summary>LockKeyType (Lock.dbc Type[i]).</summary>

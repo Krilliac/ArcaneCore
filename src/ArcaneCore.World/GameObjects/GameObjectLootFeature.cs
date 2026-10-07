@@ -206,7 +206,13 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             CreatureOptions = services.GetService<CreatureWorldFeature>()?.Options ?? new CreatureOptions(),
             Durable = _settlements,
         };
-        var system = new GameObjectMapSystem(map, Content, loot, Quests, logger) { Options = ObjectOptions, Random = new Random() };
+        var system = new GameObjectMapSystem(map, Content, loot, Quests, logger)
+        {
+            Options = ObjectOptions,
+            Random = new Random(),
+            // GameObject::Use (GameObject.cpp:1414-1415): RemoveSpellsCausingAura(SPELL_AURA_MOUNTED), the spell system resolved at use time.
+            Dismount = player => services.GetService<ArcaneCore.World.Spells.SpellFeature>()?.System.RemoveSpellsCausingAura(player, Game.Spells.AuraType.Mounted),
+        };
         map.AddUpdater(system);
         map.AddUpdater(loot.Rolls); // the need/greed roll timers of this map's loot (LootRollManager)
         _systems.Add(map, system);
