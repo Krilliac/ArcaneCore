@@ -31,6 +31,12 @@ public sealed partial class WorldSession
     internal bool IsManaged => _managed;
     internal ManagedActionBudget? ManagedBudget { get; set; }
 
+    /// <summary>
+    /// Scenario harness tap: sees every packet this managed session captures, before the bounded drain queue can evict
+    /// it. Called under the send lock on the sending thread; it must be cheap and must not send.
+    /// </summary>
+    internal Action<WorldOpcode, byte[]>? ManagedPacketObserver { get; set; }
+
     internal static async Task<WorldSession> CreateManagedAsync(Account owner, int? characterId,
         IServiceProvider services, OpcodeTable opcodes, WorldRuntime world, SessionRegistry registry,
         WorldSessionOptions options, ILogger logger, CancellationToken cancellationToken = default)
@@ -92,10 +98,12 @@ public sealed partial class WorldSession
         lock (_sendLock)
         {
             if (_state == SessionState.Closed) return;
+            byte[] copy = payload.ToArray();
+            ManagedPacketObserver?.Invoke(opcode, copy);
             // Bounded transport: no socket writer or unconsumed unbounded channel exists for bots.
             while (_managedPackets.Count > 0 && (_managedPackets.Count >= 128 || _managedPacketBytes + payload.Length > 1_048_576))
                 _managedPacketBytes -= _managedPackets.Dequeue().Payload.Length;
-            _managedPackets.Enqueue(new ManagedSessionPacket(opcode, payload.ToArray()));
+            _managedPackets.Enqueue(new ManagedSessionPacket(opcode, copy));
             _managedPacketBytes += payload.Length;
         }
     }
