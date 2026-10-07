@@ -48,6 +48,9 @@ public interface IGmAuditStore
     /// <summary>Remove the account's mute row (no-op when there is none).</summary>
     Task DeleteMuteAsync(int accountId, CancellationToken cancellationToken = default);
 
+    /// <summary>Remove every mute row that ended at or before <paramref name="nowUnix"/>; returns how many went.</summary>
+    Task<int> DeleteExpiredMutesAsync(long nowUnix, CancellationToken cancellationToken = default);
+
     /// <summary>Every ticket that is still open.</summary>
     Task<IReadOnlyList<GmTicketRecord>> LoadOpenTicketsAsync(CancellationToken cancellationToken = default);
 

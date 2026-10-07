@@ -36,6 +36,7 @@ public sealed partial class GmAuditFeature(
     private readonly Dictionary<int, AccountMuteRecord> _mutes = [];
     private readonly Queue<GmAuditEntry> _tail = new();
     private int _tailSize = new GmOptions().AuditTailSize;
+    private long _lastMuteSweepUnixSeconds = long.MinValue;
 
     /// <summary>The write-through queue (exposed for health reporting and tests).</summary>
     public GmAuditWriteQueue Writes { get; } = new(scopes, loggers.CreateLogger<GmAuditWriteQueue>());
@@ -64,6 +65,11 @@ public sealed partial class GmAuditFeature(
         }
 
         Writes.Start();
+
+        // Rows of mutes that ran out while the world was down go now; the world tick ends the rest as they expire.
+        long now = NowUnixSeconds;
+        Writes.Save(ExpiredMutesKey, store => store.DeleteExpiredMutesAsync(now));
+        world.Updated += ExpireMutes;
     }
 
     public Task StopAsync() => Writes.StopAsync();
@@ -127,7 +133,53 @@ public sealed partial class GmAuditFeature(
         return MuteOf(player.AccountId)?.MutedUntil ?? 0;
     }
 
+    /// <summary>How many account mutes are held in memory, expired ones not yet swept included (tests and diagnostics).</summary>
+    public int RememberedMutes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _mutes.Count;
+            }
+        }
+    }
+
     private static string MuteKey(int accountId) => "mute:" + accountId;
+
+    private const string ExpiredMutesKey = "mute:expired";
+
+    /// <summary>
+    /// End the mutes that ran out, once per clock second on the world thread: drop them from memory and delete their rows
+    /// (only rows that really ended, so a mute set again meanwhile is safe). vmangos keeps <c>account.mutetime</c> and
+    /// only compares it with the clock when someone speaks (WorldSession::m_muteTime, ChatHandler.cpp:221-247); the
+    /// outcome for the player is the same, this only stops expired mutes from piling up in memory and in
+    /// <c>account_mute</c>. Nothing is said to the player when a mute ends on its own, as in vmangos.
+    /// </summary>
+    private void ExpireMutes(uint diffMs)
+    {
+        long now = NowUnixSeconds;
+        if (now == _lastMuteSweepUnixSeconds)
+        {
+            return;
+        }
+
+        _lastMuteSweepUnixSeconds = now;
+        bool any = false;
+        lock (_gate)
+        {
+            foreach (int accountId in _mutes.Where(pair => pair.Value.MutedUntil <= now).Select(pair => pair.Key).ToArray())
+            {
+                _mutes.Remove(accountId);
+                any = true;
+            }
+        }
+
+        if (any)
+        {
+            Writes.Save(ExpiredMutesKey, store => store.DeleteExpiredMutesAsync(now));
+        }
+    }
 
     // ---- audit tail -----------------------------------------------------------------------------
 

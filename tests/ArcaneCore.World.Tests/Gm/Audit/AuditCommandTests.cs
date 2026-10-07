@@ -359,6 +359,42 @@ public sealed class AuditCommandTests
     }
 
     [Fact]
+    public async Task AnExpiredMute_IsForgottenAndItsRowDeleted_WithoutAnyoneAskingAboutIt()
+    {
+        var clock = new Clock();
+        await using WorldTestHost host = Start(clock);
+        await using WorldTestClient mod = await host.EnterWorldAsync("MOD", "Moddy", AccountSecurity.Moderator);
+        await using WorldTestClient target = await host.EnterWorldAsync("TARGET", "Targetone");
+        await mod.CollectAsync();
+        InMemoryGmAuditStore store = host.WorldServices.GetRequiredService<InMemoryGmAuditStore>();
+        GmAuditFeature audit = host.WorldServices.GetRequiredService<GmAuditFeature>();
+        int account = await AccountIdAsync(host, "TARGET");
+
+        Assert.StartsWith("You have disabled", await ReplyAsync(mod, ".mute targetone 30m spam"));
+        await WorldTestHost.WaitForAsync(() => store.Mute(account) is not null, "the mute row");
+        Assert.Equal(1, audit.RememberedMutes);
+
+        // The mute runs out. Nobody speaks, nobody runs .pinfo or .arcane mutes: the world tick alone ends it.
+        clock.Advance(1800);
+        await WorldTestHost.WaitForAsync(() => store.Mute(account) is null, "the expired mute row to be deleted");
+        Assert.Equal(0, audit.RememberedMutes);
+    }
+
+    [Fact]
+    public async Task ExpiredMuteRows_LeftByAnEarlierRun_AreDeletedAtStartup_AndActiveOnesKept()
+    {
+        var clock = new Clock();
+        var store = new InMemoryGmAuditStore();
+        store.Seed(new AccountMuteRecord(71, clock.UnixNow + 600, clock.UnixNow - 10, "Earlier", (byte)AccountSecurity.GameMaster, "still running"));
+        store.Seed(new AccountMuteRecord(72, clock.UnixNow - 5, clock.UnixNow - 100, "Earlier", (byte)AccountSecurity.GameMaster, "already over"));
+        await using WorldTestHost host = Start(clock, services => services.AddSingleton<IGmAuditStore>(store));
+
+        await WorldTestHost.WaitForAsync(() => store.Mute(72) is null, "the expired row to be deleted");
+        Assert.NotNull(store.Mute(71));
+        Assert.Equal(1, host.WorldServices.GetRequiredService<GmAuditFeature>().RememberedMutes);
+    }
+
+    [Fact]
     public async Task Mute_StorageFailing_StillMutes_AndTheWriteIsRetainedNotLost()
     {
         await using WorldTestHost host = Start(new Clock());

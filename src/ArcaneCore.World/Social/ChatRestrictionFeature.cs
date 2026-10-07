@@ -19,6 +19,7 @@ public sealed class ChatRestrictionFeature(IConfiguration? configuration = null,
     : IWorldFeature, IChatMuteSource
 {
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
+    private long _lastPrune = long.MinValue;
 
     /// <summary>Anti-flood settings (World:Chat, restart-only); used by the service's own logic only.</summary>
     public ChatRestrictionOptions Options { get; } = new();
@@ -30,6 +31,18 @@ public sealed class ChatRestrictionFeature(IConfiguration? configuration = null,
     {
         configuration?.GetSection(ChatRestrictionOptions.SectionName).Bind(Options);
         Service = new ChatRestrictionService(Options, () => _clock.GetUtcNow().ToUnixTimeSeconds());
+        world.Updated += PruneMutes;
+    }
+
+    /// <summary>Once per clock second on the world thread: ended mutes leave the service's table without anyone asking about them.</summary>
+    private void PruneMutes(uint diffMs)
+    {
+        long now = _clock.GetUtcNow().ToUnixTimeSeconds();
+        if (now != _lastPrune)
+        {
+            _lastPrune = now;
+            Service.PruneExpired();
+        }
     }
 
     public long MutedUntilUnixSeconds(Player player)

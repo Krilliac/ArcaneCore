@@ -53,6 +53,12 @@ back to the default, and the limit holds the staff notices to the same bound.
 * **Duration** is minutes when a bare number (mangos-zero, vmangos), else `1d2h30m` groups as `.ban`. Unlike vmangos' 32-bit
   `TimeStringToSecs` the arithmetic is checked, so `4294967297s` is refused instead of wrapping into one second; zero is refused and
   there is no permanent mute (use a ban); maximum 365 days. A word with a digit is a duration, otherwise a name, so `.mute 30m` mutes the selection.
+* **Expiry is active** (wave 2). A mute that runs out is dropped from memory and its `account_mute` row deleted by the world tick
+  (once per clock second, `GmAuditFeature.ExpireMutes`), whether or not anyone speaks, runs `.pinfo` or `.arcane mutes`; rows that
+  ran out while the world was down are deleted at start (`IGmAuditStore.DeleteExpiredMutesAsync`, conditional on the end time, so a
+  mute set again meanwhile is never touched). vmangos keeps `account.mutetime` and only compares it when the player speaks
+  (`WorldSession::m_muteTime`, `ChatHandler.cpp:221-247`); the player sees the same thing (nothing is said when a mute ends on its own),
+  the server just stops keeping ended mutes. The social lane's `ChatRestrictionService` table is pruned the same way.
 * **`.arcane` is a non-retail root.** No reference core has it, `RetailCommandOrder` does not list it, so a future retail table can never
   collide with it. Everything under it only reads.
 * **Tickets are per character, one open at a time** (vmangos `character_ticket`). `respond` answers and leaves the ticket open; `close`
