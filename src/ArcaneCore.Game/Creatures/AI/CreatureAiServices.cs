@@ -143,6 +143,9 @@ public sealed class CreatureAiFactory
 
     public const string GuardAIName = "GuardAI";
 
+    /// <summary>vmangos GuardEventAI: EventAI with the guard on-sight rules (AI/CreatureAIRegistry.cpp:50).</summary>
+    public const string GuardEventAIName = "GuardEventAI";
+
     /// <summary>CreatureType.dbc id of a critter (CREATURE_TYPE_CRITTER).</summary>
     public const uint CritterType = 8;
 
@@ -154,7 +157,11 @@ public sealed class CreatureAiFactory
         ["AggressorAI"] = static (c, _) => new AggressorAI(c),
         ["CritterAI"] = static (c, _) => new CritterAI(c),
         [GuardAIName] = static (c, _) => new GuardAI(c),
-        [EventAIName] = static (c, content) => new CreatureEventAI(c, content.Ai),
+        [EventAIName] = static (c, content) => new CreatureEventAI(c, content.Ai)
+        {
+            UsesGuardSightRules = (c.Template.Behaviour & CreatureBehaviourFlags.Guard) != 0, // vmangos GuardEventAI::Permissible
+        },
+        [GuardEventAIName] = static (c, content) => new CreatureEventAI(c, content.Ai) { UsesGuardSightRules = true },
     };
 
     public IReadOnlyCollection<string> Names => _factories.Keys;

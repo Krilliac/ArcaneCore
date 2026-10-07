@@ -47,19 +47,25 @@ docs/integration/creature-ai.md.
     the flag (deer, sheep, cows) already run through CritterAI.
   - **Flee for assistance**: the creature runs to the nearest possible helper (within 30 yd) and calls for help when it arrives. If no helper is found, it flees for 7 s.
 - **AI selection** (`CreatureAiFactory`, from `creature_template.AIName`): `NullAI`, `ReactorAI`,
-  `PassiveAI` (= reactor), `AggressorAI`, `CritterAI`, `GuardAI` and `EventAI`, plus registered C# scripts. An empty
+  `PassiveAI` (= reactor), `AggressorAI`, `CritterAI`, `GuardAI`, `EventAI` and `GuardEventAI`, plus registered C# scripts. An empty
   name gives GuardAI for a template with the GUARD extra flag (0x400 in both dialects; mangos CreatureAISelector.cpp:85-88 puts
   the guard check after the script name and before the permit contest), Reactor for civilians and Aggressor otherwise. Unknown
   names are reported once and get the default.
-- **GuardAI** (`Creatures/AI/GuardAI.cs`, mangos Object/GuardAI.cpp re-implemented): only the on-sight rule differs from
-  AggressorAI (`CreatureMapSystem.CanGuardAggroOnSight`): a guard without a victim attacks a unit in its aggro radius that is
-  hostile to players as such (`ICreatureHostility.IsHostileToPlayers`: the faction template's hostile mask carries
-  FACTION_MASK_PLAYER, DBCEnums.h:71), that its own hostility calls an enemy (opposing faction, Hated reputation, a contested-PvP
-  player for a contested guard), or, with `Creatures:GuardsDefendFriendlies` (default true), that is fighting a creature the guard is
-  friendly to (`ICreatureHostility.IsFriendly`, the template reaction; both references keep this clause commented out, GuardAI.cpp:74,
-  so the retail behaviour is UNVERIFIED). The common gates apply (alive, in control, `CanInitiateAttack`, 3 yd vertical limit, the
-  combat hooks' attackability, line of sight); a guard with a victim ignores everyone else. Not delivered: SMSG_ZONE_UNDER_ATTACK on a
-  guard's death (needs a world-wide team broadcast and a verified message layout) and the reference's separate guard sight range.
+- **GuardAI** (`Creatures/AI/GuardAI.cs`, vmangos AI/GuardAI.cpp re-implemented): only the on-sight rule differs from
+  AggressorAI (`CreatureMapSystem.CanGuardAggroOnSight`, GuardAI::MoveInLineOfSight, GuardAI.cpp:50-77): a guard without a victim
+  attacks a unit in its aggro radius that is hostile to players as such (`ICreatureHostility.IsHostileToPlayers`: the faction
+  template's hostile mask carries FACTION_MASK_PLAYER, DBCEnums.h:71), that its own hostility calls an enemy (opposing faction,
+  Hated reputation, a contested-PvP player for a contested guard), or a player the guard is not friendly to who is contested-PvP,
+  attacking a unit the guard is friendly to, or attacking someone on a taxi (`IsAttackingPlayerOrFriendly`, GuardAI.cpp:35-48); for
+  that player the radius is at least 30 yd. With `Creatures:GuardsDefendFriendlies` (default true) a *creature* fighting a creature
+  the guard is friendly to is an enemy too (an ArcaneCore extension: mangos keeps the clause commented out, Object/GuardAI.cpp:74, so
+  that half is UNVERIFIED). The height limit applies to creature targets only (GuardAI.cpp:56-57); ONLY_ATTACK_PVP_ENABLING is not
+  applied (the guard does not go through BasicAI); the other gates are the common ones (alive, in control, `CanInitiateAttack`, the
+  combat hooks' attackability, stealth, line of sight). A guard with a victim ignores everyone else.
+- **GuardEventAI** (vmangos AI/GuardEventAI.cpp; CreatureAISelector.cpp:66-69): a GUARD-flagged template whose AIName is `EventAI`,
+  or any template named `GuardEventAI`, runs `CreatureEventAI` with `UsesGuardSightRules`: its script runs as usual and whom it attacks
+  on sight is the guard rule. Not delivered: SMSG_ZONE_UNDER_ATTACK on a guard's death (mangos GuardAI::JustDied; neither vmangos AI
+  sends it and the message layout is unverified) and the reference's `IsInAccessablePlaceFor` (water and air).
 - **Creature-versus-creature aggro** (`Creatures:CreatureAggroOnCreatures`, default true): `CanAggroOnSight` takes any living unit
   of the map (a GM player and an evading creature are excluded; the hostility seam decides: reputation for players, the faction
   templates between creatures, mangos AggressorAI::MoveInLineOfSight), and the relocation notify of a moving creature visits the
@@ -217,6 +223,6 @@ code was copied.
   and invisibility are not modelled for creature targets; `Poll` mode scans players only. Mobs aggro on pets and totems alike
   (no totem exemption exists in the references' on-sight rules; UNVERIFIED against the client).
 - Flee-for-assist is simplified: there is no "attempts to run away in fear" emote, and help is called once on arrival.
-- No totem AI or formation/linking (`creature_linking`); no SMSG_ZONE_UNDER_ATTACK from a guard's death.
+- No totem AI or formation/linking (`creature_linking`); no SMSG_ZONE_UNDER_ATTACK from a guard's death (mangos only).
   - **How aggro is triggered** (`Creatures:AggroScanMode`, default `Relocation`): a player or creature that moves or joins the map schedules one AI notify after 1000 ms (`Visibility.AIRelocationNotifyDelay`); the notify makes the creatures (for a player) or the players and, with `Creatures:CreatureAggroOnCreatures`, the creatures (for a creature, both directions) within `MaxCreatureAttackRadius` (40) times the aggro rate run `MoveInLineOfSight` for it (`AiRelocationNotifier`; vmangos Unit.cpp:10082-10160, GridNotifiersImpl.h:57-119). Standing still triggers nothing. `Poll` is the original behaviour: every creature checks every player every tick (development). The aggro predicate asks the stealth and invisibility visibility service whether the creature detects the player: a stealthed player is attacked only when the creature detects it, and one just outside detection range raises the stealth alert (docs/areas/threat.md). Differences from vmangos: a plain 2D radius over the touched cells instead of the exact cell visit.
 - Per-instance map updaters and instance resets belong to `feat/instances`.

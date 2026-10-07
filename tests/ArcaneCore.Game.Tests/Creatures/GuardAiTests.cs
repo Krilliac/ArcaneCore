@@ -168,7 +168,7 @@ public sealed class GuardAiTests
     }
 
     [Fact]
-    public void AGuard_DoesNotDefendANeutralCreature_NorAnyoneWithTheOptionOff()
+    public void AGuard_DoesNotDefendANeutralCreature_AndWithTheOptionOff_LeavesCreatureAttackersAlone()
     {
         using Town neutral = Start(GuardTemplate(NeutralGuardFaction));
         Creature beast = neutral.Spawn(NeutralBeastFaction, 5, 0);
@@ -177,12 +177,91 @@ public sealed class GuardAiTests
         neutral.Guard.AI!.MoveInLineOfSight(hunter);
         Assert.Null(neutral.Guard.Combat.Victim);
 
+        // The option covers creature attackers only: a mob fighting a townsman is left alone with it off.
         using Town off = Start(GuardTemplate(NeutralGuardFaction), new CreatureOptions { RespawnPacifyMs = 0, GuardsDefendFriendlies = false });
         Creature townsman = off.Spawn(TownsfolkFaction, 5, 0, civilian: true);
-        (Player player, _) = AddPlayer(off.World, 2, 8, 0);
-        Assert.True(off.Map.Combat.Attack(player, townsman));
-        off.Guard.AI!.MoveInLineOfSight(player);
-        Assert.Null(off.Guard.Combat.Victim);
+        Creature beastAttacker = off.Spawn(NeutralBeastFaction, 8, 0);
+        Assert.True(off.Map.Combat.Attack(beastAttacker, townsman));
+        Assert.False(off.System.CanGuardAggroOnSight(off.Guard, beastAttacker));
+    }
+
+    // --- vmangos GuardAI::MoveInLineOfSight (AI/GuardAI.cpp:35-77) ------------------------------------------------------------
+
+    [Fact]
+    public void APlayerAttackingTheGuardsFriend_IsAttacked_FromUpToThirtyYards_EvenWithTheOptionOff()
+    {
+        // vmangos IsAttackingPlayerOrFriendly: a player the guard is not friendly to, whose victim the guard is friendly to, widens the
+        // radius to 30 yd and counts as an enemy (GuardAI.cpp:63-68, 74).
+        using Town t = Start(GuardTemplate(NeutralGuardFaction), new CreatureOptions { RespawnPacifyMs = 0, GuardsDefendFriendlies = false });
+        Creature townsman = t.Spawn(TownsfolkFaction, 24, 0, civilian: true);
+        (Player player, _) = AddPlayer(t.World, 1, 26, 0); // 26 yd from the guard: outside its 18 yd aggro radius
+        Run(t.World, 1100);
+        Assert.Null(t.Guard.Combat.Victim);
+
+        Assert.True(t.Map.Combat.Attack(player, townsman));
+        Assert.True(t.System.CanGuardAggroOnSight(t.Guard, player));
+        t.Guard.AI!.MoveInLineOfSight(player);
+        Assert.Same(player, t.Guard.Combat.Victim);
+
+        using Town far = Start(GuardTemplate(NeutralGuardFaction));
+        Creature farTownsman = far.Spawn(TownsfolkFaction, 30, 0, civilian: true);
+        (Player farPlayer, _) = AddPlayer(far.World, 2, 32, 0); // beyond 30 yd
+        Assert.True(far.Map.Combat.Attack(farPlayer, farTownsman));
+        Assert.False(far.System.CanGuardAggroOnSight(far.Guard, farPlayer));
+    }
+
+    [Fact]
+    public void AContestedPvpPlayer_IsAnEnemyOfANeutralGuard_WithinThirtyYards()
+    {
+        // vmangos IsAttackingPlayerOrFriendly: IsPvPContested alone qualifies (GuardAI.cpp:38-39) for a guard not friendly to the player.
+        using Town t = Start(GuardTemplate(NeutralGuardFaction));
+        (Player player, _) = AddPlayer(t.World, 1, 25, 0);
+        Assert.False(t.System.CanGuardAggroOnSight(t.Guard, player));
+
+        player.Flags |= PlayerFlags.ContestedPvp;
+
+        Assert.True(t.System.CanGuardAggroOnSight(t.Guard, player));
+    }
+
+    [Fact]
+    public void TheVerticalLimit_DoesNotApplyToPlayers()
+    {
+        // vmangos GuardAI.cpp:56-57 checks the height difference for creature targets only.
+        using Town t = Start(GuardTemplate(NeutralGuardFaction));
+        (Player player, _) = AddPlayer(t.World, 1, 6, 0);
+        player.Relocate(6, 0, 83.5f + 6f, 0, 0);
+        player.Flags |= PlayerFlags.ContestedPvp;
+
+        Assert.True(t.System.CanGuardAggroOnSight(t.Guard, player));
+    }
+
+    // --- GuardEventAI (vmangos AI/GuardEventAI.cpp, CreatureAISelector.cpp:66-69) ------------------------------------------------
+
+    [Theory]
+    [InlineData(0x400u, "EventAI")]      // a guard whose AIName is EventAI
+    [InlineData(0u, "GuardEventAI")]     // the registered name
+    public void AnEventAiGuard_RunsItsScript_AndUsesTheGuardSightRules(uint extraFlags, string aiName)
+    {
+        using Town t = Start(Template(GuardEntry) with { Faction = AllianceGuardFaction, ExtraFlags = extraFlags, AIName = aiName });
+        CreatureEventAI ai = Assert.IsType<CreatureEventAI>(t.Guard.AI);
+        Assert.True(ai.UsesGuardSightRules);
+
+        Creature menace = t.Spawn(TownMenaceFaction, 8, 0, civilian: true); // hostile to players, not to the guard's template; never starts a fight
+        Run(t.World, 1100);
+
+        Assert.Same(menace, t.Guard.Combat.Victim);
+    }
+
+    [Fact]
+    public void APlainEventAiCreature_KeepsTheAggressorSightRules()
+    {
+        using Town t = Start(Template(GuardEntry) with { Faction = AllianceGuardFaction, AIName = "EventAI" });
+        Assert.False(Assert.IsType<CreatureEventAI>(t.Guard.AI).UsesGuardSightRules);
+
+        t.Spawn(TownMenaceFaction, 8, 0, civilian: true);
+        Run(t.World, 1100);
+
+        Assert.Null(t.Guard.Combat.Victim); // its own hostility says no and it is no guard
     }
 
     [Fact]
