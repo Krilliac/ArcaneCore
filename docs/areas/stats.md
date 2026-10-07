@@ -146,10 +146,8 @@ consumed), the weapon-entry zeroing above.
 
 ## Limits (not done)
 
-- No aura modifiers. There is no `SPELL_AURA_MOD_*` stat system in the tree, so +AP/+crit/+dodge/+% auras,
-  weapon-specific parry talents, haste, shapeshift forms (druid AP, weaponless damage) and the disarm
-  *trigger* are not modelled (disarm is honoured when the system recomputes, nothing recomputes on disarm).
-  `UnitMods` / the modifier-group model of the design was deliberately not built: it would have no producer.
+- ~~No aura modifiers~~ Superseded: the percent and flat stat auras (below), the combat stat auras and disarm (section "Combat stat
+  auras") feed the formulas now; haste and the forms have their own lanes.
 - ~~Ammo DPS is 0~~ Fixed by the ranged lane (wave 4): the ammo DPS is part of the ranged damage fields and is recomputed when the ammo changes (`docs/areas/ranged/damage-inputs.md`).
 - With retail skill content, `StatsFeature` uses `PlayerSkillStatSource` to read effective weapon and
   defense skills, including temporary and permanent aura bonuses. Skill changes recompute the crit,
@@ -227,6 +225,44 @@ break and repair with and without an active BASE_PCT aura.
   draws a percent buffed stat without it; the stat value itself is correct.
 - Pets get no base armor modifiers (`MOD_BASE_RESISTANCE`, `_PCT` on a pet's armor); other creatures never have them in the reference.
 - The `SPELLMOD_ATTACK_POWER` caster modifier on the attack power percent auras does not exist (no such spell mod class here).
-- Mana regeneration and spell power after a stat change are not recomputed (no system for them yet); parry from weapon-specific talents is not modelled.
+- ~~Mana regeneration and spell power after a stat change are not recomputed; parry from weapon-specific talents is not modelled.~~ Fixed by
+  lane w2-combat-stats (section "Combat stat auras"): the regeneration tick reads the live spirit, the spell damage display fields follow every stat
+  change, and weapon-restricted parry auras count for a fitting main hand.
 - A druid who changes power type keeps the percent on the old power's group until the aura ends (the reference re-evaluates per power type).
 - The support matrix table in `aura-engine.md` still lists these rows as Unsupported; it is regenerated at integration (`AuraSupportBaseline.cs` is the source).
+
+## Combat stat auras (wave 2 lane `combat-stats`)
+
+Code: `Spells/Auras/CombatStatAuras.cs`, `Spells/Auras/CombatTableAuras.cs`, `Stats/PlayerStatAuras.cs`, `Stats/CreatureDamageStats.cs`,
+`Combat/Melee/WeaponAuraModifiers.cs`, `Combat/Melee/MeleeDamageBonus.cs`, `Combat/MeleeHitTable.cs`, `Combat/MapCombat.Melee.cs`,
+`Spells/SpellCombatRules.cs`, `Spells/Casters/Bonus/SpellBonusModule.cs`. Tests: `Game.Tests/CombatMechanics/HitChanceAuraTests.cs`,
+`MeleeDamageBonusTests.cs`, `Game.Tests/Stats/CombatStatAurasTests.cs`, `Game.Tests/Spells/Casters/SpellDamageVersusTests.cs`,
+`World.Tests/Playerbots/Scenarios/CombatStatScenarioTests.cs` (scenario `combat-stat-auras`). Reference: vmangos (`D:/refs/vmangos`).
+
+| Area | Behaviour | vmangos |
+|---|---|---|
+| +hit | `MOD_HIT_CHANCE` (54) counts only while the hand's weapon fits the spell's item class and subclass mask (player slot item in any state, creature virtual item); it feeds white swings and the melee/ranged spell table, where the `RESIST_MISS_CHANCE` spell mod joins it before the first-percent rule. `ALWAYS_HIT` melee spells cannot miss. | `SpellCaster::GetMeleeMissChance` (SpellCaster.cpp:336-424), `Player/Creature::GetWeaponBasedAuraModifier` (StatSystem.cpp:482-503, 959-976) |
+| Victim side | `MOD_ATTACKER_MELEE/RANGED_HIT_CHANCE` (184/185) lower the miss chance of white swings and melee/ranged spells; `MOD_ATTACKER_MELEE/RANGED_CRIT_CHANCE` (187/188) raise the white crit chance. Magic hit (55, 186) was already wired. | SpellCaster.cpp:414-418, Unit.cpp:2577-2581, SpellCaster.cpp:845-866 |
+| Creatures in the table | Base crit 5 + `MOD_CRIT_PERCENT`; dodge, parry and block 5 + their percent auras; a player's ranged roll starts from the ranged crit field. | Unit.cpp:2474-2595 |
+| Crit auras | `MOD_CRIT_PERCENT` (52): generic amounts in both crit fields, weapon-restricted ones while the hand's usable unbroken weapon fits (the off hand only for its own enchantment). | `HandleAuraModCritPercent` (SpellAuras.cpp:5021-5049), `_ApplyWeaponDependentAuraCritMod` (Player.cpp:7029-7070) |
+| Weapon damage | `MOD_DAMAGE_DONE` / `MOD_DAMAGE_PERCENT_DONE` physical: generic ones are UNIT_MOD_DAMAGE_PHYSICAL and the hands' TOTAL_PCT, weapon-restricted ones the fitting hand's TOTAL_VALUE / TOTAL_PCT (a wand user's magic percent on the ranged hand); `MOD_OFFHAND_DAMAGE_PCT` (122) the off-hand TOTAL_PCT. Folded in at every recompute (`PlayerStatAuras`), so they follow equip, break and disarm. | `HandleModDamageDone` / `PercentDone` / `OffhandDamagePercent` (SpellAuras.cpp:5230-5385), `_ApplyWeaponDependentAuraDamageMod` (Player.cpp:7072-7114), `CalculateMinMaxDamage` (StatSystem.cpp:354-455) |
+| Parry | A weapon-restricted `MOD_PARRY_PERCENT` (Sword/Axe/Mace Finesse) counts while the main-hand item fits. | `UpdateParryPercentage` (StatSystem.cpp:590-605) |
+| Disarm | On apply and removal: outside a weaponless form the main hand swings at 2.0 s with unarmed damage and gets the weapon delay back afterwards; weapon-restricted crit and damage stop counting meanwhile. A creature holding a weapon (virtual item class weapon) keeps 40% damage. | `HandleAuraModDisarm` (SpellAuras.cpp:3502-3545), `Creature::UpdateDamagePhysical` (StatSystem.cpp:914-919) |
+| Attack power | Flat attack power auras now recompute the player's damage fields; a creature's damage takes 30% of the attack power ratio to its template value (Demoralizing Shout and the like), plus its physical percent and flat auras. | `HandleStatModifier(UNIT_MOD_ATTACK_POWER)`, `Creature::UpdateDamagePhysical` (StatSystem.cpp:880-956) |
+| Versus and taken | White swings and weapon damage spells: `MOD_DAMAGE_DONE_CREATURE` (59), melee/ranged attack power versus (102/131) and attacker bonus (165/127) at AP/14 times the weapon speed scaled by the hand's TOTAL_PCT, `MOD_DAMAGE_DONE_VERSUS` (168); then the victim's melee/ranged taken flat (125/113), school taken (14), school percent (87) and melee/ranged percent (126/114). Spells take 168, 59 and `MOD_FLAT_SPELL_DAMAGE_VERSUS` (180), and item-restricted damage auras (Wand Specialization) no longer boost spells. | `MeleeDamageBonusDone` (SpellCaster.cpp:1295-1455), `MeleeDamageBonusTaken` (Unit.cpp:5676-5749), `SpellDamageBonusDone` (SpellCaster.cpp:1560-1700) |
+| Spell damage display | PLAYER_FIELD_MOD_DAMAGE_DONE_POS / _NEG / _PCT per school are written after every stat change and every damage done aura change (1.0 percent by default). | `UpdateSpellDamageAndHealingBonus` (StatSystem.cpp:80-88), `UpdateDamageDonePercent` (Player.cpp:7116-7136) |
+| Mana regeneration | Already recomputed: the regeneration tick reads the current spirit and auras every 2 s (vmangos caches the same value in `UpdateManaRegen` on every stat update); `ManaRegeneration_ReadsTheSpiritAfterAPercentStatChange` proves it. | `Player::UpdateManaRegen` (StatSystem.cpp:642-661) |
+
+Consciously unchanged (vmangos `HandleUnused`, no effect on 1.12): `MOD_PARRY_SKILL` (46), `MOD_DODGE_SKILL` (48), `MOD_BLOCK_SKILL` (50; only spell 21540
+"Improved Block Value" carries it), `MOD_CRIT_DAMAGE_BONUS` (163; no 1.12 spell), `MOD_RATING` (189). The crit damage bonus of 1.12 is the
+`SPELLMOD_CRIT_DAMAGE_BONUS` spell mod (Impale, Ruin, Ice Shards: `VanillaSpellCombatRules.CriticalDamage`) and, for white crits, `MOD_CRIT_PERCENT_VERSUS`;
+both were already in place. The weapon skill auras are `MOD_SKILL` / `MOD_SKILL_TALENT` (`SkillAuras`).
+
+Deviation: vmangos overwrites PLAYER_FIELD_MOD_DAMAGE_DONE_POS with the net spell damage (negative auras included) at every stat update while its aura
+handlers add positive and negative amounts apart; here the positive and negative fields always stay apart.
+
+Limits: a stack refresh that changes the amount of a flat attack power or disarm aura without a new holder is not seen (no 1.12 such aura
+stacks); the hunter pet happiness factor of `MeleeDamageBonusDone` and pets' own damage recompute belong to the pets lane; the melee class
+SCHOOL_DAMAGE spells (Shield Slam and the like) still take only the DAMAGE spell mod, not the non-weapon branch of `MeleeDamageBonusDone`; creature
+damage fields are recomputed for the main hand only (creatures carry no off-hand data), and without creature equipment rows
+(`creature_equip_template`, not in the repository) no creature holds a weapon, so the 40% disarm factor needs that data to show in play.

@@ -136,6 +136,8 @@ The tests run the built-ins plus `group-loot` (group, free-for-all loot, kill, m
 item), `mail-item` (persisted letter with item, delivery delay, take), `melee-kill` (swing,
 kill, XP credit) and `kill-quest` (accept, kill credit, turn in, settled reward row), and
 check database rows after the run. Setting `ARCANE_SCENARIO_REPORT_DIR` collects every report.
+`CombatStatScenarioTests` runs `combat-stat-auras` (duel, a damage taken curse and an attacker hit buff cast through CMSG_CAST_SPELL, white
+swings that must all land for tenfold damage); its two spells are installed by swapping the spell store on the world thread.
 
 ## MockClient playbot (external protocol client)
 

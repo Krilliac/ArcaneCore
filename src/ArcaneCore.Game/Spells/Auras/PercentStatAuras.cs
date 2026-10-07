@@ -33,8 +33,8 @@ namespace ArcaneCore.Game.Spells;
 /// <para>
 /// Limits (docs/areas/stats.md): the buff counters PLAYER_FIELD_POS/NEGSTAT and the resistance buff mods are not scaled by the percent
 /// auras (the reference does for the client UI, Player::ApplyStatPercentBuffMod, ApplyResistanceBuffModsPercentMod), pets get no base armor
-/// modifiers, the SPELLMOD_ATTACK_POWER caster modifier of the attack power percent auras does not exist, and the dependent mana
-/// regeneration and spell power are not recomputed.
+/// modifiers, and the SPELLMOD_ATTACK_POWER caster modifier of the attack power percent auras does not exist. Mana regeneration reads the
+/// live spirit at every tick, and the spell damage display follows every <see cref="PlayerStatSystem.UpdateAll"/>.
 /// </para>
 /// </summary>
 public sealed class PercentStatAuras : ISpellHandlerModule
