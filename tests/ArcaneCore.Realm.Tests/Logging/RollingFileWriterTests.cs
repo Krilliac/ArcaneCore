@@ -22,6 +22,19 @@ public sealed class RollingFileWriterTests : IDisposable
     private RollingFileWriter Writer(long rollSizeBytes, bool daily, int retain, TextWriter? diagnostics = null)
         => new(LogPath, new RollingFilePolicy(rollSizeBytes, daily, retain), () => _now, diagnostics ?? TextWriter.Null);
 
+    // The writer keeps the live file open for writing (FileShare.ReadWrite). File.ReadAllText/ReadAllBytes ask for
+    // FileShare.Read, which Windows refuses while a writer holds the file (Linux has no such lock), so read the way a
+    // log tailer does: share read and write.
+    private static byte[] ReadSharedBytes(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var copy = new MemoryStream();
+        stream.CopyTo(copy);
+        return copy.ToArray();
+    }
+
+    private static string ReadShared(string path) => new System.Text.UTF8Encoding(false).GetString(ReadSharedBytes(path));
+
     private static string Line(int n) => $"line {n:000}\n"; // 9 bytes
 
     [Fact]
@@ -40,9 +53,9 @@ public sealed class RollingFileWriterTests : IDisposable
 
         string[] files = Directory.GetFiles(_dir).Select(Path.GetFileName).Order(StringComparer.Ordinal).ToArray()!;
         Assert.Equal(["world-20261004-001.log", "world-20261004-002.log", "world.log"], files);
-        Assert.Equal("line 000\nline 001\n", File.ReadAllText(Path.Combine(_dir, "world-20261004-001.log")));
-        Assert.Equal("line 002\nline 003\n", File.ReadAllText(Path.Combine(_dir, "world-20261004-002.log")));
-        Assert.Equal("line 004\n", File.ReadAllText(LogPath));
+        Assert.Equal("line 000\nline 001\n", ReadShared(Path.Combine(_dir, "world-20261004-001.log")));
+        Assert.Equal("line 002\nline 003\n", ReadShared(Path.Combine(_dir, "world-20261004-002.log")));
+        Assert.Equal("line 004\n", ReadShared(LogPath));
     }
 
     [Fact]
@@ -58,8 +71,8 @@ public sealed class RollingFileWriterTests : IDisposable
         writer.Flush();
 
         Assert.Equal(1, writer.Rolls);
-        Assert.Equal("line 001\nline 002\n", File.ReadAllText(Path.Combine(_dir, "world-20261004-001.log")));
-        Assert.Equal("line 003\n", File.ReadAllText(LogPath));
+        Assert.Equal("line 001\nline 002\n", ReadShared(Path.Combine(_dir, "world-20261004-001.log")));
+        Assert.Equal("line 003\n", ReadShared(LogPath));
     }
 
     [Fact]
@@ -75,7 +88,7 @@ public sealed class RollingFileWriterTests : IDisposable
         IReadOnlyList<string> kept = writer.RolledSegments();
         Assert.Equal(2, kept.Count);
         Assert.Equal(["world-20261004-005.log", "world-20261004-004.log"], kept.Select(f => Path.GetFileName(f)).ToArray());
-        Assert.Equal("line 004\n", File.ReadAllText(kept[0]));
+        Assert.Equal("line 004\n", ReadShared(kept[0]));
     }
 
     [Fact]
@@ -101,8 +114,8 @@ public sealed class RollingFileWriterTests : IDisposable
         writer.Flush();
 
         Assert.Equal(1, writer.Rolls);
-        Assert.Equal("old content 15b\n", File.ReadAllText(Path.Combine(_dir, "world-20261004-001.log")));
-        Assert.Equal("line 001\n", File.ReadAllText(LogPath));
+        Assert.Equal("old content 15b\n", ReadShared(Path.Combine(_dir, "world-20261004-001.log")));
+        Assert.Equal("line 001\n", ReadShared(LogPath));
     }
 
     [Fact]
@@ -115,8 +128,8 @@ public sealed class RollingFileWriterTests : IDisposable
         writer.Write(Line(1));
         writer.Flush();
 
-        Assert.Equal("yesterday\n", File.ReadAllText(Path.Combine(_dir, "world-20261003-001.log")));
-        Assert.Equal("line 001\n", File.ReadAllText(LogPath));
+        Assert.Equal("yesterday\n", ReadShared(Path.Combine(_dir, "world-20261003-001.log")));
+        Assert.Equal("line 001\n", ReadShared(LogPath));
     }
 
     [Fact]
@@ -126,7 +139,7 @@ public sealed class RollingFileWriterTests : IDisposable
         writer.Write("héllo\n"); // 7 bytes
         writer.Flush();
         Assert.Equal(7, writer.CurrentSize);
-        byte[] bytes = File.ReadAllBytes(LogPath);
+        byte[] bytes = ReadSharedBytes(LogPath);
         Assert.Equal(7, bytes.Length);
         Assert.NotEqual(0xEF, bytes[0]);
     }
@@ -185,7 +198,7 @@ public sealed class RollingFileWriterTests : IDisposable
         string[] lines = diagnostics.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal(2, lines.Length);
         Assert.Contains("resumed; 2 line(s) were lost", lines[1], StringComparison.Ordinal);
-        Assert.Equal("three\n", File.ReadAllText(LogPath));
+        Assert.Equal("three\n", ReadShared(LogPath));
     }
 
     /// <summary>Opens real files, but while <see cref="Full"/> every flush, including the one <see cref="FileStream.Dispose()"/> performs on a dirty buffer, fails with ENOSPC.</summary>
