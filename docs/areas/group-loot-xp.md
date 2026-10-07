@@ -121,11 +121,10 @@ until the orchestrator regenerates `docs/reference/configuration.md` (new key `L
 * Roll state is memory-only: a roll running when the map unloads or the world stops is dropped with its loot.
 * Quest-item sharing, personal (non-groupRules) chest loot, money split rules and open range are
   unchanged and still differ from retail (see `docs/integration/gameobjects-loot.md`).
-* Loot recipient is still the killer's group, not a tap list (stats-combat-formulas lane owns
-  `ITapInfo`), so pets/totems credit nobody.
-* The money split (`LootService.TakeMoney`) still measures 3D <= 74 yd from the corpse; retail splits among
-  group members within `IsWithinLootXPDist` of the LOOTER. `Progression/KillRewards.Recipients` (XP,
-  quest kill credit; stats-combat-formulas lane's file) still uses the 3D `<=` rule, so XP/quest credit
+* Corpse loot and kill reputation follow the first-damage tap (`LootService.OnCreatureDamaged`, cleared on evade and
+  respawn; docs/areas/loot-templates.md) and the corpse money splits among the looter's current group within
+  `IsWithinLootXPDist` of the looter. Experience and quest kill credit still go to the killer's group, and
+  `Progression/KillRewards.Recipients` (stats-combat-formulas lane's file) still uses the 3D `<=` rule, so XP/quest credit
   and loot disagree at the edges until it adopts `GroupRewardRange.IsAtGroupRewardDistance` (one-line
   change, handed to that lane).
 * Unlike vmangos, SMSG_GROUP_LIST is only resent when the pointer value actually changes (vmangos also
