@@ -167,8 +167,10 @@ only (new tables and columns), so a database at the previous version upgrades in
 - **Template behaviour**: `Detection`, `CallForHelp`, `Pursuit`, `Leash`, `Timeout`, `StaticFlags1/2`
   (cmangos names; vmangos `detection_range`, `call_for_help_range`, `leash_range`, `static_flags1/2`),
   and a dialect tag for `ExtraFlags`. A template without the detection column gets 18 yd
-  (`CreatureTemplate.DefaultDetectionRange`). The aggro radius reads `Detection`, the hard leash reads `Leash`, and the assistance call
-  reads `CallForHelp` (see **Assistance** above).
+  (`CreatureTemplate.DefaultDetectionRange`). A template without the call-for-help column takes its dialect's schema default:
+  5 for a vmangos row (`call_for_help_range DEFAULT '5'`, vmangos sql/old_migrations/20190123062532_world.sql:28) and 0 for a
+  cmangos row (`CallForHelp DEFAULT '0'`, mangos.sql:1258). The aggro radius reads `Detection`, the hard leash reads `Leash`, and
+  the assistance call reads `CallForHelp` (see **Assistance** above).
 - **ExtraFlags dialects.** The two references give the same bits different meanings (0x01 is
   INSTANCE_BIND in cmangos and NO_LEASH_EVADE in vmangos; 0x20 is RUN_DURING_WANDER versus
   NO_MOVEMENT_PAUSE; 0x40 is unused versus ALWAYS_RUN; 0x10000 is CIVILIAN versus NO_ASSIST).

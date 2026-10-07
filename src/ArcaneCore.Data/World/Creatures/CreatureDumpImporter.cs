@@ -425,9 +425,11 @@ public sealed class CreatureDumpImporter
 
             // Behaviour columns: cmangos Detection/CallForHelp/Pursuit/Leash/Timeout (mangos.sql creature_template),
             // vmangos detection_range/call_for_help_range/leash_range (CreatureDefines.h:250-252). A missing
-            // Detection column stays null so the content default (18) applies.
+            // Detection column stays null so the content default (18) applies. A missing call-for-help column takes the
+            // dialect's schema default: vmangos call_for_help_range DEFAULT '5' (sql/old_migrations/20190123062532_world.sql:28),
+            // cmangos CallForHelp DEFAULT '0' (mangos.sql:1258).
             Detection = row.TryGet(out _, "Detection", "detection_range") ? F32(row, 18.0f, "Detection", "detection_range") : null,
-            CallForHelp = F32(row, 0f, "CallForHelp", "call_for_help_range"),
+            CallForHelp = F32(row, vmangos ? 5f : 0f, "CallForHelp", "call_for_help_range"),
             Pursuit = U32(row, "Pursuit"),
             Leash = F32(row, 0f, "Leash", "leash_range"),
             Timeout = U32(row, "Timeout"),
