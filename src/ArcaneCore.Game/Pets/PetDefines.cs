@@ -36,6 +36,12 @@ public static class PetConstants
 
     /// <summary>vmangos CREATURE_MAX_LEVEL.</summary>
     public const int MaxCreatureLevel = 63;
+
+    /// <summary>vmangos Pet::SetDeathState(CORPSE): how long a dead pet, guardian or mini pet stays before it is unsummoned (Pet.cpp:652).</summary>
+    public const uint CorpseDecayMs = 15_000;
+
+    /// <summary>vmangos Pet::SetDeathState(CORPSE): a dead hunter pet stays an hour (Pet.cpp:649-650).</summary>
+    public const uint HunterPetCorpseDecayMs = 3_600_000;
 }
 
 /// <summary>vmangos TotemSlot (SharedDefines.h:1727-1735).</summary>

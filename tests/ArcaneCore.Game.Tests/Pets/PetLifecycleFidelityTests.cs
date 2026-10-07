@@ -129,4 +129,38 @@ public sealed class PetLifecycleFidelityTests
         Assert.True(mini.Summon!.Charm!.HasSpell(PetPassiveSpell));
         Assert.True(kit.Spells.System.HasAura(mini, PetPassiveSpell));
     }
+
+    [Fact]
+    public void ADeadSummonedPetOrGuardian_IsUnsummonedAfterFifteenSeconds_AHunterPetAfterAnHour()
+    {
+        // vmangos Pet::SetDeathState(CORPSE): m_corpseDecayTimer = HUNTER_PET ? 3600000 : 15000 (Pet.cpp:649-653),
+        // and Pet::Update unsummons when it runs out (Pet.cpp:677-686).
+        using var kit = new PetTestKit();
+        (Player warlock, _) = kit.AddPlayer(1);
+        kit.Cast(warlock, PetSpell);
+        kit.Cast(warlock, GuardianSpell);
+        Creature pet = SummonOf(kit, SummonKind.Pet);
+        Creature guardian = SummonOf(kit, SummonKind.Guardian);
+
+        kit.Creatures.KillCreature(pet);
+        kit.Creatures.KillCreature(guardian);
+        kit.Run(14_000);
+        Assert.Same(pet, kit.Creatures.FindCreature(pet.Guid));
+        Assert.Equal(pet.Guid, warlock.PetGuid);
+        Assert.Same(guardian, kit.Creatures.FindCreature(guardian.Guid));
+
+        kit.Run(1_200);
+        Assert.Null(kit.Creatures.FindCreature(pet.Guid));
+        Assert.True(warlock.PetGuid.IsEmpty);
+        Assert.Null(kit.Creatures.FindCreature(guardian.Guid));
+        Assert.Empty(kit.Map.Pets!.Summons);
+
+        using var hunterKit = new PetTestKit();
+        (Player hunter, _) = hunterKit.AddPlayer(2);
+        hunter.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        hunterKit.Cast(hunter, PetSpell);
+        Creature hunterPet = SummonOf(hunterKit, SummonKind.Pet);
+        hunterKit.Creatures.KillCreature(hunterPet);
+        Assert.Equal(3_600_000u, hunterPet.CorpseDecayMs);
+    }
 }
