@@ -80,6 +80,10 @@ public sealed class ReloadAllMembershipTests
         // Both join all only when their SQL store is registered, which the test host has not (docs/areas/hot-reload.md).
         ["spell_proc_item_enchant"] = false,
         ["spell_enchant_charges"] = false,
+
+        // all_spell calls HandleReloadSpellProcEventCommand (ServerCommands.cpp:976, proc-engine lane); it joins all only when its SQL store is
+        // registered, which the test host has not.
+        ["spell_proc_event"] = false,
     };
 
     /// <summary>
@@ -93,7 +97,7 @@ public sealed class ReloadAllMembershipTests
         "all_loot", "creature_loot_template", "gameobject_loot_template", "item_loot_template", "skinning_loot_template",
         "reference_loot_template", "fishing_loot_template", "pickpocketing_loot_template", "disenchant_loot_template",
         "skill_fishing_base_level", "gameobject_template", "spell_threats", "creature_onkill_reputation", "game_weather", "reputation_reward_rate", "reputation_spillover_template",
-        "reserved_name", "spell_proc_item_enchant",
+        "reserved_name", "spell_proc_item_enchant", "spell_proc_event",
     };
 
     /// <summary>Names with no vmangos counterpart (each needs a reason in docs/areas/hot-reload.md).</summary>
