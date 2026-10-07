@@ -1,9 +1,49 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Protocol;
+using ItemInventoryResult = ArcaneCore.Game.Items.InventoryResult;
 
 namespace ArcaneCore.Game.Npc;
+
+/// <summary>How a GM's <c>.quest add</c> ended (<see cref="QuestNpcServices.GmAddQuest"/>).</summary>
+public enum GmQuestAddResult
+{
+    /// <summary>The quest is in the log; its delta went to persistence.</summary>
+    Added,
+
+    /// <summary>The player's journal is not loaded, or its quest settlement is pending: nothing changed.</summary>
+    NotReady,
+
+    /// <summary>The quest already takes a log slot (mangos would give it a second one).</summary>
+    AlreadyInLog,
+
+    /// <summary>The quest needs an adapter this server lacks (<see cref="QuestNpcServices.MissingAdapters"/>); withheld.</summary>
+    Unsupported,
+
+    /// <summary>No free log slot; the player was sent SMSG_QUESTLOG_FULL.</summary>
+    LogFull,
+
+    /// <summary>The quest's source item cannot be given; the player was told why.</summary>
+    SourceItemRefused,
+}
+
+/// <summary>How a GM's <c>.quest complete</c> ended (<see cref="QuestNpcServices.GmCompleteQuest"/>).</summary>
+public enum GmQuestCompleteResult
+{
+    /// <summary>The quest is complete and turn-in ready as far as its objectives go.</summary>
+    Completed,
+
+    /// <summary>The player's journal is not loaded, or its quest settlement is pending: nothing changed.</summary>
+    NotReady,
+
+    /// <summary>The player has no status for the quest (mangos: "Quest %u not found.").</summary>
+    NotOnQuest,
+
+    /// <summary>The quest has failed (a timed quest that ran out); ArcaneCore refuses to force it complete.</summary>
+    Failed,
+}
 
 /// <summary>
 /// Creature quest status, details, acceptance and abandonment. Reimplemented from vmangos/core
@@ -11,6 +51,13 @@ namespace ArcaneCore.Game.Npc;
 /// CanSeeStartQuest, CanAddQuest, AddQuest, RemoveQuestAtSlot and TakeQuestSourceItem. Source items,
 /// delivery counters, exploration triggers, repeatable and timed quests have adapters; source spells,
 /// party confirmation, PvP activation and auto rewards still fail closed.
+/// <para>
+/// Item-started quests: the client asks for the details of <c>item_template.startquest</c> with the item's own
+/// GUID as the quest giver, so <see cref="QuestgiverQueryQuest"/> and <see cref="AcceptQuest"/> accept an item in
+/// the player's bags whose template starts the quest (mangos zero Item::HasQuest, Object/Item.h:393, and the
+/// TYPEMASK_..._OR_ITEM lookups of QuestHandler.cpp:171-181, 264-273). The GM tooling at the end of this file
+/// (<c>.quest add|remove|complete</c>, World/Gm/Quest) follows mangos zero ChatCommands/QuestCommands.cpp:47-283.
+/// </para>
 /// </summary>
 public sealed partial class QuestNpcServices
 {
@@ -77,9 +124,16 @@ public sealed partial class QuestNpcServices
 
     public void QuestgiverQueryQuest(Player player, ObjectGuid guid, uint questId)
     {
-        if (Ready(player) is null || InteractableNpc(player, guid, NpcFlags.QuestGiver) is not { } npc
-            || Quests.Get(questId) is not { IsActive: true } quest
-            || !(StartersOf(npc).Contains(questId) || EndersOf(npc).Contains(questId)))
+        if (Ready(player) is null || Quests.Get(questId) is not { IsActive: true } quest)
+        {
+            return;
+        }
+
+        // mangos zero HandleQuestgiverQueryQuestOpcode (QuestHandler.cpp:264-273): the giver is a creature, a game object
+        // or an item in the bags whose template starts the quest; the details name the giver's GUID, the item's included.
+        if (QuestStartingItem(player, guid, questId) is null
+            && (InteractableNpc(player, guid, NpcFlags.QuestGiver) is not { } npc
+                || !(StartersOf(npc).Contains(questId) || EndersOf(npc).Contains(questId))))
         {
             return;
         }
@@ -87,6 +141,18 @@ public sealed partial class QuestNpcServices
         Send(player, WorldOpcode.SmsgQuestgiverQuestDetails, QuestPackets.Details(guid, quest, Options.RateDropMoney,
             id => Deps.Items?.GetItem(id)?.DisplayId ?? player.Inventory.Templates.Find(id)?.DisplayId ?? 0));
     }
+
+    /// <summary>
+    /// The item in the player's bags (not the bank: the client only uses bag items) that <paramref name="guid"/> names and
+    /// whose template starts <paramref name="questId"/> (mangos zero Item::HasQuest, Object/Item.h:393: <c>StartQuest == quest_id</c>).
+    /// A dead player cannot use one (CanInteractWithQuestGiver, QuestHandler.cpp:898-902: the only check for a non-creature,
+    /// non-object giver). The lookup walks the inventory once per request; it is never on a per-tick path.
+    /// </summary>
+    private static Item? QuestStartingItem(Player player, ObjectGuid guid, uint questId)
+        => questId != 0 && guid.High == HighGuid.Item && player.IsAlive && player.Inventory.IsLoaded
+            && player.Inventory.GetItemByGuid(guid) is { } item && item.Template.StartQuest == questId
+            && !InventorySlots.IsBankPos(item.BagSlot, item.Slot)
+            ? item : null;
 
     /// <summary>
     /// CMSG_QUESTGIVER_ACCEPT_QUEST (vmangos HandleQuestgiverAcceptQuestOpcode, QuestHandler.cpp:108-196). A
@@ -108,6 +174,14 @@ public sealed partial class QuestNpcServices
         if (guid.IsPlayer)
         {
             accepted = AcceptFromPlayer(player, state, guid, questId);
+        }
+        else if (QuestStartingItem(player, guid, questId) is { } startItem && Quests.Get(questId) is { } fromItem)
+        {
+            accepted = AddQuestFrom(player, state, fromItem, sharedTimerEnd: null);
+            if (accepted)
+            {
+                DestroyStartItemIfNotNeeded(player, startItem, fromItem);
+            }
         }
         else if (InteractableNpc(player, guid, NpcFlags.QuestGiver) is { } npc && Quests.Get(questId) is { } quest
             && StartersOf(npc).Contains(questId))
@@ -167,6 +241,17 @@ public sealed partial class QuestNpcServices
             return false;
         }
 
+        AddQuest(player, state, quest, slot, sharedTimerEnd);
+        return true;
+    }
+
+    /// <summary>
+    /// vmangos Player::AddQuest (Player.cpp:12820-12934) after CanAddQuest proved <paramref name="slot"/> free and the source item
+    /// storable: the status row, the timer, the log slot, the PvP flag of a PvP quest, the source item, the delivery counters and
+    /// the completion check; the delta goes to persistence.
+    /// </summary>
+    private void AddQuest(Player player, PlayerNpcState state, Quest quest, int slot, long? sharedTimerEnd)
+    {
         QuestStatusData data = state.Quests.GetOrAdd(quest.Id);
         data.Status = QuestStatus.Incomplete;
         data.Explored = false;
@@ -192,7 +277,25 @@ public sealed partial class QuestNpcServices
         AdjustRequiredItemCounts(state, quest, data);
         RefreshCompletion(state, quest, data, slot);
         Flush(state);
-        return true;
+    }
+
+    /// <summary>
+    /// The tail of mangos zero Player::AddQuest for an item giver (Object/PlayerQuest.cpp:780-803, "remove start item if not
+    /// need"): the quest-starting item is destroyed, whole stack, unless the quest requires it back (a ReqItemId) or gives it as
+    /// its source item. The item is looked up again by GUID: the source item grant may have moved stacks around.
+    /// </summary>
+    private static void DestroyStartItemIfNotNeeded(Player player, Item startItem, Quest quest)
+    {
+        uint entry = startItem.Entry;
+        if (quest.ReqItemId.Contains(entry) || quest.Template.SrcItemId == entry)
+        {
+            return;
+        }
+
+        if (player.Inventory.GetItemByGuid(startItem.Guid) is { } live)
+        {
+            player.Inventory.DestroyItem(live.BagSlot, live.Slot);
+        }
     }
 
     /// <summary>
@@ -247,4 +350,213 @@ public sealed partial class QuestNpcServices
         state.Quests.SwapSlots(slot1, slot2);
     }
 
+    // ---- GM tooling (.quest add|remove|complete, World/Gm/Quest/QuestCommands.cs) ---------------------------------------
+    // mangos zero ChatCommands/QuestCommands.cpp:47-283. World thread; every entry point hands its delta to persistence
+    // before returning, so the command sees the same retained-write path as the opcode handlers.
+
+    /// <summary>
+    /// <c>.quest add</c> (HandleQuestAddCommand, QuestCommands.cpp:47-102 minus the item-started check, which the command makes
+    /// against the item store): CanAddQuest (a free slot, the source item storable) then AddQuest and the completion check.
+    /// ArcaneCore adds two refusals mangos lacks: a quest already in the log (mangos gives it a second slot) and a quest the
+    /// support gate withholds (it would half-work). Neither CanTakeQuest nor the rewarded flag is consulted, as in mangos: a
+    /// GM may add a quest the player does not qualify for; an already rewarded non-repeatable quest stays un-rewardable until
+    /// <see cref="GmRemoveQuest"/> resets its flag.
+    /// </summary>
+    public GmQuestAddResult GmAddQuest(Player player, Quest quest)
+    {
+        ArgumentNullException.ThrowIfNull(quest);
+        if (Ready(player) is not { } state)
+        {
+            return GmQuestAddResult.NotReady;
+        }
+
+        if (state.Quests.FindSlot(quest.Id) < QuestConstants.MaxQuestLogSize)
+        {
+            return GmQuestAddResult.AlreadyInLog;
+        }
+
+        if (!AcceptableQuest(quest))
+        {
+            return GmQuestAddResult.Unsupported;
+        }
+
+        int slot = state.Quests.FindSlot(0);
+        if (slot == QuestConstants.MaxQuestLogSize)
+        {
+            player.Session.Send(WorldOpcode.SmsgQuestlogFull, []);
+            return GmQuestAddResult.LogFull;
+        }
+
+        if (!CanReceiveSourceItem(player, quest))
+        {
+            return GmQuestAddResult.SourceItemRefused;
+        }
+
+        AddQuest(player, state, quest, slot, sharedTimerEnd: null);
+        return GmQuestAddResult.Added;
+    }
+
+    /// <summary>
+    /// <c>.quest remove</c> (HandleQuestRemoveCommand, QuestCommands.cpp:110-156): every log slot holding the quest is cleared
+    /// and the source item taken back silently (an un-equippable one is left, as there), then the status becomes NONE and the
+    /// rewarded flag is reset so a repeatable (or any) quest can be done again. A player without a status row for the quest is
+    /// left alone (mangos would write a NONE row). False only when the journal is not ready.
+    /// </summary>
+    public bool GmRemoveQuest(Player player, Quest quest)
+    {
+        ArgumentNullException.ThrowIfNull(quest);
+        if (Ready(player) is not { } state)
+        {
+            return false;
+        }
+
+        for (int slot = 0; slot < QuestConstants.MaxQuestLogSize; slot++)
+        {
+            if (state.Quests.SlotQuestId(slot) == quest.Id)
+            {
+                state.Quests.SetSlot(slot, 0);
+                TakeQuestSourceItem(player, quest, msg: false);
+            }
+        }
+
+        if (state.Quests.Get(quest.Id) is { } data)
+        {
+            data.Status = QuestStatus.None;
+            data.Rewarded = false;
+            data.TimerEndUnix = 0;
+            state.Quests.RemoveTimed(quest.Id);
+            state.Quests.MarkChanged(quest.Id);
+            Flush(state);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// mangos zero Player::TakeQuestSourceItem (Object/PlayerQuest.cpp:1637-1667): SrcItemCount (at least one) of the source
+    /// item is destroyed, bank included, unless one cannot be unequipped right now (then false, and the equip error when
+    /// <paramref name="msg"/>). Nothing to do for a quest without a source item.
+    /// </summary>
+    private static bool TakeQuestSourceItem(Player player, Quest quest, bool msg)
+    {
+        uint entry = quest.Template.SrcItemId;
+        if (entry == 0 || !player.Inventory.IsLoaded)
+        {
+            return true;
+        }
+
+        uint count = SourceItemCount(quest);
+        ItemInventoryResult unequip = player.Inventory.CanUnequipItems(entry, count);
+        if (unequip != ItemInventoryResult.Ok)
+        {
+            if (msg)
+            {
+                player.Inventory.SendEquipError(unequip, null, null, entry: entry);
+            }
+
+            return false;
+        }
+
+        player.Inventory.DestroyItemCount(entry, count, includeBank: true);
+        return true;
+    }
+
+    /// <summary>
+    /// <c>.quest complete</c> (HandleQuestCompleteCommand, QuestCommands.cpp:166-283) for a quest the player has a status for:
+    /// the missing delivery items are stored and announced (silently skipped when they do not fit), every kill, cast and
+    /// game-object objective is credited to its count (<paramref name="creatureExists"/> plays ObjectMgr::GetCreatureTemplate:
+    /// a kill objective naming an unknown creature is skipped, as there; null means every creature exists), the required
+    /// money is given, then the quest is forced COMPLETE with its log slot marked. The reputation objective is the caller's
+    /// (the reputation owner is a World feature). A failed quest is refused instead of being forced: ArcaneCore's turn-in
+    /// re-checks the objectives, so a forced status alone would leave a quest that can never be rewarded.
+    /// </summary>
+    /// <remarks>
+    /// Exploration/event quests get their explored flag here, which mangos does not need: its forced status bypasses
+    /// CanCompleteQuest, whereas ArcaneCore's reward path (<see cref="RewardBase"/>) checks every objective again.
+    /// </remarks>
+    public GmQuestCompleteResult GmCompleteQuest(Player player, Quest quest, Func<uint, bool>? creatureExists = null)
+    {
+        ArgumentNullException.ThrowIfNull(quest);
+        if (Ready(player) is not { } state)
+        {
+            return GmQuestCompleteResult.NotReady;
+        }
+
+        if (state.Quests.Get(quest.Id) is not { } data || data.Status == QuestStatus.None)
+        {
+            return GmQuestCompleteResult.NotOnQuest;
+        }
+
+        if (data.Status == QuestStatus.Failed)
+        {
+            return GmQuestCompleteResult.Failed;
+        }
+
+        // Add quest items for quests that require items (QuestCommands.cpp:186-205).
+        if (player.Inventory.IsLoaded)
+        {
+            for (int i = 0; i < QuestConstants.ObjectivesCount; i++)
+            {
+                uint id = quest.ReqItemId[i];
+                uint count = quest.ReqItemCount[i];
+                if (id == 0 || count == 0)
+                {
+                    continue;
+                }
+
+                uint owned = player.Inventory.GetItemCount(id, inBankAlso: true);
+                if (owned < count)
+                {
+                    player.Inventory.AddItem(id, count - owned, out _, received: true, created: false, showInChat: true);
+                }
+            }
+        }
+
+        // All creature/GO slain/casted (QuestCommands.cpp:207-240): "not required, but otherwise it will display 'Creature slain 0/10'".
+        for (int i = 0; i < QuestConstants.ObjectivesCount; i++)
+        {
+            int target = quest.ReqCreatureOrGOId[i];
+            uint count = quest.ReqCreatureOrGOCount[i];
+            uint spellId = quest.ReqSpell[i];
+            if (target == 0 || count == 0)
+            {
+                continue;
+            }
+
+            uint entry = (uint)Math.Abs((long)target);
+            if (spellId == 0 && target > 0 && creatureExists?.Invoke(entry) == false)
+            {
+                continue;
+            }
+
+            for (uint z = 0; z < count; z++)
+            {
+                CreditCreature(state, entry, ObjectGuid.Empty, isCreature: target > 0, spellId, talking: false);
+            }
+        }
+
+        // If the quest requires money (QuestCommands.cpp:261-266).
+        if (quest.Template.RewOrReqMoney < 0)
+        {
+            ModifyMoney(state, -(long)quest.Template.RewOrReqMoney);
+        }
+
+        // CompleteQuest(entry, QUEST_STATUS_FORCE_COMPLETE) (QuestCommands.cpp:282; Player::CompleteQuest, PlayerQuest.cpp:855-875).
+        AdjustRequiredItemCounts(state, quest, data);
+        if (quest.HasSpecialFlag(QuestSpecialFlags.ExplorationOrEvent))
+        {
+            data.Explored = true;
+        }
+
+        data.Status = QuestStatus.Complete;
+        int slot = state.Quests.FindSlot(quest.Id);
+        if (slot < QuestConstants.MaxQuestLogSize)
+        {
+            state.Quests.SetSlotState(slot, QuestConstants.SlotStateComplete);
+        }
+
+        state.Quests.MarkChanged(quest.Id);
+        Flush(state);
+        return GmQuestCompleteResult.Completed;
+    }
 }
