@@ -609,7 +609,8 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// vmangos Aura::PeriodicTick SPELL_AURA_PERIODIC_HEAL / OBS_MOD_HEALTH (the latter a percent
-    /// of maximum health): healing through <see cref="IDamageSink.Heal"/>, logged with SMSG_PERIODICAURALOG.
+    /// of maximum health): healing through <see cref="IDamageSink.Heal"/>, logged with SMSG_PERIODICAURALOG; a target immune to the
+    /// spell's school (<see cref="ImmunityRules.IsImmuneToSchool"/>) is not healed.
     /// </summary>
     private void TickPeriodicHeal(SpellAuraHolder holder, SpellAura aura)
     {
@@ -623,6 +624,13 @@ public sealed partial class SpellSystem
             ? (uint)((ulong)target.MaxHealth * (uint)aura.Amount / 100)
             : (uint)aura.Amount;
         Unit caster = ResolveAuraCaster(holder) ?? target;
+        if (ImmunityRules.IsImmuneToSchool(this, target, holder.Spell, aura.IsPositive))
+        {
+            // vmangos Aura::PeriodicTick: IsImmuneToSchool(spell, 1 << effect) heals nothing and tells the client (SpellAuras.cpp:6031-6035).
+            SendToSet(caster, WorldOpcode.SmsgSpellordamageImmune, SpellRulePackets.BuildSpellOrDamageImmune(caster.Guid, target.Guid, holder.Spell.Id), includeSelf: true);
+            return;
+        }
+
         amount = ModifyTick(SpellAmountStage.HealOverTimeTick, holder, aura, caster, amount);
         uint healed = Damage.Heal(caster, target, holder.Spell, amount, periodic: true);
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
@@ -639,6 +647,13 @@ public sealed partial class SpellSystem
         int powerType = aura.Type == AuraType.ObsModMana ? (int)PowerType.Mana : aura.MiscValue;
         if (!target.IsAlive || aura.Amount <= 0 || powerType is < 0 or > (int)PowerType.Happiness)
         {
+            return;
+        }
+
+        // vmangos Aura::PeriodicTick (SpellAuras.cpp:6217-6226, 6266-6275): with a caster, IsImmuneToSchool stops the tick and tells the client.
+        if (ResolveAuraCaster(holder) is { } immuneTo && ImmunityRules.IsImmuneToSchool(this, target, holder.Spell, aura.IsPositive))
+        {
+            SendToSet(immuneTo, WorldOpcode.SmsgSpellordamageImmune, SpellRulePackets.BuildSpellOrDamageImmune(immuneTo.Guid, target.Guid, holder.Spell.Id), includeSelf: true);
             return;
         }
 
