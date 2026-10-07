@@ -16,6 +16,8 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Baselines/*.sql" />
+    <!-- The Codex line's schema (commit 0e07c29b) for the renumbering migration tests; ArcaneCore.World.Tests links the same files. -->
+    <EmbeddedResource Include="Upgrade/CodexLine/*.sql" LogicalName="CodexLine/%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Schema.Upgrade;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArcaneCore.Data.Content;
@@ -61,7 +62,8 @@ public sealed class WorldDbContext(DbContextOptions<WorldDbContext> options) : D
                 new EnsureIndexesChange("gameobject_spawn"),
                 new EnsureIndexesChange("creature_ai_scripts"),
             ]),
-        ]);
+        ],
+        foreignLines: [CodexLine.World]);
 
     public DbSet<PlayerCreateInfoRow> PlayerCreateInfo => Set<PlayerCreateInfoRow>();
 

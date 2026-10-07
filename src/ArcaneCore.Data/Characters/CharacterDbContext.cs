@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
 
@@ -82,7 +83,8 @@ public sealed class CharacterDbContext(DbContextOptions<CharacterDbContext> opti
                 new EnsureIndexesChange("mail"),
                 new EnsureIndexesChange("auction"),
             ]),
-        ]);
+        ],
+        foreignLines: [CodexLine.Characters]);
 
     public DbSet<CharacterRecord> Characters => Set<CharacterRecord>();
 

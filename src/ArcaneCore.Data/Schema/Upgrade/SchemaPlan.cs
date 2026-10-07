@@ -91,6 +91,12 @@ public sealed record SchemaPlan(
     IReadOnlyList<PlannedStep> Steps,
     string? Refusal)
 {
+    /// <summary>
+    /// Set when the database was created by another line (<see cref="SchemaDefinition.ForeignLines"/>): the first step
+    /// is its one-shot migration to this build's numbering, and <see cref="DatabaseVersion"/> is the other line's number.
+    /// </summary>
+    public ForeignLineMatch? ForeignLine { get; init; }
+
     /// <summary>The schema versions an apply writes, in order.</summary>
     public IReadOnlyList<int> PendingVersions => [.. Steps.Select(s => s.Version)];
 

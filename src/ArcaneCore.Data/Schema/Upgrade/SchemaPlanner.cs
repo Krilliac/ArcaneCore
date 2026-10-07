@@ -83,6 +83,20 @@ public static class SchemaPlanner
                 return await PlanCreateAsync(SchemaState.Creating, version, ct).ConfigureAwait(false);
             }
 
+            if (version > SchemaBootstrapper.CreatingVersion && _definition.ForeignLines.Count > 0)
+            {
+                ForeignLineDetection detection = await ForeignLineDetector.DetectAsync(_db, _definition, version.Value, ct).ConfigureAwait(false);
+                if (detection.Refusal is not null)
+                {
+                    return Refused(SchemaState.Unknown, version, detection.Refusal);
+                }
+
+                if (detection.Match is { } match)
+                {
+                    return await PlanForeignLineAsync(match, ct).ConfigureAwait(false);
+                }
+            }
+
             if (version > _definition.CurrentVersion)
             {
                 return Refused(SchemaState.Newer, version, SchemaChangeDecider.NewerMessage(_definition, version.Value));
@@ -157,6 +171,36 @@ public static class SchemaPlanner
             return new SchemaPlan(
                 _definition.Component, state, version, _definition.CurrentVersion,
                 [new PlannedStep(_definition.CurrentVersion, description, actions, statement)], null);
+        }
+
+        /// <summary>
+        /// Another line's database: one step that verifies or applies this build's steps after the divergence up to
+        /// the merged version and runs the data moves (counted, not run), then the ordinary steps after it.
+        /// </summary>
+        private async Task<SchemaPlan> PlanForeignLineAsync(ForeignLineMatch match, CancellationToken ct)
+        {
+            var actions = new List<PlannedAction>();
+            foreach (SchemaStep step in match.Steps)
+            {
+                HashSet<(string Table, string Column)> addedLater = SchemaChangeDecider.AddedLater(_definition, step);
+                foreach (SchemaChange change in step.Changes)
+                {
+                    await PlanChangeAsync(change, addedLater, actions, ct).ConfigureAwait(false);
+                }
+            }
+
+            var moves = new List<string>();
+            foreach (ForeignLineDataMove move in match.DataMoves)
+            {
+                long rows = await move.CountAsync(_db, ct).ConfigureAwait(false);
+                moves.Add($"{move.Description} ({rows} rows)");
+            }
+
+            string description = $"migrate from the {match.Line.Name} numbering (schema version {match.ForeignVersion}): verify or apply steps " +
+                                 $"{match.Line.DivergedAfter + 1}-{match.MergedVersion}" + (moves.Count == 0 ? string.Empty : "; " + string.Join("; ", moves));
+            var first = new PlannedStep(match.MergedVersion, description, actions, UpdateStatement(match.MergedVersion));
+            SchemaPlan plan = await PlanStepsAsync(SchemaState.Behind, match.MergedVersion, [first], ct).ConfigureAwait(false);
+            return plan with { DatabaseVersion = match.ForeignVersion, ForeignLine = match };
         }
 
         private async Task<SchemaPlan> PlanStepsAsync(SchemaState state, int from, List<PlannedStep> prefix, CancellationToken ct)
