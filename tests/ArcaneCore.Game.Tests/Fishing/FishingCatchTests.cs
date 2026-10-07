@@ -361,17 +361,27 @@ public sealed class FishingCatchTests
     }
 
     [Fact]
-    public void AHoleInUseByAnotherFisher_FallsBackToTheZoneLoot()
+    public void AnActivatedHole_ShowsItsLeftovers_ToTheNextCatch_AndCountsTheUseWhenEmptied()
     {
+        // vmangos Player::SendLoot (Player.cpp:7697-7698): a hole in GO_ACTIVATED shows the loot it has (FillNotNormalLootFor), only a
+        // GO_READY hole generates a new one; DoLootRelease counts the use once that loot is taken (LootHandler.cpp:489-495).
         using var rig = new FishingRig(spawns: [HoleAt(15)]);
         GameObject hole = rig.Objects.GameObjects.Single(g => g.Type == GameObjectType.FishingHole);
-        hole.LootState = GameObjectLootState.Activated;
         CastAndWaitForTheBite(rig);
+        Click(rig);
+        rig.Loot.Release(rig.Player, hole.Guid); // nothing taken: the hole keeps its leftovers
+        Assert.Equal(GameObjectLootState.Activated, hole.LootState);
+        rig.Step(100);
 
+        CastAndWaitForTheBite(rig);
         Click(rig);
 
         ParsedLoot window = Window(rig);
-        Assert.NotEqual(hole.Guid.Value, window.Guid);
-        Assert.Equal(FishingRig.SubZoneFish, Assert.Single(window.Items).ItemId);
+        Assert.Equal(hole.Guid.Value, window.Guid);
+        Assert.Equal(FishingRig.HoleFish, Assert.Single(window.Items).ItemId);
+        Assert.Equal(InventoryResult.Ok, rig.Loot.TakeItem(rig.Player, 0));
+        rig.Loot.Release(rig.Player, hole.Guid);
+        Assert.Equal(1u, hole.UseCount);
+        Assert.Equal(GameObjectLootState.Ready, hole.LootState);
     }
 }
