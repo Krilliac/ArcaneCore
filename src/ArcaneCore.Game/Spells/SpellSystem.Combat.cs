@@ -103,7 +103,7 @@ public sealed partial class SpellSystem
     /// <paramref name="amount"/> and is returned; a vulnerability (negative resist) adds its extra damage to
     /// <paramref name="amount"/> before absorbs see it (Unit.cpp:1948-1953, 2229-2232) and returns 0.
     /// </summary>
-    private uint ApplyResist(Unit caster, Unit target, SpellInfo spell, ref uint amount, bool periodic)
+    internal uint ApplyResist(Unit caster, Unit target, SpellInfo spell, ref uint amount, bool periodic)
     {
         int roll = CombatRules is ISpellResistRoll signed
             ? signed.RollResist(this, caster, target, spell, amount, periodic)

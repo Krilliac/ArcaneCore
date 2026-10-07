@@ -111,7 +111,7 @@ unchanged non-ward shield, module not installed, other-school shield). The absor
   the amount vmangos falls into `GetPower(POWER_HEALTH)` (an unrelated update field); the evident intent, a fizzle, is implemented. The Health Funnel heal
   tick needs no exception here: the base periodic heal never damages the caster (the vmangos damage-the-caster branch for visual 163 is not ported).
 * **Life Tap** (`Game/Spells/Warlock/LifeTapScript.cs`, a wlm-02 script for 1454, 1455, 1456, 11687, 11688, 11689, vmangos spell_warlock.cpp:112-159):
-  the check fizzles at health at or below the rounded-up bonus amount of the first effect's base points; the effect trades the rolled value (bonus,
+  the check fizzles at health at or below the rounded-up bonus amount of the first effect's simple value (base points plus base dice, vmangos `m_currentBasePoints`, Spell.cpp:77); the effect trades the rolled value (bonus,
   dithered) of health for as much mana, scaled by each Improved Life Tap aura (warlock family, icon 208: `(amount + 100) * mana / 100`), no combat log, and
   fizzles after the cast result when health is not above the value. The mana is added with an energize log of spell 31818 (vmangos casts it with custom
   points; the spell itself is not cast). Limit: the SPELLMOD_COST talent modifier belongs to the spell-modifier engine lane.

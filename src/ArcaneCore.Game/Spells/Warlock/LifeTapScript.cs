@@ -8,11 +8,12 @@ namespace ArcaneCore.Game.Spells.Warlock;
 /// Life Tap, all six ranks (vmangos scripts/spells/spell_warlock.cpp:112-159, ids 1454, 1455, 1456, 11687, 11688, 11689): the DUMMY effect trades
 /// health for mana one for one, quietly (no combat log), through the spell power of the caster.
 /// <list type="bullet">
-/// <item>Cast check: the cost is the first effect's base points (not the rolled value; vmangos reads <c>m_currentBasePoints</c>), taken through
+/// <item>Cast check: the cost is the first effect's simple value, base points plus base dice (not the rolled value; vmangos reads <c>m_currentBasePoints</c>,
+/// which the Spell constructor sets to <c>CalculateSimpleValue</c>, Spell.cpp:77), taken through
 /// the direct damage bonus; the cast fizzles when the caster's health is not above the rounded-up amount.</item>
 /// <item>Effect: the rolled effect value through the same bonus, dithered to an integer; with more health than that the caster loses it and gains
 /// as much mana, scaled by every Improved Life Tap aura (warlock family dummy aura, icon 208: <c>(amount + 100) * mana / 100</c>); otherwise the
-/// cast fizzles after the cast result (the value and the cost differ by the rolled point, so the check and the effect can disagree by one).</item>
+/// cast fizzles after the cast result (for a rank with dice the rolled value can exceed the checked cost).</item>
 /// <item>The mana arrives as an energize of spell 31818 (vmangos <c>CastCustomSpell(31818)</c>): the power is added and the energize log of that
 /// spell id is sent; spell 31818 itself is not cast.</item>
 /// </list>
@@ -30,7 +31,7 @@ public sealed class LifeTapScript : ISpellScript
     public SpellCastResult OnCheckCast(in SpellCastCheckContext context)
     {
         Unit caster = context.Caster;
-        float cost = context.Spell.Effects[0].BasePoints;
+        float cost = context.Spell.SimpleValue(0);
         float damage = Bonus(context.System, caster, context.Spell, cost > 0 ? cost : 0);
         return caster.Health <= Math.Ceiling(damage) ? SpellCastResult.Fizzle : SpellCastResult.CastOk;
     }

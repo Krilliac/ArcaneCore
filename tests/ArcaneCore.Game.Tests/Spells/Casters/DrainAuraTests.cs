@@ -2,6 +2,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Casters;
 using ArcaneCore.Game.Spells.Casters.Drain;
+using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Protocol;
 using Xunit;
 
@@ -255,5 +256,79 @@ public sealed class DrainAuraTests
 
         Assert.Equal([20u], sink.Damage);
         Assert.Equal([40u], sink.Healing);
+    }
+
+    /// <summary>Rules whose direct-hit resist and periodic resist differ, so a test sees which one a tick asked for.</summary>
+    private sealed class SplitResistRules(int periodicRoll) : ISpellCombatRules, ISpellResistRoll
+    {
+        public List<bool> PeriodicFlags { get; } = [];
+
+        public SpellMissInfo RollHit(SpellSystem system, Unit caster, Unit target, SpellInfo spell) => SpellMissInfo.None;
+
+        public bool RollCrit(SpellSystem system, Unit caster, Unit target, SpellInfo spell) => false;
+
+        public float CritMultiplier(SpellInfo spell) => 1.0f;
+
+        public uint RollPartialResist(SpellSystem system, Unit caster, Unit target, SpellInfo spell, uint damage) => 3; // the direct-hit roll
+
+        public uint ApplyArmor(Unit caster, Unit target, SpellInfo spell, uint damage) => damage;
+
+        public int RollResist(SpellSystem system, Unit caster, Unit target, SpellInfo spell, uint damage, bool periodic)
+        {
+            PeriodicFlags.Add(periodic);
+            return periodic ? periodicRoll : 3;
+        }
+    }
+
+    [Fact]
+    public void DrainLife_RollsThePeriodicResist_AndAVulnerabilityAddsDamage()
+    {
+        // vmangos Aura::PeriodicTick PERIODIC_LEECH (SpellAuras.cpp:5962): CalculateDamageAbsorbAndResist(..., DOT, ...), a signed resist:
+        // a negative resist (Curse of Shadow) is bonus damage (:5975-5978).
+        using SpellTestKit kit = NewKit();
+        (Player caster, Player target, RecordingSink sink) = Setup(kit);
+        var rules = new SplitResistRules(periodicRoll: -4);
+        kit.System.CombatRules = rules;
+
+        kit.System.HandleCastRequest(caster, DrainLife, SpellCastTargets.ForUnit(target.Guid));
+        kit.Advance(1000);
+
+        Assert.Equal([13u], sink.Damage);   // 9 + 4 (the direct-hit roll would have resisted 3: 6)
+        Assert.Equal([13u], sink.Healing);
+        Assert.Equal([true], rules.PeriodicFlags);
+    }
+
+    [Fact]
+    public void DrainLife_APositivePeriodicResistStillComesOff()
+    {
+        using SpellTestKit kit = NewKit();
+        (Player caster, Player target, RecordingSink sink) = Setup(kit);
+        kit.System.CombatRules = new SplitResistRules(periodicRoll: 2);
+
+        kit.System.HandleCastRequest(caster, DrainLife, SpellCastTargets.ForUnit(target.Guid));
+        kit.Advance(1000);
+
+        Assert.Equal([7u], sink.Damage);
+    }
+
+    [Fact]
+    public void ImprovedDrainMana_RollsThePeriodicResist()
+    {
+        // vmangos: the talent damage is PeriodicTick(talent, PERIODIC_DAMAGE, ...) (SpellAuras.cpp:6192-6200), the DOT resist path.
+        using SpellTestKit kit = NewKit();
+        (Player caster, Player target, RecordingSink sink) = Setup(kit);
+        var rules = new SplitResistRules(periodicRoll: -4);
+        kit.System.CombatRules = rules;
+        target.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Mana);
+        target.SetUInt32(UpdateFields.UnitFieldMaxpower1, 100);
+        target.SetUInt32(UpdateFields.UnitFieldPower1, 50);
+        caster.SetUInt32(UpdateFields.UnitFieldMaxpower1, 100);
+        kit.System.CastSpell(caster, ImprovedDrain, SpellCastTargets.ForSelf(), triggered: true);
+
+        kit.System.HandleCastRequest(caster, DrainMana, SpellCastTargets.ForUnit(target.Guid));
+        kit.Advance(1000);
+
+        Assert.Equal([5u], sink.Damage);   // 1 + 4 (the direct-hit roll would have resisted all of it)
+        Assert.Equal([true], rules.PeriodicFlags);
     }
 }

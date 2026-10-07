@@ -65,8 +65,8 @@ public sealed class SpellAura
     /// </summary>
     internal int UnitAmount { get; set; }
 
-    /// <summary>Periodic interval in ms (Spell.dbc EffectAmplitude; 0 = not periodic).</summary>
-    public uint Amplitude { get; }
+    /// <summary>Periodic interval in ms (Spell.dbc EffectAmplitude through SPELLMOD_ACTIVATION_TIME for the periodic types; 0 = not periodic).</summary>
+    public uint Amplitude { get; internal set; }
 
     /// <summary>Spell.dbc EffectMiscValue (power type for energize/mana auras).</summary>
     public int MiscValue { get; }

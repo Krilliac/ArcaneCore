@@ -289,32 +289,35 @@ public sealed class PetPowerTests
     private const uint LifeTapScriptEnergizeSpell = 31818;
 
     [Fact]
-    public void LifeTap_FizzlesAtTheCastCheck_WhenHealthIsNotAboveTheBasePoints()
+    public void LifeTap_FizzlesAtTheCastCheck_WhenHealthEqualsTheCost()
     {
+        // vmangos WarlockLifeTapScript::OnCheckCast reads m_currentBasePoints[0], which the Spell constructor sets to
+        // CalculateSimpleValue = EffectBasePoints + EffectBaseDice (Spell.cpp:77, SpellEntry.h:1232): 29 + 1 = 30 here, the same
+        // value the effect deals for a fixed rank. Health equal to it fizzles at the check instead of passing it and fizzling later.
         using PetTestKit kit = Prepared();
-        (Player warlock, _, _) = WarlockWithPet(kit);
-        warlock.Health = 29; // the check reads the base points (29), not the rolled value (30)
+        (Player warlock, _, FakeSession session) = WarlockWithPet(kit);
+        warlock.Health = 30;
         kit.Spells.Spellbook.Teach(warlock, LifeTapRank1);
 
         Assert.Equal(SpellCastResult.Fizzle, kit.Spells.System.HandleCastRequest(warlock, LifeTapRank1, SpellCastTargets.ForSelf()));
 
-        Assert.Equal(29u, warlock.Health);
+        Assert.Equal(30u, warlock.Health);
         Assert.Equal(0u, Mana(warlock));
+        Assert.Empty(SpellTestKit.Packets(session, WorldOpcode.SmsgSpellenergizelog));
     }
 
     [Fact]
-    public void LifeTap_FizzlesInTheEffect_WhenHealthEqualsTheRolledValue()
+    public void LifeTap_PassesTheCheckAndTaps_WhenHealthIsOneAboveTheCost()
     {
         using PetTestKit kit = Prepared();
-        (Player warlock, _, FakeSession session) = WarlockWithPet(kit);
-        warlock.Health = 30; // passes the check (30 > 29) but the effect needs more than 30
+        (Player warlock, _, _) = WarlockWithPet(kit);
+        warlock.Health = 31;
         kit.Spells.Spellbook.Teach(warlock, LifeTapRank1);
 
-        kit.Spells.System.HandleCastRequest(warlock, LifeTapRank1, SpellCastTargets.ForSelf());
+        Assert.Equal(SpellCastResult.CastOk, kit.Spells.System.HandleCastRequest(warlock, LifeTapRank1, SpellCastTargets.ForSelf()));
 
-        Assert.Equal(30u, warlock.Health);
-        Assert.Equal(0u, Mana(warlock));
-        Assert.Contains(SpellTestKit.Packets(session, WorldOpcode.SmsgCastResult), p => p[4] == 2 && p[5] == (byte)SpellCastResult.Fizzle);
+        Assert.Equal(1u, warlock.Health);
+        Assert.Equal(30u, Mana(warlock));
     }
 
     [Fact]

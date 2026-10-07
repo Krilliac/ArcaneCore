@@ -32,6 +32,8 @@ public sealed class ImmunityTests
     private const uint StateImmunity = 950_017;
     private const uint DamageImmunity = 950_018;
     private const uint FrostBolt = 950_019;
+    private const uint Renew = 950_020;
+    private const uint ManaTide = 950_021;
 
     private const uint PurgesEffect = 0x8000;
     private const uint HostileAndFriendly = 0x10000;
@@ -85,7 +87,24 @@ public sealed class ImmunityTests
         Immunity(DispelImmunity, AuraType.DispelImmunity, (int)DispelType.Magic),
         Immunity(EffectImmunity, AuraType.EffectImmunity, (int)SpellEffectName.SchoolDamage),
         Immunity(StateImmunity, AuraType.StateImmunity, (int)AuraType.ModStun),
-        Immunity(DamageImmunity, AuraType.DamageImmunity, (int)SpellSchoolMasks.All));
+        Immunity(DamageImmunity, AuraType.DamageImmunity, (int)SpellSchoolMasks.All),
+        SpellTestKit.Spell(Renew, SpellTestKit.Effect(SpellEffectName.ApplyAura, 5, aura: AuraType.PeriodicHeal, amplitude: 1000)) with
+        {
+            School = SpellSchool.Holy,
+            DamageClass = SpellDamageClass.Magic,
+            Duration = new SpellDuration(10_000, 0, 10_000),
+            SpellVisual = 1,
+            StartRecoveryCategory = 0,
+            StartRecoveryTime = 0,
+        },
+        SpellTestKit.Spell(ManaTide, SpellTestKit.Effect(SpellEffectName.ApplyAura, 5, aura: AuraType.PeriodicEnergize, amplitude: 1000, misc: (int)PowerType.Mana)) with
+        {
+            School = SpellSchool.Nature,
+            Duration = new SpellDuration(10_000, 0, 10_000),
+            SpellVisual = 1,
+            StartRecoveryCategory = 0,
+            StartRecoveryTime = 0,
+        });
 
     private static (Player Caster, Player Victim) Pair(SpellTestKit kit)
     {
@@ -286,6 +305,74 @@ public sealed class ImmunityTests
         Assert.Equal(before, victim.Health);
         Assert.Contains(casterSession.Sent, p => p.Opcode == WorldOpcode.SmsgSpellordamageImmune);
         Assert.DoesNotContain(casterSession.Sent, p => p.Opcode == WorldOpcode.SmsgPeriodicauralog);
+    }
+
+    // vmangos Aura::PeriodicTick PERIODIC_HEAL (SpellAuras.cpp:6029-6033): IsImmuneToSchool(spell, 1 << effect) stops the tick and sends
+    // SMSG_SPELLORDAMAGE_IMMUNE. A school immunity of the opposite polarity, or one flagged for both, blocks a heal over time.
+    private static (Player Target, FakeSession Session) HotUnder(SpellTestKit kit, uint immunity)
+    {
+        (Player target, FakeSession session) = kit.AddPlayer(1);
+        target.Health = 10;
+        kit.System.CastSpell(target, Renew, SpellCastTargets.ForSelf(), triggered: true);
+        RuleTestSupport.Apply(kit, target, immunity);
+        Assert.True(kit.System.HasAura(target, Renew));
+        Assert.True(kit.System.HasAura(target, immunity));
+        session.Clear();
+        kit.Advance(1100);
+        return (target, session);
+    }
+
+    [Fact]
+    public void AHotTickOnATargetWithAHarmfulSchoolImmunity_HealsNothing_AndTellsTheClient()
+    {
+        using SpellTestKit kit = Kit();
+        (Player target, FakeSession session) = HotUnder(kit, HarmfulImmunity);
+
+        Assert.Equal(10u, target.Health);
+        Assert.Contains(session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellordamageImmune);
+        Assert.DoesNotContain(session.Sent, p => p.Opcode == WorldOpcode.SmsgPeriodicauralog);
+    }
+
+    [Fact]
+    public void AHotTickOnADivineShieldShapedImmunity_HealsNothing()
+    {
+        using SpellTestKit kit = Kit();
+        (Player target, FakeSession session) = HotUnder(kit, DivineShield);
+
+        Assert.Equal(10u, target.Health);
+        Assert.Contains(session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellordamageImmune);
+    }
+
+    [Theory]
+    [InlineData(IceBlock)]
+    [InlineData(DamageImmunity)]
+    public void AHotTickUnderAPositiveSchoolImmunityOrADamageImmunity_StillHeals(uint immunity)
+    {
+        using SpellTestKit kit = Kit();
+        (Player target, FakeSession session) = HotUnder(kit, immunity);
+
+        Assert.Equal(15u, target.Health);
+        Assert.DoesNotContain(session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellordamageImmune);
+    }
+
+    [Theory]
+    [InlineData(HarmfulImmunity, 0u)]
+    [InlineData(IceBlock, 5u)]
+    public void AnEnergizeTick_IsStoppedByASchoolImmunityOfTheOtherPolarity(uint immunity, uint expectedMana)
+    {
+        // vmangos Aura::PeriodicTick PERIODIC_ENERGIZE (SpellAuras.cpp:6217-6226): the same IsImmuneToSchool check as the heal tick.
+        using SpellTestKit kit = Kit();
+        (Player target, FakeSession session) = kit.AddPlayer(1);
+        target.SetUInt32(UpdateFields.UnitFieldMaxpower1, 100);
+        SpellSystem.SetPower(target, PowerType.Mana, 0);
+        kit.System.CastSpell(target, ManaTide, SpellCastTargets.ForSelf(), triggered: true);
+        RuleTestSupport.Apply(kit, target, immunity);
+        session.Clear();
+
+        kit.Advance(1100);
+
+        Assert.Equal(expectedMana, SpellSystem.GetPower(target, PowerType.Mana));
+        Assert.Equal(expectedMana == 0, session.Sent.Any(p => p.Opcode == WorldOpcode.SmsgSpellordamageImmune));
     }
 
     // --- creature static immunities ---------------------------------------------------------------

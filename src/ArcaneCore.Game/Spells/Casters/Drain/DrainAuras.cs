@@ -28,7 +28,7 @@ public static class DrainAuras
     }
 
     /// <summary>
-    /// Health leech tick: the aura's (snapshotted) amount, target side modifiers, partial resist, capped at the
+    /// Health leech tick: the aura's (snapshotted) amount, target side modifiers, the signed periodic resist, capped at the
     /// target's health; the caster heals the damage dealt times EffectMultipleValue (1 when unset). Nothing happens
     /// while either side is dead; a target that dies ends the caster's channel of this spell.
     /// </summary>
@@ -43,11 +43,15 @@ public static class DrainAuras
         SpellInfo spell = holder.Spell;
         uint amount = (uint)Math.Max(aura.Amount, 0);
         uint damage = spells.ModifyTick(SpellAmountStage.DamageOverTimeTick, holder, aura, caster, amount);
-        uint resisted = Math.Min(damage, spells.CombatRules.RollPartialResist(spells, caster, target, spell, damage));
-        SpellSystem.SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog,
-            CasterPeriodicPackets.BuildPeriodicSpellDamageLog(target.Guid, caster.Guid, spell.Id, damage, spell.School, absorbed: 0, resisted), includeSelf: true);
 
-        damage = Math.Min(damage - resisted, target.Health);
+        // The DOT resist (vmangos CalculateDamageAbsorbAndResist(..., DOT, ...), SpellAuras.cpp:5962): the periodic chance, and a
+        // vulnerability (negative resist) is extra damage (:5975-5978). The log shows the damage before the resist comes off.
+        uint rolled = damage;
+        uint resisted = spells.ApplyResist(caster, target, spell, ref damage, periodic: true);
+        SpellSystem.SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog,
+            CasterPeriodicPackets.BuildPeriodicSpellDamageLog(target.Guid, caster.Guid, spell.Id, resisted > 0 ? rolled : damage, spell.School, absorbed: 0, resisted), includeSelf: true);
+
+        damage = Math.Min(damage, target.Health);
         uint dealt = spells.Damage.DealSpellDamage(caster, target, spell, damage, periodic: true);
         spells.OnDamageTaken(target, caster, dealt, periodic: true);
 
@@ -128,10 +132,11 @@ public static class DrainAuras
         }
 
         uint damage = (uint)Math.Floor(Math.Max(amount, 0f) + spells.Random.NextSingle());
-        uint resisted = Math.Min(damage, spells.CombatRules.RollPartialResist(spells, caster, target, talent, damage));
+        uint rolled = damage;
+        uint resisted = spells.ApplyResist(caster, target, talent, ref damage, periodic: true); // a PERIODIC_DAMAGE tick: the signed DOT resist
         SpellSystem.SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog,
-            CasterPeriodicPackets.BuildPeriodicSpellDamageLog(target.Guid, caster.Guid, talent.Id, damage, talent.School, absorbed: 0, resisted), includeSelf: true);
-        uint dealt = spells.Damage.DealSpellDamage(caster, target, talent, damage - resisted, periodic: true);
+            CasterPeriodicPackets.BuildPeriodicSpellDamageLog(target.Guid, caster.Guid, talent.Id, resisted > 0 ? rolled : damage, talent.School, absorbed: 0, resisted), includeSelf: true);
+        uint dealt = spells.Damage.DealSpellDamage(caster, target, talent, damage, periodic: true);
         spells.OnDamageTaken(target, caster, dealt, periodic: true);
     }
 }

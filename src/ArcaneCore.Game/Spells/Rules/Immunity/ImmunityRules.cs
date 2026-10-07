@@ -128,6 +128,45 @@ public static class ImmunityRules
     }
 
     /// <summary>
+    /// vmangos Unit::IsImmuneToSchool (Unit.cpp:5629-5657), asked by the heal and energize ticks (SpellAuras.cpp:6031, 6221, 6270): a
+    /// school-immunity aura covering a school of the spell blocks it when its polarity applies to <paramref name="incomingPositive"/>
+    /// (vmangos passes the polarity of the ticking effect). A spell that purges immunity, ignores school immunities or ignores
+    /// caster and target restrictions is never blocked, and an immunity granted by the spell itself does not count.
+    /// </summary>
+    public static bool IsImmuneToSchool(SpellSystem system, Unit target, SpellInfo spell, bool incomingPositive)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(spell);
+        if (!system.ImmunityEnforcement
+            || (spell.AttributesEx & (SpellAttributesEx)SpellRuleFlags.ExImmunityPurgesEffect) != 0
+            || (spell.AttributesEx2 & (SpellAttributesEx2)SpellRuleFlags.Ex2NoSchoolImmunities) != 0
+            || IgnoresRestrictions(spell))
+        {
+            return false;
+        }
+
+        uint schoolMask = spell.SchoolMask();
+        foreach (SpellAuraHolder holder in system.GetAuras(target))
+        {
+            if (holder.IsRemoved || holder.Spell.Id == spell.Id) // "do not let itself immune out"
+            {
+                continue;
+            }
+
+            foreach (SpellAura? aura in holder.Auras)
+            {
+                if (aura is { Type: AuraType.SchoolImmunity } && ((uint)aura.MiscValue & schoolMask) != 0 && Applies(holder.Spell, incomingPositive))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// vmangos Unit::IsImmuneToSpell (+ Creature override): dispel-type immunity (not for passive spells),
     /// school immunity (unless the spell purges immunity or ignores school immunity), mechanic immunity and
     /// mechanic-mask immunity; for creatures the static mechanic mask (spells from others only) and the static

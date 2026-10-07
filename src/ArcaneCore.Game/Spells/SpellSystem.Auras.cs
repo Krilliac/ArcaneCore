@@ -82,10 +82,20 @@ public sealed partial class SpellSystem
         int amount = context.Cast.CustomAuraAmounts is { } custom && custom.TryGetValue(context.EffectIndex, out int requested)
             ? requested
             : SnapshotAuraAmount(context);
-        var aura = new SpellAura(context.EffectIndex, effect.AuraType, amount, effect.Amplitude, effect.MiscValue, context.Target.PowerType);
+        var aura = new SpellAura(context.EffectIndex, effect.AuraType, amount, ModifiedAmplitude(context.Caster, context.Spell, effect), effect.MiscValue,
+            context.Target.PowerType);
         aura.PeriodicTimer = PeriodicTiming.InitialTimer(context.Spell, aura);
         context.PendingHolder.SetAura(aura);
     }
+
+    /// <summary>
+    /// vmangos Aura::CalculatePeriodic (SpellAuras.cpp:8078-8083): a periodic aura type's amplitude through the caster's
+    /// SPELLMOD_ACTIVATION_TIME modifiers (read without spending a charge); every other amplitude as the data states it.
+    /// </summary>
+    private uint ModifiedAmplitude(Unit caster, SpellInfo spell, SpellEffectInfo effect)
+        => effect.Amplitude != 0 && PeriodicTiming.TakesActivationTimeMod(effect.AuraType)
+            ? (uint)Math.Max(ModInt(caster, spell, SpellModOp.ActivationTime, (int)effect.Amplitude), 0)
+            : effect.Amplitude;
 
     /// <summary>
     /// Put a holder on its target (vmangos Unit::AddSpellAuraHolder + SpellAuraHolder::_AddSpellAuraHolder):
@@ -290,6 +300,10 @@ public sealed partial class SpellSystem
                 continue;
             }
 
+            // Aura::Refresh runs CalculatePeriodic again (SpellAuras.cpp:319): the interval follows the caster's current
+            // ACTIVATION_TIME mods. Documented deviation: vmangos applies them to the already modified period, so a flat mod would
+            // compound on every refresh; the fresh holder's amplitude (modified once, from the data) is taken instead.
+            aura.Amplitude = source.Amplitude;
             aura.PeriodicTimer = PeriodicTiming.InitialTimer(existing.Spell, aura);
             aura.TickCount = 0;
             if (source.Amount != aura.Amount)
@@ -548,7 +562,10 @@ public sealed partial class SpellSystem
             ? (uint)((ulong)target.MaxHealth * (uint)aura.Amount / 100)
             : (uint)aura.Amount;
         Unit caster = ResolveAuraCaster(holder) ?? target;
-        amount = ModifyTick(SpellAmountStage.DamageOverTimeTick, holder, aura, caster, amount);
+        float ramp = aura.Type == AuraType.PeriodicDamage ? PeriodicDamageRamp(holder.Spell, aura.TickCount) : 0f;
+        amount = ramp == 0f
+            ? ModifyTick(SpellAmountStage.DamageOverTimeTick, holder, aura, caster, amount)
+            : ModifyTick(SpellAmountStage.DamageOverTimeTick, holder, aura, caster, amount + ramp);
         if (ImmunityRules.IsImmuneToDamage(this, target, holder.Spell.SchoolMask(), holder.Spell))
         {
             // vmangos Aura::PeriodicTick: an immune target takes nothing and the client is told (SpellAuras.cpp:5839-5841).
@@ -566,8 +583,34 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
+    /// The tick-index ramp vmangos adds to the snapshotted amount before the target side (Aura::PeriodicTick, SpellAuras.cpp:5867-5872):
+    /// Curse of Agony (warlock family bit 10) <c>(-1 + (tick - 1) / 4) * SimpleValue(0) / 2</c> and Starshards (priest family bit 21)
+    /// <c>(-1 + (tick - 1) / 2) * SimpleValue(0) / 3</c>, with integer division on the tick term; 0 for every other spell.
+    /// </summary>
+    internal static float PeriodicDamageRamp(SpellInfo spell, int tick)
+    {
+        if (spell.IsFitToFamily(CurseOfAgonyFamily, CurseOfAgonyFlagBit))
+        {
+            return (-1 + ((tick - 1) / 4)) * (spell.SimpleValue(0) / 2.0f);
+        }
+
+        if (spell.IsFitToFamily(StarshardsFamily, StarshardsFlagBit))
+        {
+            return (-1 + ((tick - 1) / 2)) * (spell.SimpleValue(0) / 3.0f);
+        }
+
+        return 0f;
+    }
+
+    private const uint CurseOfAgonyFamily = 5;   // SPELLFAMILY_WARLOCK
+    private const int CurseOfAgonyFlagBit = 10;  // CF_WARLOCK_CURSE_OF_AGONY
+    private const uint StarshardsFamily = 6;     // SPELLFAMILY_PRIEST
+    private const int StarshardsFlagBit = 21;    // CF_PRIEST_STARSHARDS
+
+    /// <summary>
     /// vmangos Aura::PeriodicTick SPELL_AURA_PERIODIC_HEAL / OBS_MOD_HEALTH (the latter a percent
-    /// of maximum health): healing through <see cref="IDamageSink.Heal"/>, logged with SMSG_PERIODICAURALOG.
+    /// of maximum health): healing through <see cref="IDamageSink.Heal"/>, logged with SMSG_PERIODICAURALOG; a target immune to the
+    /// spell's school (<see cref="ImmunityRules.IsImmuneToSchool"/>) is not healed.
     /// </summary>
     private void TickPeriodicHeal(SpellAuraHolder holder, SpellAura aura)
     {
@@ -581,6 +624,13 @@ public sealed partial class SpellSystem
             ? (uint)((ulong)target.MaxHealth * (uint)aura.Amount / 100)
             : (uint)aura.Amount;
         Unit caster = ResolveAuraCaster(holder) ?? target;
+        if (ImmunityRules.IsImmuneToSchool(this, target, holder.Spell, aura.IsPositive))
+        {
+            // vmangos Aura::PeriodicTick: IsImmuneToSchool(spell, 1 << effect) heals nothing and tells the client (SpellAuras.cpp:6031-6035).
+            SendToSet(caster, WorldOpcode.SmsgSpellordamageImmune, SpellRulePackets.BuildSpellOrDamageImmune(caster.Guid, target.Guid, holder.Spell.Id), includeSelf: true);
+            return;
+        }
+
         amount = ModifyTick(SpellAmountStage.HealOverTimeTick, holder, aura, caster, amount);
         uint healed = Damage.Heal(caster, target, holder.Spell, amount, periodic: true);
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
@@ -597,6 +647,13 @@ public sealed partial class SpellSystem
         int powerType = aura.Type == AuraType.ObsModMana ? (int)PowerType.Mana : aura.MiscValue;
         if (!target.IsAlive || aura.Amount <= 0 || powerType is < 0 or > (int)PowerType.Happiness)
         {
+            return;
+        }
+
+        // vmangos Aura::PeriodicTick (SpellAuras.cpp:6217-6226, 6266-6275): with a caster, IsImmuneToSchool stops the tick and tells the client.
+        if (ResolveAuraCaster(holder) is { } immuneTo && ImmunityRules.IsImmuneToSchool(this, target, holder.Spell, aura.IsPositive))
+        {
+            SendToSet(immuneTo, WorldOpcode.SmsgSpellordamageImmune, SpellRulePackets.BuildSpellOrDamageImmune(immuneTo.Guid, target.Guid, holder.Spell.Id), includeSelf: true);
             return;
         }
 
