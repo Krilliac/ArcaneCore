@@ -89,6 +89,11 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(SpellEnchantChargesWorldDataModule), DatabaseComponent.World, SpellEnchantChargesWorldDataModule.Version),
             (typeof(StartingSkillWorldDataModule), DatabaseComponent.World, StartingSkillWorldDataModule.Version),
             (typeof(CreatureTextTemplateDataModule), DatabaseComponent.World, CreatureTextTemplateDataModule.Version),
+            // wave 2: the proc-engine lane holds world 38-40 open (the plan reserves them for other lanes) and owns 41.
+            (typeof(ArcaneCore.Data.World.Procs.WorldSchemaLaneGap38), DatabaseComponent.World, ArcaneCore.Data.World.Procs.WorldSchemaLaneGap38.Version),
+            (typeof(ArcaneCore.Data.World.Procs.WorldSchemaLaneGap39), DatabaseComponent.World, ArcaneCore.Data.World.Procs.WorldSchemaLaneGap39.Version),
+            (typeof(ArcaneCore.Data.World.Procs.WorldSchemaLaneGap40), DatabaseComponent.World, ArcaneCore.Data.World.Procs.WorldSchemaLaneGap40.Version),
+            (typeof(ArcaneCore.Data.World.Procs.SpellProcEventDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Procs.SpellProcEventDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
