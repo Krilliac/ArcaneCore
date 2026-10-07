@@ -99,6 +99,58 @@ public sealed class EnchantingFeatureTests
     }
 
     [Fact]
+    public async Task CraftingDisabled_StillGuardsTheEnchantEffects_SoACastKeepsItsReagents()
+    {
+        const uint spellId = 50211;
+        const uint sword = 50212;
+        const uint dust = 50213;
+        var items = new ArcaneCore.World.Tests.Items.ItemTestContent();
+        items.Templates.Templates.Add(new ArcaneCore.Kernel.Items.ItemTemplate { Entry = sword, Class = 2, SubClass = 7, InventoryType = 21, Stackable = 1 });
+        items.Templates.Templates.Add(new ArcaneCore.Kernel.Items.ItemTemplate { Entry = dust, Class = 7, SubClass = 0, Stackable = 20 });
+        items.Templates.StartingItems.Add(new ArcaneCore.Kernel.Items.StartingItem(1, 1, sword, 1));
+        items.Templates.StartingItems.Add(new ArcaneCore.Kernel.Items.StartingItem(1, 1, dust, 1));
+        ArcaneCore.Data.Content.Spells.SpellContent content = ArcaneCore.World.Tests.Spells.SpellTestServices.Content();
+        content = content with { Spells = [.. content.Spells, new ArcaneCore.Data.Content.Spells.SpellTemplateRow
+        {
+            Id = spellId, SpellName = "Synthetic enchant", RangeIndex = 1, Targets = 0x10, Effect1 = (uint)ArcaneCore.Game.Spells.SpellEffectName.EnchantItem,
+            EquippedItemClass = -1, EffectMiscValue1 = 7, Reagent1 = (int)dust, ReagentCount1 = 1,
+        }] };
+        WorldTestHost host;
+        using (items.Use())
+        {
+            host = WorldTestHost.Start(configureServices: services =>
+            {
+                services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                    .AddInMemoryCollection(new Dictionary<string, string?> { [CraftingFeature.EnabledKey] = "false" })
+                    .Build());
+                services.AddSingleton(Catalog());
+                services.AddSingleton<ArcaneCore.Data.Content.Spells.ISpellContentStore>(new ArcaneCore.World.Tests.Spells.InMemorySpellContentStore(content));
+            });
+        }
+
+        await using (host)
+        {
+            await using WorldTestClient client = await host.EnterWorldAsync("ENCHANT4", "Nocrafter");
+
+            (ArcaneCore.Game.Spells.SpellCastResult result, uint dustLeft) = await host.OnWorldAsync(() =>
+            {
+                var player = host.World.FindOnlinePlayer("Nocrafter")!;
+                var spells = host.WorldServices.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>();
+                spells.Spellbook.LearnSpell(player, spellId);
+                var target = Assert.Single(player.Inventory.Equipped).Item;
+                var cast = spells.System.HandleCastRequest(player, spellId,
+                    new ArcaneCore.Game.Spells.SpellCastTargets { Mask = ArcaneCore.Game.Spells.SpellCastTargetFlags.Item, Item = target.Guid });
+                return (cast, player.Inventory.GetItemCount(dust));
+            });
+
+            // Crafting:Enabled=false leaves the enchant effects unhandled, as a missing DBC does: refuse before the reagents go.
+            Assert.False(host.WorldServices.GetRequiredService<EnchantingFeature>().IsActive);
+            Assert.Equal(ArcaneCore.Game.Spells.SpellCastResult.Unknown, result);
+            Assert.Equal(1u, dustLeft);
+        }
+    }
+
+    [Fact]
     public void AConfiguredButMissingDbc_RefusesStartup()
     {
         Action<IServiceCollection> services = s => s.AddSingleton<IConfiguration>(new ConfigurationBuilder()

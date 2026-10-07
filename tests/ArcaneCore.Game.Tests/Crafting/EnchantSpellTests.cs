@@ -184,6 +184,18 @@ public sealed class EnchantSpellTests
     }
 
     [Fact]
+    public void MinorAgilityCloak_NeverFitsANonCloak_EvenWhenTheWeaponRowMasksWouldLetAWeaponThrough()
+    {
+        // The data fix (Item.cpp:979-982) lets the class-2 row through for a cloak; it must not leave the row's weapon masks open for weapons.
+        SpellInfo spell = EnchantSpell(MinorAgility, SpellEffectName.EnchantItem, StrengthEnchant, 1, itemClass: 2, subMask: 1 << 7);
+        var cloak = new ItemTemplate { Entry = 1, Class = 4, SubClass = 1, InventoryType = 16 };
+        var sword = new ItemTemplate { Entry = 2, Class = 2, SubClass = 7, InventoryType = 13 };
+
+        Assert.True(ItemTargetRules.IsFit(spell, cloak));
+        Assert.False(ItemTargetRules.IsFit(spell, sword));
+    }
+
+    [Fact]
     public void IsFit_NeedsTheClass_TheSubclassBit_AndTheInventoryTypeBit()
     {
         SpellInfo spell = EnchantSpell(1, SpellEffectName.EnchantItem, 1, 1, itemClass: 4, subMask: 1 << 1, invMask: 1 << 1);
@@ -289,6 +301,22 @@ public sealed class EnchantSpellTests
 
         Assert.Equal(StrengthEnchant, ItemEnchantments.Id(sword, EnchantSlots.Temporary));
         Assert.Equal(600_000u, ItemEnchantments.Duration(sword, EnchantSlots.Temporary));
+    }
+
+    [Fact]
+    public void AHeldItemEnchantment_RefreshedWithTheSameId_DoesNotStackItsStats()
+    {
+        using var rig = new Rig();
+        Item sword = rig.Equip(Weapon, InventorySlots.MainHand);
+        uint before = rig.Strength;
+        rig.Kit.Kit.Spellbook.Teach(rig.Player, HeldOil);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Kit.Kit.System.HandleCastRequest(rig.Player, HeldOil, SpellCastTargets.ForSelf()));
+        rig.Kit.Kit.Now += 5000;
+        Assert.Equal(SpellCastResult.CastOk, rig.Kit.Kit.System.HandleCastRequest(rig.Player, HeldOil, SpellCastTargets.ForSelf()));
+
+        Assert.Equal(StrengthEnchant, ItemEnchantments.Id(sword, EnchantSlots.Temporary));
+        Assert.Equal(before + 4, rig.Strength);   // the engine applies a slot once (PlayerEnchantments.Apply), so the refresh is +4, never +8
     }
 
     [Fact]

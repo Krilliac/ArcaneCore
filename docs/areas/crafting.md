@@ -95,7 +95,7 @@ not be used) and no enchantment engine. All 1,159 tradeskill crafts reported "no
   enchantment comes off, the new one is set with the caster logged, goes on when worn), ENCHANT_ITEM_TEMPORARY (`:3054-3099`: `value * 1000` ms) and
   ENCHANT_HELD_ITEM (`:5009-5057`: main hand while worn, base points seconds, else the spell duration, else 10 s, never replacing a different enchantment). Cast checks
   (`Spell.cpp:7177-7200`, `:7311-7375`): `BAD_TARGETS` for a non-player, `ITEM_GONE`, `EQUIPPED_ITEM_CLASS` from the class, subclass and (for an item target) inventory-type masks
-  (`Item::IsFitToSpellRequirements`, `Item.cpp:975-1003`, with the Enchant Cloak - Minor Agility data fix for spell 13419), `MAINHAND_EMPTY` for held-item spells, `LOWLEVEL` below the
+  (`Item::IsFitToSpellRequirements`, `Item.cpp:975-1003`, with the Enchant Cloak - Minor Agility data fix for spell 13419, narrowed here to cloaks only: vmangos skips the class check for every item, which leaves the weapon row's masks open to weapons), `MAINHAND_EMPTY` for held-item spells, `LOWLEVEL` below the
   spell's base level, and for an item of another owner (a trade slot target resolved through the economy feature) `NOT_TRADEABLE` for own-item-only spells and for catalog
   flag 0x01. `Enchanting:GmAllowTrades` (vmangos `GM.AllowTrades`, default true) refuses a game master's enchant when false.
 
@@ -136,7 +136,7 @@ not be used) and no enchantment engine. All 1,159 tradeskill crafts reported "no
 
 | Key | Default | Meaning |
 |---|---|---|
-| `Crafting:Enabled` | `true` | Master switch of reagents, the CREATE_ITEM effect and first aid. `false` registers none of them. |
+| `Crafting:Enabled` | `true` | Master switch of reagents, the CREATE_ITEM effect and first aid. `false` registers none of them; the enchant effects then refuse the cast (`Unknown`) before any reagent is taken, as with `Enchanting:Enabled=false`. |
 | `Enchanting:Enabled` | `true` | `false` leaves the engine and the enchant effects unregistered; enchant casts are refused (`Unknown`) and consume no reagents. |
 | `Enchanting:SpellItemEnchantmentDbcPath` | unset | Build-5875 `SpellItemEnchantment.dbc`. Unset: enchanting is inactive and logs a warning; every enchant effect then refuses the cast with `Unknown` before any reagent is taken (ArcaneCore guard, no vmangos counterpart). Set but unreadable or with another layout: startup refuses. |
 | `Enchanting:GmAllowTrades` | `true` | vmangos `GM.AllowTrades` (`World.cpp:680`). |

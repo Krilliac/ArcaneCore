@@ -29,12 +29,14 @@ public static class ItemTargetRules
         ArgumentNullException.ThrowIfNull(item);
         if (spell.EquippedItemClass != -1)
         {
-            if (spell.Id == MinorAgilityCloak && item.InventoryType == InventoryTypeCloak)
+            // vmangos lets a cloak through and skips only the class check for everything else, which leaves the row's weapon subclass and
+            // inventory masks open to weapons. The spell is Enchant Cloak: a cloak fits, nothing else does.
+            if (spell.Id == MinorAgilityCloak)
             {
-                return true;
+                return item.InventoryType == InventoryTypeCloak;
             }
 
-            if (spell.EquippedItemClass != (int)item.Class && spell.Id != MinorAgilityCloak)
+            if (spell.EquippedItemClass != (int)item.Class)
             {
                 return false;
             }
