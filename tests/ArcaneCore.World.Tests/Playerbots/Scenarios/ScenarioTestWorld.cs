@@ -58,7 +58,8 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
 
     public IServiceProvider Services => Host.WorldServices;
 
-    public static async Task<ScenarioTestWorld> StartAsync()
+    /// <summary>Start the world; <paramref name="configure"/> adds services of one test (stand-ins such as an auctioneer) after the defaults.</summary>
+    public static async Task<ScenarioTestWorld> StartAsync(Action<IServiceCollection>? configure = null)
     {
         string database = Path.Combine(Path.GetTempPath(), "arcane-scenario-" + Guid.NewGuid().ToString("N") + ".db");
         IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -83,6 +84,7 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
                 Enabled = true, MaxBots = 8, AllowedMaps = [0, 1], Scenarios = { Enabled = true },
             }));
             ScenarioTestContent.Register(services);
+            configure?.Invoke(services);
         });
         var world = new ScenarioTestWorld(host, time, database);
         await world.Bots.StartupAsync(default);

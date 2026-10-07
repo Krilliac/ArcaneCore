@@ -39,9 +39,23 @@ public sealed class EconomyHandlers : IOpcodeHandlerGroup
         });
         table.OnWorld(WorldOpcode.CmsgAuctionListBidderItems, (s, p, d) =>
         {
+            // guid, u32 start, u32 count, u32[count] outbid auction ids (vmangos AuctionListBidderItem::Read, Packets/AuctionHouse.cpp:11-23;
+            // wow_messages cmsg_auction_list_bidder_items). A body without the list (older tools) lists no outbid ids; a count larger than
+            // the body is cut to the ids present.
             var r = new PacketReader(d);
             ObjectGuid auctioneer = new(r.ReadUInt64());
-            Feature(s).ListBidderAuctions(s, p, auctioneer, r.ReadUInt32());
+            uint listFrom = r.ReadUInt32();
+            uint[] outbid = [];
+            if (r.TryReadUInt32(out uint count))
+            {
+                outbid = new uint[Math.Min(count, (uint)(r.Remaining / 4))];
+                for (int i = 0; i < outbid.Length; i++)
+                {
+                    outbid[i] = r.ReadUInt32();
+                }
+            }
+
+            Feature(s).ListBidderAuctions(s, p, auctioneer, listFrom, outbid);
         });
         table.OnWorld(WorldOpcode.CmsgAuctionPlaceBid, (s, p, d) =>
         {

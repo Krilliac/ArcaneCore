@@ -63,13 +63,29 @@ public sealed partial class EconomyFeature
         }
     }
 
-    /// <summary>CMSG_AUCTION_LIST_BIDDER_ITEMS: auctions the player is the highest bidder on.</summary>
-    public void ListBidderAuctions(WorldSession session, Player player, ObjectGuid auctioneer, uint listFrom)
+    /// <summary>
+    /// CMSG_AUCTION_LIST_BIDDER_ITEMS: first the auctions of <paramref name="outbidIds"/> (the client asks again for the auctions it was outbid on)
+    /// that still exist in this house, in the client's order, then the auctions the player is the highest bidder on; the page and the total count
+    /// both lists (vmangos AuctionHouseClientQueryTask, AuctionHouseHandler.cpp:665-679, then AuctionHouseObject::BuildListBidderItems,
+    /// AuctionHouseMgr.cpp:679-693). An id that is not an auction of this house is skipped.
+    /// </summary>
+    public void ListBidderAuctions(WorldSession session, Player player, ObjectGuid auctioneer, uint listFrom, IReadOnlyList<uint>? outbidIds = null)
     {
-        if (AuctioneerAccess.FindHouse(player, auctioneer) is { } house)
+        if (AuctioneerAccess.FindHouse(player, auctioneer) is not { } house)
         {
-            SendPage(session, WorldOpcode.SmsgAuctionBidderListResult, HouseAuctions(house.Id, Now).Where(v => v.Auction.BidderId == IdOf(player)), listFrom);
+            return;
         }
+
+        List<AuctionView> open = [.. HouseAuctions(house.Id, Now)];
+        int me = IdOf(player);
+        IEnumerable<AuctionView> outbid = [];
+        if (outbidIds is { Count: > 0 })
+        {
+            Dictionary<uint, AuctionView> byId = open.ToDictionary(v => v.Auction.Id);
+            outbid = outbidIds.Select(id => byId.GetValueOrDefault(id)).OfType<AuctionView>();
+        }
+
+        SendPage(session, WorldOpcode.SmsgAuctionBidderListResult, outbid.Concat(open.Where(v => v.Auction.BidderId == me)), listFrom);
     }
 
     /// <summary>CMSG_AUCTION_SELL_ITEM (vmangos HandleAuctionSellItem).</summary>
@@ -296,8 +312,10 @@ public sealed partial class EconomyFeature
                 EconomyPackets.AuctionCommandResult(auctionId, AuctionAction.BidPlaced, AuctionError.Ok, auction: updated));
             if (auction.BidderId != 0 && auction.BidderId != me)
             {
+                // vmangos SendAuctionOutbiddedMail (AuctionHouseHandler.cpp:148-170, called at :513 and :535) notifies before the auction
+                // takes the new bid: the packet carries the outbid player's own GUID, its bid and that bid's outbid step.
                 OnlinePlayer(auction.BidderId)?.Session.Send(WorldOpcode.SmsgAuctionBidderNotification,
-                    EconomyPackets.BidderNotification(updated, won: false, view.Item.RandomPropertyId));
+                    EconomyPackets.BidderNotification(auction, won: false, view.Item.RandomPropertyId));
             }
 
             if (buyout)
@@ -367,6 +385,14 @@ public sealed partial class EconomyFeature
             {
                 _auctions.Remove(auctionId);
                 session.Send(WorldOpcode.SmsgAuctionCommandResult, EconomyPackets.AuctionCommandResult(auctionId, AuctionAction.Removed, AuctionError.Ok));
+                // vmangos SendAuctionCancelledToBidderMail (AuctionHouseHandler.cpp:173-195): an online bidder is told the auction was removed
+                // (ERR_AUCTION_REMOVED_S) next to the letter that returns the bid.
+                if (auction.BidderId != 0)
+                {
+                    OnlinePlayer(auction.BidderId)?.Session.Send(WorldOpcode.SmsgAuctionRemovedNotification,
+                        EconomyPackets.RemovedNotification(auction.ItemEntry, view.Item.RandomPropertyId));
+                }
+
                 DeliverAll(letters);
             }
             else if (outcome != EconomyOutcome.Unknown)
