@@ -236,6 +236,33 @@ public sealed class QuestShareTests
     }
 
     [Fact]
+    public void PushToParty_AMemberInAnotherInstanceOfTheSameMap_IsTooFar()
+    {
+        // Same map id, same local coordinates, different map instance: not within sharing distance.
+        using var kit = new ShareKit(Templates());
+        kit.Take(kit.Sharer, Shared);
+        kit.MoveToInstance(kit.Member, 2);
+        kit.Member.X = kit.Sharer.X;
+        kit.Push(Shared);
+        Assert.Equal([QuestShareMessage.SharingQuest, QuestShareMessage.TooFar], kit.PushResults(kit.Sharer).Select(r => r.Message));
+        Assert.Empty(kit.Sent(kit.Member, WorldOpcode.SmsgQuestgiverQuestDetails));
+        Assert.Null(kit.Services.ShareInfoOf(kit.Member));
+    }
+
+    [Fact]
+    public void APartyAcceptQuest_IsNotOfferedToAMemberInAnotherInstanceOfTheSameMap()
+    {
+        // vmangos QuestHandler.cpp:166-191 skips a member that is not IsInMap(_player) (same Map object, not just map id).
+        using var kit = new ShareKit(Templates(), withThird: true);
+        kit.Take(kit.Sharer, Party);
+        kit.Push(Party);
+        kit.MoveToInstance(kit.Third, 2);
+        Assert.True(kit.Services.AcceptQuest(kit.Member, kit.Sharer.Guid, Party));
+        Assert.Empty(kit.Sent(kit.Third, WorldOpcode.SmsgQuestConfirmAccept));
+        Assert.Null(kit.Services.ShareInfoOf(kit.Third));
+    }
+
+    [Fact]
     public void ConfirmAccept_RefusesAPlayerOutsideTheGroup()
     {
         using var kit = new ShareKit(Templates());
@@ -348,6 +375,13 @@ public sealed class QuestShareTests
         }
 
         public void Push(uint questId) => Services.PushQuestToParty(Sharer, questId);
+
+        /// <summary>Move a player into another instance of its current map id (same coordinates).</summary>
+        public void MoveToInstance(Player player, uint instanceId)
+        {
+            player.Map!.RemovePlayer(player);
+            World.GetMap(player.MapId, instanceId).AddPlayer(player);
+        }
 
         public IReadOnlyList<byte[]> Sent(Player player, WorldOpcode opcode)
             => [.. _sessions[player].Sent.Where(p => p.Opcode == opcode).Select(p => p.Payload)];
