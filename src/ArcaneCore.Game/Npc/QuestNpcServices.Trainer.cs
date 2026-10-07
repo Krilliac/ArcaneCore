@@ -158,7 +158,8 @@ public sealed partial class QuestNpcServices
 
     /// <summary>
     /// vmangos Creature::IsTrainerOf: a non-empty list and, by trainer type, the class (class),
-    /// hunter (pets) or race unless exalted with the trainer's faction (mounts). With
+    /// hunter (pets), race unless exalted with the trainer's faction (mounts) or the known
+    /// trainer_spell (trade skills); an unknown type is refused. With
     /// <paramref name="msg"/> a refusing trainer shows its class/race gossip text.
     /// </summary>
     internal bool IsTrainerOf(PlayerNpcState s, NpcInfo npc, bool msg)
@@ -211,8 +212,15 @@ public sealed partial class QuestNpcServices
                     _ => 0,
                 };
                 break;
-            default:
+            case TrainerType.TradeSkills when npc.TrainerSpell != 0 && Deps.Spells?.HasSpell(p, npc.TrainerSpell) != true:
+                // vmangos Creature.cpp:1471-1481: a trade-skill trainer requires its trainer_spell to be known.
+                refusal = 11031;
+                break;
+            case TrainerType.Class or TrainerType.Pets or TrainerType.Mounts or TrainerType.TradeSkills:
                 return true;
+            default:
+                // Unknown trainer types are refused (vmangos Creature.cpp:1482-1483).
+                return false;
         }
 
         if (msg)
