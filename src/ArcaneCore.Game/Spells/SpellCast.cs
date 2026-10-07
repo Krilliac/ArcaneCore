@@ -46,6 +46,7 @@ public sealed class SpellCast
         CastX = caster.X;
         CastY = caster.Y;
         CastZ = caster.Z;
+        CastO = caster.Orientation;
     }
 
     public SpellInfo Spell { get; }
@@ -140,6 +141,9 @@ public sealed class SpellCast
     internal float CastY { get; set; }
 
     internal float CastZ { get; set; }
+
+    /// <summary>The caster's orientation when the cast (or the channel) started (vmangos m_castPosition.o, compared for the turning interrupt).</summary>
+    internal float CastO { get; set; }
 
     /// <summary>Whether the caster moved more than 0.5 yd on any axis since the cast started (vmangos Spell::update).</summary>
     internal bool HasMoved
