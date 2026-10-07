@@ -7,6 +7,9 @@ public sealed partial class GameObject
     /// <summary>vmangos m_UniqueUsers (GameObject.h:283): the players taking part in a summoning ritual (one entry per player).</summary>
     internal HashSet<ObjectGuid> UniqueUsers { get; } = [];
 
+    /// <summary>The participants of a summoning ritual (read-only view of <see cref="UniqueUsers"/>; GM inspection and tests).</summary>
+    public IReadOnlyCollection<ObjectGuid> Participants => UniqueUsers;
+
     /// <summary>vmangos m_firstUser: the first player who used a ritual (AddUniqueUse, GameObject.cpp:739-772).</summary>
     internal ObjectGuid FirstUser { get; set; }
 

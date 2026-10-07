@@ -12,7 +12,7 @@ namespace ArcaneCore.Game.Groups;
 /// checks, target icons and out-of-range member stats. The rules follow vmangos
 /// GroupHandler.cpp and Group.cpp (citations per method). World thread.
 /// </summary>
-public sealed class GroupManager(SocialContext context)
+public sealed partial class GroupManager(SocialContext context)
 {
     /// <summary>vmangos HandleRandomRollOpcode: the largest accepted maximum.</summary>
     public const uint MaxRoll = 1_000_000;
@@ -808,6 +808,7 @@ public sealed class GroupManager(SocialContext context)
         }
 
         SendUpdate(group);
+        MemberLeft?.Invoke(group, guid, kicked, leaderChanged);
         MemberRemoved?.Invoke(group, guid);
     }
 
