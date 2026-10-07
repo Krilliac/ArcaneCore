@@ -122,16 +122,31 @@ public sealed class GhostRestoreTests
         // vmangos keeps corpse.instance: the party still inside the dungeon instance sees the body and can resurrect it.
         Rig r = Create();
         using WorldRuntime world = r.World;
+        Map instance = world.GetMap(36, 105); // the instance is loaded: its party is still inside
         Login(r, GhostLife(corpse: new CorpseSnapshot(36, 5, 6, 7, 0, T - 10, (byte)CorpseType.ResurrectablePve, InstanceId: 105)));
 
         Corpse corpse = Assert.IsType<Corpse>(r.Player.Combat.Corpse);
-        Map instance = Assert.IsType<Map>(world.FindMap(36, 105));
         Assert.Same(instance, corpse.Map);
         Assert.Contains(corpse, instance.Combat.Corpses);
         Assert.Null(world.FindMap(36, 0)); // no shared copy of the dungeon
 
         CorpseSnapshot saved = Assert.IsType<CorpseSnapshot>(PlayerLife.Capture(r.Player).Corpse);
         Assert.Equal((36u, 105u), (saved.MapId, saved.InstanceId));
+    }
+
+    [Fact]
+    public void Logout_OfAGhostWhoseBodyLiesInADungeonInstance_SavesThatInstance()
+    {
+        // The logout takes the corpse out of its map before the snapshot is captured, so the instance cannot come from the map.
+        Rig r = Create();
+        using WorldRuntime world = r.World;
+        world.GetMap(36, 105);
+        Login(r, GhostLife(corpse: new CorpseSnapshot(36, 5, 6, 7, 0, T - 10, (byte)CorpseType.ResurrectablePve, InstanceId: 105)));
+
+        world.RemovePlayer(r.Player);
+
+        CorpseSnapshot body = Assert.IsType<CorpseSnapshot>(Assert.IsType<CharacterLife>(r.Saves.Saved.Last().Life).Corpse);
+        Assert.Equal((36u, 105u), (body.MapId, body.InstanceId));
     }
 
     [Fact]

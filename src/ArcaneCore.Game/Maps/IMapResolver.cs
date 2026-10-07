@@ -34,4 +34,13 @@ public interface IMapResolver
 
     /// <summary>The player has entered <paramref name="map"/> and has the full login packets (raid welcome etc.).</summary>
     void OnEntered(Player player, Map map);
+
+    /// <summary>
+    /// The map a restored body left in instance <paramref name="instanceId"/> of <paramref name="mapId"/> goes into when that
+    /// instance is not loaded: the instance's map when a live instance owns that id (created the way an entry creates it), or
+    /// null to keep the body out of every map. Never a map nobody manages: vmangos keeps such a corpse aside and adds it to the
+    /// grid only when its instance's map is next created; it never creates an instance map for a corpse. The default (a resolver
+    /// with no instances of its own) is null.
+    /// </summary>
+    Map? ResolveCorpseMap(uint mapId, uint instanceId) => null;
 }

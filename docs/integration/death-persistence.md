@@ -81,8 +81,14 @@ when the stored values are clamped to them.
   world and saves it with the map). It is stored with the character and put back at the next login. Other
   players therefore do not see an offline player's body, and it does not decay to bones while its owner
   is away; the owner always finds it again.
-- The stored corpse has no instance id; a body left in an instance is restored into the player's map when
-  the ids match, otherwise into instance 0 of its map.
+- A body is restored into the instance it was left in (`Corpse.InstanceId`, kept when the logout takes the
+  body out of its map). A row from before characters v34 reads instance 0: on an instanceable map it goes into
+  the ghost's own map when the map ids match, as before v34. A dungeon body goes into its instance only when that
+  map is loaded or a live instance save owns it (`IMapResolver.ResolveCorpseMap`, which creates the map the managed
+  way). Otherwise the ghost keeps the body outside every map: no map is created for it (vmangos keeps such a corpse
+  aside and never creates an instance map for one). Entering that dungeon still revives the ghost, and the spirit
+  healer still works. Unlike vmangos, nothing adds the body to the map later; a deleted instance is never recreated
+  and a live one gets its map at the restore.
 - Experience is stored with the life, but rest bonus is not (`PlayerProgression` keeps it per session).
 - The reclaim delay uses vmangos' two formulas as they are: `GetCorpseReclaimDelay` counts the window from
   the current time, the load-time packet counts it from the ghost time, so they can differ by one step.

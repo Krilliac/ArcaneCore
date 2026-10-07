@@ -333,6 +333,21 @@ public sealed partial class InstanceManager : IMapResolver
         }
     }
 
+    /// <inheritdoc />
+    public Map? ResolveCorpseMap(uint mapId, uint instanceId)
+    {
+        if (_world.FindMap(mapId, instanceId) is { } loaded)
+        {
+            return loaded;
+        }
+
+        // A live save gets its map the way an entry creates it: managed, so it unloads on its timer and the timed reset of the
+        // save still sees it. A deleted or unknown instance gets none (the body stays out of every map).
+        return _saves.TryGetValue(instanceId, out InstanceSave? save) && save.MapId == mapId && !save.IsDeleted
+            ? GetOrCreateInstanceMap(save)
+            : null;
+    }
+
     // ---- packets ------------------------------------------------------------------------
 
     /// <summary>SMSG_RAID_INSTANCE_INFO: the player's permanent binds (vmangos <c>Player::SendRaidInfo</c>; login and CMSG_REQUEST_RAID_INFO).</summary>

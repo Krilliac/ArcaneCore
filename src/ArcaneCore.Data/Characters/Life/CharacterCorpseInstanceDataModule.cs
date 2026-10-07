@@ -6,8 +6,10 @@ namespace ArcaneCore.Data.Characters.Life;
 
 /// <summary>
 /// The map instance of a released body (vmangos <c>corpse.instance</c>): a ghost that logs out after dying in a dungeon gets its
-/// body back in that dungeon instance, not in a shared copy of the map. Adds <c>character_corpse.InstanceId</c> (0 for rows
-/// written before it, which is what they meant: those bodies were always restored to instance 0).
+/// body back in that dungeon instance, not in a shared copy of the map. Adds <c>character_corpse.InstanceId</c>, which reads 0
+/// for rows written before it. Before v34 such a body went into the ghost's own map when the map ids matched and into instance 0
+/// of its map otherwise; <c>MapCombat.RestoreGhost</c> keeps the first rule for a 0 row on an instanceable map and no longer
+/// creates the shared instance 0 for the second.
 /// </summary>
 public sealed class CharacterCorpseInstanceDataModule : IDataModule, ICharacterDataCleanup
 {
