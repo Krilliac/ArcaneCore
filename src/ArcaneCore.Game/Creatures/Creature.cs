@@ -1,6 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Groups;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 
@@ -104,6 +105,11 @@ public sealed partial class Creature : Unit, ICombatCreature
     public uint Entry => GetUInt32(UpdateFields.ObjectFieldEntry);
 
     public CreatureDeathState DeathState { get; internal set; } = CreatureDeathState.Alive;
+
+    /// <summary>First player to damage this life and that player's group at tap time (vmangos Creature.cpp:1583-1633).</summary>
+    internal ObjectGuid LootTapPlayerGuid { get; set; }
+
+    internal Group? LootTapGroup { get; set; }
 
     /// <summary>The map system owns death, movement and respawn even while the spawn is hidden.</summary>
     internal CreatureMapSystem? System { get; set; }

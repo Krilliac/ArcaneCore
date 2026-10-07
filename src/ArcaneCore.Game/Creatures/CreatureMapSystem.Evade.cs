@@ -49,6 +49,10 @@ public sealed partial class CreatureMapSystem
         }
 
         ResetAiState(creature);
+        creature.LootTapPlayerGuid = default;
+        creature.LootTapGroup = null;
+        creature.SetUInt32(UpdateFields.UnitDynamicFlags,
+            creature.GetUInt32(UpdateFields.UnitDynamicFlags) & ~(Loot.LootService.UnitDynFlagTapped | Loot.LootService.UnitDynFlagTappedByPlayer));
         creature.IsEvading = true;
         if (_options.Movement.EvadeRestoresFullHealth)
         {

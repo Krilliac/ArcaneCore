@@ -201,6 +201,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             Items = new DeferredItemTemplates(services),
             Quests = Quests,
             Groups = new SocialGroups(services),
+            // LootMgr.cpp:370-377 evaluates each row's condition against the viewer (resolved at use time, fails closed without the feature).
             Conditions = new LootConditions(services).IsSatisfied,
             CreatureOptions = services.GetService<CreatureWorldFeature>()?.Options ?? new CreatureOptions(),
             Durable = _settlements,
@@ -209,6 +210,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         map.AddUpdater(system);
         map.AddUpdater(loot.Rolls); // the need/greed roll timers of this map's loot (LootRollManager)
         _systems.Add(map, system);
+        map.Combat.DamageDealt += OnDamageDealt;
         map.Combat.UnitKilled += OnUnitKilled;
     }
 
@@ -217,6 +219,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         if (_systems.Remove(map))
         {
             map.Combat.UnitKilled -= OnUnitKilled;
+            map.Combat.DamageDealt -= OnDamageDealt;
         }
     }
 
@@ -240,6 +243,14 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         catch (Exception ex)
         {
             logger.LogError(ex, "corpse loot for {Victim} failed", victim.Guid);
+        }
+    }
+
+    private void OnDamageDealt(Unit attacker, Unit victim, uint damage, bool direct, bool melee)
+    {
+        if (victim.Map is { } map)
+        {
+            FindSystem(map)?.Loot?.OnCreatureDamaged(attacker, victim, damage);
         }
     }
 

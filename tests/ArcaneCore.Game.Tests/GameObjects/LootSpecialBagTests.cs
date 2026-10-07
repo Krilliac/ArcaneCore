@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
@@ -161,6 +162,9 @@ public sealed class LootSpecialBagTests
             rig.World.AddPlayer(other);
             rig.World.RunTick(50);
             otherSession.Clear();
+            var groups = new FakeGroups();
+            groups.Create(LootMethod.FreeForAll, rig.Player, other);
+            rig.Loot.Groups = groups;
             LootBag bag = Bag(rig, LootType.Corpse, LootSourceKind.Creature, gold: 100);
             bag.Recipients.Add(other.Guid);
             bag.ShareMoney = share;

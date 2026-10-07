@@ -65,6 +65,7 @@ public sealed class LootServiceTests
         var quests = new FakeQuestJournal();
         var groups = new FakeGroups();
         var loot = new LootService(content, random: new Random(11)) { Items = ItemStore, Quests = quests, Groups = groups, CreatureOptions = creatureOptions ?? new CreatureOptions() };
+        map.Combat.DamageDealt += (attacker, victim, damage, _, _) => loot.OnCreatureDamaged(attacker, victim, damage);
         map.Combat.UnitKilled += (killer, victim) => loot.OnCreatureKilled(killer, victim);
         return new Rig { World = world, Map = map, Creatures = system, Loot = loot, Quests = quests, Groups = groups };
     }
@@ -305,6 +306,130 @@ public sealed class LootServiceTests
         rig.Loot.TakeMoney(alice);
         Assert.Equal(bobMoney, bob.Money);
         Assert.Equal(10u, alice.Money);
+    }
+
+    [Fact]
+    public void FirstDamageTagsCreature_AndASecondPlayersKillingBlowDoesNotStealItsLoot()
+    {
+        // vmangos Unit.cpp:800-819 tags on the first landed damage; Object.cpp:779-799 filters the tapped flags.
+        Rig rig = CreateRig();
+        (Player tagger, _) = rig.Join(1);
+        (Player finisher, _) = rig.Join(2, 1, 0);
+        Creature wolf = rig.Wolf;
+        rig.Map.Combat.DealDamage(tagger, wolf, 1, direct: false);
+        rig.Map.Combat.DealDamage(finisher, wolf, 1, direct: false);
+        Assert.Equal(LootService.UnitDynFlagTapped | LootService.UnitDynFlagTappedByPlayer,
+            wolf.GetUInt32(UpdateFields.UnitDynamicFlags) & (LootService.UnitDynFlagTapped | LootService.UnitDynFlagTappedByPlayer));
+
+        rig.Map.Combat.DealDamage(finisher, wolf, wolf.Health, direct: false);
+        LootBag bag = rig.Loot.FindLoot(wolf.Guid)!;
+        Assert.Equal([tagger.Guid], bag.Recipients);
+        Assert.Equal(LootResult.NotAllowed, rig.Loot.Open(finisher, wolf.Guid));
+        Assert.Equal(LootResult.Ok, rig.Loot.Open(tagger, wolf.Guid));
+    }
+
+    [Fact]
+    public void FirstDamage_PreservesTheTaggersPartyLootRightsAtDeath()
+    {
+        Rig rig = CreateRig();
+        (Player tagger, _) = rig.Join(1);
+        (Player partyMember, _) = rig.Join(2, 1, 0);
+        (Player finisher, _) = rig.Join(3, 2, 0);
+        rig.Groups.Create(LootMethod.FreeForAll, tagger, partyMember);
+        Creature wolf = rig.Wolf;
+        rig.Map.Combat.DealDamage(tagger, wolf, 1, direct: false);
+        rig.Map.Combat.DealDamage(finisher, wolf, wolf.Health, direct: false);
+
+        LootBag bag = rig.Loot.FindLoot(wolf.Guid)!;
+        Assert.Contains(tagger.Guid, bag.Recipients);
+        Assert.Contains(partyMember.Guid, bag.Recipients);
+        Assert.DoesNotContain(finisher.Guid, bag.Recipients);
+        Assert.Equal(LootResult.Ok, rig.Loot.Open(partyMember, wolf.Guid));
+    }
+
+    [Fact]
+    public void DisbandedTapGroup_FallsBackToTheOriginalTagger()
+    {
+        Rig rig = CreateRig();
+        (Player tagger, _) = rig.Join(1);
+        (Player formerMember, _) = rig.Join(2, 1, 0);
+        (Player finisher, _) = rig.Join(3, 2, 0);
+        rig.Groups.Create(LootMethod.FreeForAll, tagger, formerMember);
+        Creature wolf = rig.Wolf;
+        rig.Map.Combat.DealDamage(tagger, wolf, 1, direct: false);
+        rig.Groups.ByMember.Clear(); // the group manager no longer owns the tapped group
+        rig.Map.Combat.DealDamage(finisher, wolf, wolf.Health, direct: false);
+
+        LootBag bag = rig.Loot.FindLoot(wolf.Guid)!;
+        Assert.Equal([tagger.Guid], bag.Recipients);
+        Assert.Equal(LootResult.NotAllowed, rig.Loot.Open(formerMember, wolf.Guid));
+    }
+
+    [Fact]
+    public void EvadingCreature_ClearsItsLootTap()
+    {
+        Rig rig = CreateRig();
+        (Player tagger, _) = rig.Join(1);
+        Creature wolf = rig.Wolf;
+        rig.Map.Combat.DealDamage(tagger, wolf, 1, direct: false);
+        rig.Creatures.EnterEvadeMode(wolf);
+
+        Assert.Equal(0u, wolf.GetUInt32(UpdateFields.UnitDynamicFlags)
+            & (LootService.UnitDynFlagTapped | LootService.UnitDynFlagTappedByPlayer));
+    }
+
+    [Fact]
+    public void MoneySplit_UsesTwoDimensionalDistanceFromTheLooter()
+    {
+        // vmangos LootHandler.cpp:303-330 uses the looter's IsWithinLootXPDist for each current group member.
+        Rig rig = CreateRig(minGold: 10, maxGold: 10);
+        (Player alice, _) = rig.Join(1);
+        (Player bob, _) = rig.Join(2, 1, 0);
+        rig.Groups.Create(LootMethod.FreeForAll, alice, bob);
+        Creature wolf = rig.KillWolf(alice);
+        bob.Relocate(1, 0, 200, 0, 0);
+
+        uint before = bob.Money;
+        Assert.Equal(LootResult.Ok, rig.Loot.Open(alice, wolf.Guid));
+        Assert.True(rig.Loot.TakeMoney(alice));
+        Assert.Equal(before + 5, bob.Money);
+    }
+
+    [Fact]
+    public void ConditionedLoot_IsVisibleOnlyToTheRecipientWhoPassesTheCondition()
+    {
+        // vmangos LootMgr.cpp:370-377 evaluates a condition for each player viewing/taking an item.
+        Rig rig = CreateRig(rows: [(LootTableKind.Creature, Row(WolfLoot, ItemTestData.ToughJerky, 100, condition: 7))], minGold: 0, maxGold: 0);
+        (Player alice, _) = rig.Join(1);
+        (Player bob, _) = rig.Join(2, 1, 0);
+        rig.Groups.Create(LootMethod.FreeForAll, alice, bob);
+        rig.Loot.Conditions = (player, condition) => condition == 7 && ReferenceEquals(player, alice);
+        Creature wolf = rig.KillWolf(alice);
+        LootBag bag = rig.Loot.FindLoot(wolf.Guid)!;
+        LootItem item = Assert.Single(bag.Items);
+
+        Assert.Equal(LootSlotType.AllowLoot, bag.SlotFor(alice, item));
+        Assert.Null(bag.SlotFor(bob, item));
+    }
+
+    [Fact]
+    public void ReferenceRowCondition_RestrictsItemsFromTheReferencedTemplate()
+    {
+        // vmangos LootMgr.cpp:1225-1243 checks a reference row's condition before expanding it.
+        Rig rig = CreateRig(rows:
+        [
+            (LootTableKind.Creature, Row(WolfLoot, 0, 100, minOrRef: -88, max: 1, condition: 7)),
+            (LootTableKind.Reference, Row(88, ItemTestData.ToughJerky, 100)),
+        ], minGold: 0, maxGold: 0);
+        (Player alice, _) = rig.Join(1);
+        (Player bob, _) = rig.Join(2, 1, 0);
+        rig.Groups.Create(LootMethod.FreeForAll, alice, bob);
+        rig.Loot.Conditions = (player, condition) => condition == 7 && ReferenceEquals(player, alice);
+        Creature wolf = rig.KillWolf(alice);
+        LootItem item = Assert.Single(rig.Loot.FindLoot(wolf.Guid)!.Items);
+
+        Assert.Equal(LootSlotType.AllowLoot, rig.Loot.FindLoot(wolf.Guid)!.SlotFor(alice, item));
+        Assert.Null(rig.Loot.FindLoot(wolf.Guid)!.SlotFor(bob, item));
     }
 
     [Theory]

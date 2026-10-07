@@ -1,0 +1,32 @@
+# Loot templates and corpse rights
+
+This area generates 1.12.1 corpse, game object and item loot from world content. The main path is `LootGenerator` -> `LootService.Generate` -> `LootBag` -> `LootPackets`. Fishing, skinning, pickpocketing and disenchant sources are owned by their existing special-loot areas and were not changed in this lane.
+
+## Template and data behavior
+
+| Rule | Implementation | Reference |
+|---|---|---|
+| Ungrouped rows roll by `abs(ChanceOrQuestChance)`; a negative chance makes a quest-only item. Quest items with `-100` roll every time and are visible only to recipients whose active quest still needs the item. | `LootGenerator`, `LootService.Generate`, `LootBag.SlotFor` | `D:\refs\vmangos\src\game\LootMgr.cpp:256-274,370-397,459-486,1206-1244` |
+| A positive `groupid` makes ordinary rows exclusive. Explicit chances consume one roll in order; if all miss, one zero-chance row is chosen uniformly. Reference rows remain independent even with `groupid`; their group id selects a group in the referenced template. A negative `mincountOrRef` names that template and `maxcount` repeats it. | `LootGenerator`, `LootContent` | `D:\refs\vmangos\src\game\LootMgr.cpp:1038-1090,1193-1244` |
+| `condition_id` is checked for each eligible player. Conditions on reference rows are inherited by the resulting items. Missing conditions fail closed. A conditioned item is shown only to eligible recipients; condition and quest requirements both apply when the row is quest-only. | `LootGenerator`, `LootService.Generate`, `LootBag.SlotFor`, `GameObjectLootFeature` | `D:\refs\vmangos\src\game\LootMgr.cpp:370-377,634-660,952-988,1225-1243` |
+| Creature `gold_min` and `gold_max` (classic-db `MinLootGold`/`MaxLootGold`) feed the vmangos money rule: maximum when max <= min, otherwise an inclusive uniform roll; ranges >= 32700 roll values shifted right by eight, then shift back after the money rate. There is no separate level multiplier in vmangos' corpse-money path. | `GameObjectLootDumpImporter`, `LootMoneyRules`, `LootService.OnCreatureKilled` | `D:\refs\vmangos\src\game\Objects\Creature.cpp:1635-1651`; `D:\refs\vmangos\src\game\LootMgr.cpp:735-746` |
+
+`GameObjectLootDumpImporter` reads both cmangos and vmangos table dialects, including `ChanceOrQuestChance`/`chance`, `mincountOrRef`/`mincount`, `groupid`, `maxcount`, `condition_id`, and creature gold columns. No schema change was needed. The creature's own level is selected by the creature content system; the loot purse uses its template gold bounds as vmangos does (`D:\refs\vmangos\src\game\Objects\Creature.cpp:1650`).
+
+## Rights, money and wire behavior
+
+The first player to deal nonlethal damage (or their controlled unit) records the tap and group. A killing blow as the first damage records its killer. Later attackers do not replace that tap. The tap's live group supplies the nearby loot recipients at death; a disbanded group falls back to the original tapper. The tap clears on evade and respawn. `UNIT_DYNFLAG_TAPPED` (0x4) is shown to everybody, while `UNIT_DYNFLAG_TAPPED_BY_PLAYER` (0x8) is shown only to the tapper and members of the tapped group. References: `D:\refs\vmangos\src\game\Objects\Unit.cpp:800-819`, `Objects\Creature.cpp:1541-1552,1583-1633`, `Objects\Object.cpp:779-799`, `SharedDefines.h:1153-1157`.
+
+Corpse money is split among the looter's **current** group members at the group reward distance from the looter, using the 2D/radius/raid rule, with an integer share and no remainder distribution. A solo looter takes all. References: `D:\refs\vmangos\src\game\Handlers\LootHandler.cpp:303-340`, `Objects\Object.cpp:1478-1499,1738-1752`. `SMSG_LOOT_MONEY_NOTIFY` carries each group member's share; open viewers receive empty `SMSG_LOOT_CLEAR_MONEY` after it is taken (`Server\Packets\Loot.cpp:35-53`).
+
+The existing 1.12.1 loot response writes GUID, loot type, gold, item count, then each visible item's slot, id, count, display id, zero suffix, property id and slot type. Removed slots use `SMSG_LOOT_REMOVED` with one byte; money removal uses the empty clear packet. The slot types are allow/roll/master/locked as listed by `D:\refs\wow_messages\wow_message_parser\wowm\world\loot\smsg_loot_response.wowm:60-89`; the exact response order follows `D:\refs\vmangos\src\game\Server\Packets\Loot.cpp:163-218`. Corpse decay remains rank-dependent while loot is present; removing all loot shortens it by the configured looted-corpse rate (`Objects\Creature.cpp:899-915,3355-3395`).
+
+## Limits and validation
+
+- The condition evaluator accepts a player and optional NPC source, not a loot target. Player-only conditions are evaluated; source-dependent loot conditions fail closed. Eligibility is captured at loot generation, so a later change to a player's condition does not recompute existing slots. See `docs/areas/quests-npc.md` and `D:\refs\vmangos\src\game\LootMgr.cpp:370-377` for the remaining fidelity gap.
+- vmangos checks a reference row's condition before expanding the referenced table (`LootMgr.cpp:1225-1243`). ArcaneCore carries that condition to every resulting item and filters recipients after generation, so random draws can advance differently if the condition fails. The visible items remain condition gated.
+- The group roll and master assignment engines are not complete. Existing group loot can only expose directly takeable slots; roll, master and locked slot types are defined in the model but not sent by this path. See `docs/areas/group-loot-xp.md`.
+- The response serializer writes zero for random suffix and random property fields. Random-property selection and its item-instance persistence are outside this loot template slice (`D:\refs\vmangos\src\game\Server\Packets\Loot.cpp:179-200`).
+- Reference `maxcount` is read as a 32-bit value and each requested repeat is processed; a malformed world row with an extreme multiplier can stall generation. Source data needs validation or a separately agreed cap before untrusted dumps are imported (`D:\refs\vmangos\src\game\LootMgr.cpp:1234-1240`).
+- A zero-damage hit does not establish a tap here. vmangos calls `SetLootRecipient` inside its damage path; the exact zero-damage edge remains unverified against a 5875 client. Offline tapper/group fallback also has no hosted client check.
+- World loot import and the packet layouts have not been exercised against a real build 5875 client or hosted MariaDB/PostgreSQL in this lane. The local Release build and focused tests cover generation, tap, condition visibility and money splits on synthetic data.
