@@ -5,6 +5,7 @@ using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Data.Schema;
@@ -102,6 +103,14 @@ internal sealed class SchemaLock : IAsyncDisposable
     /// <summary>Make the bootstrap's work permanent (SQLite commits its transaction; the named locks have nothing to commit).</summary>
     public async Task CompleteAsync(CancellationToken cancellationToken)
     {
+        // Completing is only meaningful while the lock is held: AcquireAsync either returns a held lock or
+        // throws, and DisposeAsync releases it. Completing an unheld lock means the bootstrap ran without
+        // the cross-process serialisation it relies on, so the start fails closed.
+        if (!Invariant.Check(_transaction is not null || _heldByName, $"the {_component} schema lock is completed while not held"))
+        {
+            throw new InvalidOperationException($"the {_component} schema lock is not held; the bootstrap cannot be completed");
+        }
+
         if (_transaction is not null)
         {
             await _transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -164,6 +173,7 @@ internal sealed class SchemaLock : IAsyncDisposable
     {
         // Microsoft.Data.Sqlite turns the command timeout into SQLite's busy timeout, so the
         // BEGIN IMMEDIATE below waits at most that long for another writer.
+        Invariant.Assert(_transaction is null && !_heldByName, "a schema lock is acquired once");
         DbConnection connection = _db.Database.GetDbConnection();
         var sqlite = connection as SqliteConnection;
         int previous = sqlite?.DefaultTimeout ?? 0;
@@ -192,6 +202,7 @@ internal sealed class SchemaLock : IAsyncDisposable
     private async Task PollAsync(
         string sql, (string Name, object Value)[] parameters, TimeSpan timeout, CancellationToken cancellationToken)
     {
+        Invariant.Assert(_transaction is null && !_heldByName, "a schema lock is acquired once");
         DateTime deadline = DateTime.UtcNow + timeout;
         while (true)
         {

@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Security.Cryptography;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Cryptography;
 
@@ -41,6 +42,10 @@ public sealed class Srp6Server
         _verifier = verifier;
         _b = privateB;
         _bigB = Srp6Math.ServerPublicKey(_verifier, _b);
+
+        // B = (k*v + g^b) mod N is a residue, so it serialises into the fixed 32-byte wire field
+        // (ToFixedLittleEndian throws for anything of 33 bytes or more).
+        Invariant.Assert(_bigB.Sign >= 0 && _bigB < WowSrp6.N, $"server public ephemeral B must lie in [0, N), got {_bigB.GetByteCount(isUnsigned: true)} bytes");
     }
 
     /// <summary>
@@ -75,6 +80,14 @@ public sealed class Srp6Server
         ArgumentNullException.ThrowIfNull(clientPublicKey);
         ArgumentNullException.ThrowIfNull(clientProof);
 
+        // One proof per logon attempt: the realm session discards this object after the first call
+        // (vmangos AuthSocket.cpp:555 sets STATUS_INVALID on entry). A second call means a caller kept
+        // consumed SRP state; it is refused rather than letting a replayed A/M1 pair be recomputed.
+        if (!Invariant.Check(SessionKey is null, "TryAcceptProof was called twice on one Srp6Server (one proof per logon attempt)"))
+        {
+            return false;
+        }
+
         // A degenerate account can never authenticate; a malformed A (wrong length, 0, >= N)
         // or M1 is rejected, not thrown (vmangos CalculateSessionKey rejects A == 0 and A % N == 0).
         if (!_usable
@@ -90,7 +103,15 @@ public sealed class Srp6Server
         BigInteger s = Srp6Math.SessionImplicitKey(a, _verifier, u, _b);
         byte[] sessionKey = Srp6Math.Interleave(s);
 
+        // K is the 40-byte interleave (two SHA-1 digests); the world header cipher and the account row
+        // both take exactly that. Any other length means the interleave is broken: refuse the logon.
+        if (!Invariant.Check(sessionKey.Length == WowSrp6.SessionKeyLength, $"session key K must be {WowSrp6.SessionKeyLength} bytes, interleave produced {sessionKey.Length}"))
+        {
+            return false;
+        }
+
         byte[] expectedProof = Srp6Math.ClientProof(username, Salt, a, _bigB, sessionKey);
+        Invariant.Assert(expectedProof.Length == Sha1.DigestLength, "M1 is one SHA-1 digest");
 
         // Constant-time comparison — the proof is a secret-derived MAC.
         if (!CryptographicOperations.FixedTimeEquals(expectedProof, clientProof))

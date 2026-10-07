@@ -1,3 +1,5 @@
+using ArcaneCore.Kernel.Diagnostics;
+
 namespace ArcaneCore.Protocol;
 
 /// <summary>
@@ -17,6 +19,9 @@ public sealed class WorldHeaderCrypt
     public const int OutgoingHeaderLength = 4; // SMSG: CRYPTED_SEND_LEN
     public const int IncomingHeaderLength = 6; // CMSG: CRYPTED_RECV_LEN
 
+    /// <summary>The SRP6 session key K the cipher is keyed with: 40 bytes (two interleaved SHA-1 digests), the length vmangos stores in account.sessionkey.</summary>
+    public const int SessionKeyLength = 40;
+
     private byte[] _key = [0];
     private byte _sendIndex;
     private byte _sendPrevious;
@@ -35,6 +40,13 @@ public sealed class WorldHeaderCrypt
             throw new ArgumentException("session key must not be empty", nameof(sessionKey));
         }
 
+        // Keyed once per connection, right after CMSG_AUTH_SESSION is accepted (vmangos WorldSocket::HandleAuthSession
+        // calls m_Crypt.Init once); a second call resets both rolling states and desynchronises the peer. The key
+        // is the 40-byte K; another length means the caller took it from the wrong field (the cipher still runs:
+        // the algorithm is defined for any key length, as vmangos AuthCrypt::Init is).
+        Invariant.Check(!_initialized, "the world header cipher is initialised once per connection");
+        Invariant.Check(sessionKey.Length == SessionKeyLength, $"the world header cipher is keyed with the {SessionKeyLength}-byte session key, got {sessionKey.Length} bytes");
+
         _key = sessionKey;
         _sendIndex = _sendPrevious = _recvIndex = _recvPrevious = 0;
         _initialized = true;
@@ -52,6 +64,9 @@ public sealed class WorldHeaderCrypt
             return;
         }
 
+        // The rolling state advances one byte per header byte on both peers; a span that is not a
+        // whole 6-byte CMSG header (server) or 4-byte SMSG header (client) desynchronises every later header.
+        Invariant.Assert(header.Length is IncomingHeaderLength or OutgoingHeaderLength, $"a header is {IncomingHeaderLength} or {OutgoingHeaderLength} bytes, got {header.Length}");
         for (int t = 0; t < header.Length; t++)
         {
             _recvIndex = (byte)(_recvIndex % _key.Length);
@@ -74,6 +89,7 @@ public sealed class WorldHeaderCrypt
             return;
         }
 
+        Invariant.Assert(header.Length is IncomingHeaderLength or OutgoingHeaderLength, $"a header is {IncomingHeaderLength} or {OutgoingHeaderLength} bytes, got {header.Length}");
         for (int t = 0; t < header.Length; t++)
         {
             _sendIndex = (byte)(_sendIndex % _key.Length);

@@ -5,6 +5,7 @@ using ArcaneCore.Cryptography;
 using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Realm.Protocol;
@@ -126,6 +127,10 @@ public sealed class LogonSession(
 
         byte[] body = new byte[bodySize];
         await ReadPacketPartAsync(body, cancellationToken).ConfigureAwait(false);
+
+        // The size window above (31..47) is what makes the fixed offsets below (locale at 17..20,
+        // username length at 29) in range; keep the two in step.
+        Invariant.Assert(body.Length >= ChallengeMinBody && ChallengeMinBody > 29, $"challenge body of {body.Length} bytes is shorter than the fixed fields it is indexed by");
 
         if (body[29] > MaxUsernameLength || !AllowedLocales.Contains(ReadLocale(body)))
         {
@@ -249,6 +254,10 @@ public sealed class LogonSession(
         byte[]? autocreateVerifier = _autocreateVerifier;
         ResetChallengeState();
 
+        // The state machine: a proof consumes the challenge, so from here the session holds no SRP state
+        // and is not authenticated until this very proof says so (vmangos STATUS_INVALID on entry).
+        Invariant.Assert(_srp is null && !_authenticated && _username.Length == 0, "a logon proof consumes the challenge state before it is judged");
+
         if (srp is null
             || !LogonProofRequest.TryParse(body, out LogonProofRequest? request)
             || request is null)
@@ -272,6 +281,17 @@ public sealed class LogonSession(
         {
             logger.LogInformation("[{Endpoint}] invalid proof for '{Account}'", remoteEndpoint, LogSafe.Escape(username));
             await SendProofFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        // What is about to be persisted: K is the 40-byte key the world daemon keys its header cipher
+        // with (account.sessionkey), and an auto-create candidate carries the verifier its challenge was
+        // built from. Either missing means the challenge handler and this handler disagree; refuse rather
+        // than store a row the world cannot use or an account with no verifier.
+        if (!Invariant.Check(srp.SessionKey.Length == WowSrp6.SessionKeyLength, $"session key of {srp.SessionKey.Length} bytes about to be stored for an account")
+            || !Invariant.Check(!isAutocreate || autocreateVerifier is not null, "auto-create proof without the verifier its challenge was built from"))
+        {
+            await SendProofFailureAsync(AuthResult.FailNoAccess, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -359,6 +379,10 @@ public sealed class LogonSession(
             logger.LogWarning("[{Endpoint}] realm list requested before authentication", remoteEndpoint);
             return;
         }
+
+        // Authenticated means the proof consumed the SRP state; a session that is both authenticated and
+        // holding an Srp6Server could answer a second proof against a stale challenge.
+        Invariant.Assert(_srp is null, "an authenticated logon session holds no SRP state");
 
         IReadOnlyList<RealmEntry> realms = await realmStore.GetRealmsAsync(cancellationToken).ConfigureAwait(false);
         ReadOnlyMemory<byte> packet = RealmListWriter.Build(realms, charactersPerRealm: 0);

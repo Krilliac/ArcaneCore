@@ -1,4 +1,5 @@
 using System.Reflection;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -101,6 +102,11 @@ public static class DataModules
                 throw new InvalidOperationException($"{name} schema version {i + 2} is missing (next step is {steps[i].Version})");
             }
         }
+
+        // The loop above proved steps run 2, 3, ... without gaps, so the highest step is steps.Count + 1,
+        // which is the version the definition declares current; the bootstrapper's upgrade loop relies on
+        // every step being exactly one above its predecessor.
+        Invariant.Assert(steps.Count == 0 || steps[^1].Version == steps.Count + 1, $"{name} composed {steps.Count} steps but the last is version {steps[^1].Version}");
 
         return new SchemaDefinition
         {

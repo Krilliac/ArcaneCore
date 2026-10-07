@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
+using System.Numerics;
 using System.Text;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Protocol;
 
@@ -72,6 +74,10 @@ public sealed class PacketWriter
         }
 
         _buffer[maskPosition] = mask;
+
+        // The reader (PacketReader.ReadPackedGuid, vmangos readPackGUID) consumes one byte per set mask
+        // bit, so the bytes written after the mask must be exactly its population count.
+        Invariant.Assert(_length - maskPosition - 1 == BitOperations.PopCount(mask), $"packed GUID wrote {_length - maskPosition - 1} bytes for mask 0x{mask:X2}");
     }
 
     public void WriteBytes(ReadOnlySpan<byte> value)
@@ -86,7 +92,10 @@ public sealed class PacketWriter
     {
         int byteCount = Encoding.UTF8.GetByteCount(value);
         EnsureCapacity(byteCount + 1);
-        Encoding.UTF8.GetBytes(value, _buffer.AsSpan(_length));
+        int written = Encoding.UTF8.GetBytes(value, _buffer.AsSpan(_length));
+        // The terminator goes right after the encoded text; a count/encode disagreement would leave a
+        // gap of stale buffer bytes inside the string the client reads.
+        Invariant.Assert(written == byteCount, $"UTF-8 encoded {written} bytes but counted {byteCount}");
         _length += byteCount;
         _buffer[_length++] = 0;
     }
@@ -119,5 +128,6 @@ public sealed class PacketWriter
         }
 
         Array.Resize(ref _buffer, Math.Max(_buffer.Length * 2, _length + additional));
+        Invariant.Assert(_length + additional <= _buffer.Length, $"buffer of {_buffer.Length} bytes cannot take {additional} more at {_length}");
     }
 }

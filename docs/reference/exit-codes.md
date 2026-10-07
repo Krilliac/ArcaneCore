@@ -13,6 +13,7 @@
 | 1 | `Failure` | Runtime failure (vmangos ERROR_EXIT_CODE). |
 | 2 | `Restart` | Restart requested (vmangos RESTART_EXIT_CODE). Only a restart request may use 2. |
 | 64 | `Usage` | Unknown operations verb or bad verb arguments (sysexits EX_USAGE). Never 2: that means restart. |
+| 70 | `UnhandledException` | An exception escaped every handler and Diagnostics:OnUnhandled (or OnUnobservedTask) is Exit (sysexits EX_SOFTWARE, an ArcaneCore addition). The crash report precedes it on standard error and in the log. The default policy, FailFast, aborts instead (134 on Linux, 0x80131623 on Windows) and leaves a dump when DOTNET_DbgEnableMiniDump is set. Supervisors may restart on either. |
 | 78 | `InvalidConfiguration` | The configuration is invalid (sysexits EX_CONFIG, an ArcaneCore addition: vmangos has only 0/1/2). Supervisors must not restart on it; systemd: RestartPreventExitStatus=78. |
 
 The largest code a shutdown command may ask for is 125 (126-255 belong to shells).
