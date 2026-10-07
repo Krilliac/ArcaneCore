@@ -51,8 +51,15 @@ internal sealed class InMemoryBanStore(TimeProvider? clock = null) : IBanStore
         }
     }
 
+    /// <summary>How many single-address IP-ban reads ran.</summary>
+    public int GetActiveIpBanCalls { get; private set; }
+
+    /// <summary>How many IP-ban listings ran.</summary>
+    public int ListIpBansCalls { get; private set; }
+
     public Task<IpBanRecord?> GetActiveIpBanAsync(string ip, CancellationToken cancellationToken = default)
     {
+        GetActiveIpBanCalls++;
         MaybeFail();
         lock (_gate)
         {
@@ -144,6 +151,8 @@ internal sealed class InMemoryBanStore(TimeProvider? clock = null) : IBanStore
 
     public Task<IReadOnlyList<IpBanRecord>> ListIpBansAsync(string prefix, CancellationToken cancellationToken = default)
     {
+        ListIpBansCalls++;
+        MaybeFail();
         lock (_gate)
         {
             return Task.FromResult<IReadOnlyList<IpBanRecord>>([.. _ipRows.Where(r => r.Ip.StartsWith(prefix, StringComparison.Ordinal))]);

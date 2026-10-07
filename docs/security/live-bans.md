@@ -43,6 +43,7 @@ Administrator for `ban ip` and every `unban`.
 | `Bans:RevokeSessionKeyOnBan` | `false` (retail keeps the key) | Null the stored session key after a live ban; the next world reconnect then answers `UnknownAccount` instead of `AUTH_BANNED` |
 | `Bans:RejectUnparseableDuration` | `false` (retail) | Make a malformed `.ban` duration a syntax error instead of a permanent ban. A duration that overflows 32 bits of seconds (about 136 years) is always refused, by `.ban` and `arcane-account ban`, whatever this is set to: it never wraps into a short or permanent ban |
 | `Bans:ProtectHigherSecurity` | `true` (stricter than retail) | Refuse `.ban account` / `.ban character` against an account whose security is equal to or higher than the invoker's (banning your own account still works). vmangos has no such guard; set `false` for exact parity. Not applied to `.ban ip` or to unbans |
+| `Auth:IpBanCacheSeconds` (realm daemon) | `60` (not retail) | How long the logon daemon uses its in-memory copy of `ip_banned` before reloading it; `0` reads the row on every challenge, as vmangos realmd |
 | `Bans:RealmId` | `1` | Written to `account_banned.realm` (vmangos `realmID`); never filtered on, as retail |
 | `Bans:MaxListedEntries` | `200` (stricter than retail) | The most entries one `.baninfo` history or `.banlist` reply prints before a "more entries exist" line; `.banlist character` also stops its per-account history queries there. Retail prints everything; `0` restores that |
 
@@ -64,6 +65,14 @@ author is not kicked by their own ban) has no switch.
 * **Fail open for live sessions, fail closed at authentication.** A store error during a re-check pass is logged,
   kicks nobody and the timer keeps running; a store error at logon or world auth closes the connection.
 * World IP check reads the rows at authentication; retail checks a cached list refreshed on a timer (stricter, not looser).
+* **Realm IP check reads a cached list** (`Auth:IpBanCacheSeconds`, default 60): the logon daemon loads every active
+  `ip_banned` row once per period and checks each challenge in memory (`src/ArcaneCore.Realm/Net/RealmIpBanCache.cs`),
+  as mangosd keeps its IP list (`AccountMgr.cpp:340-367, 412-417`, reloaded every `BanListReloadTimer`, `World.cpp:697`).
+  vmangos realmd instead queries the table on every challenge (`AuthSocket.cpp:338-352`), so a reconnect flood costs one
+  query per connection; `0` restores that. Each entry keeps its unban date, so a temporary ban ends on time between
+  reloads; a ban written after the last reload reaches the logon screen within one period, and world authentication
+  (which reads the rows directly) refuses the address at once. A failed reload fails closed (the connection is closed)
+  and the next challenge retries.
 * Realm check order: ArcaneCore validates the build and the username before the IP check, so an IP-banned client
   with a wrong build sees `VersionInvalid` (retail order for that pair was not verified).
 * Ban times come from the application clock (`TimeProvider`), not the database's `UNIX_TIMESTAMP()`; hosts with

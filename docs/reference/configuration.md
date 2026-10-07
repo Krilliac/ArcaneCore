@@ -93,6 +93,7 @@ How to read the tables:
 |---|---|---|---|---|
 | `Auth:AutocreateAccounts` | `bool` | `false` | - | WCell-style auto-create-on-login. When enabled, an unknown account whose login proof validates with password == username is created on the spot (see WCell Services/WCell.AuthServer/Authentication.cs). |
 | `Auth:BindAddress` | `string` | `"0.0.0.0"` | - | Interface to bind the logon listener to. |
+| `Auth:IpBanCacheSeconds` | `int` | `60` | - | How long the logon daemon keeps its in-memory copy of `ip_banned` before the next logon challenge reloads it, in seconds (realm `RealmIpBanCache`). Default 60, mangosd's BanListReloadTimer (World.cpp:697), whose in-memory IP list this mirrors (AccountMgr.cpp:340-367, 412-417). vmangos realmd reads the table on every challenge (AuthSocket.cpp:338-352); 0 restores that. An IP ban written elsewhere reaches the logon screen within this period; world authentication reads the rows directly and refuses the address at once. |
 | `Auth:MaxConnections` | `int` | `0` | - | Global cap on simultaneous logon connections; 0 = unlimited (retail, the default). Hardening (no vmangos equivalent). |
 | `Auth:MaxConnectionsPerIp` | `int` | `0` | - | Cap per client IP address; 0 = unlimited (retail, the default). Hardening: a retail client holds one connection. |
 | `Auth:MaxSessionDurationSeconds` | `int` | `300` | - | Hard cap on one logon connection's lifetime in seconds; 0 disables. vmangos MaxSessionDuration defaults to 300 (realmd.conf.dist.in, AuthSocket.cpp:76-82). |

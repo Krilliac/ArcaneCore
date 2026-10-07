@@ -28,6 +28,9 @@ public sealed class LogonServer(
     /// <summary>The guard of the running listener (null before it starts); exposed for diagnostics and tests.</summary>
     public NetGuard? Guard { get; private set; }
 
+    /// <summary>The listener's IP-ban list (<see cref="AuthOptions.IpBanCacheSeconds"/>); null before it starts.</summary>
+    public RealmIpBanCache? IpBans { get; private set; }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         AuthOptions config = options.Value;
@@ -40,6 +43,7 @@ public sealed class LogonServer(
         {
             var guard = new NetGuard(protection?.Value ?? new NetProtectionOptions(), () => config.MaxConnections, () => config.MaxConnectionsPerIp, logger);
             Guard = guard;
+            IpBans = new RealmIpBanCache(TimeSpan.FromSeconds(Math.Max(0, config.IpBanCacheSeconds)));
             await AcceptLoop.RunAsync(
                 ct => listener.AcceptTcpClientAsync(ct),
                 client => Admit(client, guard, config, stoppingToken),
@@ -99,7 +103,7 @@ public sealed class LogonServer(
 
                 var session = new LogonSession(
                     stream, accountStore, realmStore, config,
-                    loggerFactory.CreateLogger<LogonSession>(), endpoint, banStore, guard);
+                    loggerFactory.CreateLogger<LogonSession>(), endpoint, banStore, guard, IpBans);
 
                 await session.RunAsync(stoppingToken).ConfigureAwait(false);
             }
