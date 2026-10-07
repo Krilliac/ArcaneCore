@@ -258,6 +258,13 @@ public sealed partial class PlayerInventory
             return;
         }
 
+        // vmangos Player::SplitItem (Player.cpp:10976-10981): "prevent split looting item"; the new stack would roll its own loot.
+        if (src.HasGeneratedLoot)
+        {
+            SendEquipError(InventoryResult.CouldntSplitItems, src, null);
+            return;
+        }
+
         // vmangos: "not let split all items (can be only at cheating)" / "not let split more existing items".
         if (src.Count == count)
         {
