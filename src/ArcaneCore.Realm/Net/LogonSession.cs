@@ -8,6 +8,7 @@ using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Kernel.Realms;
+using ArcaneCore.Kernel.Resilience;
 using ArcaneCore.Realm.Protocol;
 using Microsoft.Extensions.Logging;
 
@@ -82,25 +83,55 @@ public sealed class LogonSession(
             }
 
             var command = (AuthCommand)commandBuffer[0];
-            switch (command)
+            try
             {
-                case AuthCommand.LogonChallenge:
-                    await HandleChallengeAsync(cancellationToken).ConfigureAwait(false);
-                    break;
+                switch (command)
+                {
+                    case AuthCommand.LogonChallenge:
+                        await HandleChallengeAsync(cancellationToken).ConfigureAwait(false);
+                        break;
 
-                case AuthCommand.LogonProof:
-                    await HandleProofAsync(cancellationToken).ConfigureAwait(false);
-                    break;
+                    case AuthCommand.LogonProof:
+                        await HandleProofAsync(cancellationToken).ConfigureAwait(false);
+                        break;
 
-                case AuthCommand.RealmList:
-                    await HandleRealmListAsync(cancellationToken).ConfigureAwait(false);
-                    break;
+                    case AuthCommand.RealmList:
+                        await HandleRealmListAsync(cancellationToken).ConfigureAwait(false);
+                        break;
 
-                default:
-                    logger.LogWarning("[{Endpoint}] unsupported logon command 0x{Command:X2}; closing",
-                        remoteEndpoint, commandBuffer[0]);
-                    return;
+                    default:
+                        logger.LogWarning("[{Endpoint}] unsupported logon command 0x{Command:X2}; closing",
+                            remoteEndpoint, commandBuffer[0]);
+                        return;
+                }
             }
+            catch (ResilienceException ex)
+            {
+                await RefuseDatabaseUnavailableAsync(command, ex, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The auth database is down, too slow, or its circuit is open (docs/ops/resilience.md): fail closed. Nothing was
+    /// authenticated, the SRP state is dropped, the client gets WOW_FAIL_DB_BUSY so it shows a message instead of a
+    /// silent disconnect, and the connection closes. One line per refused connection without a stack; the breaker
+    /// logged the cause once when it opened. vmangos realmd has no equivalent: a dead database there fails every query.
+    /// </summary>
+    private async Task RefuseDatabaseUnavailableAsync(AuthCommand command, ResilienceException reason, CancellationToken cancellationToken)
+    {
+        ResetChallengeState();
+        _closeRequested = true;
+        logger.LogWarning("[{Endpoint}] auth database unavailable ({Reason}); refusing logon (fail closed)", remoteEndpoint, reason.Message);
+        switch (command)
+        {
+            case AuthCommand.LogonChallenge:
+                await SendChallengeFailureAsync(AuthResult.FailDbBusy, cancellationToken).ConfigureAwait(false);
+                break;
+            case AuthCommand.LogonProof:
+                await SendProofFailureAsync(AuthResult.FailDbBusy, cancellationToken).ConfigureAwait(false);
+                break;
         }
     }
 

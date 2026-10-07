@@ -59,6 +59,7 @@ builder.Services.AddArcaneCoreLogging(builder.Configuration);
 builder.Services.AddAuthDatabase(builder.Configuration);
 builder.Services.AddCharacterDatabase(builder.Configuration);
 builder.Services.AddWorldDatabase(builder.Configuration);
+builder.Services.AddDatabaseResilience(builder.Configuration); // breakers + bootstrap retry for the three databases (docs/ops/resilience.md)
 builder.Services.AddWorldDaemon(builder.Configuration);
 
 IHost host = builder.Build();

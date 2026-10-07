@@ -41,6 +41,7 @@ How to read the tables:
 - [`Ranged`](#ranged)
 - [`Realms`](#realms)
 - [`Reputation`](#reputation)
+- [`Resilience`](#resilience)
 - [`Rest`](#rest)
 - [`Skills`](#skills)
 - [`SpecialLoot`](#specialloot)
@@ -427,6 +428,24 @@ How to read the tables:
 | `Reputation:SendForcedReactions` | `bool` | `false` | - | Send SMSG_SET_FORCED_REACTIONS when a forced-reaction aura applies or fades (default false). The layout is vmangos (u32 faction, u32 rank); gtker/wow_messages types the faction as a u16, so the width is unconfirmed by a real client. The forced reaction itself works on the server either way; only the client display of it needs the packet. |
 | `Reputation:SpilloverEnabled` | `bool` | `true` | - | Retail (true): reputation_spillover_template applies (ReputationMgr.cpp:211-243). False switches every spillover off. |
 
+## `Resilience`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Resilience:Database:Bootstrap:BaseDelayMs` | `int` | `500` | - | Wait after the first failed attempt, in milliseconds; it doubles after each further failure (with full jitter). |
+| `Resilience:Database:Bootstrap:MaxAttempts` | `int` | `5` | - | Attempts to reach the database at start, including the first; 1 means no retry. The last failure exits the process with code 6. |
+| `Resilience:Database:Bootstrap:MaxDelayMs` | `int` | `5000` | - | Cap on the wait between attempts, in milliseconds. |
+| `Resilience:Database:Bootstrap:MaxTotalDurationMs` | `int` | `0` | - | Total time budget for all attempts, in milliseconds; 0 lets the attempts alone bound it. |
+| `Resilience:Database:Breaker:FailureRateThreshold` | `double` | `0.5` | - | Share of failed calls (0..1) in the sampling window that opens the circuit once MinimumThroughput calls are in it; 0 disables this trip. |
+| `Resilience:Database:Breaker:FailureThreshold` | `int` | `5` | - | Consecutive failed calls that open the circuit; 0 disables this trip (the rate trip must then be on). |
+| `Resilience:Database:Breaker:HalfOpenMaxProbes` | `int` | `1` | - | Probe calls let through at once while half-open; one success closes the circuit, one failure re-opens it. |
+| `Resilience:Database:Breaker:MinimumThroughput` | `int` | `10` | - | Calls that must fall in the sampling window before the failure rate is judged. |
+| `Resilience:Database:Breaker:OpenDurationMs` | `int` | `10000` | - | How long an open circuit refuses every call before it lets one probe through, in milliseconds. |
+| `Resilience:Database:Breaker:SamplingWindowMs` | `int` | `10000` | - | Length of the sliding window the failure rate is measured over, in milliseconds. |
+| `Resilience:Database:Bulkhead:MaxConcurrency` | `int` | `0` | - | Guarded calls allowed to run at once per logical database; 0 disables the bulkhead (no cap). |
+| `Resilience:Database:Bulkhead:MaxQueue` | `int` | `64` | - | Calls allowed to wait for a slot when every slot is busy; more are refused at once. |
+| `Resilience:Database:Enabled` | `bool` | `true` | - | `false` turns the whole database guard off: calls go straight to the store and a start-up failure is not retried (the pre-resilience behaviour). |
+| `Resilience:Database:QueryTimeoutMs` | `int` | `5000` | - | Longest one guarded database call may take before it is cancelled and counted as a failure, in milliseconds; 0 disables the timeout. |
 ## `Rest`
 
 | Key | Type | Default | Reload | Meaning |
