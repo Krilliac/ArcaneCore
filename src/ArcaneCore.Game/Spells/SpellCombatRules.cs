@@ -210,7 +210,8 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
         if (combat is not null)
         {
             MeleeRollInput input = combat.BuildRollInput(caster, target, attack) with { DualWield = false };
-            miss = MeleeHitTable.MissChance(input, input.VictimDefenseSkill - input.AttackerWeaponSkill);
+            // fullSkillDiff = attacker weapon skill - victim defense (vmangos SpellCaster.cpp:457-465), the same sign as the white swing.
+            miss = MeleeHitTable.MissChance(input, input.AttackerWeaponSkill - input.VictimDefenseSkill);
             if (attack != WeaponAttackType.RangedAttack)
             {
                 dodge = input.DodgeChance;
