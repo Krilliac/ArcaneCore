@@ -136,6 +136,11 @@ The tests run the built-ins plus `group-loot` (group, free-for-all loot, kill, m
 item), `mail-item` (persisted letter with item, delivery delay, take), `melee-kill` (swing,
 kill, XP credit) and `kill-quest` (accept, kill credit, turn in, settled reward row), and
 check database rows after the run. Setting `ARCANE_SCENARIO_REPORT_DIR` collects every report.
+`ScenarioTestWorld.StartAsync(configureServices)` lets a test register its own content and seams after
+`ScenarioTestContent` (a later registration wins). `CreatureAiScenarioTests` uses it for creature AI across sessions: an
+orc bot walks up to a CALLS_GUARDS townsman, a human bot hears the shout and the guard post's guard runs to the orc and
+swings (`SMSG_ATTACKERSTATEUPDATE`); the human waves (`ScenarioCreatureActions.TextEmoteAsync`, CMSG_TEXT_EMOTE) at a herald
+whose EventAI RECEIVE_EMOTE row greets it by name (`ScenarioCreatureDecoders.MonsterChat`).
 
 ## MockClient playbot (external protocol client)
 
