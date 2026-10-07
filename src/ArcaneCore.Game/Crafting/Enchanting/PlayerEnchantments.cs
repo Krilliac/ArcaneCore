@@ -378,8 +378,9 @@ public sealed class PlayerEnchantments
             {
                 _durations.RemoveAt(i);
                 Apply(tracked.Item, tracked.Slot, apply: false, applyDuration: false);
+                // ClearEnchantment zeroes id, duration and charges and the live mirror; the expired timer is not written back (a write-back
+                // after the clear left the old duration in the emptied slot).
                 ItemEnchantments.Clear(tracked.Item, tracked.Slot, sendToClient: true);
-                Stop(tracked);
             }
             else
             {
