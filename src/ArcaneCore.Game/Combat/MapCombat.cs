@@ -24,6 +24,7 @@ public sealed partial class MapCombat : IMapUpdater
     private readonly Map _map;
     private readonly WorldRuntime _world;
     private readonly Action<Player> _onPlayerLoggingOut;
+    private readonly Action<Map> _onMapCreated;
     private readonly HashSet<Unit> _units = [];
     private readonly List<Corpse> _corpses = [];
     private readonly Dictionary<Corpse, MapGrid> _corpseGrids = [];
@@ -35,19 +36,47 @@ public sealed partial class MapCombat : IMapUpdater
         _world = world;
         map.Grids.GridUnloading += grid =>
         {
+            // vmangos keeps every corpse in ObjectAccessor, outside the grids: an unloading grid (an instance map that unloads)
+            // takes the body out of the map, and its online owner keeps it with its map and instance id. The next map of that
+            // instance puts it back (AdoptBodiesLeftOutside).
             foreach (Corpse corpse in _corpses.Where(c => ReferenceEquals(_corpseGrids.GetValueOrDefault(c), grid)).ToArray())
             {
-                if (world.FindOnlinePlayer(corpse.Owner) is { } owner && ReferenceEquals(owner.Combat.Corpse, corpse))
-                {
-                    owner.Combat.Corpse = null;
-                }
-
                 RemoveCorpse(corpse);
             }
         };
         _onPlayerLoggingOut = OnPlayerLoggingOut;
         world.PlayerLoggingOut += _onPlayerLoggingOut;
         world.MapUnloading += OnMapUnloading;
+        _onMapCreated = OnMapCreated;
+        world.MapCreated += _onMapCreated;
+    }
+
+    private void OnMapCreated(Map map)
+    {
+        if (!ReferenceEquals(map, _map))
+        {
+            return;
+        }
+
+        _world.MapCreated -= _onMapCreated;
+        AdoptBodiesLeftOutside();
+    }
+
+    /// <summary>
+    /// vmangos ObjectAccessor::AddCorpsesToGrid (ObjectAccessor.cpp:225-245, run when a grid of the map loads): the bodies of online
+    /// ghosts that lie on this map and, for an instanceable map, in this instance, and that are in no map now (their map unloaded), go
+    /// into this new map. A body whose instance was deleted points at instance 0 and never matches a dungeon map again.
+    /// </summary>
+    private void AdoptBodiesLeftOutside()
+    {
+        foreach (Player owner in _world.OnlinePlayers.ToArray())
+        {
+            if (owner.Combat.Corpse is { Map: null } body && body.MapId == _map.MapId && body.InstanceId == _map.InstanceId
+                && !_corpses.Contains(body))
+            {
+                AddCorpse(body);
+            }
+        }
     }
 
     private void OnPlayerLoggingOut(Player player)
@@ -64,6 +93,7 @@ public sealed partial class MapCombat : IMapUpdater
         {
             _world.PlayerLoggingOut -= _onPlayerLoggingOut;
             _world.MapUnloading -= OnMapUnloading;
+            _world.MapCreated -= _onMapCreated;
         }
     }
 

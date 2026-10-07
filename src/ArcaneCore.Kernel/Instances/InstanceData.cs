@@ -46,7 +46,7 @@ public interface IInstanceStore
     /// <summary>Insert or update an instance row.</summary>
     Task SaveInstanceAsync(InstanceRecord instance, CancellationToken cancellationToken = default);
 
-    /// <summary>Delete an instance with all its character binds and last-instance references.</summary>
+    /// <summary>Delete an instance with all its character binds and last-instance references; a stored body in it keeps its place but its instance becomes 0.</summary>
     Task DeleteInstanceAsync(uint instanceId, CancellationToken cancellationToken = default);
 
     /// <summary>Insert or update a character bind (one bind per character and instance).</summary>

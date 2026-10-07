@@ -936,22 +936,24 @@ public sealed partial class InstanceManager : IMapResolver
             }
 
             Map? map = _world.FindMap(save.MapId, save.InstanceId);
-            if (map is { PlayerCount: > 0 })
+            if (map is { PlayerCount: > 0 } || map is { TransitCount: > 0 })
             {
-                // Someone else is inside (the player itself was skipped above). The save is theirs too:
-                // do not delete it under them. A group join drops just the joiner's own bind, as vmangos
-                // does. A reset request is an ArcaneCore choice: it is refused the way the group reset
-                // refuses an occupied instance (SMSG_INSTANCE_RESET_FAILED, the players inside are asked
-                // to leave) and the requester stays bound. vmangos Player::ResetInstances instead sends
-                // SMSG_INSTANCE_RESET and drops only the requester's bind, which reports a reset that did
-                // not happen and leaves the requester free to make a new instance beside the occupied one.
+                // Someone else is inside (the player itself was skipped above), or is still on its way out: a far
+                // teleport that is not acknowledged yet can fail and send that player back in (vmangos
+                // HandleReturnOnTeleportFail), which is why the timed reset waits for TransitCount too (UpdateSchedule).
+                // The save is theirs too: do not delete it under them. A group join drops just the joiner's own bind, as
+                // vmangos does. A reset request is an ArcaneCore choice: it is refused the way the group reset refuses an
+                // occupied instance (SMSG_INSTANCE_RESET_FAILED, the players inside are asked to leave, at most once per
+                // InstanceOptions.ResetRefusedNoticeSeconds) and the requester stays bound. vmangos Player::ResetInstances
+                // instead sends SMSG_INSTANCE_RESET and drops only the requester's bind, which reports a reset that did not
+                // happen and leaves the requester free to make a new instance beside the occupied one.
                 if (groupJoin)
                 {
                     RemovePlayerBind(player.Guid, save);
                 }
                 else
                 {
-                    ResetLoadedMap(map, global: false, notifyInside: true);
+                    AskToLeaveForReset(map, rateLimited: true);
                     player.Session.Send(WorldOpcode.SmsgInstanceResetFailed, InstancePackets.BuildInstanceResetFailed(InstanceResetFailedReason.General, save.MapId));
                 }
 
@@ -1038,10 +1040,7 @@ public sealed partial class InstanceManager : IMapResolver
         {
             if (notifyInside)
             {
-                foreach (Player player in map.Players)
-                {
-                    SystemMessage(player, "Please leave the instance so it can be reset.");
-                }
+                AskToLeaveForReset(map, rateLimited: false);
             }
             else
             {
@@ -1064,6 +1063,29 @@ public sealed partial class InstanceManager : IMapResolver
         }
 
         return map.PlayerCount == 0;
+    }
+
+    /// <summary>
+    /// vmangos Player::SendResetFailedNotify (LANG_LEAVE_TO_RESET_INSTANCE, Player.cpp:17077-17080) to everyone inside. The refused
+    /// personal reset sends it at most once per <see cref="InstanceOptions.ResetRefusedNoticeSeconds"/> per instance map.
+    /// </summary>
+    private void AskToLeaveForReset(Map map, bool rateLimited)
+    {
+        if (rateLimited && _options.ResetRefusedNoticeSeconds > 0 && _mapStates.TryGetValue(map, out InstanceMapState? state))
+        {
+            long now = Now;
+            if (state.LastRefusedResetNotice is long last && now - last < _options.ResetRefusedNoticeSeconds)
+            {
+                return;
+            }
+
+            state.LastRefusedResetNotice = now;
+        }
+
+        foreach (Player player in map.Players)
+        {
+            SystemMessage(player, "Please leave the instance so it can be reset.");
+        }
     }
 
     // Unbind everyone and delete the save (vmangos DungeonPersistentState::DeleteFromDB + UnbindThisState).
@@ -1142,9 +1164,28 @@ public sealed partial class InstanceManager : IMapResolver
 
         save.IsDeleted = true;
         _saves.Remove(save.InstanceId);
+        ForgetDeletedInstanceOfBodies(save);
         _persistence.InstanceDeleted(save.InstanceId);
         _logger.LogDebug("deleted {Save}", save);
         InstanceDeleted?.Invoke(save.InstanceId);
+    }
+
+    /// <summary>
+    /// The bodies of online ghosts in the deleted instance stay where they are (vmangos keeps a corpse whatever happens to its
+    /// instance), but they no longer name it: instance ids are handed out again after a restart, and a stale id would put the body
+    /// into somebody else's new instance. Instance 0 never matches a dungeon map again (MapCombat.AdoptBodiesLeftOutside,
+    /// MapCombat.RestoreGhost); entering the dungeon still revives the ghost (ReviveForDungeonEntry compares the map only). The
+    /// stored corpse rows get the same change with the instance's delete (IInstanceStore.DeleteInstanceAsync).
+    /// </summary>
+    private void ForgetDeletedInstanceOfBodies(InstanceSave save)
+    {
+        foreach (Player player in _world.OnlinePlayers)
+        {
+            if (player.Combat.Corpse is { } body && body.MapId == save.MapId && body.InstanceId == save.InstanceId)
+            {
+                body.InstanceId = 0;
+            }
+        }
     }
 
     private void OnMapUnloading(Map map)
@@ -1425,6 +1466,9 @@ public sealed class InstanceMapState
 
     /// <summary>Reset (delete) the save when the map unloads; nobody may enter meanwhile (vmangos <c>m_resetAfterUnload</c>).</summary>
     public bool ResetAfterUnload { get; internal set; }
+
+    /// <summary>Unix seconds of the last "please leave" notice of a refused personal reset (<see cref="InstanceOptions.ResetRefusedNoticeSeconds"/>).</summary>
+    internal long? LastRefusedResetNotice { get; set; }
 
     internal Action<Unit?, Unit>? KillHandler { get; set; }
 }

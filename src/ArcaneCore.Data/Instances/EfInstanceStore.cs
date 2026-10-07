@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Data.Creatures;
 using ArcaneCore.Data.Loot;
 using ArcaneCore.Kernel.Instances;
@@ -65,6 +66,12 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
 
         // The dead creatures of a reset instance come back with it (vmangos MapPersistentState deletes its creature_respawn rows).
         await db.Set<CreatureRespawnRow>().Where(r => r.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+
+        // A body in the instance stays (vmangos DeleteInstanceFromDB leaves the corpse table alone) but stops naming it: the id
+        // can be handed out again after a restart. Instance 0 keeps the body out of every instance of the map
+        // (InstanceManager.ForgetDeletedInstanceOfBodies does the same to the bodies of online ghosts).
+        await db.Set<CharacterCorpseRow>().Where(r => r.InstanceId == instanceId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.InstanceId, 0u), cancellationToken).ConfigureAwait(false);
         await db.Set<InstanceRow>().Where(i => i.Id == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }

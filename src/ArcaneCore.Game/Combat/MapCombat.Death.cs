@@ -318,6 +318,7 @@ public sealed partial class MapCombat
         if (c.Corpse is { } old)
         {
             RemoveCorpse(old);
+            c.Corpse = null; // a map that the new body creates must not adopt the old one (AdoptBodiesLeftOutside)
         }
 
         var type = (CorpseType)snapshot.Type;
