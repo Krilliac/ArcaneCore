@@ -35,7 +35,8 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
     {
         foreach (object[] provider in TestDatabases.AvailableProviders())
         {
-            foreach (SchemaStep step in CharacterDbContext.Schema.Steps)
+            // A reserved-gap placeholder (Schema/ReservedSchemaGaps.cs) is an empty step: there is no DDL to interrupt.
+            foreach (SchemaStep step in CharacterDbContext.Schema.Steps.Where(s => s.Changes.Count > 0))
             {
                 yield return [provider[0], "characters", step.Version];
             }

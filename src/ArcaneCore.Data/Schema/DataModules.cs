@@ -74,7 +74,12 @@ public static class DataModules
         IEnumerable<IDataModule>? modules = null)
     {
         var steps = new List<SchemaStep>(inlineSteps);
-        foreach (IDataModule module in modules ?? For(component))
+        IDataModule[] candidates = [.. modules ?? For(component)];
+
+        // A reserved-gap placeholder yields to a real module or inline step that claims its version (IReservedSchemaGap).
+        var claimed = new HashSet<int>(inlineSteps.Select(s => s.Version)
+            .Concat(candidates.Where(m => m is not IReservedSchemaGap).Select(m => m.SchemaVersion)));
+        foreach (IDataModule module in candidates.Where(m => m is not IReservedSchemaGap || !claimed.Contains(m.SchemaVersion)))
         {
             if (module.Component != component)
             {

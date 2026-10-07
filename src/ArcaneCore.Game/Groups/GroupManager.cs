@@ -3,6 +3,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Social;
+using ArcaneCore.Kernel.Social;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Groups;
@@ -41,6 +42,90 @@ public sealed class GroupManager(SocialContext context)
 
     /// <summary>The group <paramref name="guid"/> is a member of (online or not).</summary>
     public Group? GetGroup(ObjectGuid guid) => _memberOf.GetValueOrDefault(guid);
+
+    /// <summary>Every created group (members online or not), lowest id first.</summary>
+    public IReadOnlyList<Group> Groups => [.. _memberOf.Values.Distinct().OrderBy(g => g.Id)];
+
+    /// <summary>The stored form of a created group (vmangos Group::SaveToDB plus its group_member rows), members in slot order.</summary>
+    public static GroupRecord Snapshot(Group group)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        return new GroupRecord(
+            group.Id, (int)group.LeaderGuid.Low, (byte)group.LootMethod, (int)group.LooterGuid.Low, group.LootThreshold, group.IsRaid,
+            [.. group.TargetIcons.Select(i => i.Value)],
+            [.. group.Members.Select(m => new GroupMemberRecord((int)m.Guid.Low, m.SubGroup, m.Assistant))]);
+    }
+
+    /// <summary>
+    /// Bring stored groups back at start (vmangos ObjectMgr::LoadGroups, Group::LoadGroupFromDB / LoadMemberFromDB,
+    /// ObjectMgr.cpp:5360-5460): a member whose character no longer exists, a duplicate, or one in a missing or full subgroup
+    /// is skipped; a group whose leader no longer exists, or with fewer than two members left, is not restored and is
+    /// returned in <see cref="GroupRestoreResult.Dropped"/> for its rows to be deleted (vmangos Disband). Every member starts
+    /// offline; the leader's last-online time is now (vmangos m_leaderLastOnline = time(nullptr)), so the offline-leader
+    /// delay starts at the restart. Two ArcaneCore guards where vmangos trusts the rows: a leader who is not among the
+    /// members, or a master looter who is not, falls back to the first member, and a loot method or threshold out of range
+    /// takes the group default. New group ids continue above the highest stored one. No member events are raised.
+    /// Call before the world thread starts.
+    /// </summary>
+    public GroupRestoreResult Restore(IEnumerable<GroupRecord> records)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+        var restored = new List<uint>();
+        var dropped = new List<uint>();
+        long now = UnixSecondsClock();
+        foreach (GroupRecord record in records.OrderBy(r => r.Id))
+        {
+            _nextId = Math.Max(_nextId, record.Id + 1);
+            CharacterInfo? leaderInfo = record.LeaderId > 0 ? context.Characters.Find((uint)record.LeaderId) : null;
+            if (leaderInfo is null || _memberOf.Values.Any(g => g.Id == record.Id))
+            {
+                dropped.Add(record.Id); // vmangos: "group leader not exist" disbands the group
+                continue;
+            }
+
+            var group = new Group(record.Id)
+            {
+                IsCreated = true,
+                Type = record.IsRaid ? GroupType.Raid : GroupType.Normal,
+                LootMethod = record.LootMethod <= (byte)LootMethod.NeedBeforeGreed ? (LootMethod)record.LootMethod : LootMethod.GroupLoot,
+                LootThreshold = record.LootThreshold is >= Group.MinLootThreshold and <= Group.MaxLootThreshold ? record.LootThreshold : Group.DefaultLootThreshold,
+            };
+            foreach (GroupMemberRecord member in record.Members)
+            {
+                if (member.CharacterId > 0 && !_memberOf.ContainsKey(ObjectGuid.Player((uint)member.CharacterId))
+                    && context.Characters.Find((uint)member.CharacterId) is { } info)
+                {
+                    group.RestoreMemberSlot(ObjectGuid.Player(info.Id), info.Name, member.SubGroup, member.Assistant);
+                }
+            }
+
+            if (group.MemberCount < Group.MinMemberCount)
+            {
+                dropped.Add(record.Id); // vmangos LoadGroups: fewer than two members disbands
+                continue;
+            }
+
+            GroupMemberSlot leader = group.Find(ObjectGuid.Player(leaderInfo.Id)) ?? group.Members[0];
+            group.LeaderGuid = leader.Guid;
+            group.LeaderName = leader.Name;
+            group.LeaderLastOnlineUnixSeconds = now;
+            ObjectGuid looter = record.LooterId > 0 ? ObjectGuid.Player((uint)record.LooterId) : ObjectGuid.Empty;
+            group.LooterGuid = group.IsMember(looter) ? looter : group.LeaderGuid;
+            for (int i = 0; i < Group.TargetIconCount && i < record.TargetIcons.Count; i++)
+            {
+                group.TargetIcons[i] = new ObjectGuid(record.TargetIcons[i]);
+            }
+
+            foreach (GroupMemberSlot slot in group.Members)
+            {
+                _memberOf[slot.Guid] = group;
+            }
+
+            restored.Add(record.Id);
+        }
+
+        return new GroupRestoreResult(restored, dropped);
+    }
 
     /// <summary>The group <paramref name="guid"/> has a pending invite from (or leads before creation).</summary>
     public Group? GetInvite(ObjectGuid guid) => _invitedTo.GetValueOrDefault(guid);
@@ -967,3 +1052,6 @@ public sealed class GroupManager(SocialContext context)
         => player.Session.Send(WorldOpcode.SmsgPartyCommandResult, GroupPackets.BuildPartyCommandResult(operation, name, result));
 
 }
+
+/// <summary>What <see cref="GroupManager.Restore"/> did: the ids brought back and the ids whose rows should be deleted.</summary>
+public sealed record GroupRestoreResult(IReadOnlyList<uint> Restored, IReadOnlyList<uint> Dropped);

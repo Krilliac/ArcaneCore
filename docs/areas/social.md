@@ -61,8 +61,17 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
 - **ChatChannels.dbc rows are not verified.** The built-in channel ids, flags and name patterns
   in `ChannelTypes.cs` are transcribed from the vmangos ChatChannelsEntry handling; no DBC file
   was read.
-- **Groups are in memory only.** They are not persisted and do not survive a restart
-  (vmangos stores groups in `groups`/`group_member`).
+- **Groups survive a restart** (wave 2). `SocialGroupPersistenceFeature` restores the stored groups into the
+  `GroupManager` at start (vmangos `ObjectMgr::LoadGroups`, `ObjectMgr.cpp:5360-5460`: a member whose character is gone is
+  skipped, a group whose leader is gone or with fewer than two members left is dropped and its rows deleted) and, once per
+  clock second, writes every group that changed as one whole-group snapshot (characters schema 37, `character_group` and
+  `character_group_member`; `groups` is a reserved word in MySQL 8). vmangos writes at each mutation; here a change reaches
+  storage within a second, and the stop writes the final state. The member order is stored too (`Slot`, it decides the next
+  leader); vmangos' main tank / main assistant columns have no counterpart. Two guards where vmangos trusts its rows: a stored
+  leader or master looter who is not a member falls back to the first member, and an out-of-range loot method or threshold
+  takes the default. Group instance binds are not stored yet (review finding 89, the instances lane). Tests: Data
+  `GroupStoreTests`, Game `GroupRestoreTests`, World `GroupPersistenceWorldTests` (two hosts in turn) and the playerbot
+  scenario `GroupPersistenceScenarioTests` (bots form the group, a second world over the same SQLite database restores it).
 - **Lists after login.** `LoginSequence` (seam) sends empty friend/ignore lists; the stored
   lists are resent after `PlayerLoggedIn`, and only when non-empty.
 - **Guild MOTD order.** The MOTD and SIGNED_ON events go out after the player is added to the

@@ -120,6 +120,11 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(PetNamingDataModule), DatabaseComponent.Characters, PetNamingDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Playerbots.ManagedPlayerbotDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Playerbots.ManagedPlayerbotDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Life.CharacterCorpseInstanceDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Life.CharacterCorpseInstanceDataModule.Version),
+            // Wave 2: characters 35 and 36 belong to other lanes; the ops-social branch holds them with placeholders that yield.
+            (typeof(ReservedCharactersSchema35), DatabaseComponent.Characters, 35),
+            (typeof(ReservedCharactersSchema36), DatabaseComponent.Characters, 36),
+            (typeof(GroupDataModule), DatabaseComponent.Characters, GroupDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.Accounts.AccountAddressDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Accounts.AccountAddressDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
