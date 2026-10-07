@@ -29,6 +29,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private uint _restUntilMs;
     private PlayerbotConsumableKind _restKind;
     private int _roamDirection;
+    private int _exploreRefusals;
     private PlayerbotGoalKind _goal = PlayerbotGoalKind.Explore;
     private long _lootStartedMs;
     private readonly Queue<(WorldOpcode Opcode, byte[] Payload)> _lootActions = new();
@@ -47,6 +48,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private bool _needsRest;
     private bool _deathIntentRetired;
     private int _stopped;
+    // Creatures the bot could not path to (or looped trying to reach): skipped for a while, so the next think does
+    // not pick the same nearest unreachable target again.
+    private readonly Dictionary<ObjectGuid, uint> _unreachable = [];
+    private const uint UnreachableTargetMs = 30_000;
 
     internal void Stop()
     {
@@ -121,6 +126,19 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         uint interval = _thinkElapsed;
         _thinkElapsed = 0;
+
+        if (PlayerbotMotion.ConsumeLoop(player))
+        {
+            // The motion gave up a loop (PlayerbotMotion): drop this intent, skip its target for a while, and let the
+            // goals choose again; the looped destinations are refused by PlayerbotNavigation.TryPlan meanwhile.
+            if (_target is { } looped) MarkUnreachable(looped);
+            _target = null;
+            _route = null;
+            _attacking = false;
+            TargetEntry = 0;
+            _goal = PlayerbotGoalKind.Explore;
+            return;
+        }
 
         if (!player.IsAlive)
         {
@@ -295,7 +313,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (_target is null || _target.Map != player.Map)
         {
             Creature? previousTarget = _target;
-            _target = FindTarget(player, _quests.PreferredCreatureEntry);
+            _target = FindTarget(player, _quests.PreferredCreatureEntry, IsUnreachable);
             // Keep an exploration route across decisions; otherwise every thought changes
             // direction after only its first terrain step and the player never travels.
             if (_target is not null || previousTarget is not null) _route = null;
@@ -332,6 +350,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 if (_route is null && !PlayerbotNavigation.TryPlan(player,
                         new System.Numerics.Vector3(target.X, target.Y, target.Z), _options, out _route))
                 {
+                    MarkUnreachable(target);
                     _target = null;
                     PlayerbotMovementControl.Stop(_session, player);
                     return;
@@ -447,7 +466,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         return opened;
     }
 
-    internal static Creature? FindTarget(Player player, uint preferredEntry = 0)
+    internal static Creature? FindTarget(Player player, uint preferredEntry = 0, Func<Creature, bool>? skip = null)
     {
         if (player.Map is not { } map)
             return null;
@@ -455,6 +474,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         return player.VisibleObjects
             .Select(guid => map.FindObject(guid))
             .OfType<Creature>()
+            .Where(creature => skip is null || !skip(creature))
             .Where(creature => creature.IsAlive && map.Combat.Hooks.CanAttack(player, creature))
             .Where(creature => creature.Level <= player.Level + 1)
             .Where(creature => preferredEntry != 0 ? creature.Entry == preferredEntry : creature.Template.CreatureType != 8)
@@ -503,6 +523,17 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         _planTask = Task.Run(() => planner.SelectAsync(facts, candidates, token), token);
     }
 
+    private void MarkUnreachable(Creature creature)
+    {
+        uint now = _session.World.NowMs;
+        foreach (ObjectGuid expired in _unreachable.Where(entry => unchecked((int)(entry.Value - now)) <= 0).Select(entry => entry.Key).ToArray())
+            _unreachable.Remove(expired);
+        if (_unreachable.Count < 64) _unreachable[creature.Guid] = unchecked(now + UnreachableTargetMs);
+    }
+
+    private bool IsUnreachable(Creature creature)
+        => _unreachable.TryGetValue(creature.Guid, out uint until) && unchecked((int)(until - _session.World.NowMs)) > 0;
+
     private void Explore(Player player, uint elapsedMs)
     {
         if (_route is { Complete: false })
@@ -515,18 +546,30 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
         if (player.Map is null)
             return;
-        float angle = (_roamDirection++ + player.Guid.Low) * 2.39996323f;
+        // Wander onward: keep roughly the current facing (within +-60 degrees, golden-ratio spread so successive legs
+        // differ). Only after repeated refusals turn anywhere. The old golden-angle-from-zero choice sent each leg
+        // ~137 degrees from the last one, so a bot that lost its route every few thinks ran in circles.
+        int attempt = _roamDirection++;
+        float spread = (((attempt + (int)(player.Guid.Low % 7)) * 0.618034f) % 1f) - 0.5f;
+        float angle = _exploreRefusals >= 3
+            ? (attempt + player.Guid.Low) * 2.39996323f
+            : player.Orientation + (spread * MathF.PI * 2f / 3f);
         var destination = new System.Numerics.Vector3(
             player.X + (MathF.Cos(angle) * 48f),
             player.Y + (MathF.Sin(angle) * 48f),
             player.Z);
         if (PlayerbotNavigation.TryPlan(player, destination, _options, out _route))
         {
+            _exploreRefusals = 0;
             _goal = PlayerbotGoalKind.Explore;
             if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, _session.World.NowMs))
                 _route = null;
         }
-        else PlayerbotMovementControl.Stop(_session, player);
+        else
+        {
+            _exploreRefusals++;
+            PlayerbotMovementControl.Stop(_session, player);
+        }
     }
 
     private static float Distance(WorldObject a, WorldObject b)

@@ -63,6 +63,12 @@ public sealed record QuestKillView(uint Quest, uint Entry, uint Count, uint Requ
 public sealed record QuestCompleteView(uint Quest, uint Experience, uint Money, uint RewardItems);
 
 /// <summary>
+/// A relayed MSG_MOVE_* as an observer receives it (MovementHandlers.HandleMovement): packed mover GUID, then the
+/// mover's movement block stamped with the server time it was applied.
+/// </summary>
+public sealed record MovementView(ulong Mover, MovementInfo Info);
+
+/// <summary>
 /// Typed decoders for the server (SMSG) packets the scenario steps wait for. Each mirrors the server's own writer named in
 /// its record's summary and throws <see cref="FormatException"/> on a short or malformed body.
 /// </summary>
@@ -272,6 +278,13 @@ public static class ScenarioDecoders
         uint xp = r.ReadUInt32();
         uint money = r.ReadUInt32();
         return new QuestCompleteView(quest, xp, money, r.ReadUInt32());
+    });
+
+    public static MovementView Movement(byte[] payload) => Decode(payload, nameof(Movement), static data =>
+    {
+        var r = new PacketReader(data);
+        ulong mover = r.ReadPackedGuid();
+        return new MovementView(mover, MovementInfo.Read(ref r));
     });
 
     private delegate T Reader<T>(ReadOnlySpan<byte> data);

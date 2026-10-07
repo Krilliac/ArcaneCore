@@ -35,6 +35,7 @@ public sealed class PlayerbotRecoveryTests
                 Assert.True(recovery.Update(player, 1000));
                 Assert.Equal(before, MathF.Abs(player.X - corpse.X));
                 Assert.True(player.Movement.HasFlag(MovementFlags.Forward));
+                PlayerbotMotion.ElapseForTests(player, 1000);
                 session.ManagedBudget = new ManagedActionBudget(4);
                 Assert.True(recovery.Update(player, 1000));
                 Assert.True(MathF.Abs(player.X - corpse.X) < before);

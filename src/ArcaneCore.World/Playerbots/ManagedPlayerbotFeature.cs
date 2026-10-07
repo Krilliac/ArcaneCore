@@ -344,6 +344,15 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     {
         if (_stopping || !_options.Enabled) return;
         ActiveBot[] bots = _active.Values.OrderBy(b => b.Record.BotId).ToArray();
+        // Movement first, every tick, for every bot: the motion is a client's own reporting and must not wait for a
+        // think, the shared action budget or the per-tick time cap below (PlayerbotMotion).
+        foreach (ActiveBot active in bots)
+        {
+            if (active.Paused || active.Session.State != SessionState.InWorld || active.Session.Player is not { } mover) continue;
+            try { PlayerbotMotion.Pump(active.Session, mover, _world!.NowMs); }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            { logger.LogWarning("Playerbot {BotId} movement failed ({Type})", active.Record.BotId, ex.GetType().Name); active.Session.Kick(); }
+        }
         var budget = new ManagedActionBudget(_options.MaxActionsPerTick);
         long started = Stopwatch.GetTimestamp();
         for (int i = 0; i < bots.Length && budget.Remaining > 0; i++)

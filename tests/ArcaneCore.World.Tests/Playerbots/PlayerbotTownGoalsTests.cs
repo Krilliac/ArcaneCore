@@ -51,10 +51,12 @@ public sealed class PlayerbotTownGoalsTests
                     session.ManagedBudget = new ManagedActionBudget(4);
                     Assert.True(goals.Update(player, 500)); // Start forward; no position leap.
                     float first = player.X;
+                    PlayerbotMotion.ElapseForTests(player, 500);
                     session.ManagedBudget = new ManagedActionBudget(4);
                     Assert.True(goals.Update(player, 500));
                     Assert.True(player.X > first);
                     float second = player.X;
+                    PlayerbotMotion.ElapseForTests(player, 500);
                     session.ManagedBudget = new ManagedActionBudget(4);
                     Assert.True(goals.Update(player, 500));
                     Assert.True(player.X > second); // The 1.5-second service throttle must not pause travel.

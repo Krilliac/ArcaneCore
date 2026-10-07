@@ -69,6 +69,7 @@ public sealed class PlayerbotQuestReturnTests
                 session.ManagedBudget = new ManagedActionBudget(1);
                 brain.Update(500);
                 Assert.Equal(before, player.X);
+                PlayerbotMotion.ElapseForTests(player, 500);
                 session.ManagedBudget = new ManagedActionBudget(1);
                 brain.Update(500);
                 Assert.True(player.X > before);

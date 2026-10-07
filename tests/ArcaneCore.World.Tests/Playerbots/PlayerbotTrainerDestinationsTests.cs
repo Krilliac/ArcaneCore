@@ -71,6 +71,7 @@ public sealed class PlayerbotTrainerDestinationsTests
                     float start = player.X;
                     Assert.True(route.Update(player, 500));
                     Assert.Equal(start, player.X);
+                    PlayerbotMotion.ElapseForTests(player, 500);
                     session.ManagedBudget = new ManagedActionBudget(1);
                     Assert.True(route.Update(player, 500));
                     Assert.True(player.X > start);
@@ -123,6 +124,9 @@ public sealed class PlayerbotTrainerDestinationsTests
                     Assert.Null(brain.InspectionTarget);
                     Assert.Equal(PlayerbotGoalKind.Train, brain.Goal);
                     float start = player.X;
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    brain.Update(500);
+                    PlayerbotMotion.ElapseForTests(player, 500);
                     session.ManagedBudget = new ManagedActionBudget(1);
                     brain.Update(500);
                     Assert.True(player.X > start);
@@ -336,6 +340,7 @@ public sealed class PlayerbotTrainerDestinationsTests
                     session.ManagedBudget = new ManagedActionBudget(1);
                     Assert.True(route.Update(player, 500));
                     Assert.Equal(-8949.95f, player.X, 2);
+                    PlayerbotMotion.ElapseForTests(player, 500);
                     session.ManagedBudget = new ManagedActionBudget(1);
                     Assert.True(route.Update(player, 500));
                     Assert.True(player.X < -8949.95f);
