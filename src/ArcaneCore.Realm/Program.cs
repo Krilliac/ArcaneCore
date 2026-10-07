@@ -10,6 +10,7 @@ using Microsoft.Extensions.Hosting;
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
 ArcaneCore.Kernel.Diagnostics.DiagnosticsHostingExtensions.UseArcaneDiagnostics(builder); // crash hooks and invariants (docs/ops/invariants.md), installed before anything else can fail
 
+builder.Services.AddArcaneCoreLogging(builder.Configuration);
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
 builder.Services.Configure<RealmSeedOptions>(builder.Configuration.GetSection(RealmSeedOptions.SectionName));
 builder.Services.AddAuthDatabase(builder.Configuration);

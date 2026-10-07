@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Configuration.Validation;
+using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Kernel.Ops;
 using ArcaneCore.World.Ops.Validation;
 using Microsoft.Extensions.Configuration;
@@ -46,5 +47,5 @@ public static class OpsCli
     }
 
     public static ConfigReport Validate(IConfiguration configuration)
-        => ConfigReport.Run(configuration, [new WorldConfigChecks(), new DiagnosticsConfigChecks()]);
+        => ConfigReport.Run(configuration, [new WorldConfigChecks(), new DiagnosticsConfigChecks(), new LoggingConfigChecks()]);
 }

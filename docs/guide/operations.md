@@ -46,6 +46,11 @@ The world daemon logs slow updates through the `PerformanceLog` section (`SlowWo
 threshold), tagged with the `Perf` event id so a log sink can route them to their own file. `.server info` shows the version, the players online and the uptime.
 See [operations and performance](../areas/ops-perf.md).
 
+Both daemons log through the `Logging:ArcaneCore` provider: a colour console by default (plain automatically when stdout is a pipe or `NO_COLOR` is set;
+`Logging:ArcaneCore:Console:Mode=Plain` for journald), an optional rolling text file (`Logging:ArcaneCore:File:Enabled`) and an optional JSON-lines file
+(`Logging:ArcaneCore:Json:Enabled`) for a log shipper. File paths need a restart; the console mode and the `Logging:LogLevel` rules reload when the file changes.
+See [logging](../ops/logging.md).
+
 ## Release caveats
 
 Decide on each of these before exposing a realm to the internet. **Default is** says whether the shipped default is the retail (vmangos) behaviour; where it is
