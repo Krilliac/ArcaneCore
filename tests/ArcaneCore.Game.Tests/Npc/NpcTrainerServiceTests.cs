@@ -222,6 +222,46 @@ public sealed class NpcTrainerServiceTests
     }
 
     [Fact]
+    public void TradeSkillTrainer_WithoutItsTrainerSpell_RefusesWithGossip11031()
+    {
+        // vmangos Creature::IsTrainerOf TRAINER_TYPE_TRADESKILLS: trainer_spell must be known (Creature.cpp:1471-1481).
+        const uint Apprentice = 9001;
+        using var rig = new Rig(type: TrainerType.TradeSkills, trainerClass: 0);
+        NpcServiceKit kit = rig.Kit;
+        kit.Npc = kit.Npc with { TrainerSpell = Apprentice };
+        kit.Player.Money = 100;
+        kit.Services.TrainerList(kit.Player, kit.Npc.Guid);
+        var sent = kit.Drain();
+        Assert.DoesNotContain(sent, p => p.Opcode == WorldOpcode.SmsgTrainerList);
+        var menu = new PacketReader(Assert.Single(sent, p => p.Opcode == WorldOpcode.SmsgGossipMessage).Payload);
+        menu.ReadUInt64();
+        Assert.Equal(11031u, menu.ReadUInt32());
+
+        kit.Services.BuyTrainerSpell(kit.Player, kit.Npc.Guid, TeachStrike);
+        Assert.False(rig.Book.HasSpell(kit.Player, 100));
+        Assert.Equal(100u, kit.Player.Money);
+        kit.Drain();
+
+        rig.Book.Teach(kit.Player, Apprentice);
+        kit.Services.TrainerList(kit.Player, kit.Npc.Guid);
+        Assert.True(kit.Sent(WorldOpcode.SmsgTrainerList));
+    }
+
+    [Fact]
+    public void Trainer_OfAnUnknownType_TeachesNothing()
+    {
+        // vmangos Creature::IsTrainerOf: default -> false (Creature.cpp:1482-1483).
+        using var rig = new Rig(type: (TrainerType)7, trainerClass: (byte)Class.Warrior);
+        NpcServiceKit kit = rig.Kit;
+        kit.Player.Money = 100;
+        kit.Services.TrainerList(kit.Player, kit.Npc.Guid);
+        Assert.DoesNotContain(kit.Drain(), p => p.Opcode == WorldOpcode.SmsgTrainerList);
+        kit.Services.BuyTrainerSpell(kit.Player, kit.Npc.Guid, TeachStrike);
+        Assert.False(rig.Book.HasSpell(kit.Player, 100));
+        Assert.Equal(100u, kit.Player.Money);
+    }
+
+    [Fact]
     public void Trainer_OutOfRangeOrDead_TeachesNothing()
     {
         using (var far = new Rig(distance: 10))

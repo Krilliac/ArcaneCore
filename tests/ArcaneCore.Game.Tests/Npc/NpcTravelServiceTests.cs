@@ -464,6 +464,73 @@ public sealed class NpcTravelServiceTests
     }
 
     [Fact]
+    public void GossipTaxiVendorRow_LearnsTheNodeOnlyForACreature_NotForAGameObjectMenu()
+    {
+        // vmangos Player::PrepareGossipMenu runs SendLearnNewTaxiNode only in the creature branch (Player.cpp:12045-12047);
+        // the game-object branch hides every option but plain gossip and never learns a node.
+        NpcContent content = TaxiContent() with
+        {
+            GossipMenuOptions =
+            [
+                new GossipMenuOption { MenuId = 0, Id = 0, OptionId = (byte)GossipOption.TaxiVendor, NpcOptionNpcFlag = (uint)NpcFlags.FlightMaster, OptionText = "Fly" },
+            ],
+        };
+
+        using (var go = new NpcServiceKit(NpcFlags.QuestGiver, content))
+        {
+            go.Npc = go.Npc with { IsGameObject = true, GameObjectInteractionDistance = 5.55556f };
+            Assert.True(go.Services.OpenGameObjectQuestMenu(go.Player, go.Npc.Guid));
+            Assert.All(go.State.TaxiMask, m => Assert.Equal(0u, m));
+            Assert.False(go.Sent(WorldOpcode.SmsgNewTaxiPath));
+        }
+
+        using var creature = new NpcServiceKit(NpcFlags.FlightMaster | NpcFlags.Gossip, content);
+        creature.Services.GossipHello(creature.Player, creature.Npc.Guid);
+        Assert.Contains(creature.State.TaxiMask, m => m != 0);
+        Assert.True(creature.Sent(WorldOpcode.SmsgNewTaxiPath));
+    }
+
+    [Fact]
+    public void Flight_DeathOnALaterHopReturnsToThatHopsDepartureNode_NotTheOrigin()
+    {
+        using var rig = new TaxiRig();
+        rig.Player.Money = 1000;
+        rig.Kit.Services.ActivateTaxiExpress(rig.Player, rig.Kit.Npc.Guid, [1, 2, 3]);
+        rig.Flights.Update(rig.Map, 2100); // hop 1 done, hop 2 (node 2 -> node 3) starts
+        rig.Flights.Update(rig.Map, 1000); // halfway along hop 2
+        Assert.Equal(32f, rig.Player.Y, 0.01f);
+        rig.Player.Health = 0;
+        rig.Flights.Update(rig.Map, 100);
+        Assert.False(rig.Flights.IsFlying(rig.Player));
+        Assert.Equal((64f, 0f, Z), (rig.Player.X, rig.Player.Y, rig.Player.Z)); // node 2, not node 1 at the origin
+        Assert.Equal(0u, rig.Player.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
+    }
+
+    [Fact]
+    public void Flight_RefusedLaterLegFare_PutsThePlayerDownAtTheNodeJustReached_NotInTheAir()
+    {
+        using var rig = new TaxiRig();
+        // An express path does not land at its transition: the last waypoint of hop 1 is airborne above node 2.
+        var airborne = new TaxiPathNodeCatalog(
+        [
+            new TaxiPathNodeRecord(1, 10, 0, 0, 0, 0, Z, 0, 0),
+            new TaxiPathNodeRecord(2, 10, 1, 0, 64, 0, 120, 0, 0),
+            new TaxiPathNodeRecord(3, 11, 0, 0, 64, 0, 120, 0, 0),
+            new TaxiPathNodeRecord(4, 11, 1, 0, 64, 64, Z, 0, 0),
+        ]);
+        var flights = new TaxiFlightSystem(new NpcStore(TaxiContent()), airborne, e => e == Gryphon ? GryphonDisplay : 0u, () => 0u);
+        var landings = new List<uint>();
+        flights.Landed += (_, node) => landings.Add(node);
+        Assert.True(flights.StartFlight(rig.Player, [1, 2, 3], [10, 11], Gryphon, [0, 50], (_, cost) => cost == 0));
+        flights.Update(rig.Map, 10_000); // reaches the end of hop 1; the hop-2 fare is refused
+        Assert.False(flights.IsFlying(rig.Player));
+        Assert.Equal((64f, 0f, Z), (rig.Player.X, rig.Player.Y, rig.Player.Z)); // node 2 on the ground, not z 120
+        Assert.Equal(0u, rig.Player.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
+        Assert.Equal((UnitFlags)0, rig.Player.UnitFlags & (UnitFlags.TaxiFlight | UnitFlags.RemoveClientControl));
+        Assert.Empty(landings);
+    }
+
+    [Fact]
     public void BuildFlightMove_MatchesTheMonsterMoveFlyingLayout()
     {
         byte[] packet = TaxiFlightSystem.BuildFlightMove(ObjectGuid.Player(0x0102), 1, 2, 3, 7, 1234,

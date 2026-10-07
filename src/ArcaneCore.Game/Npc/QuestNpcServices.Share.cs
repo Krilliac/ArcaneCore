@@ -15,7 +15,8 @@ public sealed record QuestShareInfo(ObjectGuid Sharer, uint QuestId);
 /// SendQuestConfirmAccept :14407-14430, SendPushToPartyResponse :14432-14441). Packet layouts: gtker/wow_messages
 /// quest/cmsg_pushquesttoparty.wowm, msg_quest_push_result.wowm, smsg_quest_confirm_accept.wowm, cmsg_quest_confirm_accept.wowm.
 /// <para>
-/// Deviations: players on different maps are never within sharing distance (vmangos compares coordinates only); a
+/// Deviations: players in different map instances (another map, or another copy of the same map) are never within
+/// sharing distance (vmangos compares coordinates only); a
 /// pending offer lives in memory with the offered player, never in the database. By default the pusher is not required
 /// to hold the quest (vmangos does not check it; the receiver's later accept does, <see cref="CanShareQuest"/>);
 /// <c>Quests:SharePushRequiresQuest</c> adds that check up front.
@@ -40,10 +41,11 @@ public sealed partial class QuestNpcServices
         => Quests.Get(questId) is { } quest && quest.HasFlag(QuestFlags.Sharable)
             && Ready(sharer) is { } state && state.Quests.IsCurrent(questId);
 
-    /// <summary>vmangos WorldObject::IsWithinDist(obj, QUEST_SHARE_DISTANCE, is3D, SizeFactor::None): strictly inside, in 3D, on one map.</summary>
+    /// <summary>vmangos WorldObject::IsWithinDist(obj, QUEST_SHARE_DISTANCE, is3D, SizeFactor::None): strictly inside, in 3D, in one map instance.</summary>
     private static bool WithinShareDistance(Player first, Player second)
     {
-        if (first.MapId != second.MapId)
+        // Same Map object, not just the same map id: two copies of an instance share local coordinates.
+        if (first.Map is not { } map || !ReferenceEquals(map, second.Map))
         {
             return false;
         }
@@ -182,7 +184,7 @@ public sealed partial class QuestNpcServices
     }
 
     /// <summary>
-    /// After a PARTY_ACCEPT quest was accepted through <see cref="AcceptQuest"/> (QuestHandler.cpp:166-191): every other group member on the accepter's map who
+    /// After a PARTY_ACCEPT quest was accepted through <see cref="AcceptQuest"/> (QuestHandler.cpp:166-191): every other group member in the accepter's map instance (vmangos IsInMap) who
     /// could take it (one who cannot is sent the refusal) gets a pending offer, any open gossip window closed and an SMSG_QUEST_CONFIRM_ACCEPT naming the quest.
     /// </summary>
     private void OfferPartyAccept(Player accepter, Quest quest)
@@ -194,7 +196,7 @@ public sealed partial class QuestNpcServices
 
         foreach (Player member in party.MembersOf(accepter))
         {
-            if (ReferenceEquals(member, accepter) || member.MapId != accepter.MapId || Ready(member) is not { } state)
+            if (ReferenceEquals(member, accepter) || accepter.Map is not { } map || !ReferenceEquals(member.Map, map) || Ready(member) is not { } state)
             {
                 continue;
             }

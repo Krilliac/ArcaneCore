@@ -50,8 +50,11 @@ public sealed partial class QuestNpcServices
         bool kill = isCreature && spellId == 0 && !talking;
         foreach ((Quest quest, QuestStatusData data, int slot) in LoggedQuests(state))
         {
-            if (data.Status != QuestStatus.Incomplete || !quest.HasSpecialFlag(QuestSpecialFlags.KillOrCast)
-                || (talking && !quest.HasSpecialFlag(QuestSpecialFlags.ExplorationOrEvent))
+            // vmangos Player::TalkedToCreature (Player.cpp:14129-14183): talk credit needs KILL_OR_CAST | SPEAKTO and
+            // skips a quest flagged EXPLORATION_OR_EVENT (those complete through AreaExploredOrEventHappens).
+            if (data.Status != QuestStatus.Incomplete
+                || !quest.HasSpecialFlag(talking ? QuestSpecialFlags.KillOrCast | QuestSpecialFlags.SpeakTo : QuestSpecialFlags.KillOrCast)
+                || (talking && quest.HasSpecialFlag(QuestSpecialFlags.ExplorationOrEvent))
                 || (kill && inRaidGroup && !IsAllowedInRaid(quest))
                 || (!originalCaster && !quest.HasFlag(QuestFlags.Sharable)))
             {
