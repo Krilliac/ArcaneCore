@@ -63,6 +63,14 @@ over the stats window, and the three slowest world features (smoothed per-tick m
 duration. Empty samples are unavailable. `.playerbot inspect` also exposes movement flags, stand
 state, movement timestamp, whether the bot is following a route and how many loops it gave up.
 
+After the integration with the ccr line, the world-level `WorldRuntime.WorldTick` handlers (game events,
+rest accrual, the crash context and the tick watchdog's frame feed, docs/ops/watchdog.md) still run
+between the posted commands and the maps. Their time is added to the world-features phase, but they are
+not timed one by one (the watchdog handler must stay a few stores at the start of the tick), so they never
+appear among the slowest features. The watchdog's frame ring and these tick statistics are separate
+measures: the watchdog sees frame times (start to start) and warns on overruns and hangs; `.server info`
+reports the body time, its phases and the scheduler's late/skipped starts.
+
 The world loop schedules ticks on a drift-compensated fixed cadence (`WorldTickScheduler`): tick k is
 due at start + k × `TickIntervalMs`, so a wait that oversleeps (Windows timer waits wake in ~15.6 ms
 steps; a 47 ms wait often took 62, i.e. 16 instead of 20 ticks/s) is made up by the next shorter
