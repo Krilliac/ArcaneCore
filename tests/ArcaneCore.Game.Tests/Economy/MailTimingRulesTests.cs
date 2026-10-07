@@ -14,6 +14,21 @@ public sealed class MailTimingRulesTests
     private const long Now = 1_000_000;
 
     [Fact]
+    public void CodPaymentLetter_CannotBeReturned_LikeOnExpiry()
+    {
+        // The seller's COD payment letter: the buyer already holds the item, so the gold never goes back
+        // (vmangos ObjectMgr.cpp:6999 deletes it on expiry instead of returning it).
+        var payment = new MailRecord
+        {
+            Id = 8, MessageType = MailMessageType.Normal, SenderId = 7, ReceiverId = 9, Money = 500,
+            Checked = MailCheckMask.CodPayment, DeliverTime = Now, ExpireTime = Now + 10,
+        };
+        Assert.True(MailRules.CanReturn(payment with { Checked = MailCheckMask.None }));
+        Assert.False(MailRules.CanReturn(payment));
+        Assert.False(MailRules.CanReturn(payment with { Checked = MailCheckMask.CodPayment | MailCheckMask.Read }));
+    }
+
+    [Fact]
     public void Defaults_FollowVmangos()
     {
         var o = new EconomyOptions();

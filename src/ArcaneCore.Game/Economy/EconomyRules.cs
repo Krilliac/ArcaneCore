@@ -408,9 +408,13 @@ public static class MailRules
         ExpireTime = now + deliverDelaySeconds + (options.MailExpireDays * SecondsPerDay),
     };
 
-    /// <summary>Whether the letter can be returned to a player (a player's unreturned letter).</summary>
+    /// <summary>
+    /// Whether the letter can be returned to a player: a player's letter that is neither already returned nor a COD payment. The
+    /// payment's buyer already holds the item, so its gold never goes back (the same letters <see cref="ReturnsOnExpiry"/> deletes,
+    /// vmangos ObjectMgr.cpp:6999).
+    /// </summary>
     public static bool CanReturn(MailRecord mail) => mail.MessageType == MailMessageType.Normal
-        && (mail.Checked & MailCheckMask.Returned) == 0 && mail.SenderId != 0;
+        && (mail.Checked & (MailCheckMask.Returned | MailCheckMask.CodPayment)) == 0 && mail.SenderId != 0;
 
     /// <summary>
     /// Whether an expired letter goes back to its sender rather than being deleted. Only player letters that are not
