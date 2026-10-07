@@ -82,10 +82,20 @@ public sealed partial class SpellSystem
         int amount = context.Cast.CustomAuraAmounts is { } custom && custom.TryGetValue(context.EffectIndex, out int requested)
             ? requested
             : SnapshotAuraAmount(context);
-        var aura = new SpellAura(context.EffectIndex, effect.AuraType, amount, effect.Amplitude, effect.MiscValue, context.Target.PowerType);
+        var aura = new SpellAura(context.EffectIndex, effect.AuraType, amount, ModifiedAmplitude(context.Caster, context.Spell, effect), effect.MiscValue,
+            context.Target.PowerType);
         aura.PeriodicTimer = PeriodicTiming.InitialTimer(context.Spell, aura);
         context.PendingHolder.SetAura(aura);
     }
+
+    /// <summary>
+    /// vmangos Aura::CalculatePeriodic (SpellAuras.cpp:8078-8083): a periodic aura type's amplitude through the caster's
+    /// SPELLMOD_ACTIVATION_TIME modifiers (read without spending a charge); every other amplitude as the data states it.
+    /// </summary>
+    private uint ModifiedAmplitude(Unit caster, SpellInfo spell, SpellEffectInfo effect)
+        => effect.Amplitude != 0 && PeriodicTiming.TakesActivationTimeMod(effect.AuraType)
+            ? (uint)Math.Max(ModInt(caster, spell, SpellModOp.ActivationTime, (int)effect.Amplitude), 0)
+            : effect.Amplitude;
 
     /// <summary>
     /// Put a holder on its target (vmangos Unit::AddSpellAuraHolder + SpellAuraHolder::_AddSpellAuraHolder):
@@ -290,6 +300,10 @@ public sealed partial class SpellSystem
                 continue;
             }
 
+            // Aura::Refresh runs CalculatePeriodic again (SpellAuras.cpp:319): the interval follows the caster's current
+            // ACTIVATION_TIME mods. Documented deviation: vmangos applies them to the already modified period, so a flat mod would
+            // compound on every refresh; the fresh holder's amplitude (modified once, from the data) is taken instead.
+            aura.Amplitude = source.Amplitude;
             aura.PeriodicTimer = PeriodicTiming.InitialTimer(existing.Spell, aura);
             aura.TickCount = 0;
             if (source.Amount != aura.Amount)

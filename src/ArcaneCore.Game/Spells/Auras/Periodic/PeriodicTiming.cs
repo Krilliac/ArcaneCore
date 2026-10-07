@@ -30,6 +30,14 @@ public static class PeriodicTiming
             or 13797 or 14298 or 14299 or 14300 or 14301 or 23184 or 25041;
     }
 
+    /// <summary>
+    /// The aura types vmangos Aura::CalculatePeriodic marks periodic (SpellAuras.cpp:8058-8073); only their amplitude takes
+    /// SPELLMOD_ACTIVATION_TIME (:8078-8083).
+    /// </summary>
+    public static bool TakesActivationTimeMod(AuraType type) => type is AuraType.PeriodicDamage or AuraType.PeriodicHeal
+        or AuraType.PeriodicEnergize or AuraType.ObsModHealth or AuraType.PeriodicLeech or AuraType.PeriodicHealthFunnel
+        or AuraType.PeriodicManaLeech or AuraType.PeriodicDamagePercent or AuraType.PowerBurnMana or AuraType.PeriodicTriggerSpell;
+
     /// <summary>vmangos Aura::HandleModPowerRegen (SpellAuras.cpp:4831): MOD_POWER_REGEN's first tick is 5000 ms after application.</summary>
     public const int PowerRegenFirstTickMs = 5000;
 

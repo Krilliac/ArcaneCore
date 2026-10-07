@@ -68,6 +68,7 @@ Improved Fire Ward (11094, 13043, mask `0x8`) are flat RESIST_MISS_CHANCE mods b
 | RESIST_MISS_CHANCE (melee) | `MeleeSpellHitResult`: a hit-chance bonus that lowers the miss chance | `SpellCaster.cpp:381-388` |
 | THREAT | `SpellThreat.Add`, before the MOD_THREAT auras | `ThreatManager.cpp:41-44` |
 | MULTIPLE_VALUE | health leech effect, leech aura tick, mana leech tick | `SpellEffects.cpp:1868`, `SpellAuras.cpp:6008`, `:6171-6175` |
+| ACTIVATION_TIME | `SpellSystem.ModifiedAmplitude` on the amplitude of the periodic aura types (`PeriodicTiming.TakesActivationTimeMod`), at creation and again on an in-place refresh (the fresh value, not compounded as vmangos does) | `SpellAuras.cpp:8078-8083`, `:293`, `:319` |
 
 ### Charges (`Player::DropModCharge`, `RestoreSpellMods`, `RemoveSpellMods`, `Player.cpp:17617-17783`)
 
@@ -115,8 +116,8 @@ count. `SpellModFeature` and `TalentModCoverage` print the numbers, which is the
 ## Limits and open questions
 
 - **Operations not wired** (nothing in the base reads them yet): SPEED, HASTE and ATTACK_POWER on an aura's own amount
-  (`SpellAuras.cpp:3982`, `:4016`, `:5086-5219`; the haste handlers belong to the aura-engine lane), ACTIVATION_TIME on the periodic
-  interval (`:8083`) and CHARGES at holder creation (`:6693`) (the aura period and holder constructor are another lane's files),
+  (`SpellAuras.cpp:3982`, `:4016`, `:5086-5219`; the haste handlers belong to the aura-engine lane) and CHARGES at holder creation
+  (`:6693`) (the holder constructor is another lane's file),
   CHANCE_OF_SUCCESS (proc chance, `UnitAuraProcHandler.cpp:490`; there is no proc dispatcher), the aura-level RESIST_MISS_CHANCE
   (`:5430`), the mana drain effect's MULTIPLE_VALUE (no such effect handler yet). The engine already answers every operation, so wiring is a one-line call at the site.
 - **Radius** is not applied to caster-relative destination points (`SelectCasterRelativeLocation`) or persistent area auras
