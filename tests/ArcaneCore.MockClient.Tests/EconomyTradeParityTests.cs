@@ -175,6 +175,31 @@ public sealed class EconomyTradeParityTests
         Assert.False(await db.Set<ItemInstanceRow>().AnyAsync(row => row.Guid == offeredGuid, rig.Token));
     }
 
+    [Fact]
+    public async Task A_banked_item_offered_in_the_non_traded_slot_cancels_the_trade()
+    {
+        // vmangos HandleSetTradeItemOpcode (TradeHandler.cpp:708-713) refuses a bank position for every trade slot,
+        // the non-traded slot 6 included (only CanBeTraded is skipped for that slot).
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        (Recorder a, Recorder b) = await OpenTradeAsync(rig);
+        (byte bag, byte slot) = await rig.Server.World.InvokeAsync(() =>
+        {
+            Player sender = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!;
+            Assert.Equal(InventoryResult.Ok, sender.Inventory.AddItem(SyntheticArcaneServer.FixedRewardItem, 1, out Item? banked));
+            sender.Inventory.CanUseBank = () => true;
+            sender.Inventory.AutoBankItem(banked!.BagSlot, banked.Slot);
+            sender.Inventory.CanUseBank = null;
+            Assert.True(InventorySlots.IsBankPos(banked.BagSlot, banked.Slot));
+            return (banked.BagSlot, banked.Slot);
+        }).WaitAsync(rig.Token);
+        await a.SendAsync(WorldOpcode.CmsgSetTradeItem, [TradeRules.NonTradedSlot, bag, slot]);
+        await a.SendAsync(WorldOpcode.CmsgCancelTrade, []);
+
+        // Refused: the first packet either side sees is TRADE_CANCELED (no BACK_TO_TRADE, no trader view of the item).
+        Assert.Empty(await a.UntilCanceledAsync());
+        Assert.Empty(await b.UntilCanceledAsync());
+    }
+
     private static async Task<(Recorder Sender, Recorder Receiver)> OpenTradeAsync(Rig rig)
     {
         var a = new Recorder(rig.Sender, rig.Token);
