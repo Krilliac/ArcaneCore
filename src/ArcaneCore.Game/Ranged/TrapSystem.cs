@@ -80,7 +80,7 @@ public sealed class TrapSystem(SpellSystem spells) : IMapUpdater
 
             if (go.Template.GetData(TrapRules.SpellData) is var spellId and not 0)
             {
-                spells.CastFromObject(entry.Owner, spellId, target);
+                spells.CastFromObject(entry.Owner, spellId, target, source: (go.X, go.Y, go.Z));
             }
 
             uint cooldown = go.Template.GetData(TrapRules.CooldownData);

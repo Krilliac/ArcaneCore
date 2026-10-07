@@ -174,6 +174,19 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
+    /// A triggered cast made by an aura (vmangos CastSpell with <c>triggeredByAura</c>, which sets Spell::m_triggeredByAuraSpell):
+    /// it takes no power (Spell::TakePower, Spell.cpp:5053).
+    /// </summary>
+    internal SpellCastResult CastSpellTriggeredByAura(Unit caster, uint spellId, SpellCastTargets targets, SpellInfo aura)
+    {
+        ArgumentNullException.ThrowIfNull(caster);
+        ArgumentNullException.ThrowIfNull(targets);
+        SpellInfo? spell = Store.Get(spellId);
+        return spell is null ? SpellCastResult.NotFound
+            : Prepare(caster, spell, targets, triggered: true, triggeringSpell: aura, triggeredByAura: true);
+    }
+
+    /// <summary>
     /// CMSG_CANCEL_CAST (vmangos HandleCancelCastOpcode → InterruptNonMeleeSpells(false, spellId)):
     /// interrupt the cast in progress when it is <paramref name="spellId"/> (0 = any). Channels are
     /// not interrupted by this packet (withDelayed = false keeps vmangos' channel slot). A queued next-swing
@@ -279,7 +292,7 @@ public sealed partial class SpellSystem
     private SpellCastResult Prepare(Unit caster, SpellInfo spell, SpellCastTargets targets, bool triggered, bool autoRepeatShot = false, Item? castItem = null,
         SpellInfo? triggeringSpell = null, byte itemSpellIndex = 0, int? itemCooldownMs = null, int? itemCategoryCooldownMs = null,
         uint? itemCategory = null, bool itemEquipCast = false, bool itemTriggeredCast = false,
-        IReadOnlyDictionary<int, int>? customAuraAmounts = null)
+        IReadOnlyDictionary<int, int>? customAuraAmounts = null, bool triggeredByAura = false)
     {
         if (castItem is not null && (IsQuestSettlementPending(caster) || IsInTransit(caster)
             || (caster is Player player && !player.IsInWorld)))
@@ -338,7 +351,7 @@ public sealed partial class SpellSystem
             castItem is null ? PowerCostFor(caster, spell) : 0, DurationFor(caster, spell), triggeringSpell, castItem, itemSpellIndex,
             castItem is null ? (byte)0 : castItem.BagSlot, castItem is null ? (byte)0 : castItem.Slot,
             itemCooldownMs, itemCategoryCooldownMs, itemCategory, customAuraAmounts)
-            { ModScope = modScope, IsItemEquipCast = itemEquipCast, IsItemTriggeredCast = itemTriggeredCast };
+            { ModScope = modScope, IsItemEquipCast = itemEquipCast, IsItemTriggeredCast = itemTriggeredCast, IsTriggeredByAura = triggeredByAura };
         cast.AutoRepeatShot = autoRepeatShot;
         if (!triggered)
         {
@@ -422,7 +435,7 @@ public sealed partial class SpellSystem
 
         if (cast.CastItem is null)
         {
-            TakePower(caster, spell, cast.PowerCost, cast.IsTriggered); // vmangos Spell::TakePower returns at once for an item cast (Spell.cpp:5053)
+            TakePower(caster, spell, cast.PowerCost, cast.IsTriggeredByAura); // vmangos Spell::TakePower returns at once for an item cast (Spell.cpp:5053)
         }
 
         if (reagentStage is not null)
@@ -507,6 +520,7 @@ public sealed partial class SpellSystem
             cast.CastX = caster.X;
             cast.CastY = caster.Y;
             cast.CastZ = caster.Z;
+            cast.CastO = caster.Orientation;
             if (caster is Player player)
             {
                 player.Session.Send(WorldOpcode.MsgChannelStart, SpellPackets.BuildChannelStart(spell.Id, (uint)duration));
@@ -614,6 +628,32 @@ public sealed partial class SpellSystem
             return;
         }
 
+        if (cast.State == SpellCastState.Casting && cast.Timer > 0)
+        {
+            // vmangos Spell::update (Spell.cpp:4130-4139): a jump cancels every player channel, and a turn cancels a channel with
+            // the turning channel interrupt flag (the orientation is compared with the one stored when the channel started).
+            if (cast.Caster is Player channeller
+                && (channeller.Movement.HasFlag(MovementFlags.Jumping)
+                    || (cast.Spell.ChannelInterruptFlags.HasFlag(SpellAuraInterruptFlags.Turning) && channeller.Orientation != cast.CastO)))
+            {
+                Cancel(cast);
+                return;
+            }
+
+            // vmangos Spell.cpp:4142-4147: no target the channel needs is left alive (HasValidUnitPresentInTargetList).
+            if (!HasValidChannelTarget(cast))
+            {
+                EndChannelWithoutTargets(cast);
+                return;
+            }
+
+            if (IsChannelTargetOutOfRange(cast))
+            {
+                Cancel(cast);
+                return;
+            }
+        }
+
         cast.Timer = diffMs >= cast.Timer ? 0 : cast.Timer - (int)diffMs;
         if (cast.Timer > 0)
         {
@@ -652,23 +692,86 @@ public sealed partial class SpellSystem
         }
         else
         {
-            RemoveAurasByCaster(cast.Caster, cast.Spell.Id, cast.Caster.Guid);
-            if (ResolveUnitTarget(cast.Caster, cast.Targets, cast.Spell) is { } target && target != cast.Caster)
-            {
-                RemoveAurasByCaster(target, cast.Spell.Id, cast.Caster.Guid);
-            }
-
-            // Arcane Missiles redirects its aura while retaining the original request target.
-            if (cast.MagnetTarget is { } magnet && !ReferenceEquals(magnet, cast.Caster))
-            {
-                RemoveAurasByCaster(magnet, cast.Spell.Id, cast.Caster.Guid);
-            }
-
+            RemoveChannelAuras(cast);
             EndChannel(cast, interrupted: true);
             SendInterrupted(cast);
         }
 
         Finish(cast);
+    }
+
+    /// <summary>The auras a channel placed on its caster and its target (vmangos SendChannelUpdate(0), Spell.cpp: AURA_REMOVE_BY_CHANNEL).</summary>
+    private void RemoveChannelAuras(SpellCast cast)
+    {
+        RemoveAurasByCaster(cast.Caster, cast.Spell.Id, cast.Caster.Guid);
+        if (ResolveUnitTarget(cast.Caster, cast.Targets, cast.Spell) is { } target && target != cast.Caster)
+        {
+            RemoveAurasByCaster(target, cast.Spell.Id, cast.Caster.Guid);
+        }
+
+        // Arcane Missiles redirects its aura while retaining the original request target.
+        if (cast.MagnetTarget is { } magnet && !ReferenceEquals(magnet, cast.Caster))
+        {
+            RemoveAurasByCaster(magnet, cast.Spell.Id, cast.Caster.Guid);
+        }
+    }
+
+    /// <summary>
+    /// vmangos Spell.cpp:4142-4147: a channel with no valid target left ends with SendChannelUpdate(0, true) and finish(): its
+    /// auras go and the channel fields clear, but no interrupt is reported (it is not Spell::cancel).
+    /// </summary>
+    private void EndChannelWithoutTargets(SpellCast cast)
+    {
+        RemoveChannelAuras(cast);
+        EndChannel(cast, interrupted: true);
+        Finish(cast);
+    }
+
+    /// <summary>
+    /// vmangos Spell::HasValidUnitPresentInTargetList (Spell.cpp:1957-1990): a channel that applies an aura to a unit other than
+    /// its caster needs one of those units in a state the spell can target (alive, or dead for a spell that targets the dead).
+    /// Only the explicit (or redirected) unit target is tracked here, which covers the single-target channels (Drain Life, Mind
+    /// Flay, Arcane Missiles); a channel whose auras all sit on its caster needs no target.
+    /// </summary>
+    private bool HasValidChannelTarget(SpellCast cast)
+    {
+        bool needsTarget = cast.Spell.Effects.Any(e => e.Effect == SpellEffectName.ApplyAura && e.AuraType != AuraType.None
+            && e.TargetA != SpellImplicitTarget.UnitCaster);
+        if (!needsTarget)
+        {
+            return true;
+        }
+
+        Unit? target = cast.MagnetTarget ?? ResolveUnitTarget(cast.Caster, cast.Targets, cast.Spell);
+        if (target is null || ReferenceEquals(target, cast.Caster))
+        {
+            return true;
+        }
+
+        return target.IsAlive ? !cast.Spell.IsDeathOnly : cast.Spell.CanTargetDead;
+    }
+
+    /// <summary>
+    /// vmangos SpellAuraHolder::UpdateHolder (SpellAuras.cpp:7338-7376): while the channel's aura sits on its channel target,
+    /// the channel is interrupted when the combat distance passes the spell's maximum range times 1.33 for a hostile target, or
+    /// plus 1.25 yd otherwise, with SPELLMOD_RANGE applied after. SPELL_CUSTOM_CHAN_NO_DIST_LIMIT channels have no limit.
+    /// </summary>
+    private bool IsChannelTargetOutOfRange(SpellCast cast)
+    {
+        const uint customChanNoDistLimit = 0x008; // vmangos SpellDefines.h:1005
+        Unit caster = cast.Caster;
+        ulong channelObject = caster.GetUInt64(UpdateFields.UnitFieldChannelObject);
+        if ((cast.Spell.CustomFlags & customChanNoDistLimit) != 0 || channelObject == 0 || channelObject == caster.Guid.Value
+            || Units.Find(caster, new ObjectGuid(channelObject)) is not { } target
+            || !GetAuras(target).Any(h => h.Spell.Id == cast.Spell.Id && h.CasterGuid == caster.Guid))
+        {
+            return false;
+        }
+
+        float maxRange = Relations.IsHostile(target, caster) ? cast.Spell.Range.Max * 1.33f : cast.Spell.Range.Max + 1.25f;
+        maxRange = SpellModifiers.Apply(caster, cast.Spell, SpellModOp.Range, maxRange);
+        float combatDistance = Math.Max(0.0f, Distance3D(caster, target.X, target.Y, target.Z) - (CombatReach(caster) + CombatReach(target)));
+        return combatDistance > maxRange;
     }
 
     private static void EndChannel(SpellCast cast, bool interrupted)
@@ -927,7 +1030,7 @@ public sealed partial class SpellSystem
                 return beforePower;
             }
 
-            SpellCastResult power = CheckPower(caster, spell);
+            SpellCastResult power = CheckPower(caster, spell, triggered);
             if (power != SpellCastResult.CastOk)
             {
                 return power;
@@ -1017,9 +1120,18 @@ public sealed partial class SpellSystem
         return spell.Range.Min > 0 && distance < spell.Range.Min ? SpellCastResult.TooClose : SpellCastResult.CastOk;
     }
 
-    /// <summary>vmangos Spell::CheckPower: enough of the spell's power type (health costs must leave the caster alive).</summary>
-    private SpellCastResult CheckPower(Unit caster, SpellInfo spell)
+    /// <summary>
+    /// vmangos Spell::CheckPower (Spell.cpp:7029-7066): enough of the spell's power type (health costs must leave the caster alive).
+    /// A triggered cast passes at once (:7032), and a creature that is not a pet passes a spell of a power it cannot have: any
+    /// power but mana, or mana without create mana (:7055-7059).
+    /// </summary>
+    private SpellCastResult CheckPower(Unit caster, SpellInfo spell, bool triggered)
     {
+        if (triggered)
+        {
+            return SpellCastResult.CastOk;
+        }
+
         uint cost = PowerCostFor(caster, spell);
         if (cost == 0)
         {
@@ -1034,6 +1146,12 @@ public sealed partial class SpellSystem
         if (spell.PowerType is < 0 or > (int)PowerType.Happiness)
         {
             return SpellCastResult.Unknown;
+        }
+
+        if (caster is Creatures.Creature { IsPet: false }
+            && (spell.PowerType != (int)PowerType.Mana || caster.GetUInt32(UpdateFields.UnitFieldBaseMana) == 0))
+        {
+            return SpellCastResult.CastOk;
         }
 
         return GetPower(caster, (PowerType)spell.PowerType) < cost ? SpellCastResult.NoPower : SpellCastResult.CastOk;
@@ -1181,9 +1299,13 @@ public sealed partial class SpellSystem
         return (uint)Math.Max(cost, 0);
     }
 
-    private static void TakePower(Unit caster, SpellInfo spell, uint cost, bool triggered)
+    /// <summary>
+    /// vmangos Spell::TakePower (Spell.cpp:5051-5080): a cast triggered by an aura (a periodic trigger tick, a proc) takes no
+    /// power at all; every other cast, triggered or not, pays its cost.
+    /// </summary>
+    private static void TakePower(Unit caster, SpellInfo spell, uint cost, bool triggeredByAura)
     {
-        if (cost == 0)
+        if (cost == 0 || triggeredByAura)
         {
             return;
         }
@@ -1200,9 +1322,9 @@ public sealed partial class SpellSystem
             SetPower(caster, power, GetPower(caster, power) - Math.Min(cost, GetPower(caster, power)));
 
             // vmangos Spell::TakePower (Spell.cpp:5077-5079): paying mana starts the five second timer unless the
-            // spell has SPELL_ATTR_EX2_DONT_BLOCK_MANA_REGEN. A triggered cast (trigger-spell auras, scripts) does
-            // not start it: vmangos skips TakePower entirely for casts triggered by an aura. Casters lane, mana-spend-rule.
-            if (power == PowerType.Mana && !triggered && ((uint)spell.AttributesEx2 & Casters.CasterAttributes.Ex2DontBlockManaRegen) == 0)
+            // spell has SPELL_ATTR_EX2_DONT_BLOCK_MANA_REGEN. A triggered cast that was not triggered by an aura pays and
+            // starts it too; an aura-triggered cast returned above. Casters lane, mana-spend-rule.
+            if (power == PowerType.Mana && ((uint)spell.AttributesEx2 & Casters.CasterAttributes.Ex2DontBlockManaRegen) == 0)
             {
                 caster.Combat.NoteManaUsed(spell.Id);
             }
