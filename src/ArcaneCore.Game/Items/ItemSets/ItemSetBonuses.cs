@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items.ItemUse;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Items;
 
@@ -32,6 +33,9 @@ public sealed class PlayerItemSets
 
     internal SetEffect? Find(uint setId) => _effects.GetValueOrDefault(setId);
 
+    /// <summary>Every active bonus spell of every set, as a snapshot (the form change may cast or remove while it walks them).</summary>
+    internal uint[] AllActiveSpells() => [.. _effects.Values.SelectMany(e => e.Spells)];
+
     internal void Remove(uint setId) => _effects.Remove(setId);
 
     internal sealed class SetEffect
@@ -54,7 +58,7 @@ public sealed class PlayerItemSets
 /// would take a bonus away from the counted ones).
 /// <para>
 /// Set content is the immutable <see cref="ItemSetCatalog"/> read from ItemSet.dbc. Spells are cast triggered on the player with no cast item,
-/// so removal is by spell id. Form-dependent re-evaluation (mangos UpdateEquipSpellsAtFormChange) is not implemented, see docs/areas/items.md.
+/// so removal is by spell id. A bonus whose spell the current form forbids stays active but is cast only once the form fits (<see cref="ReconcileAtFormChange"/>).
 /// </para>
 /// </summary>
 public sealed class ItemSetBonuses(ItemSetCatalog catalog, SpellSystem spells, Action<uint, uint>? onUnknownSet = null)
@@ -102,7 +106,7 @@ public sealed class ItemSetBonuses(ItemSetCatalog catalog, SpellSystem spells, A
                 continue;
             }
 
-            if (_spells.Store.Get(spellId) is null)
+            if (_spells.Store.Get(spellId) is not { } info)
             {
                 continue;   // mangos: "unknown spell id in items set effects", the slot stays free
             }
@@ -112,8 +116,45 @@ public sealed class ItemSetBonuses(ItemSetCatalog catalog, SpellSystem spells, A
                 _spells.RemoveAuras(player, spellId);
             }
 
-            _spells.CastSpell(player, spellId, SpellCastTargets.ForSelf(), triggered: true);
+            // vmangos AddItemsSetItem (Item.cpp:85-87): the bonus counts as active either way, but its spell is cast only when the current
+            // form allows it; otherwise the form change casts it (ReconcileAtFormChange).
+            if (ItemEquipSpells.FitsForm(player, info))
+            {
+                _spells.CastSpell(player, spellId, SpellCastTargets.ForSelf(), triggered: true);
+            }
+
             effect.Spells.Add(spellId);
+        }
+    }
+
+    /// <summary>
+    /// vmangos Player::UpdateEquipSpellsAtFormChange, set half (Player.cpp:7242-7253, ApplyEquipSpell with no item and formChange): every
+    /// active bonus spell whose aura no longer fits the form is removed, and one that fits and has no aura is cast. A set piece counts whether
+    /// broken or not, so this does not look at durability.
+    /// </summary>
+    public void ReconcileAtFormChange(Player player, PlayerItemSets state)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(state);
+        foreach (uint spellId in state.AllActiveSpells())
+        {
+            if (_spells.Store.Get(spellId) is not { } info)
+            {
+                continue;
+            }
+
+            bool active = _spells.GetAuras(player).Any(h => !h.IsRemoved && h.Spell.Id == spellId);
+            if (!ItemEquipSpells.FitsForm(player, info))
+            {
+                if (active)
+                {
+                    _spells.RemoveAuras(player, spellId);
+                }
+            }
+            else if (!active)
+            {
+                _spells.CastSpell(player, spellId, SpellCastTargets.ForSelf(), triggered: true);
+            }
         }
     }
 
