@@ -562,7 +562,10 @@ public sealed partial class SpellSystem
             ? (uint)((ulong)target.MaxHealth * (uint)aura.Amount / 100)
             : (uint)aura.Amount;
         Unit caster = ResolveAuraCaster(holder) ?? target;
-        amount = ModifyTick(SpellAmountStage.DamageOverTimeTick, holder, aura, caster, amount);
+        float ramp = aura.Type == AuraType.PeriodicDamage ? PeriodicDamageRamp(holder.Spell, aura.TickCount) : 0f;
+        amount = ramp == 0f
+            ? ModifyTick(SpellAmountStage.DamageOverTimeTick, holder, aura, caster, amount)
+            : ModifyTick(SpellAmountStage.DamageOverTimeTick, holder, aura, caster, amount + ramp);
         if (ImmunityRules.IsImmuneToDamage(this, target, holder.Spell.SchoolMask(), holder.Spell))
         {
             // vmangos Aura::PeriodicTick: an immune target takes nothing and the client is told (SpellAuras.cpp:5839-5841).
@@ -578,6 +581,31 @@ public sealed partial class SpellSystem
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
             target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, dealt, (uint)holder.Spell.School, Absorbed: absorbed, Resisted: resisted)), includeSelf: true);
     }
+
+    /// <summary>
+    /// The tick-index ramp vmangos adds to the snapshotted amount before the target side (Aura::PeriodicTick, SpellAuras.cpp:5867-5872):
+    /// Curse of Agony (warlock family bit 10) <c>(-1 + (tick - 1) / 4) * SimpleValue(0) / 2</c> and Starshards (priest family bit 21)
+    /// <c>(-1 + (tick - 1) / 2) * SimpleValue(0) / 3</c>, with integer division on the tick term; 0 for every other spell.
+    /// </summary>
+    internal static float PeriodicDamageRamp(SpellInfo spell, int tick)
+    {
+        if (spell.IsFitToFamily(CurseOfAgonyFamily, CurseOfAgonyFlagBit))
+        {
+            return (-1 + ((tick - 1) / 4)) * (spell.SimpleValue(0) / 2.0f);
+        }
+
+        if (spell.IsFitToFamily(StarshardsFamily, StarshardsFlagBit))
+        {
+            return (-1 + ((tick - 1) / 2)) * (spell.SimpleValue(0) / 3.0f);
+        }
+
+        return 0f;
+    }
+
+    private const uint CurseOfAgonyFamily = 5;   // SPELLFAMILY_WARLOCK
+    private const int CurseOfAgonyFlagBit = 10;  // CF_WARLOCK_CURSE_OF_AGONY
+    private const uint StarshardsFamily = 6;     // SPELLFAMILY_PRIEST
+    private const int StarshardsFlagBit = 21;    // CF_PRIEST_STARSHARDS
 
     /// <summary>
     /// vmangos Aura::PeriodicTick SPELL_AURA_PERIODIC_HEAL / OBS_MOD_HEALTH (the latter a percent

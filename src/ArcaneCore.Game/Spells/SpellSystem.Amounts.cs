@@ -46,6 +46,18 @@ public sealed partial class SpellSystem
         return (uint)Math.Floor(Math.Max(modified, 0f) + Random.NextSingle());
     }
 
+    /// <summary>
+    /// <see cref="ModifyTick(SpellAmountStage, SpellAuraHolder, SpellAura, Unit, uint)"/> for a fractional amount (a tick-index ramp,
+    /// vmangos float fdamage): always dithered, also without a modifier.
+    /// </summary>
+    internal uint ModifyTick(SpellAmountStage stage, SpellAuraHolder holder, SpellAura aura, Unit caster, float amount)
+    {
+        float modified = AmountModifier is null
+            ? amount
+            : AmountModifier.Modify(stage, caster, holder.Target, holder.Spell, aura.EffectIndex, amount, holder.StackAmount);
+        return (uint)Math.Floor(Math.Max(modified, 0f) + Random.NextSingle());
+    }
+
     /// <summary>The unit that cast an aura while it is still in the world and the aura's target's map (null otherwise); the caster of a tick.</summary>
     internal Unit? AuraCaster(SpellAuraHolder holder) => ResolveAuraCaster(holder);
 
