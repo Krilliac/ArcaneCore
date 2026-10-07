@@ -68,6 +68,9 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
     /// <summary>The process-wide item GUID source.</summary>
     public ItemGuidAllocator GuidAllocator { get; } = new();
 
+    /// <summary>The random property roll handed to every inventory at login (set by <see cref="ItemRandomPropertyFeature"/>; null: none).</summary>
+    public IItemRandomPropertySource? RandomProperties { get; set; }
+
     /// <summary>The world, once attached.</summary>
     public WorldRuntime? World { get; private set; }
 
@@ -181,6 +184,7 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
         player.Inventory.Templates = templates;
         player.Inventory.GuidAllocator = GuidAllocator;
         player.Inventory.Options = Options;
+        player.Inventory.RandomProperties = RandomProperties;
         if (session.Services.GetService<IItemStore>() is { } store)
         {
             IReadOnlyList<InventoryItemData> rows = await store.GetInventoryAsync(character.Id).ConfigureAwait(false);

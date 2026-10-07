@@ -64,6 +64,7 @@ public sealed partial class PlayerInventory
         {
             Templates = Templates,
             GuidAllocator = GuidAllocator,
+            RandomProperties = RandomProperties, // quest rewards roll too (vmangos Player.cpp:13104-13119); the shadow's items are the ones kept
         };
         shadow.Load(before.Items);
         foreach (InventoryRewardGrant removal in removals)

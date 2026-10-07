@@ -27,14 +27,18 @@ public sealed partial class PlayerInventory
         return last;
     }
 
-    /// <summary>vmangos Player::StoreNewItem: create <paramref name="count"/> items of <paramref name="template"/> per <paramref name="dest"/> (from CanStoreItem).</summary>
-    public Item StoreNewItem(IReadOnlyList<ItemPosCount> dest, ItemTemplate template, uint count)
+    /// <summary>
+    /// vmangos Player::StoreNewItem: create <paramref name="count"/> items of <paramref name="template"/> per <paramref name="dest"/> (from CanStoreItem).
+    /// The new item rolls its random property unless <paramref name="randomPropertyId"/> is given (<see cref="RandomProperties"/>).
+    /// </summary>
+    public Item StoreNewItem(IReadOnlyList<ItemPosCount> dest, ItemTemplate template, uint count, int? randomPropertyId = null)
     {
         Player?.EnsureQuestSettlementMutationAllowed();
         ArgumentNullException.ThrowIfNull(dest);
         ArgumentNullException.ThrowIfNull(template);
         Item item = Item.Create(NextGuid(), template, _ownerGuid);
         item.Count = count;
+        ApplyNewItemRandomProperty(item, randomPropertyId);
         Item stored = StoreItem(dest, item);
         ItemCountChanged?.Invoke(template.Entry, (int)count);
         return stored;
