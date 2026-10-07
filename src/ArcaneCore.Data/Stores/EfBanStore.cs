@@ -1,3 +1,4 @@
+using System.Data.Common;
 using ArcaneCore.Data.Auth;
 using ArcaneCore.Kernel.Accounts;
 using Microsoft.EntityFrameworkCore;
@@ -93,10 +94,32 @@ public sealed class EfBanStore(AuthDbContext db, TimeProvider? clock = null, Acc
         });
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-        events?.Publish(new AccountStatusChange(
-            request.AccountId,
-            request.DurationSeconds > 0 ? AccountStatus.Suspended : AccountStatus.Banned,
-            request.AuthorAccountId));
+        if (events is not null)
+        {
+            bool permanent = await EffectiveBanIsPermanentAsync(request.AccountId, request.DurationSeconds <= 0).ConfigureAwait(false);
+            events.Publish(new AccountStatusChange(
+                request.AccountId,
+                permanent ? AccountStatus.Banned : AccountStatus.Suspended,
+                request.AuthorAccountId));
+        }
+    }
+
+    /// <summary>
+    /// Retail keeps every row (World.cpp:2476 inserts, nothing is deactivated), so an older, stricter ban can remain the
+    /// effective one: the published status is that of the strictest ban in force, not of the request. The read follows
+    /// the commit and must not fail the mutation, so a failed read falls back to the request's own kind.
+    /// </summary>
+    private async Task<bool> EffectiveBanIsPermanentAsync(int accountId, bool requestIsPermanent)
+    {
+        try
+        {
+            AccountBanRecord? effective = await GetActiveAccountBanAsync(accountId).ConfigureAwait(false);
+            return effective?.IsPermanent ?? requestIsPermanent;
+        }
+        catch (Exception ex) when (ex is DbException or InvalidOperationException)
+        {
+            return requestIsPermanent;
+        }
     }
 
     public async Task<bool> BanIpAsync(IpBanRequest request, CancellationToken cancellationToken = default)
@@ -169,22 +192,39 @@ public sealed class EfBanStore(AuthDbContext db, TimeProvider? clock = null, Acc
         int accountId, string source, string message, CancellationToken cancellationToken = default)
     {
         long now = Now;
-        int deactivated = await db.Set<AccountBanRow>().Where(r => r.AccountId == accountId && r.Active)
-            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Active, false), cancellationToken).ConfigureAwait(false);
+        int deactivated;
 
-        // Retail WarnAccount writes the audit row even when nothing was active: inactive, unbandate = bandate + 1.
-        db.ChangeTracker.Clear();
-        db.Set<AccountBanRow>().Add(new AccountBanRow
+        // The deactivation and its audit row are one transaction: a failed audit insert leaves the bans in force, and
+        // Active is published only once both are committed.
+        await using (var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false))
         {
-            AccountId = accountId,
-            BanDate = now,
-            UnbanDate = now + 1,
-            BannedBy = Truncate(source, 50),
-            BanReason = Truncate("UNBAN: " + message, 255),
-            Active = false,
-            Realm = 0,
-        });
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            deactivated = await db.Set<AccountBanRow>().Where(r => r.AccountId == accountId && r.Active)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.Active, false), cancellationToken).ConfigureAwait(false);
+
+            // Retail WarnAccount writes the audit row even when nothing was active: inactive, unbandate = bandate + 1.
+            db.ChangeTracker.Clear();
+            db.Set<AccountBanRow>().Add(new AccountBanRow
+            {
+                AccountId = accountId,
+                BanDate = now,
+                UnbanDate = now + 1,
+                BannedBy = Truncate(source, 50),
+                BanReason = Truncate("UNBAN: " + message, 255),
+                Active = false,
+                Realm = 0,
+            });
+            try
+            {
+                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                db.ChangeTracker.Clear(); // the rolled-back audit row must not be retried by a later save on this context
+                throw;
+            }
+
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
 
         if (deactivated > 0)
         {

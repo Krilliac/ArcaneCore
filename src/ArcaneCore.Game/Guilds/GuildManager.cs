@@ -698,6 +698,7 @@ public sealed partial class GuildManager(SocialContext context)
         }
 
         string name = NameOf(member);
+        bool wasLeader = guild.LeaderId == characterId;
         if (DeleteMember(guild, characterId))
         {
             Disband(guild);
@@ -705,7 +706,12 @@ public sealed partial class GuildManager(SocialContext context)
         }
 
         Save(guild);
-        BroadcastEvent(guild, GuildEvent.Left, ObjectGuid.Player(characterId), name);
+        if (!wasLeader)
+        {
+            // DeleteMember already broadcast GE_LEADER_CHANGED and GE_LEFT for a removed guild master (Guild.cpp:569-573).
+            BroadcastEvent(guild, GuildEvent.Left, ObjectGuid.Player(characterId), name);
+        }
+
         return GuildAdminResult.Ok;
     }
 

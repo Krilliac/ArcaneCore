@@ -86,9 +86,12 @@ public sealed class BanEnforcementFeature(IServiceProvider services, ILogger<Ban
             return;
         }
 
+        // Session addresses are already canonical (AddressOfEndpoint); bring the published one to the same form so a
+        // padded or IPv4-mapped spelling from any publisher still matches.
+        string ip = AccountBanEvaluator.NormalizeIp(change.Ip) ?? change.Ip.Trim();
         foreach (WorldSession session in _registry.Sessions)
         {
-            if (session.RemoteAddress == change.Ip && session.AccountId != change.ActorAccountId)
+            if (session.RemoteAddress == ip && session.AccountId != change.ActorAccountId)
             {
                 logger.LogInformation("Disconnecting account {AccountId}: address {Ip} is banned", session.AccountId, change.Ip);
                 session.Kick();

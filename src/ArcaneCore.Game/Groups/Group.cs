@@ -5,7 +5,7 @@ public sealed class GroupMemberSlot(ObjectGuid guid, string name, byte subGroup)
 {
     public ObjectGuid Guid { get; } = guid;
 
-    public string Name { get; } = name;
+    public string Name { get; internal set; } = name;
 
     public byte SubGroup { get; internal set; } = subGroup;
 

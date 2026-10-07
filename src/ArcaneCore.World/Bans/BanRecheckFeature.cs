@@ -100,7 +100,11 @@ public sealed class BanRecheckFeature(IServiceProvider services, ILogger<BanRech
         // Every read completes before anything is kicked: an error in any of them means nobody is kicked.
         IReadOnlySet<int> bannedAccounts = bans is null ? new HashSet<int>() : await bans.FindBannedAccountsAsync(ids, cancellationToken).ConfigureAwait(false);
         IReadOnlySet<int> nonActive = admin is null ? new HashSet<int>() : await admin.FindNonActiveAsync(ids, cancellationToken).ConfigureAwait(false);
-        IReadOnlySet<string> bannedIps = bans is null || addresses.Length == 0 ? new HashSet<string>() : await bans.FindBannedIpsAsync(addresses, cancellationToken).ConfigureAwait(false);
+        IReadOnlySet<string> storedIps = bans is null || addresses.Length == 0 ? new HashSet<string>() : await bans.FindBannedIpsAsync(addresses, cancellationToken).ConfigureAwait(false);
+
+        // The store returns the stored spelling, which a lenient collation (MariaDB PAD SPACE, case-insensitive hex)
+        // can match although it differs from the canonical session address: compare canonical forms.
+        var bannedIps = new HashSet<string>(storedIps.Select(ip => AccountBanEvaluator.NormalizeIp(ip) ?? ip.Trim()), StringComparer.Ordinal);
 
         foreach (WorldSession session in sessions)
         {

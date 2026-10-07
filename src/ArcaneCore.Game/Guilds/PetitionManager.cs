@@ -62,7 +62,8 @@ public sealed class PetitionManager
     /// <summary>
     /// Install the stored petitions (vmangos GuildMgr::LoadPetitions, GuildMgr.cpp:168-246). A petition whose
     /// owner is gone or already in a guild is deleted (joining a guild removes the owner's petition, so it is
-    /// stale), and signatures of characters that no longer exist are dropped. Run after the guilds are loaded.
+    /// stale), and signatures of characters that no longer exist or are already guilded are dropped. Run after the
+    /// guilds are loaded.
     /// </summary>
     public void Load(IEnumerable<PetitionData> petitions)
     {
@@ -83,8 +84,11 @@ public sealed class PetitionManager
             {
                 // Hardening: the sign path stops at ClientMaxSignatures, so a longer persisted list is malformed data (the packet
                 // count byte and its allocation follow the list length). Drop the excess and persist the trim.
+                // A signer already in a guild is stale too (Guild::AddMember → Player::RemovePetitionsAndSigns drops the
+                // signature on join): kept, it would count towards IsComplete and then be skipped by the founding.
                 if (petition.Signatures.Count >= PetitionConstants.ClientMaxSignatures
-                    || _context.Characters.Find((uint)signature.PlayerId) is null || petition.ForPlayer((uint)signature.PlayerId) is not null)
+                    || _context.Characters.Find((uint)signature.PlayerId) is null || petition.ForPlayer((uint)signature.PlayerId) is not null
+                    || _context.Guilds.GetGuildOf((uint)signature.PlayerId) is not null)
                 {
                     changed = true;
                     continue;
