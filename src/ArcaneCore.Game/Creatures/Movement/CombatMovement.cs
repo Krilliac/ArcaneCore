@@ -130,9 +130,14 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
     {
     }
 
-    /// <summary>vmangos: a casting, stunned, fleeing or confused unit does not chase (UNIT_STATE_CASTING / CAN_NOT_MOVE).</summary>
+    /// <summary>
+    /// vmangos: a casting, stunned, rooted, fleeing or confused unit does not chase (UNIT_STATE_CASTING / CAN_NOT_MOVE, which holds
+    /// UNIT_STATE_ROOT: UnitDefines.h:383, ChaseMovementGenerator::Update TargetedMovementGenerator.cpp:266-270). A creature's root is
+    /// <c>MovementFlags.Root</c> (set by <c>CcState.RefreshRoot</c>), not a unit flag.
+    /// </summary>
     private static bool CannotMove(Creature creature, ICreatureMover mover)
-        => mover.IsCasting(creature) || (creature.UnitFlags & (UnitFlags.Stunned | UnitFlags.Fleeing | UnitFlags.Confused)) != 0;
+        => mover.IsCasting(creature) || (creature.UnitFlags & (UnitFlags.Stunned | UnitFlags.Fleeing | UnitFlags.Confused)) != 0
+            || creature.Movement.HasFlag(MovementFlags.Root);
 
     /// <summary>True when the creature is where this generator wants it.</summary>
     protected abstract bool IsInPosition(Creature creature);
@@ -319,6 +324,9 @@ internal sealed class FollowMovementGenerator(Unit target, float distance, float
 /// legs. Timed flight ends after its duration (0 = until removed). Point choice re-implements
 /// the vmangos rule: closer than <see cref="MinQuietDistance"/> it runs a random 0.4–1.3 × the
 /// missing distance away (± 45°); otherwise a random 0.4–1.0 × (max − min quiet distance) in any direction.
+/// A stunned or rooted creature holds still (<see cref="CrowdControlGates.IsHeldInPlace"/>): the spline is stopped, no leg is
+/// picked and the flight's duration does not run. The flag is left set at the end when a fear aura holds it
+/// (<see cref="Creature.FearHeldByAura"/>).
 /// </summary>
 internal sealed class FleeingMovementGenerator(Unit? source, uint durationMs) : ICreatureMovementGenerator
 {
@@ -335,28 +343,58 @@ internal sealed class FleeingMovementGenerator(Unit? source, uint durationMs) : 
         creature.UnitFlags |= UnitFlags.Fleeing;
         _remainingMs = durationMs == 0 ? int.MaxValue : (int)Math.Min(durationMs, int.MaxValue);
         _pauseMs = 0;
-        MoveAway(creature, mover);
+        if (!CrowdControlGates.IsHeldInPlace(creature))
+        {
+            MoveAway(creature, mover); // else the first Update after the hold lifts starts the first leg (the pause timer is 0)
+        }
     }
 
     public void Resume(Creature creature, ICreatureMover mover)
     {
         creature.UnitFlags |= UnitFlags.Fleeing;
-        MoveAway(creature, mover);
+        if (!CrowdControlGates.IsHeldInPlace(creature))
+        {
+            MoveAway(creature, mover);
+        }
     }
 
-    public void Interrupt(Creature creature, ICreatureMover mover) => creature.UnitFlags &= ~UnitFlags.Fleeing;
+    public void Interrupt(Creature creature, ICreatureMover mover) => ClearOwnFlag(creature);
 
     public void Finish(Creature creature, ICreatureMover mover, bool completed)
     {
-        creature.UnitFlags &= ~UnitFlags.Fleeing;
+        ClearOwnFlag(creature);
         if (creature.IsMoving)
         {
             mover.StopMoving(creature);
         }
     }
 
+    /// <summary>
+    /// Drop the flag this flight set, unless a fear aura holds it too (it landed during the flight): the aura's flag must outlive the
+    /// flight, so the fear flight of the movement hook takes over (vmangos never lets a flight generator clear UNIT_FLAG_FLEEING).
+    /// </summary>
+    private static void ClearOwnFlag(Creature creature)
+    {
+        if (!creature.FearHeldByAura)
+        {
+            creature.UnitFlags &= ~UnitFlags.Fleeing;
+        }
+    }
+
     public bool Update(Creature creature, ICreatureMover mover, uint diffMs)
     {
+        // vmangos (Timed)FleeingMovementGenerator::Update (FleeingMovementGenerator.cpp:164-169, 220-225): a stunned or rooted unit
+        // holds still, picks no leg, and its flee timer does not run.
+        if (CrowdControlGates.IsHeldInPlace(creature))
+        {
+            if (creature.IsMoving)
+            {
+                mover.StopMoving(creature);
+            }
+
+            return true;
+        }
+
         if (durationMs != 0)
         {
             _remainingMs -= (int)Math.Min(diffMs, int.MaxValue);

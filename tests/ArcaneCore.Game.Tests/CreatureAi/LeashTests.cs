@@ -145,6 +145,28 @@ public sealed class LeashTests
         Assert.True(f.Wolf.IsInEvadeMode);
     }
 
+    [Theory]
+    [InlineData(1u)]
+    [InlineData(7u)]
+    [InlineData(333u)]
+    [InlineData(1499u)]
+    [InlineData(2999u)]
+    [InlineData(3001u)]
+    [InlineData(4500u)]
+    [InlineData(9100u)]
+    public void TheHardLeashCheck_IsNeverSkipped_WhateverTheTickLength(uint step)
+    {
+        // The clock advances by exactly the tick's diff before the check, so clock % 3000 <= diff holds on every tick that
+        // reaches a multiple of 3000 (vmangos Creature.cpp:979 polls tickTime() % 3000 <= update_diff the same way): one window of
+        // 3000 ms plus one tick always contains a check.
+        using Fight f = Start(Template() with { Leash = 30f });
+        f.Wolf.Relocate(5 + 40, 0, 83.5f, 0, 0);
+
+        Run(f.World, 3000 + step, step);
+
+        Assert.True(f.Wolf.IsInEvadeMode);
+    }
+
     [Fact]
     public void TheLeashCheckInterval_IsConfigurable_AndZeroTurnsTheHardLeashOff()
     {

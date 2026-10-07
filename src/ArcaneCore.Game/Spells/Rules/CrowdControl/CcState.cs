@@ -129,6 +129,11 @@ internal static class CcState
         }
 
         SetFlag(unit, UnitFlags.Confused, system.HasLiveAura(unit, AuraType.ModConfuse));
-        SetFlag(unit, UnitFlags.Fleeing, system.HasLiveAura(unit, AuraType.ModFear) && !system.HasLiveAura(unit, AuraType.PreventsFleeing));
+        bool feared = system.HasLiveAura(unit, AuraType.ModFear) && !system.HasLiveAura(unit, AuraType.PreventsFleeing);
+        SetFlag(unit, UnitFlags.Fleeing, feared);
+        if (unit is Creatures.Creature creature)
+        {
+            creature.FearHeldByAura = feared; // a creature's timed flight shares the flag and must not clear it while this holds
+        }
     }
 }

@@ -54,6 +54,13 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// <summary>The assistance call went out for the current fight (vmangos m_AlreadyCallAssistance).</summary>
     internal bool CalledAssistance { get; set; }
 
+    /// <summary>
+    /// A live fear aura holds <c>UnitFlags.Fleeing</c> (set with the flag by <c>CcState.RefreshFear</c>). A timed flight (critter, flee for
+    /// assistance) sets the same flag for itself and must not clear it while this is true (vmangos keeps UNIT_FLAG_FLEEING aura-owned,
+    /// Unit::ModConfuseSpell, Unit.cpp:9141-9147; TimedFleeingMovementGenerator::Finalize clears only unit states).
+    /// </summary>
+    internal bool FearHeldByAura { get; set; }
+
     /// <summary>vmangos CreatureAI::AttackedBy: an idle creature retaliates against its attacker.</summary>
     public void OnAttackedBy(Unit attacker)
     {

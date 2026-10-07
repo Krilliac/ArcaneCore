@@ -2,6 +2,7 @@ using System.Numerics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -25,13 +26,20 @@ public sealed partial class CreatureMapSystem
     // --- assistance --------------------------------------------------------------------------
 
     /// <summary>
-    /// vmangos Creature::CallAssistance: once per fight, every idle same-faction creature within
-    /// <see cref="CreatureOptions.AssistanceRadius"/> that can see the caller joins after
-    /// <see cref="CreatureOptions.AssistanceDelayMs"/> (helpers do not call further help).
+    /// vmangos Creature::CallAssistance (Objects/Creature.cpp:2520-2545): once per fight, every idle same-faction creature within the
+    /// assistance radius (<see cref="AssistanceRadiusOf"/>) that can see the caller joins after <see cref="CreatureOptions.AssistanceDelayMs"/>
+    /// (helpers do not call further help). A charmed creature calls nobody, nor does a cmangos template with NO_CALL_ASSIST.
     /// </summary>
     internal void CallAssistance(Creature creature, Unit enemy)
     {
-        if (creature.CalledAssistance || _options.AssistanceRadius <= 0 || creature.Template.Civilian)
+        if (creature.CalledAssistance || creature.Template.Civilian || !creature.CharmerGuid.IsEmpty
+            || (creature.Template.Behaviour & CreatureBehaviourFlags.NoCallAssist) != 0)
+        {
+            return;
+        }
+
+        float radius = AssistanceRadiusOf(creature.Template);
+        if (radius <= 0)
         {
             return;
         }
@@ -39,12 +47,22 @@ public sealed partial class CreatureMapSystem
         creature.CalledAssistance = true;
         foreach (Creature helper in _creatures.Values)
         {
-            if (CanAssist(helper, creature, enemy, _options.AssistanceRadius))
+            if (CanAssist(helper, creature, enemy, radius))
             {
                 _pendingAssists.Add(new PendingAssist(helper, enemy, creature, _clockMs + _options.AssistanceDelayMs));
             }
         }
     }
+
+    /// <summary>
+    /// The radius of a template's assistance call, by the dialect its rows came from. vmangos (Creature.cpp:2522-2526): a
+    /// <c>call_for_help_range</c> of 0 calls nobody, any other value searches <see cref="CreatureOptions.AssistanceRadius"/>. cmangos
+    /// (Entities/Creature.cpp:2171-2173), and rows from before the dialect was recorded: a positive <c>CallForHelp</c> replaces
+    /// <see cref="CreatureOptions.AssistanceRadius"/>, 0 keeps it.
+    /// </summary>
+    private float AssistanceRadiusOf(CreatureTemplate template) => template.ExtraFlagsDialect == CreatureExtraFlagsDialect.VMangos
+        ? (template.CallForHelp > 0 ? _options.AssistanceRadius : 0f)
+        : (template.CallForHelp > 0 ? template.CallForHelp : _options.AssistanceRadius);
 
     /// <summary>cmangos EventAI CALL_FOR_HELP: idle same-faction creatures within <paramref name="radius"/> join at once.</summary>
     public int CallForHelp(Creature creature, float radius)
