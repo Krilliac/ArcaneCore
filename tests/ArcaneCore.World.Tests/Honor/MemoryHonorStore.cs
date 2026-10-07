@@ -1,5 +1,6 @@
 using ArcaneCore.Kernel.Honor;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace ArcaneCore.World.Tests.Honor;
 
@@ -8,12 +9,34 @@ internal sealed class HonorTestServices : IWorldTestServices
 {
     public static readonly AsyncLocal<MemoryHonorStore?> Current = new();
 
+    /// <summary>
+    /// The instant every honor test host runs at (a Tuesday, mid-day UTC): the honor feature, its maintenance feature and the tests all read it,
+    /// so no test derives "today" from the wall clock and none can straddle midnight.
+    /// </summary>
+    public static readonly DateTimeOffset Instant = new(2026, 10, 6, 12, 0, 0, TimeSpan.Zero);
+
+    /// <summary>The game day (offset 0) of <see cref="Instant"/>.</summary>
+    public static uint Today => ArcaneCore.Game.Honor.HonorMaintenancePlanner.GameDay(Instant.ToUnixTimeSeconds(), 0);
+
     public void Register(IServiceCollection services)
     {
         if (Current.Value is { } store)
         {
             services.AddSingleton<IHonorStore>(store);
+            services.AddSingleton<ArcaneCore.Game.Honor.HonorClock>(new FixedHonorClock());
+            services.Replace(ServiceDescriptor.Singleton<TimeProvider>(new FixedTimeProvider()));
         }
+    }
+
+    private sealed class FixedHonorClock : ArcaneCore.Game.Honor.HonorClock
+    {
+        public override long UnixMilliseconds => Instant.ToUnixTimeMilliseconds();
+    }
+
+    /// <summary>Wall-clock reads are fixed; timers and elapsed-time stamps stay real so nothing that waits is affected.</summary>
+    private sealed class FixedTimeProvider : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => Instant;
     }
 
     /// <summary>Start a host over <paramref name="store"/> (and optional configuration).</summary>
@@ -197,8 +220,14 @@ internal sealed class MemoryHonorStore : IHonorStore
         }
     }
 
+    private int _listCalls;
+
+    /// <summary>How many times the weekly scores were read: the last thing the weekly runner does before it waits for the week gate.</summary>
+    public int ListWeeklyScoresCalls => Volatile.Read(ref _listCalls);
+
     public Task<IReadOnlyList<HonorWeeklyScore>> ListWeeklyScoresAsync(uint weekBeginDay, uint weekEndDay, CancellationToken cancellationToken = default)
     {
+        Interlocked.Increment(ref _listCalls);
         lock (_lock)
         {
             var sums = new Dictionary<int, (uint Hk, uint Dk, double Cp)>();

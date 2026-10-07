@@ -14,8 +14,9 @@ namespace ArcaneCore.Game.WorldState.Events;
 /// </para>
 /// <para>
 /// The quest objects belong to <see cref="QuestStore"/>, which the quest feature may build or rebuild at any time, so the store is
-/// looked up on every use and <see cref="Resync"/> re-applies the state when it changed. After a quest-template reload the new
-/// quest objects are active until the next event change or the next <see cref="Resync"/> (documented limit).
+/// looked up on every use and <see cref="Resync"/> re-applies the state when it changed. A quest-template reload swaps the
+/// store, so the new quest objects carry their own state until the next <see cref="Resync"/>, which the world feature runs on every world
+/// tick (pinned by <c>GameEventQuestWorldTests.AQuestTemplateReload_DoesNotLoseTheEventState_TheNextWorldTickReappliesIt</c>).
 /// </para>
 /// </summary>
 public sealed class GameEventQuests : IGameEventEffects

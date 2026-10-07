@@ -21,7 +21,7 @@ namespace ArcaneCore.World.Tests.Honor;
 /// </summary>
 public sealed class HonorWorldTests
 {
-    private static uint Today => HonorMaintenancePlanner.GameDay(DateTimeOffset.UtcNow.ToUnixTimeSeconds(), 0);
+    private static uint Today => HonorTestServices.Today; // the clock every honor test host runs at
 
     private static uint WeekBegin => HonorMaintenancePlanner.LastMaintenanceDay(Today, new HonorOptions().MaintenanceDay);
 

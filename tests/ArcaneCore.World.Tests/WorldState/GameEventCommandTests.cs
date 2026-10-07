@@ -18,9 +18,14 @@ public sealed class GameEventCommandTests
     private static string LocalText(DateTimeOffset instant)
         => TimeZoneInfo.ConvertTime(instant, TimeZoneInfo.Local).DateTime.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
 
+    // The host runs at this instant, not at the wall clock: mid-June, hours from any daylight-saving change in any zone, so the event windows
+    // below (-30 min .. +5 h) cannot straddle a day or a clock change however the test is scheduled.
+    private static readonly DateTimeOffset Now = new(2026, 6, 17, 12, 0, 0, TimeSpan.Zero);
+
     private static async Task<WorldTestHost> StartAsync()
     {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DateTimeOffset now = Now;
+        WorldTestHost.GameTime.Value = new ArcaneCore.Game.WorldState.Time.FixedGameTime(Now, TimeZoneInfo.Local);
         GameEventTestStore.Current.Value = new GameEventContent(
             [new GameEventRecord(1, 1, 1440, 180, 0, 0, "Test Festival"), new GameEventRecord(2, 1, 1440, 60, 0, 0, "Night Market")],
             [
@@ -36,6 +41,7 @@ public sealed class GameEventCommandTests
         finally
         {
             GameEventTestStore.Current.Value = null;
+            WorldTestHost.GameTime.Value = null;
         }
 
         GameEventFeature events = host.WorldServices.GetRequiredService<GameEventFeature>();

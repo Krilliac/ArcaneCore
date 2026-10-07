@@ -60,7 +60,7 @@ public sealed class GameEventReloadable(IServiceProvider services) : IContentRel
             return problems;
         }
 
-        /// <summary>The loader''s issues that make a table unfit to go live (the others are limits or dropped rows, reported as notes).</summary>
+        /// <summary>The loader's issues that make a table unfit to go live (the others are limits or dropped rows, reported as notes).</summary>
         private static bool IsRowProblem(string issue)
             => issue.Contains("reserved or out of range", StringComparison.Ordinal)
                 || issue.Contains("is linked to invalid event", StringComparison.Ordinal)

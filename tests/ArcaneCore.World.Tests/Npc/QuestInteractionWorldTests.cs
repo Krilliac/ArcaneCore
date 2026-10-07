@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Quests;
@@ -17,6 +18,23 @@ namespace ArcaneCore.World.Tests.Npc;
 
 public sealed class QuestInteractionWorldTests
 {
+    /// <summary>
+    /// Makes <paramref name="creature"/> invisible to <paramref name="player"/> the way the game does, with a visibility rule, so the state survives every later
+    /// visibility pass. Removing the guid from <see cref="Player.VisibleObjects"/> by hand is undone by the next pass the map runs for that player or
+    /// creature (any movement), which raced the socket requests that follow and let them see the creature again.
+    /// </summary>
+    private static void HideFrom(Player player, Creature creature)
+    {
+        player.Map!.AddVisibilityRule(new HideObject(creature.Guid));
+        player.Map.RefreshVisibility(player);
+        Assert.DoesNotContain(creature.Guid, player.VisibleObjects);
+    }
+
+    private sealed class HideObject(ObjectGuid guid) : IVisibilityRule
+    {
+        public bool CanSee(Player viewer, WorldObject target, bool alreadyVisible, bool detect) => target.Guid != guid;
+    }
+
     [Fact]
     public void GreetingHandlersRunInWorldAndDoNotRegisterForeignNpcServices()
     {
@@ -111,7 +129,7 @@ public sealed class QuestInteractionWorldTests
             var creature = (Creature)map.FindObject(QuestInteractionFixture.Guid)!;
             switch (guard)
             {
-                case "visibility": player.VisibleObjects.Remove(creature.Guid); break;
+                case "visibility": HideFrom(player, creature); break;
                 case "hostile": creature.FactionTemplate = 900012; break;
                 case "unknown": creature.FactionTemplate = 999999; break;
                 case "distance": creature.Relocate(player.X + 20, player.Y, player.Z, 0, host.World.NowMs); break;
@@ -223,7 +241,7 @@ public sealed class QuestInteractionWorldTests
             var creature = (Creature)player.Map!.FindObject(QuestInteractionFixture.Guid)!;
             switch (guard)
             {
-                case "visibility": player.VisibleObjects.Remove(creature.Guid); break;
+                case "visibility": HideFrom(player, creature); break;
                 case "hostile": creature.FactionTemplate = 900012; break;
                 case "unknown": creature.FactionTemplate = 999999; break;
                 case "distance": creature.Relocate(player.X + 20, player.Y, player.Z, 0, host.World.NowMs); break;

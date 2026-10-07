@@ -23,7 +23,7 @@ public sealed class HonorEndToEndTests
     public async Task A_one_blow_pvp_kill_pays_credits_persists_and_survives_a_relog_then_the_week_ranks_the_killer()
     {
         var store = new MemoryHonorStore();
-        uint today = HonorMaintenancePlanner.GameDay(DateTimeOffset.UtcNow.ToUnixTimeSeconds(), 0);
+        uint today = HonorTestServices.Today;
         uint thisWeek = today - 3; // the honor week the players log in under; the week ends later in the test (a consistent state: the next maintenance day is thisWeek + 7)
         await store.SaveMaintenanceAsync(new HonorMaintenanceState(thisWeek, thisWeek + 7, false)); // not due: attach leaves it alone
         await using WorldTestHost host = HonorTestServices.Start(store);

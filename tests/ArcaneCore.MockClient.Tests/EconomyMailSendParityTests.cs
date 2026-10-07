@@ -124,12 +124,15 @@ public sealed class EconomyMailSendParityTests
         await rig.Receiver!.SendAsync(WorldOpcode.CmsgPing, ScenarioWire.Ping(1, 0), CancellationToken.None);
         await rig.AssertNoReceivedMailUntilPongAsync();
         await rig.Receiver.SendAsync(WorldOpcode.CmsgGetMailList, ScenarioWire.Guid(Mailbox.Value), CancellationToken.None);
-        Assert.Equal(0, (await rig.Receiver.ReadUntilAsync(WorldOpcode.SmsgMailListResult, CancellationToken.None))[0]);
+        Assert.Equal(0, (await rig.ReadUntilPatientAsync(WorldOpcode.SmsgMailListResult))[0]);
 
+        // The announcement rides the economy's real one-second delivery timer and then a world tick, so on a busy
+        // machine it can arrive well after the client's 5-second per-frame read bound: wait for traffic on the rig's
+        // own 60-second deadline instead of racing that bound.
         rig.Clock.Advance(TimeSpan.FromSeconds(3601));
-        await rig.Receiver.ReadUntilAsync(WorldOpcode.SmsgReceivedMail, rig.Token);
+        await rig.ReadUntilPatientAsync(WorldOpcode.SmsgReceivedMail);
         await rig.Receiver.SendAsync(WorldOpcode.CmsgGetMailList, ScenarioWire.Guid(Mailbox.Value), CancellationToken.None);
-        Assert.Equal(1, (await rig.Receiver.ReadUntilAsync(WorldOpcode.SmsgMailListResult, CancellationToken.None))[0]);
+        Assert.Equal(1, (await rig.ReadUntilPatientAsync(WorldOpcode.SmsgMailListResult))[0]);
 
         MailRecord letter = Assert.Single(await rig.ReceiverMailAsync());
         await rig.Receiver.SendAsync(WorldOpcode.CmsgMailMarkAsRead, ScenarioWire.GuidQuest(Mailbox.Value, letter.Id), CancellationToken.None);
@@ -265,11 +268,31 @@ public sealed class EconomyMailSendParityTests
                 .GetMailsAsync(checked((int)guid), Token);
         }
 
+        /// <summary>
+        /// Read the receiver's frames until <paramref name="opcode"/> arrives. Each wait for the next frame is bounded only by the
+        /// rig's deadline; the client's 5-second bound then covers just the frame that is already arriving.
+        /// </summary>
+        public async Task<byte[]> ReadUntilPatientAsync(WorldOpcode opcode)
+        {
+            for (int index = 0; index < 512; index++)
+            {
+                await Receiver!.WaitForTrafficAsync(Token);
+                WorldFrame frame = await Receiver.ReadAsync(Token);
+                if (frame.Opcode == (ushort)opcode)
+                {
+                    return frame.Payload;
+                }
+            }
+
+            throw new InvalidOperationException($"Expected {opcode} within 512 world packets.");
+        }
+
         public async Task AssertNoReceivedMailUntilPongAsync()
         {
             while (true)
             {
-                WorldFrame frame = await Receiver!.ReadAsync(Token);
+                await Receiver!.WaitForTrafficAsync(Token);
+                WorldFrame frame = await Receiver.ReadAsync(Token);
                 Assert.NotEqual((ushort)WorldOpcode.SmsgReceivedMail, frame.Opcode);
                 if (frame.Opcode == (ushort)WorldOpcode.SmsgPong)
                 {

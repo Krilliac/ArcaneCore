@@ -22,10 +22,8 @@ public sealed class InspectHandlerTests
         return writer.ToArray();
     }
 
-    // The two other clients are not returned; an unreferenced client is finalized, which closes its socket and logs its player out (the
-    // "Inspb is not online" and missing-reply failures under GC pressure in a full run). They live as long as their host.
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WorldTestHost, List<WorldTestClient>> KeepAlive = new();
-
+    // Clients b and c are not returned: the host keeps every client it connected until it is disposed, so they cannot be finalized (which
+    // closes the socket and logs the player out) while the test runs.
     private static async Task<(WorldTestHost Host, WorldTestClient A, ulong B, ulong C)> ThreePlayersAsync()
     {
         WorldTestHost host = WorldTestHost.Start();
@@ -40,10 +38,6 @@ public sealed class InspectHandlerTests
                 map.Combat.Hooks = new CombatHooks();
             }
         });
-        KeepAlive.GetOrCreateValue(host).AddRange([b, c]);
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        await Task.Delay(300); // a client that was dropped by now would have been logged out; the keep-alive above makes this a regression guard
         ulong bGuid = await host.PlayerStateAsync("Inspb", p => p.Guid.Value);
         ulong cGuid = await host.PlayerStateAsync("Inspc", p => p.Guid.Value);
         foreach (string name in new[] { "Inspa", "Inspb", "Inspc" })

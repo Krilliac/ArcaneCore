@@ -1,13 +1,14 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 
 namespace ArcaneCore.Game.Stealth;
 
 /// <summary>
 /// The stealth part of vmangos Unit::IsVisibleForOrDetect (Unit.cpp:6321-6461), in the same order: a unit that is not stealthed,
-/// the viewer itself, a game master, the Hunter's Mark caster and a non-hostile group member are always allowed; a unit in the
+/// the viewer itself, the unit's owner or charmer, a game master, the Hunter's Mark caster and a non-hostile group member are always allowed; a unit in the
 /// NO_DETECT group is hidden; an ordinary (movement-driven) evaluation keeps only units the viewer already sees; a detection
 /// evaluation runs the distance formula (<see cref="StealthDetection"/>) and then line of sight. A dead viewer never detects.
 /// Invisibility uses the same per-viewer rule, with matching type masks and detection aura levels
@@ -37,6 +38,13 @@ public sealed class StealthVisibilityRule : IVisibilityRule
     public bool CanSee(Player viewer, WorldObject target, bool alreadyVisible, bool detect)
     {
         if (!_registry.AnyHidden || target is not Unit unit || ReferenceEquals(viewer, target))
+        {
+            return true;
+        }
+
+        // always seen by owner (vmangos Unit::IsVisibleForOrDetect, Unit.cpp:6359-6361: GetCharmerOrOwnerGuid() == pDetector's guid,
+        // tested before the visibility group, so an invisible pet or charmed unit never hides from the player that owns it)
+        if (!unit.CharmerOrOwnerGuid.IsEmpty && unit.CharmerOrOwnerGuid == viewer.Guid)
         {
             return true;
         }

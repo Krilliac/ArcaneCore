@@ -289,6 +289,88 @@ public sealed class BanCommandTests
         Assert.True((await host.Bans.GetActiveIpBanAsync("10.1.1.1"))!.IsPermanent); // the 1d retry did not replace it
     }
 
+    [Fact] // the default is a deliberate GM-visible deviation from retail (0 = unbounded, as retail): pin the number and the unconfigured path
+    public async Task BanList_WithTheDefaultOptions_StopsAt200_AndTheDefaultIsPinned()
+    {
+        Assert.Equal(200, new BanOptions().MaxListedEntries);
+
+        await using var host = WorldTestHost.Start(); // no banOptions: the command falls back to new BanOptions()
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await Drain(admin);
+        for (int i = 1; i <= 201; i++)
+        {
+            host.Bans.AddIpRow($"7.0.0.{i}", 100, 100);
+        }
+
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".banlist ip 7.");
+        string[] lines = await ReadLinesAsync(admin, 202);
+
+        Assert.Equal("The following IPs match your pattern:", lines[0]);
+        Assert.Equal("7.0.0.1", lines[1]);
+        Assert.Equal("7.0.0.200", lines[200]);
+        Assert.Equal("... more entries exist; only the first 200 are shown.", lines[201]);
+    }
+
+    [Fact]
+    public async Task BanList_Account_StopsAtMaxListedEntries_AndSaysSo()
+    {
+        await using var host = WorldTestHost.Start(banOptions: new BanOptions { MaxListedEntries = 2 });
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        foreach (string name in new[] { "CAPA", "CAPB", "CAPC" })
+        {
+            await host.AddAccountAsync(name);
+            host.Bans.AddAccountRow((await host.Accounts.FindByUsernameAsync(name))!.Id, 100, 100);
+        }
+
+        await Drain(admin);
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".banlist account cap");
+
+        Assert.Equal(
+            ["The following accounts match your query:", "CAPA", "CAPB", "... more entries exist; only the first 2 are shown."],
+            await ReadLinesAsync(admin, 4));
+    }
+
+    [Fact]
+    public async Task BanList_Character_StopsAtMaxListedEntries_AndSaysSo()
+    {
+        await using var host = WorldTestHost.Start(banOptions: new BanOptions { MaxListedEntries = 2 });
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        foreach ((string account, string character) in new[] { ("CHARA", "Capone"), ("CHARB", "Capetown"), ("CHARC", "Capsule") })
+        {
+            WorldTestClient other = await host.EnterWorldAsync(account, character);
+            await other.DisposeAsync();
+            host.Bans.AddAccountRow((await host.Accounts.FindByUsernameAsync(account))!.Id, 100, 100);
+        }
+
+        await Drain(admin);
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".banlist character cap");
+
+        Assert.Equal(
+            ["The following accounts match your query:", "CHARA", "CHARB", "... more entries exist; only the first 2 are shown."],
+            await ReadLinesAsync(admin, 4));
+    }
+
+    [Fact]
+    public async Task BanInfo_Account_HistoryStopsAtMaxListedEntries_AndSaysSo()
+    {
+        await using var host = WorldTestHost.Start(banOptions: new BanOptions { MaxListedEntries = 2 });
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await host.AddAccountAsync("MANYBANS");
+        int id = (await host.Accounts.FindByUsernameAsync("MANYBANS"))!.Id;
+        host.Bans.AddAccountRow(id, 100, 100, active: false);
+        host.Bans.AddAccountRow(id, 200, 200, active: false);
+        host.Bans.AddAccountRow(id, 300, 300, active: false);
+        await Drain(admin);
+
+        await admin.SendChatAsync(ChatType.Say, Language.Common, ".baninfo account manybans");
+        string[] lines = await ReadLinesAsync(admin, 4);
+
+        Assert.Equal("Ban history for account MANYBANS:", lines[0]);
+        Assert.StartsWith("Ban Date: ", lines[1]);
+        Assert.StartsWith("Ban Date: ", lines[2]);
+        Assert.Equal("... more entries exist; only the first 2 are shown.", lines[3]);
+    }
+
     [Fact]
     public async Task BanList_Account_Character_Ip_ListMatchesAndPurgeExpiredIpsFirst()
     {
