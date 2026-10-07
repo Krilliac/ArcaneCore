@@ -39,6 +39,8 @@ public sealed class SocialFeature(
     /// <summary>How often grouped players' changed stats go to out-of-range members (vmangos sends them from the player update).</summary>
     public const int StatsIntervalMs = 1000;
     private const int MaxDeferredCommands = 128;
+    private const int SocialReadAttempts = 3;
+    private const int SocialReadRetryDelayMs = 250;
 
     private readonly ILogger _logger = loggers.CreateLogger<SocialFeature>();
     private readonly HashSet<ObjectGuid> _ready = [];
@@ -272,12 +274,7 @@ public sealed class SocialFeature(
                 }
             }
 
-            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
-            if (scope.ServiceProvider.GetService<ISocialStore>() is { } store)
-            {
-                entries = await store.GetSocialAsync(characterId, _stop.Token).ConfigureAwait(false);
-            }
-
+            entries = await ReadSocialAsync(characterId).ConfigureAwait(false);
             if (_writes is not null)
             {
                 entries = _writes.WithRetained(characterId, entries);
@@ -289,13 +286,54 @@ public sealed class SocialFeature(
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "loading the social list of character {Id} failed; starting empty", characterId);
+            // An empty list is not a safe stand-in: ignored players could invite and be heard, and the player's later
+            // social writes would start from nothing. The player is never marked ready and is disconnected instead.
+            _logger.LogError(ex, "loading the social list of character {Id} failed; disconnecting", characterId);
+            if (!_stopping)
+            {
+                world.Post(() => FailLogin(player));
+            }
+
+            return;
         }
 
         if (!_stopping)
         {
             world.Post(() => CompleteLogin(player, entries));
         }
+    }
+
+    /// <summary>The stored friend/ignore rows, retried like the guild load; the last failure is thrown.</summary>
+    private async Task<IReadOnlyList<SocialEntry>> ReadSocialAsync(int characterId)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                return scope.ServiceProvider.GetService<ISocialStore>() is { } store
+                    ? await store.GetSocialAsync(characterId, _stop.Token).ConfigureAwait(false)
+                    : [];
+            }
+            catch (Exception ex) when (attempt < SocialReadAttempts && !_stopping)
+            {
+                _logger.LogWarning(ex, "loading the social list of character {Id} failed (attempt {Attempt}); retrying", characterId, attempt);
+                await Task.Delay(SocialReadRetryDelayMs * attempt, _stop.Token).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>World thread: the stored list could not be read. Pending commands are dropped and the session is closed.</summary>
+    private void FailLogin(Player player)
+    {
+        if (_stopping || !ReferenceEquals(_world!.FindOnlinePlayer(player.Guid), player))
+        {
+            return; // logged out meanwhile
+        }
+
+        _pendingCommands.Remove(player);
+        _rejectedCommands.Add(player);
+        player.Session.Kick();
     }
 
     private void CompleteLogin(Player player, IReadOnlyList<SocialEntry> entries)
