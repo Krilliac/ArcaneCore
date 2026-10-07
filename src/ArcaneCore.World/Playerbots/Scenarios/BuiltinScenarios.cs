@@ -191,7 +191,9 @@ public sealed class DuelScenario : IPlayerbotScenario
             ScenarioBot loser = winner.Loser.Equals(a.Name, StringComparison.OrdinalIgnoreCase) ? a : b;
             ScenarioBot victor = ReferenceEquals(loser, a) ? b : a;
             ScenarioContext.Expect(winner.Winner.Equals(victor.Name, StringComparison.OrdinalIgnoreCase), $"winner {winner.Winner} is not {victor.Name}");
-            await context.ExpectAsync(loser, "the loser is alive", p => p.IsAlive).ConfigureAwait(false);
+            // The lethal blow of a duel leaves the loser alive at exactly 1 health (vmangos Unit::DealDamage duel branch).
+            await context.ExpectAsync(loser, "the loser is alive at 1 health", p => p.IsAlive && p.Health == 1).ConfigureAwait(false);
+            await context.ExpectAsync(victor, "the winner is alive", p => p.IsAlive).ConfigureAwait(false);
             await context.WaitUntilAsync("the duel state is cleared", () => a.RequirePlayer().DuelArbiter == 0 && b.RequirePlayer().DuelArbiter == 0
                 && a.RequirePlayer().DuelTeam == 0 && b.RequirePlayer().DuelTeam == 0).ConfigureAwait(false);
         }).ConfigureAwait(false);
