@@ -38,6 +38,22 @@ public static class ItemSpellCharges
             return;
         }
 
+        if (TakeCharge(player, item))
+        {
+            cast.CastItem = null;   // destroying the item involved in the spell must not interrupt it (vmangos ClearCastItem)
+        }
+    }
+
+    /// <summary>
+    /// The charge step of TakeCastItem for one use of <paramref name="item"/> by <paramref name="player"/>: every limited-charge spell
+    /// slot loses a charge, and a spent expendable item (negative charges) loses one of its stack. True when the item was destroyed.
+    /// Also used for a key that opened a lock from the bags (<see cref="GameObjects.GameObjectMapSystem"/>), which the reference core
+    /// opens by casting the key's spell.
+    /// </summary>
+    public static bool TakeCharge(Player player, Item item)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(item);
         bool expendable = false;
         bool withoutCharges = false;
         IReadOnlyList<Kernel.Items.ItemSpell> spells = item.Template.Spells;
@@ -68,9 +84,11 @@ public static class ItemSpellCharges
 
         if (expendable && withoutCharges)
         {
-            cast.CastItem = null;   // destroying the item involved in the spell must not interrupt it (vmangos ClearCastItem)
             player.Inventory.DestroyItemCount(item, 1);
+            return true;
         }
+
+        return false;
     }
 
     /// <summary>The first spell slot of <paramref name="item"/> that has limited charges and none left (vmangos Spell.cpp:7119-7125).</summary>

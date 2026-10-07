@@ -1331,7 +1331,7 @@ public sealed partial class LootService : IViewerFieldFilter
                 // A durable take in flight decides the chest's fate (empty or not) when it finishes.
                 if (bag.Viewers.Count == 0 && !(bag.DurableKey is { } pending && Durable?.IsPending(pending) == true))
                 {
-                    go.System?.OnLootReleased(go, bag);
+                    go.System?.OnLootReleased(go, bag, player);
                 }
 
                 break;

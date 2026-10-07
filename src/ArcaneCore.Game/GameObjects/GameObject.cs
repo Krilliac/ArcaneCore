@@ -165,6 +165,7 @@ public sealed partial class GameObject : WorldObject
         ResetAfterSecond = null;
         UseCount = 0;
         SkillupSet.Clear();
+        ResetBehaviourState();
     }
 
     /// <summary>Distance between this object and <paramref name="other"/>, 3D, minus both bounding radii (vmangos GetDistance).</summary>

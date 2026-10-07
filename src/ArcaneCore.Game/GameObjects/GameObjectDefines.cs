@@ -132,6 +132,9 @@ public enum GameObjectUseResult
 
     /// <summary>The user carries UNIT_FLAG_IMMUNE and the object cannot be used under immunity (vmangos CannotBeUsedUnderImmunity).</summary>
     Immune,
+
+    /// <summary>The chest is more than ten levels above the user (vmangos Player::SendLoot, chest.level).</summary>
+    LevelTooLow,
 }
 
 /// <summary>LockKeyType (Lock.dbc Type[i]).</summary>

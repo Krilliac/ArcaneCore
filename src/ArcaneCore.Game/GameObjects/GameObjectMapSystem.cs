@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
@@ -192,7 +193,11 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
             if (go.LootState == GameObjectLootState.JustDeactivated)
             {
-                Despawn(go);
+                if (!TryStartRestock(go))
+                {
+                    Despawn(go);
+                }
+
                 continue;
             }
 
@@ -200,6 +205,9 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             {
                 ActivationExpired(go);
             }
+
+            UpdateRestock(go);
+            UpdateTypeBehaviour(go);
         }
 
         foreach ((ObjectGuid guid, long at) in _despawnAt.ToArray())
@@ -219,6 +227,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
     public void OnPlayerRemoved(Map map, Player player)
     {
+        OnRitualParticipantLeft(player);
         Loot?.OnPlayerLeft(player);
         foreach (Dictionary<Player, uint> sent in _questFlagsSent.Values)
         {
@@ -269,7 +278,13 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             GameObjectType.Camera => UseCamera(player, go),
             GameObjectType.QuestGiver => QuestGiver is { } giver && giver.OpenQuestMenu(player, go) ? GameObjectUseResult.Ok : GameObjectUseResult.Unsupported,
             GameObjectType.Mailbox => GameObjectUseResult.Ok,
-            GameObjectType.Generic or GameObjectType.SpellFocus or GameObjectType.Trap or GameObjectType.Binder
+            GameObjectType.SpellCaster => UseSpellCaster(player, go),
+            GameObjectType.SummoningRitual => UseRitual(player, go),
+            GameObjectType.FlagStand => UseFlagStand(player, go),
+            GameObjectType.AreaDamage => UseAreaDamage(player, go),
+            GameObjectType.SpellFocus => UseSpellFocus(player, go),
+            // A meeting stone is used through CMSG_MEETINGSTONE_JOIN, never through this opcode (GameObject.cpp:1836-1841).
+            GameObjectType.Generic or GameObjectType.Trap or GameObjectType.Binder or GameObjectType.MeetingStone
                 or GameObjectType.MapObject or GameObjectType.AuctionHouse or GameObjectType.GuardPost
                 or GameObjectType.Transport or GameObjectType.MoTransport or GameObjectType.DuelArbiter => GameObjectUseResult.NotUsable,
             _ => GameObjectUseResult.Unsupported,
@@ -422,15 +437,42 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     private GameObjectUseResult UseDoorOrButton(Player player, GameObject go)
     {
         GameObjectUseResult locked = CheckDirectLock(player, go);
-        return locked != GameObjectUseResult.Ok ? locked : ActivateDoorOrButton(go, go.Template.AutoCloseSeconds());
+        if (locked != GameObjectUseResult.Ok)
+        {
+            return locked;
+        }
+
+        GameObjectUseResult result = ActivateDoorOrButton(go, go.Template.AutoCloseSeconds());
+        if (go.Type == GameObjectType.Button)
+        {
+            TriggerLinkedTrap(go, player); // GameObject::Use, button (GameObject.cpp:1441-1455)
+        }
+
+        return result;
     }
 
-    private GameObjectUseResult CheckDirectLock(Player player, GameObject go)
+    /// <summary>GameObject::Use, spell focus (GameObject.cpp:1534-1539): only its linked trap reacts to a click.</summary>
+    private GameObjectUseResult UseSpellFocus(Player player, GameObject go)
     {
+        if (go.Template.LinkedTrapEntry() == 0)
+        {
+            return GameObjectUseResult.NotUsable;
+        }
+
+        TriggerLinkedTrap(go, player);
+        return GameObjectUseResult.Ok;
+    }
+
+    private GameObjectUseResult CheckDirectLock(Player player, GameObject go) => CheckDirectLock(player, go, out _);
+
+    /// <summary><see cref="CheckDirectLock(Player, GameObject)"/>, naming the key from the bags that satisfied the lock (or null).</summary>
+    private GameObjectUseResult CheckDirectLock(Player player, GameObject go, out Item? key)
+    {
+        key = null;
         uint lockId = GameObjectLocks.LockIdOf(go.Template);
         LockEntry? entry = _content.FindLock(lockId);
         return lockId != 0 && entry is null ? GameObjectUseResult.Locked
-            : GameObjectLocks.CheckDirectUse(entry, player);
+            : GameObjectLocks.CheckDirectUse(entry, player, out key);
     }
 
     /// <summary>
@@ -488,13 +530,26 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
     private GameObjectUseResult UseChest(Player player, GameObject go)
     {
+        // GameObject::Use, chest (GameObject.cpp:1472-1479): the click springs the chest's linked trap, whatever the lock or quest say.
+        TriggerLinkedTrap(go, player);
         if (!ChestQuestAllows(player, go))
         {
             return GameObjectUseResult.NeedsQuest;
         }
 
-        GameObjectUseResult locked = CheckDirectLock(player, go);
-        return locked != GameObjectUseResult.Ok ? locked : OpenChest(player, go);
+        GameObjectUseResult locked = CheckDirectLock(player, go, out Item? key);
+        if (locked != GameObjectUseResult.Ok)
+        {
+            return locked;
+        }
+
+        GameObjectUseResult opened = OpenChest(player, go);
+        if (opened == GameObjectUseResult.Ok && key is not null)
+        {
+            UseUpKey(player, key);
+        }
+
+        return opened;
     }
 
     /// <summary>
@@ -531,6 +586,19 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         if (go.LootState == GameObjectLootState.JustDeactivated)
         {
             return GameObjectUseResult.InUse;
+        }
+
+        // A restocking chest (GO_NOT_READY) has no loot until its restock time ran out. Limit: vmangos sends the empty loot window and
+        // restarts the restock timer when it is closed (Player::SendLoot generates loot only for GO_READY, Player.cpp:7672); here the
+        // open is refused and the timer keeps running.
+        if (go.LootState == GameObjectLootState.NotReady)
+        {
+            return GameObjectUseResult.NotUsable;
+        }
+
+        if (ChestLevelRefuses(player, go))
+        {
+            return GameObjectUseResult.LevelTooLow;
         }
 
         LootResult opened = key is { } durable
@@ -582,7 +650,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// loot is stored with the instance save (<see cref="LootBag.DurableKey"/>) keeps its
     /// stored leftovers and stays ready: despawning it would not reroll them.
     /// </summary>
-    internal void OnLootReleased(GameObject go, LootBag bag)
+    internal void OnLootReleased(GameObject go, LootBag bag, Player? releaser = null)
     {
         if (!Tracks(go) || !ReferenceEquals(go.Loot, bag))
         {
@@ -591,7 +659,15 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
         if (bag.IsEmpty)
         {
-            go.LootState = GameObjectLootState.JustDeactivated;
+            // DoLootRelease (LootHandler.cpp:435-487): a mineral vein may stay for another open; anything else is used up.
+            if (bag.DurableKey is null && VeinStaysAfterLooting(releaser, go))
+            {
+                ReadyVeinAgain(go);
+            }
+            else
+            {
+                go.LootState = GameObjectLootState.JustDeactivated;
+            }
         }
         else if (bag.DurableKey is not null)
         {
@@ -629,8 +705,10 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return GameObjectUseResult.OnCooldown;
         }
 
-        uint questId = go.Template.GetData(1);
-        if (questId != 0 && Quests?.IsQuestIncomplete(player, questId) != true)
+        // GameObject::Use, goober (GameObject.cpp:1547-1575): the page text or gossip comes first; only a positive questId gates the rest.
+        ShowGooberPageOrGossip(player, go);
+        int questId = GooberQuestId(go);
+        if (questId > 0 && Quests?.IsQuestIncomplete(player, (uint)questId) != true)
         {
             return GameObjectUseResult.NeedsQuest;
         }
@@ -642,10 +720,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         Quests?.GameObjectUsed(player, go.Entry, go.Guid);
-        if (go.Template.GetData(7) != 0)
-        {
-            player.Session.Send(WorldOpcode.SmsgGameobjectPagetext, GameObjectPackets.PageText(go.Guid));
-        }
+        TriggerLinkedTrap(go, player); // GameObject.cpp:1593
 
         if (go.Template.GetData(6) is var cooldown and not 0)
         {
@@ -670,6 +745,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         go.ResetAfterSecond = ClockSeconds + autoCloseSeconds;
+        CastGooberSpell(player, go);
         return GameObjectUseResult.Ok;
     }
 
@@ -877,6 +953,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         go.CooldownUntilMs = 0;
         go.ClearChangedFields();
         Map.AddObject(go);
+        RespawnLinkedTrap(go); // GameObject::Update, GO_READY respawn (GameObject.cpp:427-437)
     }
 
     private void LoadGrid(GridCoord coord)
@@ -1094,7 +1171,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         {
             GameObjectType.Chest => (go.Template.GetData(8) is var q and not 0 && Quests.IsQuestIncomplete(viewer, q))
                 || QuestLootItems(go.Template.GetData(1)).Any(item => Quests.NeedsQuestItem(viewer, item)),
-            GameObjectType.Goober => go.Template.GetData(1) is var gq and not 0 && Quests.IsQuestIncomplete(viewer, gq),
+            // GameObject::ActivateToQuest (GameObject.cpp:1245-1250): questId -1 activates the goober for everyone.
+            GameObjectType.Goober => GooberQuestId(go) is var gq && (gq == -1 || (gq > 0 && Quests.IsQuestIncomplete(viewer, (uint)gq))),
             _ => false,
         };
         return active ? GameObjectDynFlags.Activate | GameObjectDynFlags.Sparkle : GameObjectDynFlags.None;

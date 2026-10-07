@@ -13,4 +13,16 @@ public sealed class GameObjectOptions
     /// spawn is a random value between spawntimesecsmin and spawntimesecsmax. False always uses the minimum.
     /// </summary>
     public bool RandomRespawn { get; set; } = true;
+
+    /// <summary>
+    /// vmangos Rate.Mining.Amount (CONFIG_FLOAT_RATE_MINING_AMOUNT, default 1; LootHandler.cpp:455-457): scales the minimum and maximum
+    /// number of opens of a multi-use mineral vein (chest.minSuccessOpens / maxSuccessOpens). Default 1 (retail).
+    /// </summary>
+    public float MiningAmountRate { get; set; } = 1.0f;
+
+    /// <summary>
+    /// vmangos Rate.Mining.Next (CONFIG_FLOAT_RATE_MINING_NEXT, default 1; LootHandler.cpp:466-474): scales the chance that a mineral vein
+    /// past its minimum opens stays for one more open. Default 1 (retail).
+    /// </summary>
+    public float MiningNextRate { get; set; } = 1.0f;
 }

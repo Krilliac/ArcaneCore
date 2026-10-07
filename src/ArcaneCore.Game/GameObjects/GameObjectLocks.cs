@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 
 namespace ArcaneCore.Game.GameObjects;
@@ -29,9 +30,16 @@ public static class GameObjectLocks
     /// (herbalism, mining, lockpicking, fishing) needs the open-lock spell:
     /// <see cref="GameObjectUseResult.Locked"/>; a missing key: <see cref="GameObjectUseResult.MissingKey"/>.
     /// </summary>
-    public static GameObjectUseResult CheckDirectUse(LockEntry? entry, Player player)
+    public static GameObjectUseResult CheckDirectUse(LockEntry? entry, Player player) => CheckDirectUse(entry, player, out _);
+
+    /// <summary>
+    /// <see cref="CheckDirectUse(LockEntry?, Player)"/>, naming the key that opened the lock: the first item in the bags (the bank does not
+    /// count, vmangos Player::HasItemCount) of the first item case that matched, or null when no key case was the one satisfied.
+    /// </summary>
+    public static GameObjectUseResult CheckDirectUse(LockEntry? entry, Player player, out Item? key)
     {
         ArgumentNullException.ThrowIfNull(player);
+        key = null;
         if (entry is null)
         {
             return GameObjectUseResult.Ok;
@@ -46,6 +54,8 @@ public static class GameObjectLocks
                 case LockKeyType.Item when entry.Indexes[i] != 0:
                     if (player.Inventory.GetItemCount(entry.Indexes[i]) > 0)
                     {
+                        uint keyEntry = entry.Indexes[i];
+                        key = player.Inventory.AllItems.FirstOrDefault(item => item.Entry == keyEntry && !PlayerInventory.IsInBank(item));
                         return GameObjectUseResult.Ok;
                     }
 
