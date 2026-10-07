@@ -24,6 +24,11 @@ verify behaviour; nothing is copied. `D:\refs\vmangos` is the primary reference.
   opt-in deviation that logs only the tick body's duration (and the tick interval).
   Slow packets are timed around the in-world handler call (`WorldSession.cs`,
   vmangos `WorldSession.cpp:620`).
+- A slow map update lists its phases (simulation, visibility, values, flush, cleanup) and
+  counters: players, moved objects, changed objects, new objects and `visibility candidates`
+  (how many viewer/target candidates the visibility phase evaluated). A visibility phase with a
+  large candidate count per moved object is the shape of the creature-mover hot path fixed in
+  docs/areas/grid-terrain.md ("Visibility on cells").
 
 ### 2. Retail shutdown and restart
 
