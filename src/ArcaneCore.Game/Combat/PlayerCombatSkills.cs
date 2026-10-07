@@ -1,7 +1,9 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Skills;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.Skills;
 
@@ -20,7 +22,7 @@ namespace ArcaneCore.Game.Combat;
 /// Weapon-skill gain is suppressed while shapeshifted in the DBC sense (<see cref="FormQueries.IsShapeShifted(Unit, ArcaneCore.Kernel.WorldData.ShapeshiftFormCatalog?)"/>:
 /// a form whose SpellShapeshiftForm row lacks the Stance flag; vmangos Player.cpp:5351), so warrior stances,
 /// Stealth and Moonkin still gain skill. Not modelled: the weapon skill of a form without weapons (the level
-/// maximum in vmangos), and pets (a pet's owner counts as a player-controlled victim in vmangos).
+/// maximum in vmangos).
 /// </remarks>
 public static class PlayerCombatSkills
 {
@@ -108,7 +110,7 @@ public static class PlayerCombatSkills
     /// <summary>
     /// A melee swing resolved (vmangos Unit::ProcSkillsAndReactives via ProcDamageAndSpell, SpellCaster.cpp:271-283):
     /// every outcome but evade is a chance for the attacker's weapon skill, and for the victim's defense skill while
-    /// the victim is still alive. Spell weapon-damage skill-ups (a procSpell requiring a weapon) wait for the
+    /// the victim is alive before the swing's damage (the roll precedes DealMeleeDamage). Spell weapon-damage skill-ups (a procSpell requiring a weapon) wait for the
     /// spell item data.
     /// </summary>
     public static void OnMeleeResolved(Unit attacker, Unit victim, WeaponAttackType attackType, MeleeHitOutcome outcome, ShapeshiftFormCatalog? forms = null)
@@ -127,7 +129,7 @@ public static class PlayerCombatSkills
                 Defence: false,
                 Attack: (SkillAttack)attackType,
                 VictimLevel: victim.Level,
-                VictimIsPlayerControlled: victim is Player,
+                VictimIsPlayerControlled: victim.IsCharmerOrOwnerPlayerOrPlayerItself, // "No skill gain in pvp" (Player.cpp:5346-5348): a pet counts as its player
                 ShapeShifted: FormQueries.IsShapeShifted(attackingPlayer, forms),
                 WeaponSkillId: skill,
                 CanGainSkill: !fishingPole,
@@ -139,8 +141,8 @@ public static class PlayerCombatSkills
             victimSkills.UpdateCombatSkills(new CombatSkillContext(
                 Defence: true,
                 Attack: SkillAttack.Base,
-                VictimLevel: attacker.Level,
-                VictimIsPlayerControlled: attacker is Player,
+                VictimLevel: (uint)attacker.EffectiveLevelAgainst(victim, CombatConstants.WorldBossLevelDiff), // GetLevelForTarget (Player.cpp:5370)
+                VictimIsPlayerControlled: attacker.IsCharmerOrOwnerPlayerOrPlayerItself,
                 ShapeShifted: FormQueries.IsShapeShifted(defendingPlayer, forms),
                 WeaponSkillId: 0,
                 CanGainSkill: true,

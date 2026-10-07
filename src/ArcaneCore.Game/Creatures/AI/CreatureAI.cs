@@ -24,6 +24,7 @@ public abstract class CreatureAI
     {
         ArgumentNullException.ThrowIfNull(creature);
         Me = creature;
+        MeleeEnabled = creature.MeleeAllowedByTemplate; // vmangos CreatureAI::CreatureAI (AI/CreatureAI.cpp:40)
     }
 
     /// <summary>The creature this AI drives.</summary>

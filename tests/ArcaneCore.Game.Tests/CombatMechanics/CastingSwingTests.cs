@@ -40,7 +40,8 @@ public sealed class CastingSwingTests
                 Instant(NoResetSpell, (SpellInterruptFlags)15, 0x20000),
                 Instant(CombatFreeSpell, SpellInterruptFlags.Movement));
             (Caster, Session) = Kit.AddPlayer(1);
-            (Target, _) = Kit.AddPlayer(2, 3, 0);
+            (Target, _) = Kit.AddPlayer(2, 3, 0, race: Race.Orc);
+            Target.Map!.Combat.TogglePvp(Target, true); // PvP flagged (desired): a valid attack target on every swing (vmangos Player::CanAutoAttackTarget → IsValidAttackTarget, Object.cpp:3797-3814)
             Target.Health = 5000;
             Kit.Spellbook.Teach(Caster, CastBolt, ChannelSpell, ResetSpell, NoResetSpell, CombatFreeSpell);
             Caster.SetUInt32(UpdateFields.UnitFieldMaxpower1 + 1, 1000);

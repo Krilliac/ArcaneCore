@@ -115,7 +115,7 @@ public sealed class CreatureEventAI : AggressorAI
     {
         CombatMovement = true;
         _currentRangedMode = _rangedMode;
-        SetMeleeEnabled(true);
+        SetMeleeEnabled(Me.MeleeAllowedByTemplate);
         _engine.Reset();
     }
 
@@ -123,7 +123,7 @@ public sealed class CreatureEventAI : AggressorAI
     {
         CombatMovement = true;
         _currentRangedMode = _rangedMode;
-        SetMeleeEnabled(true);
+        SetMeleeEnabled(Me.MeleeAllowedByTemplate);
         _engine.Respawn();
     }
 
@@ -139,7 +139,7 @@ public sealed class CreatureEventAI : AggressorAI
     {
         CombatMovement = true;
         _currentRangedMode = _rangedMode;
-        SetMeleeEnabled(true);
+        SetMeleeEnabled(Me.MeleeAllowedByTemplate);
         _engine.ReachedHome();
     }
 

@@ -56,6 +56,12 @@ public sealed partial class MapCombat
             return false;
         }
 
+        // "player cannot attack in mount state" (vmangos Unit::Attack, Unit.cpp:4486-4488)
+        if (attacker is Player && Locomotion.UnitSpeed.IsMounted(attacker))
+        {
+            return false;
+        }
+
         if (victim is Player { IsGameMaster: true } || victim is ICombatCreature { IsInEvadeMode: true })
         {
             return false;
@@ -160,6 +166,13 @@ public sealed partial class MapCombat
         if (IsQuestSettlementPending(attacker) || IsQuestSettlementPending(victim))
         {
             return AttackCheckResult.CantAttack;
+        }
+
+        // vmangos Player::CanAutoAttackTarget (Player.cpp:1103-1109): a player's target is re-validated every swing, so a charm or
+        // faction change that made it friendly (or otherwise not attackable) stops the attack.
+        if (attacker is Player && !Hooks.CanAttack(attacker, victim))
+        {
+            return AttackCheckResult.FriendlyTarget;
         }
 
         if ((attacker.UnitFlags & (UnitFlags.Pacified | UnitFlags.Stunned | UnitFlags.Fleeing | UnitFlags.Confused)) != 0)
@@ -417,6 +430,9 @@ public sealed partial class MapCombat
         }
 
         MeleeDamageInfo info = CalculateMeleeDamage(attacker, victim, attackType);
+        // vmangos ProcDamageAndSpell runs ProcSkillsAndReactives first (SpellCaster.cpp:271-283), before the damage, so a killing swing still rolls the
+        // victim's defense skill-up.
+        PlayerCombatSkills.OnMeleeResolved(attacker, victim, attackType, info.Outcome, environment.ShapeshiftForms);
         MeleeSwingResolved?.Invoke(info);   // vmangos ProcDamageAndSpell, before the packet and the damage (Unit.cpp:2260-2271)
         SubDamage[] sub = [new SubDamage(0, info.TotalDamage, info.Absorbed, 0)]; // vmangos Unit.cpp:1510-1565; physical school after block/absorb
         CombatPackets.SendToSet(attacker, WorldOpcode.SmsgAttackerstateupdate,
@@ -424,7 +440,6 @@ public sealed partial class MapCombat
 
         DealMeleeDamage(info);
         MeleeWeaponHitDealt?.Invoke(info);
-        PlayerCombatSkills.OnMeleeResolved(attacker, victim, attackType, info.Outcome, environment.ShapeshiftForms);
         MeleeSwingFinished?.Invoke(attacker, victim); // vmangos Unit.cpp:2285: the swing cancels ATTACKING auras
         return info;
     }
@@ -436,7 +451,11 @@ public sealed partial class MapCombat
         bool victimIsPlayer = victim is Player;
         var creatureVictim = victim as ICombatCreature;
         var creatureAttacker = attacker as ICombatCreature;
-        bool victimCanDefend = (victim.UnitFlags & UnitFlags.Stunned) == 0; // UNIT_STATE_STUNNED proxy; casting arrives with spells
+        // vmangos Unit::GetUnitDodgeChance / GetUnitParryChance / GetUnitBlockChance (Unit.cpp:2474-2550): nothing while stunned
+        // (UNIT_STATE_STUNNED proxy) or casting a non-melee spell (IsNonMeleeSpellCasted(false)), and a totem never defends.
+        bool victimCanDefend = (victim.UnitFlags & UnitFlags.Stunned) == 0
+            && CombatEnvironment.For(_world).MeleeSpells?.IsNonMeleeSpellCasted(victim) != true
+            && !IsTotem(victim);
 
         float dodge = 0f, parry = 0f, block = 0f;
         if (victimCanDefend)
@@ -461,8 +480,8 @@ public sealed partial class MapCombat
             AttackType = attackType,
             VictimIsPlayer = victimIsPlayer,
             AttackerIsCreature = attacker is not Player,
-            AttackerIsPlayerControlled = attacker is Player,
-            VictimIsPlayerControlled = victimIsPlayer,
+            AttackerIsPlayerControlled = attacker.IsCharmerOrOwnerPlayerOrPlayerItself, // vmangos SpellCaster.cpp:548: a pet or charmed unit counts as its player
+            VictimIsPlayerControlled = victim.IsCharmerOrOwnerPlayerOrPlayerItself,
             VictimEvading = creatureVictim is { IsInEvadeMode: true },
             VictimStanding = IsStandingUp(victim),
             FromBehind = !HasInArc(victim, attacker, CombatConstants.DefaultArc),
@@ -483,6 +502,9 @@ public sealed partial class MapCombat
         };
     }
 
+    /// <summary>vmangos Creature::IsTotem (a summoned totem) or a creature of type TOTEM (GetUnitParryChance tests the type).</summary>
+    private static bool IsTotem(Unit unit) => Totems.TotemQuery.IsTotem(unit) || Spells.Rules.CrowdControl.CcState.IsTotem(unit);
+
     /// <summary>
     /// vmangos Unit::CalculateMeleeDamage for a white swing: weapon damage, armor, the hit
     /// table, then the outcome's adjustment (crit ×2, crushing +50%, glancing, block value,
@@ -494,7 +516,7 @@ public sealed partial class MapCombat
 
         // SetDamageIndependentHitInfoFlags
         HitInfo hit = attackType == WeaponAttackType.OffAttack ? HitInfo.LeftSwing : HitInfo.None;
-        if (attacker is Player && victim is Player)
+        if (attacker.IsCharmerOrOwnerPlayerOrPlayerItself && victim.IsCharmerOrOwnerPlayerOrPlayerItself) // Unit.cpp:1606-1613
         {
             hit |= HitInfo.Pvp;
         }
@@ -524,8 +546,13 @@ public sealed partial class MapCombat
                 clean = 0;
                 break;
             case MeleeHitOutcome.Crit:
-                damage = (uint)(damage * (CombatConstants.CritDamagePercent / 100.0f));
+            {
+                // vmangos Unit.cpp:1425-1436: (200 + the attacker's MOD_CRIT_PERCENT_VERSUS for the victim's creature type) percent.
+                uint typeMask = victim.CreatureTypeMask();
+                int versus = SpellMitigation?.GetTotalAuraModifier(attacker, AuraType.ModCritPercentVersus, a => ((uint)a.MiscValue & typeMask) != 0) ?? 0;
+                damage = (uint)(damage * ((CombatConstants.CritDamagePercent + versus) / 100.0f));
                 break;
+            }
             case MeleeHitOutcome.Parry:
                 state = VictimState.Parry;
                 clean += damage;
@@ -642,7 +669,7 @@ public sealed partial class MapCombat
             return;
         }
 
-        if (info.TargetState == VictimState.Parry)
+        if (info.TargetState == VictimState.Parry && victim is not Creatures.Creature { ParryHastens: false }) // cmangos NO_PARRY_HASTEN
         {
             UnitCombat vc = victim.Combat;
             float offTime = vc.GetAttackTimer(WeaponAttackType.OffAttack);

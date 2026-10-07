@@ -295,12 +295,19 @@ public sealed class CombatSkillsTests
         rig.Player.SetByte(UpdateFields.UnitFieldBytes1, 2, 0);
         Assert.Equal(2, rig.SkillRandom.Floats.Count + 1);                    // the PvP and form swings left the roll unconsumed
 
-        // The swing that kills the player does not roll defense.
+        // A victim that is already dead does not roll defense. (The killing swing itself rolls: vmangos runs the skill-up from
+        // ProcDamageAndSpell before DealMeleeDamage, see MeleeDefenseSkillUpTests.)
         rig.Player.Health = 1;
         rig.Creature.SetFloat(UpdateFields.UnitFieldMindamage, 500);
         rig.Creature.SetFloat(UpdateFields.UnitFieldMaxdamage, 500);
+        rig.SkillRandom.Floats.Clear();
+        rig.SkillRandom.Floats.Enqueue(100f);                                 // the killing swing's roll loses
         rig.Map.Combat.AttackerStateUpdate(rig.Creature, rig.Player, WeaponAttackType.BaseAttack);
         Assert.False(rig.Player.IsAlive);
+        Assert.Empty(rig.SkillRandom.Floats);
+        rig.SkillRandom.Floats.Enqueue(0f);
+        PlayerCombatSkills.OnMeleeResolved(rig.Creature, rig.Player, WeaponAttackType.BaseAttack, MeleeHitOutcome.Normal);
+        Assert.Single(rig.SkillRandom.Floats);                                // never rolled
         Assert.Equal((ushort)20, rig.Skills.GetValuePure(SkillIds.Defense));
     }
 

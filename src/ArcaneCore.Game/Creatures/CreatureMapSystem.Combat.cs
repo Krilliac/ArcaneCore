@@ -31,7 +31,7 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
             return false;
         }
 
-        bool melee = creature.AI?.MeleeEnabled ?? true;
+        bool melee = creature.AI?.MeleeEnabled ?? creature.MeleeAllowedByTemplate;
         if (!ReferenceEquals(creature.Combat.Victim, target))
         {
             if (!Map.Combat.Attack(creature, target, melee))
@@ -151,7 +151,7 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
         {
             if ((creature.UnitFlags & LostControl) == 0)
             {
-                if (!ReferenceEquals(combat.Victim, target) && Map.Combat.Attack(creature, target, creature.AI?.MeleeEnabled ?? true))
+                if (!ReferenceEquals(combat.Victim, target) && Map.Combat.Attack(creature, target, creature.AI?.MeleeEnabled ?? creature.MeleeAllowedByTemplate))
                 {
                     SendAiReaction(creature);
                 }
