@@ -51,6 +51,9 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
 
     public QuestNpcServices Services { get; private set; }
 
+    /// <summary>The effective immutable catalog used by live NPC reaction checks.</summary>
+    public FactionTemplateCatalog FactionTemplates { get; private set; } = FactionTemplateCatalog.Empty;
+
     public QuestNpcPersistence Persistence { get; }
 
     public QuestNpcOptions Options { get; } = new();
@@ -77,6 +80,7 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
                 ?? (string.IsNullOrWhiteSpace(Options.FactionTemplateDbcPath)
                     ? FactionTemplateCatalog.Empty
                     : FactionTemplateDbcReader.Load(Options.FactionTemplateDbcPath));
+            FactionTemplates = factions;
             Services = BuildServices(new QuestStore(quests), new NpcStore(npcs), factions,
                 _services.GetService<Reputation.ReputationFeature>()?.Service, progression: true);
         }

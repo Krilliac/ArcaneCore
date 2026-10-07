@@ -4,6 +4,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Protocol;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Net;
 using Xunit;
@@ -31,6 +32,10 @@ public sealed class PlayerbotRecoveryTests
                 var recovery = new PlayerbotRecovery(session, new PlayerbotOptions { Enabled = true, MaxRouteYards = 100, AllowedMaps = [0, 1] });
                 session.ManagedBudget = new ManagedActionBudget(4);
                 float before = MathF.Abs(player.X - corpse.X);
+                Assert.True(recovery.Update(player, 1000));
+                Assert.Equal(before, MathF.Abs(player.X - corpse.X));
+                Assert.True(player.Movement.HasFlag(MovementFlags.Forward));
+                session.ManagedBudget = new ManagedActionBudget(4);
                 Assert.True(recovery.Update(player, 1000));
                 Assert.True(MathF.Abs(player.X - corpse.X) < before);
                 Assert.True(player.Flags.HasFlag(PlayerFlags.Ghost));

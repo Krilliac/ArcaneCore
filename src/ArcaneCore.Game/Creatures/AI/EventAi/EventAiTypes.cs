@@ -36,6 +36,9 @@ public enum EventAiActionType : byte
     FleeForAssist = 25,
     Die = 37,
     CallForHelp = 39,
+    TextNew = 54,
+    /// <summary>cmangos ACTION_T_SET_RANGED_MODE: range mode type and chase distance.</summary>
+    SetRangedMode = 57,
 }
 
 /// <summary>cmangos EventAI target types (<c>Target</c>, CreatureEventAI.h:161-198); the ones with a resolver.</summary>

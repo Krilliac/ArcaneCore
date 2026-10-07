@@ -9,6 +9,12 @@ public sealed class WorldRuntimeOptions
     /// <summary>World tick length in milliseconds (vmangos WORLD_SLEEP_CONST = 50).</summary>
     public int TickIntervalMs { get; set; } = 50;
 
+    /// <summary>Maximum queued world commands admitted before the map pass of one tick.</summary>
+    public int MaxCommandsPerTick { get; set; } = 1024;
+
+    /// <summary>Maximum command-drain time per tick in milliseconds; 0 disables the time bound.</summary>
+    public int CommandTimeBudgetMs { get; set; } = 5;
+
     /// <summary>
     /// Update packets larger than this many bytes are zlib-compressed into
     /// SMSG_COMPRESSED_UPDATE_OBJECT (vmangos Compression.Update.Size default 128). 0 disables.

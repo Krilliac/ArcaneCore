@@ -10,7 +10,7 @@ namespace ArcaneCore.Game.Stealth;
 /// the viewer itself, a game master, the Hunter's Mark caster and a non-hostile group member are always allowed; a unit in the
 /// NO_DETECT group is hidden; an ordinary (movement-driven) evaluation keeps only units the viewer already sees; a detection
 /// evaluation runs the distance formula (<see cref="StealthDetection"/>) and then line of sight. A dead viewer never detects.
-/// Invisibility masks (potions, devices) are not modelled (docs/areas/rogue.md).
+/// Invisibility types and detection levels are evaluated before ordinary stealth detection.
 /// </summary>
 public sealed class StealthVisibilityRule : IVisibilityRule
 {
@@ -35,13 +35,14 @@ public sealed class StealthVisibilityRule : IVisibilityRule
 
     public bool CanSee(Player viewer, WorldObject target, bool alreadyVisible, bool detect)
     {
-        if (!_registry.AnyHidden || target is not Unit unit || ReferenceEquals(viewer, target))
+        if (target is not Unit unit || ReferenceEquals(viewer, target))
         {
             return true;
         }
 
         StealthVisibility group = _registry.VisibilityOf(unit);
-        if (group == StealthVisibility.On)
+        bool invisible = Invisibility.Mask(_spells, unit, AuraType.ModInvisibility) != 0;
+        if (group == StealthVisibility.On && !invisible)
         {
             return true;
         }
@@ -69,6 +70,9 @@ public sealed class StealthVisibilityRule : IVisibilityRule
         {
             return true;
         }
+
+        if (invisible && !Invisibility.CanDetect(_spells, viewer, unit)) return false;
+        if (group == StealthVisibility.On) return true;
 
         // unit got in stealth in this moment and must ignore old detected state
         if (group == StealthVisibility.NoDetect)

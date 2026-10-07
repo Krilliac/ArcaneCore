@@ -150,6 +150,7 @@ public static class ContentTableSpecs
                 "action3_type", "action3_param1", "action3_param2", "action3_param3", "comment",
             ], []),
         new("creature_ai_texts", [new KeyColumn("entry")], ["content_default", "type", "language", "emote"], []),
+        new("dbscript_random_templates", [new KeyColumn("id"), new KeyColumn("type"), new KeyColumn("target_id")], ["chance"], []),
         new("creature_template_spells", [new KeyColumn("entry"), new KeyColumn("setId")], Enumerable.Range(1, 10).Select(i => "spell" + i), []),
         new("creature_spell_list", [new KeyColumn("Id"), new KeyColumn("Position")], ["SpellId"], []),
         new("spell_template", [new KeyColumn("Id")],

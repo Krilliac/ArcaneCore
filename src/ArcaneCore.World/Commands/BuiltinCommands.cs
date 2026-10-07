@@ -116,6 +116,8 @@ public static class BuiltinCommands
         context.Reply("Core revision: ArcaneCore " + version + " (WoW 1.12.1 build 5875)");
         context.Reply(GmStrings.PlayersOnline(active, 0, Math.Max(stats?.MaxActive ?? 0, active), 0));
         context.Reply(GmStrings.Uptime(GmDuration.SecsToTimeString((long)context.World.Uptime.TotalSeconds)));
+        foreach (string line in ServerInfoDiagnostics.Format(ServerInfoDiagnostics.Capture(context.World, context.Session.Services)))
+            context.Reply("Server diagnostics: " + line);
         return true;
     }
 

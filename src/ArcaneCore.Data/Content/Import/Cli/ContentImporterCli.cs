@@ -453,6 +453,7 @@ public static class ContentImporterCli
             ["creature_addon"] = creatures.Addons,
             ["creature_ai_scripts"] = creatures.AiEvents,
             ["creature_ai_texts"] = creatures.AiTexts,
+            ["dbscript_random_templates"] = creatures.AiTextTemplates,
             ["gameobject_template"] = objects.Templates,
             ["gameobject_spawn"] = objects.Spawns,
             ["gameobject_questrelation"] = objects.QuestStarters,
@@ -608,6 +609,7 @@ public static class ContentImporterCli
                 ("creature_movement", await db.Set<CreatureMovementRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_model_info", await db.Set<CreatureModelInfoRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_addon", await db.Set<CreatureAddonRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("creature_ai_text_template", await db.Set<CreatureTextTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("gameobject_template", await db.Set<GameObjectTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("gameobject_spawn", await db.Set<GameObjectSpawnRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("lock_template", await db.Set<LockTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
@@ -643,6 +645,13 @@ public static class ContentImporterCli
             }
 
             IQueryable<CreatureTemplateRow> templates = db.Set<CreatureTemplateRow>();
+            IQueryable<BroadcastTextRow> broadcastTexts = db.Set<BroadcastTextRow>();
+            IQueryable<CreatureAiTextRow> aiTexts = db.Set<CreatureAiTextRow>();
+            int missingTemplateTexts = await db.Set<CreatureTextTemplateRow>()
+                .CountAsync(row => (row.TargetId > 0 && !broadcastTexts.Any(text => text.Id == (uint)row.TargetId))
+                    || (row.TargetId < 0 && !aiTexts.Any(text => text.Entry == row.TargetId)), ct).ConfigureAwait(false);
+            if (missingTemplateTexts > 0)
+                problems.Add($"{missingTemplateTexts} creature_ai_text_template choice(s) reference missing broadcast_text or creature_ai_texts");
             int missingCreatures = await db.Set<CreatureSpawnRow>()
                 .CountAsync(s => s.Entry != 0 && !templates.Any(t => t.Entry == s.Entry), ct).ConfigureAwait(false);
             int randomEntryCreatures = await db.Set<CreatureSpawnRow>().CountAsync(s => s.Entry == 0, ct).ConfigureAwait(false);

@@ -20,6 +20,13 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     private uint _failureBackoffMs;
     private uint _lastRefusedSpell;
 
+    /// <summary>Retire retry state when the player leaves a combat lifetime (death/reclaim).</summary>
+    internal void Reset()
+    {
+        _failureBackoffMs = 0;
+        _lastRefusedSpell = 0;
+    }
+
     internal bool Update(Player player, Unit target, uint elapsedMs)
     {
         ArgumentNullException.ThrowIfNull(player);
@@ -51,6 +58,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         if (state?.CurrentCast is { State: SpellCastState.Preparing or SpellCastState.Casting }
             )
         {
+            PlayerbotMovementControl.Stop(session, player);
             return true;
         }
 

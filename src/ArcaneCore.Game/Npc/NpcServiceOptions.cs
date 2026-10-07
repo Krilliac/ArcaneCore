@@ -66,11 +66,19 @@ public sealed class NpcTemplateMetadataLookup : ICreatureLookup
         _byEntry = [];
         foreach (NpcTemplateMetadata row in metadata)
         {
-            _byEntry[row.Entry] = row;
+            _byEntry[row.Entry] = Copy(row);
         }
     }
 
     public ICreatureLookup Inner => _inner;
+
+    /// <summary>Detached snapshots of all imported and configured metadata rows.</summary>
+    public IReadOnlyList<NpcTemplateMetadata> TrainerMetadata
+        => _byEntry.Values.OrderBy(row => row.Entry).Select(Copy).ToArray();
+
+    /// <summary>Returns a detached metadata snapshot for an entry, or null when unknown.</summary>
+    public NpcTemplateMetadata? MetadataFor(uint entry)
+        => _byEntry.TryGetValue(entry, out NpcTemplateMetadata? row) ? Copy(row) : null;
 
     public NpcInfo? Find(Player player, ObjectGuid guid)
     {
@@ -89,4 +97,15 @@ public sealed class NpcTemplateMetadataLookup : ICreatureLookup
             TrainerSpell = meta.TrainerSpell,
         };
     }
+
+    private static NpcTemplateMetadata Copy(NpcTemplateMetadata row)
+        => new()
+        {
+            Entry = row.Entry,
+            GossipMenuId = row.GossipMenuId,
+            TrainerType = row.TrainerType,
+            TrainerClass = row.TrainerClass,
+            TrainerRace = row.TrainerRace,
+            TrainerSpell = row.TrainerSpell,
+        };
 }

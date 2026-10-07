@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Spells.Targets;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -47,6 +48,10 @@ public sealed partial class SpellSystem
             SpellImplicitTarget selector = IsLocationTarget(effect.TargetA) && effect.TargetB != SpellImplicitTarget.None && !IsLocationTarget(effect.TargetB)
                 ? effect.TargetB
                 : effect.TargetA;
+            // Location32 also prepares the destination when target B selects the units.
+            if (selector != effect.TargetA && effect.TargetA == SpellImplicitTarget.LocationUnitMinionPosition
+                && effect.Effect != SpellEffectName.Duel)
+                SpellTargetSelectors.SelectCasterRelativeLocation(cast, effect, MathF.PI * 0.25f);
             // TARGET_UNIT_ENEMY updates the explicit target for later effects too, including
             // UNIT / NONE selectors. Arcane Missiles' caster-selector exception leaves it alone.
             if (cast.MagnetTarget is { } magnet && cast.Targets.Unit == magnet.Guid)

@@ -2,7 +2,10 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Protocol;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -25,6 +28,119 @@ namespace ArcaneCore.World.Tests.Playerbots;
 
 public sealed class PlayerbotTownGoalsTests
 {
+    [Fact]
+    public async Task TownTravelContinuesBetweenInteractionCooldowns()
+    {
+        var fixture = new TownVendorFixture();
+        TownVendorServices.Current.Value = fixture;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start(configureServices:
+                services => services.AddSingleton<ISpellContentStore>(fixture));
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "town NPC visible");
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    player.Money = 100;
+                    WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                    player.Relocate(player.X - 25, player.Y, player.Z, player.Orientation, host.World.NowMs);
+                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    Assert.True(goals.Update(player, 500)); // Start forward; no position leap.
+                    float first = player.X;
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    Assert.True(goals.Update(player, 500));
+                    Assert.True(player.X > first);
+                    float second = player.X;
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    Assert.True(goals.Update(player, 500));
+                    Assert.True(player.X > second); // The 1.5-second service throttle must not pause travel.
+                    Assert.True(player.Movement.HasFlag(MovementFlags.Forward));
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { TownVendorServices.Current.Value = null; }
+    }
+
+    [Fact]
+    public async Task UsefulTrainerKeepsBrainOwnershipDuringRequestCooldown()
+    {
+        var fixture = new TownVendorFixture();
+        TownVendorServices.Current.Value = fixture;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start(configureServices:
+                services => services.AddSingleton<ISpellContentStore>(fixture));
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true });
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "trainer visible");
+                await host.OnWorldAsync(() =>
+                {
+                    var player = session.Player!;
+                    player.Money = 100;
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    brain.Update(500); // Requests the ordinary trainer list.
+                    Assert.Equal(PlayerbotGoalKind.Train, brain.Goal);
+                    Assert.Equal(TownVendorFixture.Entry, brain.TargetEntry);
+                    MovementInfo moving = player.Movement;
+                    moving.Flags |= MovementFlags.Forward;
+                    var movement = new PacketWriter(); moving.Write(movement);
+                    Assert.True(session.TryManagedAction(WorldOpcode.MsgMoveStartForward, movement.ToArray()));
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    float x = player.X, y = player.Y;
+                    brain.Update(500); // Cooldown must not fall through to exploration.
+                    Assert.Equal(PlayerbotGoalKind.Train, brain.Goal);
+                    Assert.Equal(TownVendorFixture.Entry, brain.TargetEntry);
+                    Assert.Equal(x, player.X);
+                    Assert.Equal(y, player.Y);
+                    Assert.False(player.Movement.HasFlag(MovementFlags.MaskMoving));
+                    Assert.Null(brain.InspectionTarget);
+                    return true;
+                });
+            }
+            finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+        }
+        finally { TownVendorServices.Current.Value = null; }
+    }
+
+    [Fact]
+    public async Task UnaffordableTrainerDoesNotKeepTheTownGoalActive()
+    {
+        var fixture = new TownVendorFixture();
+        TownVendorServices.Current.Value = fixture;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start(configureServices:
+                services => services.AddSingleton<ISpellContentStore>(fixture));
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "trainer visible");
+                await host.OnWorldAsync(() =>
+                {
+                    var player = session.Player!;
+                    player.Money = 0;
+                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+                    session.ManagedBudget = new ManagedActionBudget(2);
+                    Assert.False(goals.HasCandidate(player));
+                    Assert.False(goals.Update(player, 1500));
+                    Assert.Equal(2, session.ManagedBudget.Remaining);
+                    Assert.Equal(0u, player.Money);
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { TownVendorServices.Current.Value = null; }
+    }
+
     [Fact]
     public async Task UsefulTrainerWinsOverCloserUnneededVendorAndRetiresAfterLearning()
     {
@@ -76,7 +192,8 @@ public sealed class PlayerbotTownGoalsTests
         var npc = new TownVendorFixture();
         var items = new ItemTestContent();
         items.Templates.Templates.Add(new ItemTemplate { Entry = 117, Name = "Starter food", Class = (uint)ItemClass.Consumable,
-            Stackable = 20, BuyPrice = 10, SellPrice = 1, FoodType = 1 });
+            Stackable = 20, BuyPrice = 10, SellPrice = 1, FoodType = 1,
+            Spells = [new ItemSpell(922012, 0, -1, 0, 0, 0, 0)] });
         items.Templates.Templates.Add(new ItemTemplate { Entry = 9001, Name = "Quest gray", Class = (uint)ItemClass.TradeGoods,
             Stackable = 20, SellPrice = 5 });
         using IDisposable itemScope = items.Use();
@@ -92,6 +209,17 @@ public sealed class PlayerbotTownGoalsTests
                 {
                     Player player = session.Player!;
                     player.Money = 100;
+                    var spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+                    spells.Store = new ArcaneCore.Game.Spells.SpellStore([.. spells.Store.All,
+                        new ArcaneCore.Game.Spells.SpellInfo
+                        {
+                            Id = 922012, AuraInterruptFlags = ArcaneCore.Game.Spells.SpellAuraInterruptFlags.StandingCancels,
+                            Effects = [new ArcaneCore.Game.Spells.SpellEffectInfo
+                            {
+                                Effect = ArcaneCore.Game.Spells.SpellEffectName.ApplyAura,
+                                AuraType = ArcaneCore.Game.Spells.AuraType.ModRegen, BasePoints = 4, BaseDice = 1,
+                            }, new(), new()],
+                        }], [], []);
                     return true;
                 });
                 await host.OnWorldAsync(() =>
@@ -235,7 +363,6 @@ internal sealed class TownVendorServices : IWorldTestServices
         services.AddSingleton<ICreatureDataStore>(fixture);
         services.AddSingleton<INpcContentStore>(fixture);
         services.AddSingleton<IQuestContentStore>(fixture);
-        services.AddSingleton<ISpellContentStore>(fixture);
         services.AddSingleton<INpcTemplateServiceMetadataSource>(fixture);
         services.AddSingleton<IWorldDataStore>(new InMemoryWorldDataStore());
         services.AddSingleton(new FactionTemplateCatalog([
@@ -248,6 +375,7 @@ internal sealed class TownVendorServices : IWorldTestServices
 internal sealed class TownVendorFixture : ICreatureDataStore, INpcContentStore, IQuestContentStore, ISpellContentStore, INpcTemplateServiceMetadataSource
 {
     public bool IncludeDistractingVendor { get; init; }
+    public IReadOnlyList<VendorItem>? VendorItemsOverride { get; init; }
     public const uint Entry = 922;
     public const uint QuestId = 922001;
     public const uint TeachingSpell = 922010;
@@ -255,9 +383,9 @@ internal sealed class TownVendorFixture : ICreatureDataStore, INpcContentStore, 
     public static readonly ObjectGuid Guid = ObjectGuid.WithEntry(HighGuid.Unit, Entry, 92201);
 
     Task<NpcContent> INpcContentStore.LoadAsync(CancellationToken cancellationToken)
-        => Task.FromResult(NpcContent.Empty with { VendorItems = IncludeDistractingVendor
+        => Task.FromResult(NpcContent.Empty with { VendorItems = VendorItemsOverride ?? (IncludeDistractingVendor
                 ? [new VendorItem { Entry = Entry, Item = 117, Slot = 0 }, new VendorItem { Entry = 923, Item = 117, Slot = 0 }]
-                : [new VendorItem { Entry = Entry, Item = 117, Slot = 0 }],
+                : [new VendorItem { Entry = Entry, Item = 117, Slot = 0 }]),
             TrainerSpells = [new TrainerSpell { Entry = Entry, Spell = TeachingSpell, SpellCost = 1 }] });
 
     Task<IReadOnlyList<NpcTemplateServiceMetadata>> INpcTemplateServiceMetadataSource.LoadAsync(CancellationToken cancellationToken)

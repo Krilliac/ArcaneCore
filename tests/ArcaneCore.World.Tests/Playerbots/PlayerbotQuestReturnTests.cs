@@ -68,6 +68,9 @@ public sealed class PlayerbotQuestReturnTests
                 Assert.Null(player.Combat.Victim);
                 session.ManagedBudget = new ManagedActionBudget(1);
                 brain.Update(500);
+                Assert.Equal(before, player.X);
+                session.ManagedBudget = new ManagedActionBudget(1);
+                brain.Update(500);
                 Assert.True(player.X > before);
                 Assert.Equal(PlayerbotGoalKind.Quest, brain.Goal);
                 Assert.Equal(QuestInteractionFixture.QuestId, brain.QuestId);

@@ -105,7 +105,21 @@ public sealed class PlayerbotCommands : ICommandGroup
         PlayerbotInspection? value = await service.InspectAsync(id).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         if (value is null) { context.Reply("Playerbot is not running or was not found."); return; }
         context.Reply(FormattableString.Invariant($"BOTINSPECT {value.Name} goal={value.Goal} report={value.ReportedTarget} quest={value.QuestId} map={value.MapId} level={value.Level} hp={value.Health}/{value.MaxHealth} money={value.Money} combat={value.InCombat} ghost={value.Ghost}"));
+        context.Reply(FormattableString.Invariant($"BOTINSPECT death={value.DeathState} pos={value.PlayerX:F2},{value.PlayerY:F2},{value.PlayerZ:F2}"));
+        context.Reply(FormattableString.Invariant($"BOTINSPECT movement=flags:{(uint)value.MovementFlags:X8} stand:{value.StandState} time:{value.MovementTimeMs}"));
+        if (value.Corpse is { } corpse)
+        {
+            string distance = corpse.Distance?.ToString("F1", System.Globalization.CultureInfo.InvariantCulture) ?? "unavailable";
+            context.Reply(FormattableString.Invariant($"BOTINSPECT corpse={corpse.Guid:X} map={corpse.MapId} pos={corpse.X:F2},{corpse.Y:F2},{corpse.Z:F2} distance={distance}"));
+            context.Reply($"BOTINSPECT delay_remaining_s={corpse.ReclaimDelayRemainingSeconds?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unavailable"}");
+        }
+        else
+            context.Reply("BOTINSPECT corpse=none");
         context.Reply($"BOTINSPECT target={Facts(value.Target)} victim={Facts(value.Victim)}");
+        context.Reply($"BOTINSPECT attackers=count={value.AttackerCount} shown={value.Attackers.Count}");
+        foreach (PlayerbotUnitFacts attacker in value.Attackers)
+            context.Reply($"BOTINSPECT attacker={Facts(attacker)}");
+        context.Reply(FormattableString.Invariant($"BOTINSPECT equipment=mainhand={ItemFacts(value.Equipment.MainHand)} mainhand_skill={value.Equipment.MainHandWeaponSkill?.ToString(CultureInfo.InvariantCulture) ?? "unavailable"} armor={value.Equipment.TotalArmor?.ToString(CultureInfo.InvariantCulture) ?? "unavailable"} feet={ItemFacts(value.Equipment.Feet)}"));
         context.Reply($"BOTINSPECT cast={value.CurrentCast} melee={value.MeleeCast} knownCount={value.KnownSpells.Count}");
         foreach (uint[] batch in value.KnownSpells.Chunk(24))
             context.Reply($"BOTINSPECT known={string.Join(',', batch)}");
@@ -119,6 +133,9 @@ public sealed class PlayerbotCommands : ICommandGroup
 
     private static string Facts(PlayerbotUnitFacts? unit) => unit is null ? "none"
         : $"{unit.Kind}/{unit.Guid:X}/entry:{unit.Entry}/npc:{unit.NpcFlags:X}/faction:{unit.Faction}/type:{unit.CreatureType}";
+
+    private static string ItemFacts(PlayerbotItemFacts? item) => item is null ? "none"
+        : $"entry:{item.Entry}/durability:{item.Durability}/{item.MaxDurability}";
 
     private static bool StartOperation(CommandContext context, Func<IPlayerbotService, Task<PlayerbotOperationResult>> operation,
         string verb)

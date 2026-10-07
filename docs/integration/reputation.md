@@ -181,9 +181,14 @@ installed (requirements fail closed).
   character's retained writes with `FlushCharacterAsync` before the transaction and refuses
   (NotStarted, journal intact) while they are still not durable, so a retained older row cannot
   overwrite the rows the reward writes.
+- `ReputationFeature` binds active aura156 (`MOD_REPUTATION_GAIN`, including Human Diplomacy)
+  and matching-faction aura190 to `ReputationService.GainModifier`. Generic modifiers apply
+  to positive gains; faction modifiers apply only to kills. Removal and restored auras are
+  read from live spell state. Quest settlement freezes the computed bonus before persistence
+  and replays that value at publication. The existing vmangos rule leaves losses unmodified;
+  CMaNGOS currently differs on losses, so this does not claim complete fork parity.
 - No spillover templates (`reputation_spillover_template`), no `reputation_reward_rate`, no
-  forced reactions (`SPELL_AURA_FORCE_REACTION`), no aura gain modifiers (e.g. the human
-  Diplomacy racial: the spells owner sets `ReputationService.GainModifier`).
+  forced reactions (`SPELL_AURA_FORCE_REACTION`).
 - No group, pet or tapped-kill credit: only direct player kills reward reputation.
 - No honor-rank vendor discounts (vanilla PvP rank), only the 10 % Honored discount.
 - Combat hostility (`CombatHooks`) is not wired to reputation reactions, and nothing registers

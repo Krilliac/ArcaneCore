@@ -42,8 +42,11 @@ public sealed class PlayerbotWorldDestinationsTests
                 session.ManagedBudget = new ManagedActionBudget(1);
                 Assert.True(destinations.Update(player, 6, 500));
                 Assert.Equal(2, pathfinder.Calls);
-                Assert.True(player.X < before);
+                Assert.Equal(before, player.X);
                 Assert.Equal(6u, destinations.TargetEntry);
+                session.ManagedBudget = new ManagedActionBudget(1);
+                Assert.True(destinations.Update(player, 6, 500));
+                Assert.True(player.X < before);
                 return true;
             });
         }
@@ -72,11 +75,15 @@ public sealed class PlayerbotWorldDestinationsTests
                 float start = player.X;
                 session.ManagedBudget = new ManagedActionBudget(1);
                 Assert.True(destinations.Update(player, 6, 500));
-                Assert.True(player.X > start);
+                Assert.Equal(start, player.X);
                 Assert.Equal(6u, destinations.TargetEntry);
+                session.ManagedBudget = new ManagedActionBudget(1);
+                Assert.True(destinations.Update(player, 6, 500));
+                Assert.True(player.X > start);
                 float east = player.X;
                 session.ManagedBudget = new ManagedActionBudget(1);
                 Assert.True(destinations.Update(player, 7, 500));
+                // Already moving: changing the objective redirects the next heartbeat.
                 Assert.True(player.X < east);
                 Assert.Equal(7u, destinations.TargetEntry);
                 Assert.DoesNotContain(player.VisibleObjects, guid => player.Map!.FindObject(guid) is Creature c && c.Entry is 6 or 7);

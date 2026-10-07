@@ -18,6 +18,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         List<CreatureAiTextRow> texts = await db.Set<CreatureAiTextRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<BroadcastTextRow> broadcastTexts = await db.Set<BroadcastTextRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureAiSummonRow> summons = await db.Set<CreatureAiSummonRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<CreatureTextTemplateRow> textTemplates = await db.Set<CreatureTextTemplateRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
 
         return new CreatureContent(
             templates.Select(ToTemplate),
@@ -43,7 +44,8 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
                 texts.Select(CreatureAiDataModule.ToText),
                 new BroadcastTextCatalog(broadcastTexts.Select(ToBroadcastText)),
                 summons.Select(s => new CreatureAiSummon(s.Id, s.X, s.Y, s.Z, s.Orientation, s.SpawnTimeSeconds)),
-                EventAiDialect.CMangos));
+                EventAiDialect.CMangos,
+                textTemplates.Select(row => new CreatureAiTextChoice(row.Id, row.TargetId, row.Chance))));
     }
 
     internal static BroadcastText ToBroadcastText(BroadcastTextRow r) => new(

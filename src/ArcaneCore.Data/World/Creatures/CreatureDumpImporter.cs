@@ -40,6 +40,7 @@ public sealed record CreatureImportReport(
 
     /// <summary><c>creature_ai_summons</c> rows.</summary>
     public int AiSummons { get; init; }
+    public int AiTextTemplates { get; init; }
 }
 
 /// <summary>
@@ -73,6 +74,7 @@ public sealed class CreatureDumpImporter
     private readonly Dictionary<int, CreatureAiTextRow> _aiTexts = [];
     private readonly Dictionary<uint, BroadcastTextRow> _broadcastTexts = [];
     private readonly Dictionary<uint, CreatureAiSummonRow> _aiSummons = [];
+    private readonly Dictionary<(uint, int), CreatureTextTemplateRow> _textTemplates = [];
     private bool _warnedVMangosAiEvents;
     private readonly List<string> _warnings = [];
     private int _skippedSpawns;
@@ -123,6 +125,13 @@ public sealed class CreatureDumpImporter
                     break;
                 case "creature_ai_texts":
                     ReadAiText(row);
+                    break;
+                case "dbscript_random_templates":
+                    if (U32(row, "type") == 0)
+                    {
+                        var choice = new CreatureTextTemplateRow { Id = U32(row, "id"), TargetId = Int(Get(row, "target_id")), Chance = U32(row, "chance") };
+                        _textTemplates[(choice.Id, choice.TargetId)] = choice;
+                    }
                     break;
                 case "broadcast_text":
                     ReadBroadcastText(row);
@@ -189,6 +198,7 @@ public sealed class CreatureDumpImporter
                 await db.Set<CreatureAiTextRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<BroadcastTextRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureAiSummonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await db.Set<CreatureTextTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureAddonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureMovementRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureSpawnRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
@@ -205,6 +215,7 @@ public sealed class CreatureDumpImporter
             await InsertBatchedAsync(db, _aiTexts.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _broadcastTexts.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _aiSummons.Values, cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _textTemplates.Values, cancellationToken).ConfigureAwait(false);
 
             if (savepoint is not null)
             {
@@ -264,6 +275,7 @@ public sealed class CreatureDumpImporter
         AiTexts = _aiTexts.Count,
         BroadcastTexts = _broadcastTexts.Count,
         AiSummons = _aiSummons.Count,
+        AiTextTemplates = _textTemplates.Count,
     };
 
     /// <summary>The EventAI rows that would be written (for inspection and tests).</summary>

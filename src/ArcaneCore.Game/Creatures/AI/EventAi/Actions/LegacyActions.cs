@@ -102,6 +102,19 @@ public sealed class CastAction : EventAiActionHandler
 }
 
 /// <summary>
+/// ACTION_T_SET_RANGED_MODE (57): range mode type, chase distance. CMaNGOS types are NONE=0,
+/// FULL_CASTER=1, PROXIMITY=2, NO_MELEE_MODE=3 and DISTANCER=4. Type 3 prevents leaving ranged
+/// mode, but autoattack remains independently controlled by ACTION_T_AUTO_ATTACK (20).
+/// </summary>
+public sealed class SetRangedModeAction : EventAiActionHandler
+{
+    public override byte ActionType => (byte)EventAiActionType.SetRangedMode;
+
+    public override bool Execute(EventAiContext context, CreatureAiAction action, EventAiInvocation invocation)
+        => context.Ai.SetRangedMode(action.Param1 != 0, action.Param2, action.Param1);
+}
+
+/// <summary>
 /// ACTION_T_SPAWN (12): CreatureId, Target, Duration (ms). A missing template is reported and summons nothing; the
 /// summon attacks the target unless the target is the creature itself (:812-828). The action always counts as done.
 /// </summary>

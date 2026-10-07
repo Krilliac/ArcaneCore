@@ -77,7 +77,8 @@ public sealed class MapAreaDbcCliTests : IDisposable
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
+        using var connection = new SqliteConnection("Data Source=" + Path.Combine(_root, "world.db"));
+        SqliteConnection.ClearPool(connection);
         Directory.Delete(_root, recursive: true);
     }
 }

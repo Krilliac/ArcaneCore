@@ -209,6 +209,8 @@ public enum SpellImplicitTarget : uint
     GameObjectItem = 26,
     EnumUnitsFriendAoeAtSrcLoc = 30,
     EnumUnitsFriendAoeAtDestLoc = 31,
+    /// <summary>vmangos TARGET_LOCATION_UNIT_MINION_POSITION: caster-relative summon destination.</summary>
+    LocationUnitMinionPosition = 32,
     EnumUnitsPartyAoeAtSrcLoc = 33,
     EnumUnitsPartyAoeAtDestLoc = 34,
     UnitParty = 35,

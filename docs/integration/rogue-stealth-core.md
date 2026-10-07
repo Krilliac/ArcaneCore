@@ -44,7 +44,8 @@ Conflict note: gm-commands (GM invisibility) edits the same method; they should 
 
 - The shapeshift half of every Stealth rank (aura 36 misc 30, form 30) and the movement slow (aura 33) need the stance and speed-aura lanes.
   A unit gets the stealth auras and flags but is not in form 30, so stance-gated openers cannot be checked yet.
-- No GM-invisibility guard (VISIBILITY_OFF), no invisibility masks (potions, gnome devices), no Silithus flag drop, no cancel-removes-Vanish,
+- Ordinary invisibility and detection (auras18/19) use active aura type masks and maximum detection levels. Apply/remove and restored auras refresh map visibility; player glow, shared types, world-boss detectors, group/mark exemptions and stealth precedence are modeled. Player alcohol-based type6 detection and original-client visual acceptance remain pending.
+- No GM-invisibility guard (VISIBILITY_OFF), no Silithus flag drop, no cancel-removes-Vanish,
   no COOLDOWN_ON_EVENT start (RG-04 needs spell-breadth S1/S2 hooks), no Vanish 1 s "cannot be detected" window (RG-08).
 - The mangos-classic detection model is not implemented; vmangos (sniff-verified) is the only model.
 - A creature that stealths is not re-evaluated for viewers until the next regular update (creatures have no stealth source yet).

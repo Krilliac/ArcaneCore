@@ -56,6 +56,9 @@ public sealed class WorldRuntime : IDisposable
 
     public int OnlinePlayerCount => _online.Count;
 
+    /// <summary>Approximate number of commands waiting for a world-thread tick.</summary>
+    public int PendingCommandCount => _commands.Count;
+
     /// <summary>True when the caller is the world thread (or no world thread is running).</summary>
     public bool IsWorldThread => _worldThreadId == -1 || Environment.CurrentManagedThreadId == _worldThreadId;
 
@@ -168,7 +171,7 @@ public sealed class WorldRuntime : IDisposable
         _worldThreadId = -1;
 
         // Commands posted before shutdown (e.g. a disconnect's save) still run.
-        RunCommands();
+        RunCommands(drainAll: true);
         SaveAll();
     }
 
@@ -415,8 +418,14 @@ public sealed class WorldRuntime : IDisposable
         }
     }
 
-    private void RunCommands()
+    private void RunCommands(bool drainAll = false)
     {
+        int admitted = 0;
+        long started = Stopwatch.GetTimestamp();
+        int maxCommands = Math.Max(1, Options.MaxCommandsPerTick);
+        long budgetTicks = Options.CommandTimeBudgetMs > 0
+            ? Options.CommandTimeBudgetMs * Stopwatch.Frequency / 1000L
+            : 0;
         while (_commands.TryDequeue(out Action? command))
         {
             try
@@ -426,6 +435,18 @@ public sealed class WorldRuntime : IDisposable
             catch (Exception ex)
             {
                 _logger.LogError(ex, "world command failed");
+            }
+
+            if (drainAll)
+            {
+                continue;
+            }
+
+            admitted++;
+            if (admitted >= maxCommands || budgetTicks > 0
+                && Stopwatch.GetTimestamp() - started >= budgetTicks)
+            {
+                break;
             }
         }
     }
@@ -467,7 +488,8 @@ public sealed class WorldRuntime : IDisposable
             long stampBefore = Stopwatch.GetTimestamp();
             RunTick(diff);
             long durationMicros = (Stopwatch.GetTimestamp() - stampBefore) * 1_000_000 / Stopwatch.Frequency;
-            Stats.Record(durationMicros, GC.GetAllocatedBytesForCurrentThread() - allocatedBefore, interval * 1000L);
+            Stats.Record(durationMicros, GC.GetAllocatedBytesForCurrentThread() - allocatedBefore,
+                interval * 1000L, diff * 1000L);
             if (Options.Perf.SlowWorldUpdateMeasure == SlowWorldUpdateMeasure.TickDuration
                 && Options.Perf.SlowWorldUpdate > 0 && durationMicros > Options.Perf.SlowWorldUpdate * 1000L)
             {

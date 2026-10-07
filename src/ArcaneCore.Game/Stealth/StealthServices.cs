@@ -51,6 +51,7 @@ public sealed class StealthServices(SpellSystem spells, StealthRegistry registry
         ArgumentNullException.ThrowIfNull(creature);
         ArgumentNullException.ThrowIfNull(target);
         alert = false;
+        if (!Invisibility.CanDetect(Spells, creature, target)) return false;
         StealthVisibility group = Registry.VisibilityOf(target);
         if (group == StealthVisibility.On)
         {

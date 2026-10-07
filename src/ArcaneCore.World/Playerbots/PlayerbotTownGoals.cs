@@ -3,12 +3,14 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
+using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Playerbots;
@@ -35,25 +37,24 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     {
         if (elapsedMs == 0 || !player.IsInWorld || !player.IsAlive || player.Combat.IsInCombat)
             return false;
-        if (_cooldownMs > elapsedMs)
-        {
-            _cooldownMs -= elapsedMs;
-            return false;
-        }
-
-        _cooldownMs = ThinkCooldownMs;
+        _cooldownMs = elapsedMs >= _cooldownMs ? 0 : _cooldownMs - elapsedMs;
         QuestNpcServices? services = session.Services.GetService<QuestNpcFeature>()?.Services;
         if (services is null)
             return false;
 
         if (_trainerListPending)
         {
+            // Waiting for a response is stationary. Never leave the observer's
+            // forward movement running while the interaction timer is held.
+            if (!PlayerbotMovementControl.Stop(session, player)) return true;
+            if (_cooldownMs != 0) return true;
+            _cooldownMs = ThinkCooldownMs;
             ReadTrainerList();
             if (_greenTrainerSpells.Count > 0 && services.InteractableNpc(player, _trainerTarget, NpcFlags.Trainer) is { } trainer)
             {
                 if (!PlayerbotMovementControl.Stop(session, player)) return false;
-                uint spell = services.Npcs.TrainerSpells(trainer.Entry).Where(s => s.SpellCost <= player.Money).Select(s => s.Spell)
-                    .FirstOrDefault(_greenTrainerSpells.Contains);
+                uint spell = _greenTrainerSpells.OrderBy(id => id)
+                    .FirstOrDefault(id => services.GetClassTrainerQuote(player, trainer, id) is not null);
                 if (spell != 0)
                 {
                     Goal = PlayerbotGoalKind.Train;
@@ -72,6 +73,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         if (npc is null)
             return false;
         TargetEntry = npc.Entry;
+        Goal = (npc.NpcFlags & NpcFlags.Trainer) != 0
+            ? PlayerbotGoalKind.Train : PlayerbotGoalKind.Vendor;
 
         if (services.InteractableNpc(player, npc.Guid, NpcFlags.None) is null)
         {
@@ -86,7 +89,11 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
         _route = null;
         _routeTarget = default;
-        if (!PlayerbotMovementControl.Stop(session, player)) return false;
+        if (!PlayerbotMovementControl.Stop(session, player)) return true;
+        if (_cooldownMs != 0) return true;
+        // Throttle service requests, not travel. Motion must keep progressing
+        // at the advertised speed until ordinary interaction distance is reached.
+        _cooldownMs = ThinkCooldownMs;
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TryBuyFood(player, services, npc))
             return true;
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TrySellGray(player, services, npc))
@@ -96,21 +103,14 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
     private bool TryBuyFood(Player player, QuestNpcServices services, NpcInfo npc)
     {
-        if (services.Deps.Items is not { } items)
+        if (session.Services.GetService<SpellFeature>()?.System is not { } spells)
             return false;
-        foreach (VendorItem vendor in services.Npcs.VendorItems(npc.Entry).Take(32))
-        {
-            ItemInfo? info = items.GetItem(vendor.Item);
-            if (info is null || player.Money < info.BuyPrice || player.Inventory.GetItemCount(vendor.Item) > 0)
-                continue;
-            if (info.BuyPrice == 0 || !IsFood(vendor.Item, items))
-                continue;
+        VendorItem? vendor = FindConsumableVendorRow(player, services, npc, spells);
+        if (vendor is not { } row)
+            return false;
 
-            Goal = PlayerbotGoalKind.Vendor;
-            return session.TryManagedAction(WorldOpcode.CmsgBuyItem, BuyPayload(npc.Guid, vendor.Item));
-        }
-
-        return false;
+        Goal = PlayerbotGoalKind.Vendor;
+        return session.TryManagedAction(WorldOpcode.CmsgBuyItem, BuyPayload(npc.Guid, row.Item));
     }
 
     private bool TrySellGray(Player player, QuestNpcServices services, NpcInfo npc)
@@ -174,40 +174,62 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             .FirstOrDefault(info => (info.NpcFlags & required) != 0);
     }
 
-    private static bool HasUsefulService(Player player, QuestNpcServices services, NpcInfo npc)
+    private bool HasUsefulService(Player player, QuestNpcServices services, NpcInfo npc)
     {
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && services.Npcs.VendorItems(npc.Entry).Count > 0)
         {
-            if (services.Deps.Items is { } items && player.Inventory.GetItemCount(117) == 0
-                && services.Npcs.VendorItems(npc.Entry).Take(32)
-                    .Any(row => IsFood(row.Item, items) && items.GetItem(row.Item) is { BuyPrice: > 0 } item
-                        && player.Money >= item.BuyPrice)) return true;
+            if (session.Services.GetService<SpellFeature>()?.System is { } spells
+                && FindConsumableVendorRow(player, services, npc, spells) is not null) return true;
             if (player.Inventory.AllItems.Any(item =>
                 (item.BagSlot != InventorySlots.Bag0 || item.Slot >= InventorySlots.ItemStart)
                 && item.Template.Quality == 0 && item.Template.SellPrice > 0
                 && !IsProtected(player, item, services))) return true;
         }
-        if ((npc.NpcFlags & NpcFlags.Trainer) == 0 || services.Deps.Spells is not { } spells
-            || npc.TrainerType != TrainerType.Class || npc.TrainerClass != (byte)player.Class) return false;
         // Advisory discovery only; the correlated GREEN list and ordinary buy handler
         // remain the authority for price, prerequisites and teaching/persistence.
-        return services.Npcs.TrainerSpells(npc.Entry).Take(128).Any(row =>
-            spells.DescribeTrainerSpell(row.Spell) is { } info && info.LearnedSpell != 0
-            && !spells.HasSpell(player, info.LearnedSpell)
-            && spells.IsSpellFitByClassAndRace(player, info.LearnedSpell)
-            && player.Level >= (row.ReqLevel != 0 ? row.ReqLevel : info.SpellLevel)
-            && (info.ChainPrev == 0 || spells.HasSpell(player, info.ChainPrev))
-            && (info.ChainReq == 0 || spells.HasSpell(player, info.ChainReq))
-            && (row.ReqSkill == 0 || spells.GetSkillValueBase(player, row.ReqSkill) >= row.ReqSkillValue));
+        return services.GetClassTrainerQuote(player, npc) is not null;
     }
 
-    // Build-5875 starter food is the only content contract this lane can identify without
-    // inventing a food catalog seam. Unknown consumables are never purchased automatically.
-    private static bool IsFood(uint entry, IItemService items)
-        => entry == 117 && items.GetItem(entry) is not null;
-
-    private static bool IsProtected(Player player, Item item, QuestNpcServices services)
+    private static VendorItem? FindConsumableVendorRow(Player player, QuestNpcServices services, NpcInfo npc,
+        SpellSystem spells)
     {
+        bool needFood = !PlayerbotConsumables.HasUsable(player, spells, PlayerbotConsumableKind.Food);
+        bool needDrink = player.PowerType == PowerType.Mana
+            && player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana) > 0
+            && !PlayerbotConsumables.HasUsable(player, spells, PlayerbotConsumableKind.Drink);
+        if (!needFood && !needDrink)
+            return null;
+
+        VendorItem[] rows = [.. services.Npcs.VendorItems(npc.Entry).Take(32)];
+        foreach (VendorItem row in rows)
+        {
+            if (TryEligible(row, PlayerbotConsumableKind.Food, needFood, player, services, npc, spells))
+                return row;
+        }
+
+        foreach (VendorItem row in rows)
+        {
+            if (TryEligible(row, PlayerbotConsumableKind.Drink, needDrink, player, services, npc, spells))
+                return row;
+        }
+        return null;
+
+        static bool TryEligible(VendorItem row, PlayerbotConsumableKind wanted, bool needed, Player player,
+            QuestNpcServices services, NpcInfo npc, SpellSystem spells)
+        {
+            if (!needed || player.Inventory.Templates.Find(row.Item) is not { } template
+                || player.Inventory.CanUseItem(template) != ArcaneCore.Game.Items.InventoryResult.Ok
+                || !PlayerbotConsumables.TryClassify(template, spells, out PlayerbotConsumableKind kind)
+                || kind != wanted)
+                return false;
+            return services.GetVendorPurchasePrice(player, npc, row.Item) is not null;
+        }
+    }
+
+    private bool IsProtected(Player player, Item item, QuestNpcServices services)
+    {
+        if (session.Services.GetService<SpellFeature>()?.System is { } spells
+            && PlayerbotConsumables.TryClassify(item.Template, spells, out _)) return true;
         bool questRequired = (services.StateOf(player)?.Quests.Statuses ?? new Dictionary<uint, QuestStatusData>())
             .Where(row => row.Value.Status is QuestStatus.Incomplete or QuestStatus.Complete)
             .SelectMany(row => services.Quests.Get(row.Key)?.ReqItemId ?? [])

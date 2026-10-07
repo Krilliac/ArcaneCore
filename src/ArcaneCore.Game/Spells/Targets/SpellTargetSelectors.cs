@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells.Targets;
@@ -34,8 +35,7 @@ public static class SpellTargetSelectors
     /// vmangos Spell.cpp:2977-3022: unless the client already sent a destination, the destination is
     /// <c>radius</c> yards from the caster at orientation + the target's angle (radius 0 when the effect
     /// has no radius index, "we don't want to use max spell range here"); the unit list falls back to
-    /// the caster. LIMIT: vmangos uses <c>GetFirstCollisionPosition</c> (pushed back from walls and
-    /// onto the ground); ArcaneCore has no such primitive, so the point is the unclamped offset at the caster's Z.
+    /// the caster. The collision services constrain the path, model hit and ground height.
     /// </summary>
     internal static List<(Unit Unit, float Multiplier)> SelectCasterRelativeLocation(SpellCast cast, SpellEffectInfo effect, float angleOffset)
     {
@@ -45,7 +45,8 @@ public static class SpellTargetSelectors
             float radius = effect.Radius;
             float angle = caster.Orientation + angleOffset;
             cast.Targets.Mask |= SpellCastTargetFlags.DestLocation;
-            cast.Targets.Dest = (caster.X + (radius * MathF.Cos(angle)), caster.Y + (radius * MathF.Sin(angle)), caster.Z);
+            var point = SummonPosition.Resolve(caster, radius, angle);
+            cast.Targets.Dest = (point.X, point.Y, point.Z);
         }
 
         return [(cast.Caster, 1.0f)];

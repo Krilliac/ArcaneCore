@@ -1,6 +1,8 @@
 using System.Numerics;
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Protocol;
@@ -86,22 +88,54 @@ internal static class PlayerbotNavigation
     {
         if (session.Player is not { } player)
             return false;
-        if (route.Complete || player.Map is not { } map || options.MoveSpeed <= 0 || elapsedMs == 0)
+        if (player.Map is not { } map || options.MoveSpeed <= 0 || elapsedMs == 0)
             return false;
+        if (route.Complete)
+        {
+            PlayerbotMovementControl.Stop(session, player);
+            return false;
+        }
+        if (player.StandState != StandState.Stand)
+            return session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes(0u));
         if (options.AllowedMaps is { Length: > 0 } maps && !maps.Contains(map.MapId)) return false;
 
         Vector3 current = new(player.X, player.Y, player.Z);
         float speed = MathF.Min(options.MoveSpeed, UnitSpeed.Get(player, MoveType.Run));
-        if (!float.IsFinite(speed) || speed <= 0 || (player.Movement.Flags & (MovementFlags.Root | MovementFlags.Jumping)) != 0) return false;
-        float distance = speed * Math.Min(elapsedMs, 1000u) / 1000f;
-        if (!TryStep(route, current, distance, candidate =>
+        if (!float.IsFinite(speed) || speed <= 0 || (player.Movement.Flags & (MovementFlags.Root | MovementFlags.Jumping)) != 0)
         {
-            float floor = map.Collision.GetHeight(candidate.X, candidate.Y, candidate.Z);
-            if (!Finite(candidate) || InvalidHeight(floor) || MathF.Abs(floor - candidate.Z) > 2f
-                || !map.Collision.IsInLineOfSight(current.X, current.Y, current.Z + 2,
-                    candidate.X, candidate.Y, floor + 2)) return null;
-            return new Vector3(candidate.X, candidate.Y, floor + 0.05f);
-        }, out Vector3 next, out int nextPoint)) return false;
+            PlayerbotMovementControl.Stop(session, player);
+            return false;
+        }
+        if ((player.Movement.Flags & MovementFlags.MaskMoving) == 0)
+        {
+            float startDistance = speed * Math.Min(elapsedMs, 1000u) / 1000f;
+            if (!TryStepOnMap(route, new(player.X, player.Y, player.Z), MathF.Max(startDistance, 0.1f), map,
+                    out _, out _))
+            {
+                PlayerbotMovementControl.Stop(session, player);
+                return false;
+            }
+            MovementInfo start = player.Movement;
+            start.Flags &= ~(MovementFlags.MaskMoving | MovementFlags.SplineEnabled);
+            start.Flags |= MovementFlags.Forward;
+            start.Time = serverTimeMs;
+            Vector3 toward = route.Points[route.NextPoint] - new Vector3(player.X, player.Y, player.Z);
+            if (toward.LengthSquared() > 0.001f)
+                start.Orientation = MathF.Atan2(toward.Y, toward.X);
+            start.CorrectData();
+            var startWriter = new PacketWriter(64);
+            start.Write(startWriter);
+            bool sent = session.TryManagedAction(WorldOpcode.MsgMoveStartForward, startWriter.ToArray());
+            if (sent)
+                PlayerbotMovementControl.Track(session, player, route, new(player.X, player.Y, player.Z), route.NextPoint, speed, serverTimeMs);
+            return sent;
+        }
+        float distance = speed * Math.Min(elapsedMs, 1000u) / 1000f;
+        if (!TryStepOnMap(route, current, distance, map, out Vector3 next, out int nextPoint))
+        {
+            PlayerbotMovementControl.Stop(session, player);
+            return false;
+        }
 
         MovementInfo movement = player.Movement;
         movement.Flags &= ~(MovementFlags.MaskMoving | MovementFlags.SplineEnabled);
@@ -118,6 +152,9 @@ internal static class PlayerbotNavigation
             return false;
         if (Vector3.Distance(new Vector3(player.X, player.Y, player.Z), next) > 0.5f) return false;
         route.NextPoint = nextPoint;
+        PlayerbotMovementControl.Track(session, player, route, next, route.NextPoint, speed, serverTimeMs);
+        if (route.Complete)
+            PlayerbotMovementControl.Stop(session, player);
         return true;
     }
 
@@ -151,6 +188,17 @@ internal static class PlayerbotNavigation
         }
         return Vector3.Distance(start, next) > 0.05f;
     }
+
+    internal static bool TryStepOnMap(PlayerbotRoute route, Vector3 start, float budget, Map map,
+        out Vector3 next, out int nextPoint)
+        => TryStep(route, start, budget, candidate =>
+        {
+            float floor = map.Collision.GetHeight(candidate.X, candidate.Y, candidate.Z);
+            if (!Finite(candidate) || InvalidHeight(floor) || MathF.Abs(floor - candidate.Z) > 2f
+                || !map.Collision.IsInLineOfSight(start.X, start.Y, start.Z + 2,
+                    candidate.X, candidate.Y, floor + 2)) return null;
+            return new Vector3(candidate.X, candidate.Y, floor + 0.05f);
+        }, out next, out nextPoint);
 
     internal static bool TryTerrainRoute(Vector3 start, Vector3 destination, PlayerbotOptions options,
         Func<float, float, float, float> getHeight, Func<Vector3, Vector3, bool> clear,

@@ -88,6 +88,9 @@ public sealed record CreatureAiText(int Id, string Content, byte Type, uint Lang
     public uint BroadcastTextId { get; init; }
 }
 
+/// <summary>CMaNGOS dbscript_random_templates type0: a signed text id and optional percentage.</summary>
+public readonly record struct CreatureAiTextChoice(uint TemplateId, int TextId, uint Chance);
+
 /// <summary>EventAI content, loaded once at startup and read-only afterwards (world thread reads without locks).</summary>
 public sealed class CreatureAiContent
 {
@@ -97,13 +100,15 @@ public sealed class CreatureAiContent
     private readonly Dictionary<uint, IReadOnlyList<CreatureAiEvent>> _guidEvents;
     private readonly Dictionary<int, CreatureAiText> _texts;
     private readonly Dictionary<uint, CreatureAiSummon> _summons;
+    private readonly Dictionary<uint, CreatureAiTextChoice[]> _textTemplates;
 
     public CreatureAiContent(
         IEnumerable<CreatureAiEvent> events,
         IEnumerable<CreatureAiText> texts,
         BroadcastTextCatalog? broadcastTexts = null,
         IEnumerable<CreatureAiSummon>? summons = null,
-        EventAiDialect dialect = EventAiDialect.CMangos)
+        EventAiDialect dialect = EventAiDialect.CMangos,
+        IEnumerable<CreatureAiTextChoice>? textTemplates = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(texts);
@@ -115,6 +120,11 @@ public sealed class CreatureAiContent
             .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureAiEvent>)[.. g.OrderBy(e => e.Id)]);
         _texts = texts.ToDictionary(t => t.Id);
         _summons = (summons ?? []).ToDictionary(s => s.Id);
+        _textTemplates = (textTemplates ?? []).GroupBy(row => row.TemplateId)
+            .ToDictionary(group => group.Key, group => group.OrderBy(row => row.TextId).ToArray());
+        foreach (var rows in _textTemplates.Values)
+            if (rows.Select(row => row.TextId).Distinct().Count() != rows.Length)
+                throw new ArgumentException("Invalid EventAI text template choices.", nameof(textTemplates));
         BroadcastTexts = broadcastTexts ?? BroadcastTextCatalog.Empty;
         Dialect = dialect;
     }
@@ -139,6 +149,25 @@ public sealed class CreatureAiContent
 
     /// <summary>A <c>creature_ai_summons</c> location (the SUMMON_ID action's parameter), or null.</summary>
     public CreatureAiSummon? FindSummon(uint id) => _summons.GetValueOrDefault(id);
+
+    /// <summary>Explicit chances first; residual probability selects uniformly from chance-zero rows.</summary>
+    public int SelectTemplateText(uint id, float percentRoll, Func<int, int> equalIndex)
+    {
+        ArgumentNullException.ThrowIfNull(equalIndex);
+        if (!float.IsFinite(percentRoll) || percentRoll is < 0 or > 100) throw new ArgumentOutOfRangeException(nameof(percentRoll));
+        if (!_textTemplates.TryGetValue(id, out var rows)) return 0;
+        ulong cumulative = 0;
+        foreach (var row in rows.Where(row => row.Chance > 0))
+        {
+            cumulative += row.Chance;
+            if (cumulative >= percentRoll) return row.TextId;
+        }
+        var equal = rows.Where(row => row.Chance == 0).ToArray();
+        if (equal.Length == 0) return 0;
+        int index = equalIndex(equal.Length);
+        if ((uint)index >= equal.Length) throw new ArgumentOutOfRangeException(nameof(equalIndex));
+        return equal[index].TextId;
+    }
 
     /// <summary>
     /// The text for an EventAI text id: a negative id looks up <c>creature_ai_texts</c>; a positive id

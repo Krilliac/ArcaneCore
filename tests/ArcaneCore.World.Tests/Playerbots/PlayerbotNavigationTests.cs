@@ -4,6 +4,7 @@ using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Locomotion;
+using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using Xunit;
 
@@ -95,6 +96,15 @@ public sealed class PlayerbotNavigationTests
                 Assert.Equal(1, route!.NextPoint);
                 session.ManagedBudget = new ManagedActionBudget(1);
                 Assert.True(PlayerbotNavigation.TryAdvance(session, route, options, elapsed, host.World.NowMs));
+                Assert.Equal(0, session.ManagedBudget.Remaining);
+                Assert.Equal(before, new Vector3(player.X, player.Y, player.Z));
+                Assert.True(player.Movement.HasFlag(MovementFlags.Forward));
+                Assert.Equal(1, route.NextPoint);
+                // START establishes prediction at the current position. Only the
+                // following elapsed interval advances through an ordinary heartbeat.
+                session.ManagedBudget = new ManagedActionBudget(1);
+                Assert.True(PlayerbotNavigation.TryAdvance(session, route, options, elapsed,
+                    unchecked(host.World.NowMs + elapsed)));
                 Assert.Equal(0, session.ManagedBudget.Remaining);
                 Assert.InRange(player.X - before.X, expected - 0.02f, expected + 0.02f);
                 Assert.InRange(Vector3.Distance(before, new(player.X, player.Y, player.Z)), expected - 0.02f, expected + 0.02f);

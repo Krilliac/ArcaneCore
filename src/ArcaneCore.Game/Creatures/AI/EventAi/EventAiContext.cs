@@ -43,8 +43,8 @@ public sealed class EventAiContext
     /// <summary>The map system clock in milliseconds (0 outside a map).</summary>
     public long ClockMs => System?.ClockMs ?? 0;
 
-    /// <summary>Whether the creature is in ranged (caster) mode; always false until caster mode exists.</summary>
-    public bool RangedMode => false;
+    /// <summary>Whether the creature is currently in ranged (caster) mode.</summary>
+    public bool RangedMode => _ai.CurrentRangedMode;
 
     /// <summary>The threat entries, highest first (empty without a threat list).</summary>
     public IReadOnlyList<ThreatEntry> Threat => Me.Combat.HasThreatList ? Me.Combat.Threat.Entries : [];

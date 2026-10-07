@@ -40,6 +40,56 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     internal uint TargetEntry { get; private set; }
     internal uint QuestId { get; private set; }
 
+    /// <summary>
+    /// Advisory check for the brain's idle decision. This reports an ordinary,
+    /// allowlisted quest destination that is currently eligible and offscreen;
+    /// it does not plan a route or claim/accept a quest. The subsequent
+    /// <see cref="Update"/> call remains authoritative and preserves the one
+    /// path attempt and backoff rules.
+    /// </summary>
+    internal bool HasQuestCandidate(Player player)
+    {
+        if (!_options.Enabled || !player.IsInWorld || !player.IsAlive || player.Map is not { } map)
+            return false;
+
+        uint now = _session.World.NowMs;
+        if (_backoffUntil != 0 && unchecked(now - _backoffUntil) > int.MaxValue)
+            return false;
+        if (_backoffUntil != 0)
+        {
+            // A failed route is suppressed only for the bounded backoff window.
+            // Clear its blocked marker when the window expires so the advisory
+            // seam can authorize one fresh Update/path attempt.
+            _backoffUntil = 0;
+            _blockedSpawns.Clear();
+        }
+
+        // Use the same static allowlist/map cache as Update, while rechecking
+        // live quest state below so stale rows never become ownership.
+        RefreshEntries(player, map.MapId, 0, 0);
+        QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
+        PlayerNpcState? state = services?.StateOf(player);
+        bool blockedEligible = false;
+        bool liveEligible = false;
+        foreach (DestinationEntry entry in _entries.OrderBy(entry => DistanceSquared(player, entry.Spawn)))
+        {
+            if (!Eligible(entry.Entry, 0, player, services, state, 0, out _)) continue;
+            liveEligible = true;
+            // A visible eligible giver belongs to ordinary interaction handling.
+            // Do not let this advisory seam steal it for travel.
+            if (VisibleTarget(player, entry.Entry, 0)) return false;
+            if (_blockedSpawns.Contains(entry.Spawn.Guid))
+            {
+                blockedEligible = true;
+                continue;
+            }
+            return true;
+        }
+        if (liveEligible && blockedEligible)
+            Backoff(now);
+        return false;
+    }
+
     /// <summary>Returns true only when a normal movement action was attempted.</summary>
     internal bool Update(Player player, uint preferredCreatureEntry, uint elapsedMs, uint returnQuestId = 0)
     {

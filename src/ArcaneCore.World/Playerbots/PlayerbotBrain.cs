@@ -27,6 +27,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private bool _attacking;
     private bool _lootOpened;
     private uint _restUntilMs;
+    private PlayerbotConsumableKind _restKind;
     private int _roamDirection;
     private PlayerbotGoalKind _goal = PlayerbotGoalKind.Explore;
     private long _lootStartedMs;
@@ -34,14 +35,17 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private bool _lootResponseReceived;
     private readonly PlayerbotQuestGoals _quests = new(session, options);
     private readonly PlayerbotTownGoals _town = new(session, options);
+    private readonly PlayerbotTrainerDestinations _trainers = new(session, options);
     private readonly PlayerbotWorldDestinations _destinations = new(session, options);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
     private readonly PlayerbotRecovery _recovery = new(session, options);
+    private readonly PlayerbotEquipment _equipment = new(session);
     private readonly CancellationTokenSource _planningStop = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
     private Task<string?>? _planTask;
     private string? _modelChoice;
     private long _nextPlanMs;
     private bool _needsRest;
+    private bool _deathIntentRetired;
     private int _stopped;
 
     internal void Stop()
@@ -60,35 +64,54 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     {
         if (!_options.Enabled || _stopped != 0 || _session.Player is not { } player)
             return;
-        if (PlayerbotMovementControl.Update(_session, player)) return;
         if (!player.IsInWorld) return;
 
-        if (!player.IsAlive)
+        bool dead = !player.IsAlive;
+        if (dead)
+        {
+            if (!_deathIntentRetired)
+            {
+                RetireDeathIntent();
+                _deathIntentRetired = true;
+            }
+            _goal = PlayerbotGoalKind.Recover;
+        }
+        // Death cleanup must happen before this seam, but pending movement orders still
+        // require their ordinary acknowledgements while alive or ghosted.
+        if (PlayerbotMovementControl.Update(_session, player)) return;
+
+        if (dead)
         {
             _thinkElapsed += elapsedMs;
             if (_thinkElapsed >= _options.ThinkIntervalMs)
             {
                 uint recoveryInterval = _thinkElapsed;
                 _thinkElapsed = 0;
-                _goal = PlayerbotGoalKind.Recover;
                 _recovery.Update(player, recoveryInterval);
             }
             return;
         }
+        _deathIntentRetired = false;
         _recovery.Reset();
 
         if (_restUntilMs != 0)
         {
-            if (player.Health < player.MaxHealth && !player.Combat.IsInCombat
-                && unchecked(_session.World.NowMs - _restUntilMs) > int.MaxValue)
+            if (!PlayerbotMovementControl.Stop(_session, player)) return;
+            SpellFeature? restingSpells = _session.Services.GetService<SpellFeature>();
+            bool activeRecovery = restingSpells is not null
+                && PlayerbotConsumables.HasActiveFoodDrink(player, restingSpells.System);
+            if (!player.Combat.IsInCombat && activeRecovery && PlayerbotConsumables.NeedsRecovery(player, _restKind)
+                && unchecked((int)(_restUntilMs - _session.World.NowMs)) > 0)
                 return;
             if (!_session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes(0u))) return;
             _restUntilMs = 0;
             _goal = PlayerbotGoalKind.Explore;
+            return;
         }
 
         if (_lootActions.TryPeek(out var nextLoot))
         {
+            if (!PlayerbotMovementControl.Stop(_session, player)) return;
             if (_session.TryManagedAction(nextLoot.Opcode, nextLoot.Payload)) _lootActions.Dequeue();
             return;
         }
@@ -101,6 +124,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
         if (!player.IsAlive)
         {
+            if (!_deathIntentRetired)
+            {
+                RetireDeathIntent();
+                _deathIntentRetired = true;
+            }
             _goal = PlayerbotGoalKind.Recover;
             _recovery.Update(player, interval);
             return;
@@ -108,6 +136,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
         if (_lootOpened && _target is { } pendingLoot)
         {
+            if (!PlayerbotMovementControl.Stop(_session, player)) return;
             if (_lootResponseReceived || _session.World.Uptime.TotalMilliseconds - _lootStartedMs >= 10_000)
             {
                 if (!_lootResponseReceived) _session.TryManagedAction(WorldOpcode.CmsgLootRelease,
@@ -148,22 +177,118 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         }
 
-        if (!player.Combat.IsInCombat)
+        Creature? outgoingVictim = player.Combat.Victim is Creature victim
+            && player.Map is { } map && victim.IsInWorld && victim.IsAlive && ReferenceEquals(victim.Map, map)
+            && map.Combat.Hooks.CanAttack(player, victim)
+            ? victim
+            : null;
+        if (outgoingVictim is not null)
         {
-            if (_needsRest || (player.Health * 100UL < player.MaxHealth * 45UL && player.Inventory.GetItemCount(117) > 0))
+            bool changed = !ReferenceEquals(_target, outgoingVictim);
+            _target = outgoingVictim;
+            if (changed)
             {
-                _needsRest = player.Health < player.MaxHealth;
-                if (_needsRest) { Rest(player); return; }
+                _route = null;
+                _attacking = false;
+            }
+            _lootOpened = false;
+            TargetEntry = outgoingVictim.Entry;
+        }
+
+        bool hasDeadLootTarget = _target is { IsAlive: false } && ReferenceEquals(_target.Map, player.Map);
+        Creature? defensiveAttacker = outgoingVictim is null && !hasDeadLootTarget && player.Combat.Victim is null
+            ? FindDefensiveAttacker(player)
+            : null;
+        if (defensiveAttacker is not null)
+        {
+            bool changed = !ReferenceEquals(_target, defensiveAttacker);
+            _target = defensiveAttacker;
+            if (changed)
+            {
+                _route = null;
+                _attacking = false;
+            }
+            _lootOpened = false;
+            TargetEntry = defensiveAttacker.Entry;
+        }
+        if (defensiveAttacker is null && player.Combat.IsInCombat && player.Combat.Victim is null
+            && !hasDeadLootTarget)
+        {
+            PlayerbotMovementControl.Stop(_session, player);
+            // Combat linger after an ordinary attack stop must not reopen an optional
+            // grind target. Let the authoritative combat timer/handler clear the state.
+            _target = null;
+            _route = null;
+            _attacking = false;
+            _lootOpened = false;
+            TargetEntry = 0;
+            _goal = PlayerbotGoalKind.Combat;
+            return;
+        }
+
+        if (!player.Combat.IsInCombat && outgoingVictim is null && !hasDeadLootTarget)
+        {
+            SpellFeature? spellFeature = _session.Services.GetService<SpellFeature>();
+            if (_needsRest || spellFeature is not null && PlayerbotConsumables.TryFindRecovery(player, spellFeature.System, out _))
+            {
+                Rest(player);
+                return;
+            }
+            if (_equipment.Update(player))
+            {
+                _target = null;
+                _route = null;
+                _attacking = false;
+                TargetEntry = 0;
+                _goal = PlayerbotGoalKind.Explore;
+                return;
             }
             UpdateLocalPlan(player);
             // A returned ID is only a proposal; each controller rechecks the live gameplay rules.
             if (_modelChoice == "town" && _town.Update(player, interval))
-            { _goal = _town.Goal; TargetEntry = _town.TargetEntry; return; }
+            { RetireIdleCombatRoute(); _goal = _town.Goal; TargetEntry = _town.TargetEntry; return; }
             if (_quests.Update(player, interval))
-            { _goal = _quests.Goal; QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
+            { RetireIdleCombatRoute(); _goal = _quests.Goal; QuestId = _quests.QuestId; TargetEntry = _quests.TargetEntry; return; }
             QuestId = _quests.QuestId;
             if (_town.Update(player, interval))
-            { _goal = _town.Goal; TargetEntry = _town.TargetEntry; return; }
+            { RetireIdleCombatRoute(); _goal = _town.Goal; TargetEntry = _town.TargetEntry; return; }
+            if (_quests.PreferredCreatureEntry == 0 && _trainers.HasCandidate(player))
+            {
+                // An abandoned idle-grind target must not keep reopening combat instead
+                // of travelling to a useful trainer. Stop through the ordinary handler;
+                // active combat, casts, quest returns and pending loot keep priority.
+                if (_attacking || player.Combat.Victim is not null)
+                {
+                    if (_session.TryManagedAction(WorldOpcode.CmsgAttackstop, []))
+                    { _attacking = false; _target = null; _route = null; }
+                    _goal = PlayerbotGoalKind.Train;
+                    return;
+                }
+                _target = null;
+                _route = null;
+                if (_trainers.Update(player, interval))
+                { _goal = PlayerbotGoalKind.Train; TargetEntry = _trainers.TargetEntry; return; }
+            }
+            if (_quests.PreferredCreatureEntry == 0 && player.Combat.Victim is null
+                && _destinations.HasQuestCandidate(player))
+            {
+                // Available quest travel precedes optional idle grinding. Actual combat,
+                // visible interactions, completed returns, supplies and trainers keep their
+                // existing priority; path failure still permits the ordinary fallback.
+                if (spellFeature?.System.GetState(player.Guid)?.CurrentCast is
+                    { State: ArcaneCore.Game.Spells.SpellCastState.Preparing or ArcaneCore.Game.Spells.SpellCastState.Casting }) return;
+                if (_session.ManagedBudget is { Remaining: <= 0 }) return;
+                if (_destinations.Update(player, 0, interval))
+                {
+                    _target = null;
+                    _route = null;
+                    _attacking = false;
+                    _goal = PlayerbotGoalKind.Quest;
+                    TargetEntry = _destinations.TargetEntry;
+                    QuestId = _destinations.QuestId;
+                    return;
+                }
+            }
             if (_modelChoice == "explore") { _target = null; Explore(player, interval); return; }
         }
 
@@ -193,8 +318,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         }
         Creature target = _target;
 
-        if (player.Combat.Victim is Creature victim && !ReferenceEquals(victim, _target))
-        { _target = target = victim; _route = null; _attacking = false; TargetEntry = victim.Entry; }
+        TargetEntry = target.Entry;
 
         if (target.IsAlive)
         {
@@ -209,6 +333,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                         new System.Numerics.Vector3(target.X, target.Y, target.Z), _options, out _route))
                 {
                     _target = null;
+                    PlayerbotMovementControl.Stop(_session, player);
                     return;
                 }
 
@@ -229,6 +354,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         }
 
+        if (!PlayerbotMovementControl.Stop(_session, player)) return;
         _goal = PlayerbotGoalKind.Loot;
         _lootOpened = _session.TryManagedAction(WorldOpcode.CmsgLoot,
             PlayerbotNavigation.GuidPayload(target.Guid.Value));
@@ -236,14 +362,44 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         return;
     }
 
+    private void RetireDeathIntent()
+    {
+        // Death starts a new gameplay lifetime. Drop only controller-owned, transient
+        // intent; the recovery helper still owns the ordinary release/reclaim flow.
+        _target = null;
+        TargetEntry = 0;
+        _route = null;
+        _attacking = false;
+        _lootOpened = false;
+        _lootResponseReceived = false;
+        _lootActions.Clear();
+        _restUntilMs = 0;
+        _restKind = default;
+        _needsRest = false;
+        _thinkElapsed = 0;
+        _combatSpells.Reset();
+    }
+
+    private void RetireIdleCombatRoute()
+    {
+        // Service/quest controllers own separate routes. Do not later resume a
+        // previous grind path from a different position after their work finishes.
+        _target = null;
+        _route = null;
+        _attacking = false;
+    }
+
     private void Rest(Player player)
     {
-        if (player.Health >= player.MaxHealth || player.Combat.IsInCombat)
+        SpellFeature? spellFeature = _session.Services.GetService<SpellFeature>();
+        if (spellFeature is null || player.Combat.IsInCombat
+            || spellFeature.System.GetState(player.Guid)?.CurrentCast is
+                { State: ArcaneCore.Game.Spells.SpellCastState.Preparing or ArcaneCore.Game.Spells.SpellCastState.Casting }
+            || PlayerbotConsumables.HasActiveFoodDrink(player, spellFeature.System)
+            || !PlayerbotConsumables.TryFindRecovery(player, spellFeature.System, out PlayerbotConsumable consumable))
         { _needsRest = false; return; }
 
-        Item? food = player.Inventory.AllItems.FirstOrDefault(item => item.Entry == 117 && item.Count > 0);
-        if (food is null)
-        { _needsRest = false; return; }
+        Item item = consumable.Item;
 
         _goal = PlayerbotGoalKind.Rest;
         _needsRest = true;
@@ -252,7 +408,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (player.StandState != StandState.Sit)
         { _session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes(1u)); return; }
         if (!_session.TryManagedAction(WorldOpcode.CmsgUseItem,
-            PlayerbotNavigation.UseItemPayload(food.BagSlot, food.Slot))) return;
+            PlayerbotNavigation.UseItemPayload(item.BagSlot, item.Slot))) return;
+        _restKind = consumable.Kind;
         _restUntilMs = unchecked(_session.World.NowMs + 20_000);
         _needsRest = false;
     }
@@ -311,6 +468,18 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             .FirstOrDefault();
     }
 
+    private static Creature? FindDefensiveAttacker(Player player)
+    {
+        if (player.Map is not { } map) return null;
+        return player.Combat.Attackers
+            .OfType<Creature>()
+            .Where(creature => creature.IsInWorld && creature.IsAlive
+                && ReferenceEquals(creature.Map, map)
+                && map.Combat.Hooks.CanAttack(player, creature))
+            .OrderBy(creature => Distance(player, creature))
+            .FirstOrDefault();
+    }
+
     private void UpdateLocalPlan(Player player)
     {
         if (planner is null || !_options.AllowLocalLlm || _planningStop.IsCancellationRequested) return;
@@ -357,6 +526,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (!PlayerbotNavigation.TryAdvance(_session, _route!, _options, elapsedMs, _session.World.NowMs))
                 _route = null;
         }
+        else PlayerbotMovementControl.Stop(_session, player);
     }
 
     private static float Distance(WorldObject a, WorldObject b)

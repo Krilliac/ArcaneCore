@@ -36,6 +36,125 @@ public sealed class CreatureEventAiTests
 
     private static CreatureAiAction Act(EventAiActionType type, int p1 = 0, int p2 = 0, int p3 = 0) => new((byte)type, p1, p2, p3);
 
+    [Fact]
+    public void SpawnedSetRangedMode_TypeThreeKeepsRangedStateAndLeavesAutoAttackIndependent()
+    {
+        CreatureContent content = EventContent(
+            [Row(1, EventAiEventType.Spawned, a1: Act(EventAiActionType.SetRangedMode, 3, 20))]);
+        (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(content);
+        using WorldRuntime world = runtime;
+        AddPlayer(world, 1, 50, 0); // Activate the spawn's grid through an actual player.
+        Creature wolf = Assert.Single(system.Creatures);
+        var ai = Assert.IsType<CreatureEventAI>(wolf.AI);
+
+        Assert.Empty(ai.Unsupported);
+        ai.OnRespawn();
+
+        Assert.True(ai.RangedMode);
+        Assert.True(ai.CurrentRangedMode);
+        Assert.Equal(3, ai.RangedModeType);
+        Assert.Equal(20f, ai.ChaseDistance);
+        Assert.True(ai.MeleeEnabled);
+
+        ai.Reset();
+        Assert.True(ai.CurrentRangedMode);
+        Assert.True(ai.MeleeEnabled);
+        _ = world;
+    }
+
+    [Fact]
+    public void NoMeleeRangedMode_ApproachesConfiguredMaximumDistanceWithoutRetreating()
+    {
+        CreatureContent content = EventContent(
+            [Row(1, EventAiEventType.Spawned, a1: Act(EventAiActionType.SetRangedMode, 3, 20),
+                a2: Act(EventAiActionType.AutoAttack, 0))]);
+        (WorldRuntime runtime, Map map, CreatureMapSystem system) = CreateAiSystem(content);
+        using WorldRuntime world = runtime;
+        (Player player, _) = AddPlayer(world, 1, 50, 0);
+        Creature wolf = Assert.Single(system.Creatures);
+        var ai = Assert.IsType<CreatureEventAI>(wolf.AI);
+        ai.OnRespawn();
+
+        map.Combat.DealDamage(player, wolf, 1, direct: false);
+        Run(world, 5000);
+
+        float distance = MathF.Sqrt(MathF.Pow(wolf.X - player.X, 2) + MathF.Pow(wolf.Y - player.Y, 2));
+        Assert.InRange(distance, 18.5f, 21.5f);
+        Assert.False(ai.MeleeEnabled); // action 20, not ranged mode, owns this state.
+    }
+
+    [Fact]
+    public void RangedModeAction_RejectsUnimplementedModeTypes()
+    {
+        CreatureContent content = EventContent(
+            [Row(1, EventAiEventType.Spawned, a1: Act(EventAiActionType.SetRangedMode, 2, 20))]);
+        (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(content);
+        using WorldRuntime world = runtime;
+        AddPlayer(world, 1, 50, 0);
+        Creature wolf = Assert.Single(system.Creatures);
+        var ai = Assert.IsType<CreatureEventAI>(wolf.AI);
+
+        ai.OnRespawn();
+
+        Assert.False(ai.RangedMode);
+        Assert.True(ai.MeleeEnabled);
+    }
+
+    [Fact]
+    public void MainSpellFlag_IsMetadataOnly_AndRealSpellSystemCastsAtConfiguredRange()
+    {
+        using var kit = new SpellTestKit();
+        CreatureContent content = EventContent(
+        [
+            Row(1, EventAiEventType.Spawned, a1: Act(EventAiActionType.SetRangedMode, 3, 20)),
+            Row(2, EventAiEventType.TimerInCombat, 5000, 5000, 5000, 5000,
+                flags: CreatureEventAI.FlagRepeatable,
+                a1: Act(EventAiActionType.Cast, (int)SpellTestKit.DotSpell, (int)EventAiTarget.Victim, 0x100)),
+        ]);
+        var caster = new SpellSystemCreatureCaster(kit.System);
+        (_, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Spells = caster }, world: kit.World);
+        (Player player, _) = kit.AddPlayer(1, 50, 0);
+        Creature wolf = Assert.Single(system.Creatures);
+        var ai = Assert.IsType<CreatureEventAI>(wolf.AI);
+        ai.OnRespawn();
+
+        map.Combat.DealDamage(player, wolf, 1, direct: false);
+        Run(kit.World, 6000); // Include the next EventAI timer batch after the 5-second timer.
+
+        float distance = MathF.Sqrt(MathF.Pow(wolf.X - player.X, 2) + MathF.Pow(wolf.Y - player.Y, 2));
+        Assert.InRange(distance, 18.5f, 21.5f);
+        SpellAuraHolder aura = Assert.Single(kit.System.GetAuras(player));
+        Assert.Equal(SpellTestKit.DotSpell, aura.Spell.Id);
+        Assert.Equal(wolf.Guid, aura.CasterGuid);
+        Assert.True(ai.MeleeEnabled); // 0x100 marks metadata; it is neither triggered nor melee suppression.
+    }
+
+    [Fact]
+    public void NoMeleeRangeMode_DoesNotRetreatFromCloseVictim_AndAction20StillControlsMelee()
+    {
+        CreatureContent content = EventContent(
+            [Row(1, EventAiEventType.Spawned, a1: Act(EventAiActionType.SetRangedMode, 3, 20)),
+             Row(2, EventAiEventType.TimerInCombat, 2000, 2000,
+                 a1: Act(EventAiActionType.AutoAttack, 0), a2: Act(EventAiActionType.SetRangedMode, 0, 20))]);
+        (WorldRuntime runtime, Map map, CreatureMapSystem system) = CreateAiSystem(content);
+        using WorldRuntime world = runtime;
+        (Player player, _) = AddPlayer(world, 1, 6, 0);
+        Creature wolf = Assert.Single(system.Creatures);
+        var ai = Assert.IsType<CreatureEventAI>(wolf.AI);
+        ai.OnRespawn();
+
+        map.Combat.DealDamage(player, wolf, 1, direct: false);
+        Run(world, 500);
+
+        Assert.InRange(wolf.X, 4f, 7f);
+        Assert.True(ai.RangedMode);
+        Assert.True(ai.MeleeEnabled);
+        Run(world, 2000);
+        Assert.False(ai.RangedMode);
+        Assert.False(ai.MeleeEnabled);
+        Assert.False(wolf.Combat.IsMeleeAttacking);
+    }
+
     private static CreatureContent EventContent(IEnumerable<CreatureAiEvent> events, IEnumerable<CreatureAiText>? texts = null, params CreatureTemplate[] extra)
         => new(
             [Template(configure: t => t.AIName = CreatureAiFactory.EventAIName), .. extra],

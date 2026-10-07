@@ -37,6 +37,7 @@ public sealed class StealthFeature(SpellFeature spells, IServiceProvider service
         // Data auras: their amounts are read by the detection formula (SpellSystem.GetTotalAuraModifier), nothing happens at apply.
         system.RegisterAura(AuraType.ModStealthLevel, new AuraHandler(null, null));
         system.RegisterAura(AuraType.ModStealthDetect, new AuraHandler(null, null));
+        Invisibility.Register(system);
 
         void Install(Map map)
         {

@@ -76,6 +76,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(SpellEnchantChargesWorldDataModule), DatabaseComponent.World, SpellEnchantChargesWorldDataModule.Version),
             (typeof(StartingSkillWorldDataModule), DatabaseComponent.World, StartingSkillWorldDataModule.Version),
             (typeof(NpcTemplateServiceMetadataModule), DatabaseComponent.World, NpcTemplateServiceMetadataModule.Version),
+            (typeof(CreatureTextTemplateDataModule), DatabaseComponent.World, CreatureTextTemplateDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),

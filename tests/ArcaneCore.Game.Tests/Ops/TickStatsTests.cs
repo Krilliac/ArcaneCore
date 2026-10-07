@@ -92,6 +92,47 @@ public sealed class TickStatsTests
     }
 
     [Fact]
+    public void FrameCadence_TracksMeanEffectiveRateAndFrameOverruns()
+    {
+        var stats = new TickStats(8);
+        stats.Record(100, 0, 1_000, 1_000);
+        stats.Record(100, 0, 1_000, 2_000);
+
+        TickStatsSnapshot snapshot = stats.Snapshot();
+        Assert.Equal(2, snapshot.FrameSamples);
+        Assert.Equal(1_500, snapshot.MeanFrameIntervalMicros);
+        Assert.Equal(1_000_000d / 1_500d, snapshot.EffectiveTicksPerSecond!.Value, 6);
+        Assert.Equal(1, snapshot.FrameOverruns);
+    }
+
+    [Fact]
+    public void FrameCadence_EmptyAndLegacyRecordsRemainUnmeasured()
+    {
+        var stats = new TickStats(4);
+        stats.Record(10, 0, 1_000);
+        TickStatsSnapshot snapshot = stats.Snapshot();
+
+        Assert.Equal(0, snapshot.FrameSamples);
+        Assert.Equal(0, snapshot.MeanFrameIntervalMicros);
+        Assert.Null(snapshot.EffectiveTicksPerSecond);
+        Assert.Equal(0, snapshot.FrameOverruns);
+    }
+
+    [Fact]
+    public void FrameCadence_RingWrapUsesRetainedFrameSamples()
+    {
+        var stats = new TickStats(2);
+        stats.Record(10, 0, 1_000, 1_000);
+        stats.Record(10, 0, 1_000, 2_000);
+        stats.Record(10, 0, 1_000, 3_000);
+
+        TickStatsSnapshot snapshot = stats.Snapshot();
+        Assert.Equal(2, snapshot.FrameSamples);
+        Assert.Equal(2_500, snapshot.MeanFrameIntervalMicros);
+        Assert.Equal(2, snapshot.FrameOverruns);
+    }
+
+    [Fact]
     public void Empty_SnapshotReportsZeroSamples_NotAFabricatedPercentile()
     {
         TickStatsSnapshot s = new TickStats(8).Snapshot();

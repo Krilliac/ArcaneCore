@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -54,6 +55,10 @@ public sealed class ReputationFeature(IServiceProvider services, IServiceScopeFa
         }
 
         ReputationService service = Service;
+        if (services.GetService<SpellFeature>() is { } spells)
+        {
+            ReputationAuras.Bind(spells.System, service);
+        }
         _writes!.Start();
         _world = world;
         world.MapCreated += OnMapCreated;
