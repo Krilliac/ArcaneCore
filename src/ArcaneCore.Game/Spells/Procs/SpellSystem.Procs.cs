@@ -445,6 +445,11 @@ public sealed partial class SpellSystem
             uint cooldown = entry?.Cooldown ?? 0;
             for (int i = 0; i < SpellConstants.MaxEffects; i++)
             {
+                if (holder.IsRemoved)
+                {
+                    break; // an effect's handler (or the damage-proc cancel) removed the holder: its other effects do not proc
+                }
+
                 if (holder.Auras[i] is not { } aura)
                 {
                     continue;

@@ -46,6 +46,7 @@ Each area page has a Delivered section, its limits, and the references it follow
 |---|---|
 | Spell system core | [spells](areas/spells.md) |
 | Spell combat rules, crowd control and diminishing returns | [spell-rules](areas/spell-rules.md) |
+| Procs, damage shields and spell reflection | [procs](areas/procs.md) |
 | Mage, priest and warlock | [casters](areas/casters.md) |
 | Shaman and paladin (totems) | [class-shaman-paladin](areas/class-shaman-paladin.md) |
 | Rogue | [rogue](areas/rogue.md) |

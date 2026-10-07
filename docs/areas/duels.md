@@ -62,15 +62,16 @@ Defaults are the vmangos values; a different value is a deliberate deviation.
   to charmed units, the 50/40 yd distances (selectable by option), and blocking the logout request while dueling (vmangos only blocks it while in combat,
   which a duel already is; a logout mid-duel completes interrupted either way).
 
+* **Reflected spells and DoTs** (proc-engine lane, docs/areas/procs.md): a reflected spell that would kill its own caster is cut to 1 health and ends the duel
+  with the caster as the loser (`pVictim == this && reflected`, Unit.cpp:770-776, `MapCombat.ApplyDuelClamp`), and completion removes reflected debuffs
+  whoever cast them (`IsReflected` clause, Player.cpp:6762-6787). Playerbot scenario: `proc-reflect-duel`.
+
 ## Limits (documented, not stubbed)
 
 * **Pets, guardians, totems, charmed units.** There is none on this base. The seam is `IPlayerControlledUnit`: the clamp, the hostility rule and the PvP-pulse
   exemption already read it, so the pets lane only has to implement it. Not done: `CombatStopWithPets` over controlled units, combo points aimed at the
   opponent's pet, pet hostility through the owner on the `CanAttack` path of creatures, copying `PLAYER_DUEL_TEAM` to a charmed player.
-* **Reflected spells and DoTs** (`pVictim == this && reflected` clamp, `IsReflected` clause of the aura cleanup): needs the reflected flag of the spell combat
-  rules lane.
 * **Transports** (`DuelInfo.transportGuid`, `SPELL_FAILED_NOT_ON_TRANSPORT`, leaving the transport ends the duel): no transport system.
-* **`ResetExtraAttacks`** at completion: no extra-attack counter exists.
 * **Helpful spells on duelists** (vmangos `Spell::CheckTarget` drops a positive spell aimed at a started-duel player from a non-opponent, `IsValidHelpfulTarget`
   "cannot help others in duels", party area auras skipping dueling members, `Object.cpp:3846-3848`, `SpellAuras.cpp:621-623`): needs a hook in spell target
   selection that the wave-2 spell combat rules lane reworks; not delivered (slice skipped).
