@@ -202,21 +202,26 @@ public sealed partial class ReputationFeature(IServiceProvider services, IServic
     }
 
     /// <summary>
-    /// Player::RewardReputation(Unit*, 1.0) for a same-map creature kill by a player: every group member at reward distance
-    /// gets it, dead or alive, and a dead killer still counts (<see cref="ReputationKillCredit"/>).
+    /// Player::RewardReputation(Unit*, 1.0) for a creature kill: the player who tapped it and the group of the tap, every member at
+    /// reward distance, dead or alive, whoever landed the killing blow; without a tap the killing player (a pet's or totem's owner)
+    /// and his group (<see cref="ReputationKillCredit.AwardKill"/>).
     /// </summary>
     private void OnUnitKilled(Unit? killer, Unit victim)
     {
-        if (killer is not Player { IsInWorld: true } player || victim is not Creature creature
-            || player.Map is not { } map || !creature.IsInWorld || !ReferenceEquals(creature.Map, map)
-            || !ReferenceEquals(map.FindPlayer(player.Guid), player))
+        if (victim is not Creature creature || !creature.IsInWorld || creature.Map is not { } map)
         {
             return;
         }
 
+        Player? player = killer is null ? null : DuelRules.ControllingPlayer(killer);
+        if (player is not { IsInWorld: true } || !ReferenceEquals(map.FindPlayer(player.Guid), player))
+        {
+            player = null; // the killing blow came from no player on this map: only a tap can earn the reputation
+        }
+
         _groups ??= RewardGroups.Resolver(services);
         float distance = (services.GetService<ProgressionFeature>()?.Progression.Options ?? new ProgressionOptions()).GroupXpDistance;
-        ReputationKillCredit.Award(Service, player, creature, _groups(player), distance);
+        ReputationKillCredit.AwardKill(Service, player, creature, _groups, distance);
     }
 
     /// <summary>Startup content failures (malformed Faction.dbc, duplicate kill rows) stop attachment.</summary>

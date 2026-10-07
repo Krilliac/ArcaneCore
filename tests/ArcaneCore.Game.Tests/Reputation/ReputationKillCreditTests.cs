@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Progression;
@@ -104,5 +105,91 @@ public sealed class ReputationKillCreditTests : IDisposable
         ReputationKillCredit.Award(_service, killer, Victim(), new RewardGroup([killer.Guid, loading.Guid], false), 74);
         Assert.Equal(10, _service.GetReputation(killer, BootyBay));
         Assert.Equal(0, _service.GetReputation(loading, BootyBay));
+    }
+
+    // --- the tap decides (vmangos Unit::Kill, Unit.cpp:987-1000, then Group::RewardGroupAtKill, Group.cpp:2360-2409) -------------
+
+    private static Group GroupOf(uint id, params Player[] members)
+    {
+        var group = new Group(id) { IsCreated = true, LeaderGuid = members[0].Guid };
+        foreach (Player member in members)
+        {
+            group.AddMemberSlot(member.Guid, member.Name);
+        }
+
+        return group;
+    }
+
+    private static Func<Player, RewardGroup?> Resolver(params Group[] groups)
+        => player => groups.FirstOrDefault(g => g.IsMember(player.Guid)) is { } group
+            ? new RewardGroup([.. group.Members.Select(m => m.Guid)], group.IsRaid) : null;
+
+    [Fact]
+    public void TheTappersGroup_GetsTheReputation_NotTheGroupOfWhoeverLandsTheKillingBlow()
+    {
+        Player tapper = AddPlayer(1, 0, 0);
+        Player tapperFriend = AddPlayer(2, 0, 10);
+        Player deadFriend = AddPlayer(3, 10, 0);
+        deadFriend.Health = 0; // dead inside reward distance still counts
+        Player killer = AddPlayer(4, 5, 0);
+        Player killerFriend = AddPlayer(5, 0, 5);
+        Group tapGroup = GroupOf(1, tapper, tapperFriend, deadFriend);
+        Group killerGroup = GroupOf(2, killer, killerFriend);
+        Creature victim = Victim(c => { c.LootTapPlayerGuid = tapper.Guid; c.LootTapGroup = tapGroup; });
+
+        IReadOnlyList<Player> recipients = ReputationKillCredit.AwardKill(_service, killer, victim, Resolver(tapGroup, killerGroup), 74);
+
+        Assert.Equal([tapper, tapperFriend, deadFriend], recipients);
+        Assert.Equal(10, _service.GetReputation(tapper, BootyBay));
+        Assert.Equal(10, _service.GetReputation(deadFriend, BootyBay));
+        Assert.Equal(0, _service.GetReputation(killer, BootyBay));
+        Assert.Equal(0, _service.GetReputation(killerFriend, BootyBay));
+    }
+
+    [Fact]
+    public void ATapperWhoLeftTheGroupAfterTheTap_StillGainsWithTheGroupOfTheTap()
+    {
+        Player tapper = AddPlayer(1, 0, 0);
+        Player stayed = AddPlayer(2, 0, 10);
+        Player farAway = AddPlayer(3, 300, 0);
+        Group tapGroup = GroupOf(1, stayed, farAway); // the tapper left after tagging
+        Creature victim = Victim(c => { c.LootTapPlayerGuid = tapper.Guid; c.LootTapGroup = tapGroup; });
+
+        IReadOnlyList<Player> recipients = ReputationKillCredit.AwardKill(_service, stayed, victim, Resolver(tapGroup), 74);
+
+        Assert.Equal([stayed, tapper], recipients); // members first, the tapper last (Group.cpp:2386-2405)
+        Assert.Equal(0, _service.GetReputation(farAway, BootyBay));
+    }
+
+    [Fact]
+    public void ASoloTapper_IsTheOnlyRecipient_AndADisbandedTapGroupFallsBackToTheTappersGroupNow()
+    {
+        Player tapper = AddPlayer(1, 0, 0);
+        Player killer = AddPlayer(2, 5, 0);
+        Group killerGroup = GroupOf(2, killer, AddPlayer(3, 0, 5));
+        Creature solo = Victim(c => c.LootTapPlayerGuid = tapper.Guid);
+        Assert.Equal([tapper], ReputationKillCredit.AwardKill(_service, killer, solo, Resolver(killerGroup), 74));
+
+        Group disbanded = GroupOf(1, tapper, AddPlayer(4, 0, 6));
+        disbanded.Clear();
+        Player newFriend = AddPlayer(5, 6, 0);
+        Group now = GroupOf(3, tapper, newFriend);
+        Creature victim = Victim(c => { c.LootTapPlayerGuid = tapper.Guid; c.LootTapGroup = disbanded; });
+        Assert.Equal([tapper, newFriend], ReputationKillCredit.AwardKill(_service, killer, victim, Resolver(now, killerGroup), 74));
+    }
+
+    [Fact]
+    public void WithoutATap_TheKillerAndHisGroupGain_AndAnOfflineTapperIsReplacedByTheKiller()
+    {
+        Player killer = AddPlayer(1, 0, 0);
+        Player friend = AddPlayer(2, 0, 5);
+        Group group = GroupOf(1, killer, friend);
+        Assert.Equal([killer, friend], ReputationKillCredit.AwardKill(_service, killer, Victim(), Resolver(group), 74));
+
+        // vmangos keeps the killer as pPlayerTap when the original recipient is not online, with the tap group still rewarded.
+        Player member = AddPlayer(3, 0, 7);
+        Group tapGroup = GroupOf(2, member);
+        Creature victim = Victim(c => { c.LootTapPlayerGuid = ObjectGuid.Player(424242); c.LootTapGroup = tapGroup; });
+        Assert.Equal([member, killer], ReputationKillCredit.AwardKill(_service, killer, victim, Resolver(group, tapGroup), 74));
     }
 }
