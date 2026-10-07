@@ -924,9 +924,12 @@ public sealed partial class InstanceManager : IMapResolver
             if (map is { PlayerCount: > 0 })
             {
                 // Someone else is inside (the player itself was skipped above). The save is theirs too:
-                // do not delete it under them (vmangos only removes this player's bind and, for
-                // INSTANCE_RESET_ALL, asks the players inside to leave). A reset request is refused
-                // like the group's; a group join drops just the joiner's own bind.
+                // do not delete it under them. A group join drops just the joiner's own bind, as vmangos
+                // does. A reset request is an ArcaneCore choice: it is refused the way the group reset
+                // refuses an occupied instance (SMSG_INSTANCE_RESET_FAILED, the players inside are asked
+                // to leave) and the requester stays bound. vmangos Player::ResetInstances instead sends
+                // SMSG_INSTANCE_RESET and drops only the requester's bind, which reports a reset that did
+                // not happen and leaves the requester free to make a new instance beside the occupied one.
                 if (groupJoin)
                 {
                     RemovePlayerBind(player.Guid, save);
