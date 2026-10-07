@@ -64,7 +64,8 @@ public sealed class AutoShotTests
                 Weapon(Arcane, 0x50012, 0x20000, 0x8000, 0, SpellInterruptFlags.None, SpellDamageClass.Ranged) with { RecoveryTime = 6000 },
                 Weapon(WeaponHit, 0x12, 0, 0, 0, SpellInterruptFlags.None, SpellDamageClass.Ranged));
             (Player, Session) = Kit.AddPlayer(1);
-            (Target, _) = Kit.AddPlayer(2, targetDistance);
+            (Target, _) = Kit.AddPlayer(2, targetDistance, race: Race.Orc);
+            Target.Map!.Combat.TogglePvp(Target, true); // PvP flagged (desired): a valid attack target on every swing (vmangos Player::CanAutoAttackTarget → IsValidAttackTarget, Object.cpp:3797-3814)
             Target.Health = 100_000;
             Player.Inventory.Templates = new ItemTemplateStore([.. ItemTestData.Templates, .. Templates]);
             Player.Inventory.GuidAllocator = new ItemGuidAllocator();

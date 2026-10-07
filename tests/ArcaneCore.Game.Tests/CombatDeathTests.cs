@@ -30,6 +30,7 @@ public sealed class CombatDeathTests
         var sv = new FakeSession(2);
         Player a = CombatTestKit.AddPlayer(world, 1, 0, 0, sa, mapId: mapId);
         Player v = CombatTestKit.AddPlayer(world, 2, 2, 0, sv, Race.Orc, mapId: mapId);
+        v.Map!.Combat.TogglePvp(v, true); // PvP flagged (desired): a valid attack target on every swing (vmangos Player::CanAutoAttackTarget → IsValidAttackTarget, Object.cpp:3797-3814)
         a.SetFloat(UpdateFields.UnitFieldMindamage, 50);
         a.SetFloat(UpdateFields.UnitFieldMaxdamage, 50);
         world.RunTick(1);

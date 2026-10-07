@@ -42,7 +42,8 @@ public sealed class MeleeSpellLoopTests
         {
             Kit = new SpellTestKit(Strike(twoDamageEffects, zeroDamage));
             (Caster, CasterSession) = Kit.AddPlayer(1);
-            (Target, _) = Kit.AddPlayer(2, 3, 0);
+            (Target, _) = Kit.AddPlayer(2, 3, 0, race: Race.Orc);
+            Target.Map!.Combat.TogglePvp(Target, true); // PvP flagged (desired): a valid attack target on every swing (vmangos Player::CanAutoAttackTarget → IsValidAttackTarget, Object.cpp:3797-3814)
             Kit.Spellbook.Teach(Caster, HeroicStrike, CastBolt);
             Caster.SetUInt32(UpdateFields.UnitFieldMaxpower1 + 1, 1000);
             SpellSystem.SetPower(Caster, PowerType.Rage, 100);

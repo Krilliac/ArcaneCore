@@ -140,6 +140,7 @@ public sealed class NpcBankSpiritServiceTests
             p.Level = level;
             p.MaxHealth = 1000;
             p.Health = 40;
+            p.Map!.Combat.TogglePvp(p, true); // PvP flagged (desired): a valid attack target on every swing (vmangos Player::CanAutoAttackTarget → IsValidAttackTarget, Object.cpp:3797-3814)
             Map = Kit.World.GetMap(0);
             Map.Combat.Random = new ScriptedRandom();
             Killer = CombatTestKit.AddPlayer(Kit.World, 2, -2, 0, KillerSession, Race.Orc);

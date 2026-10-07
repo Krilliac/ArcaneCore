@@ -56,6 +56,12 @@ public sealed partial class MapCombat
             return false;
         }
 
+        // "player cannot attack in mount state" (vmangos Unit::Attack, Unit.cpp:4486-4488)
+        if (attacker is Player && Locomotion.UnitSpeed.IsMounted(attacker))
+        {
+            return false;
+        }
+
         if (victim is Player { IsGameMaster: true } || victim is ICombatCreature { IsInEvadeMode: true })
         {
             return false;
@@ -160,6 +166,13 @@ public sealed partial class MapCombat
         if (IsQuestSettlementPending(attacker) || IsQuestSettlementPending(victim))
         {
             return AttackCheckResult.CantAttack;
+        }
+
+        // vmangos Player::CanAutoAttackTarget (Player.cpp:1103-1109): a player's target is re-validated every swing, so a charm or
+        // faction change that made it friendly (or otherwise not attackable) stops the attack.
+        if (attacker is Player && !Hooks.CanAttack(attacker, victim))
+        {
+            return AttackCheckResult.FriendlyTarget;
         }
 
         if ((attacker.UnitFlags & (UnitFlags.Pacified | UnitFlags.Stunned | UnitFlags.Fleeing | UnitFlags.Confused)) != 0)

@@ -17,6 +17,7 @@ public sealed class CombatMeleeTests
         var sv = new FakeSession(2);
         Player a = CombatTestKit.AddPlayer(world, 1, 0, 0, sa);
         Player v = CombatTestKit.AddPlayer(world, 2, vx, 0, sv, Race.Orc);
+        v.Map!.Combat.TogglePvp(v, true); // PvP flagged (desired): a valid attack target on every swing (vmangos Player::CanAutoAttackTarget → IsValidAttackTarget, Object.cpp:3797-3814)
         a.SetFloat(UpdateFields.UnitFieldMindamage, 50);
         a.SetFloat(UpdateFields.UnitFieldMaxdamage, 50);
         world.RunTick(1);
