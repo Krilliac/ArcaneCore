@@ -47,5 +47,13 @@ public static class OpsCli
     }
 
     public static ConfigReport Validate(IConfiguration configuration)
-        => ConfigReport.Run(configuration, [new WorldConfigChecks(), new DiagnosticsConfigChecks(), new LoggingConfigChecks(), new ResilienceConfigChecks(), new NetProtectionConfigChecks()]);
+        => ConfigReport.Run(configuration,
+        [
+            new WorldConfigChecks(),
+            new DiagnosticsConfigChecks(),
+            new LoggingConfigChecks(),
+            new ResilienceConfigChecks(),
+            new NetProtectionConfigChecks(),
+            new ArcaneCore.Kernel.Ops.Watchdog.WatchdogOptionsValidation(),
+        ]);
 }

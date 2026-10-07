@@ -35,6 +35,7 @@ How to read the tables:
 - [`Loot`](#loot)
 - [`Net:Protection`](#netprotection)
 - [`NpcServices`](#npcservices)
+- [`Ops:Watchdog`](#opswatchdog)
 - [`PerformanceLog`](#performancelog)
 - [`Pets`](#pets)
 - [`Progression`](#progression)
@@ -371,6 +372,41 @@ How to read the tables:
 | `NpcServices:TaxiNodesDbcPath` | `string` | `null` | - | Build-5875 TaxiNodes.dbc; when set its node positions and faction mounts replace the imported table. |
 | `NpcServices:TaxiPathDbcPath` | `string` | `null` | - | Build-5875 TaxiPath.dbc; when set its routes and costs replace the imported table. |
 | `NpcServices:TaxiPathNodeDbcPath` | `string` | `null` | - | Build-5875 TaxiPathNode.dbc (flight waypoints). |
+
+## `Ops:Watchdog`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Ops:Watchdog:CheckIntervalMs` | `int` | `1000` | - | How often the monitoring thread wakes to run every check (hang detection, heartbeat, probes). 100-60000. Default 1000. |
+| `Ops:Watchdog:Counters:ChangedOnly` | `bool` | `false` | - | `true`: counters that have not changed since the last dump are left out of it. Default false. |
+| `Ops:Watchdog:Counters:DumpIntervalSeconds` | `int` | `300` | - | Seconds between dumps. 0 disables the dump (the registry still counts). Default 300. |
+| `Ops:Watchdog:Enabled` | `bool` | `true` | - | The master switch. `false`: the monitoring thread is not started, nothing in this section runs, no heartbeat is sent. Default true. |
+| `Ops:Watchdog:Heartbeat:FilePath` | `string` | `""` | - | The liveness file for `File` mode; relative paths are under the content root. Required in that mode (the daemon refuses to start without it). |
+| `Ops:Watchdog:Heartbeat:IntervalSeconds` | `int` | `0` | - | Seconds between beats. 0 = half of systemd's `WATCHDOG_USEC` when it is set, otherwise 10. Default 0. |
+| `Ops:Watchdog:Heartbeat:Mode` | `HeartbeatMode` | `Auto` | - | Where the heartbeat goes. Default Auto. Values: `Auto`, `None`, `Systemd`, `File`, `Stdout`. |
+| `Ops:Watchdog:Heartbeat:WarnIntervalSeconds` | `int` | `30` | - | Least seconds between two "heartbeat withheld" warnings. Default 30. |
+| `Ops:Watchdog:Memory:Action` | `MemoryPressureAction` | `None` | - | What happens when the managed heap reaches `ActionHeapBytes`. Default None (log only; `Collect` pauses the world thread for a blocking compacting gen2 collection, `Stop` ends the process with exit code 1). Values: `None`, `Log`, `Collect`, `Stop`. |
+| `Ops:Watchdog:Memory:ActionCooldownSeconds` | `int` | `300` | - | Least seconds between two actions (a Stop fires once). Default 300. |
+| `Ops:Watchdog:Memory:ActionHeapBytes` | `long` | `0` | - | The heap size in bytes at which `Action` fires. 0 disables the action whatever `Action` says. Default 0. |
+| `Ops:Watchdog:Memory:Enabled` | `bool` | `true` | - | `false`: no sample is taken and no action can fire. Default true. |
+| `Ops:Watchdog:Memory:FullGcNotifications` | `bool` | `false` | - | `true`: register for full-GC approach/completion notifications where the runtime allows it (concurrent GC refuses; then this logs once and only polling runs). Default false. |
+| `Ops:Watchdog:Memory:GrowthLogBytes` | `long` | `16777216` | - | An Information line when the gen2 or large-object-heap high-water mark grows by at least this many bytes since the last line. 0 disables growth lines. Default 16777216 (16 MiB). |
+| `Ops:Watchdog:Memory:SampleIntervalSeconds` | `int` | `10` | - | Seconds between heap samples. 1-3600. Default 10. |
+| `Ops:Watchdog:Memory:WarnHeapBytes` | `long` | `0` | - | A rate-limited warning when the managed heap is at least this many bytes. 0 disables the check. Default 0. |
+| `Ops:Watchdog:Memory:WarnIntervalSeconds` | `int` | `60` | - | Least seconds between two memory warnings of the same kind. Default 60. |
+| `Ops:Watchdog:Memory:WarnLoadPercent` | `int` | `85` | - | A rate-limited warning when the runtime's memory load (process and machine) reaches this percentage of the available memory; the GC's own high-load threshold is 90. 0 disables the check. Default 85. |
+| `Ops:Watchdog:ThreadPool:CriticalDelayMs` | `int` | `2000` | - | A probe that waits longer than this (milliseconds), or has not run at all for this long, is a critical line. Default 2000. |
+| `Ops:Watchdog:ThreadPool:Enabled` | `bool` | `true` | - | `false`: nothing is queued. Default true. |
+| `Ops:Watchdog:ThreadPool:ProbeIntervalSeconds` | `int` | `5` | - | Seconds between probes. 1-3600. Default 5. |
+| `Ops:Watchdog:ThreadPool:WarnDelayMs` | `int` | `200` | - | A probe that waits longer than this (milliseconds) for a pool thread is a rate-limited warning with the pool counts. Default 200. |
+| `Ops:Watchdog:ThreadPool:WarnIntervalSeconds` | `int` | `30` | - | Least seconds between two starvation warnings. Default 30. |
+| `Ops:Watchdog:TickMonitor:BudgetMs` | `int` | `0` | - | A frame longer than this is an overrun. 0 = twice the configured tick interval (100 ms at the retail 50 ms tick), tolerating sleep jitter. Default 0. |
+| `Ops:Watchdog:TickMonitor:Enabled` | `bool` | `true` | - | `false`: no tick is recorded, no overrun or hang is reported and the heartbeat does not depend on the tick. Default true. |
+| `Ops:Watchdog:TickMonitor:GatesHeartbeat` | `bool` | `true` | - | `true`: the heartbeat is withheld while a tick has run longer than `HangMs`, so a supervisor watchdog restarts a hung world. Default true. |
+| `Ops:Watchdog:TickMonitor:HangMs` | `int` | `2000` | - | A frame longer than this is a hang: one critical line when it is still running and one when it completes. 0 disables hang detection. Default 2000. |
+| `Ops:Watchdog:TickMonitor:RingCapacity` | `int` | `4096` | - | Ring capacity in ticks (rounded up to a power of two, 16-1048576); the percentiles are over the last capacity-1 ticks. Default 4096 (3.4 minutes at 50 ms). |
+| `Ops:Watchdog:TickMonitor:SummaryIntervalSeconds` | `int` | `300` | - | Seconds between periodic frame-time summaries (p50/p99/max, overruns) at Information level. 0 disables the summary. Default 300. |
+| `Ops:Watchdog:TickMonitor:WarnIntervalSeconds` | `int` | `30` | - | Least seconds between two overrun warnings; overruns in between are counted and reported with the next warning. Default 30. |
 
 ## `PerformanceLog`
 

@@ -18,6 +18,7 @@ unfinished parts documented as limits).
 | [Database upgrade tooling](ops/database-upgrade.md) | The `arcane-db` runbook: status, plan, upgrade, backups, exit codes and the `Database:Upgrade` policy. |
 | [Invariants and crash handling](ops/invariants.md) | The `Diagnostics` section: invariant policy and counters, what ends the process on an unhandled exception (exit 70 or abort), the crash report, and every invariant the code asserts. |
 | [Resilience](ops/resilience.md) | Circuit breakers, retries, bulkheads and timeouts: what the daemons do when a database is slow or gone, the `Resilience` options, exit code 6, and how a write queue adopts the primitives. |
+| [Runtime health watchdogs](ops/watchdog.md) | The `Ops:Watchdog` monitors: world-tick overruns and hangs, memory pressure, thread-pool starvation, the systemd/file heartbeat and the counters registry. |
 | [Security hardening](security/hardening.md) | The opt-in hardening switches and their defaults, and what is not delivered. |
 | [Network and packet protections](ops/netguard.md) | The `Net:Protection` limits (per-address caps, rates and failure budgets, frame deadlines), the bounds-checked packet readers and the fuzz harness. |
 | [Live bans](security/live-bans.md) | Ban tables, IP bans and the live enforcement options. |

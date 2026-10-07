@@ -44,7 +44,10 @@ IP bans and the live enforcement options are described in [live bans](../securit
 
 The world daemon logs slow updates through the `PerformanceLog` section (`SlowWorldUpdate`, `SlowMapUpdate`, `SlowPackets`, in milliseconds; 0 disables a
 threshold), tagged with the `Perf` event id so a log sink can route them to their own file. `.server info` shows the version, the players online and the uptime.
-See [operations and performance](../areas/ops-perf.md).
+See [operations and performance](../areas/ops-perf.md). Both daemons also run the `Ops:Watchdog` monitors on a dedicated thread: rate-limited
+warnings on world-tick overruns with percentiles, a critical line on a hung tick, heap high-water marks and memory-pressure warnings, a
+thread-pool starvation probe, a periodic counter dump and a supervisor heartbeat (systemd `Type=notify` with `WatchdogSec`, a liveness file, or
+stdout) that is withheld while the world thread hangs. See [runtime health watchdogs](../ops/watchdog.md).
 
 Both daemons log through the `Logging:ArcaneCore` provider: a colour console by default (plain automatically when stdout is a pipe or `NO_COLOR` is set;
 `Logging:ArcaneCore:Console:Mode=Plain` for journald), an optional rolling text file (`Logging:ArcaneCore:File:Enabled`) and an optional JSON-lines file

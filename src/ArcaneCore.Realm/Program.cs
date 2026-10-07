@@ -2,6 +2,7 @@ using ArcaneCore.Data;
 using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Ops;
 using ArcaneCore.Realm.Net;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,6 +18,7 @@ builder.Services.AddNetProtection(builder.Configuration);
 builder.Services.AddAuthDatabase(builder.Configuration);
 builder.Services.AddRealmResilience(builder.Configuration); // after AddAuthDatabase: guards the auth stores (docs/ops/resilience.md)
 builder.Services.AddHostedService<LogonServer>();
+builder.Services.AddRealmWatchdog(builder.Configuration);
 
 IHost host = builder.Build();
 
@@ -32,4 +34,6 @@ if (startup != 0)
 }
 
 await host.RunAsync().ConfigureAwait(false);
-return 0;
+
+// 0 normal stop, 1 when a watchdog action stopped the host (Ops:Watchdog:Memory:Action=Stop), see ExitCodes.
+return ExitCodes.Current;
