@@ -320,6 +320,21 @@ public sealed class EnchantSpellTests
     }
 
     [Fact]
+    public void AHeldItemEnchantment_TakesItsChargesFromSpellEnchantCharges()
+    {
+        using var rig = new Rig();
+        Item sword = rig.Equip(Weapon, InventorySlots.MainHand);
+        rig.Kit.Kit.System.SpellEnchantCharges = new ArcaneCore.Kernel.WorldData.Items.SpellEnchantChargesCatalog(
+            [new ArcaneCore.Kernel.WorldData.Items.SpellEnchantCharges(HeldOil, 3)]);
+        rig.Kit.Kit.Spellbook.Teach(rig.Player, HeldOil);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Kit.Kit.System.HandleCastRequest(rig.Player, HeldOil, SpellCastTargets.ForSelf()));
+
+        // vmangos EffectEnchantHeldItem passes GetSpellEnchantCharges to SetEnchantment (SpellEffects.cpp:5044, :5054).
+        Assert.Equal(3u, ItemEnchantments.Charges(sword, EnchantSlots.Temporary));
+    }
+
+    [Fact]
     public void AHeldItemEnchantment_DoesNotReplaceADifferentOne()
     {
         using var rig = new Rig();

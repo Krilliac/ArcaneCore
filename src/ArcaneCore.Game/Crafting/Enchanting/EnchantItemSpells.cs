@@ -213,7 +213,8 @@ public sealed class EnchantItemSpells(EnchantCatalog catalog, Func<bool>? gmAllo
             return;
         }
 
-        ItemEnchantments.Set(item, EnchantSlots.Temporary, enchantId, duration, 0, context.Caster.Guid);
+        uint charges = context.System.SpellEnchantCharges.Find(context.Spell.Id) ?? 0;   // SpellEffects.cpp:5044
+        ItemEnchantments.Set(item, EnchantSlots.Temporary, enchantId, duration, charges, context.Caster.Guid);
         owner.Enchantments?.Apply(item, EnchantSlots.Temporary, apply: true);
     }
 }
