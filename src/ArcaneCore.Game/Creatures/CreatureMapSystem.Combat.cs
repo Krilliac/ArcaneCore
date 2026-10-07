@@ -56,6 +56,8 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
                 return true; // the aggro script killed or reset it
             }
 
+            TryStartNoMeleeFlee(creature, target); // after the aggro hook: a cast on aggro wins (cmangos Unit.cpp:7993)
+
             CallAssistance(creature, target);
         }
 

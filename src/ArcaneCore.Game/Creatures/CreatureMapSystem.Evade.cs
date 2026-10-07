@@ -91,6 +91,7 @@ public sealed partial class CreatureMapSystem
         creature.IsEvadingUnreachable = false; // vmangos Unit::CombatStop clears m_targetNotReachableTimer (Unit.cpp:4645)
         creature.TargetNotReachableMs = 0;
         creature.HasAggroed = false;
+        creature.InNoMeleePanic = false;
         creature.CalledAssistance = false;
         creature.CombatStart = null;
         creature.LeashClock = null;

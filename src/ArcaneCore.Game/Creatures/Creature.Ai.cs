@@ -58,6 +58,9 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// </summary>
     internal LeashExtensionClock? LeashClock { get; set; }
 
+    /// <summary>A NO_MELEE_FLEE panic flight is running (cmangos ORDER_CRITTER_FLEE): the creature evades when it ends.</summary>
+    internal bool InNoMeleePanic { get; set; }
+
     /// <summary>The assistance call went out for the current fight (vmangos m_AlreadyCallAssistance).</summary>
     internal bool CalledAssistance { get; set; }
 

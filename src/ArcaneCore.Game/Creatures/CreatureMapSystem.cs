@@ -329,6 +329,8 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
                         creature.Motion.Update(diffMs);
                     }
 
+                    CheckNoMeleePanicEnded(creature);
+
                     break;
 
                 case CreatureDeathState.Corpse:
