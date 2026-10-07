@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 5 |
 | `Moderator` | 1 | 21 |
-| `GameMaster` | 3 | 111 |
-| `Administrator` | 6 | 158 |
+| `GameMaster` | 3 | 112 |
+| `Administrator` | 6 | 162 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -102,6 +102,11 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.npc playemote` | 3 | GameMaster | declared retail level | Syntax: .npc playemote #emote Make the selected creature play an emote animation. The id is not checked against the client's emote table. |
 | `.npc info` | 2 | GameMaster | declared retail level | Syntax: .npc info Show the details of the selected creature. |
 | `.npc near` | 2 | GameMaster | declared retail level | Syntax: .npc near [#radius] List the creatures within #radius yards (default 10), nearest first. |
+| `.quest` ... | 3 | GameMaster | declared retail level | Syntax: .quest $subcommand Type .quest to see the list of possible subcommands or .help quest $subcommand to see info on subcommands. |
+| `.quest add` | 6 | Administrator | declared retail level | Syntax: .quest add #quest_id\|[$quest_title]\|#shift-click-quest-link Add the quest to the log of the selected player (or yourself) without its requirements; a quest started by an item is refused. |
+| `.quest complete` | 6 | Administrator | declared retail level | Syntax: .quest complete #quest_id\|[$quest_title]\|#shift-click-quest-link Mark every objective of the quest done for the selected player (or yourself): the required items, kills, reputation and money are given. |
+| `.quest remove` | 6 | Administrator | declared retail level | Syntax: .quest remove #quest_id\|[$quest_title]\|#shift-click-quest-link Take the quest out of the log of the selected player (or yourself), source item included, and forget that it was rewarded. |
+| `.quest status` | 3 | GameMaster | declared retail level | Syntax: .quest status [#quest_id\|[$quest_title]\|#shift-click-quest-link] Show the quest log of the selected player (or yourself), or the progress of one quest. |
 | `.reload` ... (development only) | 6 | Administrator | stored level through the map | Syntax: .reload #name \| all \| status — reload configuration or content without a restart (config, spell_template, …). |
 | `.reload all` (development only) | 6 | Administrator | stored level through the map | Syntax: .reload all — reload every content table (not the config). |
 | `.reload status` (development only) | 6 | Administrator | stored level through the map | Syntax: .reload status — what can be reloaded and how each reload last ended. |

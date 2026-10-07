@@ -173,6 +173,7 @@ How to read the tables:
 | `Creatures:CorpseDecayRareEliteSeconds` | `uint` | `1200` | - | Corpse.Decay.RAREELITE (s): 1200. |
 | `Creatures:CorpseDecayRareSeconds` | `uint` | `900` | - | Corpse.Decay.RARE (s): 900. |
 | `Creatures:CorpseDecayWorldBossSeconds` | `uint` | `3600` | - | Corpse.Decay.WORLDBOSS (s): 3600. |
+| `Creatures:CreatureAggroOnCreatures` | `bool` | `true` | - | Creatures aggro on other creatures in sight (`Creatures:CreatureAggroOnCreatures`): a moving creature notifies the creatures around it as well as the players (mangos CreatureCreatureRelocationWorker, WorldHandlers/GridNotifiersImpl.h:67-84), so a hostile mob and a guard, or a mob and an aggressive pet, acquire each other. Retail is true; false keeps the player-only notifies of the earlier build (cheaper on maps full of wanderers). |
 | `Creatures:EvadeResetsAuras` | `bool` | `true` | - | Whether an evading creature loses its auras (`Creatures:EvadeResetsAuras`): everything except a non-permanent positive aura cast by a player; with the KEEP_POSITIVE_AURAS_ON_EVADE flag only the negative ones (Creature::RemoveAurasAtReset, Objects/Creature.cpp:3611-3630). Retail is true. The evade health snap switch is `Creatures:Movement:EvadeRestoresFullHealth`. |
 | `Creatures:EventAi:DebugOnlyEvents` | `bool` | `false` | - | Run rows flagged EFLAG_DEBUG_ONLY (0x80); cmangos only does in a debug build. Off by default. |
 | `Creatures:EventAi:ReportUnsupported` | `bool` | `true` | - | Report rows with unsupported events, actions or conditions once per creature entry. |
@@ -180,6 +181,7 @@ How to read the tables:
 | `Creatures:FactionTemplateDbcPath` | `string` | `null` | - | FactionTemplate.dbc for creature hostility when no catalog is registered (empty = nobody aggroes on sight). |
 | `Creatures:FleeAssistanceRadius` | `float` | `30` | - | CreatureFamilyFleeAssistanceRadius (yd): how far a fleeing creature looks for help. |
 | `Creatures:FleeDelayMs` | `uint` | `7000` | - | CreatureFamilyFleeDelay (ms): timed flight when no helper is found. |
+| `Creatures:GuardsDefendFriendlies` | `bool` | `true` | - | A guard also attacks a unit that is fighting a creature the guard is friendly to (`Creatures:GuardsDefendFriendlies`). Both reference cores carry this clause commented out in GuardAI::MoveInLineOfSight (mangos Object/GuardAI.cpp:74), so the retail behaviour is UNVERIFIED; on by default because a guard that watches a civilian being killed is the worse mistake. |
 | `Creatures:ImplicitEventAi` | `bool` | `false` | - | `Creatures:ImplicitEventAi` (default off, retail): vmangos runs EventAI only for a template whose `AIName` is 'EventAI' (AI/CreatureAISelector.cpp:37-100, AI/EventAI/CreatureEventAI.cpp:51-56), and classic-db z2815 carries that column (`creature_template.AIName`, 4,325 templates say 'EventAI'; imported by CreatureDumpImporter). Switched on, a creature whose template has no AIName but whose entry (or spawn) has `creature_ai_scripts` rows also runs EventAI, the cmangos-classic permit (AI/EventAI/CreatureEventAI.cpp:51-63) for hand-edited data; an explicit AIName always wins. A deviation from retail. |
 | `Creatures:LeashCheckIntervalMs` | `uint` | `3000` | - | How often a creature in combat runs its periodic leash checks, in milliseconds of world time (vmangos `tickTime() % 3000 &lt;= diff`, Objects/Creature.cpp:976). 0 turns the template hard leash off. |
 | `Creatures:LeashExtensionSeconds` | `uint` | `12` | - | Whole seconds after the leash extension clock was last set before a victim outside the threat area leashes the creature (vmangos hard-coded 12, Objects/Creature.cpp:2813). |
@@ -199,6 +201,7 @@ How to read the tables:
 | `Creatures:StealthAlertCooldownMs` | `uint` | `10000` | - | Milliseconds between two alerts of one creature (`Creatures:StealthAlertCooldownMs`): vmangos 10000 (AI/CreatureAI.cpp:366-367). |
 | `Creatures:StealthAlertEnabled` | `bool` | `true` | - | `Creatures:StealthAlertEnabled`: a hostile creature that notices a stealthed player just outside its detection range reacts (SMSG_AI_REACTION alert, it stops and turns to the player); vmangos CreatureAI::OnMoveInStealth, AI/CreatureAI.cpp:349-385. Retail is true. |
 | `Creatures:ThreatRadius` | `float` | `50` | - | ThreatRadius (yd): the soft leash sphere around where a fight began is `max(1.5 x aggro radius, ThreatRadius)`; none in instances (vmangos World.cpp:564, mangosd.conf.dist.in:1526: 50). |
+| `Creatures:UnreachableTargetEvadeMs` | `uint` | `5000` | - | Milliseconds a chasing creature tolerates a victim its pathfinder cannot reach before it gives the victim up (`Creatures:UnreachableTargetEvadeMs`): alone on the threat list the creature evades, otherwise the victim is dropped from the list and the next one is chosen (vmangos Creature::Update unreachable-target timer, Objects/Creature.cpp:1017-1040, and mangos Unit::SelectHostileTarget, Object/UnitThreat.cpp:342-361, which evades at once). The count pauses while the creature cannot move and restarts with every new victim. 0 disables the evade; EventAI's EVENT_T_TARGET_NOT_REACHABLE still fires. The vmangos default could not be re-read for this build (UNVERIFIED); 5000 is ArcaneCore's choice. |
 
 ## `Database`
 
@@ -498,6 +501,7 @@ How to read the tables:
 | `Resilience:Database:Bulkhead:MaxQueue` | `int` | `64` | - | Calls allowed to wait for a slot when every slot is busy; more are refused at once. |
 | `Resilience:Database:Enabled` | `bool` | `true` | - | `false` turns the whole database guard off: calls go straight to the store and a start-up failure is not retried (the pre-resilience behaviour). |
 | `Resilience:Database:QueryTimeoutMs` | `int` | `5000` | - | Longest one guarded database call may take before it is cancelled and counted as a failure, in milliseconds; 0 disables the timeout. |
+
 ## `Rest`
 
 | Key | Type | Default | Reload | Meaning |

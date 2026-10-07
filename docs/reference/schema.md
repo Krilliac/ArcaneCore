@@ -11,7 +11,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 |---|---|---|
 | `auth` | 3 | `account`, `realmlist` |
 | `characters` | 28 | `characters` |
-| `world` | 30 | `player_create_info`, `race_info`, `class_info` |
+| `world` | 31 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -85,5 +85,6 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 28 | `Graveyards.GraveyardDataModule` | creates `world_safe_locs`, `game_graveyard_zone` |
 | 29 | `Quests.AreaTriggerQuestWorldModule` | creates `areatrigger_involvedrelation`; adds columns `areatrigger_teleport.RequiredItem`, `areatrigger_teleport.RequiredItem2`, `areatrigger_teleport.RequiredQuestDone`, `areatrigger_teleport.RequiredCondition` |
 | 30 | `World.Rest.AreaTriggerTavernDataModule` | creates `areatrigger_tavern` |
+| 31 | `World.GameObjects.GameObjectTemplateGoldDataModule` | adds columns `gameobject_template.MinGold`, `gameobject_template.MaxGold` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.
