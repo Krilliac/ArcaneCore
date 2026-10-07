@@ -5,11 +5,11 @@ vmangos sources in `D:\refs\vmangos` (primary). Nothing here was run against a r
 evidence is the reference code plus this repository's tests.
 
 Delivered, in commit order: threat-list core, victim selection, taunt and threat auras, the threat pipeline (damage, heal, spell threat),
-evade fidelity, spell_threat data, AI selection (EventAI bridge), stealth and alert, CritterAI. **Not delivered, by design:** the
-unreachable-target evade (nothing reports a chase as unreachable), social aggro and flee-for-assistance rework (faction-template call-for-help flags are
-in the client DBC, not in the references), GuardAI, aggro on pets and creature-versus-creature aggro (needs a bounded creature query and the
-reputation lane's hostility query), and creature_linking (1,189 rows; the movement-and-spawns lane owns the follow/respawn flags of the same
-table). Each is a slice of the lane design that a later lane can pick up; the limits sections below say what each missing piece depends on.
+evade fidelity, spell_threat data, AI selection (EventAI bridge), stealth and alert, CritterAI. **Not delivered, by design:**
+social aggro and flee-for-assistance rework (faction-template call-for-help flags are
+in the client DBC, not in the references) and creature_linking (1,189 rows; the movement-and-spawns lane owns the follow/respawn flags of the same
+table). The unreachable-target evade, GuardAI, aggro on pets and creature-versus-creature aggro were picked up by lane L3
+(docs/areas/creature-ai.md). The limits sections below say what each missing piece depends on.
 
 ## Delivered scope
 
@@ -58,8 +58,9 @@ Creature victim selection now follows vmangos `Unit::SelectHostileTarget` (Objec
 Limits: stun/fear/confuse are read from `UnitFlags` (no aura-holder query), the "prevents fleeing" and pending-stun states are
 not modelled, second-choice targets are only feared or confused units (damage-immune, breakable-CC and the totem rule of
 `Unit::IsSecondaryThreatTarget`, Objects/Unit.cpp:9644-9676, need the aura engine and a spell catalog the host does not have).
-The unreachable-target timers (Creature.cpp:1017-1040) are not delivered: nothing in the repository reports a chase as
-unreachable (`TargetNotReachableEvent` has no producer), so there is nothing honest to time.
+The unreachable-target timer (Creature.cpp:1017-1040) is delivered by lane L3: the chase generator reports a victim unreachable
+from the pathfinder's verdict and `SelectHostileTarget` gives the victim up after `Creatures:UnreachableTargetEvadeMs`
+(docs/areas/creature-ai.md, "Unreachable target").
 
 ### taunt and threat auras (Spells/Effects/ThreatEffects.cs, Spells/Auras/ThreatAuras.cs, Combat/Threat/Taunt.cs)
 

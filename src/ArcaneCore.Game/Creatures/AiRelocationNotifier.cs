@@ -6,21 +6,26 @@ namespace ArcaneCore.Game.Creatures;
 /// vmangos event-driven proximity aggro (<see cref="AggroScanMode.Relocation"/>). A player or creature that moves, or joins
 /// the map, schedules one AI notify after <see cref="CreatureOptions.AiRelocationNotifyDelayMs"/> unless one is already
 /// pending (Unit::OnRelocated, Unit::ScheduleAINotify, Objects/Unit.cpp:10082-10160). When it runs, a player notifies the
-/// creatures around it and a creature notifies the players around it, within
-/// <see cref="CreatureOptions.MaxCreatureAttackRadius"/> times the aggro rate (RelocationNotifyEvent::Execute,
-/// Unit.cpp:10089-10099; PlayerRelocationNotifier / CreatureRelocationNotifier, Maps/GridNotifiersImpl.h:57-119). Each
-/// notified creature runs <c>MoveInLineOfSight</c> for the mover when it is alive, in control and not evading
-/// (CallAIMoveLOS, GridNotifiersImpl.h:57-69). A unit that stands still triggers nothing.
+/// creatures around it; a creature notifies the players around it and, with <see cref="CreatureOptions.CreatureAggroOnCreatures"/>,
+/// the creatures around it in both directions (mangos CreatureCreatureRelocationWorker, WorldHandlers/GridNotifiersImpl.h:67-84:
+/// each of the pair gets <c>MoveInLineOfSight</c> for the other), within <see cref="CreatureOptions.MaxCreatureAttackRadius"/> times
+/// the aggro rate (RelocationNotifyEvent::Execute, Unit.cpp:10089-10099; PlayerRelocationNotifier / CreatureRelocationNotifier,
+/// Maps/GridNotifiersImpl.h:57-119). Each notified creature runs <c>MoveInLineOfSight</c> for the mover when it is alive, in
+/// control and not evading (CallAIMoveLOS, GridNotifiersImpl.h:57-69). A unit that stands still triggers nothing.
 /// <para>
-/// Differences from vmangos, listed in docs/areas/creature-ai.md: the search is a plain 2D radius instead of the grid cells
-/// around the mover; stealth and detection are not modelled; creature-versus-creature notifies are not run (creatures do
-/// not aggro on creatures yet).
+/// The candidates come from the map's cell index (<see cref="Maps.Grid.GridContainer.CollectObjects"/>, the cells a circle of the
+/// radius touches, like vmangos' Cell::Visit), so a notify costs the objects of those cells, not the map; the scratch list is
+/// reused across notifies (no per-notify allocation once it has grown). Differences from vmangos, listed in docs/areas/creature-ai.md:
+/// a plain 2D radius over the cells instead of the exact cell visit; stealth and detection are the host's (CallAiMoveInLineOfSight).
 /// </para>
+/// Thread affinity: world thread.
 /// </summary>
 internal sealed class AiRelocationNotifier(CreatureMapSystem system, CreatureOptions options)
 {
     private readonly Dictionary<WorldObject, long> _due = new(ReferenceEqualityComparer.Instance);
     private readonly List<WorldObject> _order = [];
+    private readonly List<WorldObject> _candidates = [];
+    private readonly HashSet<WorldObject> _seen = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>Notifies waiting for their delay.</summary>
     public int PendingCount => _order.Count;
@@ -73,9 +78,9 @@ internal sealed class AiRelocationNotifier(CreatureMapSystem system, CreatureOpt
                 return;
             }
 
-            foreach (Creature creature in system.Creatures.ToArray())
+            foreach (WorldObject candidate in Collect(player, radius))
             {
-                if (creature.IsAlive && WithinRadius(creature, player, radius))
+                if (candidate is Creature creature && ReferenceEquals(creature.System, system) && creature.IsAlive)
                 {
                     system.CallAiMoveInLineOfSight(creature, player);
                 }
@@ -88,14 +93,45 @@ internal sealed class AiRelocationNotifier(CreatureMapSystem system, CreatureOpt
                 return;
             }
 
-            foreach (Player nearby in system.Map.Players.ToArray())
+            bool creatures = options.CreatureAggroOnCreatures;
+            foreach (WorldObject candidate in Collect(mover, radius))
             {
-                if (nearby.IsAlive && WithinRadius(mover, nearby, radius))
+                if (!mover.IsAlive)
                 {
-                    system.CallAiMoveInLineOfSight(mover, nearby);
+                    break; // a reaction killed the mover
+                }
+
+                if (candidate is Player nearby)
+                {
+                    if (nearby.IsAlive)
+                    {
+                        system.CallAiMoveInLineOfSight(mover, nearby);
+                    }
+                }
+                else if (creatures && candidate is Creature other && !ReferenceEquals(other, mover) && ReferenceEquals(other.System, system) && other.IsAlive)
+                {
+                    system.CallAiMoveInLineOfSight(other, mover);
+                    if (other.IsAlive && mover.IsAlive)
+                    {
+                        system.CallAiMoveInLineOfSight(mover, other);
+                    }
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// The living units within <paramref name="radius"/> (2D) of <paramref name="center"/>, each once, snapshotted into the reused
+    /// scratch list so the AI reactions may change the map while the caller iterates.
+    /// </summary>
+    private List<WorldObject> Collect(WorldObject center, float radius)
+    {
+        _candidates.Clear();
+        _seen.Clear();
+        system.Map.Grids.CollectObjects(center.X, center.Y, radius, _candidates);
+        _candidates.RemoveAll(o => o is not (Player or Creature) || !ReferenceEquals(o.Map, system.Map) || !WithinRadius(center, o, radius) || !_seen.Add(o));
+        _seen.Clear();
+        return _candidates;
     }
 
     private static bool WithinRadius(WorldObject a, WorldObject b, float radius)

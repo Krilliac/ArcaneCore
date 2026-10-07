@@ -53,4 +53,19 @@ public sealed partial class CreatureOptions
     /// measures the plain distance (<c>IsWithinDistInMap(..., SizeFactor::None)</c>, AI/BasicAI.cpp:61-67).
     /// </summary>
     public bool AggroUsesBoundingRadius { get; set; }
+
+    /// <summary>
+    /// Creatures aggro on other creatures in sight (<c>Creatures:CreatureAggroOnCreatures</c>): a moving creature notifies the creatures
+    /// around it as well as the players (mangos CreatureCreatureRelocationWorker, WorldHandlers/GridNotifiersImpl.h:67-84), so a
+    /// hostile mob and a guard, or a mob and an aggressive pet, acquire each other. Retail is true; false keeps the player-only
+    /// notifies of the earlier build (cheaper on maps full of wanderers).
+    /// </summary>
+    public bool CreatureAggroOnCreatures { get; set; } = true;
+
+    /// <summary>
+    /// A guard also attacks a unit that is fighting a creature the guard is friendly to (<c>Creatures:GuardsDefendFriendlies</c>). Both
+    /// reference cores carry this clause commented out in GuardAI::MoveInLineOfSight (mangos Object/GuardAI.cpp:74), so the retail
+    /// behaviour is UNVERIFIED; on by default because a guard that watches a civilian being killed is the worse mistake.
+    /// </summary>
+    public bool GuardsDefendFriendlies { get; set; } = true;
 }

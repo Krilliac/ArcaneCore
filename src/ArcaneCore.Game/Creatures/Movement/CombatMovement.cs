@@ -6,15 +6,39 @@ using ArcaneCore.Protocol;
 namespace ArcaneCore.Game.Creatures;
 
 /// <summary>
+/// A mover that can also say whether a destination can be reached (vmangos <c>PathFinder::getPathType</c> read by
+/// <c>TargetedMovementGenerator::_setTargetLocation</c> into <c>m_bReachable</c>). <see cref="CreatureMapSystem"/> implements it;
+/// a mover without it leaves every target reachable. Kept apart from <see cref="ICreatureMover"/> so the movement seam's other
+/// implementations need no change.
+/// </summary>
+internal interface ICreaturePathQuery
+{
+    /// <summary>
+    /// The path to <paramref name="destination"/> as <see cref="ICreatureMover.FindPath"/> gives it; <paramref name="reachable"/> is false
+    /// when the pathfinder found no path (<see cref="Maps.Collision.PathType.NoPath"/>, the creature then goes straight) or only a partial
+    /// one (<see cref="Maps.Collision.PathType.Incomplete"/>). Without navigation data everything is reachable.
+    /// </summary>
+    IReadOnlyList<Vector3> FindPath(Creature creature, Vector3 destination, out bool reachable);
+}
+
+/// <summary>
 /// vmangos TargetedMovementGenerator: keeps a creature at a target. <see cref="ChaseMovementGenerator"/>
 /// runs into melee reach; <see cref="FollowMovementGenerator"/> holds a distance and angle. Every
 /// <see cref="RecheckMs"/> (and whenever the creature stands still) the target is re-measured;
 /// a new spline goes out only when the creature is out of place and the target has moved more
 /// than <see cref="TargetMoveTolerance"/> since the last spline was aimed.
+/// <para>
+/// Reachability (vmangos <c>m_bReachable</c>, TargetedMovementGenerator.h:53): the last path query's verdict from
+/// <see cref="ICreaturePathQuery"/>. While the target is unreachable and the creature stands at the end of its partial path it
+/// re-paths every <see cref="RecheckMs"/> (the re-path) and <see cref="UnreachableMs"/> counts the time; the host reads it for the
+/// unreachable-target evade (vmangos Creature::Update, Creature.cpp:1017-1040) and EventAI reads <see cref="IsReachable"/> for
+/// EVENT_T_TARGET_NOT_REACHABLE. Being in position is always reachable. Time the creature cannot move (stunned, casting) does
+/// not count. One generator per chase: a new target starts a new count.
+/// </para>
 /// </summary>
 internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMovementGenerator
 {
-    /// <summary>How often a moving chaser re-measures its target (ms).</summary>
+    /// <summary>How often a moving chaser re-measures its target (ms); also the re-path cadence of a stuck chaser.</summary>
     public const int RecheckMs = 100;
 
     /// <summary>A moving target that has moved less than this (yd) keeps the current spline.</summary>
@@ -23,17 +47,29 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
     /// <summary>vmangos CONTACT_DISTANCE: the gap kept between two bounding radii.</summary>
     public const float ContactDistance = 0.5f;
 
+    /// <summary>A path whose end is closer than this (yd) to where the creature stands launches no spline.</summary>
+    public const float ArrivedEpsilon = 0.1f;
+
     private int _recheckMs;
     private Vector3? _aimedAt;
+    private bool _reachable = true;
 
     public Unit Target { get; } = target;
 
     public abstract MovementGeneratorType Type { get; }
 
+    /// <summary>False since the last path query found the target unreachable (vmangos TargetedMovementGenerator::IsReachable).</summary>
+    public bool IsReachable => _reachable;
+
+    /// <summary>Milliseconds the target has been unreachable without a break (0 while reachable).</summary>
+    public uint UnreachableMs { get; private set; }
+
     public void Initialize(Creature creature, ICreatureMover mover)
     {
         _recheckMs = 0;
         _aimedAt = null;
+        _reachable = true;
+        UnreachableMs = 0;
         if (!CannotMove(creature, mover))
         {
             Step(creature, mover);
@@ -68,8 +104,13 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
             return true;
         }
 
+        if (!_reachable)
+        {
+            UnreachableMs += diffMs;
+        }
+
         _recheckMs -= (int)Math.Min(diffMs, int.MaxValue);
-        if (_recheckMs > 0 && creature.IsMoving)
+        if (_recheckMs > 0 && (creature.IsMoving || !_reachable))
         {
             return true;
         }
@@ -110,6 +151,7 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
 
             OnInPosition(creature);
             _aimedAt = null;
+            SetReachable(true);
             return;
         }
 
@@ -120,8 +162,32 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
         }
 
         Vector3 destination = Destination(creature);
-        mover.MovePath(creature, mover.FindPath(creature, destination), Run(creature), SplineFacing.None);
+        bool reachable = true;
+        IReadOnlyList<Vector3> path = mover is ICreaturePathQuery query
+            ? query.FindPath(creature, destination, out reachable)
+            : mover.FindPath(creature, destination);
+
+        // A stuck chaser's partial path ends where it already stands: no zero-length spline (and no SMSG_MONSTER_MOVE) every recheck.
+        if (path.Count > 0 && Vector3.DistanceSquared(path[^1], new Vector3(creature.X, creature.Y, creature.Z)) > ArrivedEpsilon * ArrivedEpsilon)
+        {
+            mover.MovePath(creature, path, Run(creature), SplineFacing.None);
+        }
+        else if (creature.IsMoving)
+        {
+            mover.StopMoving(creature);
+        }
+
         _aimedAt = targetPos;
+        SetReachable(reachable);
+    }
+
+    private void SetReachable(bool reachable)
+    {
+        _reachable = reachable;
+        if (reachable)
+        {
+            UnreachableMs = 0;
+        }
     }
 }
 
