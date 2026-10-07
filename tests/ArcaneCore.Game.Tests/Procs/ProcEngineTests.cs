@@ -133,6 +133,26 @@ public sealed class ProcEngineTests
     }
 
     [Fact]
+    public void SpellFlags_FollowTheDamageClass_LikePrepareMasksForProcSystem()
+    {
+        SpellInfo autoShot = Spell(75, Effect(SpellEffectName.WeaponDamage, 0)) with
+        {
+            DamageClass = SpellDamageClass.Ranged,
+            AttributesEx2 = (SpellAttributesEx2)ProcAttributes.Ex2AutoRepeat,
+        };
+        SpellInfo aimed = autoShot with { Id = 19434, AttributesEx2 = SpellAttributesEx2.None };
+        SpellInfo strike = Spell(78, Effect(SpellEffectName.WeaponDamage, 0)) with { DamageClass = SpellDamageClass.Melee };
+        SpellInfo bolt = RuleTestSupport.Magic(116);
+
+        Assert.Equal((ProcFlags.DealRangedAttack, ProcFlags.TakeRangedAttack), ProcFlagRules.SpellFlags(autoShot, WeaponAttackType.RangedAttack));
+        Assert.Equal((ProcFlags.DealRangedAbility, ProcFlags.TakeRangedAbility), ProcFlagRules.SpellFlags(aimed, WeaponAttackType.RangedAttack));
+        Assert.Equal((ProcFlags.DealMeleeAbility | ProcFlags.MainHandWeaponSwing, ProcFlags.TakeMeleeAbility),
+            ProcFlagRules.SpellFlags(strike, WeaponAttackType.BaseAttack));
+        Assert.Equal((ProcFlags.DealHarmfulSpell, ProcFlags.TakeHarmfulSpell), ProcFlagRules.SpellFlags(bolt, WeaponAttackType.BaseAttack));
+        Assert.Equal((ProcFlags.None, ProcFlags.None), ProcFlagRules.SpellFlags(aimed with { Id = 2094 }, WeaponAttackType.RangedAttack)); // Blind
+    }
+
+    [Fact]
     public void ASpellProcEventRow_ReplacesTheChance_AndItsPpmRateFollowsTheAttackTime()
     {
         (SpellTestKit kit, Player attacker, Player victim) = Kit();
