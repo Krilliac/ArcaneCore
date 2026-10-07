@@ -303,7 +303,7 @@ public sealed class InstanceManagerTests
 
         f.Now = FirstRaidReset - 60;
         f.Manager.UpdateSchedule();
-        Assert.Null(f.Manager.FindSave(id));
+        Assert.False(f.Manager.FindSave(id)!.HasBinds); // unbound now; deleted when the map unloads
         Assert.Null(f.Manager.GetPlayerBind(a.Guid, Raid));
         Assert.Equal(FirstRaidReset + (7 * Day), f.Manager.GetRaidResetTime(Raid));
         Assert.Equal(FirstRaidReset + (7 * Day), f.Persistence.ResetTimes[Raid]);
@@ -316,6 +316,7 @@ public sealed class InstanceManagerTests
         Assert.Equal((0u, -8833f, 628f), (a.Map!.MapId, a.X, a.Y));
         f.Tick(); // empty and pending reset: unloads at once
         Assert.Null(f.World.FindMap(Raid, id));
+        Assert.Null(f.Manager.FindSave(id));
         Assert.True(f.Manager.IsInstanceValid(a));
     }
 

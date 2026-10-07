@@ -921,6 +921,25 @@ public sealed partial class InstanceManager : IMapResolver
             }
 
             Map? map = _world.FindMap(save.MapId, save.InstanceId);
+            if (map is { PlayerCount: > 0 })
+            {
+                // Someone else is inside (the player itself was skipped above). The save is theirs too:
+                // do not delete it under them (vmangos only removes this player's bind and, for
+                // INSTANCE_RESET_ALL, asks the players inside to leave). A reset request is refused
+                // like the group's; a group join drops just the joiner's own bind.
+                if (groupJoin)
+                {
+                    RemovePlayerBind(player.Guid, save);
+                }
+                else
+                {
+                    ResetLoadedMap(map, global: false, notifyInside: true);
+                    player.Session.Send(WorldOpcode.SmsgInstanceResetFailed, InstancePackets.BuildInstanceResetFailed(InstanceResetFailedReason.General, save.MapId));
+                }
+
+                continue;
+            }
+
             if (map is not null)
             {
                 ResetLoadedMap(map, global: false, notifyInside: false);
@@ -1062,6 +1081,38 @@ public sealed partial class InstanceManager : IMapResolver
         save.Players.Clear();
         save.Groups.Clear();
         DeleteSave(save);
+    }
+
+    // Drop every player and group bind of a save whose map is still loaded, keeping the save itself
+    // until that map unloads (vmangos DungeonPersistentState::UnbindThisState; the lockout rows go now).
+    private void UnbindAll(InstanceSave save)
+    {
+        foreach (ObjectGuid player in save.Players.ToArray())
+        {
+            if (_playerBinds.TryGetValue(player, out Dictionary<uint, InstanceBind>? binds)
+                && binds.TryGetValue(save.MapId, out InstanceBind bind) && bind.Save == save)
+            {
+                binds.Remove(save.MapId);
+                if (binds.Count == 0)
+                {
+                    _playerBinds.Remove(player);
+                }
+            }
+
+            save.Players.Remove(player);
+            _persistence.PlayerUnbound(player.Counter, save.InstanceId);
+        }
+
+        foreach (uint groupId in save.Groups.ToArray())
+        {
+            if (_groupBinds.TryGetValue(groupId, out Dictionary<uint, InstanceBind>? binds)
+                && binds.TryGetValue(save.MapId, out InstanceBind bind) && bind.Save == save)
+            {
+                binds.Remove(save.MapId);
+            }
+
+            save.Groups.Remove(groupId);
+        }
     }
 
     private void DeleteSave(InstanceSave save)
@@ -1235,18 +1286,24 @@ public sealed partial class InstanceManager : IMapResolver
     }
 
     // vmangos MapPersistentStateManager::_ResetOrWarnAll (reset): everyone is unbound, players
-    // inside are sent to their bind point, the maps unload, the next reset is scheduled.
+    // inside are sent to their bind point, the maps unload, the next reset is scheduled. A save
+    // whose map is loaded is deleted when that map unloads (ResetAfterUnload; vmangos removes the
+    // state in ~Map), so players whose trip home is still pending or failed are not left in a
+    // deleted instance; the homebind timer of the now invalid players retries the trip.
     private void GlobalRaidReset(uint mapId, RaidSchedule schedule)
     {
         foreach (InstanceSave save in _saves.Values.Where(s => s.MapId == mapId).ToArray())
         {
-            if (_world.FindMap(save.MapId, save.InstanceId) is { } map)
+            if (_world.FindMap(save.MapId, save.InstanceId) is { } map && _mapStates.ContainsKey(map))
             {
+                UnbindAll(save);
                 ResetLoadedMap(map, global: true, notifyInside: false);
                 foreach (Player player in map.Players.ToArray())
                 {
                     TeleportToHomebind(player);
                 }
+
+                continue;
             }
 
             ResetSave(save);
