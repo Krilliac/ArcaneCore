@@ -32,6 +32,7 @@ internal sealed class ConfusedMovementGenerator : ICreatureMovementGenerator
     private float _anchorY;
     private float _anchorZ;
     private int _staggerMs;
+    private bool _interrupted;
 
     public MovementGeneratorType Type => MovementGeneratorType.Confused;
 
@@ -49,6 +50,7 @@ internal sealed class ConfusedMovementGenerator : ICreatureMovementGenerator
     public void Resume(Creature creature, ICreatureMover mover)
     {
         _staggerMs = 0;
+        _interrupted = false;
         if (creature.IsMoving)
         {
             mover.StopMoving(creature);
@@ -57,6 +59,7 @@ internal sealed class ConfusedMovementGenerator : ICreatureMovementGenerator
 
     public void Interrupt(Creature creature, ICreatureMover mover)
     {
+        _interrupted = true;
         if (creature.IsMoving)
         {
             mover.StopMoving(creature);
@@ -65,7 +68,9 @@ internal sealed class ConfusedMovementGenerator : ICreatureMovementGenerator
 
     public void Finish(Creature creature, ICreatureMover mover, bool completed)
     {
-        if (creature.IsMoving)
+        // Buried under a pushed generator (a point, a flee for assistance), the running spline is that generator's: stopping it would
+        // make a point look arrived where the creature stands.
+        if (!_interrupted && creature.IsMoving)
         {
             mover.StopMoving(creature);
         }
