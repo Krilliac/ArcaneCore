@@ -102,6 +102,19 @@ public sealed partial class Creature : Unit, ICombatCreature
         map.Combat.Attack(this, attacker, MeleeAllowedByTemplate);
     }
 
+    /// <summary>
+    /// A player aimed a text emote at the creature (vmangos WorldSession::HandleTextEmoteOpcode -> CreatureAI::ReceiveEmote,
+    /// Handlers/ChatHandler.cpp:751-752). World thread.
+    /// </summary>
+    public void ReceiveEmote(Player player, uint textEmote)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (IsAlive && System is not null && AI is { } ai)
+        {
+            ai.OnReceiveEmote(player, textEmote);
+        }
+    }
+
     /// <summary>vmangos CreatureAI::JustDied: tell the AI, then begin the map system's corpse and respawn timers.</summary>
     public void OnJustDied(Unit? killer) => System?.OnCreatureDied(this, killer);
 }

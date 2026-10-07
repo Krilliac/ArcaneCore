@@ -112,7 +112,11 @@ docs/integration/creature-ai.md.
     (parameters: repeat min, repeat max, player only; the old implementation read the wrong columns), 6
     death, 7 evade, 8 spell hit (spell id and school mask must both match), 9 range (the victim between the
     min and max yards, bounding radii added, Object.cpp:1401-1420), 11 spawned (always, or map id), 12 target
-    health, 13 target casting (repeat timers are parameters 1 and 2), 18 target mana, 21 reached home, 23/24
+    health, 13 target casting (repeat timers are parameters 1 and 2), 18 target mana, 21 reached home, 22 receive emote
+    (a player's CMSG_TEXT_EMOTE aimed at the creature readies the rows whose emote id matches, the player being the invoker;
+    a condition id is checked against the conditions table for that player, and never passes without one: cmangos
+    CreatureEventAI::ReceiveEmote :1829-1842 and CheckEvent :467-472; the world's text emote handler calls
+    `Creature.ReceiveEmote` like vmangos HandleTextEmoteOpcode, ChatHandler.cpp:751-752), 23/24
     aura and target aura (at least N stacks), 27/28 missing aura and target missing aura (fewer than N), 29
     generic timer (in and out of combat), 31 energy percent, 33 facing target (within 5 yd, victim's back or
     front half circle), 36 target not reachable. Aura stacks and the victim's casting state come from the

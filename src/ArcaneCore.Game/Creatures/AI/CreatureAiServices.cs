@@ -246,6 +246,12 @@ public sealed class CreatureAiServices
     /// <summary>The towns' guard posts (vmangos GuardMgr), shared by every map system built with these services.</summary>
     public GuardPostTable GuardPosts { get; init; } = new();
 
+    /// <summary>
+    /// The conditions table (cmangos IsConditionSatisfied) for EventAI rows that carry a condition id (EVENT_T_RECEIVE_EMOTE); null: such
+    /// rows never fire and are reported. Bound from the world's condition feature.
+    /// </summary>
+    public Npc.IConditionEvaluator? Conditions { get; init; }
+
     /// <summary>The area id a creature stands in (vmangos GetAreaId); null asks the map's terrain (<c>Map.GetZoneAndAreaId</c>).</summary>
     public Func<Creature, uint>? AreaOf { get; init; }
 }

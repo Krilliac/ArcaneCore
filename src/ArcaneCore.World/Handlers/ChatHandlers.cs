@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Chat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
@@ -400,6 +401,12 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
         string? targetName = targetGuid.IsEmpty ? null : map.FindPlayer(targetGuid)?.Name;
         map.BroadcastInRange(player, session.World.Options.ListenRangeTextEmote, WorldOpcode.SmsgTextEmote,
             ChatPackets.BuildTextEmote(player.Guid, textEmote, emoteNumber, targetName), includeSelf: true);
+
+        // vmangos HandleTextEmoteOpcode (Handlers/ChatHandler.cpp:751-752): the targeted creature's AI hears it (EventAI RECEIVE_EMOTE).
+        if (!targetGuid.IsEmpty && map.FindObject(targetGuid) is Creature creature)
+        {
+            creature.ReceiveEmote(player, textEmote);
+        }
     }
 
     /// <summary>

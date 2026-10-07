@@ -1,7 +1,9 @@
 using System.Reflection;
 using ArcaneCore.Data.Npc;
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -42,6 +44,8 @@ public static class CreatureAiServicesBinder
             Spells = spells is null ? null : new SpellSystemCreatureCaster(spells.System),
             UnitSpells = spells is null ? null : new SpellSystemUnitSpellQueries(spells.System),
             Factory = services.GetService<CreatureAiFactory>() ?? new CreatureAiFactory(),
+            // The conditions table is a world feature (ConditionFeature), not a registered IConditionEvaluator service.
+            Conditions = services.GetService<IConditionEvaluator>() ?? services.GetServices<IWorldFeature>().OfType<IConditionEvaluator>().FirstOrDefault(),
         };
 
         foreach (PropertyInfo property in Bindable)

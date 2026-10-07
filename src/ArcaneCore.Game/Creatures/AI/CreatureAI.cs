@@ -75,6 +75,11 @@ public abstract class CreatureAI
     {
     }
 
+    /// <summary>A player aimed a text emote at the creature (vmangos CreatureAI::ReceiveEmote).</summary>
+    public virtual void OnReceiveEmote(Player player, uint textEmote)
+    {
+    }
+
     /// <summary>Spawned or respawned (vmangos JustRespawned / Reset).</summary>
     public virtual void OnRespawn()
     {

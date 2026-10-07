@@ -19,6 +19,7 @@ public enum EventAiEventType : byte
     SpellHit = 8,
     Spawned = 11,
     ReachedHome = 21,
+    ReceiveEmote = 22,
 }
 
 /// <summary>cmangos-classic EventAI action types that have a handler (<c>EventAI_ActionType</c>, CreatureEventAI.h:89-159).</summary>
@@ -117,6 +118,9 @@ public enum EventAiTrigger
 
     /// <summary>A spell hit the creature (cmangos SpellHit).</summary>
     SpellHit,
+
+    /// <summary>A player aimed a text emote at the creature (cmangos ReceiveEmote).</summary>
+    ReceiveEmote,
 }
 
 /// <summary>Everything an action handler needs about the event that fired it.</summary>

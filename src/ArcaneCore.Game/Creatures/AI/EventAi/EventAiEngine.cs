@@ -178,6 +178,24 @@ public sealed class EventAiEngine
         ProcessEvents(caster, null);
     }
 
+    /// <summary>
+    /// cmangos CreatureEventAI::ReceiveEmote (:1829-1842): every row whose emote is <paramref name="textEmote"/> is readied with the
+    /// player as the invoker, then the batch runs.
+    /// </summary>
+    public void ReceiveEmote(Player player, uint textEmote)
+    {
+        EnsureDepth();
+        foreach (EventAiHolder holder in _holders)
+        {
+            if (holder.Handler is { Trigger: EventAiTrigger.ReceiveEmote } handler && handler.MatchesEmote(holder.Event, textEmote))
+            {
+                CheckAndReady(holder, player, null);
+            }
+        }
+
+        ProcessEvents(player, null);
+    }
+
     private void Dispatch(EventAiTrigger trigger, Unit? invoker, Unit? sender)
     {
         EnsureDepth();

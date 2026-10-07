@@ -158,6 +158,9 @@ public sealed class CreatureEventAI : AggressorAI
 
     public override void OnKilledUnit(Unit victim) => _engine.Kill(victim);
 
+    /// <summary>cmangos CreatureEventAI::ReceiveEmote: the EVENT_T_RECEIVE_EMOTE rows.</summary>
+    public override void OnReceiveEmote(Player player, uint textEmote) => _engine.ReceiveEmote(player, textEmote);
+
     public override void OnEvade() => _engine.Evade();
 
     public override void OnReachedHome()
