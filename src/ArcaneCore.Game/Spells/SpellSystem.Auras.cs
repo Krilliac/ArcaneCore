@@ -642,7 +642,7 @@ public sealed partial class SpellSystem
 
         if (Store.Get(triggerSpell) is not null)
         {
-            CastSpell(caster, triggerSpell, SpellCastTargets.ForUnit(triggerTarget.Guid), triggered: true, triggeringSpell: holder.Spell);
+            CastSpellTriggeredByAura(caster, triggerSpell, SpellCastTargets.ForUnit(triggerTarget.Guid), holder.Spell);
         }
     }
 }

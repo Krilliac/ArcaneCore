@@ -87,14 +87,15 @@ public sealed class ManaSpendRuleTests
     }
 
     [Fact]
-    public void TriggeredCast_DoesNotStartTheTimer()
+    public void TriggeredCast_NotMadeByAnAura_StartsTheTimer()
     {
+        // vmangos Spell::TakePower (Spell.cpp:5053) skips only casts triggered by an aura; the aura case is in TriggeredPowerTests.
         using SpellTestKit kit = NewKit();
         Player player = CasterWithMana(kit);
 
         kit.System.CastSpell(player, ManaHeal, SpellCastTargets.ForSelf(), triggered: true);
 
-        Assert.Equal(0u, player.Combat.LastManaUseTimer);
+        Assert.Equal(CombatConstants.ManaRegenInterruptMs, player.Combat.LastManaUseTimer);
     }
 
     [Fact]

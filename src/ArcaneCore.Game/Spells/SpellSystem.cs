@@ -174,6 +174,19 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
+    /// A triggered cast made by an aura (vmangos CastSpell with <c>triggeredByAura</c>, which sets Spell::m_triggeredByAuraSpell):
+    /// it takes no power (Spell::TakePower, Spell.cpp:5053).
+    /// </summary>
+    internal SpellCastResult CastSpellTriggeredByAura(Unit caster, uint spellId, SpellCastTargets targets, SpellInfo aura)
+    {
+        ArgumentNullException.ThrowIfNull(caster);
+        ArgumentNullException.ThrowIfNull(targets);
+        SpellInfo? spell = Store.Get(spellId);
+        return spell is null ? SpellCastResult.NotFound
+            : Prepare(caster, spell, targets, triggered: true, triggeringSpell: aura, triggeredByAura: true);
+    }
+
+    /// <summary>
     /// CMSG_CANCEL_CAST (vmangos HandleCancelCastOpcode → InterruptNonMeleeSpells(false, spellId)):
     /// interrupt the cast in progress when it is <paramref name="spellId"/> (0 = any). Channels are
     /// not interrupted by this packet (withDelayed = false keeps vmangos' channel slot). A queued next-swing
@@ -279,7 +292,7 @@ public sealed partial class SpellSystem
     private SpellCastResult Prepare(Unit caster, SpellInfo spell, SpellCastTargets targets, bool triggered, bool autoRepeatShot = false, Item? castItem = null,
         SpellInfo? triggeringSpell = null, byte itemSpellIndex = 0, int? itemCooldownMs = null, int? itemCategoryCooldownMs = null,
         uint? itemCategory = null, bool itemEquipCast = false, bool itemTriggeredCast = false,
-        IReadOnlyDictionary<int, int>? customAuraAmounts = null)
+        IReadOnlyDictionary<int, int>? customAuraAmounts = null, bool triggeredByAura = false)
     {
         if (castItem is not null && (IsQuestSettlementPending(caster) || IsInTransit(caster)
             || (caster is Player player && !player.IsInWorld)))
@@ -338,7 +351,7 @@ public sealed partial class SpellSystem
             castItem is null ? PowerCostFor(caster, spell) : 0, DurationFor(caster, spell), triggeringSpell, castItem, itemSpellIndex,
             castItem is null ? (byte)0 : castItem.BagSlot, castItem is null ? (byte)0 : castItem.Slot,
             itemCooldownMs, itemCategoryCooldownMs, itemCategory, customAuraAmounts)
-            { ModScope = modScope, IsItemEquipCast = itemEquipCast, IsItemTriggeredCast = itemTriggeredCast };
+            { ModScope = modScope, IsItemEquipCast = itemEquipCast, IsItemTriggeredCast = itemTriggeredCast, IsTriggeredByAura = triggeredByAura };
         cast.AutoRepeatShot = autoRepeatShot;
         if (!triggered)
         {
@@ -422,7 +435,7 @@ public sealed partial class SpellSystem
 
         if (cast.CastItem is null)
         {
-            TakePower(caster, spell, cast.PowerCost, cast.IsTriggered); // vmangos Spell::TakePower returns at once for an item cast (Spell.cpp:5053)
+            TakePower(caster, spell, cast.PowerCost, cast.IsTriggeredByAura); // vmangos Spell::TakePower returns at once for an item cast (Spell.cpp:5053)
         }
 
         if (reagentStage is not null)
@@ -927,7 +940,7 @@ public sealed partial class SpellSystem
                 return beforePower;
             }
 
-            SpellCastResult power = CheckPower(caster, spell);
+            SpellCastResult power = CheckPower(caster, spell, triggered);
             if (power != SpellCastResult.CastOk)
             {
                 return power;
@@ -1017,9 +1030,18 @@ public sealed partial class SpellSystem
         return spell.Range.Min > 0 && distance < spell.Range.Min ? SpellCastResult.TooClose : SpellCastResult.CastOk;
     }
 
-    /// <summary>vmangos Spell::CheckPower: enough of the spell's power type (health costs must leave the caster alive).</summary>
-    private SpellCastResult CheckPower(Unit caster, SpellInfo spell)
+    /// <summary>
+    /// vmangos Spell::CheckPower (Spell.cpp:7029-7066): enough of the spell's power type (health costs must leave the caster alive).
+    /// A triggered cast passes at once (:7032), and a creature that is not a pet passes a spell of a power it cannot have: any
+    /// power but mana, or mana without create mana (:7055-7059).
+    /// </summary>
+    private SpellCastResult CheckPower(Unit caster, SpellInfo spell, bool triggered)
     {
+        if (triggered)
+        {
+            return SpellCastResult.CastOk;
+        }
+
         uint cost = PowerCostFor(caster, spell);
         if (cost == 0)
         {
@@ -1034,6 +1056,12 @@ public sealed partial class SpellSystem
         if (spell.PowerType is < 0 or > (int)PowerType.Happiness)
         {
             return SpellCastResult.Unknown;
+        }
+
+        if (caster is Creatures.Creature { IsPet: false }
+            && (spell.PowerType != (int)PowerType.Mana || caster.GetUInt32(UpdateFields.UnitFieldBaseMana) == 0))
+        {
+            return SpellCastResult.CastOk;
         }
 
         return GetPower(caster, (PowerType)spell.PowerType) < cost ? SpellCastResult.NoPower : SpellCastResult.CastOk;
@@ -1181,9 +1209,13 @@ public sealed partial class SpellSystem
         return (uint)Math.Max(cost, 0);
     }
 
-    private static void TakePower(Unit caster, SpellInfo spell, uint cost, bool triggered)
+    /// <summary>
+    /// vmangos Spell::TakePower (Spell.cpp:5051-5080): a cast triggered by an aura (a periodic trigger tick, a proc) takes no
+    /// power at all; every other cast, triggered or not, pays its cost.
+    /// </summary>
+    private static void TakePower(Unit caster, SpellInfo spell, uint cost, bool triggeredByAura)
     {
-        if (cost == 0)
+        if (cost == 0 || triggeredByAura)
         {
             return;
         }
@@ -1200,9 +1232,9 @@ public sealed partial class SpellSystem
             SetPower(caster, power, GetPower(caster, power) - Math.Min(cost, GetPower(caster, power)));
 
             // vmangos Spell::TakePower (Spell.cpp:5077-5079): paying mana starts the five second timer unless the
-            // spell has SPELL_ATTR_EX2_DONT_BLOCK_MANA_REGEN. A triggered cast (trigger-spell auras, scripts) does
-            // not start it: vmangos skips TakePower entirely for casts triggered by an aura. Casters lane, mana-spend-rule.
-            if (power == PowerType.Mana && !triggered && ((uint)spell.AttributesEx2 & Casters.CasterAttributes.Ex2DontBlockManaRegen) == 0)
+            // spell has SPELL_ATTR_EX2_DONT_BLOCK_MANA_REGEN. A triggered cast that was not triggered by an aura pays and
+            // starts it too; an aura-triggered cast returned above. Casters lane, mana-spend-rule.
+            if (power == PowerType.Mana && ((uint)spell.AttributesEx2 & Casters.CasterAttributes.Ex2DontBlockManaRegen) == 0)
             {
                 caster.Combat.NoteManaUsed(spell.Id);
             }

@@ -60,6 +60,9 @@ public sealed class SpellCast
 
     public bool IsTriggered { get; }
 
+    /// <summary>Triggered by an aura (vmangos Spell::m_triggeredByAuraSpell): a periodic trigger tick. Such a cast takes no power.</summary>
+    internal bool IsTriggeredByAura { get; init; }
+
     /// <summary>
     /// One shot of the auto-repeat spell (ranged (autorepeat lane)): a triggered copy of Auto Shot / Shoot cast by
     /// <see cref="SpellSystem"/> every weapon period. It sends no SMSG_SPELL_COOLDOWN (vmangos Player::AddCooldown only
