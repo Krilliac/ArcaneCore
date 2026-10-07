@@ -85,9 +85,19 @@ author is not kicked by their own ban) has no switch.
   primary key while its cache is updated). A repeat ban of an account adds a row, as retail.
 * `.banlist account` lists accounts with a ban **in force**; retail lists every account with `active = 1`, including
   temporary bans that expired but were not yet cleaned (cleanup runs at startup, at `.banlist ip`, and here on every `.banlist`).
-* `.ban ip`: ArcaneCore keeps no `last_ip`, so it kicks live sessions by their connection address and always reports
-  success; retail kicks accounts whose `last_ip` matches and prints `ip X not found` when none do (vmangos
-  `World.cpp:2576-2579`). `.ban allip` is not implemented (needs `last_ip` and character level access).
+* `.ban ip` kicks live sessions by their connection address and always reports success; retail kicks accounts whose
+  `last_ip` matches and prints `ip X not found` when none do (vmangos `World.cpp:2576-2579`).
+* **`.ban allip $IpPrefix [$reason]`** (wave 2, Administrator, vmangos `HandleBanAllIPCommand`,
+  `AccountCommands.cpp:531-585`): every account last seen on an address starting with the prefix and with no character
+  above level 10 is banned permanently, unless already banned; one `Account 'X' permanently banned. Reason: R` line per
+  account and `N accounts banned for R (M on this IP)`; `No account found on IP 'P'` when nobody was seen there; the
+  reason defaults to `<no reason given>`. The last address is recorded by the world daemon when a session authenticates
+  (`AccountAddressFeature`, characters table `account_last_ip`, schema 38: the auth schema belongs to the realm daemon, so
+  this is the world's own record, written at world login rather than at the realm logon as vmangos `account.last_ip`). The
+  level is the higher of the stored and, for a character online, the live one. Deviations: the invoker's own account is
+  never banned, and `Bans:ProtectHigherSecurity` (default) spares accounts of equal or higher security (vmangos only hides
+  ids below 100 from a non-administrator); the prefix is a literal (digits, hex letters, `.` and `:`), not a LIKE pattern.
+  The per-account lines stop at `Bans:MaxListedEntries` (every account is still banned).
 * Ban/unban store faults answer "The ban database is unavailable; see the server log." (retail has no such text; its
   async holder fails silently).
 * `.baninfo account`/`character` and `.banlist` of characters read the account name through `IAccountAdmin`; the
@@ -133,4 +143,4 @@ author is not kicked by their own ban) has no switch.
 * `arcane-account` has no test project; its logic is covered through `IBanStore` and one scripted SQLite run (create,
   ban, baninfo, banlist, unban, permanent ban); the CLI shell itself is not unit tested.
 * Not delivered: `.reload account_banned/ip_banned` (the hot-reload coordinator is not on this base), per-realm
-  filtering of `account_banned.realm`, `last_ip` and `.ban allip`.
+  filtering of `account_banned.realm`. (`.ban allip` and the world's last-address record arrived in wave 2.)

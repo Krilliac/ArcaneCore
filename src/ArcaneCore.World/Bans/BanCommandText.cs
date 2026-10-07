@@ -38,6 +38,15 @@ public static class BanCommandText
     public const string ListTruncated = "... more entries exist; only the first {0} are shown.";
     /// <summary>Not a retail string (retail ignores the failed INSERT and still reports success): <c>.ban ip</c> against an address with a ban in force.</summary>
     public const string IpAlreadyBanned = "{0} is already banned; the existing ban is unchanged.";
+
+    /// <summary>vmangos HandleBanAllIPCommand (AccountCommands.cpp:546): no account was last seen on the address.</summary>
+    public const string AllIpNotFound = "No account found on IP '{0}'";
+
+    /// <summary>vmangos HandleBanAllIPCommand (AccountCommands.cpp:580): one banned account.</summary>
+    public const string AllIpBanned = "Account '{0}' permanently banned. Reason: {1}";
+
+    /// <summary>vmangos HandleBanAllIPCommand (AccountCommands.cpp:583): banned, reason, accounts on the address.</summary>
+    public const string AllIpSummary = "{0} accounts banned for {1} ({2} on this IP)";
     public const string BanListMatchingAccount = "The following accounts match your query:";     // 428
     public const string PlayerNotFound = "Player not found!";                                    // 499
 
