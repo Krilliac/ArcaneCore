@@ -71,7 +71,7 @@ public sealed class PercentStatAuras : ISpellHandlerModule
         system.RegisterAura(AuraType.ModAttackPowerPct, new AuraHandler((_, h, a, apply) => ApplyAttackPowerPercent(h, a, apply, ranged: false), null));
         system.RegisterAura(AuraType.ModRangedAttackPowerPct, new AuraHandler((_, h, a, apply) => ApplyAttackPowerPercent(h, a, apply, ranged: true), null));
         system.RegisterAura(AuraType.ModDodgePercent, new AuraHandler((_, h, a, apply) => ApplyDefense(h, a, apply, static (s, d) => s.AddDodgeBonus(d)), null));
-        system.RegisterAura(AuraType.ModParryPercent, new AuraHandler((_, h, a, apply) => ApplyDefense(h, a, apply, static (s, d) => s.AddParryBonus(d)), null));
+        system.RegisterAura(AuraType.ModParryPercent, new AuraHandler((_, h, a, apply) => ApplyParry(h, a, apply), null));
         system.RegisterAura(AuraType.ModBlockPercent, new AuraHandler((_, h, a, apply) => ApplyDefense(h, a, apply, static (s, d) => s.AddBlockBonus(d)), null));
         system.RegisterAura(AuraType.ModShieldBlockvalue, new AuraHandler((_, h, a, apply) => ApplyShieldBlock(h, a, apply, percent: false), null));
         system.RegisterAura(AuraType.ModShieldBlockvaluePct, new AuraHandler((_, h, a, apply) => ApplyShieldBlock(h, a, apply, percent: true), null));
@@ -511,6 +511,36 @@ public sealed class PercentStatAuras : ISpellHandlerModule
         }
 
         add(player.StatState, apply ? applied.Amount : -applied.Amount);
+    }
+
+    /// <summary>
+    /// MOD_PARRY_PERCENT: a generic aura moves the parry sum; one whose spell names an item class (Sword Finesse, Axe Finesse...) is kept as a
+    /// stat aura term that counts while the main-hand weapon fits (Player::UpdateParryPercentage reads GetWeaponBasedAuraModifier(BASE_ATTACK),
+    /// StatSystem.cpp:601), so it follows a weapon swap without an aura change.
+    /// </summary>
+    private static void ApplyParry(SpellAuraHolder holder, SpellAura aura, bool apply)
+    {
+        if (holder.Spell.EquippedItemClass < 0)
+        {
+            ApplyDefense(holder, aura, apply, static (s, d) => s.AddParryBonus(d));
+            return;
+        }
+
+        if (holder.Target is not Player player)
+        {
+            return;
+        }
+
+        if (apply)
+        {
+            player.StatState.Auras.Add(aura, new StatAuraTerm(AuraType.ModParryPercent, aura.Amount, aura.MiscValue, aura.IsPositive, holder.Spell, holder.CastItemGuid));
+        }
+        else
+        {
+            player.StatState.Auras.Remove(aura);
+        }
+
+        player.StatState.Maintainer?.UpdateParryPercentage(player);
     }
 
     /// <summary>MOD_SHIELD_BLOCKVALUE (flat) and MOD_SHIELD_BLOCKVALUE_PCT (multiplier): players only (Player::HandleBaseModValue).</summary>

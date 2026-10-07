@@ -60,6 +60,12 @@ public sealed class PlayerStatState
     public UnitModLedger Mods { get; } = new();
 
     /// <summary>
+    /// The crit, weapon damage, weapon parry and damage done auras the formulas fold in at every recompute (<see cref="PlayerStatAuras"/>); kept by
+    /// <see cref="Spells.CombatStatAuras"/> and the weapon-restricted parry auras of <see cref="Spells.PercentStatAuras"/>. World thread only.
+    /// </summary>
+    public PlayerStatAuras Auras { get; } = new();
+
+    /// <summary>
     /// The sum of the amounts of the dodge percent auras (SPELL_AURA_MOD_DODGE_PERCENT; vmangos adds GetTotalAuraModifier of the type
     /// in Player::UpdateDodgePercentage, StatSystem.cpp:607-640). Kept by the stat auras, which recompute the percentage when it changes.
     /// </summary>
