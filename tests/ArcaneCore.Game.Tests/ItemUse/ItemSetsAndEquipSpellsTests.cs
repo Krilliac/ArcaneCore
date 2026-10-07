@@ -42,6 +42,7 @@ public sealed class ItemSetsAndEquipSpellsTests
     private const uint Quiver = 97010;
     private const uint Bow = 97011;
     private const uint SecondRing = 97012;
+    private const uint SkillChest = 97013;
 
     private const uint RequiredSkill = 164;
 
@@ -56,7 +57,7 @@ public sealed class ItemSetsAndEquipSpellsTests
     private static readonly ItemTemplate[] Templates =
     [
         Armor(Head, 1, SetId), Armor(Chest, 5, SetId), Armor(Legs, 7, SetId), Armor(Feet, 8, SetId),
-        Armor(SkillHead, 1, SkillSetId), Armor(UnlistedHead, 1, UnlistedSetId),
+        Armor(SkillHead, 1, SkillSetId), Armor(SkillChest, 5, SkillSetId), Armor(UnlistedHead, 1, UnlistedSetId),
         new ItemTemplate { Entry = Sword, Name = "Sword", DisplayId = Sword, Class = 2, SubClass = 7, InventoryType = 13, Quality = 3, Delay = 2000, MaxDurability = 40, Spells = [OnEquip(SwordEquipSpell)] }.Normalized(),
         Armor(Ring, 11, 0, OnEquip(ChargedEquipSpell, charges: -1), new ItemSpell(ConsumableUseSpell, ItemSpellTriggers.OnUse, -1, 0, -1, 0, -1)),
         Armor(SecondRing, 11, SetId),
@@ -82,9 +83,11 @@ public sealed class ItemSetsAndEquipSpellsTests
 
     private sealed class Skilled(uint skill) : IItemRequirements
     {
+        public uint Skill { get; set; } = skill;
+
         public bool CanDualWield(PlayerInventory inventory) => false;
 
-        public uint SkillValue(PlayerInventory inventory, uint id) => skill;
+        public uint SkillValue(PlayerInventory inventory, uint id) => Skill;
 
         public bool HasSpell(PlayerInventory inventory, uint spellId) => true;
 
@@ -229,6 +232,21 @@ public sealed class ItemSetsAndEquipSpellsTests
         Assert.Equal(0, ItemEquipSpells.SetsOf(rig.Inventory)!.PieceCount(SkillSetId));
         rig.TakeOff(piece);   // nothing to remove: must not throw or go negative
         Assert.Equal(0, ItemEquipSpells.SetsOf(rig.Inventory)!.PieceCount(SkillSetId));
+    }
+
+    [Fact]
+    public void APieceWornBeforeTheSkillWasReached_IsNotCounted_SoTakingItOffKeepsTheBonusOfTheCountedPieces()
+    {
+        using var rig = new Rig(skill: 100);
+        Item early = rig.Wear(SkillHead);                       // skill 100 < 200: not counted
+        ((Skilled)rig.Inventory.Requirements).Skill = 200;
+        rig.Wear(SkillChest);                                   // counted: one piece, the one-piece bonus is on
+        Assert.Equal(1, rig.Holders(SkillSetSpell));
+
+        rig.TakeOff(early);
+
+        Assert.Equal(1, ItemEquipSpells.SetsOf(rig.Inventory)!.PieceCount(SkillSetId));
+        Assert.Equal(1, rig.Holders(SkillSetSpell));
     }
 
     [Fact]

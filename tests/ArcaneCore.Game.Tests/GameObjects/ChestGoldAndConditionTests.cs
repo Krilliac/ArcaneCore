@@ -91,9 +91,9 @@ public sealed class ChestGoldAndConditionTests
         Assert.Equal(loot.Gold, chest.Loot!.Gold);
         uint rolled = loot.Gold;
 
-        // Released with the money untaken: the chest stays ready and the same roll is shown to the next opener (no reroll).
+        // Released with the money untaken: the chest stays activated and the same roll is shown to the next opener (no reroll).
         rig.Loot.Release(alice, chest.Guid);
-        Assert.Equal(GameObjectLootState.Ready, chest.LootState);
+        Assert.Equal(GameObjectLootState.Activated, chest.LootState);
         bobSession.Clear();
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(bob, chest.Guid));
         Assert.Equal(rolled, LootResponse(bobSession).Gold);
@@ -118,7 +118,7 @@ public sealed class ChestGoldAndConditionTests
         ParsedLootItem jerky = Assert.Single(LootResponse(session).Items);
         Assert.Equal(Items.InventoryResult.Ok, rig.Loot.TakeItem(player, jerky.Slot));
         rig.Loot.Release(player, chest.Guid);
-        Assert.Equal(GameObjectLootState.Ready, chest.LootState); // money left: not looted out (vmangos Loot::isLooted counts gold)
+        Assert.Equal(GameObjectLootState.Activated, chest.LootState); // money left: not looted out (vmangos Loot::isLooted counts gold)
 
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(player, chest.Guid));
         Assert.True(rig.Loot.TakeMoney(player));

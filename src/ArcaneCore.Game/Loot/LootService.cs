@@ -587,6 +587,11 @@ public sealed partial class LootService : IViewerFieldFilter
         }
 
         go.LootState = GameObjectLootState.Activated;
+        if (go.Type == GameObjectType.Chest)
+        {
+            go.State = GameObjectState.Active; // Player::SendLoot (Player.cpp:7699-7701): the chest open animation
+        }
+
         return Show(player, bag);
     }
 
@@ -1256,7 +1261,8 @@ public sealed partial class LootService : IViewerFieldFilter
     /// CMSG_LOOT_RELEASE (vmangos HandleLootReleaseOpcode → DoLootRelease): close the window,
     /// clear UNIT_FLAG_LOOTING and settle the source: a looted-out corpse stops being lootable; a
     /// round-robin looter releasing leftovers opens them to the whole group; a looted-out item is
-    /// destroyed; a chest goes back to ready or despawns when empty.
+    /// destroyed; a chest closes its lid, then despawns when empty or stays activated with its
+    /// leftovers (<see cref="GameObjectMapSystem.OnLootReleased"/>).
     /// </summary>
     public void Release(Player player, ObjectGuid guid)
     {
@@ -1311,6 +1317,11 @@ public sealed partial class LootService : IViewerFieldFilter
                 break;
 
             case GameObject go:
+                if (go.Type == GameObjectType.Chest)
+                {
+                    go.State = GameObjectState.Ready; // DoLootRelease (LootHandler.cpp:415-417): the chest closed animation, at every release
+                }
+
                 if (bag.Owner == player.Guid && !bag.IsEmpty)
                 {
                     bag.Owner = default;

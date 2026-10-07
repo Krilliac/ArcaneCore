@@ -19,6 +19,7 @@ namespace ArcaneCore.Game.Items;
 /// Limits: an item whose template names another map or area is destroyed when the player is
 /// alive and the map/zone changed (Player.cpp:6643-6656, DestroyZoneLimitedItem 10881-10909) and
 /// when the player becomes alive again (the resurrect path). A dead player keeps them (patch 1.7.0).
+/// The bank is not searched, and a bag's contents go before the bag (DestroyZoneLimitedItem's order).
 /// The first observation counts as a change, which covers the login load rule (Player.cpp:15524-15529).
 /// After leaving a map the next observation waits until <see cref="Player.ZoneId"/> has been
 /// assigned again (terrain lookup or the client's CMSG_ZONEUPDATE): vmangos computes the zone
@@ -111,18 +112,37 @@ public static class ItemMaintenance
             return;
         }
 
-        foreach (Item item in inventory.AllItems.ToList())
+        // DestroyZoneLimitedItem (Player.cpp:10881-10909) walks the backpack, the keyring and the bag contents before the
+        // equipment and the bags themselves, and never the bank.
+        foreach (Item item in ContentsFirst(inventory).ToList())
         {
-            if (IsLimitedToAnotherMapOrZone(item, player.MapId, player.ZoneId))
+            if (!PlayerInventory.IsInBank(item) && IsLimitedToAnotherMapOrZone(item, player.MapId, player.ZoneId))
             {
-                inventory.DestroyItem(item.BagSlot, item.Slot);
+                DestroyIfStillHeld(inventory, item);
             }
+        }
+    }
+
+    /// <summary>Every stored item, the contents of a bag before the bag (a destroyed bag takes its contents with it).</summary>
+    private static IEnumerable<Item> ContentsFirst(PlayerInventory inventory)
+        => inventory.AllItems.OrderBy(item => item is Container ? 1 : 0);
+
+    /// <summary>
+    /// Destroy <paramref name="item"/> where it is now, unless it already left the inventory (its bag was destroyed earlier in the
+    /// same pass): a detached item still remembers its old slot number, which would name whatever now holds that backpack or
+    /// equipment slot.
+    /// </summary>
+    private static void DestroyIfStillHeld(PlayerInventory inventory, Item item)
+    {
+        if (ReferenceEquals(inventory.GetItem(item.BagSlot, item.Slot), item))
+        {
+            inventory.DestroyItem(item.BagSlot, item.Slot);
         }
     }
 
     private static void Durations(Player player, PlayerInventory inventory, State state, long nowSeconds)
     {
-        var timed = inventory.AllItems.Where(i => i.Duration != 0).ToList();
+        var timed = ContentsFirst(inventory).Where(i => i.Duration != 0).ToList();
         state.Tracked.RemoveWhere(i => !timed.Contains(i));
         foreach (Item item in timed)
         {
@@ -150,7 +170,7 @@ public static class ItemMaintenance
             if (item.Duration <= elapsed)
             {
                 state.Tracked.Remove(item);
-                inventory.DestroyItem(item.BagSlot, item.Slot);
+                DestroyIfStillHeld(inventory, item);
             }
             else
             {

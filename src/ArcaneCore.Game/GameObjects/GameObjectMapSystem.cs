@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
@@ -133,6 +134,13 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// <summary>Skill values for lock checks; defaults to the inventory's requirements seam (vmangos GetSkillValue).</summary>
     public Func<Player, uint, uint> SkillValue { get; set; } = static (player, skill) => player.Inventory.Requirements.SkillValue(player.Inventory, skill);
 
+    /// <summary>
+    /// Takes a mounted user off the mount before a use of an object that does not allow mounted use (vmangos GameObject::Use,
+    /// GameObject.cpp:1414-1415: <c>RemoveSpellsCausingAura(SPELL_AURA_MOUNTED)</c>). The world wires it to the spell system; null (tests
+    /// without spells) leaves the user mounted.
+    /// </summary>
+    public Action<Player>? Dismount { get; set; }
+
     /// <summary>Raised after a successful use (scripts, events, the spells area's linked traps/spells).</summary>
     public event Action<Player, GameObject>? Used;
 
@@ -190,7 +198,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
             if (go.ResetAfterSecond is { } resetAfter && resetAfter < ClockSeconds)
             {
-                ResetToReady(go);
+                ActivationExpired(go);
             }
         }
 
@@ -236,6 +244,18 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         if (result != GameObjectUseResult.Ok)
         {
             return result;
+        }
+
+        // GameObject::Use (GameObject.cpp:1409-1416): an immune user is ignored by objects that cannot be used under immunity,
+        // and a mounted user is taken off the mount unless the object allows mounted use.
+        if (IsRefusedForImmunity(player, go!))
+        {
+            return GameObjectUseResult.Immune;
+        }
+
+        if (!go!.Template.IsUsableMounted() && MountService.IsMounted(player))
+        {
+            Dismount?.Invoke(player);
         }
 
         // An area owns a type (fishing bobbers: ArcaneCore.Game.Fishing) and registers its handler instead of editing this switch.
@@ -292,6 +312,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return result;
         }
 
+        // Spell::EffectOpenLock (SpellEffects.cpp:2117-2118) returns before opening (and before any skill-up) for an immune caster.
+        if (IsRefusedForImmunity(player, go!))
+        {
+            return GameObjectUseResult.Immune;
+        }
+
         uint lockId = GameObjectLocks.LockIdOf(go!.Template);
         LockEntry? entry = _content.FindLock(lockId);
         result = lockId != 0 && entry is null ? GameObjectUseResult.Locked
@@ -303,7 +329,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
         result = go.Type switch
         {
-            GameObjectType.Chest => OpenChest(player, go),
+            // The chest quest gate of UseChest holds for the spell path too: a gathering node tied to a quest opens only for that quest.
+            GameObjectType.Chest => ChestQuestAllows(player, go) ? OpenChest(player, go) : GameObjectUseResult.NeedsQuest,
             GameObjectType.Door or GameObjectType.Button => ActivateDoorOrButton(go, go.Template.AutoCloseSeconds()),
             GameObjectType.Goober => UseGoober(player, go, lockChecked: true),
             _ => GameObjectUseResult.NotUsable,
@@ -425,6 +452,31 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         return GameObjectUseResult.Ok;
     }
 
+    /// <summary>
+    /// GameObject::Update, GO_ACTIVATED (GameObject.cpp:572-597), once the object's timer passed: a goober leaves use and is
+    /// deactivated (GO_JUST_DEACTIVATED sets its state back to ready, :606-623, then the next update despawns it unless it never
+    /// despawns); a partly looted chest is deactivated (despawns, respawns fresh); a door or button resets.
+    /// </summary>
+    private static void ActivationExpired(GameObject go)
+    {
+        switch (go.Type)
+        {
+            case GameObjectType.Goober:
+                go.Flags &= ~GameObjectFlags.InUse;
+                go.State = GameObjectState.Ready;
+                go.ResetAfterSecond = null;
+                go.LootState = GameObjectLootState.JustDeactivated;
+                break;
+            case GameObjectType.Chest:
+                go.ResetAfterSecond = null;
+                go.LootState = GameObjectLootState.JustDeactivated;
+                break;
+            default:
+                ResetToReady(go);
+                break;
+        }
+    }
+
     /// <summary>vmangos ResetDoorOrButton: back to the spawn state, not in use, ready again.</summary>
     private static void ResetToReady(GameObject go)
     {
@@ -436,8 +488,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
     private GameObjectUseResult UseChest(Player player, GameObject go)
     {
-        uint questId = go.Template.GetData(8);
-        if (questId != 0 && Quests?.IsQuestIncomplete(player, questId) != true)
+        if (!ChestQuestAllows(player, go))
         {
             return GameObjectUseResult.NeedsQuest;
         }
@@ -445,6 +496,21 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         GameObjectUseResult locked = CheckDirectLock(player, go);
         return locked != GameObjectUseResult.Ok ? locked : OpenChest(player, go);
     }
+
+    /// <summary>
+    /// The chest quest gate (chest.questId, data8): the quest must be incomplete for the user. vmangos only uses the column for the
+    /// per-viewer activate flag (GameObject::ActivateToQuest, GameObject.cpp:1217-1220), which keeps a client from using the chest;
+    /// ArcaneCore enforces it on every server path that opens a chest so a crafted request cannot get around it.
+    /// </summary>
+    private bool ChestQuestAllows(Player player, GameObject go)
+    {
+        uint questId = go.Template.GetData(8);
+        return questId == 0 || Quests?.IsQuestIncomplete(player, questId) == true;
+    }
+
+    /// <summary>vmangos CannotBeUsedUnderImmunity (GameObjectDefines.h:602-619) against UNIT_FLAG_IMMUNE.</summary>
+    private static bool IsRefusedForImmunity(Player player, GameObject go)
+        => go.Template.CannotBeUsedUnderImmunity() && (player.UnitFlags & UnitFlags.Immune) != 0;
 
     private GameObjectUseResult OpenChest(Player player, GameObject go)
     {
@@ -503,9 +569,18 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     }
 
     /// <summary>
+    /// vmangos DoLootRelease (LootHandler.cpp:503-511): a partly looted chest stays GO_ACTIVATED with its loot and despawns this
+    /// many seconds after the release, so it comes back with fresh loot.
+    /// </summary>
+    public const uint PartlyLootedChestDespawnSeconds = 5 * 60;
+
+    /// <summary>
     /// Called by the loot service when the last viewer released a chest's loot (vmangos
-    /// DoLootRelease for a game object): looted out → despawn and respawn later; otherwise
-    /// ready again with the remaining loot kept.
+    /// DoLootRelease for a game object): looted out → despawn and respawn later; otherwise the
+    /// object stays activated with the remaining loot (LootHandler.cpp:503-511) and a chest
+    /// despawns <see cref="PartlyLootedChestDespawnSeconds"/> later. A dungeon chest whose
+    /// loot is stored with the instance save (<see cref="LootBag.DurableKey"/>) keeps its
+    /// stored leftovers and stays ready: despawning it would not reroll them.
     /// </summary>
     internal void OnLootReleased(GameObject go, LootBag bag)
     {
@@ -514,7 +589,28 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return;
         }
 
-        go.LootState = bag.IsEmpty ? GameObjectLootState.JustDeactivated : GameObjectLootState.Ready;
+        if (bag.IsEmpty)
+        {
+            go.LootState = GameObjectLootState.JustDeactivated;
+        }
+        else if (bag.DurableKey is not null)
+        {
+            go.LootState = GameObjectLootState.Ready;
+        }
+        else
+        {
+            ActivateWithLeftovers(go);
+        }
+    }
+
+    /// <summary>A chest holding leftovers: activated, despawning <see cref="PartlyLootedChestDespawnSeconds"/> from now (the whole-second clock).</summary>
+    private void ActivateWithLeftovers(GameObject go)
+    {
+        go.LootState = GameObjectLootState.Activated;
+        if (go.Type == GameObjectType.Chest)
+        {
+            go.ResetAfterSecond = ClockSeconds + PartlyLootedChestDespawnSeconds;
+        }
     }
 
     private GameObjectUseResult UseGoober(Player player, GameObject go, bool lockChecked = false)
@@ -551,26 +647,29 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             player.Session.Send(WorldOpcode.SmsgGameobjectPagetext, GameObjectPackets.PageText(go.Guid));
         }
 
-        if (go.Template.GetData(4) is var anim and not 0)
-        {
-            Map.BroadcastInRange(go, 0, WorldOpcode.SmsgGameobjectCustomAnim, GameObjectPackets.CustomAnim(go.Guid, anim), includeSelf: false);
-        }
-
         if (go.Template.GetData(6) is var cooldown and not 0)
         {
             go.CooldownUntilMs = _clockMs + (cooldown * 1000L);
         }
 
         go.UseCount++;
-        if (go.Template.GetData(5) != 0)
+
+        // GameObject::Use, goober (GameObject.cpp:1593-1606): in use and activated; an object with a custom animation (the display
+        // list, or goober.customAnim (data4) together with an auto-close time) plays animation 0, any other one shows its active
+        // state. The auto-close time (data3, whole seconds) runs out in GameObject::Update (:578-585): the object is deactivated
+        // then, and a consumable one (data5) or one that may despawn goes away (ActivationExpired, Despawn).
+        go.Flags |= GameObjectFlags.InUse;
+        go.LootState = GameObjectLootState.Activated;
+        if (GameObjectInfoView.HasCustomAnim(go.GetUInt32(UpdateFields.GameobjectDisplayid)) || (autoCloseSeconds > 0 && go.Template.GetData(4) != 0))
         {
-            go.LootState = GameObjectLootState.JustDeactivated; // consumable
+            Map.BroadcastInRange(go, 0, WorldOpcode.SmsgGameobjectCustomAnim, GameObjectPackets.CustomAnim(go.Guid, 0), includeSelf: false);
         }
-        else if (autoCloseSeconds > 0)
+        else
         {
-            ActivateDoorOrButton(go, autoCloseSeconds);
+            go.State = GameObjectState.Active;
         }
 
+        go.ResetAfterSecond = ClockSeconds + autoCloseSeconds;
         return GameObjectUseResult.Ok;
     }
 
@@ -856,7 +955,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
             if (_unloadedLoot.Remove(spawn.Guid, out LootBag? remaining))
             {
+                // The leftovers come back with the chest, which is still the partly looted one: its despawn timer starts again.
                 Loot!.RestoreGameObjectLoot(go, remaining);
+                if (go.Loot is not null)
+                {
+                    ActivateWithLeftovers(go);
+                }
             }
 
             bool pending = _respawnAt.Remove(spawn.Guid, out long respawnAt);

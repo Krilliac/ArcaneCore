@@ -129,6 +129,13 @@ public static class GameObjectInfoView
     }
 
     /// <summary>
+    /// GameObject::HasCustomAnim (GameObject.cpp:2431-2450): the displays that play a custom animation instead of changing state
+    /// (eternal flame, the hunter traps, lava and plague fissures, the Dun Morogh mortar, Sapphiron's birth, Silithyst).
+    /// </summary>
+    public static bool HasCustomAnim(uint displayId)
+        => displayId is 2570 or 3071 or 3072 or 3073 or 3074 or 4392 or 4472 or 4491 or 6785 or 6747 or 6871;
+
+    /// <summary>
     /// GameObject::LoadFromDB (GameObject.cpp:985-991): a database spawn whose type neither despawns when
     /// targeted (noDamageImmune clear) nor at use (not consumable) and whose spawntimesecsmin is non-negative never despawns:
     /// it carries GO_FLAG_NODESPAWN and has no respawn delay.

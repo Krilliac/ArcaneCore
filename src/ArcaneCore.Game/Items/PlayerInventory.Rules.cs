@@ -99,6 +99,13 @@ public sealed partial class PlayerInventory
         }
 
         uint proficiency = template.ProficiencySkill();
+
+        // Player::CanUseItem (Player.cpp:10088-10091): fist weapons use the unarmed skill in combat, but equipping one needs Fist Weapons.
+        if (proficiency != 0 && (ItemClass)template.Class == ItemClass.Weapon && template.SubClass == ItemSubClasses.WeaponFist)
+        {
+            proficiency = ItemSkills.FistWeapons;
+        }
+
         if (proficiency != 0 && Requirements.SkillValue(this, proficiency) == 0)
         {
             return InventoryResult.NoRequiredProficiency;
@@ -619,7 +626,7 @@ public sealed partial class PlayerInventory
 
     private bool IsBoundToOther(Item item) => item.OwnerGuid != _ownerGuid && item.IsSoulBound;
 
-    private static bool IsInBank(Item item)
+    internal static bool IsInBank(Item item)
     {
         byte slot = item.Container?.Slot ?? item.Slot;
         return slot >= InventorySlots.BankItemStart && slot < InventorySlots.BankBagEnd;

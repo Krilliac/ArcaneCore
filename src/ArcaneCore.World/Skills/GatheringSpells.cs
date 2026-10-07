@@ -23,7 +23,8 @@ namespace ArcaneCore.World.Skills;
 /// </summary>
 /// <remarks>
 /// Not modelled: opening with a key item (no item-cast path exists, so key locks never open), the per-object use
-/// requirement table, battleground flags, the play-time flag, immune users, multi-use veins (the object system despawns an emptied chest). Skinning follows Spell.cpp:5940-5969 including the tapper's head start; the
+/// requirement table, battleground flags, the play-time flag, the SPELL_FAILED_DAMAGE_IMMUNE cast check (the effect itself refuses an
+/// immune caster, <see cref="GameObjectMapSystem.OpenLock"/>), multi-use veins (the object system despawns an emptied chest). Skinning follows Spell.cpp:5940-5969 including the tapper's head start; the
 /// tap list is approximated by the corpse loot's recipients (see <see cref="LootService.IsSkinnableBy"/>).
 /// </remarks>
 internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature skills)
@@ -160,7 +161,15 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
 
         if (go is not null)
         {
-            Objects?.FindSystem(player.Map!)?.OpenLock(player, go.Guid, (LockType)effect.MiscValue, 0, (uint)Math.Max(0, SimpleValue(effect)));
+            // Only an object that really opened gives a skill-up: a refusal (an immune caster, the chest quest gate, a chest
+            // being despawned) leaves the node closed and the skill as it was (vmangos returns before UpdateGatherSkill for an
+            // immune caster, SpellEffects.cpp:2117-2118).
+            GameObjectUseResult opened = Objects?.FindSystem(player.Map!)?.OpenLock(player, go.Guid, (LockType)effect.MiscValue, 0, (uint)Math.Max(0, SimpleValue(effect)))
+                ?? GameObjectUseResult.Unsupported;
+            if (opened != GameObjectUseResult.Ok)
+            {
+                return;
+            }
         }
         else if (item is not null)
         {

@@ -364,13 +364,29 @@ public sealed class FishingService : IMapUpdater, ILootReleaseHandler
         loot.ShowSpecial(player, go, bag);
     }
 
-    /// <summary>A successful catch near a hole loots the hole instead (GameObject::Use → fishingHole-&gt;Use → SendLoot(LOOT_FISHINGHOLE)); false when the hole cannot be used now.</summary>
+    /// <summary>
+    /// A successful catch near a hole loots the hole instead (GameObject::Use → fishingHole-&gt;Use → SendLoot(LOOT_FISHINGHOLE)); false when
+    /// the hole cannot be used now. Player::SendLoot (Player.cpp:7663-7698) generates loot only for a GO_READY hole; an activated one (leftovers
+    /// released, or another fisher's open window) shows the loot it holds, which the release settles as usual.
+    /// </summary>
     private bool OpenHole(Player player, GameObject hole)
     {
         LootService? loot = Loot;
-        if (loot is null || hole.LootState != GameObjectLootState.Ready)
+        if (loot is null)
         {
-            return false; // in use by another fisher: vmangos shows its shared loot, this implementation falls back to the zone loot
+            return false;
+        }
+
+        if (hole.LootState == GameObjectLootState.Activated && hole.Loot is { } leftovers && ReferenceEquals(loot.FindLoot(hole.Guid), leftovers))
+        {
+            leftovers.Recipients.Add(player.Guid);
+            loot.ShowSpecial(player, hole, leftovers);
+            return true;
+        }
+
+        if (hole.LootState != GameObjectLootState.Ready)
+        {
+            return false; // used up (despawning) or activated without loot: the catch falls back to the zone loot
         }
 
         LootBag bag = loot.Generate(hole.Guid, LootSourceKind.GameObject, LootType.FishingHole, LootTableKind.GameObject, hole.Template.GetData(1), [player]);

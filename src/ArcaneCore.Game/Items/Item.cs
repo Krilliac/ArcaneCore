@@ -154,6 +154,9 @@ public class Item : WorldObject
     /// </summary>
     public ItemLootData? Loot { get; set; }
 
+    /// <summary>vmangos Item::HasGeneratedLoot: generated loot with money or items still in it.</summary>
+    public bool HasGeneratedLoot => Loot is { } loot && (loot.Gold != 0 || loot.Items.Count != 0);
+
     /// <summary>The bag holding this item, or null when it sits in the player's own slots.</summary>
     public Container? Container { get; internal set; }
 
@@ -173,9 +176,14 @@ public class Item : WorldObject
     public void SetBinding(bool bound)
         => DynamicFlags = bound ? DynamicFlags | ItemDynFlags.Bound : DynamicFlags & ~ItemDynFlags.Bound;
 
-    /// <summary>vmangos Item::CanBeMergedPartlyWith: same entry and room left in this stack.</summary>
+    /// <summary>
+    /// vmangos Item::CanBeMergedPartlyWith (Item.cpp:1187-1201): same entry and room left in this stack, and no generated loot in it
+    /// ("not allow merge looting currently items").
+    /// </summary>
     public InventoryResult CanBeMergedPartlyWith(ItemTemplate template)
-        => Entry != template.Entry || Count >= template.MaxStackSize() ? InventoryResult.ItemCantStack : InventoryResult.Ok;
+        => Entry != template.Entry || Count >= template.MaxStackSize() ? InventoryResult.ItemCantStack
+            : HasGeneratedLoot ? InventoryResult.AlreadyLooted
+            : InventoryResult.Ok;
 
     /// <summary>The persistent state of this item.</summary>
     public ItemInstanceData ToData()

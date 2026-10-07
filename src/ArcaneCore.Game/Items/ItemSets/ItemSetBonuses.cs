@@ -36,7 +36,10 @@ public sealed class PlayerItemSets
 
     internal sealed class SetEffect
     {
-        public int Pieces { get; set; }
+        /// <summary>The worn pieces that count: a piece worn while the set's skill requirement was not met is not one of them.</summary>
+        public HashSet<Item> Counted { get; } = new(ReferenceEqualityComparer.Instance);
+
+        public int Pieces => Counted.Count;
 
         public HashSet<uint> Spells { get; } = [];
     }
@@ -46,7 +49,9 @@ public sealed class PlayerItemSets
 /// Item set bonuses (mangos AddItemsSetItem / RemoveItemsSetItem, Item.cpp): each worn piece of a set counts once, a bonus spell is cast on
 /// the wearer when its piece threshold is reached and removed as soon as the count drops below it, so unequipping one piece removes the
 /// highest bonus. A piece counts while worn even when broken. A set whose required skill the wearer lacks at the time a piece is worn does
-/// not count that piece (mangos checks only then; a removal of an uncounted set finds no effect and does nothing).
+/// not count that piece (mangos checks only then). Taking off a piece that was never counted changes nothing: the counted pieces are
+/// remembered (mangos RemoveItemsSetItem decrements the count for any piece once the set has an effect, so an early uncounted piece
+/// would take a bonus away from the counted ones).
 /// <para>
 /// Set content is the immutable <see cref="ItemSetCatalog"/> read from ItemSet.dbc. Spells are cast triggered on the player with no cast item,
 /// so removal is by spell id. Form-dependent re-evaluation (mangos UpdateEquipSpellsAtFormChange) is not implemented, see docs/areas/items.md.
@@ -84,7 +89,11 @@ public sealed class ItemSetBonuses(ItemSetCatalog catalog, SpellSystem spells, A
         }
 
         PlayerItemSets.SetEffect effect = state.GetOrAdd(setId);
-        effect.Pieces++;
+        if (!effect.Counted.Add(item))
+        {
+            return; // already counted (a replay of a piece that is still counted)
+        }
+
         for (int slot = 0; slot < ItemSetRecord.BonusSlots; slot++)
         {
             uint spellId = set.SpellIds[slot];
@@ -112,12 +121,11 @@ public sealed class ItemSetBonuses(ItemSetCatalog catalog, SpellSystem spells, A
     public void ItemRemoved(Player player, PlayerItemSets state, Item item)
     {
         uint setId = item.Template.SetId;
-        if (setId == 0 || _catalog.Find(setId) is not { } set || state.Find(setId) is not { } effect)
+        if (setId == 0 || _catalog.Find(setId) is not { } set || state.Find(setId) is not { } effect || !effect.Counted.Remove(item))
         {
-            return;   // an unknown set was never applied; an uncounted set (skill) has no effect
+            return;   // an unknown set was never applied; a piece worn without the set's skill was never counted
         }
 
-        effect.Pieces--;
         for (int slot = 0; slot < ItemSetRecord.BonusSlots; slot++)
         {
             uint spellId = set.SpellIds[slot];
