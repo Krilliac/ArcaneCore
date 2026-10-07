@@ -24,7 +24,8 @@ public sealed class ManagedPlayerbotStoreTests
 
         await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
 
-        Assert.Equal(ManagedPlayerbotDataModule.Version,
+        Assert.True(CharacterDbContext.Schema.CurrentVersion >= ManagedPlayerbotDataModule.Version);
+        Assert.Equal(CharacterDbContext.Schema.CurrentVersion,
             (await db.Set<SchemaVersionRow>().AsNoTracking().SingleAsync()).Version);
         Assert.Equal(ManagedPlayerbotDataModule.Version, new ManagedPlayerbotDataModule().SchemaVersion);
         Assert.Equal(1, await db.Database.SqlQueryRaw<int>(

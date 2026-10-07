@@ -37,13 +37,16 @@ public sealed class ChannelTriggerTests
             SpellVisual = 1,
         },
         SpellTestKit.Spell(SelfTrigger, SpellTestKit.Effect(SpellEffectName.Heal, 1, SpellImplicitTarget.Unit)),
-        // The Arcane Missiles shape again, but its triggered spell may target the dead (SPELL_ATTR_EX2_ALLOW_DEAD_TARGET).
+        // The Arcane Missiles shape again, but its triggered spell may target the dead (SPELL_ATTR_EX2_ALLOW_DEAD_TARGET). The
+        // channel carries the flag too: otherwise vmangos HasValidUnitPresentInTargetList (Spell.cpp:1957-1990) ends a channel
+        // whose aura target died, and no triggered spell could reach the corpse at all.
         SpellTestKit.Spell(
             DeadMissiles,
             SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.PeriodicTriggerSpell, amplitude: 1000, trigger: DeadMissile),
             SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitEnemy, AuraType.Dummy)) with
         {
             AttributesEx = SpellAttributesEx.IsChanneled,
+            AttributesEx2 = SpellAttributesEx2.AllowDeadTarget,
             Duration = new SpellDuration(3000, 0, 3000),
             RangeIndex = 4,
             Range = new SpellRange(0, 30),
@@ -52,10 +55,25 @@ public sealed class ChannelTriggerTests
         SpellTestKit.Spell(DeadMissile, SpellTestKit.Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.Unit)) with
         {
             AttributesEx2 = SpellAttributesEx2.AllowDeadTarget,
+        },
+        // A channel that may keep a dead target, firing the plain Missile (which may not): the channel runs on after the death,
+        // so only the triggered spell's own alive-state check can keep the corpse from being hit.
+        SpellTestKit.Spell(
+            DeadChannelMissiles,
+            SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.PeriodicTriggerSpell, amplitude: 1000, trigger: Missile),
+            SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitEnemy, AuraType.Dummy)) with
+        {
+            AttributesEx = SpellAttributesEx.IsChanneled,
+            AttributesEx2 = SpellAttributesEx2.AllowDeadTarget,
+            Duration = new SpellDuration(3000, 0, 3000),
+            RangeIndex = 4,
+            Range = new SpellRange(0, 30),
+            SpellVisual = 1,
         });
 
     private const uint DeadMissiles = 3005;
     private const uint DeadMissile = 3006;
+    private const uint DeadChannelMissiles = 3007;
 
     [Fact]
     public void ArcaneMissilesShape_TriggersAtTheChannelTarget_NotAtTheCaster()
@@ -128,11 +146,13 @@ public sealed class ChannelTriggerTests
     public void AChannelTargetThatDied_ReceivesNoFurtherTriggeredSpells()
     {
         // vmangos: the triggered spell's CheckCast refuses a dead explicit target (Spell.cpp:5572, CanTargetAliveState), so a corpse
-        // never receives EffectTriggerSpell; the damage, heal and energize ticks already stop on a dead target.
+        // never receives EffectTriggerSpell; the damage, heal and energize ticks already stop on a dead target. The channel itself
+        // may keep a dead target, so it is still running when the refused ticks come due: the triggered spell's check is what
+        // spares the corpse, not the channel ending (vmangos HasValidUnitPresentInTargetList).
         using SpellTestKit kit = NewKit();
         (Player caster, _) = kit.AddPlayer(1);
         (Player enemy, _) = kit.AddPlayer(2, 10, 0);
-        kit.Spellbook.Teach(caster, Missiles);
+        kit.Spellbook.Teach(caster, DeadChannelMissiles);
         int liveHits = 0;
         int corpseHits = 0;
         kit.System.SpellHit += (c, t, s) =>
@@ -143,10 +163,12 @@ public sealed class ChannelTriggerTests
             }
         };
 
-        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Missiles, SpellCastTargets.ForUnit(enemy.Guid)));
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, DeadChannelMissiles, SpellCastTargets.ForUnit(enemy.Guid)));
         kit.Advance(1000, step: 100);
         enemy.Health = 0;
-        kit.Advance(2000, step: 100);
+        kit.Advance(1500, step: 100);
+        Assert.Contains(kit.System.GetAuras(caster), h => h.Spell.Id == DeadChannelMissiles);
+        kit.Advance(500, step: 100);
 
         Assert.Equal(1, liveHits);
         Assert.Equal(0, corpseHits);
