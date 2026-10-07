@@ -54,10 +54,15 @@ public static class PlayerLife
     /// <summary>
     /// Apply the stored health and power, never above the current maximums ("restore remembered
     /// power/health values (but not more max values)", Player.cpp:15062-15070). Call it after
-    /// everything that sets the maximums (items, auras, level stats) has run. A character stored
-    /// dead without being a ghost has no body to walk back to: it comes back at half health and
-    /// mana like vmangos <c>Player::LoadCorpse</c> ("Prevent Dead Player login without corpse",
-    /// Player.cpp:15434-15439, <c>ResurrectPlayer(0.5f)</c>).
+    /// everything that sets the maximums (items, auras, level stats) has run. A ghost without a body
+    /// comes back at half health and mana like vmangos <c>Player::LoadCorpse</c> ("Prevent Dead Player
+    /// login without corpse", Player.cpp:15434-15439, <c>ResurrectPlayer(0.5f)</c>). A character stored
+    /// at 0 health without being a ghost (only a crash between the death and the release can save one:
+    /// a logout releases a dying spirit first) gets the same half restore. That is an ArcaneCore decision:
+    /// vmangos loads it ALIVE at 0 health (its death state comes from the ghost flag alone,
+    /// Player.cpp:14973-14975) and lets regeneration raise it, but here <see cref="Unit.IsAlive"/> also
+    /// needs health above 0, so a 0-health load would be alive yet treated as dead everywhere. Nothing is
+    /// skipped by it: the durability loss was taken at the death, and a reclaim has no sickness either.
     /// </summary>
     public static LoadedLife ApplyVitals(Player player, CharacterLife life)
     {
@@ -90,8 +95,9 @@ public static class PlayerLife
     }
 
     /// <summary>
-    /// Dead without being a ghost, or a ghost without a body: vmangos <c>Player::LoadCorpse</c>
-    /// resurrects both at half health ("Prevent Dead Player login without corpse", Player.cpp:15434-15439).
+    /// A ghost without a body (vmangos <c>Player::LoadCorpse</c> resurrects it at half health, "Prevent Dead
+    /// Player login without corpse", Player.cpp:15434-15439), or a non-ghost stored at 0 health (the same half
+    /// restore by ArcaneCore decision; see <see cref="ApplyVitals"/>).
     /// </summary>
     public static bool HasNoBodyToReturnTo(CharacterLife life)
     {
