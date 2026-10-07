@@ -110,13 +110,24 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
         }
 
         _recheckMs -= (int)Math.Min(diffMs, int.MaxValue);
-        if (_recheckMs > 0 && (creature.IsMoving || !_reachable))
+        if (_recheckMs <= 0 || (!creature.IsMoving && _reachable))
         {
-            return true;
+            Step(creature, mover);
         }
 
-        Step(creature, mover);
+        // vmangos TargetedMovementGenerator::Update: a finalized spline informs once the re-measure is done (never while the
+        // creature cannot move, which returned above).
+        if (!creature.IsMoving)
+        {
+            OnSplineFinalized(creature, mover);
+        }
+
         return true;
+    }
+
+    /// <summary>The generator ran with the creature standing (vmangos <c>movespline->Finalized()</c> after the re-measure).</summary>
+    protected virtual void OnSplineFinalized(Creature creature, ICreatureMover mover)
+    {
     }
 
     /// <summary>vmangos: a casting, stunned, fleeing or confused unit does not chase (UNIT_STATE_CASTING / CAN_NOT_MOVE).</summary>
@@ -285,6 +296,18 @@ internal sealed class FollowMovementGenerator(Unit target, float distance, float
 
     protected override Vector3 Destination(Creature creature)
         => PointAround(Target.BoundingRadius + creature.BoundingRadius + distance, Target.Orientation + angle);
+
+    /// <summary>
+    /// vmangos FollowMovementGenerator&lt;Creature&gt;::MovementInform (TargetedMovementGenerator.cpp:861-870): the AI hears
+    /// FOLLOW_MOTION_TYPE with the target's low GUID (a pet compares it with its owner's, PetAI::MovementInform).
+    /// </summary>
+    protected override void OnSplineFinalized(Creature creature, ICreatureMover mover)
+    {
+        if (creature.IsAlive)
+        {
+            mover.OnMovementFinished(creature, MovementGeneratorType.Follow, Target.Guid.Counter);
+        }
+    }
 
     protected override bool Run(Creature creature)
         => Target is not Player || (Target.Movement.Flags & MovementFlags.WalkMode) == 0;

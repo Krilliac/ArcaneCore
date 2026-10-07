@@ -18,6 +18,7 @@ namespace ArcaneCore.Game.Tests.Pets;
 /// </summary>
 public sealed class PetLifecycleFidelityTests
 {
+    private const uint PetCastSpell = 910301;
 
     private static Creature Enemy(PetTestKit kit, float x, float y)
         => kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(NpcCasterEntry)!, x, y, 83.5f, 0);
@@ -162,5 +163,44 @@ public sealed class PetLifecycleFidelityTests
         Creature hunterPet = SummonOf(hunterKit, SummonKind.Pet);
         hunterKit.Creatures.KillCreature(hunterPet);
         Assert.Equal(3_600_000u, hunterPet.CorpseDecayMs);
+    }
+
+    [Fact]
+    public void APetReturningOnAFollowOrder_IsNotArrivedWhileItCannotMove()
+    {
+        // vmangos FollowMovementGenerator::Update returns before MovementInform while the pet casts (IsNoMovementSpellCasted),
+        // and PetAI::MovementInform(FOLLOW_MOTION_TYPE) is the only place that marks the pet as following (PetAI.cpp:684-693).
+        SpellInfo castTime = Spell(PetCastSpell, Effect(SpellEffectName.Heal, 5)) with
+        {
+            CastTime = new SpellCastTime(3_000, 0, 3_000),
+            StartRecoveryCategory = 0,
+            StartRecoveryTime = 0,
+        };
+        using var kit = new PetTestKit([castTime], creatureSpells: true);
+        (Player owner, _) = kit.AddPlayer(1, 5, 5);
+        kit.Cast(owner, PetSpell);
+        Creature pet = SummonOf(kit, SummonKind.Pet);
+        kit.Run(3_000);
+        CharmInfo charm = pet.Summon!.Charm!;
+        Assert.True(charm.IsFollowing);
+
+        owner.SetPosition(30, 5, owner.Z, 0);
+        kit.Controller.HandleCommand(pet, CommandState.Follow, null);
+        Assert.True(charm.IsReturning && charm.IsCommandFollow);
+        Assert.Equal(SpellCastResult.CastOk, kit.Spells.System.CastSpell(pet, PetCastSpell, SpellCastTargets.ForSelf(), triggered: false));
+
+        kit.Run(300);
+        Assert.False(pet.IsMoving);
+        Assert.False(charm.IsFollowing);
+        Assert.True(charm.IsReturning);
+        Assert.True(charm.IsCommandFollow);
+
+        // once the cast is over it runs to its owner and only then follows
+        kit.Spells.System.CancelCast(pet, 0);
+        kit.Run(8_000);
+        Assert.True(charm.IsFollowing);
+        Assert.False(charm.IsReturning);
+        float distance = MathF.Sqrt(((pet.X - owner.X) * (pet.X - owner.X)) + ((pet.Y - owner.Y) * (pet.Y - owner.Y)));
+        Assert.True(distance < 6f, $"pet still {distance} yd from its owner");
     }
 }
