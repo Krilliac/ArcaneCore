@@ -85,12 +85,21 @@ public sealed class LoggingAllocationTests
 
         GC.Collect();
         GC.WaitForPendingFinalizers();
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < iterations; i++)
+
+        // Least of three runs: a one-off runtime allocation on this thread (tiered JIT / OSR type loading, seen on Windows)
+        // lands in one run only; a per-call allocation would show in all three.
+        long least = long.MaxValue;
+        for (int run = 0; run < 3 && least != 0; run++)
         {
-            action();
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < iterations; i++)
+            {
+                action();
+            }
+
+            least = Math.Min(least, GC.GetAllocatedBytesForCurrentThread() - before);
         }
 
-        return GC.GetAllocatedBytesForCurrentThread() - before;
+        return least;
     }
 }

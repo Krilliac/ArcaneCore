@@ -299,13 +299,21 @@ public sealed class IpRateTableTests
     {
         var address = IPAddress.Parse("203.0.113.7");
         IpKey.From(address);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10_000; i++)
+        // Least of three runs: a one-off runtime allocation on this thread (tiered JIT / OSR type loading, seen on Windows)
+        // lands in one run only; a per-call allocation would show in all three.
+        long least = long.MaxValue;
+        for (int run = 0; run < 3 && least != 0; run++)
         {
-            IpKey.From(address);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 10_000; i++)
+            {
+                IpKey.From(address);
+            }
+
+            least = Math.Min(least, GC.GetAllocatedBytesForCurrentThread() - before);
         }
 
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Equal(0, least);
     }
 
     [Fact]

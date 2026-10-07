@@ -66,16 +66,27 @@ internal static class WatchdogTestSupport
     /// <summary>A fresh registry per test, so counters of one test never leak into another.</summary>
     public static CounterRegistry NewRegistry() => new();
 
-    /// <summary>Bytes allocated on this thread by <paramref name="action"/> after one warm-up call (JIT and pool warm-up are excluded).</summary>
+    /// <summary>
+    /// Bytes allocated on this thread by <paramref name="iterations"/> calls of <paramref name="action"/>, the least of three
+    /// measured runs after one warm-up call. A one-off runtime allocation on the calling thread (tiered JIT / OSR type loading,
+    /// seen on Windows: a few KB once) lands in one run only, while a per-call allocation shows in every run, so the minimum
+    /// still catches any steady-state allocation.
+    /// </summary>
     public static long AllocatedBy(Action action, int iterations = 10_000)
     {
         action();
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < iterations; i++)
+        long least = long.MaxValue;
+        for (int run = 0; run < 3 && least != 0; run++)
         {
-            action();
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < iterations; i++)
+            {
+                action();
+            }
+
+            least = Math.Min(least, GC.GetAllocatedBytesForCurrentThread() - before);
         }
 
-        return GC.GetAllocatedBytesForCurrentThread() - before;
+        return least;
     }
 }
