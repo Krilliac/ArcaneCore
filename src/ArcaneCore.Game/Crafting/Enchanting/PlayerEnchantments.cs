@@ -68,6 +68,25 @@ public sealed class PlayerEnchantments
     public bool IsApplied(Item item, int slot) => _applied.ContainsKey((item, slot));
 
     /// <summary>
+    /// vmangos <c>Item::IsBoundByEnchant</c> (Objects/Item.cpp:956-973): any enchantment slot holds an enchantment flagged
+    /// <see cref="EnchantCatalog.CanSoulboundFlag"/>. Such an item cannot be traded, mailed or auctioned.
+    /// </summary>
+    public bool IsBoundByEnchant(Item item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        for (int slot = 0; slot < EnchantSlots.Count; slot++)
+        {
+            if (ItemEnchantments.Id(item, slot) is not 0 and var id && _catalog.Find(id) is { } enchant
+                && (enchant.Flags & EnchantCatalog.CanSoulboundFlag) != 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Start maintaining a player whose items were loaded before this attached (the stat hook only sees later equips and removals): apply the
     /// enchantments of every worn item and start the timers of every item that has one.
     /// </summary>

@@ -222,6 +222,50 @@ public sealed class EconomyStoreTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task Trade_AStackMergedIntoTheReceiversStack_EndsAsTheGiversConsumedItem(DatabaseProvider provider)
+    {
+        // The world settlement lists a traded instance the receiver merged whole into a stack as the giver's consumed GUID.
+        Seed seed = await CreateAsync(provider);
+        ItemInstanceData stack = ItemOf(seed.B, 200);
+        CharacterState aAfter = seed.A with { Inventory = Without(seed.A.Inventory!, 100) };
+        CharacterState bAfter = seed.B with
+        {
+            Inventory = new InventorySnapshot([.. Without(seed.B.Inventory!, 200).Items, new InventoryItemData(0, 23, stack with { Count = 6 })]),
+        };
+        Assert.Equal(EconomyCommitResult.Committed, await CommitAsync(seed, new EconomyCommitRequest(Guid.NewGuid(),
+            [new EconomyParticipant(seed.A, aAfter, [100]), new EconomyParticipant(seed.B, bAfter)], [])));
+        await AssertStateAsync(seed.Connection, aAfter);
+        await AssertStateAsync(seed.Connection, bAfter);
+        await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(seed.Connection);
+        Assert.False(await db.Set<ItemInstanceRow>().AnyAsync(r => r.Guid == 100));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task TakeItem_MergedIntoAStack_DeletesTheEscrowedInstance(DatabaseProvider provider)
+    {
+        Seed seed = await CreateAsync(provider);
+        MailRecord mail = Letter(1, seed.A.Id, seed.B.Id, itemGuid: 100, itemEntry: 117);
+        CharacterState aAfter = seed.A with { Inventory = Without(seed.A.Inventory!, 100) };
+        Assert.Equal(EconomyCommitResult.Committed, await CommitAsync(seed, new EconomyCommitRequest(Guid.NewGuid(),
+            [new EconomyParticipant(seed.A, aAfter)], [new EscrowFromInventory(seed.A.Id, ItemOf(seed.A, 100)), new InsertMail(mail, null)])));
+
+        ItemInstanceData stack = ItemOf(seed.B, 200);
+        CharacterState bAfter = seed.B with
+        {
+            Inventory = new InventorySnapshot([.. Without(seed.B.Inventory!, 200).Items, new InventoryItemData(0, 23, stack with { Count = 6 })]),
+        };
+        Assert.Equal(EconomyCommitResult.Committed, await CommitAsync(seed, new EconomyCommitRequest(Guid.NewGuid(),
+            [new EconomyParticipant(seed.B, bAfter)],
+            [new UpdateMail(mail, mail with { ItemGuid = 0, ItemEntry = 0 }), new DeleteEscrowItem(100)])));
+        await AssertStateAsync(seed.Connection, bAfter);
+        await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(seed.Connection);
+        Assert.False(await db.Set<ItemInstanceRow>().AnyAsync(r => r.Guid == 100));
+        Assert.Empty(await new EfEconomyStore(db).GetEscrowItemsAsync([100]));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task DuplicationAttempts_AreRefused(DatabaseProvider provider)
     {
         Seed seed = await CreateAsync(provider);

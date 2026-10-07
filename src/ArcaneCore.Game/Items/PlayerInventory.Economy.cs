@@ -10,7 +10,7 @@ namespace ArcaneCore.Game.Items;
 public sealed class EconomyInventoryStage
 {
     internal EconomyInventoryStage(PlayerInventory inventory, InventorySnapshot before, InventorySnapshot after,
-        IReadOnlyList<Item> removed, IReadOnlyList<(byte Bag, byte Slot, ItemInstanceData Data)> added,
+        IReadOnlyList<Item> removed, IReadOnlyList<(IReadOnlyList<ItemPosCount> Dest, ItemInstanceData Data)> added,
         IReadOnlyList<(Item Existing, ItemInstanceData Data)>? replacements = null,
         IReadOnlyList<InventoryRewardGrant>? consumes = null,
         IReadOnlyList<(Item Existing, uint Count)>? consumeItems = null)
@@ -35,7 +35,8 @@ public sealed class EconomyInventoryStage
 
     internal IReadOnlyList<Item> Removed { get; }
 
-    internal IReadOnlyList<(byte Bag, byte Slot, ItemInstanceData Data)> Added { get; }
+    /// <summary>Each arriving instance with its planned destination (merges into existing stacks first, then at most one free slot).</summary>
+    internal IReadOnlyList<(IReadOnlyList<ItemPosCount> Dest, ItemInstanceData Data)> Added { get; }
     internal IReadOnlyList<(Item Existing, ItemInstanceData Data)> Replacements { get; }
     internal IReadOnlyList<InventoryRewardGrant> Consumes { get; }
     internal IReadOnlyList<(Item Existing, uint Count)> ConsumeItems { get; }
@@ -47,6 +48,10 @@ public sealed class EconomyInventoryStage
         .Distinct().Where(guid => Before.Items.Any(row => row.Item.Guid == guid)
             && !After.Items.Any(row => row.Item.Guid == guid)).ToArray());
 
+    /// <summary>Arriving instances merged whole into existing stacks: their GUIDs end with this transfer.</summary>
+    public IReadOnlyList<uint> MergedItemGuids => Array.AsReadOnly(Added.Select(a => a.Data.Guid)
+        .Where(guid => !After.Items.Any(row => row.Item.Guid == guid)).ToArray());
+
     /// <summary>The persistent data of the leaving items, as they will be escrowed or handed over.</summary>
     public IReadOnlyList<ItemInstanceData> RemovedData => Removed.Select(i => i.ToData()).ToArray();
 }
@@ -57,7 +62,7 @@ public sealed partial class PlayerInventory
     /// Whether an item may be offered in a trade (vmangos Item::CanBeTraded, Item.cpp:932-952):
     /// loaded, carried in the backpack or a carried bag (not equipped, not an equipped bag, not in
     /// the bank; the carried rule is stricter than vmangos' CanUnequipItem and keeps client-supplied
-    /// positions honest), not soulbound, and an empty bag only. Conjured and timed items are
+    /// positions honest), not soulbound nor bound by an enchantment, and an empty bag only. Conjured and timed items are
     /// tradable (TradeHandler.cpp:313,322,702 check only CanBeTraded).
     /// </summary>
     public InventoryResult CanBeTraded(Item item)
@@ -77,7 +82,9 @@ public sealed partial class PlayerInventory
             return InventoryResult.ItemNotFound;
         }
 
-        if (item.IsSoulBound)
+        // vmangos Item::CanBeTraded also refuses IsBoundByEnchant (Item.cpp:950): an enchantment that can soulbind the item
+        // does not set the bound flag, so it is checked separately (no enchantment engine attached: no catalog to read).
+        if (item.IsSoulBound || Player?.Enchantments?.IsBoundByEnchant(item) == true)
         {
             return InventoryResult.CantDropSoulbound;
         }
@@ -112,8 +119,10 @@ public sealed partial class PlayerInventory
 
     /// <summary>
     /// Plan removing <paramref name="remove"/> and adding the existing instances in <paramref name="add"/>
-    /// (each placed whole into a free backpack or general-bag slot, never merged, so its GUID and data
-    /// survive unchanged). The ordinary unique-count limits apply.
+    /// where vmangos CanStoreItem(NULL_BAG, NULL_SLOT, …, item) / StoreItem put them: room in existing
+    /// stacks first, then one free slot. A part placed in a free slot keeps its GUID and data; an
+    /// instance merged whole into stacks ends (<see cref="EconomyInventoryStage.MergedItemGuids"/>), as
+    /// vmangos _StoreItem deletes it. The ordinary unique-count limits apply.
     /// </summary>
     public InventoryResult TryStageEconomyTransfer(IReadOnlyList<ObjectGuid> remove, IReadOnlyList<ItemInstanceData> add,
         out EconomyInventoryStage? stage, bool trade = false)
@@ -262,10 +271,10 @@ public sealed partial class PlayerInventory
             }
             if (remaining != 0) return InventoryResult.ItemNotFound;
         }
-        var placed = new List<(byte Bag, byte Slot, ItemInstanceData Data)>();
+        var placed = new List<(IReadOnlyList<ItemPosCount> Dest, ItemInstanceData Data)>();
         foreach (ItemInstanceData data in add)
         {
-            if (data.Count == 0 || Templates.Find(data.Entry) is not { } template)
+            if (data.Count == 0 || Templates.Find(data.Entry) is not { } template || data.Count > Math.Max(template.Stackable, 1u))
             {
                 return InventoryResult.ItemNotFound;
             }
@@ -276,15 +285,23 @@ public sealed partial class PlayerInventory
                 return limit;
             }
 
-            if (shadow.FindFreeCarriedSlot(template) is not { } position)
-            {
-                return InventoryResult.InventoryFull;
-            }
-
             Item item = Item.Create(data.Guid, template, _ownerGuid);
             item.Load(data);
-            shadow.PlaceDetached(position.Bag, position.Slot, item);
-            placed.Add((position.Bag, position.Slot, item.ToData()));
+            var dest = new List<ItemPosCount>();
+            InventoryResult room = shadow.CanStoreItem(InventorySlots.NullBag, InventorySlots.NullSlot, dest, item, swap: false, out _);
+            if (room != InventoryResult.Ok)
+            {
+                return room;
+            }
+
+            // Only the last position may be a free slot: StoreItem would otherwise clone the instance under a new GUID.
+            if (dest.Count == 0 || dest.Take(dest.Count - 1).Any(pos => shadow.GetItem(pos.Bag, pos.Slot) is null))
+            {
+                return InventoryResult.ItemNotFound;
+            }
+
+            shadow.StoreItem(dest, item);
+            placed.Add((dest.AsReadOnly(), data));
         }
 
         stage = new EconomyInventoryStage(this, before, FreezeRewardSnapshot(shadow.CreateSnapshot()), removed, placed, replacementPlan, consume, consumeItems);
@@ -330,15 +347,15 @@ public sealed partial class PlayerInventory
                 throw new InvalidOperationException("the reagent inventory changed while its economy transfer was settling");
         }
 
-        foreach ((byte bag, byte slot, ItemInstanceData data) in stage.Added)
+        foreach ((IReadOnlyList<ItemPosCount> dest, ItemInstanceData data) in stage.Added)
         {
             ItemTemplate template = Templates.Find(data.Entry)
                 ?? throw new InvalidOperationException($"item template {data.Entry} disappeared during settlement");
             Item item = Item.Create(data.Guid, template, _ownerGuid);
             item.Load(data);
-            PlaceDetached(bag, slot, item);
-            SendCreateIfNeeded(item);
-            ItemCountChanged?.Invoke(item.Entry, (int)item.Count);
+            uint count = item.Count;
+            StoreItem(dest, item); // the planned merges and free slot; a fresh instance in a free slot is created client-side
+            ItemCountChanged?.Invoke(item.Entry, (int)count);
         }
 
         stage.Applied = true;
@@ -357,47 +374,6 @@ public sealed partial class PlayerInventory
         InventoryItemData[] right = [.. b.Items.OrderBy(i => i.Item.Guid)];
         return left.Length == right.Length && left.Zip(right).All(p => p.First.ContainerGuid == p.Second.ContainerGuid
             && p.First.Slot == p.Second.Slot && SameRewardItem(p.First.Item, p.Second.Item));
-    }
-
-    /// <summary>First free backpack slot, then the first free slot of a carried general bag that accepts the item.</summary>
-    private (byte Bag, byte Slot)? FindFreeCarriedSlot(ItemTemplate template)
-    {
-        for (byte slot = InventorySlots.ItemStart; slot < InventorySlots.ItemEnd; slot++)
-        {
-            if (_items[slot] is null)
-            {
-                return (InventorySlots.Bag0, slot);
-            }
-        }
-
-        for (byte bagSlot = InventorySlots.BagStart; bagSlot < InventorySlots.BagEnd; bagSlot++)
-        {
-            if (_items[bagSlot] is Container bag && template.CanGoIntoBag(bag.Template))
-            {
-                for (byte slot = 0; slot < bag.Size; slot++)
-                {
-                    if (bag[slot] is null)
-                    {
-                        return (bagSlot, slot);
-                    }
-                }
-            }
-        }
-
-        return null;
-    }
-
-    private void PlaceDetached(byte bag, byte slot, Item item)
-    {
-        if (bag == InventorySlots.Bag0)
-        {
-            PlaceInOwnSlot(slot, item);
-        }
-        else
-        {
-            ((Container)_items[bag]!).StoreItem(slot, item);
-            item.Inventory = this;
-        }
     }
 
     private void ReplaceDetached(ObjectGuid guid, ItemInstanceData data)

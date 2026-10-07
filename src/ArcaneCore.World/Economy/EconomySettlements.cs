@@ -112,6 +112,19 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
             && !player.IsQuestSettlementPending && !player.IsLoggingOut && !saves.IsHeld(id) && !saves.IsQuarantined(id);
     }
 
+    /// <summary>
+    /// The item GUIDs that leave <paramref name="actor"/> and exist nowhere afterwards: its consumed reagents, plus the items it
+    /// handed to another actor whose stage merged them whole into existing stacks (a traded stack; vmangos _StoreItem deletes it).
+    /// </summary>
+    private static IReadOnlyList<uint> Ended(EconomyActor actor, IReadOnlyList<EconomyActor> actors)
+    {
+        IReadOnlyList<uint> consumed = actor.Stage.ConsumedItemGuids;
+        uint[] merged = [.. actors.Where(other => !ReferenceEquals(other, actor)).SelectMany(other => other.Stage.MergedItemGuids)
+            .Where(guid => actor.Before.Inventory!.Items.Any(row => row.Item.Guid == guid)
+                && !actor.After.Inventory!.Items.Any(row => row.Item.Guid == guid))];
+        return merged.Length == 0 ? consumed : Array.AsReadOnly(consumed.Union(merged).ToArray());
+    }
+
     /// <summary>World thread: freeze the actor's planned money/inventory change.</summary>
     public EconomyActor? CreateActor(WorldSession session, Player player, EconomyInventoryStage stage, uint moneyAfter,
         CharacterLife? lifeAfter = null)
@@ -143,7 +156,7 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
 
         Guid operationId = Guid.NewGuid();
         var request = new EconomyCommitRequest(operationId,
-            actors.Select(a => new EconomyParticipant(a.Before, a.After, a.Stage.ConsumedItemGuids)).ToArray(), changes.ToArray());
+            actors.Select(a => new EconomyParticipant(a.Before, a.After, Ended(a, actors))).ToArray(), changes.ToArray());
         var operation = new Operation(operationId, actors, request, finished);
         lock (_gate)
         {
