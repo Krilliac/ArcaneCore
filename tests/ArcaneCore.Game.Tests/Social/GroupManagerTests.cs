@@ -446,6 +446,28 @@ public sealed class GroupManagerTests
         Assert.Equal(LootMethod.MasterLoot, group.LootMethod);
     }
 
+    [Theory]
+    [InlineData(0u)] // poor: every grey would be rolled
+    [InlineData(1u)] // common
+    [InlineData(7u)] // above artifact: nothing would ever be rolled
+    [InlineData(255u)]
+    [InlineData(256u)]
+    public void LootMethod_AThresholdOutsideUncommonToArtifact_IsRefused(uint threshold)
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2);
+        Group group = MakeParty(f, a, b);
+
+        f.Context.Groups.SetLootMethod(a, (uint)LootMethod.FreeForAll, ObjectGuid.Empty, threshold);
+        Assert.Equal(LootMethod.GroupLoot, group.LootMethod); // the whole request is dropped, as azerothcore GroupHandler.cpp:535 does
+        Assert.Equal(Group.DefaultLootThreshold, group.LootThreshold);
+
+        f.Context.Groups.SetLootMethod(a, (uint)LootMethod.FreeForAll, ObjectGuid.Empty, 6); // artifact is the highest quality
+        Assert.Equal(LootMethod.FreeForAll, group.LootMethod);
+        Assert.Equal(6, group.LootThreshold);
+    }
+
     [Fact]
     public void SetLeader_MovesTheLeaderFlag()
     {

@@ -310,6 +310,7 @@ public sealed partial class LootService : IViewerFieldFilter
                 return;
         }
 
+        bag.DistributionGroup = group;
         foreach (LootItem item in bag.Items)
         {
             if (!item.IsQuestItem && !item.IsPerPlayer && items.Find(item.ItemId) is { } template && template.Quality >= group.LootThreshold)
@@ -572,9 +573,11 @@ public sealed partial class LootService : IViewerFieldFilter
 
     private LootResult ShowChest(Player player, GameObject go, LootBag bag)
     {
-        if (!bag.IsRecipient(player) && bag.Owner.IsEmpty)
+        if (!bag.IsRecipient(player) && bag.Owner.IsEmpty && bag.Permission == LootPermission.Open)
         {
-            // vmangos lets anyone open a chest someone else left unfinished; they share what is left.
+            // vmangos lets anyone open a chest someone else left unfinished; they share what is left. Not a chest whose items the
+            // group rolls for or its master looter hands out: those carry no owner on purpose, and a passerby added here could take
+            // what is under the threshold, start or join the rolls, or be named as a master loot target.
             bag.Recipients.Add(player.Guid);
         }
 

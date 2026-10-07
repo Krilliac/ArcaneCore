@@ -20,8 +20,9 @@ public sealed partial class CreatureMapSystem
     /// refuses attacks until it arrives (<see cref="Creature.IsInEvadeMode"/>); a charmed creature does not run home and is not left in evade
     /// mode. Health and mana are not touched: the creature regenerates a
     /// third of its maximum per 5 s tick once out of combat (<c>Creatures:Movement:EvadeRestoresFullHealth</c> restores the old instant snap).
-    /// Not delivered: combo points other players hold on the creature are not cleared (no evade event reaches the combo service), a
-    /// creature's pets and totems are not sent home (creatures have no controlled-unit links), the loot recipient is not cleared.
+    /// The loot tap is cleared (the tapper, the group of the tap and the tapped dynamic flags; vmangos CreatureAI::EnterEvadeMode →
+    /// SetLootRecipient(nullptr)). Not delivered: combo points other players hold on the creature are not cleared (no evade event reaches
+    /// the combo service), a creature's pets and totems are not sent home (creatures have no controlled-unit links).
     /// <see cref="Evaded"/> is raised once per evade.
     /// </summary>
     public void EnterEvadeMode(Creature creature)

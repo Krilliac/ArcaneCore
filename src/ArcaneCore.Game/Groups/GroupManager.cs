@@ -360,11 +360,16 @@ public sealed class GroupManager(SocialContext context)
 
     /// <summary>
     /// CMSG_LOOT_METHOD (vmangos HandleLootMethodOpcode): leader only, method ≤ need-before-
-    /// greed; master loot needs a member as looter, other methods clear it.
+    /// greed; master loot needs a member as looter, other methods clear it. A threshold outside
+    /// uncommon..artifact drops the request: vmangos stores whatever the packet says, so a crafted
+    /// 0 would roll every grey and 7 or more would roll nothing, and the value reaches every
+    /// member's client in the group list; azerothcore GroupHandler.cpp:535 refuses it, and the
+    /// 1.12 menu only offers uncommon, rare and epic.
     /// </summary>
     public void SetLootMethod(Player player, uint method, ObjectGuid master, uint threshold)
     {
-        if (method > (uint)LootMethod.NeedBeforeGreed || GetGroup(player.Guid) is not { } group || !group.IsLeader(player.Guid))
+        if (method > (uint)LootMethod.NeedBeforeGreed || threshold is < Group.MinLootThreshold or > Group.MaxLootThreshold
+            || GetGroup(player.Guid) is not { } group || !group.IsLeader(player.Guid))
         {
             return;
         }
@@ -383,7 +388,7 @@ public sealed class GroupManager(SocialContext context)
 
         group.LootMethod = (LootMethod)method;
         group.LooterGuid = master;
-        group.LootThreshold = (byte)Math.Min(threshold, byte.MaxValue);
+        group.LootThreshold = (byte)threshold;
         SendUpdate(group);
     }
 

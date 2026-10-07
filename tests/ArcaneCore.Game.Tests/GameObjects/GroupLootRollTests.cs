@@ -337,25 +337,172 @@ public sealed class GroupLootRollTests
     }
 
     [Fact]
-    public void NeedBeforeGreed_OnlyMembersWhoCanUseTheItemRoll_AndALoneUserIsNotHeldUp()
+    public void NeedBeforeGreed_OnlyMembersWhoCanUseTheItemRoll_AndALoneUserAutoNeedsIt()
     {
         Rig rig = CreateRig(NeedyHelm, BlueSword);
         (Player alice, FakeSession aliceSession) = rig.Join(1);
-        (Player bob, _) = rig.Join(2, 1, 0);
+        (Player bob, FakeSession bobSession) = rig.Join(2, 1, 0);
         (Player carol, FakeSession carolSession) = rig.Join(3, 2, 0);
         bob.Level = 10; // alice and carol (level 1) cannot use the level 10 helm
         rig.Groups.Create(LootMethod.NeedBeforeGreed, alice, bob, carol);
         Creature wolf = rig.KillWolf(alice);
+        byte helm = SlotOf(rig, wolf, NeedyHelm);
         rig.Loot.Open(alice, wolf.Guid);
 
-        // The helm: only bob can use it, so nobody is rolled against and it stays free to take (vmangos: a single looter auto-needs).
+        // The helm: only bob can use it, so it is not rolled: he needs it with 100 and it goes straight into his bags
+        // (vmangos Group::StartLootRoll single looter → CountSingleLooterRoll, Group.cpp:1023-1027, 1090-1121).
         // The sword is usable by all three and is rolled.
         Assert.Equal(1, rig.Loot.Rolls.ActiveRollCount);
         byte sword = SlotOf(rig, wolf, BlueSword);
         Assert.Equal(GroupLootPackets.StartRoll(wolf.Guid, sword, BlueSword, 60000), Assert.Single(Packets(carolSession, WorldOpcode.SmsgLootStartRoll)).Payload);
-        Assert.False(rig.Loot.FindLoot(wolf.Guid)!.FindSlot(SlotOf(rig, wolf, NeedyHelm))!.RollActive);
+        Assert.True(rig.Loot.FindLoot(wolf.Guid)!.FindSlot(helm)!.IsLooted);
         Assert.True(rig.Loot.FindLoot(wolf.Guid)!.FindSlot(sword)!.RollActive);
-        Assert.Equal(LootSlotType.AllowLoot, SlotTypeOf(Window(aliceSession), NeedyHelm));
+        Assert.Equal(1u, bob.Inventory.GetItemCount(NeedyHelm));
+        Assert.Equal(GroupLootPackets.RollWon(wolf.Guid, helm, NeedyHelm, bob.Guid, 100, RollVote.Need),
+            Assert.Single(Packets(bobSession, WorldOpcode.SmsgLootRollWon)).Payload);
+        Assert.Empty(Packets(carolSession, WorldOpcode.SmsgLootRollWon)); // only the lone roller hears of it
+        Assert.DoesNotContain(Window(aliceSession).Items, i => i.ItemId == NeedyHelm);
+        Assert.Equal(InventoryResult.AlreadyLooted, rig.Loot.TakeItem(alice, helm));
+    }
+
+    [Fact]
+    public void ALoneEligibleMember_WhoCannotStoreTheItem_KeepsTheOnlyClaim()
+    {
+        Rig rig = CreateRig(UniqueGem);
+        (Player alice, FakeSession aliceSession) = rig.Join(1);
+        (Player bob, FakeSession bobSession) = rig.Join(2, 1, 0);
+        rig.Groups.Create(LootMethod.GroupLoot, alice, bob);
+        Creature wolf = rig.KillWolf(alice);
+        LootBag bag = rig.Loot.FindLoot(wolf.Guid)!;
+        Assert.Equal(LootPermission.Roll, bag.Permission);
+        bob.Relocate(400, 0, 83.5f, 0, 0); // bob walks off: alice is the only member left within reward distance
+        Assert.Equal(InventoryResult.Ok, alice.Inventory.AddItem(UniqueGem, 1, out _)); // and she already carries the unique gem
+        Forget(aliceSession);
+
+        rig.Loot.Open(alice, wolf.Guid);
+
+        // vmangos CountSingleLooterRoll: the store fails, the item is unblocked with the lone roller as its owner and he is told why.
+        LootItem gem = bag.FindSlot(0)!;
+        Assert.Equal(0, rig.Loot.Rolls.ActiveRollCount);
+        Assert.False(gem.IsLooted);
+        Assert.Equal(alice.Guid, gem.Winner);
+        Assert.Single(Packets(aliceSession, WorldOpcode.SmsgInventoryChangeFailure));
+        Assert.Single(Packets(aliceSession, WorldOpcode.SmsgLootRollWon));
+        Assert.Empty(Packets(bobSession, WorldOpcode.SmsgLootRollWon));
+        Assert.Null(bag.SlotFor(bob, gem)); // bob may not walk back and take it
+        Assert.Equal(LootSlotType.AllowLoot, bag.SlotFor(alice, gem)); // she can, once she makes room
+    }
+
+    // --- the roster: rolls belong to the group that earned the loot ---------------------------------
+
+    [Fact]
+    public void AFirstOpenerWhoLeftTheGroup_DoesNotSpendTheRolls_TheGroupStillRolls()
+    {
+        Rig rig = CreateRig(BlueSword);
+        (Player alice, _) = rig.Join(1);
+        (Player bob, FakeSession bobSession) = rig.Join(2, 1, 0);
+        (Player carol, FakeSession carolSession) = rig.Join(3, 2, 0);
+        Group group = rig.Groups.Create(LootMethod.GroupLoot, alice, bob, carol);
+        Creature wolf = rig.KillWolf(alice);
+        Leave(rig, group, alice); // alice was a recipient at the kill and left the group afterwards
+
+        Assert.Equal(LootResult.Ok, rig.Loot.Open(alice, wolf.Guid));
+        Assert.Equal(1, rig.Loot.Rolls.ActiveRollCount); // the roll is among the group, without her
+        Assert.Equal(InventoryResult.LootCantLootThatNow, rig.Loot.TakeItem(alice, 0));
+        Assert.Single(Packets(bobSession, WorldOpcode.SmsgLootStartRoll));
+        Assert.Single(Packets(carolSession, WorldOpcode.SmsgLootStartRoll));
+        Assert.False(rig.Loot.Rolls.Vote(alice, wolf.Guid, 0, RollVote.Need));
+    }
+
+    [Fact]
+    public void AnOpenWhileTheMethodIsNoLongerGroupLoot_DoesNotSpendTheRolls()
+    {
+        Rig rig = CreateRig(BlueSword);
+        (Player alice, _) = rig.Join(1);
+        (Player bob, _) = rig.Join(2, 1, 0);
+        Group group = rig.Groups.Create(LootMethod.GroupLoot, alice, bob);
+        Creature wolf = rig.KillWolf(alice);
+
+        group.LootMethod = LootMethod.FreeForAll;
+        rig.Loot.Open(alice, wolf.Guid);
+        rig.Loot.Release(alice, wolf.Guid);
+        Assert.Equal(0, rig.Loot.Rolls.ActiveRollCount);
+
+        group.LootMethod = LootMethod.GroupLoot; // the leader switched back before anyone took the sword
+        rig.Loot.Open(bob, wolf.Guid);
+        Assert.Equal(1, rig.Loot.Rolls.ActiveRollCount);
+        Assert.True(rig.Loot.FindLoot(wolf.Guid)!.FindSlot(0)!.RollActive);
+    }
+
+    [Fact]
+    public void AMemberWhoLeavesTheGroup_DropsOutOfTheRoll_AndHisNeedNoLongerCounts()
+    {
+        Rig rig = CreateRig(BlueSword);
+        (Player alice, _) = rig.Join(1);
+        (Player bob, FakeSession bobSession) = rig.Join(2, 1, 0);
+        (Player carol, _) = rig.Join(3, 2, 0);
+        Group group = rig.Groups.Create(LootMethod.GroupLoot, alice, bob, carol);
+        Creature wolf = rig.KillWolf(alice);
+        rig.Loot.Open(alice, wolf.Guid);
+
+        Vote(rig, bob, wolf, 0, RollVote.Need);
+        Leave(rig, group, bob); // vmangos Group::_removeMember → _removeRolls (Group.cpp:1627, 1780-1805): his vote is erased
+        Forget(bobSession);
+        Vote(rig, alice, wolf, 0, RollVote.Greed);
+        Vote(rig, carol, wolf, 0, RollVote.Pass);
+
+        Assert.Equal(0, rig.Loot.Rolls.ActiveRollCount);
+        Assert.Equal(0u, bob.Inventory.GetItemCount(BlueSword));
+        Assert.Equal(1u, alice.Inventory.GetItemCount(BlueSword));
+        Assert.Empty(Packets(bobSession, WorldOpcode.SmsgLootRollWon)); // he is no longer told about the roll
+    }
+
+    [Fact]
+    public void ALeaverWhoHadNotVoted_NoLongerHoldsTheRollUp_AndCannotVoteAnyMore()
+    {
+        Rig rig = CreateRig(BlueSword);
+        (Player alice, _) = rig.Join(1);
+        (Player bob, _) = rig.Join(2, 1, 0);
+        (Player carol, _) = rig.Join(3, 2, 0);
+        Group group = rig.Groups.Create(LootMethod.GroupLoot, alice, bob, carol);
+        Creature wolf = rig.KillWolf(alice);
+        rig.Loot.Open(alice, wolf.Guid);
+
+        Vote(rig, alice, wolf, 0, RollVote.Greed);
+        Vote(rig, carol, wolf, 0, RollVote.Pass);
+        Leave(rig, group, bob);
+        Assert.False(rig.Loot.Rolls.Vote(bob, wolf.Guid, 0, RollVote.Need));
+
+        rig.Elapse(1); // the next map update notices that everyone left in the roll has voted
+        Assert.Equal(0, rig.Loot.Rolls.ActiveRollCount);
+        Assert.Equal(1u, alice.Inventory.GetItemCount(BlueSword));
+        Assert.Equal(0u, bob.Inventory.GetItemCount(BlueSword));
+    }
+
+    [Fact]
+    public void ADisbandedGroup_ResolvesItsRollsAtOnce_WithTheVotesCast()
+    {
+        Rig rig = CreateRig(BlueSword);
+        (Player alice, _) = rig.Join(1);
+        (Player bob, _) = rig.Join(2, 1, 0);
+        (Player carol, _) = rig.Join(3, 2, 0);
+        Group group = rig.Groups.Create(LootMethod.GroupLoot, alice, bob, carol);
+        Creature wolf = rig.KillWolf(alice);
+        rig.Loot.Open(alice, wolf.Guid);
+
+        Vote(rig, carol, wolf, 0, RollVote.Need);
+        group.Clear(); // vmangos Group::Disband counts every roll before it drops the members (Group.cpp:605-606)
+        rig.Groups.ByMember.Clear();
+
+        rig.Elapse(1);
+        Assert.Equal(0, rig.Loot.Rolls.ActiveRollCount);
+        Assert.Equal(1u, carol.Inventory.GetItemCount(BlueSword));
+    }
+
+    private static void Leave(Rig rig, Group group, Player member)
+    {
+        group.RemoveMemberSlot(group.Find(member.Guid)!);
+        rig.Groups.ByMember.Remove(member.Guid);
     }
 
     [Fact]

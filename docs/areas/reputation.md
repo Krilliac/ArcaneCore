@@ -19,7 +19,7 @@ below are for that checkout), `D:\refs\mangos-classic`, `D:\refs\wow_messages`, 
 | world tables | `reputation_spillover_template` and `reputation_reward_rate` as one world schema step (22 after wave-4 integration), two `CreateTableChange`, no inline data | `ObjectMgr.cpp:8827-9070`; classic-db column names |
 | combat reactions | the `GetReactionTo` / `GetFactionReactionTo` / `IsValidAttackTarget` ladder as `ReputationReactionResolver`, `ReputationCombatHooks` and `ReputationCreatureHostility`: Hated players are attacked by their former friends, reputation factions are not attackable unless at war, contested guards attack contested players, GM neutral, forced ranks, duels, same raid, owner-controlled units | `Object.cpp:3608-3816` |
 | forced reactions | in-memory forced-rank state on `PlayerReputation` (never persisted, as vmangos), consulted by every reaction path | `ReputationMgr.cpp:99-131` |
-| kill credit | every group member at reward distance, alive or dead, even with a dead killer; pet and player-controlled victims give nothing | `Group.cpp:2295-2409`; `Player.cpp:19959-19980, 6355-6365` |
+| kill credit | the first-damage tapper and the group of the tap (else the tapper's current group; the killer stands in when nobody tapped or the tapper is not on the map), whoever lands the killing blow: every member at reward distance, alive or dead, even with a dead killer, then a tapper who left the group if he is at reward distance; pet and player-controlled victims give nothing (`ReputationKillCredit.AwardKill`) | `Unit.cpp:978-1000, 1094-1097`; `Group.cpp:2295-2409`; `Player.cpp:19959-19980, 6355-6365` |
 | quest objectives | a changed standing (main faction and every spillover target) completes or reverts reputation-objective quests | `Player.cpp:14239-14264` |
 | GM commands | `.modify rep` (level 4), `.lookup faction` and `.character reputation` (level 2) with retail syntax and texts | `CharacterCommands.cpp:1955-1969, 4330-4422`; `LookupCommands.cpp:1384-1478` |
 | diagnostics and reload | one ACTIVE/INACTIVE startup line, kill rows with a missing faction skipped once at load, quest reputation columns validated, `.reload` of the three tables | `ObjectMgr.cpp:8935-8957, 5702-5750, 6026-6039`; `Chat.cpp:826, 886-887` |
@@ -45,7 +45,6 @@ combat. `ReputationFeature` and `ReputationCombatFeature` now each log one line 
 | --- | --- | --- |
 | client packets must be exactly 5 bytes (war, inactive) or 4 (watched) with slot < 64; stored standing is clamped on load; an invalid watched slot loads as -1 and `CMSG_SET_WATCHED_FACTION` is validated | hardening against input a retail client never sends; unobservable to a retail client | none |
 | the reaction ladder returns "cannot resolve" for a reputation faction whose player state is not loaded, and the hooks then use the template-only answer | the standings load on the session task before the player enters the world; never more permissive than before | none |
-| kill credit goes to the killer's group, not the loot tapper's | no tap primitive on the base; XP and quest credit do the same | follows the threat lane |
 | free-for-all PvP reactions are not modelled | no FFA state exists | none |
 | `SMSG_SET_FORCED_REACTIONS` is built but not sent | vmangos writes (u32 faction, u32 rank); wow_messages types the faction as a u16 | `SendForcedReactions` |
 | the reputation templates reload as one pair: either `.reload` name refreshes both tables | one immutable `ReputationContent` swapped whole | none |
@@ -62,7 +61,7 @@ combat. `ReputationFeature` and `ReputationCombatFeature` now each log one line 
   rounding they will use.
 - **Dump importer wiring** for the two new tables: `ContentImporterCli`, the table specs and a `ReputationTemplatesDumpImporter` are not part of
   this lane; the world tables fill from SQL for now. classic-db has 12 spillover rows and 3 reward-rate rows (all 1/1/1).
-- **Loot-tapper credit**, Alterac Valley Frostwolf/Stormpike reputation for killing enemy players (`Group.cpp:2305-2320`, battleground lane).
+- **Alterac Valley** Frostwolf/Stormpike reputation for killing enemy players (`Group.cpp:2305-2320`, battleground lane).
 - **Stop-attack on a forced Friendly rank** handles the player's own victim only; the attacker set, pets and the threat references of the
   faction (`Unit.cpp:10006-10029`) belong to the threat lane.
 - **Per-quest `RewRepSpilloverMask`** exists as `QuestReputationReward.NoSpillover` but nothing feeds it (the column is vmangos-only,

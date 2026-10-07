@@ -74,7 +74,7 @@ Group loot, need before greed and master loot now run end to end. Reference: vma
 |---|---|
 | The round-robin fallback is gone for group loot and need before greed (no `LootBag.Owner`); only round robin still holds the loot for the pointer's looter. The pointer itself still advances as before | `LootService.PlanLooter` |
 | The group's threshold decides per item at generation: shared, non-quest, non-party-loot items whose quality is at or above `Group.LootThreshold` leave `LootItem.IsUnderThreshold`; the bag records `LootPermission` Open / Roll / Master and the master looter | `LootService.ConfigureDistribution`, `LootModel.cs` |
-| Rolls start once, when the first player opens the loot, before the window is sent (like `Player::SendLoot`). Participants: group members that are recipients of the loot and within reward distance; need before greed: only members for whom `CanUseItem` is OK. Fewer than two participants: no roll, the item stays free | `LootRollManager.Start` |
+| Rolls start once, when the loot is first opened, before the window is sent (like `Player::SendLoot`). They belong to the group whose method set the permission (`LootBag.DistributionGroup`, vmangos `GetGroupLootRecipient`), not the opener's: an open by someone who left that group, or while the method is no longer group loot / need before greed, starts nothing and spends nothing; a disbanded group rolls nothing. Participants: members of that group that are recipients of the loot and within reward distance; need before greed: only members for whom `CanUseItem` is OK. No participant: no roll, the item stays free. One participant: he needs it with 100 (SMSG_LOOT_ROLL_WON to him) and gets it at once, or keeps the only claim when his bags refuse it (vmangos `CountSingleLooterRoll`, `Group.cpp:1090-1121`) | `LootRollManager.Start` |
 | SMSG_LOOT_START_ROLL (countdown = `Loot:RollTimeoutMs`, default 60000, `Group.cpp:72`), SMSG_LOOT_ROLL vote announcements (pass 128/128, need 0/0, greed 128/2), per-voter 1..100 rolls, SMSG_LOOT_ROLL_WON, SMSG_LOOT_ALL_PASSED, all to the participants still in the map | `LootRollManager`, `GroupLootPackets` |
 | CMSG_LOOT_ROLL: a vote counts once per participant (vmangos would count a repeat again); unknown roll, non-participant, repeat and votes >= 3 are ignored | `GameObjectLootHandlers.LootRoll`, `LootRollManager.Vote` |
 | Resolution: when all voted or the timer ends (non-voters pass). Need beats greed beats pass; the highest roll wins, a tie goes to the earlier member in group order; nobody left: all passed, the item is free again | `LootRollManager.Resolve` |
@@ -82,6 +82,8 @@ Group loot, need before greed and master loot now run end to end. Reference: vma
 | Rolled items show as view-only (`LootSlotType.RollOngoing`) and cannot be taken until resolved | `LootBag.SlotFor` |
 | Rolling away the last item while nobody has a window open loots the corpse out / settles the chest | `LootService.SettleUnviewed` |
 | A member leaving the map passes on his open rolls; loot that is gone cancels its rolls silently | `LootRollManager.OnPlayerRemoved`, `Vote`/`Resolve` source checks |
+| A member who leaves the group or is kicked drops out of its rolls, vote and all, and hears no more of them; the roll resolves once everyone still in it has voted. A disbanded group's rolls resolve at once with the votes cast (vmangos `_removeRolls`, `Group.cpp:1780-1805`; `Disband`, `Group.cpp:605-606`). The roster is checked on each vote, at resolution and on the map update, so the effect lands within one tick | `LootRollManager.Prune` |
+| A late opener of a chest is added to its recipients only when the chest is open loot; a chest under rolls or master loot keeps strangers out (they could otherwise take items under the threshold, start the rolls or be named a master loot target) | `LootService.ShowChest` |
 | Master loot: no owner; the master looter sees items at or above the threshold as `LootSlotType.Master`, everyone else only items under it (money is shared as before). SMSG_LOOT_MASTER_LIST (the recipients within reward distance, group order) goes to the master when he opens the loot | `LootBag.SlotFor`, `LootService.SendMasterList` |
 | CMSG_LOOT_MASTER_GIVE: only the master looter with that window open; target must be a recipient within reward distance; the item goes through `AwardItem`. Failures: not master closes the window (vmangos), unknown target answers the error form of SMSG_LOOT_RESPONSE `PlayerNotFound`, full bags `MasterInventoryFull`, unique/count limit `MasterUniqueItem`, anything else `MasterOther`; the item stays in the window | `LootService.GiveMasterLoot`, `GameObjectLootHandlers.LootMasterGive` |
 
@@ -104,7 +106,9 @@ master's client reacts to SMSG_LOOT_MASTER_LIST; the exact wording shown for the
 
 Tests: `Game.Tests/GameObjects/GroupLootRollTests.cs` (start, vote, need > greed > pass, tie and highest roll, all passed,
 timeout into pass, vote edge cases, full-bag winner, need before greed participation, threshold and party-loot items,
-leaving the map, gone loot, corpse looted out, master list/slot types, give, give refusals, round robin unchanged),
+leaving the map, leaving the group, disband, the lone participant, an opener outside the group, corpse looted out, master
+list/slot types, give, give refusals, round robin unchanged), `GameObjectTests.GroupRulesChest_*` (no late opener under
+rolls or master loot),
 `LootServiceTests.MasterLoot_KeepsTheMasterAsLooter_AndDoesNotRotateIt` (updated: no owner), and
 `World.Tests/GameObjects/GroupLootWorldTests.cs` (CMSG_LOOT_ROLL and CMSG_LOOT_MASTER_GIVE through the real host, timer
 through the map update). `ConfigReferenceTests.Production_ConfigurationReference_MatchesTheCommittedPage` fails locally
@@ -117,11 +121,10 @@ until the orchestrator regenerates `docs/reference/configuration.md` (new key `L
 * Roll state is memory-only: a roll running when the map unloads or the world stops is dropped with its loot.
 * Quest-item sharing, personal (non-groupRules) chest loot, money split rules and open range are
   unchanged and still differ from retail (see `docs/integration/gameobjects-loot.md`).
-* Loot recipient is still the killer's group, not a tap list (stats-combat-formulas lane owns
-  `ITapInfo`), so pets/totems credit nobody.
-* The money split (`LootService.TakeMoney`) still measures 3D <= 74 yd from the corpse; retail splits among
-  group members within `IsWithinLootXPDist` of the LOOTER. `Progression/KillRewards.Recipients` (XP,
-  quest kill credit; stats-combat-formulas lane's file) still uses the 3D `<=` rule, so XP/quest credit
+* Corpse loot and kill reputation follow the first-damage tap (`LootService.OnCreatureDamaged`, cleared on evade and
+  respawn; docs/areas/loot-templates.md) and the corpse money splits among the looter's current group within
+  `IsWithinLootXPDist` of the looter. Experience and quest kill credit still go to the killer's group, and
+  `Progression/KillRewards.Recipients` (stats-combat-formulas lane's file) still uses the 3D `<=` rule, so XP/quest credit
   and loot disagree at the edges until it adopts `GroupRewardRange.IsAtGroupRewardDistance` (one-line
   change, handed to that lane).
 * Unlike vmangos, SMSG_GROUP_LIST is only resent when the pointer value actually changes (vmangos also

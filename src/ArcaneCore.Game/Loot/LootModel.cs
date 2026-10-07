@@ -200,6 +200,12 @@ public sealed class LootBag
     /// <summary>Rolls were started for the items above the threshold (they start once, when the first player opens the loot).</summary>
     public bool RollsStarted { get; internal set; }
 
+    /// <summary>
+    /// The group whose loot method set <see cref="Permission"/> (vmangos Creature::GetGroupLootRecipient): its members roll, whoever
+    /// opens the loot first. Null when no group method applies. World thread.
+    /// </summary>
+    internal Groups.Group? DistributionGroup { get; set; }
+
     /// <summary>Players with this loot window open (vmangos m_playersLooting).</summary>
     public HashSet<Player> Viewers { get; } = new(ReferenceEqualityComparer.Instance);
 
