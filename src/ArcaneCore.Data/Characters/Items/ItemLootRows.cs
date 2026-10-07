@@ -52,6 +52,24 @@ public sealed class ItemLootRow
     }
 }
 
+/// <summary>
+/// The orphan sweep (vmangos CharacterDatabaseCleaner::CleanOrphanedItemData, <c>RemoveOrphanedRows("item_loot", "guid", "item_instance", "guid")</c>):
+/// one set-based DELETE per table removes the loot of every item guid without an <c>item_instance</c> row. Such rows were left by builds before the
+/// escrow paths deleted loot with their items (docs/integration/wave3-followups-20261004.md F8); loot of owned and escrowed (owner 0) items stays.
+/// </summary>
+public sealed class EfItemLootMaintenance(CharacterDbContext db) : IItemLootMaintenance
+{
+    public async Task<int> DeleteOrphanedLootAsync(CancellationToken cancellationToken = default)
+    {
+        IQueryable<ItemInstanceRow> items = db.Set<ItemInstanceRow>();
+        int stacks = await db.Set<ItemLootRow>().Where(r => !items.Any(i => i.Guid == r.ItemGuid))
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        int states = await db.Set<ItemLootStateRow>().Where(r => !items.Any(i => i.Guid == r.ItemGuid))
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        return stacks + states;
+    }
+}
+
 /// <summary>Reads and stages the loot rows of container items; used by the inventory store so loot and inventory commit in one SaveChanges.</summary>
 public static class ItemLootPersistence
 {

@@ -102,6 +102,17 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
                 GuidAllocator.Seed(await items.GetMaxItemGuidAsync(cancellationToken).ConfigureAwait(false));
             }
 
+            // vmangos ObjectMgr::SetHighestGuids / CharacterDatabaseCleaner::CleanOrphanedItemData: container loot whose item is gone
+            // (left by builds before the escrow paths deleted it with the item) is removed before any character loads.
+            if (scope.ServiceProvider.GetService<IItemLootMaintenance>() is { } lootMaintenance)
+            {
+                int orphans = await lootMaintenance.DeleteOrphanedLootAsync(cancellationToken).ConfigureAwait(false);
+                if (orphans > 0)
+                {
+                    logger.LogWarning("Deleted {Count} orphaned item loot rows (their items no longer exist)", orphans);
+                }
+            }
+
             logger.LogInformation("Loaded {Count} item templates", store.Count);
             _live.Replace(store);
             _templates = store;

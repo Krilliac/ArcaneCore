@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Kernel.Items;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -29,9 +30,8 @@ public sealed class ItemLootDataModule : IDataModule, ICharacterDataCleanup
         modelBuilder.Entity<ItemLootRow>(ItemLootRow.Configure);
     }
 
-    public void AddServices(IServiceCollection services)
-    {
-    }
+    /// <summary>The startup orphan sweep (<see cref="EfItemLootMaintenance"/>).</summary>
+    public void AddServices(IServiceCollection services) => services.AddScoped<IItemLootMaintenance, EfItemLootMaintenance>();
 
     /// <summary>The loot of every item the character owns (vmangos DeleteFromDB deletes <c>item_loot</c> with the items).</summary>
     public async Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
