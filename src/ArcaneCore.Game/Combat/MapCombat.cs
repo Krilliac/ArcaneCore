@@ -95,10 +95,12 @@ public sealed partial class MapCombat : IMapUpdater
     /// <summary>
     /// vmangos SpellCaster::GetWeaponSkillValue. A player's off-hand skill is 0 without an off-hand weapon;
     /// the hooks only learn about the weapon through <see cref="CombatHooks.HasOffhandWeapon"/>, so a stat
-    /// source that sees one answers for it with the level maximum (the hooks' own value until skills exist).
+    /// source that sees one only supplies the level maximum before skills are attached. Once skills exist,
+    /// the weapon's actual proficiency and bonuses determine every hit-table range (vmangos
+    /// SpellCaster::GetWeaponSkillValue, SpellCaster.cpp:116-141).
     /// </summary>
     internal int WeaponSkill(Unit unit, WeaponAttackType attackType, Unit? victim)
-        => unit is Player && attackType == WeaponAttackType.OffAttack && Stats?.HasOffhandWeapon(unit) == true
+        => unit is Player { Skills: null } && attackType == WeaponAttackType.OffAttack && Stats?.HasOffhandWeapon(unit) == true
             ? MeleeHitTable.SkillMaxForLevel(unit, victim)
             : Hooks.GetWeaponSkill(unit, attackType, victim);
 

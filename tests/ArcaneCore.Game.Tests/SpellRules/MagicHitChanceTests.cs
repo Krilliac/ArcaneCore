@@ -251,6 +251,22 @@ public sealed class MagicHitChanceTests
         Assert.InRange(resisted, 560, 800); // 17% of 4000 = 680
     }
 
+    [Fact]
+    public void MagicHitRollUsesTheTruncatedTenThousandPointTable()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, Player target) = Players(kit);
+        var rules = new VanillaSpellCombatRules { Modifiers = new AddModifier(SpellModOp.ResistMissChance, -0.433f) };
+        SpellInfo spell = kit.Store.Get(Bolt)!;
+
+        // 96 - 0.433 = 95.567%; vmangos SpellCaster.cpp:876-878 truncates to
+        // 9556/10000 hit, leaving 444 miss slots (SpellCaster.cpp:785-792).
+        Assert.Equal(95.56f, rules.MagicHitPercent(kit.System, caster, target, spell), 2);
+        kit.System.Random = new ScriptedRandom(443, 444);
+        Assert.Equal(SpellMissInfo.Resist, rules.RollHit(kit.System, caster, target, spell));
+        Assert.Equal(SpellMissInfo.None, rules.RollHit(kit.System, caster, target, spell));
+    }
+
     internal sealed class AddModifier(SpellModOp op, float delta) : ISpellModifiers
     {
         public float Apply(Unit caster, SpellInfo spell, SpellModOp operation, float value) => operation == op ? value + delta : value;

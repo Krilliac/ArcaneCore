@@ -125,8 +125,9 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
                 }
 
                 float hit = MagicHitPercent(system, caster, target, spell);
+                int hitPoints = (int)MathF.Round(hit * 100f); // already truncated to hundredths by MagicHitChance.Finish
                 int roll = system.Random.Next(0, 10_000);
-                return roll < (int)((100.0f - hit) * 100.0f) ? SpellMissInfo.Resist : SpellMissInfo.None;
+                return roll < 10_000 - hitPoints ? SpellMissInfo.Resist : SpellMissInfo.None;
             }
 
             case SpellDamageClass.Melee:

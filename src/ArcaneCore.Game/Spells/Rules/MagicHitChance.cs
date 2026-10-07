@@ -29,7 +29,8 @@ public static class MagicHitChance
 
     /// <summary>
     /// The final chance: binary spells are scaled by <c>1 - resistChance</c> (SpellCaster.cpp:869-874),
-    /// then the result is clamped to <see cref="MinPercent"/>..<see cref="MaxPercent"/> (:877-878).
+    /// then converted to integer slots out of 10000 (truncating fractional slots) and clamped
+    /// to <see cref="MinPercent"/>..<see cref="MaxPercent"/> (:876-878).
     /// </summary>
     public static float Finish(float chance, bool binary, float resistChance)
     {
@@ -38,6 +39,7 @@ public static class MagicHitChance
             chance *= 1.0f - resistChance;
         }
 
-        return Math.Clamp(chance, MinPercent, MaxPercent);
+        int hitPoints = Math.Clamp((int)(chance * 100f), 100, 9900);
+        return hitPoints / 100f;
     }
 }
