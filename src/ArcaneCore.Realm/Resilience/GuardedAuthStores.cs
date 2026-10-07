@@ -127,6 +127,13 @@ internal sealed class GuardedBanStore(Func<IBanStore> inner, DatabaseGuard guard
             (Inner: inner, AccountId: accountId),
             cancellationToken).AsTask();
 
+    public Task<IReadOnlySet<int>> FindAccountsWithHistoryAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
+        => guard.ExecuteAsync(
+            DatabaseComponent.Auth,
+            static (s, ct) => new ValueTask<IReadOnlySet<int>>(s.Inner().FindAccountsWithHistoryAsync(s.Ids, ct)),
+            (Inner: inner, Ids: accountIds),
+            cancellationToken).AsTask();
+
     public Task<IReadOnlyList<AccountBanRecord>> ListActiveAccountBansAsync(CancellationToken cancellationToken = default)
         => guard.ExecuteAsync(
             DatabaseComponent.Auth,
