@@ -25,13 +25,22 @@ public sealed partial class SpellSystem
     /// A trap's spell (vmangos GameObject::Update: <c>owner->CastSpell(target, spellId, true, ..., trapGuid)</c>, a triggered
     /// cast, which neither checks range nor needs a living caster). Runs synchronously: a triggered cast has no cast time.
     /// A player a trap hits is not put in combat (Spell.cpp:1650, see <see cref="StartsCombat"/>); the trap's damage over time, applied later by an aura, is not covered.
+    /// <paramref name="source"/> is the object's position: the trap is the casting object (vmangos GetCastingObject), so the
+    /// spell's source location is the trap (SpellCaster.cpp:2271-2273, Spell.cpp:2549-2555) and source-location areas centre there.
     /// </summary>
-    internal SpellCastResult CastFromObject(Unit owner, uint spellId, Unit target)
+    internal SpellCastResult CastFromObject(Unit owner, uint spellId, Unit target, (float X, float Y, float Z)? source = null)
     {
         _objectCastDepth++;
         try
         {
-            return CastSpell(owner, spellId, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+            SpellCastTargets targets = SpellCastTargets.ForUnit(target.Guid);
+            if (source is { } at)
+            {
+                targets.Mask |= SpellCastTargetFlags.SourceLocation;
+                targets.Source = at;
+            }
+
+            return CastSpell(owner, spellId, targets, triggered: true);
         }
         finally
         {

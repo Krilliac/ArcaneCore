@@ -178,10 +178,20 @@ public sealed partial class SpellSystem
             case SpellImplicitTarget.UnitNearCaster:
                 return RandomNearCaster(cast, effect, selector);
             case SpellImplicitTarget.EnumUnitsEnemyAoeAtSrcLoc:
+            {
+                (float x, float y, float z) = SourceCentre(cast, effect);
+                return Area(cast, effect, x, y, z, AreaRadius(cast, effect, selector), u => IsEnemy(caster, u), cone: false);
+            }
+
             case SpellImplicitTarget.EnumUnitsEnemyWithinCasterRange:
+                // vmangos PUSH_SELF_CENTER (Spell.cpp:2557-2558): the caster, whatever the source.
                 return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, selector), u => IsEnemy(caster, u), cone: false);
             case SpellImplicitTarget.EnumUnitsFriendAoeAtSrcLoc:
-                return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, selector), u => IsFriend(cast, u), cone: false);
+            {
+                (float x, float y, float z) = SourceCentre(cast, effect);
+                return Area(cast, effect, x, y, z, AreaRadius(cast, effect, selector), u => IsFriend(cast, u), cone: false);
+            }
+
             case SpellImplicitTarget.EnumUnitsEnemyAoeAtDestLoc:
             case SpellImplicitTarget.EnumUnitsFriendAoeAtDestLoc:
             case SpellImplicitTarget.EnumUnitsPartyAoeAtDestLoc:
@@ -259,6 +269,19 @@ public sealed partial class SpellSystem
 
         Unit centre = unitTarget ?? cast.Caster;
         return (centre.X, centre.Y, centre.Z);
+    }
+
+    /// <summary>
+    /// The centre of a source-location area (vmangos PUSH_SRC_CENTER, Spell.cpp:7968-7971: <c>m_targets.m_src</c>). An effect
+    /// whose first target is TARGET_LOCATION_CASTER_SRC writes the casting object there first (Spell.cpp:2549-2555): the caster,
+    /// or the trap of a cast made on behalf of a game object (whose position <see cref="CastFromObject"/> puts in the source).
+    /// Otherwise the source the client sent, and the caster when there is none (vmangos would leave the source at 0,0,0).
+    /// </summary>
+    private (float X, float Y, float Z) SourceCentre(SpellCast cast, SpellEffectInfo effect)
+    {
+        bool hasSource = (cast.Targets.Mask & SpellCastTargetFlags.SourceLocation) != 0;
+        bool casterSource = effect.TargetA == SpellImplicitTarget.LocationCasterSrc && _objectCastDepth == 0;
+        return hasSource && !casterSource ? cast.Targets.Source : (cast.Caster.X, cast.Caster.Y, cast.Caster.Z);
     }
 
     private bool IsEnemy(Unit caster, Unit unit) => unit.IsAlive && Relations.IsHostile(caster, unit);
