@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Items;
 
 namespace ArcaneCore.Game.Items;
 
@@ -36,8 +37,9 @@ public sealed partial class PlayerInventory
             return Fail(InventoryResult.ItemNotFound, null);
         }
 
-        if ((gift.Template.Flags & (uint)ItemTemplateFlags.Wrapper) == 0 || gift.Template.WrappedGift == 0
-            || Templates.Find(gift.Template.WrappedGift) is not { } wrappedTemplate)
+        uint wrappedEntry = WrappedGiftOf(gift.Template);
+        if ((gift.Template.Flags & (uint)ItemTemplateFlags.Wrapper) == 0 || wrappedEntry == 0
+            || Templates.Find(wrappedEntry) is not { } wrappedTemplate)
         {
             // vmangos ObjectMgr::LoadItemPrototypes clears a wrapped_gift that names no item, so it fails the same check (ObjectMgr.cpp:4203-4211).
             return Fail(InventoryResult.ItemNotFound, gift);
@@ -95,6 +97,27 @@ public sealed partial class PlayerInventory
         item.SetUInt32(UpdateFields.ItemFieldFlags, (uint)ItemDynFlags.Wrapped);
         DestroyItemCount(gift, 1);
         return InventoryResult.Ok;
+    }
+
+    /// <summary>
+    /// The gift entry a wrapping paper turns an item into: the template's <c>wrapped_gift</c> (vmangos item_template). Content imported from
+    /// cmangos classic-db has no such column, so a paper without one falls back to the fixed pairs cmangos uses instead
+    /// (mangos-classic ItemHandler.cpp:1152-1160, mangoszero ItemHandlerEnchant.cpp:184-192): 5042→5043, 5048→5044, 17303→17302,
+    /// 17304→17305, 17307→17308, 21830→21831.
+    /// </summary>
+    public static uint WrappedGiftOf(ItemTemplate paper)
+    {
+        ArgumentNullException.ThrowIfNull(paper);
+        return paper.WrappedGift != 0 ? paper.WrappedGift : paper.Entry switch
+        {
+            5042 => 5043,
+            5048 => 5044,
+            17303 => 17302,
+            17304 => 17305,
+            17307 => 17308,
+            21830 => 21831,
+            _ => 0,
+        };
     }
 
     /// <summary>

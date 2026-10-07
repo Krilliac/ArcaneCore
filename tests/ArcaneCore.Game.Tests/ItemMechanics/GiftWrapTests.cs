@@ -116,6 +116,28 @@ public sealed class GiftWrapTests
     }
 
     [Fact]
+    public void ClassicDbPaper_WithoutAWrappedGiftColumn_UsesTheCmangosPairs()
+    {
+        // cmangos classic-db item_template has no wrapped_gift: paper 5042 makes gift 5043 (mangos-classic ItemHandler.cpp:1152-1160).
+        (Player player, _) = CreatePlayer();
+        player.Inventory.Templates = new ItemTemplateStore(
+            [
+                .. Templates,
+                new ItemTemplate { Entry = 5042, Class = 0, Name = "Red Ribboned Wrapping Paper", DisplayId = 1, Stackable = 20, Flags = (uint)ItemTemplateFlags.Wrapper },
+                new ItemTemplate { Entry = 5043, Class = 0, Name = "Red Ribboned Gift", DisplayId = 2, Stackable = 1, Flags = (uint)ItemTemplateFlags.Wrapper },
+                new ItemTemplate { Entry = Sword, Class = 2, SubClass = 7, Name = "Gift Sword", DisplayId = 4, InventoryType = 13, Delay = 2000, MaxDurability = 50, Damages = [new ItemDamage(1, 3, 0)] },
+            ], []);
+        player.Inventory.Load([]);
+        Item paper = Give(player.Inventory, 5042);
+        Item sword = Give(player.Inventory, Sword);
+        Assert.Equal(InventoryResult.Ok, Wrap(player, paper, sword));
+        Assert.Equal((5043u, Sword), (sword.Entry, sword.GiftEntry));
+        Assert.Equal(0u, PlayerInventory.WrappedGiftOf(new ItemTemplate { Entry = 1 }));
+        Assert.Equal(17308u, PlayerInventory.WrappedGiftOf(new ItemTemplate { Entry = 17307 }));
+        Assert.Equal(9u, PlayerInventory.WrappedGiftOf(new ItemTemplate { Entry = 5042, WrappedGift = 9 }));   // the column wins
+    }
+
+    [Fact]
     public void Wrap_RefusesAWornItem()
     {
         (Player player, _) = Create();
