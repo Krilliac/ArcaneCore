@@ -58,6 +58,33 @@ public sealed class DuelCompletionTests
     }
 
     [Fact]
+    public void Completion_AlsoRemovesAReflectedDebuff_ThatItsOwnCasterNowCarries()
+    {
+        // vmangos Player.cpp:6762-6768, 6781-6787 (> 1.6.1): "You are no longer able to kill players in duels with reflected DoT spells".
+        using var rig = new DuelRig();
+        rig.Kit.System.CombatRules = new ReflectOnlyRules();
+        rig.Kit.System.CastSpell(rig.A, ReflectAura, SpellCastTargets.ForSelf(), triggered: true);
+        rig.Challenge();
+        rig.AcceptAndStart();
+        Cast(rig, rig.B, rig.A, ReflectableDebuff);
+        SpellAuraHolder reflected = Assert.Single(rig.Kit.System.GetAuras(rig.B), h => h.Spell.Id == ReflectableDebuff);
+        Assert.True(reflected.IsReflected);
+        Assert.Equal(rig.B.Guid, reflected.CasterGuid); // its own caster: the "cast by the opponent" rule alone would keep it
+        Assert.False(Has(rig, rig.A, ReflectableDebuff));
+
+        rig.Service.Complete(rig.A, DuelCompleteType.Won);
+
+        Assert.False(Has(rig, rig.B, ReflectableDebuff));
+    }
+
+    /// <summary>Every spell lands unless the vanilla reflect step turns it back.</summary>
+    private sealed class ReflectOnlyRules : VanillaSpellCombatRules
+    {
+        public override SpellMissInfo RollHit(SpellSystem system, Unit caster, Unit target, SpellInfo spell)
+            => system.RollSpellReflect(caster, target, spell) ? SpellMissInfo.Reflect : SpellMissInfo.None;
+    }
+
+    [Fact]
     public void AnAuraAppliedInTheSecondBeforeTheStart_IsKept_AndInTheSameSecond_IsRemoved()
     {
         using var rig = new DuelRig();

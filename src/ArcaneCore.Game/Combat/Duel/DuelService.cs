@@ -116,7 +116,8 @@ public sealed partial class DuelService
     /// opponent, loser = this player) to this player's set; the flag object goes; the negative auras each side cast on the other since the start
     /// are removed; combo points aimed at the other player are cleared; arbiter and team are reset; both halves are marked finished (each owner
     /// drops its object on its next map update, so the rest of this tick still sees the duel, vmangos Player.cpp:1132-1137). Idempotent.
-    /// Limits: reflected holders are not removed (no reflected flag on this base), pets are not looked at (no pets).
+    /// A reflected holder goes too, whoever cast it (Player.cpp:6762-6768, 6781-6787, &gt; 1.6.1: "You are no longer able to kill players in
+    /// duels with reflected DoT spells"). Limits: pets are not looked at (no pets).
     /// </summary>
     public void Complete(Player player, DuelCompleteType type)
     {
@@ -235,7 +236,7 @@ public sealed partial class DuelService
         List<uint>? spellIds = null;
         foreach (SpellAuraHolder holder in spells.GetAuras(target))
         {
-            if (!holder.IsPositive && holder.CasterGuid == caster && holder.AppliedAtUnixSeconds >= since)
+            if (!holder.IsPositive && (holder.CasterGuid == caster || holder.IsReflected) && holder.AppliedAtUnixSeconds >= since)
             {
                 (spellIds ??= []).Add(holder.Spell.Id);
             }
