@@ -11,7 +11,7 @@ immutable content, retained-write persistence) wins where they differ.
 | Behaviour | Where | Reference |
 |---|---|---|
 | `LootService.Conditions` is wired to the `ConditionFeature` by the world daemon: `IsSatisfied(conditionId, player, source: null)`. Resolved at use time (the conditions feature attaches first, by type-name order, but may rebuild its evaluator later and forwards to the current one); without the feature every conditioned row fails closed, like a missing `conditions` row in cmangos | `World/GameObjects/GameObjectLootFeature.LootConditions` | `Object/LootMgr.cpp:505` (`LootItem::AllowedForPlayer`: `IsPlayerMeetToCondition(conditionId, player, map, lootTarget, CONDITION_FROM_LOOT)`) |
-| A conditioned row is generated when any recipient of the loot satisfies it (the L4-merged generation rule, unchanged; this lane only connects the evaluator) | `Loot/LootService.Generate` | `LootMgr.cpp:505`, `:798` (`FillNonQuestNonFFAConditionalLoot`) |
+| A conditioned row is decided per recipient: the item is restricted to the recipients who meet its condition and every reference-row condition above it, and skipped when nobody does (per-player rule from the loot-templates fidelity lane, merged 2026-10-07; this lane connects the evaluator) | `Loot/LootService.Generate` | `LootMgr.cpp:505`, `:798` (`FillNonQuestNonFFAConditionalLoot`) |
 | `gameobject_template.mingold` and `maxgold` are imported (cmangos classic-db and vmangos layouts; absent columns read 0), stored in two additive columns and exposed as `GameObjectTemplate.MinGold/MaxGold` | `Data/World/GameObjects/GameObjectTemplateGoldDataModule`, `GameObjectLootDumpImporter.ReadTemplate`, `EfGameObjectDataStore`, `Kernel/WorldData/GameObjects/GameObjectTemplate` | `Object/GameObject.h:415-416` (`GameObjectInfo::MinMoneyLoot/MaxMoneyLoot`, the two fields after `data[24]`; the template load format in `Server/SQLStorages.cpp:87` has 33 fields: 7 + 24 data + 2 gold) |
 | A chest's loot carries money rolled from the template range with the creature money rule (`LootMoneyRules.Generate`: nothing when max is 0, max when max <= min, the 8-bit shifted roll above 32700, `Loot:MoneyRate` applied, clamped to `MAX_MONEY_AMOUNT`). Only an object with a loot id pays: the reference breaks out before `generateMoneyLoot` without one | `Loot/LootMoneyRules.GenerateForGameObject`, `LootService.OpenGameObject` | `Object/PlayerLoot.cpp:222-229` |
 | Chest money shows in SMSG_LOOT_RESPONSE, is taken with CMSG_LOOT_MONEY (SMSG_LOOT_CLEAR_MONEY to the viewers) and keeps the chest from being looted out until taken (vmangos `Loot::isLooted` counts gold) | `LootService.TakeMoney`, `LootBag.IsEmpty` | `WorldHandlers/LootHandler.cpp:259-390` |
@@ -35,11 +35,10 @@ fails locally until then.
 
 ## Known gaps
 
-* **Group visibility of conditioned rows.** The reference decides the condition per viewer (`AllowedForPlayer`), so a
-  grouped player who fails it does not see the item; ArcaneCore generates the row when any recipient meets it and then
-  shows it to every recipient (`LootService.Generate`, L4 code, not touched by this lane). Solo loot behaves exactly like
-  the reference. The condition is evaluated without the loot source (`Conditions` is `Func<Player, uint, bool>`), so
-  source-side condition types (area of the chest, creature-side checks) read "no source" and fail closed.
+* **Loot source not passed to conditions.** The condition is evaluated per viewer, as the reference's `AllowedForPlayer`
+  does (closed by the loot-templates fidelity lane at the 2026-10-07 integration: `LootItem.AllowedLooters`), but without
+  the loot source (`Conditions` is `Func<Player, uint, bool>`), so source-side condition types (area of the chest,
+  creature-side checks) read "no source" and fail closed.
 * **Durable instance chests pay nothing.** The chest record stored with the instance save (`loot_state`, characters
   schema, `LootStateDataModule`, outside this lane) has no money column and `LootBag.ToRecord` refuses a bag with gold, so
   `LootService.OpenDurableGameObject` generates no money even when the template names a range. Adding `gold` to the

@@ -103,7 +103,7 @@ public sealed partial class LootService : IViewerFieldFilter
     /// <summary>
     /// Evaluates a loot row's condition_id for one recipient (the world daemon wires the conditions feature here,
     /// <c>GameObjectLootFeature</c>); null (no conditions area) skips conditioned rows, as a missing row does in cmangos.
-    /// A conditioned row is generated when any recipient satisfies it (see docs/areas/loot-conditions-chest-gold.md).
+    /// A conditioned item is restricted to the recipients who satisfy it (see docs/areas/loot-conditions-chest-gold.md).
     /// </summary>
     public Func<Player, uint, bool>? Conditions { get; set; }
 

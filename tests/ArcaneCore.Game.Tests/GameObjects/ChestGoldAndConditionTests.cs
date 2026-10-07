@@ -225,7 +225,7 @@ public sealed class ChestGoldAndConditionTests
     }
 
     [Fact]
-    public void ConditionedRow_InAGroup_IsGeneratedWhenAnyRecipientMeetsIt_AndSharedWithAll()
+    public void ConditionedRow_InAGroup_IsGeneratedWhenAnyRecipientMeetsIt_AndOnlyThoseRecipientsMayLootIt()
     {
         Rig rig = CreateRig([GoSpawn(1, FreeChestEntry, 3, 0)]);
         (Player alice, FakeSession aliceSession) = rig.Join(1);
@@ -235,7 +235,9 @@ public sealed class ChestGoldAndConditionTests
 
         aliceSession.Clear();
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(alice, rig.Single(FreeChestEntry).Guid));
-        // Recorded deviation (docs/areas/loot-conditions-chest-gold.md): the row drops because bob meets it, and alice sees it too.
-        Assert.Equal([ItemTestData.ToughJerky, Hide], LootResponse(aliceSession).Items.Select(i => i.ItemId).Order());
+        // The row drops because bob meets it, but it is decided per viewer (vmangos LootItem::AllowedForPlayer): alice does not see it.
+        Assert.Equal([ItemTestData.ToughJerky], LootResponse(aliceSession).Items.Select(i => i.ItemId).Order());
+        LootItem hide = Assert.Single(rig.Loot.FindLoot(rig.Single(FreeChestEntry).Guid)!.Items, i => i.ItemId == Hide);
+        Assert.Equal([bob.Guid], hide.AllowedLooters);
     }
 }
