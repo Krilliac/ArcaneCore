@@ -301,7 +301,11 @@ public sealed partial class EconomyFeature
 
         long now = Now;
         MailRecord updated = mail with { ItemGuid = 0, ItemEntry = 0, Cod = 0 };
-        var changes = new List<EconomyChange> { new UpdateMail(mail, updated), new ReleaseFromEscrow(IdOf(player), item.Guid) };
+        // An item merged whole into the receiver's stacks ends (vmangos _StoreItem deletes it); otherwise the instance itself arrives.
+        EconomyChange arrival = stage!.MergedItemGuids.Contains(item.Guid)
+            ? new DeleteEscrowItem(item.Guid)
+            : new ReleaseFromEscrow(IdOf(player), item.Guid);
+        var changes = new List<EconomyChange> { new UpdateMail(mail, updated), arrival };
         MailView? payment = null;
         if (mail.Cod > 0 && mail.MessageType == MailMessageType.Normal && CharacterExists((int)mail.SenderId))
         {

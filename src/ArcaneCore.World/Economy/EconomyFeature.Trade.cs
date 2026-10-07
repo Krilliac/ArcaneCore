@@ -129,7 +129,8 @@ public sealed partial class EconomyFeature
 
         Item? item = player.Inventory.GetItem(bag, slot);
         TradeSide mine = trade.SideOf(player);
-        if (item is null || mine.SlotOf(item.Guid) >= 0
+        // vmangos TradeHandler.cpp:708-713: a bank position is refused for every slot, the non-traded one included.
+        if (item is null || mine.SlotOf(item.Guid) >= 0 || InventorySlots.IsBankPos(bag, slot)
             || (tradeSlot != TradeRules.NonTradedSlot && player.Inventory.CanBeTraded(item) != InventoryResult.Ok))
         {
             CancelTrade(player, TradeStatus.TradeCanceled);
@@ -374,7 +375,7 @@ public sealed partial class EconomyFeature
     private TradeSession? OpenTradeOf(Player player)
         => _trades.GetValueOrDefault(player) is { Opened: true, Settling: false } trade ? trade : null;
 
-    /// <summary>Every offered item is still carried, unmoved in identity and tradable (slot 6 only needs to exist).</summary>
+    /// <summary>Every offered item is still carried, unmoved in identity and tradable (slot 6 only needs to exist outside the bank).</summary>
     private static bool OffersStillValid(TradeSide side)
     {
         for (int slot = 0; slot < TradeRules.SlotCount; slot++)
@@ -385,7 +386,7 @@ public sealed partial class EconomyFeature
                 continue;
             }
 
-            if (side.Player.Inventory.GetItemByGuid(guid) is not { } item
+            if (side.Player.Inventory.GetItemByGuid(guid) is not { } item || InventorySlots.IsBankPos(item.BagSlot, item.Slot)
                 || (slot != TradeRules.NonTradedSlot && side.Player.Inventory.CanBeTraded(item) != InventoryResult.Ok))
             {
                 return false;

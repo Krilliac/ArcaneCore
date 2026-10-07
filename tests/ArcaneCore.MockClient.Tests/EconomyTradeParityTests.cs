@@ -1,11 +1,16 @@
 using System.Text;
+using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.MockClient.Hosting;
 using ArcaneCore.MockClient.Protocol;
 using ArcaneCore.MockClient.Scenarios;
 using ArcaneCore.Protocol;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static ArcaneCore.MockClient.Tests.EconomyMailSendParityTests;
 
@@ -113,6 +118,86 @@ public sealed class EconomyTradeParityTests
         Assert.DoesNotContain("S12", receiver.Concat(sender)); // no CLOSE_WINDOW
         Assert.Equal("S7", receiver[^1]);
         Assert.Equal("S7", sender[^1]);
+    }
+
+    [Fact]
+    public async Task A_traded_stack_merges_into_the_receivers_stack_when_no_slot_is_free()
+    {
+        // vmangos trade stores the received items with CanStoreItems/StoreItem (TradeHandler.cpp), which fill room in existing
+        // stacks: full bags with stack room take the stack, and the traded instance ends inside the receiver's stack.
+        const uint Arrow = 992801;
+        const uint Filler = 992802;
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        (Recorder a, Recorder b) = await OpenTradeAsync(rig);
+        (byte bag, byte slot, uint offeredGuid, uint stackGuid) = await rig.Server.World.InvokeAsync(() =>
+        {
+            Player sender = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!;
+            Player receiver = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.ReceiverGuid))!;
+            IEnumerable<ArcaneCore.Kernel.Items.ItemTemplate> known = sender.Inventory.Templates is ItemTemplateStore store ? store.All : [];
+            var templates = new ItemTemplateStore([.. known,
+                new ArcaneCore.Kernel.Items.ItemTemplate { Entry = Arrow, Class = 0, Stackable = 20 },
+                new ArcaneCore.Kernel.Items.ItemTemplate { Entry = Filler, Class = 0, Stackable = 1 }]);
+            sender.Inventory.Templates = templates;
+            receiver.Inventory.Templates = templates;
+            Assert.Equal(InventoryResult.Ok, sender.Inventory.AddItem(Arrow, 5, out Item? offered));
+            Assert.Equal(InventoryResult.Ok, receiver.Inventory.AddItem(Arrow, 10, out Item? stack));
+            while (receiver.Inventory.AddItem(Filler, 1, out _) == InventoryResult.Ok)
+            {
+            }
+
+            return (offered!.BagSlot, offered.Slot, offered.Guid.Low, stack!.Guid.Low);
+        }).WaitAsync(rig.Token);
+        await a.SendAsync(WorldOpcode.CmsgSetTradeItem, [0, bag, slot]);
+        await b.WaitForAsync(seen => seen.Contains("EXT"));
+        rig.Clock.Advance(TimeSpan.FromSeconds(2));
+        await a.SendAsync(WorldOpcode.CmsgAcceptTrade, []);
+        await b.WaitForAsync(seen => seen.Contains("S4"));
+        await b.SendAsync(WorldOpcode.CmsgAcceptTrade, []);
+        await a.WaitForAsync(seen => seen.Contains("S8"));            // TRADE_COMPLETE after the commit
+
+        await rig.Server.World.InvokeAsync(() =>
+        {
+            Player sender = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!;
+            Player receiver = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.ReceiverGuid))!;
+            Assert.Equal(15u, receiver.Inventory.GetItemByGuid(ObjectGuid.Item(stackGuid))!.Count);
+            Assert.Null(receiver.Inventory.GetItemByGuid(ObjectGuid.Item(offeredGuid)));
+            Assert.Null(sender.Inventory.GetItemByGuid(ObjectGuid.Item(offeredGuid)));
+            Assert.Equal(0u, sender.Inventory.GetItemCount(Arrow));
+            return true;
+        }).WaitAsync(rig.Token);
+
+        await using AsyncServiceScope scope = rig.Server.Services.CreateAsyncScope();
+        CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        IReadOnlyList<ArcaneCore.Kernel.Items.InventoryItemData> stored = await new EfItemStore(db).GetInventoryAsync((int)rig.ReceiverGuid, rig.Token);
+        Assert.Equal(15u, stored.Single(row => row.Item.Guid == stackGuid).Item.Count);
+        Assert.DoesNotContain(stored, row => row.Item.Guid == offeredGuid);
+        Assert.DoesNotContain(await new EfItemStore(db).GetInventoryAsync((int)rig.SenderGuid, rig.Token), row => row.Item.Guid == offeredGuid);
+        Assert.False(await db.Set<ItemInstanceRow>().AnyAsync(row => row.Guid == offeredGuid, rig.Token));
+    }
+
+    [Fact]
+    public async Task A_banked_item_offered_in_the_non_traded_slot_cancels_the_trade()
+    {
+        // vmangos HandleSetTradeItemOpcode (TradeHandler.cpp:708-713) refuses a bank position for every trade slot,
+        // the non-traded slot 6 included (only CanBeTraded is skipped for that slot).
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        (Recorder a, Recorder b) = await OpenTradeAsync(rig);
+        (byte bag, byte slot) = await rig.Server.World.InvokeAsync(() =>
+        {
+            Player sender = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!;
+            Assert.Equal(InventoryResult.Ok, sender.Inventory.AddItem(SyntheticArcaneServer.FixedRewardItem, 1, out Item? banked));
+            sender.Inventory.CanUseBank = () => true;
+            sender.Inventory.AutoBankItem(banked!.BagSlot, banked.Slot);
+            sender.Inventory.CanUseBank = null;
+            Assert.True(InventorySlots.IsBankPos(banked.BagSlot, banked.Slot));
+            return (banked.BagSlot, banked.Slot);
+        }).WaitAsync(rig.Token);
+        await a.SendAsync(WorldOpcode.CmsgSetTradeItem, [TradeRules.NonTradedSlot, bag, slot]);
+        await a.SendAsync(WorldOpcode.CmsgCancelTrade, []);
+
+        // Refused: the first packet either side sees is TRADE_CANCELED (no BACK_TO_TRADE, no trader view of the item).
+        Assert.Empty(await a.UntilCanceledAsync());
+        Assert.Empty(await b.UntilCanceledAsync());
     }
 
     private static async Task<(Recorder Sender, Recorder Receiver)> OpenTradeAsync(Rig rig)

@@ -205,6 +205,14 @@ public static class AuctionHouseRules
         float cut = (float)((ulong)house.CutPercent * bid) * rate / 100.0f;
         return cut >= uint.MaxValue ? uint.MaxValue : cut <= 0f ? 0u : (uint)cut;
     }
+
+    /// <summary>
+    /// The successful-sale letter's money: bid + deposit − cut (vmangos AuctionHouseMgr.cpp:226), capped at the money limit. A cut
+    /// above bid + deposit (a house row over 100%, or a large Rate.Auction.Cut) pays nothing; vmangos' uint32 subtraction wraps there.
+    /// </summary>
+    public static uint Proceeds(uint bid, uint deposit, uint cut)
+        => (uint)Math.Clamp((long)bid + deposit - cut, 0, EconomyOptions.MaxMoney);
+
     /// <summary>vmangos GetAuctionOutBid: 5% of the current bid in whole percents, at least 1 copper.</summary>
     public static uint OutBid(uint bid) => Math.Max(bid / 100 * 5, 1);
 
@@ -400,9 +408,13 @@ public static class MailRules
         ExpireTime = now + deliverDelaySeconds + (options.MailExpireDays * SecondsPerDay),
     };
 
-    /// <summary>Whether the letter can be returned to a player (a player's unreturned letter).</summary>
+    /// <summary>
+    /// Whether the letter can be returned to a player: a player's letter that is neither already returned nor a COD payment. The
+    /// payment's buyer already holds the item, so its gold never goes back (the same letters <see cref="ReturnsOnExpiry"/> deletes,
+    /// vmangos ObjectMgr.cpp:6999).
+    /// </summary>
     public static bool CanReturn(MailRecord mail) => mail.MessageType == MailMessageType.Normal
-        && (mail.Checked & MailCheckMask.Returned) == 0 && mail.SenderId != 0;
+        && (mail.Checked & (MailCheckMask.Returned | MailCheckMask.CodPayment)) == 0 && mail.SenderId != 0;
 
     /// <summary>
     /// Whether an expired letter goes back to its sender rather than being deleted. Only player letters that are not

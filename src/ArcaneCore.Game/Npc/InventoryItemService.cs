@@ -56,7 +56,9 @@ public sealed class InventoryItemService(
 
     public ItemSale SellToVendor(Player player, ObjectGuid vendor, ObjectGuid item, byte count)
     {
-        VendorSellError error = player.Inventory.SellItem(item, count, BuybackTimestamp(player), out uint money);
+        // The payout is capped at the wallet's room (vmangos ModifyMoney clamps at MAX_MONEY_AMOUNT) so buyback costs what was paid.
+        uint room = QuestNpcServices.MaxMoneyAmount - Math.Min(player.Money, QuestNpcServices.MaxMoneyAmount);
+        VendorSellError error = player.Inventory.SellItem(item, count, BuybackTimestamp(player), repairCosts, room, out uint money);
         return error switch
         {
             VendorSellError.None => ItemSale.Succeeded(money),

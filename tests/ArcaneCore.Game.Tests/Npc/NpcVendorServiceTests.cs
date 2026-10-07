@@ -176,6 +176,73 @@ public sealed class NpcVendorServiceTests
     }
 
     [Fact]
+    public void SellItem_SpentExpendableCharges_ScaleThePrice()
+    {
+        // vmangos HandleSellItemOpcode (ItemHandler.cpp:84-96): negative template charges make the price relative to
+        // the charges left; the buyback slot keeps the scaled price.
+        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        Item wand = kit.Give(Wand);
+        wand.SetInt32(UpdateFields.ItemFieldSpellCharges, -4);
+        kit.Services.SellItem(kit.Player, kit.Npc.Guid, wand.Guid, 0);
+        Assert.Equal(80u, kit.Player.Money);
+        Assert.Equal(80u, kit.Player.Inventory.GetBuybackPrice(InventorySlots.BuybackStart));
+    }
+
+    [Fact]
+    public void SellItem_LostDurability_SubtractsTheUndiscountedRepairCost()
+    {
+        // ItemHandler.cpp:98-138: uint32(lost × DurabilityCosts multiplier × DurabilityQuality factor) comes off the price.
+        using var kit = new NpcServiceKit(NpcFlags.Vendor, repair: Repair());
+        Item sword = kit.Give(Sword);
+        sword.Durability = 40; // 10 lost × 3 × 1.0 = 30
+        kit.Services.SellItem(kit.Player, kit.Npc.Guid, sword.Guid, 0);
+        Assert.Equal(220u, kit.Player.Money);
+        Assert.Equal(220u, kit.Player.Inventory.GetBuybackPrice(InventorySlots.BuybackStart));
+    }
+
+    [Fact]
+    public void SellItem_RepairCostAboveThePrice_SellsForOneCopper()
+    {
+        uint[] multipliers = new uint[RepairCostTable.MultiplierCount];
+        multipliers[7] = 100;
+        using var kit = new NpcServiceKit(NpcFlags.Vendor, repair: new RepairCostTable([(10u, multipliers)], [(6u, 1.0f)]));
+        Item sword = kit.Give(Sword);
+        sword.Durability = 40; // 10 lost × 100 = 1000 > 250: "starter items can cost more to repair than vendorprice"
+        kit.Services.SellItem(kit.Player, kit.Npc.Guid, sword.Guid, 0);
+        Assert.Equal(1u, kit.Player.Money);
+    }
+
+    [Fact]
+    public void SellItem_DamagedItemWithoutARepairCostRow_IsRefused()
+    {
+        // ItemHandler.cpp:106-121: no DurabilityCosts/DurabilityQuality row for a damaged item answers SELL_ERR_CANT_SELL_ITEM.
+        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        Item sword = kit.Give(Sword);
+        sword.Durability = 49;
+        kit.Session.Clear();
+        kit.Services.SellItem(kit.Player, kit.Npc.Guid, sword.Guid, 0);
+        Assert.Equal((byte)SellResult.CantSellItem, kit.Single(WorldOpcode.SmsgSellItem)[16]);
+        Assert.Equal(0u, kit.Player.Money);
+        Assert.Same(sword, kit.Player.Inventory.GetItemByGuid(sword.Guid));
+    }
+
+    [Fact]
+    public void SellItem_NearTheMoneyCap_BuybackCostsWhatWasActuallyPaid()
+    {
+        using var kit = new NpcServiceKit(NpcFlags.Vendor);
+        Item sword = kit.Give(Sword);
+        kit.Player.Money = QuestNpcServices.MaxMoneyAmount - 10;
+        kit.Services.SellItem(kit.Player, kit.Npc.Guid, sword.Guid, 0);
+        Assert.Equal(QuestNpcServices.MaxMoneyAmount, kit.Player.Money);
+        Assert.Equal(10u, kit.Player.Inventory.GetBuybackPrice(InventorySlots.BuybackStart));
+
+        kit.Player.Money = 100;
+        kit.Services.BuybackItem(kit.Player, kit.Npc.Guid, InventorySlots.BuybackStart);
+        Assert.Equal(90u, kit.Player.Money);
+        Assert.Same(sword, kit.Player.Inventory.GetItemByGuid(sword.Guid));
+    }
+
+    [Fact]
     public void SellItem_PartOfAStack_SplitsIt()
     {
         using var kit = new NpcServiceKit(NpcFlags.Vendor);

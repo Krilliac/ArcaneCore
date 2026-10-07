@@ -1,5 +1,7 @@
+using ArcaneCore.Game.Crafting.Enchanting;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Kernel.Crafting;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -145,6 +147,72 @@ public sealed class PlayerInventoryEconomyTests
         Item pants = inv.GetItemByGuid(ObjectGuid.Item(5000))!;
         Assert.Same(bag, pants.Container);
         Assert.Equal((InventorySlots.BagStart, (byte)0), (pants.BagSlot, pants.Slot));
+    }
+
+    [Fact]
+    public void Stage_MergesAnArrivingStackIntoRoomOfAnExistingOne_WhenNoSlotIsFree()
+    {
+        // vmangos CanStoreItem(NULL_BAG, NULL_SLOT, …, pItem) fills existing stacks before free slots and StoreItem
+        // merges the arriving instance away (Player.cpp _StoreItem); mail, trade and auction items take that path.
+        (Player player, _) = Loaded();
+        PlayerInventory inv = player.Inventory;
+        Item jerky = Give(inv, ToughJerky, 4);
+        for (int i = 1; i < 16; i++)
+        {
+            Give(inv, RecruitsShirt);
+        }
+
+        Assert.Equal(InventoryResult.Ok, inv.TryStageEconomyTransfer([], [Foreign(5000, ToughJerky, 3)], out EconomyInventoryStage? stage));
+        Assert.Equal([5000u], stage!.MergedItemGuids);
+        Assert.DoesNotContain(stage.After.Items, row => row.Item.Guid == 5000);
+        Assert.Equal(7u, stage.After.Items.Single(row => row.Item.Guid == jerky.Guid.Low).Item.Count);
+        Assert.Equal(4u, jerky.Count);
+
+        inv.ApplyEconomyTransfer(stage);
+        Assert.Equal(7u, jerky.Count);
+        Assert.Null(inv.GetItemByGuid(ObjectGuid.Item(5000)));
+        Assert.True(PlayerInventory.SameEconomySnapshot(stage.After, inv.CreateSnapshot()));
+
+        Assert.Equal(InventoryResult.InventoryFull, inv.TryStageEconomyTransfer([], [Foreign(5001, ToughJerky, 14)], out _));
+    }
+
+    [Fact]
+    public void Stage_FillsAnExistingStackFirst_ThenPlacesTheRestWithItsOwnGuid()
+    {
+        (Player player, _) = Loaded();
+        PlayerInventory inv = player.Inventory;
+        Item jerky = Give(inv, ToughJerky, 18);
+
+        Assert.Equal(InventoryResult.Ok, inv.TryStageEconomyTransfer([], [Foreign(5000, ToughJerky, 5)], out EconomyInventoryStage? stage));
+        Assert.Empty(stage!.MergedItemGuids);
+        inv.ApplyEconomyTransfer(stage);
+        Assert.Equal(20u, jerky.Count);
+        Item rest = inv.GetItemByGuid(ObjectGuid.Item(5000))!;
+        Assert.Equal((3u, 42u), (rest.Count, rest.ToData().Creator));
+        Assert.True(PlayerInventory.SameEconomySnapshot(stage.After, inv.CreateSnapshot()));
+    }
+
+    [Fact]
+    public void CanBeTraded_RefusesAnItemCarryingAnEnchantmentThatCanSoulbind()
+    {
+        // vmangos Item::CanBeTraded → IsBoundByEnchant (Item.cpp:950-973): any enchantment slot with ENCHANTMENT_CAN_SOULBOUND.
+        (Player player, _) = Loaded();
+        PlayerInventory inv = player.Inventory;
+        var catalog = new EnchantCatalog(
+        [
+            new SpellItemEnchantment(701, [5, 0, 0], [2, 0, 0], [4, 0, 0], "Plain", 0, 0),
+            new SpellItemEnchantment(702, [5, 0, 0], [2, 0, 0], [4, 0, 0], "Soulbound", 0, EnchantCatalog.CanSoulboundFlag),
+        ]);
+        player.AttachEnchantments(new PlayerEnchantments(player, catalog, null));
+        Item pants = Give(inv, RecruitsPants);
+        ItemEnchantments.Set(pants, EnchantSlots.Permanent, 701, 0, 0);
+        Assert.Equal(InventoryResult.Ok, inv.CanBeTraded(pants));
+
+        ItemEnchantments.Set(pants, EnchantSlots.Temporary, 702, 60_000, 0);
+        Assert.False(pants.IsSoulBound);
+        Assert.Equal(InventoryResult.CantDropSoulbound, inv.CanBeTraded(pants));
+        Assert.Equal(InventoryResult.CantDropSoulbound, inv.CanTransferOut(pants));
+        Assert.Equal(InventoryResult.CantDropSoulbound, inv.TryStageEconomyTransfer([pants.Guid], [], out _, trade: true));
     }
 
     [Fact]

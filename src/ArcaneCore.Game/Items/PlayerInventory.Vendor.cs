@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.Npc;
 
 namespace ArcaneCore.Game.Items;
 
@@ -43,11 +44,16 @@ public sealed partial class PlayerInventory
     /// The item half of vmangos HandleSellItemOpcode: the item must be the player's, carried
     /// (equipment, bags, backpack, keyring — never bank or buyback), not a non-empty bag, removable
     /// when worn, sellable (SellPrice &gt; 0); <paramref name="count"/> 0 sells the stack and more
-    /// than the stack is refused. A partial stack is split. The sold part moves to a buyback slot
-    /// priced SellPrice × count. <paramref name="money"/> is what the caller must pay out.
+    /// than the stack is refused. A partial stack is split. The price is SellPrice × count, scaled
+    /// by the expendable charges left and less the undiscounted repair cost of lost durability (at
+    /// least 1 copper; a damaged item without a DurabilityCosts/DurabilityQuality row cannot be
+    /// sold), then capped at <paramref name="maxPayout"/> (the wallet's room). The sold part moves
+    /// to a buyback slot priced at that amount. <paramref name="money"/> is what the caller must pay out.
     /// </summary>
-    public VendorSellError SellItem(ObjectGuid itemGuid, uint count, uint timestamp, out uint money)
+    public VendorSellError SellItem(ObjectGuid itemGuid, uint count, uint timestamp, RepairCostTable repairCosts, uint maxPayout,
+        out uint money)
     {
+        ArgumentNullException.ThrowIfNull(repairCosts);
         Player?.EnsureQuestSettlementMutationAllowed();
         money = 0;
         if (GetItemByGuid(itemGuid) is not { } item)
@@ -79,7 +85,14 @@ public sealed partial class PlayerInventory
         }
 
         ulong total = (ulong)item.Template.SellPrice * count;
-        money = total > uint.MaxValue ? uint.MaxValue : (uint)total;
+        uint price = total > uint.MaxValue ? uint.MaxValue : (uint)total;
+        if (!TryAdjustSellPrice(item, ref price, repairCosts))
+        {
+            return VendorSellError.CantSellItem;
+        }
+
+        // The wallet stops at the money cap, so the buyback slot is priced at what was actually paid.
+        money = Math.Min(price, maxPayout);
         Item sold;
         if (count < item.Count)
         {
@@ -95,6 +108,43 @@ public sealed partial class PlayerInventory
         ItemCountChanged?.Invoke(item.Entry, -(int)count);
         AddItemToBuybackSlot(sold, money, timestamp);
         return VendorSellError.None;
+    }
+
+    /// <summary>
+    /// vmangos HandleSellItemOpcode (ItemHandler.cpp:84-138): the first spell with expendable (negative) template charges scales
+    /// the price by the charges left; lost durability then takes uint32(lost × DurabilityCosts multiplier × DurabilityQuality
+    /// factor) off it (at least 1 copper of cost, and a cost above the price leaves 1 copper). False when a damaged item has no
+    /// cost row (vmangos answers SELL_ERR_CANT_SELL_ITEM).
+    /// </summary>
+    private static bool TryAdjustSellPrice(Item item, ref uint price, RepairCostTable repairCosts)
+    {
+        ItemTemplate template = item.Template;
+        for (int i = 0; i < Item.SpellChargeSlots && i < template.Spells.Count; i++)
+        {
+            ItemSpell spell = template.Spells[i];
+            if (spell.SpellId != 0 && spell.Charges < 0)
+            {
+                float multiplier = (float)item.GetInt32(UpdateFields.ItemFieldSpellCharges + i) / spell.Charges;
+                float scaled = price * multiplier;
+                price = scaled >= uint.MaxValue ? uint.MaxValue : scaled <= 0f ? 0u : (uint)scaled;
+                break;
+            }
+        }
+
+        uint max = item.MaxDurability;
+        if (max == 0 || item.Durability >= max)
+        {
+            return true;
+        }
+
+        if (!repairCosts.TryGetCost(template.Class, template.SubClass, template.ItemLevel, template.Quality, max - item.Durability, out uint cost))
+        {
+            return false;
+        }
+
+        cost = Math.Max(cost, 1u);
+        price = cost > price ? 1u : price - cost;
+        return true;
     }
 
     /// <summary>Where the buyback item of <paramref name="slot"/> would go (vmangos CanStoreItem(NULL_BAG, NULL_SLOT, …)).</summary>
