@@ -20,7 +20,9 @@ public sealed class InstanceEnterLimiter
     /// </summary>
     public bool CanEnter(int accountId, uint instanceId, int maxCount, long now)
     {
-        if (!_enterTimes.TryGetValue(accountId, out Dictionary<uint, long>? times) || times.ContainsKey(instanceId) || times.Count < maxCount)
+        // 0 is never an entered instance (Record refuses it), so asking for it never counts as a re-entry.
+        if (!_enterTimes.TryGetValue(accountId, out Dictionary<uint, long>? times)
+            || (instanceId != 0 && times.ContainsKey(instanceId)) || times.Count < maxCount)
         {
             return true;
         }
@@ -37,9 +39,17 @@ public sealed class InstanceEnterLimiter
         return false;
     }
 
-    /// <summary>Record an entry (vmangos <c>DungeonMap::Add</c> -> <c>AddInstanceEnterTime</c>, Map.cpp:2188).</summary>
+    /// <summary>
+    /// Record an entry (vmangos <c>DungeonMap::Add</c> -> <c>AddInstanceEnterTime</c>, Map.cpp:2188, always with the map's real
+    /// instance id). Id 0 only means "not created yet" and is ignored, so it can never become a free re-entry past the cap.
+    /// </summary>
     public void Record(int accountId, uint instanceId, long now)
     {
+        if (instanceId == 0)
+        {
+            return;
+        }
+
         if (!_enterTimes.TryGetValue(accountId, out Dictionary<uint, long>? times))
         {
             _enterTimes[accountId] = times = [];
