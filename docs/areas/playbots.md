@@ -24,6 +24,14 @@ behaviour is described in `docs/integration/playerbot-*.md`.
 By default a running bot is **autonomous**: each world tick `PlayerbotBrain` chooses quest,
 town, trainer, combat, loot and recovery goals within the shared per-tick action budget.
 
+Movement is separate from both: `PlayerbotMotion` advances every bot's current route every
+world tick (before any think, outside the action budget) and reports it the way a 1.12 client
+does — START, heartbeats every 500 ms and at turns, STOP — so observers see smooth running
+whatever the think interval. Brain, goals and scripted controllers only choose routes
+(`PlayerbotNavigation.TryPlan` / `TryAdvance`). It also gives up navigation loops. Details and
+the 2026-10-07 root causes: `docs/integration/playerbot-movement-and-tick-health.md`; whether
+real terrain/collision/navmesh data is needed: `docs/integration/maps-vmaps-mmaps.md`.
+
 In **scripted mode** an `IPlayerbotController` replaces the brain.
 `ManagedPlayerbotFeature.StartScriptedAsync(idOrName, controller)` starts a bot that way;
 `SetControllerAsync(botId, controller)` switches a running bot (null returns it to autonomous

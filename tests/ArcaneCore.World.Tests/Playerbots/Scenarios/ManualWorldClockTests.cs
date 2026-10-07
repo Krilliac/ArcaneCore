@@ -30,7 +30,9 @@ public sealed class ManualWorldClockTests
         await world.AdvanceClockAsync(175);
         Assert.Equal(start + 175, world.NowMs);
         Assert.Equal(175u, await world.InvokeAsync(() => (uint)diffs.Sum(d => (long)d)));
-        Assert.All(diffs, diff => Assert.True(diff <= 50));
+        // The world thread keeps appending (zero-diff command ticks): read the list there, not from the test thread.
+        uint[] seen = await world.InvokeAsync(() => diffs.ToArray());
+        Assert.All(seen, diff => Assert.True(diff <= 50));
     }
 
     [Fact]

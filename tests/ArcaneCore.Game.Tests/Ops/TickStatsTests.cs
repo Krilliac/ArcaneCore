@@ -175,4 +175,40 @@ public sealed class TickStatsTests
     [Fact]
     public void Percentile_NearestRank_RejectsEmptyInput()
         => Assert.Throws<ArgumentException>(() => TickStats.NearestRank([], 50));
+
+    [Fact]
+    public void P95_AndPhaseMeansAndMaxima_AreReported()
+    {
+        var stats = new TickStats(4096);
+        for (long us = 1; us <= 1000; us++)
+        {
+            stats.Record(us, 0, 1_000_000, 0, new TickPhases(us % 10, 2 * us, 5));
+        }
+
+        TickStatsSnapshot s = stats.Snapshot();
+        Assert.Equal(950, s.P95Micros);
+        Assert.Equal(4.5, s.Commands.MeanMicros, 6);
+        Assert.Equal(9, s.Commands.MaxMicros);
+        Assert.Equal(1001, s.Maps.MeanMicros, 6);
+        Assert.Equal(2000, s.Maps.MaxMicros);
+        Assert.Equal(new TickPhaseSummary(5, 5), s.Features);
+    }
+
+    [Fact]
+    public void FeatureMeans_AreSmoothedAndSlowestFirst()
+    {
+        var stats = new TickStats(16);
+        Assert.Empty(stats.Snapshot().FeatureMeans);
+        for (int i = 0; i < 500; i++)
+        {
+            stats.RecordFeature("Bots", 400);
+            stats.RecordFeature("Chat", 10);
+        }
+
+        stats.RecordFeature("Bots", 40_000); // one spike moves the smoothed mean a little, not to the spike
+        IReadOnlyList<(string Name, double MeanMicros)> means = stats.Snapshot().FeatureMeans;
+        Assert.Equal(["Bots", "Chat"], means.Select(m => m.Name));
+        Assert.InRange(means[0].MeanMicros, 1_100, 1_300);
+        Assert.Equal(10, means[1].MeanMicros, 6);
+    }
 }

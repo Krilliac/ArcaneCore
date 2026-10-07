@@ -67,7 +67,7 @@ public sealed class PlayerbotMovementLifecycleTests
     }
 
     [Fact]
-    public async Task TerminalStopRetriesAfterBudgetIsExhausted()
+    public async Task ArrivalStopIsSentEvenWithAnExhaustedActionBudget()
     {
         await using WorldTestHost host = WorldTestHost.Start();
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
@@ -77,18 +77,19 @@ public sealed class PlayerbotMovementLifecycleTests
             {
                 Player player = session.Player!;
                 WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
-                var options = new PlayerbotOptions { MoveSpeed = 4, MaxPathPoints = 8, MaxRouteYards = 8 };
+                var options = new PlayerbotOptions { MaxPathPoints = 8, MaxRouteYards = 8 };
                 Assert.True(PlayerbotNavigation.TryPlan(player, new(player.X + 2, player.Y, player.Z), options, out PlayerbotRoute? route));
                 session.ManagedBudget = new ManagedActionBudget(1);
                 Assert.True(PlayerbotNavigation.TryAdvance(session, route!, options, 500, host.World.NowMs));
-                session.ManagedBudget = new ManagedActionBudget(1);
+                Assert.True(player.Movement.HasFlag(MovementFlags.Forward));
+                // Half a second later the bot (7 yd/s) has arrived: the STOP goes out although no budget is left.
+                PlayerbotMotion.ElapseForTests(player, 500);
+                session.ManagedBudget = new ManagedActionBudget(0);
                 Assert.True(PlayerbotNavigation.TryAdvance(session, route!, options, 500, host.World.NowMs));
                 Assert.True(route!.Complete);
-                Assert.Equal(0, session.ManagedBudget.Remaining);
-                Assert.True(player.Movement.HasFlag(MovementFlags.Forward));
-                session.ManagedBudget = new ManagedActionBudget(1);
-                Assert.True(PlayerbotMovementControl.Update(session, player));
                 Assert.Equal(MovementFlags.None, player.Movement.Flags & MovementFlags.MaskMoving);
+                Assert.Equal(route.Points[^1].X, player.X, 2);
+                Assert.False(PlayerbotMovementControl.Update(session, player)); // nothing left to acknowledge
                 return true;
             });
         }
@@ -96,7 +97,7 @@ public sealed class PlayerbotMovementLifecycleTests
     }
 
     [Fact]
-    public async Task StopProjectsValidatedSegmentToLogicalCurrentTime()
+    public async Task StopLandsAtTheRoutePositionOfTheCurrentTime()
     {
         await using WorldTestHost host = WorldTestHost.Start();
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
@@ -107,18 +108,14 @@ public sealed class PlayerbotMovementLifecycleTests
                 Player player = session.Player!;
                 WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
                 float start = player.X;
-                MovementInfo moving = player.Movement;
-                moving.Flags |= MovementFlags.Forward;
-                var heartbeat = new PacketWriter();
-                moving.Write(heartbeat);
-                session.ManagedBudget = new ManagedActionBudget(1);
-                Assert.True(session.TryManagedAction(WorldOpcode.MsgMoveHeartbeat, heartbeat.ToArray()));
                 Assert.True(PlayerbotNavigation.TryTerrainRoute(new(start, player.Y, player.Z),
                     new(start + 7, player.Y, player.Z), new PlayerbotOptions(), (_, _, _) => 83.53f,
                     (_, _) => true, out PlayerbotRoute? route));
                 Assert.True(route!.Points.Count > 2);
-                PlayerbotMovementControl.Track(session, player, route, new(start, player.Y, player.Z), 1,
-                    7, unchecked(host.World.NowMs - 1000));
+                // The bot started running along the route a second ago; observers have been extrapolating since.
+                session.ManagedBudget = new ManagedActionBudget(1);
+                Assert.True(PlayerbotNavigation.TryAdvance(session, route, new PlayerbotOptions(), 500,
+                    unchecked(host.World.NowMs - 1000)));
                 session.ManagedBudget = new ManagedActionBudget(1);
                 Assert.True(PlayerbotMovementControl.Stop(session, player));
                 Assert.True(player.X > start + 6.5f);
@@ -148,17 +145,20 @@ public sealed class PlayerbotMovementLifecycleTests
             await host.OnWorldAsync(() =>
             {
                 Player player = mover.Player!;
-                var options = new PlayerbotOptions { MoveSpeed = 4, MaxPathPoints = 8, MaxRouteYards = 8 };
-                Assert.True(PlayerbotNavigation.TryPlan(player, new(player.X + 3, player.Y, player.Z), options,
+                var options = new PlayerbotOptions { MaxPathPoints = 8, MaxRouteYards = 8 };
+                Assert.True(PlayerbotNavigation.TryPlan(player, new(player.X + 5, player.Y, player.Z), options,
                     out PlayerbotRoute? route));
                 mover.ManagedBudget = new ManagedActionBudget(1);
                 Assert.True(PlayerbotNavigation.TryAdvance(mover, route!, options, 500, host.World.NowMs));
-                mover.ManagedBudget = new ManagedActionBudget(1);
-                Assert.True(PlayerbotNavigation.TryAdvance(mover, route!, options, 500, host.World.NowMs));
-                mover.ManagedBudget = new ManagedActionBudget(1);
-                Assert.True(PlayerbotNavigation.TryAdvance(mover, route!, options, 500, host.World.NowMs));
-                mover.ManagedBudget = new ManagedActionBudget(1);
-                Assert.True(PlayerbotMovementControl.Update(mover, player));
+                // 7 yd/s: 500 ms later a heartbeat reports 3.5 yd; 500 ms after that the bot has reached the
+                // 5-yard end and stops there.
+                for (int i = 0; i < 2; i++)
+                {
+                    PlayerbotMotion.ElapseForTests(player, 500);
+                    mover.ManagedBudget = new ManagedActionBudget(1);
+                    Assert.True(PlayerbotNavigation.TryAdvance(mover, route!, options, 500, host.World.NowMs));
+                }
+                Assert.True(route!.Complete);
                 return true;
             });
             ManagedSessionPacket start = Assert.Single(observer.DrainManagedPackets(WorldOpcode.MsgMoveStartForward));
@@ -167,7 +167,7 @@ public sealed class PlayerbotMovementLifecycleTests
             MovementInfo startInfo = MovementInfo.Read(ref startReader);
             Assert.True(startInfo.Flags.HasFlag(MovementFlags.Forward));
             IReadOnlyList<ManagedSessionPacket> heartbeats = observer.DrainManagedPackets(WorldOpcode.MsgMoveHeartbeat);
-            Assert.Equal(2, heartbeats.Count);
+            Assert.Single(heartbeats);
             ManagedSessionPacket heartbeat = heartbeats[^1];
             PacketReader heartbeatReader = new(heartbeat.Payload);
             Assert.Equal(mover.Player.Guid.Value, heartbeatReader.ReadPackedGuid());

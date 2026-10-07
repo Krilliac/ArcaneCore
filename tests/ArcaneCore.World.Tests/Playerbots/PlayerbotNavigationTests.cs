@@ -67,9 +67,9 @@ public sealed class PlayerbotNavigationTests
     [Theory]
     [InlineData(1f, 7f, 500u, 3.5f)]
     [InlineData(0.5f, 7f, 500u, 1.75f)]
-    [InlineData(1f, 7f, 8000u, 7f)]
-    [InlineData(1f, 2f, 500u, 1f)]
-    public async Task TerrainMovementHonorsSpeedAndElapsedCapUsingOneNormalHeartbeat(
+    [InlineData(1f, 7f, 8000u, 12f)] // arrives: the STOP lands on the 12-yard route end
+    [InlineData(1f, 2f, 500u, 1.25f)] // a cap below the run speed walks (walk speed 2.5)
+    public async Task TerrainMovementHonorsSpeedAndServerTimeUsingOneNormalHeartbeat(
         float rate, float configuredSpeed, uint elapsed, float expected)
     {
         await using WorldTestHost host = WorldTestHost.Start();
@@ -94,8 +94,10 @@ public sealed class PlayerbotNavigationTests
                 Assert.False(PlayerbotNavigation.TryAdvance(session, route!, options, elapsed, host.World.NowMs));
                 Assert.Equal(before, new Vector3(player.X, player.Y, player.Z));
                 Assert.Equal(1, route!.NextPoint);
+                // One server time base for START and the heartbeat: the real clock keeps running between calls.
+                uint startedAt = host.World.NowMs;
                 session.ManagedBudget = new ManagedActionBudget(1);
-                Assert.True(PlayerbotNavigation.TryAdvance(session, route, options, elapsed, host.World.NowMs));
+                Assert.True(PlayerbotNavigation.TryAdvance(session, route, options, elapsed, startedAt));
                 Assert.Equal(0, session.ManagedBudget.Remaining);
                 Assert.Equal(before, new Vector3(player.X, player.Y, player.Z));
                 Assert.True(player.Movement.HasFlag(MovementFlags.Forward));
@@ -103,9 +105,10 @@ public sealed class PlayerbotNavigationTests
                 // START establishes prediction at the current position. Only the
                 // following elapsed interval advances through an ordinary heartbeat.
                 session.ManagedBudget = new ManagedActionBudget(1);
+                Assert.Equal(configuredSpeed < 7f, player.Movement.HasFlag(MovementFlags.WalkMode));
                 Assert.True(PlayerbotNavigation.TryAdvance(session, route, options, elapsed,
-                    unchecked(host.World.NowMs + elapsed)));
-                Assert.Equal(0, session.ManagedBudget.Remaining);
+                    unchecked(startedAt + elapsed)));
+                Assert.Equal(1, session.ManagedBudget.Remaining); // reporting its own motion costs no action budget
                 Assert.InRange(player.X - before.X, expected - 0.02f, expected + 0.02f);
                 Assert.InRange(Vector3.Distance(before, new(player.X, player.Y, player.Z)), expected - 0.02f, expected + 0.02f);
                 // A one-yard budget can stop just short of the first waypoint because

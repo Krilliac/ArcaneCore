@@ -81,6 +81,7 @@ public sealed class PlayerbotQuestTravelPriorityTests
                     Assert.Equal(QuestTravelFixture.QuestId, brain.QuestId);
                     Assert.Null(player.Combat.Victim);
                     Assert.Equal(before, player.X);
+                    PlayerbotMotion.ElapseForTests(player, 500);
                     session.ManagedBudget = new ManagedActionBudget(1);
                     brain.Update(500);
                     Assert.NotEqual(before, player.X);

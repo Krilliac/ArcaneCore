@@ -44,6 +44,7 @@ public sealed class PlayerbotWorldDestinationsTests
                 Assert.Equal(2, pathfinder.Calls);
                 Assert.Equal(before, player.X);
                 Assert.Equal(6u, destinations.TargetEntry);
+                PlayerbotMotion.ElapseForTests(player, 500);
                 session.ManagedBudget = new ManagedActionBudget(1);
                 Assert.True(destinations.Update(player, 6, 500));
                 Assert.True(player.X < before);
@@ -77,13 +78,20 @@ public sealed class PlayerbotWorldDestinationsTests
                 Assert.True(destinations.Update(player, 6, 500));
                 Assert.Equal(start, player.X);
                 Assert.Equal(6u, destinations.TargetEntry);
+                PlayerbotMotion.ElapseForTests(player, 500);
                 session.ManagedBudget = new ManagedActionBudget(1);
                 Assert.True(destinations.Update(player, 6, 500));
                 Assert.True(player.X > start);
                 float east = player.X;
                 session.ManagedBudget = new ManagedActionBudget(1);
                 Assert.True(destinations.Update(player, 7, 500));
-                // Already moving: changing the objective redirects the next heartbeat.
+                // Already moving: changing the objective turns the bot at once (a heartbeat with the new
+                // orientation where it is), and it then runs toward the new objective.
+                Assert.Equal(east, player.X, 2);
+                Assert.True(MathF.Abs(player.Orientation - MathF.PI) < 0.01f);
+                PlayerbotMotion.ElapseForTests(player, 500);
+                session.ManagedBudget = new ManagedActionBudget(1);
+                Assert.True(destinations.Update(player, 7, 500));
                 Assert.True(player.X < east);
                 Assert.Equal(7u, destinations.TargetEntry);
                 Assert.DoesNotContain(player.VisibleObjects, guid => player.Map!.FindObject(guid) is Creature c && c.Entry is 6 or 7);

@@ -44,7 +44,12 @@ internal static class PlayerbotNavigation
         if (options.AllowedMaps is { Length: > 0 } maps && !maps.Contains(map.MapId))
             return false;
 
-        Vector3 start = new(player.X, player.Y, player.Z);
+        // A destination given up after a loop is refused for a while, so the goal picks another one.
+        if (PlayerbotMotion.IsBlacklisted(player, destination))
+            return false;
+
+        // A moving bot plans from where it is now, not from its last heartbeat.
+        Vector3 start = PlayerbotMotion.CurrentPosition(player);
         PathResult path = map.Collision.FindPath(start, destination,
             new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints), Mover = PathMover.Player,
                 ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = false, MaxSearchNodes = 512 });
@@ -82,7 +87,12 @@ internal static class PlayerbotNavigation
         return true;
     }
 
-    /// <summary>Spend a bounded movement distance and relay one authoritative heartbeat.</summary>
+    /// <summary>
+    /// Follow <paramref name="route"/> this think (<see cref="PlayerbotMotion.Follow"/>): start, switch or keep moving.
+    /// The motion itself advances every world tick, so the distance does not depend on <paramref name="elapsedMs"/>;
+    /// <paramref name="serverTimeMs"/> is the current server time. False when the route is finished or cannot be
+    /// followed (the caller drops it).
+    /// </summary>
     internal static bool TryAdvance(WorldSession session, PlayerbotRoute route, PlayerbotOptions options,
         uint elapsedMs, uint serverTimeMs)
     {
@@ -98,64 +108,7 @@ internal static class PlayerbotNavigation
         if (player.StandState != StandState.Stand)
             return session.TryManagedAction(WorldOpcode.CmsgStandstatechange, BitConverter.GetBytes(0u));
         if (options.AllowedMaps is { Length: > 0 } maps && !maps.Contains(map.MapId)) return false;
-
-        Vector3 current = new(player.X, player.Y, player.Z);
-        float speed = MathF.Min(options.MoveSpeed, UnitSpeed.Get(player, MoveType.Run));
-        if (!float.IsFinite(speed) || speed <= 0 || (player.Movement.Flags & (MovementFlags.Root | MovementFlags.Jumping)) != 0)
-        {
-            PlayerbotMovementControl.Stop(session, player);
-            return false;
-        }
-        if ((player.Movement.Flags & MovementFlags.MaskMoving) == 0)
-        {
-            float startDistance = speed * Math.Min(elapsedMs, 1000u) / 1000f;
-            if (!TryStepOnMap(route, new(player.X, player.Y, player.Z), MathF.Max(startDistance, 0.1f), map,
-                    out _, out _))
-            {
-                PlayerbotMovementControl.Stop(session, player);
-                return false;
-            }
-            MovementInfo start = player.Movement;
-            start.Flags &= ~(MovementFlags.MaskMoving | MovementFlags.SplineEnabled);
-            start.Flags |= MovementFlags.Forward;
-            start.Time = serverTimeMs;
-            Vector3 toward = route.Points[route.NextPoint] - new Vector3(player.X, player.Y, player.Z);
-            if (toward.LengthSquared() > 0.001f)
-                start.Orientation = MathF.Atan2(toward.Y, toward.X);
-            start.CorrectData();
-            var startWriter = new PacketWriter(64);
-            start.Write(startWriter);
-            bool sent = session.TryManagedAction(WorldOpcode.MsgMoveStartForward, startWriter.ToArray());
-            if (sent)
-                PlayerbotMovementControl.Track(session, player, route, new(player.X, player.Y, player.Z), route.NextPoint, speed, serverTimeMs);
-            return sent;
-        }
-        float distance = speed * Math.Min(elapsedMs, 1000u) / 1000f;
-        if (!TryStepOnMap(route, current, distance, map, out Vector3 next, out int nextPoint))
-        {
-            PlayerbotMovementControl.Stop(session, player);
-            return false;
-        }
-
-        MovementInfo movement = player.Movement;
-        movement.Flags &= ~(MovementFlags.MaskMoving | MovementFlags.SplineEnabled);
-        movement.Flags |= MovementFlags.Forward;
-        movement.Time = serverTimeMs;
-        movement.X = next.X;
-        movement.Y = next.Y;
-        movement.Z = next.Z;
-        movement.Orientation = MathF.Atan2(next.Y - current.Y, next.X - current.X);
-        movement.CorrectData();
-        var writer = new PacketWriter(64);
-        movement.Write(writer);
-        if (!session.TryManagedAction(WorldOpcode.MsgMoveHeartbeat, writer.ToArray()))
-            return false;
-        if (Vector3.Distance(new Vector3(player.X, player.Y, player.Z), next) > 0.5f) return false;
-        route.NextPoint = nextPoint;
-        PlayerbotMovementControl.Track(session, player, route, next, route.NextPoint, speed, serverTimeMs);
-        if (route.Complete)
-            PlayerbotMovementControl.Stop(session, player);
-        return true;
+        return PlayerbotMotion.Follow(session, player, route, options, serverTimeMs);
     }
 
     /// <summary>Propose a step without changing the route; the caller commits after normal admission.</summary>

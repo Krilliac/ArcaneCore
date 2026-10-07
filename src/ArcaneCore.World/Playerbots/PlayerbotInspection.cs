@@ -34,6 +34,10 @@ public sealed record PlayerbotInspection(string Name, PlayerbotGoalKind Goal, ui
     public MovementFlags MovementFlags { get; init; }
     public StandState StandState { get; init; }
     public uint MovementTimeMs { get; init; }
+
+    /// <summary>Whether the bot is following a route (PlayerbotMotion), and how many loops it gave up so far.</summary>
+    public bool Following { get; init; }
+    public int LoopsGivenUp { get; init; }
 }
 
 internal static class PlayerbotInspector
@@ -83,6 +87,8 @@ internal static class PlayerbotInspector
             MovementFlags = player.Movement.Flags,
             StandState = player.StandState,
             MovementTimeMs = player.Movement.Time,
+            Following = PlayerbotMotion.IsActive(player),
+            LoopsGivenUp = PlayerbotMotion.LoopCount(player),
         };
     }
 
