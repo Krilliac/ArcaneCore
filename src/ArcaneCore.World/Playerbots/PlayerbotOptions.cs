@@ -95,11 +95,12 @@ public sealed class PlayerbotOptions
 /// </summary>
 public sealed class PlayerbotScenarioOptions
 {
+    /// <summary>Let an Administrator run registered bot scenarios against the live world (off by default).</summary>
     public bool Enabled { get; set; }
 
-    /// <summary>Wall-clock bound of one scenario run.</summary>
+    /// <summary>Wall-clock bound of one scenario run in seconds (5..600).</summary>
     public int MaxDurationSeconds { get; set; } = 120;
 
-    /// <summary>Default bound of one WaitUntil step.</summary>
+    /// <summary>Default bound of one WaitUntil step in seconds (1..300).</summary>
     public int StepTimeoutSeconds { get; set; } = 20;
 }
