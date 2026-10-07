@@ -54,10 +54,22 @@ loot, active casts and combat linger retire movement rather than leaving observe
 forward travel. Taking a town or quest goal retires a previous idle combat route.
 
 `.server info` retains version, population and uptime, and adds target/observed tick rate,
-frame timing, tick-work mean/p99/max, distinct frame/work overrun counts, command backlog,
-process working set, managed heap, allocation per tick and managed-bot count. Rates come from
-measured frame intervals, not inverse simulation-work duration. Empty samples are unavailable.
-`.playerbot inspect` also exposes movement flags, stand state and movement timestamp.
+frame timing, tick-work mean/p95/p99/max, distinct frame/work overrun counts, command backlog,
+process working set, managed heap, allocation per tick and managed-bot count, then three more lines:
+the tick schedule (`late=` ticks that started after their due time, `skipped=` due starts given up
+after a stall), the mean/max time of each tick phase (posted commands, map updates, world features)
+over the stats window, and the three slowest world features (smoothed per-tick mean, e.g.
+`ManagedPlayerbotFeature`). Rates come from measured frame intervals, not inverse simulation-work
+duration. Empty samples are unavailable. `.playerbot inspect` also exposes movement flags, stand
+state, movement timestamp, whether the bot is following a route and how many loops it gave up.
+
+The world loop schedules ticks on a drift-compensated fixed cadence (`WorldTickScheduler`): tick k is
+due at start + k × `TickIntervalMs`, so a wait that oversleeps (Windows timer waits wake in ~15.6 ms
+steps; a 47 ms wait often took 62, i.e. 16 instead of 20 ticks/s) is made up by the next shorter
+wait. A loop that falls a whole interval or more behind (a long tick, GC or paging stall) neither
+bursts back-to-back catch-up ticks nor accumulates debt: it skips the missed starts, counts them, and
+restarts the cadence from now. Each tick still receives its real elapsed time as its diff (variable
+step, as vmangos), so skipping starts loses no simulated time; no spiral of death is possible.
 
 The world loop preserves actual elapsed time. Its posted-command phase is bounded by
 `World:MaxCommandsPerTick` (default1024) and `World:CommandTimeBudgetMs` (default5; zero disables

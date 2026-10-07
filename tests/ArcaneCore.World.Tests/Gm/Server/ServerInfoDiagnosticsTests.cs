@@ -1,4 +1,5 @@
 using System.Globalization;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.World.Commands;
 using Xunit;
 
@@ -60,5 +61,37 @@ public sealed class ServerInfoDiagnosticsTests
         Assert.Contains("observed: unavailable", lines[0]);
         Assert.Contains("mean=unavailable", lines[1]);
         Assert.Contains("allocatedPerTick=unavailable", lines[3]);
+    }
+
+    [Fact]
+    public void FormatShowsP95ScheduleHealthPhasesAndSlowestFeatures()
+    {
+        ServerInfoDiagnosticsValues values = new(50, 20, 19.9, 64, 50_100, 1_000, 4_000, 9_000, 2, 1, 0, 1, 2, 10, 4)
+        {
+            P95TickMicros = 3_250,
+            LateTicks = 12,
+            SkippedTicks = 7,
+            Commands = new TickPhaseSummary(120, 900),
+            Maps = new TickPhaseSummary(700, 8_000),
+            Features = new TickPhaseSummary(180, 1_500),
+            SlowestFeatures = [("ManagedPlayerbotFeature", 150), ("ChatFeature", 20)],
+        };
+        string[] lines = [.. ServerInfoDiagnostics.Format(values)];
+        Assert.Contains("p95=3.25 ms", lines[2]);
+        Assert.Contains("p99=4.00 ms", lines[2]);
+        Assert.Contains("late=12 skipped=7", lines[5]);
+        Assert.Contains("commands=0.12 ms/0.90 ms maps=0.70 ms/8.00 ms features=0.18 ms/1.50 ms", lines[6]);
+        Assert.Equal("Slowest features: ManagedPlayerbotFeature 0.15 ms, ChatFeature 0.02 ms", lines[7]);
+        Assert.All(lines, line => Assert.InRange(line.Length, 1, 240));
+    }
+
+    [Fact]
+    public void FormatWithoutPhaseSamplesSaysUnavailable()
+    {
+        ServerInfoDiagnosticsValues values = new(50, 20, null, 0, null, null, null, null, null, null, 0, 1, 2, null, null);
+        string[] lines = [.. ServerInfoDiagnostics.Format(values)];
+        Assert.Contains("p95=unavailable", lines[2]);
+        Assert.Contains("commands=unavailable", lines[6]);
+        Assert.Equal("Slowest features: unavailable", lines[7]);
     }
 }

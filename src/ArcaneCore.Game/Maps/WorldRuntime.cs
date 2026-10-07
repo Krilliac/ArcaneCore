@@ -52,6 +52,9 @@ public sealed class WorldRuntime : IDisposable
     /// </summary>
     public TickStats Stats { get; } = new();
 
+    /// <summary>The world thread's tick schedule (late and skipped starts; docs/integration/playerbot-movement-and-tick-health.md).</summary>
+    public WorldTickScheduler Scheduler { get; private set; } = new(50);
+
     /// <summary>
     /// Milliseconds since the world started, wrapping like vmangos WorldTimer::getMSTime.
     /// This is the clock movement timestamps and create blocks carry.
@@ -419,7 +422,9 @@ public sealed class WorldRuntime : IDisposable
             Interlocked.Add(ref _manualNowMs, diffMs);
         }
 
+        long phaseStart = Stopwatch.GetTimestamp();
         RunCommands();
+        long commandsEnd = Stopwatch.GetTimestamp();
 
         // A snapshot: a map system may create another map (an instance) during its update.
         foreach (Map map in _maps.Values.ToArray())
@@ -441,7 +446,11 @@ public sealed class WorldRuntime : IDisposable
         }
 
         UnloadRequestedMaps();
-        Raise(Updated, diffMs, nameof(Updated));
+        long mapsEnd = Stopwatch.GetTimestamp();
+        RaiseTimed(Updated, diffMs);
+        long featuresEnd = Stopwatch.GetTimestamp();
+        LastTickPhases = new TickPhases(Micros(commandsEnd - phaseStart), Micros(mapsEnd - commandsEnd),
+            Micros(featuresEnd - mapsEnd));
 
         if (Options.AutosaveIntervalMs > 0)
         {
@@ -484,6 +493,35 @@ public sealed class WorldRuntime : IDisposable
                 _logger.LogWarning(PerformanceLogOptions.PerfEventId, "{What}: map {MapId} instance {InstanceId} took {DurationMs} ms",
                     what, map.MapId, map.InstanceId, micros / 1000);
             }
+        }
+    }
+
+    /// <summary>The phase times of the last <see cref="RunTick"/> (world thread).</summary>
+    public TickPhases LastTickPhases { get; private set; }
+
+    private static long Micros(long stopwatchTicks) => stopwatchTicks * 1_000_000 / Stopwatch.Frequency;
+
+    /// <summary>Raise <see cref="Updated"/>, timing each world feature for the tick statistics.</summary>
+    private void RaiseTimed(Action<uint>? handlers, uint diffMs)
+    {
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (Action<uint> handler in handlers.GetInvocationList().Cast<Action<uint>>())
+        {
+            long start = Stopwatch.GetTimestamp();
+            try
+            {
+                handler(diffMs);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "{Event} handler failed for {Subject}", nameof(Updated), diffMs);
+            }
+
+            Stats.RecordFeature(handler.Method.DeclaringType?.Name ?? handler.Method.Name, Micros(Stopwatch.GetTimestamp() - start));
         }
     }
 
@@ -596,6 +634,7 @@ public sealed class WorldRuntime : IDisposable
     {
         _worldThreadId = Environment.CurrentManagedThreadId;
         int interval = Math.Max(1, Options.TickIntervalMs);
+        Scheduler = new WorldTickScheduler(interval);
         long last = _clock.ElapsedMilliseconds;
         _logger.LogInformation("World thread started ({Interval} ms tick)", interval);
 
@@ -621,7 +660,7 @@ public sealed class WorldRuntime : IDisposable
             RunTick(diff);
             long durationMicros = (Stopwatch.GetTimestamp() - stampBefore) * 1_000_000 / Stopwatch.Frequency;
             Stats.Record(durationMicros, GC.GetAllocatedBytesForCurrentThread() - allocatedBefore,
-                interval * 1000L, diff * 1000L);
+                interval * 1000L, diff * 1000L, LastTickPhases);
             if (Options.Perf.SlowWorldUpdateMeasure == SlowWorldUpdateMeasure.TickDuration
                 && Options.Perf.SlowWorldUpdate > 0 && durationMicros > Options.Perf.SlowWorldUpdate * 1000L)
             {
@@ -638,10 +677,10 @@ public sealed class WorldRuntime : IDisposable
                 }
             }
 
-            long elapsed = _clock.ElapsedMilliseconds - tickStart;
-            if (elapsed < interval)
+            int wait = Scheduler.NextWait(tickStart, _clock.ElapsedMilliseconds);
+            if (wait > 0)
             {
-                _stopSignal.Wait((int)(interval - elapsed));
+                _stopSignal.Wait(wait);
             }
         }
 
