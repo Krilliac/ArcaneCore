@@ -452,9 +452,9 @@ public sealed class CodexLineMigrationTests : IDisposable
         if (version >= 25)
         {
             await CodexLineDatabase.InsertAsync(path, "managed_playerbot", ("BotId", BotA.ToString().ToUpperInvariant()), ("AccountId", 7), ("CharacterId", 1),
-                ("AccountName", "PBCODEXA"), ("DesiredEnabled", 1), ("State", (int)ManagedPlayerbotState.Stopped), ("Revision", 4), ("CreatedUnix", 1_800_000_000L), ("UpdatedUnix", 1_800_000_100L));
+                ("AccountName", "PBCODEXA"), ("DesiredEnabled", 1), ("State", (int)ManagedPlayerbotState.Stopped), ("Revision", 4), ("CreatedUnix", 1_780_000_000L), ("UpdatedUnix", 1_780_000_100L));
             await CodexLineDatabase.InsertAsync(path, "managed_playerbot", ("BotId", BotB.ToString().ToUpperInvariant()), ("AccountId", 8), ("CharacterId", 2),
-                ("AccountName", "PBCODEXB"), ("DesiredEnabled", 0), ("State", (int)ManagedPlayerbotState.Stopped), ("CreatedUnix", 1_800_000_000L), ("UpdatedUnix", 1_800_000_000L));
+                ("AccountName", "PBCODEXB"), ("DesiredEnabled", 0), ("State", (int)ManagedPlayerbotState.Stopped), ("CreatedUnix", 1_780_000_000L), ("UpdatedUnix", 1_780_000_000L));
         }
 
         return path;
