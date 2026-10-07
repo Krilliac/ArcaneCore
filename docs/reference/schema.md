@@ -10,7 +10,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 4 | `account`, `realmlist` |
-| `characters` | 33 | `characters` |
+| `characters` | 34 | `characters` |
 | `world` | 37 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
@@ -57,6 +57,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 31 | `Characters.Pets.PetCooldownDataModule` | creates `character_pet_cooldown` | yes |
 | 32 | `Characters.Pets.PetNamingDataModule` | adds columns `character_pet.Name`, `character_pet.NameTimestamp`, `character_pet.RenameAllowed` | yes |
 | 33 | `Characters.Playerbots.ManagedPlayerbotDataModule` | creates `managed_playerbot` | yes |
+| 34 | `Characters.Life.CharacterCorpseInstanceDataModule` | adds columns `character_corpse.InstanceId` | yes |
 
 ## `world`
 

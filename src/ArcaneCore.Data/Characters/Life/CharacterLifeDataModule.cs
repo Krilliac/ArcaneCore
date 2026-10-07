@@ -58,6 +58,9 @@ public sealed class CharacterCorpseRow
 
     /// <summary>CorpseType: 1 = resurrectable PvE, 2 = resurrectable PvP.</summary>
     public byte Type { get; set; }
+
+    /// <summary>The map instance the body lies in (vmangos <c>corpse.instance</c>); added by <see cref="CharacterCorpseInstanceDataModule"/>.</summary>
+    public uint InstanceId { get; set; }
 }
 
 /// <summary>
@@ -166,6 +169,7 @@ internal static class CharacterLifePersistence
         row.Orientation = corpse.Orientation;
         row.GhostTime = corpse.GhostTimeUnix;
         row.Type = corpse.Type;
+        row.InstanceId = corpse.InstanceId;
     }
 }
 
@@ -189,6 +193,6 @@ public sealed class EfCharacterLifeStore(CharacterDbContext db) : ICharacterLife
             vitals.Xp,
             vitals.DeathExpireTime,
             vitals.IsGhost,
-            corpse is null ? null : new CorpseSnapshot(corpse.MapId, corpse.X, corpse.Y, corpse.Z, corpse.Orientation, corpse.GhostTime, corpse.Type));
+            corpse is null ? null : new CorpseSnapshot(corpse.MapId, corpse.X, corpse.Y, corpse.Z, corpse.Orientation, corpse.GhostTime, corpse.Type, corpse.InstanceId));
     }
 }

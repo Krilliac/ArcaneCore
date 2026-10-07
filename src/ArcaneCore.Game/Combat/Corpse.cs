@@ -34,6 +34,13 @@ public sealed class Corpse : WorldObject
 
     public CorpseType Type { get; private init; }
 
+    /// <summary>
+    /// The map instance the body lies in (vmangos <c>Corpse::GetInstanceId</c>, saved as <c>corpse.instance</c>): set when it
+    /// enters a map and kept when it leaves one (a logout takes the body out of its map before the character is saved), or the
+    /// stored instance of a restored body whose instance map is not loaded (<see cref="MapCombat.RestoreGhost"/>).
+    /// </summary>
+    public uint InstanceId { get; internal set; }
+
     public ObjectGuid Owner => new(GetUInt64(UpdateFields.CorpseFieldOwner));
 
     /// <summary>

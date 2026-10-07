@@ -4,6 +4,8 @@ using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using Xunit;
 
 namespace ArcaneCore.Data.Tests;
@@ -102,6 +104,61 @@ public sealed class CharacterLifeStoreTests : IAsyncLifetime
             Assert.Equal((0, 0), (await db.Set<CharacterVitalsRow>().CountAsync(), await db.Set<CharacterCorpseRow>().CountAsync()));
             Assert.Null(await new EfCharacterLifeStore(db).LoadAsync(id));
         }
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task ADungeonBody_KeepsItsInstance(DatabaseProvider provider)
+    {
+        (CharacterDbContext db, int id) = await NewCharacterAsync(provider);
+        await using (db)
+        {
+            var characters = new EfCharacterStore(db);
+            CharacterLife ghost = Ghost() with { Corpse = new CorpseSnapshot(36, -16f, -383f, 61f, 1.8f, 1_700_000_100, 1, InstanceId: 105) };
+            await characters.SaveStateAsync(State(id, ghost));
+
+            CorpseSnapshot corpse = Assert.IsType<CorpseSnapshot>((await new EfCharacterLifeStore(db).LoadAsync(id))!.Corpse);
+            Assert.Equal((36u, 105u), (corpse.MapId, corpse.InstanceId));
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task ADatabaseFromBeforeTheCorpseInstance_GainsTheColumn_KeepingItsBodies(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
+        int id;
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+            id = (await new EfCharacterStore(db).CreateAsync(new CharacterRecord { AccountId = 3, Name = "Older", Race = 1, Class = 1, Level = 1 })).Id;
+            await new EfCharacterStore(db).SaveStateAsync(State(id, Ghost()));
+
+            // A database from before the step: no InstanceId column, version below it. Fixed identifiers only.
+            ISqlGenerationHelper sql = db.GetService<ISqlGenerationHelper>();
+            string dropColumn =
+                $"ALTER TABLE {sql.DelimitIdentifier(CharacterLifeDataModule.CorpseTable)} DROP COLUMN {sql.DelimitIdentifier(nameof(CharacterCorpseRow.InstanceId))}";
+            await db.Database.ExecuteSqlRawAsync(dropColumn);
+            await db.Set<SchemaVersionRow>().ExecuteUpdateAsync(s => s.SetProperty(r => r.Version, CharacterCorpseInstanceDataModule.Version - 1));
+        }
+
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+            Assert.Equal(CharacterDbContext.Schema.CurrentVersion, (await db.Set<SchemaVersionRow>().SingleAsync()).Version);
+            CorpseSnapshot corpse = Assert.IsType<CorpseSnapshot>((await new EfCharacterLifeStore(db).LoadAsync(id))!.Corpse);
+            Assert.Equal((1u, 0u, -618.5f), (corpse.MapId, corpse.InstanceId, corpse.X));
+        }
+    }
+
+    [Fact]
+    public void TheCorpseInstanceModule_AddsOneColumnToTheCorpseTable()
+    {
+        var module = new CharacterCorpseInstanceDataModule();
+        Assert.Equal(DatabaseComponent.Characters, module.Component);
+        Assert.Equal(CharacterCorpseInstanceDataModule.Version, module.SchemaVersion);
+        Assert.True(CharacterDbContext.Schema.CurrentVersion >= CharacterCorpseInstanceDataModule.Version);
+        Assert.Equal(new AddColumnChange(CharacterLifeDataModule.CorpseTable, "InstanceId"), Assert.Single(module.SchemaChanges));
     }
 
     [Fact]

@@ -16,12 +16,16 @@ gtker/wow_messages (1.12). Behaviour follows vmangos unless a gap below says oth
   transit. The world then raises `MapUnloading`, removes the map and calls `Map.UnloadAll()`
   (grids unloaded, `IsUnloaded` set, and later `AddPlayer` calls throw). Every map keeps its
   own grids, `IMapUpdater`s, combat and visibility.
-- **Map resolver seam.** `IMapResolver` (`WorldRuntime.MapResolver`) has four members:
+- **Map resolver seam.** `IMapResolver` (`WorldRuntime.MapResolver`) has five members:
   - `ResolveLoginMap(player)`: login.
   - `CanEnter(player, mapId)`: checked when a far teleport starts.
   - `ResolveEntry(player, mapId)`: picks the instance at worldport-ack arrival; null refuses
     the entry and the teleport returns the player to its origin.
   - `OnEntered(player, map)`.
+  - `ResolveCorpseMap(mapId, instanceId)`: the map of a relogged ghost's body whose instance map is
+    not loaded. `InstanceManager` creates it, managed, only for a live save; otherwise null, and the
+    body stays out of every map (vmangos never creates an instance map for a corpse). The default
+    member returns null.
 
   Without a resolver everything uses instance 0, as before.
 - **`Game/Instances/InstanceManager`** (the resolver) follows the vmangos rules:

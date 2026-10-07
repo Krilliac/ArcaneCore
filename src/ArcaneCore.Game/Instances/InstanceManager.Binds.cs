@@ -48,14 +48,28 @@ public sealed partial class InstanceManager
             return;
         }
 
-        // vmangos GetRespawnTimeEx: the absolute time the corpse's spawn comes back (0 delay
-        // for a creature that does not respawn on a timer).
-        long delayMs = creature.RespawnAtMs - (creature.System?.ClockMs ?? 0);
-        long resetTime = Now + Math.Max(0, delayMs) / 1000 + (2 * 60 * 60);
+        long resetTime = Now + SecondsUntilBack(map, creature) + (2 * 60 * 60);
         if (save.ResetTime < resetTime)
         {
             save.ResetTime = resetTime;
             _persistence.InstanceSaved(save);
         }
+    }
+
+    /// <summary>
+    /// vmangos <c>Creature::GetRespawnTimeEx</c> (Creature.cpp:3305-3314) relative to now: the time left to the respawn
+    /// when it is ahead; else, while the corpse lies, the respawn delay plus the corpse time left; else 0. The respawn time
+    /// is a map-clock value, so it is measured against the clock of the creature's system (the map's when the creature is
+    /// in none); without any clock it is not read at all.
+    /// </summary>
+    private static long SecondsUntilBack(Map map, Creature creature)
+    {
+        CreatureMapSystem? clock = creature.System ?? map.FindUpdater<CreatureMapSystem>();
+        if (clock is not null && creature.RespawnAtMs > clock.ClockMs)
+        {
+            return (creature.RespawnAtMs - clock.ClockMs) / 1000;
+        }
+
+        return creature.CorpseDecayMs > 0 ? creature.RespawnDelaySeconds + (creature.CorpseDecayMs / 1000) : 0;
     }
 }

@@ -218,8 +218,8 @@ public sealed partial class MapCombat
 
     /// <summary>
     /// CMSG_RECLAIM_CORPSE (vmangos HandleReclaimCorpseOpcode): a ghost with a corpse whose
-    /// reclaim delay has passed, within 39 yd (3D) of it, is resurrected at 50% and the corpse
-    /// goes away.
+    /// reclaim delay has passed, within 39 yd (3D) of it, is resurrected at 50% (100% in a
+    /// battleground, whose match must be in progress) and the corpse goes away.
     /// </summary>
     public bool TryReclaimCorpse(Player player)
     {
@@ -249,16 +249,52 @@ public sealed partial class MapCombat
             return false;
         }
 
-        ResurrectPlayer(player, CombatConstants.CorpseReclaimRestorePercent, applySickness: false);
+        // "Prevent exploit: die with hellfire during battleground preparation, and resurrect after the door"
+        // (MiscHandler.cpp:594-597): a match that is not in progress refuses the reclaim.
+        Battlegrounds.BattlegroundStatus? match = Death.DeathSeams.Find(_world)?.Battlegrounds?.MatchStatusOf(player.Guid);
+        if (match is { } status && status != Battlegrounds.BattlegroundStatus.InProgress)
+        {
+            return false;
+        }
+
+        // ResurrectPlayer(InBattleGround() ? 1.0f : 0.5f) (MiscHandler.cpp:599): bound to a match, or on a battleground map.
+        bool inBattleground = match is not null || player.Map?.Template is { IsBattleground: true };
+        ResurrectPlayer(player, inBattleground ? 1.0f : CombatConstants.CorpseReclaimRestorePercent, applySickness: false);
         RemoveCorpse(corpse);
         c.Corpse = null;
         return true;
     }
 
     /// <summary>
+    /// The map a restored body goes back into (vmangos <c>corpse.instance</c>), or null to keep it out of every map. A body in this
+    /// map's instance, or a row from before the corpse instance was stored (instance 0) of an instanceable map with this map's id, goes
+    /// here: the old code put such a body into the ghost's map whenever the map ids matched. A body on a continent goes into its
+    /// map. A dungeon body goes into its instance's map only when that map is loaded or a live instance owns it
+    /// (<see cref="Maps.IMapResolver.ResolveCorpseMap"/>, which creates it the managed way); a corpse never creates an instance
+    /// map by itself, as vmangos never does.
+    /// </summary>
+    private MapCombat? ResolveCorpseMap(Kernel.Characters.CorpseSnapshot snapshot)
+    {
+        bool instanceable = IsInstanceableMap(snapshot.MapId);
+        if (snapshot.MapId == _map.MapId && (snapshot.InstanceId == _map.InstanceId || (snapshot.InstanceId == 0 && instanceable)))
+        {
+            return this;
+        }
+
+        if (!instanceable)
+        {
+            return _world.GetMap(snapshot.MapId).Combat;
+        }
+
+        Maps.Map? map = _world.FindMap(snapshot.MapId, snapshot.InstanceId)
+            ?? (snapshot.InstanceId != 0 ? _world.MapResolver?.ResolveCorpseMap(snapshot.MapId, snapshot.InstanceId) : null);
+        return map?.Combat;
+    }
+
+    /// <summary>
     /// Put a logged-in ghost's body back (world thread, the player is in this map; vmangos
     /// Player::LoadCorpse + Corpse loading). <paramref name="snapshot"/> is the stored body: the
-    /// corpse object is created at its place (in the map it was left in), the ghost time is the
+    /// corpse object is created at its place (in the map instance it was left in, see <see cref="ResolveCorpseMap"/>), the ghost time is the
     /// stored Unix second, the ghost form is applied, the "release timer" byte flag is set on a
     /// non-instanceable map (Player.cpp:15434), and the client is told what is left of the
     /// reclaim delay (Player::SendCorpseReclaimDelay(load = true), Player.cpp:20228-20260). The
@@ -280,11 +316,20 @@ public sealed partial class MapCombat
             RemoveCorpse(old);
         }
 
-        MapCombat corpseMap = snapshot.MapId == _map.MapId ? this : _world.GetMap(snapshot.MapId).Combat;
         var type = (CorpseType)snapshot.Type;
         Corpse corpse = Corpse.CreateAt(player, snapshot.MapId, snapshot.X, snapshot.Y, snapshot.Z, snapshot.Orientation,
             type is CorpseType.ResurrectablePvp ? type : CorpseType.ResurrectablePve);
-        corpseMap.AddCorpse(corpse);
+        if (ResolveCorpseMap(snapshot) is { } corpseMap)
+        {
+            corpseMap.AddCorpse(corpse);
+        }
+        else
+        {
+            // Its instance is not loaded and no live instance owns it: the ghost keeps the body (and its instance, for the next
+            // save) outside every map. Entering that dungeon still revives it (ReviveForDungeonEntry); the spirit healer still works.
+            corpse.InstanceId = snapshot.InstanceId;
+        }
+
         c.Corpse = corpse;
         c.GhostTime = snapshot.GhostTimeUnix;
         c.DeathTimer = 0;

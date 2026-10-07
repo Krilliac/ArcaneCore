@@ -238,6 +238,23 @@ public sealed class SelfResurrectionTests
     }
 
     [Fact]
+    public void AnAnkhGoneAfterTheDeath_RefusesTheReincarnation_AndEmptiesTheField()
+    {
+        // The Ankh is 21169's Reagent1, so the cast itself checks it (Spell::CheckItems); HandleSelfResOpcode empties the field anyway.
+        using var rig = new Rig();
+        rig.Kit.Spellbook.LearnSpell(rig.Player, SelfResurrection.ReincarnationPassive);
+        Give(rig.Player.Inventory, SelfResurrection.Ankh, 1);
+        rig.Die();
+        Assert.Equal(SelfResurrection.ReincarnationEffect, rig.SelfResSpell);
+
+        Assert.Equal(1u, rig.Player.Inventory.DestroyItemCount(SelfResurrection.Ankh, 1));
+        Assert.False(SelfResurrection.Use(rig.Kit.System, rig.Player));
+
+        Assert.False(rig.Player.IsAlive);
+        Assert.Equal(0u, rig.SelfResSpell);
+    }
+
+    [Fact]
     public void ASelfResurrectionSpellThatWasAlreadyChosen_IsKept()
     {
         using var rig = new Rig();

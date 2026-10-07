@@ -416,6 +416,7 @@ public sealed partial class MapCombat : IMapUpdater
 
     private void AddCorpse(Corpse corpse)
     {
+        corpse.InstanceId = _map.InstanceId;
         _map.AddObject(corpse, isNewObject: true);
         _corpses.Add(corpse);
         Maps.Grid.CellCoord cell = _map.Grids.CellOf(corpse)!.Value;
