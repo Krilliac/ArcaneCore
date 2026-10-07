@@ -34,6 +34,12 @@ public sealed class Group
     /// <summary>vmangos ITEM_QUALITY_UNCOMMON, the default loot threshold (Group::Create).</summary>
     public const byte DefaultLootThreshold = 2;
 
+    /// <summary>The lowest loot threshold a leader may set: ITEM_QUALITY_UNCOMMON.</summary>
+    public const byte MinLootThreshold = 2;
+
+    /// <summary>The highest loot threshold a leader may set: ITEM_QUALITY_ARTIFACT, the top 1.12 item quality.</summary>
+    public const byte MaxLootThreshold = 6;
+
     private readonly List<GroupMemberSlot> _members = [];
     private readonly HashSet<ObjectGuid> _invitees = [];
     private readonly byte[] _subGroupCounts = new byte[MaxRaidSubGroups];
