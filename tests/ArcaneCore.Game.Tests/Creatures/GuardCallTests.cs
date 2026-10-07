@@ -137,6 +137,11 @@ public sealed class GuardCallTests
         Assert.Equal(GuardPostUse.Used, posts.TryUse(Goldshire, Team.Alliance, 245_000).Use); // three more minutes: +3, then -1
         Assert.Equal(6u, posts.ChargesOf(Goldshire));
         Assert.Equal(GuardPostUse.NoPost, posts.TryUse(NoPostArea, Team.Alliance, 61_000).Use);
+
+        // The uint server clock wraps after 49.7 days: the post starts afresh instead of waiting for its old cooldown.
+        Assert.Equal(GuardPostUse.Used, posts.TryUse(Goldshire, Team.Alliance, uint.MaxValue - 5_000).Use);
+        Assert.Equal(GuardPostUse.Used, posts.TryUse(Goldshire, Team.Alliance, 3_000).Use);
+        Assert.Equal(GuardPostTable.MaxCharges - 1, posts.ChargesOf(Goldshire));
     }
 
     [Fact]

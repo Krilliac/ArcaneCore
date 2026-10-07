@@ -153,6 +153,15 @@ public sealed class GuardPostTable
                 _state[areaId] = state = new PostState { Charges = MaxCharges, RechargeEpoch = nowMs / RechargeMs };
             }
 
+            if (nowMs < state.LastUseMs)
+            {
+                // The server clock wrapped (uint milliseconds, every 49.7 days): start the post afresh rather than wait for the old values.
+                state.Charges = MaxCharges;
+                state.RechargeEpoch = nowMs / RechargeMs;
+                state.CooldownUntilMs = 0;
+            }
+
+            state.LastUseMs = nowMs;
             long epoch = nowMs / RechargeMs;
             if (epoch > state.RechargeEpoch)
             {
@@ -241,5 +250,7 @@ public sealed class GuardPostTable
         public long RechargeEpoch { get; set; }
 
         public long CooldownUntilMs { get; set; }
+
+        public long LastUseMs { get; set; }
     }
 }
