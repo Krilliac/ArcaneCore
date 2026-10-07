@@ -109,8 +109,11 @@ internal sealed class InMemoryBanStore(AccountStatusEvents? events = null, TimeP
         MaybeFail();
         lock (_gate)
         {
+            // Like a SQL store under a lenient collation (MariaDB PAD SPACE / case-insensitive): a row written by an
+            // external tool in a non-canonical form still matches the lookup, and the store returns the STORED form.
             return Task.FromResult<IReadOnlySet<string>>(_ipRows
-                .Where(r => ips.Contains(r.Ip) && AccountBanEvaluator.IsActive(r, Now)).Select(r => r.Ip).ToHashSet());
+                .Where(r => ips.Contains(AccountBanEvaluator.NormalizeIp(r.Ip) ?? r.Ip) && AccountBanEvaluator.IsActive(r, Now))
+                .Select(r => r.Ip).ToHashSet());
         }
     }
 
