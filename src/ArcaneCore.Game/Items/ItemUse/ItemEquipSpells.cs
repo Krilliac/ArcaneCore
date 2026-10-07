@@ -53,6 +53,8 @@ public sealed class ItemEquipSpells(SpellSystem spells, ItemSetBonuses? sets = n
         s_bindings.Add(inventory, binding);
         inventory.EquipmentChanged += binding.OnEquipment;
         inventory.BagEquipChanged += binding.OnBag;
+        // The combat weapon switch timer (vmangos Player::m_weaponChangeTimer) lives in the spell system with the global cooldown it starts.
+        inventory.WeaponChangeLocked = () => _spells.IsWeaponChangeLocked(player);
 
         // vmangos _ApplyAllItemMods order: sets for every worn piece (broken too), then the spells of the unbroken ones.
         foreach ((byte slot, Item item) in inventory.Equipped)
@@ -221,6 +223,7 @@ public sealed class ItemEquipSpells(SpellSystem spells, ItemSetBonuses? sets = n
             {
                 case EquipmentChange.Worn:
                     _owner._sets?.ItemWorn(_player, Sets, item, replay: false);
+                    _owner._spells.OnWeaponWorn(_player, item);   // vmangos EquipItem: the combat weapon switch, after the set and the mods
                     break;
                 case EquipmentChange.Removed:
                     _owner._sets?.ItemRemoved(_player, Sets, item);
