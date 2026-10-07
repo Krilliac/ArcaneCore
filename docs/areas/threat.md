@@ -178,10 +178,12 @@ The line promised in docs/integration/rogue-creature-stealth.md is applied:
   cannot see but whose stealth it nearly breaks (the 5 yd alert band) gets `CreatureAI.OnMoveInStealth`.
 - The alert (`CanTriggerAlert` / `TriggerAlert`, AI/CreatureAI.cpp:349-385): a creature that is alive, not in combat, not stunned, confused or
   fleeing, not a civilian, not passive, with a hostile target in line of sight and no alert in the last 10 s sends SMSG_AI_REACTION (alert, wow_messages
-  smsg_ai_reaction.wowm), stops and turns to the player. Options: `Creatures:StealthAlertEnabled` (default true), `Creatures:StealthAlertCooldownMs` (10000).
+  smsg_ai_reaction.wowm), stops, turns to the player with a facing spline (vmangos SetFacingTo) and stands distracted for 5 s (MoveDistract:
+  `DistractMovementGenerator`, Movement/IdleMovementGenerator.cpp:33-75): its random or waypoint movement waits, any new movement such as a chase ends
+  the distraction, and when the 5 s are over it turns back to its spawn facing and moves on. Options: `Creatures:StealthAlertEnabled` (default true),
+  `Creatures:StealthAlertCooldownMs` (10000).
 
-Limits: the 5 s MoveDistract that follows the alert needs a movement generator this server does not have (the creature carries on moving); the turn is
-the orientation field, no facing spline packet is sent; the alert comes only from the relocation-driven scan (`Poll` mode calls `MoveInLineOfSight` directly and has no
+Limits: the alert comes only from the relocation-driven scan (`Poll` mode calls `MoveInLineOfSight` directly and has no
 stealth awareness); detect-range auras and creature-versus-creature detection are not modelled; the Vanish 1 s window belongs to the rogue lane.
 
 ### critters (Creatures/AI/CritterAI.cs)

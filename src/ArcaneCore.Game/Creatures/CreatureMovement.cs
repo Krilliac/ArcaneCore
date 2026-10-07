@@ -18,6 +18,9 @@ public enum MovementGeneratorType : byte
     Home = 7,
     Point = 9,
     Fleeing = 10,
+
+    /// <summary>vmangos DISTRACT_MOTION_TYPE (MotionMaster.h:50): stand facing a spot for a while.</summary>
+    Distract = 11,
     Follow = 15,
 }
 
@@ -53,6 +56,12 @@ internal interface ICreatureMover
 
     /// <summary>A generator that ends by itself finished (home reached, point reached).</summary>
     void OnMovementFinished(Creature creature, MovementGeneratorType type, uint pointId);
+
+    /// <summary>
+    /// Turn the creature to <paramref name="angle"/> where it stands (vmangos Unit::SetFacingTo, Objects/Unit.cpp:2785-2794: a facing spline
+    /// with no path). The default only sets the orientation; <see cref="CreatureMapSystem"/> also tells the observers.
+    /// </summary>
+    void SetFacingTo(Creature creature, float angle) => creature.Orientation = Creature.NormalizeOrientation(angle);
 }
 
 /// <summary>

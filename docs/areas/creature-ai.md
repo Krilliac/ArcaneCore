@@ -17,6 +17,9 @@ docs/integration/creature-ai.md.
   - `Point`: moves to one point, then fires movement-inform.
   - `Waypoint`: the `creature_movement` path, with a per-node `Run` flag and wait times. It resumes the current node after an interruption.
   - `Random`: unchanged from the creatures area.
+  - `Distract` (vmangos DistractMovementGenerator, IdleMovementGenerator.cpp:33-75): stands for a while (the 5 s after a stealth alert,
+    the effect value of SPELL_EFFECT_DISTRACT), then faces its spawn orientation again. Any newly pushed generator expires it
+    (MotionMaster::Mutate, MotionMaster.cpp:699-702). `CreatureMapSystem.SetFacingTo` sends the facing spline (Unit::SetFacingTo).
 - **Splines.** Multi-point linear splines use SMSG_MONSTER_MOVE: the point count, the
   destination, then N−1 packed offsets from the path midpoint (11/11/10 bits at quarter-yard
   resolution, from gtker wow_messages / vmangos `MoveSplineInitArgs` packing). Facing can be

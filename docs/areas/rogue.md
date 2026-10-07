@@ -29,6 +29,10 @@ creature-facing rule, `IsFromBehindOnly`, the Gouge facing shape.
 **Creature detection (RG-03)** `StealthServices.CanCreatureSee` (per map). The call into `CanAggroOnSight` belongs to the creature-ai lane
 (one line documented in `rogue-creature-stealth.md`).
 
+**Distract** `Game/Spells/Effects/DistractEffect.cs` (SPELL_EFFECT_DISTRACT, vmangos `Spell::EffectDistract`, SpellEffects.cpp:2632-2649): a creature
+target that is out of combat and can react turns to the spell's destination and stands for the effect value in seconds (`CreatureMapSystem.Distract`,
+`DistractMovementGenerator`; docs/areas/threat.md), then turns back to its spawn facing. A player target is left alone (the client owns its facing).
+
 **Energy (RG-05a)** The pool and tick already followed vmangos (100 max and start; +20 per 2000 ms; regen in combat; resurrection and level-up refill).
 `EnergyTests` and `RogueCreationTests` pin that behaviour so the stat/aura/rate lanes cannot change it unnoticed.
 
@@ -51,7 +55,7 @@ Stealth rank, `ClassScripts/Rogue.cpp:103-110`). By default one roll decides, wh
 ## Limits (not stubs: absent, documented)
 
 - Shapeshift form 30 and the movement slow of Stealth (aura 36 misc 30, aura 33): need the stance and speed-aura lanes. A stealthed unit is not in form 30 until then.
-- No Vanish/Sanctuary effect, no Vanish script (remove roots/snares/Hunter's Mark, recast highest Stealth rank), no Preparation, no Distract, no Pick Pocket, no poisons, no rogue talent
+- No Vanish/Sanctuary effect, no Vanish script (remove roots/snares/Hunter's Mark, recast highest Stealth rank), no Preparation, no Pick Pocket, no poisons, no rogue talent
   consumers, no combo points, no finisher scaling, no energy modifiers (Adrenaline Rush, Vigor, Rate.Energy) and no 82 percent energy refund on a miss. Each is in the lane's
   `slices_not_done` with its blocker.
 - No COOLDOWN_ON_EVENT start for Stealth (10 s cooldown after the aura fades) and no cancel-removes-Vanish: both need the fade hook that spell-breadth owns.
