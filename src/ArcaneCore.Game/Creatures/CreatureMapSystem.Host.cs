@@ -171,7 +171,9 @@ public sealed partial class CreatureMapSystem
                 if (!_creatures.TryGetValue(helper.Guid, out Creature? currentHelper) || !ReferenceEquals(currentHelper, helper)
                     || !_creatures.TryGetValue(caller.Guid, out Creature? currentCaller) || !ReferenceEquals(currentCaller, caller)
                     || !ReferenceEquals(helper.Map, Map) || !ReferenceEquals(caller.Map, Map)
-                    || !caller.IsAlive || caller.IsEvading || !ReferenceEquals(caller.Combat.Victim, assist.Enemy)
+                    // The stored enemy, not the caller's current victim (vmangos AssistDelayEvent::Execute, Creature.cpp:150-173,
+                    // attacks m_victimGuid): a caller that switched targets during the delay still brings its helpers.
+                    || !caller.IsAlive || caller.IsEvading
                     || !assist.Enemy.IsAlive || !ReferenceEquals(assist.Enemy.Map, Map)
                     || !CanAssistNow(helper, caller, assist.Enemy))
                 {
