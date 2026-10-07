@@ -28,6 +28,7 @@ How to read the tables:
 - [`Enchanting`](#enchanting)
 - [`GameObjects`](#gameobjects)
 - [`HotReload`](#hotreload)
+- [`ItemRandomProperties`](#itemrandomproperties)
 - [`ItemSets`](#itemsets)
 - [`Items`](#items)
 - [`Locomotion`](#locomotion)
@@ -37,6 +38,7 @@ How to read the tables:
 - [`Net:Protection`](#netprotection)
 - [`NpcServices`](#npcservices)
 - [`Ops:Watchdog`](#opswatchdog)
+- [`PageText`](#pagetext)
 - [`PerformanceLog`](#performancelog)
 - [`Pets`](#pets)
 - [`Pets:Names`](#petsnames)
@@ -293,6 +295,13 @@ How to read the tables:
 | `HotReload:EmptyTables` | `EmptyTablePolicy` | `Retail` | - | What a reload does when item_template, game_tele or areatrigger_teleport comes back empty. Default Retail: vmangos clears the loaded rows first (ObjectMgr.cpp:3817, 10468, 7708), so the table ends up empty. Values: `Retail`, `KeepLoaded`. |
 | `HotReload:NegativeNumbers` | `InvalidNumberPolicy` | `Retail` | - | What `.reload config` does with a negative interval or range. Default Retail: vmangos logs an error and uses the default (World.cpp:2949-2977 setConfigPos/setConfigMin). Values: `Retail`, `Reject`. |
 
+## `ItemRandomProperties`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `ItemRandomProperties:DbcPath` | `string` | `null` | - | The build-5875 ItemRandomProperties.dbc (16 fields), supplied by the developer and never downloaded by the daemon. Empty: no item gets a random property. A configured file that is unreadable or has another layout refuses startup. |
+| `ItemRandomProperties:EnchantmentTemplateDumpPath` | `string` | `null` | - | A MySQL world dump (vmangos or cmangos classic-db, plain or .gz) holding `item_enchantment_template`; only that table is read. Both this and `DbcPath` are needed for random properties. A configured dump that cannot be read refuses startup. |
+
 ## `ItemSets`
 
 | Key | Type | Default | Reload | Meaning |
@@ -303,7 +312,10 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `Items:DurabilityLossChanceAbsorb` | `double` | `0.5` | - | mangos `DurabilityLossChance.Absorb` (mangos-classic World.cpp:460, mangoszero WorldConfig.cpp:233; default 0.5): the percent chance that a player whose absorb effects take part of a melee swing loses a durability point on one worn armor piece (the hit-taken pool). Zero or less never rolls. |
+| `Items:DurabilityLossChanceBlock` | `double` | `0.05` | - | mangos `DurabilityLossChance.Block` (mangos-classic World.cpp:462, mangoszero WorldConfig.cpp:235; default 0.05): the percent chance that a player who blocks a melee swing loses a durability point on the off-hand item (the shield). Zero or less never rolls. |
 | `Items:DurabilityLossChanceDamage` | `double` | `0.5` | - | vmangos `DurabilityLossChance.Damage` (mangosd.conf.dist.in:2848, World.cpp:554): the percent chance (0.5 means 0.5 percent) that damage dealt or taken costs a worn item a durability point (Unit.cpp:1093-1108). Rolled per damage event by MapCombat (MapCombat.Durability.cs): a player victim that survives loses a point on a uniformly random equipment slot, and a player's connecting melee swing wears the weapon of the swinging hand. Zero or less never rolls; `DurabilityLossEnable` false overrides it. |
+| `Items:DurabilityLossChanceParry` | `double` | `0.05` | - | mangos `DurabilityLossChance.Parry` (mangos-classic World.cpp:461, mangoszero WorldConfig.cpp:234; default 0.05): the percent chance that a player who parries a melee swing loses a durability point on the main-hand weapon (MapCombat.Durability.cs). Zero or less never rolls; `DurabilityLossEnable` false overrides it. |
 | `Items:DurabilityLossEnable` | `bool` | `true` | - | vmangos `DurabilityLoss.Enable` (mangosd.conf.dist.in:2847, World.cpp:553; read first in Player::DurabilityPointsLoss, Player.cpp:4866). False: no item ever loses durability. |
 | `Items:ZoneLimitCheckMs` | `int` | `1000` | - | How often (ms) the per-map item maintenance runs: timed-item ticks and map/area-limited item checks. vmangos reacts to the zone change itself (Player::UpdateZone, Player.cpp:6643-6656) and ticks durations once a second (Player.cpp:1155); here Player.ZoneId has no change event, so the zone is polled at this interval (a deliberate, documented deviation: the result is the same within one interval). |
 
@@ -424,6 +436,12 @@ How to read the tables:
 | `Ops:Watchdog:TickMonitor:RingCapacity` | `int` | `4096` | - | Ring capacity in ticks (rounded up to a power of two, 16-1048576); the percentiles are over the last capacity-1 ticks. Default 4096 (3.4 minutes at 50 ms). |
 | `Ops:Watchdog:TickMonitor:SummaryIntervalSeconds` | `int` | `300` | - | Seconds between periodic frame-time summaries (p50/p99/max, overruns) at Information level. 0 disables the summary. Default 300. |
 | `Ops:Watchdog:TickMonitor:WarnIntervalSeconds` | `int` | `30` | - | Least seconds between two overrun warnings; overruns in between are counted and reported with the next warning. Default 30. |
+
+## `PageText`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `PageText:DumpPath` | `string` | `null` | - | A MySQL world dump (vmangos or cmangos classic-db, plain or .gz) holding the `page_text` table; only that table is read. Empty: no page text, so every page a client asks for is answered "Item page missing." (the vmangos answer for an unknown page). A configured file that cannot be read refuses startup. |
 
 ## `PerformanceLog`
 
