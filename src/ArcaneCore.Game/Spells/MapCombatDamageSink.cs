@@ -18,6 +18,9 @@ public class MapCombatDamageSink : IDamageSink
         => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat, critical, durabilityLoss: true);
 
     public uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat, bool critical, bool durabilityLoss)
+        => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat, critical, durabilityLoss, reflected: false);
+
+    public uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat, bool critical, bool durabilityLoss, bool reflected)
     {
         if (caster.Map is not { } map || !ReferenceEquals(map, victim.Map))
         {
@@ -28,7 +31,7 @@ public class MapCombatDamageSink : IDamageSink
         // The spell and the crit flag give the threat formula its school, spell_threat multiplier and MOD_CRITICAL_THREAT (MapCombat.AddDamageThreat);
         // the spell also carries the death durability exemption, and durabilityLoss is DealDamage's own flag (instant kill, split damage).
         map.Combat.DealDamage(caster, victim, damage, direct: !periodic, meleeDamage: false, startsCombat: startsCombat, threatSpell: spell, critical: critical,
-            durabilityLoss: durabilityLoss);
+            durabilityLoss: durabilityLoss, reflected: reflected);
         return health - Math.Min(health, victim.Health);
     }
 

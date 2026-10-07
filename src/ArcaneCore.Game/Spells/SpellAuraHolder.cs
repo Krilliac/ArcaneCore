@@ -203,6 +203,12 @@ public sealed class SpellAuraHolder
     /// </summary>
     public long AppliedAtUnixSeconds { get; internal set; }
 
+    /// <summary>The spell system clock (ms) when the holder was put on its target: the proc engine skips an aura applied after the event it handles began.</summary>
+    internal uint AppliedAtMs { get; set; }
+
+    /// <summary>The holder came from a reflected spell (vmangos SpellAuraHolder::IsReflected): its periodic damage on its own caster cannot end a duel by killing.</summary>
+    public bool IsReflected { get; internal set; }
+
     /// <summary>Visible aura slot 0-47, or <see cref="NoSlot"/>.</summary>
     public byte Slot { get; internal set; } = NoSlot;
 

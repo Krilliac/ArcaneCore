@@ -511,6 +511,17 @@ public sealed partial class SpellSystem
             cast.CastItem?.Guid ?? caster.Guid, caster.Guid, spell.Id, WithAmmoFlag(SpellCastFlags.Unknown9, spell), hits, misses, cast.Targets,
             RangedSpellFacts.IsRanged(spell) ? GetAmmoVisual(caster) : default), includeSelf: true); // ranged (hunter lane): ammo trailer
 
+        // Proc engine: the cast-end procs before the effects (vmangos Spell::cast, Spell.cpp:3724-3749), and for a channel the target triggers
+        // as soon as the targets are known (Spell.cpp:3682-3683).
+        Unit castEndTarget = unitTarget ?? caster;
+        FireCastEndProcs(cast, castEndTarget, targetEffects.TryGetValue(castEndTarget, out SpellTargetEntry? mainEntry) ? mainEntry.Miss : SpellMissInfo.None,
+            targetEffects.Count == 0);
+        var procOutcomes = targetEffects.Select(pair => (pair.Key, pair.Value.Miss)).ToList();
+        if (spell.IsChanneled && !cast.IsTriggered)
+        {
+            HandleAddTargetTriggerAuras(cast, procOutcomes);
+        }
+
         int duration = cast.Duration;
         if (spell.IsChanneled && duration > 0 && !cast.IsTriggered)
         {
@@ -532,8 +543,22 @@ public sealed partial class SpellSystem
 
         foreach ((Unit target, SpellTargetEntry entry) in targetEffects)
         {
+            if (entry.Miss == SpellMissInfo.Reflect)
+            {
+                // vmangos Spell::DoAllEffectOnTarget (Spell.cpp:1209-1224): the reflected spell lands on its caster instead, unless the caster is
+                // immune to it (reflectResult) or a game object cast it (hunter traps are not reflected back after 1.10, Spell.cpp:944-957).
+                if (_objectCastDepth == 0 && caster.IsAlive && !ImmunityRules.IsImmuneToSpell(this, caster, spell, castOnSelf: true)
+                    && ApplyEffects(cast, caster, entry.EffectMask, entry.Multipliers, reflected: true) is { } reflectedOutcome)
+                {
+                    NotifyOutcome(cast, reflectedOutcome with { Miss = SpellMissInfo.Reflect });
+                }
+
+                continue;
+            }
+
             if (entry.Miss != SpellMissInfo.None)
             {
+                FireSpellHitProcs(cast, target, entry.Miss, 0, 0, false, 0, entry.EffectMask, reflected: false);
                 SendNextMeleeSpellNoDamage(cast, target, entry.Miss);
                 // vmangos SpellCaster::SendSpellMiss; a missed hostile spell still starts combat (zero damage).
                 SendToSet(caster, WorldOpcode.SmsgSpelllogmiss, SpellPackets.BuildSpellLogMiss(spell.Id, caster.Guid, target.Guid, entry.Miss), includeSelf: true);
@@ -555,8 +580,16 @@ public sealed partial class SpellSystem
                 if (outcome.Damage == 0)
                     SendNextMeleeSpellNoDamage(cast, target, eligible: nextMeleeTarget);
                 HandleItemSpecialProc(cast, target, SpellMissInfo.None);
+                // vmangos Spell.cpp:1534-1537: a weapon ability that dealt damage triggers the target's damage shields.
+                if (outcome.Damage > 0 && !ReferenceEquals(caster, target) && CanTriggerWeaponProcs(spell))
+                    TriggerDamageShields(caster, target);
                 NotifyOutcome(cast, outcome);
             }
+        }
+
+        if (!spell.IsChanneled || cast.IsTriggered)
+        {
+            HandleAddTargetTriggerAuras(cast, procOutcomes); // vmangos Spell::finish (Spell.cpp:4368-4369)
         }
 
         // ranged (autorepeat lane): a non-triggered cast with the combat interrupt bit restarts the melee swing (vmangos Spell.cpp:3805-3810).

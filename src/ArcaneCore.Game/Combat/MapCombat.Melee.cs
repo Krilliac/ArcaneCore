@@ -434,6 +434,7 @@ public sealed partial class MapCombat
         // victim's defense skill-up.
         PlayerCombatSkills.OnMeleeResolved(attacker, victim, attackType, info.Outcome, environment.ShapeshiftForms);
         MeleeSwingResolved?.Invoke(info);   // vmangos ProcDamageAndSpell, before the packet and the damage (Unit.cpp:2260-2271)
+        SpellMitigation?.OnMeleeSwingResolved(info); // the aura procs of that call (Spells/Procs, docs/areas/procs.md)
         SubDamage[] sub = [new SubDamage(0, info.TotalDamage, info.Absorbed, 0)]; // vmangos Unit.cpp:1510-1565; physical school after block/absorb
         CombatPackets.SendToSet(attacker, WorldOpcode.SmsgAttackerstateupdate,
             CombatPackets.AttackerStateUpdate(info.HitInfo, attacker.Guid, victim.Guid, info.TotalDamage, sub, info.TargetState, info.Blocked));
@@ -709,14 +710,15 @@ public sealed partial class MapCombat
     /// dodge/parry rage case. <paramref name="startsCombat"/> false skips the combat link and the auto-attack start. Returns the damage dealt. <paramref name="threatSpell"/> and <paramref name="critical"/>: the spell the damage comes from and whether it crit, for the threat formula (<see cref="AddDamageThreat"/>);
     /// the spell also decides the death durability exemption (SPELL_ATTR_EX3_NO_DURABILITY_LOSS) and, with no threat to create
     /// (<see cref="SuppressesSpellThreat"/>), keeps the victim's AI out of AttackedBy. <paramref name="durabilityLoss"/> false is
-    /// vmangos DealDamage's durabilityLoss argument (instant kill, split damage: no death wear). Public for the spells area (direct
+    /// vmangos DealDamage's durabilityLoss argument (instant kill, split damage: no death wear). <paramref name="reflected"/> is its reflected
+    /// argument: a reflected spell hitting its own caster cannot kill it in a duel (MapCombat.Duel.cs). Public for the spells area (direct
     /// spell damage uses <paramref name="direct"/> = false for DoTs, and
     /// <paramref name="meleeDamage"/> = false for every spell). vmangos Unit.cpp DealDamage
     /// distinguishes DIRECT_DAMAGE from SPELL_DIRECT_DAMAGE: only weapon damage rewards
     /// outgoing rage, and its auto-start Attack call enables melee only for DIRECT_DAMAGE.
     /// </summary>
     public uint DealDamage(Unit attacker, Unit victim, uint damage, MeleeHitOutcome outcome = MeleeHitOutcome.Normal, uint cleanDamage = 0, bool direct = true, bool meleeDamage = true, bool startsCombat = true,
-        SpellInfo? threatSpell = null, bool critical = false, bool durabilityLoss = true)
+        SpellInfo? threatSpell = null, bool critical = false, bool durabilityLoss = true, bool reflected = false)
     {
         if (IsQuestSettlementPending(attacker) || IsQuestSettlementPending(victim) || !IsAliveState(victim))
         {
@@ -763,7 +765,7 @@ public sealed partial class MapCombat
         }
 
         // Duels end at 1 hp (MapCombat.Duel.cs; vmangos Unit.cpp:762-779).
-        bool duelEnded = ApplyDuelClamp(attacker, victim, ref damage);
+        bool duelEnded = ApplyDuelClamp(attacker, victim, ref damage, reflected);
 
         // The per-attacker damage history is recorded before the lethal check, so the killing blow counts
         // (vmangos Unit::UnitDamaged, Unit.cpp:788-796; the kill is at :825). Never for self damage.

@@ -52,6 +52,13 @@ public interface IDamageSink
     uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat, bool critical, bool durabilityLoss)
         => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat, critical);
 
+    /// <summary>
+    /// As above, carrying Unit::DealDamage's <c>reflected</c> flag: a reflected spell damaging its own caster (vmangos Unit.cpp:770-776, "Fixed bug
+    /// where you could kill someone in a duel with spell reflection") is cut to 1 health in a duel. Sinks without duels ignore it.
+    /// </summary>
+    uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic, bool startsCombat, bool critical, bool durabilityLoss, bool reflected)
+        => DealSpellDamage(caster, victim, spell, damage, periodic, startsCombat, critical, durabilityLoss);
+
     /// <summary>Heal <paramref name="amount"/>; returns the health actually restored.</summary>
     uint Heal(Unit caster, Unit target, SpellInfo spell, uint amount);
 

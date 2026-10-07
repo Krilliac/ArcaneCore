@@ -10,17 +10,19 @@ public sealed partial class MapCombat
     /// vmangos tests <c>m_duel</c> only) and takes damage that would bring it to 0 hp (<c>damage + 1 >= health</c>) is flagged as ending the
     /// duel. When the dealer is the duel opponent or a unit the opponent controls (<see cref="IPlayerControlledUnit"/>), the damage is
     /// cut to health - 1 so the victim survives; any other dealer (a third player, a creature, the victim itself) is not clamped and kills.
-    /// The reflected-spell clause (<c>pVictim == this &amp;&amp; reflected</c>) needs the reflected flag the spell combat rules lane owns
-    /// and is not modelled. A world without a <see cref="DuelService"/> has no duels, so nothing happens.
+    /// The reflected-spell clause (<c>pVictim == this &amp;&amp; reflected</c>, build &gt; 1.6.1: "Fixed bug where you could kill someone in a duel
+    /// with spell reflection") clamps too: <paramref name="reflected"/> damage the victim deals itself (its own spell, turned back). A world
+    /// without a <see cref="DuelService"/> has no duels, so nothing happens.
     /// </summary>
-    private bool ApplyDuelClamp(Unit attacker, Unit victim, ref uint damage)
+    private bool ApplyDuelClamp(Unit attacker, Unit victim, ref uint damage, bool reflected = false)
     {
         if (victim is not Player { Duel: { } duel } || DuelService.Find(_world) is null || (ulong)damage + 1 < victim.Health)
         {
             return false;
         }
 
-        if (ReferenceEquals(duel.Opponent, attacker) || ReferenceEquals(duel.Opponent, DuelRules.ControllingPlayer(attacker)))
+        if (ReferenceEquals(duel.Opponent, attacker) || ReferenceEquals(duel.Opponent, DuelRules.ControllingPlayer(attacker))
+            || (reflected && ReferenceEquals(victim, attacker)))
         {
             damage = victim.Health > 0 ? victim.Health - 1 : 0;
         }
