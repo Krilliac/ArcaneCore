@@ -619,7 +619,7 @@ public sealed partial class PlayerInventory
 
     private bool IsBoundToOther(Item item) => item.OwnerGuid != _ownerGuid && item.IsSoulBound;
 
-    private static bool IsInBank(Item item)
+    internal static bool IsInBank(Item item)
     {
         byte slot = item.Container?.Slot ?? item.Slot;
         return slot >= InventorySlots.BankItemStart && slot < InventorySlots.BankBagEnd;
