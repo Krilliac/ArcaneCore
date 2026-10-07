@@ -465,8 +465,8 @@ public sealed partial class MapCombat
             AttackType = attackType,
             VictimIsPlayer = victimIsPlayer,
             AttackerIsCreature = attacker is not Player,
-            AttackerIsPlayerControlled = attacker is Player,
-            VictimIsPlayerControlled = victimIsPlayer,
+            AttackerIsPlayerControlled = attacker.IsCharmerOrOwnerPlayerOrPlayerItself, // vmangos SpellCaster.cpp:548: a pet or charmed unit counts as its player
+            VictimIsPlayerControlled = victim.IsCharmerOrOwnerPlayerOrPlayerItself,
             VictimEvading = creatureVictim is { IsInEvadeMode: true },
             VictimStanding = IsStandingUp(victim),
             FromBehind = !HasInArc(victim, attacker, CombatConstants.DefaultArc),
@@ -501,7 +501,7 @@ public sealed partial class MapCombat
 
         // SetDamageIndependentHitInfoFlags
         HitInfo hit = attackType == WeaponAttackType.OffAttack ? HitInfo.LeftSwing : HitInfo.None;
-        if (attacker is Player && victim is Player)
+        if (attacker.IsCharmerOrOwnerPlayerOrPlayerItself && victim.IsCharmerOrOwnerPlayerOrPlayerItself) // Unit.cpp:1606-1613
         {
             hit |= HitInfo.Pvp;
         }
