@@ -71,7 +71,11 @@ public sealed partial class MapCombat
             RemoveCorpse(old);
         }
 
-        Corpse corpse = Corpse.CreateFor(player, c.PvpDeath);
+        // vmangos Player::CreateCorpse: InBattleGround() makes the body lootable (Player.cpp:4753-4754); bound to a match, or on a
+        // battleground map, as the reclaim rule reads it.
+        bool inBattleground = Death.DeathSeams.Find(_world)?.Battlegrounds?.MatchStatusOf(player.Guid) is not null
+            || player.Map?.Template is { IsBattleground: true };
+        Corpse corpse = Corpse.CreateFor(player, c.PvpDeath, lootable: inBattleground);
         c.PvpDeath = false;
         c.Corpse = corpse;
         AddCorpse(corpse);

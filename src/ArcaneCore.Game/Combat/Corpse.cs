@@ -18,6 +18,9 @@ public sealed class Corpse : WorldObject
     /// <summary>CORPSE_FLAG_HIDE_CLOAK.</summary>
     public const uint FlagHideCloak = 0x10;
 
+    /// <summary>CORPSE_FLAG_LOOTABLE: a battleground body whose insignia can be taken (vmangos Player::CreateCorpse, Player.cpp:4753-4754).</summary>
+    public const uint FlagLootable = 0x20;
+
     private static int s_nextCounter;
 
     private Corpse(ObjectGuid guid)
@@ -45,22 +48,33 @@ public sealed class Corpse : WorldObject
 
     /// <summary>
     /// Build the corpse of <paramref name="player"/> at its position (vmangos
-    /// Player::CreateCorpse): owner, position and facing, the native display id,
+    /// Player::CreateCorpse, Player.cpp:4719-4782): owner, position and facing, the native display id,
     /// CORPSE_FIELD_BYTES_1 = (0, race, gender, skin), CORPSE_FIELD_BYTES_2 = (face, hair
-    /// style, hair color, facial hair) and CORPSE_FLAG_UNK2. Equipment display ids
-    /// (CORPSE_FIELD_ITEM) and the hide helm/cloak flags come from the items area.
+    /// style, hair color, facial hair), CORPSE_FLAG_UNK2 with the hide helm and hide cloak flags of
+    /// PLAYER_FLAGS, the guild id and the equipment (CORPSE_FIELD_ITEM + slot = display id |
+    /// inventory type &lt;&lt; 24). <paramref name="lootable"/> adds CORPSE_FLAG_LOOTABLE, which vmangos sets
+    /// when the player is in a battleground ("to be able to remove insignia").
     /// </summary>
-    public static Corpse CreateFor(Player player, bool pvpDeath)
+    public static Corpse CreateFor(Player player, bool pvpDeath, bool lootable = false)
     {
         ArgumentNullException.ThrowIfNull(player);
-        return CreateAt(player, player.MapId, player.X, player.Y, player.Z, player.Orientation,
+        Corpse corpse = CreateAt(player, player.MapId, player.X, player.Y, player.Z, player.Orientation,
             pvpDeath ? CorpseType.ResurrectablePvp : CorpseType.ResurrectablePve);
+        if (lootable)
+        {
+            corpse.SetUInt32(UpdateFields.CorpseFieldFlags, corpse.GetUInt32(UpdateFields.CorpseFieldFlags) | FlagLootable);
+            corpse.ClearChangedFields();
+        }
+
+        return corpse;
     }
 
     /// <summary>
     /// The corpse of <paramref name="player"/> at an explicit place and of an explicit type: a body
     /// that was left in the world by an earlier session (vmangos loads it from the corpse table,
-    /// Corpse::LoadCorpse); appearance comes from the owner like <see cref="CreateFor"/>.
+    /// Corpse::LoadFromDB, Corpse.cpp:157-226, which reads the appearance, the equipment cache, the guild
+    /// and the player flags of the character row); appearance, gear, guild and the hide flags come from
+    /// the owner like <see cref="CreateFor"/>. Never lootable: vmangos saves no battleground body.
     /// </summary>
     public static Corpse CreateAt(Player player, uint mapId, float x, float y, float z, float orientation, CorpseType type)
     {
@@ -93,7 +107,23 @@ public sealed class Corpse : WorldObject
             ((uint)(byte)player.Race << 8) | ((uint)(byte)player.Gender << 16) | ((uint)skin << 24));
         corpse.SetUInt32(UpdateFields.CorpseFieldBytes2,
             face | ((uint)hairStyle << 8) | ((uint)hairColor << 16) | ((uint)facialHair << 24));
-        corpse.SetUInt32(UpdateFields.CorpseFieldFlags, FlagUnk2);
+        uint flags = FlagUnk2;
+        if ((player.Flags & PlayerFlags.HideHelm) != 0)
+        {
+            flags |= FlagHideHelm;
+        }
+
+        if ((player.Flags & PlayerFlags.HideCloak) != 0)
+        {
+            flags |= FlagHideCloak;
+        }
+
+        corpse.SetUInt32(UpdateFields.CorpseFieldFlags, flags);
+        corpse.SetUInt32(UpdateFields.CorpseFieldGuild, player.GetUInt32(UpdateFields.PlayerGuildid));
+        foreach ((byte slot, Items.Item item) in player.Inventory.Equipped)
+        {
+            corpse.SetUInt32(UpdateFields.CorpseFieldItem + slot, item.Template.DisplayId | (item.Template.InventoryType << 24));
+        }
 
         // A create block carries every value; nothing is pending.
         corpse.ClearChangedFields();
