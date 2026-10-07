@@ -84,14 +84,53 @@ public sealed class WaypointGeneratorTests
     }
 
     [Fact]
-    public void ASpawnWithNoPathAnywhere_StillIdles()
+    public void ASpawnWithNoPathAnywhere_WandersWithinItsSpawnDistance_ByDefault()
     {
-        CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 0, 0, movementType: 2)]);
+        // Both references leave such a creature standing (vmangos WaypointMovementGenerator::LoadPath logs and returns with no path,
+        // Movement/WaypointMovementGenerator.cpp:47-52); ArcaneCore's default falls back to random movement within the spawn's wander
+        // distance (5 yd when the spawn has none, RandomMovementGenerator.DefaultWanderDistance) so the content error does not freeze it.
+        CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 0, 0, movementType: 2, wander: 3)]);
         (WorldRuntime w, _, _, Creature wolf, _) = Start(content);
+        using WorldRuntime world = w;
+
+        Assert.Equal(MovementGeneratorType.Random, wolf.Motion.DefaultType);
+        float farthest = 0;
+        for (int i = 0; i < 300; i++)
+        {
+            world.RunTick(100);
+            if (wolf.Spline is { } spline)
+            {
+                farthest = MathF.Max(farthest, MathF.Sqrt((spline.EndX * spline.EndX) + (spline.EndY * spline.EndY)));
+            }
+        }
+
+        Assert.InRange(farthest, 0.01f, 3.0001f);
+    }
+
+    [Fact]
+    public void ASpawnWithNoPathAnywhere_StillIdles_WithTheRetailFallback()
+    {
+        var options = new CreatureOptions();
+        options.Movement.MissingWaypointPathFallback = MissingWaypointPathFallback.Idle;
+        CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 0, 0, movementType: 2)]);
+        (WorldRuntime w, _, _, Creature wolf, _) = Start(content, options: options);
         using WorldRuntime world = w;
 
         Assert.Equal(MovementGeneratorType.Idle, wolf.Motion.DefaultType);
         Assert.False(wolf.IsMoving);
+    }
+
+    [Fact]
+    public void TheContentAudit_ListsEveryWaypointSpawnWithoutAPath_Once()
+    {
+        // The per-creature warning (one per grid load, repeated on every respawn and map) became one aggregate warning at content load.
+        CreatureContent content = Content([Template(), Template(WolfEntry + 1) with { MovementType = 2 }],
+            [Spawn(1, WolfEntry, 0, 0, movementType: 2), Spawn(2, WolfEntry, 5, 0, movementType: 2), Spawn(3, WolfEntry, 9, 0, movementType: 2),
+             Spawn(4, WolfEntry, 0, 9, movementType: 1), Spawn(5, WolfEntry + 1, 0, 0, movementType: 2)],
+            waypoints: [(2u, Node(1, 5, 5))],
+            entryWaypoints: [(WolfEntry + 1, 0u, Node(1, 1, 1))]);
+
+        Assert.Equal([1u, 3u], content.FindWaypointSpawnsWithoutPath().Select(s => s.Guid).Order());
     }
 
     [Fact]

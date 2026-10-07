@@ -15,7 +15,7 @@ public enum MonsterMoveOffsetBase
 
 public sealed partial class CreatureOptions
 {
-    /// <summary>Creature movement fidelity switches (<c>Creatures:Movement</c>). Every default is retail.</summary>
+    /// <summary>Creature movement fidelity switches (<c>Creatures:Movement</c>). Every default is retail except <see cref="CreatureMovementOptions.MissingWaypointPathFallback"/>.</summary>
     public CreatureMovementOptions Movement { get; } = new();
 }
 
@@ -51,4 +51,24 @@ public sealed class CreatureMovementOptions
     /// regeneration, a third of the maximum every 5 s (Objects/Creature.cpp:1087-1160).
     /// </summary>
     public bool EvadeRestoresFullHealth { get; set; }
+
+    /// <summary>
+    /// <c>Creatures:Movement:MissingWaypointPathFallback</c>: what a creature with waypoint movement but no path (neither its spawn's
+    /// <c>creature_movement</c> rows nor its entry's <c>creature_movement_template</c> path) does. Both references leave it standing
+    /// (vmangos WaypointMovementGenerator::LoadPath, Movement/WaypointMovementGenerator.cpp:47-52, logs and keeps an empty path);
+    /// that is <see cref="MissingWaypointPathFallback.Idle"/>. The default, <see cref="MissingWaypointPathFallback.Random"/>, is a
+    /// deliberate deviation: the creature wanders within its spawn's wander distance (5 yd when the spawn has none) so a content
+    /// gap does not leave a patrol frozen in place. The content audit reports such spawns once at load either way.
+    /// </summary>
+    public MissingWaypointPathFallback MissingWaypointPathFallback { get; set; } = MissingWaypointPathFallback.Random;
+}
+
+/// <summary>The default movement of a waypoint creature without a path (<see cref="CreatureMovementOptions.MissingWaypointPathFallback"/>).</summary>
+public enum MissingWaypointPathFallback
+{
+    /// <summary>Random movement within the spawn's wander distance (ArcaneCore default).</summary>
+    Random,
+
+    /// <summary>Stand at the spawn point (both references).</summary>
+    Idle,
 }

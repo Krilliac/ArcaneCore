@@ -297,8 +297,11 @@ public sealed partial class CreatureMapSystem
                 CreatureWaypointPath path = _content.ResolveWaypointPath(creature.Spawn?.Guid ?? 0, creature.Template.Entry);
                 if (path.Points.Count == 0)
                 {
-                    _logger.LogWarning("{Creature} has waypoint movement but no creature_movement or creature_movement_template path; idling", creature.Guid);
-                    return IdleMovementGenerator.Instance;
+                    // Reported once in aggregate at content load (CreatureContent.FindWaypointSpawnsWithoutPath); per creature only at debug.
+                    bool wander = _options.Movement.MissingWaypointPathFallback == MissingWaypointPathFallback.Random;
+                    _logger.LogDebug("{Creature} has waypoint movement but no creature_movement or creature_movement_template path; {Fallback}",
+                        creature.Guid, wander ? "wandering" : "idling");
+                    return wander ? new RandomMovementGenerator() : IdleMovementGenerator.Instance;
                 }
 
                 return new WaypointMovementGenerator(path.Points);
