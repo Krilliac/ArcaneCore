@@ -654,7 +654,7 @@ public sealed partial class MapCombat
             return;
         }
 
-        if (info.TargetState == VictimState.Parry)
+        if (info.TargetState == VictimState.Parry && victim is not Creatures.Creature { ParryHastens: false }) // cmangos NO_PARRY_HASTEN
         {
             UnitCombat vc = victim.Combat;
             float offTime = vc.GetAttackTimer(WeaponAttackType.OffAttack);

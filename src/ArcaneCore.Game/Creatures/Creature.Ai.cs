@@ -73,7 +73,7 @@ public sealed partial class Creature : Unit, ICombatCreature
         }
 
         System?.StopMoving(this);
-        map.Combat.Attack(this, attacker);
+        map.Combat.Attack(this, attacker, MeleeAllowedByTemplate);
     }
 
     /// <summary>vmangos CreatureAI::JustDied: tell the AI, then begin the map system's corpse and respawn timers.</summary>

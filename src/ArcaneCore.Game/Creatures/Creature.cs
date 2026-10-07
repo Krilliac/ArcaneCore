@@ -126,11 +126,26 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// <summary>vmangos Creature::IsPet: a summoned Pet object of any kind (pet, guardian, mini pet).</summary>
     public bool IsPet => Summon is { Kind: Pets.SummonKind.Pet or Pets.SummonKind.Guardian or Pets.SummonKind.MiniPet };
 
-    public bool CanParry => true;
+    /// <summary>vmangos CREATURE_STATIC_FLAG_2_NO_CRUSHING_BLOWS (CreatureDefines.h:138).</summary>
+    public const uint StaticFlag2NoCrushingBlows = 0x00000010;
 
-    public bool CanBlock => true;
+    /// <summary>False with CREATURE_FLAG_EXTRA_NO_PARRY (vmangos SpellCaster.cpp:565-571).</summary>
+    public bool CanParry => (Template.Behaviour & CreatureBehaviourFlags.NoParry) == 0;
 
-    public bool CanCrush => true;
+    /// <summary>False with CREATURE_FLAG_EXTRA_NO_BLOCK.</summary>
+    public bool CanBlock => (Template.Behaviour & CreatureBehaviourFlags.NoBlock) == 0;
+
+    /// <summary>vmangos SpellCaster.cpp:550: never a pet, nor with CREATURE_STATIC_FLAG_2_NO_CRUSHING_BLOWS.</summary>
+    public bool CanCrush => !IsPet && (Template.StaticFlags2 & StaticFlag2NoCrushingBlows) == 0;
+
+    /// <summary>False with cmangos CREATURE_EXTRA_FLAG_NO_PARRY_HASTEN: a parry does not pull this creature's swing timer forward.</summary>
+    internal bool ParryHastens => (Template.Behaviour & CreatureBehaviourFlags.NoParryHasten) == 0;
+
+    /// <summary>
+    /// Whether the template lets the creature auto attack: not with vmangos CREATURE_STATIC_FLAG_NO_MELEE (CreatureAI.cpp:40)
+    /// nor cmangos CREATURE_EXTRA_FLAG_NO_MELEE. The AI starts from this and scripts may still turn melee on.
+    /// </summary>
+    internal bool MeleeAllowedByTemplate => (Template.Behaviour & (CreatureBehaviourFlags.NoMelee | CreatureBehaviourFlags.NoMeleeFlee)) == 0;
 
     public bool IsWorldBoss => (CreatureRank)Template.Rank == CreatureRank.WorldBoss;
 
