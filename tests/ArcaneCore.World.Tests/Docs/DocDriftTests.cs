@@ -47,6 +47,16 @@ public sealed class DocDriftTests
         Assert.Equal(8L * 1024 * 1024, options.MaxQueuedWorldBytes);
         string queue = Row("World:MaxQueuedWorldPackets` / `MaxQueuedWorldBytes");
         Assert.Contains("8192 / 8388608", queue, StringComparison.Ordinal);
+
+        // The shared per-address cap is the third default-on hardening switch; the daemon caps it combines with stay 0.
+        var protection = new NetProtectionOptions();
+        Assert.Equal(16, protection.MaxConnectionsPerIp);
+        string cap = Row("Net:Protection:MaxConnectionsPerIp");
+        Assert.Contains("16", cap, StringComparison.Ordinal);
+        Assert.Contains("on by default", cap, StringComparison.Ordinal);
+        Assert.Contains("0 disables", cap, StringComparison.Ordinal);
+        Assert.Contains("0 / 0 (unlimited)", Row("Auth:MaxConnections` / `MaxConnectionsPerIp"), StringComparison.Ordinal);
+        Assert.Contains("0 / 0 (unlimited)", Row("World:MaxConnections` / `MaxConnectionsPerIp"), StringComparison.Ordinal);
     }
 
     [Fact]

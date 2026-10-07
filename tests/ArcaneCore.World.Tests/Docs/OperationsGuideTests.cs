@@ -54,6 +54,17 @@ public sealed class OperationsGuideTests
         Assert.DoesNotContain("Auth:MaxConnections", nonRetail);
         Assert.True(new ArcaneCore.World.Gm.Core.GmOptions().LowerSecurity);
         Assert.True(new ArcaneCore.World.Bans.BanOptions().ProtectHigherSecurity);
+
+        // The shared per-address connection cap (netguard lane) is on by default with no vmangos equivalent, while the
+        // daemon caps stay 0: the register must say so and name 0 as the switch that restores retail.
+        Assert.Contains("Net:Protection:MaxConnectionsPerIp", nonRetail);
+        Assert.Equal(16, new NetProtectionOptions().MaxConnectionsPerIp);
+        Deviation cap = DeviationRegister.All.Single(d => d.Key == "Net:Protection:MaxConnectionsPerIp");
+        Assert.Equal("16", cap.Default);
+        Assert.Contains("Set 0", cap.Advice, StringComparison.Ordinal);
+        Assert.Contains("On by default", cap.Advice, StringComparison.Ordinal);
+        Assert.DoesNotContain("World:MaxConnectionsPerIp", nonRetail);
+        Assert.DoesNotContain("Auth:MaxConnectionsPerIp", nonRetail);
     }
 
     [Fact]

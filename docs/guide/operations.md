@@ -83,6 +83,7 @@ not, the "what to do" column says how to get retail. The defaults in this table 
 | `World:ListenRangeTextEmote` | `25` | retail | vmangos code default 25 (World.cpp:558) but its shipped mangosd.conf.dist.in sets 40 (:1560). | Set 40 to match a stock vmangos realm. |
 | `World:Maps:GridUnload` | `true` | retail | vmangos code default true (World.cpp:582) but its shipped mangosd.conf.dist.in sets 0 (:399). | Set false to keep grids loaded as the shipped vmangos configuration does. |
 | `Database:Upgrade:Policy` | `Always` | **not retail** | vmangos never creates or upgrades a database on start. | Use `CreateOnly` or `Never` once the databases exist and upgrade with `arcane-db`. |
+| `Net:Protection:MaxConnectionsPerIp` | `16` | **not retail** | No vmangos equivalent; unlimited. The daemon caps `Auth:`/`World:MaxConnectionsPerIp` stay 0, this shared cap is what applies. | On by default as hardening: 16 simultaneous connections per client address on each listener, so a LAN party or campus NAT with more players than that behind one address is cut off at the 17th. Set 0 to restore the retail unlimited behaviour (restart to change). |
 <!-- register:end -->
 
 Two things that vmangos has and ArcaneCore does not, so they are limits and not options: the **wrong-password throttle** of the logon server (vmangos

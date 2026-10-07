@@ -13,6 +13,7 @@ ArcaneCore.Kernel.Diagnostics.DiagnosticsHostingExtensions.UseArcaneDiagnostics(
 builder.Services.AddArcaneCoreLogging(builder.Configuration);
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
 builder.Services.Configure<RealmSeedOptions>(builder.Configuration.GetSection(RealmSeedOptions.SectionName));
+builder.Services.AddNetProtection(builder.Configuration);
 builder.Services.AddAuthDatabase(builder.Configuration);
 builder.Services.AddRealmResilience(builder.Configuration); // after AddAuthDatabase: guards the auth stores (docs/ops/resilience.md)
 builder.Services.AddHostedService<LogonServer>();

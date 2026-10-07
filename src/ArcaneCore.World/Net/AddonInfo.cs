@@ -17,6 +17,22 @@ public static class AddonInfo
     private const byte StatusHidden = 2;  // ADDON_STATUS_HIDDEN
     private const uint CorrectModulusCrc = 0x4C1C776D;
 
+    /// <summary>Longest addon name read (bytes). Addon folder names are short; the bound stops a 1 MiB decompressed block from becoming one string.</summary>
+    public const int MaxAddonNameBytes = 256;
+
+    /// <summary>Most records answered; a retail client ships a few dozen addons, heavy UIs a few hundred.</summary>
+    public const int MaxAddons = 4096;
+
+    /// <summary>The largest record the response can grow by: status, info, key flag, the 256-byte key, revision and url flag.</summary>
+    private const int MaxRecordBytes = 1 + 1 + 1 + 256 + 4 + 1;
+
+    /// <summary>
+    /// The response never exceeds one SMSG payload (<see cref="WorldSession.MaxServerPayload"/>): a
+    /// block with tens of thousands of records would otherwise build a frame the size field cannot
+    /// carry, and <c>Send</c> would throw out of the authentication handler.
+    /// </summary>
+    public const int MaxResponseBytes = WorldSession.MaxServerPayload;
+
     /// <summary>Blizzard public-key blob sent when an addon's modulus CRC mismatches.</summary>
     private static ReadOnlySpan<byte> PublicKey =>
     [
@@ -40,7 +56,10 @@ public static class AddonInfo
 
     /// <summary>
     /// Build the SMSG_ADDON_INFO response. Returns an empty payload if the block is absent
-    /// or cannot be decompressed (the client still proceeds to character select).
+    /// or cannot be decompressed (the client still proceeds to character select). Parsing never
+    /// throws: a record that does not fit (name over <see cref="MaxAddonNameBytes"/>, a truncated
+    /// tail) ends the list, and the list ends at <see cref="MaxAddons"/> records or when the next
+    /// record could push the response past <see cref="MaxResponseBytes"/>.
     /// </summary>
     public static byte[] BuildResponse(ReadOnlySpan<byte> addonBlock)
     {
@@ -51,19 +70,19 @@ public static class AddonInfo
         }
 
         var reader = new PacketReader(decompressed);
-        while (reader.Remaining > 0)
+        int records = 0;
+        while (reader.Remaining > 0 && records < MaxAddons && response.Length + MaxRecordBytes <= MaxResponseBytes)
         {
-            string name = reader.ReadCString();
-            if (reader.Remaining < 9)
+            if (!reader.TryReadCStringBytes(MaxAddonNameBytes, out ReadOnlySpan<byte> name)
+                || !reader.TryReadByte(out _)                // flags (enabled)
+                || !reader.TryReadUInt32(out uint modulusCrc)
+                || !reader.TryReadUInt32(out _))             // url crc
             {
-                break; // flags(1) + modulusCrc(4) + urlCrc(4)
+                break; // a truncated or oversized record ends the list
             }
 
-            _ = reader.ReadByte();              // flags (enabled)
-            uint modulusCrc = reader.ReadUInt32();
-            _ = reader.ReadUInt32();            // url crc
-
-            if (name.Contains("Blizzard", StringComparison.Ordinal))
+            records++;
+            if (name.IndexOf("Blizzard"u8) >= 0)
             {
                 response.WriteByte(StatusHidden);
                 response.WriteByte(1); // info provided

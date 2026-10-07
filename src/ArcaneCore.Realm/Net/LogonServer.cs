@@ -14,13 +14,20 @@ namespace ArcaneCore.Realm.Net;
 /// <summary>
 /// TCP listener for the logon/realm daemon (default port 3724, Charter §3). Accepts
 /// connections and runs each through a <see cref="LogonSession"/> on its own DI scope.
+/// Admission (connection caps, per-address connection rate) and the per-address failure budget
+/// live in one <see cref="NetGuard"/> built from <c>Net:Protection</c> when the listener starts
+/// (docs/ops/netguard.md); a missing registration keeps the defaults, so every protection is on.
 /// </summary>
 public sealed class LogonServer(
     IServiceScopeFactory scopeFactory,
     IOptions<AuthOptions> options,
     ILoggerFactory loggerFactory,
-    ILogger<LogonServer> logger) : BackgroundService
+    ILogger<LogonServer> logger,
+    IOptions<NetProtectionOptions>? protection = null) : BackgroundService
 {
+    /// <summary>The guard of the running listener (null before it starts); exposed for diagnostics and tests.</summary>
+    public NetGuard? Guard { get; private set; }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         AuthOptions config = options.Value;
@@ -31,10 +38,11 @@ public sealed class LogonServer(
 
         try
         {
-            var limiter = new ConnectionLimiter(() => config.MaxConnections, () => config.MaxConnectionsPerIp);
+            var guard = new NetGuard(protection?.Value ?? new NetProtectionOptions(), () => config.MaxConnections, () => config.MaxConnectionsPerIp, logger);
+            Guard = guard;
             await AcceptLoop.RunAsync(
                 ct => listener.AcceptTcpClientAsync(ct),
-                client => Admit(client, limiter, config, stoppingToken),
+                client => Admit(client, guard, config, stoppingToken),
                 logger,
                 stoppingToken).ConfigureAwait(false);
         }
@@ -49,19 +57,18 @@ public sealed class LogonServer(
         }
     }
 
-    /// <summary>Enforce the connection caps before any scope or session is created.</summary>
-    private void Admit(TcpClient client, ConnectionLimiter limiter, AuthOptions config, CancellationToken stoppingToken)
+    /// <summary>Enforce the connection caps and the connection rate before any scope or session is created.</summary>
+    private void Admit(TcpClient client, NetGuard guard, AuthOptions config, CancellationToken stoppingToken)
     {
         IDisposable? lease = null;
         try
         {
             if (client.Client.RemoteEndPoint is IPEndPoint remote)
             {
-                lease = limiter.TryAcquire(remote.Address);
+                lease = guard.TryAdmit(remote.Address);
                 if (lease is null)
                 {
-                    logger.LogDebug("[{Endpoint}] logon connection refused (connection limit)", remote);
-                    client.Dispose();
+                    client.Dispose(); // refused and already logged (rate-limited) by the guard
                     return;
                 }
             }
@@ -72,10 +79,10 @@ public sealed class LogonServer(
             return;
         }
 
-        _ = HandleClientAsync(client, config, lease, stoppingToken);
+        _ = HandleClientAsync(client, config, guard, lease, stoppingToken);
     }
 
-    private async Task HandleClientAsync(TcpClient client, AuthOptions config, IDisposable? lease, CancellationToken stoppingToken)
+    private async Task HandleClientAsync(TcpClient client, AuthOptions config, NetGuard guard, IDisposable? lease, CancellationToken stoppingToken)
     {
         string endpoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
         logger.LogInformation("[{Endpoint}] connected", endpoint);
@@ -92,7 +99,7 @@ public sealed class LogonServer(
 
                 var session = new LogonSession(
                     stream, accountStore, realmStore, config,
-                    loggerFactory.CreateLogger<LogonSession>(), endpoint, banStore);
+                    loggerFactory.CreateLogger<LogonSession>(), endpoint, banStore, guard);
 
                 await session.RunAsync(stoppingToken).ConfigureAwait(false);
             }

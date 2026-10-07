@@ -13,7 +13,10 @@ namespace ArcaneCore.World.Net;
 
 /// <summary>
 /// TCP listener for the world daemon (default port 8085, charter §3). Each connection gets
-/// its own DI scope and a <see cref="WorldSession"/>.
+/// its own DI scope and a <see cref="WorldSession"/>. Admission (connection caps, per-address
+/// connection rate) and the per-address failure budget live in one <see cref="NetGuard"/> built
+/// from <c>Net:Protection</c> when the listener starts (docs/ops/netguard.md); a missing
+/// registration keeps the defaults, so every protection is on.
 /// </summary>
 public sealed class WorldServer(
     IServiceScopeFactory scopeFactory,
@@ -23,8 +26,12 @@ public sealed class WorldServer(
     WorldRuntime world,
     SessionRegistry registry,
     ILoggerFactory loggerFactory,
-    ILogger<WorldServer> logger) : BackgroundService
+    ILogger<WorldServer> logger,
+    IOptions<NetProtectionOptions>? protection = null) : BackgroundService
 {
+    /// <summary>The guard of the running listener (null before it starts); exposed for diagnostics and tests.</summary>
+    public NetGuard? Guard { get; private set; }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         WorldOptions config = options.Value;
@@ -37,7 +44,8 @@ public sealed class WorldServer(
 
         try
         {
-            var limiter = new ConnectionLimiter(() => config.MaxConnections, () => config.MaxConnectionsPerIp);
+            var guard = new NetGuard(protection?.Value ?? new NetProtectionOptions(), () => config.MaxConnections, () => config.MaxConnectionsPerIp, logger);
+            Guard = guard;
             await AcceptLoop.RunAsync(
                 ct => listener.AcceptTcpClientAsync(ct),
                 client =>
@@ -48,11 +56,10 @@ public sealed class WorldServer(
                     {
                         if (client.Client.RemoteEndPoint is IPEndPoint remote)
                         {
-                            lease = limiter.TryAcquire(remote.Address);
+                            lease = guard.TryAdmit(remote.Address);
                             if (lease is null)
                             {
-                                logger.LogDebug("[{Endpoint}] world connection refused (connection limit)", remote);
-                                client.Dispose();
+                                client.Dispose(); // refused and already logged (rate-limited) by the guard
                                 return;
                             }
                         }
@@ -64,7 +71,7 @@ public sealed class WorldServer(
                     }
 
                     sessions.RemoveWhere(static session => session.IsCompleted);
-                    sessions.Add(HandleClientAsync(client, lease, sessionStop.Token));
+                    sessions.Add(HandleClientAsync(client, guard, lease, sessionStop.Token));
                 },
                 logger,
                 stoppingToken).ConfigureAwait(false);
@@ -99,7 +106,7 @@ public sealed class WorldServer(
         }
     }
 
-    private async Task HandleClientAsync(TcpClient client, IDisposable? lease, CancellationToken stoppingToken)
+    private async Task HandleClientAsync(TcpClient client, NetGuard guard, IDisposable? lease, CancellationToken stoppingToken)
     {
         string endpoint = "unknown";
         try
@@ -114,7 +121,7 @@ public sealed class WorldServer(
             {
                 var session = new WorldSession(
                     stream, endpoint, scope.ServiceProvider, opcodes, world, registry,
-                    sessionOptions.Value, loggerFactory.CreateLogger<WorldSession>());
+                    sessionOptions.Value, loggerFactory.CreateLogger<WorldSession>(), guard);
                 await session.RunAsync(stoppingToken).ConfigureAwait(false);
             }
         }
