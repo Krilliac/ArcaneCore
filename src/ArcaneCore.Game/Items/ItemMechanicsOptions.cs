@@ -26,6 +26,26 @@ public sealed class ItemMechanicsOptions
     public double DurabilityLossChanceDamage { get; set; } = 0.5;
 
     /// <summary>
+    /// mangos <c>DurabilityLossChance.Parry</c> (mangos-classic World.cpp:461, mangoszero WorldConfig.cpp:234; default 0.05): the percent chance
+    /// that a player who parries a melee swing loses a durability point on the main-hand weapon (MapCombat.Durability.cs). Zero or less never
+    /// rolls; <see cref="DurabilityLossEnable"/> false overrides it.
+    /// </summary>
+    public double DurabilityLossChanceParry { get; set; } = 0.05;
+
+    /// <summary>
+    /// mangos <c>DurabilityLossChance.Block</c> (mangos-classic World.cpp:462, mangoszero WorldConfig.cpp:235; default 0.05): the percent chance
+    /// that a player who blocks a melee swing loses a durability point on the off-hand item (the shield). Zero or less never rolls.
+    /// </summary>
+    public double DurabilityLossChanceBlock { get; set; } = 0.05;
+
+    /// <summary>
+    /// mangos <c>DurabilityLossChance.Absorb</c> (mangos-classic World.cpp:460, mangoszero WorldConfig.cpp:233; default 0.5): the percent chance
+    /// that a player whose absorb effects take part of a melee swing loses a durability point on one worn armor piece (the hit-taken pool).
+    /// Zero or less never rolls.
+    /// </summary>
+    public double DurabilityLossChanceAbsorb { get; set; } = 0.5;
+
+    /// <summary>
     /// How often (ms) the per-map item maintenance runs: timed-item ticks and map/area-limited item
     /// checks. vmangos reacts to the zone change itself (Player::UpdateZone, Player.cpp:6643-6656)
     /// and ticks durations once a second (Player.cpp:1155); here Player.ZoneId has no change

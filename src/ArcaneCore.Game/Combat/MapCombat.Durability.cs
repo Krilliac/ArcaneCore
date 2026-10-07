@@ -62,13 +62,59 @@ public sealed partial class MapCombat
     /// vmangos roll_chance_f(DurabilityLossChance.Damage). Nothing is rolled (the random source is not advanced) when
     /// durability loss is disabled or the chance is not positive, so those configurations cost nothing per hit.
     /// </summary>
-    private bool RollDurabilityChance(ItemMechanicsOptions options)
+    private bool RollDurabilityChance(ItemMechanicsOptions options) => RollDurabilityChance(options, options.DurabilityLossChanceDamage);
+
+    /// <summary>roll_chance_f(<paramref name="chance"/>) under the global <c>Items:DurabilityLossEnable</c> switch; a chance of 0 or less draws nothing.</summary>
+    private bool RollDurabilityChance(ItemMechanicsOptions options, double chance)
     {
-        if (!options.DurabilityLossEnable || !(options.DurabilityLossChanceDamage > 0d))
+        if (!options.DurabilityLossEnable || !(chance > 0d))
         {
             return false;
         }
 
-        return (float)options.DurabilityLossChanceDamage > Random.NextFloat(0f, DurabilityChancePercentScale);
+        return (float)chance > Random.NextFloat(0f, DurabilityChancePercentScale);
+    }
+
+    /// <summary>
+    /// Wear from defending a white swing, after its damage was dealt, while the player victim still lives: a parry wears the main-hand weapon
+    /// (<c>Items:DurabilityLossChanceParry</c>), a block the off-hand shield (<c>Items:DurabilityLossChanceBlock</c>), and damage that absorb
+    /// effects took a worn armor piece from the hit-taken pool (<c>Items:DurabilityLossChanceAbsorb</c>). The three settings and their defaults are
+    /// the mangos <c>DurabilityLossChance.Parry/Block/Absorb</c> (mangos-classic World.cpp:460-462, mangoszero WorldConfig.cpp:233-235); no
+    /// reference core still reads them (vmangos dropped them, World.cpp:554 keeps only .Damage), so which item each one wears is a documented
+    /// reconstruction (docs/areas/items.md). A swing that missed, was dodged or was fully blocked does not reach the hit-taken roll, which is
+    /// why these exist. World thread only; allocation free.
+    /// </summary>
+    private void RollDefenseDurability(MeleeDamageInfo info)
+    {
+        if (info.Target is not Player victim || ReferenceEquals(info.Attacker, info.Target) || !IsAliveState(victim))
+        {
+            return;
+        }
+
+        ItemMechanicsOptions options = victim.Inventory.Options;
+        if (info.Outcome == MeleeHitOutcome.Parry)
+        {
+            if (RollDurabilityChance(options, options.DurabilityLossChanceParry))
+            {
+                victim.Inventory.DurabilityPointLossForEquipSlot(InventorySlots.MainHand);
+            }
+
+            return;
+        }
+
+        if (info.Outcome == MeleeHitOutcome.Block && RollDurabilityChance(options, options.DurabilityLossChanceBlock))
+        {
+            victim.Inventory.DurabilityPointLossForEquipSlot(InventorySlots.OffHand);
+        }
+
+        if (info.Absorbed > 0 && RollDurabilityChance(options, options.DurabilityLossChanceAbsorb))
+        {
+            Span<byte> armor = stackalloc byte[InventorySlots.EquipmentEnd];
+            int count = victim.Inventory.CollectWornArmorWithDurability(armor);
+            if (count > 0)
+            {
+                victim.Inventory.DurabilityPointLossForEquipSlot(armor[Random.Next(0, count - 1)]);
+            }
+        }
     }
 }
