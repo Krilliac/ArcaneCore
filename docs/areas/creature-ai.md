@@ -99,6 +99,11 @@ docs/integration/creature-ai.md.
   to an `EventAiEngine`; the engine owns the machinery and the event/action types are handler classes
   found by reflection (`EventAiRegistry`; a duplicate type id fails at startup), so a new event or action
   is one new file.
+  - **Coverage at load** (`EventAiCoverage.Analyze`): the world logs used unsupported event/action IDs
+    with row counts, then separately logs unsupported reference IDs absent from the loaded scripts.
+    It also counts creature entry or spawn-guid script keys for which every row has a handler and no
+    unsupported parameter condition. The offline z2815 audit and complete ID counts are in
+    [eventai-completeness-20261008.md](../integration/eventai-completeness-20261008.md).
   - **Engine** (cmangos citations): holders per row, entry rows then spawn-guid rows (`InitAI`
     :102-163); timer-driven events evaluated in batches every `Creatures:EventAi:UpdateIntervalMs`
     (500, `EVENT_UPDATE_TIME` CreatureEventAI.h:32) with the strict `<` of `UpdateEventTimers`
