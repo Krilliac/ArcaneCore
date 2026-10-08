@@ -178,6 +178,15 @@ Update 2 (branch `claude/bot-revive`): the last two items.
   place (it waited under the flat rule; proven by switching the creature system off). The camp that covers the whole radius moved
   from 22 to 15 yards (level-1 monsters reach 18 yards against a level-1 bot, so 22 no longer camps). The clear-ground and
   real-terrain tests check the spot and the revive point against each creature's own reach instead of 25 yards.
-* Still open: in a replay of all five bots, Ironwander died twice near Kharanos (around 520 s) and both times took the spirit
-  healer within 10 seconds of starting its corpse run from the graveyard above it (`-5156, -865, 507`, the body 280 to 290 yards
-  away): the walk stopped closing on the body for `StuckMs`. Not investigated; it is a corpse-run route, not the camped-body rule.
+* Ironwander's corpse runs from the ridge above Kharanos (branch `claude/bot-corpserun`). The graveyard at `-5165, -876, 507`
+  sits above a switchback: the navigation mesh's route to a body 270 to 292 yards west starts north-east, and the straight-line
+  distance grew from 291.8 to 307.9 yards over more than 10 seconds before it shrank. The corpse run counted only a new best
+  straight-line distance as closing, so `StuckMs` judged it stuck and it took the spirit healer every time (three deaths per
+  replay, all through the healer). Now walking down the route being followed (less way left along its legs, then straight on
+  to the goal, `PlayerbotRecovery.RouteLeft`) also counts as closing; a freshly planned route only sets its yardstick, and only
+  the straight-line distance is progress for the 60-second bound. The real-terrain test from that graveyard to that body takes
+  the spirit healer before the change and reaches the body after.
+* The live replay ran the death clock on wall time while game time ran about 30 times faster, so a ghost at its body waited
+  out a 30-second reclaim delay for 15 game minutes. The replay now registers a death clock that follows game time. With both
+  changes, every death in three replays (Ironwander, Dawnrover, Mirthblade) was revived at the body, 1.8 to 38.6 yards from it,
+  none through the spirit healer.
