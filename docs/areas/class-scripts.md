@@ -44,7 +44,7 @@ procced by `SpellSystem.HandleItemCombatProc` (Rockbiter Weapon's TOTEM effect a
 Weapon are data-driven there. The enchantment rows come from the client's SpellItemEnchantment.dbc and the PPM rows from `spell_proc_item_enchant`.
 
 Totems: the totem is rooted (`MovementFlags.Root` at summon and on every active update, `TotemSystem.cs:277`, `TotemSystem.Active.cs:21`;
-`ActiveTotemTests` asserts it) and Searing Totem casts: the build 5875 `totem_spell` maps Searing Totem 2523 to 22048 (2.2 s cast, 20 yd, fire), a
+`ActiveTotemTests` and `TotemRootTests` assert it) and Searing Totem casts: the build 5875 `totem_spell` maps Searing Totem 2523 to 22048 (2.2 s cast, 20 yd, fire), a
 cast-time spell, so `TotemSystem.Active` drives it (ActiveTotemTests, TotemLoopbackTests).
 
 ## Rogue
