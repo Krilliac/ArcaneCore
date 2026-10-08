@@ -177,6 +177,61 @@ public static class ScenarioBattlegrounds
     /// <summary>The centre of an area trigger, or null.</summary>
     public static (uint MapId, float X, float Y, float Z)? FindAreaTrigger(this ScenarioContext context, uint triggerId)
         => WorldMaps.Of(context.World).FindAreaTrigger(triggerId) is { } trigger ? (trigger.MapId, trigger.X, trigger.Y, trigger.Z) : null;
+
+    /// <summary>
+    /// The opening of a battleground scenario: log in an Alliance (human) and a Horde (orc) warrior, queue each at a battlemaster of
+    /// <paramref name="type"/> on its home continent, take the invitation, port in, and wait for the gates to open. Returns the bots and their
+    /// match.
+    /// </summary>
+    public static async Task<(ScenarioBot Alliance, ScenarioBot Horde, Battleground Match)> EnterMatchAsync(this ScenarioContext context,
+        BattlegroundType type, string allianceBot, string hordeBot, TimeSpan startWait)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        uint mapId = BattlegroundManager.MapOfType(type);
+        ScenarioBot ally = await context.StepAsync("login " + allianceBot, () => context.LoginAsync(allianceBot, race: 1, characterClass: 1)).ConfigureAwait(false);
+        ScenarioBot horde = await context.StepAsync("login " + hordeBot, () => context.LoginAsync(hordeBot, race: 2, characterClass: 1)).ConfigureAwait(false);
+
+        foreach (ScenarioBot bot in new[] { ally, horde })
+        {
+            await context.StepAsync($"{bot.Name} queues at a battlemaster", async () =>
+            {
+                uint home = await bot.ReadAsync(p => p.MapId).ConfigureAwait(false);
+                var master = context.FindBattlemaster(home, type) ?? throw new ScenarioAssertionException($"no {type} battlemaster on map {home}");
+                await context.PlaceAsync(bot, home, master.X + 2f, master.Y, master.Z, MathF.PI).ConfigureAwait(false);
+                long mark = bot.Mark();
+                ScenarioContext.Expect(await bot.BattlemasterHelloAsync(master.Guid).ConfigureAwait(false), "hello refused");
+                await bot.WaitForPacketAsync(WorldOpcode.SmsgBattlefieldList, p => p, since: mark).ConfigureAwait(false);
+                ScenarioContext.Expect(await bot.JoinBattlegroundAsync(master.Guid, mapId).ConfigureAwait(false), "join refused");
+                await bot.WaitForPacketAsync(WorldOpcode.SmsgBattlefieldStatus, BattlefieldStatus,
+                    s => s.Status is BattlegroundStatus.WaitQueue or BattlegroundStatus.WaitJoin, mark).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        }
+
+        foreach (ScenarioBot bot in new[] { ally, horde })
+        {
+            await context.StepAsync($"{bot.Name} is invited and ports in", async () =>
+            {
+                await bot.WaitForPacketAsync(WorldOpcode.SmsgBattlefieldStatus, BattlefieldStatus,
+                    s => s.Status == BattlegroundStatus.WaitJoin && s.MapId == mapId).ConfigureAwait(false);
+                ScenarioContext.Expect(await bot.PortBattlegroundAsync(mapId).ConfigureAwait(false), "port refused");
+                await context.WaitUntilAsync($"{bot.Name} is in the match", () => bot.Session!.Player is { IsInWorld: true, Map: { } map } p
+                    && map.MapId == mapId
+                    && context.Services.GetRequiredService<BattlegroundFeature>().BattlegroundOf(p.Guid)?.PlayerTeam(p.Guid) is not null).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        }
+
+        Battleground match = await context.StepAsync("both bots are in the same match", async () =>
+        {
+            Battleground? a = await context.BattlegroundOfAsync(ally).ConfigureAwait(false);
+            Battleground? h = await context.BattlegroundOfAsync(horde).ConfigureAwait(false);
+            ScenarioContext.Expect(a is not null && a.Type == type && ReferenceEquals(a, h), $"the bots are not in one {type} match");
+            return a!;
+        }).ConfigureAwait(false);
+
+        await context.StepAsync("the gates open after the start countdown", () => context.WaitUntilAsync("the match is in progress",
+            () => match.Status == BattlegroundStatus.InProgress, startWait)).ConfigureAwait(false);
+        return (ally, horde, match);
+    }
 }
 
 /// <summary>
@@ -269,56 +324,11 @@ public sealed class WarsongGulchScenario : IPlayerbotScenario
                 && feature.BattlegroundOf(a.Guid) is null, LongWait)).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// The opening of every Warsong Gulch scenario: log both bots in (a human and an orc warrior), queue each at a battlemaster of its home
-    /// continent, take the invitation, port in, and wait for the gates to open. Returns the bots and their match.
-    /// </summary>
+    /// <summary>The opening of every Warsong Gulch scenario (<see cref="ScenarioBattlegrounds.EnterMatchAsync"/> for Warsong Gulch).</summary>
     public static async Task<(ScenarioBot Alliance, ScenarioBot Horde, WarsongGulch Match)> EnterMatchAsync(ScenarioContext context, TimeSpan startWait)
     {
-        ArgumentNullException.ThrowIfNull(context);
-        ScenarioBot ally = await context.StepAsync("login " + AllianceBot, () => context.LoginAsync(AllianceBot, race: 1, characterClass: 1)).ConfigureAwait(false);
-        ScenarioBot horde = await context.StepAsync("login " + HordeBot, () => context.LoginAsync(HordeBot, race: 2, characterClass: 1)).ConfigureAwait(false);
-
-        foreach (ScenarioBot bot in new[] { ally, horde })
-        {
-            await context.StepAsync($"{bot.Name} queues at a battlemaster", async () =>
-            {
-                uint home = await bot.ReadAsync(p => p.MapId).ConfigureAwait(false);
-                var master = context.FindBattlemaster(home, BattlegroundType.WarsongGulch)
-                    ?? throw new ScenarioAssertionException($"no Warsong Gulch battlemaster on map {home}");
-                await context.PlaceAsync(bot, home, master.X + 2f, master.Y, master.Z, MathF.PI).ConfigureAwait(false);
-                long mark = bot.Mark();
-                ScenarioContext.Expect(await bot.BattlemasterHelloAsync(master.Guid).ConfigureAwait(false), "hello refused");
-                await bot.WaitForPacketAsync(WorldOpcode.SmsgBattlefieldList, p => p, since: mark).ConfigureAwait(false);
-                ScenarioContext.Expect(await bot.JoinBattlegroundAsync(master.Guid, Map).ConfigureAwait(false), "join refused");
-                await bot.WaitForPacketAsync(WorldOpcode.SmsgBattlefieldStatus, ScenarioBattlegrounds.BattlefieldStatus,
-                    s => s.Status is BattlegroundStatus.WaitQueue or BattlegroundStatus.WaitJoin, mark).ConfigureAwait(false);
-            }).ConfigureAwait(false);
-        }
-
-        foreach (ScenarioBot bot in new[] { ally, horde })
-        {
-            await context.StepAsync($"{bot.Name} is invited and ports in", async () =>
-            {
-                await bot.WaitForPacketAsync(WorldOpcode.SmsgBattlefieldStatus, ScenarioBattlegrounds.BattlefieldStatus,
-                    s => s.Status == BattlegroundStatus.WaitJoin && s.MapId == Map).ConfigureAwait(false);
-                ScenarioContext.Expect(await bot.PortBattlegroundAsync(Map).ConfigureAwait(false), "port refused");
-                await context.WaitUntilAsync($"{bot.Name} is in the match", () => bot.Session!.Player is { IsInWorld: true, Map: { MapId: Map } } p
-                    && context.Services.GetRequiredService<BattlegroundFeature>().BattlegroundOf(p.Guid)?.PlayerTeam(p.Guid) is not null).ConfigureAwait(false);
-            }).ConfigureAwait(false);
-        }
-
-        WarsongGulch wsg = await context.StepAsync("both bots are in the same match", async () =>
-        {
-            Battleground? a = await context.BattlegroundOfAsync(ally).ConfigureAwait(false);
-            Battleground? h = await context.BattlegroundOfAsync(horde).ConfigureAwait(false);
-            ScenarioContext.Expect(a is WarsongGulch && ReferenceEquals(a, h), "the bots are not in one Warsong Gulch match");
-            return (WarsongGulch)a!;
-        }).ConfigureAwait(false);
-
-        await context.StepAsync("the gates open after the start countdown", () => context.WaitUntilAsync("the match is in progress",
-            () => wsg.Status == BattlegroundStatus.InProgress, startWait)).ConfigureAwait(false);
-        return (ally, horde, wsg);
+        (ScenarioBot ally, ScenarioBot horde, Battleground match) = await context.EnterMatchAsync(BattlegroundType.WarsongGulch, AllianceBot, HordeBot, startWait).ConfigureAwait(false);
+        return (ally, horde, (WarsongGulch)match);
     }
 
     /// <summary>The Alliance bot takes the Horde flag from its stand and captures it at the Alliance flag room trigger (3646).</summary>
