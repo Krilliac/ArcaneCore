@@ -852,11 +852,14 @@ How to read the tables:
 | `World:Playerbots:AllowLocalLlm` | `bool` | `false` | - | Let a local language model choose among the bot's candidate goals (off by default; the rules choose otherwise). |
 | `World:Playerbots:AllowedMaps` | `uint[]` | `[0, 1]` | - | The maps bots may act and travel on (non-empty, no duplicates; a configured list replaces the default continents 0 and 1). |
 | `World:Playerbots:Enabled` | `bool` | `false` | - | Run server-managed playerbots (off by default). |
+| `World:Playerbots:FaultBackoffSeconds` | `int` | `30` | - | Seconds a bot waits in quarantine after an action fault before it is logged in again (1..3600); each further fault in `FaultWindowSeconds` doubles the wait, up to an hour. The bot stays desired meanwhile. |
+| `World:Playerbots:FaultWindowSeconds` | `int` | `3600` | - | How far back faults count towards `MaxFaults`, in seconds of world time (1..604800). |
 | `World:Playerbots:LocalLlmContextSize` | `int` | `1024` | - | The local model's context size in tokens (512..2048). |
 | `World:Playerbots:LocalLlmModel` | `string` | `"R4C3R/qwen3-0.6b-heretic:q4_k_m"` | - | The local model name sent to the loopback inference endpoint (at most 128 characters). |
 | `World:Playerbots:LocalLlmTimeoutMs` | `int` | `5000` | - | Milliseconds a local model choice may take before the rules decide (100..10000). |
 | `World:Playerbots:MaxActionsPerTick` | `int` | `4` | - | The most managed client actions all bots may send in one world tick (1..64). |
 | `World:Playerbots:MaxBots` | `int` | `8` | - | The most managed bots online at once (0..64). |
+| `World:Playerbots:MaxFaults` | `int` | `3` | - | The faults within `FaultWindowSeconds` that disable a bot for good (DesiredEnabled off; 1..100). |
 | `World:Playerbots:MaxPathPoints` | `int` | `128` | - | The most points of one bot route (1..4096). |
 | `World:Playerbots:MaxRouteYards` | `float` | `2000` | - | The longest bot route in yards (above 0, at most 100000). |
 | `World:Playerbots:MoveSpeed` | `float` | `7` | - | The bots' movement speed in yards per second, never above the player's run speed (above 0, at most 100). |
