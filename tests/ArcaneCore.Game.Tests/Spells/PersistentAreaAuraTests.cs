@@ -186,6 +186,31 @@ public sealed class PersistentAreaAuraTests : IDisposable
     }
 
     [Fact]
+    public void ANonFlaggedPlayersGroundSpell_HitsAPlayer_WhenBothAreInAFreeForAllArea()
+    {
+        // vmangos GridNotifiersImpl.h:170: the patch 1.7 rule spares "!(attackerPlayer->IsFFAPvP() && attackedPlayer->IsFFAPvP())"
+        // (the Gurubashi arena, a free-for-all realm).
+        _paladin.UnitFlags &= ~UnitFlags.Pvp;
+        _paladin.Flags |= PlayerFlags.FfaPvp;
+        _enemy.Flags |= PlayerFlags.FfaPvp;
+        Cast(Consecration);
+        _kit.Advance(100);
+
+        Assert.NotNull(Holder(_enemy, Consecration));
+    }
+
+    [Fact]
+    public void ANonFlaggedPlayersGroundSpell_DoesNotHitAPlayer_WhenOnlyTheCasterIsFreeForAll()
+    {
+        _paladin.UnitFlags &= ~UnitFlags.Pvp;
+        _paladin.Flags |= PlayerFlags.FfaPvp;
+        Cast(Consecration);
+        _kit.Advance(100);
+
+        Assert.Null(Holder(_enemy, Consecration));
+    }
+
+    [Fact]
     public void APositiveGroundAura_GoesToFriends()
     {
         Cast(Heal);

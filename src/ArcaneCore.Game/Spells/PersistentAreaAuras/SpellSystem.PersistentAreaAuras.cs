@@ -21,7 +21,7 @@ namespace ArcaneCore.Game.Spells;
 /// time ran out, unless it is the running channel's object. Each update it visits the units within its radius (DynamicObjectUpdater::VisitHelper,
 /// GridNotifiersImpl.h:123-262): alive, not a GM, a valid attack target for a negative effect (a valid helper target for a positive one), in line of
 /// sight of the object for a player caster, not refreshed within 2 s, the patch 1.7 rule (a non-PvP-flagged player's negative area does not hit
-/// players outside a duel), combat for a negative effect without NO_THREAT / THREAT_ONLY_ON_MISS / NO_INITIAL_THREAT / NOT_AN_ACTION, and not
+/// players outside a duel, unless both are free-for-all PvP), combat for a negative effect without NO_THREAT / THREAT_ONLY_ON_MISS / NO_INITIAL_THREAT / NOT_AN_ACTION, and not
 /// immune. An existing holder of the spell from the caster has its duration raised to the object's; otherwise a new holder with the spell's
 /// duration is added (a channel's holder takes the channel's remaining time).</item>
 /// <item>The aura's own update (PersistentAreaAura::Update, SpellAuras.cpp:892-919): a unit outside the radius, or whose object is gone, loses it
@@ -201,8 +201,10 @@ public sealed partial class SpellSystem
         }
 
         // Patch 1.7.0: "Consecration and other similar spells can no longer be used by non-PvP flagged players to damage PvP flagged enemies."
+        // Two players who are both free-for-all PvP (an arena, a free-for-all realm) are spared the rule (GridNotifiersImpl.h:170).
         if (!dynamic.IsPositive && caster.GetCharmerOrOwnerPlayerOrSelf() is { } attacker && target.GetCharmerOrOwnerPlayerOrSelf() is { } attacked
-            && (attacker.UnitFlags & UnitFlags.Pvp) == 0 && !DuelRules.IsInDuelWith(attacker, attacked))
+            && (attacker.UnitFlags & UnitFlags.Pvp) == 0 && !((attacker.Flags & PlayerFlags.FfaPvp) != 0 && (attacked.Flags & PlayerFlags.FfaPvp) != 0)
+            && !DuelRules.IsInDuelWith(attacker, attacked))
         {
             return;
         }
