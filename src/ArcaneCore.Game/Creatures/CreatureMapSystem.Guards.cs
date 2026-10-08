@@ -53,7 +53,8 @@ public sealed partial class CreatureMapSystem
     /// <paramref name="enemy"/> (<see cref="CallNearestGuard"/>) and the call counts as made. A post that is cooling down or out of charges
     /// refuses (false: the caller may try again). Otherwise the civilian speaks its call (<see cref="GuardPostTable.GetTextId"/>, as a say)
     /// and the post's guard for the team opposite the enemy's player (else the civilian's own team, which needs Faction.dbc and is not
-    /// modelled) appears 5 yd east of it, attacks the enemy and despawns after 2 minutes. Returns whether the call was made.
+    /// modelled) appears 5 yd east of it, attacks the enemy and despawns after 2 minutes alive and out of combat
+    /// (TEMPSUMMON_TIMED_OR_DEAD_DESPAWN: the timer starts again while it fights). Returns whether the call was made.
     /// </summary>
     public bool SummonGuard(Creature civilian, Unit enemy)
     {
@@ -89,7 +90,7 @@ public sealed partial class CreatureMapSystem
             float y = civilian.Y;
             float z = _height.GetHeight(Map.MapId, x, y, civilian.Z) ?? civilian.Z;
             Creature guard = SpawnTemporary(template, x, y, z, 0);
-            _summons.Add((guard, _clockMs + GuardPostTable.GuardDespawnMs));
+            AddTimedSummon(guard, GuardPostTable.GuardDespawnMs, SummonTimer.OutOfCombat); // TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 2 minutes
             civilian.CalledGuard = guard.Guid;
             if (guard.AI is { } ai)
             {

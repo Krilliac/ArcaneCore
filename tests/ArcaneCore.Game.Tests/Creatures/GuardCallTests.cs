@@ -217,6 +217,37 @@ public sealed class GuardCallTests
         Assert.Empty(t.Guards);
     }
 
+    /// <summary>
+    /// vmangos summons the guard TEMPSUMMON_TIMED_OR_DEAD_DESPAWN (GuardMgr.cpp:451; Objects/TemporarySummon.cpp:127-148): its 2-minute
+    /// timer counts only while it is alive and out of combat, and starts again from 2 minutes while it fights. A guard still fighting at
+    /// 2 minutes stays; once the fight ends it stays another 2 minutes.
+    /// </summary>
+    [Fact]
+    public void AGuardStillFightingAtTwoMinutes_Stays_AndGoesTwoMinutesAfterItsFightEnds()
+    {
+        using Town t = Start();
+        (Player orc, _) = Horde(t.World, 1, 10, 0);
+        orc.MaxHealth = 10_000_000;
+        orc.Health = 10_000_000;
+        t.Civilian.AI!.MoveInLineOfSight(orc);
+        Creature guard = Assert.Single(t.Guards);
+
+        Run(t.World, GuardPostTable.GuardDespawnMs + 30_000, step: 1000);
+
+        Assert.True(orc.IsAlive);
+        Assert.Same(guard, Assert.Single(t.Guards));
+        Assert.True(guard.Combat.IsInCombat);
+        Assert.Same(orc, guard.Combat.Victim);
+
+        t.World.RemovePlayer(orc); // the fight ends 150 s after the summon
+        Run(t.World, GuardPostTable.GuardDespawnMs - 10_000, step: 1000);
+        Assert.False(guard.Combat.IsInCombat);
+        Assert.Same(guard, Assert.Single(t.Guards)); // 260 s after the summon, 110 s after the fight
+
+        Run(t.World, 15_000, step: 1000);
+        Assert.Empty(t.Guards);
+    }
+
     [Theory]
     [InlineData(362u, 0u, null, GuardPostTable.TextGuardOrc2)]        // Razor Hill always says "Grunts! Attack!"
     [InlineData(87u, 0u, 56u, GuardPostTable.TextGuardNightElf)]       // by model: a night elf female

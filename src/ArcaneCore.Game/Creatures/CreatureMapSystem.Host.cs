@@ -197,15 +197,7 @@ public sealed partial class CreatureMapSystem
             }
         }
 
-        if (_summons.Count > 0)
-        {
-            (Creature Creature, long DespawnAtMs)[] expired = [.. _summons.Where(s => s.DespawnAtMs <= _clockMs)];
-            _summons.RemoveAll(s => s.DespawnAtMs <= _clockMs);
-            foreach ((Creature summoned, _) in expired)
-            {
-                Despawn(summoned);
-            }
-        }
+        UpdateTimedSummons();
     }
 
     private void OnMovementFinished(Creature creature, MovementGeneratorType type, uint pointId)

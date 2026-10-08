@@ -75,7 +75,8 @@ docs/integration/creature-ai.md.
   post spends a charge (10 per post, one back per minute; 10 s cooldown after a use, shared by every map), the civilian says its call
   (broadcast text by its model from CreatureDisplayInfo.dbc when the display metadata is installed, else by its faction template;
   Razor Hill always says "Grunts! Attack!") and the post's guard for the team opposite the enemy's player appears 5 yd east of it,
-  attacks the enemy and despawns after 2 minutes. A post that is cooling down or empty refuses and the civilian keeps trying on sight;
+  attacks the enemy and despawns after 2 minutes alive and out of combat (vmangos TEMPSUMMON_TIMED_OR_DEAD_DESPAWN: the timer starts
+  again while it fights, so a guard is never pulled out of a fight). A post that is cooling down or empty refuses and the civilian keeps trying on sight;
   after a successful call it stops calling on sight until the guard it called is gone or it respawns. In an area without a post the
   nearest idle friendly guard within 50 yd in sight attacks. Data: classic-db z2815 sets CALLS_GUARDS on no template (vmangos data
   does), so nothing calls until such rows are imported; a call against a creature that no player controls summons nobody (vmangos
