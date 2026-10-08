@@ -63,6 +63,11 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
                 dbc?.CollisionHeight ?? 0, dbc?.ModelScale ?? 1.0f, dbc?.HasModelData ?? false);
         };
         services.GetService<IConfiguration>()?.GetSection(CreatureOptions.SectionName).Bind(Options);
+        foreach (string name in Options.Rates.Normalize())
+        {
+            logger.LogError("{Section}:Rates:{Option} can't be negative. Using 1 instead.", CreatureOptions.SectionName, name);
+        }
+
         _height = services.GetService<ICreatureHeightProvider>();
         _aiServices = BuildAiServices();
 

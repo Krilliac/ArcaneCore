@@ -55,6 +55,28 @@ public sealed class InstanceOptions
     /// <summary>Let players enter raids without a raid group (vmangos <c>Instance.IgnoreRaid</c>, default off).</summary>
     public bool IgnoreRaidGroup { get; set; }
 
+    /// <summary>
+    /// vmangos <c>Rate.InstanceResetTime</c> (World.cpp:543, setConfigPos, default 1): multiplies the reset period in days of every raid with a
+    /// <c>reset_delay</c>, truncated and at least one day (ObjectMgr::LoadMapTemplate, ObjectMgr.cpp:6809-6811). A delay of 0 (no global reset)
+    /// stays 0. Read when the raid schedules are built and at each global reset; a negative value is 1.
+    /// </summary>
+    public float RateResetTime { get; set; } = 1.0f;
+
     /// <summary>Unload delay actually used (at least <see cref="MinUnloadDelayMs"/>).</summary>
     public uint EffectiveUnloadDelayMs => (uint)Math.Max(UnloadDelayMs, MinUnloadDelayMs);
+
+    /// <summary>
+    /// The reset period in days a map template's <c>reset_delay</c> gives with <see cref="RateResetTime"/>: 0 stays 0, anything else is
+    /// <c>max(1, (uint)(resetDelay * rate))</c> (vmangos ObjectMgr.cpp:6810-6811).
+    /// </summary>
+    public uint EffectiveResetDelayDays(uint resetDelay)
+    {
+        if (resetDelay == 0)
+        {
+            return 0;
+        }
+
+        float rate = RateResetTime >= 0.0f ? RateResetTime : 1.0f;
+        return Math.Max(1u, (uint)Math.Min(resetDelay * rate, (float)uint.MaxValue)); // float product, as vmangos' uint32 * float
+    }
 }

@@ -37,12 +37,16 @@ public sealed partial class Creature : Unit, ICombatCreature
     private CreatureTemplate _template;
     private int _templateVersion;
     private readonly Func<uint, CreatureDisplayModelMetadata?>? _displayModelResolver;
+    private readonly CreatureStatRates? _statRates;
 
     // highGuid: HIGHGUID_PET for pets, guardians and mini pets, HIGHGUID_UNIT for everything else
     // including totems (vmangos SpellEffects.cpp; docs/integration/pets.md). guidEntry: the entry part
     // of the GUID when it is not the template entry: a pet's GUID carries its pet number there
     // (vmangos Pet::Create: Object::_Create(guidlow, petNumber, HIGHGUID_PET)).
-    public Creature(uint counter, CreatureTemplate template, CreatureSpawn? spawn, CreatureContent content, Random random, HighGuid highGuid = HighGuid.Unit, uint guidEntry = 0, Func<uint, CreatureDisplayModelMetadata?>? displayModelResolver = null)
+    // statRates: the Rate.Creature.* rates (Creatures:Rates) the creature's health and damage are scaled with, at spawn and every
+    // respawn; null (pets) is 1 everywhere.
+    public Creature(uint counter, CreatureTemplate template, CreatureSpawn? spawn, CreatureContent content, Random random, HighGuid highGuid = HighGuid.Unit, uint guidEntry = 0, Func<uint, CreatureDisplayModelMetadata?>? displayModelResolver = null,
+        CreatureStatRates? statRates = null)
         : base(ObjectGuid.WithEntry(highGuid, guidEntry != 0 ? guidEntry : template.Entry, counter), Game.TypeId.Unit, CreatureTypeMask, UpdateFields.UnitEnd)
     {
         ArgumentNullException.ThrowIfNull(template);
@@ -55,6 +59,7 @@ public sealed partial class Creature : Unit, ICombatCreature
         _templateVersion = content.DefinitionsVersion;
         _random = random;
         _displayModelResolver = displayModelResolver;
+        _statRates = statRates;
 
         if (spawn is not null)
         {
@@ -148,6 +153,21 @@ public sealed partial class Creature : Unit, ICombatCreature
     internal bool MeleeAllowedByTemplate => (Template.Behaviour & (CreatureBehaviourFlags.NoMelee | CreatureBehaviourFlags.NoMeleeFlee)) == 0;
 
     public bool IsWorldBoss => (CreatureRank)Template.Rank == CreatureRank.WorldBoss;
+
+    /// <summary>
+    /// vmangos Creature::_GetHealthMod of this creature (Rate.Creature.*.HP, <c>Creatures:Rates</c>): the factor on the health it spawns with
+    /// (SelectLevel uses rank 0 for a pet, Creature.cpp:1796); 1 without rates.
+    /// </summary>
+    public float HealthRate => _statRates?.Hp(IsPet ? (uint)CreatureRank.Normal : Template.Rank) ?? 1.0f;
+
+    /// <summary>vmangos Creature::_GetDamageMod (Rate.Creature.*.Damage): the factor on its melee and ranged weapon damage; 1 without rates.</summary>
+    public float DamageRate => _statRates?.Damage(IsPet ? (uint)CreatureRank.Normal : Template.Rank) ?? 1.0f;
+
+    /// <summary>
+    /// vmangos Creature::_GetSpellDamageMod (Rate.Creature.*.SpellDamage) on the template rank, applied to the done side of its damage spells
+    /// (SpellCaster.cpp:1588-1590); 1 without rates.
+    /// </summary>
+    public float SpellDamageRate => _statRates?.SpellDamage(Template.Rank) ?? 1.0f;
 
     public bool RegeneratesHealth => true;
 
@@ -424,6 +444,13 @@ public sealed partial class Creature : Unit, ICombatCreature
         uint minHealth = Math.Min(t.MinLevelHealth, t.MaxLevelHealth);
         uint maxHealth = Math.Max(t.MinLevelHealth, t.MaxLevelHealth);
         uint health = Math.Max(1u, minHealth + (uint)(rel * (maxHealth - minHealth)));
+
+        // Rate.Creature.*.HP: max(1, round(healthMod * health)) for the health and the base health alike (vmangos SelectLevel, Creature.cpp:1802-1806).
+        float healthRate = HealthRate;
+        if (healthRate != 1.0f)
+        {
+            health = (uint)Math.Clamp(MathF.Round(healthRate * health), 1.0f, uint.MaxValue);
+        }
         uint minMana = Math.Min(t.MinLevelMana, t.MaxLevelMana);
         uint maxMana = Math.Max(t.MinLevelMana, t.MaxLevelMana);
         uint mana = minMana + (uint)(rel * (maxMana - minMana));
@@ -455,12 +482,14 @@ public sealed partial class Creature : Unit, ICombatCreature
                 break;
         }
 
-        SetFloat(UpdateFields.UnitFieldMindamage, t.MinMeleeDamage);
-        SetFloat(UpdateFields.UnitFieldMaxdamage, t.MaxMeleeDamage);
+        // Rate.Creature.*.Damage multiplies the melee and the ranged weapon damage (vmangos SelectLevel, Creature.cpp:1830-1843).
+        float damageRate = DamageRate;
+        SetFloat(UpdateFields.UnitFieldMindamage, t.MinMeleeDamage * damageRate);
+        SetFloat(UpdateFields.UnitFieldMaxdamage, t.MaxMeleeDamage * damageRate);
         // ranged (autorepeat lane): the ranged damage and attack power fields (vmangos Creature.cpp:1840-1843 SetBaseWeaponDamage(RANGED_ATTACK)),
         // from the template exactly like the melee pair above (the importer derives them from creature_classlevelstats).
-        SetFloat(UpdateFields.UnitFieldMinrangeddamage, t.MinRangedDamage);
-        SetFloat(UpdateFields.UnitFieldMaxrangeddamage, t.MaxRangedDamage);
+        SetFloat(UpdateFields.UnitFieldMinrangeddamage, t.MinRangedDamage * damageRate);
+        SetFloat(UpdateFields.UnitFieldMaxrangeddamage, t.MaxRangedDamage * damageRate);
         SetUInt32(UpdateFields.UnitFieldRangedAttackPower, t.RangedAttackPower);
         SetUInt32(UpdateFields.UnitFieldResistances, t.Armor);
     }

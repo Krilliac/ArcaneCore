@@ -93,6 +93,7 @@ public sealed class HonorService : IPlayerHonor, IHonorAwards
     public bool Add(Player player, float cp, HonorKind kind, Unit? source)
     {
         ArgumentNullException.ThrowIfNull(player);
+        cp = Scaled(cp, kind);
         if (cp == 0f || For(player) is not { } state)
         {
             return false;
@@ -126,6 +127,13 @@ public sealed class HonorService : IPlayerHonor, IHonorAwards
 
         return true;
     }
+
+    /// <summary>
+    /// <see cref="HonorOptions.Rate"/> on honor that is earned (a kill, battleground bonus or quest honor); dishonor and the exact amount of a
+    /// GM's <c>.honor add</c> (<see cref="HonorKind.Other"/>) are left alone.
+    /// </summary>
+    public float Scaled(float cp, HonorKind kind)
+        => kind is HonorKind.Honorable or HonorKind.Bonus or HonorKind.Quest && Options.Rate >= 0f && Options.Rate != 1f ? cp * Options.Rate : cp;
 
     /// <summary>HonorMgr::Update: recompute the derived values and write the honor tab fields.</summary>
     public void Update(Player player)

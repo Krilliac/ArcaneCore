@@ -48,8 +48,8 @@ public static class CreatureDamageStats
             totalPct *= DisarmedDamageFactor;
         }
 
-        float min = template.MinMeleeDamage;
-        float max = template.MaxMeleeDamage;
+        float min = template.MinMeleeDamage * creature.DamageRate; // Rate.Creature.*.Damage is part of the base weapon damage (Creature.cpp:1830-1835)
+        float max = template.MaxMeleeDamage * creature.DamageRate;
         if (template.MeleeAttackPower > 0)
         {
             uint mods = creature.GetUInt32(UpdateFields.UnitFieldAttackPowerMods);

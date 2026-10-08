@@ -83,6 +83,76 @@ public sealed class LootOptions
 
     /// <summary>vmangos Rate.Drop.Money.</summary>
     public float MoneyRate { get; set; } = 1.0f;
+
+    /// <summary>
+    /// vmangos Rate.Drop.Item.Poor (World.cpp:497, setConfigPos, default 1): multiplies the chance of an ungrouped loot row whose item is of poor
+    /// (grey) quality (LootMgr.cpp:33-42 qualityToRate, applied in LootStoreItem::Roll, :256-268: a chance of 100 or more always drops,
+    /// otherwise <c>roll_chance_f(chance * rate)</c>). Grouped rows are not scaled (LootGroup::Roll uses the raw chances, :1056-1086).
+    /// </summary>
+    public float DropItemPoorRate { get; set; } = 1.0f;
+
+    /// <summary>vmangos Rate.Drop.Item.Normal (World.cpp:498, default 1): the same for common (white) items.</summary>
+    public float DropItemNormalRate { get; set; } = 1.0f;
+
+    /// <summary>vmangos Rate.Drop.Item.Uncommon (World.cpp:499, default 1): the same for uncommon (green) items.</summary>
+    public float DropItemUncommonRate { get; set; } = 1.0f;
+
+    /// <summary>vmangos Rate.Drop.Item.Rare (World.cpp:500, default 1): the same for rare (blue) items.</summary>
+    public float DropItemRareRate { get; set; } = 1.0f;
+
+    /// <summary>vmangos Rate.Drop.Item.Epic (World.cpp:501, default 1): the same for epic (purple) items.</summary>
+    public float DropItemEpicRate { get; set; } = 1.0f;
+
+    /// <summary>vmangos Rate.Drop.Item.Legendary (World.cpp:502, default 1): the same for legendary (orange) items.</summary>
+    public float DropItemLegendaryRate { get; set; } = 1.0f;
+
+    /// <summary>vmangos Rate.Drop.Item.Artifact (World.cpp:503, default 1): the same for artifact quality items.</summary>
+    public float DropItemArtifactRate { get; set; } = 1.0f;
+
+    /// <summary>
+    /// vmangos Rate.Drop.Item.Referenced (World.cpp:504, default 1): multiplies the chance of an ungrouped reference row (a negative
+    /// mincountOrRef) to be processed (LootStoreItem::Roll, LootMgr.cpp:261-262).
+    /// </summary>
+    public float DropItemReferencedRate { get; set; } = 1.0f;
+
+    /// <summary>The Rate.Drop.Item.* multiplier of an item quality (vmangos qualityToRate); 1 for a quality outside 0..6.</summary>
+    public float DropItemRate(uint quality) => quality switch
+    {
+        0 => DropItemPoorRate,
+        1 => DropItemNormalRate,
+        2 => DropItemUncommonRate,
+        3 => DropItemRareRate,
+        4 => DropItemEpicRate,
+        5 => DropItemLegendaryRate,
+        6 => DropItemArtifactRate,
+        _ => 1.0f,
+    };
+
+    /// <summary>vmangos setConfigPos (World.cpp:2959-2967): a negative (or NaN) drop rate falls back to 1. Returns the names that were replaced.</summary>
+    public IReadOnlyList<string> Normalize()
+    {
+        var replaced = new List<string>();
+        float Positive(float value, string name)
+        {
+            if (value >= 0.0f)
+            {
+                return value;
+            }
+
+            replaced.Add(name);
+            return 1.0f;
+        }
+
+        DropItemPoorRate = Positive(DropItemPoorRate, nameof(DropItemPoorRate));
+        DropItemNormalRate = Positive(DropItemNormalRate, nameof(DropItemNormalRate));
+        DropItemUncommonRate = Positive(DropItemUncommonRate, nameof(DropItemUncommonRate));
+        DropItemRareRate = Positive(DropItemRareRate, nameof(DropItemRareRate));
+        DropItemEpicRate = Positive(DropItemEpicRate, nameof(DropItemEpicRate));
+        DropItemLegendaryRate = Positive(DropItemLegendaryRate, nameof(DropItemLegendaryRate));
+        DropItemArtifactRate = Positive(DropItemArtifactRate, nameof(DropItemArtifactRate));
+        DropItemReferencedRate = Positive(DropItemReferencedRate, nameof(DropItemReferencedRate));
+        return replaced;
+    }
 }
 
 /// <summary>Why a loot request was refused.</summary>
