@@ -19,6 +19,11 @@ namespace ArcaneCore.World.Playerbots.Chat;
 /// message (rules then facts, so providers that cache prefixes can), the reply is <c>choices[0].message.content</c>;
 /// <c>finish_reason: content_filter</c> is a refusal.
 /// </para>
+/// <para>
+/// <b>Moderation</b> (<see cref="PlayerbotChatModerationKind.Endpoint"/>: <c>POST {ModerationBaseUrl or BaseUrl}/moderations</c> with
+/// <c>{"model", "input"}</c> and <c>Authorization: Bearer</c> when a key is set): <c>results[0].flagged</c>, and the first category
+/// marked true.
+/// </para>
 /// Responses above 64 KiB are not read. The key is put on the request only and never appears in a result or an exception message.
 /// </summary>
 public sealed class HttpBotChatClient : IBotChatClient, IDisposable
@@ -73,6 +78,64 @@ public sealed class HttpBotChatClient : IBotChatClient, IDisposable
         {
             return BotChatResult.Fail(BotChatOutcome.NetworkError);
         }
+    }
+
+    public async Task<BotChatModeration> ModerateAsync(PlayerbotChatProviderOptions provider, string? apiKey, string text, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        if (provider.ModerationEndpoint is not { } endpoint) return new BotChatModeration(BotChatModerationVerdict.Failed);
+        var body = new JsonObject { ["model"] = provider.EffectiveModerationModel, ["input"] = text ?? string.Empty };
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        {
+            Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"),
+        };
+        foreach ((string name, string value) in provider.Headers ?? []) request.Headers.TryAddWithoutValidation(name, value);
+        if (apiKey is not null) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        try
+        {
+            using HttpResponseMessage response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return new BotChatModeration(BotChatModerationVerdict.Failed);
+            byte[]? bytes = await ReadCappedAsync(response, cancellationToken).ConfigureAwait(false);
+            return bytes is null ? new BotChatModeration(BotChatModerationVerdict.Failed) : ParseModeration(bytes);
+        }
+        catch (OperationCanceledException)
+        {
+            return new BotChatModeration(BotChatModerationVerdict.Failed);
+        }
+        catch (Exception error) when (error is HttpRequestException or IOException)
+        {
+            return new BotChatModeration(BotChatModerationVerdict.Failed);
+        }
+    }
+
+    /// <summary>An OpenAI-compatible moderation response: <c>results[0].flagged</c> and the first category marked true.</summary>
+    internal static BotChatModeration ParseModeration(byte[] body)
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(body);
+            JsonElement root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("results", out JsonElement results)
+                || results.ValueKind != JsonValueKind.Array || results.GetArrayLength() == 0 || results[0].ValueKind != JsonValueKind.Object
+                || !results[0].TryGetProperty("flagged", out JsonElement flagged) || flagged.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                return new BotChatModeration(BotChatModerationVerdict.Failed);
+            if (!flagged.GetBoolean()) return new BotChatModeration(BotChatModerationVerdict.Clean);
+            string? category = null;
+            if (results[0].TryGetProperty("categories", out JsonElement categories) && categories.ValueKind == JsonValueKind.Object)
+                category = categories.EnumerateObject().FirstOrDefault(pair => pair.Value.ValueKind == JsonValueKind.True).Name;
+            return new BotChatModeration(BotChatModerationVerdict.Flagged, Category(category));
+        }
+        catch (JsonException)
+        {
+            return new BotChatModeration(BotChatModerationVerdict.Failed);
+        }
+    }
+
+    /// <summary>A category name from a response, fit for a log line (letters, digits, '/', '-', '_'; at most 40).</summary>
+    private static string Category(string? name)
+    {
+        string clean = new([.. (name ?? string.Empty).Where(c => char.IsAsciiLetterOrDigit(c) || c is '/' or '-' or '_').Take(40)]);
+        return clean.Length == 0 ? "flagged" : clean;
     }
 
     /// <summary>The Messages API body (Anthropic): model, max_tokens, the two-block system prompt with the cache breakpoint, the messages.</summary>

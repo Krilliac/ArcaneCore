@@ -9,7 +9,7 @@ namespace ArcaneCore.World.Playerbots.Chat;
 /// Keys: the intent (<c>greeting</c>, <c>thanks</c>, <c>bye</c>, <c>doing</c>, <c>doing.idle</c>, <c>doing.quest</c>, <c>where</c>,
 /// <c>where.zone</c>, <c>where.unknown</c>, <c>who</c>, <c>bot</c>, <c>abuse</c>, <c>group.yes</c>, <c>group.no</c>,
 /// <c>group.already</c>, <c>group.together</c>, <c>command.notmaster</c>, <c>command.nogroup</c>, <c>help.other</c>,
-/// <c>unknown</c>), plus variants added to the base list: <c>&lt;key&gt;.race.&lt;Race&gt;</c>, <c>&lt;key&gt;.class.&lt;Class&gt;</c>,
+/// <c>unknown</c>; and for a line the safety screening flagged, <c>safety.selfharm</c> and <c>safety.personal</c>), plus variants added to the base list: <c>&lt;key&gt;.race.&lt;Race&gt;</c>, <c>&lt;key&gt;.class.&lt;Class&gt;</c>,
 /// <c>&lt;key&gt;.level.novice</c> (below 10), <c>&lt;key&gt;.level.veteran</c> (60). Add a line by adding a string; add a variant by
 /// adding a key. Lines state only what the bot knows of itself and well-known game mechanics: no invented lore.
 /// </para>
@@ -54,6 +54,12 @@ internal static class PlayerbotChatTemplates
 
         ["bot"] = ["Yes, I'm a bot run by this server.", "I am, yes. One of the server's bots.", "Yep, a server bot. Still happy to chat."],
         ["abuse"] = ["No need for that.", "Whatever you say.", "Moving on.", "Okay then."],
+        ["safety.selfharm"] =
+        [
+            "That sounds really heavy, {player}. Please talk to someone you trust, or a local crisis line, about it.",
+            "Hey, that matters more than any game. Please reach out to someone you trust or a crisis line near you.",
+        ],
+        ["safety.personal"] = ["Better not share personal details in chat, {player}.", "Keep your personal info to yourself out here."],
 
         ["group.yes"] = ["Sure, send me an invite.", "Invite me and I'll come along.", "Happy to. Send the invite."],
         ["group.no"] = ["Thanks, but I'll pass for now.", "Sorry, not looking for a group right now.", "Maybe another time."],

@@ -35,6 +35,22 @@ public enum PlayerbotChatProviderKind
     OpenAICompatible,
 }
 
+/// <summary>A provider's optional moderation step before a player's line is sent to it (<see cref="PlayerbotChatProviderOptions.Moderation"/>).</summary>
+public enum PlayerbotChatModerationKind
+{
+    /// <summary>No moderation step: the local filter only.</summary>
+    None,
+
+    /// <summary>
+    /// An OpenAI-compatible moderation endpoint: <c>POST {ModerationBaseUrl or BaseUrl}/moderations</c> with <c>{"model", "input"}</c>;
+    /// a result with <c>flagged: true</c> flags the line.
+    /// </summary>
+    Endpoint,
+
+    /// <summary>A short classification request to the provider itself (one word, SAFE or UNSAFE) before the reply request.</summary>
+    Classify,
+}
+
 /// <summary>
 /// <c>World:Playerbots:Chat</c>: managed bots answer players who talk to them (docs/areas/playbots.md, Bot chat). A whisper, or a party
 /// or say line that names the bot, is answered in character by the first provider of <see cref="Providers"/> that can answer now; the
@@ -53,7 +69,8 @@ public sealed class PlayerbotChatOptions
     /// The reply providers, tried in order until one answers (failover on an error, a timeout, a 429, a spent budget or a missing
     /// key). Empty by default: only the built-in templates answer. The built-in provider is appended when it is not listed, and when
     /// listed it must be last. See docs/areas/playbots.md for the provider keys (Kind, BaseUrl, Model, ApiKeyEnvironmentVariable,
-    /// Headers, MaxRepliesPerHour, MaxTokens, TokenLimitParameter, InputUsdPerMillionTokens, OutputUsdPerMillionTokens).
+    /// Headers, MaxRepliesPerHour, MaxTokens, TokenLimitParameter, InputUsdPerMillionTokens, OutputUsdPerMillionTokens, Moderation,
+    /// ModerationBaseUrl, ModerationModel, ModerationApiKeyEnvironmentVariable).
     /// </summary>
     public PlayerbotChatProviderOptions[] Providers { get; set; } = [];
 
@@ -84,6 +101,12 @@ public sealed class PlayerbotChatOptions
     /// </summary>
     public bool NaturalLanguageCommands { get; set; } = true;
 
+    /// <summary>
+    /// <c>Safety</c>: screening of players' lines and model replies, strikes and cut-offs, the AI disclosure and opt-out, and how little
+    /// is sent to a model provider (docs/areas/playbots.md, Safety and provider policies).
+    /// </summary>
+    public PlayerbotChatSafetyOptions Safety { get; set; } = new();
+
     /// <summary>The providers in the order they are tried: the configured ones, then the built-in templates (the configured entry or a default one).</summary>
     internal IReadOnlyList<PlayerbotChatProviderOptions> EffectiveProviders()
     {
@@ -113,7 +136,12 @@ public sealed class PlayerbotChatOptions
         if (MemoryExchanges is < 0 or > 16) throw new InvalidOperationException($"{section}: MemoryExchanges must be 0..16.");
         if (TimeoutSeconds is < 1 or > 60) throw new InvalidOperationException($"{section}: TimeoutSeconds must be 1..60.");
         if (MaxQueuedRequests is < 1 or > 256) throw new InvalidOperationException($"{section}: MaxQueuedRequests must be 1..256.");
+        if (Safety is null) throw new InvalidOperationException($"{section}:Safety is missing.");
+        Safety.Validate();
     }
+
+    /// <summary>Whether a model provider (anything but the built-in templates) is configured.</summary>
+    internal bool HasModelProvider => (Providers ?? []).Any(provider => provider is { Kind: not PlayerbotChatProviderKind.Builtin });
 
     internal static string? CheckChannels(PlayerbotChatChannels channels)
         => (channels & ~(PlayerbotChatChannels.Whisper | PlayerbotChatChannels.Party | PlayerbotChatChannels.Say)) == 0 ? null
@@ -189,6 +217,25 @@ public sealed class PlayerbotChatProviderOptions
     /// <summary>US dollars per million output tokens for the spend estimate (unset = the built-in price of a known Anthropic model, else unpriced).</summary>
     public double? OutputUsdPerMillionTokens { get; set; }
 
+    /// <summary>
+    /// The moderation step before each player line is sent to this provider: <c>None</c> (default), <c>Endpoint</c> (an
+    /// OpenAI-compatible <c>/moderations</c> endpoint) or <c>Classify</c> (a one-word classification request to this provider). A line
+    /// it flags goes to no provider; when the step fails, this provider is skipped.
+    /// </summary>
+    public PlayerbotChatModerationKind Moderation { get; set; } = PlayerbotChatModerationKind.None;
+
+    /// <summary>Endpoint moderation: the API base whose <c>/moderations</c> is called (empty = <see cref="BaseUrl"/>; required for Anthropic).</summary>
+    public string ModerationBaseUrl { get; set; } = string.Empty;
+
+    /// <summary>Endpoint moderation: the moderation model (empty = omni-moderation-latest).</summary>
+    public string ModerationModel { get; set; } = string.Empty;
+
+    /// <summary>Endpoint moderation: the environment variable of the moderation key (unset = this provider's key; empty = none).</summary>
+    public string? ModerationApiKeyEnvironmentVariable { get; set; }
+
+    /// <summary>The default moderation model of <see cref="PlayerbotChatModerationKind.Endpoint"/>.</summary>
+    public const string DefaultModerationModel = "omni-moderation-latest";
+
     /// <summary>The model actually sent (the Anthropic default when <see cref="Model"/> is empty).</summary>
     internal string EffectiveModel => Kind == PlayerbotChatProviderKind.Anthropic && string.IsNullOrWhiteSpace(Model) ? DefaultAnthropicModel : Model.Trim();
 
@@ -196,6 +243,26 @@ public sealed class PlayerbotChatProviderOptions
     internal string? EffectiveKeyVariable => ApiKeyEnvironmentVariable is { } named
         ? (string.IsNullOrWhiteSpace(named) ? null : named.Trim())
         : Kind == PlayerbotChatProviderKind.Anthropic ? "ANTHROPIC_API_KEY" : null;
+
+    /// <summary>The moderation model actually sent.</summary>
+    internal string EffectiveModerationModel => string.IsNullOrWhiteSpace(ModerationModel) ? DefaultModerationModel : ModerationModel.Trim();
+
+    /// <summary>The variable the moderation key is read from, or null when the moderation endpoint takes no key.</summary>
+    internal string? EffectiveModerationKeyVariable => ModerationApiKeyEnvironmentVariable is { } named
+        ? (string.IsNullOrWhiteSpace(named) ? null : named.Trim())
+        : EffectiveKeyVariable;
+
+    /// <summary>The moderation endpoint (<see cref="PlayerbotChatModerationKind.Endpoint"/> only; null otherwise).</summary>
+    internal Uri? ModerationEndpoint
+    {
+        get
+        {
+            if (Moderation != PlayerbotChatModerationKind.Endpoint) return null;
+            string root = !string.IsNullOrWhiteSpace(ModerationBaseUrl) ? ModerationBaseUrl.Trim()
+                : Kind == PlayerbotChatProviderKind.OpenAICompatible ? BaseUrl.Trim() : string.Empty;
+            return root.Length == 0 ? null : new Uri(root.TrimEnd('/') + "/moderations");
+        }
+    }
 
     /// <summary>The request URL of this provider (null for Builtin).</summary>
     internal Uri? Endpoint => Kind switch
@@ -264,6 +331,7 @@ public sealed class PlayerbotChatProviderOptions
         if (TokenLimitParameter is not ("max_tokens" or "max_completion_tokens")) return "TokenLimitParameter must be max_tokens or max_completion_tokens";
         if (InputUsdPerMillionTokens is { } input && (!double.IsFinite(input) || input is < 0 or > 1000)) return "InputUsdPerMillionTokens must be 0..1000";
         if (OutputUsdPerMillionTokens is { } output && (!double.IsFinite(output) || output is < 0 or > 1000)) return "OutputUsdPerMillionTokens must be 0..1000";
+        if (ModerationProblem() is { } moderation) return moderation;
         if (Headers is null || Headers.Count > 16) return "Headers must hold at most 16 entries";
         foreach ((string name, string value) in Headers)
         {
@@ -273,6 +341,29 @@ public sealed class PlayerbotChatProviderOptions
             if (value is null || value.Length > 512 || value.Any(char.IsControl)) return $"header {name} must be at most 512 characters without control characters";
         }
 
+        return null;
+    }
+
+    private string? ModerationProblem()
+    {
+        if (!Enum.IsDefined(Moderation)) return "Moderation must be None, Endpoint or Classify";
+        if (ModerationModel is null || ModerationModel.Trim().Length > 200 || ModerationModel.Any(char.IsControl))
+            return "ModerationModel must be at most 200 characters without control characters";
+        if (ModerationApiKeyEnvironmentVariable is { Length: > 0 } variable
+            && (variable.Trim().Length > 128 || !variable.Trim().All(c => char.IsAsciiLetterOrDigit(c) || c == '_')))
+            return "ModerationApiKeyEnvironmentVariable must be a variable name (letters, digits, underscores; at most 128)";
+        if (ModerationBaseUrl is null) return "ModerationBaseUrl is missing";
+        if (!string.IsNullOrWhiteSpace(ModerationBaseUrl))
+        {
+            if (!Uri.TryCreate(ModerationBaseUrl.Trim(), UriKind.Absolute, out Uri? root) || root.Scheme is not ("http" or "https")
+                || !string.IsNullOrEmpty(root.Query) || !string.IsNullOrEmpty(root.Fragment) || !string.IsNullOrEmpty(root.UserInfo))
+                return "ModerationBaseUrl must be an absolute http or https URL without query, fragment or credentials";
+            if (root.Scheme == "http" && EffectiveModerationKeyVariable is not null && !IsLoopback(root))
+                return "ModerationBaseUrl must use https when a key is sent to a host that is not this machine";
+        }
+
+        if (Moderation == PlayerbotChatModerationKind.Endpoint && ModerationEndpoint is null)
+            return "Moderation Endpoint needs ModerationBaseUrl (or an OpenAICompatible BaseUrl)";
         return null;
     }
 
@@ -286,6 +377,8 @@ public sealed class PlayerbotChatProviderOptions
         Headers = new Dictionary<string, string>(Headers ?? [], StringComparer.OrdinalIgnoreCase),
         MaxRepliesPerHour = MaxRepliesPerHour, MaxTokens = MaxTokens, TokenLimitParameter = TokenLimitParameter,
         InputUsdPerMillionTokens = InputUsdPerMillionTokens, OutputUsdPerMillionTokens = OutputUsdPerMillionTokens,
+        Moderation = Moderation, ModerationBaseUrl = ModerationBaseUrl, ModerationModel = ModerationModel,
+        ModerationApiKeyEnvironmentVariable = ModerationApiKeyEnvironmentVariable,
     };
 
     /// <summary>Whether two entries configure the same provider in every setting.</summary>
@@ -293,6 +386,8 @@ public sealed class PlayerbotChatProviderOptions
         => Kind == other.Kind && BaseUrl == other.BaseUrl && Model == other.Model && ApiKeyEnvironmentVariable == other.ApiKeyEnvironmentVariable
             && MaxRepliesPerHour == other.MaxRepliesPerHour && MaxTokens == other.MaxTokens && TokenLimitParameter == other.TokenLimitParameter
             && InputUsdPerMillionTokens == other.InputUsdPerMillionTokens && OutputUsdPerMillionTokens == other.OutputUsdPerMillionTokens
+            && Moderation == other.Moderation && ModerationBaseUrl == other.ModerationBaseUrl && ModerationModel == other.ModerationModel
+            && ModerationApiKeyEnvironmentVariable == other.ModerationApiKeyEnvironmentVariable
             && (Headers ?? []).Count == (other.Headers ?? []).Count
             && (Headers ?? []).All(pair => (other.Headers ?? []).TryGetValue(pair.Key, out string? value) && value == pair.Value);
 }

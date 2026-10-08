@@ -22,4 +22,9 @@
     <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The bot chat local filter's shipped term list (docs/areas/playbots.md, Safety and provider policies). -->
+    <EmbeddedResource Include="Playerbots\Chat\PlayerbotChatSafetyTerms.json" LogicalName="ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafetyTerms.json" />
+  </ItemGroup>
+
 </Project>

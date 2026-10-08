@@ -25,6 +25,9 @@ internal enum BotChatAdmission
 
     /// <summary>The queue is full.</summary>
     QueueFull,
+
+    /// <summary>A whispered "ai on", "ai off" or "ai": answered by the safety itself, never sent to a provider.</summary>
+    Choice,
 }
 
 /// <summary>One provider's line of <c>.playerbot chat status</c>. Never holds the key: only whether its variable is set.</summary>
@@ -35,7 +38,7 @@ internal sealed record BotChatProviderStatus(
 /// <summary><c>.playerbot chat status</c>.</summary>
 internal sealed record BotChatStatus(
     bool Enabled, PlayerbotChatChannels Channels, int Queued, long Answered, long Dropped, double SpentTodayUsd, double MaxDailySpendUsd,
-    IReadOnlyList<BotChatProviderStatus> Providers);
+    IReadOnlyList<BotChatProviderStatus> Providers, BotChatSafetyStatus Safety);
 
 /// <summary>
 /// The bots' chat service (docs/areas/playbots.md, Bot chat). The world thread hands it a line (<see cref="TryAsk"/>: cheap checks
@@ -43,6 +46,13 @@ internal sealed record BotChatStatus(
 /// spend cap and a back-off after 429/5xx/timeouts) and put the reply on a queue the world thread drains (<see cref="DrainReplies"/>)
 /// and says through the bot's ordinary CMSG_MESSAGECHAT. A failure only means no reply: it never reaches the bot's behaviour.
 /// Keys are read from the environment at each request and never logged or shown.
+/// <para>
+/// Safety (<see cref="PlayerbotChatSafety"/>, docs/areas/playbots.md, Safety and provider policies): every line is screened by the
+/// local filter before any model provider is tried, and by a provider's moderation step before that provider sees it; a flagged
+/// line goes to no provider and gets the built-in brush-off (or nothing). A model's reply is screened before it is said. A player
+/// who is cut off, opted out, or not opted in under RequireOptIn gets built-in replies only. Only the line and the remembered
+/// exchanges are sent, under character names, with emails and phone numbers replaced.
+/// </para>
 /// </summary>
 internal sealed class PlayerbotChat : IAsyncDisposable
 {
@@ -63,6 +73,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
     private readonly ConcurrentQueue<BotChatReply> _replies = new();
     private readonly Random _random = new();
     private readonly CancellationTokenSource _stop = new();
+    private readonly PlayerbotChatSafety _safety;
     private Channel<BotChatAsk>? _queue;
     private Task[] _workers = [];
     private int _queued;
@@ -79,9 +90,13 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         _environment = environment ?? throw new ArgumentNullException(nameof(environment));
         _time = time ?? throw new ArgumentNullException(nameof(time));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _safety = new PlayerbotChatSafety(() => _options.Chat, time, logger);
     }
 
     private PlayerbotChatOptions Options => _options.Chat;
+
+    /// <summary>The safety state: flags, strikes, cut-offs, choices (<c>.playerbot chat flags</c> and <c>pardon</c>).</summary>
+    internal PlayerbotChatSafety Safety => _safety;
 
     /// <summary>Whether bots answer chat now (live: <c>.reload config</c>). Off: every line takes the fixed path of before.</summary>
     internal bool IsActive => Volatile.Read(ref _disposed) == 0 && Options.Enabled;
@@ -108,6 +123,12 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(ask);
         if (!IsActive) return BotChatAdmission.Disabled;
         if (!Answers(ask.Channel)) return BotChatAdmission.Channel;
+        if (_safety.TryChoice(ask) is { } choice)
+        {
+            _replies.Enqueue(new BotChatReply(ask.BotId, ask.SenderGuid, ask.SenderName, ask.Channel, choice, null, AcknowledgeCommand: false, "Safety"));
+            return BotChatAdmission.Choice;
+        }
+
         DateTimeOffset now = _time.GetUtcNow();
         PlayerbotChatOptions options = Options;
         lock (_gate)
@@ -126,6 +147,15 @@ internal sealed class PlayerbotChat : IAsyncDisposable
 
         return BotChatAdmission.Queued;
     }
+
+    /// <summary>
+    /// World thread, after <see cref="TryAsk"/> took a line: the AI disclosure to show its speaker first (once per login,
+    /// <paramref name="login"/> from <see cref="PlayerbotChatSafety.LoginOf"/>), or null.
+    /// </summary>
+    internal string? TakeDisclosure(BotChatAsk ask, long login) => IsActive ? _safety.TakeDisclosure(ask, login, Options.HasModelProvider) : null;
+
+    /// <summary>World thread: the automatic mutes to apply (<see cref="PlayerbotChatSafetyOptions.AutoMute"/>).</summary>
+    internal IReadOnlyList<BotChatMute> DrainMutes() => _safety.DrainMutes();
 
     /// <summary>
     /// Log the provider chain at start: each provider's kind and model, and whether its key variable is set (the name of the
@@ -147,6 +177,15 @@ internal sealed class PlayerbotChat : IAsyncDisposable
             string key = variable is null ? "no key" : $"key {variable} {(string.IsNullOrEmpty(_environment.Get(variable)) ? "missing (skipped)" : "present")}";
             _logger.LogInformation("Bot chat provider #{Index}: {Provider}, {Key}, at most {PerHour} replies an hour", index++, provider.Label, key, provider.MaxRepliesPerHour);
         }
+
+        PlayerbotChatSafetyOptions safety = options.Safety;
+        (int terms, int patterns) = _safety.Filter().Size;
+        _logger.LogInformation(
+            "Bot chat safety: screening {Screening} ({Terms} terms, {Patterns} patterns; categories {Categories}), disclosure {Disclosure}, opt-out {OptOut}, require opt-in {OptIn}, strip personal data {Strip}",
+            safety.Enabled ? "on" : "OFF", terms, patterns, safety.Categories, safety.Disclosure ? "on" : "off", safety.AllowOptOut ? "on" : "off",
+            safety.RequireOptIn ? "on" : "off", safety.StripPersonalData ? "on" : "off");
+        if (!safety.Enabled && options.HasModelProvider)
+            _logger.LogWarning("Bot chat safety screening is off while a model provider is configured: players' lines reach the provider unscreened");
     }
 
     /// <summary>World thread: the replies ready to be said (at most <see cref="MaxRepliesPerDrain"/> per call).</summary>
@@ -180,7 +219,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
             }
 
             return new BotChatStatus(options.Enabled, options.Channels, Volatile.Read(ref _queued), Interlocked.Read(ref _answered),
-                Interlocked.Read(ref _dropped), _spentToday, options.MaxDailySpendUsd, lines);
+                Interlocked.Read(ref _dropped), _spentToday, options.MaxDailySpendUsd, lines, _safety.Status());
         }
     }
 
@@ -230,15 +269,35 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         }
     }
 
-    /// <summary>Worker: the first provider that answers, in order; null when none does (or the built-in one chooses silence).</summary>
+    /// <summary>
+    /// Worker: the first provider that answers, in order; null when none does (or the built-in one chooses silence). The line is
+    /// screened first: a flagged line is answered by <see cref="Flagged"/> and reaches no model provider.
+    /// </summary>
     internal async Task<BotChatReply?> AnswerAsync(BotChatAsk ask)
     {
         PlayerbotChatOptions options = Options;
         if (!options.Enabled) return null;
+        PlayerbotChatSafetyOptions safety = options.Safety;
+        bool screening = safety.Enabled;
+        bool modelAllowed = true;
+        if (screening)
+        {
+            SafetyVerdict verdict = _safety.ScreenInput(ask.Text);
+            if (verdict.Category is { } category)
+            {
+                _safety.Flag(ask, category.ToString(), BotChatFlagSource.Local, Strikes(category), ask.Text);
+                return Flagged(ask, category, safety);
+            }
+
+            if (verdict.TimedOut) modelAllowed = false; // not judged in time: kept from the models, no strike
+        }
+
+        if (modelAllowed && options.HasModelProvider && !_safety.ModelAllowed(ask)) modelAllowed = false;
         int index = -1;
         foreach (PlayerbotChatProviderOptions provider in options.EffectiveProviders())
         {
             index++;
+            if (provider.Kind != PlayerbotChatProviderKind.Builtin && !modelAllowed) continue;
             string? key;
             lock (_gate)
             {
@@ -246,8 +305,24 @@ internal sealed class PlayerbotChat : IAsyncDisposable
             }
 
             if (provider.Kind == PlayerbotChatProviderKind.Builtin) return Builtin(ask, provider, options);
+            if (screening && provider.Moderation != PlayerbotChatModerationKind.None)
+            {
+                BotChatModeration moderation = await ModerateAsync(provider, key, ask, options).ConfigureAwait(false);
+                if (moderation.Verdict == BotChatModerationVerdict.Flagged)
+                {
+                    _safety.Flag(ask, moderation.Category ?? "flagged", BotChatFlagSource.Moderation, strike: true, ask.Text);
+                    return Flagged(ask, null, safety);
+                }
+
+                if (moderation.Verdict != BotChatModerationVerdict.Clean)
+                {
+                    Fail(provider, index, "moderation-failed", TimeSpan.Zero); // never sent unchecked: the next provider answers
+                    continue;
+                }
+            }
+
             BotChatResult result;
-            BotChatPrompt prompt = PlayerbotChatPrompts.Build(ask, Memory(ask));
+            BotChatPrompt prompt = PlayerbotChatPrompts.Build(Outgoing(ask, options), Outgoing(Memory(ask), options));
             using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token))
             {
                 deadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(options.TimeoutSeconds, 1, 60)));
@@ -274,6 +349,14 @@ internal sealed class PlayerbotChat : IAsyncDisposable
                 continue;
             }
 
+            if (screening && safety.ScreenOutput && _safety.ScreenOutput(text).Category is { } said)
+            {
+                _safety.Flag(ask, said.ToString(), BotChatFlagSource.Output, strike: false, text);
+                if (safety.OnOutputFlagged == PlayerbotChatOutputAction.Drop) return null;
+                modelAllowed = false; // the built-in provider answers the (clean) line instead
+                continue;
+            }
+
             if (!ask.FromMaster || !options.NaturalLanguageCommands) command = null;
             Remember(ask, text);
             return new BotChatReply(ask.BotId, ask.SenderGuid, ask.SenderName, ask.Channel, text, command, AcknowledgeCommand: false, provider.Label);
@@ -295,6 +378,83 @@ internal sealed class PlayerbotChat : IAsyncDisposable
 
         if (answer.Text is { } text) Remember(ask, text);
         return new BotChatReply(ask.BotId, ask.SenderGuid, ask.SenderName, ask.Channel, answer.Text, answer.Command, AcknowledgeCommand: true, provider.Label);
+    }
+
+    // --- safety -----------------------------------------------------------------------------------------------------------
+
+    /// <summary>Whether a local flag of <paramref name="category"/> is a strike (self-harm and personal data are not: no one is punished for them).</summary>
+    internal static bool Strikes(PlayerbotChatSafetyCategories category)
+        => category is not (PlayerbotChatSafetyCategories.SelfHarm or PlayerbotChatSafetyCategories.PersonalData);
+
+    /// <summary>
+    /// The answer to a flagged line: nothing (<see cref="PlayerbotChatFlaggedAction.Ignore"/>) or the built-in brush-off (a supportive
+    /// line for self-harm, a caution for personal data). The line is not remembered, so it is never sent later as memory either.
+    /// </summary>
+    private BotChatReply? Flagged(BotChatAsk ask, PlayerbotChatSafetyCategories? category, PlayerbotChatSafetyOptions safety)
+    {
+        if (safety.OnFlagged == PlayerbotChatFlaggedAction.Ignore) return null;
+        string key = category switch
+        {
+            PlayerbotChatSafetyCategories.SelfHarm => "safety.selfharm",
+            PlayerbotChatSafetyCategories.PersonalData => "safety.personal",
+            _ => "abuse",
+        };
+        string? text;
+        lock (_gate)
+        {
+            string? last = _conversations.TryGetValue((ask.BotId, ask.SenderGuid.Value), out Conversation? conversation) ? conversation.LastReply : null;
+            text = PlayerbotBuiltinChat.Pick(key, ask, last, _random);
+        }
+
+        return text is null ? null : new BotChatReply(ask.BotId, ask.SenderGuid, ask.SenderName, ask.Channel, text, null, AcknowledgeCommand: true, "Builtin");
+    }
+
+    /// <summary>The line as sent to a model provider: emails and phone numbers replaced when <see cref="PlayerbotChatSafetyOptions.StripPersonalData"/>.</summary>
+    private static BotChatAsk Outgoing(BotChatAsk ask, PlayerbotChatOptions options)
+        => options.Safety.StripPersonalData ? ask with { Text = PlayerbotChatSafetyFilter.StripPersonalData(ask.Text) } : ask;
+
+    private static List<BotChatTurn> Outgoing(List<BotChatTurn> memory, PlayerbotChatOptions options)
+        => options.Safety.StripPersonalData ? [.. memory.Select(turn => turn with { Text = PlayerbotChatSafetyFilter.StripPersonalData(turn.Text) })] : memory;
+
+    /// <summary>A provider's moderation step for <paramref name="ask"/>'s line (as it would be sent); any error fails the step.</summary>
+    private async Task<BotChatModeration> ModerateAsync(PlayerbotChatProviderOptions provider, string? key, BotChatAsk ask, PlayerbotChatOptions options)
+    {
+        string text = PlayerbotChatPrompts.Clean(Outgoing(ask, options).Text, PlayerbotChatPrompts.MaxLineLength);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(options.TimeoutSeconds, 1, 60)));
+        try
+        {
+            if (provider.Moderation == PlayerbotChatModerationKind.Endpoint)
+            {
+                string? moderationKey = key;
+                if (provider.ModerationApiKeyEnvironmentVariable is not null)
+                {
+                    string? variable = provider.EffectiveModerationKeyVariable;
+                    moderationKey = variable is null ? null : _environment.Get(variable);
+                    if (variable is not null && string.IsNullOrEmpty(moderationKey)) return new BotChatModeration(BotChatModerationVerdict.Failed);
+                }
+
+                return await _client.ModerateAsync(provider, moderationKey, text, deadline.Token).ConfigureAwait(false);
+            }
+
+            PlayerbotChatProviderOptions classifier = provider.Clone();
+            classifier.MaxTokens = 16;
+            BotChatResult result = await _client.CompleteAsync(classifier, key, PlayerbotChatPrompts.Classifier(text), deadline.Token).ConfigureAwait(false);
+            lock (_gate)
+            {
+                AddSpend(provider, result, _time.GetUtcNow());
+            }
+
+            return result.Outcome == BotChatOutcome.Ok ? PlayerbotChatPrompts.ReadClassification(result.Text) : new BotChatModeration(BotChatModerationVerdict.Failed);
+        }
+        catch (OperationCanceledException) when (!_stop.IsCancellationRequested)
+        {
+            return new BotChatModeration(BotChatModerationVerdict.Failed);
+        }
+        catch (Exception error) when (error is HttpRequestException or IOException or InvalidOperationException)
+        {
+            return new BotChatModeration(BotChatModerationVerdict.Failed);
+        }
     }
 
     // --- budgets and provider state ---------------------------------------------------------------------------------------
@@ -324,10 +484,7 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         DateTimeOffset now = _time.GetUtcNow();
         lock (_gate)
         {
-            RollSpendDay(now);
-            if (provider.Price is { } price)
-                _spentToday += ((result.InputTokens + (1.25 * result.CacheWriteTokens) + (0.1 * result.CacheReadTokens)) * price.Input
-                    + (result.OutputTokens * price.Output)) / 1_000_000d;
+            AddSpend(provider, result, now);
             if (result.Outcome == BotChatOutcome.Ok)
             {
                 StateOf(provider).Succeed(now);
@@ -344,6 +501,15 @@ internal sealed class PlayerbotChat : IAsyncDisposable
         };
         bool backOff = result.Outcome is BotChatOutcome.RateLimited or BotChatOutcome.Unavailable or BotChatOutcome.Timeout or BotChatOutcome.NetworkError;
         Fail(provider, index, ErrorClass(result.Outcome), cooldown ?? (backOff ? null : TimeSpan.Zero));
+    }
+
+    /// <summary>Under <see cref="_gate"/>: add a request's estimated cost to the day's spend.</summary>
+    private void AddSpend(PlayerbotChatProviderOptions provider, BotChatResult result, DateTimeOffset now)
+    {
+        RollSpendDay(now);
+        if (provider.Price is { } price)
+            _spentToday += ((result.InputTokens + (1.25 * result.CacheWriteTokens) + (0.1 * result.CacheReadTokens)) * price.Input
+                + (result.OutputTokens * price.Output)) / 1_000_000d;
     }
 
     /// <summary>Count a failure; <paramref name="cooldown"/> null = the doubling back-off (15 s up to 5 min), zero = none.</summary>

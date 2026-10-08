@@ -1,0 +1,48 @@
+{
+  "about": "The shipped term list of the bot chat local filter (docs/areas/playbots.md, Safety and provider policies). Conservative on purpose: it aims at what model providers' usage policies forbid, not at ordinary rudeness, and avoids words that are common in WoW chat (kill, die, bomb, gun, naked, suicide pull). Terms are whole words or phrases after normalization (case, accents, leetspeak, spaced-out letters and repeated letters are folded); a trailing * also matches longer words. Patterns are .NET regular expressions run with RegexOptions.NonBacktracking on the lower-case text with punctuation turned into single spaces, so back-references and lookarounds are not available. Personal data (emails, phone numbers, street addresses) is built into the code. An operator file of the same shape (World:Playerbots:Chat:Safety:TermsFile) adds to this list or, with ReplaceDefaultTerms, replaces it.",
+  "categories": {
+    "SexualMinors": {
+      "terms": [ "lolicon", "shotacon", "child porn", "kiddie porn", "kiddy porn", "jailbait", "pedophilia", "cp trade", "csam" ],
+      "patterns": [
+        "\\b(child|children|kid|kids|minor|minors|underage|under age|preteen|pre teen|loli|lolis|shota|toddler|little girls?|little boys?|(1[0-7]|[1-9]) ?(yo|y o|years? old|yrs? old))\\b.{0,40}\\b(sex|sexy|sexual|sexually|nude|nudes|porn|horny|molest|molested|molesting|grope|blowjob|cum|aroused|naughty pics)\\b",
+        "\\b(sex|sexy|sexual|sexually|nude|nudes|porn|horny|molest|molested|molesting|grope|blowjob|cum|aroused|naughty pics)\\b.{0,40}\\b(child|children|kid|kids|minor|minors|underage|under age|preteen|pre teen|loli|lolis|shota|toddler|little girls?|little boys?|(1[0-7]|[1-9]) ?(yo|y o|years? old|yrs? old))\\b"
+      ]
+    },
+    "SelfHarm": {
+      "terms": [ "kill myself", "killing myself", "end my life", "ending my life", "commit suicide", "suicidal", "self harm", "selfharm", "cut myself", "cutting myself", "hang myself", "slit my wrists", "overdose on purpose" ],
+      "patterns": [
+        "\\b(i|im|i m|i am) (going to|gonna|want to|wanna|about to|ready to) (die|end it all|end it)\\b.{0,30}\\b(irl|for real|real life)\\b"
+      ]
+    },
+    "Threats": {
+      "terms": [ "i know where you live", "i know where u live", "i will find you irl", "ill find you irl", "gonna find you irl", "swat you", "swatting you", "dox you", "doxx you", "doxing you", "doxxing you", "leak your address" ],
+      "patterns": [
+        "\\b(i ?ll|i will|im going to|i m going to|im gonna|i m gonna|gonna|going to) (find|hunt|track|kill|shoot|stab|hurt|beat|rape) (you|u|your family|ur family)\\b.{0,30}\\b(irl|in real life|for real|at your house|at ur house|at home)\\b",
+        "\\b(shoot|bomb) up (a|the|my|your|ur) (school|church|mosque|synagogue|temple|mall|office|work)\\b",
+        "\\b(i ?ll|i will|gonna|going to) rape (you|u)\\b"
+      ]
+    },
+    "Hate": {
+      "terms": [ "nigger*", "niggers", "faggot*", "kike*", "tranny", "trannies", "wetback*", "raghead*", "towelhead*", "sand nigger*", "gook*", "heil hitler", "sieg heil", "white power", "gas the jews", "race war now" ],
+      "patterns": [
+        "\\b(kill|gas|exterminate|genocide|lynch|hang|burn) (all )?(the )?(jews|blacks|black people|muslims|gays|gay people|whites|white people|asians|mexicans|arabs|christians|trans people|immigrants|women)\\b",
+        "\\b(jews|blacks|black people|muslims|gays|gay people|asians|mexicans|arabs|trans people|immigrants) (should|must|deserve to) (die|be killed|be gassed|be exterminated|burn)\\b",
+        "\\b14 ?88\\b"
+      ]
+    },
+    "Harassment": {
+      "terms": [ "kys", "kill yourself", "kill urself", "kill your self", "kill ur self", "go kill yourself", "neck yourself", "an hero", "drink bleach", "go drink bleach", "hope you get cancer", "hope u get cancer" ],
+      "patterns": [
+        "\\b(go )?(hang|shoot|off) (yourself|urself|your self)\\b",
+        "\\b(i )?hope (you|u|ur family|your family) (die|dies|get raped|gets raped)\\b.{0,20}\\b(irl|in real life|for real)\\b"
+      ]
+    },
+    "IllegalGoods": {
+      "terms": [ "pipe bomb", "pipe bombs", "ghost gun", "ghost guns", "fentanyl", "methamphetamine", "crystal meth", "cocaine", "heroin", "ricin", "sarin", "untraceable gun", "3d printed gun" ],
+      "patterns": [
+        "\\bhow (do i|do you|to|can i) (make|build|cook|synthesi[sz]e|get|buy) (a |an |some )?(napalm|thermite|meth|crack|lsd|mdma|molotov|silencer|suppressor|untraceable gun|machine gun|full auto)\\b",
+        "\\b(buy|sell|selling|buying|plug for|dealer for) (some )?(coke|crack|meth|molly|mdma|lsd|acid tabs|shrooms|xanax|oxy|oxycontin|percs)\\b.{0,30}\\b(irl|cash|venmo|paypal|bitcoin|btc|crypto|discord|telegram|snap|dm me)\\b"
+      ]
+    }
+  }
+}

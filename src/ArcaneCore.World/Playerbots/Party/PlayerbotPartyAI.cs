@@ -249,8 +249,11 @@ internal sealed class PlayerbotPartyAI
         _chatEvents.Observe(player, Now);
         bool fromMaster = !master.IsEmpty && sender.Guid == master;
         var ask = new Chat.BotChatAsk(_botId, player.Guid, Persona(player, master), sender.Guid, sender.Name,
-            line.Type is ChatType.Raid or ChatType.RaidLeader ? ChatType.Party : line.Type, line.Text, fromMaster, InviteAllowed(player, sender));
-        chat.TryAsk(ask);
+            line.Type is ChatType.Raid or ChatType.RaidLeader ? ChatType.Party : line.Type, line.Text, fromMaster, InviteAllowed(player, sender),
+            sender.AccountId);
+        // The AI disclosure comes first, once per login of the speaker (a new Player is made at every login).
+        if (chat.TryAsk(ask) == Chat.BotChatAdmission.Queued && chat.TakeDisclosure(ask, Chat.PlayerbotChatSafety.LoginOf(sender)) is { } notice)
+            Gm.Core.GmReplies.SendSystemMessage(sender, notice);
         return true;
     }
 

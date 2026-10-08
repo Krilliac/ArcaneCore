@@ -22,7 +22,10 @@ internal sealed record BotChatPersona(
     bool InGroup,
     IReadOnlyList<string> RecentEvents);
 
-/// <summary>One line a player said to a bot, with everything a provider needs to answer it.</summary>
+/// <summary>
+/// One line a player said to a bot, with everything a provider needs to answer it. <see cref="SenderAccountId"/> is for the safety
+/// records and the automatic mute only (0 when unknown); it never reaches a provider, and neither do the GUIDs.
+/// </summary>
 internal sealed record BotChatAsk(
     Guid BotId,
     ObjectGuid BotGuid,
@@ -32,7 +35,8 @@ internal sealed record BotChatAsk(
     ChatType Channel,
     string Text,
     bool FromMaster,
-    bool InviteAllowed);
+    bool InviteAllowed,
+    int SenderAccountId = 0);
 
 /// <summary>A reply on its way back to the world thread: said by the bot on <see cref="Channel"/>, and the master's order, if any.</summary>
 internal sealed record BotChatReply(
@@ -98,6 +102,22 @@ public sealed record BotChatResult(
     public static BotChatResult Fail(BotChatOutcome outcome, TimeSpan? retryAfter = null) => new(outcome, RetryAfter: retryAfter);
 }
 
+/// <summary>How a moderation step judged a line.</summary>
+public enum BotChatModerationVerdict
+{
+    /// <summary>Nothing flagged: the line may go to the provider.</summary>
+    Clean,
+
+    /// <summary>Flagged (<see cref="BotChatModeration.Category"/>): the line goes to no provider.</summary>
+    Flagged,
+
+    /// <summary>The step failed (an error, a timeout, an unreadable answer): this provider is skipped.</summary>
+    Failed,
+}
+
+/// <summary>A moderation step's verdict, the first flagged category (when the endpoint names one) and the tokens it used.</summary>
+public sealed record BotChatModeration(BotChatModerationVerdict Verdict, string? Category = null, int InputTokens = 0, int OutputTokens = 0);
+
 /// <summary>
 /// A model provider's transport (the Anthropic Messages API or an OpenAI-compatible chat completions endpoint). Called only from the
 /// chat worker, never on the world thread. <paramref name="apiKey"/> is null for a keyless endpoint; implementations never log it.
@@ -105,6 +125,13 @@ public sealed record BotChatResult(
 public interface IBotChatClient
 {
     Task<BotChatResult> CompleteAsync(PlayerbotChatProviderOptions provider, string? apiKey, BotChatPrompt prompt, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The <see cref="PlayerbotChatModerationKind.Endpoint"/> step: an OpenAI-compatible <c>/moderations</c> request for
+    /// <paramref name="text"/>. A transport without one fails the step (the provider is then skipped).
+    /// </summary>
+    Task<BotChatModeration> ModerateAsync(PlayerbotChatProviderOptions provider, string? apiKey, string text, CancellationToken cancellationToken)
+        => Task.FromResult(new BotChatModeration(BotChatModerationVerdict.Failed));
 }
 
 /// <summary>Where provider keys come from (the process environment; a test seam).</summary>

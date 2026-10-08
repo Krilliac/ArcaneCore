@@ -525,6 +525,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     private void DeliverChatReplies()
     {
         if (_chat is not { } chat) return;
+        foreach (Chat.BotChatMute mute in chat.DrainMutes()) ApplyChatMute(mute);
         foreach (Chat.BotChatReply reply in chat.DrainReplies())
         {
             if (!_active.TryGetValue(reply.BotId, out ActiveBot? active) || active.Paused || active.Controller is not null
@@ -536,6 +537,26 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                 logger.LogWarning(ex, "Playerbot {BotId} ({Name}) could not say a chat reply", active.Record.BotId, active.Name);
             }
         }
+    }
+
+    /// <summary>
+    /// World thread: the bot chat safety's automatic mute (World:Playerbots:Chat:Safety:AutoMute), through the account mute of
+    /// <c>.mute</c> (persisted, lifted by <c>.unmute</c>). A longer mute already in force is kept.
+    /// </summary>
+    private void ApplyChatMute(Chat.BotChatMute mute)
+    {
+        if (services.GetService<Gm.Audit.GmAuditFeature>() is not { } audit)
+        {
+            logger.LogWarning("Bot chat safety could not mute {Player}: the GM audit feature (account mutes) is not running", mute.PlayerName);
+            return;
+        }
+
+        long seconds = mute.Minutes * 60L;
+        if (audit.MuteOf(mute.AccountId) is { } existing && existing.MutedUntil >= audit.NowUnixSeconds + seconds) return;
+        const string reason = "Bot chat safety: repeated flagged messages to bots";
+        audit.Mute(mute.AccountId, seconds, "Bot chat safety", Kernel.Accounts.AccountSecurity.GameMaster, reason);
+        if (_world?.FindOnlinePlayer(new Game.ObjectGuid(mute.PlayerGuid)) is { } player)
+            Gm.Core.GmReplies.SendSystemMessage(player, Gm.Audit.GmAuditStrings.YourChatDisabled(Gm.Audit.GmAuditStrings.Span(seconds), "Bot chat safety", reason));
     }
 
     private async Task CheckpointAsync()
