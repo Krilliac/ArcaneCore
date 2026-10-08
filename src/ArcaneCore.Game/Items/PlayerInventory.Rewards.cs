@@ -64,6 +64,7 @@ public sealed partial class PlayerInventory
         {
             Templates = Templates,
             GuidAllocator = GuidAllocator,
+            RandomProperties = RandomProperties, // quest rewards roll too (vmangos Player.cpp:13104-13119); the shadow's items are the ones kept
         };
         shadow.Load(before.Items);
         foreach (InventoryRewardGrant removal in removals)
@@ -255,5 +256,6 @@ public sealed partial class PlayerInventory
     private static bool SameRewardItem(ItemInstanceData a, ItemInstanceData b) => a.Guid == b.Guid && a.Entry == b.Entry
         && a.Count == b.Count && a.Creator == b.Creator && a.GiftCreator == b.GiftCreator && a.Duration == b.Duration
         && a.Flags == b.Flags && a.RandomPropertyId == b.RandomPropertyId && a.Durability == b.Durability && a.TextId == b.TextId
+        && a.GiftEntry == b.GiftEntry && a.GiftFlags == b.GiftFlags
         && a.Charges.SequenceEqual(b.Charges) && a.Enchantments.SequenceEqual(b.Enchantments);
 }

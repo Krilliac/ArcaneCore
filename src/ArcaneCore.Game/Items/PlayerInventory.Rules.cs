@@ -481,6 +481,12 @@ public sealed partial class PlayerInventory
             {
                 return InventoryResult.YouAreStunned;
             }
+
+            // vmangos Player.cpp:9710-9711: a weapon cannot be put on in combat while the weapon change timer runs.
+            if ((player.UnitFlags & UnitFlags.InCombat) != 0 && template.Class == (uint)ItemClass.Weapon && WeaponChangeLocked?.Invoke() == true)
+            {
+                return InventoryResult.CantDoRightNow;
+            }
         }
 
         byte eslot = FindEquipSlot(template, slot, swap);

@@ -26,6 +26,12 @@ public sealed class ItemInstanceRow
     public uint Durability { get; set; }
     public uint Text { get; set; }
 
+    /// <summary>The wrapped item's own entry (vmangos character_gifts.item_id); 0 when not wrapped. Column added at characters <see cref="ItemGiftDataModule.Version"/>.</summary>
+    public uint GiftEntry { get; set; }
+
+    /// <summary>The wrapped item's own ITEM_FIELD_FLAGS (vmangos character_gifts.flags).</summary>
+    public uint GiftFlags { get; set; }
+
     public ItemInstanceData ToData() => new()
     {
         Guid = Guid,
@@ -40,6 +46,8 @@ public sealed class ItemInstanceRow
         RandomPropertyId = RandomPropertyId,
         Durability = Durability,
         TextId = Text,
+        GiftEntry = GiftEntry,
+        GiftFlags = GiftFlags,
     };
 
     public void CopyFrom(int ownerId, ItemInstanceData data)
@@ -56,6 +64,8 @@ public sealed class ItemInstanceRow
         RandomPropertyId = data.RandomPropertyId;
         Durability = data.Durability;
         Text = data.TextId;
+        GiftEntry = data.GiftEntry;
+        GiftFlags = data.GiftFlags;
     }
 
     internal static void Configure(EntityTypeBuilder<ItemInstanceRow> entity)

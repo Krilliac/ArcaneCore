@@ -21,8 +21,8 @@ namespace ArcaneCore.Game.Items.ItemUse;
 /// </list>
 /// <item>An "Equip:" spell that the wearer's shapeshift form does not allow is not cast, and a form change re-checks every worn item: the auras
 /// that no longer fit go, the ones that now fit come (mangos ApplyEquipSpell's form check and Player::UpdateEquipSpellsAtFormChange,
-/// Player.cpp:7181-7254; <see cref="ReconcileAtFormChange"/>, run as an <see cref="IFormChangeListener"/>). Set bonus spells are not re-checked
-/// at a form change (a documented limit).</item>
+/// Player.cpp:7181-7254; <see cref="ReconcileAtFormChange"/>, run as an <see cref="IFormChangeListener"/>). Set bonus spells follow the same
+/// rule (AddItemsSetItem casts a bonus only when the form fits; the form change re-checks every active bonus).</item>
 /// Everything runs on the world thread inside the inventory operation. State is one <see cref="PlayerItemSets"/> and two delegates per
 /// player, created at <see cref="Attach"/>; nothing allocates per tick.
 /// </summary>
@@ -53,6 +53,8 @@ public sealed class ItemEquipSpells(SpellSystem spells, ItemSetBonuses? sets = n
         s_bindings.Add(inventory, binding);
         inventory.EquipmentChanged += binding.OnEquipment;
         inventory.BagEquipChanged += binding.OnBag;
+        // The combat weapon switch timer (vmangos Player::m_weaponChangeTimer) lives in the spell system with the global cooldown it starts.
+        inventory.WeaponChangeLocked = () => _spells.IsWeaponChangeLocked(player);
 
         // vmangos _ApplyAllItemMods order: sets for every worn piece (broken too), then the spells of the unbroken ones.
         foreach ((byte slot, Item item) in inventory.Equipped)
@@ -96,7 +98,7 @@ public sealed class ItemEquipSpells(SpellSystem spells, ItemSetBonuses? sets = n
     }
 
     /// <summary>
-    /// mangos Player::UpdateEquipSpellsAtFormChange (Player.cpp:7231-7240): every worn, unbroken item's "Equip:" spells are re-checked against
+    /// mangos Player::UpdateEquipSpellsAtFormChange (Player.cpp:7231-7253): every worn, unbroken item's "Equip:" spells are re-checked against
     /// the current form; an aura that no longer fits is removed, a fitting spell whose aura is missing is cast (an active one is not cast again).
     /// </summary>
     public void ReconcileAtFormChange(Player player)
@@ -130,6 +132,12 @@ public sealed class ItemEquipSpells(SpellSystem spells, ItemSetBonuses? sets = n
                 }
             }
         }
+
+        // The set half (Player.cpp:7242-7253): the active bonus spells, independent of breakage.
+        if (_sets is not null && s_bindings.TryGetValue(player.Inventory, out Binding? binding))
+        {
+            _sets.ReconcileAtFormChange(player, binding.Sets);
+        }
     }
 
     /// <inheritdoc />
@@ -142,7 +150,7 @@ public sealed class ItemEquipSpells(SpellSystem spells, ItemSetBonuses? sets = n
     }
 
     /// <summary>mangos ApplyEquipSpell: "Cannot be used in this stance/form" (SpellEntry::GetErrorAtShapeshiftedCast, Player.cpp:7186).</summary>
-    private static bool FitsForm(Player player, SpellInfo spell)
+    internal static bool FitsForm(Player player, SpellInfo spell)
         => spell.GetErrorAtShapeshiftedCast((uint)ShapeshiftService.GetForm(player), null) == SpellCastResult.CastOk;
 
     private void ApplyItem(Player player, Item item, bool replay)
@@ -221,6 +229,7 @@ public sealed class ItemEquipSpells(SpellSystem spells, ItemSetBonuses? sets = n
             {
                 case EquipmentChange.Worn:
                     _owner._sets?.ItemWorn(_player, Sets, item, replay: false);
+                    _owner._spells.OnWeaponWorn(_player, item);   // vmangos EquipItem: the combat weapon switch, after the set and the mods
                     break;
                 case EquipmentChange.Removed:
                     _owner._sets?.ItemRemoved(_player, Sets, item);

@@ -47,7 +47,7 @@ For the build-5875 bags, bank and move-error audit, see [inventory-bags.md](inve
 - **Dual wield** is off by default, so a one-handed weapon never auto-equips to the off hand.
 - **No mail fallback** when the off hand cannot be stored after equipping a two-hander (vmangos mails it); the equip fails with `InventoryFull` instead.
 - **Keyring** holds keys only within the level's keyring size (vmangos `GetMaxKeyringSize`); explicit moves into buyback slots or keyring slots past the size are refused with `ItemDoesntGoIntoBag2` (hardening, vmangos does not check).
-- **Not implemented here** (see "Item mechanics lane" below for what has since been delivered and what is still open): buyback (vendor area), the `ITEM_FLAG_*` "discovered" gate, item loot containers (`generated_loot`), item enchantments and random properties, item text/pages, and exact persisted item-cooldown owner metadata. The build-5875 `CMSG_USE_ITEM` path, charges, bind-on-use, item cooldown selection, and full-resource consumable refusal are implemented in the item-use slice.
+- **Not implemented here** (see "Item mechanics lane" below for what has since been delivered and what is still open): buyback (vendor area), the `ITEM_FLAG_*` "discovered" gate, item loot containers (`generated_loot`), item enchantments, and exact persisted item-cooldown owner metadata (random properties, page text and gift wrapping: see "Economy-items lane" below). The build-5875 `CMSG_USE_ITEM` path, charges, bind-on-use, item cooldown selection, and full-resource consumable refusal are implemented in the item-use slice.
 - **Stat hook** applies template stats, armor, resistances and health/mana pools to the update fields directly; it does not do combat ratings or auras (no aura system yet).
 
 ## Tests
@@ -90,7 +90,7 @@ Known gaps and UNVERIFIED points:
 
 - UNVERIFIED: whether retail 1.12.1 weights the armor slots on a hit taken. No reference core does: `mangosserver/server` picks uniformly over all 19 slots (`Unit.cpp:1096`, `urand(0, EQUIPMENT_SLOT_END - 1)`), and a keyword search of the other cores (arcemu, WCell, mangossharp) found no per-slot weights either (WCell lists the whole feature as a TODO); azerothcore and TrinityCore were only searched for the config keys. The implemented pool is therefore uniform over the worn armor with durability (the lane acceptance's "retail slot weights" is not demonstrated by any source; this is what the code does). If a captured retail source shows weights, `CollectWornArmorWithDurability` is where the pool is built and `RollHitTakenDurability` is the single pick.
 - UNVERIFIED: whether retail wears the weapon only for white swings, whether a ranged weapon wears on ranged hits, and whether environmental damage (falling, lava) wears armor; the code follows the reference core for the last (self damage is damage taken).
-- `DurabilityLossChance.Absorb`, `.Parry` and `.Block` of the reference core's config are not modelled (they exist in `WorldConfig.cpp` but nothing in `Unit.cpp` reads them), nor is the `SPELL_ATTR_EX3_NO_DURABILITY_LOSS` exception.
+- `DurabilityLossChance.Absorb`, `.Parry` and `.Block` are modelled since the economy-items lane (see below); the slots they wear are a reconstruction, since no reference core still reads them. The `SPELL_ATTR_EX3_NO_DURABILITY_LOSS` exception is not modelled.
 - The new `Items:DurabilityLossChanceDamage` description in `ItemMechanicsOptions` changes the generated `docs/reference/configuration.md` row, so `ConfigReferenceTests` in `ArcaneCore.World.Tests` fails until the orchestrator regenerates it.
 
 ### Deliberate differences
@@ -100,15 +100,15 @@ Known gaps and UNVERIFIED points:
 - **Ammo storage** is a separate table instead of a `characters` column (no behavioural change).
 - **`AmmoDps` is computed** from the current equipment on every read; vmangos caches `m_ammoDPS` and can leave it stale after unequipping the ranged weapon.
 - **`CanBeTraded` keeps the carried-position rule** (backpack or carried bag only), which is stricter than vmangos' `CanUnequipItem` check; the client never offers equipped items.
-- **READ_ITEM packet layouts follow vmangos** (OK: item guid twice; FAILED: guid, u8 reason always 0, guid), while wow_messages lists one guid for both. Unverified against a real client. No page text is sent (see limits).
+- **READ_ITEM packet layouts follow vmangos** (OK: item guid twice; FAILED: guid, u8 reason always 0, guid), while wow_messages lists one guid for both. Unverified against a real client. The pages themselves come from CMSG_PAGE_TEXT_QUERY (see "Economy-items lane").
 
 ### Not delivered (needs another lane's primitive, data or a decision)
 
 - Exact persisted item-cooldown owner metadata for relog/UI reconstruction: current server rows preserve durations/category IDs, while `ItemId` and effective item-category ownership remain pending. References: `SpellHandler.cpp:36-140`, `Spell.cpp:4991-5046, 7109-7175`, `Player.cpp:22139-22214`; proposed contract is documented in `docs/integration/item-use-20261004.md` and the cooldown reconnaissance report.
-- Random properties (`ItemRandomProperties`): need the developer-supplied build-5875 DBC. CMSG_USE_ITEM, item charges and consumption, the item cooldown pick, bind-on-use and the consumable refusal are delivered (`SpellSystem.HandleItemUse`, docs/integration/item-use-20261004.md); ON_EQUIP item spells and item sets are delivered (next section); the enchantment engine is the crafting lane's (docs/areas/crafting.md), and weapon chance-on-hit spells and enchantment combat spells proc through `SpellSystem.ItemCombatProcs`.
+- Random properties are delivered by the economy-items lane (code path; the content needs the developer-supplied ItemRandomProperties.dbc and an `item_enchantment_template` dump). CMSG_USE_ITEM, item charges and consumption, the item cooldown pick, bind-on-use and the consumable refusal are delivered (`SpellSystem.HandleItemUse`, docs/integration/item-use-20261004.md); ON_EQUIP item spells and item sets are delivered (next section); the enchantment engine is the crafting lane's (docs/areas/crafting.md), and weapon chance-on-hit spells and enchantment combat spells proc through `SpellSystem.ItemCombatProcs`.
 - Item loot containers (`CMSG_OPEN_ITEM`, `generated_loot`), lockboxes: need coordination with the loot-service owner (group-loot-xp).
-- Equip cooldown and combat weapon-swap GCD, food/drink sit and `MOD_REGEN` (aura 84), elixir exclusivity, offline rules (conjured items after 15 minutes offline, REAL_DURATION offline tick; need `logout_time` from death-persistence).
-- Gift wrapping (`CMSG_WRAP_ITEM`): classic-db `item_template` has no `WrappedGift` column, so no wrapper can be created from the data; READ_ITEM page text needs `page_text` content and `CMSG_PAGE_TEXT_QUERY`.
+- Equip cooldown (the 30 s on-use cooldown of an item just put on, vmangos Player::ApplyEquipCooldown), food/drink sit and `MOD_REGEN` (aura 84), elixir exclusivity. The combat weapon-swap GCD and the 15-minute conjured rule are delivered by the economy-items lane; REAL_DURATION does not exist in 1.12.
+- Gift wrapping and page text are delivered by the economy-items lane (classic-db papers use the cmangos paper-to-gift pairs; page text needs a `page_text` dump).
 - Spell `SummonChangeItem` (item transform keeping enchantments).
 
 ### Real-client acceptance still pending
@@ -138,10 +138,57 @@ The item-use request and spell start/go layouts have not been captured against a
 
 ### Known gaps
 
-- **Shapeshift form checks cover the Equip: spells only.** An Equip: spell the current form forbids is not cast, and a form change re-checks every worn item (`ItemEquipSpells.ReconcileAtFormChange`, an `IFormChangeListener` of the stance feature; mangos `ApplyEquipSpell` and `UpdateEquipSpellsAtFormChange`, merged from the Codex line at the 2026-10-07 integration). Set bonus spells are not re-checked at a form change.
+- **Shapeshift form checks.** An Equip: spell the current form forbids is not cast, and a form change re-checks every worn item (`ItemEquipSpells.ReconcileAtFormChange`, an `IFormChangeListener` of the stance feature; mangos `ApplyEquipSpell` and `UpdateEquipSpellsAtFormChange`, merged from the Codex line at the 2026-10-07 integration). Set bonus spells follow the same rule since the economy-items lane (`ItemSetBonuses.ReconcileAtFormChange`; AddItemsSetItem casts a bonus only when the form fits).
 - The catalog is not hot-reloadable (it mirrors the client's own DBC); a changed file needs a restart.
 - UNVERIFIED against a real 1.12.1 client: the tooltip text of set bonuses and the set item list come from the client's own DBC; the server only supplies the spells. The ItemSet.dbc field layout is taken from the mangos reference (`DBCStructure.h` / `DBCfmt.h`), not from a developer file in this repo.
 
 ### Tests (this lane)
 
 `ItemSetsAndEquipSpellsTests` (Game.Tests/ItemUse: 2 then 4 pieces, unequip and destroy removal, broken pieces, skill requirement, unknown set, equip spell apply/remove/break/repair, on-use negative-charge exemption, bags, login replay without stacking, quiver haste next to it), `ItemSetDbcReaderTests` (Data.Tests/Items), `ItemEquipSpellFeatureTests` (World.Tests/Items: options, catalog loading, and a real relog through the feature host where a saved buff and a saved non-passive stacking Equip: aura both come back once, the equip aura bound to its item and gone when it is taken off).
+
+## Economy-items lane (wave 2, 2026-10-07)
+
+Branch `claude/w2-economy-items`. vmangos is the reference (`D:\refs\vmangos`, read only); where vmangos has nothing, the cmangos trees are cited.
+
+### Delivered
+
+| Piece | What | Where | Reference |
+|---|---|---|---|
+| Orphaned container loot | `item_loot_state` / `item_loot` rows whose `item_instance` row is gone are deleted when item content first loads, before any character (one set-based DELETE per table). The escrow paths already stopped making new ones (wave-3 F8); this removes what older builds left. | `EfItemLootMaintenance` (`IItemLootMaintenance`), `ItemsFeature.EnsureLoadedAsync` | `CharacterDatabaseCleaner::CleanOrphanedItemData`, `ObjectMgr::SetHighestGuids` (ObjectMgr.cpp:7943-7956) |
+| Defense durability | `Items:DurabilityLossChanceParry` (0.05), `Block` (0.05), `Absorb` (0.5): after a white swing a surviving player victim that parried wears its main hand, one that blocked wears its off hand (the shield), and absorbed damage wears a worn armor piece from the hit-taken pool. `DurabilityLossEnable=false` overrides; a zero chance draws nothing. | `MapCombat.Durability.cs` (`RollDefenseDurability`) | mangos-classic World.cpp:460-462, mangoszero WorldConfig.cpp:233-235 (settings and defaults) |
+| Combat weapon switch | A weapon put on while alive and in combat starts the weapon change timer and the global cooldown of spell 6119 (rogue 6123) and sends SMSG_SPELL_COOLDOWN; while the timer runs, equipping another weapon in combat is CANT_DO_RIGHT_NOW. The swing timer reset on a swap was already in the stat system. | `SpellSystem.WeaponSwap.cs`, `PlayerInventory.WeaponChangeLocked`, `ItemEquipSpells` (Worn) | Player.cpp:10340-10369 (EquipItem), 9710-9711 (CanEquipItem), SharedDefines.h:1173-1176 |
+| Conjured items offline | An item whose template has ITEM_FLAG_CONJURED is dropped at login when more than 900 s passed since the stored logout second (`character_rest.logout_time`; a queued logout write is flushed first). No stored second: nothing vanishes. | `ConjuredItems`, `ItemsFeature.OnPlayerLoadingAsync` | Player.cpp:15533-15540 (_LoadInventory) |
+| Set bonuses and forms | A reached set bonus whose spell the current form forbids is recorded but not cast; a form change casts or removes every active bonus spell to match. | `ItemSetBonuses.ReconcileAtFormChange` | Item.cpp:85-87 (AddItemsSetItem), Player.cpp:7242-7253 (UpdateEquipSpellsAtFormChange) |
+| Gift wrapping | CMSG_WRAP_ITEM with vmangos' refusals in order; the item keeps guid and fields, takes the paper's gift entry, ITEM_DYNFLAG_WRAPPED and the gift creator; one paper is used. CMSG_OPEN_ITEM on a gift restores the item's own entry and flags (unknown contents: the gift is destroyed). Papers without `wrapped_gift` (cmangos classic-db) use the cmangos pairs. | `PlayerInventory.Gifts.cs`, `ItemMiscHandlers` (CMSG_WRAP_ITEM), `GameObjectLootHandlers.OpenItem` | ItemHandler.cpp:1049-1139, SpellHandler.cpp:200-227; mangos-classic ItemHandler.cpp:1152-1160 |
+| Page text | CMSG_PAGE_TEXT_QUERY answers one SMSG_PAGE_TEXT_QUERY_RESPONSE per page along the chain, "Item page missing." for an unknown page; the load cuts loops and reports missing next pages. Serves READ_ITEM books and text objects. | `PageTextFeature`, `PageTextCatalog`, `PageTextDumpReader` | QueryHandler.cpp:263-299, ObjectMgr.cpp:6647-6687 |
+| Random properties | A new item whose template has `random_property` rolls an `item_enchantment_template` row by chance (GetItemEnchantMod) and writes the ItemRandomProperties.dbc row's id and three enchantments (slots 3-5). Rolled in StoreNewItem (loot pickup, vendors, spell creation, quest rewards); a caller may pass an id. | `ItemRandomProperties`, `PlayerInventory.RandomProperties.cs`, `ItemRandomPropertyFeature` | Item.cpp:792-834, ItemEnchantmentMgr.cpp |
+
+The auction outbid notification and bidder list are in [economy fidelity](../integration/economy-fidelity.md).
+
+### Data contracts (what the code needs and the repo does not have)
+
+| Setting | Content | Without it |
+|---|---|---|
+| `PageText:DumpPath` | A vmangos or cmangos classic-db world dump (plain or .gz) with `page_text` (entry, text, next_page); only that table is read. An extract holding only `page_text` loads much faster than the full dump. | Every page answers "Item page missing." |
+| `ItemRandomProperties:DbcPath` | The developer-supplied build-5875 ItemRandomProperties.dbc (16 fields, strict). | No random properties. |
+| `ItemRandomProperties:EnchantmentTemplateDumpPath` | A world dump with `item_enchantment_template` (entry, ench, chance; vmangos rows filtered to patch 10). | No random properties. |
+
+`page_text` and `item_enchantment_template` are read from dumps because a world-database table for them needs a world schema number this lane did not have; moving them into the world database is a follow-up (a table module plus a content-import spec).
+
+### Schema
+
+Characters **39** (`ItemGiftDataModule.Version`): `item_instance.gift_entry` and `gift_flags`, the values vmangos keeps in `character_gifts`. Deliberately on the item row: the wrapped state then travels through mail, auction and trade escrow (which move `item_instance` rows) and goes with the item, with no extra row to move or delete. Steps 35-38 are empty placeholders (`EconomyItemsLaneSchemaGap35..38`) that keep the versions contiguous on this branch; the integrator deletes each one whose number a merged lane uses. Never ship the placeholders to a live realm.
+
+### Deliberate differences and UNVERIFIED points
+
+- **Defense durability slots** are a reconstruction: the mangos settings exist, but no reference core reads them any more (vmangos keeps only `.Damage`), so parry → main hand, block → off hand and absorb → a random worn armor piece are this code's reading of the names. UNVERIFIED against retail.
+- **Absorb** counts damage taken by absorb auras on a white swing (`MeleeDamageInfo.Absorbed`), not armor mitigation, which the hit-taken roll already covers. Spells and ranged attacks do not roll the defense chances.
+- **A wrapped item keeps its own durability** across a save; vmangos clamps durability to the gift template's maximum (0) when it loads a wrapped item, which would break the item on opening. Opening restores the item template's maximum.
+- **The page chain is bounded** by the page count as well as by the load-time loop cut (vmangos relies on the cut alone).
+- **Loot shows no random property**: vmangos rolls when the loot is generated and shows it in the loot window and roll packets (LootItem::randomPropertyId); here the roll happens when the item is stored, so the window shows 0 and the name suffix appears once it is in the bags. Group-loot roll packets likewise send 0.
+- **The weapon switch timer** is per Player object (a relog starts at 0, as in vmangos) and needs spells 6119/6123 in the spell store (Spell.dbc); without them nothing starts, as vmangos logs.
+- The equip cooldown (30 s on-use cooldown on equip, Player::ApplyEquipCooldown) is still not delivered.
+
+### Tests
+
+Game: `ItemMechanics/DefenseDurabilityTests`, `ItemMechanics/GiftWrapTests`, `ItemMechanics/ItemRandomPropertyTests`, `ItemUse/WeaponSwapCooldownTests`, `ItemUse/ItemSetFormChangeTests`. Data: `ItemLootOrphanSweepTests`, `ItemGiftStoreTests` (round trip and the upgrade from step 38), `Items/PageTextDumpReaderTests`, `Items/ItemRandomPropertyReaderTests`, `IntegratedSchemaTests`. World: `Items/ConjuredLogoutWorldTests`, `Items/PageTextWorldTests`, `Items/ItemRandomPropertyWorldTests`, and the playerbot scenarios `Playerbots/Scenarios/AuctionOutbidScenarioTests` (three bots) and `GiftWrapScenarioTests` (wrap, mail with the escrow row checked, open). Harness additions: `ScenarioAuctionWire`, `ScenarioItemWire`, `ScenarioTestWorld.StartAsync(configure)`.

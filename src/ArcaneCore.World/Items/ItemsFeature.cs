@@ -1,4 +1,6 @@
+using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
@@ -7,6 +9,7 @@ using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Progression;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -65,6 +68,9 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
     /// <summary>The process-wide item GUID source.</summary>
     public ItemGuidAllocator GuidAllocator { get; } = new();
 
+    /// <summary>The random property roll handed to every inventory at login (set by <see cref="ItemRandomPropertyFeature"/>; null: none).</summary>
+    public IItemRandomPropertySource? RandomProperties { get; set; }
+
     /// <summary>The world, once attached.</summary>
     public WorldRuntime? World { get; private set; }
 
@@ -100,6 +106,17 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
             if (scope.ServiceProvider.GetService<IItemStore>() is { } items)
             {
                 GuidAllocator.Seed(await items.GetMaxItemGuidAsync(cancellationToken).ConfigureAwait(false));
+            }
+
+            // vmangos ObjectMgr::SetHighestGuids / CharacterDatabaseCleaner::CleanOrphanedItemData: container loot whose item is gone
+            // (left by builds before the escrow paths deleted it with the item) is removed before any character loads.
+            if (scope.ServiceProvider.GetService<IItemLootMaintenance>() is { } lootMaintenance)
+            {
+                int orphans = await lootMaintenance.DeleteOrphanedLootAsync(cancellationToken).ConfigureAwait(false);
+                if (orphans > 0)
+                {
+                    logger.LogWarning("Deleted {Count} orphaned item loot rows (their items no longer exist)", orphans);
+                }
             }
 
             logger.LogInformation("Loaded {Count} item templates", store.Count);
@@ -167,14 +184,48 @@ public sealed partial class ItemsFeature(IServiceScopeFactory scopes, ILogger<It
         player.Inventory.Templates = templates;
         player.Inventory.GuidAllocator = GuidAllocator;
         player.Inventory.Options = Options;
+        player.Inventory.RandomProperties = RandomProperties;
         if (session.Services.GetService<IItemStore>() is { } store)
         {
-            player.Inventory.Load(await store.GetInventoryAsync(character.Id).ConfigureAwait(false));
+            IReadOnlyList<InventoryItemData> rows = await store.GetInventoryAsync(character.Id).ConfigureAwait(false);
+            if (await OfflineSecondsAsync(session, character.Id).ConfigureAwait(false) is { } offline)
+            {
+                IReadOnlyList<InventoryItemData> kept = ConjuredItems.WithoutVanished(rows, templates, offline);
+                if (kept.Count != rows.Count)
+                {
+                    logger.LogDebug("{Character}: {Count} conjured items vanished after {Seconds} s offline", character.Name, rows.Count - kept.Count, offline);
+                    rows = kept;
+                }
+            }
+
+            player.Inventory.Load(rows);
         }
 
         if (session.Services.GetService<IItemStateStore>() is { } states)
         {
             player.Inventory.RestoreAmmo(await states.GetAmmoAsync(character.Id).ConfigureAwait(false));
         }
+    }
+
+    /// <summary>
+    /// Seconds since the character's last stored logout (vmangos <c>characters.logout_time</c>, written by every save), from the rested state
+    /// (<see cref="ICharacterRestStore"/>, written at logout and periodically); null when none is stored. A logout write still queued is made
+    /// durable first, so a quick relog never reads an older second (which would look like a longer absence).
+    /// </summary>
+    private static async Task<long?> OfflineSecondsAsync(WorldSession session, int characterId)
+    {
+        if (session.Services.GetService<ICharacterRestStore>() is not { } rest)
+        {
+            return null;
+        }
+
+        if (session.Services.GetService<RestFeature>() is { } restFeature)
+        {
+            await restFeature.Writes.FlushCharacterAsync(characterId).ConfigureAwait(false);
+        }
+
+        return await rest.LoadAsync(characterId).ConfigureAwait(false) is { } state
+            ? DeathHooks.For(session.World).Clock.UnixSeconds - state.LogoutUnixSeconds
+            : null;
     }
 }

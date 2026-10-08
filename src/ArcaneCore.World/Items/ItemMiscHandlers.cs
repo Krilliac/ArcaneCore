@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Protocol;
@@ -24,6 +25,22 @@ public sealed class ItemMiscHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgAutostoreBankItem, HandleAutoStoreBankItem);
         table.OnWorld(WorldOpcode.CmsgAutoequipItemSlot, HandleAutoEquipItemSlot);
         table.OnWorld(WorldOpcode.CmsgSetAmmo, HandleSetAmmo);
+        table.OnWorld(WorldOpcode.CmsgWrapItem, HandleWrapItem);
+    }
+
+    /// <summary>
+    /// CMSG_WRAP_ITEM: u8 gift bag, u8 gift slot, u8 item bag, u8 item slot (wow_messages cmsg_wrap_item; vmangos HandleWrapItemOpcode). A
+    /// spell being cast refuses the wrap (vmangos IsNonMeleeSpellCasted(true, false, false)).
+    /// </summary>
+    private static void HandleWrapItem(WorldSession session, Player player, byte[] payload)
+    {
+        if (payload.Length < 4)
+        {
+            return;
+        }
+
+        bool casting = CombatEnvironment.For(session.World).MeleeSpells?.IsNonMeleeSpellCasted(player) == true;
+        player.Inventory.WrapItem(payload[0], payload[1], payload[2], payload[3], casting);
     }
 
     /// <summary>

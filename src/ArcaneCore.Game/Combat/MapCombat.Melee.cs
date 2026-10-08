@@ -716,6 +716,7 @@ public sealed partial class MapCombat
 
         uint dealt = DealDamage(info.Attacker, victim, info.TotalDamage, info.Outcome, info.CleanDamage, direct: true);
         RollHitDoneDurability(info, dealt);
+        RollDefenseDurability(info);
         // DealDamage publishes positive hits through DamageDealt. Fully absorbed hits have no
         // health loss and need the zero-damage spell interruption path (vmangos Unit.cpp:733-746).
         if (dealt == 0 && info.Absorbed > 0)
