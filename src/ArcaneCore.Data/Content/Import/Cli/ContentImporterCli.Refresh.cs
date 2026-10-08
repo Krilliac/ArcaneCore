@@ -156,6 +156,11 @@ public static partial class ContentImporterCli
                     () => MapAreaDbcImporter.ReadSnapshot(mapPath, areaPath, instances.SawTable ? instances.Maps : null));
                 o.WriteLine($"  Map.dbc: {mapTables.Maps.Count} map(s), AreaTable.dbc: {mapTables.Areas.Count} area(s); " +
                     $"{mapTables.InstanceRows} map(s) with instance data from the dump");
+                foreach (string correction in instances.Corrections)
+                {
+                    o.WriteLine($"  instance data: {correction}");
+                }
+
                 warnings.AddRange(mapTables.Warnings);
             }
             else

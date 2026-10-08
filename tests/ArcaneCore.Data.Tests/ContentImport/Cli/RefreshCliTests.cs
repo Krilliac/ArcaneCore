@@ -145,16 +145,6 @@ public sealed class RefreshCliTests : IDisposable
         Dbc("Map.dbc", 42, MapRow(0, 0, 0), MapRow(1, 0, 0), MapRow(30, 3, 0), MapRow(36, 1, 1581), MapRow(489, 3, 3277));
         return Dbc("AreaTable.dbc", 25, AreaRow(12, 0, 12), AreaRow(2597, 30, 2597), AreaRow(1581, 36, 0));
 
-        static object[] MapRow(int id, int type, int linkedZone)
-        {
-            object[] row = Enumerable.Repeat<object>(0, 42).ToArray();
-            row[0] = id;
-            row[2] = type;
-            row[4] = 1;
-            row[19] = linkedZone;
-            return row;
-        }
-
         static object[] AreaRow(int id, int map, int flag)
         {
             object[] row = Enumerable.Repeat<object>(0, 25).ToArray();
@@ -164,6 +154,46 @@ public sealed class RefreshCliTests : IDisposable
             row[11] = 1;
             return row;
         }
+    }
+
+    /// <summary>A Map.dbc row (42 fields): id, instance type at 2, an enUS name at 4, the linked zone at 19.</summary>
+    private static object[] MapRow(int id, int type, int linkedZone)
+    {
+        object[] row = Enumerable.Repeat<object>(0, 42).ToArray();
+        row[0] = id;
+        row[2] = type;
+        row[4] = 1;
+        row[19] = linkedZone;
+        return row;
+    }
+
+    /// <summary>
+    /// Blackrock Spire (229) keeps no global reset: classic-db z2815 gives it <c>reset_delay</c> 3, but vmangos, the fidelity reference,
+    /// removed it ("Blackrock Spire no reset", sql/old_migrations/20170917193208_world.sql: <c>UPDATE map_template SET ResetDelay=0
+    /// WHERE Entry=229</c>; all its 229 rows in 20171129015531 have 0). With 3 the world would schedule a global reset of map 229 and send
+    /// everyone inside home every three days. Naxxramas' 7 is left alone.
+    /// </summary>
+    [Fact]
+    public async Task Refresh_GivesBlackrockSpireNoResetDelay_AsVmangosDoes_AndKeepsTheRaidsOwn()
+    {
+        string world = await OldWorldAsync();
+        string dump = PathOf("world.sql");
+        // classic-db z2815 instance_template 229 and 533, verbatim.
+        File.WriteAllText(dump, Dump + "\n" +
+            "INSERT INTO `instance_template` (`map`,`parent`,`levelMin`,`levelMax`,`maxPlayers`,`reset_delay`,`ghostEntranceMap`,`ghostEntranceX`,`ghostEntranceY`,`ScriptName`,`mountAllowed`) " +
+            "VALUES (229,0,55,0,10,3,0,-7522.53,-1233.04,'instance_blackrock_spire',0),(533,0,60,60,40,7,0,0,0,'instance_naxxramas',0);\n");
+        string dbc = Dbcs();
+        Dbc("Map.dbc", 42, MapRow(0, 0, 0), MapRow(1, 0, 0), MapRow(30, 3, 0), MapRow(36, 1, 1581), MapRow(489, 3, 3277),
+            MapRow(229, 1, 0), MapRow(533, 2, 0));
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", dbc);
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains("map 229 reset_delay 3 -> 0 (vmangos: Blackrock Spire has no global reset)", output, StringComparison.Ordinal);
+        await using WorldDbContext db = Open(world);
+        MapTemplateRow spire = await db.Set<MapTemplateRow>().SingleAsync(r => r.Entry == 229);
+        Assert.Equal(((byte)1, 10u, 0u, "instance_blackrock_spire"), (spire.MapType, spire.PlayerLimit, spire.ResetDelay, spire.ScriptName));
+        Assert.Equal(7u, (await db.Set<MapTemplateRow>().SingleAsync(r => r.Entry == 533)).ResetDelay);
     }
 
     [Fact]

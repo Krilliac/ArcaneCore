@@ -738,6 +738,7 @@ public static partial class ContentImporterCli
         GuardPath(target.FilePath);
         GuardPath(reportPath);
         IReadOnlyDictionary<uint, MapInstanceData>? instances = null;
+        IReadOnlyList<string> corrections = [];
         if (a.Value("--dump") is { } dumpPath)
         {
             (IReadOnlyList<DumpInput> inputs, _) = OpenInputs([dumpPath]);
@@ -748,6 +749,7 @@ public static partial class ContentImporterCli
             }
 
             instances = importer.SawTable ? importer.Maps : null;
+            corrections = importer.Corrections;
         }
 
         MapAreaDbcSnapshot snapshot;
@@ -784,6 +786,11 @@ public static partial class ContentImporterCli
                 new System.Text.Json.JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase }));
         }
         output.WriteLine($"Imported {report.MappedMaps} maps and {report.MappedAreas} areas; {report.InstanceRows} map(s) took instance data from the dump.");
+        foreach (string correction in corrections)
+        {
+            output.WriteLine($"  instance data: {correction}");
+        }
+
         PrintWarnings(output, report.Warnings);
         return ExitCodes.Ok;
     }

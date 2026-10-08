@@ -61,6 +61,25 @@ public sealed class InstanceTemplateDumpImporterTests
         Assert.Equal(-1, importer.Maps[489].GhostEntranceMap);
     }
 
+    /// <summary>
+    /// classic-db z2815 gives Blackrock Spire (229) <c>reset_delay</c> 3; vmangos removed that global reset on purpose ("Blackrock Spire no
+    /// reset", sql/old_migrations/20170917193208_world.sql, <c>UPDATE map_template SET ResetDelay=0 WHERE Entry=229</c>). The importer
+    /// follows vmangos and leaves every other reset delay as the dump has it.
+    /// </summary>
+    [Fact]
+    public void ClassicDb_BlackrockSpire_GetsVmangosNoReset_AndOtherResetDelaysStay()
+    {
+        var importer = new InstanceTemplateDumpImporter();
+        importer.Read(new StringReader(
+            "INSERT INTO `instance_template` (`map`,`parent`,`levelMin`,`levelMax`,`maxPlayers`,`reset_delay`,`ghostEntranceMap`,`ghostEntranceX`,`ghostEntranceY`,`ScriptName`,`mountAllowed`) " +
+            "VALUES (229,0,55,0,10,3,0,-7522.53,-1233.04,'instance_blackrock_spire',0),(533,0,60,60,40,7,0,0,0,'instance_naxxramas',0),(409,0,60,60,40,7,0,-7510.56,-1036.7,'instance_molten_core',0);"));
+
+        MapInstanceData spire = importer.Maps[229];
+        Assert.Equal((0u, 10u, 0u, 0, "instance_blackrock_spire"), (spire.Parent, spire.PlayerLimit, spire.ResetDelay, spire.GhostEntranceMap, spire.ScriptName));
+        Assert.Equal((7u, 7u), (importer.Maps[533].ResetDelay, importer.Maps[409].ResetDelay));
+        Assert.Equal(["map 229 reset_delay 3 -> 0 (vmangos: Blackrock Spire has no global reset)"], importer.Corrections);
+    }
+
     [Fact]
     public void Vmangos_MapTemplate_TakesTheNewestPatchUpToTheLastOne()
     {
@@ -73,6 +92,8 @@ public sealed class InstanceTemplateDumpImporterTests
         Assert.Equal("instance_blackrock_spire", importer.Maps[229].ScriptName);
         Assert.Equal((-1, 7u), (importer.Maps[533].GhostEntranceMap, importer.Maps[533].ResetDelay));
         Assert.Equal(-1, importer.Maps[0].GhostEntranceMap);
+        Assert.Equal(0u, importer.Maps[229].ResetDelay);
+        Assert.Empty(importer.Corrections); // vmangos already has no Blackrock Spire reset: nothing to correct
     }
 
     [Fact]

@@ -3,7 +3,9 @@ using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Import;
 using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Game.Instances;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.World.Instances;
 using ArcaneCore.World.Playerbots.Scenarios;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -52,7 +54,37 @@ public sealed class DungeonImportedMapsTests : IDisposable
         Assert.Equal((MapType.Instance, 10u, 0, "instance_deadmines"), (deadmines.MapType, deadmines.PlayerLimit, deadmines.GhostEntranceMap, deadmines.ScriptName));
     }
 
-    private async Task<string> RefreshedWorldAsync()
+    /// <summary>
+    /// The refreshed tables with classic-db's Blackrock Spire (229, a dungeon, <c>reset_delay</c> 3) and Naxxramas (533, a raid, 7): the
+    /// world schedules Naxxramas' global reset but none for Blackrock Spire, as vmangos (its "Blackrock Spire no reset" fix sets 229's
+    /// ResetDelay to 0). With 3 the instance manager would reset map 229 every three days and send everyone inside to their homebind.
+    /// </summary>
+    [Fact]
+    public async Task RefreshedMapTables_ScheduleNoGlobalResetForBlackrockSpire_ButTheRaidsOwn()
+    {
+        // classic-db z2815 instance_template 229 and 533, verbatim.
+        string world = await RefreshedWorldAsync(
+            [Map(229, 1, 28, 0), Map(533, 2, 44, 0)],
+            "(229,0,55,0,10,3,0,-7522.53,-1233.04,'instance_blackrock_spire',0),(533,0,60,60,40,7,0,0,0,'instance_naxxramas',0)");
+
+        await using ScenarioTestWorld scenarioWorld = await ScenarioTestWorld.StartAsync(services =>
+            services.AddSingleton<IMapDataStore>(new FileMapStore(world)));
+        InstanceManager instances = scenarioWorld.Services.GetRequiredService<InstanceFeature>().Instances;
+
+        (MapTemplate? spire, long spireReset, long naxxramasReset) = await scenarioWorld.Host.World.InvokeAsync(() => (
+            ArcaneCore.Game.Maps.Templates.WorldMaps.Of(scenarioWorld.Host.World).Registry.Find(229),
+            instances.GetRaidResetTime(229),
+            instances.GetRaidResetTime(533)));
+
+        Assert.True(naxxramasReset > 0, "Naxxramas has no global reset schedule: the check below would pass vacuously");
+        Assert.True(spireReset == 0, $"Blackrock Spire has a global reset scheduled at {spireReset} (unix seconds)");
+        Assert.NotNull(spire);
+        Assert.Equal((MapType.Instance, 10u, 0u), (spire.MapType, spire.PlayerLimit, spire.ResetDelay));
+    }
+
+    private Task<string> RefreshedWorldAsync() => RefreshedWorldAsync([], null);
+
+    private async Task<string> RefreshedWorldAsync(uint[][] extraMaps, string? extraInstanceRows)
     {
         string path = Path.Combine(_directory, "world.db");
         await using (WorldDbContext db = Open(path))
@@ -79,16 +111,17 @@ public sealed class DungeonImportedMapsTests : IDisposable
         string dbc = Path.Combine(_directory, "dbc");
         Directory.CreateDirectory(dbc);
         // Map.dbc: id, directory, instance type (field 2), pvp, enUS name (field 4), ..., linked zone (field 19). Names: 1 "Azeroth",
-        // 9 "Kalimdor", 18 "Deadmines".
-        string[] strings = ["", "Azeroth", "Kalimdor", "Deadmines"];
-        WriteDbc(Path.Combine(dbc, "Map.dbc"), 42, strings, Map(0, 0, 1, 0), Map(1, 0, 9, 0), Map(36, 1, 18, 1581));
+        // 9 "Kalimdor", 18 "Deadmines", 28 "Blackrock Spire", 44 "Naxxramas".
+        string[] strings = ["", "Azeroth", "Kalimdor", "Deadmines", "Blackrock Spire", "Naxxramas"];
+        WriteDbc(Path.Combine(dbc, "Map.dbc"), 42, strings, [Map(0, 0, 1, 0), Map(1, 0, 9, 0), Map(36, 1, 18, 1581), .. extraMaps]);
         // AreaTable.dbc: id, map, parent zone, explore flag, ..., level (10), name (11), team (20): Elwynn Forest and The Deadmines.
         WriteDbc(Path.Combine(dbc, "AreaTable.dbc"), 25, strings, Area(12, 0, 12), Area(1581, 36, 0));
 
         string dump = Path.Combine(_directory, "world.sql");
         File.WriteAllText(dump,
             "INSERT INTO `instance_template` (`map`,`parent`,`levelMin`,`levelMax`,`maxPlayers`,`reset_delay`,`ghostEntranceMap`,`ghostEntranceX`,`ghostEntranceY`,`ScriptName`,`mountAllowed`) " +
-            "VALUES (36,0,17,26,10,0,0,-11207.8,1681.15,'instance_deadmines',1);\n");
+            "VALUES (36,0,17,26,10,0,0,-11207.8,1681.15,'instance_deadmines',1)" +
+            (extraInstanceRows is null ? string.Empty : "," + extraInstanceRows) + ";\n");
 
         var output = new StringWriter();
         var error = new StringWriter();
