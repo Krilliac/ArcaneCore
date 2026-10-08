@@ -52,12 +52,14 @@ public sealed class ClientDataReport
         DirectoryFiles = directoryFiles;
         Problems = problems;
         DirectoryResolutions = directoryResolutions;
-        Overlay = resolutions.Where(r => r.Source == ClientDbcSource.Directory)
+        var overlay = resolutions.Where(r => r.Source == ClientDbcSource.Directory)
             .ToDictionary(r => r.Consumer.Key, r => (string?)r.Path, StringComparer.OrdinalIgnoreCase);
         foreach (ClientDirectoryResolution resolution in directoryResolutions.Where(r => r.Source == ClientDbcSource.Directory))
         {
-            Overlay[resolution.Consumer.Key] = resolution.Path;
+            overlay[resolution.Consumer.Key] = resolution.Path;
         }
+
+        Overlay = overlay;
     }
 
     /// <summary>A report for a daemon without client data configuration (nothing set, nothing checked).</summary>
