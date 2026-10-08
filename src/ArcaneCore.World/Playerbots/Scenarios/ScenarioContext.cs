@@ -31,7 +31,10 @@ public sealed class ScenarioRunOptions
     /// </summary>
     public TimeSpan ManualPollStep { get; set; } = TimeSpan.FromSeconds(1);
 
-    /// <summary>Wall time a manual-clock wait keeps polling (without advancing) after its game budget, for async I/O.</summary>
+    /// <summary>
+    /// Least wall time a manual-clock wait keeps polling (without advancing) after its game budget, for async I/O. The wait
+    /// also keeps polling until its whole timeout has passed in wall time (see <see cref="ScenarioContext.WaitUntilAsync"/>).
+    /// </summary>
     public TimeSpan ManualWallGrace { get; set; } = TimeSpan.FromSeconds(3);
 
     /// <summary>Real-clock poll interval.</summary>
@@ -314,8 +317,13 @@ public sealed class ScenarioContext
     /// <summary>
     /// Wait until <paramref name="condition"/> (evaluated on the world thread) holds. With a manual clock the world runs
     /// tick by tick with the condition checked after every tick, for at most <paramref name="timeout"/> of game time; then
-    /// it keeps polling for <see cref="ScenarioRunOptions.ManualWallGrace"/> of wall time without advancing (async I/O such
-    /// as a database commit). With the real clock it polls until <paramref name="timeout"/> of wall time. Always bounded.
+    /// it keeps polling without advancing (posted commands still run, so async I/O such as a database commit can land) until
+    /// <paramref name="timeout"/> of wall time has passed since the wait began, and at least
+    /// <see cref="ScenarioRunOptions.ManualWallGrace"/> since the game budget ran out. The manual clock spends its game budget
+    /// as fast as the world ticks — a 30 s budget in well under a second — while database work runs on real time, so a wait
+    /// on a reply that needs a commit fails only when both budgets are spent, never because game time ran ahead of wall time.
+    /// It never runs more than <paramref name="timeout"/> of game time. With the real clock it polls until
+    /// <paramref name="timeout"/> of wall time. Always bounded (and by the run's deadline).
     /// </summary>
     public async Task WaitUntilAsync(string what, Func<bool> condition, TimeSpan? timeout = null)
     {
@@ -323,7 +331,7 @@ public sealed class ScenarioContext
         TimeSpan limit = timeout ?? Options.StepTimeout;
         var wall = Stopwatch.StartNew();
         TimeSpan game = TimeSpan.Zero;
-        TimeSpan? graceStart = null;
+        TimeSpan? gameSpentAt = null;
         while (true)
         {
             CancellationToken.ThrowIfCancellationRequested();
@@ -340,9 +348,12 @@ public sealed class ScenarioContext
                     continue;
                 }
 
-                graceStart ??= wall.Elapsed;
-                if (wall.Elapsed - graceStart.Value > Options.ManualWallGrace)
-                    throw new ScenarioTimeoutException($"timed out waiting for: {what} ({game.TotalSeconds:F1}s game, {wall.Elapsed.TotalSeconds:F1}s wall)");
+                // Game budget spent: give off-world-thread work (a database reply runs on real time) the same budget in wall time.
+                gameSpentAt ??= wall.Elapsed;
+                TimeSpan wallBudget = limit > gameSpentAt.Value + Options.ManualWallGrace ? limit : gameSpentAt.Value + Options.ManualWallGrace;
+                if (wall.Elapsed >= wallBudget)
+                    throw new ScenarioTimeoutException($"timed out waiting for: {what} ({game.TotalSeconds:F1}s game, "
+                        + $"{wall.Elapsed.TotalSeconds:F1}s wall; game budget spent after {gameSpentAt.Value.TotalSeconds:F1}s wall)");
                 await Task.Delay(10, CancellationToken).ConfigureAwait(false);
             }
             else

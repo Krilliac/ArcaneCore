@@ -196,8 +196,10 @@ commands keep running every tick interval with a zero diff, so sessions and `Inv
 while the simulation stands still. `ScenarioClock.Manual(world, time)` drives it; a
 `ScenarioTimeProvider` registered as the host's `TimeProvider` follows game time tick by tick
 (mail delay, trade anti-scam window, duel countdown) and can jump ahead (`Advance`). On the
-manual clock a wait's timeout is game time, followed by a short wall-clock grace
-(`ManualWallGrace`, 3 s) for asynchronous I/O such as database commits. Code that reads
+manual clock a wait's timeout is game time, after which it keeps polling without advancing until
+the same timeout has also passed in wall time (and at least `ManualWallGrace`, 3 s, after the
+game budget ran out): the game budget burns in well under a second, while asynchronous I/O such
+as a database commit runs on real time and can take seconds on a loaded machine. Code that reads
 `DateTime` or `Stopwatch` directly, rather than the world clock or `TimeProvider`, does not
 follow the manual clock. `ScenarioClock.Real` (live server) polls in wall time.
 
