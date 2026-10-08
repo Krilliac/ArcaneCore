@@ -195,6 +195,9 @@ public sealed record CreatureWaypoint(uint Point, float X, float Y, float Z, flo
 {
     /// <summary>Travel to this node at run speed (world schema creature-AI step, <c>creature_movement.Run</c>).</summary>
     public bool Run { get; init; }
+
+    /// <summary>script_waypoint.ScriptId (a creature movement DB script, when present).</summary>
+    public uint ScriptId { get; init; }
 }
 
 /// <summary>Where a creature's waypoint path came from (mangos-classic MotionGenerators/WaypointManager.h WaypointPathOrigin).</summary>
@@ -235,7 +238,8 @@ public sealed class CreatureDefinitions
         Dictionary<uint, CreatureAddon> addons,
         Dictionary<uint, IReadOnlyList<CreatureWaypoint>> waypoints,
         CreatureAiContent ai,
-        Dictionary<(uint Entry, uint PathId), IReadOnlyList<CreatureWaypoint>> entryWaypoints)
+        Dictionary<(uint Entry, uint PathId), IReadOnlyList<CreatureWaypoint>> entryWaypoints,
+        Dictionary<(uint Entry, uint PathId), IReadOnlyList<CreatureWaypoint>> scriptWaypoints)
     {
         Templates = templates;
         Models = models;
@@ -243,6 +247,7 @@ public sealed class CreatureDefinitions
         Waypoints = waypoints;
         Ai = ai;
         EntryWaypoints = entryWaypoints;
+        ScriptWaypoints = scriptWaypoints;
     }
 
     internal Dictionary<uint, CreatureTemplate> Templates { get; }
@@ -254,6 +259,8 @@ public sealed class CreatureDefinitions
     internal Dictionary<uint, IReadOnlyList<CreatureWaypoint>> Waypoints { get; }
 
     internal Dictionary<(uint Entry, uint PathId), IReadOnlyList<CreatureWaypoint>> EntryWaypoints { get; }
+
+    internal Dictionary<(uint Entry, uint PathId), IReadOnlyList<CreatureWaypoint>> ScriptWaypoints { get; }
 
     internal CreatureAiContent Ai { get; }
 }
@@ -284,7 +291,8 @@ public sealed class CreatureContent
         IEnumerable<CreatureAddon> addons,
         CreatureAiContent? ai = null,
         IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryWaypoints = null,
-        IEnumerable<(uint SpawnGuid, uint Entry)>? spawnEntries = null)
+        IEnumerable<(uint SpawnGuid, uint Entry)>? spawnEntries = null,
+        IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? scriptWaypoints = null)
     {
         _definitions = new CreatureDefinitions(
             templates.ToDictionary(t => t.Entry),
@@ -295,6 +303,9 @@ public sealed class CreatureContent
                 .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureWaypoint>)[.. g.Select(w => w.Point).OrderBy(p => p.Point)]),
             ai ?? CreatureAiContent.Empty,
             (entryWaypoints ?? [])
+                .GroupBy(w => (w.Entry, w.PathId))
+                .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureWaypoint>)[.. g.Select(w => w.Point).OrderBy(p => p.Point)]),
+            (scriptWaypoints ?? [])
                 .GroupBy(w => (w.Entry, w.PathId))
                 .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureWaypoint>)[.. g.Select(w => w.Point).OrderBy(p => p.Point)]));
         _spawnEntries = (spawnEntries ?? [])
@@ -335,6 +346,13 @@ public sealed class CreatureContent
     /// <summary>One path of an entry (<c>creature_movement_template</c>), in point-id order; empty when there is none.</summary>
     public IReadOnlyList<CreatureWaypoint> GetEntryWaypoints(uint entry, uint pathId = 0)
         => _definitions.EntryWaypoints.GetValueOrDefault((entry, pathId)) ?? [];
+
+    /// <summary>
+    /// The ScriptDev2 escort path (<c>script_waypoint</c>) for an entry. Older registered escort AIs used the entry's
+    /// creature_movement_template path, so that path remains a fallback when this entry has no script_waypoint rows.
+    /// </summary>
+    public IReadOnlyList<CreatureWaypoint> GetScriptWaypoints(uint entry, uint pathId = 0)
+        => _definitions.ScriptWaypoints.GetValueOrDefault((entry, pathId)) ?? GetEntryWaypoints(entry, pathId);
 
     /// <summary>
     /// The path a creature walks by default: its spawn's own <c>creature_movement</c> rows, else the entry's default (PathId 0)

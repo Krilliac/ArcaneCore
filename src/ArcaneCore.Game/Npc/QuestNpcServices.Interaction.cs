@@ -61,6 +61,9 @@ public enum GmQuestCompleteResult
 /// </summary>
 public sealed partial class QuestNpcServices
 {
+    /// <summary>A quest entered the player's journal (cmangos Player::AddQuest starts quest_start DB scripts after the journal change).</summary>
+    public event Action<Player, ObjectGuid, Quest>? QuestAccepted;
+
     public void QuestgiverStatusQuery(Player player, ObjectGuid guid)
     {
         if (Ready(player) is not { } state || FindNpc(player, guid) is not { } npc)
@@ -187,6 +190,11 @@ public sealed partial class QuestNpcServices
             && StartersOf(npc).Contains(questId))
         {
             accepted = AddQuestFrom(player, state, quest, sharedTimerEnd: null);
+        }
+
+        if (accepted && Quests.Get(questId) is { } acceptedQuest)
+        {
+            QuestAccepted?.Invoke(player, guid, acceptedQuest);
         }
 
         if (accepted && Quests.Get(questId) is { } taken && taken.HasFlag(QuestFlags.PartyAccept))

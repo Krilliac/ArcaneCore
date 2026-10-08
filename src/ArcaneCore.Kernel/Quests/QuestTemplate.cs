@@ -6,8 +6,7 @@ namespace ArcaneCore.Kernel.Quests;
 /// ROADMAP § Content). Immutable once loaded; the Game layer derives a runtime quest from it.
 /// </summary>
 /// <remarks>
-/// Not carried (no consumer yet):
-/// StartScript/CompleteScript, Required*Script. See docs/areas/quests-npc.md.
+/// Not carried (no consumer yet): Required*Script. See docs/areas/quests-npc.md.
 /// </remarks>
 public sealed class QuestTemplate
 {
@@ -391,4 +390,16 @@ public sealed class QuestTemplate
 
     /// <summary>quest_template.RewMailDelaySecs: seconds the reward mail is delayed (vmangos Player.cpp:13145-13163).</summary>
     public uint RewMailDelaySecs { get; init; }
+
+    /// <summary>
+    /// quest_template.StartScript: the <c>dbscripts_on_quest_start</c> id run when the quest is taken from a giver, the giver as source and
+    /// the player as target (mangos-classic Player::AddQuest, Player.cpp:12533-12535); 0 = none. World schema 42.
+    /// </summary>
+    public uint StartScript { get; init; }
+
+    /// <summary>
+    /// quest_template.CompleteScript: the <c>dbscripts_on_quest_end</c> id run when the quest is rewarded and the giver's script did not
+    /// handle the reward (mangos-classic Player::RewardQuest, Player.cpp:12712-12713); 0 = none. World schema 42.
+    /// </summary>
+    public uint CompleteScript { get; init; }
 }

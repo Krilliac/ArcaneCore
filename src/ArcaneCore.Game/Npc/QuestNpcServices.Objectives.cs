@@ -12,6 +12,23 @@ namespace ArcaneCore.Game.Npc;
 /// </summary>
 public sealed partial class QuestNpcServices
 {
+    /// <summary>
+    /// vmangos Player::GroupEventFailHappens (Player.cpp:13888-13903): the quest fails for every online group member (the player alone when
+    /// not grouped) who still has it incomplete, regardless of distance; a completed one is kept.
+    /// </summary>
+    public void GroupEventFailHappens(Player player, uint questId)
+    {
+        IReadOnlyList<Player> members = Deps.Party?.MembersOf(player) ?? [];
+        foreach (Player member in members.Count == 0 ? [player] : members)
+        {
+            if (Ready(member) is { } state && state.Quests.Get(questId) is { Status: QuestStatus.Incomplete })
+            {
+                FailQuest(state, questId);
+                Flush(state);
+            }
+        }
+    }
+
     public void KilledMonsterCredit(Player player, uint entry, ObjectGuid guid)
         => CreditCreature(player, entry, guid, true, 0, false);
 

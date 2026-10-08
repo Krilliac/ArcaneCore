@@ -70,7 +70,9 @@ public static partial class ContentImporterCli
           refresh <dump>...     replace, in one transaction, only the world tables a world built by an older importer
                                 lacks: world_safe_locs and game_graveyard_zone, the four battleground tables,
                                 exploration_basexp and game_weather, areatrigger_tavern, transports, spell_proc_event,
-                                dbscripts_on_relay and dbscript_relay_template, the ships' gameobject_template rows (type 15;
+                                dbscripts_on_relay and dbscript_relay_template, dbscripts_on_quest_start/quest_end/gossip/event
+                                and script_waypoint (plus the script ids of quest_template and gossip_menu, and the
+                                gossip_menu_option rows that run a script), the ships' gameobject_template rows (type 15;
                                 other objects are left alone), and from --dbc-dir: areatrigger_template (AreaTrigger.dbc),
                                 taxi_nodes (TaxiNodes.dbc) and taxi_path (TaxiPath.dbc); WorldSafeLocs.dbc there adds the safe
                                 locations the dump lacks, TaxiPathNode.dbc there checks every ship's route; Map.dbc and
@@ -672,6 +674,11 @@ public static partial class ContentImporterCli
             ["game_tele"] = locations.Teleports,
             ["totem_spell"] = totems.Rows,
         };
+        foreach ((string table, int rows) in creatures.DbScriptTables)
+        {
+            imported[table] = rows;
+        }
+
         var skipped = new Dictionary<string, long>
         {
             ["creature_spawn"] = creatures.SkippedSpawns,
@@ -829,6 +836,11 @@ public static partial class ContentImporterCli
                 ("creature_ai_text_template", await db.Set<CreatureTextTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("dbscripts_on_relay", await db.Set<RelayScriptRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("dbscript_relay_template", await db.Set<RelayScriptTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
+                (DbScriptDataModule.QuestStartTable, await db.Set<QuestStartScriptRow>().CountAsync(ct).ConfigureAwait(false)),
+                (DbScriptDataModule.QuestEndTable, await db.Set<QuestEndScriptRow>().CountAsync(ct).ConfigureAwait(false)),
+                (DbScriptDataModule.GossipTable, await db.Set<GossipScriptRow>().CountAsync(ct).ConfigureAwait(false)),
+                (DbScriptDataModule.EventTable, await db.Set<EventScriptRow>().CountAsync(ct).ConfigureAwait(false)),
+                (DbScriptDataModule.WaypointTable, await db.Set<ScriptWaypointRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("gameobject_template", await db.Set<GameObjectTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("gameobject_spawn", await db.Set<GameObjectSpawnRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("lock_template", await db.Set<LockTemplateRow>().CountAsync(ct).ConfigureAwait(false)),

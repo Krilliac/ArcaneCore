@@ -95,7 +95,7 @@ public sealed class NpcDumpImporterTests : IAsyncLifetime
     }
 
     [Fact]
-    public void SkipsUnsupportedTrainerRequirementsAndScriptedGossipWithoutLeakingSourceText()
+    public void SkipsUnsupportedTrainerRequirementsWithoutLeakingSourceText_AndKeepsAScriptedGossipOption()
     {
         var importer = new NpcDumpImporter();
         importer.Read(new StringReader("""
@@ -106,8 +106,10 @@ public sealed class NpcDumpImporterTests : IAsyncLifetime
 
         NpcImportReport report = importer.BuildReport();
         Assert.Equal(0, report.Trainers);
-        Assert.Equal(0, report.GossipOptions);
-        Assert.Equal(3, report.Skipped);
+        // World schema 42 runs gossip_menu_option.action_script_id (a dbscripts_on_gossip id): the scripted option is kept with it.
+        Assert.Equal(1, report.GossipOptions);
+        Assert.Equal(99u, Assert.Single(importer.ScriptedOptions).ActionScriptId);
+        Assert.Equal(2, report.Skipped);
         Assert.DoesNotContain(report.Diagnostics, d => d.Contains("secret source phrase", StringComparison.Ordinal));
     }
 

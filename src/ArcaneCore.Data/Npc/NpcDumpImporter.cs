@@ -93,6 +93,12 @@ public sealed class NpcDumpImporter
         }
     }
 
+    /// <summary>
+    /// The <c>gossip_menu_option</c> rows read that run a <c>dbscripts_on_gossip</c> script (<c>action_script_id</c>): importers before world
+    /// schema 42 skipped them, so the content importer's <c>refresh</c> adds them to an existing world.
+    /// </summary>
+    public IReadOnlyCollection<GossipMenuOption> ScriptedOptions => [.. _options.Values.Where(o => o.ActionScriptId != 0)];
+
     public NpcImportReport BuildReport() => new(_gossip.Count, _menus.Count, _options.Count, _texts.Count,
         _vendors.Count, _trainers.Count, _replaced, _skipped, [.. _diagnostics]);
 
@@ -212,8 +218,9 @@ public sealed class NpcDumpImporter
 
     private static void ValidateGossipOptionExtensions(DumpRow row)
     {
-        if (ReadUnsignedExtension(row, "action_script_id") != 0)
-            throw new InvalidDataException("gossip_menu_option.action_script_id is unsupported when nonzero");
+        // action_script_id (a dbscripts_on_gossip id, world schema 42) is read into GossipMenuOption.ActionScriptId; a malformed one
+        // still fails the row here rather than wrapping.
+        _ = ReadUnsignedExtension(row, "action_script_id");
         if (ReadUnsignedExtension(row, "box_money") != 0)
             throw new InvalidDataException("gossip_menu_option.box_money is unsupported when nonzero");
 

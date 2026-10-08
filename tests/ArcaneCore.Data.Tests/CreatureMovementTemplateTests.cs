@@ -118,6 +118,35 @@ public sealed class CreatureMovementTemplateTests : IAsyncLifetime
         Assert.Equal(319, waypointSpawns.Count(s => !withOwnPath.Contains(s.Guid) && entriesWithPath.Contains(s.Entry)));
     }
 
+    /// <summary>
+    /// The real z2815 snapshot has the quest and gossip scripts this lane must preserve, plus Corporal Keeshan's
+    /// script_waypoint path (ScriptDev2 redridge_mountains.cpp npc_corporal_keeshan_escortAI).
+    /// </summary>
+    [ClassicDbDumpFact]
+    public void RealClassicDbDump_QuestGossipEventScriptsAndEscortPathAreRead()
+    {
+        string path = Environment.GetEnvironmentVariable(ClassicDbDumpFactAttribute.Variable)!;
+        Assert.True(File.Exists(path), $"{ClassicDbDumpFactAttribute.Variable} is set but '{path}' does not exist");
+        var importer = new DbScriptDumpImporter();
+        using TextReader reader = ArcaneCore.Data.Content.Import.DumpFiles.OpenText(path);
+        importer.Read(reader);
+
+        Assert.Contains(importer.Scripts, row => row.Kind == DbScriptKind.QuestStart && row.Step.Id == 68
+            && row.Step.Command == 10 && row.Step.DataLong == 2044);
+        Assert.Contains(importer.Scripts, row => row.Kind == DbScriptKind.QuestStart && row.Step.Id == 68
+            && row.Step.Command == 26 && row.Step.DelayMs == 3000);
+        Assert.Contains(importer.Scripts, row => row.Kind == DbScriptKind.QuestStart && row.Step.Id == 74
+            && row.Step.Command == 10 && row.Step.DataLong == 2044);
+        Assert.Contains(importer.Scripts, row => row.Kind == DbScriptKind.QuestEnd && row.Step.Id == 112
+            && row.Step.Command == 0);
+        Assert.Contains(importer.Scripts, row => row.Kind == DbScriptKind.Gossip && row.Step.Id == 21
+            && row.Step.Command == 7 && row.Step.DataLong == 6981);
+        Assert.Contains(importer.Scripts, row => row.Kind == DbScriptKind.Event && row.Step.Id == 364
+            && row.Step.Command == 10 && row.Step.DataLong == 2624);
+        Assert.Contains(importer.ScriptWaypoints, row => row.Entry == 349 && row.PathId == 0
+            && row.Point.Point == 1 && row.Point.X == -8769.59f);
+    }
+
     private sealed class ClassicDbDumpFactAttribute : FactAttribute
     {
         public const string Variable = "ARCANECORE_CLASSICDB_DUMP";

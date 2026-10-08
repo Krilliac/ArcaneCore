@@ -183,7 +183,10 @@ feature reads:
   battleground tables, `exploration_basexp` and `game_weather`, `areatrigger_tavern` (`AreaTriggerTavernDumpImporter`), `transports`
   (`TransportDumpImporter`; a cmangos row has no build and gets 0), `spell_proc_event` (build 5875; `--cooldown-unit auto` reads the
   classic-db core revision from `db_version`: seconds before z2829, milliseconds from it, refused when the dump names none), the relay DB
-  scripts, `areatrigger_template` from `AreaTrigger.dbc` (`AreaTriggerDbcReader`, vmangos `niffffffff`; the client's patch-2.MPQ copy
+  scripts, the quest, gossip and event DB scripts and `script_waypoint` (world 42, `DbScriptDumpImporter.ReplaceAsync`: it also sets
+  `quest_template.StartScript`/`CompleteScript` and `gossip_menu.script_id` on the rows the world already has, and adds the
+  `gossip_menu_option` rows that run a script, which importers before world 42 refused; [creature AI](creature-ai.md)),
+  `areatrigger_template` from `AreaTrigger.dbc` (`AreaTriggerDbcReader`, vmangos `niffffffff`; the client's patch-2.MPQ copy
   holds 432 triggers, every `areatrigger_teleport` id of classic-db among them), and the flight masters' `taxi_nodes` and `taxi_path`
   from `TaxiNodes.dbc` and `TaxiPath.dbc` (`NpcServiceDbcReaders`, vmangos `nifffssssssssxii` and `niii`). The ships' own
   `gameobject_template` rows (type 15: data0 TaxiPath id, data1 speed, data2 acceleration) are written as the dump has them, mapped as

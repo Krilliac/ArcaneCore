@@ -23,6 +23,12 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         List<CreatureTextTemplateRow> textTemplates = await db.Set<CreatureTextTemplateRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<RelayScriptRow> relaySteps = await db.Set<RelayScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<RelayScriptTemplateRow> relayTemplates = await db.Set<RelayScriptTemplateRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        var dbScripts = new List<DbScriptRow>();
+        dbScripts.AddRange(await db.Set<QuestStartScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
+        dbScripts.AddRange(await db.Set<QuestEndScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
+        dbScripts.AddRange(await db.Set<GossipScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
+        dbScripts.AddRange(await db.Set<EventScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
+        List<ScriptWaypointRow> scriptWaypoints = await db.Set<ScriptWaypointRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
 
         return new CreatureContent(
             templates.Select(ToTemplate),
@@ -54,9 +60,11 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
                 RelayScripts = new RelayScriptCatalog(
                     relaySteps.Select(RelayScriptDataModule.ToStep),
                     relayTemplates.Select(row => new RelayScriptTemplateChoice(row.Id, row.RelayId, row.Chance))),
+                DbScripts = new DbScriptCatalog(dbScripts.Select(row => (DbScriptDataModule.KindOf(row), DbScriptDataModule.ToStep(row)))),
             },
             entryPaths.Select(p => (p.Entry, p.PathId, new CreatureWaypoint(p.Point, p.X, p.Y, p.Z, p.Orientation, p.WaitTimeMs))),
-            spawnEntries.Select(e => (e.SpawnGuid, e.Entry)));
+            spawnEntries.Select(e => (e.SpawnGuid, e.Entry)),
+            scriptWaypoints.Select(DbScriptDataModule.ToWaypoint));
     }
 
     internal static BroadcastText ToBroadcastText(BroadcastTextRow r) => new(

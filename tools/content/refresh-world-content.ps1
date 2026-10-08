@@ -15,6 +15,13 @@
     gameobject_template, type 15 rows only         dump (the ships and zeppelins; every other object is left alone)
     spell_proc_event                               dump (cooldown unit from the classic-db core revision)
     dbscripts_on_relay, dbscript_relay_template    dump
+    dbscripts_on_quest_start, dbscripts_on_quest_end,
+    dbscripts_on_gossip, dbscripts_on_event,
+    script_waypoint                                dump (world schema 42)
+    quest_template.StartScript/CompleteScript,
+    gossip_menu.script_id                          dump; set on the rows the world already has (no quest or menu is added)
+    gossip_menu_option rows with action_script_id  dump; added when missing (importers before world 42 skipped them),
+                                                   otherwise only their action_script_id is set
     areatrigger_template                           AreaTrigger.dbc
     map_template                                   Map.dbc (every map) + the dump's instance_template (player limit, reset
                                                    delay, ghost entrance, script of the dungeons and raids)

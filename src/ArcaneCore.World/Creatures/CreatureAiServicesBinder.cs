@@ -71,6 +71,7 @@ public static class CreatureAiServicesBinder
             Conditions = services.GetService<IConditionEvaluator>() ?? services.GetServices<IWorldFeature>().OfType<IConditionEvaluator>().FirstOrDefault(),
             TeamOf = creature => FactionTeams.Of(creature.FactionTemplate, templates.Value, factions.Value),
             QuestEvents = new EventAiQuestEvents(services),
+            ScriptQuests = new ScriptQuestEvents(services),
         };
 
         foreach (PropertyInfo property in Bindable)

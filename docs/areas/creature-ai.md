@@ -253,7 +253,12 @@ semantics are cmangos'. classic-db z2815 has 141 action-53 rows reaching 109 rel
   and for AI_EVENT_CALL_ASSISTANCE (13, AIDefines.h:40; 0 is AI_EVENT_JUST_DIED, only received) each receiver then answers the call and
   attacks the invoker, CreatureAI::HandleAssistanceCall, AI/BaseAI/CreatureAI.cpp:224-233; without a radius to a creature target, or to the
   source itself for a player target; EventAI THROW_AI_EVENT, action 45, sends through the same `SendAiEventAround`), 45
-  START_RELAY_SCRIPT.
+  START_RELAY_SCRIPT, and the quest commands of the quest-scripts lane: 7 QUEST_EXPLORED (the player among target and source, target
+  first, GetPlayerTargetOrSourceAndLog; credit through AreaExploredOrEventHappens, or FailQuest when the creature partner is dead or
+  farther than datalong2, IsWithinDistInMap; ScriptMgr.cpp:1934-1966), 8 KILL_CREDIT (creature datalong, or the creature partner's entry;
+  datalong2 group credit through `IEventAiQuestEvents.KillCredit`, which needs a creature partner, the player alone otherwise; :1968-1999)
+  and 26 ATTACK_START (a creature source attacks the unit target through its AI; :2479-2497). Commands 7 and 8 reach the quest log through
+  `CreatureAiServices.ScriptQuests` (`IScriptQuestEvents`, bound by the world to `QuestNpcFeature`'s service, `ScriptQuestEvents`).
 - **Steps without a source**: as cmangos HandleScriptStep (ScriptMgr.cpp:1704-1764) builds its pairs from the sources, a step whose
   source list is empty (for example REVERSE_DIRECTION with no target) runs nothing. Before this wave such a step ran with a null source
   and its target, so a command that only needed the target acted; it no longer does.
@@ -271,6 +276,40 @@ semantics are cmangos'. classic-db z2815 has 141 action-53 rows reaching 109 rel
   (a later dump file replaces every row of a relay id it carries), `EfCreatureDataStore` loads them into
   `CreatureAiContent.RelayScripts`. A database imported before this step has no relay rows: re-import the dump.
 
+## Quest, gossip and event DB scripts
+
+cmangos keeps four more DB script namespaces with the relay row layout: `dbscripts_on_quest_start`, `dbscripts_on_quest_end`,
+`dbscripts_on_gossip` and `dbscripts_on_event` (ScriptMgr::LoadScripts; ids are independent per namespace). `DbScriptCatalog`
+(`CreatureAiContent.DbScripts`) holds them by `DbScriptKind`, and `CreatureMapSystem.StartDbScript(kind, id, source, target)` runs one on
+the map clock with the relay runner and executor above (one runner per namespace, so the same id may run in two namespaces at once).
+
+- **Data** (world step 42, `DbScriptDataModule`): the four tables (every column but the comment, plus the dump order per id), ScriptDev2
+  `script_waypoint`, and the columns that name the scripts: `quest_template.StartScript` and `CompleteScript`, `gossip_menu.script_id` and
+  `gossip_menu_option.action_script_id` (the NPC importer used to refuse a scripted option; it now keeps it). `CreatureDumpImporter` reads
+  the five tables with the creature tables (through `DbScriptDumpImporter`: a later dump file replaces every row of a script id it carries;
+  a point 0 rejects that entry's whole path, SystemMgr::LoadScriptWaypoints), the quest and NPC importers read the id columns by name,
+  `EfCreatureDataStore` loads `CreatureAiContent.DbScripts` and `CreatureContent.GetScriptWaypoints`. The content importer's `refresh`
+  (`tools/content/refresh-world-content.ps1`) replaces the five tables, sets the script ids of the quests and menus a world already has,
+  and adds the scripted gossip options an older import skipped. classic-db z2815, measured (import, then refresh twice with the same
+  result): 629 / 1,892 / 403 / 453 script rows and 1,523 path points; 369 quests and 17 menu texts carry a script id; 307 scripted options
+  are kept (one more is still refused for its `box_money`).
+- **Dispatch** (`CreatureQuestScripts`, attached by `QuestNpcFeature` to the creature feature's systems): a quest taken from a creature or
+  game object first reaches the giver's `IQuestScriptAI` (ScriptDev2 pQuestAcceptNPC), then starts `StartScript` with the giver as source
+  and the player as target (Player::AddQuest, Player.cpp:12517-12535); a rewarded quest starts `CompleteScript` the same way
+  (Player::RewardQuest, :12695-12713); a selected gossip option starts its `action_script_id` after its own action (the creature as source,
+  a game object as target; Player::OnGossipSelect, :11953-11960) and a shown menu text its `script_id` with the player as source
+  (GetGossipTextId, :11979-12004). `QuestNpcServices.GossipScriptStarted` carries the gossip ones.
+- **Event credit**: an exploration/event quest is withheld unless something can complete it. `DbScriptQuestCredit` counts every quest a
+  DB script's QUEST_EXPLORED names (relays included) and every escort quest of an entry script (`CreatureAiFactory.ScriptedEventQuests`),
+  read through `QuestNpcServices.ScriptCreditedQuests`; classic-db quests such as 2843 are offered because of it.
+- **Not run**: `dbscripts_on_event` has no caller yet (the spell effect SEND_EVENT and the game object events that start it are not
+  ported), and the commands this executor does not know (for example 11 OPEN_DOOR in quest 6482's start script, 34 TERMINATE_COND) are
+  reported and skipped as for the relays. Quests started by an item run no script (cmangos uses the item as source).
+
+Proof over real rows: `ClassicDbScriptedQuestTests` (World.Tests) imports a z2815 excerpt into a schema-42 database, loads it through the
+stores and runs quests 2843 (QUEST_EXPLORED at 10 s), 2480 (MOVE_TO, then QUEST_EXPLORED at 30 s), 8984 (CompleteScript 9028: NPC flags,
+Annalise Lerent at 2 s) and the escort 6482 on simulated time; `ClassicDbScriptedQuestWorldTests` takes 2843 over the socket.
+
 ## Scripted AIs: escorts and per-map scripts by entry
 
 ScriptDev-style scripts (the vmangos `ScriptName` AIs) are C# classes a feature gives the creatures of an entry on one map:
@@ -286,10 +325,19 @@ point's wait, `WaypointReached` on each; `SetEscortPaused` holds it at a point; 
 escort runs back to where the fight began (point `PointLastPoint`, not home) and goes on; `Stop` ends it where it stands; at the end of the
 path it disappears (or loops home, or respawns at once). The script hooks are `Reset` (the spawn, every evade, every respawn),
 `JustSpawned` (the work a ScriptDev constructor does, once the map placed the creature), `JustRespawned`, `Aggro` and `UpdateEscortAI`.
-The escort points are vmangos `script_waypoint` (one path per entry, ordered by point): here the entry's `creature_movement_template`
-path 0 (`EscortAI.EscortPathId`), keyed by entry and point, where such rows import (the world schema has no `script_waypoint` table). An
-entry without points does not start, and the map logs it once per entry. Not ported, since no script here escorts a player: the escorted
-player, its quest, the assist of the player in combat and the distance check that fails the escort.
+The escort points are ScriptDev2 `script_waypoint` (one path per entry, ordered by point; `CreatureContent.GetScriptWaypoints`, world
+step 42), and without such rows the entry's `creature_movement_template` path 0 (`EscortAI.EscortPathId`), where the battleground escorts
+keep their points. An entry without points does not start, and the map logs it once per entry.
+`Start(..., player, questId)` links the escort to a player and quest (vmangos npc_escortAI::Start): every second it checks that the player
+or an online member of its group is within `MaxPlayerDistance` (100, IsWithinDistInMap), and when nobody is it fails the quest and
+disappears (JustDied then ResetEscort, ScriptedEscortAI.cpp:265-300); its death fails the quest too, for every group member who still has
+it incomplete (`QuestNpcServices.GroupEventFailHappens`, Player::GroupEventFailHappens). Not ported: the assist of the player in combat.
+
+World-wide scripts by entry (the ScriptDev2 `ScriptName`, which this server does not import): `CreatureAiFactory.RegisterEntryScript`
+selects an AI before the AIName on every map (vmangos selectAI asks the script name first), with the event quests it completes. Built in:
+`RuulSnowhoofAI` (12818, mangos-classic npc_ruul_snowhoof, ashenvale.cpp:373-472): taking quest 6482 sets him off with the player under
+the passive escort faction 33; ambushes of three Thistlefur furbolgs at points 14 and 31; the quest for the player and the group near him
+at point 32 (RewardPlayerAndGroupAtEventExplored); he bows at 33 and leaves at 36. Not ported there: SetImmuneToNPC.
 
 The map services the scripts use (`CreatureMapSystem.ScriptedAi.cs`): `SummonCorpseDespawn` (TEMPSUMMON_CORPSE_DESPAWN: the summon stays
 until it dies and goes with its corpse on the next update; `MarkCorpseDespawn` for an object's summon), `SetHomePosition`, `NearTeleport`

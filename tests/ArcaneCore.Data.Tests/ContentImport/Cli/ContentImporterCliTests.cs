@@ -387,7 +387,7 @@ public sealed class ContentImporterCliTests : IDisposable
     private const string ItemsAndQuests = """
         CREATE TABLE `item_template` (`entry` mediumint unsigned NOT NULL, `name` varchar(255), `displayid` mediumint, `Quality` tinyint, `ScriptName` varchar(64), PRIMARY KEY (`entry`));
         INSERT INTO `item_template` VALUES (25,'Worn Shortsword',1542,1,'x'),(6948,'Hearthstone',6418,1,'');
-        CREATE TABLE `quest_template` (`entry` mediumint unsigned NOT NULL, `QuestLevel` smallint, `Title` text, `RewMoneyMaxLevel` int, `StartScript` int, PRIMARY KEY (`entry`));
+        CREATE TABLE `quest_template` (`entry` mediumint unsigned NOT NULL, `QuestLevel` smallint, `Title` text, `RewMoneyMaxLevel` int, `CompleteEmoteDelay` int, PRIMARY KEY (`entry`));
         INSERT INTO `quest_template` VALUES (783,3,'A Threat Within',1000,0);
         CREATE TABLE `creature_questrelation` (`id` mediumint unsigned NOT NULL, `quest` mediumint unsigned NOT NULL, PRIMARY KEY (`id`, `quest`));
         INSERT INTO `creature_questrelation` VALUES (1001,783),(1002,783);
@@ -407,7 +407,8 @@ public sealed class ContentImporterCliTests : IDisposable
         Assert.Contains("CMangos", items.Text, StringComparison.Ordinal);
         Assert.Contains("ScriptName", items.Unmapped, StringComparison.Ordinal);
         Assert.Contains("displayid", items.Mapped, StringComparison.Ordinal);
-        Assert.Contains("StartScript", TableLine(output, "quest_template").Unmapped, StringComparison.Ordinal);
+        // StartScript is read since world schema 42 (the quest start DB script); the emote delays still are not.
+        Assert.Contains("CompleteEmoteDelay", TableLine(output, "quest_template").Unmapped, StringComparison.Ordinal);
         Assert.Contains("RewMoneyMaxLevel", TableLine(output, "quest_template").Mapped, StringComparison.Ordinal);
     }
 

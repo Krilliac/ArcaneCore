@@ -67,6 +67,9 @@ public sealed class RelayScriptCatalog
 
     public bool Contains(uint id) => _scripts.ContainsKey(id);
 
+    /// <summary>Every step of every relay.</summary>
+    public IEnumerable<RelayScriptStep> AllSteps => _scripts.Values.SelectMany(steps => steps);
+
     /// <summary>
     /// cmangos ScriptMgr::GetRandomRelayDbscriptFromTemplate: explicit chances first (cumulative against <paramref name="percentRoll"/>,
     /// 0..100), the remaining probability uniformly over the chance-zero rows (<paramref name="equalIndex"/> picks among them). 0 when the

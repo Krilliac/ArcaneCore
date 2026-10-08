@@ -20,6 +20,18 @@ public sealed partial class CreatureMapSystem
     private readonly HashSet<int> _reportedTexts = [];
     private readonly HashSet<Creature> _corpseDespawns = new(ReferenceEqualityComparer.Instance);
 
+    /// <summary>A player-linked escort failed (vmangos npc_escortAI::JustDied): its quest fails for the player's group.</summary>
+    internal void FailEscortQuest(Player player, uint questId) => _ai.ScriptQuests?.GroupEventFailHappens(player, questId);
+
+    /// <summary>
+    /// mangos-classic Player::RewardPlayerAndGroupAtEventExplored (Player.cpp:13427): the quest's exploration or event objective is done for
+    /// the player and every group member near <paramref name="source"/> (what an escort gives at its last point). Without the quest seam nothing.
+    /// </summary>
+    internal void RewardGroupEventExplored(Player player, uint questId, Creature source) => _ai.QuestEvents?.EventHappened(player, questId, source, rewardGroup: true);
+
+    /// <summary>The online members of an escort player's group (vmangos npc_escortAI::IsPlayerOrGroupInRange); empty when not grouped.</summary>
+    internal IReadOnlyList<Player> EscortGroupMembers(Player player) => _ai.ScriptQuests?.GroupMembersOf(player) ?? [];
+
     /// <summary>
     /// Give every creature of <paramref name="entry"/> on this map the AI <paramref name="factory"/> builds (vmangos FactorySelector::selectAI
     /// asks the script name first, AI/CreatureAISelector.cpp:37-50). Creatures already in the map take it at once; a later registration of the

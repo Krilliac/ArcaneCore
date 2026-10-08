@@ -21,6 +21,9 @@ public sealed class GossipMenu
 
     /// <summary>gossip_menu.condition_id (0 = always).</summary>
     public uint ConditionId { get; init; }
+
+    /// <summary>gossip_menu.script_id: the <c>dbscripts_on_gossip</c> id run when this text is chosen (mangos-classic Player::GetGossipTextId); 0 = none. World schema 42.</summary>
+    public uint ScriptId { get; init; }
 }
 
 /// <summary><c>gossip_menu_option</c> (cmangos/vmangos): one line of a gossip menu.</summary>
@@ -58,6 +61,9 @@ public sealed class GossipMenuOption
 
     /// <summary>gossip_menu_option.condition_id (0 = always).</summary>
     public uint ConditionId { get; init; }
+
+    /// <summary>gossip_menu_option.action_script_id: the <c>dbscripts_on_gossip</c> id run when the option is selected (mangos-classic Player::OnGossipSelect); 0 = none. World schema 42.</summary>
+    public uint ActionScriptId { get; init; }
 }
 
 /// <summary>
