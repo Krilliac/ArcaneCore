@@ -150,9 +150,57 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        // Relay: packed mover GUID + the movement block carrying the server receive time
-        // (vmangos/cmangos-classic MovementInfo::Write sends stime).
-        var packet = new PacketWriter(payload.Length + 9);
+        RelayOwnMovement(player, opcode);
+    }
+
+    /// <summary>
+    /// A server-managed bot's own movement without the client path (<c>World:Playerbots:MovementPackets</c> = false): the same
+    /// admission as <see cref="HandleMovement"/> (not while teleported or on a taxi, a valid block, the bot moves itself), the same
+    /// relocation with the locomotion observers, and the same relay to the bot's observers, but no opcode dispatch and no
+    /// encode/decode of a client packet. False when the movement was not applied.
+    /// </summary>
+    internal static bool MoveManagedBot(WorldSession session, Player player, WorldOpcode opcode, MovementInfo movement)
+    {
+        movement = AsDecoded(movement);
+        if (!MovementOpcodes.IsRelayable(opcode)
+            || session.Services.GetRequiredService<TeleportFeature>().Teleports.IsBeingTeleported(player)
+            || (player.UnitFlags & UnitFlags.TaxiFlight) != 0
+            || !IsAcceptable(session, movement)
+            || !ReferenceEquals(player.GetConfirmedMover(), player))
+        {
+            return false;
+        }
+
+        ApplyObserved(session, player, opcode, movement);
+        RelayOwnMovement(player, opcode);
+        return true;
+    }
+
+    /// <summary>
+    /// The block as <see cref="MovementInfo.Read"/> would return it after <see cref="MovementInfo.Write"/>: the fields its flags do not
+    /// announce are zero, so the server-applied path stores exactly what the packet path stores.
+    /// </summary>
+    private static MovementInfo AsDecoded(MovementInfo movement)
+    {
+        if (!movement.HasFlag(MovementFlags.OnTransport))
+        {
+            movement.TransportGuid = 0;
+            movement.TransportX = movement.TransportY = movement.TransportZ = movement.TransportOrientation = 0;
+        }
+
+        if (!movement.HasFlag(MovementFlags.Swimming)) movement.Pitch = 0;
+        if (!movement.HasFlag(MovementFlags.Jumping)) movement.JumpZSpeed = movement.JumpCosAngle = movement.JumpSinAngle = movement.JumpXySpeed = 0;
+        if (!movement.HasFlag(MovementFlags.SplineElevation)) movement.SplineElevation = 0;
+        return movement;
+    }
+
+    /// <summary>
+    /// Relay a player's stored movement to every observer: packed mover GUID + the movement block carrying the server receive time
+    /// (vmangos/cmangos-classic MovementInfo::Write sends stime).
+    /// </summary>
+    private static void RelayOwnMovement(Player player, WorldOpcode opcode)
+    {
+        var packet = new PacketWriter(64);
         packet.WritePackedGuid(player.Guid.Value);
         player.Movement.Write(packet);
         player.Map?.BroadcastToObservers(player, opcode, packet.AsSpan());

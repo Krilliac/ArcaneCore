@@ -7,6 +7,8 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Scenarios;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Xunit;
 using Xunit.Abstractions;
 using static ArcaneCore.World.Tests.Playerbots.Scenarios.ScenarioTestContent;
@@ -32,6 +34,19 @@ public sealed class PlayerbotMovementWireTests(ITestOutputHelper output)
     {
         Vector3 offset = new(30, 0, 0);
         Run run = await RunAsync(500, (walker, context, think, _) => walker.Follow(context, offset));
+        Expect(run, offset, expectStop: true);
+    }
+
+    [Fact]
+    public async Task StraightRoute_WithMovementPacketsOff_ObserversSeeTheSameKindOfStream()
+    {
+        // World:Playerbots:MovementPackets = false: the server relocates the bot and relays the moves itself, on the world tick.
+        Vector3 offset = new(30, 0, 0);
+        Run run = await RunAsync(500, (walker, context, think, _) => walker.Follow(context, offset), configure: services =>
+            services.AddSingleton<IOptions<PlayerbotOptions>>(Options.Create(new PlayerbotOptions
+            {
+                Enabled = true, MaxBots = 8, AllowedMaps = [0, 1], Scenarios = { Enabled = true }, MovementPackets = false,
+            })), walkerPackets: false);
         Expect(run, offset, expectStop: true);
     }
 
@@ -154,7 +169,7 @@ public sealed class PlayerbotMovementWireTests(ITestOutputHelper output)
         private bool _started;
 
         public uint ThinkMs { get; } = thinkMs;
-        public PlayerbotOptions Options { get; } = new() { Enabled = true, MaxPathPoints = 128, MaxRouteYards = 200, AllowedMaps = [0, 1] };
+        public PlayerbotOptions Options { get; init; } = new() { Enabled = true, MaxPathPoints = 128, MaxRouteYards = 200, AllowedMaps = [0, 1] };
         public Vector3 Origin;
         public Vector3? Wanted;
         public PlayerbotRoute? Route;
@@ -200,9 +215,9 @@ public sealed class PlayerbotMovementWireTests(ITestOutputHelper output)
     }
 
     private static async Task<Run> RunAsync(uint thinkMs, Think think, TimeSpan? duration = null,
-        Func<Walker, Player, string>? after = null)
+        Func<Walker, Player, string>? after = null, Action<IServiceCollection>? configure = null, bool walkerPackets = true)
     {
-        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync();
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(configure);
         Run? result = null;
         ScenarioReport report = await world.RunAsync(new DelegateScenario("movement-wire", async context =>
         {
@@ -220,7 +235,12 @@ public sealed class PlayerbotMovementWireTests(ITestOutputHelper output)
             await context.PlaceAsync(mover, 0, StartX, StartY - WireOffsetY, StartZ);
             await context.WaitUntilAsync("observer sees mover", () => observer.RequirePlayerForTests().VisibleObjects.Contains(mover.Guid));
 
-            var walker = new Walker(thinkMs, think);
+            var walker = new Walker(thinkMs, think)
+            {
+                Options = new() { Enabled = true, MaxPathPoints = 128, MaxRouteYards = 200, AllowedMaps = [0, 1], MovementPackets = walkerPackets },
+            };
+            var dispatched = new List<WorldOpcode>();
+            mover.Session!.ManagedDispatchObserver = dispatched.Add;
             long mark = observer.Mark();
             Assert.True(await world.Bots.SetControllerAsync(mover.BotId, walker));
             await context.IdleAsync(duration ?? TimeSpan.FromSeconds(10));
@@ -237,6 +257,8 @@ public sealed class PlayerbotMovementWireTests(ITestOutputHelper output)
                 .Where(m => m.View.Mover == mover.Guid.Value)
                 .Select(m => (m.Opcode, m.View.Info))
                 .ToList();
+            mover.Session!.ManagedDispatchObserver = null;
+            Assert.Equal(walkerPackets, dispatched.Any(MovementOpcodes.IsRelayable));
             result = new Run(moves, walker.Origin, walker.Results, stand, moving, afterText);
         }));
         Assert.True(report.Passed, report.ToString());

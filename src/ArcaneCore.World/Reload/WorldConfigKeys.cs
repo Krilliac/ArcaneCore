@@ -3,15 +3,17 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.World.Playerbots;
 
 namespace ArcaneCore.World.Reload;
 
 /// <summary>
 /// The option objects one configuration view carries: the runtime tuning (<see cref="WorldRuntimeOptions"/>,
 /// shared by reference with every reader) and, when known, the listener options (<see cref="WorldOptions"/>)
-/// and the social rules (<see cref="SocialOptions"/>). A side that is not known reads as null.
+/// the social rules (<see cref="SocialOptions"/>) and the playerbot options (<see cref="PlayerbotOptions"/>). A side that is not
+/// known reads as null.
 /// </summary>
-public readonly record struct WorldConfigView(WorldRuntimeOptions Runtime, WorldOptions? Listener, SocialOptions? Social = null);
+public readonly record struct WorldConfigView(WorldRuntimeOptions Runtime, WorldOptions? Listener, SocialOptions? Social = null, PlayerbotOptions? Playerbots = null);
 
 /// <summary>
 /// One option under the <c>World</c> section and what <c>.reload config</c> does with it. A live
@@ -120,6 +122,10 @@ public static class WorldConfigKeys
         LiveSocialCount("OfflineLeaderDelaySeconds", o => o.OfflineLeaderDelaySeconds, (o, v) => o.OfflineLeaderDelaySeconds = v),
         // Not a vmangos key: the switch for its custom "World"/"China" channel names, read when a channel is created.
         LiveSocial("VmangosChannelExtensions", o => o.VmangosChannelExtensions, (o, v) => o.VmangosChannelExtensions = v),
+
+        // Not a vmangos key: how bot movement reaches the world (client packets through the handlers, or applied by the server).
+        // PlayerbotMotion reads the shared PlayerbotOptions at every movement packet. The other playerbot options are read at start.
+        LivePlayerbots("MovementPackets", o => o.MovementPackets, (o, v) => o.MovementPackets = v),
     ];
 
     private static string? NonNegative<T>(T value) where T : struct, IComparable<T>
@@ -156,6 +162,13 @@ public static class WorldConfigKeys
             $"{SocialOptions.SectionName}:{path}",
             v => v.Social is { } social ? get(social) : null,
             (view, v) => set(view.Social!, (bool)v!),
+            null);
+
+    private static WorldConfigKey LivePlayerbots(string path, Func<PlayerbotOptions, bool> get, Action<PlayerbotOptions, bool> set)
+        => new(
+            $"{PlayerbotOptions.SectionName}:{path}",
+            v => v.Playerbots is { } playerbots ? get(playerbots) : null,
+            (view, v) => set(view.Playerbots!, (bool)v!),
             null);
 
     private static WorldConfigKey Fixed(string path, Func<WorldConfigView, object?> read)

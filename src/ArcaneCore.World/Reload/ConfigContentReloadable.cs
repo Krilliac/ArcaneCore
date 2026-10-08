@@ -2,6 +2,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Reload;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -48,6 +49,7 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
         var runtime = new WorldRuntimeOptions();
         var listener = new WorldOptions();
         var social = new SocialOptions();
+        var playerbots = new PlayerbotOptions();
         IConfigurationRoot snapshot = fresh.Build();
         try
         {
@@ -55,6 +57,7 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
             section.Bind(runtime);
             section.Bind(listener);
             snapshot.GetSection(SocialOptions.SectionName).Bind(social);
+            PlayerbotOptions.ApplyConfiguration(playerbots, snapshot);
         }
         finally
         {
@@ -64,7 +67,7 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
         // vmangos setConfigPos/setConfigMin: a negative value is logged and replaced by the default, and the reload
         // goes on (World.cpp:2949-2977); HotReload:NegativeNumbers = Reject keeps the whole-reload rejection.
         var substitutions = new List<string>();
-        var candidateView = new WorldConfigView(runtime, listener, social);
+        var candidateView = new WorldConfigView(runtime, listener, social, playerbots);
         var defaults = new WorldConfigView(new WorldRuntimeOptions(), null);
         if (ReloadPolicy.Resolve(services).NegativeNumbers == InvalidNumberPolicy.Retail)
         {
@@ -82,10 +85,12 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
 
         WorldOptions? liveListener = services.GetService<IOptions<WorldOptions>>()?.Value;
         SocialOptions? liveSocial = services.GetService<SocialFeature>()?.Options;
-        return Task.FromResult<ContentCandidate>(new ConfigCandidate(candidateView, liveListener, liveSocial, substitutions));
+        PlayerbotOptions? livePlayerbots = services.GetService<IOptions<PlayerbotOptions>>()?.Value;
+        return Task.FromResult<ContentCandidate>(new ConfigCandidate(candidateView, liveListener, liveSocial, livePlayerbots, substitutions));
     }
 
-    private sealed class ConfigCandidate(WorldConfigView candidate, WorldOptions? liveListener, SocialOptions? liveSocial, IReadOnlyList<string> substitutions) : ContentCandidate
+    private sealed class ConfigCandidate(WorldConfigView candidate, WorldOptions? liveListener, SocialOptions? liveSocial, PlayerbotOptions? livePlayerbots,
+        IReadOnlyList<string> substitutions) : ContentCandidate
     {
         private string _summary = "configuration";
 
@@ -107,7 +112,7 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
 
         public override void Commit(WorldRuntime world, ReloadTransaction transaction)
         {
-            var live = new WorldConfigView(world.Options, liveListener, liveSocial);
+            var live = new WorldConfigView(world.Options, liveListener, liveSocial, livePlayerbots);
             foreach (string substitution in substitutions)
             {
                 transaction.Note(substitution);

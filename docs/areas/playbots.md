@@ -33,6 +33,17 @@ whatever the think interval. Brain, goals and scripted controllers only choose r
 the 2026-10-07 root causes: `docs/integration/playerbot-movement-and-tick-health.md`; whether
 real terrain/collision/navmesh data is needed: `docs/integration/maps-vmaps-mmaps.md`.
 
+`World:Playerbots:MovementPackets` (default `true`, live through `.reload config`) chooses how
+those moves reach the world. `true`: each one is a client MSG_MOVE_* packet, encoded and dispatched
+through the opcode table to `MovementHandlers` like any client's. `false`: the server applies the
+same move itself (`WorldSession.TryManagedMovement` -> `MovementHandlers.MoveManagedBot`): the
+same admission (not while teleported or on a taxi, a valid block, the bot moves itself), the same
+relocation with the locomotion observers and the same MSG_MOVE_* relay to observers, without the
+dispatch or the packet encode/decode. Observers receive byte-identical streams in both modes
+(`PlayerbotMovementPacketsTests`); `PlayerbotMotion` reads the option at every move, so a reload
+switches running bots at their next move. Acknowledgements (speed, root, teleport, far transfer)
+and `CMSG_AREATRIGGER` stay client packets in both modes.
+
 In **scripted mode** an `IPlayerbotController` replaces the brain.
 `ManagedPlayerbotFeature.StartScriptedAsync(idOrName, controller)` starts a bot that way;
 `SetControllerAsync(botId, controller)` switches a running bot (null returns it to autonomous

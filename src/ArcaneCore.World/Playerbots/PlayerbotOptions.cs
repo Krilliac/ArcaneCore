@@ -31,6 +31,14 @@ public sealed class PlayerbotOptions
     /// <summary>The bots' movement speed in yards per second, never above the player's run speed (above 0, at most 100).</summary>
     public float MoveSpeed { get; set; } = 7f;
 
+    /// <summary>
+    /// How a bot's movement reaches the world (on by default). On: the bot reports its motion with the MSG_MOVE_* packets a 1.12
+    /// client sends, dispatched through the ordinary movement handlers like any client's. Off: the server relocates the bot itself
+    /// (the same locomotion observers) and sends its observers the same MSG_MOVE_* relay, skipping the opcode dispatch, the
+    /// packet encode/decode and the handler, which is cheaper with many bots. Live: <c>.reload config</c> applies a change at once.
+    /// </summary>
+    public bool MovementPackets { get; set; } = true;
+
     /// <summary>The maps bots may act and travel on (non-empty, no duplicates; a configured list replaces the default continents 0 and 1).</summary>
     public uint[] AllowedMaps { get; set; } = [0, 1];
 

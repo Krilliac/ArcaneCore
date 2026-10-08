@@ -37,6 +37,9 @@ public sealed partial class WorldSession
     /// </summary>
     internal Action<WorldOpcode, byte[]>? ManagedPacketObserver { get; set; }
 
+    /// <summary>Test tap: sees every client opcode a managed action dispatches to its handler (<see cref="TryManagedAction"/>), before the handler runs.</summary>
+    internal Action<WorldOpcode>? ManagedDispatchObserver { get; set; }
+
     internal static async Task<WorldSession> CreateManagedAsync(Account owner, int? characterId,
         IServiceProvider services, OpcodeTable opcodes, WorldRuntime world, SessionRegistry registry,
         WorldSessionOptions options, ILogger logger, CancellationToken cancellationToken = default)
@@ -89,8 +92,21 @@ public sealed partial class WorldSession
             || !handler.AllowsState(_state)
             || (player.Map is null && opcode != WorldOpcode.MsgMoveWorldportAck)) return false;
         if (ManagedBudget is { } budget && !budget.TryTake()) return false;
+        ManagedDispatchObserver?.Invoke(opcode);
         handler.World(this, player, payload);
         return _state == SessionState.InWorld;
+    }
+
+    /// <summary>
+    /// A managed bot's own movement applied by the server (<c>World:Playerbots:MovementPackets</c> = false): the gate and budget of
+    /// <see cref="TryManagedAction"/>, then <see cref="MovementHandlers.MoveManagedBot"/> instead of the opcode's handler.
+    /// </summary>
+    internal bool TryManagedMovement(WorldOpcode opcode, in MovementInfo movement)
+    {
+        if (!_managed || !World.IsWorldThread || _kick.IsCancellationRequested || _state != SessionState.InWorld
+            || Player is not { } player || player.IsQuestSettlementPending || player.Map is null) return false;
+        if (ManagedBudget is { } budget && !budget.TryTake()) return false;
+        return MovementHandlers.MoveManagedBot(this, player, opcode, movement) && _state == SessionState.InWorld;
     }
 
     private void CaptureManagedPacket(WorldOpcode opcode, ReadOnlySpan<byte> payload)

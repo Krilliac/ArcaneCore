@@ -10,6 +10,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -17,7 +18,8 @@ namespace ArcaneCore.World.Playerbots;
 /// The movement "client" of a server-managed player: it moves the bot along its route the way a 1.12 client moves its
 /// own character, and reports it with the packets a real client sends — MSG_MOVE_START_FORWARD, a heartbeat about
 /// every 500 ms (and when the route turns), MSG_MOVE_STOP — through the ordinary movement handler, which relays them to
-/// every observer.
+/// every observer. With <see cref="PlayerbotOptions.MovementPackets"/> off the server applies the same moves itself
+/// (<see cref="WorldSession.TryManagedMovement"/>): observers receive the same MSG_MOVE_* stream, without the opcode dispatch.
 /// <para>
 /// Observers keep a remote player running along the last packet's orientation at its known speed until the next
 /// packet. So every packet's position is the exact route position at that packet's server time (distance = speed ×
@@ -59,6 +61,8 @@ internal static class PlayerbotMotion
         internal float Speed;
         internal bool Walk;
         internal float MoveSpeedCap;
+        /// <summary>The live options the bot follows its routes with (<c>.reload config</c> changes them in place).</summary>
+        internal PlayerbotOptions? Options;
         internal uint LeaseMs;
         internal uint RenewedMs;
         internal readonly PlayerbotLoopDetector Loops = new();
@@ -139,6 +143,7 @@ internal static class PlayerbotMotion
     {
         MotionState state = Of(player);
         state.World = session.World;
+        state.Options = options;
         if (player.Map is not { } map) return false;
         if (route.Complete || route.Points.Count < 2) return false;
         if (IsBlacklisted(player, route.Points[^1]))
@@ -434,7 +439,11 @@ internal static class PlayerbotMotion
             route.NextPoint = nextPoint;
     }
 
-    /// <summary>One movement packet through the ordinary handler; true when the server stored it.</summary>
+    /// <summary>
+    /// One movement packet through the ordinary handler, or applied by the server directly when
+    /// <see cref="PlayerbotOptions.MovementPackets"/> is off (read at every packet, so a reload takes effect at once); true when the
+    /// server stored it.
+    /// </summary>
     private static bool Send(WorldSession session, Player player, WorldOpcode opcode, Vector3 position, float heading,
         bool walk, bool moving, uint now, bool budgeted)
     {
@@ -450,15 +459,27 @@ internal static class PlayerbotMotion
         movement.Time = now;
         movement.FallTime = 0;
         movement.CorrectData();
-        var writer = new PacketWriter(64);
-        movement.Write(writer);
+        MotionState state = Of(player);
+        bool packets = (state.Options ??= session.Services.GetService<IOptions<PlayerbotOptions>>()?.Value)?.MovementPackets ?? true;
         ManagedActionBudget? budget = session.ManagedBudget;
         if (!budgeted) session.ManagedBudget = null;
         bool sent;
-        try { sent = session.TryManagedAction(opcode, writer.ToArray()); }
+        try
+        {
+            if (packets)
+            {
+                var writer = new PacketWriter(64);
+                movement.Write(writer);
+                sent = session.TryManagedAction(opcode, writer.ToArray());
+            }
+            else
+            {
+                sent = session.TryManagedMovement(opcode, movement);
+            }
+        }
         finally { if (!budgeted) session.ManagedBudget = budget; }
         if (!sent) return false;
-        Of(player).Packets++;
+        state.Packets++;
         return Vector3.Distance(new(player.X, player.Y, player.Z), position) <= 0.5f
             && ((player.Movement.Flags & MovementFlags.Forward) != 0) == moving;
     }

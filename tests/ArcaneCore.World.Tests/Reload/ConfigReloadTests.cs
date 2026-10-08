@@ -7,6 +7,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Reload;
 using ArcaneCore.World.Characters;
+using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Reload;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.Configuration;
@@ -49,7 +50,8 @@ public sealed class ConfigReloadTests : IDisposable
         return path;
     }
 
-    private ReloadCoordinator Reloader(IConfiguration configuration, WorldOptions? live = null, SocialFeature? social = null, HotReloadOptions? policy = null)
+    private ReloadCoordinator Reloader(IConfiguration configuration, WorldOptions? live = null, SocialFeature? social = null, HotReloadOptions? policy = null,
+        PlayerbotOptions? playerbots = null)
     {
         IServiceCollection services = new ServiceCollection().AddSingleton(configuration);
         if (policy is not null)
@@ -65,6 +67,11 @@ public sealed class ConfigReloadTests : IDisposable
         if (social is not null)
         {
             services.AddSingleton(social);
+        }
+
+        if (playerbots is not null)
+        {
+            services.AddSingleton(Options.Create(playerbots));
         }
 
         var coordinator = new ReloadCoordinator(NullLogger.Instance);
@@ -262,6 +269,27 @@ public sealed class ConfigReloadTests : IDisposable
     }
 
     [Fact]
+    public async Task PlayerbotMovementPackets_IsLive_OnTheRunningPlayerbotOptions()
+    {
+        // The running bots read World:Playerbots:MovementPackets from this options object at every movement packet
+        // (PlayerbotMotion), so the change takes effect at the bots' next move.
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "MaxBots": 2, "MovementPackets": false } } }""");
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+
+        ReloadResult result = await coordinator.ReloadAsync("config");
+
+        Assert.Equal(ReloadStatus.Applied, result.Status);
+        Assert.False(playerbots.MovementPackets);
+        Assert.Equal(8, playerbots.MaxBots); // the other playerbot options are not part of the reload set
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
+        await coordinator.ReloadAsync("config");
+
+        Assert.True(playerbots.MovementPackets);
+    }
+
+    [Fact]
     public async Task AKeyRemovedFromTheFile_ReturnsToItsDefault()
     {
         string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
@@ -333,6 +361,9 @@ public sealed class ConfigReloadTests : IDisposable
         {
             expected.Add($"{SocialOptions.SectionName}:{property.Name}");
         }
+
+        // Of the playerbot options only the movement transport is in the reload set (the rest are read once at start).
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MovementPackets)}");
 
         var classified = new SortedSet<string>(WorldConfigKeys.All.Select(k => k.Path), StringComparer.Ordinal);
 
