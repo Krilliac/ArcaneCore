@@ -44,8 +44,8 @@ public sealed class DungeonScriptFeature(IServiceProvider services) : IWorldFeat
         });
     }
 
-    private static void OnQuestAccepted(Player player, ObjectGuid giverGuid, uint questId)
-        => DungeonScriptHooks.OnQuestAccepted(player, giverGuid, questId);
+    private static void OnQuestAccepted(Player player, ObjectGuid giverGuid, ArcaneCore.Game.Quests.Quest quest)
+        => DungeonScriptHooks.OnQuestAccepted(player, giverGuid, quest.Id);
 
     public void OnAreaTrigger(Player player, uint triggerId) => DungeonScriptHooks.OnAreaTrigger(player, triggerId);
 

@@ -63,9 +63,6 @@ public sealed partial class QuestNpcServices
     /// <summary>A quest was rewarded by a quest giver (vmangos Player::RewardQuest: the battleground and the giver's OnQuestRewarded script).</summary>
     public event Action<Player, ObjectGuid, Quest>? QuestRewarded;
 
-    /// <summary>A quest accepted from a creature (ScriptDev2 pQuestAcceptNPC is notified after the journal write).</summary>
-    public event Action<Player, ObjectGuid, uint>? QuestAccepted;
-
     /// <summary>
     /// A gossip DB script is due (mangos-classic Map::ScriptsStart(SCRIPT_TYPE_GOSSIP)): the player, the creature or game object, the
     /// <c>dbscripts_on_gossip</c> id, and whether the player is the script's source (a menu text's <c>script_id</c>, and an option of a game

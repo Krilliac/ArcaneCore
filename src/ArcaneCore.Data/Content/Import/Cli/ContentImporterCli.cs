@@ -640,8 +640,9 @@ public static partial class ContentImporterCli
             ["creature_template"] = creatures.Templates,
             ["creature_spawn"] = creatures.Spawns,
             ["creature_movement"] = creatures.Waypoints,
-            ["creature_movement_template"] = creatures.MovementTemplates - creatures.ScriptWaypoints - creatures.WaypointPaths,
-            ["script_waypoint"] = creatures.ScriptWaypoints,
+            ["creature_movement_template"] = creatures.MovementTemplates - creatures.ScriptWaypointCopies - creatures.WaypointPaths,
+            // script_waypoint itself (world 42) is counted from DbScriptTables below; this is its copy in creature_movement_template.
+            ["script_waypoint (creature_movement_template copy)"] = creatures.ScriptWaypointCopies,
             ["waypoint_path"] = creatures.WaypointPaths,
             ["creature_spawn_entry"] = creatures.SpawnEntries,
             ["creature_model_info"] = creatures.Models,

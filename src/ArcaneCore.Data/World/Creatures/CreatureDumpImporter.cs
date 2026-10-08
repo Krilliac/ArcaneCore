@@ -49,8 +49,8 @@ public sealed record CreatureImportReport(
 
     /// <summary><c>creature_movement_template</c> rows (the entry paths a spawn without its own path walks).</summary>
     public int MovementTemplates { get; init; }
-    /// <summary>ScriptDev2 <c>script_waypoint</c> rows among <see cref="MovementTemplates"/>.</summary>
-    public int ScriptWaypoints { get; init; }
+    /// <summary>ScriptDev2 <c>script_waypoint</c> rows copied among <see cref="MovementTemplates"/> (the world-42 table count is <see cref="ScriptWaypoints"/>).</summary>
+    public int ScriptWaypointCopies { get; init; }
 
     /// <summary>cmangos <c>waypoint_path</c> rows among <see cref="MovementTemplates"/> (stored under entry 0, see CreatureContent.WaypointPathBit).</summary>
     public int WaypointPaths { get; init; }
@@ -156,7 +156,6 @@ public sealed class CreatureDumpImporter
                     ReadMovement(row);
                     break;
                 case "creature_movement_template":
-                case "script_waypoint":
                 case "waypoint_path":
                     ReadMovementTemplate(row);
                     break;
@@ -212,8 +211,13 @@ public sealed class CreatureDumpImporter
                 case DbScriptDataModule.QuestStartTable:
                 case DbScriptDataModule.QuestEndTable:
                 case DbScriptDataModule.GossipTable:
-                case DbScriptDataModule.WaypointTable:
                     _dbScripts.Accept(row);
+                    break;
+                case DbScriptDataModule.WaypointTable:
+                    // script_waypoint feeds both the world-42 table (quest-scripts) and its creature_movement_template copy under
+                    // CreatureContent.ScriptWaypointPathBit (sd2-low), which a full import writes and the escorts fall back to.
+                    _dbScripts.Accept(row);
+                    ReadMovementTemplate(row);
                     break;
                 case DbScriptDataModule.EventTable:
                     _dbScripts.Accept(row);
@@ -388,7 +392,7 @@ public sealed class CreatureDumpImporter
         BroadcastTexts = _broadcastTexts.Count,
         AiSummons = _aiSummons.Count,
         MovementTemplates = _movementTemplates.Count,
-        ScriptWaypoints = _scriptWaypointKeys.Count,
+        ScriptWaypointCopies = _scriptWaypointKeys.Count,
         WaypointPaths = _waypointPathKeys.Count,
         SpawnEntries = _spawnEntries.Count,
         AiTextTemplates = _textTemplates.Count,
