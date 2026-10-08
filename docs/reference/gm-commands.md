@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 5 |
 | `Moderator` | 1 | 21 |
-| `GameMaster` | 3 | 121 |
-| `Administrator` | 6 | 177 |
+| `GameMaster` | 3 | 122 |
+| `Administrator` | 6 | 180 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -92,6 +92,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.modify mana` | 3 | GameMaster | declared retail level | Syntax: .modify mana #newmana [#newmaxmana] Change the mana (and maximum mana) of the selected player, or yours. |
 | `.modify energy` | 3 | GameMaster | declared retail level | Syntax: .modify energy #newenergy [#newmaxenergy] Change the energy (and maximum energy) of the selected player, or yours. |
 | `.modify rage` | 3 | GameMaster | declared retail level | Syntax: .modify rage #newrage [#newmaxrage] Change the rage (and maximum rage) of the selected player, or yours. |
+| `.modify tp` | 4 | Administrator | declared retail level | Syntax: .modify tp #amount Set the free talent points of the selected player, or yours. |
 | `.modify honor` | 4 | Administrator | declared retail level | Syntax: .modify honor $field #value Fields: points rank todaykills yesterdaykills yesterdayhonor thisweekkills thisweekhonor lastweekkills lastweekhonor lastweekstanding lifetimedishonorablekills lifetimehonorablekills. |
 | `.modify rep` | 4 | Administrator | declared retail level | Syntax: .modify rep #repId (#repvalue \| $rankname [#delta]) Sets the reputation of the selected player with the faction to the value, or to the beginning of the rank plus the delta. |
 | `.npc` ... | 2 | GameMaster | declared retail level | Syntax: .npc $subcommand Type .npc to see the list of possible subcommands or .help npc $subcommand to see info on subcommands. |
@@ -112,6 +113,9 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.reload` ... (development only) | 6 | Administrator | stored level through the map | Syntax: .reload #name \| all \| status — reload configuration or content without a restart (config, spell_template, …). |
 | `.reload all` (development only) | 6 | Administrator | stored level through the map | Syntax: .reload all — reload every content table (not the config). |
 | `.reload status` (development only) | 6 | Administrator | stored level through the map | Syntax: .reload status — what can be reloaded and how each reload last ended. |
+| `.reset` ... | 3 | GameMaster | declared retail level | Syntax: .reset $subcommand Type .reset to see the list of possible subcommands or .help reset $subcommand to see info on subcommands. |
+| `.reset talents` | 3 | GameMaster | declared retail level | Syntax: .reset talents [$playername] Remove all talents of the selected player or the named one (online now, or at the next login when offline), for free. |
+| `.reset all` | 6 | Administrator | declared retail level | Syntax: .reset all talents Request a free talent reset of every character at its next login. |
 | `.server` ... | 0 | Player | stored level through the map | Server status. |
 | `.server info` | 0 | Player | stored level through the map | Syntax: .server info Display the server version, the players online and the uptime. |
 | `.server motd` | 0 | Player | stored level through the map | Syntax: .server motd Show the server message of the day. |
