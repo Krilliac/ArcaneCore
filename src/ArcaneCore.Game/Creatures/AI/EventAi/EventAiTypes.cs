@@ -20,6 +20,9 @@ public enum EventAiEventType : byte
     Spawned = 11,
     ReachedHome = 21,
     ReceiveEmote = 22,
+
+    /// <summary>EVENT_T_RECEIVE_AI_EVENT: an AI event another creature (or a relay's SEND_AI_EVENT) sent (CreatureEventAI.h:76).</summary>
+    ReceiveAiEvent = 30,
 }
 
 /// <summary>cmangos-classic EventAI action types that have a handler (<c>EventAI_ActionType</c>, CreatureEventAI.h:89-159).</summary>
@@ -123,6 +126,9 @@ public enum EventAiTrigger
 
     /// <summary>A player aimed a text emote at the creature (cmangos ReceiveEmote).</summary>
     ReceiveEmote,
+
+    /// <summary>An AI event reached the creature (cmangos ReceiveAIEvent).</summary>
+    ReceiveAiEvent,
 }
 
 /// <summary>Everything an action handler needs about the event that fired it.</summary>

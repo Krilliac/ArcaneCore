@@ -196,6 +196,25 @@ public sealed class EventAiEngine
         ProcessEvents(player, null);
     }
 
+    /// <summary>
+    /// cmangos CreatureEventAI::ReceiveAIEvent (AI/EventAI/CreatureEventAI.cpp:1563-1575): every RECEIVE_AI_EVENT row of the event type whose
+    /// sender entry is 0 or the sender's entry is readied with the invoker and the sender, then the batch runs.
+    /// </summary>
+    public void ReceiveAiEvent(uint eventType, Unit sender, Unit? invoker)
+    {
+        ArgumentNullException.ThrowIfNull(sender);
+        EnsureDepth();
+        foreach (EventAiHolder holder in _holders)
+        {
+            if (holder.Handler is { Trigger: EventAiTrigger.ReceiveAiEvent } handler && handler.MatchesAiEvent(holder.Event, eventType, sender))
+            {
+                CheckAndReady(holder, invoker, sender);
+            }
+        }
+
+        ProcessEvents(invoker, sender);
+    }
+
     private void Dispatch(EventAiTrigger trigger, Unit? invoker, Unit? sender)
     {
         EnsureDepth();

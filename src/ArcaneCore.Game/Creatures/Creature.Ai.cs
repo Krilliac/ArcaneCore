@@ -121,6 +121,18 @@ public sealed partial class Creature : Unit, ICombatCreature
         }
     }
 
+    /// <summary>
+    /// An AI event reached the creature (cmangos UnitAI::ReceiveAIEvent): a living creature with an AI hands it over. World thread.
+    /// </summary>
+    public void ReceiveAiEvent(uint eventType, Unit sender, Unit? invoker, uint miscValue = 0)
+    {
+        ArgumentNullException.ThrowIfNull(sender);
+        if (IsAlive && System is not null && AI is { } ai)
+        {
+            ai.OnReceiveAiEvent(eventType, sender, invoker, miscValue);
+        }
+    }
+
     /// <summary>vmangos CreatureAI::JustDied: tell the AI, then begin the map system's corpse and respawn timers.</summary>
     public void OnJustDied(Unit? killer) => System?.OnCreatureDied(this, killer);
 }

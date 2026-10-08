@@ -80,6 +80,14 @@ public abstract class CreatureAI
     {
     }
 
+    /// <summary>
+    /// An AI event reached the creature (cmangos UnitAI::ReceiveAIEvent, AI/BaseAI/UnitAI.h:372): <paramref name="sender"/> sent it,
+    /// <paramref name="invoker"/> caused it. Nothing by default.
+    /// </summary>
+    public virtual void OnReceiveAiEvent(uint eventType, Unit sender, Unit? invoker, uint miscValue)
+    {
+    }
+
     /// <summary>Spawned or respawned (vmangos JustRespawned / Reset).</summary>
     public virtual void OnRespawn()
     {
