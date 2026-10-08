@@ -35,13 +35,12 @@ public sealed class AntiCheatLogRow
 }
 
 /// <summary>
-/// Characters schema module of the anticheat lane (docs/areas/anticheat.md): the batched violation log. Version 43: 41 and
-/// 42 belong to other lanes of the same wave and are held by <see cref="CharactersReservedGap41"/> and
-/// <see cref="CharactersReservedGap42"/> until they merge.
+/// Characters schema module of the anticheat lane (docs/areas/anticheat.md): the batched violation log. Version 41 (the
+/// wave-6 integration renumbered it down from the lane's 43 so the schema has no placeholder gaps; the instance-persist lane takes 42).
 /// </summary>
 public sealed class AntiCheatDataModule : IDataModule, ICharacterDataCleanup
 {
-    public const int Version = 43;
+    public const int Version = 41;
 
     public const string LogTable = "character_anticheat_log";
 
@@ -112,20 +111,4 @@ public sealed class EfAntiCheatLogStore(CharacterDbContext db) : IAntiCheatLogSt
 
     public Task<int> DeleteAsync(int characterId, CancellationToken cancellationToken = default)
         => db.Set<AntiCheatLogRow>().Where(r => r.CharacterId == characterId).ExecuteDeleteAsync(cancellationToken);
-}
-
-/// <summary>Characters version 41, owned by another lane of the wave (see <see cref="IReservedSchemaGap"/>).</summary>
-public sealed class CharactersReservedGap41 : ReservedSchemaGap
-{
-    public override DatabaseComponent Component => DatabaseComponent.Characters;
-
-    public override int SchemaVersion => 41;
-}
-
-/// <summary>Characters version 42, owned by another lane of the wave (see <see cref="IReservedSchemaGap"/>).</summary>
-public sealed class CharactersReservedGap42 : ReservedSchemaGap
-{
-    public override DatabaseComponent Component => DatabaseComponent.Characters;
-
-    public override int SchemaVersion => 42;
 }

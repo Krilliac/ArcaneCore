@@ -24,7 +24,7 @@ register of [operations](../guide/operations.md).
 | Packet budgets | `Kernel/Net/OpcodeRateLimiter.cs`, wired in `WorldSession.DispatchAsync` | see [netguard](../ops/netguard.md) |
 | Ping latency average | `WorldSession.LatencyMs` | EWMA (alpha 1/5) of the latency every `CMSG_PING` reports; the base discarded it |
 | Receive time | `WorldSession.CurrentPacketReceivedMs` | stamped when the packet is queued, so a world-thread stall does not bunch the times the checks compare |
-| Violation log | `Data/Characters/AntiCheat/AntiCheatDataModule.cs`, characters schema **43** | `character_anticheat_log`; coalesced and batched (one insert per flush) |
+| Violation log | `Data/Characters/AntiCheat/AntiCheatDataModule.cs`, characters schema **41** | `character_anticheat_log`; coalesced and batched (one insert per flush) |
 | Commands | `World/AntiCheat/AntiCheatCommands.cs` | `.anticheat ...` |
 | Startup check | `World/AntiCheat/AntiCheatConfigChecks.cs` | a value that does not bind or validate is exit 78 |
 
@@ -103,7 +103,7 @@ across a relog until it has decayed (pruned every minute).
 
 ## Violation log
 
-`character_anticheat_log` (characters schema 43): character, account, type (the `AntiCheatViolation` number), summed
+`character_anticheat_log` (characters schema 41): character, account, type (the `AntiCheatViolation` number), summed
 weight, score after the last finding, count, map and position, a fixed detail text, first and last unix time. Repeats of one
 type by one character within `AntiCheat:Log:CoalesceMs` (5 s) fold into one row; the queue (at most `AntiCheat:Log:MaxQueuedRows`) is written
 every `AntiCheat:Log:FlushIntervalSeconds` (10) in one batch of at most `AntiCheat:Log:MaxRowsPerFlush`, on the thread pool. A failed write is
