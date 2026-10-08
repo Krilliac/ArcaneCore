@@ -179,7 +179,7 @@ internal sealed class RecordingPorts : IBattlegroundSpellPort, IBattlegroundHono
 
     public void ScheduleQueueUpdate(Battleground battleground) => QueueUpdates++;
 
-    public BattlegroundPorts ToPorts(RecordingHost host) => new()
+    public BattlegroundPorts ToPorts(RecordingHost host, Random? random = null) => new()
     {
         Host = host,
         Spells = this,
@@ -188,6 +188,7 @@ internal sealed class RecordingPorts : IBattlegroundSpellPort, IBattlegroundHono
         Reputation = this,
         Calendar = this,
         Lifecycle = this,
+        Random = random ?? Random.Shared,
     };
 }
 

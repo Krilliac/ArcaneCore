@@ -271,6 +271,33 @@ semantics are cmangos'. classic-db z2815 has 141 action-53 rows reaching 109 rel
   (a later dump file replaces every row of a relay id it carries), `EfCreatureDataStore` loads them into
   `CreatureAiContent.RelayScripts`. A database imported before this step has no relay rows: re-import the dump.
 
+## Scripted AIs: escorts and per-map scripts by entry
+
+ScriptDev-style scripts (the vmangos `ScriptName` AIs) are C# classes a feature gives the creatures of an entry on one map:
+`CreatureMapSystem.RegisterEntryAi(entry, factory)` (`CreatureMapSystem.ScriptedAi.cs`). The script is asked before the template's
+`AIName`, as vmangos selectAI asks the script name first (AI/CreatureAISelector.cpp:39-46): every creature of the entry already in the map
+takes it at once, and any that enters the map later, including a wild summon, a guardian or a mini pet; a controlled pet and a charmed
+creature never do. `UnregisterEntryAi` gives the creatures their template AI back. The Alterac Valley assault scripts are the first user
+(docs/areas/battlegrounds.md).
+
+`EscortAI` (`Creatures/AI/EscortAI.cs`) is vmangos npc_escortAI (AI/ScriptedEscortAI.cpp): `Start` loads the entry's escort points, clears
+the NPC flags and sets the walk mode; after the first delay (2.5 s from the AI's start or respawn) it walks point by point with each
+point's wait, `WaypointReached` on each; `SetEscortPaused` holds it at a point; a fight breaks it off and, once the fight is over, the
+escort runs back to where the fight began (point `PointLastPoint`, not home) and goes on; `Stop` ends it where it stands; at the end of the
+path it disappears (or loops home, or respawns at once). The script hooks are `Reset` (the spawn, every evade, every respawn),
+`JustSpawned` (the work a ScriptDev constructor does, once the map placed the creature), `JustRespawned`, `Aggro` and `UpdateEscortAI`.
+The escort points are vmangos `script_waypoint` (one path per entry, ordered by point): here the entry's `creature_movement_template`
+path 0 (`EscortAI.EscortPathId`), keyed by entry and point, where such rows import (the world schema has no `script_waypoint` table). An
+entry without points does not start, and the map logs it once per entry. Not ported, since no script here escorts a player: the escorted
+player, its quest, the assist of the player in combat and the distance check that fails the escort.
+
+The map services the scripts use (`CreatureMapSystem.ScriptedAi.cs`): `SummonCorpseDespawn` (TEMPSUMMON_CORPSE_DESPAWN: the summon stays
+until it dies and goes with its corpse on the next update; `MarkCorpseDespawn` for an object's summon), `SetHomePosition`, `NearTeleport`
+(MSG_MOVE_TELEPORT around the relocation), `MoveIdle`, `SetDefaultRandomMovement`, `SayText` (DoScriptText by broadcast or
+creature_ai_texts id), `CreaturesOfEntryInRange` (GetCreatureListWithEntryInGrid) and `SelectNearestTarget`, and `RemoveAuras` through
+the creature spell seam. A script AI may set `CasterChaseDistance` (vmangos SetCasterChaseDistance: it chases at that distance). A
+creature's flight (vmangos Unit::SetFly, MOVEFLAG_FLYING) now survives its moves and relocations, as its walk mode does.
+
 ## Code layout
 
 The AI host is split by concern so parallel work does not share a file (a pure move: no behaviour
@@ -357,6 +384,7 @@ code was copied.
   and invisibility are not modelled for creature targets; `Poll` mode scans players only. Mobs aggro on pets and totems alike
   (no totem exemption exists in the references' on-sight rules; UNVERIFIED against the client).
 - Flee-for-assist is simplified: there is no "attempts to run away in fear" emote, and help is called once on arrival.
-- No totem AI or formation/linking (`creature_linking`); no SMSG_ZONE_UNDER_ATTACK from a guard's death (mangos only).
+- No totem AI or formation/linking (`creature_linking`); no SMSG_ZONE_UNDER_ATTACK from a guard's death (mangos only). The Alterac
+  Valley scripts keep their own small creature groups (a follow at the member's distance and angle, fighting and returning together).
   - **How aggro is triggered** (`Creatures:AggroScanMode`, default `Relocation`): a player or creature that moves or joins the map schedules one AI notify after 1000 ms (`Visibility.AIRelocationNotifyDelay`); the notify makes the creatures (for a player) or the players and, with `Creatures:CreatureAggroOnCreatures`, the creatures (for a creature, both directions) within `MaxCreatureAttackRadius` (40) times the aggro rate run `MoveInLineOfSight` for it (`AiRelocationNotifier`; vmangos Unit.cpp:10082-10160, GridNotifiersImpl.h:57-119). Standing still triggers nothing. `Poll` is the original behaviour: every creature checks every player every tick (development). The aggro predicate asks the stealth and invisibility visibility service whether the creature detects the player: a stealthed player is attacked only when the creature detects it, and one just outside detection range raises the stealth alert (docs/areas/threat.md). Differences from vmangos: a plain 2D radius over the touched cells instead of the exact cell visit.
 - Per-instance map updaters and instance resets belong to `feat/instances`.

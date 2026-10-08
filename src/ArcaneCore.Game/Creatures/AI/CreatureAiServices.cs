@@ -120,6 +120,17 @@ public interface ICreatureSpellCaster
 
     bool HasAura(Unit unit, uint spellId);
 
+    /// <summary>Remove every aura of <paramref name="spellId"/> from <paramref name="unit"/> (vmangos Unit::RemoveAurasDueToSpell). Nothing by default.</summary>
+    void RemoveAuras(Unit unit, uint spellId)
+    {
+    }
+
+    /// <summary>
+    /// Put the auras of <paramref name="spellId"/> on <paramref name="unit"/> without a cast (vmangos Unit::AddAura); with
+    /// <paramref name="permanent"/> the holder never runs out (ADD_AURA_PERMANENT). <see cref="CreatureCastResult.NoSpellSystem"/> by default.
+    /// </summary>
+    CreatureCastResult AddAura(Unit unit, uint spellId, bool permanent) => CreatureCastResult.NoSpellSystem;
+
     /// <summary>Stop the cast or channel in progress (evade, death).</summary>
     void Interrupt(Creature caster);
 

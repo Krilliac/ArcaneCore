@@ -6,8 +6,7 @@ namespace ArcaneCore.Game.Battlegrounds;
 /// The Alterac Valley turn-ins, upgrades and challenge counters (vmangos BattleGroundAV.cpp:58-275, 433-772, 799-806; the collector and
 /// quartermaster scripts of scripts/battlegrounds/battleground_alterac.cpp:2477-2560, 2617-2730, 3360-3660). Armor scraps raise the
 /// defenders' upgrade level and pile supply crates at the base; the other turn-ins count towards the challenges (air, cavalry, ground and
-/// world-boss assaults). The assault invocations themselves (the escorted troops, beacons, war riders and world bosses of the scripts) are
-/// not ported: their counters, goals, go flags and resets are, so a later script can read them.
+/// world-boss assaults), which the assault scripts (Battlegrounds/AlteracValleyScripts) read and launch.
 /// </summary>
 public sealed partial class AlteracValley
 {
@@ -281,13 +280,14 @@ public sealed partial class AlteracValley
     /// BattleGroundAV.cpp:501-772, then the quest giver's own <c>pQuestRewardedNPC</c> script: <see cref="CollectorQuestComplete"/>).
     /// <paramref name="requiredItem"/> and <paramref name="requiredCount"/> are the quest's first required item and its count. The match's part
     /// runs only while it is in progress (BattleGroundAV.cpp:505-506); the collector's script only asks that the player be in the match
-    /// (battleground_alterac.cpp:2488-2490), so it counts before the start and after the end too.
+    /// (battleground_alterac.cpp:2488-2490), so it counts before the start and after the end too. True when this turn-in completed the world
+    /// boss offering and launched its assault (the summoner's escort then starts: AvCollectorGossip.QuestRewarded).
     /// </summary>
-    public void HandleQuestComplete(ObjectGuid player, ObjectGuid questGiver, uint questId, uint requiredItem, uint requiredCount)
+    public bool HandleQuestComplete(ObjectGuid player, ObjectGuid questGiver, uint questId, uint requiredItem, uint requiredCount)
     {
         if (PlayerTeam(player) is not { } team)
         {
-            return;
+            return false;
         }
 
         if (Status == BattlegroundStatus.InProgress)
@@ -295,7 +295,7 @@ public sealed partial class AlteracValley
             MatchQuestComplete(team, player, questGiver, questId);
         }
 
-        CollectorQuestComplete(team, questId, requiredItem, requiredCount);
+        return CollectorQuestComplete(team, questId, requiredItem, requiredCount);
     }
 
     /// <summary>BattleGroundAV::HandleQuestComplete (BattleGroundAV.cpp:501-772), match in progress.</summary>
@@ -481,10 +481,10 @@ public sealed partial class AlteracValley
     /// <summary>
     /// The collectors' quest-rewarded script (QuestComplete_npc_AVBlood_collector, battleground_alterac.cpp:2477-2560): a turn-in of blood or
     /// crystals, hides, flesh or medals, or mine supplies adds its required count to the matching challenge, a tamed mount adds one to the
-    /// tamed cavalry; when the world-boss offering is complete it is reset and the team's go flag for the world boss is set (the escorted
-    /// summoning that follows in the script is not ported). Other quests are not a collector's.
+    /// tamed cavalry; when the world-boss offering is complete it is reset and the team's go flag for the world boss is set, and true is
+    /// returned (the summoner's escort follows: AvCollectorGossip.QuestRewarded). Other quests are not a collector's.
     /// </summary>
-    public void CollectorQuestComplete(Team team, uint questId, uint requiredItem, uint requiredCount)
+    public bool CollectorQuestComplete(Team team, uint questId, uint requiredItem, uint requiredCount)
     {
         int challenge;
         uint delivered = requiredCount;
@@ -497,7 +497,7 @@ public sealed partial class AlteracValley
         {
             if (requiredItem == 0 || requiredCount == 0)
             {
-                return;
+                return false;
             }
 
             challenge = requiredItem switch
@@ -513,7 +513,7 @@ public sealed partial class AlteracValley
             };
             if (challenge < 0)
             {
-                return;
+                return false;
             }
         }
 
@@ -522,7 +522,10 @@ public sealed partial class AlteracValley
         {
             ResetWorldBossChallenge(team);
             SetPlayerGoStatus(team, AssaultWorldBoss, true);
+            return true;
         }
+
+        return false;
     }
 
     // ------------------------------------------------------------------ the upgrade

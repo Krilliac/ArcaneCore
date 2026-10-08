@@ -42,6 +42,12 @@ public abstract class CreatureAI
     /// <summary>Whether the creature runs after its victim (cmangos EventAI combat movement).</summary>
     public bool CombatMovement { get; set; } = true;
 
+    /// <summary>
+    /// The distance a scripted caster keeps from its victim while it chases it (vmangos Creature::SetCasterChaseDistance); 0 chases into melee
+    /// reach as any creature.
+    /// </summary>
+    public float CasterChaseDistance { get; protected set; }
+
     /// <summary>Whether the creature swings at its victim (cmangos EventAI auto attack); false keeps it at range.</summary>
     public bool MeleeEnabled { get; protected set; } = true;
 
@@ -179,6 +185,13 @@ public abstract class CreatureAI
     /// <summary>Cast a spell through the world spell system (no-op result without one).</summary>
     protected CreatureCastResult DoCast(Unit? target, uint spellId, bool triggered = false)
         => System?.CastSpell(Me, spellId, target, triggered) ?? CreatureCastResult.NoSpellSystem;
+
+    /// <summary>
+    /// vmangos <c>m_creature-&gt;AddAura(spellId, permanent ? ADD_AURA_PERMANENT : 0)</c>: the spell's auras on this creature without a cast; a
+    /// permanent holder never runs out, whatever the spell's duration.
+    /// </summary>
+    protected CreatureCastResult DoAddAura(uint spellId, bool permanent = false)
+        => System?.AddAura(Me, spellId, permanent) ?? CreatureCastResult.NoSpellSystem;
 
     /// <summary>Make nearby same-faction creatures join the fight at once (EventAI CALL_FOR_HELP).</summary>
     protected int DoCallForHelp(float radius) => System?.CallForHelp(Me, radius) ?? 0;

@@ -257,6 +257,13 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return result;
         }
 
+        // GameObject::Use (GameObject.cpp:1405-1407): the object's script may take the use over, before anything else (and then nothing
+        // else happens: no use event either).
+        if (AiOf(go!)?.OnUse(this, go!, player) == true)
+        {
+            return GameObjectUseResult.Ok;
+        }
+
         // GameObject::Use (GameObject.cpp:1409-1416): an immune user is ignored by objects that cannot be used under immunity,
         // and a mounted user is taken off the mount unless the object allows mounted use.
         if (IsRefusedForImmunity(player, go!))

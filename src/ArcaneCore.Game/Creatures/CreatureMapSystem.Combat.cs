@@ -377,6 +377,10 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
             {
                 creature.Motion.MoveChase(victim, distancer.AttackDistance); // cmangos RANGED_MOVEMENT: MoveChase(victim, m_attackDistance)
             }
+            else if (creature.AI is { CasterChaseDistance: > 0 } caster)
+            {
+                creature.Motion.MoveChase(victim, caster.CasterChaseDistance); // vmangos Creature::SetCasterChaseDistance (a scripted caster)
+            }
             else
             {
                 creature.Motion.MoveChase(victim);

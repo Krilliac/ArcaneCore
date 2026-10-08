@@ -131,15 +131,69 @@ inert default.
   answers hostile to everyone (GameObject.cpp:2092-2094): a literal port would let a mine go off under its own team, so the team rule stands
   in for the faction the reference's data would need. A dead layer's creatures and a RESPAWN_STOP defender stay dead for the match only: a
   battleground map writes no `creature_respawn` rows (vmangos MapPersistentStateMgr.cpp:84-86; docs/areas/creature-movement-spawns.md). `CheckSpellCast` (asked through a cast check after the range check) refuses a shredder summon (21544/21565)
-  with SPELL_FAILED_SPELL_UNAVAILABLE while the team's last summoner still controls a shredder, else records the summoner; the summon and
-  possess of the shredder itself are the spell system's (the AVCreateShredderScript fix-up is not ported). Snivvle yells 70 s in and the captains
+  with SPELL_FAILED_SPELL_UNAVAILABLE while the team's last summoner still controls a shredder, else records the summoner; the summon is
+  the spell system's wild summon, and AVCreateShredderScript (battleground_alterac.cpp:4877-4891, `AlteracValleyCreateShredderScript`, the
+  spell scripts' new OnSummon hook) marks it as created by Control Shredder (21556/21566, the spell the second effect triggers) with the
+  caster as its creator. The possession by Control Shredder itself reaches the shredder through a script target (TARGET 38 and
+  `spell_script_target`), which this server does not resolve and classic-db has no rows for: a live summoner does not take control of its
+  shredder, so the one-shredder rule only holds against a summoner who controls it some other way. Snivvle yells 70 s in and the captains
   yell with their buffs (mangos_string 791-793; these rows are not in the string table here, so those yells are logged once and not sent).
-  classic-db z2815 has row 790 but not 791-793, and vmangos' Language.h marks 791-799 as unused; the text has to come from a vmangos world
-  database's mangos_string, which is not among the local references, so it is a content gap, not a code one.
-- **Alterac Valley, not ported**: the assault invocations of the scripts (the escorted ground troops, beacons, war riders, cavalry and world
-  bosses with their waypoints and AIs; their counters, goals and go flags are kept for them), the collectors' other gossip menus, and the
-  start-time supply and tamed events (unreachable in vmangos itself). The AV queue minimum, initial maximum and randomization of vmangos are not
-  ported; an AV group join is rejected as vmangos does.
+  classic-db z2815 has row 790 but not 791-793; vmangos' Language.h:831 marks 791-799 as unused, and vmangos' own sql (D:/refs/vmangos/sql,
+  every migration and old migration searched) has no mangos_string row 791-793 either (the only rows with those ids belong to other tables),
+  so the text exists in neither local reference: the yells stay silent, a content gap, not a code one.
+- **Alterac Valley assault scripts** (`Battlegrounds/AlteracValleyScripts`, vmangos battleground_alterac.cpp:1230-4500; `AlteracValleyScripts`
+  gives each match's map its scripts by entry, since classic-db has no script names, and takes them back when the match detaches):
+  - the collectors' menus and quest scripts (`AvCollectorGossip`; the world's battleground gossip script answers them besides Murgot and
+    Regzar): a collector whose offerings are complete offers the assault to a player at least neutral with Frostwolf or Stormpike (bowing);
+    launching it closes the menu, shouts, spends the offerings and sets the team's go flag, and gives the beacon (soldier, lieutenant and
+    commander air assaults) or the assault orders (ground) when the player has none; a cavalry commander starts his ride; the quartermasters
+    show how close the mine supplies are and their vendor line; a wing commander away from his post sets off when his side speaks to him;
+    the world boss summoners show how close the offering is; a completed world-boss offering starts the summoner's escort and the
+    assault orders turned in send the troops chief off;
+  - `AvEventAI` (AV_NpcEventAI): the ground assault's chief and ten troops of the team's level from the quartermaster, the cavalry commander's
+    eight riders, his speech and rally, the wing commander's transformation into his war rider on the global air assault, Thurloga's and
+    Renferal's ride to the summoning place, the altar or circle they place and their departure after the world boss came, their combat
+    spells, and a commander's followers going on alone after his death; `AvTroopsChiefAI` (AV_npc_troops_chief_EventAI); `AvCavalryAI`
+    (AV_NpcEventTroopsAI); `AvWarRiderAI` (AV_WarRiderAI: home in the enemy base, wander, attack the nearest enemy, Fireball, Fireball
+    Volley, Stun Bomb Attack); `AvBeaconAi` (AV_BeaconInvocationObjectAI); `AvWorldBossAI` (av_world_boss_baseai and the Lokholar and Ivus
+    AIs: one of each at a time through events 102 and 103, the end of the summoning, the yells, the march to the enemy base, the spells,
+    Swell of Souls); `AvSummonerAddAI` (FrostwolfShamanAI, DruidOfTheGroveAI);
+  - the start-time supply and tamed events: vmangos BattleGroundAV::Update (:845-869) tests the third start warning's flag inside its
+    in-progress branch, where every start flag is set, so they never run there; here they run at the warning itself
+    (`StartingEventThird`), 30 s before the gates open. The block's two guard despawns are left out: in this event layout (15, 0) are the
+    first aid station's starting defenders and (28, 0) the Alliance marshals of a tower the Horde holds at the start.
+  - The start-time block is a deviation the lead accepts or reverts: it runs a branch vmangos never executes. On the live data it changes
+    nothing visible (events 80-97 start with no active state, and classic-db has no state-2 rows for them).
+  - A transformed wing commander takes Vanish (24699, 20 s in Spell.dbc and classic-db) as a permanent aura without a cast, as vmangos
+    `AddAura(SPELL_AV_INVISIBLE, ADD_AURA_PERMANENT)` does (`SpellSystem.AddAura`, vmangos Unit::AddAura; `CreatureAI.DoAddAura`): he stays
+    invisible until he respawns.
+  - **The entry scripts replace classic-db EventAI.** Fifteen of these entries carry `AIName` 'EventAI' and `creature_ai_scripts` rows in
+    classic-db z2815; in an Alterac Valley match their entry script wins, as vmangos' ScriptName wins over AIName, so those rows do not run
+    there. AV_NpcEventAI only melees (it calls no UpdateSpellsList), so the wing commanders lose their combat spells: Sunder Armor and Strike
+    (Guse 13179, Jeztor 13180, Mulverick 13181), Strike and Rend (Ichman 13437, Slidore 13438, Vipore 13439), and Ichman his Greater
+    Invisibility on spawn; the Stormpike Ram Rider Commander (13577) loses Mortal Strike and Cleave. Thurloga (13236), Renferal (13442),
+    Lokholar (13256), Ivus (13419), the Frostwolf Shaman (13284), the Druid of the Grove (13443) and the war riders (14943, 14946) cast their
+    vmangos script spells instead of the classic-db sets (for example the war riders no longer Throw Liquid Fire, 23969, and Renferal no
+    longer casts Thorns or Moonfire 22206).
+  - **Deviations.** The creature groups the scripts form (JoinCreatureGroup with OPTION_FORMATION_MOVE, AGGRO_TOGETHER and
+    EVADE_TOGETHER) are a follow of the leader at the member's slot, a group that enters a fight together, and a member that takes its place
+    again after a fight. The slot is vmangos' (`AvScript.FormationSlot`): the angle from the leader to the member less the member's facing
+    and the 3D distance between their edges. vmangos hands the two to `JoinCreatureGroup(leader, dist, angle, ...)` in the wrong order
+    (battleground_alterac.cpp:2355, 2379, 3273 pass the angle as the follow distance and the distance as the follow angle, so its riders
+    bunch within 2 pi yards of the commander at angles set by their distance in yards); the port keeps each value in its meaning. The
+    world boss summoner is not given JustRespawned at the moment it disappears (vmangos calls it on the dead summoner); its respawn runs it.
+    A beacon's minute starts at the first update after it appeared (vmangos: its construction). The shaman's Lightning Shield timer is
+    guarded where vmangos lets an unsigned timer wrap (it never recasts there once the shield was up when the timer ran out). Murgot and
+    Regzar keep their own AI (vmangos gives them AV_NpcEventAI, which does nothing for them).
+  - **Content gaps (live)**: the escorts walk their entry's escort points (vmangos `script_waypoint`, here `creature_movement_template`
+    path 0), and neither classic-db z2815 nor the local vmangos sql has any for these entries, so on the live data no escort sets off (logged
+    once per entry): the cavalry commanders and troops chiefs stay where they are, Thurloga and Renferal do not reach the summoning place,
+    and Lokholar and Ivus would not march. The beacons are planted and the world bosses called by event scripts (the planting spells
+    21355, 21370, 21371 and 21728-21730 and the rituals' 21249 and 21648 are SEND_EVENT, 7143, 7158, ... and 7060, 7268: vmangos
+    `event_scripts`), which neither reference has: a planting or a completed ritual does nothing yet. What works on the live data: the
+    menus and their launches, the beacon and orders items, the troops and riders summoned at their vmangos places, the wing commanders' war
+    riders over the enemy bases, the troops chief's start, and every script once a creature or object of its entry is in the map. The AV
+    queue minimum, initial maximum and randomization of vmangos are not ported; an AV group join is rejected as vmangos does.
 - **Not ported from vmangos.** The queue announcer (`Battleground.QueueAnnouncer.*`), `BattleGround.RandomizeQueues`, the debug "testing"
   mode, the accurate-PvP reputation values of patches before 1.10, `BattleGround::HandleCommand`, the item reward by mail for a full bag
   (marks are cast spells here, as in vmangos for 1.12).
@@ -171,6 +225,13 @@ states, leaving with Deserter, a far teleport out, a logout and login inside a m
 `BattlegroundGuardScenarioTests` (a buff touched by a player outside the match stays; a possessed carrier keeps the flag through an immunity and
 the loss of the flag aura) run two managed bots against the real handlers on the
 manual clock with the synthetic content of `WarsongGulchTestContent`; `ArathiBasinWorldScenarioTests` plays an Arathi Basin node.
+`AlteracValleyAssaultTests` covers the start-time events, `AlteracValleyShredderScriptTests` the shredder spell script, and
+`AlteracValleyAssaultScriptTests` (`AvScriptRig`: a real creature and object system with simulated time) the assault scripts: the ground
+assault's summons, the troops chief's attack and rally, the formation slot, the cavalry ride and the riders going on alone, the wing
+commander's war rider and his permanent invisibility (with the real spell system, past Vanish's 20 s), the war rider over the enemy base,
+the beacons, the Ice Lord and Thurloga, the summoners' adds and the collectors' menus. `Spells/AddAuraTests` covers `SpellSystem.AddAura`.
+`AlteracValleyAssaultScenarioTests` plays the shredder ("av-shredder") and the ground assault ("av-assault": the quartermaster's menu, the
+orders, the marshal and his commandos, the speech and the rally) over the wire with two managed bots.
 `AlteracValleyUpgradeTests` covers the turn-ins, upgrades, challenges, respawn modes, landmines, shredders and yells, and
 `AlteracValleyWorldScenarioTests` (the `av-upgrades` scenario, `AlteracValleyTestContent`) plays them over the wire: an armor-scraps quest turned
 in at Murgot through the quest opcodes, the quartermaster's gossip and the upgrade, a Horde landmine sparing the Horde bot and going off under the

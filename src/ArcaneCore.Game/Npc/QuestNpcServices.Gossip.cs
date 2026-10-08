@@ -62,7 +62,11 @@ public sealed partial class QuestNpcServices
 
         if (GossipScript?.Hello(player, npc) is { } scripted)
         {
-            SendScriptedGossip(s, npc, scripted);
+            if (!scripted.Silent)
+            {
+                SendScriptedGossip(s, npc, scripted);
+            }
+
             Flush(s);
             return;
         }
@@ -277,10 +281,23 @@ public sealed partial class QuestNpcServices
 
         if (item.Scripted)
         {
-            // The script answers with an npc text shown over the same lines (SEND_GOSSIP_MENU), or with nothing.
-            if (GossipScript?.Select(p, npc, item.ScriptSender, item.ScriptAction) is uint textId and not 0)
+            // The script may close the menu, open the vendor list, and answer with an npc text shown over the same lines (SEND_GOSSIP_MENU).
+            if (GossipScript?.SelectReply(p, npc, item.ScriptSender, item.ScriptAction) is { } reply)
             {
-                SendGossipMenu(s, npc.Guid, textId);
+                if (reply.Close)
+                {
+                    CloseGossip(p);
+                }
+
+                if (reply.Vendor)
+                {
+                    SendListInventory(s, npc.Guid);
+                }
+
+                if (reply.NpcTextId != 0)
+                {
+                    SendGossipMenu(s, npc.Guid, reply.NpcTextId);
+                }
             }
 
             return;

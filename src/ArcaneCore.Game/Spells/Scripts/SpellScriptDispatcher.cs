@@ -6,7 +6,7 @@ namespace ArcaneCore.Game.Spells.Scripts;
 /// <summary>
 /// Routes the <see cref="ISpellScript"/> hooks of a <see cref="SpellScriptRegistry"/> on a <see cref="SpellSystem"/> without editing it: a
 /// cast check in <see cref="SpellCheckPhase.Final"/> with the highest order (vmangos runs the script check last, Spell.cpp:6480),
-/// an <see cref="ISpellCastObserver"/> for OnCast, and chained handlers for DUMMY, SCRIPT_EFFECT and DISPEL that keep whatever was
+/// an <see cref="ISpellCastObserver"/> for OnCast and OnSummon, and chained handlers for DUMMY, SCRIPT_EFFECT and DISPEL that keep whatever was
 /// installed before (another lane's handler, the built-in dispel) and call it after the script.
 /// <para>
 /// SCRIPT_EFFECT (77) has no behaviour of its own: vmangos EffectScriptEffect falls through to the database script table
@@ -98,4 +98,6 @@ public sealed class SpellScriptDispatcher : ISpellCastCheck, ISpellCastObserver
         => Registry.Find(context.Spell.Id)?.OnCheckCast(context) ?? SpellCastResult.CastOk;
 
     void ISpellCastObserver.OnCast(SpellCast cast) => Registry.Find(cast.Spell.Id)?.OnCast(cast);
+
+    void ISpellCastObserver.OnSummoned(SpellEffectContext context, Creatures.Creature summon) => Registry.Find(context.Spell.Id)?.OnSummon(context, summon);
 }

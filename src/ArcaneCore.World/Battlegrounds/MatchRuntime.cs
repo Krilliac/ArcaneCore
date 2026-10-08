@@ -120,6 +120,7 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
             }
 
             creatures.SpawnGate = this;
+            AttachAlteracValley(creatures);
         }
 
         if (!_combatHooked)
@@ -139,6 +140,8 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
             objects.Used -= OnObjectUsed;
             DetachAlteracValley(objects);
         }
+
+        DetachAlteracValleyScripts();
 
         if (Map is { } map && _combatHooked)
         {

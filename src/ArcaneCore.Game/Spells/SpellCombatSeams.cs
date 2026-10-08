@@ -127,6 +127,11 @@ public interface ISpellCastObserver
     void OnFinished(SpellCast cast, bool completed)
     {
     }
+
+    /// <summary>An effect of the cast summoned <paramref name="summon"/> (raised by the summon effects through <see cref="SpellSystem.NotifySummoned"/>).</summary>
+    void OnSummoned(SpellEffectContext context, Creatures.Creature summon)
+    {
+    }
 }
 
 /// <summary>Which number an <see cref="ISpellValueModifier"/> is asked to adjust.</summary>

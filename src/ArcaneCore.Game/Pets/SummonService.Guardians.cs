@@ -132,7 +132,7 @@ public sealed partial class SummonService
     /// points within the effect radius of it; without a destination at the radius in front of the
     /// caster, or at the caster when the radius is 0. They keep their template faction and level,
     /// carry only <c>UNIT_CREATED_BY_SPELL</c> (the creator field is not set for these spells) and
-    /// despawn after the spell duration, or at death when it has none.
+    /// despawn after the spell duration, or at death when it has none. The spell's script then hears of each summon (OnSummon).
     /// </summary>
     private void EffectSummonWild(SpellEffectContext context)
     {
@@ -192,6 +192,7 @@ public sealed partial class SummonService
 
             pets.Options = _options;
             pets.Register(summon, this);
+            context.System.NotifySummoned(context, summon); // vmangos m_spellScript->OnSummon(this, summon) (SpellEffects.cpp:2768-2769)
         }
     }
 
