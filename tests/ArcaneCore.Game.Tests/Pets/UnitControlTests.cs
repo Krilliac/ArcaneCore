@@ -59,6 +59,26 @@ public sealed class UnitControlTests
     }
 
     [Fact]
+    public void MoveNotActiveMover_GivesUpOnlyTheMoverTheClientNamed()
+    {
+        using PetTestKit kit = Kit();
+        (Player priest, _) = kit.AddPlayer(1, 5, 5);
+        Creature mob = Mob(kit);
+        CharmService charms = kit.Service.Charms;
+        CastAt(kit, priest, PossessSpell, mob);
+        Assert.True(charms.HandleSetActiveMover(priest, mob.Guid));
+
+        // vmangos HandleMoveNotActiveMoverOpcode: the old mover must be the client's, and not the server's current mover (unless it is the player)
+        Assert.Null(CharmService.HandleMoveNotActiveMover(priest, priest.Guid));
+        Assert.Null(CharmService.HandleMoveNotActiveMover(priest, mob.Guid));
+
+        kit.Spells.System.RemoveAuras(mob, PossessSpell);
+        Assert.Same(mob, CharmService.HandleMoveNotActiveMover(priest, mob.Guid));
+        Assert.True(priest.ClientMoverGuid.IsEmpty);
+        Assert.Same(priest, priest.GetConfirmedMover());
+    }
+
+    [Fact]
     public void ThePossessorsCamera_SeesWhatIsAroundThePossessedUnit()
     {
         using PetTestKit kit = Kit();
