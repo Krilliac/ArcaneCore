@@ -49,7 +49,7 @@ public sealed class RaidBossTests
             Map = World.GetMap(0);
             Raid = onyxia ? new OnyxiaInstance(Map) : new MoltenCoreInstance(Map);
             Map.AddUpdater(Raid);
-            uint[] entries = [.. MoltenCoreInstance.BossEntries, 12099, 11662, 11672, 11663, 11664, 12143, 13148, 10184, 11262, 12758, 12129];
+            uint[] entries = [.. MoltenCoreInstance.BossEntries, 12099, 11661, 11662, 11672, 11673, 12101, 11663, 11664, 12143, 13148, 10184, 11262, 12758, 12129];
             var content = new CreatureContent(entries.Select(e => Template(e, b => { b.MinLevelHealth = b.MaxLevelHealth = 10000; })), spawns ?? [], [], [], []);
             Caster = new FailableCaster(Spells);
             Creatures = new CreatureMapSystem(Map, content, random: random ?? new Random(1), aiServices: new CreatureAiServices { Spells = Caster });
@@ -276,6 +276,29 @@ public sealed class RaidBossTests
         ai.OnUpdate(25000); Assert.Contains(a.Spells.Casts, c => c.Spell == 18351); Assert.Equal(0, ai.FlightPoint);
     }
     [Fact]
+    public void Onyxia_LostBreathOrUnfinishedMove_DoesNotStallTheFlightPhase()
+    {
+        using var a = new Arena(true, new MinimumRandom()); Creature boss = a.Engage(10184); var ai = (OnyxiaAI)boss.AI!;
+        boss.Health = 6000; ai.OnUpdate(1); ai.OnMovementInform(MovementGeneratorType.Point, 9); ai.OnUpdate(3500);
+        ai.OnMovementInform(MovementGeneratorType.Point, 10); a.Spells.Casts.Clear();
+        ai.OnUpdate(25000); Assert.Contains(a.Spells.Casts, c => c.Spell == 17086); // the breath's SpellHit never arrives
+        a.Spells.Casts.Clear(); ai.OnUpdate(5000);
+        Assert.Contains(a.Spells.Casts, c => c.Spell == 18392); // fireballs are not gated on the breath or a move
+        ai.OnUpdate(25000); Assert.Contains(a.Spells.Casts, c => c.Spell == 18351); // the next movement action is not latched either
+        ai.OnSpellHit(boss, new SpellInfo { Id = 18351 }); // starts the cross move; its MovementInform never arrives
+        a.Spells.Casts.Clear(); ai.OnUpdate(5000); Assert.Contains(a.Spells.Casts, c => c.Spell == 18392);
+        boss.Health = 4000; ai.OnUpdate(1); Assert.Equal(OnyxiaAI.OnyxiaPhase.Landing, ai.Phase); // lands at once at <=40%
+    }
+    [Fact]
+    public void Onyxia_LandingWaitsOnlyForASpellBeingCast()
+    {
+        using var a = new Arena(true); Creature boss = a.Engage(10184); var ai = (OnyxiaAI)boss.AI!;
+        boss.Health = 6000; ai.OnUpdate(1); ai.OnMovementInform(MovementGeneratorType.Point, 9); ai.OnUpdate(3500);
+        ai.OnMovementInform(MovementGeneratorType.Point, 10);
+        boss.Health = 4000; a.Caster.Fail = true; ai.OnUpdate(1); Assert.Equal(OnyxiaAI.OnyxiaPhase.Flight, ai.Phase);
+        a.Caster.Fail = false; ai.OnUpdate(1); Assert.Equal(OnyxiaAI.OnyxiaPhase.Landing, ai.Phase);
+    }
+    [Fact]
     public void Onyxia_WhelpSpawnerWaitsForTrigger_ThenSummonsExactlyOnce()
     {
         using var a = new Arena(true);
@@ -312,8 +335,76 @@ public sealed class RaidBossTests
         foreach (uint delay in new uint[] { 8700, 11700, 8700, 16500 }) ai.OnUpdate(delay);
         Assert.Contains(a.Spells.Casts, c => c.Spell == 19773 && ReferenceEquals(c.Target, domo));
         Assert.False(ai.StartSummonEvent(a.Player)); Assert.Single(a.Creatures.Creatures, c => c.Entry == 11502);
+        // The real Elemental Fire hit (spell 19773 through SpellSystem) is RaidHostTests.ElementalFire_KillsMajordomoThroughTheSpellSystem_...;
+        // the FakeCaster here records the cast without resolving its targets, so the hit is delivered by hand.
         var ragAi = (RagnarosAI)rag.AI!;
         ragAi.OnSpellHitTarget(domo, new SpellInfo { Id = 19773 }); ragAi.OnUpdate(10000); ragAi.OnUpdate(3000);
         Assert.Equal(0u, (uint)(rag.UnitFlags & UnitFlags.NonAttackable2));
+    }
+    [Fact]
+    public void Ragnaros_PhaseChangesDoNotWaitForTheSonsOrEmergeCast()
+    {
+        // boss_ragnaros.cpp HandlePhaseTransition submerges whatever the Sons summon returns and emerges unconditionally.
+        using var a = new Arena(); Creature boss = a.Engage(11502); var ai = Assert.IsType<RagnarosAI>(boss.AI);
+        a.Caster.Fail = true;
+        ai.OnUpdate(180000); Assert.Equal(RagnarosAI.RagnarosPhase.Submerging, ai.Phase);
+        ai.OnUpdate(3000); ai.OnUpdate(90000); Assert.Equal(RagnarosAI.RagnarosPhase.Emerging, ai.Phase);
+        ai.OnUpdate(500); Assert.Equal(RagnarosAI.RagnarosPhase.Emerged, ai.Phase); Assert.True(ai.MeleeEnabled);
+        a.Caster.Fail = false; ai.OnUpdate(20000);
+        Assert.Contains(a.Spells.Casts, c => c.Spell == 20566); // Wrath of Ragnaros resumes after the emerge
+    }
+    [Theory]
+    // ClassicDB z2815 creature_linking_template rows with FLAG_TO_AGGRO_ON_AGGRO (0x2).
+    [InlineData(11661u, 12259u, 2u)]
+    [InlineData(11662u, 12098u, 7u)]
+    [InlineData(11672u, 11988u, 6u)]
+    [InlineData(12099u, 12057u, 3u)]
+    [InlineData(11663u, 12018u, 8u)]
+    [InlineData(11664u, 12018u, 8u)]
+    public void PullingALinkedAdd_PullsItsBoss(uint add, uint master, uint encounter)
+    {
+        using var a = new Arena();
+        Creature boss = a.Spawn(master); Creature slave = a.Spawn(add);
+        Assert.False(boss.Combat.IsInCombat);
+        Assert.True(a.Creatures.AttackStart(slave, a.Player));
+        Assert.True(boss.Combat.IsInCombat); Assert.Same(a.Player, boss.Combat.Victim);
+        Assert.Equal(EncounterState.InProgress, a.Raid.GetData(encounter));
+    }
+    [Fact]
+    public void LinkWithoutToAggroFlag_DoesNotPullTheBoss()
+    {
+        using var a = new Arena();
+        Creature magmadar = a.Spawn(11982); Creature hound = a.Spawn(11673); // flag 1024: CANT_SPAWN_IF_BOSS_DEAD only
+        Assert.True(a.Creatures.AttackStart(hound, a.Player));
+        Assert.False(magmadar.Combat.IsInCombat);
+    }
+    [Theory]
+    // FLAG_CANT_SPAWN_IF_BOSS_DEAD (0x400) rows: 1031/1543 guards and the 1024-only Ancient Core Hound and Lava Surger.
+    [InlineData(11661u, 2u)]
+    [InlineData(11662u, 7u)]
+    [InlineData(11672u, 6u)]
+    [InlineData(12099u, 3u)]
+    [InlineData(11673u, 1u)]
+    [InlineData(12101u, 3u)]
+    public void LinkedTrash_DoesNotStayAfterItsBossIsDone(uint add, uint encounter)
+    {
+        using var a = new Arena();
+        a.Raid.SetData(encounter, EncounterState.Done);
+        Creature slave = a.Spawn(add);
+        Assert.Contains(slave, a.Creatures.Creatures);
+        a.World.RunTick(50); a.World.RunTick(50);
+        Assert.DoesNotContain(slave, a.Creatures.Creatures); // a temporary creature's forced despawn removes it outright
+    }
+    [Fact]
+    public void MajordomoAdds_LeaveTheirCorpses_UntilTheOutroRemovesThem()
+    {
+        using var a = new Arena(); var raid = (MoltenCoreInstance)a.Raid;
+        Creature domo = a.Spawn(12018); raid.SpawnGuards(domo);
+        Creature add = a.Creatures.Creatures.First(c => c.Entry == 11663);
+        a.Map.Combat.Kill(a.Player, add);
+        for (int i = 0; i < 5; i++) a.World.RunTick(100);
+        Assert.Contains(add, a.Creatures.Creatures); Assert.False(add.IsAlive); // TEMPSPAWN_MANUAL_DESPAWN: lootable corpse
+        domo.AI!.OnEvade(); // MajordomoAI unsummons its adds (UnsummonMajordomoAdds)
+        Assert.DoesNotContain(add, a.Creatures.Creatures);
     }
 }

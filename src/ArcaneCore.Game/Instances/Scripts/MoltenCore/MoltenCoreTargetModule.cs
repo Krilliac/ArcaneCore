@@ -13,21 +13,24 @@ public sealed class MoltenCoreTargetModule : ISpellHandlerModule
     {
         foreach (uint spell in new uint[] { 20553, 20619, 21075, 21086, 21087, 21094, 23487 })
             system.RegisterSpellTargetSelector(spell, (SpellImplicitTarget)7, Area);
-        foreach (uint spell in new uint[] { 19515, 20482, 20553, 21090 })
+        // 19773 Elemental Fire (Ragnaros kills Majordomo): Spell.dbc 5875 effect 1 INSTAKILL, target A 38, range index 6 (100 yd);
+        // ClassicDB z2815 spell_script_target (19773,1,12018).
+        foreach (uint spell in new uint[] { 19515, 19773, 20482, 20553, 21090 })
             system.RegisterSpellTargetSelector(spell, (SpellImplicitTarget)38, Nearest);
         system.RegisterCastCheck(new RaidDatabaseDestination());
     }
     private static List<(Unit Unit, float Multiplier)> Area(SpellSystem system, SpellCast cast, SpellEffectInfo effect, Unit? explicitTarget)
         => Select(cast, effect, false);
     private static List<(Unit Unit, float Multiplier)> Nearest(SpellSystem system, SpellCast cast, SpellEffectInfo effect, Unit? explicitTarget)
-        => Select(cast, effect, true);
-    private static List<(Unit Unit, float Multiplier)> Select(SpellCast cast, SpellEffectInfo effect, bool nearest)
+        => Select(cast, effect, true, explicitTarget);
+    private static List<(Unit Unit, float Multiplier)> Select(SpellCast cast, SpellEffectInfo effect, bool nearest, Unit? explicitTarget = null)
     {
         if (cast.Caster.Map?.FindUpdater<MoltenCoreInstance>() is not { } raid
             || raid.Instance.FindUpdater<CreatureMapSystem>() is not { } creatures) return [];
         uint[] entries = cast.Spell.Id switch
         {
             19515 => [12057],
+            19773 => [12018],
             20482 => [12099],
             20553 => [11672],
             21087 => [11663],
@@ -35,6 +38,8 @@ public sealed class MoltenCoreTargetModule : ISpellHandlerModule
             _ => []
         };
         float radius = effect.Radius > 0 ? effect.Radius : cast.Spell.Range.Max;
+        // Spell::CheckScriptTargeting: an entry search with the 50000 yd "anywhere" range looks 200 yd around the caster.
+        if (nearest && radius >= 50000f) radius = 200f;
         float Distance(Unit target)
         {
             float dx = target.X - cast.Caster.X, dy = target.Y - cast.Caster.Y, dz = target.Z - cast.Caster.Z;
@@ -43,7 +48,15 @@ public sealed class MoltenCoreTargetModule : ISpellHandlerModule
         IEnumerable<Unit> targets = creatures.Creatures.Cast<Unit>().Concat(raid.Instance.Players)
             .Where(u => u.IsAlive && (entries.Length == 0 || u is Creature c && entries.Contains(c.Entry))
                 && Distance(u) <= MathF.Pow(radius + u.BoundingRadius + cast.Caster.BoundingRadius, 2));
-        if (nearest) targets = targets.OrderBy(Distance).ThenBy(u => u.Guid.Value).Take((int)Math.Max(1u, effect.ChainTarget));
+        if (nearest)
+        {
+            // CheckScriptTargeting takes the explicit unit first when it is a live creature of a listed entry in range, then the nearest others.
+            Unit[] inRange = targets.ToArray();
+            Unit? first = explicitTarget is Creature && inRange.Contains(explicitTarget) ? explicitTarget : null;
+            IEnumerable<Unit> ordered = inRange.Where(u => !ReferenceEquals(u, first)).OrderBy(Distance).ThenBy(u => u.Guid.Value);
+            if (first is not null) ordered = ordered.Prepend(first);
+            targets = ordered.Take((int)Math.Max(1u, effect.ChainTarget));
+        }
         else if (cast.Spell.MaxAffectedTargets > 0) targets = targets.Take((int)cast.Spell.MaxAffectedTargets);
         return targets.Select(u => (u, 1f)).ToList();
     }

@@ -6,7 +6,10 @@ using ArcaneCore.Protocol;
 namespace ArcaneCore.Game.Instances.Scripts.Onyxia;
 
 /// <summary>mangos-classic kalimdor/onyxias_lair/boss_onyxia.cpp boss_onyxiaAI: ExecuteAction, MovementInform,
-/// PhaseTransition, HandlePhaseTransition, SummonWhelps, SpellHit. Movement completion, not elapsed travel time, advances phases.</summary>
+/// PhaseTransition, HandlePhaseTransition, SummonWhelps, SpellHit. Movement completion, not elapsed travel time, advances the liftoff
+/// and landing phases. In flight nothing waits for a breath or a move to finish: as in the reference, the fireball and movement actions and
+/// the 40% landing only wait while a spell is being cast (CombatAI's IsNonMeleeSpellCasted gate), so a lost breath or a replaced move
+/// cannot hold Onyxia in the air.</summary>
 public sealed class OnyxiaAI(Creature creature, OnyxiaInstance instance) : RaidCreatureAI(creature, instance, 0)
 {
     public enum OnyxiaPhase { Ground, ToLiftoff, LiftingOff, FlyingNorth, Flight, Landing, LandingDelay, Final }
@@ -20,7 +23,7 @@ public sealed class OnyxiaAI(Creature creature, OnyxiaInstance instance) : RaidC
         new(18609,-16.70134f,-181.4501f,-61.98513f),new(18584,12.26687f,-181.1084f,-60.23914f)]);
     private uint _transition, _movement, _whelps;
     private int _waveCount, _waveSize;
-    private bool _firstWave, _breathing, _moving;
+    private bool _firstWave;
     private bool _lured;
     private readonly HashSet<ObjectGuid> _summons = [];
     protected override void Reset()
@@ -29,7 +32,7 @@ public sealed class OnyxiaAI(Creature creature, OnyxiaInstance instance) : RaidC
         Phase = OnyxiaPhase.Ground; FlightPoint = 0;
         Me.StandState = StandState.Sleep;
         _transition = _movement = _whelps = 0;
-        _waveCount = 0; _waveSize = 20; _firstWave = true; _breathing = _moving = false;
+        _waveCount = 0; _waveSize = 20; _firstWave = true;
         _lured = false;
         SetMeleeEnabled(true); CombatMovement = true;
         Me.RemoveMovementFlags(MovementFlags.Flying | MovementFlags.Hover);
@@ -87,7 +90,7 @@ public sealed class OnyxiaAI(Creature creature, OnyxiaInstance instance) : RaidC
         }
         else if (pointId == 10 && Phase == OnyxiaPhase.FlyingNorth)
         {
-            Phase = OnyxiaPhase.Flight; _movement = 25000; _moving = false;
+            Phase = OnyxiaPhase.Flight; _movement = 25000;
             Cast(18430, triggered: true); Cast(19951, triggered: true);
             ClearActions(); Spell(18392, 0, 0, 3000, 5000, PlayerTarget);
         }
@@ -98,14 +101,11 @@ public sealed class OnyxiaAI(Creature creature, OnyxiaInstance instance) : RaidC
             System?.RemoveAuras(Me, 19951);
             Phase = OnyxiaPhase.LandingDelay; _transition = 2000;
         }
-        else if (pointId < 8 && Phase == OnyxiaPhase.Flight)
-        {
-            _moving = _breathing = false; Cast(18430, triggered: true);
-        }
+        else if (pointId < 8 && Phase == OnyxiaPhase.Flight) Cast(18430, triggered: true);
     }
     public override void OnSpellHit(Unit caster, SpellInfo spell)
     {
-        if (Phase != OnyxiaPhase.Flight || !_breathing || !FlightPath.Any(p => p.Breath == spell.Id)) return;
+        if (Phase != OnyxiaPhase.Flight || !FlightPath.Any(p => p.Breath == spell.Id)) return;
         MoveTo(FlightPoint, (uint)FlightPoint);
         Cast(22191, triggered: true);
     }
@@ -115,7 +115,7 @@ public sealed class OnyxiaAI(Creature creature, OnyxiaInstance instance) : RaidC
     }
     private void MoveTo(int point, uint id)
     {
-        var p = FlightPath[point]; _moving = true;
+        var p = FlightPath[point];
         Me.Motion.MovePoint(id, p.X, p.Y, p.Z, run: true);
     }
     public override void OnUpdate(uint diffMs)
@@ -129,10 +129,11 @@ public sealed class OnyxiaAI(Creature creature, OnyxiaInstance instance) : RaidC
             Me.Motion.MovePoint(9, FlightPath[4].X, FlightPath[4].Y, -84.25523f, run: true);
             return;
         }
-        if (Phase == OnyxiaPhase.Flight && Below(40) && !_moving && !_breathing)
+        // ONYXIA_PHASE_3_TRANSITION: at or below 40% as soon as no spell is being cast; the landing move replaces any flight move.
+        if (Phase == OnyxiaPhase.Flight && Below(40) && !IsCasting)
         {
             Say(8290); Phase = OnyxiaPhase.Landing;
-            System?.InterruptCast(Me); System?.RemoveAuras(Me, 18430);
+            System?.RemoveAuras(Me, 18430);
             Me.Motion.MovePoint(11, -1.060547f, -229.9293f, -86.14094f, run: true);
             return;
         }
@@ -153,17 +154,17 @@ public sealed class OnyxiaAI(Creature creature, OnyxiaInstance instance) : RaidC
         }
         if (Phase == OnyxiaPhase.Flight)
         {
-            if (_moving || _breathing) return;
-            if (Due(ref _movement, diffMs))
+            // ONYXIA_MOVEMENT: retried each update while a spell is being cast, otherwise not gated on the previous move.
+            if (Due(ref _movement, diffMs) && !IsCasting)
             {
                 uint choice = Random(0, 2);
                 if (choice == 0)
                 {
                     // SpellHit may fire synchronously: publish the destination before casting.
                     uint spell = FlightPath[FlightPoint].Breath;
-                    int old = FlightPoint; FlightPoint = (FlightPoint + 4) % 8; _breathing = true;
+                    int old = FlightPoint; FlightPoint = (FlightPoint + 4) % 8;
                     Say(7213);
-                    if (!Cast(spell)) { FlightPoint = old; _breathing = false; return; }
+                    if (!Cast(spell)) { FlightPoint = old; return; }
                     _movement = 25000;
                 }
                 else

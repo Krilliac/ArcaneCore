@@ -62,6 +62,13 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
                 SummonGuard(creature, target); // vmangos Creature::OnEnterCombat (Creature.cpp:3689-3690)
             }
 
+            // cmangos Unit::SetInCombatWith (Unit.cpp:8004-8008): InstanceData::OnCreatureEnterCombat, then the aggro linking event.
+            Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureEnterCombat(creature, target);
+            if (!creature.IsAlive || creature.IsEvading)
+            {
+                return true;
+            }
+
             CallAssistance(creature, target);
         }
 

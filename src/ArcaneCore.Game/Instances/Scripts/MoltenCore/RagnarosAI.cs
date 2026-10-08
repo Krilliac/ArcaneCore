@@ -102,7 +102,9 @@ public sealed class RagnarosAI(Creature creature, MoltenCoreInstance instance) :
             switch (Phase)
             {
                 case RagnarosPhase.Emerged:
-                    if (!Cast(21108)) return; // DBC trigger spells supply the eight summon positions; no invented coordinates
+                    // HandlePhaseTransition submerges whether or not the Sons summon succeeds. DBC trigger spells supply the eight
+                    // summon positions; no invented coordinates.
+                    Cast(21108);
                     Cast(20567, triggered: true); Cast(21859, triggered: true);
                     Me.UnitFlags |= UnitFlags.NotSelectable;
                     SetMeleeEnabled(false);
@@ -114,7 +116,7 @@ public sealed class RagnarosAI(Creature creature, MoltenCoreInstance instance) :
                     foreach (uint spell in new uint[] { 21107, 21859, 20567 }) System?.RemoveAuras(Me, spell);
                     Phase = RagnarosPhase.Emerging; _phaseTimer = 500; break;
                 case RagnarosPhase.Emerging:
-                    if (!Cast(20568)) return;
+                    Cast(20568); // emerges unconditionally, as HandlePhaseTransition does
                     Me.UnitFlags &= ~UnitFlags.NotSelectable;
                     SetMeleeEnabled(true); Phase = RagnarosPhase.Emerged; _phaseTimer = 180000;
                     GroundActions(true); break;

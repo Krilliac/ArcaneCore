@@ -20,6 +20,8 @@ public abstract class RaidCreatureAI(Creature creature, ScriptedInstance instanc
     protected uint Random(uint min, uint max) => (uint)(System?.RandomInt((int)min, (int)max) ?? (int)min);
     protected bool Below(uint percent) => (ulong)Me.Health * 100 <= (ulong)Me.MaxHealth * percent;
     protected void Say(int text) => System?.SayText(Me, text);
+    /// <summary>Unit::IsNonMeleeSpellCasted(false): CombatAI does not run its combat actions while the creature prepares a spell.</summary>
+    protected bool IsCasting => System?.AiServices.Spells?.IsCasting(Me) ?? false;
     protected bool Cast(uint spell, Unit? target = null, bool triggered = false)
         => DoCast(target ?? Me, spell, triggered) == CreatureCastResult.Ok;
     protected Unit? RandomTarget(Func<Unit, bool>? predicate = null)

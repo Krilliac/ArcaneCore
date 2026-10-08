@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 
 namespace ArcaneCore.Game.Instances.Scripts.MoltenCore;
@@ -82,13 +83,34 @@ public sealed class MoltenCoreInstance(Map map) : ScriptedInstance(map, 10)
         if (circle >= 0 && Encounters[circle + 1] is EncounterState.Done or EncounterState.Special)
             go.LootState = GameObjectLootState.JustDeactivated;
     }
+    // ClassicDB z2815 409_molten_core.sql creature_linking_template, all eight rows for map 409 (search_range 0): slave entry -> master entry,
+    // flag. cmangos CreatureLinkingMgr.h: 0x1 AGGRO_ON_AGGRO, 0x2 TO_AGGRO_ON_AGGRO, 0x4 RESPAWN_ON_EVADE, 0x200 FOLLOW, 0x400 CANT_SPAWN_IF_BOSS_DEAD.
+    // AGGRO_ON_AGGRO and RESPAWN_ON_EVADE are carried by the master's AI (MoltenCoreBossAI.OnAggro/OnEvade, MajordomoAI.OnAggro/OnEvade);
+    // TO_AGGRO_ON_AGGRO by OnCreatureEnterCombat; CANT_SPAWN_IF_BOSS_DEAD by OnCreatureCreate. FOLLOW (Firesworn -> Garr) is not carried.
+    internal static IReadOnlyDictionary<uint, (uint Master, uint Flags)> Links { get; } = new Dictionary<uint, (uint Master, uint Flags)>
+    {
+        [11661] = (12259, 1031), [11662] = (12098, 1031), [11663] = (12018, 7), [11664] = (12018, 7),
+        [11672] = (11988, 1031), [11673] = (11982, 1024), [12099] = (12057, 1543), [12101] = (12057, 1024),
+    };
+    private const uint LinkToAggroOnAggro = 0x2, LinkCantSpawnIfBossDead = 0x400;
     public override void OnCreatureCreate(Creature creature)
     {
         StoreCreature(creature);
         if (creature.System is { } system) Register(system);
-        uint? boss = creature.Entry switch { 11661 => 2u, 12099 => 3u, 11672 => 6u, 11662 => 7u, _ => (uint?)null };
-        if (boss is { } type && GetData(type) is EncounterState.Done or EncounterState.Special)
-            creature.System?.ForcedDespawn(creature, 1); // ClassicDB FLAG_CANT_SPAWN_IF_BOSS_DEAD
+        // FLAG_CANT_SPAWN_IF_BOSS_DEAD: the encounter's state stands in for the master's respawn state (the bosses never respawn once done).
+        if (Links.TryGetValue(creature.Entry, out var link) && (link.Flags & LinkCantSpawnIfBossDead) != 0
+            && BossEntries.ToList().IndexOf(link.Master) is >= 0 and var type && GetData((uint)type) is EncounterState.Done or EncounterState.Special)
+            creature.System?.ForcedDespawn(creature, 1);
+    }
+    /// <summary>cmangos CreatureLinkingHolder::DoCreatureLinkingEvent(LINKING_EVENT_AGGRO), master case: a slave whose row has
+    /// FLAG_TO_AGGRO_ON_AGGRO pulls its living master; a master already fighting only gains the enemy (threat and combat).</summary>
+    public override void OnCreatureEnterCombat(Creature creature, Unit enemy)
+    {
+        if (!Links.TryGetValue(creature.Entry, out var link) || (link.Flags & LinkToAggroOnAggro) == 0
+            || creature.System is not { } system) return;
+        Creature? master = system.Creatures.FirstOrDefault(c => c.Entry == link.Master && c.IsAlive);
+        if (master is null || master.IsCharmerOrOwnerPlayerOrPlayerItself || !enemy.IsAlive) return; // pMaster->IsControlledByPlayer()
+        system.EnterCombatWithTarget(master, enemy);
     }
     internal void SetLavaPresentation(bool visible)
     {
@@ -145,7 +167,10 @@ public sealed class MoltenCoreInstance(Map map) : ScriptedInstance(map, 10)
             (11663,746.939f,-1194.87f,-118.016f,2.21657f),(11663,747.132f,-1158.87f,-118.897f,4.03171f),
             (11663,757.116f,-1170.12f,-118.793f,3.40339f),(11663,755.910f,-1184.46f,-118.449f,2.80998f)
         ];
-        foreach (var p in positions) domo.System?.SummonCorpseDespawn(domo, p.Entry, p.X, p.Y, p.Z, p.O);
+        // TEMPSPAWN_MANUAL_DESPAWN: the corpses stay lootable; MajordomoAI removes the adds at its outro or on evade.
+        if (domo.System is not { } system) return;
+        foreach (var p in positions)
+            if (system.Content.FindTemplate(p.Entry) is { } template) system.SpawnTemporary(template, p.X, p.Y, p.Z, p.O, domo);
     }
     private sealed class RuneAI(MoltenCoreInstance raid) : IGameObjectAi
     {

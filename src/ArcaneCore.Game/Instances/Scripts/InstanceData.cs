@@ -99,6 +99,15 @@ public abstract class InstanceData : IMapUpdater
     {
     }
 
+    /// <summary>
+    /// cmangos <c>InstanceData::OnCreatureEnterCombat</c> (called from Unit::SetInCombatWith after the AI's aggro hook): a creature of the
+    /// instance entered combat with <paramref name="enemy"/>. The enemy is passed so a script can carry the cmangos aggro linking event
+    /// (CreatureLinkingHolder::DoCreatureLinkingEvent LINKING_EVENT_AGGRO) for its own creature_linking_template rows.
+    /// </summary>
+    public virtual void OnCreatureEnterCombat(Creature creature, Unit enemy)
+    {
+    }
+
     /// <summary>vmangos <c>OnObjectCreate</c>: a game object was added to the instance map (grid load, summon); it is not visible yet.</summary>
     public virtual void OnObjectCreate(GameObject go)
     {
