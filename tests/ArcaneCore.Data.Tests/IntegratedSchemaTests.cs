@@ -93,6 +93,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(RelayScriptDataModule), DatabaseComponent.World, RelayScriptDataModule.Version),
             (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundWorldDataModule.Version),
             (typeof(ArcaneCore.Data.World.Transports.TransportWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportWorldDataModule.Version),
+            (typeof(DbScriptDataModule), DatabaseComponent.World, DbScriptDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -150,11 +151,12 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Assert.DoesNotContain(WorldDbContext.IndexRepairVersion, DataModules.For(DatabaseComponent.World).Select(m => m.SchemaVersion));
 
         // Wave 2 (docs/integration/wave2-20261007.md): every step is real. No placeholder is registered, and the lanes' modules
-        // were renumbered down so the plan's unclaimed numbers left no gap: world 38-41, characters 35-40.
+        // were renumbered down so the plan's unclaimed numbers left no gap: world 38-41, characters 35-40. World 42 is the quest-scripts lane's
+        // DB script step (DbScriptDataModule).
         Assert.DoesNotContain(DataModules.All, m => m is IReservedSchemaGap);
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
-        Assert.Equal(41, WorldDbContext.Schema.CurrentVersion);
+        Assert.Equal(42, WorldDbContext.Schema.CurrentVersion);
         Assert.Equal(40, CharacterDbContext.Schema.CurrentVersion);
         Assert.Equal(4, AuthDbContext.Schema.CurrentVersion);
 

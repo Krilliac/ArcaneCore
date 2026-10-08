@@ -34,7 +34,9 @@ public static partial class ContentImporterCli
     /// transaction, and only when the inputs carry it, so a second run with the same inputs leaves the same rows and a failure changes nothing.
     /// Tables: <c>world_safe_locs</c> and <c>game_graveyard_zone</c> (dump; <c>WorldSafeLocs.dbc</c> fills ids the dump lacks), the battleground
     /// tables, <c>exploration_basexp</c> and <c>game_weather</c>, <c>areatrigger_tavern</c>, <c>transports</c>, <c>spell_proc_event</c> (build
-    /// 5875, cooldown unit from the dump's classic-db revision unless given), the relay DB scripts, <c>areatrigger_template</c> from
+    /// 5875, cooldown unit from the dump's classic-db revision unless given), the relay DB scripts, the quest, gossip and event DB scripts and
+    /// <c>script_waypoint</c> (world 42; the script ids of the <c>quest_template</c> and <c>gossip_menu</c> rows the world has are set, and the
+    /// gossip options that run a script are added when missing), <c>areatrigger_template</c> from
     /// <c>AreaTrigger.dbc</c>, and <c>taxi_nodes</c> / <c>taxi_path</c> from <c>TaxiNodes.dbc</c> / <c>TaxiPath.dbc</c>. The ships' own
     /// <c>gameobject_template</c> rows (type 15) are written as the dump has them; every other object template is left alone. With
     /// <c>Map.dbc</c> and <c>AreaTable.dbc</c> in <c>--dbc-dir</c> it also replaces <c>map_template</c> (every map, the dungeon columns from
@@ -96,6 +98,8 @@ public static partial class ContentImporterCli
         var transports = new TransportDumpImporter();
         var relays = new CreatureDumpImporter();
         var instances = new InstanceTemplateDumpImporter();
+        var dbScripts = new DbScriptDumpImporter();
+        var gossip = new NpcDumpImporter();
         WorldStateContent worldState;
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
@@ -131,6 +135,20 @@ public static partial class ContentImporterCli
         {
             instances.Read(reader);
         }
+
+        // World schema 42: the quest, gossip and event DB scripts, script_waypoint, the script ids of quest_template and gossip_menu, and the
+        // gossip options that run a script (older importers skipped those options).
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            dbScripts.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            gossip.Read(reader);
+        }
+
+        IReadOnlyCollection<GossipMenuOption> scriptedOptions = gossip.ScriptedOptions;
 
         SpellProcEventParseResult? procs = null;
         if (scan.Tables.TryGetValue(SpellProcEventDataModule.Table, out TableScan? procTable) && procTable.Rows > 0)
@@ -265,6 +283,14 @@ public static partial class ContentImporterCli
         Count(SpellProcEventDataModule.Table, procs?.Content.Count ?? 0, procs is not null);
         Count("dbscripts_on_relay", relaySteps.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count("dbscript_relay_template", relayTemplates.Count, relaySteps.Count + relayTemplates.Count > 0);
+        foreach ((string table, int rows) in dbScripts.Counts)
+        {
+            Count(table, rows, dbScripts.HasRows);
+        }
+
+        Count("quest_template (StartScript/CompleteScript)", dbScripts.QuestScripts.Count, dbScripts.QuestScripts.Count > 0);
+        Count("gossip_menu (script_id)", dbScripts.MenuScripts.Count, dbScripts.MenuScripts.Count > 0);
+        Count("gossip_menu_option (action_script_id)", scriptedOptions.Count, scriptedOptions.Count > 0);
         Count(MapDataModule.AreaTriggerTemplateTable, triggers?.Count ?? 0, triggers is not null);
         Count(MapDataModule.MapTemplateTable, mapTables?.Maps.Count ?? 0, mapTables is not null);
         Count(MapDataModule.AreaTemplateTable, mapTables?.Areas.Count ?? 0, mapTables is not null);
@@ -304,6 +330,8 @@ public static partial class ContentImporterCli
                     await transports.ReplaceAsync(db, token).ConfigureAwait(false);
                     await transports.ReplaceShipTemplatesAsync(db, token).ConfigureAwait(false);
                     await relays.ReplaceRelayScriptsAsync(db, token).ConfigureAwait(false);
+                    await dbScripts.ReplaceAsync(db, token).ConfigureAwait(false);
+                    await UpsertScriptedGossipOptionsAsync(db, scriptedOptions, token).ConfigureAwait(false);
                     if (procs is not null)
                     {
                         await db.Set<SpellProcEventRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
@@ -362,6 +390,27 @@ public static partial class ContentImporterCli
         PrintWarnings(o, warnings);
         WriteReport(reportPath, ContentImportReport.Create("refresh", files, scan, warnings, dryRun) with { Imported = counts });
         return ExitCodes.Ok;
+    }
+
+    /// <summary>
+    /// The gossip options that run a <c>dbscripts_on_gossip</c> script: an existing row (menu_id, id) takes the dump's
+    /// <c>action_script_id</c>; a missing one (importers before world schema 42 skipped them) is added as the dump has it. A second run
+    /// changes nothing.
+    /// </summary>
+    private static async Task UpsertScriptedGossipOptionsAsync(WorldDbContext db, IReadOnlyCollection<GossipMenuOption> options, CancellationToken ct)
+    {
+        foreach (GossipMenuOption option in options)
+        {
+            int updated = await db.Set<GossipMenuOption>().Where(o => o.MenuId == option.MenuId && o.Id == option.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(o => o.ActionScriptId, option.ActionScriptId), ct).ConfigureAwait(false);
+            if (updated == 0)
+            {
+                db.Add(option);
+            }
+        }
+
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        db.ChangeTracker.Clear();
     }
 
     /// <summary>

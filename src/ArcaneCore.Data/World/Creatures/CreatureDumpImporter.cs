@@ -53,6 +53,15 @@ public sealed record CreatureImportReport(
 
     /// <summary>Type-1 (relay) rows of <c>dbscript_random_templates</c>.</summary>
     public int RelayScriptTemplates { get; init; }
+
+    /// <summary>Rows of <c>dbscripts_on_quest_start</c>, <c>_quest_end</c>, <c>_gossip</c> and <c>_event</c> together (world schema 42).</summary>
+    public int DbScriptSteps { get; init; }
+
+    /// <summary><c>script_waypoint</c> rows (ScriptDev2 escort paths; world schema 42).</summary>
+    public int ScriptWaypoints { get; init; }
+
+    /// <summary>Rows per world-schema-42 table (the four DB script tables and <c>script_waypoint</c>).</summary>
+    public IReadOnlyDictionary<string, int> DbScriptTables { get; init; } = new Dictionary<string, int>();
 }
 
 /// <summary>
@@ -93,11 +102,15 @@ public sealed class CreatureDumpImporter
     private readonly Dictionary<uint, List<RelayScriptRow>> _relaySteps = [];
     private readonly HashSet<uint> _relayIdsThisRead = [];
     private readonly Dictionary<(uint, uint), RelayScriptTemplateRow> _relayTemplates = [];
+    private readonly DbScriptDumpImporter _dbScripts = new();
     private bool _warnedVMangosAiEvents;
     private readonly List<string> _warnings = [];
     private int _skippedSpawns;
 
     public CreatureDumpDialect Dialect { get; private set; }
+
+    /// <summary>The quest, gossip and event DB scripts and <c>script_waypoint</c> rows read with the creature tables (world schema 42).</summary>
+    public DbScriptDumpImporter DbScripts => _dbScripts;
 
     /// <summary>
     /// How template <c>ExtraFlags</c> / <c>flags_extra</c> are decoded. <see cref="CreatureExtraFlagsDialect.Unknown"/> (the
@@ -110,6 +123,7 @@ public sealed class CreatureDumpImporter
     public void Read(TextReader dump)
     {
         _relayIdsThisRead.Clear();
+        _dbScripts.BeginRead();
         var reader = new MySqlDumpReader(dump);
         foreach (object item in reader.Read())
         {
@@ -166,6 +180,13 @@ public sealed class CreatureDumpImporter
                     break;
                 case "dbscripts_on_relay":
                     ReadRelayStep(row);
+                    break;
+                case DbScriptDataModule.QuestStartTable:
+                case DbScriptDataModule.QuestEndTable:
+                case DbScriptDataModule.GossipTable:
+                case DbScriptDataModule.EventTable:
+                case DbScriptDataModule.WaypointTable:
+                    _dbScripts.Accept(row);
                     break;
                 case "broadcast_text":
                     ReadBroadcastText(row);
@@ -235,6 +256,7 @@ public sealed class CreatureDumpImporter
                 await db.Set<CreatureTextTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<RelayScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<RelayScriptTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                await DbScriptDumpImporter.DeleteAllAsync(db, cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureAddonRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureMovementRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
                 await db.Set<CreatureMovementTemplateRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
@@ -258,6 +280,7 @@ public sealed class CreatureDumpImporter
             await InsertBatchedAsync(db, _textTemplates.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _relaySteps.Values.SelectMany(rows => rows), cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _relayTemplates.Values, cancellationToken).ConfigureAwait(false);
+            await _dbScripts.InsertAllAsync(db, cancellationToken).ConfigureAwait(false);
 
             if (savepoint is not null)
             {
@@ -332,6 +355,9 @@ public sealed class CreatureDumpImporter
         AiTextTemplates = _textTemplates.Count,
         RelayScriptSteps = _relaySteps.Values.Sum(rows => rows.Count),
         RelayScriptTemplates = _relayTemplates.Count,
+        DbScriptSteps = _dbScripts.ScriptRows.Count,
+        ScriptWaypoints = _dbScripts.WaypointRowsToWrite.Count,
+        DbScriptTables = _dbScripts.Counts,
     };
 
     /// <summary>The relay DB script rows and relay templates that would be written (for inspection and tests).</summary>

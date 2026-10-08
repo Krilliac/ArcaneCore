@@ -30,6 +30,10 @@ public sealed class DbScriptCatalog
     public IReadOnlyList<RelayScriptStep> Get(DbScriptKind kind, uint id)
         => _tables.TryGetValue(kind, out RelayScriptCatalog? table) ? table.Get(id) : [];
 
+    /// <summary>Every step of every namespace.</summary>
+    public IEnumerable<(DbScriptKind Kind, RelayScriptStep Step)> AllSteps
+        => _tables.SelectMany(table => table.Value.AllSteps.Select(step => (table.Key, step)));
+
     public int StepCount(DbScriptKind kind)
         => _tables.TryGetValue(kind, out RelayScriptCatalog? table) ? table.StepCount : 0;
 }

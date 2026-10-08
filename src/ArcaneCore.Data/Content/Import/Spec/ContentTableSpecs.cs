@@ -173,6 +173,16 @@ public static class ContentTableSpecs
                 "datalong2", "datalong3", "search_radius", "data_flags", "dataint2", "dataint3", "dataint4", "datafloat",
                 "z", "o", "speed", "condition_id",
             ], []),
+        // World schema 42: the quest, gossip and event DB scripts (the relay layout, no key; DbScriptDumpImporter) and ScriptDev2's escort paths.
+        .. new[] { "dbscripts_on_quest_start", "dbscripts_on_quest_end", "dbscripts_on_gossip", "dbscripts_on_event" }.Select(table => new TableSpec(table,
+            [new KeyColumn("id"), new KeyColumn("delay"), new KeyColumn("priority"), new KeyColumn("command"), new KeyColumn("datalong"),
+             new KeyColumn("buddy_entry"), new KeyColumn("dataint"), new KeyColumn("x"), new KeyColumn("y")],
+            [
+                "datalong2", "datalong3", "search_radius", "data_flags", "dataint2", "dataint3", "dataint4", "datafloat",
+                "z", "o", "speed", "condition_id",
+            ], [])),
+        new("script_waypoint", [new KeyColumn("Entry"), new KeyColumn("PathId"), new KeyColumn("Point")],
+            ["PositionX", "PositionY", "PositionZ", "Orientation", "WaitTime", "ScriptId"], []),
         new("creature_template_spells", [new KeyColumn("entry"), new KeyColumn("setId")], Enumerable.Range(1, 10).Select(i => "spell" + i), []),
         new("creature_spell_list", [new KeyColumn("Id"), new KeyColumn("Position")], ["SpellId"], []),
         new("spell_template", [new KeyColumn("Id")],
