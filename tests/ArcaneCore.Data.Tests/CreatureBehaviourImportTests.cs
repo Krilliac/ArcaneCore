@@ -436,7 +436,11 @@ public sealed class CreatureBehaviourImportTests : IAsyncLifetime
         Assert.Equal(11104, report.BroadcastTexts);
         Assert.Equal(10384, report.Templates);
         Assert.Equal(38, report.AiSummons);
-        Assert.Equal(0, report.AiTexts);
+        Assert.True(report.ScriptTexts > 0);
+        Assert.Equal(report.ScriptTexts, report.AiTexts); // z2815 creature_ai_texts is empty
+        Assert.Contains(importer.AiSnapshot().Texts, t => t.Entry == -1036000 && t.Content.Contains("noise", StringComparison.Ordinal));
+        Assert.Contains(importer.PathSnapshot(), p => p.Entry == 3849 && p.PathId == 0x8000_0000u && p.Point == 12);
+        Assert.DoesNotContain(importer.PathSnapshot(), p => p.Entry == 3678 && (p.PathId & 0x8000_0000u) != 0);
 
         // Almost every row carries 1024/1025 and 39 rows are keyed by spawn guid.
         IReadOnlyCollection<CreatureAiScriptRow> scripts = importer.AiSnapshot().Scripts;

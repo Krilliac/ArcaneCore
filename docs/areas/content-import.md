@@ -305,6 +305,10 @@ loot entries" and "Loaded 4245 quest templates". Item templates load lazily (fir
 - Dialect signatures are per table and conservative: a cmangos dump whose `creature`/`gameobject` lacks `spawnMask`, or a
   loot table with neither `condition_id` nor `patch_min`, is rejected (exit 3), not guessed.
 
+## Wave 5 ScriptDev2 data note (2026-10-08)
+
+The creature importer now maps ClassicDB `script_texts` into the existing creature AI text catalog, preserving type, language, sound, emote and broadcast id. It maps `script_waypoint` to `creature_movement_template` under path `0x80000000 | PathId`; that namespace prevents an escort path from becoming a creature's default movement. `refresh` reports the source rows separately. The real z2815 dump probe asserts Deadmines speech and the Shadowfang prisoner path; it finds no path for Disciple of Naralex (3678). Deadmines' known patrol GUIDs have `spawnMask=0`; the instance script gates those specific rows until a boss death. The general `spawnMask` import limit above remains.
+
 ## References
 
 - vmangos (`D:\refs\vmangos`): `src/game/ObjectMgr.cpp` (`LoadCreatureTemplates` :1190, `LoadCreatures` :2319, game objects

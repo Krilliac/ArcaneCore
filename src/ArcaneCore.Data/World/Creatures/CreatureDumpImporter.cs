@@ -32,8 +32,11 @@ public sealed record CreatureImportReport(
     /// <summary>cmangos <c>creature_ai_scripts</c> rows (EventAI).</summary>
     public int AiEvents { get; init; }
 
-    /// <summary>cmangos <c>creature_ai_texts</c> rows.</summary>
+    /// <summary>cmangos <c>creature_ai_texts</c> and ScriptDev2 <c>script_texts</c> rows stored in one text catalog.</summary>
     public int AiTexts { get; init; }
+
+    /// <summary>ScriptDev2 <c>script_texts</c> rows among <see cref="AiTexts"/>.</summary>
+    public int ScriptTexts { get; init; }
 
     /// <summary><c>broadcast_text</c> rows (the lines positive EventAI text ids refer to).</summary>
     public int BroadcastTexts { get; init; }
@@ -46,6 +49,8 @@ public sealed record CreatureImportReport(
 
     /// <summary><c>creature_movement_template</c> rows (the entry paths a spawn without its own path walks).</summary>
     public int MovementTemplates { get; init; }
+    /// <summary>ScriptDev2 <c>script_waypoint</c> rows among <see cref="MovementTemplates"/>.</summary>
+    public int ScriptWaypoints { get; init; }
     public int AiTextTemplates { get; init; }
 
     /// <summary><c>dbscripts_on_relay</c> rows (the relay DB scripts EventAI's START_RELAY_SCRIPT runs).</summary>
@@ -80,6 +85,7 @@ public sealed class CreatureDumpImporter
     private readonly Dictionary<uint, CreatureSpawnRow> _spawns = [];
     private readonly Dictionary<(uint, uint), CreatureMovementRow> _movement = [];
     private readonly Dictionary<(uint Entry, uint PathId, uint Point), CreatureMovementTemplateRow> _movementTemplates = [];
+    private readonly HashSet<(uint Entry, uint PathId, uint Point)> _scriptWaypointKeys = [];
     private readonly HashSet<(uint Owner, uint Path, uint Point)> _scriptedNodes = [];
     private readonly Dictionary<(uint SpawnGuid, uint Entry), CreatureSpawnEntryRow> _spawnEntries = [];
     private readonly Dictionary<uint, (int Build, CreatureModelInfoRow Row)> _models = [];
@@ -87,6 +93,7 @@ public sealed class CreatureDumpImporter
     private readonly Dictionary<(byte Class, byte Level), ClassLevelStats> _classLevelStats = [];
     private readonly Dictionary<uint, CreatureAiScriptRow> _aiScripts = [];
     private readonly Dictionary<int, CreatureAiTextRow> _aiTexts = [];
+    private readonly HashSet<int> _scriptTextEntries = [];
     private readonly Dictionary<uint, BroadcastTextRow> _broadcastTexts = [];
     private readonly Dictionary<uint, CreatureAiSummonRow> _aiSummons = [];
     private readonly Dictionary<(uint, int), CreatureTextTemplateRow> _textTemplates = [];
@@ -130,6 +137,7 @@ public sealed class CreatureDumpImporter
                     ReadMovement(row);
                     break;
                 case "creature_movement_template":
+                case "script_waypoint":
                     ReadMovementTemplate(row);
                     break;
                 case "creature_spawn_entry":
@@ -149,6 +157,7 @@ public sealed class CreatureDumpImporter
                     ReadAiScript(row);
                     break;
                 case "creature_ai_texts":
+                case "script_texts":
                     ReadAiText(row);
                     break;
                 case "dbscript_random_templates":
@@ -325,9 +334,11 @@ public sealed class CreatureDumpImporter
     {
         AiEvents = _aiScripts.Count,
         AiTexts = _aiTexts.Count,
+        ScriptTexts = _scriptTextEntries.Count,
         BroadcastTexts = _broadcastTexts.Count,
         AiSummons = _aiSummons.Count,
         MovementTemplates = _movementTemplates.Count,
+        ScriptWaypoints = _scriptWaypointKeys.Count,
         SpawnEntries = _spawnEntries.Count,
         AiTextTemplates = _textTemplates.Count,
         RelayScriptSteps = _relaySteps.Values.Sum(rows => rows.Count),
@@ -716,10 +727,12 @@ public sealed class CreatureDumpImporter
 
     private void ReadMovementTemplate(DumpRow row)
     {
+        bool scriptWaypoint = row.Table.Equals("script_waypoint", StringComparison.OrdinalIgnoreCase);
         var point = new CreatureMovementTemplateRow
         {
             Entry = U32(row, "Entry"),
-            PathId = U32(row, "PathId", "path_id"),
+            // A separate namespace prevents an escort path from becoming an ordinary spawn's default waypoint path.
+            PathId = U32(row, "PathId", "path_id") | (scriptWaypoint ? 0x8000_0000u : 0u),
             Point = U32(row, "Point"),
             X = F32(row, 0f, "PositionX", "position_x"),
             Y = F32(row, 0f, "PositionY", "position_y"),
@@ -728,6 +741,10 @@ public sealed class CreatureDumpImporter
             WaitTimeMs = U32(row, "WaitTime", "waittime"),
         };
         _movementTemplates[(point.Entry, point.PathId, point.Point)] = point;
+        if (scriptWaypoint)
+        {
+            _scriptWaypointKeys.Add((point.Entry, point.PathId, point.Point));
+        }
         NoteScript(point.Entry, point.PathId + 1, point.Point, row);
     }
 
@@ -866,11 +883,15 @@ public sealed class CreatureDumpImporter
         };
         if (text.Entry >= 0)
         {
-            Warn($"creature_ai_texts entry {text.Entry} is not negative; skipped");
+            Warn($"{row.Table} entry {text.Entry} is not negative; skipped");
             return;
         }
 
         _aiTexts[text.Entry] = text;
+        if (row.Table.Equals("script_texts", StringComparison.OrdinalIgnoreCase))
+        {
+            _scriptTextEntries.Add(text.Entry);
+        }
     }
 
     // broadcast_text: the columns mangos-classic ObjectMgr::LoadBroadcastText reads (ObjectMgr.cpp:7786-7821).
