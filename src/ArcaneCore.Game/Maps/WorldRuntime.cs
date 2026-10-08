@@ -549,11 +549,11 @@ public sealed class WorldRuntime : IDisposable
             if (diagnostics is { Completed: true } timing)
             {
                 _logger.LogWarning(PerformanceLogOptions.PerfEventId,
-                    "{What}: map {MapId} instance {InstanceId} took {DurationMs} ms (simulation {SimulationMs} ms, visibility {VisibilityMs} ms, values {ValuesMs} ms, flush {FlushMs} ms, cleanup {CleanupMs} ms; players {Players}, moved {MovedObjects}, changed {ChangedObjects}, new {NewObjects})",
+                    "{What}: map {MapId} instance {InstanceId} took {DurationMs} ms (simulation {SimulationMs} ms, visibility {VisibilityMs} ms, values {ValuesMs} ms, flush {FlushMs} ms, cleanup {CleanupMs} ms; players {Players}, moved {MovedObjects}, changed {ChangedObjects}, new {NewObjects}, visibility candidates {VisibilityCandidates})",
                     what, map.MapId, map.InstanceId, micros / 1000, timing.SimulationMicros / 1000,
                     timing.VisibilityMicros / 1000, timing.ValuesMicros / 1000, timing.FlushMicros / 1000,
                     timing.CleanupMicros / 1000, timing.Players, timing.MovedObjects, timing.ChangedObjects,
-                    timing.NewObjects);
+                    timing.NewObjects, timing.VisibilityCandidates);
             }
             else
             {

@@ -30,6 +30,10 @@ is listed in [Reference discrepancies](#reference-discrepancies).
     cell re-activates its grid (timer × 0.1) and loads ahead.
   - `CollectObjects(x, y, r)`: the objects of the cells a circle touches in loaded grids
     (vmangos `Cell::Visit` with `dont_load`). Callers apply their exact distance test.
+  - `CollectPlayers(x, y, r)`: the players of the same cells only. Each cell keeps its
+    players in a second list, as vmangos keeps them in the cell's "world" container
+    (GridDefines.h `AllWorldObjectTypes`, visited with a `WorldTypeMapContainer` visitor), so a
+    query that is only about players does not walk the cell's creatures and game objects.
   - `Update(diff)`: the vmangos `GridStates.cpp` state machine — Active grids check every
     expiry/10 ms and go Idle when nothing active is in or near them (`ActiveObjectsNearGrid`:
     visibility range in cells + 1 around the grid); Idle → Removal with the full delay;
@@ -54,8 +58,28 @@ pass unmodified). Internally:
 - An observer index (`object GUID → players whose client has it`, the inverse of
   `Player.VisibleObjects`) replaces scans in `BroadcastToObservers` and in non-player
   visibility updates.
-- `BroadcastInRange` visits only the cells within range (range ≤ 0 still means the whole
-  map) and applies the same 3D test.
+- A moved or new non-player object's pass looks only at players: those in the cells within
+  the same radius (`CollectPlayers`) plus its observers, in join order — exactly the players
+  the all-objects candidate list contained, without walking the creatures and game objects
+  around it (vmangos `Map::UpdateObjectVisibility`, Map.cpp, visits only the
+  `WorldTypeMapContainer` with `VisibleChangesNotifier`). This was the hot path behind the live
+  "Slow map update … visibility 42-58 ms; players 4, moved ~670" warning: every wandering
+  creature collected, de-duplicated and sorted the ~460 objects of the 7 × 7 cells around it.
+  `VisibilityPerformanceTests` reproduces it (66,000 clustered spawns on map 0, 4 players, 670
+  creatures moving each tick) and checks every tick against a brute-force full scan: the
+  visibility phase went from a median of 16.4 ms (309,670 candidates a tick) to 0.4 ms (761
+  candidates a tick) on the dev box, with identical visible sets. The slow-map warning now
+  reports `visibility candidates` too.
+- `BroadcastInRange` visits only the players of the cells within range (range ≤ 0 still means
+  the whole map) and applies the same 3D test (vmangos `Map::MessageDistBroadcast` also visits
+  only the `WorldTypeMapContainer`).
+- Not adopted: vmangos' `Visibility.RelocationLowerLimit` (10 yards: `Unit::OnRelocated` only
+  queues a visibility update once a unit moved that far from where it was last notified) and
+  the visibility-update timeout (`MapUpdate.VisibilityUpdate.Timeout`, which defers the rest of
+  the relocated list to the next tick). Both change who sees whom at the edge of sight for a
+  tick or more, and with the players-only mover pass the phase no longer needs them. The AI
+  relocation notify (`Visibility.AIRelocationNotifyDelay`) is the creature AI's
+  (`AiRelocationNotifier`, docs/areas/creature-ai.md).
 - Non-player objects (`AddObject` / `RemoveObject` / `SetActive`) are the seam for creatures
   and game objects: moving one schedules its visibility pass for the end of the tick.
 - `Update` order: packets → packets of players in transit from this map (only the world-port

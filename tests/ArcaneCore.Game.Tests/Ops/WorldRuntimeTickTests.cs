@@ -193,6 +193,7 @@ public sealed class WorldRuntimeTickTests
         Assert.Contains("flush", entry.Message);
         Assert.Contains("cleanup", entry.Message);
         Assert.Contains("players", entry.Message);
+        Assert.Contains("visibility candidates", entry.Message);
         Assert.Contains("moved", entry.Message);
         Assert.Matches(@"players \d+, moved \d+, changed \d+, new \d+", entry.Message);
     }

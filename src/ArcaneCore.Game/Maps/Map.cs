@@ -58,6 +58,9 @@ public sealed class Map
     private readonly List<WorldObject> _valuesQueue = [];
     private readonly List<IMapUpdater> _updaters = [];
     private readonly List<Unit> _heartbeatUnits = [];
+    private readonly List<Player> _viewerScratch = [];
+    private readonly List<WorldObject> _movedScratch = [];
+    private bool _viewerScratchInUse;
 
     // Consecutive failure count per updater; -1 means the fault breaker is skipping it. Empty
     // unless an updater throws and World:MaxConsecutiveUpdaterFaults is set.
@@ -115,6 +118,18 @@ public sealed class Map
 
     /// <summary>The map's <c>map_template</c> row, or null when the map is not registered.</summary>
     public MapTemplate? Template => WorldMaps.Of(_world).Registry.Find(MapId);
+
+    /// <summary>
+    /// Cumulative number of candidates the visibility passes looked at for players that moved or joined
+    /// (<see cref="UpdateVisibility"/>). A work counter for performance tests and diagnostics; world thread.
+    /// </summary>
+    internal long PlayerVisibilityCandidates { get; private set; }
+
+    /// <summary>
+    /// Cumulative number of candidates the visibility passes looked at for non-player objects that moved or
+    /// appeared (<see cref="UpdateObjectVisibility"/>). A work counter for performance tests; world thread.
+    /// </summary>
+    internal long ObjectVisibilityCandidates { get; private set; }
 
     /// <summary>Players removed from this map by a far teleport whose client has not confirmed the new world yet.</summary>
     public int TransitCount => _transit.Count;
@@ -412,8 +427,8 @@ public sealed class Map
     /// Send a packet to every player within <paramref name="range"/> of <paramref name="source"/>,
     /// as vmangos Map::MessageDistBroadcast → MessageDistDeliverer does: a 3D distance check
     /// plus both bounding radii (WorldObject::IsWithinDist defaults), an optional same-team
-    /// filter (no exemptions), and a range of 0 meaning the whole map. Only the cells within
-    /// range (plus the largest bounding radius in the map) are visited.
+    /// filter (no exemptions), and a range of 0 meaning the whole map. Only the players of the
+    /// cells within range (plus the largest bounding radius in the map) are visited.
     /// </summary>
     public void BroadcastInRange(
         WorldObject source, float range, WorldOpcode opcode, ReadOnlySpan<byte> payload,
@@ -429,10 +444,14 @@ public sealed class Map
             return;
         }
 
+        // Only the cells' players: vmangos visits the WorldTypeMapContainer (Map::MessageDistBroadcast, Map.cpp).
         float searchRadius = range + source.BoundingRadius + _grid.MaxBoundingRadius;
-        foreach (WorldObject obj in Query(source.X, source.Y, searchRadius, extra: null))
+        var players = new List<Player>();
+        _grid.CollectPlayers(source.X, source.Y, searchRadius, players);
+        SortByJoinOrderDistinct(players);
+        foreach (Player player in players)
         {
-            if (obj is Player player && ReferenceEquals(player.Map, this))
+            if (ReferenceEquals(player.Map, this))
             {
                 DeliverInRange(player, source, range, opcode, payload, includeSelf, onlyTeam);
             }
@@ -538,6 +557,7 @@ public sealed class Map
             }
 
             // (2) visibility: players that moved, then other objects that moved or appeared
+            long candidatesBefore = PlayerVisibilityCandidates + ObjectVisibilityCandidates;
             foreach (Player player in _players.Values)
             {
                 if (player.NeedsVisibilityUpdate)
@@ -549,12 +569,22 @@ public sealed class Map
 
             if (_movedObjects.Count > 0)
             {
-                foreach (WorldObject obj in _movedObjects.OrderBy(o => o.MapSequence).ToArray())
+                // A reused snapshot in join order (MapSequence is unique, so the order is the one OrderBy gave).
+                _movedScratch.AddRange(_movedObjects);
+                _movedScratch.Sort(static (a, b) => a.MapSequence.CompareTo(b.MapSequence));
+                try
                 {
-                    if (ReferenceEquals(obj.Map, this))
+                    foreach (WorldObject obj in _movedScratch)
                     {
-                        UpdateObjectVisibility(obj);
+                        if (ReferenceEquals(obj.Map, this))
+                        {
+                            UpdateObjectVisibility(obj);
+                        }
                     }
+                }
+                finally
+                {
+                    _movedScratch.Clear();
                 }
 
                 _movedObjects.Clear();
@@ -562,7 +592,11 @@ public sealed class Map
 
             _newObjects.Clear();
 
-            diagnostics?.EndVisibility();
+            if (diagnostics is not null)
+            {
+                diagnostics.VisibilityCandidates = PlayerVisibilityCandidates + ObjectVisibilityCandidates - candidatesBefore;
+                diagnostics.EndVisibility();
+            }
 
             // (3) values updates
             if (diagnostics is not null)
@@ -759,10 +793,57 @@ public sealed class Map
             found.AddRange(extra);
         }
 
-        var seen = new HashSet<WorldObject>(found.Count, ReferenceEqualityComparer.Instance);
-        found.RemoveAll(o => !seen.Add(o));
-        found.Sort(static (a, b) => a.MapSequence.CompareTo(b.MapSequence));
+        SortByJoinOrderDistinct(found);
         return found;
+    }
+
+    /// <summary>
+    /// Sort candidates into map-join order and drop repeats. <see cref="WorldObject.MapSequence"/> is unique per
+    /// object of a map (a fresh number on every join), so equal entries are adjacent after the sort.
+    /// </summary>
+    private static void SortByJoinOrderDistinct<T>(List<T> list)
+        where T : WorldObject
+    {
+        if (list.Count < 2)
+        {
+            return;
+        }
+
+        list.Sort(static (a, b) => a.MapSequence.CompareTo(b.MapSequence));
+        int write = 1;
+        for (int read = 1; read < list.Count; read++)
+        {
+            if (!ReferenceEquals(list[read], list[write - 1]))
+            {
+                list[write++] = list[read];
+            }
+        }
+
+        list.RemoveRange(write, list.Count - write);
+    }
+
+    /// <summary>
+    /// The players whose view of the non-player object <paramref name="obj"/> could change: players in the cells
+    /// within visibility range (+ grey distance + both radii) and whoever sees it now, in map-join order. These are
+    /// exactly the players among <see cref="VisibilityCandidates"/>, found without walking the cells' creatures and
+    /// game objects — vmangos <c>Map::UpdateObjectVisibility</c> (Map.cpp) visits only the
+    /// <c>WorldTypeMapContainer</c> (players' cameras) with its <c>VisibleChangesNotifier</c>.
+    /// </summary>
+    private List<Player> ObjectVisibilityViewers(WorldObject obj)
+    {
+        // One scratch list for the per-mover pass; a nested call (a visibility rule refreshing another object)
+        // gets its own list.
+        List<Player> viewers = _viewerScratchInUse ? [] : _viewerScratch;
+        viewers.Clear();
+        float radius = VisibilityRange + VisibilityGreyDistance + obj.BoundingRadius + _grid.MaxBoundingRadius;
+        _grid.CollectPlayers(obj.X, obj.Y, radius, viewers);
+        if (_observers.TryGetValue(obj.Guid, out HashSet<Player>? observers))
+        {
+            viewers.AddRange(observers);
+        }
+
+        SortByJoinOrderDistinct(viewers);
+        return viewers;
     }
 
     /// <summary>
@@ -797,7 +878,9 @@ public sealed class Map
     /// <summary>Re-evaluate visibility between a player and everything near it, in both directions.</summary>
     private void UpdateVisibility(Player player)
     {
-        foreach (WorldObject other in VisibilityCandidates(player))
+        List<WorldObject> candidates = VisibilityCandidates(player);
+        PlayerVisibilityCandidates += candidates.Count;
+        foreach (WorldObject other in candidates)
         {
             if (ReferenceEquals(other, player) || !ReferenceEquals(other.Map, this))
             {
@@ -815,11 +898,26 @@ public sealed class Map
     /// <summary>Re-evaluate which players see a non-player object (vmangos WorldObject::UpdateObjectVisibility).</summary>
     private void UpdateObjectVisibility(WorldObject obj)
     {
-        foreach (WorldObject other in VisibilityCandidates(obj))
+        List<Player> viewers = ObjectVisibilityViewers(obj);
+        ObjectVisibilityCandidates += viewers.Count;
+        bool ownsScratch = ReferenceEquals(viewers, _viewerScratch);
+        _viewerScratchInUse |= ownsScratch;
+        try
         {
-            if (other is Player viewer && ReferenceEquals(viewer.Map, this))
+            foreach (Player viewer in viewers)
             {
-                UpdateVisibilityOf(viewer, obj);
+                if (ReferenceEquals(viewer.Map, this))
+                {
+                    UpdateVisibilityOf(viewer, obj);
+                }
+            }
+        }
+        finally
+        {
+            if (ownsScratch)
+            {
+                _viewerScratchInUse = false;
+                viewers.Clear();
             }
         }
     }

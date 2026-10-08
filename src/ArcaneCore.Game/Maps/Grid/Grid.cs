@@ -26,6 +26,11 @@ public enum GridState
 public sealed class Grid
 {
     private readonly List<WorldObject>?[] _cells = new List<WorldObject>?[GridDefines.MaxNumberOfCells * GridDefines.MaxNumberOfCells];
+
+    // The players of each cell, also listed in _cells: vmangos keeps them in a separate per-cell
+    // container (GridDefines.h: AllWorldObjectTypes, the "world" half of a cell), so a query that is
+    // only about players (Map::UpdateObjectVisibility) does not walk the creatures and game objects.
+    private readonly List<Player>?[] _playerCells = new List<Player>?[GridDefines.MaxNumberOfCells * GridDefines.MaxNumberOfCells];
     private long _timerMs;
     private int _unloadActiveLocks;
 
@@ -97,14 +102,23 @@ public sealed class Grid
         int index = Index(cell);
         (_cells[index] ??= []).Add(obj);
         ObjectCount++;
+        if (obj is Player player)
+        {
+            (_playerCells[index] ??= []).Add(player);
+        }
     }
 
     internal void Remove(CellCoord cell, WorldObject obj)
     {
-        List<WorldObject>? list = _cells[Index(cell)];
+        int index = Index(cell);
+        List<WorldObject>? list = _cells[index];
         if (list is not null && list.Remove(obj))
         {
             ObjectCount--;
+            if (obj is Player player)
+            {
+                _playerCells[index]?.Remove(player);
+            }
         }
     }
 
@@ -112,6 +126,15 @@ public sealed class Grid
     {
         List<WorldObject>? list = _cells[(localX * GridDefines.MaxNumberOfCells) + localY];
         if (list is not null)
+        {
+            results.AddRange(list);
+        }
+    }
+
+    internal void AppendPlayers(int localX, int localY, List<Player> results)
+    {
+        List<Player>? list = _playerCells[(localX * GridDefines.MaxNumberOfCells) + localY];
+        if (list is { Count: > 0 })
         {
             results.AddRange(list);
         }
