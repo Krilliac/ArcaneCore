@@ -149,3 +149,26 @@ now reports `stalled ...` in `.playerbot list` and gives up that goal. On the re
 1240 to 4450 yards in 10 minutes of game time; before, 0 to 504 yards, standing still for 485 to 599 seconds.
 Mirthblade's ghost now walks to its body (39 yards) but still takes the spirit healer 60 seconds later: two Frostmane Troll
 Whelps (spawns 927 and 931) stand within 25 yards of where the reclaim would revive it, the camped-body rule, unchanged.
+
+Update 2 (branch `claude/bot-revive`): the last two items.
+
+* Duststalker (Hunter, map 1, quest 5441) fought a Vile Familiar for 150 seconds and died. Replayed with
+  `ARCANECORE_TEST_BOT_REPLAY_NAMES=Duststalker` (three runs, same result): the hunter stands 2 to 3 yards from the creature, melee,
+  the creature's health unchanged while the bot's falls. The server refuses an auto-attack outside a 120 degree arc in front
+  (`SMSG_ATTACKSWING_BADFACING`, `AutoAttackArc`) and a managed player never turned: after a route ended, or when the creature came
+  round to its side, the bot faced 78 to 106 degrees away from it. Fix: in melee the brain sends `MSG_MOVE_SET_FACING` to the victim
+  before the swing (`PlayerbotMotion.Face`, as the client does on attack). Replayed again, it travelled 2700 to 3070 yards in 10
+  minutes alive, the longest still stretch 35 to 60 seconds.
+* A ghost whose body is camped no longer waits for the camp to leave. `PlayerbotRecovery` looks for a spot inside the reclaim radius
+  (vmangos `CORPSE_RECLAIM_RADIUS` 39, `HandleReclaimCorpseOpcode`: `IsWithinDistInMap` of the body, then `ResurrectPlayer` where the
+  player stands) that is more than 27.5 yards from every hostile it sees (the 25 yard camped rule plus a margin) and reachable on
+  the navigation mesh within 90 yards, nearest to the ghost first (rings every 3 yards, 24 directions, at most 16 path queries),
+  walks there (`WalkToReviveSpot`) and reclaims. Walking to a spot does not count as progress, so a camp that keeps moving still
+  ends in the spirit healer after 60 seconds; with no spot it waits exactly as before. On the real Coldridge terrain a ghost with two
+  hostiles within 25 yards now revives at a clear spot inside the radius; the same test with the search disabled ends in the
+  spirit-healer fault.
+* Mirthblade in the replay still takes the spirit healer, and honestly so: nine hostile creatures stand round its body, and the only
+  ground in the radius that is 27.5 yards from all of them is a ledge the mesh reaches only by a route that leaves the radius. The
+  search finds no spot there. Judging each creature by its real aggro radius (vmangos `GetAttackDistance`: 20 yards less the level
+  difference, at least 5) instead of a flat 25 would open ground for low-level creatures such as the whelps; it also changes the
+  camped-body rule for every ghost, so it was not done here.

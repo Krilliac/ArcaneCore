@@ -306,6 +306,18 @@ internal static class PlayerbotMotion
     }
 
     /// <summary>
+    /// Turn on the spot to <paramref name="heading"/> (MSG_MOVE_SET_FACING), as a client does when the player attacks a target
+    /// beside or behind it. Unbudgeted, like a stop: turning is not a managed action. The bot must stand still (the caller stops it
+    /// first); true when the server stored the new orientation.
+    /// </summary>
+    internal static bool Face(WorldSession session, Player player, float heading)
+    {
+        if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0 || Of(player).Active) return false;
+        return Send(session, player, WorldOpcode.MsgMoveSetFacing, new(player.X, player.Y, player.Z), heading,
+            (player.Movement.Flags & MovementFlags.WalkMode) != 0, moving: false, session.World.NowMs, budgeted: false);
+    }
+
+    /// <summary>
     /// Report the current route position with a heartbeat before something else is acknowledged with the stored
     /// movement block (speed/flag orders), so observers do not see the bot jump back to its last packet.
     /// </summary>

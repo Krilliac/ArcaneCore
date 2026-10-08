@@ -26,30 +26,38 @@ namespace ArcaneCore.World.Tests.Playerbots.Dungeon;
 /// </summary>
 public sealed class PlayerbotRecoveryDecisionTests
 {
-    public static TheoryData<bool, string, bool, bool, long, bool, bool, bool, string> Tree => new()
+    public static TheoryData<bool, string, bool, bool, long, bool, bool, bool, bool, string> Tree => new()
     {
-        // ghost, corpse, entrance known, at corpse, reclaim wait, hostile, stalled, fallback taken -> step
-        { false, "ThisMap", false, false, 0, false, false, false, "Release" },
-        { false, "ThisMap", false, false, 0, false, true, false, "Fault" },
-        { true, "ThisMap", false, false, 0, false, false, false, "WalkToCorpse" },
-        { true, "ThisMap", false, true, 30, false, false, false, "WaitForReclaimDelay" },
-        { true, "ThisMap", false, true, 30, true, false, false, "WaitForReclaimDelay" },
-        { true, "ThisMap", false, true, 0, true, false, false, "WaitForHostiles" },
-        { true, "ThisMap", false, true, 0, false, false, false, "Reclaim" },
-        { true, "OtherMap", true, false, 0, false, false, false, "WalkToEntrance" },
-        { true, "OtherMap", false, false, 0, false, false, false, "SpiritHealer" },
-        { true, "None", false, false, 0, false, false, false, "SpiritHealer" },
-        { true, "ThisMap", false, false, 0, false, true, false, "SpiritHealer" },
-        { true, "ThisMap", false, true, 0, true, true, false, "SpiritHealer" },
-        { true, "OtherMap", true, false, 0, false, true, false, "SpiritHealer" },
-        { true, "ThisMap", false, true, 0, false, false, true, "SpiritHealer" },
+        // ghost, corpse, entrance known, at corpse, reclaim wait, hostile, stalled, fallback taken, revive spot known -> step
+        { false, "ThisMap", false, false, 0, false, false, false, false, "Release" },
+        { false, "ThisMap", false, false, 0, false, true, false, false, "Fault" },
+        { true, "ThisMap", false, false, 0, false, false, false, false, "WalkToCorpse" },
+        { true, "ThisMap", false, true, 30, false, false, false, false, "WaitForReclaimDelay" },
+        { true, "ThisMap", false, true, 30, true, false, false, false, "WaitForReclaimDelay" },
+        { true, "ThisMap", false, true, 0, true, false, false, false, "WaitForHostiles" },
+        { true, "ThisMap", false, true, 0, false, false, false, false, "Reclaim" },
+        { true, "OtherMap", true, false, 0, false, false, false, false, "WalkToEntrance" },
+        { true, "OtherMap", false, false, 0, false, false, false, false, "SpiritHealer" },
+        { true, "None", false, false, 0, false, false, false, false, "SpiritHealer" },
+        { true, "ThisMap", false, false, 0, false, true, false, false, "SpiritHealer" },
+        { true, "ThisMap", false, true, 0, true, true, false, false, "SpiritHealer" },
+        { true, "OtherMap", true, false, 0, false, true, false, false, "SpiritHealer" },
+        { true, "ThisMap", false, true, 0, false, false, true, false, "SpiritHealer" },
+        // A camped revive point with a clear, reachable spot inside the reclaim radius: walk there instead of waiting (and reclaim
+        // wherever the ghost stands once nothing camps it; the delay, a stall and the fallback come first, as before).
+        { true, "ThisMap", false, true, 0, true, false, false, true, "WalkToReviveSpot" },
+        { true, "ThisMap", false, true, 0, false, false, false, true, "Reclaim" },
+        { true, "ThisMap", false, true, 30, true, false, false, true, "WaitForReclaimDelay" },
+        { true, "ThisMap", false, true, 0, true, true, false, true, "SpiritHealer" },
+        { true, "ThisMap", false, true, 0, true, false, true, true, "SpiritHealer" },
+        { true, "ThisMap", false, false, 0, true, false, false, true, "WalkToCorpse" },
     };
 
     [Theory]
     [MemberData(nameof(Tree))]
-    public void Decide(bool ghost, string corpse, bool entrance, bool atCorpse, long wait, bool hostile, bool stalled, bool fallback, string expected)
+    public void Decide(bool ghost, string corpse, bool entrance, bool atCorpse, long wait, bool hostile, bool stalled, bool fallback, bool reviveSpot, string expected)
         => Assert.Equal(Enum.Parse<Step>(expected),
-            PlayerbotRecovery.Decide(ghost, Enum.Parse<Place>(corpse), entrance, atCorpse, wait, hostile, stalled, fallback));
+            PlayerbotRecovery.Decide(ghost, Enum.Parse<Place>(corpse), entrance, atCorpse, wait, hostile, stalled, fallback, reviveSpot));
 
     [Theory]
     [InlineData(true, true, false, false, "Activate")]
@@ -60,6 +68,61 @@ public sealed class PlayerbotRecoveryDecisionTests
     [InlineData(true, false, true, true, "Fault")]
     public void DecideSpiritHealer(bool healer, bool inReach, bool graveyard, bool stalled, string expected)
         => Assert.Equal(Enum.Parse<Healer>(expected), PlayerbotRecovery.DecideSpiritHealer(healer, inReach, graveyard, stalled));
+
+    /// <summary>
+    /// The revive-spot search, free of world state: rings round the body inside the reclaim radius, nearest to the ghost first, clear
+    /// of every hostile; the first one the mesh reaches. The body here is surrounded: the only clear ground is the far rim.
+    /// </summary>
+    [Fact]
+    public void FindReviveSpot_TakesTheNearestReachableCandidateClearOfEveryHostile()
+    {
+        var body = new Vector3(0, 0, 0);
+        var ghost = new Vector3(30, 0, 0);
+        // Hostiles at the body and east of it: the clear ground is west, 28+ yards from the body's own camp.
+        Vector3[] hostiles = [new(0, 0, 0), new(20, 0, 0), new(5, 15, 0), new(5, -15, 0)];
+        var asked = new List<Vector3>();
+        Vector3? spot = PlayerbotRecovery.FindReviveSpot(ghost, body, hostiles, candidate => { asked.Add(candidate); return candidate; });
+
+        Assert.NotNull(spot);
+        Assert.True(Vector3.Distance(spot!.Value, body) <= PlayerbotRecovery.ReviveSpotMaxYards, "outside the reclaim radius");
+        Assert.All(hostiles, hostile => Assert.True(Vector3.Distance(spot.Value, hostile) > PlayerbotRecovery.HostileClearYards,
+            $"{Vector3.Distance(spot.Value, hostile):F1} yards from a hostile"));
+        Assert.Equal(spot, asked[0]); // nearest first: the first clear candidate the search asked about was reachable
+    }
+
+    /// <summary>A body whose whole reclaim disc is camped has no spot: the ghost goes on waiting, as before.</summary>
+    [Fact]
+    public void FindReviveSpot_FindsNothing_WhenTheCampCoversTheReclaimDisc()
+    {
+        // Eight hostiles on a circle of 22 yards round the body: every point of the 33-yard disc is within 27.5 yards of one.
+        Vector3[] hostiles = [.. Enumerable.Range(0, 8).Select(i => new Vector3(22f * MathF.Cos(i * MathF.PI / 4f), 22f * MathF.Sin(i * MathF.PI / 4f), 0))];
+        Assert.Null(PlayerbotRecovery.FindReviveSpot(new Vector3(30, 0, 0), new Vector3(0, 0, 0), hostiles, candidate => candidate));
+    }
+
+    /// <summary>
+    /// A candidate the mesh cannot reach is skipped for the next, and a reachable end that lies outside the radius or beside a
+    /// hostile (the mesh ends short of an off-mesh candidate) is no spot; the number of asked candidates is bounded.
+    /// </summary>
+    [Fact]
+    public void FindReviveSpot_SkipsUnreachableCandidates_AndChecksTheEndTheMeshReturns()
+    {
+        var body = new Vector3(0, 0, 0);
+        var ghost = new Vector3(30, 0, 0);
+        Vector3[] hostiles = [new(30, 10, 0)];
+        int asked = 0;
+        Assert.Null(PlayerbotRecovery.FindReviveSpot(ghost, body, hostiles, _ => { asked++; return null; }));
+        Assert.Equal(PlayerbotRecovery.ReviveSpotMaxQueries, asked);
+
+        // The mesh answers with the hostile's own place for every candidate: never a spot.
+        Assert.Null(PlayerbotRecovery.FindReviveSpot(ghost, body, hostiles, _ => hostiles[0]));
+        // ... and with a place beyond the radius: never a spot either.
+        Assert.Null(PlayerbotRecovery.FindReviveSpot(ghost, body, hostiles, _ => new Vector3(60, 0, 0)));
+        // The first candidate fails, the second is reached.
+        int calls = 0;
+        Vector3? spot = PlayerbotRecovery.FindReviveSpot(ghost, body, hostiles, candidate => ++calls == 1 ? null : candidate);
+        Assert.NotNull(spot);
+        Assert.Equal(2, calls);
+    }
 
     /// <summary>A ghost whose body lies on its own map walks to it (the ordinary corpse run).</summary>
     [Fact]
@@ -138,19 +201,22 @@ public sealed class PlayerbotRecoveryDecisionTests
     }
 
     /// <summary>
-    /// At its body, after the reclaim delay, a ghost does not reclaim while a hostile creature stands near the body; once it has left,
-    /// the ghost reclaims (mangoszero ReviveFromCorpseAction).
+    /// At its body, after the reclaim delay, a ghost does not reclaim while a hostile creature stands near it; once the camp has
+    /// left, the ghost reclaims (mangoszero ReviveFromCorpseAction). The camp here is eight hostiles on a circle of 22 yards round the
+    /// body: every point inside the reclaim radius is within 27.5 yards of one, so there is no revive spot to walk to and the ghost
+    /// waits, as it always did. (With one hostile only, it now walks to clear ground: the next test.)
     /// </summary>
     [Fact]
-    public async Task AHostileNearTheBody_MeansWaiting_ThenTheGhostReclaimsWhenItLeaves()
+    public async Task ACampOverTheWholeReclaimRadius_MeansWaiting_ThenTheGhostReclaimsWhenItLeaves()
     {
         var clock = new TestDeathClock(1_000);
         await using DungeonBotHost host = await DungeonBotHost.StartAsync();
         await host.OnWorldAsync(() => DeathHooks.Register(host.Host.World, new DeathHooks(new DeathOptions(), clock)));
         await host.KillAndReleaseAsync();
-        Creature wolf = await host.OnWorldAsync(() => DungeonBotHost.AddCreature(host.Player.Map!, 994301,
-            host.Player.X + 10, host.Player.Y, host.Player.Z, 0, host.Host.World.NowMs, faction: 14)); // a monster
-        await host.AcknowledgeUntilAsync(p => p.VisibleObjects.Contains(wolf.Guid), "the ghost sees the creature");
+        Creature[] camp = await host.OnWorldAsync(() => Enumerable.Range(0, 8).Select(i => DungeonBotHost.AddCreature(host.Player.Map!, 994310u + (uint)i,
+            host.Player.X + (22f * MathF.Cos(i * MathF.PI / 4f)), host.Player.Y + (22f * MathF.Sin(i * MathF.PI / 4f)), host.Player.Z, 0,
+            host.Host.World.NowMs, faction: 14)).ToArray()); // monsters
+        await host.AcknowledgeUntilAsync(p => camp.All(c => p.VisibleObjects.Contains(c.Guid)), "the ghost sees the camp");
         clock.Seconds += 31;
 
         var recovery = new PlayerbotRecovery(host.Session, new PlayerbotOptions { Enabled = true });
@@ -159,10 +225,11 @@ public sealed class PlayerbotRecoveryDecisionTests
             host.Session.ManagedBudget = new ManagedActionBudget(4);
             Assert.False(recovery.Update(host.Player, 500));
             Assert.Equal(Step.WaitForHostiles, recovery.LastStep);
+            Assert.Null(recovery.ReviveSpot);
             Assert.Equal(4, host.Session.ManagedBudget.Remaining);
             Assert.False(host.Player.IsAlive);
 
-            wolf.Relocate(host.Player.X + 40, host.Player.Y, host.Player.Z, 0, host.Host.World.NowMs);
+            foreach (Creature wolf in camp) wolf.Relocate(host.Player.X + 45, host.Player.Y, host.Player.Z, 0, host.Host.World.NowMs);
             host.Session.ManagedBudget = new ManagedActionBudget(4);
             Assert.True(recovery.Update(host.Player, 500));
             Assert.Equal(Step.Reclaim, recovery.LastStep);
@@ -171,10 +238,68 @@ public sealed class PlayerbotRecoveryDecisionTests
     }
 
     /// <summary>
+    /// A hostile camps the ghost's revive point, but the reclaim radius is 39 yards and the rest of it is clear: the ghost walks to
+    /// ground more than 25 yards from the hostile (and inside the radius), and reclaims there. Before, it stood still until the
+    /// hostile left, and took the spirit healer after a minute (Mirthblade, two Frostmane Troll Whelps near its body).
+    /// </summary>
+    [Fact]
+    public async Task AHostileNearTheBody_WithClearGroundInsideTheReclaimRadius_SendsTheGhostThere()
+    {
+        var clock = new TestDeathClock(1_000);
+        await using DungeonBotHost host = await DungeonBotHost.StartAsync();
+        await host.OnWorldAsync(() => DeathHooks.Register(host.Host.World, new DeathHooks(new DeathOptions(), clock)));
+        await host.KillAndReleaseAsync();
+        Creature wolf = await host.OnWorldAsync(() => DungeonBotHost.AddCreature(host.Player.Map!, 994301,
+            host.Player.X + 10, host.Player.Y, host.Player.Z, 0, host.Host.World.NowMs, faction: 14)); // a monster
+        Vector3 body = await host.OnWorldAsync(() => new Vector3(host.Player.Combat.Corpse!.X, host.Player.Combat.Corpse.Y, host.Player.Combat.Corpse.Z));
+        await host.AcknowledgeUntilAsync(p => p.VisibleObjects.Contains(wolf.Guid), "the ghost sees the creature");
+        clock.Seconds += 31;
+
+        var recovery = new PlayerbotRecovery(host.Session, new PlayerbotOptions { Enabled = true });
+        Vector3 spot = await host.OnWorldAsync(() =>
+        {
+            host.Session.ManagedBudget = new ManagedActionBudget(4);
+            Assert.True(recovery.Update(host.Player, 500));
+            Assert.Equal(Step.WalkToReviveSpot, recovery.LastStep);
+            Assert.False(host.Player.IsAlive);
+            return recovery.ReviveSpot!.Value;
+        });
+        Assert.True(Vector3.Distance(spot, new Vector3(wolf.X, wolf.Y, wolf.Z)) > PlayerbotRecovery.HostileClearYards, "the spot is camped too");
+        Assert.True(Vector3.Distance(spot, body) <= PlayerbotRecovery.ReviveSpotMaxYards, "the spot is outside the reclaim radius");
+
+        bool revived = false;
+        for (int think = 0; think < 100 && !revived; think++)
+        {
+            await host.AdvanceAsync(500);
+            revived = await host.OnWorldAsync(() =>
+            {
+                if (PlayerbotMovementControl.Update(host.Session, host.Player)) return false;
+                if (host.Player.IsAlive) return true;
+                PlayerbotMotion.Pump(host.Session, host.Player, host.Host.World.NowMs);
+                host.Session.ManagedBudget = new ManagedActionBudget(4);
+                recovery.Update(host.Player, 500);
+                Assert.False(recovery.UsingSpiritHealer, "the ghost gave up on its body");
+                return host.Player.IsAlive;
+            });
+        }
+
+        Assert.True(revived, "the ghost never revived");
+        await host.OnWorldAsync(() =>
+        {
+            var at = new Vector3(host.Player.X, host.Player.Y, host.Player.Z);
+            Assert.True(Vector3.Distance(at, new Vector3(wolf.X, wolf.Y, wolf.Z)) > PlayerbotRecovery.HostileClearYards, "revived beside the hostile");
+            Assert.True(Vector3.Distance(at, body) < CombatConstants.CorpseReclaimRadius, "revived outside the reclaim radius");
+            Assert.Null(host.Player.Combat.Corpse);
+        });
+    }
+
+    /// <summary>
     /// The hostile check is made where the ghost stands, because CMSG_RECLAIM_CORPSE revives the player there (vmangos
     /// MiscHandler.cpp:599, no relocation), and the walk stops as soon as the body is in reclaim range (about 39 yards). With the body
     /// 30 yards away: a creature 15 yards from the ghost (45 from the body) means waiting; one beside the body (35 yards from the
-    /// ghost) does not. Before, both were measured from the body, the other way round.
+    /// ghost) does not. Before, both were measured from the body, the other way round. The creature 15 yards from the ghost now sends
+    /// the ghost walking to clear ground instead of waiting (<see cref="Step.WalkToReviveSpot"/>); what the check pins is that it
+    /// is not reclaimed from there.
     /// </summary>
     [Fact]
     public async Task TheHostileCheck_IsMadeAroundTheGhost_WhereTheReclaimRevivesIt()
@@ -198,8 +323,8 @@ public sealed class PlayerbotRecoveryDecisionTests
         await host.OnWorldAsync(() =>
         {
             host.Session.ManagedBudget = new ManagedActionBudget(4);
-            Assert.False(recovery.Update(host.Player, 500));
-            Assert.Equal(Step.WaitForHostiles, recovery.LastStep);
+            recovery.Update(host.Player, 500);
+            Assert.Equal(Step.WalkToReviveSpot, recovery.LastStep); // not Reclaim: the hostile is near the ghost
             Assert.False(host.Player.IsAlive);
 
             wolf.Relocate(ghost.X + 35, ghost.Y, ghost.Z, 0, host.Host.World.NowMs); // beside the body

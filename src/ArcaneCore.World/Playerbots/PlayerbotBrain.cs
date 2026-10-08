@@ -42,6 +42,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private readonly PlayerbotWorldDestinations _destinations = new(session, options);
     private readonly PlayerbotCombatSpells _combatSpells = new(session);
     private readonly PlayerbotRecovery _recovery = new(session, options);
+
+    /// <summary>The ghost recovery (inspection and tests).</summary>
+    internal PlayerbotRecovery Recovery => _recovery;
     private readonly PlayerbotEquipment _equipment = new(session);
     private readonly PlayerbotStallWatch _stall = new();
     private readonly PlayerbotSuspensions _suspensions = new();
@@ -413,6 +416,16 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 return;
             }
 
+            // The server refuses a swing at a target outside the auto-attack arc (SMSG_ATTACKSWING_BADFACING) and a managed player
+            // never turns by itself: face the victim first, as the client does when it attacks.
+            if (!FacesTarget(player, target))
+            {
+                if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0 && !PlayerbotMovementControl.Stop(_session, player)) return;
+                _goal = PlayerbotGoalKind.Combat;
+                PlayerbotMotion.Face(_session, player, MathF.Atan2(target.Y - player.Y, target.X - player.X));
+                return;
+            }
+
             if (!_attacking || player.Combat.Victim is null)
             {
                 if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0)
@@ -598,6 +611,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             .ThenBy(creature => Distance(player, creature))
             .FirstOrDefault();
     }
+
+    /// <summary>Whether <paramref name="target"/> is inside the arc the server swings in (<see cref="CombatConstants.AutoAttackArc"/>).</summary>
+    private static bool FacesTarget(Player player, Creature target)
+        => MathF.Sqrt(MathF.Pow(target.X - player.X, 2) + MathF.Pow(target.Y - player.Y, 2)) <= CombatConstants.NoFacingChecksDistance
+            || MapCombat.HasInArc(player, target, CombatConstants.AutoAttackArc);
 
     /// <summary>
     /// Where a bot fights its target from (vmangos PartyBotAI.cpp:755-766, GetDistancingTarget / RunAwayFromTarget :146-185 and the
