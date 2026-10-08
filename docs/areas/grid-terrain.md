@@ -207,7 +207,9 @@ Both validate like vmangos `HandleGoHelper` and answer
 `area_template`, `areatrigger_template`, `areatrigger_teleport` and `game_tele` (vmangos world
 DB column meanings, PascalCase column names as elsewhere in ArcaneCore) and registers
 `EfMapDataStore` as `IMapDataStore`. A world database at version 1 is upgraded in place; its
-rows are kept. The tables start empty: fill them from a vmangos world database export.
+rows are kept. The tables start empty: `arcane-content-importer refresh --dbc-dir` (or `import-map-dbc`) fills `map_template` and
+`area_template` with every Map.dbc map and AreaTable.dbc area and the dump's instance rows, `areatrigger_template` from AreaTrigger.dbc,
+and `import` the teleports (docs/areas/content-import.md).
 
 ## Configuration (`World:Maps`)
 
