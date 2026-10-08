@@ -4,8 +4,10 @@ using ArcaneCore.Game.Quests;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.World.Creatures;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
 using System.Numerics;
@@ -63,8 +65,13 @@ public sealed class PlayerbotWorldDestinationsTests
             [.. Enumerable.Range(1, 4100).Select(i => new CreatureSpawn { Guid = (uint)i, Entry = 99, MapId = 0, X = 0, Y = 0, Z = 83.53f }),
              new CreatureSpawn { Guid = 10001, Entry = 6, MapId = 0, X = -8648.95f, Y = -132.49f, Z = 83.53f },
              new CreatureSpawn { Guid = 10002, Entry = 7, MapId = 0, X = -9248.95f, Y = -132.49f, Z = 83.53f }], [], [], []);
+        // Manual world clock: the motion catches its route up to world.NowMs on every think, so on the wall clock the
+        // time between reading `east` and the re-routing think would move the bot (a load-dependent flake).
         await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
-            services.AddSingleton<ICreatureDataStore>(new DestinationContent(content)));
+        {
+            services.AddSingleton<ICreatureDataStore>(new DestinationContent(content));
+            services.AddSingleton<IWorldFeature, ManualClockFeature>();
+        });
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
@@ -99,6 +106,11 @@ public sealed class PlayerbotWorldDestinationsTests
             });
         }
         finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    private sealed class ManualClockFeature : IWorldFeature
+    {
+        public void Attach(WorldRuntime world) => world.UseManualClock();
     }
 
     private sealed class DestinationContent(CreatureContent content) : ICreatureDataStore
