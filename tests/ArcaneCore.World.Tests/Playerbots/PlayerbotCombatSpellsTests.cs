@@ -1,11 +1,13 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Tests.Spells;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,6 +18,40 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// <summary>Real world-thread coverage for the ordinary hostile spell seam.</summary>
 public sealed class PlayerbotCombatSpellsTests
 {
+    private sealed class ManualClockFeature : IWorldFeature
+    {
+        public void Attach(WorldRuntime world) => world.UseManualClock();
+    }
+
+    [Fact]
+    public async Task ManagedHostileCast_UsesManualWorldTimeForDamage()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<IWorldFeature, ManualClockFeature>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            Creature target = await AddTargetAsync(host, session, 7, 50);
+            uint before = await host.World.InvokeAsync(() => target.Health);
+            var helper = new PlayerbotCombatSpells(session);
+            Assert.True(await host.World.InvokeAsync(() =>
+            {
+                session.ManagedBudget = new ManagedActionBudget(2);
+                return helper.Update(session.Player!, target, 0);
+            }));
+
+            await host.World.AdvanceClockAsync(450);
+            Assert.Equal(before, await host.World.InvokeAsync(() => target.Health));
+            await host.World.AdvanceClockAsync(50);
+            Assert.Equal(before - 7, await host.World.InvokeAsync(() => target.Health));
+        }
+        finally
+        {
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
     [Fact]
     public async Task LearnedLoadedHostileSpell_UsesOrdinaryCastAndDamagesVisibleCreature()
     {

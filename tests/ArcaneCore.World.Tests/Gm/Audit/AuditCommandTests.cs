@@ -85,19 +85,46 @@ public sealed class AuditCommandTests
     [Fact]
     public async Task APlayer_CannotRunAnyOfThem_AndTheyStayOutOfTheirCommandList()
     {
-        await using WorldTestHost host = Start(new Clock());
+        var clock = new Clock();
+        await using WorldTestHost host = Start(clock);
         await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plain");
         await player.CollectAsync();
 
         foreach (string command in new[] { ".pinfo", ".mute 5", ".unmute", ".gmannounce hi", ".gmnotify hi", ".gm list", ".gm ingame", ".arcane mutes", ".arcane gmlog", ".arcane queues", ".arcane bancheck ip 1.2.3.4" })
         {
             Assert.Equal("This command is not available to you.", await ReplyAsync(player, command));
+            clock.Advance(1); // vmangos counts command lines toward the one-second chat flood window.
         }
 
         await player.SendChatAsync(ChatType.Say, Language.Common, ".commands");
         Assert.DoesNotContain(
             (await player.CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text),
             line => line.Contains("gm", StringComparison.Ordinal) || line.Contains("arcane", StringComparison.Ordinal) || line.Contains("ticket", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task PlayerCommands_CountTowardFlood_AndAChatCommandCannotBypassTheMute()
+    {
+        var clock = new Clock();
+        await using WorldTestHost host = Start(clock);
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plain");
+        await player.CollectAsync();
+
+        for (int i = 0; i < 11; i++)
+        {
+            Assert.Equal("This command is not available to you.", await ReplyAsync(player, ".pinfo"));
+        }
+
+        await player.SendChatAsync(ChatType.Say, Language.Common, ".pinfo");
+        Assert.Equal("You must wait 10 Seconds. before speaking again.",
+            NotificationOf(await player.ReadUntilAsync(WorldOpcode.SmsgNotification)));
+
+        // vmangos parses whisper commands before its receiver-specific mute gate.
+        Assert.Equal("This command is not available to you.",
+            await WhisperedReplyAsync(player, ".pinfo", "Nobody"));
+
+        clock.Advance(10);
+        Assert.Equal("This command is not available to you.", await ReplyAsync(player, ".pinfo"));
     }
 
     // ---- .mute / .unmute ----

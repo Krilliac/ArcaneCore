@@ -176,6 +176,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         world.PlayerLoggedIn += OnPlayerLoggedIn;
         world.PlayerLoggingOut += OnPlayerLoggingOut;
         world.MapCreated += SubscribeCombat;
+        world.Updated += OnWorldUpdated;
         foreach (Map map in world.Maps)
         {
             SubscribeCombat(map);
@@ -281,6 +282,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             _world.PlayerLoggedIn -= OnPlayerLoggedIn;
             _world.PlayerLoggingOut -= OnPlayerLoggingOut;
             _world.MapCreated -= SubscribeCombat;
+            _world.Updated -= OnWorldUpdated;
         }
 
         lock (_combatSubscriptions)
@@ -351,10 +353,20 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         }
     }
 
+    private void OnWorldUpdated(uint diffMs)
+    {
+        // Manual advances can run many world ticks before a wall-clock timer fires.
+        // Consume the same game-time delta on each tick, including zero-diff command ticks.
+        if (_world?.IsManualClock == true)
+        {
+            Update();
+        }
+    }
+
     private void QueueUpdate()
     {
         WorldRuntime? world = _world;
-        if (world is null || Interlocked.Exchange(ref _updateQueued, 1) == 1)
+        if (world is null || world.IsManualClock || Interlocked.Exchange(ref _updateQueued, 1) == 1)
         {
             return;
         }
@@ -362,6 +374,10 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         world.Post(() =>
         {
             Volatile.Write(ref _updateQueued, 0);
+            if (world.IsManualClock)
+            {
+                return;
+            }
             try
             {
                 Update();
