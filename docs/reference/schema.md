@@ -10,7 +10,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 4 | `account`, `realmlist` |
-| `characters` | 34 | `characters` |
+| `characters` | 40 | `characters` |
 | `world` | 41 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
@@ -58,6 +58,12 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 32 | `Characters.Pets.PetNamingDataModule` | adds columns `character_pet.Name`, `character_pet.NameTimestamp`, `character_pet.RenameAllowed` | yes |
 | 33 | `Characters.Playerbots.ManagedPlayerbotDataModule` | creates `managed_playerbot` | yes |
 | 34 | `Characters.Life.CharacterCorpseInstanceDataModule` | adds columns `character_corpse.InstanceId` | yes |
+| 35 | `Instances.GroupInstanceBindDataModule` | creates `group_instance` | yes |
+| 36 | `Social.GroupDataModule` | creates `character_group`, `character_group_member` | yes |
+| 37 | `Characters.Accounts.AccountAddressDataModule` | creates `account_last_ip` | yes |
+| 38 | `Characters.Items.ItemGiftDataModule` | adds columns `item_instance.gift_entry`, `item_instance.gift_flags` | yes |
+| 39 | `Characters.Battlegrounds.CharacterBattlegroundDataModule` | creates `character_battleground_data` | yes |
+| 40 | `Characters.Transports.CharacterTransportDataModule` | adds columns `characters.transport_guid`, `characters.transport_x`, `characters.transport_y`, `characters.transport_z`, `characters.transport_o` | yes |
 
 ## `world`
 
@@ -99,9 +105,9 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 35 | `Content.Items.SpellEnchantChargesWorldDataModule` | creates `spell_enchant_charges` |
 | 36 | `Skills.StartingSkillWorldDataModule` | creates `playercreateinfo_skills` |
 | 37 | `World.Creatures.CreatureTextTemplateDataModule` | creates `creature_ai_text_template` |
-| 38 | `World.Procs.WorldSchemaLaneGap38` | no changes |
-| 39 | `World.Procs.WorldSchemaLaneGap39` | no changes |
-| 40 | `World.Procs.WorldSchemaLaneGap40` | no changes |
-| 41 | `World.Procs.SpellProcEventDataModule` | creates `spell_proc_event` |
+| 38 | `World.Creatures.RelayScriptDataModule` | creates `dbscripts_on_relay`, `dbscript_relay_template` |
+| 39 | `World.Procs.SpellProcEventDataModule` | creates `spell_proc_event` |
+| 40 | `World.Battlegrounds.BattlegroundWorldDataModule` | creates `battleground_template`, `creature_battleground`, `gameobject_battleground`, `battlemaster_entry` |
+| 41 | `World.Transports.TransportWorldDataModule` | creates `transports` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.
