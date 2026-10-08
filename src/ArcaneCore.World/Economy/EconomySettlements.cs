@@ -66,10 +66,15 @@ public sealed class EconomyActor
 /// and loads the committed state. An unreadable outcome keeps the actors quarantined and
 /// kicks them, so no stale snapshot can overwrite the durable result.
 /// </summary>
-public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logger)
+public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logger, Func<TimeSpan>? budgetSource = null)
 {
     public const int MaxConcurrentOperations = 16;
-    public static readonly TimeSpan Budget = TimeSpan.FromSeconds(5);
+
+    /// <summary>The shipped settlement budget (<c>Economy:SettlementBudgetSeconds</c>).</summary>
+    public static readonly TimeSpan DefaultBudget = TimeSpan.FromSeconds(5);
+
+    /// <summary>Wall time one operation (its saves and its commit) may take before it is abandoned; read at each operation.</summary>
+    public TimeSpan Budget => budgetSource?.Invoke() ?? DefaultBudget;
 
     private readonly Lock _gate = new();
     private readonly HashSet<Operation> _operations = [];
@@ -241,10 +246,12 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
     {
         EconomyOutcome outcome = EconomyOutcome.NotStarted;
         bool transactionStarted = false;
+        TimeSpan allowed = Budget;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
-            budget.CancelAfter(Budget);
+            budget.CancelAfter(allowed);
             // The pre-operation snapshot must be durable first: the commit compares the stored
             // money and inventory against it, so a lost earlier save is a conflict, not a dupe.
             await Task.WhenAll(operation.Actors.Select(a => _saves!.SaveForSettlementAsync(a.Before, budget.Token))).ConfigureAwait(false);
@@ -273,7 +280,16 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            logger.LogError(ex, "economy operation {Operation} failed", operation.Id);
+            if (ex is OperationCanceledException && !_stop.IsCancellationRequested)
+            {
+                // The caller answers the client with its ordinary failure reply (or the actors are kicked when the outcome is unknown).
+                logger.LogWarning("economy operation {Operation} ran out of its {Budget}s budget after {Elapsed} ms (transaction started: {Started})",
+                    operation.Id, allowed.TotalSeconds, clock.ElapsedMilliseconds, transactionStarted);
+            }
+            else
+            {
+                logger.LogError(ex, "economy operation {Operation} failed", operation.Id);
+            }
             if (transactionStarted && outcome != EconomyOutcome.After)
             {
                 outcome = EconomyOutcome.Unknown;

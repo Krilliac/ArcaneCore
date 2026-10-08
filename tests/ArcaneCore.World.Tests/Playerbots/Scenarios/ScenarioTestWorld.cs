@@ -15,7 +15,9 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.World.Economy;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Scenarios;
@@ -45,8 +47,24 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
         _database = database;
         Bots = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         Clock = ScenarioClock.Manual(host.World, time);
-        host.WorldServices.GetRequiredService<QuestNpcFeature>().Options.OrdinaryRewardQuestIds = [ScenarioTestContent.KillQuest];
+        QuestNpcOptions quests = host.WorldServices.GetRequiredService<QuestNpcFeature>().Options;
+        quests.OrdinaryRewardQuestIds = [ScenarioTestContent.KillQuest];
+        // A scenario wait gives a reply behind a database commit its whole step timeout in wall time. The reward settlement's own
+        // wall-clock budget (5 s shipped) cancelled rewards whose SQLite save and commit ran slower than that under full-suite load:
+        // nothing was rewarded, no SMSG_QUESTGIVER_QUEST_COMPLETE was sent, and the scenario timed out after 30 s. Match the
+        // settlement budget to the scenario step timeout so only the scenario's own bound decides.
+        quests.SettlementBudgetSeconds = (int)DefaultStepTimeout.TotalSeconds;
+        // The economy (auction, mail, trade) and dungeon chest loot settlements have the same kind of wall-clock budget: under load an
+        // auction cancel answered DATABASE once its commit outlasted 5 s.
+        host.WorldServices.GetRequiredService<EconomyFeature>().Options.SettlementBudgetSeconds = (int)DefaultStepTimeout.TotalSeconds;
+        if (host.WorldServices.GetService<GameObjectLootFeature>() is { } loot)
+        {
+            loot.ObjectOptions.LootSettlementBudgetSeconds = (int)DefaultStepTimeout.TotalSeconds;
+        }
     }
+
+    /// <summary>The step timeout of <see cref="RunAsync"/> without options (and of most scenario tests).</summary>
+    public static TimeSpan DefaultStepTimeout { get; } = TimeSpan.FromSeconds(30);
 
     public WorldTestHost Host { get; }
 
@@ -95,7 +113,7 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
     public Task<ScenarioReport> RunAsync(IPlayerbotScenario scenario, ScenarioRunOptions? options = null)
         => ScenarioRunner.RunAsync(scenario, Bots, Host.World, Services, Clock, options ?? new ScenarioRunOptions
         {
-            StepTimeout = TimeSpan.FromSeconds(30), MaxDuration = TimeSpan.FromSeconds(90),
+            StepTimeout = DefaultStepTimeout, MaxDuration = TimeSpan.FromSeconds(90),
         });
 
     /// <summary>Run <paramref name="scenario"/> and fail the test with the whole report when it did not pass.</summary>

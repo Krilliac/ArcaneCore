@@ -28,7 +28,7 @@ public sealed partial class EconomyFeature : ICharacterDeleteHook
 
         int id = character.Id;
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(_readStop.Token);
-        budget.CancelAfter(EconomySettlements.Budget);
+        budget.CancelAfter(Settlements.Budget);
         AuctionSnapshot sold;
         IReadOnlyList<MailRecord> letters;
         await using (AsyncServiceScope scope = _scopes.CreateAsyncScope())

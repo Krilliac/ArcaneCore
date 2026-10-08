@@ -72,6 +72,21 @@ public sealed class ConfigValidationTests
         Assert.Empty(Run(Config(("PerformanceLog:SlowWorldUpdateMeasure", "FrameInterval"))).Issues);
     }
 
+    [Theory]
+    [InlineData("Quests:SettlementBudgetSeconds")]
+    [InlineData("Economy:SettlementBudgetSeconds")]
+    [InlineData("GameObjects:LootSettlementBudgetSeconds")]
+    public void SettlementBudgets_OutsideOneTo300Seconds_AreErrors(string key)
+    {
+        foreach (string bad in new[] { "0", "301", "five" })
+        {
+            Assert.Contains(Run(Config((key, bad))).Issues, i => i.Key == key && i.Severity == ConfigSeverity.Error);
+        }
+
+        Assert.Empty(Run(Config((key, "1"))).Issues);
+        Assert.Empty(Run(Config((key, "30"))).Issues);
+    }
+
     [Fact]
     public void CharactersPerRealm_11_IsAnError()
         => Assert.Contains(Run(Config(("World:CharactersPerRealm", "11"))).Issues, i => i.Key == "World:CharactersPerRealm");

@@ -114,6 +114,17 @@ public sealed class EconomyOptions
     /// </summary>
     public bool TradeSpaceNotifications { get; set; } = true;
 
+    /// <summary>
+    /// Seconds one economy settlement (auction, mail, trade) may take end to end, and one economy store read, before it is abandoned:
+    /// an operation that did not commit is answered with its ordinary failure reply (auction DATABASE error, mail INTERNAL_ERROR,
+    /// trade cancelled), one whose outcome cannot be read kicks its actors. Operational, not a gameplay rule: 5 is the shipped value.
+    /// Valid range 1-300.
+    /// </summary>
+    public int SettlementBudgetSeconds { get; set; } = 5;
+
+    /// <summary><see cref="SettlementBudgetSeconds"/> as a duration, never below one second.</summary>
+    public TimeSpan SettlementBudget => TimeSpan.FromSeconds(Math.Max(1, SettlementBudgetSeconds));
+
     /// <summary>Rate.Auction.Time multiplier of a listing's duration (vmangos World.cpp:534, AuctionHouseHandler.cpp:362; default 1.0).</summary>
     public float AuctionRateTime { get; set; } = 1.0f;
 

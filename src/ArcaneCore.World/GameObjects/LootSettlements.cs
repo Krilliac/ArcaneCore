@@ -25,10 +25,15 @@ namespace ArcaneCore.World.GameObjects;
 /// nothing is rebuilt, opened or taken for a key while its operation is in flight. An unreadable
 /// outcome blocks the key until restart and kicks the actor, so no stale snapshot can overwrite the result.
 /// </summary>
-public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger) : ILootStateCoordinator
+public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger, Func<TimeSpan>? budgetSource = null) : ILootStateCoordinator
 {
     public const int MaxConcurrentOperations = 16;
-    public static readonly TimeSpan Budget = TimeSpan.FromSeconds(5);
+
+    /// <summary>The shipped settlement budget (<c>GameObjects:LootSettlementBudgetSeconds</c>).</summary>
+    public static readonly TimeSpan DefaultBudget = TimeSpan.FromSeconds(5);
+
+    /// <summary>Wall time one operation (save, barrier, commit) may take before it is abandoned; read at each operation.</summary>
+    public TimeSpan Budget => budgetSource?.Invoke() ?? DefaultBudget;
 
     private readonly Lock _gate = new();
     private readonly HashSet<Operation> _operations = [];
@@ -234,10 +239,12 @@ public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger)
     {
         LootOutcome outcome = LootOutcome.NotStarted;
         bool transactionStarted = false;
+        TimeSpan allowed = Budget;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
-            budget.CancelAfter(Budget);
+            budget.CancelAfter(allowed);
             if (operation.Source.Actor is { } actor)
             {
                 // The pre-operation snapshot must be durable first: the commit compares the stored
@@ -268,7 +275,16 @@ public sealed class LootSettlements(IServiceScopeFactory scopes, ILogger logger)
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            logger.LogError(ex, "loot operation {Operation} failed", operation.Id);
+            if (ex is OperationCanceledException && !_stop.IsCancellationRequested)
+            {
+                // The caller answers the client with its ordinary failure reply (or the actors are kicked when the outcome is unknown).
+                logger.LogWarning("loot operation {Operation} ran out of its {Budget}s budget after {Elapsed} ms (transaction started: {Started})",
+                    operation.Id, allowed.TotalSeconds, clock.ElapsedMilliseconds, transactionStarted);
+            }
+            else
+            {
+                logger.LogError(ex, "loot operation {Operation} failed", operation.Id);
+            }
             if (transactionStarted && outcome != LootOutcome.After)
             {
                 outcome = LootOutcome.Unknown;

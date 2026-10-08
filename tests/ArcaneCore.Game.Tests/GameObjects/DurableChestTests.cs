@@ -207,6 +207,23 @@ public sealed class DurableChestTests
         Assert.Equal([1, 2], rig.Durable.Find(Key)!.Recipients.Order());
     }
 
+    /// <summary>
+    /// An opening whose outcome cannot be read (its settlement's budget ran out mid-commit and the reconciliation failed) freezes no
+    /// character, so nobody is kicked: the opener is still released (SMSG_LOOT_RELEASE_RESPONSE), never left waiting on a window.
+    /// </summary>
+    [Fact]
+    public void UnknownGeneration_StillReleasesTheClient()
+    {
+        Rig rig = CreateRig();
+        (Player alice, FakeSession session) = rig.Join(1);
+
+        rig.Durable.NextOutcome = LootOutcome.Unknown;
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(alice, rig.Chest.Guid));
+        Assert.Single(Packets(session, WorldOpcode.SmsgLootReleaseResponse));
+        Assert.False(session.Kicked);
+        Assert.Null(rig.Chest.Loot);
+    }
+
     [Fact]
     public void PartialTake_SurvivesMapRecreation_WithTheSameContents_WithoutReroll()
     {

@@ -54,7 +54,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         _scopes = scopes;
         _logger = logger;
         _clock = timeProvider ?? TimeProvider.System;
-        Settlements = new EconomySettlements(scopes, logger);
+        Settlements = new EconomySettlements(scopes, logger, () => Options.SettlementBudget);
     }
 
     public const string SectionName = "Economy";
@@ -258,7 +258,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             try
             {
                 using var budget = CancellationTokenSource.CreateLinkedTokenSource(_readStop.Token);
-                budget.CancelAfter(EconomySettlements.Budget);
+                budget.CancelAfter(Settlements.Budget);
                 await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
                 T result = await read(scope.ServiceProvider.GetRequiredService<IEconomyStore>(), budget.Token).ConfigureAwait(false);
                 world.Post(() => done(result));

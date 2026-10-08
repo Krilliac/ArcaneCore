@@ -142,7 +142,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             // before the instance system loads, or a reused instance id could inherit old state.
             if (scope.ServiceProvider.GetService<ILootStateStore>() is { } stateStore)
             {
-                _settlements = new LootSettlements(services.GetRequiredService<IServiceScopeFactory>(), logger);
+                _settlements = new LootSettlements(services.GetRequiredService<IServiceScopeFactory>(), logger, () => ObjectOptions.LootSettlementBudget);
                 _settlements.Load(stateStore.LoadInstanceStatesAsync().GetAwaiter().GetResult());
             }
         }
