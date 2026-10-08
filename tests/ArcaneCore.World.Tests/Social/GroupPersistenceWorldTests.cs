@@ -1,12 +1,16 @@
 using System.Buffers.Binary;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Instances;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Instances;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
+using ArcaneCore.World.Instances;
 using ArcaneCore.World.Social;
+using ArcaneCore.World.Tests.Instances;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -156,6 +160,52 @@ public sealed class GroupPersistenceWorldTests
         Assert.Equal((byte)GroupType.Raid, list[0]);
         var reader = new PacketReader(list.AsSpan(6).ToArray());
         Assert.Equal("Member", reader.ReadCString());
+    }
+
+    [Fact]
+    public async Task ARestoredGroup_TakesBackItsLeadersStoredPermanentBind_AfterARestart()
+    {
+        // vmangos ObjectMgr::LoadGroups attaches the group_instance rows of the leader to each group it loads
+        // (ObjectMgr.cpp:5463-5513): the stored group (groups lane) and the stored group bind (instances lane) meet at start.
+        const uint Deadmines = 36;
+        var groups = new InMemoryGroupStore();
+        WorldTestHost first = WorldTestHost.Start(configureServices: services => services.AddSingleton<IGroupStore>(groups));
+        int leaderId;
+        await using (first)
+        {
+            await using WorldTestClient leader = await first.EnterWorldAsync("LEADE", "Leadere");
+            await using WorldTestClient member = await first.EnterWorldAsync("MEMBE", "Membere");
+            await leader.SendAsync(WorldOpcode.CmsgGroupInvite, CString("membere"));
+            await member.ReadUntilAsync(WorldOpcode.SmsgGroupInvite);
+            await member.SendAsync(WorldOpcode.CmsgGroupAccept, []);
+            await WorldTestHost.WaitForAsync(() => groups.All() is [{ Members.Count: 2 }], "the party to reach storage");
+            leaderId = groups.All()[0].LeaderId;
+        }
+
+        InMemoryInstanceStore.Seed.Value = new InstanceStoreSnapshot([new InstanceRecord(150, Deadmines, 0)], [], [], [])
+        {
+            GroupBinds = [new GroupInstanceBindRecord(leaderId, 150, Permanent: true)],
+        };
+        WorldTestHost second;
+        try
+        {
+            second = Restart(first, groups);
+        }
+        finally
+        {
+            InMemoryInstanceStore.Seed.Value = null;
+        }
+
+        await using (second)
+        {
+            InstanceBind? bind = await second.OnWorldAsync(() =>
+            {
+                Group group = second.WorldServices.GetRequiredService<SocialFeature>().Context.Groups.Groups.Single();
+                return second.WorldServices.GetRequiredService<InstanceFeature>().Instances.GetGroupBind(group, Deadmines);
+            });
+            Assert.NotNull(bind);
+            Assert.Equal((150u, true), (bind.Value.Save.InstanceId, bind.Value.Permanent));
+        }
     }
 
     [Fact]

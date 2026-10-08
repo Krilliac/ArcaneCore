@@ -122,6 +122,17 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
             }
 
             manager.Load(snapshot);
+
+            // Groups restored from storage (SocialGroupPersistenceFeature restores them in its Attach, before the world thread
+            // runs) take back their leader's stored permanent binds, as vmangos ObjectMgr::LoadGroups attaches the group_instance
+            // rows of each group it loads (ObjectMgr.cpp:5463-5513). A group formed later gets them in OnGroupMemberAdded.
+            if (services.GetService<SocialFeature>() is { } restored)
+            {
+                foreach (Game.Groups.Group group in restored.Context.Groups.Groups)
+                {
+                    manager.RestoreStoredGroupBinds(group);
+                }
+            }
         });
         _scheduleTimer = new Timer(_ => world.Post(manager.UpdateSchedule), null, ScheduleIntervalMs, ScheduleIntervalMs);
         _logger.LogInformation("instances: {Instances} stored, {Binds} character binds", snapshot.Instances.Count, snapshot.Binds.Count);
