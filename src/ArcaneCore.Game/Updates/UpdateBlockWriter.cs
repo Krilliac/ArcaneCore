@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Updates;
@@ -114,6 +115,12 @@ public static class UpdateBlockWriter
         if (obj is Items.Item item && item.OwnerGuid == viewer.Guid)
         {
             visible |= UpdateFieldFlags.OwnerOnly | UpdateFieldFlags.ItemOwner;
+        }
+
+        // A unit's owner (its pet's stats) and its charmer get OWNER_ONLY (Object.cpp:1061-1063).
+        if (obj is Unit unit && !ReferenceEquals(unit, viewer) && (unit.OwnerGuid == viewer.Guid || unit.CharmerGuid == viewer.Guid))
+        {
+            visible |= UpdateFieldFlags.OwnerOnly;
         }
 
         return visible;

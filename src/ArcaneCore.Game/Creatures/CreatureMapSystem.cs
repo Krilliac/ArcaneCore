@@ -308,6 +308,14 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
                         creature.PacifiedMs = creature.PacifiedMs <= diffMs ? 0 : creature.PacifiedMs - diffMs; // vmangos Creature::Update
                     }
 
+                    // A possessed creature is moved by its possessor's client (vmangos HandleMoverRelocation): its AI still runs (PetAI's
+                    // possessed branch keeps the melee victim) but no leash, crowd-control movement or generator moves it.
+                    if ((creature.UnitFlags & UnitFlags.Possessed) != 0)
+                    {
+                        UpdateAi(creature, diffMs);
+                        break;
+                    }
+
                     if (!CheckHardLeash(creature, diffMs))
                     {
                         UpdateAi(creature, diffMs);

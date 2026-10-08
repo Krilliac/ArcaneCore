@@ -58,6 +58,7 @@ public sealed partial class SummonService : ISpellSummonSink
         spells.RegisterEffect(SpellEffectName.SummonGuardian, EffectSummonGuardian);
         spells.RegisterEffect(SpellEffectName.SummonCritter, EffectSummonCritter);
         RegisterSummonPet(spells);
+        Charms.Install(spells);
         spells.RegisterEffect(SpellEffectName.SummonDeadPet, context =>
         {
             if (context.Caster is Player player)
@@ -127,6 +128,9 @@ public sealed partial class SummonService : ISpellSummonSink
 
         Unit? owner = creature.GetOwner();
         Map? map = creature.Map;
+
+        // vmangos Pet::Unsummon (Pet.cpp:1118-1136): a charm on the pet ends, and a player possessing it gets its control back.
+        Charms.OnUnsummon(creature);
         map?.Combat.CombatStop(creature);
         switch (links.Kind)
         {
