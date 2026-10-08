@@ -107,16 +107,22 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     internal const long StuckMs = 10_000;
 
     /// <summary>
-    /// A hostile creature this close to the ghost keeps it from reclaiming its body (just beyond the 20-yard same-level aggro
-    /// radius): the reclaim revives the bot where the ghost stands.
+    /// The aggro radius assumed for a hostile creature when the map has no creature system to ask (vmangos' 20 yards for a
+    /// creature of the bot's level, and a margin). With one, each creature's own radius is used (<see cref="Threats"/>).
     /// </summary>
     internal const float HostileClearYards = 25f;
 
     /// <summary>
-    /// A revive spot is at least this far from every hostile creature: <see cref="HostileClearYards"/> and a margin, so a bot
-    /// that stops a yard or two short of it still passes the camped-body rule.
+    /// The camped-body margin: a hostile camps the ghost's revive point when the ghost stands inside the creature's aggro radius
+    /// plus this (the creature may step a little before the revived bot gets up).
     /// </summary>
-    internal const float ReviveSpotClearYards = HostileClearYards + 2.5f;
+    internal const float CampMarginYards = 2.5f;
+
+    /// <summary>
+    /// A revive spot keeps this much more room than <see cref="CampMarginYards"/>, so a bot that stops a yard or two short of it
+    /// still passes the camped-body rule.
+    /// </summary>
+    internal const float ReviveSpotSlackYards = 2.5f;
 
     /// <summary>A revive spot is at most this far (3D) from the body: the reclaim radius less a margin for the walk's last yards.</summary>
     internal const float ReviveSpotMaxYards = CombatConstants.CorpseReclaimRadius - 3f;
@@ -226,7 +232,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         AreaTriggerTemplate? entrance = place == PlayerbotCorpsePlace.OtherMap ? FindEntrance(player, corpse!.MapId) : null;
         bool atCorpse = place == PlayerbotCorpsePlace.ThisMap && WithinReclaimDistance(player, corpse!);
         long wait = atCorpse ? player.Map?.Combat.CorpseReclaimWaitSeconds(player) ?? 0 : 0;
-        bool hostile = atCorpse && wait <= 0 && HostileNear(player);
+        bool hostile = atCorpse && wait <= 0 && Camped(player);
         Vector3? spot = hostile && !stalled ? ChooseReviveSpot(player, corpse!) : null;
         PlayerbotRecoveryStep step = Decide(ghost, place, entrance is not null, atCorpse, wait, hostile, stalled, fallback: false,
             reviveSpotKnown: spot is not null);
@@ -387,30 +393,50 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     }
 
     /// <summary>
-    /// A living hostile creature the ghost can see within <see cref="HostileClearYards"/> of the ghost itself, where CMSG_RECLAIM_CORPSE
-    /// revives it (vmangos MiscHandler.cpp:599), which may be up to the reclaim radius away from the body.
+    /// Whether a hostile creature would attack the bot revived where the ghost stands now (CMSG_RECLAIM_CORPSE revives it in
+    /// place, vmangos MiscHandler.cpp:599): the ghost is inside a threat's aggro radius plus <see cref="CampMarginYards"/>.
     /// </summary>
-    internal static bool HostileNear(Player player)
+    internal static bool Camped(Player player)
     {
         var here = new Vector3(player.X, player.Y, player.Z);
-        foreach (Vector3 hostile in HostilePositions(player))
-            if (Vector3.Distance(hostile, here) <= HostileClearYards)
+        foreach (PlayerbotThreat threat in Threats(player))
+            if (threat.Reaches(here, CampMarginYards))
                 return true;
         return false;
     }
 
-    /// <summary>The living hostile creatures the ghost can see.</summary>
-    private static List<Vector3> HostilePositions(Player player)
+    /// <summary>
+    /// The creatures the ghost can see that would attack it once revived, each with its aggro radius against this player, by the
+    /// server's own on-sight rules (<see cref="CreatureMapSystem.CanAggroOnSight"/>, vmangos BasicAI::MoveInLineOfSight): alive,
+    /// hostile to the player, able to initiate an attack (react state aggressive: not a passive or NO_AGGRO creature, not
+    /// stunned, pacified or unselectable), proximity aggro allowed for it (not a creature that only attacks PvP-flagged players),
+    /// and a radius of <see cref="CreatureMapSystem.GetAttackDistance"/>: the template's detection range (18 by default) less the
+    /// level difference, never under 5, times the aggro rate; a low-level creature reaches less far, a higher one further. Without
+    /// a creature system on the map every hostile counts with <see cref="HostileClearYards"/>.
+    /// </summary>
+    internal static List<PlayerbotThreat> Threats(Player player)
     {
-        var found = new List<Vector3>();
+        var found = new List<PlayerbotThreat>();
         if (player.Map is not { } map) return found;
+        CreatureMapSystem? system = map.FindUpdater<CreatureMapSystem>();
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (map.FindObject(guid) is not Creature creature || !creature.IsInWorld || !creature.IsAlive
-                || !ReferenceEquals(creature.Map, map))
+                || !ReferenceEquals(creature.Map, map) || !map.Combat.Hooks.IsHostileTo(creature, player))
                 continue;
-            if (map.Combat.Hooks.IsHostileTo(creature, player))
-                found.Add(new Vector3(creature.X, creature.Y, creature.Z));
+            var at = new Vector3(creature.X, creature.Y, creature.Z);
+            if (system is null)
+            {
+                found.Add(new PlayerbotThreat(at, HostileClearYards, IgnoresHeight: true, Radii: 0));
+                continue;
+            }
+
+            if (!system.CanInitiateAttack(creature) || !system.IsProximityAggroAllowedFor(creature, player)) continue;
+            float radii = creature.BoundingRadius + player.BoundingRadius;
+            float radius = system.GetAttackDistance(creature, player) + (system.Options.AggroUsesBoundingRadius ? radii : 0f);
+            if (radius <= 0) continue;
+            bool flyer = (creature.Template.InhabitType & 0x04) != 0; // INHABIT_AIR: no height limit
+            found.Add(new PlayerbotThreat(at, radius, flyer, radii));
         }
 
         return found;
@@ -424,7 +450,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
     {
         if (player.Map is null) return null;
         var body = new Vector3(corpse.X, corpse.Y, corpse.Z);
-        List<Vector3> hostiles = HostilePositions(player);
+        List<PlayerbotThreat> hostiles = Threats(player);
         if (_spot is { } kept && IsReviveSpot(kept, body, hostiles)) return kept;
 
         Vector3? found = FindReviveSpot(new Vector3(player.X, player.Y, player.Z), body, hostiles, candidate =>
@@ -447,27 +473,25 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         return found;
     }
 
-    private static bool IsReviveSpot(Vector3 spot, Vector3 body, List<Vector3> hostiles)
+    private static bool IsReviveSpot(Vector3 spot, Vector3 body, IReadOnlyList<PlayerbotThreat> hostiles)
     {
         if (Vector3.Distance(spot, body) > ReviveSpotMaxYards) return false;
-        foreach (Vector3 hostile in hostiles)
-            if (Vector3.Distance(hostile, spot) <= ReviveSpotClearYards) return false;
+        foreach (PlayerbotThreat hostile in hostiles)
+            if (hostile.Reaches(spot, CampMarginYards + ReviveSpotSlackYards)) return false;
         return true;
     }
 
     /// <summary>
     /// A place to reclaim a camped body from, free of world state: candidates on rings round the body, within
     /// <see cref="ReviveSpotMaxYards"/> of it (the server revives within <see cref="CombatConstants.CorpseReclaimRadius"/>) and at
-    /// least <see cref="ReviveSpotClearYards"/> from every hostile, nearest to the ghost first. <paramref name="reach"/> maps a
+    /// out of every threat's reach with <see cref="CampMarginYards"/> and <see cref="ReviveSpotSlackYards"/>, nearest to the ghost first. <paramref name="reach"/> maps a
     /// candidate to the point the ghost can actually walk to (the navigation mesh's, null when it cannot); the first reachable
     /// point that is still a revive spot is taken. At most <see cref="ReviveSpotMaxQueries"/> candidates are asked.
     /// </summary>
-    internal static Vector3? FindReviveSpot(Vector3 ghost, Vector3 body, IReadOnlyList<Vector3> hostiles, Func<Vector3, Vector3?> reach)
+    internal static Vector3? FindReviveSpot(Vector3 ghost, Vector3 body, IReadOnlyList<PlayerbotThreat> hostileList, Func<Vector3, Vector3?> reach)
     {
-        List<Vector3> hostileList = hostiles as List<Vector3> ?? [.. hostiles];
         var candidates = new List<Vector3> { body };
-        // Rings every few yards, finely spaced: a camp can leave only a thin slice of the reclaim disc clear (the Frostmane camp
-        // round Mirthblade's body left a pocket on the far rim, 29 yards from the nearest troll).
+        // Rings every few yards, finely spaced: a camp can leave only a thin slice of the reclaim disc clear.
         for (float radius = ReviveSpotRingYards; radius <= ReviveSpotMaxYards - 1f; radius += ReviveSpotRingYards)
             for (int step = 0; step < ReviveSpotAngles; step++)
             {
@@ -531,4 +555,22 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
     private static float Distance(WorldObject from, float x, float y, float z)
         => MathF.Sqrt(MathF.Pow(from.X - x, 2) + MathF.Pow(from.Y - y, 2) + MathF.Pow(from.Z - z, 2));
+}
+
+/// <summary>
+/// A creature that would attack a revived bot (<see cref="PlayerbotRecovery.Threats"/>): where it stands, its aggro radius against
+/// the bot, whether it is free of the 3-yard height limit (a flyer), and the bounding radii the height limit takes off.
+/// </summary>
+internal readonly record struct PlayerbotThreat(Vector3 Position, float Radius, bool IgnoresHeight, float Radii)
+{
+    /// <summary>
+    /// Whether a bot standing at <paramref name="spot"/> is inside this creature's aggro reach plus <paramref name="margin"/>
+    /// (vmangos BasicAI::MoveInLineOfSight via CreatureMapSystem.IsInAggroReach: plain 3D distance, strictly inside; a unit more
+    /// than CREATURE_Z_ATTACK_RANGE above or below a creature that cannot fly is not aggroed).
+    /// </summary>
+    internal bool Reaches(Vector3 spot, float margin)
+    {
+        if (!IgnoresHeight && MathF.Max(0f, MathF.Abs(Position.Z - spot.Z) - Radii) > CreatureAggro.MaxZDistance) return false;
+        return Vector3.Distance(Position, spot) < Radius + margin;
+    }
 }

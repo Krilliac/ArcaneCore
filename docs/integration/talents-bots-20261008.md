@@ -159,16 +159,25 @@ Update 2 (branch `claude/bot-revive`): the last two items.
   round to its side, the bot faced 78 to 106 degrees away from it. Fix: in melee the brain sends `MSG_MOVE_SET_FACING` to the victim
   before the swing (`PlayerbotMotion.Face`, as the client does on attack). Replayed again, it travelled 2700 to 3070 yards in 10
   minutes alive, the longest still stretch 35 to 60 seconds.
-* A ghost whose body is camped no longer waits for the camp to leave. `PlayerbotRecovery` looks for a spot inside the reclaim radius
-  (vmangos `CORPSE_RECLAIM_RADIUS` 39, `HandleReclaimCorpseOpcode`: `IsWithinDistInMap` of the body, then `ResurrectPlayer` where the
-  player stands) that is more than 27.5 yards from every hostile it sees (the 25 yard camped rule plus a margin) and reachable on
-  the navigation mesh within 90 yards, nearest to the ghost first (rings every 3 yards, 24 directions, at most 16 path queries),
-  walks there (`WalkToReviveSpot`) and reclaims. Walking to a spot does not count as progress, so a camp that keeps moving still
-  ends in the spirit healer after 60 seconds; with no spot it waits exactly as before. On the real Coldridge terrain a ghost with two
-  hostiles within 25 yards now revives at a clear spot inside the radius; the same test with the search disabled ends in the
-  spirit-healer fault.
-* Mirthblade in the replay still takes the spirit healer, and honestly so: nine hostile creatures stand round its body, and the only
-  ground in the radius that is 27.5 yards from all of them is a ledge the mesh reaches only by a route that leaves the radius. The
-  search finds no spot there. Judging each creature by its real aggro radius (vmangos `GetAttackDistance`: 20 yards less the level
-  difference, at least 5) instead of a flat 25 would open ground for low-level creatures such as the whelps; it also changes the
-  camped-body rule for every ghost, so it was not done here.
+* A ghost whose body is camped no longer waits for the camp to leave, and "camped" now means what the server would do. A creature
+  camps the revive point only when it would attack the revived bot by the server's own on-sight rules (`CreatureMapSystem`,
+  vmangos `BasicAI::MoveInLineOfSight`): alive, hostile, able to initiate an attack (react state aggressive, so not passive or
+  NO_AGGRO, not stunned or pacified), proximity aggro allowed (not a PvP-only attacker), within 3 yards in height unless it flies,
+  and inside its own aggro radius (`GetAttackDistance`: the template detection range, 18 by default, less the level difference,
+  at least 5, times the aggro rate) plus a 2.5 yard margin. The flat 25 yards is kept only for a map without a creature system.
+  When the ghost is camped, `PlayerbotRecovery` looks for a spot inside the reclaim radius (vmangos `CORPSE_RECLAIM_RADIUS` 39,
+  `HandleReclaimCorpseOpcode`: `IsWithinDistInMap` of the body, then `ResurrectPlayer` where the player stands) out of every
+  threat's reach with a further 2.5 yards, reachable on the navigation mesh within 90 yards, nearest to the ghost first (rings
+  every 3 yards, 24 directions, at most 16 path queries), walks there (`WalkToReviveSpot`) and reclaims. Walking to a spot is not
+  progress, so a camp that keeps moving still ends in the spirit healer after 60 seconds; with no spot it waits as before.
+* Mirthblade, replayed three times: it reaches its body at 36 seconds and reclaims it there, 38.8 yards from the body (the edge of
+  the reclaim radius), without the spirit healer, and is alive for the rest of the run (2036 to 2552 yards travelled). By their
+  own aggro radius (detection range less the level difference) the creatures round the body do not reach the ghost there; under
+  the flat 25 yards it took the spirit healer at 100 seconds.
+* Tests: a level-20 bot beside a level-1 monster 10 yards away (radius 5) and a NO_AGGRO monster 4 yards away now reclaims in
+  place (it waited under the flat rule; proven by switching the creature system off). The camp that covers the whole radius moved
+  from 22 to 15 yards (level-1 monsters reach 18 yards against a level-1 bot, so 22 no longer camps). The clear-ground and
+  real-terrain tests check the spot and the revive point against each creature's own reach instead of 25 yards.
+* Still open: in a replay of all five bots, Ironwander died twice near Kharanos (around 520 s) and both times took the spirit
+  healer within 10 seconds of starting its corpse run from the graveyard above it (`-5156, -865, 507`, the body 280 to 290 yards
+  away): the walk stopped closing on the body for `StuckMs`. Not investigated; it is a corpse-run route, not the camped-body rule.
