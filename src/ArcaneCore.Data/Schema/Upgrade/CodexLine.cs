@@ -81,7 +81,10 @@ public static class CodexLine
                 $"copy the NPC service metadata of {NpcMetadataTable} (Codex world step 26, dropped by the merge) into the creature_template " +
                 $"columns of world step {CreatureNpcMetadataDataModule.Version} (the table itself is left in place)",
                 CountNpcMetadataAsync,
-                MoveNpcMetadataAsync),
+                MoveNpcMetadataAsync)
+            {
+                Sql = db => [MoveNpcMetadataSql(db)],
+            },
         ],
     };
 
@@ -106,6 +109,10 @@ public static class CodexLine
     /// metadata row takes that row's five values. Running it again writes the same values.
     /// </summary>
     private static async Task<long> MoveNpcMetadataAsync(DbContext db, CancellationToken ct)
+        => await db.Database.ExecuteSqlRawAsync(MoveNpcMetadataSql(db), ct).ConfigureAwait(false);
+
+    /// <summary>The move's one statement, shared by the apply and the operator-applied script so the two cannot differ.</summary>
+    private static string MoveNpcMetadataSql(DbContext db)
     {
         ISqlGenerationHelper sql = db.GetService<ISqlGenerationHelper>();
         (string template, string metadata, string match) = NpcMetadataSql(db);
@@ -113,8 +120,7 @@ public static class CodexLine
         string assignments = string.Join(", ", s_npcColumns.Select(c =>
             $"{sql.DelimitIdentifier(c.Template)} = (SELECT {metadata}.{sql.DelimitIdentifier(c.Codex)} FROM {metadata} WHERE {entry})"));
         // Only delimited constant identifiers, no values: nothing to parameterise.
-        string update = $"UPDATE {template} SET {assignments} WHERE EXISTS {match}";
-        return await db.Database.ExecuteSqlRawAsync(update, ct).ConfigureAwait(false);
+        return $"UPDATE {template} SET {assignments} WHERE EXISTS {match}";
     }
 
     private static (string Template, string Metadata, string Match) NpcMetadataSql(DbContext db)

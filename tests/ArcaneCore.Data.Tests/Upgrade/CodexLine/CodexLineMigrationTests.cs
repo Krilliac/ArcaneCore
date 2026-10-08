@@ -395,7 +395,183 @@ public sealed class CodexLineMigrationTests : IDisposable
         await AssertSeededCharacterRowsAsync(characters);
     }
 
+    // --- operator-applied SQL (arcane-db plan --script) ----------------------------------------------
+
+    /// <summary>
+    /// The script of a Codex world database that holds NPC metadata carries the same metadata move the apply runs, right
+    /// after this build's step 21 creates the columns and before the version write; run by hand it leaves the database
+    /// exactly as the ordinary upgrade does (same tables, columns, indexes, version and every row). A script that advanced
+    /// the version without the move would strand the metadata: the database would then read as this build's own line
+    /// (its version is past the Codex range) and no later upgrade would move it.
+    /// </summary>
+    [Theory]
+    [InlineData(26)]
+    [InlineData(27)]
+    public async Task PlanScript_OfACodexWorldWithNpcMetadata_RunByHand_EndsExactlyLikeTheUpgrade(int codexVersion)
+    {
+        string scripted = await NewCodexWorldAsync(codexVersion);
+        string upgraded = Path.Combine(_directory, $"codex-world-{codexVersion}-upgraded.db");
+        File.Copy(scripted, upgraded);
+        string fingerprint = UpgradeTestSupport.FileFingerprint(scripted);
+
+        (int code, string script, string error) = await UpgradeTestSupport.RunCliAsync(Single(scripted), "plan", "--script", "--component", "world");
+        Assert.Equal(DbUpgradeExitCodes.UpgradePending, code);
+        Assert.Equal(string.Empty, error);
+        Assert.Equal(fingerprint, UpgradeTestSupport.FileFingerprint(scripted)); // plan writes nothing
+        Assert.DoesNotContain("NOT RENDERED", script, StringComparison.Ordinal);
+
+        // Placement: right after the last column of step 21 (one comment line between), before the next step's DDL and
+        // the first version write.
+        string[] lines = script.ReplaceLineEndings("\n").Split('\n');
+        int lastColumn = Array.FindLastIndex(lines, l => l.StartsWith("ALTER TABLE", StringComparison.Ordinal)
+                                                         && l.Contains($"\"{nameof(CreatureTemplateRow.TrainerSpell)}\"", StringComparison.Ordinal));
+        int move = Array.FindIndex(lines, l => l.StartsWith("UPDATE \"creature_template\" SET", StringComparison.Ordinal));
+        int firstVersion = Array.FindIndex(lines, l => l.StartsWith("UPDATE \"world_schema\"", StringComparison.Ordinal));
+        Assert.True(lastColumn >= 0 && move == lastColumn + 2 && firstVersion > move,
+            $"column {lastColumn}, move {move}, version {firstVersion}:\n{script}");
+        Assert.StartsWith("-- data move (1 rows now): copy the NPC service metadata", lines[move - 1], StringComparison.Ordinal);
+        Assert.Contains(Codex.NpcMetadataTable, lines[move], StringComparison.Ordinal);
+        Assert.Single(lines, l => l.StartsWith("UPDATE \"creature_template\"", StringComparison.Ordinal));
+
+        await CodexLineDatabase.ExecuteAsync(scripted, script);
+
+        (code, string output, error) = await UpgradeTestSupport.RunCliAsync(Single(upgraded), "upgrade", "--confirm-backup", "--component", "world");
+        Assert.True(code == DbUpgradeExitCodes.Ok, output + error);
+
+        Assert.Equal(WorldDbContext.Schema.CurrentVersion, await VersionAsync(scripted, "world"));
+        await using (WorldDbContext a = World(scripted))
+        await using (WorldDbContext b = World(upgraded))
+        {
+            Assert.Equal(await UpgradeTestSupport.SnapshotAsync(b, WorldDbContext.Schema), await UpgradeTestSupport.SnapshotAsync(a, WorldDbContext.Schema));
+            CreatureTemplateRow trainer = await a.Set<CreatureTemplateRow>().AsNoTracking().SingleAsync(t => t.Entry == 5113);
+            Assert.Equal((4105u, 0u, 1u, 0u, 0u), (trainer.GossipMenuId, trainer.TrainerType, trainer.TrainerClass, trainer.TrainerRace, trainer.TrainerSpell));
+        }
+
+        Assert.Equal(await DumpRowsAsync(upgraded), await DumpRowsAsync(scripted));
+        await AssertNoDriftAsync(scripted, "world", foreignTables: [Codex.NpcMetadataTable]);
+        (code, output, _) = await UpgradeTestSupport.RunCliAsync(Single(scripted), "plan", "--component", "world");
+        Assert.True(code == DbUpgradeExitCodes.Ok, output);
+    }
+
+    /// <summary>
+    /// A data move without SQL (a line definition whose move only runs as code) refuses the whole script: only comments
+    /// are written, no DDL and above all no version write, so nothing can record the migration as done without its rows.
+    /// </summary>
+    [Fact]
+    public async Task PlanScript_OfAMigrationWithADataMoveThatHasNoSql_IsRefused_WithoutAnyStatement()
+    {
+        string path = await NewCodexWorldAsync(CodexLineDatabase.WorldVersion);
+        string fingerprint = UpgradeTestSupport.FileFingerprint(path);
+        ForeignLine codeOnly = new()
+        {
+            Name = Codex.World.Name,
+            DivergedAfter = Codex.World.DivergedAfter,
+            Steps = Codex.World.Steps,
+            DataMoves = [.. Codex.World.DataMoves.Select(m => m with { Sql = null })],
+        };
+        SchemaDefinition schema = WorldDbContext.Schema;
+        var definition = new SchemaDefinition
+        {
+            Component = schema.Component,
+            CurrentVersion = schema.CurrentVersion,
+            Version1Tables = schema.Version1Tables,
+            Steps = schema.Steps,
+            ForeignLines = [codeOnly],
+            ReservedGapVersions = schema.ReservedGapVersions,
+        };
+
+        SchemaPlan plan;
+        await using (WorldDbContext db = World(path))
+        {
+            plan = await SchemaPlanner.PlanAsync(db, definition, includeScript: true);
+        }
+
+        Assert.Null(plan.FirstRefusal); // the apply runs the move as code: only the script is refused
+        Assert.Single(plan.Steps[0].DataMoves, m => m.Script is null && m.Rows == 1);
+        var output = new StringWriter();
+        string? refusal = PlanFormatter.WriteScript(output, plan);
+
+        Assert.NotNull(refusal);
+        Assert.Contains("cannot write as SQL", refusal, StringComparison.Ordinal);
+        Assert.Contains("migrate-codex --apply", refusal, StringComparison.Ordinal);
+        string[] lines = [.. output.ToString().ReplaceLineEndings("\n").Split('\n').Where(l => l.Length > 0)];
+        Assert.Equal(2, lines.Length);
+        Assert.All(lines, l => Assert.StartsWith("-- ", l, StringComparison.Ordinal));
+        Assert.Equal(fingerprint, UpgradeTestSupport.FileFingerprint(path));
+
+        // The shipped line renders its move, so the same plan with the real definition writes a script.
+        await using (WorldDbContext db = World(path))
+        {
+            Assert.Null(PlanFormatter.WriteScript(new StringWriter(), await SchemaPlanner.PlanAsync(db, WorldDbContext.Schema, includeScript: true)));
+        }
+    }
+
+    /// <summary>The script of a Codex database without NPC metadata (before Codex step 26) has no data move to render.</summary>
+    [Fact]
+    public async Task PlanScript_OfACodexWorldBeforeTheMetadataStep_RunByHand_EndsExactlyLikeTheUpgrade()
+    {
+        string scripted = await NewCodexWorldAsync(25);
+        string upgraded = Path.Combine(_directory, "codex-world-25-upgraded.db");
+        File.Copy(scripted, upgraded);
+
+        (int code, string script, string error) = await UpgradeTestSupport.RunCliAsync(Single(scripted), "plan", "--script", "--component", "world");
+        Assert.Equal(DbUpgradeExitCodes.UpgradePending, code);
+        Assert.Equal(string.Empty, error);
+        Assert.DoesNotContain("UPDATE \"creature_template\"", script, StringComparison.Ordinal);
+        await CodexLineDatabase.ExecuteAsync(scripted, script);
+        (code, string output, error) = await UpgradeTestSupport.RunCliAsync(Single(upgraded), "upgrade", "--confirm-backup", "--component", "world");
+        Assert.True(code == DbUpgradeExitCodes.Ok, output + error);
+
+        Assert.Equal(WorldDbContext.Schema.CurrentVersion, await VersionAsync(scripted, "world"));
+        Assert.Equal(await DumpRowsAsync(upgraded), await DumpRowsAsync(scripted));
+    }
+
     // --- helpers ------------------------------------------------------------------------------------
+
+    /// <summary>Every table of the SQLite file with its columns and every row, in a stable order.</summary>
+    private static async Task<string> DumpRowsAsync(string path)
+    {
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection(CodexLineDatabase.ConnectionString(path));
+        await connection.OpenAsync();
+        var tables = new List<string>();
+        await using (Microsoft.Data.Sqlite.SqliteCommand list = connection.CreateCommand())
+        {
+            list.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name";
+            await using Microsoft.Data.Sqlite.SqliteDataReader reader = await list.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                tables.Add(reader.GetString(0));
+            }
+        }
+
+        var text = new System.Text.StringBuilder();
+        foreach (string table in tables)
+        {
+            await using Microsoft.Data.Sqlite.SqliteCommand select = connection.CreateCommand();
+            select.CommandText = $"SELECT * FROM \"{table}\"";
+            await using Microsoft.Data.Sqlite.SqliteDataReader reader = await select.ExecuteReaderAsync();
+            text.Append(table).Append(':');
+            for (int i = 0; i < reader.FieldCount; i++)
+            {
+                text.Append(' ').Append(reader.GetName(i));
+            }
+
+            text.Append('\n');
+            var rows = new List<string>();
+            while (await reader.ReadAsync())
+            {
+                rows.Add(string.Join('|', Enumerable.Range(0, reader.FieldCount).Select(i =>
+                    reader.IsDBNull(i) ? "NULL" : Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture))));
+            }
+
+            foreach (string row in rows.Order(StringComparer.Ordinal))
+            {
+                text.Append("  ").Append(row).Append('\n');
+            }
+        }
+
+        return text.ToString();
+    }
 
     private static SchemaDefinition AuthDbContextSchema() => ArcaneCore.Data.Auth.AuthDbContext.Schema;
 

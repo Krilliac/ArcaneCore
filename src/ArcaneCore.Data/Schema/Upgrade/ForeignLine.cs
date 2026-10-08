@@ -37,7 +37,16 @@ public sealed record ForeignLineDataMove(
     int AfterMergedVersion,
     string Description,
     Func<DbContext, CancellationToken, Task<long>> CountAsync,
-    Func<DbContext, CancellationToken, Task<long>> ApplyAsync);
+    Func<DbContext, CancellationToken, Task<long>> ApplyAsync)
+{
+    /// <summary>
+    /// The statements <see cref="ApplyAsync"/> issues, in the context's SQL dialect, for the operator-applied script
+    /// (<c>arcane-db plan --script</c>); null when the move cannot be written as plain SQL, in which case the script of a
+    /// plan that needs it is refused rather than written without it (its version write would hide the missing rows from
+    /// every later migration).
+    /// </summary>
+    public Func<DbContext, IReadOnlyList<string>>? Sql { get; init; }
+}
 
 /// <summary>
 /// The schema numbering of another development line that shares this build's history up to

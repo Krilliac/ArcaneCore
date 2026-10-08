@@ -250,7 +250,11 @@ public static class DbUpgradeCli
                     db => SchemaPlanner.PlanAsync(db, target.Spec.Schema, includeScript: script, ct)).ConfigureAwait(false);
                 if (script)
                 {
-                    PlanFormatter.WriteScript(_out, plan);
+                    if (PlanFormatter.WriteScript(_out, plan) is { } refusal)
+                    {
+                        await _err.WriteLineAsync($"error: {target.Spec.Name}: refused: {refusal}").ConfigureAwait(false);
+                        code = Worse(code, DbUpgradeExitCodes.Refused);
+                    }
                 }
                 else if (json)
                 {
