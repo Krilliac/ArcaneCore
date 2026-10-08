@@ -519,14 +519,8 @@ public sealed partial class SpellSystem
         }
     }
 
-    /// <summary>AURAAPPLICATIONS holds stack count - 1 (vmangos UpdateAuraApplication).</summary>
-    private static void WriteAuraApplications(SpellAuraHolder holder)
-    {
-        if (holder.Slot != SpellAuraHolder.NoSlot)
-        {
-            SetSlotByte(holder.Target, UpdateFields.UnitFieldAuraapplications, holder.Slot, (byte)(Math.Max(holder.StackAmount, (byte)1) - 1));
-        }
-    }
+    /// <summary>AURAAPPLICATIONS holds charges * stacks - 1, clamped (vmangos UpdateAuraApplication, <see cref="SpellAuraHolder.UpdateAuraApplication"/>).</summary>
+    private static void WriteAuraApplications(SpellAuraHolder holder) => holder.UpdateAuraApplication();
 
     private static void SetSlotByte(Unit target, int baseIndex, int slot, byte value)
     {

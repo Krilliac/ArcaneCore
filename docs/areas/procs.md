@@ -21,7 +21,9 @@ A hit path describes what happened with a `ProcEvent` (vmangos `ProcSystemArgume
    attacker side, the CHANCE_OF_SUCCESS spell modifiers);
 3. handles them (`HandleTriggers`, Unit.cpp:4245-4345): each effect the event's spell can proc (the row's family mask, else
    `Aura::CanProcFrom`) runs the spell's proc script or its aura type's handler; OK spends a charge (FAILED does with
-   PROC_FAILURE_BURNS_CHARGE); the holder goes with its last charge.
+   PROC_FAILURE_BURNS_CHARGE); the holder goes with its last charge. Every charge change (proc, absorb shield, magnet, restore, custom
+   charges) rewrites the visible slot's AURAAPPLICATIONS byte to `charges * stacks` clamped to 255, minus one (`SpellAuraHolder.Charges`,
+   vmangos `UpdateAuraApplication`, SpellAuras.cpp:7547-7560), so the client shows the remaining charges.
 
 `TriggerProccedSpell` casts a triggered spell as a cast made by the aura (no power, no procs of its own unless NOT_A_PROC) and puts the row's
 hidden cooldown on it (`AddProcCooldown`, server side only).

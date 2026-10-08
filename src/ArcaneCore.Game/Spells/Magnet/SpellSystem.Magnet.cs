@@ -53,8 +53,7 @@ public sealed partial class SpellSystem
             }
             if (holder.Charges > 0)
             {
-                holder.Charges--;
-                WriteAuraApplications(holder);
+                holder.Charges--; // rewrites the client's charge count (SpellAuraHolder.UpdateAuraApplication)
                 if (holder.Charges == 0)
                 {
                     // Removing the caster's source also removes its area children. A missed or

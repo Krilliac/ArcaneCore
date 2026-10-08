@@ -601,7 +601,10 @@ public sealed partial class SpellSystem
             ? (SpellModifiers as Mods.ISpellModEngine)?.ClassMask(spell, effectIndex) ?? spell.Effects[effectIndex].ItemType
             : 0;
 
-    /// <summary>vmangos SpellAuraHolder::DropAuraCharge: one charge less; true when the last one is gone.</summary>
+    /// <summary>
+    /// vmangos SpellAuraHolder::DropAuraCharge: one charge less (the <see cref="SpellAuraHolder.Charges"/> setter rewrites the client's
+    /// AURAAPPLICATIONS count); true when the last one is gone.
+    /// </summary>
     private static bool DropAuraCharge(SpellAuraHolder holder)
     {
         if (holder.Charges <= 0)

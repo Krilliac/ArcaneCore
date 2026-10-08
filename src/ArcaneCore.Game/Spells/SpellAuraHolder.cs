@@ -218,8 +218,47 @@ public sealed class SpellAuraHolder
 
     public byte StackAmount { get; internal set; } = 1;
 
-    /// <summary>Remaining proc charges (Spell.dbc procCharges at application; 0 = unlimited). Persisted; consumption belongs to the proc system.</summary>
-    public int Charges { get; internal set; }
+    /// <summary>
+    /// Remaining proc charges (Spell.dbc procCharges at application; 0 = unlimited). Persisted; consumption belongs to the proc system. Every
+    /// change rewrites the visible slot's AURAAPPLICATIONS byte (vmangos SpellAuraHolder::SetAuraCharges / DropAuraCharge, SpellAuras.h:202-218),
+    /// so the client's charge count follows each spent charge.
+    /// </summary>
+    public int Charges
+    {
+        get => _charges;
+        internal set
+        {
+            if (_charges == value)
+            {
+                return;
+            }
+
+            _charges = value;
+            UpdateAuraApplication();
+        }
+    }
+
+    private int _charges;
+
+    /// <summary>
+    /// vmangos SpellAuraHolder::UpdateAuraApplication (SpellAuras.cpp:7547-7560): a visible slot's AURAAPPLICATIONS byte holds
+    /// <c>charges * stacks</c> (the stacks alone without charges), clamped to 255, minus one ("field expect count-1 for proper amount show, also
+    /// prevent overflow at client side"). Called on every charge or stack change and when the slot is first written.
+    /// </summary>
+    internal void UpdateAuraApplication()
+    {
+        if (Slot == NoSlot || IsRemoved)
+        {
+            return;
+        }
+
+        long stacks = Math.Max(StackAmount, (byte)1);
+        long count = _charges > 0 ? _charges * stacks : stacks;
+        uint value = (uint)(Math.Min(count, 255) - 1);
+        int index = UpdateFields.UnitFieldAuraapplications + (Slot / 4);
+        int shift = (Slot % 4) * 8;
+        Target.SetUInt32(index, (Target.GetUInt32(index) & ~(0xFFu << shift)) | (value << shift));
+    }
 
     public bool IsRemoved { get; internal set; }
 

@@ -105,6 +105,8 @@ public sealed class SpellPersistenceTests
 
         Assert.Equal(3, holder.StackAmount);
         Assert.Equal(2, holder.Charges);
+        int applications = UpdateFields.UnitFieldAuraapplications + (holder.Slot / 4);
+        Assert.Equal(5, player.GetByte(applications, holder.Slot % 4)); // the client sees 2 charges * 3 stacks (vmangos UpdateAuraApplication)
         Assert.Equal(45, holder.Auras[0]!.Amount);
         Assert.Null(holder.Auras[1]);
 
