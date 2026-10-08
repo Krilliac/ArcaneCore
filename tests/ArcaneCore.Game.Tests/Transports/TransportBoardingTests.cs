@@ -69,6 +69,7 @@ public sealed class TransportBoardingTests
         Player player = TestWorld.CreatePlayer(1, 100, 0, new FakeSession(1));
         world.AddPlayer(player);
         ClientMoves(world, player, Aboard(ferry, 4f, 0f, 6f));
+        Assert.Same(ferry, player.Transport);
 
         ClientMoves(world, player, new MovementInfo { X = 90f, Y = 5f, Z = 0f });
 
