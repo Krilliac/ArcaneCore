@@ -33,6 +33,26 @@ public sealed class PlayerbotConfigurationBindingTests
         Assert.Throws<InvalidOperationException>(options.Validate);
     }
 
+    [Fact]
+    public void ThePartySection_BindsThroughTheActualDaemonRegistration()
+    {
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [PlayerbotOptions.SectionName + ":Party:InvitePolicy"] = "None",
+            [PlayerbotOptions.SectionName + ":Party:Allowlist:0"] = "Guildleader",
+            [PlayerbotOptions.SectionName + ":Party:LootRoll"] = "Greed",
+            [PlayerbotOptions.SectionName + ":Party:TeleportToLeader"] = "false",
+        }).Build();
+        using ServiceProvider services = new ServiceCollection().AddLogging().AddWorldDaemon(configuration).BuildServiceProvider();
+        PlayerbotOptions options = services.GetRequiredService<IOptions<PlayerbotOptions>>().Value;
+        options.Validate();
+        Assert.Equal(PlayerbotInvitePolicy.None, options.Party.InvitePolicy);
+        Assert.Equal(["Guildleader"], options.Party.Allowlist);
+        Assert.Equal(PlayerbotLootRoll.Greed, options.Party.LootRoll);
+        Assert.False(options.Party.TeleportToLeader);
+        Assert.True(options.Party.AutoRevive);
+    }
+
     private static IConfiguration Configuration(params string[] maps)
         => new ConfigurationBuilder().AddInMemoryCollection(maps.Select((map, index) =>
             new KeyValuePair<string, string?>(PlayerbotOptions.SectionName + ":AllowedMaps:" + index, map))).Build();

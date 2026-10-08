@@ -363,6 +363,96 @@ public sealed class ManagedPlayerbotLifecycleTests
         Assert.StartsWith("quarantined (fault 1/3): start-failed: login-refused", record.ErrorCode);
     }
 
+    /// <summary>
+    /// A bot in a real player's group is driven by its party AI (vmangos PartyBotAI), not the brain; when the group is gone the brain
+    /// drives it again, a fresh one (the old one's routes and targets belong to another place), and the bot reports its own goals.
+    /// </summary>
+    [Fact]
+    public async Task AGroupedBot_SwitchesToThePartyAI_AndBackToAFreshBrainWhenUngrouped()
+    {
+        await using WorldTestHost host = Party.PartyTestHost.Start(o => o.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone);
+        Guid id = await Party.PartyTestHost.StartBotAsync(host, "Lifeparty");
+        ManagedPlayerbotFeature feature = Party.PartyTestHost.Feature(host);
+        Assert.False(feature.IsPartyDriven(id));
+        await using WorldTestClient master = await host.EnterWorldAsync("LIFEMASTER", "Lifemaster");
+
+        await master.SendAsync(Protocol.WorldOpcode.CmsgGroupInvite, Party.PartyTestHost.CString("Lifeparty"));
+        await host.WaitForWorldAsync(() => feature.IsPartyDriven(id), "the party AI drives the grouped bot");
+        await host.WaitForWorldAsync(() => feature.Snapshot().Single(s => s.BotId == id).Goal is PlayerbotGoalKind.Follow or PlayerbotGoalKind.Assist,
+            "the bot reports its party goal");
+        PlayerbotBrain grouped = (await host.OnWorldAsync(() => feature.FindBrain(id)))!;
+
+        await master.SendAsync(Protocol.WorldOpcode.CmsgGroupDisband, []);
+        await host.WaitForWorldAsync(() => !feature.IsPartyDriven(id), "the brain drives the ungrouped bot");
+        Assert.NotSame(grouped, await host.OnWorldAsync(() => feature.FindBrain(id)));
+        await host.WaitForWorldAsync(() => feature.Snapshot().Single(s => s.BotId == id).Goal is not (PlayerbotGoalKind.Follow or PlayerbotGoalKind.Assist),
+            "the bot reports its own goal again");
+        Assert.Null(await host.OnWorldAsync(() => feature.FindParty(id)));
+    }
+
+    /// <summary>
+    /// A controller that takes over a grouped bot (scripted mode) drives it alone: the party AI lets go, so nothing reports the party
+    /// goal, master or mode while it does. When the controller detaches, the bot (still grouped) is engaged afresh.
+    /// </summary>
+    [Fact]
+    public async Task AControllerTakingOverAGroupedBot_ClearsThePartyState_UntilItDetaches()
+    {
+        await using WorldTestHost host = Party.PartyTestHost.Start(o => o.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone);
+        Guid id = await Party.PartyTestHost.StartBotAsync(host, "Lifescript");
+        ManagedPlayerbotFeature feature = Party.PartyTestHost.Feature(host);
+        await using WorldTestClient master = await host.EnterWorldAsync("LIFESCRIPTM", "Lifescriptm");
+        await master.SendAsync(Protocol.WorldOpcode.CmsgGroupInvite, Party.PartyTestHost.CString("Lifescript"));
+        await host.WaitForWorldAsync(() => feature.IsPartyDriven(id), "the party AI drives the grouped bot");
+
+        Assert.True(await feature.SetControllerAsync(id, new IdleController()));
+
+        Assert.False(feature.IsPartyDriven(id));
+        Assert.Null(await host.OnWorldAsync(() => feature.FindParty(id)));
+        PlayerbotInspection scripted = (await feature.InspectAsync("Lifescript"))!;
+        Assert.Null(scripted.Master);
+        Assert.Null(scripted.PartyMode);
+        Assert.False(scripted.Goal is PlayerbotGoalKind.Follow or PlayerbotGoalKind.Assist, scripted.Goal.ToString());
+        await host.WaitForWorldAsync(() => feature.Snapshot().Single(s => s.BotId == id).Goal is not (PlayerbotGoalKind.Follow or PlayerbotGoalKind.Assist),
+            "the snapshot reports no party goal");
+
+        Assert.True(await feature.SetControllerAsync(id, null));
+        await host.WaitForWorldAsync(() => feature.IsPartyDriven(id), "the party AI drives the still grouped bot again");
+        Assert.Equal("Lifescriptm", (await feature.InspectAsync("Lifescript"))!.Master);
+    }
+
+    private sealed class IdleController : IPlayerbotController
+    {
+        public void Tick(PlayerbotControllerContext context, uint elapsedMs) { }
+
+        public void Detached(Guid botId) { }
+    }
+
+    /// <summary>
+    /// A master who logs out is waited for (<see cref="PlayerbotPartyOptions.MasterTimeoutSeconds"/>); then the bot leaves the group
+    /// (vmangos requestRemoval) and goes back to the brain.
+    /// </summary>
+    [Fact]
+    public async Task AMasterWhoLogsOut_IsWaitedFor_ThenTheBotLeavesTheGroupForTheBrain()
+    {
+        await using WorldTestHost host = Party.PartyTestHost.Start(o =>
+        {
+            o.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone;
+            o.Party.MasterTimeoutSeconds = 1;
+        });
+        Guid id = await Party.PartyTestHost.StartBotAsync(host, "Lifewaiter");
+        ManagedPlayerbotFeature feature = Party.PartyTestHost.Feature(host);
+        WorldTestClient master = await host.EnterWorldAsync("LIFEGONE", "Lifegone");
+        await master.SendAsync(Protocol.WorldOpcode.CmsgGroupInvite, Party.PartyTestHost.CString("Lifewaiter"));
+        await host.WaitForWorldAsync(() => feature.IsPartyDriven(id), "the party AI drives the grouped bot");
+        Game.ObjectGuid bot = await host.PlayerStateAsync("Lifewaiter", p => p.Guid);
+        Game.Groups.GroupManager groups = host.WorldServices.GetRequiredService<ArcaneCore.World.Social.SocialFeature>().Context.Groups;
+
+        await master.DisposeAsync();
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Lifegone") is null, "the master logs out");
+        await host.WaitForWorldAsync(() => groups.GetGroup(bot) is null, "the bot leaves the group after the timeout");
+        await host.WaitForWorldAsync(() => !feature.IsPartyDriven(id), "the brain drives the bot again");
+    }
+
     private static async Task WaitAsync(Func<Task<bool>> condition, string what, int seconds)
     {
         DateTime deadline = DateTime.UtcNow.AddSeconds(seconds);

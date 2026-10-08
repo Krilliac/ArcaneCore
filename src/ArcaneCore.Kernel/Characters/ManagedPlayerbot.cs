@@ -1,7 +1,8 @@
 namespace ArcaneCore.Kernel.Characters;
 
 public enum ManagedPlayerbotState { Stopped, Starting, Running, Stopping, Faulted }
-public enum PlayerbotGoalKind { Explore, Quest, Grind, Combat, Loot, Rest, Vendor, Train, Recover }
+/// <summary>A bot's current goal. Persisted as its number (managed_playerbot.Goal): append only, never reorder.</summary>
+public enum PlayerbotGoalKind { Explore, Quest, Grind, Combat, Loot, Rest, Vendor, Train, Recover, Follow, Assist }
 
 /// <summary>Durable server ownership, separate from ordinary character gameplay state.</summary>
 public sealed record ManagedPlayerbot(
