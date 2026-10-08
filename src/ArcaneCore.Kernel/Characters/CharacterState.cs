@@ -8,6 +8,7 @@ namespace ArcaneCore.Kernel.Characters;
 /// <see cref="Inventory"/> is null when no item changed since the last save (items area).
 /// <see cref="Life"/> is complete when present (health, power, experience, death state) and null
 /// only for a state that does not describe a live player (the stored life is then left alone).
+/// <see cref="Transport"/> is the ship the character stands on, null on land (the stored seat is then cleared).
 /// </summary>
 public sealed record CharacterState(
     int Id,
@@ -26,7 +27,14 @@ public sealed record CharacterState(
     HomeBind? Home = null,
     Items.InventorySnapshot? Inventory = null,
     CharacterLife? Life = null,
-    byte BankBagSlotCount = 0);
+    byte BankBagSlotCount = 0,
+    TransportSeat? Transport = null);
+
+/// <summary>
+/// Where on a ship a character stands (vmangos <c>characters.transport_guid</c> and <c>transport_x</c> .. <c>transport_o</c>):
+/// the ship's low GUID (its template entry) and the offset on it.
+/// </summary>
+public readonly record struct TransportSeat(uint Guid, float X, float Y, float Z, float Orientation);
 
 /// <summary>A hearthstone bind point (vmangos character_homebind; sent in SMSG_BINDPOINTUPDATE).</summary>
 public readonly record struct HomeBind(uint MapId, uint ZoneId, float X, float Y, float Z)

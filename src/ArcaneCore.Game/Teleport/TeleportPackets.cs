@@ -23,18 +23,42 @@ public enum TransferAbortReason : byte
     ZoneInCombat = 0x05,
 }
 
+/// <summary>vmangos <c>TeleportToOptions</c> (UnitDefines.h:769-779) that this base honours.</summary>
+[Flags]
+public enum TeleportOptions
+{
+    None = 0,
+
+    /// <summary><c>TELE_TO_NOT_LEAVE_TRANSPORT</c> (0x02): a passenger stays on its ship (a ship changing maps).</summary>
+    NotLeaveTransport = 0x02,
+}
+
 /// <summary>Teleport and area-trigger packet layouts (1.12.1 build 5875).</summary>
 public static class TeleportPackets
 {
     /// <summary>
     /// SMSG_TRANSFER_PENDING: u32 target map (vmangos <c>WorldPackets::Misc::TransferPending</c>;
-    /// a transport entry and the old map follow only when travelling on a transport, which
-    /// ArcaneCore has not got yet). gtker/wow_messages agrees.
+    /// a transport entry and the old map follow only when travelling on a transport, see the
+    /// overload). gtker/wow_messages agrees.
     /// </summary>
     public static byte[] BuildTransferPending(uint mapId)
     {
         var packet = new PacketWriter(4);
         packet.WriteUInt32(mapId);
+        return packet.AsSpan().ToArray();
+    }
+
+    /// <summary>
+    /// SMSG_TRANSFER_PENDING of a passenger whose ship changes maps: u32 target map, u32 transport entry, u32 old map
+    /// (vmangos <c>TransferPending::AppendBodyTo</c>, Server/Packets/Misc.cpp:722-730; gtker/wow_messages
+    /// world/movement/smsg/smsg_transfer_pending.wowm: optional <c>has_transport { u32 transport; Map transport_map; }</c>).
+    /// </summary>
+    public static byte[] BuildTransferPending(uint mapId, uint transportEntry, uint oldMapId)
+    {
+        var packet = new PacketWriter(12);
+        packet.WriteUInt32(mapId);
+        packet.WriteUInt32(transportEntry);
+        packet.WriteUInt32(oldMapId);
         return packet.AsSpan().ToArray();
     }
 

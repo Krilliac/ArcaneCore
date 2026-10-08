@@ -86,6 +86,9 @@ public sealed partial class Player : Unit
         Z = character.Z;
         Orientation = character.Orientation;
         Home = new HomeBind(character.HomeMapId, character.HomeZoneId, character.HomeX, character.HomeY, character.HomeZ);
+        LoginTransportSeat = character.TransportGuid != 0
+            ? new TransportSeat(character.TransportGuid, character.TransportX, character.TransportY, character.TransportZ, character.TransportOrientation)
+            : null;
         _playedTimeAtLogin = character.PlayedTime;
         _levelPlayedTimeAtLogin = character.LevelPlayedTime;
         _raceFactionTemplate = appearance.FactionTemplate;
@@ -465,7 +468,11 @@ public sealed partial class Player : Unit
         // A spirit that logs out while still at its body is saved at its graveyard (vmangos WorldSession.cpp:694-701);
         // the player itself stays where it is until it leaves the map.
         (uint saveMap, float saveX, float saveY, float saveZ, float saveO) = LogoutLocation ?? (MapId, X, Y, Z, Orientation);
-        return CreateSnapshot(nowMs, saveMap, saveX, saveY, saveZ, saveO, buttons, Inventory.TakeSnapshotIfChanged());
+        return CreateSnapshot(nowMs, saveMap, saveX, saveY, saveZ, saveO, buttons, Inventory.TakeSnapshotIfChanged()) with
+        {
+            // vmangos SaveToDB stores the ship and the offset (Player.cpp:16427-16434); a spirit moved to its graveyard is on land.
+            Transport = LogoutLocation is null ? CurrentTransportSeat : null,
+        };
     }
 
     /// <summary>

@@ -260,6 +260,13 @@ public sealed class EfCharacterStore(CharacterDbContext db) : ICharacterStore, I
         character.Money = state.Money;
         character.ActionBarToggles = state.ActionBarToggles;
         character.BankBagSlotCount = state.BankBagSlotCount;
+        // vmangos SaveToDB (Player.cpp:16427-16434): the ship and the offset on it, zeros on land.
+        TransportSeat seat = state.Transport ?? default;
+        character.TransportGuid = seat.Guid;
+        character.TransportX = seat.X;
+        character.TransportY = seat.Y;
+        character.TransportZ = seat.Z;
+        character.TransportOrientation = seat.Orientation;
         if (state.Home is { } home)
         {
             character.HomeMapId = home.MapId;

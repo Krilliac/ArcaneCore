@@ -48,8 +48,8 @@ public enum MovementFlags : uint
 /// <para>
 /// Reference discrepancy (transport block only): mangoszero reads an extra u32 transport time
 /// and skips fallTime on transports; gtker/wow_messages uses a packed GUID plus u32 time.
-/// Transports do not exist in ArcaneCore yet; the vmangos/cmangos layout is used until a
-/// real client capture on a boat settles it.
+/// ArcaneCore follows the vmangos/cmangos layout (the reference whose ships it implements,
+/// docs/areas/transports.md) until a real client capture on a boat settles it.
 /// </para>
 /// </summary>
 public struct MovementInfo

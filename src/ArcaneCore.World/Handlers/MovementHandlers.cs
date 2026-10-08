@@ -33,12 +33,27 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
     /// CMSG_MOVE_TIME_SKIPPED: u64 mover GUID, u32 skipped milliseconds (vmangos, cmangos-classic
     /// and mangoszero read a full GUID). Relayed to observers as MSG_MOVE_TIME_SKIPPED with a
     /// packed GUID, as vmangos and cmangos-classic do, so they keep interpolating correctly.
+    /// One that comes after boarding a ship and before any movement aboard is not relayed: the ship is sent to the
+    /// player again instead ("fix an 1.12 client problem with transports", vmangos MovementHandler.cpp:1001-1010; the
+    /// first movement aboard clears the mark, 1087-1089).
     /// </summary>
     private static void HandleMoveTimeSkipped(WorldSession session, Player player, byte[] payload)
     {
         var reader = new PacketReader(payload);
         ulong guid = reader.ReadUInt64();
         uint lag = reader.ReadUInt32();
+        if (guid == player.Guid.Value
+            && Game.Transports.TransportSystem.Of(session.World) is { } transports
+            && transports.TakeJustBoarded(player))
+        {
+            if (player.Transport is { } ship)
+            {
+                transports.ResendTo(ship, player);
+            }
+
+            return;
+        }
+
         if (guid == player.Guid.Value)
         {
             player.Map?.BroadcastToObservers(player, WorldOpcode.MsgMoveTimeSkipped, MiscPackets.BuildMoveTimeSkipped(player.Guid, lag));

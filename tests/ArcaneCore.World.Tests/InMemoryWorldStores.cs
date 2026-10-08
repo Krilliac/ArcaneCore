@@ -61,6 +61,8 @@ internal sealed class InMemoryCharacterStore : ICharacterStore, ICharacterLifeSt
                 c.LevelPlayedTime = state.LevelPlayedTime;
                 c.Money = state.Money;
                 c.ActionBarToggles = state.ActionBarToggles;
+                TransportSeat seat = state.Transport ?? default;
+                (c.TransportGuid, c.TransportX, c.TransportY, c.TransportZ, c.TransportOrientation) = (seat.Guid, seat.X, seat.Y, seat.Z, seat.Orientation);
                 if (state.Home is { } home)
                 {
                     (c.HomeMapId, c.HomeZoneId, c.HomeX, c.HomeY, c.HomeZ) = (home.MapId, home.ZoneId, home.X, home.Y, home.Z);

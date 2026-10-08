@@ -70,9 +70,8 @@ public static class FallDamageCalculator
 /// the fall. Landing: <c>MSG_MOVE_FALL_LAND</c> hurts when the previous block was FallingFar, the client reports at
 /// least 1229 ms of falling, the player is not above where it started, and the fall was at least 14.57 yards; not a
 /// dead player, a game master, or a unit with a Hover or Feather Fall aura; Safe Fall auras (Safe Fall, Feline Grace)
-/// reduce the distance by their amounts. Transports do not exist here, so the transport comparisons of vmangos
-/// (a changed transport GUID, a change of the OnTransport flag) are applied to the transport fields that the block
-/// carries but never meet a real transport.
+/// reduce the distance by their amounts. The transport comparisons of vmangos (a changed transport GUID, a change of
+/// the OnTransport flag) are applied to the transport fields the block carries (ships: docs/areas/transports.md).
 /// </para>
 /// </summary>
 [MovementObserver(Order = 20)]

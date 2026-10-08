@@ -71,6 +71,10 @@ resolved), `SetTradeGoldAsync`, `AcceptTradeAsync`, `CancelTradeAsync`; `SendMai
 `SendAsync(opcode, payload)` for anything else. Payload layouts are in `ScenarioPackets` and
 follow the server's own handler parsing. The MockClient keeps its own independent encodings
 on purpose (it is a second oracle), so the builders are not shared with it.
+Ships (`ScenarioTransports`, docs/areas/transports.md): `context.ShipAsync(entry)` finds a route's ship,
+`BoardAsync(ship, x, y, z)` sends a heartbeat standing on it at that offset, `LeaveShipAsync()` one without it,
+`TimeSkippedAsync(ms)` a CMSG_MOVE_TIME_SKIPPED; `ScenarioTransports.TransferPending` and `NewWorld` decode the
+map-change packets.
 
 **Typed decoders** (`ScenarioDecoders`, mirroring the server writers): group list, party
 command result, group invite, trade status, mail result and mail-list count, duel requested,
@@ -167,6 +171,9 @@ CMSG_GROUP_RAID_CONVERT, Molten Core is added to the map registry on the world t
 `group_instance` row is read back from SQLite, and the member who was outside enters the same instance and is locked too).
 `BattlegroundScenarioTests` and `BattlegroundWorldScenarioTests` start the scenario world with `WarsongGulchTestContent` (map 489, its safe
 locations, flag stands with their event rows, flag room triggers, flag auras, a battlemaster per side) through the `StartAsync(configure)` hook.
+`TransportScenarioTests` use the same hook for synthetic ship routes (`TransportWorldContent`): `ship-duel` (two
+bots board a ferry, duel aboard while it sails away from the flag, and the duel ends fled when one steps off) and
+`ship-crossing` (a bot rides a ship through its map change and arrives aboard on map 1).
 
 ## MockClient playbot (external protocol client)
 

@@ -106,6 +106,15 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap42), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap42.Version),
             (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap43), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap43.Version),
             (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundWorldDataModule.Version),
+            // The transports lane holds world 38-44 open with empty steps (the integrator drops each one a merged lane claims).
+            (typeof(ArcaneCore.Data.World.Transports.TransportLaneWorldGap38), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportLaneWorldGap38.Version),
+            (typeof(ArcaneCore.Data.World.Transports.TransportLaneWorldGap39), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportLaneWorldGap39.Version),
+            (typeof(ArcaneCore.Data.World.Transports.TransportLaneWorldGap40), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportLaneWorldGap40.Version),
+            (typeof(ArcaneCore.Data.World.Transports.TransportLaneWorldGap41), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportLaneWorldGap41.Version),
+            (typeof(ArcaneCore.Data.World.Transports.TransportLaneWorldGap42), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportLaneWorldGap42.Version),
+            (typeof(ArcaneCore.Data.World.Transports.TransportLaneWorldGap43), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportLaneWorldGap43.Version),
+            (typeof(ArcaneCore.Data.World.Transports.TransportLaneWorldGap44), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportLaneWorldGap44.Version),
+            (typeof(ArcaneCore.Data.World.Transports.TransportWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportWorldDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
             (typeof(QuestNpcCharactersModule), DatabaseComponent.Characters, 5),
@@ -155,6 +164,14 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap38), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap38.Version),
             (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap39), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap39.Version),
             (typeof(ArcaneCore.Data.Characters.Battlegrounds.CharacterBattlegroundDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.CharacterBattlegroundDataModule.Version),
+            // The transports lane holds characters 35-40 open with empty steps (the integrator drops each one a merged lane claims).
+            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap35), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap35.Version),
+            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap36), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap36.Version),
+            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap37), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap37.Version),
+            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap38), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap38.Version),
+            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap39), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap39.Version),
+            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap40), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap40.Version),
+            (typeof(ArcaneCore.Data.Characters.Transports.CharacterTransportDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.CharacterTransportDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),

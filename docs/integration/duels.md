@@ -37,7 +37,8 @@ aimed at the opponent's pet in `Complete` (`Player.cpp:6798-6804`), and the `PLA
 
 * Reflected spells: when the spell combat rules lane has a reflected flag on damage and holders, add the `pVictim == this && reflected` clause in `ApplyDuelClamp`
   and the `IsReflected` clause in `DuelService.RemoveHostileAuras`.
-* Transports: add the transport id to `DuelInfo`, compare it in `CheckChallenge` (`NOT_ON_TRANSPORT`) and in `CheckDistance`.
+* Transports: delivered by the transport lane (`DuelInfo.TransportGuid`, `NOT_ON_TRANSPORT` in `CheckChallenge`, the ship as the duel area in
+  `CheckDistance`; docs/areas/transports.md).
 * `SpellSystem.UnixSecondsClock` is set by `DuelFeature` to the duel clock; any other consumer of `AppliedAtUnixSeconds` should read the same clock.
 
 ## Tests
