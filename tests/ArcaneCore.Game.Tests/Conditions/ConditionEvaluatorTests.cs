@@ -59,6 +59,23 @@ public sealed class ConditionEvaluatorTests
         Assert.False(e.IsSatisfied(0, CreatePlayer(), null));
     }
 
+    [Fact]
+    public void InstanceScriptCondition_DelegatesValue1AndFailsClosedWithoutAnInstance()
+    {
+        // mangos-classic Conditions.cpp:285-292 passes value1 to
+        // InstanceData::CheckConditionCriteriaMeet; Dire Maul uses 0..6 for its tribute tier.
+        var context = new ConditionContext { InstanceScript = (_, id) => id == 4 };
+        ConditionEvaluator evaluator = Evaluator(context,
+            Row(41, ConditionType.InstanceScript, 4), Row(42, ConditionType.InstanceScript, 5));
+        Player player = CreatePlayer();
+        Assert.True(evaluator.IsSatisfied(41, player, null));
+        Assert.False(evaluator.IsSatisfied(42, player, null));
+
+        ConditionEvaluator missing = Evaluator(new ConditionContext { InstanceScript = (_, _) => null },
+            Row(41, ConditionType.InstanceScript, 4));
+        Assert.False(missing.IsSatisfied(41, player, null));
+    }
+
     [Theory]
     [InlineData(false, false, false, false)]
     [InlineData(true, false, true, false)]

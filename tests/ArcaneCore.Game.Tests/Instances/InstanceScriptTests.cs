@@ -175,7 +175,7 @@ public sealed class InstanceScriptTests
     {
         // classic-db z2815 ACTION_T_SET_INST_DATA rows: Shadowfang Keep 33, Wailing Caverns 43, Razorfen Kraul 47, Blackfathom Deeps 48,
         // Sunken Temple 109, Blackrock Depths 230, Zul'Gurub 309, Dire Maul 429; plus the ScriptDev2 dungeon ports of wave 7.
-        Assert.Equal([33u, 36u, 43u, 47u, 48u, 70u, 90u, 109u, 129u, 189u, 209u, 230u, 309u, 349u, 429u],
+        Assert.Equal([33u, 36u, 43u, 47u, 48u, 70u, 90u, 109u, 129u, 189u, 209u, 229u, 230u, 289u, 309u, 329u, 349u, 429u],
             InstanceScriptRegistry.Default.MapIds.Order());
     }
 }

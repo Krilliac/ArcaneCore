@@ -20,7 +20,7 @@ public sealed record ConditionSummary(int Total, int Evaluable, IReadOnlyDiction
 /// reversed (Conditions.cpp:115-122), and <see cref="ConditionFlags.ReverseResult"/> negates last.
 /// </para>
 /// <para>
-/// Fail closed: a type this server cannot decide (script, instance, encounter, world-state and other
+/// Fail closed: a type this server cannot decide (encounter, world-state and other
 /// conditions that are not about a player at an NPC; a type whose collaborator is missing; a creature
 /// target whose race, class, level or gender the NPC contract does not carry) is unknown, not false.
 /// Unknown propagates with three-valued logic (NOT unknown is unknown; AND with a false is false; OR
@@ -96,6 +96,7 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
         ConditionType.ActiveGameEvent => Context.IsGameEventActive is not null,
         ConditionType.ActiveHoliday => Context.IsHolidayActive is not null,
         ConditionType.Spell => Context.HasSpell is not null,
+        ConditionType.InstanceScript => Context.InstanceScript is not null,
         _ => false,
     };
 
@@ -300,6 +301,8 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
             case ConditionType.Spell:
                 return Unknown(c, target.Player is { } p5 && Context.HasSpell is { } hasSpell
                     ? c.Value2 switch { 0 => hasSpell(p5, c.Value1), 1 => !hasSpell(p5, c.Value1), _ => false } : null);
+            case ConditionType.InstanceScript:
+                return Unknown(c, target.Player is { } p6 ? Context.InstanceScript?.Invoke(p6, c.Value1) : null);
             case ConditionType.Gender:
                 return target.Player is { } gendered ? (uint)gendered.Gender == c.Value1 : Unknown(c, null);
             default:

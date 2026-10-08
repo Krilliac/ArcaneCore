@@ -61,10 +61,19 @@ public sealed partial class CreatureMapSystem
     /// scripted.
     /// </summary>
     private CreatureAI? CreateEntryAi(Creature creature)
-        => _entryAis.Count > 0 && creature.Summon is not { Kind: SummonKind.Pet } && creature.CharmerGuid.IsEmpty
-            && _entryAis.TryGetValue(creature.Template.Entry, out Func<Creature, CreatureAI>? factory)
-            ? factory(creature)
-            : null;
+    {
+        if (creature.Summon is { Kind: SummonKind.Pet } || !creature.CharmerGuid.IsEmpty)
+        {
+            return null;
+        }
+
+        if (_entryAis.TryGetValue(creature.Template.Entry, out Func<Creature, CreatureAI>? factory))
+        {
+            return factory(creature);
+        }
+
+        return Instances.Scripts.DungeonBossAis.Create(creature, Map.MapId);
+    }
 
     /// <summary>Whether this map gives creatures of <paramref name="entry"/> a script AI (<see cref="RegisterEntryAi"/>).</summary>
     internal bool HasEntryAi(uint entry) => _entryAis.ContainsKey(entry);
@@ -184,6 +193,35 @@ public sealed partial class CreatureMapSystem
         Creature summoned = SpawnTemporary(template, x, y, z, orientation, summoner);
         _corpseDespawns.Add(summoned);
         return summoned;
+    }
+
+    /// <summary>Instance script summon when the event has no creature summoner (SD2 player or game-object summon).</summary>
+    public Creature? SummonInstanceCreature(uint entry, float x, float y, float z, float orientation)
+    {
+        if (_content.FindTemplate(entry) is not { } template)
+        {
+            return null;
+        }
+
+        Creature creature = SpawnTemporary(template, x, y, z, orientation);
+        MarkCorpseDespawn(creature);
+        return creature;
+    }
+
+    /// <summary>
+    /// Instance script summon without a creature summoner (a game object's SummonCreature) as cmangos TEMPSPAWN_TIMED_OOC_OR_DEAD_DESPAWN:
+    /// it goes after <paramref name="despawnMs"/> alive, out of combat and uncharmed, and a dead one with its corpse decay.
+    /// </summary>
+    public Creature? SummonInstanceCreatureTimedOocOrDead(uint entry, float x, float y, float z, float orientation, uint despawnMs)
+    {
+        if (_content.FindTemplate(entry) is not { } template)
+        {
+            return null;
+        }
+
+        Creature creature = SpawnTemporary(template, x, y, z, orientation);
+        AddTimedSummon(creature, despawnMs, SummonTimer.OutOfCombatUncharmed);
+        return creature;
     }
 
     /// <summary>

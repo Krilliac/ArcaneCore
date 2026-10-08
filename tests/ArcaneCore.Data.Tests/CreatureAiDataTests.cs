@@ -64,6 +64,40 @@ public sealed class CreatureAiDataTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Importer_ReadsScriptDev2TextsIntoTheExistingNegativeTextStore()
+    {
+        // ClassicDB z2815 script_texts includes locale columns and inserts positional rows.
+        var importer = new CreatureDumpImporter();
+        importer.Read(new StringReader("""
+            CREATE TABLE `script_texts` (
+              `entry` mediumint NOT NULL,
+              `content_default` text NOT NULL,
+              `content_loc1` text,
+              `content_loc2` text,
+              `content_loc3` text,
+              `content_loc4` text,
+              `content_loc5` text,
+              `content_loc6` text,
+              `content_loc7` text,
+              `content_loc8` text,
+              `sound` mediumint unsigned NOT NULL,
+              `type` tinyint unsigned NOT NULL,
+              `language` tinyint unsigned NOT NULL,
+              `emote` smallint unsigned NOT NULL,
+              `broadcast_text_id` int NOT NULL,
+              `comment` text
+            );
+            INSERT INTO `script_texts` VALUES
+            (-1229004,'Synthetic arena announcement',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,0,1,0,0,0,'synthetic');
+            """));
+
+        CreatureAiTextRow text = Assert.Single(importer.AiSnapshot().Texts);
+        Assert.Equal(-1229004, text.Entry);
+        Assert.Equal("Synthetic arena announcement", text.Content);
+        Assert.Equal((byte)1, text.Type);
+    }
+
+    [Fact]
     public void Importer_ReadsTheAiNameColumnOfAClassicDbPositionalRow()
     {
         // classic-db z2815 creature_template has AIName char(64) (column 87) and 4,325 rows say 'EventAI': the retail selector needs no bridge.

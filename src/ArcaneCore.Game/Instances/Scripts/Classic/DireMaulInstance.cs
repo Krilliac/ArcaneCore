@@ -11,12 +11,13 @@ namespace ArcaneCore.Game.Instances.Scripts.Classic;
 /// <para>
 /// Ported: the nineteen states and their save string; SPECIAL breaks the crumbling wall (177220) once; DONE breaks it if that has not happened
 /// and opens the corrupted vine (179502); a wall or vine created while Alzzin is done (or the wall already broken) is created open; a loaded
-/// state of DONE or more counts as the wall broken. Not ported (logged at debug level): the Felvine shards' respawn on DONE, and every other
-/// type of the instance (Zevrim, Ironbark, Warpwood, Immol'thar, the prince, the pylons, the Dreadsteed, King Gordok and the ogres).
+/// state of DONE or more counts as the wall broken. The Gordok Tribute run continues in DireMaul/DireMaulTribute.cs.
+/// Not ported (logged at debug level): the Felvine shards' respawn on DONE, Zevrim, Ironbark, Warpwood, Immol'thar, the prince, the pylons
+/// and the Dreadsteed ritual.
 /// </para>
 /// </summary>
 [InstanceScript(MapId)]
-public sealed class DireMaulInstance(Map instance) : ScriptedInstance(instance, MaxEncounter)
+public sealed partial class DireMaulInstance(Map instance) : ScriptedInstance(instance, MaxEncounter)
 {
     public const uint MapId = 429;
     public const int MaxEncounter = 19;
@@ -41,6 +42,9 @@ public sealed class DireMaulInstance(Map instance) : ScriptedInstance(instance, 
     {
         switch (go.Entry)
         {
+            case GoNorthLibraryDoor:
+            case GoGordokTribute:
+                break;
             case GoCrumbleWall:
                 OpenIf(go, _wallDestroyed || Encounters[TypeAlzzin] == EncounterState.Done);
                 break;
@@ -58,7 +62,10 @@ public sealed class DireMaulInstance(Map instance) : ScriptedInstance(instance, 
     {
         if (type != TypeAlzzin)
         {
-            NotPorted(type, data, "(a Dire Maul event other than Alzzin's)");
+            if (!SetAdditionalData(type, data))
+            {
+                NotPorted(type, data, "(a Dire Maul event other than Alzzin's and the Tribute run)");
+            }
             return;
         }
 

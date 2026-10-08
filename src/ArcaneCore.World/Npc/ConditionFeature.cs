@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Reputation;
@@ -37,9 +38,8 @@ public sealed class ConditionOptions
 /// Evaluates the <c>conditions</c> table for the NPC services (gossip options and menu texts, vendor
 /// rows, quest <c>RequiredCondition</c>): the <see cref="IConditionEvaluator"/> the quest and NPC
 /// features pick up through <see cref="NpcServicesFeature.Extend"/>. The table comes from the optional
-/// <see cref="IConditionContentStore"/> (no implementation ships yet: until the content importer
-/// registers one the table is empty and every conditioned option stays hidden, which is also what a
-/// missing row means in cmangos). The evaluator forwards to the current inner evaluator, so a services
+/// <see cref="IConditionContentStore"/> (the Data module supplies it; without stored rows every
+/// conditioned option stays hidden, as a missing row does in cmangos). The evaluator forwards to the current inner evaluator, so a services
 /// rebuild by another feature never holds a stale one.
 /// </summary>
 public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFactory scopes, ILogger<ConditionFeature> logger)
@@ -138,6 +138,8 @@ public sealed class ConditionFeature(IServiceProvider services, IServiceScopeFac
             IsGameEventActive = id => events.Contains(id) || (id is > 0 and <= ushort.MaxValue && services.GetService<GameEventFeature>()?.IsActiveEvent((ushort)id) == true),
             IsHolidayActive = id => holidays.Contains(id) || (services.GetService<GameEventFeature>()?.IsActiveHoliday(id) ?? false),
             Quests = () => services.GetService<QuestNpcFeature>()?.Services,
+            InstanceScript = (player, conditionId) => player.Map?.FindUpdater<InstanceData>() is { } script
+                ? script.CheckConditionCriteriaMeet(player, conditionId) : null,
 
             // GetHonorRankInfo().rank (the PvP_RANK condition, classic-db/mangos-classic type 11). Without honor the condition stays
             // undecidable and fails closed, as before.

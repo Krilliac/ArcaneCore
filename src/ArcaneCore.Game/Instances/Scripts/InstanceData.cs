@@ -53,6 +53,10 @@ public abstract class InstanceData : IMapUpdater
     /// <summary>Diagnostics (the parts of a script that are not ported are logged at debug level).</summary>
     public ILogger Logger { get; internal set; } = NullLogger.Instance;
 
+    /// <summary>World services for ScriptDev2's player credit and player-cast effects; unset in a state-only fixture.</summary>
+    public Action<Player, uint, ObjectGuid>? CreatureCredit { get; internal set; }
+    public Action<Player, uint>? CastPlayerSpell { get; internal set; }
+
     /// <summary>vmangos <c>Initialize</c>: a fresh state (called for every creation, before <see cref="Load"/>).</summary>
     public virtual void Initialize()
     {
@@ -132,6 +136,23 @@ public abstract class InstanceData : IMapUpdater
     {
     }
 
+    /// <summary>ScriptDev2 area trigger callback after the client trigger was spatially verified.</summary>
+    public virtual void OnAreaTrigger(Player player, uint triggerId)
+    {
+    }
+
+    /// <summary>
+    /// cmangos ProcessEventId after SPELL_EFFECT_SEND_EVENT fires on this map (SpellEffects.cpp EffectSendEvent → StartEvents_Event).
+    /// True when this script handles <paramref name="eventId"/> (including any dbscripts_on_event content it stands in for); false
+    /// leaves the event unhandled, and the spell system reports it as not implemented.
+    /// </summary>
+    public virtual bool OnSpellEvent(Unit caster, uint eventId) => false;
+
+    /// <summary>ScriptDev2 InstanceData player leave callback.</summary>
+    public virtual void OnPlayerLeave(Player player)
+    {
+    }
+
     /// <summary>vmangos <c>OnObjectCreate</c>: a game object was added to the instance map (grid load, summon); it is not visible yet.</summary>
     public virtual void OnObjectCreate(GameObject go)
     {
@@ -147,6 +168,16 @@ public abstract class InstanceData : IMapUpdater
     {
     }
 
+    /// <summary>
+    /// ScriptDev2 GOUse script (cmangos GameObject::Use: <c>scriptReturnValue = sScriptDevAIMgr.OnGameObjectUse(player, go)</c>), called after
+    /// the mount check and, for a locked object, after its lock opened (Spell::SendLoot → GameObject::Use). True means the script took the
+    /// use: the object still activates, but a goober does not cast its spell (GameObject.cpp, GAMEOBJECT_TYPE_GOOBER: <c>else return;</c>).
+    /// </summary>
+    public virtual bool OnGameObjectUse(Player player, GameObject go) => false;
+
+    /// <summary>cmangos CONDITION_INSTANCE_SCRIPT: the instance decides a loot or gossip condition.</summary>
+    public virtual bool CheckConditionCriteriaMeet(Player player, uint conditionId) => false;
+
     /// <summary>vmangos <c>Update</c>: every map tick.</summary>
     public virtual void Update(uint diffMs)
     {
@@ -158,5 +189,6 @@ public abstract class InstanceData : IMapUpdater
 
     void IMapUpdater.OnPlayerRemoved(Map map, Player player)
     {
+        OnPlayerLeave(player);
     }
 }

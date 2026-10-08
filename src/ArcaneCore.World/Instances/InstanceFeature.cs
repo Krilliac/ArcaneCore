@@ -2,6 +2,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Instances;
 using ArcaneCore.Protocol;
@@ -11,6 +12,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Packets;
 using ArcaneCore.World.Social;
+using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,10 +31,14 @@ namespace ArcaneCore.World.Instances;
 /// last instance are dropped and a purge of its rows is queued after any later write.</para>
 /// <para>Options come from the <c>World:Instances</c> configuration section (<see cref="InstanceOptions"/>).</para>
 /// </summary>
-public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers) : IWorldFeature, ICharacterDeleteHook, IAsyncDisposable
+public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers) : IWorldFeature, ICharacterDeleteHook, IAreaTriggerListener, IAsyncDisposable
 {
     /// <summary>How often the reset schedule runs (vmangos checks it every world update; resets are minute-granular).</summary>
     public const int ScheduleIntervalMs = 5000;
+
+    /// <summary>A spatially verified client area trigger goes on to the map's instance script (ScriptDev2 AreaTrigger_at_* scripts).</summary>
+    public void OnAreaTrigger(Player player, uint triggerId)
+        => player.Map?.FindUpdater<Game.Instances.Scripts.InstanceData>()?.OnAreaTrigger(player, triggerId);
 
     /// <summary>Upper bound for draining the write queue or one world-thread round trip during a character deletion.</summary>
     public static readonly TimeSpan DeleteTimeout = TimeSpan.FromSeconds(10);
@@ -106,6 +112,9 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         QuestNpcFeature? questFeature = services.GetService<QuestNpcFeature>();
         // cmangos Player::IsCurrentQuest mode 2: QUEST_STATUS_COMPLETE and not rewarded (the SD2 Fortune Awaits chest check).
         _manager.QuestCompleteUnrewarded = (player, questId) => questFeature?.Services.IsCurrent(player, questId, 2) == true;
+        _manager.ScriptCreatureCredit = (player, entry, guid) => services.GetService<QuestNpcFeature>()?.Services.KilledMonsterCredit(player, entry, guid);
+        _manager.ScriptCastPlayerSpell = (player, spell) => services.GetService<SpellFeature>()?.System.CastSpell(player, spell,
+            SpellCastTargets.ForSelf(), triggered: true);
         _manager.SystemMessage = static (player, text) => player.Session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(text));
         _manager.Install();
         world.PlayerLoggedIn += OnPlayerLoggedIn;
