@@ -135,6 +135,8 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `CharacterCreation:AllowTwoSideAccounts` | `bool` | `false` | - | vmangos AllowTwoSide.Accounts (default off): one account may hold both factions on a PvP realm. |
+| `CharacterCreation:CharSectionsDbcPath` | `string` | `null` | - | The build-5875 CharSections.dbc (10 fields), supplied by the developer and never downloaded. Together with `CharacterFacialHairStylesDbcPath` it turns on vmangos Player::ValidateAppearance: a CMSG_CHAR_CREATE whose skin, face, hair or facial hair the client could not have offered is refused with CHAR_CREATE_FAILED. Both empty: appearance is not checked. Only one set, or a configured file that is unreadable or has another layout, refuses startup. |
+| `CharacterCreation:CharacterFacialHairStylesDbcPath` | `string` | `null` | - | The build-5875 CharacterFacialHairStyles.dbc (9 fields); see `CharSectionsDbcPath`. |
 | `CharacterCreation:CharactersCreatingDisabled` | `uint` | `0` | - | vmangos CharactersCreatingDisabled (World.cpp:629): bit 0 stops Alliance, bit 1 stops Horde creations for ordinary players (CharacterHandler.cpp:193-216). Default 0. |
 | `CharacterCreation:GameType` | `RealmGameType` | `Normal` | - | vmangos GameType (World.cpp:600): PvP, RP-PvP and FFA realms are "PvP realms" (World.h:802). Values: `Normal`, `PvP`, `Normal2`, `Rp`, `RpPvP`, `FfaPvP`. |
 | `CharacterCreation:GmStartLevel` | `int` | `1` | - | vmangos GM.StartLevel (default 1), clamped to StartPlayerLevel..MAX_LEVEL (100); used for accounts above player security (World.cpp:677, Player.cpp:16217). |
