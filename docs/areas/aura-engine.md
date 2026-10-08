@@ -50,7 +50,7 @@ every deliberate difference sits behind the `Auras` configuration section (class
 
 Levels: `Handler` = a handler is registered with the spell system; `Referenced` = no handler, but code outside the aura files names the type (this does
 not mean every vmangos consumer exists); `Unsupported` = nothing acts on it. The column "consumers" lists up to three source files that mention the type.
-Counts: Handler 139, Referenced 24, Unsupported 29, NotAnAura 1 (193 types). The table is `AuraSupportBaseline.cs`; `AuraSupportWorldTests` fails when a row
+Counts: Handler 139, Referenced 26, Unsupported 27, NotAnAura 1 (193 types). The table is `AuraSupportBaseline.cs`; `AuraSupportWorldTests` fails when a row
 disagrees with the live registrations of a composed world host.
 
 | Value | Aura type | Level | vmangos handler | Consumers | Owner of the gap |
@@ -120,7 +120,7 @@ disagrees with the live registrations of a composed world host.
 | 62 | PeriodicHealthFunnel | Handler | `HandlePeriodicHealthFunnel` (SpellAuras.cpp:127) | SpellSystem.PowerBurn.cs, DrainAuras.cs, ProcFlagRules.cs |  |
 | 63 | PeriodicManaFunnel | Unsupported | `HandleUnused` (SpellAuras.cpp:128) |  | obsolete in 1.12 (vmangos HandleUnused; only zzOLDMana Funnel 1941) |
 | 64 | PeriodicManaLeech | Handler | `HandlePeriodicManaLeech` (SpellAuras.cpp:129) | CasterPeriodicPackets.cs, DrainAuras.cs |  |
-| 65 | ModCastingSpeedNotStack | Unsupported | `HandleModCastingSpeed` (SpellAuras.cpp:130) |  | aura-transform (not scheduled) |
+| 65 | ModCastingSpeedNotStack | Referenced | `HandleModCastingSpeed` (SpellAuras.cpp:130) | BuiltInProcHandlers.cs | aura-transform (not scheduled): the proc filter exists, the cast speed does not |
 | 66 | FeignDeath | Handler | `HandleFeignDeath` (SpellAuras.cpp:131) | RangedHandlers.cs, SpellSystem.Feign.cs |  |
 | 67 | ModDisarm | Handler | `HandleAuraModDisarm` (SpellAuras.cpp:132) | CcAuraHandlers.cs, CcState.cs, SpellBinary.cs |  |
 | 68 | ModStalked | Handler | `HandleAuraModStalked` (SpellAuras.cpp:133) | RangedHandlers.cs, SpellSystem.Stealth.cs, SpellSystem.Tracking.cs |  |
@@ -238,7 +238,7 @@ disagrees with the live registrations of a composed world host.
 | 180 | ModFlatSpellDamageVersus | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:245) |  |  |
 | 181 | ModFlatSpellCritDamageVersus | Unsupported | `HandleUnused` (SpellAuras.cpp:246) |  |  |
 | 182 | ModResistanceOfStatPercent | Unsupported | `HandleAuraModResistenceOfStatPercent` (SpellAuras.cpp:247) |  |  |
-| 183 | ModCriticalThreat | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:248) |  | threat-and-aggro |
+| 183 | ModCriticalThreat | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:248) | SpellThreatModifiers.cs |  |
 | 184 | ModAttackerMeleeHitChance | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:249) |  |  |
 | 185 | ModAttackerRangedHitChance | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:250) |  |  |
 | 186 | ModAttackerSpellHitChance | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:251) | SpellCombatRules.cs |  |
