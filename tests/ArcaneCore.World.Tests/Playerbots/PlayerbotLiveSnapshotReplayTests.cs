@@ -31,6 +31,12 @@ internal sealed class LiveSnapshotReplayFactAttribute : FactAttribute
     public const string SettingsVariable = "ARCANECORE_TEST_BOT_REPLAY_SETTINGS";
     public const string NamesVariable = "ARCANECORE_TEST_BOT_REPLAY_NAMES";
 
+    /// <summary>
+    /// The moment the snapshot was taken (ISO 8601, e.g. <c>2026-10-08T16:46:00Z</c>): the game-event clock starts there and runs with
+    /// game time. Unset: the characters database file's last write time.
+    /// </summary>
+    public const string TimeVariable = "ARCANECORE_TEST_BOT_REPLAY_TIME";
+
     public LiveSnapshotReplayFactAttribute()
     {
         if (!File.Exists(Environment.GetEnvironmentVariable(CharactersVariable) ?? "")
@@ -141,6 +147,26 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
         await host.OnWorldAsync(() => ArcaneCore.Game.Death.DeathHooks.Register(host.World,
             new ArcaneCore.Game.Death.DeathHooks(ArcaneCore.Game.Death.DeathHooks.For(host.World).Options, new GameTimeDeathClock(host.World))));
 
+        // Game events (holidays, the Darkmoon Faire, day and night) read the wall clock too: a replay run in December would turn Winter
+        // Veil on for an October snapshot, and the events would not move with the replay's fast game time. Their clock starts at the
+        // snapshot's moment and runs with game time; the service is rebuilt on it with the events the snapshot recorded as running.
+        string source = Environment.GetEnvironmentVariable(LiveSnapshotReplayFactAttribute.CharactersVariable)!;
+        DateTimeOffset taken = Environment.GetEnvironmentVariable(LiveSnapshotReplayFactAttribute.TimeVariable) is { Length: > 0 } at
+            ? DateTimeOffset.Parse(at, CultureInfo.InvariantCulture) : new DateTimeOffset(File.GetLastWriteTimeUtc(source), TimeSpan.Zero);
+        HashSet<ushort> running = [];
+        using (IServiceScope scope = host.WorldServices.CreateScope())
+            if (scope.ServiceProvider.GetService<ArcaneCore.Kernel.WorldData.WorldState.IGameEventStatusStore>() is { } status)
+                foreach (int id in await status.LoadActiveAsync())
+                    if (id is > 0 and <= ushort.MaxValue) running.Add((ushort)id);
+        await host.OnWorldAsync(() =>
+        {
+            ArcaneCore.Game.WorldState.WorldStateHooks hooks = ArcaneCore.Game.WorldState.WorldStateHooks.For(host.World);
+            hooks.Time = new GameTimeClock(host.World, taken, hooks.Time.Zone);
+            if (host.WorldServices.GetService<ArcaneCore.World.WorldState.GameEventFeature>() is { } events)
+                events.UseContent(events.Content, running);
+            return true;
+        });
+
         ManagedPlayerbotFeature bots = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         await bots.StartupAsync(default);
         try
@@ -150,10 +176,20 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
             Assert.Equal(watched.Length, watches.Count);
             await host.World.AdvanceClockAsync(100); // the status snapshot is refreshed by the world tick
             Assert.All(bots.Snapshot().Where(s => watches.ContainsKey(s.Name)), s => Assert.Equal(ManagedPlayerbotState.Running, s.State));
+            ArcaneCore.World.Npc.QuestNpcFeature questFeature = host.WorldServices.GetRequiredService<ArcaneCore.World.Npc.QuestNpcFeature>();
+            output.WriteLine(await host.OnWorldAsync(() => string.Create(CultureInfo.InvariantCulture,
+                $"game events at {ArcaneCore.Game.WorldState.WorldStateHooks.For(host.World).Time.UtcNow:u}: {(host.WorldServices.GetService<ArcaneCore.World.WorldState.GameEventFeature>() is { } e ? $"{e.Content.Events.Count} loaded, running {string.Join(",", e.ActiveEvents.Order())}" : "none")}")));
+            Dictionary<string, Dictionary<uint, QuestRow>> questsAtStart = await host.OnWorldAsync(() =>
+                watches.ToDictionary(pair => pair.Key, pair => QuestLog(questFeature, bots.FindSession(pair.Value.BotId)?.Player)));
 
             for (uint elapsed = 0; elapsed < ReplayMs; elapsed += 1_000)
             {
                 await host.World.AdvanceClockAsync(1_000);
+                // A quest reward is written to the characters database in the background; on the fast manual clock the bot's 15-second
+                // exchange deadline would otherwise run out while the write is on its way, and the reward be counted as refused.
+                foreach (int character in await host.OnWorldAsync(() => watches.Values
+                             .Select(w => bots.FindSession(w.BotId)?.Player is { } p ? (int)p.Guid.Low : 0).Where(id => id != 0).ToArray()))
+                    await questFeature.WaitForSettlementAsync(character);
                 await host.OnWorldAsync(() =>
                 {
                     foreach ((string name, Watch watch) in watches)
@@ -199,6 +235,14 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
 
             foreach ((string name, Watch watch) in watches)
                 output.WriteLine($"{name}: longest still while alive {watch.LongestStillMs / 1000} s, travelled {watch.Travelled:F0} yards, deaths {watch.Deaths}");
+            foreach ((string name, Watch watch) in watches)
+            {
+                Dictionary<uint, QuestRow> before = questsAtStart[name];
+                Dictionary<uint, QuestRow> after = await host.OnWorldAsync(() => QuestLog(questFeature, bots.FindSession(watch.BotId)?.Player));
+                output.WriteLine($"{name}: quests taken {string.Join(",", after.Keys.Where(q => !before.ContainsKey(q)).Order())}; "
+                    + $"rewarded {string.Join(",", after.Where(q => q.Value.Rewarded && !(before.TryGetValue(q.Key, out QuestRow was) && was.Rewarded)).Select(q => q.Key).Order())}; "
+                    + $"open {string.Join(",", after.Where(q => !q.Value.Rewarded).OrderBy(q => q.Key).Select(q => $"{q.Key}:{q.Value.Status}"))}");
+            }
             // Bot groups (PlayerbotGroupCoordinator): what the coordinator saw and did over the replay.
             if (host.WorldServices.GetService<ArcaneCore.World.Playerbots.Groups.PlayerbotGroupCoordinator>() is { } groups)
                 foreach (string line in await host.OnWorldAsync(() => groups.Report().Concat(groups.Events).ToArray()))
@@ -207,6 +251,23 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
                 $"{pair.Key} stood within {SamePlaceYards} yards of one place for {pair.Value.LongestStillMs / 1000} s while alive"));
         }
         finally { await bots.ShutdownBeforeWorldStopAsync(); }
+    }
+
+    private readonly record struct QuestRow(ArcaneCore.Game.Quests.QuestStatus Status, bool Rewarded);
+
+    private static Dictionary<uint, QuestRow> QuestLog(ArcaneCore.World.Npc.QuestNpcFeature quests, ArcaneCore.Game.Entities.Player? player)
+        => player is not null && quests.Services.StateOf(player) is { Loaded: true } state
+            ? state.Quests.Statuses.ToDictionary(row => row.Key, row => new QuestRow(row.Value.Status, row.Value.Rewarded))
+            : [];
+
+    /// <summary>The game-event clock: the snapshot's moment plus the world's game time since the replay started.</summary>
+    private sealed class GameTimeClock(ArcaneCore.Game.Maps.WorldRuntime world, DateTimeOffset start, TimeZoneInfo zone) : ArcaneCore.Game.WorldState.Time.IGameTime
+    {
+        private readonly TimeSpan _startUptime = world.Uptime;
+
+        public DateTimeOffset UtcNow => start + (world.Uptime - _startUptime);
+
+        public TimeZoneInfo Zone => zone;
     }
 
     /// <summary>Unix seconds that advance with the world's game time from the moment the replay starts.</summary>

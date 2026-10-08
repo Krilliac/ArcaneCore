@@ -80,6 +80,8 @@ public static partial class ContentImporterCli
                                 locations the dump lacks, TaxiPathNode.dbc there checks every ship's route; Map.dbc and
                                 AreaTable.dbc there (both or neither) replace map_template (every map, the dungeon columns
                                 from the dump's instance_template) and area_template (every area).
+                                The seven game-event tables are filled when the world has no game_event row (a world built
+                                before the game-event importer); a world with events keeps its own.
                                 A table the inputs do not carry is left as it is, so running it again changes nothing.
                                 (--cooldown-unit auto|ms|seconds, default auto: the classic-db db_version decides;
                                 --dry-run writes nothing; --report <file>). A world whose schema is behind this

@@ -60,7 +60,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             .Where(row => row.Value is { Status: QuestStatus.Complete, Rewarded: false }
                 && services.IsRewardable(row.Key) && !IsRefused(row.Key))
             .Where(row => services.Quests.CreatureEndersOf(row.Key)
-                .Any(entry => content.GetSpawns(player.MapId, entry).Count > 0))
+                .Any(entry => content.GetSpawns(player.MapId, entry).Any(spawn => PlayerbotWorldDestinations.IsPresent(player, spawn))))
             .Select(row => row.Key).FirstOrDefault();
     }
 
@@ -243,7 +243,10 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         PreferredCreatureEntry = 0;
         foreach ((uint questId, QuestStatusData status) in state.Quests.Statuses)
         {
-            if (status.Status != QuestStatus.Incomplete || services.Quests.Get(questId) is not { } quest)
+            // vmangos Quest::IsActive: a quest of a game event that is not running (game_event_quest, the server's event state) is
+            // neither offered nor turned in (PrepareQuestMenu skips it for the giver and the ender alike; IsRewardable already keeps the
+            // bot from walking to its ender). One in the log is kept for when the event comes back, but its objectives are not hunted.
+            if (status.Status != QuestStatus.Incomplete || services.Quests.Get(questId) is not { IsActive: true } quest)
                 continue;
             if (Suspensions?.IsQuestSuspended(questId, _session.World.NowMs) == true)
                 continue;

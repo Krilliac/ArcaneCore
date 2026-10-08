@@ -3,6 +3,7 @@ using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.World.Playerbots.Combat;
 
 namespace ArcaneCore.World.Playerbots.Groups;
@@ -39,6 +40,10 @@ internal enum PlayerbotGroupRole : byte
 /// <param name="Meeting">The meeting point: the objective's nearest spawn for a quest, the instance entrance otherwise.</param>
 /// <param name="EntranceTrigger">The area trigger into the instance (0 for open-world content).</param>
 /// <param name="Objective">Where the objective stands inside the instance (or the open-world spawn).</param>
+/// <param name="ObjectiveItem">
+/// A quest item the goal is for (0: the creature itself): <see cref="ObjectiveEntry"/> is then a creature that drops it, and the goal is
+/// done when each member has the quest's count of the item.
+/// </param>
 internal sealed record PlayerbotGroupGoal(
     PlayerbotGroupGoalKind Kind,
     uint QuestId,
@@ -50,7 +55,8 @@ internal sealed record PlayerbotGroupGoal(
     Vector3 Objective,
     int Size,
     byte MinLevel,
-    string Source)
+    string Source,
+    uint ObjectiveItem = 0)
 {
     /// <summary>The matching key (<see cref="PlayerbotGroupGoal"/>).</summary>
     public (PlayerbotGroupGoalKind Kind, uint Value) Key => InInstance ? (Kind, MapId) : (Kind, ObjectiveEntry);
@@ -59,7 +65,7 @@ internal sealed record PlayerbotGroupGoal(
     public bool InInstance => EntranceTrigger != 0;
 
     public override string ToString() => string.Create(CultureInfo.InvariantCulture,
-        $"{Kind.ToString().ToLowerInvariant()}:{(InInstance ? MapId : ObjectiveEntry)} quest={QuestId} size={Size} source={Source}");
+        $"{Kind.ToString().ToLowerInvariant()}:{(InInstance ? MapId : ObjectiveEntry)} quest={QuestId}{(ObjectiveItem != 0 ? $" item={ObjectiveItem} from={ObjectiveEntry}" : "")} size={Size} source={Source}");
 }
 
 /// <summary>A bot as the matcher sees it.</summary>
@@ -116,6 +122,53 @@ internal static class PlayerbotGroupContent
     /// size when that is more than one. Only a raid quest gets a raid: a raid group's kills credit raid quests alone (vmangos
     /// Player::KilledMonster, the quest's raid check), so an elite quest suggesting more than five is done by a party of five.
     /// </summary>
+    /// <summary>The most nested reference tables followed (vmangos LootTemplate::Process follows references; the data nests two deep).</summary>
+    internal const int MaxReferenceDepth = 5;
+
+    /// <summary>
+    /// Which creatures drop each item (item entry to creature entries, ascending): every row of each creature's
+    /// <c>creature_loot_template</c> (its <c>creature_loot_info</c> loot id), and through a negative <c>mincountOrRef</c> every row of the
+    /// <c>reference_loot_template</c> it names (nested references too), whatever the chance: a quest item (negative chance) as well as an
+    /// ordinary one. A dungeon quest that asks only for items (a boss's head, a key) is a goal at the creatures that drop them.
+    /// </summary>
+    internal static Dictionary<uint, uint[]> DropIndex(LootContent loot)
+    {
+        ArgumentNullException.ThrowIfNull(loot);
+        var references = new Dictionary<uint, HashSet<uint>>();
+        HashSet<uint> ItemsOf(LootTableKind kind, uint entry, int depth)
+        {
+            if (kind == LootTableKind.Reference && references.TryGetValue(entry, out HashSet<uint>? known)) return known;
+            var items = new HashSet<uint>();
+            if (kind == LootTableKind.Reference) references[entry] = items; // a reference cycle ends here
+            foreach (LootStoreRow row in loot.GetRows(kind, entry))
+            {
+                if (row.MinCountOrRef < 0)
+                {
+                    if (depth < MaxReferenceDepth) items.UnionWith(ItemsOf(LootTableKind.Reference, (uint)-row.MinCountOrRef, depth + 1));
+                }
+                else if (row.Item != 0)
+                {
+                    items.Add(row.Item);
+                }
+            }
+
+            return items;
+        }
+
+        var droppers = new Dictionary<uint, SortedSet<uint>>();
+        foreach (CreatureLootInfo creature in loot.CreatureInfos)
+        {
+            if (creature.LootId == 0) continue;
+            foreach (uint item in ItemsOf(LootTableKind.Creature, creature.LootId, 0))
+            {
+                if (!droppers.TryGetValue(item, out SortedSet<uint>? entries)) droppers[item] = entries = [];
+                entries.Add(creature.Entry);
+            }
+        }
+
+        return droppers.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray());
+    }
+
     internal static int QuestGroupSize(QuestTemplate template)
     {
         ArgumentNullException.ThrowIfNull(template);

@@ -196,8 +196,12 @@ feature reads:
   `gameobject_template` rows (type 15: data0 TaxiPath id, data1 speed, data2 acceleration) are written as the dump has them, mapped as
   the full object import maps them (`GameObjectLootDumpImporter.MapTemplate`); every other object template is left alone. A missing DBC
   leaves its table alone with a warning. With `Map.dbc` and `AreaTable.dbc` in `--dbc-dir` (both or neither: one alone is refused
-  before the database is opened) it also replaces `map_template` and `area_template` (`MapAreaDbcImporter`, below). A second run with
-  the same inputs leaves the same rows. It then checks what the world logs at start: teleports and taverns without a trigger,
+  before the database is opened) it also replaces `map_template` and `area_template` (`MapAreaDbcImporter`, below). The seven game-event
+  tables (`GameEventDumpImporter`, both dialects) are filled when the world has no `game_event` row at all (a world built before the
+  game-event importer, or migrated from the Codex-line schema, which leaves them empty: every holiday NPC then stands in the world all year
+  and its quests are offered out of season); a world that has events keeps its own (an import, a GM's `game_event.disabled`). On a copy of
+  the wave-8 rehearsal's world (2026-10-08, classic-db z2815): 67 events, 38 times, 3219 creature and 12274 gameobject event spawns, 977
+  creature data rows, 61 event quests, 1 mail. A second run with the same inputs leaves the same rows. It then checks what the world logs at start: teleports and taverns without a trigger,
   battleground start locations that are not safe locations, transports without a type-15 object, portals to a map with no
   `map_template` row (vmangos "unknown target map"), graveyard links to a zone with no `area_template` row (vmangos "not existing zone
   id"; checked only when the table has rows, as the world does), and, with `TaxiPathNode.dbc` in `--dbc-dir`, every ship the world would

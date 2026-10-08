@@ -189,6 +189,81 @@ public sealed class PlayerbotGroupWorldTests
         });
     }
 
+    /// <summary>
+    /// A dungeon quest that asks only for an item (the boss's trophy, a quest drop through a reference loot table) is group content too:
+    /// the coordinator maps the item to the creature that drops it inside The Deadmines, the group goes in, kills the boss, each member
+    /// loots its own copy of the quest drop (whoever holds the corpse), and the group walks out once everyone has it. Before, only
+    /// creature objectives made a goal, and the bots never grouped for it.
+    /// </summary>
+    [Fact]
+    public async Task ADungeonQuestForAnItemOnly_IsGroupContent_AtTheCreatureThatDropsIt_AndEveryMemberLootsIt()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonItemQuest], dungeon: true);
+        var tank = await world.AddBotAsync("Trophytank", Human, Warrior, 12, [Taunt], EntranceArea);
+        var healer = await world.AddBotAsync("Trophyprie", Human, Priest, 12, [LesserHeal, Smite], EntranceArea);
+        var mage = await world.AddBotAsync("Trophymage", Human, Mage, 12, [Fireball], EntranceArea);
+        (Guid Id, string Name)[] bots = [tank, healer, mage];
+
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        Assert.Equal(PlayerbotGroupGoalKind.Dungeon, group.Goal.Kind);
+        Assert.Equal((36u, BossEntry, BossTrophy, DungeonItemQuest), (group.Goal.MapId, group.Goal.ObjectiveEntry, group.Goal.ObjectiveItem, group.Goal.QuestId));
+
+        Assert.True(await world.RunUntilAsync(480_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        Assert.Equal(1, world.Coordinator.Totals.Completed);
+        await world.OnWorldAsync(() =>
+        {
+            Assert.All(bots, b => Assert.Equal(0u, world.Player(b.Id).MapId));
+            Assert.All(bots, b => Assert.Equal(1u, world.Player(b.Id).Inventory.GetItemCount(BossTrophy)));
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// Grouped for a goal, the members share its quest the way players do: one member dropped the elite quest after the group formed; a
+    /// member who has it pushes it to the party once everyone is within the share distance (CMSG_PUSHQUESTTOPARTY, vmangos
+    /// HandlePushQuestToParty), the member without it accepts it from the sharer (CMSG_QUESTGIVER_ACCEPT_QUEST with the sharer's guid),
+    /// and is credited with the kill like the others.
+    /// </summary>
+    [Fact]
+    public async Task GroupedForAGoal_AMemberWithoutTheQuest_IsSharedIt_AndCredited()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest]);
+        var sent = new ConcurrentQueue<(string Bot, WorldOpcode Opcode)>();
+        var tank = await world.AddBotAsync("Sharetank", Human, Warrior, 10, [Taunt]);
+        var healer = await world.AddBotAsync("Shareheal", Human, Priest, 10, [LesserHeal, Smite, Resurrection]);
+        var mage = await world.AddBotAsync("Sharemage", Human, Mage, 10, [Fireball]);
+        foreach ((Guid id, string name) in new[] { tank, healer, mage })
+            await world.OnWorldAsync(() => world.Session(id).ManagedDispatchObserver = opcode => sent.Enqueue((name, opcode)));
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), world.Trace());
+
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player(mage.Id);
+            ArcaneCore.Game.Npc.QuestNpcServices quests = world.World.Services.GetRequiredService<QuestNpcFeature>().Services;
+            int slot = quests.StateOf(player)!.Quests.FindSlot(EliteQuest);
+            Assert.True(quests.AbandonQuest(player, (byte)slot));
+            return true;
+        });
+        Assert.False(world.HasQuest(mage.Id, EliteQuest) && await world.OnWorldAsync(() => world.World.Services.GetRequiredService<QuestNpcFeature>()
+            .Services.StateOf(world.Player(mage.Id))!.Quests.GetStatus(EliteQuest) != QuestStatus.None));
+
+        Assert.True(await world.RunUntilAsync(60_000, () => world.World.Services.GetRequiredService<QuestNpcFeature>().Services
+            .StateOf(world.Player(mage.Id))!.Quests.GetStatus(EliteQuest) == QuestStatus.Incomplete), world.Trace());
+        Assert.Contains(sent, s => s.Opcode == WorldOpcode.CmsgPushquesttoparty && s.Bot != mage.Name);
+        Assert.Contains(sent, s => s.Opcode == WorldOpcode.CmsgQuestgiverAcceptQuest && s.Bot == mage.Name);
+        Assert.Contains(world.Coordinator.Events, e => e.Contains($"shares quest {EliteQuest} with {mage.Name}", StringComparison.Ordinal));
+
+        Assert.True(await world.RunUntilAsync(240_000, () => world.Coordinator.Groups.Count == 0), world.Trace());
+        await world.OnWorldAsync(() =>
+        {
+            Assert.True(world.Coordinator.ObjectiveDone(world.Player(mage.Id), OgreEntry));
+            Assert.Equal(QuestStatus.Complete, world.World.Services.GetRequiredService<QuestNpcFeature>().Services
+                .StateOf(world.Player(mage.Id))!.Quests.GetStatus(EliteQuest));
+            return true;
+        });
+    }
+
     [Fact]
     public async Task AWipe_TheSurvivorRetreats_ResurrectsTheDead_AndTheGroupRegroups()
     {

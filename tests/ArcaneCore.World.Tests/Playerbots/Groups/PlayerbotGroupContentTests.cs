@@ -2,6 +2,7 @@ using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Playerbots.Groups;
@@ -152,6 +153,33 @@ public sealed class PlayerbotGroupContentTests
 
         Assert.Equal("elite-above", PlayerbotRiskModel.Assess(facts, options).Reason);
         Assert.NotEqual("elite-above", PlayerbotRiskModel.Assess(facts with { GroupSize = 3 }, options).Reason);
+    }
+
+    /// <summary>
+    /// Which creatures drop an item: direct rows, rows reached through reference tables (nested, as vmangos LootTemplate::Process
+    /// follows them; a reference cycle ends), quest drops (negative chance) included; a creature without a loot id drops nothing.
+    /// </summary>
+    [Fact]
+    public void TheDropIndex_FollowsReferenceTables_ToTheCreaturesThatDropAnItem()
+    {
+        var loot = new LootContent(
+        [
+            (LootTableKind.Creature, new LootStoreRow(10, 500, 30f, 0, 1, 1)),        // creature loot 10: item 500
+            (LootTableKind.Creature, new LootStoreRow(10, 0, 100f, 0, -70, 1)),       // ... and reference 70
+            (LootTableKind.Creature, new LootStoreRow(20, 0, 100f, 0, -71, 1)),       // creature loot 20: reference 71
+            (LootTableKind.Reference, new LootStoreRow(70, 600, -100f, 0, 1, 1)),     // reference 70: quest item 600
+            (LootTableKind.Reference, new LootStoreRow(71, 0, 100f, 0, -70, 1)),      // reference 71 -> reference 70 (nested)
+            (LootTableKind.Reference, new LootStoreRow(71, 0, 100f, 0, -71, 1)),      // ... and itself (a cycle)
+            (LootTableKind.Reference, new LootStoreRow(71, 700, 5f, 1, 1, 1)),
+        ],
+        [new CreatureLootInfo(1001, 10, 0, 0, 0), new CreatureLootInfo(1002, 20, 0, 0, 0), new CreatureLootInfo(1003, 0, 0, 0, 0)]);
+
+        Dictionary<uint, uint[]> index = PlayerbotGroupContent.DropIndex(loot);
+
+        Assert.Equal([1001u], index[500]);
+        Assert.Equal([1001u, 1002u], index[600]);
+        Assert.Equal([1002u], index[700]);
+        Assert.Equal(3, index.Count);
     }
 
     private static PlayerbotGroupCandidate Bot(string name, Class @class, byte level, uint since, PlayerbotRole role = PlayerbotRole.MeleeDps)

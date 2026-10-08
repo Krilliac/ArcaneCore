@@ -341,9 +341,9 @@ public sealed class PlayerbotRealTerrainNavigationTests(ITestOutputHelper output
         }
 
         /// <summary>Follow routes from <see cref="PlayerbotNavigation.TryPlanToward"/> until within <paramref name="reach"/> of the goal.</summary>
-        public async Task<float> WalkTowardAsync(Vector3 goal, float reach, uint maxMs, ITestOutputHelper log)
+        public async Task<float> WalkTowardAsync(Vector3 goal, float reach, uint maxMs, ITestOutputHelper log, PlayerbotOptions? with = null)
         {
-            var options = new PlayerbotOptions();
+            PlayerbotOptions options = with ?? new PlayerbotOptions();
             float left = float.PositiveInfinity;
             for (uint spent = 0; spent < maxMs;)
             {
@@ -386,6 +386,26 @@ public sealed class PlayerbotRealTerrainNavigationTests(ITestOutputHelper output
             await Host.DisposeAsync();
         }
     }
+
+    /// <summary>
+    /// The wave-8 rehearsal's quest-35 stall ("Further Concerns", Dawnrover to Guard Thomas, creature 261, 610 yards south of where it
+    /// stopped; docs/integration/wave8-20261008.md). Replayed, the bot stood at (-9532.9, -426.7) for good: the 126-yard point towards
+    /// the guard lies past the Elwynn tile boundary (y -533.3), on a navigation-mesh tile not loaded yet (tiles load with the grids
+    /// round the players), so the mesh answers a straight line (vmangos HaveTiles shortcut) and the terrain stepper refuses it over the
+    /// hill. With the replay's settings (MaxPathPoints 128, MaxRouteYards 2000) the bot now walks all the way to the guard.
+    /// </summary>
+    [RealTerrainBotFact]
+    public async Task Quest35_FromWhereDawnroverStopped_TheBotWalksToGuardThomas_AcrossTheTileBoundary()
+    {
+        await using Terrain terrain = await Terrain.StartAsync();
+        await terrain.PlaceAsync(new Vector3(-9532.9f, -426.7f, 57.6f));
+        var options = new PlayerbotOptions { MaxPathPoints = 128, MaxRouteYards = 2000 };
+        float left = await terrain.WalkTowardAsync(GuardThomas, 4f, 300_000, output, options);
+        Assert.True(left <= 4f, $"stopped {left:F1} yards from Guard Thomas");
+    }
+
+    // Guard Thomas (creature 261, spawn 80880), the ender of quest 35, at the bridge east of Elwynn.
+    private static readonly Vector3 GuardThomas = new(-9610.23f, -1032.05f, 41.3058f);
 
     private sealed class ManualClock : IWorldFeature
     {

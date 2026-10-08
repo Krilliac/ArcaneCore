@@ -39,6 +39,7 @@ Every 2 seconds each free bot (autonomous, not in a real player's group, in no g
 | Type 62 (raid) | a raid of `SuggestedPlayers` when above 5, else 10 |
 | Any other quest with `SuggestedPlayers` above 1 | that many (at most 5) |
 | An objective that spawns only inside instances (`map_template` dungeon or raid) | that instance, reached through an entrance trigger on the bot's continent (`areatrigger_teleport` to it); the map's player limit (5 for a dungeon), or the quest's own size; the trigger's required level |
+| A quest item dropped only by creatures that spawn inside instances (`creature_loot_template` through `creature_loot_info`, and the `reference_loot_template` tables its negative `mincountOrRef` rows name, nested; `PlayerbotGroupContent.DropIndex`) | as the instance row above, at the creature that drops it; done when each member has the quest's count of the item |
 | A quest objective the risk estimate passed over alone (`PlayerbotRiskModel.NeededGroupSize`) | the smallest group (2 to 5) whose estimate would take it |
 
 Type 41 is PvP, not elite (QuestInfo.dbc; in the live world database "Wanted: Hogger", 176, is Type 1 and the Alterac Valley quests
@@ -109,10 +110,25 @@ nobody needs healing. Positioning is the brain's (`PlayerbotBrain.DecidePosition
 the victim before a swing).
 
 **Between fights**: a member below 50% health or mana eats or drinks (the leader does not pull meanwhile); a healer resurrects a dead
-member it can see (Resurrection, Redemption, Ancestral Spirit through the ordinary cast; the dead member's party intake accepts a
-group member's offer); a member loots the corpses whose round-robin turn is its own. A dead member waits (unreleased) while a living
+member it can see (Resurrection, Redemption, Ancestral Spirit, and Rebirth when it carries the seed, through the ordinary cast; the dead
+member's party intake accepts a group member's offer). The real rows (classic-db 2006, 7328, 2008, 20484) name no implicit target and the
+corpse flag (`Targets` 0x8000) without `AllowDeadTarget`, so the healer casts like a 1.12 client: at the dead unit while its body is
+unreleased, at the corpse (CMSG_CAST_SPELL with TARGET_FLAG_CORPSE and the corpse guid) once it released, walking to the body either way.
+The server checks such a cast as vmangos does: a unit target is range and line-of-sight checked whatever the implicit target
+(`Spell::CheckRange`), a corpse must exist and be in sight (`Spell::CheckCast` :5780), and a client's cast of a corpse-flag spell without a
+unit or corpse is refused (`ValidateExplicitTargetMask`); a member loots the corpses whose round-robin turn is its own, and any corpse holding a quest item it needs (vmangos shows a
+quest drop to every member who needs it, whoever holds the corpse). A dead member waits (unreleased) while a living
 member could resurrect it, at most 60 seconds, then releases and runs back (`PlayerbotRecovery`; a ghost whose body lies inside walks
 into the entrance and is revived there). A leader that died is waited for where the group stands.
+
+**Sharing the goal's quests.** Once grouped (gathering, travelling or engaging, out of a fight) a bot member holding a sharable quest of
+the goal (the goal's quest, or one asking for its creature or item) that another member lacks and could take pushes it to the party
+(CMSG_PUSHQUESTTOPARTY, the client's "Share Quest") when every such member stands within the share distance (vmangos
+`QUEST_SHARE_DISTANCE`, 14 yards); each quest once per group, noted in the events (`Tank shares quest 990701 with Mage`). The server
+applies vmangos `HandlePushQuestToParty` (sharable flag, the sharer on the quest, the receiver able to take it, the log not full, one
+offer at a time). A bot's party intake (bot groups and a real player's party alike) answers the server's pending offer as a client's quest
+window does: accept (CMSG_QUESTGIVER_ACCEPT_QUEST with the sharer's guid) when the sharer is in its group and it can take a quest the
+server settles, else decline (MSG_QUEST_PUSH_RESULT).
 
 **Loot rolls** (items at or above the threshold): need when the item is an upgrade the bot can wear (`PlayerbotItemScore.UpgradeGain`
 with its build's weights), greed otherwise (`GroupLootVote`).
@@ -166,7 +182,9 @@ out of an instance before it disbands. A group that cannot walk out in time is b
 `tests/ArcaneCore.World.Tests/Playerbots/Groups/`: the pure rules (`PlayerbotGroupContentTests`: quest flags and sizes, instance
 sizes, role composition, level range, the leader, raid subgroups, the risk estimate's group size, the group's elite margin); end to
 end on the scenario world with the manual clock (`GroupTestWorld`: a giver offering only the test's quests, an elite ogre, a brute, a
-raid warlord, a Deadmines boss, flat ground, a test Taunt and Resurrection): an elite quest done by a tank, a healer and a mage formed
+raid warlord, a Deadmines boss, flat ground, a test Taunt and Resurrection; `PlayerbotGroupResurrectionTests` adds the four real
+resurrection rows through `SpellStoreFactory`: a priest and a paladin resurrect an unreleased member, a priest resurrects a released one
+through its corpse): an elite quest done by a tank, a healer and a mage formed
 through `CMSG_GROUP_INVITE` / `CMSG_GROUP_ACCEPT` / `CMSG_LOOT_METHOD` and disbanded with every member credited; an objective the risk
 estimate passes over done by two; the healer healing the tank in a fight; the tank taunting the ogre off the healer; a dungeon quest:
 through the entrance trigger into one instance bound to the group, the boss, out through the exit; a wipe retreated, the dead
@@ -195,10 +213,10 @@ d3b26dcb):
 
 ## Limits
 
-* Dungeon goals come from creature objectives; a dungeon quest that asks only for items is not recognised (its drop source would need
-  the loot tables).
+* An item objective is a goal only when every creature that drops it spawns inside instances; one dropped on the bot's own map stays the
+  brain's solo work (as before). The group kills the dropper once; a drop chance below 100% that does not drop for everyone fails the
+  goal after the usual two minutes without the objective in sight.
 * Clearing is local: the leader pulls what stands within 20 yards of it on the way; there is no dungeon route or pull planning, no
   crowd control, no marking.
-* Resurrection targets a dead member's body; a member that already released (a ghost) runs back instead (no corpse-target cast).
 * The coordinator's groups live in memory: after a restart the bots leave the restored server groups and match again.
-* Bots do not hand quests to each other (a bot without the quest is not matched for a quest goal).
+* A bot without a quest for the goal is not matched for it (sharing happens inside a group formed for the goal, below).

@@ -13,6 +13,7 @@ using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
@@ -340,7 +341,80 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
     {
         if (goal.QuestId == 0) return true;
         if (QuestState(player) is not { } state) return false;
-        return state.Quests.Get(goal.QuestId) is { Status: QuestStatus.Incomplete } && !ObjectiveDone(player, goal.ObjectiveEntry);
+        return state.Quests.Get(goal.QuestId) is { Status: QuestStatus.Incomplete } && !GoalDone(player, goal);
+    }
+
+    /// <summary>
+    /// Members share the goal's quests with each other, as players do once grouped: a bot member holding a sharable quest of the goal
+    /// (the goal's quest, or one asking for its creature or item) that another member lacks and could take sends CMSG_PUSHQUESTTOPARTY
+    /// (<see cref="PlayerbotGroupAI.PushQuest"/>) once every such member stands within the share distance (vmangos QUEST_SHARE_DISTANCE,
+    /// 14 yards); the receivers' party intake accepts (<c>PlayerbotPartyAI</c>). The server applies vmangos' rules (sharable flag, the
+    /// sharer on the quest, the receiver able to take it, the log not full, one offer at a time). Each quest is pushed once per group.
+    /// </summary>
+    private void ShareQuests(BotGroup group)
+    {
+        if (services.GetService<QuestNpcFeature>()?.Services is not { } quests) return;
+        var joined = new List<(Member Member, Player Player)>();
+        foreach (Member member in group.Members.Where(m => m.Joined))
+            if (_world!.FindOnlinePlayer(member.Guid) is { IsAlive: true } player) joined.Add((member, player));
+        foreach ((Member member, Player sharer) in joined)
+        {
+            if (member.Real || member.AI is not { } ai || quests.StateOf(sharer) is not { Loaded: true } state) continue;
+            foreach ((uint questId, QuestStatusData status) in state.Quests.Statuses.OrderBy(s => s.Key))
+            {
+                if (status.Rewarded || group.Shared.Contains(questId) || quests.Quests.Get(questId) is not { } quest
+                    || !ForGoal(quest, group.Goal) || !quests.CanShareQuest(sharer, questId)) continue;
+                var lacking = joined.Where(other => !ReferenceEquals(other.Player, sharer)
+                    && quests.StateOf(other.Player)?.Quests.GetStatus(questId) == QuestStatus.None && quests.CanTakeQuest(other.Player, questId) == true).ToArray();
+                if (lacking.Length == 0) continue;
+                if (lacking.Any(other => !ReferenceEquals(other.Player.Map, sharer.Map)
+                        || Distance(other.Player, sharer) >= QuestNpcServices.QuestShareDistance - 1f)) continue;
+                if (!ai.PushQuest(questId)) continue;
+                group.Shared.Add(questId);
+                Note($"{sharer.Name} shares quest {questId} with {string.Join(", ", lacking.Select(other => other.Player.Name))}");
+            }
+        }
+    }
+
+    /// <summary>Whether <paramref name="quest"/> is part of <paramref name="goal"/>: the goal's quest, or one asking for its creature or item.</summary>
+    private static bool ForGoal(Quest quest, PlayerbotGroupGoal goal)
+        => quest.Id == goal.QuestId || (goal.ObjectiveEntry != 0 && quest.ReqCreatureOrGOId.Contains((int)goal.ObjectiveEntry))
+            || (goal.ObjectiveItem != 0 && quest.ReqItemId.Contains(goal.ObjectiveItem));
+
+    /// <summary>The goal's objective is done for the bot: its quest item count (<see cref="PlayerbotGroupGoal.ObjectiveItem"/>), else its kills.</summary>
+    internal bool GoalDone(Player player, PlayerbotGroupGoal goal)
+        => goal.ObjectiveItem != 0 ? ItemObjectiveDone(player, goal.ObjectiveItem) : ObjectiveDone(player, goal.ObjectiveEntry);
+
+    /// <summary>Whether every unfinished quest in the bot's log that asks for <paramref name="item"/> has its count in the bags.</summary>
+    internal bool ItemObjectiveDone(Player player, uint item)
+    {
+        QuestNpcServices? quests = services.GetService<QuestNpcFeature>()?.Services;
+        if (quests is null || QuestState(player) is not { } state || item == 0) return true;
+        uint have = player.Inventory.GetItemCount(item);
+        foreach ((uint questId, QuestStatusData status) in state.Quests.Statuses)
+        {
+            if (status.Status != QuestStatus.Incomplete || quests.Quests.Get(questId) is not { } quest) continue;
+            for (int index = 0; index < quest.ReqItemId.Count; index++)
+                if (quest.ReqItemId[index] == item && have < quest.ReqItemCount[index]) return false;
+        }
+
+        return true;
+    }
+
+    private LootContent? _dropIndexOf;
+    private Dictionary<uint, uint[]> _dropIndex = [];
+
+    /// <summary>The creatures that drop <paramref name="item"/> (<see cref="PlayerbotGroupContent.DropIndex"/>, rebuilt when the loot tables are reloaded).</summary>
+    internal IReadOnlyList<uint> DroppersOf(uint item)
+    {
+        if (services.GetService<GameObjects.GameObjectLootFeature>()?.LootContent is not { } loot) return [];
+        if (!ReferenceEquals(loot, _dropIndexOf))
+        {
+            _dropIndex = PlayerbotGroupContent.DropIndex(loot);
+            _dropIndexOf = loot;
+        }
+
+        return _dropIndex.GetValueOrDefault(item) ?? [];
     }
 
     private PlayerNpcState? QuestState(Player player)
@@ -372,7 +446,8 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
 
         foreach ((uint questId, QuestStatusData status) in state.Quests.Statuses.OrderBy(s => s.Key))
         {
-            if (status.Status != QuestStatus.Incomplete || quests.Quests.Get(questId) is not { } quest) continue;
+            // A quest of a game event that is not running is not pursued (vmangos Quest::IsActive; PlayerbotQuestGoals).
+            if (status.Status != QuestStatus.Incomplete || quests.Quests.Get(questId) is not { IsActive: true } quest) continue;
             if (bot.Brain.Suspensions.IsQuestSuspended(questId, Now)) continue;
             int flagged = PlayerbotGroupContent.QuestGroupSize(quest.Template);
             for (int index = 0; index < quest.ReqCreatureOrGOId.Count; index++)
@@ -381,6 +456,21 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
                 if (raw <= 0 || status.CreatureOrGOCount[index] >= quest.ReqCreatureOrGOCount[index]) continue;
                 uint entry = (uint)raw;
                 if (GoalFor(player, maps, creatures, quest, entry, flagged) is { } goal && !IsSetAside(bot.BotId, goal.Key)) return goal;
+            }
+
+            // A quest item dropped only inside an instance (a dungeon quest that asks for a boss's head and nothing else): the goal is the
+            // creature that drops it, in that instance, like a creature objective. A drop from creatures on the bot's own map is the brain's
+            // solo work, as before.
+            for (int index = 0; index < quest.ReqItemId.Count; index++)
+            {
+                uint item = quest.ReqItemId[index];
+                if (item == 0 || quest.ReqItemCount[index] == 0 || player.Inventory.GetItemCount(item) >= quest.ReqItemCount[index]) continue;
+                foreach (uint dropper in DroppersOf(item))
+                {
+                    if (creatures.GetSpawns(player.MapId, dropper).Count > 0) continue;
+                    if (GoalFor(player, maps, creatures, quest, dropper, flagged) is { InInstance: true } goal && !IsSetAside(bot.BotId, goal.Key))
+                        return goal with { ObjectiveItem = item };
+                }
             }
         }
 
@@ -613,6 +703,9 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
         if (group.Members.Any(m => m.Joined && _world!.FindOnlinePlayer(m.Guid) is { IsAlive: true } p && p.Combat.IsInCombat))
             group.LastCombatMs = Math.Max(1u, now);
 
+        if (group.State is PlayerbotGroupState.Gathering or PlayerbotGroupState.Travelling or PlayerbotGroupState.Engaging && !group.InFight(now))
+            ShareQuests(group);
+
         switch (group.State)
         {
             case PlayerbotGroupState.Forming:
@@ -800,7 +893,7 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
         group.UpdateObjective(_world!);
         if (!group.HadQuest) return group.ObjectiveKilled;
         foreach (Member member in group.Members.Where(m => m.Joined && !m.Real))
-            if (_world!.FindOnlinePlayer(member.Guid) is { } player && !ObjectiveDone(player, group.Goal.ObjectiveEntry)) return false;
+            if (_world!.FindOnlinePlayer(member.Guid) is { } player && !GoalDone(player, group.Goal)) return false;
         return true;
     }
 
@@ -1038,6 +1131,9 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
         public bool Raid { get; set; }
         public bool Solo { get; init; }
         public bool HadQuest { get; set; }
+
+        /// <summary>The quests a member already pushed to the group (<see cref="ShareQuests"/>).</summary>
+        public HashSet<uint> Shared { get; } = [];
 
         /// <summary>Where the group gathers before the content (<see cref="ApproachPoint"/>).</summary>
         public Vector3 Approach { get; set; }

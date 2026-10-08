@@ -66,7 +66,7 @@ The **decision**:
 | `avoid` (`elite-above`) | an elite three or more levels above the bot that is not a quest objective | Next candidate. |
 | `avoid` (`remembered`) | the bot fled from or died to this very creature within `DangerMemorySeconds` | Next candidate (it is not even listed). |
 | `rest` (`low-health`, `low-mana`) | it would be an `engage` at full health and mana | When nothing else is worth it, the bot waits (eating or drinking when it carries food or water) until `RecoverHealthPct`, at most 90 s. |
-| `detour` (`path-adds-N`) | the fight is acceptable without the creatures on the way | Walks via a waypoint 15, 25 or 35 yards to either side of the straight line, chosen so the route and the last leg stay 2 yards outside every path creature's reach; `avoid` when none does. |
+| `detour` (`path-adds-N`) | the fight is acceptable without the creatures on the way | Walks via a waypoint 15, 25 or 35 yards to either side of the straight line, chosen so the route and the last leg stay 2 yards outside the reach of every visible creature that would attack the bot and is not part of the fight anyway (those on the way and any other, e.g. one standing beside the waypoint), and out of its hazards; `avoid` when none does. |
 | `avoid` (`pack-of-N`, `too-strong`, `elite`) | otherwise | Next candidate; with none, the brain's destinations or exploring as before. |
 
 The last verdict is reported: `risk=2.47 reward=3.30 decision=avoid reason=pack-of-3 target=6`.
@@ -127,7 +127,9 @@ and of each retreat (20). The brain looks the visible creatures over every 2 sec
 Every route a living bot is given (`PlayerbotNavigation.TryPlan` / `TryPlanToward`: quest givers and objectives, trainers, vendors,
 quest travel, exploring, approaches) is checked, sampled every 2 yards, against the hazards it does not already stand in. One that
 passes through a hazard is replaced by a way round it: a corner before it and one past it, its radius plus 5 or 15 yards off to
-either side, each leg on the navigation mesh; with none, the route is refused. The goal then does what it does with any route it
+either side, each leg on the navigation mesh (or stepped over the terrain where the mesh has none); with none, the route is refused.
+Each leg of such a route keeps its own proof (`PlayerbotRoute.LegsNavigated`): the motion skips the floor and line-of-sight checks only
+on the mesh's legs, never on a stepped one that follows a mesh leg (it used to take the first leg's proof for the whole route). The goal then does what it does with any route it
 cannot get: a trainer destination tries the next trainer (`PlayerbotTrainerDestinations` blocks that spawn), a vendor, quest giver
 or travel goal another one or nothing, and a goal that keeps failing is given up by the stall watch. A route being walked is
 checked again at each step and given up when a hazard turned up on the rest of it. A retreat walks where it must; a party bot
@@ -167,7 +169,9 @@ manual clock and flat ground (`RiskTestWorld`): a pack of three passed for a lon
 unless a soloable quest objective, a lost fight retreated past the leash with the creatures evading and the bot recovering and
 pulling again once it forgets, a nearly won fight finished, the class escapes cast for a mage, rogue, hunter, priest and warrior,
 a party bot staying until its master falls, an errand set aside after a death (`PlayerbotRiskWorldTests`,
-`PlayerbotRetreatEscapeTests`, `PlayerbotRiskPartyTests`), and the report in status and inspect (`PlayerbotRiskReportTests`).
+`PlayerbotRetreatEscapeTests`, `PlayerbotRiskPartyTests`), and the report in status and inspect (`PlayerbotRiskReportTests`);
+the detours (`PlayerbotDetourTests`: a hazard detour's stepped legs keep their checks, a pit opened on one stops the bot; a pack
+detour keeps out of a hostile standing on its first waypoint).
 `ConfigReloadTests` checks every risk key is live and range-checked. The live snapshot replay
 (`PlayerbotLiveSnapshotReplayTests`) prints each bot's deaths.
 
