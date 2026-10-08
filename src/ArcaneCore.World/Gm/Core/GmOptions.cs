@@ -79,6 +79,26 @@ public sealed class GmOptions
     /// </summary>
     public int TicketMutationsPerMinute { get; set; } = 10;
 
+    /// <summary>
+    /// ArcaneCore only, NOT the retail default: registers the <c>.fx</c> GM tooling (music, sounds, spell visuals,
+    /// cinematics, zone-under-attack, world states, client clock speed, screen messages, multi-zone weather and the
+    /// <c>.fx event</c> presets), which pushes client-visible effects to the invoker, the selection, the zone, the map or
+    /// the server. vmangos has no such root: only <c>.debug play music|sound|cinematic</c> and <c>.debug worldstate</c>,
+    /// each to the invoker (Chat.cpp:288-323). False removes the root (restart to change).
+    /// </summary>
+    public bool LiveFx { get; set; } = true;
+
+    /// <summary>
+    /// ArcaneCore only: a directory of the developer's own build-5875 client DBC files (nothing is shipped). When set,
+    /// <c>.fx music</c>/<c>sound</c> refuse an id not in SoundEntries.dbc, <c>.fx cinematic</c> one not in
+    /// CinematicSequences.dbc and <c>.fx visual</c> one not in SpellVisualKit.dbc, and <c>.fx lookup</c> searches those
+    /// files plus ZoneMusic, SpellVisualEffectName and WorldStateUI .dbc. A file missing from the directory leaves its
+    /// kind unchecked (with a warning); a missing directory or a malformed file stops the daemon. Empty (the default):
+    /// every id is sent unchecked. vmangos' <c>.debug play sound|music|cinematic</c> refuse unknown ids against its own
+    /// loaded tables (DebugCommands.cpp:471-536); ArcaneCore loads no such tables unless this is set.
+    /// </summary>
+    public string LiveFxDbcDirectory { get; set; } = string.Empty;
+
     /// <summary>The retail level of a stored account security (unmapped values count as Player).</summary>
     public int LevelOf(AccountSecurity security) => SecurityMap.GetValueOrDefault(security, (byte)0);
 

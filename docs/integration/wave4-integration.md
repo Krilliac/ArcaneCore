@@ -192,10 +192,11 @@ Data.Tests skips are all environment-gated facts, none is provider-only when a M
 three different variable names (`ARCANECORE_CLASSICDB_DUMP` for `CreatureMovementTemplateTests`, `CreatureBehaviourImportTests`, `GameObjectSpawnDataTests` and
 `CreatureSpawnEntryTests`; `ARCANE_CLASSICDB_DUMP`, the spelling of `ClassicDbDumpFactAttribute` in `tests/ArcaneCore.Data.Tests/WorldState`, which falls back to
 `D:\refs\classic-db\Full_DB\ClassicDB_1_12_1_z2815.sql.gz` when unset, for `WeatherImportCliTests`, `GameEventImporterTests` and `WorldStateDataTests`;
-`ARCANECORE_CLASSIC_DB` for `TotemSpellDataTests`) and five need a build-5875 DBC directory (`ARCANECORE_TEST_DBC_DIR`: `SkillDbcReaderTests`,
-`ShapeshiftFormDbcTests`, `EnchantDbcReaderTests`, `CharacterAppearanceDbcReaderTests` from the wave-4 optional-dbcs lane, and `ClientDataTests` from the 2026-10-08 client-data lane, which adds one gated fact, so each skip count below that predates it is one lower than a run today). `DataTestsSkipAttributionTests` checks this paragraph against the attributes. One more, the read-committed bid/deletion theory in
-`EconomyCharacterDeletionRaceTests`, skips only when neither `ARCANECORE_TEST_MARIADB` nor `ARCANECORE_TEST_POSTGRES` is set. With no variables set a run skips 13 (12 before the optional-dbcs lane); with the
-two database variables and no dump or DBC (the CI configuration in `.github/workflows/ci.yml`) it skips 12 (11 before). The 9 above is neither, so some of the dump or DBC variables
+`ARCANECORE_CLASSIC_DB` for `TotemSpellDataTests`) and six need a build-5875 DBC directory (`ARCANECORE_TEST_DBC_DIR`: `SkillDbcReaderTests`,
+`ShapeshiftFormDbcTests`, `EnchantDbcReaderTests`, `CharacterAppearanceDbcReaderTests` from the wave-4 optional-dbcs lane, `ClientEffectDbcReaderTests`
+from the `.fx` client-data lane and `ClientDataTests` from the 2026-10-08 client-data lane; each of the last two adds one gated fact). `DataTestsSkipAttributionTests` checks this paragraph against the attributes. One more, the read-committed bid/deletion theory in
+`EconomyCharacterDeletionRaceTests`, skips only when neither `ARCANECORE_TEST_MARIADB` nor `ARCANECORE_TEST_POSTGRES` is set. With no variables set a run skips 15 (14 before the 2026-10-08 client-data lane, 13 before the `.fx` client-data lane, 12 before the optional-dbcs lane); with the
+two database variables and no dump or DBC (the CI configuration in `.github/workflows/ci.yml`) it skips 14 (12 before the two client-data lanes). The 9 above is neither, so some of the dump or DBC variables
 were set on the machine that produced it; which ones is UNVERIFIED (the run was not logged). The CI skip count was not read from a CI log.
 
 Resilience theory timing (`SchemaStartupResilienceTests.InterruptedFreshCreate_ResumesOnRestart`, all three providers, the one filter, Debug, `--no-build`,
