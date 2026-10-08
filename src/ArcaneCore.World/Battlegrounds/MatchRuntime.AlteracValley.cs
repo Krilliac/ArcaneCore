@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
+using ArcaneCore.Game.Battlegrounds.AlteracValleyScripts;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
@@ -123,7 +124,7 @@ internal sealed partial class MatchRuntime
     public uint CharmedEntryOf(ObjectGuid player)
         => Online(player) is { } p && !p.CharmGuid.IsEmpty && p.Map?.FindObject(p.CharmGuid) is Creature charm ? charm.Entry : 0;
 
-    /// <summary>Install the landmine script on the match's objects (Alterac Valley only).</summary>
+    /// <summary>Install the landmine and beacon scripts on the match's objects (Alterac Valley only).</summary>
     private void AttachAlteracValley(GameObjectMapSystem objects)
     {
         if (Type != BattlegroundType.AlteracValley)
@@ -134,6 +135,32 @@ internal sealed partial class MatchRuntime
         _landmines ??= new AvLandmineAi(this);
         objects.RegisterAi(AlteracValley.GameObjectLandmineHorde, _landmines);
         objects.RegisterAi(AlteracValley.GameObjectLandmineAlliance, _landmines);
+        if (AssaultScripts() is { } scripts)
+        {
+            scripts.Attach(objects);
+        }
+    }
+
+    /// <summary>Give the match map's creatures the assault scripts (Alterac Valley only).</summary>
+    private void AttachAlteracValley(CreatureMapSystem creatures)
+    {
+        if (AssaultScripts() is { } scripts)
+        {
+            scripts.Attach(creatures);
+        }
+    }
+
+    /// <summary>The assault scripts of this match (vmangos AddSC_bg_alterac's assault part), made with the match.</summary>
+    private AlteracValleyScripts? AssaultScripts()
+        => Type == BattlegroundType.AlteracValley && Battleground is AlteracValley av ? _assaultScripts ??= new AlteracValleyScripts(av) : null;
+
+    private AlteracValleyScripts? _assaultScripts;
+
+    /// <summary>The match is over or its map unloads: the creatures and objects go back to their own AI.</summary>
+    private void DetachAlteracValleyScripts()
+    {
+        _assaultScripts?.Detach();
+        _assaultScripts = null;
     }
 
     private void DetachAlteracValley(GameObjectMapSystem objects)
