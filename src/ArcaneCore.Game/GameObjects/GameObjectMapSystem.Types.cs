@@ -414,7 +414,7 @@ public sealed partial class GameObjectMapSystem
             }
         }
 
-        if (target is null)
+        if (target is null || AiOf(trap)?.OnTrapTarget(this, trap, target) == true)
         {
             return;
         }

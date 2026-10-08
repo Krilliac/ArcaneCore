@@ -26,7 +26,7 @@ namespace ArcaneCore.World.Battlegrounds;
 /// states, statuses, resurrections, doors, spawns, teleports) and its map side (the spawn gate of the battleground events, the flag stand,
 /// dropped flag and banner objects, the match's own objects such as the Arathi Basin buffs, and the battleground buff traps). World thread.
 /// </summary>
-internal sealed class MatchRuntime : IBattlegroundHost, IWrappingSpawnGate
+internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGate
 {
     /// <summary>The group reward distance (vmangos CONFIG_FLOAT_GROUP_XP_DISTANCE, mangosd.conf MaxGroupXPDistance default 74).</summary>
     public const float GroupRewardDistance = 74f;
@@ -107,6 +107,7 @@ internal sealed class MatchRuntime : IBattlegroundHost, IWrappingSpawnGate
             objects.RegisterUseHandler(GameObjectType.FlagStand, UseFlagStand);
             objects.RegisterUseHandler(GameObjectType.FlagDrop, UseFlagDrop);
             objects.Used += OnObjectUsed;
+            AttachAlteracValley(objects);
         }
 
         if (_creatures is null && map.FindUpdater<CreatureMapSystem>() is { } creatures)
@@ -135,6 +136,7 @@ internal sealed class MatchRuntime : IBattlegroundHost, IWrappingSpawnGate
         if (_gameObjects is { } objects)
         {
             objects.Used -= OnObjectUsed;
+            DetachAlteracValley(objects);
         }
 
         if (Map is { } map && _combatHooked)

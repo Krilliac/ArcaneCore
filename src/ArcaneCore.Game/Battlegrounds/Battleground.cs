@@ -713,6 +713,21 @@ public abstract partial class Battleground
         }
     }
 
+    /// <summary>vmangos <c>SetSpawnEventMode</c>: nothing for <see cref="BattlegroundConstants.EventNone"/>, otherwise the host applies the mode.</summary>
+    protected void SetSpawnEventMode(byte event1, byte event2, BattlegroundSpawnMode mode)
+    {
+        if (event2 != BattlegroundConstants.EventNone)
+        {
+            Host.SetSpawnEventMode(event1, event2, mode);
+        }
+    }
+
+    /// <summary>
+    /// vmangos <c>BattleGround::CheckSpellCast</c>, asked by Spell::CheckCast after the range check for a participant's cast that no aura
+    /// triggered (Spell.cpp:5705-5716): null lets the cast go on, a value is the SpellCastResult that refuses it. Nothing by default.
+    /// </summary>
+    public virtual byte? CheckSpellCast(ObjectGuid caster, uint spellId) => null;
+
     /// <summary>The world states a player entering the battleground starts with (vmangos <c>FillInitialWorldStates</c>); a value may be -1.</summary>
     public virtual IReadOnlyList<(uint Id, int Value)> InitialWorldStates() => [];
 

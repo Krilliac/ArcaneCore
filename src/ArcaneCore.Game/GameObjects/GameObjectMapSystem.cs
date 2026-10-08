@@ -179,6 +179,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         _clockMs += diffMs;
+        UpdateAis(diffMs);
         foreach (GameObject go in _objects.Values.ToArray())
         {
             if (!go.IsSpawned)

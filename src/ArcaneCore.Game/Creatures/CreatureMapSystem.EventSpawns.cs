@@ -68,3 +68,44 @@ public sealed partial class CreatureMapSystem
         }
     }
 }
+
+/// <summary>The respawn modes a battleground sets on its event creatures (vmangos BattleGround::SpawnBGCreature).</summary>
+public sealed partial class CreatureMapSystem
+{
+    /// <summary>vmangos RESPAWN_2MINUTES: the delay a forced event creature comes back after.</summary>
+    public const uint EventRespawnSeconds = 120;
+
+    /// <summary>
+    /// vmangos SpawnBGCreature for the live creature of a spawn (BattleGround.cpp:1590-1630). RESPAWN_FORCED: later deaths come back after two
+    /// minutes, and a dead one waiting for its respawn comes back in a second. RESPAWN_STOP: no later death comes back, and a dead one whose
+    /// corpse is gone stays dead; a corpse keeps the respawn time it had (vmangos only moves a time already past). Returns false when the spawn
+    /// has no creature in this map.
+    /// </summary>
+    public bool SetEventRespawnMode(uint spawnGuid, bool forced)
+    {
+        Creature? creature = _creatures.Values.FirstOrDefault(c => c.Spawn?.Guid == spawnGuid);
+        if (creature is null)
+        {
+            return false;
+        }
+
+        if (forced)
+        {
+            creature.RespawnDelayOverrideSeconds = EventRespawnSeconds;
+            if (creature.DeathState != CreatureDeathState.Alive && creature.RespawnAtMs > _clockMs)
+            {
+                creature.RespawnAtMs = _clockMs + 1000;
+            }
+
+            return true;
+        }
+
+        creature.RespawnDelayOverrideSeconds = Creature.RespawnNeverSeconds;
+        if (creature.DeathState == CreatureDeathState.Dead)
+        {
+            creature.RespawnAtMs = long.MaxValue;
+        }
+
+        return true;
+    }
+}

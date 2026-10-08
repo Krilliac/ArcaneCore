@@ -276,6 +276,11 @@ public sealed partial class Creature : Unit, ICombatCreature
             return 0;
         }
 
+        if (RespawnDelayOverrideSeconds is { } forced)
+        {
+            return forced;
+        }
+
         if (!_respawnDelayDrawn)
         {
             _respawnDelaySeconds = DrawFromSpawnRange();
@@ -283,6 +288,15 @@ public sealed partial class Creature : Unit, ICombatCreature
 
         return _respawnDelaySeconds;
     }
+
+    /// <summary>
+    /// A respawn delay a battleground set (vmangos <c>SetRespawnDelay</c> from SpawnBGCreature: two minutes, or
+    /// <see cref="RespawnNeverSeconds"/>), used instead of the spawn's own for every later death; null: the spawn's.
+    /// </summary>
+    public uint? RespawnDelayOverrideSeconds { get; internal set; }
+
+    /// <summary>vmangos RESPAWN_NEVER as a delay: the creature does not come back.</summary>
+    public const uint RespawnNeverSeconds = uint.MaxValue;
 
     private uint DrawFromSpawnRange()
     {

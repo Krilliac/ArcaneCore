@@ -9,13 +9,15 @@ namespace ArcaneCore.Game.Battlegrounds;
 /// reinforcements; the match ends when a general dies (vmangos removed the reinforcement-zero win, BattleGroundAV.cpp:782-787). Reputation and
 /// bonus honor follow each objective and the surviving towers, captain, graveyards and mines at the end.
 /// <para>
-/// Not ported from vmangos (each needs content or systems this server does not have): the armor-scrap upgrades of the defenders and their
-/// quests, the air, cavalry, ground and world-boss challenge invocations, the shredders, the landmine layers and experts, the commanders'
-/// respawn stop, Snivvle and the start-time supply and tamed events (the latter are unreachable in vmangos: they test the third start event
-/// flag while the match is running, BattleGroundAV.cpp:845). The defender events are spawned at upgrade level 0.
+/// The turn-ins, the armor-scrap upgrades of the defenders (the defender events follow the owner's scraps), the challenge counters, the
+/// landmine layers and experts, the shredder owner check, the respawn stop of the commanders, the explosives experts and the defenders of an
+/// assaulted node, and the captains' and Snivvle's yells are in <c>AlteracValley.Upgrades.cs</c> and below. Not ported: the assault
+/// invocations of the scripts (escorted troops, beacons, war riders and world bosses; their counters and go flags are kept) and the
+/// start-time supply and tamed events (unreachable in vmangos: they test the third start event flag while the match is running,
+/// BattleGroundAV.cpp:845).
 /// </para>
 /// </summary>
-public sealed class AlteracValley : Battleground
+public sealed partial class AlteracValley : Battleground
 {
     /// <summary>Number of nodes (vmangos <c>BG_AV_NODES_MAX</c>).</summary>
     public const int NodeCount = 15;
@@ -62,6 +64,26 @@ public sealed class AlteracValley : Battleground
     public const uint SpellBossKillQuest = 23658;
     public const uint SpellHordeCaptainBuff = 22751;
     public const uint SpellAllianceCaptainBuff = 23693;
+
+    // BG_AV_Spells and BG_AV_Creatures, BG_AV_GameObjects (BattleGroundAV.h:414-435).
+    public const uint SpellSummonShredderHorde = 21544;
+    public const uint SpellSummonShredderAlliance = 21565;
+    public const uint NpcShredderAlliance = 13416;
+    public const uint NpcShredderHorde = 13378;
+    public const uint NpcLandminesLayerAlliance = 13356;
+    public const uint NpcLandminesLayerHorde = 13357;
+    public const uint NpcLandminesExpertAlliance = 13598;
+    public const uint NpcLandminesExpertHorde = 13597;
+    public const uint GameObjectLandmineHorde = 179324;
+    public const uint GameObjectLandmineAlliance = 179325;
+
+    /// <summary>The yells the captains give with their buff and Snivvle's at 70 s (mangos_string ids, BattleGroundAV.cpp:810-842).</summary>
+    public const uint TextSnivvle = 791;
+    public const uint TextHordeCaptainBuff = 792;
+    public const uint TextAllianceCaptainBuff = 793;
+
+    /// <summary>SPELL_FAILED_SPELL_UNAVAILABLE (SpellCastResult 0x63).</summary>
+    public const byte CastFailedSpellUnavailable = 0x63;
 
     // BG_AV_Events used by the rules (BattleGroundAV.h:203-276)
     public const byte EventMineBosses = 46;
@@ -170,6 +192,9 @@ public sealed class AlteracValley : Battleground
     private readonly uint _repSurviveTower;
     private uint _buffTimerAlliance;
     private uint _buffTimerHorde;
+    private uint _snivvleTimer;
+    private bool _snivvleDone;
+    private readonly ObjectGuid[] _shredderOwners = new ObjectGuid[2];
 
     public AlteracValley(BattlegroundTemplate template, int bracket, uint instanceId, uint clientInstanceId, BattlegroundOptions options, BattlegroundPorts ports)
         : base(template, bracket, instanceId, clientInstanceId, options, ports)
@@ -235,9 +260,10 @@ public sealed class AlteracValley : Battleground
 
         InitNode(NodeSnowfallGrave, TeamNeutral, tower: false);
 
-        // initializeChallengeInvocationGoals (BattleGroundAV.cpp:98-103): the captain buffs come two to six minutes in.
+        // initializeChallengeInvocationGoals (BattleGroundAV.cpp:98-157): the captain buffs come two to six minutes in.
         _buffTimerAlliance = 120_000 + ((uint)Ports.Random.Next(0, 5) * 60_000);
         _buffTimerHorde = 120_000 + ((uint)Ports.Random.Next(0, 5) * 60_000);
+        InitializeChallengeGoals();
     }
 
     // ------------------------------------------------------------------ queries
@@ -295,6 +321,14 @@ public sealed class AlteracValley : Battleground
     /// <inheritdoc />
     public override bool Update(uint diffMs)
     {
+        // Snivvle yells 70 s after the match object exists, whatever its status (BattleGroundAV.cpp:810-815).
+        _snivvleTimer += diffMs;
+        if (_snivvleTimer >= 70_000 && !_snivvleDone)
+        {
+            Host.EventCreatureYell(EventSnivvle, TextSnivvle);
+            _snivvleDone = true;
+        }
+
         if (Status == BattlegroundStatus.InProgress)
         {
             UpdateRunning(diffMs);
@@ -311,6 +345,7 @@ public sealed class AlteracValley : Battleground
             if (!IsActiveEvent(EventCaptainDeadHorde, 0))
             {
                 CastSpellOnTeam(SpellHordeCaptainBuff, Team.Horde);
+                Host.EventCreatureYell(EventCaptainHorde, TextHordeCaptainBuff);
             }
 
             _buffTimerHorde = 120_000 + ((uint)Ports.Random.Next(0, 5) * 60_000);
@@ -325,6 +360,7 @@ public sealed class AlteracValley : Battleground
             if (!IsActiveEvent(EventCaptainDeadAlliance, 0))
             {
                 CastSpellOnTeam(SpellAllianceCaptainBuff, Team.Alliance);
+                Host.EventCreatureYell(EventCaptainAlliance, TextAllianceCaptainBuff);
             }
 
             _buffTimerAlliance = 120_000 + ((uint)Ports.Random.Next(0, 5) * 60_000);
@@ -429,7 +465,24 @@ public sealed class AlteracValley : Battleground
     /// </summary>
     public override void HandleKillUnit(uint creatureEntry, byte event1, ObjectGuid killer)
     {
-        if (Status != BattlegroundStatus.InProgress || event1 == BattlegroundConstants.EventNone || PlayerTeam(killer) is not { } killerTeam)
+        if (Status != BattlegroundStatus.InProgress)
+        {
+            return;
+        }
+
+        switch (creatureEntry)
+        {
+            case NpcLandminesLayerAlliance or NpcLandminesLayerHorde:
+                // The landmines stop coming back (BattleGroundAV.cpp:283-290; the landmine object script reads the event).
+                SetActiveEvent(creatureEntry == NpcLandminesLayerAlliance ? EventLandminesAlliance : EventLandminesHorde, 1);
+                return;
+            case NpcLandminesExpertAlliance or NpcLandminesExpertHorde:
+                // Every landmine of the event goes for good (:291-301).
+                Host.RemoveEventGameObjects(creatureEntry == NpcLandminesExpertAlliance ? EventLandminesAlliance : EventLandminesHorde, 0);
+                return;
+        }
+
+        if (event1 == BattlegroundConstants.EventNone || PlayerTeam(killer) is not { } killerTeam)
         {
             return;
         }
@@ -476,6 +529,11 @@ public sealed class AlteracValley : Battleground
             case EventLieutenantAlliance:
                 RewardReputationToTeam(FactionFrostwolf, (int)_repCommander, Team.Horde);
                 RewardHonorToTeam(BonusHonorFromKill(KillCommander), Team.Horde);
+                if (event1 != EventLieutenantAlliance)
+                {
+                    SetSpawnEventMode(event1, 0, BattlegroundSpawnMode.RespawnStop); // "despawn mobs" (:336-366)
+                }
+
                 if (event1 == EventCommanderAllianceKarlPhilips)
                 {
                     Host.CompleteQuestForAll(7281);
@@ -486,6 +544,11 @@ public sealed class AlteracValley : Battleground
             case EventLieutenantHorde:
                 RewardReputationToTeam(FactionStormpike, (int)_repCommander, Team.Alliance);
                 RewardHonorToTeam(BonusHonorFromKill(KillCommander), Team.Alliance);
+                if (event1 != EventLieutenantHorde)
+                {
+                    SetSpawnEventMode(event1, 0, BattlegroundSpawnMode.RespawnStop); // (:367-390)
+                }
+
                 if (event1 == EventCommanderHordeLouisPhilips)
                 {
                     Host.CompleteQuestForAll(7282);
@@ -499,9 +562,11 @@ public sealed class AlteracValley : Battleground
                 break;
             case EventExplosivesExpertAlliance:
                 Host.CompleteQuestForAll(7367);
+                SetSpawnEventMode(EventExplosivesExpertAlliance, 0, BattlegroundSpawnMode.RespawnStop);
                 break;
             case EventExplosivesExpertHorde:
                 Host.CompleteQuestForAll(7368);
+                SetSpawnEventMode(EventExplosivesExpertHorde, 0, BattlegroundSpawnMode.RespawnStop);
                 break;
         }
     }
@@ -717,24 +782,32 @@ public sealed class AlteracValley : Battleground
     }
 
     /// <summary>
-    /// vmangos <c>PopulateNode</c> (BattleGroundAV.cpp:1209-1286) at defender upgrade level 0: the banner event (node, owner * 2 + state), shown
-    /// after 5 s when controlled and 1 s when assaulted, and the defender events of a controlled graveyard or tower.
+    /// vmangos <c>PopulateNode</c> (BattleGroundAV.cpp:1209-1286): the banner event (node, owner * 2 + state), shown after 5 s when controlled and
+    /// 1 s when assaulted; the defenders of a controlled graveyard (node + 15, owner * 4 + defender type) or tower (the base defenders
+    /// node + 15, owner * 2 + 1, and the tower defenders node + 23, owner * 4 + defender type) are spawned, respawn at once when dead and come
+    /// back two minutes after a death; those of an assaulted node, at the previous owner's defender type, stop coming back
+    /// (SetSpawnEventMode RESPAWN_FORCED and RESPAWN_STOP). The defender type follows the owner's armor scraps (<see cref="DefenderType"/>).
     /// </summary>
     private void PopulateNode(int node)
     {
         NodeInfo n = _nodes[node];
         int owner = n.Owner;
+        int previous = n.PrevOtherOwner;
+        int typeNew = DefenderType(owner);
+        int typeOld = DefenderType(previous);
         uint delay = 0;
         if (IsGrave(node))
         {
             if (n.State == PointControlled)
             {
-                SpawnEvent((byte)(NodeCount + node), (byte)(owner * MaxGraveTypes), spawn: true, forcedDespawn: true);
+                SetSpawnEventMode((byte)(NodeCount + node), (byte)((owner * MaxGraveTypes) + typeNew), BattlegroundSpawnMode.RespawnForced);
+                SpawnEvent((byte)(NodeCount + node), (byte)((owner * MaxGraveTypes) + typeNew), spawn: true, forcedDespawn: true);
                 delay = 5;
             }
             else
             {
-                delay = 1;      // the old defenders stop respawning (SetSpawnEventMode RESPAWN_STOP, not modelled)
+                SetSpawnEventMode((byte)(NodeCount + node), (byte)((previous * MaxGraveTypes) + typeOld), BattlegroundSpawnMode.RespawnStop);
+                delay = 1;
             }
         }
 
@@ -742,12 +815,16 @@ public sealed class AlteracValley : Battleground
         {
             if (n.State == PointControlled)
             {
+                SetSpawnEventMode((byte)(NodeCount + node), (byte)((owner * MaxStates) + 1), BattlegroundSpawnMode.RespawnForced);
                 SpawnEvent((byte)(NodeCount + node), (byte)((owner * MaxStates) + 1), spawn: true, forcedDespawn: true);
-                SpawnEvent((byte)(TowersMaxEventBase + node), (byte)(owner * MaxGraveTypes), spawn: true, forcedDespawn: true);
+                SetSpawnEventMode((byte)(TowersMaxEventBase + node), (byte)((owner * MaxGraveTypes) + typeNew), BattlegroundSpawnMode.RespawnForced);
+                SpawnEvent((byte)(TowersMaxEventBase + node), (byte)((owner * MaxGraveTypes) + typeNew), spawn: true, forcedDespawn: true);
                 delay = 5;
             }
             else
             {
+                SetSpawnEventMode((byte)(NodeCount + node), (byte)((previous * MaxStates) + 1), BattlegroundSpawnMode.RespawnStop);
+                SetSpawnEventMode((byte)(TowersMaxEventBase + node), (byte)((previous * MaxGraveTypes) + typeOld), BattlegroundSpawnMode.RespawnStop);
                 delay = 1;
             }
         }
@@ -887,6 +964,33 @@ public sealed class AlteracValley : Battleground
 
         base.EndBattleground(winner);
     }
+
+    // ------------------------------------------------------------------ spells
+
+    /// <summary>
+    /// vmangos <c>CheckSpellCast</c> (BattleGroundAV.cpp:1722-1744): a team has one shredder at a time. A summon is refused while the team's
+    /// last summoner still controls a shredder (SPELL_FAILED_SPELL_UNAVAILABLE); otherwise the caster becomes the team's shredder owner.
+    /// </summary>
+    public override byte? CheckSpellCast(ObjectGuid caster, uint spellId)
+    {
+        if (spellId is not (SpellSummonShredderAlliance or SpellSummonShredderHorde))
+        {
+            return null;
+        }
+
+        int team = spellId == SpellSummonShredderAlliance ? 0 : 1;
+        ObjectGuid owner = _shredderOwners[team];
+        if (!owner.IsEmpty && Host.CharmedEntryOf(owner) is NpcShredderAlliance or NpcShredderHorde)
+        {
+            return CastFailedSpellUnavailable;
+        }
+
+        _shredderOwners[team] = caster;
+        return null;
+    }
+
+    /// <summary>The player that summoned a team's shredder last (vmangos <c>m_shredderOwners</c>).</summary>
+    public ObjectGuid ShredderOwner(Team team) => _shredderOwners[BattlegroundConstants.TeamIndex(team)];
 
     // ------------------------------------------------------------------ triggers, graveyards, world states
 

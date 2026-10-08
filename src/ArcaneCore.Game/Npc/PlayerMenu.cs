@@ -10,7 +10,17 @@ public sealed record GossipMenuItem(
     GossipOption OptionId,
     string BoxMessage,
     int ActionMenu,
-    uint ActionPoi);
+    uint ActionPoi)
+{
+    /// <summary>A line a gossip script added (<see cref="INpcGossipScript"/>): selecting it goes back to the script with its sender and action.</summary>
+    public bool Scripted { get; init; }
+
+    /// <summary>The script sender of a <see cref="Scripted"/> line (vmangos GossipMenuItemData::m_gSender).</summary>
+    public uint ScriptSender { get; init; }
+
+    /// <summary>The script action of a <see cref="Scripted"/> line (vmangos GossipMenuItemData::m_gAction).</summary>
+    public uint ScriptAction { get; init; }
+}
 
 /// <summary>One prepared quest entry (vmangos GossipDef.h QuestMenuItem).</summary>
 public sealed record QuestMenuItem(uint QuestId, DialogStatus Icon);

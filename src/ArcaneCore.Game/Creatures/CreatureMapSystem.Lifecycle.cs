@@ -55,7 +55,8 @@ public sealed partial class CreatureMapSystem
             : creature.CorpseDecaySeconds(_options) * 1000;
         creature.SkinningForOthersMs = Creature.SkinningForOthersDefaultMs; // Creature.cpp:822-825: a new life, a new corpse
         creature.LootedForSkin = false;
-        creature.RespawnAtMs = _clockMs + (creature.NextRespawnDelaySeconds() * 1000L);
+        uint respawnDelay = creature.NextRespawnDelaySeconds();
+        creature.RespawnAtMs = respawnDelay == Creature.RespawnNeverSeconds ? long.MaxValue : _clockMs + (respawnDelay * 1000L);
         SaveRespawnOnDeath(creature);
         // Capture the current pet while its corpse still belongs to the map.
         // After decay, the owner's pet GUID no longer resolves to the removed object.
