@@ -436,7 +436,9 @@ public sealed class CreatureBehaviourImportTests : IAsyncLifetime
         Assert.Equal(11104, report.BroadcastTexts);
         Assert.Equal(10384, report.Templates);
         Assert.Equal(38, report.AiSummons);
-        Assert.Equal(0, report.AiTexts);
+        Assert.Equal(1523, report.AiTexts); // z2815's script_texts feed the runtime text store; creature_ai_texts itself is empty
+        Assert.Contains(importer.AiSnapshot().Texts, t => t.Entry == -1109006); // Avatar brazier
+        Assert.Contains(importer.AiSnapshot().Texts, t => t.Entry == -1230048); // bar patrol
 
         // Almost every row carries 1024/1025 and 39 rows are keyed by spawn guid.
         IReadOnlyCollection<CreatureAiScriptRow> scripts = importer.AiSnapshot().Scripts;

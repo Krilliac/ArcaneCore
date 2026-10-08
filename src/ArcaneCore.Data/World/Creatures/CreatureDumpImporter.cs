@@ -80,6 +80,7 @@ public sealed class CreatureDumpImporter
     private readonly Dictionary<uint, CreatureSpawnRow> _spawns = [];
     private readonly Dictionary<(uint, uint), CreatureMovementRow> _movement = [];
     private readonly Dictionary<(uint Entry, uint PathId, uint Point), CreatureMovementTemplateRow> _movementTemplates = [];
+    private readonly Dictionary<(uint Entry, uint PathId, uint Point), CreatureMovementTemplateRow> _scriptWaypoints = [];
     private readonly HashSet<(uint Owner, uint Path, uint Point)> _scriptedNodes = [];
     private readonly Dictionary<(uint SpawnGuid, uint Entry), CreatureSpawnEntryRow> _spawnEntries = [];
     private readonly Dictionary<uint, (int Build, CreatureModelInfoRow Row)> _models = [];
@@ -132,6 +133,9 @@ public sealed class CreatureDumpImporter
                 case "creature_movement_template":
                     ReadMovementTemplate(row);
                     break;
+                case "script_waypoint":
+                    ReadMovementTemplate(row, scriptDev: true);
+                    break;
                 case "creature_spawn_entry":
                     ReadSpawnEntry(row);
                     break;
@@ -150,6 +154,9 @@ public sealed class CreatureDumpImporter
                     break;
                 case "creature_ai_texts":
                     ReadAiText(row);
+                    break;
+                case "script_texts":
+                    ReadAiText(row, scriptDev: true);
                     break;
                 case "dbscript_random_templates":
                     if (U32(row, "type") == 0)
@@ -248,7 +255,7 @@ public sealed class CreatureDumpImporter
             await InsertBatchedAsync(db, _models.Values.Select(m => m.Row), cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _spawns.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _movement.Values, cancellationToken).ConfigureAwait(false);
-            await InsertBatchedAsync(db, _movementTemplates.Values, cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, EffectivePaths(), cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _spawnEntries.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _addons.Values, cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _aiScripts.Values, cancellationToken).ConfigureAwait(false);
@@ -327,7 +334,7 @@ public sealed class CreatureDumpImporter
         AiTexts = _aiTexts.Count,
         BroadcastTexts = _broadcastTexts.Count,
         AiSummons = _aiSummons.Count,
-        MovementTemplates = _movementTemplates.Count,
+        MovementTemplates = EffectivePaths().Count(),
         SpawnEntries = _spawnEntries.Count,
         AiTextTemplates = _textTemplates.Count,
         RelayScriptSteps = _relaySteps.Values.Sum(rows => rows.Count),
@@ -402,7 +409,14 @@ public sealed class CreatureDumpImporter
     public IReadOnlyCollection<CreatureSpawnEntryRow> SpawnEntrySnapshot() => [.. _spawnEntries.Values];
 
     /// <summary>The entry waypoint paths that would be written (for inspection and tests).</summary>
-    public IReadOnlyCollection<CreatureMovementTemplateRow> PathSnapshot() => [.. _movementTemplates.Values];
+    public IReadOnlyCollection<CreatureMovementTemplateRow> PathSnapshot() => [.. EffectivePaths()];
+
+    /// <summary>ScriptDev2 escort paths fill only entry/path pairs without a movement-template path; never blend two sources' points.</summary>
+    private IEnumerable<CreatureMovementTemplateRow> EffectivePaths()
+    {
+        HashSet<(uint Entry, uint PathId)> explicitPaths = [.. _movementTemplates.Keys.Select(k => (k.Entry, k.PathId))];
+        return _movementTemplates.Values.Concat(_scriptWaypoints.Values.Where(p => !explicitPaths.Contains((p.Entry, p.PathId))));
+    }
 
     /// <summary>The EventAI rows that would be written (for inspection and tests).</summary>
     public (IReadOnlyCollection<CreatureAiScriptRow> Scripts, IReadOnlyCollection<CreatureAiTextRow> Texts) AiSnapshot()
@@ -714,7 +728,7 @@ public sealed class CreatureDumpImporter
         }
     }
 
-    private void ReadMovementTemplate(DumpRow row)
+    private void ReadMovementTemplate(DumpRow row, bool scriptDev = false)
     {
         var point = new CreatureMovementTemplateRow
         {
@@ -727,7 +741,7 @@ public sealed class CreatureDumpImporter
             Orientation = F32(row, 0f, "Orientation"),
             WaitTimeMs = U32(row, "WaitTime", "waittime"),
         };
-        _movementTemplates[(point.Entry, point.PathId, point.Point)] = point;
+        (scriptDev ? _scriptWaypoints : _movementTemplates)[(point.Entry, point.PathId, point.Point)] = point;
         NoteScript(point.Entry, point.PathId + 1, point.Point, row);
     }
 
@@ -796,7 +810,7 @@ public sealed class CreatureDumpImporter
         }
     }
 
-    // --- creature_ai_scripts / creature_ai_texts (cmangos-classic EventAI) ------------------
+    // --- creature_ai_scripts / creature_ai_texts / script_texts (cmangos-classic EventAI and ScriptDev2) ---
 
     private void ReadAiScript(DumpRow row)
     {
@@ -852,7 +866,7 @@ public sealed class CreatureDumpImporter
         _aiScripts[script.Id] = script;
     }
 
-    private void ReadAiText(DumpRow row)
+    private void ReadAiText(DumpRow row, bool scriptDev = false)
     {
         var text = new CreatureAiTextRow
         {
@@ -866,11 +880,16 @@ public sealed class CreatureDumpImporter
         };
         if (text.Entry >= 0)
         {
-            Warn($"creature_ai_texts entry {text.Entry} is not negative; skipped");
+            Warn($"{(scriptDev ? "script_texts" : "creature_ai_texts")} entry {text.Entry} is not negative; skipped");
             return;
         }
 
-        _aiTexts[text.Entry] = text;
+        if (scriptDev)
+        {
+            if (!_aiTexts.TryAdd(text.Entry, text))
+                Warn($"script_texts entry {text.Entry} overlaps an earlier text; kept the earlier line");
+        }
+        else _aiTexts[text.Entry] = text;
     }
 
     // broadcast_text: the columns mangos-classic ObjectMgr::LoadBroadcastText reads (ObjectMgr.cpp:7786-7821).

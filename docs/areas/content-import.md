@@ -8,6 +8,10 @@ database or report inside a git work tree unless git ignores the path.
 
 ## Delivered
 
+### ScriptDev2 text and escort paths (2026-10-08; no schema change)
+
+`CreatureDumpImporter` reads classic-db `script_texts` into the existing negative-ID creature text store and reads `script_waypoint` into entry movement paths. An explicit `creature_movement_template` path wins for its whole entry/path pair, so the two sources' points are never mixed. In z2815, this adds 1,523 script texts and brings effective entry paths to 16,879 points on 604 paths; Grimstone (10096) has six points and Phalanx (9502) has two. These rows are needed for the Maraudon, Sunken Temple and Blackrock Depths ScriptDev2 encounters in [instances](instances.md). An existing world database needs a content refresh to receive them.
+
 ### Totem spell CLI integration (2026-10-04; no schema change)
 
 `plan`, `import`, dry runs and JSON reports now include the totem spell source tables. The existing

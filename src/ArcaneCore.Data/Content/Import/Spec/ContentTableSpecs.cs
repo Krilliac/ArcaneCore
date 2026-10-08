@@ -147,6 +147,8 @@ public static class ContentTableSpecs
         new("creature_spawn_entry", [new KeyColumn("guid"), new KeyColumn("entry")], [], []),
         new("creature_movement_template", [new KeyColumn("Entry"), new KeyColumn("PathId", "path_id"), new KeyColumn("Point")],
             ["PositionX", "position_x", "PositionY", "position_y", "PositionZ", "position_z", "Orientation", "WaitTime", "waittime"], []),
+        new("script_waypoint", [new KeyColumn("Entry"), new KeyColumn("PathId"), new KeyColumn("Point")],
+            ["PositionX", "PositionY", "PositionZ", "Orientation", "WaitTime", "ScriptId"], []),
         new("creature_model_info", [new KeyColumn("modelid", "display_id")],
             ["build", "bounding_radius", "combat_reach", "gender", "modelid_other_gender", "display_id_other_gender"], []),
         new("creature_display_info_addon", [new KeyColumn("modelid", "display_id")],
@@ -164,6 +166,7 @@ public static class ContentTableSpecs
                 "action3_type", "action3_param1", "action3_param2", "action3_param3", "comment",
             ], []),
         new("creature_ai_texts", [new KeyColumn("entry")], ["content_default", "type", "language", "emote"], []),
+        new("script_texts", [new KeyColumn("entry")], ["content_default", "sound", "type", "language", "emote", "broadcast_text_id"], []),
         new("dbscript_random_templates", [new KeyColumn("id"), new KeyColumn("type"), new KeyColumn("target_id")], ["chance"], []),
         // cmangos dbscripts_on_relay has no key; the scan key is wide enough that only true duplicates collide (CreatureDumpImporter.ReadRelayStep).
         new("dbscripts_on_relay",
