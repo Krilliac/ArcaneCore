@@ -15,8 +15,17 @@ public sealed partial class Player
     /// <summary>The seat a player had when it left the world aboard (taken off the ship before its final snapshot).</summary>
     internal TransportSeat? LogoutTransportSeat { get; set; }
 
-    /// <summary>The seat a snapshot stores: the ship the player rides now, or the one it rode when it left the world.</summary>
+    /// <summary>
+    /// The stored seat of a player that entered its saved map on land while its ship is on the other map, until the deferred
+    /// boarding runs (one map update later). A save or a logout in that window stores this seat, so the next login is aboard again.
+    /// </summary>
+    internal TransportSeat? BoardingTransportSeat { get; set; }
+
+    /// <summary>
+    /// The seat a snapshot stores: the ship the player rides now, the one it rode when it left the world, or the one it is about
+    /// to board after login.
+    /// </summary>
     internal TransportSeat? CurrentTransportSeat => Transport is { } ship
         ? new TransportSeat(ship.Guid.Low, Movement.TransportX, Movement.TransportY, Movement.TransportZ, Movement.TransportOrientation)
-        : LogoutTransportSeat;
+        : LogoutTransportSeat ?? BoardingTransportSeat;
 }

@@ -57,8 +57,10 @@ instanceable map, a map without a `map_template` row) are logged and refused; th
   player enters its saved map on land (its self create has no ONTRANSPORT and names no ship), then boards and is
   far-teleported to the ship right after the first map update; a missing ship sends it to its bind point at the same point.
   vmangos decides both before the map is entered (Player::LoadFromDB moves the character to the ship's map), so a 1.12
-  client there never sees the saved map at all; here it loads the saved map briefly first. A crash loses nothing beyond the
-  last autosave, which stores the seat as well.
+  client there never sees the saved map at all; here it loads the saved map briefly first. Until it boards, the seat is kept
+  (`Player.BoardingTransportSeat`): an autosave or a disconnect in that window stores it, so the next login is aboard again
+  (`TransportSeatTests.Login_WithTheShipOnTheOtherMap_ASaveBeforeItBoards_KeepsTheSeat`, `..._ALogoutBeforeItBoards_SavesTheSeat`).
+  A crash loses nothing beyond the last autosave, which stores the seat as well.
 * **Other passengers in the self packet**: vmangos `SendInitSelf` also puts the other visible passengers of the player's
   ship into the self packet; here they come with the ordinary visibility pass right after (has-transport 0).
 * **Creatures aboard**: the API (`AddPassenger`, `AddFollower`, `RemoveFollower`) exists and creatures move with the ship,
