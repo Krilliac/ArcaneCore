@@ -1,4 +1,8 @@
+using System.Numerics;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Scenarios;
 using Microsoft.Extensions.DependencyInjection;
@@ -99,7 +103,38 @@ public sealed class DungeonScenarioTests
 /// </summary>
 internal static class DeadminesTestContent
 {
+    /// <summary>The Deadmines' linked zone (map_template.linked_zone), as an area row the graveyard lookup can find inside the dungeon.</summary>
+    public const uint DeadminesZone = 1581;
+
+    /// <summary>The graveyard (safe location) a ghost released inside The Deadmines is sent to: on Eastern Kingdoms, near the entrance.</summary>
+    public static readonly WorldSafeLoc Graveyard = new(9001, 0, -11180f, 1650f, 24.57f, 0f, "Scenario Westfall graveyard");
+
+    /// <summary>A spirit healer beside <see cref="Graveyard"/>.</summary>
+    public const uint SpiritHealerEntry = 6491;
+
+    public const uint SpiritHealerSpawn = 990650;
+
+    /// <summary>The floor heights the bot tests stand on: the entrance area of Eastern Kingdoms and the entrance tunnel inside.</summary>
+    public const float OutsideFloor = 24.57f;
+
+    public const float InsideFloor = 61.78f;
+
     public static void Register(IServiceCollection services) => services.AddSingleton<IMapDataStore>(new Maps(playerLimit: 10));
+
+    /// <summary>
+    /// The content for the bot movement and recovery tests: the dungeon with its linked zone as an area row, a graveyard for that
+    /// zone outside (<see cref="Graveyard"/>) and a spirit healer standing at it. The creature store replaces the scenario creatures.
+    /// </summary>
+    public static void RegisterForBots(IServiceCollection services)
+    {
+        services.AddSingleton<IMapDataStore>(new Maps(playerLimit: 10, withZone: true));
+        services.AddSingleton<IGraveyardDataStore>(new Graveyards());
+        services.AddSingleton<ICreatureDataStore>(new SpiritHealers());
+    }
+
+    /// <summary>Install a flat floor per map (<see cref="OutsideFloor"/> on the continents, <see cref="InsideFloor"/> in the dungeon) and open paths.</summary>
+    public static void InstallCollision(ArcaneCore.Game.Maps.WorldRuntime world)
+        => WorldCollision.Of(world).Install(lineOfSight: new Floor(), pathfinder: new OpenPathfinder());
 
     /// <summary>The same content with a dungeon that admits one player: the second bot is refused at the entrance.</summary>
     public static void RegisterOnePlayerOnly(IServiceCollection services) => services.AddSingleton<IMapDataStore>(new Maps(playerLimit: 1));
@@ -119,14 +154,14 @@ internal static class DeadminesTestContent
             => Task.FromResult(new MapContent(Continents, [], [], [], []));
     }
 
-    private sealed class Maps(uint playerLimit) : IMapDataStore
+    private sealed class Maps(uint playerLimit, bool withZone = false) : IMapDataStore
     {
         public Task<MapContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new MapContent(
             [
                 .. Continents,
-                new MapTemplate(DungeonEntryScenario.Deadmines, 0, MapType.Instance, 1581, playerLimit, 0, 0, -11208.4f, 1672.3f, "The Deadmines", ""),
+                new MapTemplate(DungeonEntryScenario.Deadmines, 0, MapType.Instance, DeadminesZone, playerLimit, 0, 0, -11208.4f, 1672.3f, "The Deadmines", ""),
             ],
-            [],
+            withZone ? [new AreaTemplate(DeadminesZone, DungeonEntryScenario.Deadmines, 0, 0, 0, 18, "The Deadmines", 0, 0)] : [],
             [
                 new AreaTriggerTemplate(DungeonEntryScenario.EntranceTrigger, 0, -11208.6f, 1679.6f, 24.6f, 0f, 5f, 10f, 8f, 1.5f, "Deadmines Entrance"),
                 new AreaTriggerTemplate(DungeonEntryScenario.ExitTrigger, DungeonEntryScenario.Deadmines, -14.6f, -390.5f, 62.4f, 5f, 0, 0, 0, 0, "Deadmines Exit"),
@@ -137,5 +172,34 @@ internal static class DeadminesTestContent
                 new AreaTriggerTeleport(DungeonEntryScenario.ExitTrigger, "Deadmines - Exiting", "", 0, 0, -11208.7f, 1675.9f, 24.5733f, 4.71239f),
             ],
             []));
+    }
+
+    private sealed class Graveyards : IGraveyardDataStore
+    {
+        public Task<GraveyardContent> LoadAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(new GraveyardContent([Graveyard], [new GraveyardLink(Graveyard.Id, DeadminesZone, 0)]));
+    }
+
+    private sealed class SpiritHealers : ICreatureDataStore
+    {
+        public Task<CreatureContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new CreatureContent(
+            [new CreatureTemplate
+            {
+                Entry = SpiritHealerEntry, Name = "Spirit Healer", Faction = 12, NpcFlags = (uint)NpcFlags.SpiritHealer, DisplayIds = [5233],
+                MinLevel = 60, MaxLevel = 60, MinLevelHealth = 100, MaxLevelHealth = 100, ExtraFlags = ArcaneCore.Game.Creatures.Creature.ExtraFlagNoAggro,
+            }],
+            [new CreatureSpawn { Guid = SpiritHealerSpawn, Entry = SpiritHealerEntry, MapId = 0, X = Graveyard.X + 2f, Y = Graveyard.Y, Z = Graveyard.Z }],
+            [], [], []));
+    }
+
+    /// <summary>Flat ground: <see cref="OutsideFloor"/> on every map but the dungeon, <see cref="InsideFloor"/> in it; nothing blocks the view.</summary>
+    private sealed class Floor : ILineOfSight
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit) { hit = to; return false; }
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
+            => mapId == DungeonEntryScenario.Deadmines ? InsideFloor : OutsideFloor;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info) { info = default; return false; }
     }
 }
