@@ -83,7 +83,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         bool liveEligible = false;
         foreach (DestinationEntry entry in _entries.OrderBy(entry => DistanceSquared(player, entry.Spawn)))
         {
-            if (Suspended(entry.Entry)) continue;
+            if (Suspended(entry.Entry) || !IsPresent(player, entry.Spawn)) continue;
             if (!Eligible(entry.Entry, 0, player, services, state, 0, SkipQuest, out _)) continue;
             liveEligible = true;
             // A visible eligible giver belongs to ordinary interaction handling.
@@ -163,7 +163,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         int scanned = 0;
         bool attempted = false;
         foreach (DestinationEntry entry in _entries
-            .Where(entry => !_blockedSpawns.Contains(entry.Spawn.Guid))
+            .Where(entry => !_blockedSpawns.Contains(entry.Spawn.Guid) && IsPresent(player, entry.Spawn))
             .Where(entry => preferredCreatureEntry == 0 || entry.Entry == preferredCreatureEntry)
             .OrderBy(entry => DistanceSquared(player, entry.Spawn)))
         {
@@ -192,6 +192,14 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         if (attempted) Backoff(now);
         return false;
     }
+
+    /// <summary>
+    /// Whether the spawn may be in the world now: a spawn listed in <c>game_event_creature</c> is there only while its event says so
+    /// (the map's spawn gate, vmangos GameEventMgr), so the giver or ender of an out-of-season quest (Tormek Stoneriver and Colara Dean
+    /// of "Dearest Colara,", Love is in the Air; Greatfather Winter, Winter Veil) is not a destination while its event is off.
+    /// </summary>
+    internal static bool IsPresent(Player player, CreatureSpawn spawn)
+        => player.Map?.FindUpdater<CreatureMapSystem>()?.SpawnGate?.AllowsCreature(spawn.Guid) != false;
 
     internal static bool IsFiniteDestination(CreatureSpawn spawn)
         => float.IsFinite(spawn.X) && float.IsFinite(spawn.Y) && float.IsFinite(spawn.Z);

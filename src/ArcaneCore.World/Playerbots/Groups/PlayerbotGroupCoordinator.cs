@@ -372,7 +372,8 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
 
         foreach ((uint questId, QuestStatusData status) in state.Quests.Statuses.OrderBy(s => s.Key))
         {
-            if (status.Status != QuestStatus.Incomplete || quests.Quests.Get(questId) is not { } quest) continue;
+            // A quest of a game event that is not running is not pursued (vmangos Quest::IsActive; PlayerbotQuestGoals).
+            if (status.Status != QuestStatus.Incomplete || quests.Quests.Get(questId) is not { IsActive: true } quest) continue;
             if (bot.Brain.Suspensions.IsQuestSuspended(questId, Now)) continue;
             int flagged = PlayerbotGroupContent.QuestGroupSize(quest.Template);
             for (int index = 0; index < quest.ReqCreatureOrGOId.Count; index++)

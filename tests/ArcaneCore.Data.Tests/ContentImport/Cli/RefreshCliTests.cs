@@ -244,6 +244,65 @@ public sealed class RefreshCliTests : IDisposable
         Assert.Equal(1, await db.Set<AreaTriggerTeleportRow>().CountAsync());
     }
 
+    /// <summary>
+    /// Real classic-db z2815 game-event tuples (shortened): Feast of Winter Veil (2), Winter Veil: Gifts (21) with quest 8827
+    /// "Winter's Presents", Love is in the Air (8) with the spawns of Colara Dean (91691) and Tormek Stoneriver (91693) of quest 8898
+    /// "Dearest Colara,", and Greatfather Winter's spawn (86184) under event 2.
+    /// </summary>
+    private const string EventDump = """
+        INSERT INTO `game_event` (`entry`,`schedule_type`,`occurence`,`length`,`holiday`,`linkedTo`,`description`) VALUES (2,11,525600,27360,141,0,'Feast of Winter Veil'),(8,11,525600,5760,335,0,'Love is in the Air'),(21,1,525600,11700,0,0,'Winter Veil: Gifts');
+        INSERT INTO `game_event_time` (`entry`,`start_time`,`end_time`) VALUES (2,'2020-12-16 23:00:00','2030-12-31 22:59:59'),(8,'2020-02-08 22:00:00','2030-12-31 22:59:59'),(21,'2020-12-25 06:00:00','2030-12-31 22:59:59');
+        INSERT INTO `game_event_creature` (`guid`,`event`) VALUES (86184,2),(91691,8),(91693,8);
+        INSERT INTO `game_event_quest` (`quest`,`event`) VALUES (8827,21);
+        """;
+
+    /// <summary>
+    /// A world migrated from the Codex-line schema has empty game-event tables (the live world of the wave-8 rehearsal): every holiday NPC
+    /// stood in the world all year and its quests were offered in October. Refresh fills them from the dump.
+    /// </summary>
+    [Fact]
+    public async Task Refresh_FillsEmptyGameEventTables()
+    {
+        string world = await OldWorldAsync();
+        string dump = PathOf("world.sql");
+        File.WriteAllText(dump, Dump + Environment.NewLine + EventDump);
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", Dbcs());
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains("  game_event  3", output, StringComparison.Ordinal);
+        await using WorldDbContext db = Open(world);
+        Assert.Equal([2u, 8u, 21u], await db.Set<GameEventRow>().OrderBy(r => r.Entry).Select(r => r.Entry).ToListAsync());
+        Assert.Equal(3, await db.Set<GameEventTimeRow>().CountAsync());
+        Assert.Equal([86184u, 91691u, 91693u], await db.Set<GameEventCreatureRow>().OrderBy(r => r.Guid).Select(r => r.Guid).ToListAsync());
+        GameEventQuestRow gifts = await db.Set<GameEventQuestRow>().SingleAsync();
+        Assert.Equal((8827u, 21), (gifts.Quest, gifts.Event));
+    }
+
+    /// <summary>A world that has events (imported, or one a GM disabled) keeps its own game-event tables.</summary>
+    [Fact]
+    public async Task Refresh_LeavesAWorldsOwnGameEvents()
+    {
+        string world = await OldWorldAsync();
+        await using (WorldDbContext seed = Open(world))
+        {
+            seed.Set<GameEventRow>().Add(new GameEventRow { Entry = 2, ScheduleType = 11, Occurence = 525600, Length = 27360, Description = "Winter Veil", Disabled = true });
+            await seed.SaveChangesAsync();
+        }
+
+        string dump = PathOf("world.sql");
+        File.WriteAllText(dump, Dump + Environment.NewLine + EventDump);
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", Dbcs());
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains("the world has 1 event(s) already", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("  game_event  3", output, StringComparison.Ordinal);
+        await using WorldDbContext db = Open(world);
+        GameEventRow kept = await db.Set<GameEventRow>().SingleAsync();
+        Assert.True(kept.Disabled);
+        Assert.Equal(0, await db.Set<GameEventCreatureRow>().CountAsync());
+    }
+
     [Fact]
     public async Task Refresh_RunTwice_LeavesTheSameRows()
     {
