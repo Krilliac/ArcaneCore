@@ -220,6 +220,47 @@ public sealed class ScriptDev2DungeonTests
     }
 
     [Fact]
+    public void Spire_SeventhWaveWaitsForItsLastDeath_ThenRendLeavesTheBalconyBeforeGyth()
+    {
+        using ScriptRun run = Enter(map => new BlackrockSpireInstance(map), [],
+            [(BlackrockSpireInstance.GoGythEntry, -12f), (BlackrockSpireInstance.GoGythCombat, -10f),
+             (BlackrockSpireInstance.GoGythExit, -8f)],
+            [BlackrockSpireInstance.NpcNefarius, BlackrockSpireInstance.NpcRend,
+             BlackrockSpireInstance.NpcGyth, BlackrockSpireInstance.NpcWhelp,
+             BlackrockSpireInstance.NpcDragon, BlackrockSpireInstance.NpcHandler, 9819, 10317]);
+        var spire = (BlackrockSpireInstance)run.Data;
+        run.Data.OnAreaTrigger(run.Player, 2026);
+        run.Data.Update(7_000);
+        run.Data.Update(5_000);
+        for (int wave = 2; wave <= 7; wave++)
+        {
+            run.Data.Update(60_000); // DoSendNextStadiumWave re-arms 60 s while waves remain
+        }
+
+        Assert.Equal(7, spire.StadiumWave);
+        // instance_blackrock_spire::DoSendNextStadiumWave stops the timer after the seventh wave: no Gyth intro while it lives.
+        run.Data.Update(60_000);
+        Assert.Equal(7, spire.StadiumWave);
+
+        foreach (Creature mob in run.Creatures.Creatures.Where(c => c.Spawn is null && c.IsAlive
+            && c.Template.Entry is BlackrockSpireInstance.NpcWhelp or BlackrockSpireInstance.NpcDragon or BlackrockSpireInstance.NpcHandler).ToArray())
+        {
+            run.Map.Combat.Kill(run.Player, mob);
+        }
+
+        Assert.Equal(8, spire.StadiumWave); // SAY_NEFARIUS_LOSE1
+        run.Data.Update(3_000); // SAY_REND_ATTACK
+        run.Data.Update(2_000); // SAY_NEFARIUS_WARCHIEF: Rend leaves (ForcedDespawn 5000)
+        Assert.Equal(10, spire.StadiumWave);
+        run.Fixture.Tick(5_000);
+        Assert.DoesNotContain(run.Creatures.Creatures, c => c.Template.Entry == BlackrockSpireInstance.NpcRend && c.IsAlive);
+        Assert.DoesNotContain(run.Creatures.Creatures, c => c.Template.Entry == BlackrockSpireInstance.NpcGyth);
+        run.Data.Update(25_000);
+        Assert.Single(run.Creatures.Creatures, c => c.Template.Entry == BlackrockSpireInstance.NpcGyth && c.IsAlive);
+        Assert.Equal(EncounterState.InProgress, run.Data.GetData(BlackrockSpireInstance.TypeStadium));
+    }
+
+    [Fact]
     public void Scholomance_KirtonosDeathOpensTheGateThroughTheInstanceCallback()
     {
         using ScriptRun run = Enter(map => new ScholomanceInstance(map),
@@ -250,6 +291,24 @@ public sealed class ScriptDev2DungeonTests
         Assert.Equal(309.65f, kirtonos.X);
         run.Map.Combat.Kill(run.Player, kirtonos);
         Assert.Equal(GameObjectState.Active, gate.State);
+    }
+
+    [Fact]
+    public void Scholomance_GandlingAppearsOnlyWhenTheSixRoomBossesAreDead()
+    {
+        // instance_scholomance::DoSpawnGandlingIfCan: Malicia, Theolen, Polkelt, Ravenian, Alexei and Illucia Barov.
+        uint[] roomBosses = [10505, 11261, 10901, 10507, 10504, 10502];
+        using ScriptRun run = Enter(map => new ScholomanceInstance(map),
+            roomBosses.Select((entry, i) => ((uint)(i + 1), entry, -12f + i, 61.78f)), [], [ScholomanceInstance.NpcGandling]);
+        for (uint guid = 1; guid <= 5; guid++)
+        {
+            run.Kill(guid);
+        }
+
+        Assert.DoesNotContain(run.Creatures.Creatures, c => c.Template.Entry == ScholomanceInstance.NpcGandling);
+        run.Kill(6);
+        Creature gandling = Assert.Single(run.Creatures.Creatures, c => c.Template.Entry == ScholomanceInstance.NpcGandling);
+        Assert.Equal(180.771f, gandling.X);
     }
 
     [Fact]

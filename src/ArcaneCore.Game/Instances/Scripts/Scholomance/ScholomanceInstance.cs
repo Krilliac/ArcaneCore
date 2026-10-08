@@ -87,7 +87,8 @@ public sealed class ScholomanceInstance(Map instance) : ScriptedInstance(instanc
         }
     }
 
-    public override void OnPlayerEnter(Player player) => SpawnGandlingIfReady();
+    // instance_scholomance::OnPlayerEnter calls DoSpawnGandlingIfCan(true): a reload spawn is silent.
+    public override void OnPlayerEnter(Player player) => SpawnGandlingIfReady(byPlayerEnter: true);
 
     public override void OnGameObjectUse(Player player, GameObject go)
     {
@@ -149,7 +150,7 @@ public sealed class ScholomanceInstance(Map instance) : ScriptedInstance(instanc
         Encounters[type] = data;
         if (data == EncounterState.Done)
         {
-            SpawnGandlingIfReady();
+            SpawnGandlingIfReady(byPlayerEnter: false);
             SaveToDB();
         }
     }
@@ -291,7 +292,8 @@ public sealed class ScholomanceInstance(Map instance) : ScriptedInstance(instanc
         }
     }
 
-    private void SpawnGandlingIfReady()
+    /// <summary>instance_scholomance::DoSpawnGandlingIfCan: SAY_GANDLING_SPAWN only when the sixth room boss dies, not on a player's entry.</summary>
+    private void SpawnGandlingIfReady(bool byPlayerEnter)
     {
         if (Encounters[TypeGandling] == EncounterState.Done || GetSingleCreatureFromStorage(NpcGandling) is not null
             || !Enumerable.Range((int)TypeMalicia, 6).All(i => Encounters[i] == EncounterState.Done)
@@ -300,7 +302,8 @@ public sealed class ScholomanceInstance(Map instance) : ScriptedInstance(instanc
             return;
         }
 
-        if (Instance.FindUpdater<CreatureMapSystem>()?.SummonInstanceCreature(NpcGandling, 180.771f, -5.4286f, 75.5702f, 1.29154f) is { } gandling)
+        if (Instance.FindUpdater<CreatureMapSystem>()?.SummonInstanceCreature(NpcGandling, 180.771f, -5.4286f, 75.5702f, 1.29154f) is { } gandling
+            && !byPlayerEnter)
         {
             gandling.System?.SayText(gandling, -1289000);
         }

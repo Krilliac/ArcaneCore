@@ -549,7 +549,8 @@ public sealed class BlackrockSpireInstance(Map instance) : ScriptedInstance(inst
 
             DoUseDoorOrButton(GoGythCombat);
             _stadiumWave++;
-            _stadiumTimer = 60_000;
+            // DoSendNextStadiumWave: the timer stops once the seventh wave is out; the Gyth intro waits for its last death.
+            _stadiumTimer = _stadiumWave < StadiumWaves.Length ? 60_000u : 0u;
         }
         else if (_stadiumWave == StadiumWaves.Length)
         {
@@ -570,6 +571,14 @@ public sealed class BlackrockSpireInstance(Map instance) : ScriptedInstance(inst
         else if (_stadiumWave == StadiumWaves.Length + 2)
         {
             nefarius.System?.SayText(nefarius, -1229016);
+            // JustDidDialogueStep(SAY_NEFARIUS_WARCHIEF): Rend leaves the balcony (ForcedDespawn 5000 towards aStadiumLocs[6]);
+            // boss_gyth summons him again when Gyth falls under 11%.
+            if (GetSingleCreatureFromStorage(NpcRend) is { IsAlive: true } rend && rend.System is { } rendSystem)
+            {
+                rend.Motion.MovePoint(0, 165.74f, -466.46f, 116.80f, run: true);
+                rendSystem.ForcedDespawn(rend, 5_000);
+            }
+
             _stadiumWave++;
             _stadiumTimer = 30_000;
         }
