@@ -53,6 +53,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         (Type Type, DatabaseComponent Component, int Version)[] expected =
         [
             (typeof(BanDataModule), DatabaseComponent.Auth, BanDataModule.Version),
+            (typeof(AccountLoginSecurityDataModule), DatabaseComponent.Auth, AccountLoginSecurityDataModule.Version),
             (typeof(ArcaneCore.Data.Auth.Playerbots.ManagedPlayerbotProvisionDataModule), DatabaseComponent.Auth, ArcaneCore.Data.Auth.Playerbots.ManagedPlayerbotProvisionDataModule.Version),
             (typeof(CreatureDataModule), DatabaseComponent.World, 2),
             (typeof(MapDataModule), DatabaseComponent.World, 3),
@@ -158,7 +159,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
         Assert.Equal(41, WorldDbContext.Schema.CurrentVersion);
         Assert.Equal(41, CharacterDbContext.Schema.CurrentVersion); // anticheat (41)
-        Assert.Equal(4, AuthDbContext.Schema.CurrentVersion);
+        Assert.Equal(5, AuthDbContext.Schema.CurrentVersion);
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })
         {

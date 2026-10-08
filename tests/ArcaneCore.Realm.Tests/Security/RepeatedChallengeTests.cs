@@ -214,6 +214,9 @@ public sealed class RepeatedChallengeTests
         public Task UpdateSessionKeyAsync(string username, byte[] sessionKey, CancellationToken cancellationToken = default)
             => inner.UpdateSessionKeyAsync(username, sessionKey, cancellationToken);
 
+        public Task UpdateLoginAsync(string username, byte[] sessionKey, string? address, CancellationToken cancellationToken = default)
+            => inner.UpdateLoginAsync(username, sessionKey, address, cancellationToken);
+
         public Task<bool> UpdateSecurityAsync(string username, AccountSecurity security, CancellationToken cancellationToken = default)
             => inner.UpdateSecurityAsync(username, security, cancellationToken);
     }

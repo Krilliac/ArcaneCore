@@ -8,7 +8,7 @@ namespace ArcaneCore.Data.Stores;
 /// EF Core implementation of <see cref="IAccountStore"/> and <see cref="IAccountAdmin"/>. The events
 /// parameter is optional so existing <c>new EfAccountStore(db)</c> call sites keep compiling; DI supplies it.
 /// </summary>
-public sealed class EfAccountStore(AuthDbContext db, AccountStatusEvents? events = null) : IAccountStore, IAccountAdmin
+public sealed class EfAccountStore(AuthDbContext db, AccountStatusEvents? events = null) : IAccountStore, IAccountAdmin, IAccountLoginSecurityStore
 {
     /// <summary>Ids per query (see <see cref="EfBanStore"/>).</summary>
     private const int ChunkSize = 500;
@@ -125,6 +125,34 @@ public sealed class EfAccountStore(AuthDbContext db, AccountStatusEvents? events
 
         account.SessionKey = sessionKey;
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task UpdateLoginAsync(string username, byte[] sessionKey, string? address,
+        CancellationToken cancellationToken = default)
+    {
+        string normalized = username.ToUpperInvariant();
+        Account account = await db.Accounts.FirstOrDefaultAsync(a => a.Username == normalized, cancellationToken)
+            .ConfigureAwait(false) ?? throw new InvalidOperationException($"account '{normalized}' does not exist");
+        account.SessionKey = sessionKey;
+        if (address is not null) account.LastIp = address;
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<bool> SetAsync(string username, AccountLockFlags flags, string securityInfo,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(securityInfo);
+        string normalized = username.ToUpperInvariant();
+        Account? account = await db.Accounts.FirstOrDefaultAsync(a => a.Username == normalized, cancellationToken)
+            .ConfigureAwait(false);
+        if (account is null) return false;
+        if (!AccountLoginSecurityPolicy.IsValid(flags, securityInfo))
+            throw new ArgumentException("Invalid account login security settings", nameof(flags));
+        account.LockFlags = flags;
+        account.SecurityInfo = securityInfo;
+        account.SessionKey = null; // a changed factor must invalidate a previously issued world key
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return true;
     }
 
     public async Task<bool> UpdateSecurityAsync(

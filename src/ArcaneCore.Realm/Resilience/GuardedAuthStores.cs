@@ -42,6 +42,13 @@ internal sealed class GuardedAccountStore(Func<IAccountStore> inner, DatabaseGua
             (Inner: inner, Username: username, SessionKey: sessionKey),
             cancellationToken).AsTask();
 
+    public Task UpdateLoginAsync(string username, byte[] sessionKey, string? address, CancellationToken cancellationToken = default)
+        => guard.ExecuteAsync(
+            DatabaseComponent.Auth,
+            static (s, ct) => new ValueTask(s.Inner().UpdateLoginAsync(s.Username, s.SessionKey, s.Address, ct)),
+            (Inner: inner, Username: username, SessionKey: sessionKey, Address: address),
+            cancellationToken).AsTask();
+
     public Task<bool> UpdateSecurityAsync(string username, AccountSecurity security, CancellationToken cancellationToken = default)
         => guard.ExecuteAsync(
             DatabaseComponent.Auth,
