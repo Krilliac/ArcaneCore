@@ -37,6 +37,15 @@ public sealed partial class QuestNpcServices
     /// </summary>
     public INpcGossipScript? GossipScript { get; set; }
 
+    private readonly Dictionary<uint, INpcGossipScript> _entryGossipScripts = [];
+
+    /// <summary>Register a dungeon NPC's ScriptDev2 gossip by creature entry, alongside the existing world gossip script.</summary>
+    public void RegisterGossipScript(uint entry, INpcGossipScript script)
+        => _entryGossipScripts[entry] = script ?? throw new ArgumentNullException(nameof(script));
+
+    private INpcGossipScript? GossipScriptFor(uint entry)
+        => _entryGossipScripts.GetValueOrDefault(entry) ?? GossipScript;
+
     /// <summary>A quest was rewarded by a quest giver (vmangos Player::RewardQuest: the battleground and the giver's OnQuestRewarded script).</summary>
     public event Action<Player, ObjectGuid, Quest>? QuestRewarded;
 
@@ -74,7 +83,7 @@ public sealed partial class QuestNpcServices
                 Battlegrounds.BattlegroundPackets.BuildAreaSpiritHealerTime(npc.Guid, SpiritGuideNextResurrectMs?.Invoke(npc.Guid) ?? 0));
         }
 
-        if (GossipScript?.Hello(player, npc) is { } scripted)
+        if (GossipScriptFor(npc.Entry)?.Hello(player, npc) is { } scripted)
         {
             if (!scripted.Silent)
             {
@@ -296,7 +305,7 @@ public sealed partial class QuestNpcServices
         if (item.Scripted)
         {
             // The script may close the menu, open the vendor list, and answer with an npc text shown over the same lines (SEND_GOSSIP_MENU).
-            if (GossipScript?.SelectReply(p, npc, item.ScriptSender, item.ScriptAction) is { } reply)
+            if (GossipScriptFor(npc.Entry)?.SelectReply(p, npc, item.ScriptSender, item.ScriptAction) is { } reply)
             {
                 if (reply.Close)
                 {

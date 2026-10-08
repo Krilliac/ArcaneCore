@@ -325,9 +325,15 @@ point's wait, `WaypointReached` on each; `SetEscortPaused` holds it at a point; 
 escort runs back to where the fight began (point `PointLastPoint`, not home) and goes on; `Stop` ends it where it stands; at the end of the
 path it disappears (or loops home, or respawns at once). The script hooks are `Reset` (the spawn, every evade, every respawn),
 `JustSpawned` (the work a ScriptDev constructor does, once the map placed the creature), `JustRespawned`, `Aggro` and `UpdateEscortAI`.
-The escort points are ScriptDev2 `script_waypoint` (one path per entry, ordered by point; `CreatureContent.GetScriptWaypoints`, world
-step 42), and without such rows the entry's `creature_movement_template` path 0 (`EscortAI.EscortPathId`), where the battleground escorts
-keep their points. An entry without points does not start, and the map logs it once per entry.
+The escort points come from one of two origins, as in mangos-classic `npc_escortAI::Start` (`base/escort_ai.cpp:253-261`).
+`EscortAI.Start()` without a path id walks the entry's ScriptDev2 `script_waypoint` path 0 (PATH_FROM_EXTERNAL,
+`CreatureContent.GetScriptWaypoints`): the world-42 `script_waypoint` table when it has rows for the entry, else the copy a full content
+import put into `creature_movement_template` under path `0x80000000 | PathId`, else the entry's own `creature_movement_template` path 0
+(`EscortAI.EscortPathId`), where the battleground escorts keep their points. `EscortAI.Start(waypointPath: id)` walks cmangos
+`waypoint_path` path `id` (PATH_FROM_WAYPOINT_PATH, keyed by path id alone) and nothing else: those rows import into
+`creature_movement_template` under entry 0 and path `0x40000000 | PathId` (`CreatureContent.GetWaypointPath`); the world schema has no
+`waypoint_path` table, so a `refresh` does not add them. An escort without points does not start, and the map logs it once per entry.
+The `ScriptId` of a point is not run (ArcaneCore runs no creature-movement scripts; the importer counts such nodes).
 `Start(..., player, questId)` links the escort to a player and quest (vmangos npc_escortAI::Start): every second it checks that the player
 or an online member of its group is within `MaxPlayerDistance` (100, IsWithinDistInMap), and when nobody is it fails the quest and
 disappears (JustDied then ResetEscort, ScriptedEscortAI.cpp:265-300); its death fails the quest too, for every group member who still has

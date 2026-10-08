@@ -164,6 +164,11 @@ public static class ContentTableSpecs
                 "action3_type", "action3_param1", "action3_param2", "action3_param3", "comment",
             ], []),
         new("creature_ai_texts", [new KeyColumn("entry")], ["content_default", "type", "language", "emote"], []),
+        new("script_texts", [new KeyColumn("entry")], ["content_default", "type", "language", "emote", "sound", "broadcast_text_id"], []),
+        // script_waypoint is listed once, with the world-42 DB script tables below (both the creature importer and DbScriptDumpImporter read it).
+        // cmangos waypoint_path (keyed by path id alone; stored under entry 0, CreatureContent.WaypointPathBit).
+        new("waypoint_path", [new KeyColumn("PathId"), new KeyColumn("Point")],
+            ["PositionX", "PositionY", "PositionZ", "Orientation", "WaitTime", "ScriptId"], []),
         new("dbscript_random_templates", [new KeyColumn("id"), new KeyColumn("type"), new KeyColumn("target_id")], ["chance"], []),
         // cmangos dbscripts_on_relay has no key; the scan key is wide enough that only true duplicates collide (CreatureDumpImporter.ReadRelayStep).
         new("dbscripts_on_relay",

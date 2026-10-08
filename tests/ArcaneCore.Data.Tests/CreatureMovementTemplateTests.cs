@@ -102,8 +102,11 @@ public sealed class CreatureMovementTemplateTests : IAsyncLifetime
         importer.Read(reader);
 
         CreatureImportReport report = importer.BuildReport();
-        IReadOnlyCollection<CreatureMovementTemplateRow> rows = importer.PathSnapshot();
-        Assert.Equal(15402, report.MovementTemplates);
+        // The store also holds script_waypoint (1,523 rows) and waypoint_path (5,393 rows, under entry 0) in their own path namespaces.
+        Assert.Equal((22318, 1523, 5393), (report.MovementTemplates, report.ScriptWaypoints, report.WaypointPaths));
+        const uint namespaceBits = CreatureContent.ScriptWaypointPathBit | CreatureContent.WaypointPathBit;
+        CreatureMovementTemplateRow[] rows = [.. importer.PathSnapshot().Where(r => (r.PathId & namespaceBits) == 0)];
+        Assert.Equal(15402, rows.Length);
         Assert.Equal(544, rows.Select(r => (r.Entry, r.PathId)).Distinct().Count());
         Assert.Equal(479, rows.Select(r => r.Entry).Distinct().Count());
         Assert.Equal(51, rows.Where(r => r.PathId > 0).Select(r => r.Entry).Distinct().Count());

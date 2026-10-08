@@ -8,6 +8,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Packets;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Teleport;
@@ -102,6 +103,9 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         TimeProvider time = services.GetService<TimeProvider>() ?? TimeProvider.System;
         _manager = new InstanceManager(world, Options, _writes,
             unixNow: () => time.GetUtcNow().ToUnixTimeSeconds(), logger: loggers.CreateLogger<InstanceManager>());
+        QuestNpcFeature? questFeature = services.GetService<QuestNpcFeature>();
+        // cmangos Player::IsCurrentQuest mode 2: QUEST_STATUS_COMPLETE and not rewarded (the SD2 Fortune Awaits chest check).
+        _manager.QuestCompleteUnrewarded = (player, questId) => questFeature?.Services.IsCurrent(player, questId, 2) == true;
         _manager.SystemMessage = static (player, text) => player.Session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(text));
         _manager.Install();
         world.PlayerLoggedIn += OnPlayerLoggedIn;

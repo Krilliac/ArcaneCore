@@ -80,6 +80,9 @@ public sealed partial class InstanceManager : IMapResolver
     /// <summary>Which maps have an instance script (vmangos <c>map_template.ScriptName</c>); the scripts of the Game assembly by default.</summary>
     public InstanceScriptRegistry Scripts { get; set; } = InstanceScriptRegistry.Default;
 
+    /// <summary>Quest journal check for ScriptDev2's quest-only instance chests.</summary>
+    public Func<Player, uint, bool> QuestCompleteUnrewarded { get; set; } = static (_, _) => false;
+
     /// <summary>Shows a system chat line to a player (default: none).</summary>
     public Action<Player, string> SystemMessage { get; set; } = static (_, _) => { };
 
@@ -847,6 +850,7 @@ public sealed partial class InstanceManager : IMapResolver
         }
 
         data.Logger = _logger;
+        data.QuestCompleteUnrewarded = QuestCompleteUnrewarded;
         data.Saving = (_, text) =>
         {
             if (save.IsDeleted)

@@ -226,12 +226,11 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>An escort was started on an entry without escort points (vmangos "EscortAI Start with 0 waypoints", once per entry).</summary>
-    internal void ReportEscortWithoutPath(Creature creature)
+    internal void ReportEscortWithoutPath(Creature creature, string path)
     {
         if (_reportedEscorts.Add(creature.Template.Entry))
         {
-            _logger.LogWarning("escort of creature {Entry} has no points (creature_movement_template path {Path}); it does not start",
-                creature.Template.Entry, EscortAI.EscortPathId);
+            _logger.LogWarning("escort of creature {Entry} has no points ({Path}); it does not start", creature.Template.Entry, path);
         }
     }
 

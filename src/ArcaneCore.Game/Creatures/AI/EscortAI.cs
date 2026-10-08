@@ -9,10 +9,13 @@ namespace ArcaneCore.Game.Creatures;
 /// point once <see cref="Start"/>ed, pauses on request, breaks off to fight, then runs back to where the fight began and goes on, and at the
 /// end of the path either loops home or disappears (and respawns at once when asked). Subclasses react to <see cref="WaypointReached"/>.
 /// <para>
-/// The path is ScriptDev2 <c>script_waypoint</c> (one path per entry, points in id order; mangos-classic SystemMgr::LoadScriptWaypoints,
-/// ScriptDevAI/system/system.cpp:63-121). An entry without script_waypoint rows falls back to its <c>creature_movement_template</c> path
-/// <see cref="EscortPathId"/>, where the escorts of this code base kept their points before. An entry without either cannot start, as in
-/// vmangos ("EscortAI Start with 0 waypoints").
+/// The path comes from one of two origins, as in mangos-classic npc_escortAI::Start (AI/ScriptDevAI/base/escort_ai.cpp:253-261). Without a
+/// path id it is the entry's ScriptDev2 <c>script_waypoint</c> path (PATH_FROM_EXTERNAL; mangos-classic SystemMgr::LoadScriptWaypoints,
+/// ScriptDevAI/system/system.cpp:63-121): the world-42 <c>script_waypoint</c> table when it has rows for the entry, else the copy imported
+/// into <c>creature_movement_template</c> under <see cref="ScriptWaypointPathBit"/>, else the entry's own path <see cref="EscortPathId"/>
+/// (scripts and tests that load their points there). With a path id it is that cmangos <c>waypoint_path</c> path
+/// (PATH_FROM_WAYPOINT_PATH, keyed by path id alone, <see cref="CreatureContent.GetWaypointPath"/>) and nothing else. An escort without
+/// points cannot start ("EscortAI attempt to start escorting ... but has no waypoints loaded").
 /// </para>
 /// <para>
 /// A player-linked escort (<see cref="Start"/> with a player and quest) checks every second that the player or a member of its group is
@@ -29,8 +32,11 @@ public abstract class EscortAI : CreatureAI
     /// <summary>The point id of the run home of a looping escort (POINT_HOME).</summary>
     public const uint PointHome = 0xFFFFFE;
 
-    /// <summary>The default <c>script_waypoint.PathId</c> for an escort.</summary>
+    /// <summary>The default <c>script_waypoint.PathId</c> for an escort, and the legacy fallback path for tests and manually loaded escorts.</summary>
     public const uint EscortPathId = 0;
+
+    /// <summary>ScriptDev2 script_waypoint paths imported into creature_movement_template with a separate namespace.</summary>
+    public const uint ScriptWaypointPathBit = CreatureContent.ScriptWaypointPathBit;
 
     /// <summary>The default delay before the first waypoint (m_uiDelayBeforeTheFirstWaypoint, 2.5 s).</summary>
     public const uint DefaultDelayBeforeFirstWaypointMs = 2500;
@@ -111,9 +117,10 @@ public abstract class EscortAI : CreatureAI
     /// <summary>
     /// vmangos npc_escortAI::Start (ScriptedEscortAI.cpp:452-506): refused in combat, while escorting, or without points. The points are
     /// loaded, the NPC flags cleared, the walk mode set and the first point waits <see cref="DelayBeforeFirstWaypointMs"/>... from the last
-    /// reset of the timer (the constructor or a respawn), as in vmangos.
+    /// reset of the timer (the constructor or a respawn), as in vmangos. A non-zero <paramref name="waypointPath"/> is a cmangos
+    /// <c>waypoint_path</c> id (mangos-classic escort_ai.cpp:253-261, origin PATH_FROM_WAYPOINT_PATH); 0 is the entry's script path.
     /// </summary>
-    public bool Start(bool run = false, bool instantRespawn = false, bool canLoopPath = false, Player? player = null, uint questId = 0)
+    public bool Start(bool run = false, bool instantRespawn = false, bool canLoopPath = false, Player? player = null, uint questId = 0, uint waypointPath = 0)
     {
         if (Me.Combat.IsInCombat || HasEscortState(EscortState.Escorting))
         {
@@ -123,12 +130,21 @@ public abstract class EscortAI : CreatureAI
         _waypoints.Clear();
         if (System is { } system)
         {
-            _waypoints.AddRange(system.Content.GetScriptWaypoints(Me.Template.Entry, EscortPathId));
+            if (waypointPath != 0)
+            {
+                _waypoints.AddRange(system.Content.GetWaypointPath(waypointPath));
+            }
+            else
+            {
+                _waypoints.AddRange(system.Content.GetScriptWaypoints(Me.Template.Entry, EscortPathId));
+            }
         }
 
         if (_waypoints.Count == 0)
         {
-            System?.ReportEscortWithoutPath(Me);
+            System?.ReportEscortWithoutPath(Me, waypointPath != 0
+                ? $"waypoint_path {waypointPath}"
+                : $"script_waypoint path 0 or creature_movement_template path {EscortPathId}");
             return false;
         }
 

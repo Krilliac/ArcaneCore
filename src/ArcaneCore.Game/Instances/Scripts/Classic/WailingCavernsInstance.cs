@@ -8,12 +8,12 @@ namespace ArcaneCore.Game.Instances.Scripts.Classic;
 /// Fanglords (Anacondra 0, Cobrahn 1, Pythas 2, Serpentis 3) on aggro, evade and death, and Mutanus (5).
 /// <para>
 /// Ported: the six states and their save string, and the Disciple of Naralex state: once the four Fanglords are done it becomes SPECIAL (when it
-/// was NOT_STARTED or FAIL), which is what lets the disciple's escort start. Not ported: the disciple's intro yell, the escort itself, the
-/// mysterious chest of "Fortune Awaits".
+/// was NOT_STARTED or FAIL), which is what lets the disciple's escort start. The disciple's intro yell, the escort and the mysterious chest of
+/// "Fortune Awaits" are in WailingCaverns/ (WailingCavernsInstance.Events.cs, DiscipleOfNaralexAi.cs, DiscipleOfNaralexGossip.cs).
 /// </para>
 /// </summary>
 [InstanceScript(MapId)]
-public sealed class WailingCavernsInstance(Map instance) : ScriptedInstance(instance, MaxEncounter)
+public sealed partial class WailingCavernsInstance(Map instance) : ScriptedInstance(instance, MaxEncounter)
 {
     public const uint MapId = 43;
     public const int MaxEncounter = 6;
@@ -38,7 +38,7 @@ public sealed class WailingCavernsInstance(Map instance) : ScriptedInstance(inst
         {
             if (Encounters[4] == EncounterState.NotStarted)
             {
-                NotPorted(type, data, "(the Disciple of Naralex's intro yell)");
+                SpeakDiscipleIntro();
             }
 
             Encounters[4] = EncounterState.Special;

@@ -10,12 +10,12 @@ namespace ArcaneCore.Game.Instances.Scripts.Classic;
 /// <para>
 /// Ported: the six encounter states and their save string, the courtyard door when the prisoners are freed (TYPE_FREE_NPC done), Arugal's door
 /// when Wolf Master Nandos is done, the sorcerer's door after the fourth voidwalker, and the doors that are created open when their encounter is
-/// done. Not ported (logged at debug level): Ada's and Ash's speech when Rethilgore dies, Archmage Arugal's Fenrus dialogue and summon, the
-/// Arugal intro dialogue and Vincent's death pose, the Nandos pack event.
+/// done. The event parts (Ada's and Ash's speech when Rethilgore dies, Archmage Arugal's Fenrus dialogue and summon, the Arugal intro dialogue
+/// and Vincent's death pose, the Nandos pack event) are in ShadowfangKeep/ShadowfangKeepInstance.Events.cs.
 /// </para>
 /// </summary>
 [InstanceScript(MapId)]
-public sealed class ShadowfangKeepInstance(Map instance) : ScriptedInstance(instance, MaxEncounter)
+public sealed partial class ShadowfangKeepInstance(Map instance) : ScriptedInstance(instance, MaxEncounter)
 {
     public const uint MapId = 33;
     public const int MaxEncounter = 6;
@@ -70,7 +70,7 @@ public sealed class ShadowfangKeepInstance(Map instance) : ScriptedInstance(inst
             case TypeRethilgore:
                 if (data == EncounterState.Done)
                 {
-                    NotPorted(type, data, "(Ada's and Ash's speech)");
+                    PrisonersSpeak();
                 }
 
                 Encounters[1] = data;
@@ -78,7 +78,7 @@ public sealed class ShadowfangKeepInstance(Map instance) : ScriptedInstance(inst
             case TypeFenrus:
                 if (data == EncounterState.Done)
                 {
-                    NotPorted(type, data, "(Archmage Arugal's summon and dialogue)");
+                    SummonArugalForFenrus();
                 }
 
                 Encounters[2] = data;

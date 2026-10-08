@@ -186,6 +186,11 @@ public sealed partial class CreatureMapSystem
     {
         foreach (CreatureSpawn spawn in spawns)
         {
+            if (_scriptOnlySpawns.Contains(spawn.Guid) && !_activatingScriptSpawns.Contains(spawn.Guid))
+            {
+                continue;
+            }
+
             if (_spawnGate is { } gate && !gate.AllowsCreature(spawn.Guid))
             {
                 continue; // an event spawn whose event is not running (vmangos leaves game_event_creature guids out of the grid at load)
