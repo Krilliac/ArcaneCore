@@ -13,6 +13,9 @@ internal sealed class InMemoryBanStore(TimeProvider? clock = null) : IBanStore
     /// <summary>When set, every read throws it (a database outage).</summary>
     public Exception? FailWith { get; set; }
 
+    /// <summary>When set, only the whole-list read (<see cref="ListIpBansAsync"/>) throws it (a large table past the query budget).</summary>
+    public Exception? ListFailWith { get; set; }
+
     private long Now => (clock ?? TimeProvider.System).GetUtcNow().ToUnixTimeSeconds();
 
     private void MaybeFail()
@@ -153,6 +156,11 @@ internal sealed class InMemoryBanStore(TimeProvider? clock = null) : IBanStore
     {
         ListIpBansCalls++;
         MaybeFail();
+        if (ListFailWith is not null)
+        {
+            throw ListFailWith;
+        }
+
         lock (_gate)
         {
             return Task.FromResult<IReadOnlyList<IpBanRecord>>([.. _ipRows.Where(r => r.Ip.StartsWith(prefix, StringComparison.Ordinal))]);

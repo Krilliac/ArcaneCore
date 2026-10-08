@@ -72,8 +72,11 @@ author is not kicked by their own ban) has no switch.
   vmangos realmd instead queries the table on every challenge (`AuthSocket.cpp:338-352`), so a reconnect flood costs one
   query per connection; `0` restores that. Each entry keeps its unban date, so a temporary ban ends on time between
   reloads; a ban written after the last reload reaches the logon screen within one period, and world authentication
-  (which reads the rows directly) refuses the address at once. A failed reload fails closed (the connection is closed)
-  and the next challenge retries.
+  (which reads the rows directly) refuses the address at once. An unban (or a shortened ban) written by the world,
+  `arcane-account` or SQL likewise takes up to one period to let the address back in at the logon screen. A failed
+  reload (an outage, or a large table that runs past the store's query budget) does not lock everyone out: that
+  challenge and every challenge for one period after it use vmangos realmd's single-row read, then the list is tried
+  again; the connection is closed (fail closed) only when the row read fails too.
 * Realm check order: ArcaneCore validates the build and the username before the IP check, so an IP-banned client
   with a wrong build sees `VersionInvalid` (retail order for that pair was not verified).
 * Ban times come from the application clock (`TimeProvider`), not the database's `UNIX_TIMESTAMP()`; hosts with
