@@ -2,6 +2,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
@@ -471,12 +472,18 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (player.Map is not { } map)
             return null;
 
+        GroupManager? groups = (player.Session as WorldSession)?.Services.GetService<Social.SocialFeature>()?.Context.Groups;
+        uint grayLevel = ArcaneCore.Game.Progression.ExperienceFormulas.GrayLevel(player.Level);
         return player.VisibleObjects
             .Select(guid => map.FindObject(guid))
             .OfType<Creature>()
             .Where(creature => skip is null || !skip(creature))
             .Where(creature => creature.IsAlive && map.Combat.Hooks.CanAttack(player, creature))
             .Where(creature => creature.Level <= player.Level + 1)
+            // Grey creatures give no experience (XP::GetGrayLevel); idle grinding leaves them alone. A named quest
+            // objective is still allowed: the quest asks for that creature whatever its level.
+            .Where(creature => preferredEntry != 0 && creature.Entry == preferredEntry || creature.Level > grayLevel)
+            .Where(creature => !IsSomeoneElses(player, creature, groups))
             .Where(creature => preferredEntry != 0 ? creature.Entry == preferredEntry : creature.Template.CreatureType != 8)
             // Ordinary idle grinding must not initiate attacks on town/service NPCs.
             // Explicit quest objectives and the existing defensive-victim path keep
@@ -487,6 +494,31 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             .ThenBy(creature => Distance(player, creature))
             .FirstOrDefault();
     }
+
+    /// <summary>
+    /// Whether <paramref name="creature"/> belongs to another player's fight: tapped by someone outside the bot's group (the
+    /// client's grey name: UNIT_DYNFLAG_TAPPED without TAPPED_BY_PLAYER as the bot sees it, LootService's viewer filter over
+    /// Creature.LootTapPlayerGuid), or fighting a player who is neither the bot nor in its group (its victim, or any player on
+    /// its threat list). vmangos bots take such targets only from their leader's fight (PartyBotAI::SelectAttackTarget).
+    /// </summary>
+    internal static bool IsSomeoneElses(Player player, Creature creature, GroupManager? groups)
+    {
+        uint seen = creature.GetValueFor(UpdateFields.UnitDynamicFlags, player);
+        if ((seen & Game.Loot.LootService.UnitDynFlagTapped) != 0 && (seen & Game.Loot.LootService.UnitDynFlagTappedByPlayer) == 0)
+            return true;
+        if (creature.Combat.Victim is Player victim && IsStranger(player, victim, groups))
+            return true;
+        if (!creature.Combat.HasThreatList) return false;
+        foreach (ThreatEntry entry in creature.Combat.Threat.Entries)
+        {
+            if (entry.Target is Player other && IsStranger(player, other, groups))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsStranger(Player player, Player other, GroupManager? groups)
+        => other.Guid != player.Guid && groups?.AreInSameGroup(player.Guid, other.Guid) != true;
 
     private static Creature? FindDefensiveAttacker(Player player)
     {
