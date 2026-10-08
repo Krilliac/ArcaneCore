@@ -446,6 +446,20 @@ public sealed class GmObjectNpcCommandTests
         Assert.Equal(GmNpcCommands.SelectCreature, (await SendAsync(gm, ".npc whisper Npcwhl hi")).Single);
     }
 
+    // vmangos HandleNpcWhisperCommand refuses a target of higher security (CreatureCommands.cpp:977, HasLowerSecurity).
+    [Fact]
+    public async Task NpcWhisper_RefusesAHigherRankTarget()
+    {
+        Scene scene = Start();
+        await using WorldTestHost host = scene.Host;
+        await using WorldTestClient gm = await GmAsync(scene, "NPCWHR", "Npcwhr");
+        await using WorldTestClient boss = await GmAsync(scene, "NPCWHB", "Npcwhb", AccountSecurity.Administrator);
+        await SelectAsync(scene, "Npcwhr", WolfSpawn);
+
+        Assert.Equal("You have low security level for this.", (await SendAsync(gm, ".npc whisper Npcwhb psst")).Single);
+        Assert.DoesNotContain(await boss.CollectAsync(Quiet), p => p.Opcode == WorldOpcode.SmsgMessagechat && p.Payload[0] == (byte)ChatType.MonsterWhisper);
+    }
+
     [Fact]
     public async Task NpcPlayEmote_TellsTheObservers_AndChecksItsArgument()
     {

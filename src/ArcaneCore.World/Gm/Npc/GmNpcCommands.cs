@@ -113,7 +113,7 @@ public sealed class GmNpcCommands : ICommandGroup
             return true;
         }
 
-        if (!GmTargets.TryPlayer(context, name, out Player target))
+        if (!GmTargets.TryPlayer(context, name, out Player target) || !context.CanActOn(target))   // CreatureCommands.cpp:977
         {
             return true;
         }

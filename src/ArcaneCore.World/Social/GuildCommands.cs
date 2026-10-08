@@ -1,14 +1,20 @@
 using ArcaneCore.Game.Guilds;
+using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Gm.Core;
 
 namespace ArcaneCore.World.Social;
 
 /// <summary>
 /// <c>.guild create/invite/uninvite/rank/delete</c> (cmangos/vmangos Level2/Level3.cpp
 /// HandleGuild*Command, SEC_GAMEMASTER). A character name may be omitted to use the selected
-/// player or yourself; guild names are quoted.
+/// player or yourself; guild names are quoted. The character's account must not outrank the invoker
+/// (<see cref="CommandContext.CanActOn"/>; for an offline character the owner account is read first, so the
+/// answer comes a moment later). <c>.guild delete</c> removes every member, so it applies the check to each
+/// member and refuses when any of them outranks the invoker. vmangos has no such check on these commands;
+/// ArcaneCore applies it to every GM command that changes another player (docs/integration/gm-commands.md).
 /// </summary>
 public sealed class GuildCommands : ICommandGroup
 {
@@ -33,13 +39,11 @@ public sealed class GuildCommands : ICommandGroup
             return false;
         }
 
-        if (ResolveCharacter(context, name) is not { } id)
+        ActOnCharacter(context, name, id =>
         {
-            return true;
-        }
-
-        GuildAdminResult result = Guilds(context).Create(id, guildName, out _);
-        context.Reply(result == GuildAdminResult.Ok ? $"Guild {guildName} created." : Describe(result));
+            GuildAdminResult result = Guilds(context).Create(id, guildName, out _);
+            context.Reply(result == GuildAdminResult.Ok ? $"Guild {guildName} created." : Describe(result));
+        });
         return true;
     }
 
@@ -50,25 +54,21 @@ public sealed class GuildCommands : ICommandGroup
             return false;
         }
 
-        if (ResolveCharacter(context, name) is not { } id)
+        ActOnCharacter(context, name, id =>
         {
-            return true;
-        }
-
-        GuildAdminResult result = Guilds(context).AdminInvite(id, guildName);
-        context.Reply(result == GuildAdminResult.Ok ? $"Added to {guildName}." : Describe(result));
+            GuildAdminResult result = Guilds(context).AdminInvite(id, guildName);
+            context.Reply(result == GuildAdminResult.Ok ? $"Added to {guildName}." : Describe(result));
+        });
         return true;
     }
 
     private static bool Uninvite(CommandContext context, string args)
     {
-        if (ResolveCharacter(context, args.Trim()) is not { } id)
+        ActOnCharacter(context, args.Trim(), id =>
         {
-            return true;
-        }
-
-        GuildAdminResult result = Guilds(context).AdminUninvite(id);
-        context.Reply(result == GuildAdminResult.Ok ? "Removed from the guild." : Describe(result));
+            GuildAdminResult result = Guilds(context).AdminUninvite(id);
+            context.Reply(result == GuildAdminResult.Ok ? "Removed from the guild." : Describe(result));
+        });
         return true;
     }
 
@@ -80,13 +80,11 @@ public sealed class GuildCommands : ICommandGroup
             return false;
         }
 
-        if (ResolveCharacter(context, parts.Length == 2 ? parts[0] : string.Empty) is not { } id)
+        ActOnCharacter(context, parts.Length == 2 ? parts[0] : string.Empty, id =>
         {
-            return true;
-        }
-
-        GuildAdminResult result = Guilds(context).AdminSetRank(id, rank);
-        context.Reply(result == GuildAdminResult.Ok ? $"Rank set to {rank}." : Describe(result));
+            GuildAdminResult result = Guilds(context).AdminSetRank(id, rank);
+            context.Reply(result == GuildAdminResult.Ok ? $"Rank set to {rank}." : Describe(result));
+        });
         return true;
     }
 
@@ -97,8 +95,55 @@ public sealed class GuildCommands : ICommandGroup
             return false;
         }
 
-        GuildAdminResult result = Guilds(context).Delete(guildName);
-        context.Reply(result == GuildAdminResult.Ok ? $"Guild {guildName} deleted." : Describe(result));
+        GuildManager guilds = Guilds(context);
+        if (guilds.GetByName(guildName) is not { } guild)
+        {
+            context.Reply(Describe(GuildAdminResult.GuildNotFound));
+            return true;
+        }
+
+        // Disbanding removes every member, so the invoker must be able to act on each of them: an online member by
+        // its session's security, an offline one by its owner account's (read off the world thread).
+        SocialContext social = SocialHandlers.Social(context.Session);
+        uint[] checkedMembers = [.. guild.Members.Select(m => m.CharacterId)];
+        var offlineAccounts = new List<int>();
+        foreach (uint memberId in checkedMembers)
+        {
+            if (social.Characters.Find(memberId) is not { } info)
+            {
+                continue; // no character, no account to protect
+            }
+
+            if (context.World.FindOnlinePlayer(info.Name) is { } online)
+            {
+                if (!context.CanActOn(online))
+                {
+                    return true;
+                }
+            }
+            else
+            {
+                offlineAccounts.Add(info.AccountId);
+            }
+        }
+
+        GmTargets.ActOnOffline(context, offlineAccounts, () =>
+        {
+            if (!ReferenceEquals(guilds.GetByName(guildName), guild))
+            {
+                context.Reply(Describe(GuildAdminResult.GuildNotFound));
+            }
+            else if (guild.Members.Any(m => !checkedMembers.Contains(m.CharacterId)))
+            {
+                // Someone joined while the offline members were being checked; they have not been.
+                context.Reply("The guild's members changed; nothing was changed. Try again.");
+            }
+            else
+            {
+                GuildAdminResult result = guilds.Delete(guildName);
+                context.Reply(result == GuildAdminResult.Ok ? $"Guild {guildName} deleted." : Describe(result));
+            }
+        }, unknownAccountIsNotFound: false);
         return true;
     }
 
@@ -119,27 +164,41 @@ public sealed class GuildCommands : ICommandGroup
         return quoted.Length > 0 && args[(close + 1)..].Trim().Length == 0;
     }
 
-    /// <summary>The named character (online or not), or the selected player / yourself when no name is given.</summary>
-    private static uint? ResolveCharacter(CommandContext context, string name)
+    /// <summary>
+    /// Run <paramref name="act"/> with the id of the named character (online or not), or of the selected player /
+    /// yourself when no name is given, once the target-rank check allows it; otherwise reply why not.
+    /// </summary>
+    private static void ActOnCharacter(CommandContext context, string name, Action<uint> act)
     {
         if (name.Length == 0)
         {
-            if (context.SelectedPlayerOrSelf() is { } selected)
+            if (context.SelectedPlayerOrSelf() is not { } selected)
             {
-                return selected.Guid.Low;
+                context.Reply("No player selected.");
+            }
+            else if (context.CanActOn(selected))
+            {
+                act(selected.Guid.Low);
             }
 
-            context.Reply("No player selected.");
-            return null;
+            return;
         }
 
-        if (SocialHandlers.Social(context.Session).Characters.FindByName(CharacterNames.Normalize(name)) is { } info)
+        if (SocialHandlers.Social(context.Session).Characters.FindByName(CharacterNames.Normalize(name)) is not { } info)
         {
-            return info.Id;
+            context.Reply($"Player {name} not found.");
         }
-
-        context.Reply($"Player {name} not found.");
-        return null;
+        else if (context.World.FindOnlinePlayer(info.Name) is { } online)
+        {
+            if (context.CanActOn(online))
+            {
+                act(info.Id);
+            }
+        }
+        else
+        {
+            GmTargets.ActOnOffline(context, info.AccountId, () => act(info.Id));
+        }
     }
 
     private static string Describe(GuildAdminResult result) => result switch
