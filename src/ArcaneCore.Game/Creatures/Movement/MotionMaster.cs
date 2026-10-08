@@ -43,6 +43,9 @@ public sealed class MotionMaster
     /// <summary>Which crowd-control generator (started by <see cref="SyncCrowdControl"/>) is in the stack, if any.</summary>
     internal CrowdControlMovement ActiveCrowdControl => _crowdControl is null ? CrowdControlMovement.None : _crowdControlKind;
 
+    /// <summary>Whether the crowd-control generator is the one driving the creature (not buried under a pushed generator).</summary>
+    internal bool IsCrowdControlOnTop => _crowdControl is not null && ReferenceEquals(Top, _crowdControl);
+
     /// <summary>Install the default generator and start it (spawn, respawn).</summary>
     internal void Initialize(ICreatureMovementGenerator defaultGenerator, ICreatureMover mover, bool start)
     {
@@ -253,10 +256,17 @@ public sealed class MotionMaster
 
     /// <summary>
     /// Resume the generator now on top. The default (idle/random/waypoint) stays interrupted
-    /// while the creature is in combat: it stands until the AI chases again or evades.
+    /// while the creature is in combat: it stands until the AI chases again or evades. It also
+    /// stays interrupted while the creature is possessed (vmangos MotionMaster::Initialize installs
+    /// no default for a possessed unit): a fear ending under possession leaves it standing.
     /// </summary>
     private void ResumeTop(ICreatureMover mover)
     {
+        if (_stack.Count == 0 && (_owner.UnitFlags & UnitFlags.Possessed) != 0)
+        {
+            return;
+        }
+
         if (_stack.Count == 0 && _owner.Combat.IsInCombat)
         {
             if (_owner.IsMoving)

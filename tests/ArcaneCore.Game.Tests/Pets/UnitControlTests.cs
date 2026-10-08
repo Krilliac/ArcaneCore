@@ -338,4 +338,85 @@ public sealed class UnitControlTests
         Assert.Equal(mob.Guid.Value, r.ReadPackedGuid());
         Assert.Equal(0, r.ReadByte());
     }
+
+    /// <summary>
+    /// vmangos Unit::ModConfuseSpell (Unit.cpp:9125-9173) starts MoveFeared / MoveConfused whatever controls the unit, and
+    /// MotionMaster::UpdateMotion (MotionMaster.cpp:176-185) runs it: UNIT_STATE_POSSESSED is not in UNIT_STATE_CAN_NOT_MOVE
+    /// (UnitDefines.h:383-396) and the flee and confuse generators do not test it (only the chase and follow ones do). So a possessed
+    /// creature under fear runs from the caster; when the fear ends it stands (the possessed creature has no default generator,
+    /// MotionMaster.cpp:56) and its possessor gets the control back.
+    /// </summary>
+    [Theory]
+    [InlineData(AuraType.ModFear, MovementGeneratorType.Fleeing)]
+    [InlineData(AuraType.ModConfuse, MovementGeneratorType.Confused)]
+    public void APossessedCreatureUnderFearOrConfuse_IsMovedByTheCrowdControl_ThenHandedBack(AuraType aura, MovementGeneratorType generator)
+    {
+        SpellInfo cc = Spell(920_100, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitEnemy, aura: aura)) with
+        {
+            RangeIndex = 4,
+            Range = new SpellRange(0, 30),
+            Duration = new SpellDuration(3_000, 0, 3_000),
+        };
+        using var kit = new PetTestKit([.. ControlSpells(), cc]);
+        (Player priest, FakeSession session) = kit.AddPlayer(1, 5, 5);
+        (Player other, _) = kit.AddPlayer(2, 5, 7);
+        Creature mob = Mob(kit);
+        CastAt(kit, priest, PossessSpell, mob);
+        kit.Run(200);
+        Assert.False(mob.IsMoving);
+        (float startX, float startY) = (mob.X, mob.Y);
+
+        CastAt(kit, other, 920_100, mob);
+        kit.Run(1_500);
+
+        Assert.Equal(generator, mob.Motion.CurrentType);
+        Assert.True(mob.IsMoving || mob.X != startX || mob.Y != startY, "the crowd control did not move the possessed creature");
+        session.Clear();
+
+        kit.Spells.Advance(3_000); // the aura runs out
+        Assert.False(kit.Spells.System.HasAura(mob, 920_100));
+        kit.Run(200);
+        Assert.Empty(mob.Motion.ActiveTypes);
+        Assert.False(mob.IsMoving);
+        Assert.Equal(priest.Guid, mob.CharmerGuid);
+        var r = new PacketReader(Packets(session, WorldOpcode.SmsgClientControlUpdate)[^1]);
+        Assert.Equal(mob.Guid.Value, r.ReadPackedGuid());
+        Assert.Equal(1, r.ReadByte());
+
+        // nothing moves it on its own afterwards: its possessor's client does
+        (float stopX, float stopY) = (mob.X, mob.Y);
+        kit.Run(3_000);
+        Assert.False(mob.IsMoving);
+        Assert.Equal((stopX, stopY), (mob.X, mob.Y));
+    }
+
+    [Fact]
+    public void AFearEndingUnderPossession_DoesNotSendThePossessedCreatureBackOnItsWaypoints()
+    {
+        SpellInfo fear = Spell(920_100, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitEnemy, aura: AuraType.ModFear)) with
+        {
+            RangeIndex = 4,
+            Range = new SpellRange(0, 30),
+            Duration = new SpellDuration(3_000, 0, 3_000),
+        };
+        using var kit = new PetTestKit([.. ControlSpells(), fear]);
+        (Player priest, _) = kit.AddPlayer(1, 5, 5);
+        (Player other, _) = kit.AddPlayer(2, 5, 7);
+        Creature mob = Mob(kit);
+        mob.Motion.Initialize(
+            new WaypointMovementGenerator([new(1, 40, 5, 83.5f, 100, 0), new(2, 40, 30, 83.5f, 100, 0)]), kit.Creatures, start: false);
+        CastAt(kit, priest, PossessSpell, mob);
+        CastAt(kit, other, 920_100, mob);
+        kit.Run(1_000);
+        Assert.Equal(MovementGeneratorType.Fleeing, mob.Motion.CurrentType);
+
+        kit.Spells.System.RemoveAuras(mob, 920_100);
+        kit.Run(200);
+
+        Assert.Equal(MovementGeneratorType.Waypoint, mob.Motion.CurrentType); // the default, interrupted
+        Assert.False(mob.IsMoving);
+        (float x, float y) = (mob.X, mob.Y);
+        kit.Run(2_000);
+        Assert.Equal((x, y), (mob.X, mob.Y));
+    }
 }

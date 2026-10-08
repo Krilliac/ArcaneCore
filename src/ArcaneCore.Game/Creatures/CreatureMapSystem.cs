@@ -310,10 +310,17 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
                     }
 
                     // A possessed creature is moved by its possessor's client (vmangos HandleMoverRelocation): its AI still runs (PetAI's
-                    // possessed branch keeps the melee victim) but no leash, crowd-control movement or generator moves it.
+                    // possessed branch keeps the melee victim) but no leash or generator of its own moves it. Fear and confuse do: vmangos
+                    // ModConfuseSpell starts their generator whoever controls the unit, UpdateMotion runs it (UNIT_STATE_POSSESSED is not in
+                    // UNIT_STATE_CAN_NOT_MOVE) and the client gets the control back when it ends (UpdateControl).
                     if ((creature.UnitFlags & UnitFlags.Possessed) != 0)
                     {
                         UpdateAi(creature, diffMs);
+                        if (creature.DeathState == CreatureDeathState.Alive && _creatures.ContainsKey(creature.Guid))
+                        {
+                            UpdatePossessedCrowdControl(creature, diffMs);
+                        }
+
                         break;
                     }
 
@@ -388,6 +395,22 @@ public sealed partial class CreatureMapSystem : IMapUpdater, ICreatureMover
         }
 
         motion.SyncCrowdControl(wanted, wanted == CrowdControlMovement.Fear ? CcState.FearSource(creature) : null);
+    }
+
+    /// <summary>
+    /// The movement a possessed creature still gets from the server: the fear or confuse generator while the aura flag holds. Nothing
+    /// else on its stack is updated (vmangos MotionMaster::Initialize installs no default generator for a possessed unit, and the chase
+    /// and follow generators stop on UNIT_STATE_POSSESSED), and ending the crowd control does not resume the default
+    /// (<see cref="MotionMaster"/> keeps it interrupted while possessed).
+    /// </summary>
+    private static void UpdatePossessedCrowdControl(Creature creature, uint diffMs)
+    {
+        SyncCrowdControlMovement(creature);
+        MotionMaster motion = creature.Motion;
+        if (motion.ActiveCrowdControl != CrowdControlMovement.None && motion.IsCrowdControlOnTop)
+        {
+            motion.Update(diffMs);
+        }
     }
 
     /// <summary>

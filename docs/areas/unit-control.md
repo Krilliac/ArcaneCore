@@ -48,8 +48,10 @@ Behaviour, in the order vmangos runs it:
   (vmangos: "allowed to move self"), nothing while the player is possessed or charmed. A possessed creature is relocated (never while the server
   moves it on a spline) and the block is relayed to its observers except the possessor, a possessed player through its own locomotion observers
   and to its own client. CMSG_SET_ACTIVE_MOVER and CMSG_MOVE_NOT_ACTIVE_MOVER follow vmangos (the latter ignores the block while the moved
-  player, not the sender, is being teleported). The creature system runs only the AI of a possessed
-  creature (no leash, crowd-control movement or generator), and PetAI skips return movement and autocast while it is possessed.
+  player, not the sender, is being teleported). The creature system runs the AI of a possessed creature and, while a fear or confuse holds it,
+  that crowd-control generator (vmangos `ModConfuseSpell` starts it whoever controls the unit and `UpdateMotion` runs it: UNIT_STATE_POSSESSED is
+  not in UNIT_STATE_CAN_NOT_MOVE); no leash and no generator of its own, and the default generator is not resumed when the crowd control ends
+  (vmangos installs none for a possessed unit, MotionMaster.cpp:56). PetAI skips return movement and autocast while it is possessed.
 * **Camera**: the map evaluates a player's visibility from its view point (the possessed unit), whose own body is always in range; a view point
   that moves flags its viewer for a visibility pass.
 * **Fear and confuse** on a controlled unit (or its controller) re-send the control state (`Unit::SetFeared` / `SetConfused` → `UpdateControl`).
@@ -97,17 +99,24 @@ Behaviour, in the order vmangos runs it:
   is not copied from the possessor.
 * The creature PvP flag reset at the end of a charm (`CREATURE_STATIC_FLAG_PVP_ENABLING`) is not modelled (no static PvP flag on this base).
 * Logging out as the spirit does not kill the player at once (vmangos WorldSession.cpp:706-712); the spirit simply ends with the logout.
-* The SoR follow-up steps run in the map update after the interval (`MapUnitControl.Schedule`), so they need the unit's map; outside a map they
-  run at once.
+* The SoR follow-up steps run in the map update after the interval (`MapUnitControl.Schedule`), so they need the unit's map; scheduled outside a
+  map they run at once. Like vmangos `m_Events` (kept across a far teleport, cleared only by CleanupsBeforeDelete), a player's pending step goes
+  with it when it leaves the map (`OnPlayerRemoved`) and resumes, with the time it had left, on the map it enters (`OnPlayerAdding`): the
+  spirit removed as a priest leaves a battleground still loses the stun and the invincibility and dies at its destination. In transit nothing
+  runs, as in vmangos (the unit is not updated); a logout in transit drops it with the player object.
 
 ## Tests
 
 * `tests/ArcaneCore.Game.Tests/Pets/CharmPossessTests.cs` (16; RED on the proc-engine base: 13 of the first 15 failed, the two characterization
-  cases passed; the possessed hunter's pet dismiss case failed against the first version of this lane), `UnitControlTests.cs` (11: confirmed
+  cases passed; the possessed hunter's pet dismiss case failed against the first version of this lane), `UnitControlTests.cs` (13: confirmed
   mover, move-not-active-mover and its teleport check, camera visibility, Eyes of the Beast return, dismissal and save, the leash save, a player
-  charmed by a creature, the possessor's cancel, fear on a possessed creature, the per-map damage relay; the cancel case was proven load-bearing
-  by reverting `SpellSystem.CancelAura.cs`).
+  charmed by a creature, the possessor's cancel, fear on a possessed creature, fear and confuse moving a possessed creature then handing it back
+  (a theory, RED: both cases stayed Idle), a fear ending under possession not resuming the waypoints (proven load-bearing by disabling the
+  `MotionMaster.ResumeTop` possessed guard), the per-map damage relay; the cancel case was proven load-bearing by reverting
+  `SpellSystem.CancelAura.cs`).
 * `tests/ArcaneCore.Game.Tests/Spells/PowerBurnTests.cs` (6; RED: 4 failed, then the every-tick crit roll failed against the first version) and
-  `SpiritOfRedemptionTests.cs` (5; RED: 2 failed, the no-talent control passed; the two threshold cases failed against the first version).
+  `SpiritOfRedemptionTests.cs` (7; RED: 2 failed, the no-talent control passed; the two threshold cases failed against the first version; the
+  map-change case failed with the stun left on, and fails again with both the removal carry and the due-time redirect disabled, either alone
+  passing it; the re-entry case guards against a double run).
 * Playerbot scenarios, `tests/ArcaneCore.World.Tests/Playerbots/Scenarios/UnitControlScenarioTests.cs` (3; RED: all 3 failed at the control
   step): `control-possess`, `control-charm`, `spirit-of-redemption`. Logs: `D:/ArcaneCore-lanes/_logs/w2-unit-control/`.
