@@ -190,8 +190,8 @@ ported: it only changes damage for GM-like invulnerability states and game maste
   read from the aura ledger, which `MovementFlagAuras` (slice 2) fills; any other lane's aura of those types is not seen
   unless it records itself in the ledger.
 * **Not delivered:** `SetJumpInitialSpeed` (extrapolation only); the knockback "launched" reset and the knockback-ack fall
-  reset (no knockback in this wave); transports do not exist, so the transport branches compare the block's transport
-  fields but never meet a transport. Real clients report fall time and z in their own way: damage numbers were checked
+  reset (no knockback in this wave). The transport branches compare the block's transport fields; ships exist since the
+  transport lane ([transports](transports.md)), whose passengers' blocks carry the ship GUID and offset they compare. Real clients report fall time and z in their own way: damage numbers were checked
   against the formula, not against a 1.12.1 client.
 ## Slice 5: undermap-void (delivered)
 

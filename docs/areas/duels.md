@@ -69,7 +69,8 @@ Defaults are the vmangos values; a different value is a deliberate deviation.
   opponent's pet, pet hostility through the owner on the `CanAttack` path of creatures, copying `PLAYER_DUEL_TEAM` to a charmed player.
 * **Reflected spells and DoTs** (`pVictim == this && reflected` clamp, `IsReflected` clause of the aura cleanup): needs the reflected flag of the spell combat
   rules lane.
-* **Transports** (`DuelInfo.transportGuid`, `SPELL_FAILED_NOT_ON_TRANSPORT`, leaving the transport ends the duel): no transport system.
+* **Transports** are delivered with the transport lane (see [transports](transports.md)): `SPELL_FAILED_NOT_ON_TRANSPORT` unless both stand on the same
+  ship, `DuelInfo.TransportGuid`, and leaving the ship is leaving the duel area.
 * **`ResetExtraAttacks`** at completion: no extra-attack counter exists.
 * **Helpful spells on duelists** (vmangos `Spell::CheckTarget` drops a positive spell aimed at a started-duel player from a non-opponent, `IsValidHelpfulTarget`
   "cannot help others in duels", party area auras skipping dueling members, `Object.cpp:3846-3848`, `SpellAuras.cpp:621-623`): needs a hook in spell target

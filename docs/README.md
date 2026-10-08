@@ -58,6 +58,7 @@ Each area page has a Delivered section, its limits, and the references it follow
 | Character rename | [character-rename](areas/character-rename.md) |
 | Melee combat | [combat](areas/combat.md) |
 | Duels | [duels](areas/duels.md) |
+| Ships and zeppelins (transports) | [transports](areas/transports.md) |
 | Creatures and world spawns | [creatures](areas/creatures.md) |
 | Creature AI and movement | [creature-ai](areas/creature-ai.md) |
 | Grids, maps and terrain | [grid-terrain](areas/grid-terrain.md) |
