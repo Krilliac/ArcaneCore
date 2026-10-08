@@ -172,6 +172,10 @@ feature reads:
   writes `spell effect 0xMASK` lines that `Spells:Mods:ClassMaskFile` loads ([spell-mods](spell-mods.md)); the spell DBC reads these
   masks as 32 bits and about 11% of the classic rows need more. It writes no database; `--dry-run` writes no file. vmangos' own mask
   corrections (migration `20240926142033`) are not applied.
+- **Proc conditions.** `proc-events <dump>... --database <file>` (or `--provider`/`--connection-string`) replaces `spell_proc_event` (world 41)
+  with the dump's rows for build 5875 in one transaction, by column name for both the classic-db and the vmangos layout; vmangos rows whose
+  build range misses 5875 are dropped and counted. `--cooldown-unit seconds` reads classic-db dumps before z2829, whose `Cooldown` is in
+  seconds; `--dry-run` parses and counts without a database. Two kept rows for one spell are an error. See [procs](procs.md).
 - Verified on the z2815 dump: 40 start positions, 1,497 starting spells, 353 teleport targets and 2,400 level-stat rows (human
   warrior level 1: strength 23; the file is a sample of the retail table, not committed); the daemon logged "level stats for
   2400 race/class/level rows". With no spells imported (`import-dbc` needs client DBCs) the spell feature logs each

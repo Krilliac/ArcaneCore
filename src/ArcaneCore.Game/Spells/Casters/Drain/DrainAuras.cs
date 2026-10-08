@@ -52,7 +52,12 @@ public static class DrainAuras
             CasterPeriodicPackets.BuildPeriodicSpellDamageLog(target.Guid, caster.Guid, spell.Id, resisted > 0 ? rolled : damage, spell.School, absorbed: 0, resisted), includeSelf: true);
 
         damage = Math.Min(damage, target.Health);
-        uint dealt = spells.Damage.DealSpellDamage(caster, target, spell, damage, periodic: true);
+
+        // DEAL/TAKE_HARMFUL_PERIODIC (+ TAKEN_ANY_DAMAGE when damage gets through) before the damage; the damage costs no durability on a kill and
+        // carries the holder's reflected flag, so a reflected leech cannot kill its own caster in a duel (vmangos SpellAuras.cpp:5994-5999).
+        spells.FirePeriodicDamageProcs(caster, target, spell, damage, rolled);
+        uint dealt = spells.Damage.DealSpellDamage(caster, target, spell, damage, periodic: true, startsCombat: true, critical: false, durabilityLoss: false,
+            reflected: holder.IsReflected && ReferenceEquals(caster, target));
         spells.OnDamageTaken(target, caster, dealt, periodic: true);
 
         if (!target.IsAlive
@@ -110,12 +115,16 @@ public static class DrainAuras
             SpellSystem.SetPower(caster, power, Math.Min(max, SpellSystem.GetPower(caster, power) + gain));
         }
 
-        ImprovedDrainMana(spells, caster, target, drained);
+        ImprovedDrainMana(spells, caster, target, drained, reflected: holder.IsReflected && ReferenceEquals(caster, target));
         spells.BreakDamageCancelledAuras(target);
     }
 
-    /// <summary>The talent's shadow damage tick (vmangos PeriodicTick(talent spell, PERIODIC_DAMAGE, drained * 0.15 / 0.3)).</summary>
-    private static void ImprovedDrainMana(SpellSystem spells, Unit caster, Unit target, uint drained)
+    /// <summary>
+    /// The talent's shadow damage tick (vmangos PeriodicTick(talent spell, PERIODIC_DAMAGE, drained * 0.15 / 0.3), SpellAuras.cpp:6200-6206): a
+    /// periodic damage tick of the talent spell, so it fires DEAL/TAKE_HARMFUL_PERIODIC procs before its damage (:5902-5917) and carries the Drain
+    /// Mana holder's reflected flag (:5921). The mana drain itself fires no procs (vmangos' PERIODIC_MANA_LEECH block has no ProcDamageAndSpell).
+    /// </summary>
+    private static void ImprovedDrainMana(SpellSystem spells, Unit caster, Unit target, uint drained, bool reflected)
     {
         (uint talentId, float fraction) = spells.HasAura(caster, ImprovedDrainManaRank2) ? (ImprovedDrainManaRank2, 0.3f)
             : spells.HasAura(caster, ImprovedDrainManaRank1) ? (ImprovedDrainManaRank1, 0.15f)
@@ -136,7 +145,9 @@ public static class DrainAuras
         uint resisted = spells.ApplyResist(caster, target, talent, ref damage, periodic: true); // a PERIODIC_DAMAGE tick: the signed DOT resist
         SpellSystem.SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog,
             CasterPeriodicPackets.BuildPeriodicSpellDamageLog(target.Guid, caster.Guid, talent.Id, resisted > 0 ? rolled : damage, talent.School, absorbed: 0, resisted), includeSelf: true);
-        uint dealt = spells.Damage.DealSpellDamage(caster, target, talent, damage, periodic: true);
+        spells.FirePeriodicDamageProcs(caster, target, talent, damage, rolled);
+        uint dealt = spells.Damage.DealSpellDamage(caster, target, talent, damage, periodic: true, startsCombat: true, critical: false, durabilityLoss: true,
+            reflected: reflected);
         spells.OnDamageTaken(target, caster, dealt, periodic: true);
     }
 }

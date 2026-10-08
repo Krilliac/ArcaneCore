@@ -108,9 +108,16 @@ public sealed class SpellProcEventDataModule : IDataModule
 /// <summary>EF Core implementation of <see cref="ISpellProcEventDataStore"/>.</summary>
 public sealed class EfSpellProcEventStore(WorldDbContext db) : ISpellProcEventDataStore
 {
+    /// <summary>
+    /// The rows whose build range holds the supported build (vmangos SpellMgr::LoadSpellProcEvents: <c>WHERE 5875 BETWEEN build_min AND build_max</c>),
+    /// so rows put into the table straight from a vmangos dump are filtered like the importer filters them.
+    /// </summary>
     public async Task<SpellProcEventContent> LoadAsync(CancellationToken cancellationToken = default)
     {
-        List<SpellProcEventRow> rows = await db.Set<SpellProcEventRow>().AsNoTracking().OrderBy(r => r.Entry).ToListAsync(cancellationToken).ConfigureAwait(false);
+        const uint build = SpellProcEventDumpImporter.SupportedBuild;
+        List<SpellProcEventRow> rows = await db.Set<SpellProcEventRow>().AsNoTracking()
+            .Where(r => r.BuildMin <= build && r.BuildMax >= build)
+            .OrderBy(r => r.Entry).ToListAsync(cancellationToken).ConfigureAwait(false);
         return new SpellProcEventContent(rows.Select(SpellProcEventDataModule.ToRecord));
     }
 }

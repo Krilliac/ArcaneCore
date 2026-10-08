@@ -127,10 +127,12 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
-    /// vmangos Spell::cast (Spell.cpp:3724-3749): "Trigger procs on cast end for caster": the attacker flags with PROC_EX_CAST_END and the main
-    /// target's outcome (only auras whose spell_proc_event asks for CAST_END react), and a cast with no unit target procs as a normal hit.
+    /// vmangos Spell::cast (Spell.cpp:3724-3749): "Trigger procs on cast end for caster": the attacker flags with PROC_EX_CAST_END and, when the
+    /// main target is one of the spell's targets, its outcome (<paramref name="mainMiss"/> null: it is not, and the event is CAST_END alone); only
+    /// auras whose spell_proc_event asks for CAST_END react. A cast with no unit target procs as a normal hit. ArcaneCore rolls crits per effect, after
+    /// this point, so a hit is always NORMAL_HIT here (vmangos knows target.isCrit already).
     /// </summary>
-    private void FireCastEndProcs(SpellCast cast, Unit? mainTarget, SpellMissInfo mainMiss, bool targetsEmpty)
+    private void FireCastEndProcs(SpellCast cast, Unit? mainTarget, SpellMissInfo? mainMiss, bool targetsEmpty)
     {
         if (!ProcFlagRules.CanTrigger(cast) || _objectCastDepth > 0 || (cast.Spell.AttributesEx3 & ProcAttributes.Ex3SuppressCasterProcs) != 0)
         {
@@ -144,7 +146,12 @@ public sealed partial class SpellSystem
             return;
         }
 
-        ProcFlagsEx extra = ProcFlagsEx.CastEnd | (mainMiss == SpellMissInfo.None ? ProcFlagsEx.NormalHit : ProcFlagRules.ExtendMask(mainMiss, hasDamageInfo: false));
+        ProcFlagsEx extra = ProcFlagsEx.CastEnd | mainMiss switch
+        {
+            null => ProcFlagsEx.None,
+            SpellMissInfo.None => ProcFlagsEx.NormalHit,
+            SpellMissInfo miss => ProcFlagRules.ExtendMask(miss, hasDamageInfo: false),
+        };
         bool triggeredByAuraOrItem = cast.IsTriggeredByAura || (cast.IsTriggered && cast.CastItem is not null);
         ProcDamageAndSpell(cast.Caster, new ProcEvent
         {

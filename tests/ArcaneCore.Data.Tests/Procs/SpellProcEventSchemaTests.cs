@@ -57,6 +57,31 @@ public sealed class SpellProcEventSchemaTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task Store_LoadsOnlyTheRowsWhoseBuildRangeHoldsBuild5875(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(cs))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+            // Rows put in directly from a vmangos dump keep their build range (vmangos SpellMgr::LoadSpellProcEvents: WHERE 5875 BETWEEN build_min AND build_max).
+            db.Set<SpellProcEventRow>().AddRange(
+                new SpellProcEventRow { Entry = 1, ProcEx = 1, BuildMin = 0, BuildMax = 5464 },
+                new SpellProcEventRow { Entry = 2, ProcEx = 2, BuildMin = 5875, BuildMax = 5875 },
+                new SpellProcEventRow { Entry = 3, ProcEx = 3, BuildMin = 6005, BuildMax = 9999 },
+                new SpellProcEventRow { Entry = 4, ProcEx = 4, BuildMin = 0, BuildMax = 9999 });
+            await db.SaveChangesAsync();
+        }
+
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(cs))
+        {
+            SpellProcEventContent content = await new EfSpellProcEventStore(db).LoadAsync();
+
+            Assert.Equal([2u, 4u], content.Rows.Select(r => r.Entry).Order());
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task PreviousWorldVersion_GainsTheTable_KeepingRows_AndTheStepRunsTwiceSafely(DatabaseProvider provider)
     {
         DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);

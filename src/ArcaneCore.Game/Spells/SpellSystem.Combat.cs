@@ -88,7 +88,9 @@ public sealed partial class SpellSystem
             if (!hit.ProcsDone)
             {
                 hit.ProcsDone = true;
-                FireSpellHitProcs(hit.Cast, target, SpellMissInfo.None, amount, original + resisted, crit, absorbed, hit.EffectMask, hit.Reflected);
+                // A reflected hit procs with PROC_EX_REFLECT plus the hit bits (CreateProcExtendMask falls through from REFLECT, Unit.cpp:8811-8828).
+                FireSpellHitProcs(hit.Cast, target, hit.Reflected ? SpellMissInfo.Reflect : SpellMissInfo.None, amount, original + resisted, crit, absorbed,
+                    hit.EffectMask, hit.Reflected);
             }
         }
 

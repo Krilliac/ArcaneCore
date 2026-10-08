@@ -10,6 +10,7 @@ using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
+using ArcaneCore.Data.World.Procs;
 using ArcaneCore.Data.World.SpecialLoot;
 using ArcaneCore.Data.World.WorldState;
 using ArcaneCore.Kernel.WorldData.WorldState;
@@ -60,6 +61,10 @@ public static class ContentImporterCli
           class-masks <dump>... read spell_affect (the 64-bit class masks of the talent modifier auras)
                                 and write the overlay file Spells:Mods:ClassMaskFile reads
                                 (--class-mask-file <file>, outside the repository; --dry-run writes nothing)
+          proc-events <dump>... replace spell_proc_event (the proc conditions: flags, procEx, PPM, cooldown,
+                                family masks) with the dump's rows for build 5875; vmangos rows outside
+                                the build range are dropped (--cooldown-unit ms|seconds: classic-db dumps
+                                before z2829 store seconds; --dry-run writes nothing)
 
         a <dump> is a .sql or .sql.gz file (the gzip magic number decides, not the name); several
         dumps are read in order as one, later rows replacing earlier ones with the same key.
@@ -116,6 +121,7 @@ public static class ContentImporterCli
                 "import-map-dbc" => await ImportMapDbcAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "verify" => await VerifyAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "class-masks" => ClassMasks(arguments, output),
+                "proc-events" => await ProcEventsAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 _ => throw new UsageException($"unknown command '{arguments.Command}'"),
             };
         }
@@ -213,6 +219,64 @@ public static class ContentImporterCli
         }
 
         o.WriteLine($"class mask file: wrote {report.Rows} row(s) to {Path.GetFullPath(path)}; set Spells:Mods:ClassMaskFile to it");
+        return ExitCodes.Ok;
+    }
+
+    // --- proc-events -------------------------------------------------------------------------
+
+    /// <summary>
+    /// <c>proc-events</c>: <see cref="SpellProcEventDumpImporter"/> from the command line. The whole dump is parsed (and the build filter applied)
+    /// before any database is opened, and the table is replaced in one transaction, so a malformed dump changes nothing.
+    /// </summary>
+    private static async Task<int> ProcEventsAsync(CliArguments a, TextWriter o, CancellationToken ct)
+    {
+        RequireInputs(a);
+        ProcCooldownUnit cooldownUnit = (a.Value("--cooldown-unit") ?? "ms").ToLowerInvariant() switch
+        {
+            "ms" or "milliseconds" => ProcCooldownUnit.Milliseconds,
+            "s" or "seconds" => ProcCooldownUnit.Seconds,
+            string other => throw new UsageException($"unknown --cooldown-unit '{other}' (ms, seconds)"),
+        };
+        bool dryRun = a.Flag("--dry-run");
+        Target? target = dryRun && a.Value("--database") is null && a.Value("--provider") is null ? null : ResolveTarget(a);
+        if (!dryRun)
+        {
+            GuardPath(target!.FilePath);
+        }
+
+        (IReadOnlyList<DumpInput> inputs, _) = OpenInputs(a.Positional);
+        SpellProcEventParseResult result;
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            result = SpellProcEventDumpImporter.Parse(reader, cooldownUnit: cooldownUnit);
+        }
+
+        if (result.RowsRead == 0)
+        {
+            throw new CliException(ExitCodes.Schema, "the dump has no spell_proc_event rows (is it a classic-db or vmangos world dump?)");
+        }
+
+        string counts = $"spell_proc_event: {result.RowsRead} row(s) read, {result.RowsFilteredByBuild} outside build {SpellProcEventDumpImporter.SupportedBuild}";
+        if (dryRun)
+        {
+            o.WriteLine($"{counts}, {result.Content.Count} to import (dry run: no database written)");
+            return ExitCodes.Ok;
+        }
+
+        o.WriteLine($"target: {target!.Describe}");
+        int written;
+        try
+        {
+            await using WorldDbContext db = OpenWorld(target);
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema, cancellationToken: ct).ConfigureAwait(false);
+            written = await SpellProcEventDumpImporter.ImportAsync(db, result.Content, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
+        {
+            throw DatabaseError(ex, target);
+        }
+
+        o.WriteLine($"{counts}, {written} imported; a running world picks them up with .reload spell_proc_event");
         return ExitCodes.Ok;
     }
 

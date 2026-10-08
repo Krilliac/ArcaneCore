@@ -129,8 +129,10 @@ public sealed partial class SpellSystem
             }
 
             // "prevent delayed procs from removing auras applied after the proc happened (Frostbite removed by the Frostbolt that applied it)":
-            // an aura of the event's own actor applied after the event began does not proc from it.
-            if (holder.AppliedAtMs > now && ((isVictim && target is not null && target.Guid == holder.CasterGuid) || (!isVictim && owner.Guid == holder.CasterGuid)))
+            // an aura of the event's own actor applied at or after the event's time does not proc from it (Unit.cpp:8958 compares with >=). The
+            // engine is synchronous, so an aura the same hit put on (a nested triggered cast in the effect handlers) has AppliedAtMs == now. The
+            // clock is vmangos getMSTime and wraps after ~49.7 days: the signed difference keeps an aura applied before the wrap from looking new.
+            if (unchecked((int)(holder.AppliedAtMs - now)) >= 0 && ((isVictim && target is not null && target.Guid == holder.CasterGuid) || (!isVictim && owner.Guid == holder.CasterGuid)))
             {
                 continue;
             }
@@ -502,7 +504,10 @@ public sealed partial class SpellSystem
                 }
 
                 anyAuraProc = true;
-                ApplyDamageProcCancel(context);
+                if (result == AuraProcResult.Ok)
+                {
+                    ApplyDamageProcCancel(context); // only a proc that happened ends the aura
+                }
             }
 
             if (useCharges && anyAuraProc && !holder.IsRemoved && DropAuraCharge(holder))

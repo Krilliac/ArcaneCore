@@ -42,6 +42,16 @@ public sealed class ProcEngineTests
         StartRecoveryTime = 0,
     };
 
+    /// <summary>
+    /// Apply a self aura a millisecond before the event under test: an aura the event's actor applied at the event's own time does not proc
+    /// from it (vmangos Unit.cpp:8958, <c>GetAuraApplyTime() &gt;= procTime</c>), and the test clock does not move by itself.
+    /// </summary>
+    private static void ApplyEarlier(SpellTestKit kit, Unit unit, uint id)
+    {
+        RuleTestSupport.Apply(kit, unit, id);
+        kit.Now++;
+    }
+
     private static SpellInfo NoGcd(SpellInfo spell) => spell with { StartRecoveryCategory = 0, StartRecoveryTime = 0 };
 
     private static SpellTestKit NewKit() => new(
@@ -157,7 +167,7 @@ public sealed class ProcEngineTests
     {
         (SpellTestKit kit, Player attacker, Player victim) = Kit();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, attacker, SwingProc);
+        ApplyEarlier(kit, attacker, SwingProc);
         kit.System.ProcEvents = new Catalog(new SpellProcEventRecord(SwingProc, 0, 0, 0, 0, 0, 0, 0, PpmRate: 0.0001f, 0, 0));
         kit.System.Random = new SpellRules.ScriptedRandom(500); // 5%: above the PPM chance of a 2 s weapon at 0.0001 PPM
 
@@ -175,7 +185,7 @@ public sealed class ProcEngineTests
     {
         (SpellTestKit kit, Player attacker, Player victim) = Kit();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, attacker, SwingProc);
+        ApplyEarlier(kit, attacker, SwingProc);
         kit.System.ProcEvents = new Catalog(new SpellProcEventRecord(SwingProc, 0, 0, 0, 0, 0, 0, 0, 0, 0, Cooldown: 5000));
 
         kit.System.OnMeleeSwingResolved(Swing(attacker, victim));
@@ -195,7 +205,7 @@ public sealed class ProcEngineTests
     {
         (SpellTestKit kit, Player attacker, Player victim) = Kit();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, attacker, CritOnly);
+        ApplyEarlier(kit, attacker, CritOnly);
         kit.System.ProcEvents = new Catalog(new SpellProcEventRecord(CritOnly, 0, 0, 0, 0, 0, 0, (uint)ProcFlagsEx.CriticalHit, 0, 0, 0));
 
         kit.System.OnMeleeSwingResolved(Swing(attacker, victim));
@@ -210,7 +220,7 @@ public sealed class ProcEngineTests
     {
         (SpellTestKit kit, Player caster, Player target) = Kit();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, caster, FamilyProc);
+        ApplyEarlier(kit, caster, FamilyProc);
         kit.System.ProcEvents = new Catalog(new SpellProcEventRecord(FamilyProc, 0, 3, SpellFamilyMask0: 0x20, 0, 0, 0, 0, 0, 0, 0));
 
         kit.System.CastSpell(caster, OtherFamilyBolt, SpellCastTargets.ForUnit(target.Guid), triggered: true);
@@ -225,7 +235,7 @@ public sealed class ProcEngineTests
     {
         (SpellTestKit kit, Player attacker, Player victim) = Kit();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, attacker, BurnCharge); // its trigger spell does not exist: the handler fails every time
+        ApplyEarlier(kit, attacker, BurnCharge); // its trigger spell does not exist: the handler fails every time
 
         kit.System.OnMeleeSwingResolved(Swing(attacker, victim));
 
@@ -238,7 +248,7 @@ public sealed class ProcEngineTests
         (SpellTestKit kit, Player attacker, Player victim) = Kit();
         using SpellTestKit _ = kit;
         (Player observer, FakeSession session) = kit.AddPlayer(3, 1);
-        RuleTestSupport.Apply(kit, victim, Thorns);
+        ApplyEarlier(kit, victim, Thorns);
         session.Clear();
 
         kit.System.OnMeleeWeaponHit(Swing(attacker, victim, MeleeHitOutcome.Parry));
@@ -261,7 +271,7 @@ public sealed class ProcEngineTests
     {
         (SpellTestKit kit, Player killer, Player victim) = Kit();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, killer, KillProc);
+        ApplyEarlier(kit, killer, KillProc);
         killer.Level = 1;
         victim.Level = 1;
 
@@ -276,7 +286,7 @@ public sealed class ProcEngineTests
         (SpellTestKit kit, Player caster, Player reflector) = Kit();
         using SpellTestKit _ = kit;
         kit.System.CombatRules = new AlwaysHitRules();
-        RuleTestSupport.Apply(kit, reflector, FrostReflect);
+        ApplyEarlier(kit, reflector, FrostReflect);
         kit.System.ProcEvents = new Catalog(new SpellProcEventRecord(FrostReflect, 0, 0, 0, 0, 0, 0, (uint)ProcFlagsEx.Reflect, 0, 0, 0));
 
         kit.System.CastSpell(caster, FireBolt, SpellCastTargets.ForUnit(reflector.Guid), triggered: true);
@@ -298,6 +308,7 @@ public sealed class ProcEngineTests
         using SpellTestKit _ = kit;
         victim.Level = 1; // max damage 50 below level 9: a 10 damage hit is a 20% chance
         kit.System.CastSpell(attacker, Root, SpellCastTargets.ForUnit(victim.Guid), triggered: true);
+        kit.Now++; // the root is the attacker's own aura: the hits below come a millisecond later (Unit.cpp:8958)
         Assert.True(kit.System.HasAura(victim, Root));
 
         kit.System.Random = new FixedDoubleRandom(0.25); // the proc roll passes (100%), the break roll 25% misses the 20% chance
@@ -314,7 +325,7 @@ public sealed class ProcEngineTests
     {
         (SpellTestKit kit, Player attacker, Player victim) = Kit();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, attacker, SwingProc);
+        ApplyEarlier(kit, attacker, SwingProc);
         var script = new CountingScript();
         kit.System.RegisterProcScript(SwingProc, script);
 
@@ -330,7 +341,7 @@ public sealed class ProcEngineTests
     {
         (SpellTestKit kit, Player attacker, Player victim) = Kit();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, attacker, CritOnly);
+        ApplyEarlier(kit, attacker, CritOnly);
         int calls = 0;
         kit.System.RegisterProcHandler(AuraType.ModResistance, (in AuraProcContext context) =>
         {

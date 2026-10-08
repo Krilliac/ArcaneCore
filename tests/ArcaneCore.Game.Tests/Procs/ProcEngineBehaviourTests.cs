@@ -45,6 +45,16 @@ public sealed class ProcEngineBehaviourTests
         StartRecoveryTime = 0,
     };
 
+    /// <summary>
+    /// Apply a self aura a millisecond before the event under test: an aura the event's actor applied at the event's own time does not proc
+    /// from it (vmangos Unit.cpp:8958, <c>GetAuraApplyTime() &gt;= procTime</c>), and the test clock does not move by itself.
+    /// </summary>
+    private static void ApplyEarlier(SpellTestKit kit, Unit unit, uint id)
+    {
+        RuleTestSupport.Apply(kit, unit, id);
+        kit.Now++;
+    }
+
     private static SpellInfo DamageCancelled(uint id, ProcFlags procFlags, uint dispel = 0) => Spell(id,
         Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, SpellHandlerModuleTests.FixtureAura)) with
     {
@@ -143,7 +153,7 @@ public sealed class ProcEngineBehaviourTests
     {
         (SpellTestKit kit, Player attacker, Player victim, MapCombat combat) = MeleeKit();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, attacker, OnSwingAura);
+        ApplyEarlier(kit, attacker, OnSwingAura);
 
         combat.AttackerStateUpdate(attacker, victim, WeaponAttackType.BaseAttack);
 
@@ -156,7 +166,7 @@ public sealed class ProcEngineBehaviourTests
     {
         (SpellTestKit kit, Player attacker, Player victim, MapCombat combat) = MeleeKit();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, victim, ChargedVictimAura);
+        ApplyEarlier(kit, victim, ChargedVictimAura);
 
         combat.AttackerStateUpdate(attacker, victim, WeaponAttackType.BaseAttack);
         Assert.Equal(1, kit.System.GetAuras(victim).Single(h => h.Spell.Id == ChargedVictimAura).Charges);
@@ -170,7 +180,7 @@ public sealed class ProcEngineBehaviourTests
     {
         (SpellTestKit kit, Player attacker, Player victim, MapCombat combat) = MeleeKit();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, victim, ThornsLikeProc);
+        ApplyEarlier(kit, victim, ThornsLikeProc);
 
         combat.AttackerStateUpdate(attacker, victim, WeaponAttackType.BaseAttack);
 
@@ -183,7 +193,7 @@ public sealed class ProcEngineBehaviourTests
     {
         (SpellTestKit kit, Player attacker, Player victim, MapCombat combat) = MeleeKit();
         using SpellTestKit _ = kit;
-        RuleTestSupport.Apply(kit, attacker, ExtraAttackAura);
+        ApplyEarlier(kit, attacker, ExtraAttackAura);
 
         combat.AttackerStateUpdate(attacker, victim, WeaponAttackType.BaseAttack);
         Assert.Equal(1u, attacker.Combat.ExtraAttacks);
@@ -201,7 +211,7 @@ public sealed class ProcEngineBehaviourTests
         (Player reflector, _) = kit.AddPlayer(2, 2);
         caster.Health = caster.MaxHealth = 1000;
         reflector.Health = reflector.MaxHealth = 1000;
-        RuleTestSupport.Apply(kit, reflector, ReflectAll);
+        ApplyEarlier(kit, reflector, ReflectAll);
         session.Clear();
 
         kit.System.CastSpell(caster, FrostBolt, SpellCastTargets.ForUnit(reflector.Guid), triggered: true);
@@ -225,7 +235,7 @@ public sealed class ProcEngineBehaviourTests
         using SpellTestKit kit = NewKit();
         (Player attacker, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
-        RuleTestSupport.Apply(kit, victim, WyvernStingRank1);
+        ApplyEarlier(kit, victim, WyvernStingRank1);
 
         kit.System.OnDamageTaken(victim, attacker, 10, periodic: false); // a bare damage break: procFlags auras are the proc engine's
         Assert.True(kit.System.HasAura(victim, WyvernStingRank1));
@@ -240,7 +250,7 @@ public sealed class ProcEngineBehaviourTests
         using SpellTestKit kit = NewKit();
         (Player attacker, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
-        RuleTestSupport.Apply(kit, victim, ProwlRank1);
+        ApplyEarlier(kit, victim, ProwlRank1);
         kit.System.CastSpell(attacker, Dot, SpellCastTargets.ForUnit(victim.Guid), triggered: true);
 
         kit.Advance(3000);
@@ -255,7 +265,7 @@ public sealed class ProcEngineBehaviourTests
         using SpellTestKit kit = NewKit();
         (Player attacker, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddPlayer(2, 2);
-        RuleTestSupport.Apply(kit, victim, PeriodicCharge);
+        ApplyEarlier(kit, victim, PeriodicCharge);
         kit.System.CastSpell(attacker, Dot, SpellCastTargets.ForUnit(victim.Guid), triggered: true);
         Assert.True(kit.System.HasAura(victim, PeriodicCharge)); // the cast itself is no periodic event
 
@@ -270,7 +280,7 @@ public sealed class ProcEngineBehaviourTests
         using SpellTestKit kit = NewKit();
         (Player caster, _) = kit.AddPlayer(1);
         (Player target, _) = kit.AddPlayer(2, 2);
-        RuleTestSupport.Apply(kit, caster, TargetTriggerAura);
+        ApplyEarlier(kit, caster, TargetTriggerAura);
 
         kit.System.CastSpell(caster, Hit, SpellCastTargets.ForUnit(target.Guid), triggered: true); // not in the aura's class mask
         Assert.False(kit.System.HasAura(target, TargetTriggerDebuff));

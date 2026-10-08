@@ -514,7 +514,7 @@ public sealed partial class SpellSystem
         // Proc engine: the cast-end procs before the effects (vmangos Spell::cast, Spell.cpp:3724-3749), and for a channel the target triggers
         // as soon as the targets are known (Spell.cpp:3682-3683).
         Unit castEndTarget = unitTarget ?? caster;
-        FireCastEndProcs(cast, castEndTarget, targetEffects.TryGetValue(castEndTarget, out SpellTargetEntry? mainEntry) ? mainEntry.Miss : SpellMissInfo.None,
+        FireCastEndProcs(cast, castEndTarget, targetEffects.TryGetValue(castEndTarget, out SpellTargetEntry? mainEntry) ? mainEntry.Miss : null,
             targetEffects.Count == 0);
         var procOutcomes = targetEffects.Select(pair => (pair.Key, pair.Value.Miss)).ToList();
         if (spell.IsChanneled && !cast.IsTriggered)

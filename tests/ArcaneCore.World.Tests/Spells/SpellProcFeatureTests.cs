@@ -87,13 +87,26 @@ public sealed class SpellProcFeatureTests
         await using WorldTestClient killerClient = await host.EnterWorldAsync("PROCKILL", "Prockill");
         await using WorldTestClient victimClient = await host.EnterWorldAsync("PROCDEAD", "Procdead");
 
+        uint appliedAt = await host.OnWorldAsync(() =>
+        {
+            Player killer = host.World.FindOnlinePlayer("Prockill")!;
+            var spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+            spells.CastSpell(killer, KillAura, ArcaneCore.Game.Spells.SpellCastTargets.ForSelf(), triggered: true);
+            Assert.True(spells.HasAura(killer, KillAura));
+            return host.World.NowMs;
+        });
+
+        // The killer's own aura procs only from a kill after the millisecond it was applied in (vmangos Unit.cpp:8958: apply time >= proc time skips it).
+        while (host.World.NowMs == appliedAt)
+        {
+            await Task.Delay(1);
+        }
+
         bool buffed = await host.OnWorldAsync(() =>
         {
             Player killer = host.World.FindOnlinePlayer("Prockill")!;
             Player victim = host.World.FindOnlinePlayer("Procdead")!;
             var spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
-            spells.CastSpell(killer, KillAura, ArcaneCore.Game.Spells.SpellCastTargets.ForSelf(), triggered: true);
-            Assert.True(spells.HasAura(killer, KillAura));
             killer.Level = 10;
             victim.Level = 10; // above the killer's gray level: an honor-or-XP target
 

@@ -244,6 +244,16 @@ public sealed partial class SpellSystem
                 : (uint)(amount * CombatRules.CritMultiplier(context.Spell));
         }
 
+        // vmangos Spell::DoAllEffectOnTarget (Spell.cpp:1335-1352): the cast's heal procs fire before DealHeal, with the whole heal (overheal
+        // included) as both amounts. The cast's own hit on this target procs once, here.
+        if (_outcome is { ProcsDone: false } hit && ReferenceEquals(hit.Target, context.Target) && ReferenceEquals(hit.Cast.Caster, context.Caster)
+            && hit.Cast.Spell.Id == context.Spell.Id && amount > 0 && context.Target.IsAlive)
+        {
+            hit.ProcsDone = true;
+            FireSpellHitProcs(hit.Cast, context.Target, hit.Reflected ? SpellMissInfo.Reflect : SpellMissInfo.None, 0, 0, crit, 0, hit.EffectMask, hit.Reflected,
+                healing: amount);
+        }
+
         uint healed = Damage.Heal(context.Caster, context.Target, context.Spell, amount, periodic: false);
         RecordHealing(context.Caster, context.Target, context.Spell, healed, crit);
         SendToSet(context.Caster, WorldOpcode.SmsgSpellheallog,
