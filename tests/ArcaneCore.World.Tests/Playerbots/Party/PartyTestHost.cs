@@ -100,9 +100,9 @@ internal static class PartyTestHost
     /// World thread: a <see cref="GoldCreatureEntry"/> creature <paramref name="xOffset"/> yards from <paramref name="near"/>, killed at
     /// once by <paramref name="killer"/> (its whole health as damage, the ordinary kill path); returns the corpse.
     /// </summary>
-    public static Creature KillGoldCreature(CreatureMapSystem system, Player near, float xOffset, Player killer)
+    public static Creature KillGoldCreature(CreatureMapSystem system, Player near, float xOffset, Player killer, float yOffset = 0f)
     {
-        Creature creature = system.SpawnTemporary(GoldTemplate, near.X + xOffset, near.Y, near.Z, 0);
+        Creature creature = system.SpawnTemporary(GoldTemplate, near.X + xOffset, near.Y + yOffset, near.Z, 0);
         killer.Map!.Combat.DealDamage(killer, creature, creature.Health, direct: false);
         if (creature.DeathState != CreatureDeathState.Corpse) throw new InvalidOperationException("the creature did not die");
         return creature;

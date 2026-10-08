@@ -89,8 +89,11 @@ public sealed class PlayerbotPartyLootAndDeathTests
             Player follower = host.World.FindOnlinePlayer("Partystayer")!;
             Groups(host).SetLootMethod(owner, (uint)LootMethod.RoundRobin, ObjectGuid.Empty, 2);
             CreatureMapSystem creatures = PartyTestHost.GoldCreatures(follower);
-            PartyTestHost.KillGoldCreature(creatures, follower, 12f, owner); // the master's turn
-            Creature corpse = PartyTestHost.KillGoldCreature(creatures, follower, 12f, owner); // the bot's, 12 yards off
+            // 12 yards SOUTH: the test map's area triggers lie on the start's east-west line (MapTestData: the Deadmines entrance box
+            // 10 yards west, the "Test shortcut" teleport sphere 10 yards east), and a bot walking into one reports it like a client
+            // (PlayerbotAreaTriggers) and is teleported away mid-walk.
+            PartyTestHost.KillGoldCreature(creatures, follower, 0f, owner, yOffset: -12f); // the master's turn
+            Creature corpse = PartyTestHost.KillGoldCreature(creatures, follower, 0f, owner, yOffset: -12f); // the bot's, 12 yards off
             LootBag bag = Loot(host, follower).FindLoot(corpse.Guid)!;
             Assert.Equal(follower.Guid, bag.Owner);
             return bag;
