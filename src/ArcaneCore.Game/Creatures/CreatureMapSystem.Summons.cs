@@ -56,6 +56,14 @@ public sealed partial class CreatureMapSystem
     private void AddTimedSummon(Creature creature, uint lifetimeMs, SummonTimer timer)
         => _summons.Add(new TimedSummon(creature, lifetimeMs, timer, _clockMs + lifetimeMs));
 
+    /// <summary>ScriptDev2 TEMPSPAWN_TIMED_DESPAWN: a script's temporary creature goes after <paramref name="lifetimeMs"/>, fighting or not.</summary>
+    public void MarkTimedDespawn(Creature creature, uint lifetimeMs)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        if (creature.Spawn is null && _creatures.ContainsKey(creature.Guid))
+            AddTimedSummon(creature, lifetimeMs, SummonTimer.Absolute);
+    }
+
     /// <summary>ScriptDev2 TEMPSPAWN_TIMED_OOC_DESPAWN (TemporarySpawn.cpp:45-58): a script's temporary creature
     /// counts down only while alive and out of combat; combat restarts its full lifetime.</summary>
     public void MarkTimedOutOfCombatDespawn(Creature creature, uint lifetimeMs)
@@ -176,7 +184,11 @@ public sealed partial class CreatureMapSystem
         return creature;
     }
 
-    /// <summary>ScriptDev2 instance summon with TEMPSPAWN_DEAD_DESPAWN; the temporary creature goes with its corpse.</summary>
+    /// <summary>
+    /// ScriptDev2 instance summon with TEMPSPAWN_DEAD_DESPAWN and no creature summoner (a player's or the instance's SummonCreature): the
+    /// temporary creature lies as an ordinary, lootable corpse after death and is gone for good when the corpse decays. (It used to go with
+    /// its corpse at once - TEMPSPAWN_CORPSE_DESPAWN - which took the loot of summoned bosses such as Atal'alarion and Gandling.)
+    /// </summary>
     public Creature? SummonForInstance(uint entry, float x, float y, float z, float orientation)
     {
         if (_content.FindTemplate(entry) is not { } template)
@@ -189,8 +201,6 @@ public sealed partial class CreatureMapSystem
             return null;
         }
 
-        Creature creature = SpawnTemporary(template, x, y, z, orientation);
-        MarkCorpseDespawn(creature);
-        return creature;
+        return SpawnTemporary(template, x, y, z, orientation);
     }
 }

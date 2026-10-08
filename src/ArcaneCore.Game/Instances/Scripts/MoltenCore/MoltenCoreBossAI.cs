@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 
 namespace ArcaneCore.Game.Instances.Scripts.MoltenCore;
@@ -101,6 +102,8 @@ public sealed class MoltenCoreBossAI(Creature creature, MoltenCoreInstance insta
                 Spell(20228, 7000, 7000, 7000, 7000, PlayerTarget);
                 break;
             case 11672: // mob_core_ragerAI
+                // The constructor's SetDeathPrevention(true): a burst from above 50% cannot kill the Rager before its Full Heal fires.
+                Me.InvincibilityHpThreshold = 1;
                 Cast(12787, triggered: true);
                 Spell(19820, 7000, 7000, 10000, 10000, () => Victim);
                 break;
@@ -148,6 +151,10 @@ public sealed class MoltenCoreBossAI(Creature creature, MoltenCoreInstance insta
         }
         if (Me.Template.Entry == 11988 && System is { } system)
             foreach (Creature add in system.CreaturesOfEntryInRange(Me, 11672, 100).Where(c => c.IsAlive).ToArray())
+            {
+                // cmangos Unit::DealDamage lets INSTAKILL damage through death prevention (Unit.cpp:1006): Quiet Suicide still kills.
+                add.InvincibilityHpThreshold = 0;
                 system.CastSpell(add, 3617, add, true);
+            }
     }
 }

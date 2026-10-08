@@ -116,10 +116,11 @@ public sealed class DiscipleOfNaralexAi(Creature creature, WailingCavernsInstanc
         }
         else _potionTimer -= diffMs;
 
-        if (!UpdateVictim() || Victim is not { } victim) return;
+        if (!UpdateVictim() || Victim is null) return;
         if (_sleepTimer <= diffMs)
         {
-            if (DoCast(victim, 1090) == CreatureCastResult.Ok) _sleepTimer = 30_000;
+            // SelectAttackingTarget(ATTACKING_TARGET_RANDOM, 1): Sleep goes on a random attacker below the top of the threat list, never the tank.
+            if (SelectRandomAttackingTarget(1) is { } sleeper && DoCast(sleeper, 1090) == CreatureCastResult.Ok) _sleepTimer = 30_000;
         }
         else _sleepTimer -= diffMs;
     }
@@ -155,7 +156,8 @@ public sealed class DiscipleOfNaralexAi(Creature creature, WailingCavernsInstanc
                 foreach ((float x, float y, float z, float o) in points)
                 {
                     uint entry = (System?.RandomInt(0, 1) ?? 0) == 0 ? 5048u : 5755u;
-                    Summon(entry, x, y, z, o);
+                    // TEMPSPAWN_TIMED_OOC_DESPAWN 20000 (wailing_cavernsScripts.cpp:282): gone 20 s out of combat, a corpse left to decay.
+                    if (Summon(entry, x, y, z, o) is { } snake) System?.MarkTimedOutOfCombatDespawn(snake, 20_000);
                 }
 
                 break;
@@ -210,7 +212,15 @@ public sealed class DiscipleOfNaralexAi(Creature creature, WailingCavernsInstanc
                 instance.SetData(WailingCavernsInstance.TypeDisciple, EncounterState.Done);
                 _eventTimer = 5_000;
                 break;
-            case 8: System?.SayText(Me, 2101); _eventTimer = 1_000; break;
+            case 8:
+                // InterruptNonMeleeSpells(false, SPELL_AWAKENING) and RemoveAurasDueToSpell(SPELL_AWAKENING): the self-stunning ritual
+                // channel of step 1 ends before the disciple speaks and flies (wailing_cavernsScripts.cpp:365-372).
+                System?.InterruptCast(Me);
+                System?.RemoveAuras(Me, 6271);
+                System?.PlayEmote(Me, 25); // EMOTE_ONESHOT_POINT
+                System?.SayText(Me, 2101);
+                _eventTimer = 1_000;
+                break;
             case 9:
                 if (instance.Naralex is { } thanks) System?.SayText(thanks, 1272);
                 _eventTimer = 7_000;
@@ -243,6 +253,7 @@ public sealed class DiscipleOfNaralexAi(Creature creature, WailingCavernsInstanc
         }
     }
 
-    private void Summon(uint entry, float x, float y, float z, float o)
-        => System?.SummonCorpseDespawn(Me, entry, x, y, z, o);
+    /// <summary>The source's TEMPSPAWN_DEAD_DESPAWN summons (wailing_cavernsScripts.cpp:258, 321, 334, 350): corpses (Mutanus' too) stay to be looted.</summary>
+    private Creature? Summon(uint entry, float x, float y, float z, float o)
+        => System?.SummonDeadDespawn(Me, entry, x, y, z, o);
 }

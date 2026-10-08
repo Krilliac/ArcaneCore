@@ -158,6 +158,23 @@ public sealed class RaidBossTests
         a.Map.Combat.Kill(a.Player, boss); Assert.Contains(a.Spells.Casts, c => c.Spell == 3617 && ReferenceEquals(c.Target, add));
     }
     [Fact]
+    public void CoreRager_DeathPrevention_KeepsItAliveForFullHeal_UntilGolemaggsDeathLetsQuietSuicideThrough()
+    {
+        // mob_core_ragerAI: SetDeathPrevention(true) in the constructor, Full Heal at 50% (boss_golemagg.cpp:143-177); INSTAKILL damage
+        // passes death prevention (Unit.cpp:1006), so Golemagg's death still kills it.
+        using var a = new Arena(); Creature rager = a.Engage(11672);
+        a.Map.Combat.DealDamage(a.Player, rager, rager.MaxHealth * 2, direct: false);
+        Assert.True(rager.IsAlive);
+        Assert.Equal(1u, rager.Health);
+        rager.AI!.OnUpdate(1);
+        Assert.Contains(a.Spells.Casts, c => c.Spell == 17683);
+
+        Creature golemagg = a.Spawn(11988);
+        a.Map.Combat.Kill(a.Player, golemagg);
+        Assert.Contains(a.Spells.Casts, c => c.Spell == 3617 && ReferenceEquals(c.Target, rager));
+        Assert.Equal(0u, rager.InvincibilityHpThreshold);
+    }
+    [Fact]
     public void Garr_FireswornDeathErupts_AndEnrageHitStacks()
     {
         using var a = new Arena(); Creature garr = a.Engage(12057); Creature add = a.Spawn(12099);

@@ -37,6 +37,12 @@ public sealed partial class DireMaulInstance
         {
             StoreCreature(creature);
         }
+
+        // instance_dire_maul::OnCreatureCreate (instance_dire_maul.cpp:107-110): with the King dead, Cho'Rush sits.
+        if (creature.Template.Entry == NpcChorush && Encounters[TypeKingGordok] == EncounterState.Done)
+        {
+            creature.StandState = StandState.Sit;
+        }
     }
 
     public override void OnCreatureDeath(Creature creature)
@@ -94,7 +100,7 @@ public sealed partial class DireMaulInstance
                 }
 
                 if (Instance.FindUpdater<CreatureMapSystem>() is { } creatures
-                    && creatures.SummonCorpseDespawn(chorush, NpcMizzle, 683.296f, 484.384f, 29.544f, 0.0174f) is { } mizzle)
+                    && creatures.SummonDeadDespawn(chorush, NpcMizzle, 683.296f, 484.384f, 29.544f, 0.0174f) is { } mizzle)
                 {
                     mizzle.NpcFlags &= ~(uint)ArcaneCore.Game.Npc.NpcFlags.Gossip;
                     creatures.SetScriptRun(mizzle, run: true);

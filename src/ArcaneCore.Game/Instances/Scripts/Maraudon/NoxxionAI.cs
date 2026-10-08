@@ -21,6 +21,18 @@ public sealed class NoxxionAI(Creature creature) : CreatureAI(creature)
         _spawnAuraActive = false;
     }
 
+    /// <summary>SummonNoxxionsSpawns::OnApply's remove branch (boss_noxxion.cpp): the aura goes with his death, and so does the
+    /// uninteractible flag - the polled aura state is not looked at again once he is dead, so it is cleared here.</summary>
+    public override void OnDeath(Unit? killer)
+    {
+        base.OnDeath(killer);
+        if (_spawnAuraActive)
+        {
+            _spawnAuraActive = false;
+            Me.UnitFlags &= ~UnitFlags.NotSelectable;
+        }
+    }
+
     public override void OnJustSummoned(Creature summoned)
     {
         // SelectAttackingTarget(ATTACKING_TARGET_RANDOM, 0): any living unit on the threat list.

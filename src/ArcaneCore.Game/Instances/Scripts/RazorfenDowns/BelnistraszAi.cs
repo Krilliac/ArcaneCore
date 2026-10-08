@@ -24,6 +24,7 @@ public sealed class BelnistraszAi(Creature creature) : EscortAI(creature)
     public bool AcceptQuest(Player player)
     {
         if (!Start(run: true)) return false;
+        Me.FactionTemplate = 250; // SetFactionTemporary(FACTION_ESCORT_N_NEUTRAL_ACTIVE, RESTORE_RESPAWN), razorfen_downs.cpp:301
         _escortPlayer = player;
         System?.SayText(Me, -1129005, player);
         return true;

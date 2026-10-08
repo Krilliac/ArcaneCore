@@ -48,7 +48,21 @@ public sealed class GrimstoneAI(Creature creature, BlackrockDepthsInstance insta
     {
         if (!_summons.Remove(summoned.Guid)) return;
         _alive = Math.Max(0, _alive - 1);
-        if (_alive == 0) _eventMs = 5000;
+        if (_alive != 0) return;
+        _eventMs = 5000;
+        if (_ringPhase == RingPhase.Gladiators) DoChallengeQuestCredit();
+    }
+
+    /// <summary>
+    /// npc_grimstoneAI::DoChallengeQuestCredit (blackrock_depths.cpp:298-308): Theldren and his band are dead, so every player of the map
+    /// whose The Challenge (9015) is incomplete gets KilledMonsterCredit(NPC_THELDREN_QUEST_CREDIT 16166). The quest-log check is the
+    /// credit's own (a player without the quest gains nothing).
+    /// </summary>
+    private void DoChallengeQuestCredit()
+    {
+        if (Me.Map is not { } map) return;
+        foreach (Player player in map.Players.ToArray())
+            instance.CreatureCredit?.Invoke(player, 16166, default);
     }
 
     protected override void WaypointReached(uint pointId)
@@ -165,11 +179,11 @@ public sealed class GrimstoneAI(Creature creature, BlackrockDepthsInstance insta
     {
         uint entry = RingMobs[_mobChoice];
         for (int i = 0; i < RingMobCounts[_mobChoice]; i++)
-            System?.SummonCorpseDespawn(Me, entry, 608.960f, -235.322f, -53.907f, 1.857f);
+            System?.SummonDeadDespawn(Me, entry, 608.960f, -235.322f, -53.907f, 1.857f);
     }
 
     private void SummonAtNorth(uint entry)
-        => System?.SummonCorpseDespawn(Me, entry, 644.300f, -175.989f, -53.739f, 3.418f);
+        => System?.SummonDeadDespawn(Me, entry, 644.300f, -175.989f, -53.739f, 3.418f);
 
     private void Say(int text) => System?.SayText(Me, text);
 }

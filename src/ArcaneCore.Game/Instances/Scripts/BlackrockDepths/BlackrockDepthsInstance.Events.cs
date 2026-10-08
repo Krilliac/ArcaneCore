@@ -248,7 +248,7 @@ public sealed partial class BlackrockDepthsInstance
                             last = construct;
                         }
                         if (last is not null)
-                            creatures?.SummonCorpseDespawn(last, 9476, 821.905f, -338.382f, -50.134f, 3.78736f);
+                            creatures?.SummonDeadDespawn(last, 9476, 821.905f, -338.382f, -50.134f, 3.78736f);
                     }
                     return;
                 }
@@ -293,11 +293,11 @@ public sealed partial class BlackrockDepthsInstance
                     if (++_brokenKegs == 3 && GetSingleCreatureFromStorage(NpcPlugger) is { } plugger)
                     {
                         CreatureMapSystem? creatures = Instance.FindUpdater<CreatureMapSystem>();
-                        if (creatures?.SummonCorpseDespawn(plugger, 9537, 856.0867f, -149.7469f, -49.6719f, 0.05949629f) is { } hurley)
+                        if (creatures?.SummonDeadDespawn(plugger, 9537, 856.0867f, -149.7469f, -49.6719f, 0.05949629f) is { } hurley)
                         {
                             for (int i = 0; i < 3; i++)
                             {
-                                if (creatures.SummonCorpseDespawn(plugger, 9541, 856.0867f, -149.7469f, -49.6719f, 0.05949629f) is { } crony)
+                                if (creatures.SummonDeadDespawn(plugger, 9541, 856.0867f, -149.7469f, -49.6719f, 0.05949629f) is { } crony)
                                 {
                                     crony.UnitFlags |= UnitFlags.ImmuneToPlayer | UnitFlags.ImmuneToNpc;
                                     crony.Motion.MoveFollow(hurley, 1f, 0);
@@ -461,7 +461,7 @@ public sealed partial class BlackrockDepthsInstance
         {
             float x = 872.7059f + (creatures?.RandomInt(-200, 200) ?? 0) / 100f;
             float y = -232.5491f + (creatures?.RandomInt(-200, 200) ?? 0) / 100f;
-            if (creatures?.SummonCorpseDespawn(plugger, entry, x, y, -43.7525f, 2.069044f) is { } patrol)
+            if (creatures?.SummonDeadDespawn(plugger, entry, x, y, -43.7525f, 2.069044f) is { } patrol)
             {
                 _barPatrol.Add(patrol.Guid);
                 patrol.Motion.MovePoint(0, 865.5645f, -219.7471f, -43.7033f, run: false);

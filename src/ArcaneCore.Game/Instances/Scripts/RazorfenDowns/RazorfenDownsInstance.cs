@@ -80,7 +80,6 @@ public sealed class RazorfenDownsInstance(Map map) : ScriptedInstance(map, 1)
             double radius = Math.Sqrt(Random.Shared.NextDouble()) * 5;
             Creature summoned = creatures.SpawnTemporary(template,
                 point.X + (float)(Math.Cos(angle) * radius), point.Y + (float)(Math.Sin(angle) * radius), point.Z, point.O);
-            creatures.MarkCorpseDespawn(summoned);
             summoned.Motion.MovePoint(0, gong.X, gong.Y, gong.Z, run: true);
         }
 

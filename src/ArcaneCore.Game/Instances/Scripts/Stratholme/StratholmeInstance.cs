@@ -30,6 +30,10 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         NpcBarthilas = 10435;
     public const uint SpellBaronUltimatum = 27861, SpellYsidaFreed = 27773;
 
+    // stratholme.h stratholmeLocation[0] (Barthilas door run) and [1] (Barthilas teleport).
+    private const float BarthilasRunX = 3725.577f, BarthilasRunY = -3599.484f, BarthilasRunZ = 142.367f;
+    private const float BarthilasTeleportX = 4068.284f, BarthilasTeleportY = -3535.678f, BarthilasTeleportZ = 122.771f, BarthilasTeleportO = 2.50f;
+
     private static readonly uint[] ZigguratDoors = [GoZiggurat1, GoZiggurat2, GoZiggurat3];
     private readonly HashSet<ObjectGuid>[] _acolytes = [[], [], []];
     private readonly ObjectGuid[] _crystals = new ObjectGuid[3];
@@ -41,6 +45,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
     private uint _baronRunTimer;
     private uint _mindlessTimer;
     private uint _guardsTimer;
+    private uint _barthilasRunTimer;
     private uint _slaughterDoorTimer;
     private uint _slaughterSquareTimer;
     private uint _mindlessCount;
@@ -67,7 +72,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         _abominations.Clear();
         _mindless.Clear();
         _guards.Clear();
-        _baronRunTimer = _mindlessTimer = _guardsTimer = _slaughterDoorTimer = _slaughterSquareTimer = _mindlessCount = 0;
+        _baronRunTimer = _mindlessTimer = _guardsTimer = _slaughterDoorTimer = _slaughterSquareTimer = _mindlessCount = _barthilasRunTimer = 0;
         _baronWarnings = 0;
         _slaughterDoorOpen = _ramsteinSummoned = _announcerChosen = false;
         _acolyteAnnouncer = default;
@@ -88,7 +93,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
     {
         if (Encounters[TypeBaronRun] is EncounterState.Done or EncounterState.Fail && GetSingleCreatureFromStorage(NpcYsida) is null)
         {
-            Creature? ysida = Instance.FindUpdater<CreatureMapSystem>()?.SummonInstanceCreature(NpcYsida, 4041.9f, -3337.6f, 115.06f, 3.82f);
+            Creature? ysida = Instance.FindUpdater<CreatureMapSystem>()?.SummonForInstance(NpcYsida, 4041.9f, -3337.6f, 115.06f, 3.82f);
             if (ysida is not null && Encounters[TypeBaronRun] == EncounterState.Fail)
             {
                 ysida.System?.KillCreature(ysida);
@@ -114,6 +119,15 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         }
 
         return false;
+    }
+
+    /// <summary>instance_stratholme::OnCreatureRespawn (stratholme.cpp:761-768): once the run has begun, Barthilas comes back in the slaughterhouse.</summary>
+    public override void OnCreatureRespawn(Creature creature)
+    {
+        if (creature.Template.Entry == NpcBarthilas && Encounters[TypeBarthilasRun] != EncounterState.NotStarted)
+        {
+            creature.System?.NearTeleport(creature, BarthilasTeleportX, BarthilasTeleportY, BarthilasTeleportZ, BarthilasTeleportO);
+        }
     }
 
     public override void OnObjectCreate(GameObject go)
@@ -192,7 +206,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
                     Announce(NpcBaron, -1329009);
                     if (GetSingleCreatureFromStorage(NpcYsida) is null)
                     {
-                        Instance.FindUpdater<CreatureMapSystem>()?.SummonInstanceCreature(NpcYsida, 4044.78f, -3333.68f, 115.53f, 4.15f);
+                        Instance.FindUpdater<CreatureMapSystem>()?.SummonForInstance(NpcYsida, 4044.78f, -3333.68f, 115.53f, 4.15f);
                     }
                 }
                 else if (data == EncounterState.Done)
@@ -225,9 +239,9 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
                         _slaughterDoorTimer = 10_000;
                         _slaughterSquareTimer = 0; // no more abominations to call
                         Announce(NpcBaron, -1329013);
-                        if (Instance.FindUpdater<CreatureMapSystem>()?.SummonInstanceCreature(NpcRamstein, 4032.643f, -3378.546f, 119.752f, 4.74f) is { } ramstein)
+                        if (Instance.FindUpdater<CreatureMapSystem>()?.SummonForInstance(NpcRamstein, 4032.643f, -3378.546f, 119.752f, 4.74f) is { } ramstein)
                         {
-                            ramstein.Motion.MovePoint(0, 4032.843f, -3390.246f, 119.732f, run: true);
+                            ramstein.Motion.MovePoint(0, 4033.044f, -3431.031f, 119.055f, run: true); // stratholmeLocation[5], the square (stratholme.cpp:293-294)
                         }
                     }
                 }
@@ -240,7 +254,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
                     _mindless.Clear();
                     for (int i = 0; i < 5; i++)
                     {
-                        Instance.FindUpdater<CreatureMapSystem>()?.SummonInstanceCreature(NpcBlackGuard, 4032.602f, -3378.506f, 119.752f, 4.74f);
+                        Instance.FindUpdater<CreatureMapSystem>()?.SummonForInstance(NpcBlackGuard, 4032.602f, -3378.506f, 119.752f, 4.74f);
                     }
                 }
                 else if (data == EncounterState.Fail && Encounters[type] != EncounterState.Fail)
@@ -269,6 +283,11 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
                 if (data == EncounterState.InProgress)
                 {
                     SetDoor(GoBaronDoor, false);
+                    // A new try after a wipe closes the slaughterhouse gauntlet again (stratholme.cpp:352-357).
+                    if (Encounters[type] == EncounterState.Fail)
+                    {
+                        SetDoor(GoGauntletPort, false);
+                    }
                 }
                 else if (data == EncounterState.Done)
                 {
@@ -299,10 +318,28 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
                 }
 
                 break;
+            case TypeBarthilasRun:
+                // stratholme.cpp:427-441: Barthilas, alive and out of combat, warns the Baron and runs off; 8 s later he is teleported to
+                // the slaughterhouse (Update).
+                if (data == EncounterState.InProgress && GetSingleCreatureFromStorage(NpcBarthilas) is { IsAlive: true } barthilas
+                    && !barthilas.Combat.IsInCombat)
+                {
+                    barthilas.System?.SayText(barthilas, -1329008); // SAY_WARN_BARON
+                    barthilas.Motion.MovePoint(0, BarthilasRunX, BarthilasRunY, BarthilasRunZ, run: true);
+                    _barthilasRunTimer = 8_000;
+                }
+
+                break;
             case TypeBlackGuards:
                 if (Encounters[type] == data)
                 {
                     return;
+                }
+
+                // stratholme.cpp:442-462: a new try after a wipe closes the gauntlet port again; a wipe opens it so the group can leave.
+                if ((data == EncounterState.InProgress && Encounters[type] == EncounterState.Fail) || data == EncounterState.Fail)
+                {
+                    DoUseDoorOrButton(GoGauntletPort);
                 }
 
                 if (data == EncounterState.Done)
@@ -473,7 +510,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         {
             if (diffMs >= _mindlessTimer)
             {
-                if (Instance.FindUpdater<CreatureMapSystem>()?.SummonInstanceCreature(NpcMindless, 3969.357f, -3391.871f, 119.116f, 5.91f) is { } undead)
+                if (Instance.FindUpdater<CreatureMapSystem>()?.SummonForInstance(NpcMindless, 3969.357f, -3391.871f, 119.116f, 5.91f) is { } undead)
                 {
                     undead.Motion.MovePoint(0, 4033.044f, -3431.031f, 119.055f, run: true);
                     _mindlessCount++;
@@ -487,11 +524,47 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
             }
         }
 
+        if (_barthilasRunTimer != 0)
+        {
+            if (diffMs >= _barthilasRunTimer)
+            {
+                _barthilasRunTimer = 0;
+                if (GetSingleCreatureFromStorage(NpcBarthilas) is { IsAlive: true } barthilas && !barthilas.Combat.IsInCombat)
+                {
+                    barthilas.Motion.Clear();
+                    barthilas.System?.MoveIdle(barthilas);
+                    barthilas.System?.NearTeleport(barthilas, BarthilasTeleportX, BarthilasTeleportY, BarthilasTeleportZ, BarthilasTeleportO);
+                }
+
+                SetData(TypeBarthilasRun, EncounterState.Done);
+            }
+            else
+            {
+                _barthilasRunTimer -= diffMs;
+            }
+        }
+
         if (_guardsTimer != 0)
         {
             if (diffMs >= _guardsTimer)
             {
+                // stratholme.cpp:1055-1077: open the door and send each living, idle Black Guard to a random point within 10 yd of the
+                // square (stratholmeLocation[5]).
                 OpenSlaughterhouse(true);
+                if (Instance.FindUpdater<CreatureMapSystem>() is { } system)
+                {
+                    foreach (ObjectGuid guid in _guards)
+                    {
+                        if (system.FindCreature(guid) is { IsAlive: true } guard && !guard.Combat.IsInCombat)
+                        {
+                            float angle = system.RandomInt(0, 359) * MathF.PI / 180f;
+                            float distance = system.RandomInt(0, 10);
+                            guard.Motion.MovePoint(0, 4033.044f + (distance * MathF.Cos(angle)), -3431.031f + (distance * MathF.Sin(angle)),
+                                119.055f, run: false);
+                        }
+                    }
+                }
+
                 _guardsTimer = 0;
             }
             else
