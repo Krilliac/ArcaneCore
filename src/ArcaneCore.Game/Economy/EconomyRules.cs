@@ -119,7 +119,8 @@ public sealed class EconomyOptions
 
     /// <summary>
     /// Active auctions one account may hold per auction house (vmangos Auction.AccountConcurrentLimit, World.cpp:538,
-    /// AuctionHouseHandler.cpp:274-280); 0 = unlimited (default).
+    /// AuctionHouseHandler.cpp:274-280). A listing counts from acceptance: while it settles, and while an unknown outcome is
+    /// recovered. 0 = unlimited (default).
     /// </summary>
     public uint AuctionAccountConcurrentLimit { get; set; }
 
