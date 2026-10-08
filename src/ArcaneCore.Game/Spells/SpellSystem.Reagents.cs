@@ -16,7 +16,7 @@ public sealed partial class SpellSystem
     private Func<Item, bool>? TradedReagentFilter(Player player)
         => ReagentTradeFilter is { } filter ? item => filter(player, item) : null;
 
-    private bool IgnoresReagents(Unit caster, SpellCastTargets targets, bool triggered, SpellInfo? triggeringSpell)
+    internal bool IgnoresReagents(Unit caster, SpellCastTargets targets, bool triggered, SpellInfo? triggeringSpell)
     {
         if (caster is not Player || _objectCastDepth != 0) return true;
         // Spell.cpp:7070-7081: standalone server triggers and children whose

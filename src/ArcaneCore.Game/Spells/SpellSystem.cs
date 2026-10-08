@@ -1090,7 +1090,7 @@ public sealed partial class SpellSystem
                 checkedTarget ?? unitTarget ?? caster, triggered);
             if (resources != SpellCastResult.CastOk) return resources;
         }
-        SpellCastResult items = RunCastChecks(SpellCheckPhase.Items, caster, spell, targets, checkedTarget, triggered, strict, castItem);
+        SpellCastResult items = RunCastChecks(SpellCheckPhase.Items, caster, spell, targets, checkedTarget, triggered, strict, castItem, triggeringSpell);
         if (items != SpellCastResult.CastOk)
         {
             return items;

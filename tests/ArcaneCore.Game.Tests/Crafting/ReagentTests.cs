@@ -156,6 +156,38 @@ public sealed class ReagentTests
     }
 
     [Fact]
+    public void TriggeredChild_WithoutAMasterReagent_StillNeedsItsToolBeforePayingItsReagent()
+    {
+        // vmangos Spell::IgnoreItemRequirements (Spell.cpp:7069-7083) returns false when the
+        // triggering spell has no first reagent. CheckItems then checks both child reagents and totems.
+        using CraftingTestKit rig = Rig();
+        rig.Give(CraftingTestKit.CopperBar);
+        SpellInfo master = rig.Kit.Store.Get(NoRequirements)!;
+
+        Assert.Equal(SpellCastResult.ItemGone,
+            rig.System.CastSpell(rig.Player, NeedsTool, SpellCastTargets.ForSelf(), triggered: true, triggeringSpell: master));
+        Assert.Equal(1u, rig.Inventory.GetItemCount(CraftingTestKit.CopperBar));
+
+        rig.Give(CraftingTestKit.BlacksmithHammer);
+        Assert.Equal(SpellCastResult.CastOk,
+            rig.System.CastSpell(rig.Player, NeedsTool, SpellCastTargets.ForSelf(), triggered: true, triggeringSpell: master));
+        Assert.Equal(0u, rig.Inventory.GetItemCount(CraftingTestKit.CopperBar));
+    }
+
+    [Fact]
+    public void TriggeredChild_WithAMasterReagent_ReusesTheOriginalItemsAndTool()
+    {
+        using CraftingTestKit rig = Rig();
+        rig.Give(CraftingTestKit.CopperBar);
+        SpellInfo master = rig.Kit.Store.Get(NeedsCloth)!;
+
+        Assert.Equal(SpellCastResult.CastOk,
+            rig.System.CastSpell(rig.Player, NeedsTool, SpellCastTargets.ForSelf(), triggered: true, triggeringSpell: master));
+        Assert.Equal(1u, rig.Inventory.GetItemCount(CraftingTestKit.CopperBar));
+        Assert.Equal(0u, rig.Inventory.GetItemCount(CraftingTestKit.BlacksmithHammer));
+    }
+
+    [Fact]
     public void ReagentsAreDestroyed_BeforeTheEffect_SoACreatedItemCanUseTheFreedSlot()
     {
         using CraftingTestKit rig = Rig();

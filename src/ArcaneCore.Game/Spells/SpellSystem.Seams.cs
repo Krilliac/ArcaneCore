@@ -100,7 +100,8 @@ public sealed partial class SpellSystem
         _chainRangeProviders = [.. _chainRangeProviders, provider];
     }
 
-    private SpellCastResult RunCastChecks(SpellCheckPhase phase, Unit caster, SpellInfo spell, SpellCastTargets targets, Unit? target, bool triggered, bool strict, Items.Item? castItem = null)
+    private SpellCastResult RunCastChecks(SpellCheckPhase phase, Unit caster, SpellInfo spell, SpellCastTargets targets, Unit? target, bool triggered, bool strict,
+        Items.Item? castItem = null, SpellInfo? triggeringSpell = null)
     {
         foreach (ISpellCastCheck check in _castChecks)
         {
@@ -109,7 +110,7 @@ public sealed partial class SpellSystem
                 continue;
             }
 
-            SpellCastResult result = check.Check(new SpellCastCheckContext(this, caster, spell, targets, target, triggered, strict, castItem));
+            SpellCastResult result = check.Check(new SpellCastCheckContext(this, caster, spell, targets, target, triggered, strict, castItem, triggeringSpell));
             if (result != SpellCastResult.CastOk)
             {
                 return result;
