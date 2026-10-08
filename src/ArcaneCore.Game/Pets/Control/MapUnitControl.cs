@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
@@ -21,6 +22,13 @@ public sealed class MapUnitControl : IMapUpdater
     private readonly List<Pending> _pending = [];
     private readonly List<Pending> _due = [];
     private bool _combatSubscribed;
+
+    /// <summary>
+    /// The scheduled actions of players between two maps (a far teleport): vmangos keeps them on the unit (<c>m_Events</c>, which only
+    /// CleanupsBeforeDelete clears, Unit.cpp:8305), so they go with the player and resume on the map it enters. A player that never enters
+    /// another map (logout in transit) takes them with it, as vmangos deletes the unit's queue with the unit.
+    /// </summary>
+    private static readonly ConditionalWeakTable<Player, List<Pending>> s_inTransit = new();
 
     private sealed record Link(CharmService Service, ObjectGuid Controller);
 
@@ -98,7 +106,9 @@ public sealed class MapUnitControl : IMapUpdater
 
     /// <summary>
     /// vmangos <c>m_Events.AddLambdaEventAtOffset</c> for a unit of this map: <paramref name="action"/> runs in the map update once
-    /// <paramref name="delayMs"/> have passed (Spirit of Redemption's follow-up steps), unless the unit has left the map by then.
+    /// <paramref name="delayMs"/> have passed (Spirit of Redemption's follow-up steps). Like vmangos's queue, which belongs to the unit, the
+    /// action of a player follows it to the next map it enters (<see cref="OnPlayerRemoved"/>, <see cref="OnPlayerAdding"/>); the
+    /// action of another unit is dropped when the unit has left the map (despawned or unloaded).
     /// </summary>
     public void Schedule(Unit unit, uint delayMs, Action action)
     {
@@ -162,6 +172,7 @@ public sealed class MapUnitControl : IMapUpdater
     /// </summary>
     public void OnPlayerRemoved(Map map, Player player)
     {
+        CarryPending(player);
         if (_links.Count == 0)
         {
             return;
@@ -186,6 +197,56 @@ public sealed class MapUnitControl : IMapUpdater
                     link.Service.ForceRelease(controlled);
                 }
             }
+        }
+    }
+
+    /// <summary>The player enters this map: what it carried from the map it left resumes here, with the time it still had.</summary>
+    public void OnPlayerAdding(Map map, Player player)
+    {
+        if (s_inTransit.TryGetValue(player, out List<Pending>? carried))
+        {
+            s_inTransit.Remove(player);
+            _pending.AddRange(carried);
+        }
+    }
+
+    /// <summary>Move <paramref name="player"/>'s scheduled actions off this map, onto the player, until it enters a map again.</summary>
+    private void CarryPending(Player player)
+    {
+        if (_pending.Count == 0)
+        {
+            return;
+        }
+
+        List<Pending>? carried = null;
+        foreach (Pending pending in _pending)
+        {
+            if (ReferenceEquals(pending.Unit, player))
+            {
+                (carried ??= s_inTransit.GetValue(player, static _ => [])).Add(pending);
+            }
+        }
+
+        if (carried is not null)
+        {
+            _pending.RemoveAll(p => ReferenceEquals(p.Unit, player));
+        }
+    }
+
+    /// <summary>
+    /// A due action of a player that is no longer on this map without having been removed through it: it runs on the player's map
+    /// (next update there), or waits on the player while it is between maps.
+    /// </summary>
+    private static void Redirect(Player player, Pending pending)
+    {
+        pending.RemainingMs = 0;
+        if (player.Map?.FindUpdater<MapUnitControl>() is { } control)
+        {
+            control._pending.Add(pending);
+        }
+        else
+        {
+            s_inTransit.GetValue(player, static _ => []).Add(pending);
         }
     }
 
@@ -272,6 +333,10 @@ public sealed class MapUnitControl : IMapUpdater
             if (ReferenceEquals(pending.Unit.Map, _map))
             {
                 pending.Action();
+            }
+            else if (pending.Unit is Player player)
+            {
+                Redirect(player, pending);
             }
         }
 
