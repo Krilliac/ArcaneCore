@@ -135,9 +135,11 @@ public sealed class KillEvent : EventAiEventHandler
 }
 
 /// <summary>
-/// EVENT_T_DEATH (6): ConditionId (CreatureEventAI.h:655-659). The creature_conditions system does not exist,
-/// so a row with a condition cannot be evaluated: it never fires and is listed as unsupported (see
-/// <see cref="CreatureEventAI.Unsupported"/>). Rows without a condition fire on every death.
+/// EVENT_T_DEATH (6): ConditionId (CreatureEventAI.h:655-659). A row without a condition fires on every death; a row with one fires only when
+/// there is a killer and the conditions table is satisfied for the player controlling it (CheckEvent, CreatureEventAI.cpp:327-339:
+/// <c>actionInvoker-&gt;GetControllingPlayer()</c>, else the killer itself; a killer no player controls is not a player, so a player
+/// condition fails for it). Without a conditions table such a row never fires. classic-db z2815: 2 rows (the Hazzali wasps summon their
+/// parasites when killed by a player on quest 7734, condition 100).
 /// </summary>
 public sealed class DeathEvent : EventAiEventHandler
 {
@@ -147,9 +149,8 @@ public sealed class DeathEvent : EventAiEventHandler
 
     public override bool Repeatable => false;
 
-    public override bool Check(EventAiContext context, EventAiHolder holder, Unit? invoker) => holder.Param(0) == 0;
-
-    public override string? UnsupportedReason(CreatureAiEvent row) => row.Param1 == 0 ? null : $"death condition {row.Param1}";
+    public override bool Check(EventAiContext context, EventAiHolder holder, Unit? invoker)
+        => EventAiSearch.ConditionHolds(context, holder.Param(0), invoker);
 }
 
 /// <summary>EVENT_T_EVADE (7): no parameters; fires when the creature starts evading (:1475-1489).</summary>
@@ -184,10 +185,11 @@ public sealed class SpellHitEvent : EventAiEventHandler
 }
 
 /// <summary>
-/// EVENT_T_SPAWNED (11): Condition, ConditionValue1 (CreatureEventAI.h:686-691). Considered at (re)spawn when the
-/// condition holds: 0 always, 1 the creature is on map ConditionValue1 (SpawnedEventConditionsCheck, :1902-1927).
-/// Condition 2 (zone or area) needs the world's zone lookup, which does not exist: such a row never fires and is
-/// listed as unsupported.
+/// EVENT_T_SPAWNED (11): Condition, ConditionValue1 (CreatureEventAI.h:686-691). Considered at (re)spawn when the condition holds
+/// (SpawnedEventConditionsCheck, CreatureEventAI.cpp:1902-1927): 0 always, 1 the creature is on map ConditionValue1, 2 the zone or the area it
+/// stands in is ConditionValue1 (GetZoneAndAreaId; nothing matches where the terrain does not know the area). Any other condition never
+/// fires and is listed as unsupported. classic-db z2815: 6 rows with the zone condition (the city revelers become neutral when they spawn in
+/// Moonglade, zone 493).
 /// </summary>
 public sealed class SpawnedEvent : EventAiEventHandler
 {
@@ -200,15 +202,27 @@ public sealed class SpawnedEvent : EventAiEventHandler
     public override bool Check(EventAiContext context, EventAiHolder holder, Unit? invoker) => true;
 
     public override bool AllowTrigger(EventAiContext context, EventAiHolder holder)
-        => (EventAiSpawnedCondition)holder.Param(0) switch
+    {
+        switch ((EventAiSpawnedCondition)holder.Param(0))
         {
-            EventAiSpawnedCondition.Always => true,
-            EventAiSpawnedCondition.Map => context.Me.MapId == holder.Param(1),
-            _ => false,
-        };
+            case EventAiSpawnedCondition.Always:
+                return true;
+            case EventAiSpawnedCondition.Map:
+                return context.Me.MapId == holder.Param(1);
+            case EventAiSpawnedCondition.Zone:
+            {
+                (uint zone, uint area) = context.ZoneAndArea;
+                uint wanted = holder.Param(1);
+                return zone == wanted || area == wanted;
+            }
+
+            default:
+                return false;
+        }
+    }
 
     public override string? UnsupportedReason(CreatureAiEvent row)
-        => row.Param1 is 0 or 1 ? null : $"spawned condition {row.Param1}";
+        => row.Param1 is 0 or 1 or 2 ? null : $"spawned condition {row.Param1}";
 }
 
 /// <summary>EVENT_T_REACHED_HOME (21): no parameters; fires when the creature reaches home after evading (:1462-1473).</summary>

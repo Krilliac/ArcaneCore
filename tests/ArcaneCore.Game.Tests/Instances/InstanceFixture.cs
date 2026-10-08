@@ -59,6 +59,8 @@ internal sealed class RecordingInstancePersistence : IInstancePersistence
 
     public void PlayerEnteredInstance(uint characterId, uint mapId, uint instanceId) => Last[characterId] = (mapId, instanceId);
 
+    public void InstanceDataSaved(InstanceSave save) => Calls.Add($"data {save.InstanceId} {save.Data}");
+
     /// <summary>Stored group binds, keyed by the leader's character id (vmangos <c>group_instance</c>).</summary>
     public HashSet<(uint Leader, uint Instance, bool Permanent)> GroupBinds { get; } = [];
 

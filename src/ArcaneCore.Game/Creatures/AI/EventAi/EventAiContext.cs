@@ -41,6 +41,15 @@ public sealed class EventAiContext
 
     public Unit? Victim => Me.Combat.Victim;
 
+    /// <summary>
+    /// The script state of the creature's instance map (cmangos <c>m_creature->GetInstanceData()</c>), or null outside a map or on a map
+    /// without an instance script.
+    /// </summary>
+    public Instances.Scripts.InstanceData? InstanceData => Me.Map?.FindUpdater<Instances.Scripts.InstanceData>();
+
+    /// <summary>The zone and area the creature stands in (cmangos GetZoneAndAreaId); (0, 0) outside a map or where the terrain does not know.</summary>
+    public (uint ZoneId, uint AreaId) ZoneAndArea => System?.ZoneAndAreaOf(Me) ?? (0, 0);
+
     /// <summary>The map system clock in milliseconds (0 outside a map).</summary>
     public long ClockMs => System?.ClockMs ?? 0;
 

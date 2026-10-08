@@ -188,6 +188,18 @@ public sealed class MotionMaster
     /// </summary>
     internal void MoveRandom(ICreatureMovementGenerator wander) => Push(wander);
 
+    /// <summary>
+    /// cmangos MotionMaster::MoveIdle (MotionGenerators/MotionMaster.cpp:273-277): the idle generator is pushed unless the creature is already
+    /// idle (the static generator on top); the one beneath resumes when it is removed or the stack is cleared.
+    /// </summary>
+    internal void MoveIdle()
+    {
+        if (Top.Type != MovementGeneratorType.Idle)
+        {
+            Push(IdleMovementGenerator.Instance);
+        }
+    }
+
     /// <summary>Remove the top generator if it is of <paramref name="type"/> (the one beneath resumes).</summary>
     public bool Remove(MovementGeneratorType type)
     {

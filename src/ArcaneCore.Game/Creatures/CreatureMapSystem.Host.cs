@@ -32,6 +32,11 @@ public sealed partial class CreatureMapSystem
 
     // --- spells, texts, summons ----------------------------------------------------------------
 
+    /// <summary>
+    /// A creature's script cast. A dead creature casts only a triggered spell (vmangos Spell::CheckCast, Spells/Spell.cpp:5320: a dead unit may
+    /// cast a triggered spell no aura triggered; cmangos refuses a dead caster only when it is a player, Spell.cpp:4692-4695), which is what
+    /// EventAI's "cast on death" rows rely on.
+    /// </summary>
     public CreatureCastResult CastSpell(Creature creature, uint spellId, Unit? target, bool triggered)
     {
         ArgumentNullException.ThrowIfNull(creature);
@@ -40,7 +45,7 @@ public sealed partial class CreatureMapSystem
             return CreatureCastResult.NoSpellSystem;
         }
 
-        return creature.IsAlive ? spells.Cast(creature, spellId, target, triggered) : CreatureCastResult.Failed;
+        return creature.IsAlive || triggered ? spells.Cast(creature, spellId, target, triggered) : CreatureCastResult.Failed;
     }
 
     public bool HasAura(Unit unit, uint spellId) => _ai.Spells?.HasAura(unit, spellId) ?? false;

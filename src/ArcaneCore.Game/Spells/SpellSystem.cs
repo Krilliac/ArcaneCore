@@ -989,7 +989,10 @@ public sealed partial class SpellSystem
             return start;
         }
 
-        if (!caster.IsAlive && !spell.HasAttribute(SpellAttributes.AllowCastWhileDead) && _objectCastDepth == 0)
+        // vmangos Spell.cpp:5320 also lets a dead unit cast a triggered spell no aura triggered; here only a creature's script cast takes that
+        // exception (EventAI "cast on death"), a dead player still needs SPELL_ATTR_ALLOW_CAST_WHILE_DEAD.
+        if (!caster.IsAlive && !spell.HasAttribute(SpellAttributes.AllowCastWhileDead) && _objectCastDepth == 0
+            && !(caster is Creatures.Creature && triggered && triggeringSpell is null))
         {
             return SpellCastResult.CasterDead;
         }

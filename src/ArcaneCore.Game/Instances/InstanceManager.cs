@@ -1,7 +1,9 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
@@ -74,6 +76,9 @@ public sealed partial class InstanceManager : IMapResolver
 
     /// <summary>Sends a player to its bind point (default: does nothing; the world feature wires <see cref="TeleportService.TeleportToHomebind"/>).</summary>
     public Func<Player, bool> TeleportToHomebind { get; set; } = static _ => false;
+
+    /// <summary>Which maps have an instance script (vmangos <c>map_template.ScriptName</c>); the scripts of the Game assembly by default.</summary>
+    public InstanceScriptRegistry Scripts { get; set; } = InstanceScriptRegistry.Default;
 
     /// <summary>Shows a system chat line to a player (default: none).</summary>
     public Action<Player, string> SystemMessage { get; set; } = static (_, _) => { };
@@ -820,9 +825,60 @@ public sealed partial class InstanceManager : IMapResolver
             {
                 combat.UnitKilled += state.KillHandler;
             }
+
+            AttachInstanceData(map, save);
         }
 
         return map;
+    }
+
+    /// <summary>
+    /// vmangos Map::CreateInstanceData (Maps/Map.cpp:1987-2037) for a map with a script (<see cref="Scripts"/>): the script is created and
+    /// initialized, then loads the save string the instance save holds (vmangos <c>SELECT data FROM instance</c>), and is attached to the map
+    /// before anything is placed in it. Creatures and game objects the map already has (a system that loaded a grid early) are reported to it as
+    /// created. Its saves go to the instance save and to <see cref="IInstancePersistence.InstanceDataSaved"/>.
+    /// </summary>
+    private void AttachInstanceData(Map map, InstanceSave save)
+    {
+        if (map.FindUpdater<InstanceData>() is not null || Scripts.Create(map) is not { } data)
+        {
+            return;
+        }
+
+        data.Logger = _logger;
+        data.Saving = (_, text) =>
+        {
+            if (save.IsDeleted)
+            {
+                return;
+            }
+
+            save.Data = text;
+            _persistence.InstanceDataSaved(save);
+        };
+        data.Initialize();
+        if (save.Data is { } stored)
+        {
+            data.Load(stored);
+        }
+
+        map.AddUpdater(data);
+        foreach (Creature creature in map.FindUpdater<CreatureMapSystem>()?.Creatures.ToArray() ?? [])
+        {
+            data.OnCreatureCreate(creature);
+        }
+
+        foreach (GameObject go in map.FindUpdater<GameObjectMapSystem>()?.GameObjects.ToArray() ?? [])
+        {
+            data.OnObjectCreate(go);
+        }
+    }
+
+    /// <summary>The script state of an instance map (vmangos <c>Map::GetInstanceData</c>), or null when its map has no script.</summary>
+    public static InstanceData? InstanceDataOf(Map map)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        return map.FindUpdater<InstanceData>();
     }
 
 

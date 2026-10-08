@@ -114,8 +114,10 @@ docs/integration/creature-ai.md.
   - **Events with a handler**: 0 timer in combat, 1 timer out of combat, 2 health percent (with the
     allow-out-of-combat parameter), 3 mana percent (needs a mana creature in combat), 4 aggro, 5 kill
     (parameters: repeat min, repeat max, player only; the old implementation read the wrong columns), 6
-    death, 7 evade, 8 spell hit (spell id and school mask must both match), 9 range (the victim between the
-    min and max yards, bounding radii added, Object.cpp:1401-1420), 11 spawned (always, or map id), 12 target
+    death (a condition id is checked against the conditions table for the killer's controlling player; no killer, or no conditions
+    table, and such a row does not fire: CheckEvent :327-339), 7 evade, 8 spell hit (spell id and school mask must both match), 9 range (the victim between the
+    min and max yards, bounding radii added, Object.cpp:1401-1420), 11 spawned (always, map id, or zone or area id
+    through `CreatureAiServices.ZoneAndAreaOf` else the map's terrain: SpawnedEventConditionsCheck :1902-1927), 12 target
     health, 13 target casting (repeat timers are parameters 1 and 2), 18 target mana, 21 reached home, 22 receive emote
     (a player's CMSG_TEXT_EMOTE aimed at the creature readies the rows whose emote id matches, the player being the invoker;
     a condition id is checked against the conditions table for that player, and never passes without one: cmangos
@@ -153,18 +155,37 @@ docs/integration/creature-ai.md.
     A-F reach every living creature in range, the sender included; the other types the creatures that could assist against the invoker), 47
     stand state, 50 react state, 51 pause waypoints, 55 attack start, 56 despawn guardians, 58 set walk (RUN/WALK_DEFAULT; the chase
     variants change nothing: chases always run), 59 set facing, 61 immobilized state (the server-owned root flag, kept while a root aura comes
-    and goes; combat-only ends at the reset), 64 follow movement (0 holds a follow movement still).
+    and goes; combat-only ends at the reset), 64 follow movement (0 holds a follow movement still); and (wave 4,
+    `Actions/InstanceAndMovementActions.cs`) 34 set instance data and 35 set instance data 64 (into the instance script of the creature's
+    map, see "Instance scripts" below; a map without a script fails the action, :1046-1077), 48 change movement (0 pushes idle unless idle is
+    on top, 1 pushes a walking wander of the given yards around where the creature stands, 2 stops it and makes the waypoint path its
+    movement, 0 being its default path; the path and linear types and `waypoint_path` paths fail; :1164-1206).
+  - **Instance scripts** (`Game/Instances/Scripts`): vmangos `InstanceData` (Maps/InstanceData.h) is the script state of one dungeon
+    instance map: `InstanceManager` creates it with the instance map of a map that has a script (`InstanceScriptRegistry`, classes marked
+    `[InstanceScript(mapId)]`), calls `Initialize`, then `Load` with the save string the instance save keeps (Map::CreateInstanceData,
+    Map.cpp:1987-2037), and attaches it to the map (`map.FindUpdater<InstanceData>()`); the creature and game object systems report every
+    object they place (`OnCreatureCreate`, `OnObjectCreate`). `ScriptedInstance` is ScriptDev2's encounter array (states 0-4), its save
+    string (the states separated by spaces, saved when a value is DONE) and load (IN_PROGRESS comes back NOT_STARTED), with the door helper
+    (`DoUseDoorOrButton`: a ready door is used, an active one reset). The eight dungeons classic-db z2815's 37 SET_INST_DATA rows write to have
+    the state part of their mangos-classic ScriptDev2 scripts (the field numbers the data uses): Shadowfang Keep 33 (courtyard, Arugal and
+    sorcerer doors), Wailing Caverns 43 (the disciple becomes SPECIAL after the four Fanglords), Razorfen Kraul 47 (Agathelos' ward opens
+    when the last counted ward keeper dies), Blackfathom Deeps 48 (Kelris only becomes DONE, the portal door), Sunken Temple 109 (the
+    avatar's combat doors), Blackrock Depths 230 (the Tomb of the Seven: doors, dead dwarves respawn on FAIL), Zul'Gurub 309 (Ohgan) and
+    Dire Maul 429 (Alzzin's crumbling wall and vine). Not ported, logged at debug: texts, dialogues, summons, waves and the other
+    encounters of those scripts. The save string lives on the in-memory `InstanceSave.Data` (an instance map unloaded and created again
+    loads it) and goes to `IInstancePersistence.InstanceDataSaved`; the characters database has no `instance.data` column yet, so it does
+    not outlive a restart (docs/integration/eventai-instance-20261008.md).
   - **Targets**: 0-6, 7 (the invoker; there are no pets), 10, 11 (the spawner: the creature that summoned this one, else its owner), 12 and 15
     (no unit). Others fail the action.
-  - **Still unsupported** in classic-db z2815: action 34 SET_INST_DATA (37 rows; no instance scripts exist to receive the data) and action 48
-    CHANGE_MOVEMENT (3 rows; not ported: the relay MOVEMENT command added a push for random movement, `MotionMaster.MoveRandom`, but there
-    is no waypoint push). Both stay in the startup warning.
+  - classic-db z2815 has no EventAI row with an unsupported part any more (wave 4: 48 rows over 30 entries before, 0 after, measured on a
+    copy of the live world database; docs/integration/eventai-instance-20261008.md).
+  - A dead creature casts a triggered script spell (EventAI "cast on death": 103 death rows cast, 69 with CAST_TRIGGERED); an untriggered
+    one is refused (vmangos Spell.cpp:5320; cmangos refuses only dead players, Spell.cpp:4692-4695).
   - Event 36 (target not reachable) is checked at every batch and fires while the chase generator reports its victim
     unreachable (see "Unreachable target" above; nothing is unreachable without navigation data); death-prevented (35) is not
     implemented (action 42 clamps the health; no classic-db z2815 row uses event 35).
   - **Not supported, reported once per entry** (`CreatureEventAI.Unsupported`): every other event and action
-    type; a death event with a condition id (no conditions system); a spawned event with the zone condition
-    (no zone lookup); cast flags beyond the three above, SET_RANGED_MODE and caster mode (ranged mode is
+    type; a spawned event with a condition other than 0-2; cast flags beyond the three above, SET_RANGED_MODE and caster mode (ranged mode is
     always off, so RANGED_MODE_ONLY rows never run); the combat-movement melee packet parameter.
   - Summons (12 and 32) with a lifetime count it down while alive, out of combat and uncharmed (cmangos `TEMPSPAWN_TIMED_OOC_OR_DEAD_DESPAWN`);
     a lifetime of 0 is `TEMPSPAWN_TIMED_OOC_DESPAWN` with 0 ms: the summon goes as soon as it is alive and out of combat.
