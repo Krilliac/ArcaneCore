@@ -62,6 +62,13 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     private readonly PlayerbotEquipment _equipment = new(session);
     private readonly PlayerbotStallWatch _stall = new();
     private readonly PlayerbotSuspensions _suspensions = new();
+    // The creature entries attacking the bot at its last living update: its killers when it dies (the server clears a dead
+    // player's attackers before the brain sees the death).
+    private readonly HashSet<uint> _attackerEntries = [];
+    // The last errand the bot was travelling for (quest, trainer, vendor): what led it where it keeps dying.
+    private (PlayerbotGoalKind Goal, uint Entry, uint Quest, uint AtMs) _errand;
+    // The creatures attacking the bot at its last living update (guid and entry): the risk's danger memory of its killers.
+    private readonly List<(ObjectGuid Guid, uint Entry)> _attackers = [];
     private readonly CancellationTokenSource _planningStop = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
     private Task<string?>? _planTask;
     private string? _modelChoice;
@@ -99,6 +106,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// <summary>Stalls reported so far.</summary>
     internal int StallCount => _stall.Count;
 
+    /// <summary>Whether goals skip creatures of <paramref name="entry"/> for now (a stall or a death loop set it aside; tests).</summary>
+    internal bool IsEntrySetAside(uint entry) => _suspensions.IsEntrySuspended(entry, _session.World.NowMs);
+
     internal void Update(uint elapsedMs)
     {
         if (!_options.Enabled || _stopped != 0 || _session.Player is not { } player)
@@ -113,12 +123,17 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _stall.Reset();
             if (!_deathIntentRetired)
             {
-                Risk.OnDeath(player);
-                SetAsideDeadlyErrand();
+                RecordDeath(player);
                 RetireDeathIntent();
                 _deathIntentRetired = true;
             }
             _goal = PlayerbotGoalKind.Recover;
+        }
+        else
+        {
+            // Alive again: the next death is a new one, even when pending movement orders hold this update below.
+            _deathIntentRetired = false;
+            RememberAttackers(player);
         }
         // Death cleanup must happen before this seam, but pending movement orders still
         // require their ordinary acknowledgements while alive or ghosted.
@@ -171,8 +186,6 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 (uint)Math.Clamp(_options.StallSeconds, 10, 86_400) * 1000u, Fingerprint))
             GiveUpStalledGoal(player);
 
-        // The errand the bot is on (a trainer, vendor or quest destination), kept for a death on the way (SetAsideDeadlyErrand).
-        NoteErrand(_goal, TargetEntry, QuestId);
 
         if (PlayerbotMotion.ConsumeLoop(player))
         {
@@ -191,8 +204,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         {
             if (!_deathIntentRetired)
             {
-                Risk.OnDeath(player);
-                SetAsideDeadlyErrand();
+                RecordDeath(player);
                 RetireDeathIntent();
                 _deathIntentRetired = true;
             }
@@ -397,8 +409,8 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             Creature? previousTarget = _target;
             uint preferred = _quests.PreferredCreatureEntry;
             _target = _options.Risk.Enabled
-                ? Risk.ChooseTarget(player, preferred, IsUnreachable, questObjective: preferred != 0)
-                : FindTarget(player, preferred, IsUnreachable);
+                ? Risk.ChooseTarget(player, preferred, IsSkipped, questObjective: preferred != 0)
+                : FindTarget(player, preferred, IsSkipped);
             _rangedIdleMs = 0;
             // Keep an exploration route across decisions; otherwise every thought changes
             // direction after only its first terrain step and the player never travels.
@@ -559,24 +571,11 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         return new(player.Level, player.GetUInt32(UpdateFields.PlayerXp), player.Money, items, quests, rewarded, objectives, spells);
     }
 
-    private (PlayerbotGoalKind Goal, uint Entry, uint Quest, uint AtMs)? _errand;
-
     /// <summary>
-    /// A bot killed within <see cref="DeadlyErrandMs"/> of walking an errand (the way to a trainer, vendor or quest destination led
-    /// through something that killed it) sets that errand aside for <see cref="PlayerbotSuspensions.SuspendMs"/> instead of
-    /// walking the same way into the same creatures after its revive (live replay, 2026-10-08: Dawnrover walked to Arthur the
-    /// Faithful past the Scourge invasion's Skeletal Soldiers, whose Scourge Strike kills outright, five times in ten minutes).
+    /// With the risk estimate on, a bot killed within <see cref="DeadlyErrandMs"/> of walking an errand (the way to a trainer,
+    /// vendor or quest destination led through something that killed it) sets that errand aside at the first death, not only in a
+    /// death loop (<see cref="RecordDeath"/>).
     /// </summary>
-    private void SetAsideDeadlyErrand()
-    {
-        if (!_options.Risk.Enabled || _errand is not { } errand) return;
-        _errand = null;
-        uint now = _session.World.NowMs;
-        if (unchecked(now - errand.AtMs) > DeadlyErrandMs) return;
-        _suspensions.SuspendEntry(errand.Entry, now);
-        if (errand.Goal == PlayerbotGoalKind.Quest) _suspensions.SuspendQuest(errand.Quest, now);
-    }
-
     internal const uint DeadlyErrandMs = 30_000;
 
     /// <summary>The goals set aside for a while (stalls, deadly errands; inspection and tests).</summary>
@@ -585,7 +584,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// <summary>Keep the errand the bot is on (each think; tests call it directly).</summary>
     internal void NoteErrand(PlayerbotGoalKind goal, uint entry, uint quest)
     {
-        if (goal is PlayerbotGoalKind.Train or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Quest && entry != 0)
+        if (goal is PlayerbotGoalKind.Quest or PlayerbotGoalKind.Train or PlayerbotGoalKind.Vendor && (entry != 0 || quest != 0))
             _errand = (goal, entry, quest, _session.World.NowMs);
     }
 
@@ -796,7 +795,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         var candidates = new List<PlayerbotPlanCandidate>();
         if (_quests.HasCandidate(player)) candidates.Add(new("quest", PlayerbotGoalKind.Quest, _quests.TargetEntry, _quests.QuestId));
         if (_town.HasCandidate(player)) candidates.Add(new("town", PlayerbotGoalKind.Vendor, _town.TargetEntry, 0));
-        if (FindTarget(player, _quests.PreferredCreatureEntry) is { } target) candidates.Add(new("grind", PlayerbotGoalKind.Grind, target.Entry, QuestId));
+        if (FindTarget(player, _quests.PreferredCreatureEntry, IsSkipped) is { } target) candidates.Add(new("grind", PlayerbotGoalKind.Grind, target.Entry, QuestId));
         candidates.Add(new("explore", PlayerbotGoalKind.Explore, 0, 0));
         var facts = new PlayerbotPlannerFacts(player.Level, player.Health, player.MaxHealth, player.Combat.IsInCombat,
             player.MapId, (uint)(_session.Services.GetService<SpellFeature>()?.Spellbook.GetSpells(player).Count ?? 0),
@@ -815,6 +814,54 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     private bool IsUnreachable(Creature creature)
         => _unreachable.TryGetValue(creature.Guid, out uint until) && unchecked((int)(until - _session.World.NowMs)) > 0;
+
+    /// <summary>A creature the goals do not choose now: unreachable, or of an entry set aside (stall, death loop).</summary>
+    private bool IsSkipped(Creature creature) => IsUnreachable(creature) || _suspensions.IsEntrySuspended(creature.Entry, _session.World.NowMs);
+
+    private void RememberAttackers(Player player)
+    {
+        NoteErrand(_goal, TargetEntry, QuestId);
+        _attackerEntries.Clear();
+        _attackers.Clear();
+        foreach (Unit unit in player.Combat.Attackers.Concat(player.Combat.ThreatenedBy))
+            if (unit is Creature creature && _attackerEntries.Add(creature.Entry) | !_attackers.Contains((creature.Guid, creature.Entry)))
+                _attackers.Add((creature.Guid, creature.Entry));
+    }
+
+    /// <summary>
+    /// The bot just died (<see cref="PlayerbotStallWatch.RecordDeath"/>): a creature entry that has now killed it twice is set aside
+    /// for the goals, and a death loop takes the spirit healer for this death instead of the body in the same place again, and sets
+    /// aside the errand it was last travelling for (its quest and NPC, every trainer for a trainer visit): the route to it led
+    /// through the place (replay of the 2026-10-08 rehearsal: without that, Dawnrover walked from the Goldshire graveyard to its
+    /// next trainer in Stormwind past the Scourge invasion point and died on the road again).
+    /// </summary>
+    private void RecordDeath(Player player)
+    {
+        uint now = _session.World.NowMs;
+        (bool loop, IReadOnlyList<uint> setAside) = _stall.RecordDeath(now, player.MapId,
+            new System.Numerics.Vector3(player.X, player.Y, player.Z), _attackerEntries);
+        _attackerEntries.Clear();
+        Risk.OnDeath(player, _attackers);
+        _attackers.Clear();
+        foreach (uint entry in setAside) _suspensions.SuspendEntry(entry, now);
+        if (!loop)
+        {
+            if (_options.Risk.Enabled && _errand.Entry != 0 && unchecked(now - _errand.AtMs) <= DeadlyErrandMs)
+            {
+                _suspensions.SuspendEntry(_errand.Entry, now);
+                if (_errand.Goal == PlayerbotGoalKind.Quest) _suspensions.SuspendQuest(_errand.Quest, now);
+                _errand = default;
+            }
+
+            return;
+        }
+
+        _recovery.TakeSpiritHealer();
+        if (_errand.Goal == PlayerbotGoalKind.Quest) _suspensions.SuspendQuest(_errand.Quest, now);
+        if (_errand.Goal == PlayerbotGoalKind.Train) _suspensions.SuspendTraining(now);
+        _suspensions.SuspendEntry(_errand.Entry, now);
+        _errand = default;
+    }
 
     private void Explore(Player player, uint elapsedMs)
     {

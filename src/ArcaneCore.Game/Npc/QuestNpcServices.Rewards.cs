@@ -334,7 +334,8 @@ public sealed partial class QuestNpcServices
         }
 
         experience = (uint)scaled;
-        levelAfter = progression.Preview(player.Level, progression.GetCurrentXp(player), experience).Level;
+        // GiveXp applies the personal XP rate to the committed amount, so the preview of the level does too.
+        levelAfter = progression.Preview(player.Level, progression.GetCurrentXp(player), global::ArcaneCore.Game.Progression.PlayerProgression.ApplyPersonalRate(player, experience)).Level;
         return true;
     }
 

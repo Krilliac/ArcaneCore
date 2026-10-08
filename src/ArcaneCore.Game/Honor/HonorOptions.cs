@@ -51,6 +51,13 @@ public sealed record HonorOptions
     /// <summary>Directory for the HCR calculation report; empty writes none.</summary>
     public string ReportDirectory { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Non-retail when not 1 (default 1): multiplies the honor (contribution points) earned from kills, battleground bonuses and quests. vmangos has no
+    /// such rate; the MaNGOS Zero fork and mangos-classic declare Rate.Honor (WorldConfig.cpp:215, World.cpp:452) but never read it, so the semantics
+    /// are cmangos-tbc / TrinityCore's Player::RewardHonor (<c>honor *= Rate.Honor</c>). Dishonor and a GM's exact <c>.honor add</c> are not scaled.
+    /// </summary>
+    public float Rate { get; init; } = 1.0f;
+
     /// <summary>The weekly calculation's options.</summary>
     public HonorMaintenanceOptions Maintenance => new(RpDecay, MinHonorKills, PoolSizePerFaction);
 }

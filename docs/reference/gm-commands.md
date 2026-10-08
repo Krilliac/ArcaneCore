@@ -13,10 +13,10 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 
 | Stored account | Retail level (default map) | Commands reachable |
 |---|---|---|
-| `Player` | 0 | 5 |
-| `Moderator` | 1 | 21 |
-| `GameMaster` | 3 | 123 |
-| `Administrator` | 6 | 181 |
+| `Player` | 0 | 6 |
+| `Moderator` | 1 | 22 |
+| `GameMaster` | 3 | 152 |
+| `Administrator` | 6 | 216 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -30,6 +30,19 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.character` ... | 2 | GameMaster | declared retail level | Syntax: .character $subcommand |
 | `.character reputation` | 2 | GameMaster | declared retail level | Syntax: .character reputation [$player_name] Shows the reputation of the selected player or of the named online player. |
 | `.character rename` | 3 | GameMaster | declared retail level | Syntax: .character rename [$name] Request a rename of the selected character, or the named one (online or not); the player is asked for a new name at the character screen. |
+| `.debug` ... | 3 | GameMaster | declared retail level | Syntax: .debug $subcommand Type .debug to see the list of possible subcommands or .help debug $subcommand to see info on subcommands. |
+| `.debug vis` ... | 3 | GameMaster | declared retail level | Syntax: .debug vis $subcommand Draw server data as markers only you can see (they go after a while, with .debug vis clear, at logout or on a map change). Right-click a marker to print its details. |
+| `.debug vis los` | 3 | GameMaster | declared retail level | Syntax: .debug vis los Draw the line of sight from you to the selected unit through the vmap collision (green clear; red up to the hit, a reticle at the hit, small red dots for the hidden rest). |
+| `.debug vis path` | 3 | GameMaster | declared retail level | Syntax: .debug vis path Draw the path the pathfinder (navmesh) finds from you to the selected unit: blue corners and dots, red corners when it is incomplete, missing or a straight line. |
+| `.debug vis waypoints` | 3 | GameMaster | declared retail level | Syntax: .debug vis waypoints Draw the waypoint path of the selected creature (creature_movement, else creature_movement_template), with its nodes listed. |
+| `.debug vis cells` | 3 | GameMaster | declared retail level | Syntax: .debug vis cells [#radius] Mark the map cell corners (33.3 yards) within #radius cells (default 2, at most 5) on the floor; a grid corner (533.3 yards) has a red flag. |
+| `.debug vis collision` | 3 | GameMaster | declared retail level | Syntax: .debug vis collision [#yards] Cast a ray straight ahead at eye height (default 40 yards) and mark where the vmap collision stops it. |
+| `.debug vis height` | 3 | GameMaster | declared retail level | Syntax: .debug vis height Mark the floor under you and print the terrain, model, water and floor heights, zone, area and indoor state. |
+| `.debug vis range` | 3 | GameMaster | declared retail level | Syntax: .debug vis range [#yards] Mark a circle of #yards around you on the floor (default the visibility distance, 100 yards). |
+| `.debug vis spawns` | 3 | GameMaster | declared retail level | Syntax: .debug vis spawns [#yards] Mark the spawn points of the creatures spawned within #yards (default 40), nearest first. |
+| `.debug vis kit` | 3 | GameMaster | declared retail level | Syntax: .debug vis kit #kitid Play a SpellVisualKit.dbc visual on yourself, seen only by you (the id is not checked). |
+| `.debug vis list` | 3 | GameMaster | declared retail level | Syntax: .debug vis list List your drawings with their marker counts and the seconds they have left. |
+| `.debug vis clear` | 3 | GameMaster | declared retail level | Syntax: .debug vis clear Remove all your markers now. |
 | `.deplenish` | 3 | GameMaster | declared retail level | Syntax: .deplenish Set the health of the selected unit or yourself to 1 and its power to 0. |
 | `.replenish` | 3 | GameMaster | declared retail level | Syntax: .replenish Restore the health, and the mana of a mana user, of the selected unit or yourself. |
 | `.event` ... | 3 | GameMaster | declared retail level | Syntax: .event #event_id Show the information of an event. |
@@ -94,6 +107,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.modify rage` | 3 | GameMaster | declared retail level | Syntax: .modify rage #newrage [#newmaxrage] Change the rage (and maximum rage) of the selected player, or yours. |
 | `.modify tp` | 4 | Administrator | declared retail level | Syntax: .modify tp #amount Set the free talent points of the selected player, or yours. |
 | `.modify honor` | 4 | Administrator | declared retail level | Syntax: .modify honor $field #value Fields: points rank todaykills yesterdaykills yesterdayhonor thisweekkills thisweekhonor lastweekkills lastweekhonor lastweekstanding lifetimedishonorablekills lifetimehonorablekills. |
+| `.modify xprate` | 0 | Player | declared retail level | Syntax: .modify xprate #rate Set your experience rate (a game master sets the selected player's) to #rate times normal experience gain. |
 | `.modify rep` | 4 | Administrator | declared retail level | Syntax: .modify rep #repId (#repvalue \| $rankname [#delta]) Sets the reputation of the selected player with the faction to the value, or to the beginning of the rank plus the delta. |
 | `.npc` ... | 2 | GameMaster | declared retail level | Syntax: .npc $subcommand Type .npc to see the list of possible subcommands or .help npc $subcommand to see info on subcommands. |
 | `.npc add` | 3 | GameMaster | declared retail level | Syntax: .npc add #entry Place a temporary creature where you stand. It is not saved and does not respawn. |
@@ -190,6 +204,15 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.mute` | 1 | Moderator | stored level through the map | Syntax: .mute [$playername] $duration [$reason] Disable the chat of the player's account. $duration is a number of minutes or like 1d2h30m (1 second to 365 days). The player must be online. |
 | `.unmute` | 1 | Moderator | stored level through the map | Syntax: .unmute [$playername] Enable the chat of the player's account again. The character may be offline. |
 | `.repairitems` | 3 | GameMaster | declared retail level | Syntax: .repairitems [#itemGuid] Repair durability on the selected online player or yourself. |
+| `.anticheat` ... | 3 | GameMaster | stored level through the map | Anticheat scores, reports and settings. |
+| `.anticheat status` | 3 | GameMaster | stored level through the map | Syntax: .anticheat status [$name] Show the anticheat settings and the live score of the character (or the selected player, or you). |
+| `.anticheat top` | 3 | GameMaster | stored level through the map | Syntax: .anticheat top [#count] List the highest live scores (10 by default, at most 50). |
+| `.anticheat report` | 3 | GameMaster | stored level through the map | Syntax: .anticheat report [$name] Show the newest violation log rows of the character. |
+| `.anticheat set` | 6 | Administrator | stored level through the map | Syntax: .anticheat set $field $value Change a live setting until the next .reload config: enabled, action (none\|log\|gmalert\|rubberband\|kick), alert, rubberband, kick, decay, speedtolerance, teleport, terrain, persist, autoban. |
+| `.anticheat warn` | 3 | GameMaster | stored level through the map | Syntax: .anticheat warn [$name] Send the character an on-screen anticheat warning. |
+| `.anticheat delete` | 6 | Administrator | stored level through the map | Syntax: .anticheat delete [$name] Forget the character's live score and delete its violation log rows. |
+| `.anticheat score` | 3 | GameMaster | stored level through the map | Syntax: .anticheat score [$name] [#value] Show the character's live score; with a value (administrators) set it and apply what it warrants. |
+| `.anticheat rubberband` | 3 | GameMaster | stored level through the map | Syntax: .anticheat rubberband [$name] Move the online character back to its last validated position. |
 | `.creature` ... | 3 | GameMaster | stored level through the map | Creature commands. |
 | `.creature add` | 3 | GameMaster | stored level through the map | Syntax: .creature add &lt;entry&gt; — spawn a temporary creature where you stand (not saved). |
 | `.creature info` | 3 | GameMaster | stored level through the map | Syntax: .creature info — details of the selected creature. |
@@ -201,16 +224,33 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.arcane mutes` | 3 | GameMaster | stored level through the map | Syntax: .arcane mutes List the chat mutes in force, with who set them and when they end. |
 | `.arcane gmlog` | 6 | Administrator | stored level through the map | Syntax: .arcane gmlog [$count] Show the latest audited GM commands (default 20, at most 100; kept in memory since the last restart). |
 | `.arcane queues` | 6 | Administrator | stored level through the map | Syntax: .arcane queues Show the pending and retained writes of the write-behind queues. |
+| `.arcane dbc` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane dbc Show how each client DBC the server reads was resolved (loaded, missing or format mismatch) and where from. |
+| `.arcane dbc validate` | 6 | Administrator | stored level through the map | Syntax: .arcane dbc validate Check the world database's spell, map, area, faction, display ... ids against the DBCs in ClientData:DbcDirectory and report the dangling ones. |
 | `.arcane content` | 3 | GameMaster | stored level through the map | Syntax: .arcane content Show how many rows of each content table are loaded. |
 | `.arcane maps` | 3 | GameMaster | stored level through the map | Syntax: .arcane maps Show the players, objects and in-transit objects of every running map. |
 | `.arcane reloads` | 3 | GameMaster | stored level through the map | Syntax: .arcane reloads Show how each reloadable content table last ended, and the creature definitions generation. |
 | `.gmannounce` | 1 | Moderator | stored level through the map | Syntax: .gmannounce $message Send a chat message to every staff member online. |
 | `.gmnotify` | 1 | Moderator | stored level through the map | Syntax: .gmnotify $message Send an on-screen notification to every staff member online. |
+| `.fx` ... | 3 | GameMaster | stored level through the map | Syntax: .fx $subcommand Non-retail GM tooling: push music, sounds, spell visuals, cinematics, world states and screen text to a scope. |
+| `.fx music` | 3 | GameMaster | stored level through the map | Syntax: .fx music #soundid [self\|target\|zone\|map\|server] (default self; map and server need an Administrator) Play a SoundEntries id as music (SMSG_PLAY_MUSIC). |
+| `.fx sound` | 3 | GameMaster | stored level through the map | Syntax: .fx sound #soundid [self\|target\|zone\|map\|server] (default self; map and server need an Administrator) Play a SoundEntries id (SMSG_PLAY_SOUND). |
+| `.fx visual` | 3 | GameMaster | stored level through the map | Syntax: .fx visual #kitid [self\|target\|zone\|map\|server] (default self; map and server need an Administrator) Play a SpellVisualKit on each scoped character, seen by those around it (SMSG_PLAY_SPELL_VISUAL). |
+| `.fx cinematic` | 3 | GameMaster | stored level through the map | Syntax: .fx cinematic #cinematicid [self\|target\|zone\|map\|server] (default self; map and server need an Administrator) Start a CinematicSequences id (SMSG_TRIGGER_CINEMATIC). |
+| `.fx zoneattack` | 3 | GameMaster | stored level through the map | Syntax: .fx zoneattack [#areaid] [self\|target\|zone\|map\|server] (default self; map and server need an Administrator) Show "&lt;zone&gt; is under attack!" for an area (default your zone) (SMSG_ZONE_UNDER_ATTACK). |
+| `.fx worldstate` | 3 | GameMaster | stored level through the map | Syntax: .fx worldstate #field #value [self\|target\|zone\|map\|server] (default self; map and server need an Administrator) Set a world-state HUD value on the clients (SMSG_UPDATE_WORLD_STATE). |
+| `.fx timespeed` | 3 | GameMaster | stored level through the map | Syntax: .fx timespeed #minutespersecond\|reset [self\|target\|zone\|map\|server] (default self; map and server need an Administrator) Run the client day/night clock at a speed (0 freezes it, reset is the retail 1/60, at most 60); client-side only, a relog restores it (SMSG_LOGIN_SETTIMESPEED). |
+| `.fx message` | 3 | GameMaster | stored level through the map | Syntax: .fx message [self\|target\|zone\|map\|server] $text Show large text in the middle of the screen (SMSG_AREA_TRIGGER_MESSAGE). |
+| `.fx weather` | 6 | Administrator | stored level through the map | Syntax: .fx weather #weathertype #status [zone\|map\|server] .wchange for your zone (default), every occupied zone of your map, or of every map. |
+| `.fx event` | 3 | GameMaster | stored level through the map | Syntax: .fx event [$preset] [self\|target\|zone\|map\|server] (default self; map and server need an Administrator) Fire a named set of effects at once; no preset lists them. |
+| `.fx lookup` | 3 | GameMaster | stored level through the map | Syntax: .fx lookup sound\|music\|cinematic\|visual\|worldstate #id\|$namepart Search the client tables of World:GmCommands:LiveFxDbcDirectory (at most 20 lines). |
 | `.auras` | 3 | GameMaster | stored level through the map | Syntax: .auras [page] Display active auras on the selected player or yourself (12 per page). |
 | `.spawninfo` ... | 2 | GameMaster | declared retail level | Syntax: .spawninfo $subcommand Type .spawninfo to see the list of possible subcommands. Read-only. |
 | `.spawninfo creature` | 2 | GameMaster | declared retail level | Syntax: .spawninfo creature [#radius] List the creatures within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
 | `.spawninfo gameobject` | 2 | GameMaster | declared retail level | Syntax: .spawninfo gameobject [#radius] List the game objects within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
 | `.spawninfo summary` | 2 | GameMaster | declared retail level | Syntax: .spawninfo summary Count the creatures and game objects of this map by state, including the respawn times kept for unloaded grids. |
+| `.movement` ... | 6 | Administrator | stored level through the map | Player movement rates. Syntax: .movement $subcommand |
+| `.movement rates` | 6 | Administrator | stored level through the map | Syntax: .movement rates Show the player speed rates in force (1 is retail). |
+| `.movement set` | 6 | Administrator | stored level through the map | Syntax: .movement set $field $value Change a player speed rate for every online player until the next .reload config or restart. $field: speedrate (all speeds), run, runback, swim, swimback, walk or turn. $value: a multiplier from 0.1 to 10 (1 is retail). |
 | `.playerbot` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot &lt;create\|start\|stop\|status\|list\|inspect\|invite\|scenario&gt; Manage server-owned autonomous players. |
 | `.playerbot create` | 6 | Administrator | stored level through the map | Syntax: .playerbot create $name [#race #class] Create a persistent bot character. |
 | `.playerbot start` | 6 | Administrator | stored level through the map | Syntax: .playerbot start $id\|$name Start a persistent bot. |

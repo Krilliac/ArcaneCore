@@ -1,9 +1,11 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.DebugDraw;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Gm.DebugDraw;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
@@ -47,8 +49,9 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
 
         var reader = new PacketReader(payload);
         uint entry = reader.ReadUInt32();
+        // A .debug vis marker (docs/areas/debug-draw.md) carries a reserved entry no content row may use.
         session.Send(WorldOpcode.SmsgGameobjectQueryResponse,
-            Feature(session)?.Content.FindTemplate(entry) is { } template
+            (DebugMarkerStyles.FindTemplate(entry) ?? Feature(session)?.Content.FindTemplate(entry)) is { } template
                 ? GameObjectPackets.QueryResponse(template)
                 : GameObjectPackets.QueryUnknown(entry));
         return Task.CompletedTask;
@@ -57,13 +60,28 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_GAMEOBJ_USE: u64 guid.</summary>
     private static void Use(WorldSession session, Player player, byte[] payload)
     {
-        if (payload.Length < 8 || player.Map is not { } map || Feature(session)?.FindSystem(map) is not { } system)
+        if (payload.Length < 8)
         {
             return;
         }
 
-        var reader = new PacketReader(payload);
-        system.Use(player, new ObjectGuid(reader.ReadUInt64()));
+        var guid = new ObjectGuid(new PacketReader(payload).ReadUInt64());
+        // A right-click on a client-only .debug vis marker prints its label (it is in no map).
+        if (session.Services.GetService<DebugDrawFeature>()?.OnMarkerUsed(player, guid) == true)
+        {
+            return;
+        }
+
+        if (player.Map is not { } map || Feature(session)?.FindSystem(map) is not { } system)
+        {
+            return;
+        }
+
+        if (system.Use(player, guid) == GameObjectUseResult.TooFar && system.Find(guid) is { } gameObject)
+        {
+            // Refused already; far beyond any interaction distance it is a remote-use attempt (docs/areas/anticheat.md).
+            session.Services.GetService<AntiCheat.AntiCheatFeature>()?.OnGameObjectTooFar(session, player, gameObject);
+        }
     }
 
     /// <summary>CMSG_LOOT: u64 corpse guid.</summary>

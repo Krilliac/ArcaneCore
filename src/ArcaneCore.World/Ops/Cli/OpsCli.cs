@@ -57,5 +57,6 @@ public static class OpsCli
             new NetProtectionConfigChecks(),
             new ArcaneCore.Kernel.Ops.Watchdog.WatchdogOptionsValidation(),
             new GmFirstLoginToolsConfigChecks(),
+            new ClientData.ClientDataConfigChecks(),
         ]);
 }

@@ -104,13 +104,15 @@ internal sealed class PlayerbotRisk
     }
 
     /// <summary>The bot died: remember its killers and the place, and forget the fight.</summary>
-    internal void OnDeath(Player player)
+    /// <param name="attackers">The creatures attacking the bot at its last living update (the server clears a dead player's attackers).</param>
+    internal void OnDeath(Player player, IEnumerable<(ObjectGuid Guid, uint Entry)>? attackers = null)
     {
-        // The killers: whatever still attacks the body, and the enemies of the fight being watched (not those of an earlier one).
-        Creature[] killers = [.. player.Combat.Attackers.OfType<Creature>().Concat(Tracker.Active ? Tracker.LastEnemies : []).Distinct()];
+        // The killers: those attackers, and the enemies of the fight being watched (not those of an earlier one).
+        (ObjectGuid Guid, uint Entry)[] killers = [.. (attackers ?? [])
+            .Concat((Tracker.Active ? Tracker.LastEnemies : []).Select(c => (c.Guid, c.Entry))).Distinct()];
         if (Enabled && killers.Length > 0)
-            Memory.Remember(player.MapId, new Vector3(player.X, player.Y, player.Z),
-                killers.Select(c => (c.Guid, c.Entry)), _session.World.NowMs, _options.Risk.DangerMemorySeconds);
+            Memory.Remember(player.MapId, new Vector3(player.X, player.Y, player.Z), killers, _session.World.NowMs,
+                _options.Risk.DangerMemorySeconds);
         if (Enabled)
             Hazards.Add(player.MapId, new Vector3(player.X, player.Y, player.Z), PlayerbotHazards.DeathYards, _session.World.NowMs,
                 _options.Risk.DangerMemorySeconds, "death");

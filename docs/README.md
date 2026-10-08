@@ -22,6 +22,7 @@ unfinished parts documented as limits).
 | [Security hardening](security/hardening.md) | The opt-in hardening switches and their defaults, and what is not delivered. |
 | [Network and packet protections](ops/netguard.md) | The `Net:Protection` limits (per-address caps, rates and failure budgets, frame deadlines), the bounds-checked packet readers and the fuzz harness. |
 | [Live bans](security/live-bans.md) | Ban tables, IP bans and the live enforcement options. |
+| [Anticheat](areas/anticheat.md) | The server-side movement checks, the score and escalation (log, GM alert, rubberband, kick, autoban), the `AntiCheat` options and the `.anticheat` commands. |
 | [Operations and performance](areas/ops-perf.md) | `check-config`, exit codes, the performance log and shutdown commands. |
 | [Live reload](areas/hot-reload.md) | The `.reload` command tree and which configuration is applied live. |
 | [Code hot reload](areas/code-hot-reload.md) | The development runner and the `.hotcode` / `.hotmodule` commands. |
@@ -56,8 +57,10 @@ Each area page has a Delivered section, its limits, and the references it follow
 | Hunter | [hunter](areas/hunter.md) |
 | Talents | [talents](areas/talents.md) |
 | Skills and professions | [skills](areas/skills.md) |
+| Client data (DBC directory, validation) | [client-data](areas/client-data.md) |
 | Player stats and combat formulas | [stats](areas/stats.md) |
 | Rested experience | [rested-xp](areas/rested-xp.md) |
+| Rates (every Rate.* knob, speed rates) | [rates](areas/rates.md) |
 | Character rename | [character-rename](areas/character-rename.md) |
 | Melee combat | [combat](areas/combat.md) |
 | Duels | [duels](areas/duels.md) |
@@ -66,7 +69,9 @@ Each area page has a Delivered section, its limits, and the references it follow
 | Creature AI and movement | [creature-ai](areas/creature-ai.md) |
 | Grids, maps and terrain | [grid-terrain](areas/grid-terrain.md) |
 | Collision and pathing | [collision-pathing](areas/collision-pathing.md) |
+| GM debug drawing (`.debug vis`: LoS, paths, waypoints, cells) | [debug-draw](areas/debug-draw.md) |
 | Locomotion, falls and environment | [locomotion](areas/locomotion.md) |
+| Anticheat (movement checks, scores, escalation, violation log) | [anticheat](areas/anticheat.md) |
 | World state and exploration | [world-state](areas/world-state.md) |
 | Instances and bosses | [instances](areas/instances.md) |
 | Items and inventory | [items](areas/items.md) |

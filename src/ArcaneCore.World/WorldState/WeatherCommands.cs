@@ -17,6 +17,30 @@ public sealed class WeatherCommands : ICommandGroup
         new ChatCommand("wchange", AccountSecurity.Administrator, "Syntax: .wchange #weathertype #status — set the weather of your zone. Type: 0 fine, 1 rain, 2 snow, 3 sandstorm; status 0..1.", WChange),
     ];
 
+    /// <summary>
+    /// The <c>.wchange</c> arguments "#weathertype #status" (vmangos ServerCommands.cpp:106-120): a type up to
+    /// <see cref="WeatherType.Storm"/> (Weather::IsValidWeatherType) and a grade clamped to 0..1. Shared with
+    /// <c>.fx weather</c>, which applies the same values to more than one zone.
+    /// </summary>
+    public static bool TryParse(IReadOnlyList<string> parts, out WeatherType type, out float grade)
+    {
+        type = WeatherType.Fine;
+        grade = 0;
+        if (parts.Count != 2
+            || !uint.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out uint raw)
+            || raw > (uint)WeatherType.Storm // Weather::IsValidWeatherType
+            || !float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out grade)
+            || float.IsNaN(grade))
+        {
+            return false;
+        }
+
+        type = (WeatherType)raw;
+        // clamp grade from 0 to 1
+        grade = Math.Clamp(grade, 0.0f, 1.0f);
+        return true;
+    }
+
     private static bool WChange(CommandContext context, string args)
     {
         if (!WorldStateHooks.For(context.World).WeatherSettings.Enabled)
@@ -25,24 +49,17 @@ public sealed class WeatherCommands : ICommandGroup
             return true;
         }
 
-        string[] parts = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length != 2
-            || !uint.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out uint type)
-            || type > (uint)WeatherType.Storm // Weather::IsValidWeatherType
-            || !float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out float grade)
-            || float.IsNaN(grade))
+        if (!TryParse(args.Split(' ', StringSplitOptions.RemoveEmptyEntries), out WeatherType type, out float grade))
         {
             return false;
         }
 
-        // clamp grade from 0 to 1
-        grade = Math.Clamp(grade, 0.0f, 1.0f);
         if (context.Player.Map?.FindUpdater<MapWeather>() is not { } weather)
         {
             return false;
         }
 
-        weather.SetWeather(context.Player.ZoneId, (WeatherType)type, grade, permanent: false);
+        weather.SetWeather(context.Player.ZoneId, type, grade, permanent: false);
         return true;
     }
 }

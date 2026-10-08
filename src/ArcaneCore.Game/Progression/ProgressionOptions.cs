@@ -18,6 +18,18 @@ public sealed class ProgressionOptions
     /// <summary>Rate.XP.Kill.Elite.</summary>
     public float RateXpKillElite { get; set; } = 1.0f;
 
+    /// <summary>
+    /// vmangos Rate.XP.Personal.Min (World.cpp:510, setConfigMin 0, default 1): the lowest personal XP rate <c>.modify xprate</c> accepts
+    /// (CharacterCommands.cpp:78-82). A negative value is replaced by 1 when the command reads it.
+    /// </summary>
+    public float RateXpPersonalMin { get; set; } = 1.0f;
+
+    /// <summary>
+    /// vmangos Rate.XP.Personal.Max (World.cpp:511, setConfigMin 0, default 1): the highest personal XP rate a player below GameMaster may set
+    /// with <c>.modify xprate</c> (CharacterCommands.cpp:84-88). A negative value is replaced by 1 when the command reads it.
+    /// </summary>
+    public float RateXpPersonalMax { get; set; } = 1.0f;
+
     /// <summary>MaxGroupXPDistance (yards, 3D): group members farther from the victim get no XP or kill credit.</summary>
     public float GroupXpDistance { get; set; } = 74.0f;
 

@@ -15,6 +15,10 @@ using Microsoft.Extensions.Logging;
 
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
 
+// Client data (docs/areas/client-data.md): fill every unset per-file DBC key from ClientData:DbcDirectory before anything binds, so
+// check-config, the validation below and every feature see the same effective configuration.
+ArcaneCore.Data.ClientData.ClientDataReport clientData = ArcaneCore.World.ClientData.ClientDataStartup.Apply(builder.Configuration);
+
 // Operations verbs (check-config) run instead of the daemon: nothing binds, no schema is touched.
 if (OpsCli.TryRun(args, builder.Configuration, Console.Out, out int verbExitCode))
 {
@@ -63,8 +67,11 @@ builder.Services.AddDatabaseResilience(builder.Configuration); // breakers + boo
 builder.Services.AddWorldDaemon(builder.Configuration);
 builder.Services.AddNetProtection(builder.Configuration);
 builder.Services.AddWorldWatchdog(builder.Configuration);
+builder.Services.AddSingleton(clientData);
 
 IHost host = builder.Build();
+ArcaneCore.World.ClientData.ClientDataStartup.Log(
+    clientData, host.Services.GetRequiredService<ILoggerFactory>().CreateLogger(ArcaneCore.World.ClientData.ClientDataStartup.LogCategory));
 
 if (hotCode.Enabled)
 {

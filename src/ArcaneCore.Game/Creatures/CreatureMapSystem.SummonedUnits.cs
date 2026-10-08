@@ -24,7 +24,9 @@ public sealed partial class CreatureMapSystem
     {
         ArgumentNullException.ThrowIfNull(template);
         ArgumentNullException.ThrowIfNull(prepare);
-        var creature = new Creature(_nextTemporaryCounter++ & 0x00FFFFFF, template, spawn: null, _content, _random, highGuid, guidEntry);
+        // A pet, guardian or mini pet (HIGHGUID_PET) is spawned without the Rate.Creature.* rates (vmangos Pet.cpp:1359-1360 uses 1 for a player's pet).
+        var creature = new Creature(_nextTemporaryCounter++ & 0x00FFFFFF, template, spawn: null, _content, _random, highGuid, guidEntry,
+            statRates: highGuid == HighGuid.Pet ? null : _options.Rates);
         creature.MapId = Map.MapId;
         CreatureHome home = prepare(creature);
         if (creature.Summon is { } links && FindCreature(links.Owner) is { } summoner)

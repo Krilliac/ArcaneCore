@@ -1,6 +1,7 @@
 using System.Data.Common;
 using System.Net.Sockets;
 using ArcaneCore.Data.Auth;
+using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Import;
@@ -38,6 +39,8 @@ public static class DbUpgradeCli
           migrate-codex find databases the Codex line created (before the 2026-10-07 merge renumbered its schema steps) and
                         report their one-shot migration to this build's numbering; --apply runs only that migration
           backup-info   print how to back each database up
+          dbc           check the client DBC directory (each file against the vmangos layout) and the world database's
+                        references into it (spell, map, area, faction, display ... ids no DBC row has); read-only
 
         options:
           --component auth|characters|world|all   which component(s) to act on (default all)
@@ -49,13 +52,14 @@ public static class DbUpgradeCli
           --backup-dir <directory>                upgrade, migrate-codex: also write a verified copy of each SQLite database there
           --allow-active-sessions                 upgrade, migrate-codex: do not refuse when other sessions are connected
           --lock-timeout <seconds>                upgrade, migrate-codex: how long to wait for another process's schema lock (default 60)
+          --dbc-dir <directory>                   dbc: the build-5875 DBC directory (default ClientData:DbcDirectory)
 
         configuration: the Database section (appsettings.json, environment variables such as
         Database__Characters__ConnectionString); a host option --config <file> names another JSON file.
         Characters is per realm: run once per realm configuration. Stop every daemon first; rolling upgrades are unsupported.
 
         exit codes: 0 ok, 1 unexpected failure, 2 usage or configuration, 3 upgrade pending (status, plan),
-        4 refused (newer database, unknown state, blocker, active sessions), 5 drift, 6 database unreachable,
+        4 refused (newer database, unknown state, blocker, active sessions), 5 drift (dbc: a dangling id or bad DBC), 6 database unreachable,
         7 schema lock timeout, 8 backup not confirmed
         """;
 
@@ -66,8 +70,13 @@ public static class DbUpgradeCli
     public static IReadOnlyList<string> Options => [.. DbUpgradeArguments.ValueOptions, .. DbUpgradeArguments.Flags];
 
     /// <summary>Run one command line. Never throws for expected failures; returns the exit code.</summary>
-    public static async Task<int> RunAsync(
+    public static Task<int> RunAsync(
         string[] args, DatabaseOptions database, TextWriter output, TextWriter error, CancellationToken cancellationToken)
+        => RunAsync(args, database, output, error, dbcDirectory: null, cancellationToken);
+
+    /// <summary>Run one command line; <paramref name="dbcDirectory"/> is <c>ClientData:DbcDirectory</c>, the default of <c>dbc --dbc-dir</c>.</summary>
+    public static async Task<int> RunAsync(
+        string[] args, DatabaseOptions database, TextWriter output, TextWriter error, string? dbcDirectory, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(database);
@@ -85,7 +94,7 @@ public static class DbUpgradeCli
             return DbUpgradeExitCodes.Ok;
         }
 
-        var run = new Run(database, output, error);
+        var run = new Run(database, output, error) { DbcDirectory = dbcDirectory };
         try
         {
             DbUpgradeArguments arguments = DbUpgradeArguments.Parse(args);
@@ -97,6 +106,7 @@ public static class DbUpgradeCli
                 "upgrade" => await run.UpgradeAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "migrate-codex" => await run.MigrateCodexAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "backup-info" => run.BackupInfo(arguments),
+                "dbc" => await run.DbcAsync(arguments, cancellationToken).ConfigureAwait(false),
                 _ => throw new UsageException($"unknown command '{arguments.Command}'"),
             };
         }
@@ -464,6 +474,71 @@ public static class DbUpgradeCli
             }
 
             return DbUpgradeExitCodes.Ok;
+        }
+
+        public string? DbcDirectory { get; init; }
+
+        /// <summary>
+        /// <c>dbc</c>: every file of the DBC directory against its vmangos layout, then the world database's references into the DBCs
+        /// (<see cref="DbcCrossReferences"/>). Read-only. Drift (5) when a referenced DBC is bad or an id dangles.
+        /// </summary>
+        public async Task<int> DbcAsync(DbUpgradeArguments a, CancellationToken ct)
+        {
+            string directory = a.Value("--dbc-dir") ?? DbcDirectory ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                throw new UsageException("no DBC directory: pass --dbc-dir <directory> or set ClientData:DbcDirectory");
+            }
+
+            if (!Directory.Exists(directory))
+            {
+                throw new UsageException($"the DBC directory '{directory}' does not exist");
+            }
+
+            IReadOnlyList<ClientDbcFileCheck> files = ClientDbcInspector.CheckDirectory(directory);
+            DatabaseConnectionOptions resolved = _database.Resolve(DatabaseComponent.World);
+            if (string.IsNullOrWhiteSpace(resolved.ConnectionString))
+            {
+                throw new UsageException("no connection string for the world database: set Database:World:ConnectionString (or Database:ConnectionString)");
+            }
+
+            DatabaseConnectionOptions prepared = Prepare(resolved, readOnly: true, "world");
+            var target = new Target(s_specs.Single(s => s.Name == "world"), prepared, Describe(prepared));
+            IReadOnlyList<DbcReferenceResult> references = await GuardAsync(target, ct,
+                db => DbcCrossReferences.RunAsync(db.Database.GetDbConnection(), directory, cancellationToken: ct)).ConfigureAwait(false);
+
+            bool badFile = files.Any(f => f.Status is ClientDbcStatus.Malformed or ClientDbcStatus.FormatMismatch);
+            bool dangling = references.Any(r => r.Status == DbcReferenceStatus.Dangling);
+            if (a.Flag("--json"))
+            {
+                await _out.WriteLineAsync(PlanFormatter.ToJson(new
+                {
+                    directory,
+                    files = files.Select(f => new { file = f.File, status = f.Status.ToString(), records = f.Records, fields = f.Fields, recordSize = f.RecordSize, layout = f.Layout?.Source, detail = f.Detail }),
+                    references = references.Select(r => new
+                    {
+                        dbc = r.Reference.Dbc, table = r.Reference.Table, column = r.Reference.Column, status = r.Status.ToString(),
+                        referencedIds = r.ReferencedIds, danglingIds = r.DanglingIds, danglingRows = r.DanglingRows, samples = r.Samples, reason = r.Reason,
+                    }),
+                })).ConfigureAwait(false);
+            }
+            else
+            {
+                await _out.WriteLineAsync($"arcane-db dbc: {directory} against {ProviderName(target.Connection)} {target.Description}").ConfigureAwait(false);
+                foreach (ClientDbcFileCheck file in files.Where(f => f.Layout is not null || !f.IsUsable))
+                {
+                    await _out.WriteLineAsync($"  {file.File}: {file.Describe()}").ConfigureAwait(false);
+                }
+
+                int headerOnly = files.Count(f => f.Layout is null && f.IsUsable);
+                await _out.WriteLineAsync($"  ({headerOnly} more files without a reference layout have a well-formed WDBC header)").ConfigureAwait(false);
+                foreach (string line in DbcCrossReferences.Lines(references, all: true))
+                {
+                    await _out.WriteLineAsync(line).ConfigureAwait(false);
+                }
+            }
+
+            return badFile || dangling ? DbUpgradeExitCodes.Drift : DbUpgradeExitCodes.Ok;
         }
 
         public int BackupInfo(DbUpgradeArguments a)

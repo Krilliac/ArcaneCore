@@ -44,6 +44,12 @@ public sealed class HonorSettings
     /// <summary>Directory that receives the vmangos HCR calculation report; empty writes none.</summary>
     public string ReportDirectory { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Non-retail when not 1 (default 1): multiplies earned honor (kills, battleground bonuses, quests); Rate.Honor of the MaNGOS Zero fork and the
+    /// cmangos/TrinityCore line (vmangos has none). A negative or non-finite value is 1.
+    /// </summary>
+    public float Rate { get; set; } = 1.0f;
+
     /// <summary>The validated options: the decay is clamped to 0..1 and the weekday to 0..6 (vmangos setConfigMinMax).</summary>
     public HonorOptions ToOptions() => new()
     {
@@ -58,5 +64,6 @@ public sealed class HonorSettings
         RacialLeaderExcludedEntries = [.. RacialLeaderExcludedEntries],
         MaintenanceMode = MaintenanceMode,
         ReportDirectory = ReportDirectory ?? string.Empty,
+        Rate = float.IsFinite(Rate) && Rate >= 0f ? Rate : 1.0f,
     };
 }

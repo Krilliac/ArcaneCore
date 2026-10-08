@@ -1,4 +1,5 @@
 using System.Globalization;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Accounts;
@@ -10,10 +11,10 @@ namespace ArcaneCore.World.Reload;
 /// <summary>
 /// The option objects one configuration view carries: the runtime tuning (<see cref="WorldRuntimeOptions"/>,
 /// shared by reference with every reader) and, when known, the listener options (<see cref="WorldOptions"/>)
-/// the social rules (<see cref="SocialOptions"/>) and the playerbot options (<see cref="PlayerbotOptions"/>). A side that is not
-/// known reads as null.
+/// the social rules (<see cref="SocialOptions"/>), the playerbot options (<see cref="PlayerbotOptions"/>) and the movement rules
+/// (<see cref="LocomotionOptions"/>, whose player speed rates are live). A side that is not known reads as null.
 /// </summary>
-public readonly record struct WorldConfigView(WorldRuntimeOptions Runtime, WorldOptions? Listener, SocialOptions? Social = null, PlayerbotOptions? Playerbots = null);
+public readonly record struct WorldConfigView(WorldRuntimeOptions Runtime, WorldOptions? Listener, SocialOptions? Social = null, PlayerbotOptions? Playerbots = null, LocomotionOptions? Locomotion = null);
 
 /// <summary>
 /// One option under the <c>World</c> section and what <c>.reload config</c> does with it. A live
@@ -137,7 +138,33 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Risk:DangerMemorySeconds", o => o.Risk.DangerMemorySeconds, (o, v) => o.Risk.DangerMemorySeconds = v,
             v => v is >= 0 and <= 86_400 ? null : "must be 0..86400"),
         LivePlayerbots("Risk:PartyRetreatOnWipe", o => o.Risk.PartyRetreatOnWipe, (o, v) => o.Risk.PartyRetreatOnWipe = v),
+
+        // The player speed rates (non-retail when not 1; the MaNGOS Zero fork's Movement.*SpeedRate): UnitSpeed.SetRate reads them through the
+        // player's copy, which the reload refreshes for every online player (ConfigContentReloadable re-sends the speeds after these keys).
+        LiveSpeedRate("PlayerSpeedRate", o => o.PlayerSpeedRate, (o, v) => o.PlayerSpeedRate = v),
+        LiveSpeedRate("PlayerRunSpeedRate", o => o.PlayerRunSpeedRate, (o, v) => o.PlayerRunSpeedRate = v),
+        LiveSpeedRate("PlayerRunBackSpeedRate", o => o.PlayerRunBackSpeedRate, (o, v) => o.PlayerRunBackSpeedRate = v),
+        LiveSpeedRate("PlayerSwimSpeedRate", o => o.PlayerSwimSpeedRate, (o, v) => o.PlayerSwimSpeedRate = v),
+        LiveSpeedRate("PlayerSwimBackSpeedRate", o => o.PlayerSwimBackSpeedRate, (o, v) => o.PlayerSwimBackSpeedRate = v),
+        LiveSpeedRate("PlayerWalkSpeedRate", o => o.PlayerWalkSpeedRate, (o, v) => o.PlayerWalkSpeedRate = v),
+        LiveSpeedRate("PlayerTurnRate", o => o.PlayerTurnRate, (o, v) => o.PlayerTurnRate = v),
     ];
+
+    /// <summary>True for the keys whose change must re-send the speeds of the online players (<see cref="LocomotionOptions"/> keys).</summary>
+    public static bool IsSpeedRate(WorldConfigKey key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        return key.Path.StartsWith(LocomotionOptions.SectionName + ":", StringComparison.Ordinal);
+    }
+
+    private static WorldConfigKey LiveSpeedRate(string path, Func<LocomotionOptions, float> get, Action<LocomotionOptions, float> set)
+        => new(
+            $"{LocomotionOptions.SectionName}:{path}",
+            v => v.Locomotion is { } locomotion ? get(locomotion) : null,
+            (view, v) => set(view.Locomotion!, (float)v!),
+            v => (float)v! is >= LocomotionOptions.MinSpeedRate and <= LocomotionOptions.MaxSpeedRate
+                ? null
+                : $"must be between {LocomotionOptions.MinSpeedRate.ToString(CultureInfo.InvariantCulture)} and {LocomotionOptions.MaxSpeedRate.ToString(CultureInfo.InvariantCulture)}");
 
     private static string? NonNegative<T>(T value) where T : struct, IComparable<T>
         => value.CompareTo(default) < 0 ? "must not be negative" : null;

@@ -14,11 +14,13 @@ How to read the tables:
 
 ## Sections
 
+- [`AntiCheat`](#anticheat)
 - [`Auras`](#auras)
 - [`Auth`](#auth)
 - [`Bans`](#bans)
 - [`Battleground`](#battleground)
 - [`CharacterCreation`](#charactercreation)
+- [`ClientData`](#clientdata)
 - [`Combat`](#combat)
 - [`Conditions`](#conditions)
 - [`Creatures`](#creatures)
@@ -65,6 +67,7 @@ How to read the tables:
 - [`World:Exploration`](#worldexploration)
 - [`World:GameEvents`](#worldgameevents)
 - [`World:GmCommands`](#worldgmcommands)
+- [`World:GmCommands:DebugDraw`](#worldgmcommandsdebugdraw)
 - [`World:GmCommands:FirstLoginTools`](#worldgmcommandsfirstlogintools)
 - [`World:Guild`](#worldguild)
 - [`World:Honor`](#worldhonor)
@@ -81,6 +84,54 @@ How to read the tables:
 - [`World:Zones`](#worldzones)
 - [Keys read by name](#keys-read-by-name)
 - [Aliases and framework sections](#aliases-and-framework-sections)
+
+## `AntiCheat`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `AntiCheat:Action` | `AntiCheatAction` | `Log` | - | The highest escalation ever applied: None (score only), Log, GmAlert, Rubberband, Kick. A score past a threshold whose action is above this ceiling gets the ceiling instead. Bound from AntiCheat:Action; default Log. Values: `None`, `Log`, `GmAlert`, `Rubberband`, `Kick`. |
+| `AntiCheat:Autoban:DecayPerHour` | `float` | `1` | - | Points forgotten per hour. Default 1. |
+| `AntiCheat:Autoban:Enabled` | `bool` | `false` | - | Ban accounts on repeated kicks. Default false. |
+| `AntiCheat:Autoban:FirstBanSeconds` | `long` | `86400` | - | Seconds of the first ban (0 is permanent). Default 86400 (one day). |
+| `AntiCheat:Autoban:HistoryDays` | `int` | `180` | - | Earlier AntiCheat bans older than this many days do not move the account up the ladder. Default 180. |
+| `AntiCheat:Autoban:KickPoints` | `float` | `10` | - | Points one kick adds. Default 10. |
+| `AntiCheat:Autoban:LaterBanSeconds` | `long` | `0` | - | Seconds of the third and every later ban (0 is permanent). Default 0 (permanent). |
+| `AntiCheat:Autoban:SecondBanSeconds` | `long` | `604800` | - | Seconds of the second ban (0 is permanent). Default 604800 (seven days). |
+| `AntiCheat:Autoban:Threshold` | `float` | `25` | - | Points at which the account is banned. Default 25: the third kick within five hours of the first (the fork's 30 with any decay at all needs a fourth kick). |
+| `AntiCheat:BaselineGapMs` | `int` | `3000` | - | A gap this long (milliseconds) between two movement packets starts a new baseline (loading screen, AFK). Default 3000. |
+| `AntiCheat:BurstPacketsPerSecond` | `int` | `50` | - | Movement packets per second, by the receive clock AND the client's own clock, that count as a burst. Default 50. |
+| `AntiCheat:ClientTimeRegressionMs` | `int` | `500` | - | A client timestamp that goes back by more than this many milliseconds is scored. Default 500. |
+| `AntiCheat:DecayPerSecond` | `float` | `2` | - | Score points forgotten per second, so occasional noise never adds up (fork AntiCheat.Score.DecayPerSec). Default 2. |
+| `AntiCheat:Enabled` | `bool` | `true` | - | Run the checks at all. Bound from AntiCheat:Enabled; default true (log only, see `Action`). |
+| `AntiCheat:ExemptManagedBots` | `bool` | `true` | - | The server's own managed playerbot sessions are not checked (they are trusted server code). Bound from AntiCheat:ExemptManagedBots; default true. |
+| `AntiCheat:ExemptSecurity` | `AccountSecurity` | `Moderator` | - | Accounts at or above this security level are not checked; Player checks everyone (a GM in GM mode is still exempt). Bound from AntiCheat:ExemptSecurity; default Moderator (every staff account). Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `AntiCheat:FallSuppressYards` | `float` | `20` | - | A drop of this many yards that ends without MSG_MOVE_FALL_LAND is fall-damage suppression. Default 20. |
+| `AntiCheat:GmAlertIntervalSeconds` | `int` | `10` | - | At most one GM alert per offender per this many seconds. Default 10. |
+| `AntiCheat:LatencySlackMs` | `int` | `1000` | - | The base of the latency slack in milliseconds: the time budget of a movement step is the client's own elapsed time, capped by the server's receive interval plus this plus twice the ping latency average. Default 1000. |
+| `AntiCheat:Log:CoalesceMs` | `int` | `5000` | - | Repeats of one violation type by one character within this many milliseconds are folded into the row already queued (its count goes up) instead of adding rows. Default 5000. |
+| `AntiCheat:Log:FlushIntervalSeconds` | `int` | `10` | - | Seconds between two flushes of the queued rows. Default 10. |
+| `AntiCheat:Log:MaxQueuedRows` | `int` | `10000` | - | Most rows waiting in memory; beyond it the newest are dropped and counted. Default 10000. |
+| `AntiCheat:Log:MaxRowsPerFlush` | `int` | `500` | - | Most rows written by one flush (the rest wait for the next). Default 500. |
+| `AntiCheat:Log:Persist` | `bool` | `true` | - | Write violations to character_anticheat_log. Default true. |
+| `AntiCheat:MaxLatencySlackMs` | `int` | `3000` | - | The most the latency slack may grow to, in milliseconds. Default 3000. |
+| `AntiCheat:MaxTimeSkipMs` | `int` | `10000` | - | A CMSG_MOVE_TIME_SKIPPED reporting more than this many milliseconds is scored (a client freeze rarely exceeds it). Default 10000. |
+| `AntiCheat:MaxTimeSkipsPer10Seconds` | `int` | `10` | - | More CMSG_MOVE_TIME_SKIPPED than this in ten seconds is scored as spam. Default 10. |
+| `AntiCheat:RubberbandIntervalMs` | `int` | `2000` | - | At most one rubberband per offender per this many milliseconds. Default 2000. |
+| `AntiCheat:ScoreGmAlert` | `float` | `30` | - | Score at which the GM alert applies (fork AntiCheat.Score.Warn). Default 30. |
+| `AntiCheat:ScoreKick` | `float` | `120` | - | Score at which the session is disconnected (fork AntiCheat.Score.Kick). Default 120. |
+| `AntiCheat:ScoreRubberband` | `float` | `60` | - | Score at which the player is moved back to the last validated position (fork AntiCheat.Score.Rubberband). Default 60. |
+| `AntiCheat:SpeedChangeGraceMs` | `int` | `2000` | - | After a speed change is acknowledged the previous (higher) speed still counts for this long, in milliseconds, plus the latency slack, so packets already in flight are never judged by the new speed. Default 2000. |
+| `AntiCheat:SpeedClock:CooldownMs` | `int` | `10000` | - | After firing it stays silent for this long (milliseconds). Default 10000. |
+| `AntiCheat:SpeedClock:Enabled` | `bool` | `true` | - | Run it. Default true. |
+| `AntiCheat:SpeedClock:MaxGapMs` | `int` | `3000` | - | A pair further apart than this (milliseconds) is ignored (the player stood still or the client froze). Default 3000. |
+| `AntiCheat:SpeedClock:MinSamples` | `int` | `12` | - | Usable pairs needed before the window is judged. Default 12. |
+| `AntiCheat:SpeedClock:SustainWindows` | `int` | `3` | - | Consecutive hot evaluations before it fires. Default 3. |
+| `AntiCheat:SpeedClock:TolerancePercent` | `int` | `30` | - | How much faster than real time, in percent, the client clock may run. Default 30. |
+| `AntiCheat:SpeedClock:Window` | `int` | `20` | - | Pairs of consecutive packets in the window. Default 20. |
+| `AntiCheat:SpeedSlackYards` | `float` | `2` | - | Distance in yards that one packet may always cover on top of the speed budget (rounding, collision push). Default 2. |
+| `AntiCheat:SpeedTolerancePercent` | `float` | `10` | - | Tolerance above the allowed speed, in percent, before the speed check scores. Default 10. |
+| `AntiCheat:TeleportDistance` | `float` | `50` | - | One packet moving farther than this, plus what the speed covers in the latency slack, is a teleport (fork AntiCheat.Teleport.Distance). Default 50. |
+| `AntiCheat:TerrainChecks` | `bool` | `true` | - | Run the checks that need world geometry (swimming out of water, climbing into the air, walking through a wall). Each runs only where the terrain or vmap data for that spot is actually loaded; without data it never scores. Default true. |
 
 ## `Auras`
 
@@ -148,6 +199,13 @@ How to read the tables:
 | `CharacterCreation:StartPlayerMoney` | `long` | `0` | - | vmangos StartPlayerMoney in copper (default 0), clamped to 0..MAX_MONEY_AMOUNT (World.cpp:674). |
 | `CharacterCreation:StrictPlayerNames` | `uint` | `0` | - | vmangos StrictPlayerNames (0 any one script, bit 1 basic Latin, bit 2 realm zone script). |
 
+## `ClientData`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `ClientData:DbcDirectory` | `string` | `""` | - | A directory holding the client's DBFilesClient *.dbc files (build 5875, extracted by the developer; none ships with the server). Set, every DBC consumer whose own path key (for example `Combat:ShapeshiftFormDbcPath`) is unset or empty reads the file of that name in this directory (for example SpellShapeshiftForm.dbc); a key that is set still wins. Each file is checked at start against the vmangos layout (field count and record size) and logged on one line: loaded, missing or format mismatch. A missing or mismatched file is not handed to its consumer, which keeps its built-in table or stays off, with a warning. Empty (the default): only the per-file keys are read, as before. |
+| `ClientData:Strict` | `bool` | `false` | - | Make a client data problem fatal: a missing or mismatched DBC under `DbcDirectory`, a configured per-file path whose file is missing or has another layout, or a `DbcDirectory` that does not exist refuses start-up (exit code 78, like any configuration error) instead of a warning. Default false. |
+
 ## `Combat`
 
 | Key | Type | Default | Reload | Meaning |
@@ -209,6 +267,21 @@ How to read the tables:
 | `Creatures:MovementEnabled` | `bool` | `true` | - | Random and waypoint movement; off leaves every creature idle at its spawn point. |
 | `Creatures:NoMeleeFleeMs` | `uint` | `30000` | - | How long a NO_MELEE_FLEE creature runs before it evades (cmangos `DoFlee(30000)`, Unit.cpp:7996). |
 | `Creatures:NoMeleeFleeOnAggro` | `bool` | `false` | - | `Creatures:NoMeleeFleeOnAggro` (default false): a creature with the static flag NO_MELEE_FLEE (0x00100000) that a player or a player's pet engages runs in panic for `NoMeleeFleeMs` and then evades (cmangos Unit::SetInCombatWithVictim, Entities/Unit.cpp:7993-7998, and CreatureAI::TimedFleeingEnded, AI/BaseAI/CreatureAI.cpp:254-258). vmangos only takes the melee away for the same bit (CREATURE_STATIC_FLAG_NO_MELEE, whose original comment is "Flee"; AI/CreatureAI.cpp:40), and the default keeps that, since vmangos is the fidelity reference; critters still run from a hit through CritterAI either way. Melee is off for the flag either way. classic-db z2815 sets it on 71 templates (deer, sheep, cows, wisps, totems, target dummies). |
+| `Creatures:Rates:EliteDamage` | `float` | `1` | - | Rate.Creature.Elite.Elite.Damage (default 1; also the rate of an unknown rank). |
+| `Creatures:Rates:EliteHp` | `float` | `1` | - | Rate.Creature.Elite.Elite.HP (default 1; also the rate of an unknown rank). |
+| `Creatures:Rates:EliteSpellDamage` | `float` | `1` | - | Rate.Creature.Elite.Elite.SpellDamage (default 1; also the rate of an unknown rank). |
+| `Creatures:Rates:NormalDamage` | `float` | `1` | - | Rate.Creature.Normal.Damage (default 1). |
+| `Creatures:Rates:NormalHp` | `float` | `1` | - | Rate.Creature.Normal.HP (default 1). |
+| `Creatures:Rates:NormalSpellDamage` | `float` | `1` | - | Rate.Creature.Normal.SpellDamage (default 1). |
+| `Creatures:Rates:RareDamage` | `float` | `1` | - | Rate.Creature.Elite.RARE.Damage (default 1). |
+| `Creatures:Rates:RareEliteDamage` | `float` | `1` | - | Rate.Creature.Elite.RAREELITE.Damage (default 1). |
+| `Creatures:Rates:RareEliteHp` | `float` | `1` | - | Rate.Creature.Elite.RAREELITE.HP (default 1). |
+| `Creatures:Rates:RareEliteSpellDamage` | `float` | `1` | - | Rate.Creature.Elite.RAREELITE.SpellDamage (default 1). |
+| `Creatures:Rates:RareHp` | `float` | `1` | - | Rate.Creature.Elite.RARE.HP (default 1). |
+| `Creatures:Rates:RareSpellDamage` | `float` | `1` | - | Rate.Creature.Elite.RARE.SpellDamage (default 1). |
+| `Creatures:Rates:WorldBossDamage` | `float` | `1` | - | Rate.Creature.Elite.WORLDBOSS.Damage (default 1). |
+| `Creatures:Rates:WorldBossHp` | `float` | `1` | - | Rate.Creature.Elite.WORLDBOSS.HP (default 1). |
+| `Creatures:Rates:WorldBossSpellDamage` | `float` | `1` | - | Rate.Creature.Elite.WORLDBOSS.SpellDamage (default 1). |
 | `Creatures:Respawn:AlternateEntries` | `bool` | `true` | - | `Creatures:Respawn:AlternateEntries`: a spawn with `creature_spawn_entry` rows (vmangos `id2` ... `id5`) becomes one of those entries when it loads and again at every respawn (cmangos Creature::LoadFromDB / ResetEntry; vmangos Creature.cpp:830-841, :1936-1944). False ignores the rows: a spawn whose `id` is 0 then never spawns (the earlier behaviour). |
 | `Creatures:Respawn:DrawDelayAtLoad` | `bool` | `true` | - | `Creatures:Respawn:DrawDelayAtLoad`: a spawn's respawn delay (`urand(spawntimesecsmin, spawntimesecsmax)`) is drawn once when the creature object is created and reused at every death (vmangos Creature::LoadFromDB, Objects/Creature.cpp:1963; SetDeathState reads `m_respawnDelay`, :2246). False draws again at every death (the earlier ArcaneCore behaviour). |
 | `Creatures:Respawn:HonorTemplateCorpseDecay` | `bool` | `false` | - | `Creatures:Respawn:HonorTemplateCorpseDecay`: let a template's `CorpseDecay` column override the rank delay. It is a cmangos column; vmangos sets the corpse delay by rank alone (Creature.cpp:1326-1343), which is retail. |
@@ -257,7 +330,7 @@ How to read the tables:
 | `Economy:AllowDeleteWithAttachments` | `bool` | `false` | - | Letters with an item or money may be deleted by the receiver, destroying the attachment, as vmangos does (MailHandler.cpp:469-491 refuses only cash on delivery). Default false: only emptied letters can be deleted, the pre-lane behaviour, since no retail source shows attachments being destroyable. |
 | `Economy:AuctionAccountConcurrentLimit` | `uint` | `0` | - | Active auctions one account may hold per auction house (vmangos Auction.AccountConcurrentLimit, World.cpp:538, AuctionHouseHandler.cpp:274-280). A listing counts from acceptance: while it settles, and while an unknown outcome is recovered. 0 = unlimited (default). |
 | `Economy:AuctionDepositMin` | `uint` | `0` | - | Minimum deposit in copper (vmangos CONFIG_UINT32_AUCTION_DEPOSIT_MIN, default 0). |
-| `Economy:AuctionHouses` | `List<AuctionHouseEntry>` | `[AuctionHouseEntry { Id = 2, DepositPercent = 15, CutPercent = 5 }, AuctionHouseEntry { Id = 6, DepositPercent = 15, CutPercent = 5 }, AuctionHouseEntry { Id = 7, DepositPercent = 75, CutPercent = 15 }]` | - | The three houses: Alliance 2, Horde 6, neutral (Blackwater/goblin) 7. |
+| `Economy:AuctionHouses` | `List<AuctionHouseEntry>` | `[AuctionHouseEntry { Id = 2, DepositPercent = 5, CutPercent = 5 }, AuctionHouseEntry { Id = 6, DepositPercent = 5, CutPercent = 5 }, AuctionHouseEntry { Id = 7, DepositPercent = 25, CutPercent = 15 }]` | - | The three houses: Alliance 2, Horde 6, neutral (Blackwater/goblin) 7, with the deposit and cut percentages of the build-5875 client AuctionHouse.dbc (m_depositRate, m_consignmentRate), which vmangos reads: 5/5 for both faction houses, 25/15 for the neutral one. |
 | `Economy:AuctionRateCut` | `float` | `1` | - | Rate.Auction.Cut multiplier (vmangos World.cpp:536, default 1.0). |
 | `Economy:AuctionRateDeposit` | `float` | `1` | - | Rate.Auction.Deposit multiplier (vmangos World.cpp:535, default 1.0). |
 | `Economy:AuctionRateTime` | `float` | `1` | - | Rate.Auction.Time multiplier of a listing's duration (vmangos World.cpp:534, AuctionHouseHandler.cpp:362; default 1.0). |
@@ -344,6 +417,13 @@ How to read the tables:
 | `Locomotion:MirrorTimerEnvironmentalMaxSec` | `uint` | `1` | - | Seconds in lava or slime before the first pulse (vmangos MirrorTimer.Environmental.Max, World.cpp:816, default 1). |
 | `Locomotion:MirrorTimerFatigueMaxSec` | `uint` | `60` | - | Seconds of fatigue in deep water before the first pulse (vmangos MirrorTimer.Fatigue.Max, World.cpp:814, default 60). |
 | `Locomotion:PendingAckResponseTimeMs` | `uint` | `4000` | - | How long the client has to acknowledge a server-ordered movement change before the server enforces it (vmangos Movement.PendingAckResponseTime, World.cpp:985, default 4000 ms; the wait is multiplied by 5 while the player is being teleported, Unit.cpp:6633). |
+| `Locomotion:PlayerRunBackSpeedRate` | `float` | `1` | live | Non-retail when not 1 (default 1): player run-back speed multiplier (the fork's Movement.RunSpeedRate on MOVE_RUN_BACK; 0.1 to 10; live). |
+| `Locomotion:PlayerRunSpeedRate` | `float` | `1` | live | Non-retail when not 1 (default 1): player run speed multiplier (the fork's Movement.RunSpeedRate, which also covers run back; 0.1 to 10; live). |
+| `Locomotion:PlayerSpeedRate` | `float` | `1` | live | Non-retail when not 1 (default 1, retail): multiplies every movement speed of every player (run, run back, swim, swim back, walk), on top of the per-type rates below. Not a vmangos key: the MaNGOS Zero fork's Movement.PlayerSpeedRate (feature/movement-enhancements, WorldConfig.cpp, percent 10 to 1000, applied in the player block of Unit::UpdateSpeed, UnitSpeed.cpp:162-168), here a multiplier clamped to 0.1 to 10. Applied where a player's speed is set (`UnitSpeed.SetRate`), so every speed change, force-speed packet and the server's own movement use the result. Live: `.reload config` and `.movement set` re-send the speeds of every online player. |
+| `Locomotion:PlayerSwimBackSpeedRate` | `float` | `1` | live | Non-retail when not 1 (default 1): player swim-back speed multiplier (the fork's Movement.SwimSpeedRate on MOVE_SWIM_BACK; 0.1 to 10; live). |
+| `Locomotion:PlayerSwimSpeedRate` | `float` | `1` | live | Non-retail when not 1 (default 1): player swim speed multiplier (the fork's Movement.SwimSpeedRate, which also covers swim back; 0.1 to 10; live). |
+| `Locomotion:PlayerTurnRate` | `float` | `1` | live | Non-retail when not 1 (default 1): player turn rate multiplier (0.1 to 10; live). Neither vmangos nor the fork has one; the base is vmangos baseMoveSpeed[MOVE_TURN_RATE] = 3.141594 rad/s (Unit.cpp:67-74). `PlayerSpeedRate` does not apply to it. A change reaches the client as SMSG_FORCE_TURN_RATE_CHANGE. |
+| `Locomotion:PlayerWalkSpeedRate` | `float` | `1` | live | Non-retail when not 1 (default 1): player walk speed multiplier (the fork's Movement.WalkSpeedRate; 0.1 to 10; live). |
 | `Locomotion:RateDamageFall` | `float` | `1` | - | Fall damage multiplier (vmangos Rate.Damage.Fall, World.cpp:533, default 1; setConfigPos: a negative value becomes 1). |
 | `Locomotion:SlimeDamage` | `bool` | `false` | - | Deliberate deviation, off by default: hurt in slime like in lava. vmangos (Player.cpp:1030-1040) and mangos-classic (Player.cpp:1305-1311, "FIXME ... Undercity") damage only in magma although both define DAMAGE_SLIME; whether retail 1.12 hurt in slime cannot be proven from the references. When on, a slime pulse deals the same 605-610 as lava. |
 
@@ -373,6 +453,14 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `Loot:BossRewardDistanceBonus` | `float` | `150` | - | Extra yards for a world boss victim (vmangos Object.cpp:1494). 0 restores the plain limit. |
+| `Loot:DropItemArtifactRate` | `float` | `1` | - | vmangos Rate.Drop.Item.Artifact (World.cpp:503, default 1): the same for artifact quality items. |
+| `Loot:DropItemEpicRate` | `float` | `1` | - | vmangos Rate.Drop.Item.Epic (World.cpp:501, default 1): the same for epic (purple) items. |
+| `Loot:DropItemLegendaryRate` | `float` | `1` | - | vmangos Rate.Drop.Item.Legendary (World.cpp:502, default 1): the same for legendary (orange) items. |
+| `Loot:DropItemNormalRate` | `float` | `1` | - | vmangos Rate.Drop.Item.Normal (World.cpp:498, default 1): the same for common (white) items. |
+| `Loot:DropItemPoorRate` | `float` | `1` | - | vmangos Rate.Drop.Item.Poor (World.cpp:497, setConfigPos, default 1): multiplies the chance of an ungrouped loot row whose item is of poor (grey) quality (LootMgr.cpp:33-42 qualityToRate, applied in LootStoreItem::Roll, :256-268: a chance of 100 or more always drops, otherwise `roll_chance_f(chance * rate)`). Grouped rows are not scaled (LootGroup::Roll uses the raw chances, :1056-1086). |
+| `Loot:DropItemRareRate` | `float` | `1` | - | vmangos Rate.Drop.Item.Rare (World.cpp:500, default 1): the same for rare (blue) items. |
+| `Loot:DropItemReferencedRate` | `float` | `1` | - | vmangos Rate.Drop.Item.Referenced (World.cpp:504, default 1): multiplies the chance of an ungrouped reference row (a negative mincountOrRef) to be processed (LootStoreItem::Roll, LootMgr.cpp:261-262). |
+| `Loot:DropItemUncommonRate` | `float` | `1` | - | vmangos Rate.Drop.Item.Uncommon (World.cpp:499, default 1): the same for uncommon (green) items. |
 | `Loot:GroupLootDistance` | `float` | `74` | - | vmangos CONFIG_FLOAT_GROUP_XP_DISTANCE: group members within it share loot and money. |
 | `Loot:LootDistance` | `float` | `5` | - | INTERACTION_DISTANCE: how close a looter must stay to the corpse/chest (plus both radii). |
 | `Loot:LootedCorpseDecayRate` | `float` | `0` | - | vmangos CONFIG_FLOAT_RATE_CORPSE_DECAY_LOOTED (Rate.Corpse.Decay.Looted, mangosd.conf.dist.in:1542; cmangos World.cpp:457 too): a looted-out corpse stays this share of its decay time. The retail default 0 means a third of the creature's respawn delay (Creature.cpp:3369-3370). |
@@ -401,6 +489,10 @@ How to read the tables:
 | `Net:Protection:LogonUnauthenticatedLifetime` | `TimeSpan` | `00:00:30` | - | Longest a logon connection may exist without a successful proof, counted from accept; the connection is closed when it expires. 00:00:00 disables. Auth:MaxSessionDurationSeconds (300, vmangos MaxSessionDuration) still bounds the whole connection; this closes an idle or guessing one much sooner. The world daemon's equivalent is World:PreAuthTimeout (retail). |
 | `Net:Protection:MaxConnectionsPerIp` | `int` | `16` | - | Simultaneous connections one client IP address may hold on a listener; 0 disables. Applied together with the daemon's own cap (Auth:MaxConnectionsPerIp, World:MaxConnectionsPerIp): when both are set the lower one wins. A retail client holds one connection per daemon. Deviation from retail (vmangos has no per-address cap), on by default. |
 | `Net:Protection:MaxTrackedAddresses` | `int` | `4096` | - | Most client addresses the per-address table tracks (rounded up to a power of two). Memory is fixed at start (about 48 bytes per slot) and nothing is allocated per connection. When the table is full and no idle slot exists the newcomer is still admitted: the table forgets the least recently seen address of the probe window (preferring one that is not being limited) and writes one rate-limited log line. A full table measures less; it never refuses a connection (the connection caps are the fail-closed limit). |
+| `Net:Protection:WorldFloodPacketsPerSecond` | `int` | `8000` | - | World daemon only: packets in one one-second window that close the connection as a flood (one rate-limited log line); 0 disables. Above `WorldPacketsPerSecond`, so a burst is dropped long before it disconnects. |
+| `Net:Protection:WorldOpcodeBurst` | `int` | `4000` | - | World daemon only: the capacity of each per-opcode token bucket of an authenticated connection (`Net.OpcodeRateLimiter`, the MaNGOS Zero anticheat fork's gateway RateLimiter); a packet that finds its opcode's bucket empty is dropped (not handled) and counted, the connection stays. 0 disables the per-opcode buckets. Far above a retail client: an empty client cache in a crowded city sends a few hundred queries of one opcode at once, and the world queue's own tests treat a 3000-packet burst as heavy but legitimate. Deviation from retail (vmangos handles every packet), on by default. Read when the session starts. |
+| `Net:Protection:WorldOpcodeRefillPerSecond` | `double` | `1000` | - | World daemon only: tokens a per-opcode bucket regains per second (see `WorldOpcodeBurst`). |
+| `Net:Protection:WorldPacketsPerSecond` | `int` | `4000` | - | World daemon only: packets of any opcode one connection may send in a one-second window before the rest of that window is dropped (counted, the connection stays); 0 disables. A retail client sends a few tens per second. |
 
 ## `NpcServices`
 
@@ -489,6 +581,8 @@ How to read the tables:
 | `Progression:MaxPlayerLevel` | `uint` | `60` | - | MaxPlayerLevel: no experience is gained at or above it. |
 | `Progression:RateXpKill` | `float` | `1` | - | Rate.XP.Kill. |
 | `Progression:RateXpKillElite` | `float` | `1` | - | Rate.XP.Kill.Elite. |
+| `Progression:RateXpPersonalMax` | `float` | `1` | - | vmangos Rate.XP.Personal.Max (World.cpp:511, setConfigMin 0, default 1): the highest personal XP rate a player below GameMaster may set with `.modify xprate` (CharacterCommands.cpp:84-88). A negative value is replaced by 1 when the command reads it. |
+| `Progression:RateXpPersonalMin` | `float` | `1` | - | vmangos Rate.XP.Personal.Min (World.cpp:510, setConfigMin 0, default 1): the lowest personal XP rate `.modify xprate` accepts (CharacterCommands.cpp:78-82). A negative value is replaced by 1 when the command reads it. |
 
 ## `Quests`
 
@@ -776,12 +870,26 @@ How to read the tables:
 | `World:GmCommands:AuditTailSize` | `int` | `200` | - | How many of the latest audit lines `.arcane gmlog` can show (ArcaneCore only; the lines are the ones `LogCommands` writes, kept in memory, lost on restart). 0 keeps none. |
 | `World:GmCommands:ExactNameFirst` | `bool` | `false` | - | A command word matching a command name exactly wins over a longer name that starts with it (the behaviour before the retail table work). Retail (false) takes the first table entry the word is a prefix of (hasStringAbbr, Chat.cpp:1566-1600), with roots in retail order. |
 | `World:GmCommands:HideUnavailable` | `bool` | `false` | - | Treat a command above the invoker's level as if it did not exist ("There is no such command", the behaviour before the retail table work). Retail (false) resolves the command first and answers "This command is not available to you." (Chat.cpp:1884-1888). |
+| `World:GmCommands:LiveFx` | `bool` | `true` | - | ArcaneCore only, NOT the retail default: registers the `.fx` GM tooling (music, sounds, spell visuals, cinematics, zone-under-attack, world states, client clock speed, screen messages, multi-zone weather and the `.fx event` presets), which pushes client-visible effects to the invoker, the selection, the zone, the map or the server. vmangos has no such root: only `.debug play music\|sound\|cinematic` and `.debug worldstate`, each to the invoker (Chat.cpp:288-323). False removes the root (restart to change). |
+| `World:GmCommands:LiveFxDbcDirectory` | `string` | `""` | - | ArcaneCore only: a directory of the developer's own build-5875 client DBC files (nothing is shipped). When set, `.fx music`/`sound` refuse an id not in SoundEntries.dbc, `.fx cinematic` one not in CinematicSequences.dbc and `.fx visual` one not in SpellVisualKit.dbc, and `.fx lookup` searches those files plus ZoneMusic, SpellVisualEffectName and WorldStateUI .dbc. A file missing from the directory leaves its kind unchecked (with a warning); a missing directory or a malformed file stops the daemon. Empty (the default): every id is sent unchecked. vmangos' `.debug play sound\|music\|cinematic` refuse unknown ids against its own loaded tables (DebugCommands.cpp:471-536); ArcaneCore loads no such tables unless this is set. |
 | `World:GmCommands:LogCommands` | `bool` | `true` | - | Write one log line per GM command (a command above level 0), as vmangos Chat.cpp:1908-1925 does. |
 | `World:GmCommands:LookupMaxResults` | `int` | `0` | - | The most lines `.lookup` prints (0 = unlimited, as vmangos). A one-letter search on a full classic database matches about 14,000 items, each its own chat packet, all sent from the world thread; an operator may cap it (a final line says results were left out). |
 | `World:GmCommands:LowerSecurity` | `bool` | `true` | - | vmangos GM.LowerSecurity (mangosd.conf.dist.in:2536). Retail default is false, which lets staff act on a higher account; ArcaneCore keeps the stricter true as its default so the existing refusal does not weaken. Strong checks (mute/unmute) are strict in both. |
 | `World:GmCommands:RetailLevels` | `bool` | `true` | - | Apply the vmangos account level of the commands declared before the retail command work (`RetailCommandLevels`); off keeps their ArcaneCore four-level declarations. |
 | `World:GmCommands:SecurityMap` | `Dictionary<AccountSecurity, byte>` | `{Administrator: 6, GameMaster: 3, Moderator: 1, Player: 0}` | - | The retail account level (vmangos AccountTypes, D:\refs\vmangos\src\shared\Common.h:136-146: PLAYER 0, MODERATOR 1, TICKETMASTER 2, GAMEMASTER 3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6, CONSOLE 7) each stored `AccountSecurity` stands for. ArcaneCore stores four levels, so the retail levels 2, 4 and 5 are only reachable by mapping a stored level onto them (an operator may remap, e.g. GameMaster=4). |
 | `World:GmCommands:TicketMutationsPerMinute` | `int` | `10` | - | ArcaneCore only (no reference core limits these): the most ticket mutations (`CMSG_GMTICKET_CREATE`, `_UPDATETEXT`, `_DELETETICKET`) one account may send per minute. Beyond it the packet is refused before anything is read (create and update answer with their error code, a delete is answered with the ticket's unchanged state) and the player is told; every accepted create or changed text tells all GameMasters online, so this also bounds that. Fail-closed: 0 refuses every ticket mutation, a negative value is the default. |
+
+## `World:GmCommands:DebugDraw`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:GmCommands:DebugDraw:GameObjectDisplayInfoDbcPath` | `string` | `""` | - | The developer's own build-5875 GameObjectDisplayInfo.dbc (optional; nothing is shipped). When set, every marker model (built-in and overridden) is checked against it at startup: an override the client does not have falls back to the built-in model with a warning. An unreadable or malformed file stops the daemon, as every configured DBC does. Empty: no check. |
+| `World:GmCommands:DebugDraw:Glow` | `bool` | `true` | - | Add a coloured glow model next to the key markers (end points, hits, path corners, waypoints, heights, spawns). |
+| `World:GmCommands:DebugDraw:GlowModels` | `Dictionary<string, uint>` | `{}` | - | Per marker kind, the glow companion's GameObjectDisplayInfo id (0 = no glow), checked like `Models`. |
+| `World:GmCommands:DebugDraw:LifetimeSeconds` | `int` | `120` | - | Seconds a drawing stays before it is removed on its own (it also goes with .debug vis clear, a logout or a map change). 5..3600. |
+| `World:GmCommands:DebugDraw:MaxMarkersPerGm` | `int` | `300` | - | Most markers one GM's client holds at once (glow companions count); a new drawing removes the oldest ones to fit. 1..2000. |
+| `World:GmCommands:DebugDraw:Models` | `Dictionary<string, uint>` | `{}` | - | Per marker kind (the `DebugMarkerKind` name, e.g. `Cell`, `LosClear`, `Waypoint`), a GameObjectDisplayInfo id to draw instead of the built-in model. 0 or an id missing from `GameObjectDisplayInfoDbcPath` keeps the built-in model. |
+| `World:GmCommands:DebugDraw:Spacing` | `float` | `2` | - | Yards between the dots of a line or path (at least 0.5; a long line spreads its dots further to stay within its share of markers). |
 
 ## `World:GmCommands:FirstLoginTools`
 
@@ -819,6 +927,7 @@ How to read the tables:
 | `World:Honor:MinHonorKills` | `uint` | `0` | - | Honorable kills a week to be ranked; 0 selects 15 (MIN_HONOR_KILLS_POST_1_10). |
 | `World:Honor:PoolSizePerFaction` | `uint` | `0` | - | Standing pool size per faction; 0 uses the number of ranked players. |
 | `World:Honor:RacialLeaderExcludedEntries` | `uint[]` | `[]` | - | Creature entries that are never racial leaders. |
+| `World:Honor:Rate` | `float` | `1` | - | Non-retail when not 1 (default 1): multiplies earned honor (kills, battleground bonuses, quests); Rate.Honor of the MaNGOS Zero fork and the cmangos/TrinityCore line (vmangos has none). A negative or non-finite value is 1. |
 | `World:Honor:ReportDirectory` | `string` | `""` | - | Directory that receives the vmangos HCR calculation report; empty writes none. |
 | `World:Honor:RpDecay` | `float` | `0.2` | - | Weekly rank point decay, clamped to 0..1. |
 | `World:Honor:TimeZoneOffsetHours` | `int` | `0` | - | Hours added to UTC for the game day and the weekday of the weekly calculation. |
@@ -844,6 +953,7 @@ How to read the tables:
 | `World:Instances:IgnoreRaidGroup` | `bool` | `false` | - | Let players enter raids without a raid group (vmangos `Instance.IgnoreRaid`, default off). |
 | `World:Instances:NormalDungeonResetSeconds` | `int` | `7200` | - | A normal (non-raid) dungeon resets this long after it was created, but only while nobody is inside (vmangos `MapPersistentStateManager::AddPersistentState`: "if no creatures are killed the instance will reset in two hours"; the schedule is cancelled while players are in). |
 | `World:Instances:PerHourLimit` | `int` | `5` | - | New instances one account may enter per hour (vmangos `Instance.PerHourLimit`, default 5; `MAX_INSTANCE_PER_ACCOUNT_PER_HOUR` Player.h:669). 0 turns the limit off (a ArcaneCore convention: vmangos would refuse every new instance at 0). Game masters are exempt. |
+| `World:Instances:RateResetTime` | `float` | `1` | - | vmangos `Rate.InstanceResetTime` (World.cpp:543, setConfigPos, default 1): multiplies the reset period in days of every raid with a `reset_delay`, truncated and at least one day (ObjectMgr::LoadMapTemplate, ObjectMgr.cpp:6809-6811). A delay of 0 (no global reset) stays 0. Read when the raid schedules are built and at each global reset; a negative value is 1. |
 | `World:Instances:ResetExtendsOnKills` | `bool` | `true` | - | A creature kill in a normal dungeon moves the reset time to respawn + 2 h when later (vmangos Map::BindToInstanceOrRaid, Map.cpp:3536-3544). Default on (retail). |
 | `World:Instances:ResetRefusedNoticeSeconds` | `int` | `10` | - | Seconds between two "Please leave the instance so it can be reset." notices to the players inside an instance that a refused personal reset asks to leave (an ArcaneCore limit: the refusal itself is an ArcaneCore choice, see docs/integration/instances.md, and the requester can repeat CMSG_RESET_INSTANCES at will). The requester still gets SMSG_INSTANCE_RESET_FAILED every time. 0 sends the notice on every refusal. |
 | `World:Instances:ResetTimeHour` | `int` | `4` | - | Hour of the day (UTC, 0–23) of global raid resets (vmangos `Instance.ResetTimeHour`, default 4). |

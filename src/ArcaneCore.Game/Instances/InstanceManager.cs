@@ -1595,7 +1595,7 @@ public sealed partial class InstanceManager : IMapResolver
         var storedByMap = stored.GroupBy(r => r.MapId).ToDictionary(g => g.Key, g => g.Last().ResetTime);
         foreach (MapTemplate template in Registry.All.Where(t => t.IsDungeon && t.ResetDelay > 0))
         {
-            long period = template.ResetDelay * Day;
+            long period = _options.EffectiveResetDelayDays(template.ResetDelay) * Day; // Rate.InstanceResetTime (ObjectMgr.cpp:6809-6811)
             long t = storedByMap.TryGetValue(template.Entry, out long value) && value > 0
                 ? value
                 : _raidSchedules.TryGetValue(template.Entry, out RaidSchedule? existing) ? existing.ResetTime : today + period + diff;
@@ -1639,7 +1639,7 @@ public sealed partial class InstanceManager : IMapResolver
         }
 
         MapTemplate? template = Registry.Find(mapId);
-        long period = Math.Max(1, template?.ResetDelay ?? 7) * Day;
+        long period = Math.Max(1, _options.EffectiveResetDelayDays(template?.ResetDelay ?? 7)) * Day;
         long diff = (long)Math.Clamp(_options.ResetTimeHour, 0, 23) * 3600;
         long next = (schedule.ResetTime / Day * Day) + period + diff;
         long now = Now;
