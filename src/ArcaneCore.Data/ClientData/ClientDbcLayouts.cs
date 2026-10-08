@@ -1,16 +1,15 @@
 namespace ArcaneCore.Data.ClientData;
 
 /// <summary>
-/// The expected layout of one build-5875 DBC: its field count (every 1.12.1 field is four bytes, so the record size is four times
-/// that) and where the layout comes from. <see cref="Format"/> is the vmangos format string when vmangos loads the file
-/// (one character per field: n index, i int, f float, s string, d/x ignored), otherwise null and <see cref="Source"/> names the
-/// ArcaneCore reader whose field count is enforced.
+/// The expected layout of one build-5875 DBC: its field count, record size and source. <see cref="Format"/> is the vmangos
+/// format string when vmangos loads the file (one character per field: n index, i int, f float, s string, d/x ignored);
+/// otherwise <see cref="Source"/> names the ArcaneCore reader or WoWDBDefs definition.
 /// </summary>
 public sealed record ClientDbcLayout(string File, int Fields, string? Format, string Source, int? PackedRecordSize = null)
 {
     /// <summary>
-    /// The record size in bytes: four bytes a field, except for a file with packed byte fields (CharStartOutfit declares 41 fields
-    /// in 152-byte records), whose size is <see cref="PackedRecordSize"/>.
+    /// The record size in bytes: normally four bytes a field. Packed fields and WoWDBDefs-derived sizes use
+    /// <see cref="PackedRecordSize"/>.
     /// </summary>
     public int RecordSize => PackedRecordSize ?? Fields * 4;
 }
@@ -19,7 +18,7 @@ public sealed record ClientDbcLayout(string File, int Fields, string? Format, st
 /// The reference layouts of the build-5875 DBCs the core reads or cross-references. The vmangos rows are transcribed from
 /// vmangos src/game/Database/DBCfmt.h (the build &gt; 1.10.2 variants of ChrClasses and ItemSet); vmangos reads Faction,
 /// FactionTemplate, CharStartOutfit and Spell from its world database instead, so those four are the field counts the ArcaneCore
-/// readers require. A file of the full client set that is not listed here has no reference layout: only its WDBC header is checked.
+/// readers require. The generated WoWDBDefs table supplies the remaining build-5875 layouts.
 /// </summary>
 public static class ClientDbcLayouts
 {
@@ -29,7 +28,7 @@ public static class ClientDbcLayouts
         => new(file, fields, null, "ArcaneCore " + reader, packedRecordSize);
 
     /// <summary>Every reference layout, by file name (case-insensitive).</summary>
-    public static IReadOnlyDictionary<string, ClientDbcLayout> All { get; } = new ClientDbcLayout[]
+    private static IReadOnlyDictionary<string, ClientDbcLayout> Primary { get; } = new ClientDbcLayout[]
     {
         V("AreaTable.dbc", "niiiixxxxxissssssssxixxxi", "AreaTableEntryfmt"),
         V("AreaTrigger.dbc", "niffffffff", "AreaTriggerEntryfmt"),
@@ -91,6 +90,20 @@ public static class ClientDbcLayouts
         A("CharStartOutfit.dbc", 41, "CharStartOutfitDbcReader", packedRecordSize: 152),
         A("Spell.dbc", 173, "SpellDbcImporter"),
     }.ToDictionary(l => l.File, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// All build-5875 client layouts: the vmangos and ArcaneCore entries above, then the generated WoWDBDefs layouts
+    /// (<see cref="ClientDbcDbdLayouts"/>) for every other file. A primary entry wins, and one the generated table lacks is kept.
+    /// </summary>
+    public static IReadOnlyDictionary<string, ClientDbcLayout> All { get; } =
+        Primary.Values
+            .Concat(ClientDbcDbdLayouts.All.Values
+                .Where(d => !Primary.ContainsKey(d.File))
+                .Select(d => new ClientDbcLayout(d.File, d.Fields, null, "WoWDBDefs e3df370", d.RecordSize)))
+            .ToDictionary(l => l.File, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The vmangos and ArcaneCore layouts, which the generated WoWDBDefs table must agree with.</summary>
+    public static IEnumerable<ClientDbcLayout> PrimaryLayouts => Primary.Values;
 
     /// <summary>The reference layout of <paramref name="file"/>, or null when it has none.</summary>
     public static ClientDbcLayout? Find(string file) => All.GetValueOrDefault(file);

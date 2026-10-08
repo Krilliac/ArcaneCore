@@ -54,7 +54,7 @@ public sealed record DbcReferenceResult(
 /// trigger, graveyard, taxi, lock, item set, skill and emote ids the content uses must exist in the client's
 /// tables, or the client shows nothing (or crashes) for them. Read-only: every query is a SELECT with GROUP BY.
 /// </summary>
-public static class DbcCrossReferences
+public static partial class DbcCrossReferences
 {
     private static IEnumerable<DbcReference> Many(string dbc, string table, params string[] columns) => columns.Select(c => new DbcReference(dbc, table, c));
 
@@ -198,14 +198,17 @@ public static class DbcCrossReferences
         return results;
     }
 
-    /// <summary>The report lines: a summary, then each dangling or skipped reference (ok ones only with <paramref name="all"/>).</summary>
-    public static IReadOnlyList<string> Lines(IReadOnlyList<DbcReferenceResult> results, bool all = false)
+    /// <summary>
+    /// The report lines: a summary headed <paramref name="title"/>, then each dangling or skipped reference (ok ones only with
+    /// <paramref name="all"/>).
+    /// </summary>
+    public static IReadOnlyList<string> Lines(IReadOnlyList<DbcReferenceResult> results, bool all = false, string title = "DBC cross-references")
     {
         ArgumentNullException.ThrowIfNull(results);
         CultureInfo c = CultureInfo.InvariantCulture;
         var lines = new List<string>
         {
-            string.Create(c, $"DBC cross-references: {results.Count} checked, {results.Count(r => r.Status == DbcReferenceStatus.Ok)} ok, "
+            string.Create(c, $"{title}: {results.Count} checked, {results.Count(r => r.Status == DbcReferenceStatus.Ok)} ok, "
                 + $"{results.Count(r => r.Status == DbcReferenceStatus.Dangling)} with dangling ids ({results.Sum(r => r.DanglingIds)} ids, {results.Sum(r => r.DanglingRows)} rows), "
                 + $"{results.Count(r => r.Status == DbcReferenceStatus.Skipped)} skipped"),
         };
