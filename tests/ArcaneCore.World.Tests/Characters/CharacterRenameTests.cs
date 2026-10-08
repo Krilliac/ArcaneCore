@@ -320,6 +320,7 @@ public sealed class CharacterRenameTests
 
             Assert.Equal($"Forced rename for player {Link("Crsleeper")} (GUID #1) will be requested at next login.", await RunAsync(gm, ".character rename Crsleeper"));
 
+            await WorldTestHost.WaitForAsync(() => Flags(host).FlagsOf(1) == CharacterAtLoginFlags.Rename, "the offline rename flag to be stored");
             Assert.Equal(CharacterAtLoginFlags.Rename, Flags(host).FlagsOf(1));
         }
     }
