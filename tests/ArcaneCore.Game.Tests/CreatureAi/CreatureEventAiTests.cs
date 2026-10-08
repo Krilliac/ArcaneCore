@@ -390,6 +390,28 @@ public sealed class CreatureEventAiTests
         Assert.Empty(spells.Casts); // no chance, aura present, no second target on the threat list
     }
 
+    [Theory]
+    [InlineData(CreatureEventAI.CastTriggered, true)]
+    [InlineData(0, false)]
+    public void ADeadCreature_CastsATriggeredDeathSpell_ButNotAnUntriggeredOne(int castFlags, bool lands)
+    {
+        // cmangos Spell::CheckCast (Spells/Spell.cpp:4692-4695) refuses a dead caster only when it is a player, and vmangos (Spell.cpp:5320) lets a
+        // dead unit cast a triggered spell no aura triggered: EventAI's "cast on death" rows (classic-db z2815: 103 death rows cast, 69 of them
+        // with CAST_TRIGGERED, such as the Hazzali wasps' Summon Hazzali Parasites) run after the creature is dead.
+        using var kit = new SpellTestKit();
+        CreatureContent content = EventContent(
+            [Row(1, EventAiEventType.Death, a1: Act(EventAiActionType.Cast, (int)SpellTestKit.DotSpell, (int)EventAiTarget.Invoker, castFlags))]);
+        var caster = new SpellSystemCreatureCaster(kit.System);
+        (_, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Spells = caster }, world: kit.World);
+        (Player player, _) = kit.AddPlayer(1);
+        Creature wolf = Assert.Single(system.Creatures);
+
+        map.Combat.Kill(player, wolf);
+
+        Assert.False(wolf.IsAlive);
+        Assert.Equal(lands, kit.System.HasAura(player, SpellTestKit.DotSpell));
+    }
+
     [Fact]
     public void CastThroughTheRealSpellSystem_AppliesTheCreaturesAura_AndDespawnDropsItsSpellState()
     {
