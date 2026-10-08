@@ -191,6 +191,18 @@ public sealed class FormMountCastCheckTests : IDisposable
     }
 
     [Fact]
+    public void WaterWalking_OnASpirit_FailsBadTargets_OnAPriestInShadowform_IsOk()
+    {
+        // The client's SpellShapeshiftForm rows (patch.MPQ): Spirit of Redemption 32 has flags1 0 (shapeshifted),
+        // Shadowform 28 has 0x9 (Stance, so not shapeshifted in vmangos Unit::IsShapeShifted).
+        SetForm(_other, 32);
+        Assert.Equal(SpellCastResult.BadTargets, Cast(_player, WaterWalking, _other));
+
+        SetForm(_other, 28);
+        Assert.Equal(SpellCastResult.CastOk, Cast(_player, WaterWalking, _other));
+    }
+
+    [Fact]
     public void AMountCancelledAura_OnAMountedTarget_FailsBadTargets()
     {
         Mount(_other);

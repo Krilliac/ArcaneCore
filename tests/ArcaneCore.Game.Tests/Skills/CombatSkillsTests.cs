@@ -315,12 +315,13 @@ public sealed class CombatSkillsTests
     [InlineData(17, true)]    // Battle Stance: flags1 Stance, not "shapeshifted" (vmangos Unit::IsShapeShifted, Unit.cpp:5843-5852)
     [InlineData(30, true)]    // Stealth: Stance flag
     [InlineData(31, true)]    // Moonkin: Stance flag
+    [InlineData(28, true)]    // Shadowform: flags1 0x9 in the client's (patch.MPQ) row carries the Stance flag
     [InlineData(0, true)]
-    [InlineData(1, false)]    // Cat, Bear, Travel, Ghost Wolf, Shadowform: shapeshifted, no weapon skill (Player.cpp:5351)
+    [InlineData(1, false)]    // Cat, Bear, Travel, Ghost Wolf, Spirit of Redemption: shapeshifted, no weapon skill (Player.cpp:5351)
     [InlineData(5, false)]
     [InlineData(3, false)]
     [InlineData(16, false)]
-    [InlineData(28, false)]
+    [InlineData(32, false)]
     public void WeaponSkillGain_FollowsTheFormFlags_NotTheFormByte(byte form, bool gains)
     {
         var rig = new Rig();

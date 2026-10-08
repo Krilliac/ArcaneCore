@@ -81,7 +81,7 @@ When a server and the docs disagree, the server wins and the conflict is listed 
    - `tests/ArcaneCore.Data.Tests/Spells`: schema upgrade, stores, DBC importer on SQLite, MariaDB and PostgreSQL.
    - `tests/ArcaneCore.World.Tests/Spells`: loopback end to end.
 3. With a client:
-   - Run `arcane-spell-import <WoW 1.12.1>/Data/DBFilesClient` after extracting the DBCs from `dbc.MPQ`.
+   - Run `arcane-spell-import <WoW 1.12.1>/Data/DBFilesClient` after extracting the DBCs the client actually uses: each file from `patch-2.MPQ` if it has it, else `patch.MPQ`, else `dbc.MPQ` (the base archive holds older copies of some files, e.g. `SpellShapeshiftForm.dbc`). `D:efsient-dbc-5875-effective` holds verified extractions.
    - Fill `playercreateinfo_spell` from classic-db (M8 importer) or by hand.
    - Log in: the spellbook shows the starting spells.
    - Cast a spell with a cast time and watch the cast bar, the GCD and the cooldown.

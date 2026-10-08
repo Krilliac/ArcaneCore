@@ -25,7 +25,7 @@ Ghost Wolf, Shadowform and rogue Stealth was an inert buff. Now:
 | Bear / Dire Bear | 5 / 8 | display 2281 or 2289, rage (max 1000, the rage the druid had is kept), boosts 1178 + 21178 / 9635 + 21178, attack time 2.5 s |
 | Ghost Wolf | 16 | display 4613, scale 0.8 |
 | Warrior stances | 17-19 | as before (rage kept up to Tactical Mastery's amount, stance boost) |
-| Shadowform | 28 | form byte only: Holy spells (StancesNot) and NOT_SHAPESHIFT spells are blocked |
+| Shadowform | 28 | form byte only: Holy spells (StancesNot) are blocked; flags1 0x9 is a Stance, so NOT_SHAPESHIFT spells stay castable and SHAPESHIFTING_CANCELS auras stay |
 | Stealth | 30 | form byte only: the 21 rogue stealth-form spells (Ambush, Garrote, Cheap Shot, Sap, Pick Pocket, Vanish, Premeditation) become castable |
 | Moonkin | 31 | display 15374 / 15375, boost 24905 |
 
@@ -36,8 +36,9 @@ Wolf, Shadowform, Stealth and the stances do not (`SpellAuras.cpp:2436-2445`).
 
 1. **A1 retail form table and flag-based predicates** (`ShapeshiftFormCatalog.Retail`, `FormQueries`). The 32 rows of the
    client `SpellShapeshiftForm.dbc` (flags1 and creatureType). `IsShapeShifted` is `form != 0 && !(flags1 & Stance)`
-   (`Unit.cpp:5843-5852`), so Cat, Tree, Travel, Aquatic, Bear, Dire Bear, Ghost Wolf and Shadowform count, warrior stances,
-   Stealth and Moonkin do not. Weapon-skill gain follows it (`Player.cpp:5351`): it was "form byte != 0" before, which
+   (`Unit.cpp:5843-5852`), so Cat, Tree, Travel, Aquatic, Bear, Dire Bear, Ghost Wolf and Spirit of Redemption count, warrior
+   stances, Shadowform, Stealth and Moonkin do not (corrected 2026-10-08: the table first shipped the base dbc.MPQ rows, see
+   "Data provenance"). Weapon-skill gain follows it (`Player.cpp:5351`): it was "form byte != 0" before, which
    would have stopped warriors and rogues from gaining weapon skill the moment stances and stealth became real. Player
    creature type is a Beast in the animal forms (`Unit.cpp:7722-7735`). `CombatEnvironment.ShapeshiftForms` links the table
    (DBC or built-in) for combat code. `Combat:RequireShapeshiftFormDbc` (default false) refuses startup without
@@ -91,16 +92,21 @@ Wolf, Shadowform, Stealth and the stances do not (`SpellAuras.cpp:2436-2445`).
 
 The 32 `SpellShapeshiftForm` rows, the class power types (Warrior 1, Rogue 3, others 0; `FormPowerRules.ClassPowerType`) and
 the race creature type (7, humanoid, for all nine races) were read from the developer's own build-5875 client
-(`Data\dbc.MPQ`, `DBFilesClient\*.dbc`), not from the GPL references and not downloaded. Only the meaningful columns are in
+(`DBFilesClient\*.dbc`), not from the GPL references and not downloaded. `SpellShapeshiftForm.dbc` is the `Data\patch.MPQ`
+copy, the one the client resolves (patch-2.MPQ carries none). The table first shipped the older `Data\dbc.MPQ` copy, which
+differs in 11 rows (no druid or Ghost Wolf flags, Shadowform 0x8 without Stance, rows 31 and 32 the obsolete
+"zzOLDStealth 2/3" stances with 0x1, Tree/Moonkin/Spirit creatureType 0, Creature - Cat 0); it was corrected on 2026-10-08. Only the meaningful columns are in
 the repository. `ShapeshiftFormDbcTests.Retail_MatchesTheDevelopersClientDbc_RowForRow` checks the built-in table against a real
 file when `ARCANECORE_TEST_DBC_DIR` points at a directory with `SpellShapeshiftForm.dbc`; without it the test is reported as
 Skipped (never a silent pass). Spell data in the tests are classic-db 1.12.1 `spell_template` values.
 
-Row facts: flags1 is 0x7 (Stance, NotToggleable, PersistOnDeath) for the stances 17-19, 0x8 (CanInteractNpc) for Shadowform
-28, 0x1 for Stealth 30 and for the Moonkin form 31 (the client row is named zzOLDStealth 2) and for the unused row 32, and 0
-for every other row, the druid forms included. creatureType is 1 (beast) for 1, 3, 4, 5, 8, 14, 16, -1 for 17 and 28.
-vmangos' `SHAPESHIFT_FLAG_DONT_USE_WEAPON` (0x10) and `AGILITY_ATTACK_BONUS` (0x20) are in no 1.12.1 row, which is why the
-weapon-less forms are decided by the hard-coded `IsAttackSpeedOverridenForm` (1, 5, 8; `SharedDefines.h:1456-1466`).
+Row facts: flags1 is 0x70 (DontUseWeapon, AgilityAttackBonus, CanUseEquippedItems) for Cat 1, 0x10 for Tree 2, 0x50
+(DontUseWeapon, CanUseEquippedItems) for Travel 3, Aquatic 4, Bear 5 and Dire Bear 8, 0x40 for Ghost Wolf 16, 0x7 (Stance,
+NotToggleable, PersistOnDeath) for the stances 17-19, 0x9 (Stance, CanInteractNpc) for Shadowform 28, 0x1 for Stealth 30,
+0x41 (Stance, CanUseEquippedItems) for Moonkin 31, and 0 for every other row, Spirit of Redemption 32 included.
+creatureType is 1 (beast) for 1, 3, 4, 5, 8, 14, 15 and 16, -1 for 2, 17, 28, 31 and 32. The server reads only the Stance
+bit and creatureType; the weapon-less forms are decided by the hard-coded `IsAttackSpeedOverridenForm` (1, 5, 8;
+`SharedDefines.h:1456-1466`), as vmangos does for attack speed.
 
 ## Configuration
 

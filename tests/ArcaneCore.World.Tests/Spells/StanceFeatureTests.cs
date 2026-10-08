@@ -48,7 +48,7 @@ public sealed class StanceFeatureTests
         Assert.True(spells.HasAuraHandler(AuraType.ModShapeshift));
         Assert.Single(spells.CastChecks.OfType<StanceCastCheck>());
         Assert.Equal(7u, feature.Service!.GetFormFlags(ShapeshiftForm.BattleStance));   // client row: Stance | NotToggleable | PersistOnDeath
-        Assert.Equal(0u, feature.Service.GetFormFlags(ShapeshiftForm.Cat));              // a client row, not "unknown"
+        Assert.Equal(0x70u, feature.Service.GetFormFlags(ShapeshiftForm.Cat));           // the client's patch.MPQ row, not "unknown"
         Assert.Equal(1u, feature.Service.GetFormFlags(ShapeshiftForm.Stealth));
         Assert.Same(ShapeshiftFormCatalog.Retail, CombatEnvironment.For(world).ShapeshiftForms);
     }

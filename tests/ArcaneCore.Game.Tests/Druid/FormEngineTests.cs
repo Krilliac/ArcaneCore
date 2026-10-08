@@ -489,7 +489,7 @@ public sealed class FormEngineTests
     {
         using var rig = new Rig();
 
-        Assert.Equal(0u, rig.Service.GetFormFlags(ShapeshiftForm.Cat));
+        Assert.Equal(0x70u, rig.Service.GetFormFlags(ShapeshiftForm.Cat));   // the client's patch.MPQ row: no Stance bit
         Assert.Equal(7u, rig.Service.GetFormFlags(ShapeshiftForm.BattleStance));
         Assert.True(ShapeshiftService.CastsShapeshiftFormEffect(ShapeshiftForm.Moonkin));
         Assert.False(ShapeshiftService.CastsShapeshiftFormEffect(ShapeshiftForm.GhostWolf));

@@ -58,7 +58,7 @@ A drift test (`CraftingDocsTests`) fails when a key named here is not a real opt
 
 ## Open questions for the integrator or the developer
 
-1. **Real 1.12.1 DBCs** are at `D:\server-Zero\run\dbc` (1.12-shaped; `SpellItemEnchantment.dbc` 1,460 rows). Point `Enchanting:SpellItemEnchantmentDbcPath` at it for a real run; extract the same files from the client `dbc.MPQ` if the
+1. **Real 1.12.1 DBCs** are at `D:\server-Zero\run\dbc` (1.12-shaped; `SpellItemEnchantment.dbc` 1,460 rows). Point `Enchanting:SpellItemEnchantmentDbcPath` at it for a real run; extract the same files from the client (patch-2.MPQ, then patch.MPQ, then dbc.MPQ, the order the client resolves them) if the
    server-Zero copy is not the retail build for you. The real-DBC probe needs `ARCANECORE_TEST_DBC_DIR`.
 2. **Melee outcome event.** Combat-spell enchants (62 referenced enchants) and the item `ChanceOnHit` spells need a published melee/ranged hit outcome; the threat or warrior-proc lane is the natural owner.
    `Player::CastItemCombatSpell` (`Player.cpp:7310-7355`) is the spec; `ItemEnchantments`, `PlayerEnchantments.Apply(item, slot, false)` and `ItemEnchantments.Clear` are the primitives it uses.

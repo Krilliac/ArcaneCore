@@ -46,22 +46,26 @@ public sealed class ShapeshiftFormCatalog
             .Select(id => new ShapeshiftFormInfo((uint)id, 1, 0)));
 
     /// <summary>
-    /// Every row of the build-5875 client SpellShapeshiftForm.dbc (32 rows, flags1 and creatureType), for servers
-    /// without <c>Combat:ShapeshiftFormDbcPath</c>. Provenance: read from the developer's own 1.12.1 client
-    /// (Data\dbc.MPQ, DBFilesClient\SpellShapeshiftForm.dbc), not from the GPL references and not downloaded; only
-    /// the two meaningful columns are kept. flags1 is 7 (Stance | NotToggleable | PersistOnDeath) for the warrior
-    /// stances 17-19, 8 (CanInteractNpc) for Shadowform 28, 1 (Stance) for Stealth 30 and the Moonkin form 31 (and
-    /// the unused row 32), and 0 for every other row, the druid animal forms included. creatureType is 1 (beast)
-    /// for 1, 3, 4, 5, 8, 14 and 16, -1 for 17 and 28 and 0 for the rest (vmangos Unit::GetCreatureType ignores
-    /// values of 0 or below). A configured DBC always overrides this table.
+    /// Every row of the build-5875 client SpellShapeshiftForm.dbc as the client resolves it (32 rows, flags1 and
+    /// creatureType), for servers without <c>Combat:ShapeshiftFormDbcPath</c>. Provenance: read from the developer's own
+    /// 1.12.1 client, the copy in <c>Data\patch.MPQ</c> (which overrides the older <c>Data\dbc.MPQ</c> copy; patch-2.MPQ
+    /// carries none), not from the GPL references and not downloaded; only the two meaningful columns are kept.
+    /// flags1 (vmangos SharedDefines.h:1471-1477): 0x70 (DontUseWeapon | AgilityAttackBonus | CanUseEquippedItems) for Cat 1,
+    /// 0x10 for Tree 2, 0x50 (DontUseWeapon | CanUseEquippedItems) for Travel 3, Aquatic 4, Bear 5 and Dire Bear 8,
+    /// 0x40 for Ghost Wolf 16, 0x7 (Stance | NotToggleable | PersistOnDeath) for the warrior stances 17-19,
+    /// 0x9 (Stance | CanInteractNpc) for Shadowform 28, 0x1 for Stealth 30, 0x41 (Stance | CanUseEquippedItems) for
+    /// Moonkin 31, and 0 for every other row, Spirit of Redemption 32 included. creatureType is 1 (beast) for 1, 3, 4, 5,
+    /// 8, 14, 15 and 16, -1 for 2, 17, 28, 31 and 32, and 0 for the rest (vmangos Unit::GetCreatureType ignores values of
+    /// 0 or below). The base dbc.MPQ copy differs (no druid or Ghost Wolf flags, Shadowform 0x8, rows 31 and 32 are the
+    /// obsolete "zzOLDStealth" stances with 0x1); it is not what the client uses. A configured DBC always overrides this table.
     /// </summary>
     public static ShapeshiftFormCatalog Retail { get; } = new(
         [
-            new(1, 0, 1), new(2, 0, 0), new(3, 0, 1), new(4, 0, 1), new(5, 0, 1), new(6, 0, 0), new(7, 0, 0), new(8, 0, 1),
-            new(9, 0, 0), new(10, 0, 0), new(11, 0, 0), new(12, 0, 0), new(13, 0, 0), new(14, 0, 1), new(15, 0, 0), new(16, 0, 1),
+            new(1, 0x70, 1), new(2, 0x10, -1), new(3, 0x50, 1), new(4, 0x50, 1), new(5, 0x50, 1), new(6, 0, 0), new(7, 0, 0), new(8, 0x50, 1),
+            new(9, 0, 0), new(10, 0, 0), new(11, 0, 0), new(12, 0, 0), new(13, 0, 0), new(14, 0, 1), new(15, 0, 1), new(16, 0x40, 1),
             new(17, 7, -1), new(18, 7, 0), new(19, 7, 0),
             new(20, 0, 0), new(21, 0, 0), new(22, 0, 0), new(23, 0, 0), new(24, 0, 0), new(25, 0, 0), new(26, 0, 0), new(27, 0, 0),
-            new(28, 8, -1), new(29, 0, 0), new(30, 1, 0), new(31, 1, 0), new(32, 1, 0),
+            new(28, 9, -1), new(29, 0, 0), new(30, 1, 0), new(31, 0x41, -1), new(32, 0, -1),
         ]);
     public int Count => _forms.Count;
 

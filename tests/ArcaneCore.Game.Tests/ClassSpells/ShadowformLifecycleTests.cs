@@ -27,7 +27,7 @@ public sealed class ShadowformLifecycleTests
 
     private static ShapeshiftService Install(SpellTestKit kit, params ShapeshiftForm[] additionalForms)
         => new(kit.System,
-            new ShapeshiftFormCatalog([new((uint)ShapeshiftForm.Shadow, 0, 0),
+            new ShapeshiftFormCatalog([new((uint)ShapeshiftForm.Shadow, 9, -1),   // the client row: Stance | CanInteractNpc
                 .. additionalForms.Select(form => new ShapeshiftFormInfo((uint)form, 0, 0))]),
             new CombatOptions(), _ => []);
 
@@ -62,7 +62,7 @@ public sealed class ShadowformLifecycleTests
     }
 
     [Fact]
-    public void Shadowform_RemovesOnlyAurasMarkedShapeshiftingCancels()
+    public void Shadowform_IsAStance_SoItKeepsEvenAurasMarkedShapeshiftingCancels()
     {
         SpellInfo cancel = Spell(ShapeCancelBuff, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy)) with
         {
@@ -81,7 +81,8 @@ public sealed class ShadowformLifecycleTests
         kit.System.CastSpell(player, ShapeSafeBuff, SpellCastTargets.ForSelf(), true);
         kit.System.CastSpell(player, Shadowform, SpellCastTargets.ForSelf(), true);
 
-        Assert.False(kit.System.HasAura(player, ShapeCancelBuff));
+        // vmangos SpellAuras.cpp:2515: only a form without SHAPESHIFT_FLAG_STANCE cancels them (Ghost Wolf, the druid forms).
+        Assert.True(kit.System.HasAura(player, ShapeCancelBuff));
         Assert.True(kit.System.HasAura(player, ShapeSafeBuff));
         Assert.Equal(ShapeshiftForm.Shadow, ShapeshiftService.GetForm(player));
     }
