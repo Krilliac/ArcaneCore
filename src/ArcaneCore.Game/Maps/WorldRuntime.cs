@@ -478,7 +478,10 @@ public sealed class WorldRuntime : IDisposable
     }
 
     /// <summary>One tick: posted commands, then every map (world thread; tests call it directly).</summary>
-    public void RunTick(uint diffMs)
+    public void RunTick(uint diffMs) => RunTick(diffMs, null);
+
+    /// <summary>Benchmark seam: observe completed map phases without enabling warning logs.</summary>
+    internal void RunTick(uint diffMs, Action<Map, MapUpdateDiagnostics>? observeMap)
     {
         if (_manualClock)
         {
@@ -497,7 +500,7 @@ public sealed class WorldRuntime : IDisposable
         foreach (Map map in _maps.Values.ToArray())
         {
             long mapStart = Stopwatch.GetTimestamp();
-            MapUpdateDiagnostics? diagnostics = Options.Perf.SlowMapUpdate > 0 && _logger.IsEnabled(LogLevel.Warning)
+            MapUpdateDiagnostics? diagnostics = observeMap is not null || Options.Perf.SlowMapUpdate > 0 && _logger.IsEnabled(LogLevel.Warning)
                 ? new MapUpdateDiagnostics()
                 : null;
             try
@@ -510,6 +513,7 @@ public sealed class WorldRuntime : IDisposable
             }
 
             LogIfSlow(Options.Perf.SlowMapUpdate, mapStart, "Slow map update", map, diagnostics);
+            if (diagnostics is not null) observeMap?.Invoke(map, diagnostics);
         }
 
         UnloadRequestedMaps();
