@@ -14,7 +14,7 @@ public sealed class PlayerbotGroupInviteTests
 {
     public static TheoryData<PlayerbotInvitePolicy, bool, bool, bool, bool> Matrix() => new()
     {
-        // policy, allowlisted, same guild, friends, accepted
+        // policy, allowlisted, same guild, inviter on the BOT's friend list (the inviter's own list never counts), accepted
         { PlayerbotInvitePolicy.None, false, false, false, false },
         { PlayerbotInvitePolicy.None, false, true, true, false },
         { PlayerbotInvitePolicy.None, true, false, false, true },
@@ -28,10 +28,10 @@ public sealed class PlayerbotGroupInviteTests
 
     [Theory]
     [MemberData(nameof(Matrix))]
-    public void InvitePolicyMatrix(PlayerbotInvitePolicy policy, bool allowlisted, bool sameGuild, bool friends, bool accepted)
+    public void InvitePolicyMatrix(PlayerbotInvitePolicy policy, bool allowlisted, bool sameGuild, bool onBotsFriendList, bool accepted)
     {
         string[] allowlist = allowlisted ? ["Someoneelse", "Inviter"] : ["Someoneelse"];
-        Assert.Equal(accepted, PlayerbotGroupInvites.Allows(policy, allowlist, "Inviter", sameGuild, friends));
+        Assert.Equal(accepted, PlayerbotGroupInvites.Allows(policy, allowlist, "Inviter", sameGuild, onBotsFriendList));
     }
 
     [Fact]

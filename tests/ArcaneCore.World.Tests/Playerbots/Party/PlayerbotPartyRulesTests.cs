@@ -95,6 +95,31 @@ public sealed class PlayerbotPartyRulesTests
     public void Follow_PassiveStillFollows()
         => Assert.Equal(PlayerbotFollowAction.Move, PlayerbotParty.DecideFollow(Facts(20f) with { Mode = PlayerbotPartyMode.Passive }));
 
+    /// <summary>
+    /// vmangos UpdateAI :795-817: the teleport to the leader sits inside the !IsInCombat() block. A bot in combat (its attacker out of
+    /// reach or no valid target) walks after a far master on its map, and waits for one on another map; out of combat it teleports.
+    /// </summary>
+    [Fact]
+    public void Follow_ABotInCombat_NeverTeleports()
+    {
+        Assert.Equal(PlayerbotFollowAction.Move, PlayerbotParty.DecideFollow(Facts(500f) with { InCombat = true }));
+        Assert.Equal(PlayerbotFollowAction.Wait, PlayerbotParty.DecideFollow(Facts(float.NaN) with { InCombat = true, SameMap = false }));
+        Assert.Equal(PlayerbotFollowAction.Teleport, PlayerbotParty.DecideFollow(Facts(500f) with { InCombat = false }));
+    }
+
+    /// <summary>
+    /// A master in another instance of the bot's own map id cannot be reached by the teleport service: within one map id it teleports
+    /// near and keeps the bot's instance (it would return true and loop every think). The bot waits; another map id is teleported to.
+    /// </summary>
+    [Fact]
+    public void Follow_AMasterInAnotherInstanceOfTheSameMap_IsWaitedFor()
+    {
+        Assert.Equal(PlayerbotFollowAction.Wait,
+            PlayerbotParty.DecideFollow(Facts(float.NaN) with { SameMap = false, MasterInOtherInstance = true }));
+        Assert.Equal(PlayerbotFollowAction.Teleport,
+            PlayerbotParty.DecideFollow(Facts(float.NaN) with { SameMap = false, MasterInOtherInstance = false }));
+    }
+
     [Fact]
     public void FollowPoint_IsTheChosenDistanceFromTheMaster_AtTheAngleFromItsFacing()
     {

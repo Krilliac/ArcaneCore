@@ -196,6 +196,14 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             IPlayerbotController? previous = active.Controller;
             active.Controller = controller;
             active.Session.ManagedBudget = null;
+            if (controller is not null && active.Session.Player is { } player && (active.PartyDriven || active.Party.IsEngaged))
+            {
+                // The controller drives now: the party AI lets go, so no party goal, master or mode is reported while it does. When
+                // the controller detaches, a bot still grouped is engaged afresh; an ungrouped one gets a fresh brain.
+                active.Party.Disengage(player);
+                if (active.PartyDriven) ReplaceBrain(active);
+                active.PartyDriven = false;
+            }
             if (previous is not null && !ReferenceEquals(previous, controller)) previous.Detached(botId);
             return true;
         });

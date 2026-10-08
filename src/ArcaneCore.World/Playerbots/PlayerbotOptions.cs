@@ -113,7 +113,7 @@ public enum PlayerbotInvitePolicy
     /// <summary>Only the names in <see cref="PlayerbotPartyOptions.Allowlist"/>.</summary>
     None,
 
-    /// <summary>The allowlist, the bot's guild mates, and players on the bot's friend list or with the bot on theirs.</summary>
+    /// <summary>The allowlist, the bot's guild mates and players on the bot's own friend list (a player's own list does not count).</summary>
     GuildOrFriends,
 
     /// <summary>Every player.</summary>

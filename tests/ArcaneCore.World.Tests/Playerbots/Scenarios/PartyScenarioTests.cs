@@ -25,6 +25,8 @@ public sealed class PartyScenarioTests
     /// <summary>An uncommon (quality 2) item every wolf drops: at the group's default loot threshold, so its corpse starts a roll.</summary>
     private const uint ScenarioFang = 990300;
 
+    private const string MasterName = "Partymaster";
+
     [Fact]
     public async Task PartyMaster_TheBotJoinsFollowsFightsRollsHoldsReportsAndEntersTheDungeonWithItsMaster()
     {
@@ -34,7 +36,7 @@ public sealed class PartyScenarioTests
             WorldCollision.Of(world.Host.World).Install(lineOfSight: new GroundEverywhere());
             return true;
         });
-        await using SocketMaster master = await SocketMaster.EnterAsync(world, "PARTYMASTER", "Partymaster");
+        await using SocketMaster master = await SocketMaster.EnterAsync(world, "PARTYMASTER", MasterName);
 
         ScenarioReport report = await world.RunPassingAsync(new PartyScenario(master, WolfEntry));
 
@@ -63,6 +65,7 @@ public sealed class PartyScenarioTests
         services.AddSingleton<IOptions<PlayerbotOptions>>(Options.Create(new PlayerbotOptions
         {
             Enabled = true, MaxBots = 8, AllowedMaps = [0, 1, DungeonEntryScenario.Deadmines], Scenarios = { Enabled = true },
+            Party = { Allowlist = [MasterName] }, // the default policy, GuildOrFriends, plus the master
         }));
         var items = new InMemoryItemTemplateSource();
         items.Templates.Add(new ItemTemplate { Entry = LinenCloth, Name = "Linen Cloth", Class = 7, SubClass = 0, Quality = 1, Stackable = 20, SellPrice = 13 });

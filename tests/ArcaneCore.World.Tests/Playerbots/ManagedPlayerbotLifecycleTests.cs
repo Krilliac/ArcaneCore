@@ -391,6 +391,43 @@ public sealed class ManagedPlayerbotLifecycleTests
     }
 
     /// <summary>
+    /// A controller that takes over a grouped bot (scripted mode) drives it alone: the party AI lets go, so nothing reports the party
+    /// goal, master or mode while it does. When the controller detaches, the bot (still grouped) is engaged afresh.
+    /// </summary>
+    [Fact]
+    public async Task AControllerTakingOverAGroupedBot_ClearsThePartyState_UntilItDetaches()
+    {
+        await using WorldTestHost host = Party.PartyTestHost.Start(o => o.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone);
+        Guid id = await Party.PartyTestHost.StartBotAsync(host, "Lifescript");
+        ManagedPlayerbotFeature feature = Party.PartyTestHost.Feature(host);
+        await using WorldTestClient master = await host.EnterWorldAsync("LIFESCRIPTM", "Lifescriptm");
+        await master.SendAsync(Protocol.WorldOpcode.CmsgGroupInvite, Party.PartyTestHost.CString("Lifescript"));
+        await host.WaitForWorldAsync(() => feature.IsPartyDriven(id), "the party AI drives the grouped bot");
+
+        Assert.True(await feature.SetControllerAsync(id, new IdleController()));
+
+        Assert.False(feature.IsPartyDriven(id));
+        Assert.Null(await host.OnWorldAsync(() => feature.FindParty(id)));
+        PlayerbotInspection scripted = (await feature.InspectAsync("Lifescript"))!;
+        Assert.Null(scripted.Master);
+        Assert.Null(scripted.PartyMode);
+        Assert.False(scripted.Goal is PlayerbotGoalKind.Follow or PlayerbotGoalKind.Assist, scripted.Goal.ToString());
+        await host.WaitForWorldAsync(() => feature.Snapshot().Single(s => s.BotId == id).Goal is not (PlayerbotGoalKind.Follow or PlayerbotGoalKind.Assist),
+            "the snapshot reports no party goal");
+
+        Assert.True(await feature.SetControllerAsync(id, null));
+        await host.WaitForWorldAsync(() => feature.IsPartyDriven(id), "the party AI drives the still grouped bot again");
+        Assert.Equal("Lifescriptm", (await feature.InspectAsync("Lifescript"))!.Master);
+    }
+
+    private sealed class IdleController : IPlayerbotController
+    {
+        public void Tick(PlayerbotControllerContext context, uint elapsedMs) { }
+
+        public void Detached(Guid botId) { }
+    }
+
+    /// <summary>
     /// A master who logs out is waited for (<see cref="PlayerbotPartyOptions.MasterTimeoutSeconds"/>); then the bot leaves the group
     /// (vmangos requestRemoval) and goes back to the brain.
     /// </summary>

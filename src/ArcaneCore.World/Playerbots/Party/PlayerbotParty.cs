@@ -33,10 +33,13 @@ internal enum PlayerbotFollowAction
     Wait,
 }
 
-/// <summary>The facts one follow decision needs (all read on the world thread).</summary>
+/// <summary>
+/// The facts one follow decision needs (all read on the world thread). <see cref="SameMap"/> means the same map instance;
+/// <see cref="MasterInOtherInstance"/> that the master is on the bot's map id but in another instance of it.
+/// </summary>
 internal readonly record struct PlayerbotFollowFacts(
     PlayerbotPartyMode Mode, bool MasterInWorld, bool SameMap, float Distance, bool TeleportToLeader, bool MasterMapAllowed,
-    bool MasterFlying = false);
+    bool MasterFlying = false, bool InCombat = false, bool MasterInOtherInstance = false);
 
 /// <summary>Another group member as <see cref="PlayerbotParty.ShouldAutoRevive"/> sees it.</summary>
 internal readonly record struct PlayerbotReviveMember(bool InCombat, bool Alive, bool Healer, float? Distance);
@@ -79,19 +82,23 @@ internal static class PlayerbotParty
     }
 
     /// <summary>
-    /// One out-of-combat follow step (vmangos UpdateAI :806-817 and :884-891). Stay holds whatever happens. A master between maps
-    /// is waited for, and so is one on a taxi flight (vmangos UpdateAI: idle while the leader IsTaxiFlying); one on another map or instance, or more than <see cref="TeleportDistance"/> yards away, is teleported to when
-    /// <see cref="PlayerbotPartyOptions.TeleportToLeader"/> is on and the bot may be on the master's map (AllowedMaps); without the
-    /// teleport a far master on the same map is walked to, one on another map waited for. Within <see cref="MaxFollowDistance"/> the bot holds.
+    /// One follow step (vmangos UpdateAI :795-817 and :884-891). Stay holds whatever happens. A master between maps is waited for,
+    /// and so is one on a taxi flight (vmangos UpdateAI: idle while the leader IsTaxiFlying). A master on another map, or more than
+    /// <see cref="TeleportDistance"/> yards away, is teleported to when <see cref="PlayerbotPartyOptions.TeleportToLeader"/> is on, the
+    /// bot may be on the master's map (AllowedMaps) and the bot is out of combat (vmangos teleports only inside its !IsInCombat()
+    /// block); otherwise a far master on the same map is walked to and one on another map waited for. A master in another instance of
+    /// the bot's own map id is waited for: the teleport service moves a bot within its map id by a near teleport, which never changes
+    /// the instance. Within <see cref="MaxFollowDistance"/> the bot holds.
     /// </summary>
     internal static PlayerbotFollowAction DecideFollow(in PlayerbotFollowFacts facts)
     {
         if (facts.Mode == PlayerbotPartyMode.Stay) return PlayerbotFollowAction.Hold;
         if (!facts.MasterInWorld || facts.MasterFlying) return PlayerbotFollowAction.Wait;
+        bool mayTeleport = facts.TeleportToLeader && !facts.InCombat;
         if (!facts.SameMap)
-            return facts.TeleportToLeader && facts.MasterMapAllowed ? PlayerbotFollowAction.Teleport : PlayerbotFollowAction.Wait;
+            return mayTeleport && facts.MasterMapAllowed && !facts.MasterInOtherInstance ? PlayerbotFollowAction.Teleport : PlayerbotFollowAction.Wait;
         if (!float.IsFinite(facts.Distance)) return PlayerbotFollowAction.Wait;
-        if (facts.Distance > TeleportDistance && facts.TeleportToLeader) return PlayerbotFollowAction.Teleport;
+        if (facts.Distance > TeleportDistance && mayTeleport) return PlayerbotFollowAction.Teleport;
         return facts.Distance > MaxFollowDistance ? PlayerbotFollowAction.Move : PlayerbotFollowAction.Hold;
     }
 

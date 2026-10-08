@@ -18,6 +18,7 @@ using ArcaneCore.World.Progression;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.World.Playerbots.Scenarios;
 
@@ -43,13 +44,15 @@ public interface IPartyScenarioMaster
 
 /// <summary>
 /// <c>party-master</c>: a real player and a managed bot that runs autonomously (vmangos PartyBotAI; <see cref="PlayerbotPartyAI"/>).
-/// The master befriends the bot (the default invite policy takes friends) and invites it, and it accepts; it follows a 40-yard walk;
+/// The master is on the bot's invite allowlist (<c>World:Playerbots:Party:Allowlist</c>; befriending a bot is not consent, only the bot's
+/// own friend list is) and invites it, and it accepts; it follows a 40-yard walk;
 /// the master targets a hostile creature and whispers 'attack', and the bot fights it; the group loot roll on its corpse gets the bot's
 /// vote at once, so it resolves as soon as the master votes; after 'stay' the bot holds while the master walks off; 'status' gets a
 /// whispered answer; the master takes The Deadmines entrance (area trigger 78) and the bot lands in the same instance, and comes out
 /// with it through the exit (119); the master leaves the group and the bot goes back to its own goals.
 /// <para>
-/// It needs a master (<see cref="PartyScenario(IPartyScenarioMaster, uint)"/>; the tests connect one), the Deadmines content of
+/// It needs a master (<see cref="PartyScenario(IPartyScenarioMaster, uint)"/>; the tests connect one) whom the invite policy lets invite
+/// the bot (on the allowlist, or the policy Anyone), the Deadmines content of
 /// <see cref="DungeonEntryScenario"/>, a hostile creature near the master whose loot has an item at the group's loot threshold, and the
 /// dungeon map among <c>World:Playerbots:AllowedMaps</c>. Without a master it fails at its first step.
 /// </para>
@@ -184,10 +187,10 @@ public sealed class PartyScenario : IPlayerbotScenario
             if (await context.ReadAsync(() => Groups.GetGroup(_masterGuid) is not null).ConfigureAwait(false))
                 await master.SendAsync(WorldOpcode.CmsgGroupDisband, []).ConfigureAwait(false);
             await context.WaitUntilAsync("neither is grouped", () => Groups.GetGroup(_masterGuid) is null && Groups.GetGroup(_botGuid) is null).ConfigureAwait(false);
-            await master.SendAsync(WorldOpcode.CmsgAddFriend, CString(BotName)).ConfigureAwait(false);
-            SocialFeature social = context.Services.GetRequiredService<SocialFeature>();
-            await context.WaitUntilAsync($"{BotName} is on {master.Name}'s friend list",
-                () => social.Context.Friends.Get(Master).Has(_botGuid.Low, Kernel.Social.SocialFlags.Friend)).ConfigureAwait(false);
+            PlayerbotPartyOptions party = (context.Services.GetService<IOptions<PlayerbotOptions>>()?.Value ?? new PlayerbotOptions()).Party;
+            ScenarioContext.Expect(party.InvitePolicy == PlayerbotInvitePolicy.Anyone
+                || party.Allowlist.Contains(master.Name, StringComparer.OrdinalIgnoreCase),
+                $"{master.Name} may not invite {BotName}: put the master on World:Playerbots:Party:Allowlist");
             await master.SendAsync(WorldOpcode.CmsgGroupInvite, CString(BotName)).ConfigureAwait(false);
             await context.WaitUntilAsync($"{BotName} joined {master.Name}'s group", () => Groups.AreInSameGroup(_masterGuid, _botGuid)
                 && Groups.GetGroup(_masterGuid)?.LeaderGuid == _masterGuid).ConfigureAwait(false);

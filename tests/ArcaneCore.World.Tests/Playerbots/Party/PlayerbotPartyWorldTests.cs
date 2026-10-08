@@ -6,6 +6,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Party;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -33,17 +34,35 @@ public sealed class PlayerbotPartyWorldTests
         Assert.False(PartyTestHost.Feature(host).IsPartyDriven(bot));
     }
 
+    /// <summary>
+    /// GuildOrFriends counts only the BOT's friend list. Any player can put any bot on their own list with one CMSG_ADD_FRIEND, so
+    /// that is no consent: such an invite is declined (the policy would otherwise work like Anyone). Once the bot has the player on
+    /// its own list, the invite is accepted and the bot follows its new master.
+    /// </summary>
     [Fact]
-    public async Task AFriendsInvite_IsAccepted_AndTheBotFollowsItsNewMaster()
+    public async Task BefriendingTheBot_DoesNotLetAPlayerInviteIt_ButBeingOnTheBotsOwnFriendListDoes()
     {
         await using WorldTestHost host = PartyTestHost.Start();
         Guid bot = await PartyTestHost.StartBotAsync(host, "Partyfriend");
         await using WorldTestClient master = await host.EnterWorldAsync("PARTYFRIENDM", "Partyfriendm");
         ObjectGuid botGuid = await host.PlayerStateAsync("Partyfriend", p => p.Guid);
+        ObjectGuid masterGuid = await host.PlayerStateAsync("Partyfriendm", p => p.Guid);
 
         await master.SendAsync(WorldOpcode.CmsgAddFriend, PartyTestHost.CString("Partyfriend"));
-        await host.WaitForWorldAsync(() => Groups(host) is not null && Social(host).Friends.Get(host.World.FindOnlinePlayer("Partyfriendm")!)
-            .Has(botGuid.Low, Kernel.Social.SocialFlags.Friend), "the master befriends the bot");
+        await host.WaitForWorldAsync(() => Social(host).Friends.Get(host.World.FindOnlinePlayer("Partyfriendm")!)
+            .Has(botGuid.Low, Kernel.Social.SocialFlags.Friend), "the player befriends the bot");
+        await master.SendAsync(WorldOpcode.CmsgGroupInvite, PartyTestHost.CString("Partyfriend"));
+        Assert.Equal("Partyfriend", new PacketReader(await master.ReadUntilAsync(WorldOpcode.SmsgGroupDecline)).ReadCString());
+        Assert.False(await host.OnWorldAsync(() => Groups(host).GetGroup(botGuid) is not null));
+
+        await host.OnWorldAsync(() =>
+        {
+            WorldSession session = PartyTestHost.Feature(host).FindSession(bot)!;
+            session.ManagedBudget = null;
+            Assert.True(session.TryManagedAction(WorldOpcode.CmsgAddFriend, PartyTestHost.CString("Partyfriendm")));
+        });
+        await host.WaitForWorldAsync(() => Social(host).Friends.Get(host.World.FindOnlinePlayer("Partyfriend")!)
+            .Has(masterGuid.Low, Kernel.Social.SocialFlags.Friend), "the bot befriends the player");
         await master.SendAsync(WorldOpcode.CmsgGroupInvite, PartyTestHost.CString("Partyfriend"));
 
         await host.WaitForWorldAsync(() => PartyTestHost.Feature(host).IsPartyDriven(bot), "the party AI drives the bot");
@@ -54,12 +73,67 @@ public sealed class PlayerbotPartyWorldTests
         Assert.Equal(PlayerbotPartyMode.Follow, inspection.PartyMode);
     }
 
+    /// <summary>
+    /// The capture queue is bounded (128 packets, drop-oldest): an invitation whose SMSG_GROUP_INVITE was evicted before the bot read
+    /// it is still answered, from the group state.
+    /// </summary>
+    [Fact]
+    public async Task AnInvitationWhosePacketWasEvicted_IsStillAnswered()
+    {
+        await using WorldTestHost host = PartyTestHost.Start(options => options.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone);
+        Guid bot = await PartyTestHost.StartBotAsync(host, "Partyflood");
+        await using WorldTestClient master = await host.EnterWorldAsync("PARTYFLOODM", "Partyfloodm");
+
+        await host.OnWorldAsync(() =>
+        {
+            Player inviter = host.World.FindOnlinePlayer("Partyfloodm")!;
+            Groups(host).Invite(inviter, "Partyflood");
+            Assert.NotNull(Groups(host).GetInvite(host.World.FindOnlinePlayer("Partyflood")!.Guid));
+            WorldSession session = PartyTestHost.Feature(host).FindSession(bot)!;
+            for (int i = 0; i < 200; i++) session.Send(WorldOpcode.SmsgEmote, new byte[12]); // evicts the SMSG_GROUP_INVITE
+        });
+
+        await host.WaitForWorldAsync(() => Groups(host).AreInSameGroup(host.World.FindOnlinePlayer("Partyfloodm")!.Guid,
+            host.World.FindOnlinePlayer("Partyflood")!.Guid), "the bot accepts the invitation");
+    }
+
+    /// <summary>
+    /// A command the master sends the moment the bot joined, before the bot's first turn in the action budget, is kept: that turn
+    /// does not reset it to follow. The bot joins (the GM path, synchronous) and the master's 'stay' whisper is in its queue in the
+    /// same world step, so the next tick's intake reads it before any think.
+    /// </summary>
+    [Fact]
+    public async Task AnOrderSentBeforeTheBotsFirstTurn_IsKept()
+    {
+        await using WorldTestHost host = PartyTestHost.Start(options => options.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone);
+        Guid bot = await PartyTestHost.StartBotAsync(host, "Partyearly");
+        await using WorldTestClient master = await host.EnterWorldAsync("PARTYEARLYM", "Partyearlym");
+        ulong botGuid = (await host.PlayerStateAsync("Partyearly", p => p.Guid)).Value;
+
+        await host.OnWorldAsync(() =>
+        {
+            Player inviter = host.World.FindOnlinePlayer("Partyearlym")!;
+            Assert.Equal("invited", PartyTestHost.Feature(host).InviteToGroup(inviter, "Partyearly").Code);
+            Assert.False(PartyTestHost.Feature(host).IsPartyDriven(bot));
+            PartyTestHost.Feature(host).FindSession(bot)!.Send(WorldOpcode.SmsgMessagechat,
+                global::ArcaneCore.World.Packets.ChatPackets.BuildMessage(ChatType.Whisper, Language.Common, inviter.Guid, "stay", ChatTag.None));
+        });
+
+        Assert.Equal("Staying here.", (await PartyTestHost.ReadWhisperFromAsync(master, botGuid)).Text);
+        await host.WaitForWorldAsync(() => PartyTestHost.Feature(host).IsPartyDriven(bot), "the party AI drives the bot");
+        await host.WaitForWorldAsync(() => PartyTestHost.Feature(host).Snapshot().Single(s => s.BotId == bot).Goal == PlayerbotGoalKind.Follow,
+            "the party AI has thought");
+        Assert.Equal(PlayerbotPartyMode.Stay, await host.OnWorldAsync(() => PartyTestHost.Feature(host).FindParty(bot)!.Mode));
+    }
+
     [Fact]
     public async Task TheGmInviteCommand_PutsTheBotIntoTheGmsGroup_WhateverThePolicy()
     {
         await using WorldTestHost host = PartyTestHost.Start(options => options.Party.InvitePolicy = PlayerbotInvitePolicy.None);
         Guid bot = await PartyTestHost.StartBotAsync(host, "Partygmbot");
         await using WorldTestClient gm = await host.EnterWorldAsync("PARTYGM", "Partygm", AccountSecurity.GameMaster);
+        await gm.SendChatAsync(ChatType.Say, Language.Common, ".playerbot inspect Partygmbot");
+        Assert.Equal("BOTINSPECT party=none", await ReadSystemLineAsync(gm, "BOTINSPECT party="));
 
         await gm.SendChatAsync(ChatType.Say, Language.Common, ".playerbot invite Partygmbot");
 
@@ -68,6 +142,8 @@ public sealed class PlayerbotPartyWorldTests
         await host.WaitForWorldAsync(() => Groups(host).AreInSameGroup(host.World.FindOnlinePlayer("Partygm")!.Guid,
             host.World.FindOnlinePlayer("Partygmbot")!.Guid), "the bot is in the GM's group");
         await host.WaitForWorldAsync(() => PartyTestHost.Feature(host).IsPartyDriven(bot), "the party AI drives the bot");
+        await gm.SendChatAsync(ChatType.Say, Language.Common, ".playerbot inspect Partygmbot");
+        Assert.Equal("BOTINSPECT party=master:Partygm mode:follow", await ReadSystemLineAsync(gm, "BOTINSPECT party="));
 
         await gm.SendChatAsync(ChatType.Say, Language.Common, ".playerbot invite Partygmbot");
         Assert.Equal("Playerbot ok: already-in-your-group (Partygmbot).", await ReadSystemLineAsync(gm, "Playerbot "));
