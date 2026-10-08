@@ -48,6 +48,34 @@ public sealed class LiveSessionTests : IDisposable
     }
 
     [Fact]
+    public void AWhisperScriptLine_IsReadBackByTheServersOwnReader_AsAWhisperToTheTarget()
+    {
+        var reader = new PacketReader(LiveSession.ScriptPacket("/w Ironwander what level are you?"));
+        Assert.Equal((uint)ChatType.Whisper, reader.ReadUInt32());
+        Assert.Equal((uint)Language.Common, reader.ReadUInt32());
+        Assert.Equal("Ironwander", reader.ReadCString());
+        Assert.Equal("what level are you?", reader.ReadCString());
+        Assert.Equal(0, reader.Remaining);
+
+        // Anything else (and a whisper without text) is a say, as before.
+        Assert.Equal(LiveSession.SayPacket(".gps"), LiveSession.ScriptPacket(".gps"));
+        Assert.Equal(LiveSession.SayPacket("/w Ironwander"), LiveSession.ScriptPacket("/w Ironwander"));
+    }
+
+    [Fact]
+    public void PlayerLinesBuiltByTheServer_AreDecodedWithTypeAndSender_AndSystemLinesAreNot()
+    {
+        var bot = new ObjectGuid(0x2A);
+        byte[] whisper = ChatPackets.BuildMessage(ChatType.Whisper, Language.Common, bot, "I'm level 7.", ChatTag.None);
+        byte[] say = ChatPackets.BuildMessage(ChatType.Say, Language.Common, bot, "Hello there", ChatTag.None);
+
+        Assert.Equal("whisper from 0x2A: I'm level 7.", LiveSession.DecodePlayerLine(whisper));
+        Assert.Equal("say from 0x2A: Hello there", LiveSession.DecodePlayerLine(say));
+        Assert.Null(LiveSession.DecodePlayerLine(ChatPackets.BuildSystemMessage("ArcaneCore test line")));
+        Assert.Null(LiveSession.DecodePlayerLine([0x07, 0, 0]));
+    }
+
+    [Fact]
     public void Credentials_ComeFromAFile_NeverAnArgument()
     {
         string file = Path.Combine(_dir, "dev-account.txt");

@@ -68,7 +68,8 @@ internal static class LiveSession
     internal static string Usage =>
         "usage: arcane-mock live --account NAME (--password-env VAR | --credentials-file FILE) [--realm 127.0.0.1:3724]" + Environment.NewLine
         + "                        [--character NAME] [--say TEXT]... [--interval-ms 1000] [--duration-s 120] [--stop-file FILE] [--script-file FILE]" + Environment.NewLine
-        + "       --script-file: every NEW line appended to this file while the session runs is sent as chat (e.g. .hotcode status)." + Environment.NewLine
+        + "       --script-file: every NEW line appended to this file while the session runs is sent as chat (e.g. .hotcode status);" + Environment.NewLine
+        + "       a line '/w NAME TEXT' is sent as a whisper to NAME. Player chat lines received are printed with their type and sender." + Environment.NewLine
         + "       --credentials-file reads 'account=' and 'password=' lines (scripts/dev-runner.ps1 writes one); the password is never an argument." + Environment.NewLine
         + "       The password variable defaults to " + DefaultPasswordVariable + ". The realm must be a loopback address.";
 
@@ -204,7 +205,7 @@ internal static class LiveSession
             foreach (string scripted in NewScriptLines(options.ScriptFile, ref scriptIndex))
             {
                 output.WriteLine($"{Stamp()} [{local}] > {scripted}");
-                await client.SendAsync((ushort)WorldOpcode.CmsgMessagechat, SayPacket(scripted), ct).ConfigureAwait(false);
+                await client.SendAsync((ushort)WorldOpcode.CmsgMessagechat, ScriptPacket(scripted), ct).ConfigureAwait(false);
                 await DrainAsync(client, output, local, ReplyQuietPeriod, ct).ConfigureAwait(false);
             }
 
@@ -352,6 +353,51 @@ internal static class LiveSession
         return payload;
     }
 
+    /// <summary>
+    /// A script line as CMSG_MESSAGECHAT: <c>/w NAME TEXT</c> is a whisper (u32 type, u32 language, the CString target, the CString
+    /// message), anything else a say (<see cref="SayPacket"/>).
+    /// </summary>
+    internal static byte[] ScriptPacket(string line)
+    {
+        if (line.StartsWith("/w ", StringComparison.OrdinalIgnoreCase))
+        {
+            string rest = line[3..].TrimStart();
+            int space = rest.IndexOf(' ', StringComparison.Ordinal);
+            if (space > 0 && rest[(space + 1)..].Trim().Length > 0)
+            {
+                byte[] target = Encoding.UTF8.GetBytes(rest[..space]);
+                byte[] body = Encoding.UTF8.GetBytes(rest[(space + 1)..].Trim());
+                byte[] payload = new byte[8 + target.Length + 1 + body.Length + 1];
+                BinaryPrimitives.WriteUInt32LittleEndian(payload, (uint)ChatType.Whisper);
+                BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(4), (uint)Language.Common);
+                target.CopyTo(payload, 8);
+                body.CopyTo(payload, 8 + target.Length + 1);
+                return payload;
+            }
+        }
+
+        return SayPacket(line);
+    }
+
+    /// <summary>
+    /// SMSG_MESSAGECHAT for a player line (vmangos ChatHandler::BuildChatPacket): u8 type, u32 language, u64 sender, a second u64 for
+    /// say, party and yell, u32 length, text, u8 tag. Printed as <c>whisper from 0x... : text</c>; null for system lines and anything
+    /// that does not decode.
+    /// </summary>
+    internal static string? DecodePlayerLine(byte[] payload)
+    {
+        if (payload.Length < 18) return null;
+        var type = (ChatType)payload[0];
+        if (type == ChatType.System) return null;
+        ulong sender = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(5));
+        int at = type is ChatType.Say or ChatType.Party or ChatType.Yell ? 21 : 13;
+        if (payload.Length < at + 5) return null;
+        uint length = BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(at));
+        if (length == 0 || length > payload.Length - at - 4) return null;
+        string text = Encoding.UTF8.GetString(payload, at + 4, (int)length - 1);
+        return string.Create(CultureInfo.InvariantCulture, $"{type.ToString().ToLowerInvariant()} from 0x{sender:X}: {text}");
+    }
+
     /// <summary>SMSG_MESSAGECHAT for a system line: u8 type, u32 language, u64 sender, u32 length, text, u8 tag. Null for anything else.</summary>
     internal static string? DecodeSystemLine(byte[] payload)
     {
@@ -387,7 +433,7 @@ internal static class LiveSession
             WorldFrame frame = await client.ReadAsync(ct).ConfigureAwait(false);
             if (frame.Opcode == (ushort)WorldOpcode.SmsgMessagechat)
             {
-                string? line = DecodeSystemLine(frame.Payload);
+                string? line = DecodeSystemLine(frame.Payload) ?? DecodePlayerLine(frame.Payload);
                 output.WriteLine($"{Stamp()} [{local}] < {line ?? "(non-system chat frame, " + frame.Payload.Length.ToString(CultureInfo.InvariantCulture) + " bytes)"}");
             }
             else if (frame.Opcode == (ushort)WorldOpcode.SmsgNewWorld && frame.Payload.Length >= 20)
