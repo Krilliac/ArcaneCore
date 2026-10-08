@@ -146,20 +146,13 @@ Transform aura and the mage polymorph classification (mage family, first effect 
 
 Tests: `tests/ArcaneCore.Game.Tests/CombatMechanics/RegenAuraTests.cs` (11 tests; RED first: 9 failed, the two baseline tests proving the harness passed).
 
-## wlm-22 Invisibility and Detect Invisibility (superseded by the stealth lane at integration)
-
-
-
-This lane built its own aura 18 / 19 handlers and an InvisibilityVisibilityRule. The reviewed Codex stealth lane (claude/cx-stealth-detection,
-
-docs/areas/stealth.md) implements the same vmangos code (HandleInvisibility, HandleInvisibilityDetect, CanDetectInvisibilityOf) inside the stealth registry and
-
-`StealthVisibilityRule`. Both register auras 18 and 19, which SpellSystem.RegisterModules rejects as a duplicate, so the integration keeps the stealth lane's
-
-implementation (InvisibilityAuras, InvisibilityTests) and drops this lane's InvisibilityVisibilityRule, InvisibilityFeature and its 12 tests. See
-
-docs/integration/wave4-integration.md.
-
+## wlm-22 Invisibility and Detect Invisibility (superseded by the stealth lane at integration)
+
+This lane built its own aura 18 / 19 handlers and an InvisibilityVisibilityRule. The reviewed Codex stealth lane (claude/cx-stealth-detection,
+docs/areas/stealth.md) implements the same vmangos code (HandleInvisibility, HandleInvisibilityDetect, CanDetectInvisibilityOf) inside the stealth registry and
+`StealthVisibilityRule`. Both register auras 18 and 19, which SpellSystem.RegisterModules rejects as a duplicate, so the integration keeps the stealth lane's
+implementation (InvisibilityAuras, InvisibilityTests) and drops this lane's InvisibilityVisibilityRule, InvisibilityFeature and its 12 tests. See
+docs/integration/wave4-integration.md.
 ## wlm-08 (reduced) Warlock demons and Demonic Sacrifice (`Pets/SummonService.Demons.cs`, `Spells/Warlock/DemonicSacrificeScript.cs`)
 
 `SPELL_EFFECT_SUMMON_PET` (56) was unregistered (docs/integration/pets.md), so Summon Imp, Voidwalker, Succubus and Felhunter did nothing.
