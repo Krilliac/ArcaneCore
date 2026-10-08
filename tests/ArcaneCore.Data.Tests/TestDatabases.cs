@@ -127,16 +127,25 @@ internal sealed class TestDatabases : IAsyncDisposable
         await db.Database.EnsureDeletedAsync();
     }
 
+    /// <summary>
+    /// Close the idle pooled SQLite handles of exactly this connection string (the pool key) and nothing else.
+    /// Tests must use this instead of <c>SqliteConnection.ClearAllPools()</c>: closing another class's last
+    /// handle on a WAL database checkpoints that database, rewriting its file mid-test (the 2026-10-07
+    /// SchemaPlannerTests fingerprint flake), and disposes handles that class is acquiring.
+    /// <c>NoGlobalSqlitePoolClearing</c> in <see cref="TestDatabasesIsolationTests"/> keeps it out.
+    /// </summary>
+    public static void ClearSqlitePool(string connectionString)
+    {
+        using var connection = new SqliteConnection(connectionString);
+        SqliteConnection.ClearPool(connection);
+    }
+
     private static void ClearPool(DatabaseConnectionOptions options)
     {
         switch (options.Provider)
         {
             case DatabaseProvider.Sqlite:
-                using (var connection = new SqliteConnection(options.ConnectionString))
-                {
-                    SqliteConnection.ClearPool(connection);
-                }
-
+                ClearSqlitePool(options.ConnectionString);
                 break;
             case DatabaseProvider.MariaDb or DatabaseProvider.MySql:
                 using (var connection = new MySqlConnection(options.ConnectionString))

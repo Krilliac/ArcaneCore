@@ -129,7 +129,7 @@ public sealed class DbUpgradeCliTests : IAsyncLifetime
         string? file = provider == DatabaseProvider.Sqlite ? UpgradeTestSupport.SqlitePath(connection) : null;
         await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection);
         string before = await UpgradeTestSupport.SnapshotAsync(db, CharacterDbContext.Schema);
-        string? fileBefore = file is null ? null : UpgradeTestSupport.FileFingerprint(file);
+        string? fileBefore = file is null ? null : UpgradeTestSupport.SettledFileFingerprint(connection);
 
         (int code, string json, _) = await UpgradeTestSupport.RunCliAsync(connection, "plan", "--json", "--component", "characters");
 
@@ -137,7 +137,7 @@ public sealed class DbUpgradeCliTests : IAsyncLifetime
         Assert.Equal(before, await UpgradeTestSupport.SnapshotAsync(db, CharacterDbContext.Schema));
         if (file is not null)
         {
-            Assert.Equal(fileBefore, UpgradeTestSupport.FileFingerprint(file));
+            Assert.Equal(fileBefore, UpgradeTestSupport.SettledFileFingerprint(connection));
         }
 
         using JsonDocument document = JsonDocument.Parse(json);
@@ -223,14 +223,14 @@ public sealed class DbUpgradeCliTests : IAsyncLifetime
         }
 
         string? file = provider == DatabaseProvider.Sqlite ? UpgradeTestSupport.SqlitePath(connection) : null;
-        string? fileBefore = file is null ? null : UpgradeTestSupport.FileFingerprint(file);
+        string? fileBefore = file is null ? null : UpgradeTestSupport.SettledFileFingerprint(connection);
         (int again, string second, _) = await UpgradeTestSupport.RunCliAsync(connection, "upgrade", "--allow-active-sessions");
         Assert.Equal(DbUpgradeExitCodes.Ok, again);
         Assert.Contains("nothing to do", second, StringComparison.Ordinal);
         Assert.DoesNotContain("upgrading", second, StringComparison.Ordinal);
         if (file is not null)
         {
-            Assert.Equal(fileBefore, UpgradeTestSupport.FileFingerprint(file));
+            Assert.Equal(fileBefore, UpgradeTestSupport.SettledFileFingerprint(connection));
         }
     }
 
@@ -308,7 +308,7 @@ public sealed class DbUpgradeCliTests : IAsyncLifetime
             await command.ExecuteNonQueryAsync();
         }
 
-        string fingerprint = UpgradeTestSupport.FileFingerprint(path);
+        string fingerprint = UpgradeTestSupport.SettledFileFingerprint(connection);
 
         (int plan, string planOut, _) = await UpgradeTestSupport.RunCliAsync(connection, "plan", "--component", "characters");
         (int upgrade, _, string error) = await UpgradeTestSupport.RunCliAsync(connection, "upgrade", "--component", "characters", "--confirm-backup");
@@ -318,7 +318,7 @@ public sealed class DbUpgradeCliTests : IAsyncLifetime
         Assert.Matches(@"1 group\(s\) of rows share a value", planOut);
         Assert.Equal(DbUpgradeExitCodes.Refused, upgrade);
         Assert.Contains("nothing was changed", error, StringComparison.Ordinal);
-        Assert.Equal(fingerprint, UpgradeTestSupport.FileFingerprint(path)); // not a byte written
+        Assert.Equal(fingerprint, UpgradeTestSupport.SettledFileFingerprint(connection)); // not a byte written
 
         await using (var raw = new SqliteConnection($"Data Source={path};Pooling=False"))
         {

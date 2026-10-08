@@ -52,6 +52,39 @@ public sealed class TestDatabasesIsolationTests
         Assert.True(Interlocked.Read(ref completed) > 0, "no fixture lifecycle completed");
     }
 
+    /// <summary>
+    /// No test in this assembly clears every SQLite pool of the process. Closing another class's last pooled handle on
+    /// a WAL database checkpoints it, so a "writes nothing" fingerprint in that class sees its file rewritten with the
+    /// same content (SchemaPlannerTests, 2026-10-07, when CodexLineMigrationTests and the resilience tests did it).
+    /// Use <see cref="TestDatabases.ClearSqlitePool"/> with the test's own connection string.
+    /// </summary>
+    [Fact]
+    public void NoGlobalSqlitePoolClearing()
+    {
+        string? root = null;
+        for (string? dir = AppContext.BaseDirectory; !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
+        {
+            if (File.Exists(Path.Combine(dir, "ArcaneCore.Data.Tests.csproj")))
+            {
+                root = dir;
+                break;
+            }
+        }
+
+        Assert.True(root is not null, "the ArcaneCore.Data.Tests sources were not found above " + AppContext.BaseDirectory);
+        var call = new System.Text.RegularExpressions.Regex(@"\.ClearAllPools\s*\(");
+        string separator = Path.DirectorySeparatorChar.ToString();
+        string[] sources = [.. Directory.EnumerateFiles(root!, "*.cs", SearchOption.AllDirectories)
+            .Where(p => !p.Contains(separator + "obj" + separator, StringComparison.Ordinal)
+                && !p.Contains(separator + "bin" + separator, StringComparison.Ordinal))];
+        Assert.True(sources.Length > 100, $"only {sources.Length} test sources scanned under {root}");
+
+        string[] offenders = [.. sources.SelectMany(p => File.ReadLines(p).Select((line, i) => (Path: p, Line: line, Number: i + 1)))
+            .Where(x => !x.Line.TrimStart().StartsWith("//", StringComparison.Ordinal) && call.IsMatch(x.Line))
+            .Select(x => $"{Path.GetRelativePath(root!, x.Path)}:{x.Number}")];
+        Assert.True(offenders.Length == 0, "SqliteConnection.ClearAllPools in: " + string.Join(", ", offenders));
+    }
+
     private static void Execute(SqliteConnection connection, SqliteTransaction transaction, string sql)
     {
         using SqliteCommand command = connection.CreateCommand();

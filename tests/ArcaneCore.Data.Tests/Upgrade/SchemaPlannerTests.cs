@@ -36,10 +36,10 @@ public sealed class SchemaPlannerTests : IAsyncLifetime
     public async Task LegacyV1Database_IsBehind_ListsExactlyThePendingSteps_AndChangesNothing(DatabaseProvider provider)
     {
         DatabaseConnectionOptions connection = await NewLegacyCharactersV1Async(_databases, provider);
-        string? file = provider == DatabaseProvider.Sqlite ? UpgradeTestSupport.SqlitePath(connection) : null;
+        bool sqlite = provider == DatabaseProvider.Sqlite;
         await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection);
         string before = await UpgradeTestSupport.SnapshotAsync(db, CharacterDbContext.Schema);
-        string? fileBefore = file is null ? null : UpgradeTestSupport.FileFingerprint(file);
+        string? fileBefore = sqlite ? UpgradeTestSupport.SettledFileFingerprint(connection) : null;
 
         SchemaPlan plan = await SchemaPlanner.PlanAsync(db, CharacterDbContext.Schema);
 
@@ -51,9 +51,9 @@ public sealed class SchemaPlannerTests : IAsyncLifetime
         Assert.True(plan.CreateCount > 10, $"the legacy characters database lacks many tables, the plan creates {plan.CreateCount}");
         Assert.False(plan.IsRefused, plan.FirstRefusal);
         Assert.Equal(before, await UpgradeTestSupport.SnapshotAsync(db, CharacterDbContext.Schema));
-        if (file is not null)
+        if (sqlite)
         {
-            Assert.Equal(fileBefore, UpgradeTestSupport.FileFingerprint(file));
+            Assert.Equal(fileBefore, UpgradeTestSupport.SettledFileFingerprint(connection));
         }
     }
 
