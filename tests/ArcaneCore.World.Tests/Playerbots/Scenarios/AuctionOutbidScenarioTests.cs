@@ -1,5 +1,9 @@
+using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Economy;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Economy;
+using ArcaneCore.Kernel.Economy;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Economy;
@@ -24,6 +28,76 @@ public sealed class AuctionOutbidScenarioTests
         await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(services =>
             services.AddSingleton<IAuctioneerAccess>(new AnyAuctioneer()));
         await world.RunPassingAsync(new AuctionOutbidScenario());
+    }
+
+    /// <summary>
+    /// The same scenario with the listing's database acknowledgement held for 6 s of wall time (a loaded machine): the manual clock
+    /// spends the step's whole game budget long before the reply exists, and the wait must still see it (it once failed with
+    /// "Scnseller receives SmsgAuctionCommandResult (30.0s game, 4.2s wall)" under full suite load). The hold comes after the
+    /// commit and ignores the settlement's own 5 s budget (EconomySettlements.Budget), which would otherwise answer Database.
+    /// </summary>
+    [Fact]
+    public async Task Outbid_Passes_WhenTheListingCommitIsSlowerThanTheGameBudgetInWallTime()
+    {
+        var store = new SlowFirstCommit(TimeSpan.FromSeconds(6));
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(services =>
+        {
+            services.AddSingleton<IAuctioneerAccess>(new AnyAuctioneer());
+            services.AddScoped<IEconomyStore>(sp => store.Wrap(new EfEconomyStore(sp.GetRequiredService<CharacterDbContext>())));
+        });
+        await world.RunPassingAsync(new AuctionOutbidScenario());
+        Assert.True(store.Delayed, "the seam never held a commit");
+    }
+
+    /// <summary>Holds the first economy commit's result (the listing) for a fixed wall time; every other call goes straight through.</summary>
+    private sealed class SlowFirstCommit(TimeSpan delay)
+    {
+        private readonly TimeSpan _delay = delay;
+        private int _commits;
+
+        public bool Delayed => Volatile.Read(ref _commits) > 0;
+
+        public IEconomyStore Wrap(IEconomyStore inner) => new Store(this, inner);
+
+        private sealed class Store(SlowFirstCommit owner, IEconomyStore inner) : IEconomyStore
+        {
+            public async Task<EconomyCommitResult> CommitAsync(EconomyCommitRequest request, CancellationToken cancellationToken = default)
+            {
+                EconomyCommitResult result = await inner.CommitAsync(request, cancellationToken);
+                if (Interlocked.Increment(ref owner._commits) == 1)
+                {
+                    await Task.Delay(owner._delay, CancellationToken.None);
+                }
+
+                return result;
+            }
+
+            public Task<bool> IsCommittedAsync(Guid operationId, CancellationToken cancellationToken = default)
+                => inner.IsCommittedAsync(operationId, cancellationToken);
+
+            public Task<IReadOnlyList<MailRecord>> GetMailsAsync(int receiverId, CancellationToken cancellationToken = default)
+                => inner.GetMailsAsync(receiverId, cancellationToken);
+
+            public Task<IReadOnlyList<MailRecord>> GetExpiredMailsAsync(long now, int max, CancellationToken cancellationToken = default)
+                => inner.GetExpiredMailsAsync(now, max, cancellationToken);
+
+            public Task<IReadOnlyList<MailRecord>> GetMailsInvolvingAsync(int characterId, CancellationToken cancellationToken = default)
+                => inner.GetMailsInvolvingAsync(characterId, cancellationToken);
+
+            public Task<string?> GetItemTextAsync(uint itemTextId, CancellationToken cancellationToken = default)
+                => inner.GetItemTextAsync(itemTextId, cancellationToken);
+
+            public Task<IReadOnlyList<AuctionRecord>> GetAuctionsAsync(CancellationToken cancellationToken = default)
+                => inner.GetAuctionsAsync(cancellationToken);
+
+            public Task<IReadOnlyDictionary<uint, ItemInstanceData>> GetEscrowItemsAsync(IReadOnlyCollection<uint> itemGuids,
+                CancellationToken cancellationToken = default) => inner.GetEscrowItemsAsync(itemGuids, cancellationToken);
+
+            public Task<AuctionSnapshot> GetAuctionSnapshotAsync(AuctionSnapshotFilter filter, CancellationToken cancellationToken = default)
+                => inner.GetAuctionSnapshotAsync(filter, cancellationToken);
+
+            public Task<EconomyIdSeed> GetIdSeedAsync(CancellationToken cancellationToken = default) => inner.GetIdSeedAsync(cancellationToken);
+        }
     }
 
     internal sealed class AnyAuctioneer : IAuctioneerAccess

@@ -116,6 +116,28 @@ public sealed class PlayerbotScenarioTests
         Assert.StartsWith("timed out waiting for: never", report.Failure);
         uint after = await world.Host.OnWorldAsync(() => world.Host.World.NowMs);
         Assert.InRange(after - before, 5000u, 5200u); // exactly the bounded game time passed (plus the last step)
+        // The game budget burns in a fraction of a second; the wait still gave async work its timeout in wall time.
+        Assert.True(report.Steps[^1].Wall >= TimeSpan.FromSeconds(5), report.ToString());
+        Assert.Contains("game budget spent after", report.Failure);
+    }
+
+    [Fact]
+    public async Task AManualClockWait_OutlastsSlowOffThreadWork_WithoutAdvancingPastItsGameBudget()
+    {
+        // A database-backed reply runs on real time while the manual clock runs as fast as the world can tick: under load the
+        // whole game budget can be spent long before the reply lands. Here the "reply" is an off-world-thread completion 6 s of
+        // wall time away, past the old 3 s grace after a 10 s game budget that burns in well under a second.
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync();
+        uint before = await world.Host.OnWorldAsync(() => world.Host.World.NowMs);
+        ScenarioReport report = await world.RunAsync(new DelegateScenario("slow-reply", context =>
+            context.StepAsync("wait for a slow off-thread reply", async () =>
+            {
+                Task reply = Task.Delay(TimeSpan.FromSeconds(6));
+                await context.WaitUntilAsync("the slow reply", () => reply.IsCompleted, TimeSpan.FromSeconds(10));
+            })));
+        Assert.True(report.Passed, report.ToString());
+        uint after = await world.Host.OnWorldAsync(() => world.Host.World.NowMs);
+        Assert.InRange(after - before, 0u, 10_200u); // never more game time than the wait's own budget
     }
 
     [Fact]
