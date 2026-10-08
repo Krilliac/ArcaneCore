@@ -35,13 +35,19 @@ public sealed class NetGuard
     private long _refusedAuthAttempts;
     private long _droppedPackets;
     private long _floodDisconnects;
+    private readonly IPNetwork[] _exempt;
 
     /// <param name="options">The <c>Net:Protection</c> section.</param>
     /// <param name="daemonMaxConnections">The daemon's own global cap (Auth:/World:MaxConnections), read at each admission.</param>
     /// <param name="daemonMaxPerIp">The daemon's own per-address cap (Auth:/World:MaxConnectionsPerIp), read at each admission.</param>
     /// <param name="logger">Where the rate-limited refusal lines go.</param>
     /// <param name="clock">Monotonic milliseconds; tests inject a fake.</param>
-    public NetGuard(NetProtectionOptions options, Func<int> daemonMaxConnections, Func<int> daemonMaxPerIp, ILogger logger, Func<long>? clock = null)
+    /// <param name="bindAddress">
+    /// The address the listener is bound to: a loopback bind exempts loopback clients from the per-address limits
+    /// (<see cref="NetProtectionOptions.ExemptLoopbackOnLoopbackBind"/>). Null: not known, no loopback exemption.
+    /// </param>
+    public NetGuard(NetProtectionOptions options, Func<int> daemonMaxConnections, Func<int> daemonMaxPerIp, ILogger logger, Func<long>? clock = null,
+        IPAddress? bindAddress = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(daemonMaxConnections);
@@ -50,7 +56,11 @@ public sealed class NetGuard
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         Func<long> ticks = clock ?? Clock.Milliseconds;
 
-        Limiter = new ConnectionLimiter(daemonMaxConnections, () => EffectivePerIpCap(daemonMaxPerIp(), options.MaxConnectionsPerIp));
+        ExemptLoopback = options.ExemptLoopbackOnLoopbackBind && bindAddress is not null && IPAddress.IsLoopback(Normalize(bindAddress));
+        _exempt = ParseExemptions(options.ExemptAddresses, _logger);
+        // An exempt address is free of the shared cap only: the daemon's own cap, when an operator set one, still applies.
+        Limiter = new ConnectionLimiter(daemonMaxConnections,
+            address => IsExempt(address) ? Math.Max(0, daemonMaxPerIp()) : EffectivePerIpCap(daemonMaxPerIp(), options.MaxConnectionsPerIp));
         Table = new IpRateTable(Math.Max(1, options.MaxTrackedAddresses), options.AddressIdleEviction > TimeSpan.Zero ? options.AddressIdleEviction : TimeSpan.FromMinutes(10), ticks);
         Table.Configure(RateBucket.Connections, Math.Max(0, options.ConnectionBurstPerIp), Math.Max(0, options.ConnectionsPerMinutePerIp));
         Table.Configure(RateBucket.AuthFailures, Math.Max(0, options.AuthFailureBurstPerIp), Math.Max(0, options.AuthFailuresPerMinutePerIp));
@@ -64,6 +74,85 @@ public sealed class NetGuard
         _unauthenticatedTimeout = new LogGate(interval, ticks);
         _packetDropped = new LogGate(interval, ticks);
         _packetFlood = new LogGate(interval, ticks);
+    }
+
+    /// <summary>Whether loopback clients are exempt from the per-address limits (a loopback-bound listener, <see cref="NetProtectionOptions.ExemptLoopbackOnLoopbackBind"/>).</summary>
+    public bool ExemptLoopback { get; }
+
+    /// <summary>The parsed <see cref="NetProtectionOptions.ExemptAddresses"/> networks.</summary>
+    public IReadOnlyList<IPNetwork> ExemptNetworks => _exempt;
+
+    /// <summary>
+    /// Whether <paramref name="address"/> is exempt from the shared per-address connection cap
+    /// (<see cref="NetProtectionOptions.MaxConnectionsPerIp"/>). Nothing else is lifted: the daemon's own per-address cap, the
+    /// global cap, the connection rate and the authentication failure budget still apply.
+    /// </summary>
+    public bool IsExempt(IPAddress address)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+        IPAddress key = Normalize(address);
+        if (ExemptLoopback && IPAddress.IsLoopback(key))
+        {
+            return true;
+        }
+
+        foreach (IPNetwork network in _exempt)
+        {
+            if (network.Contains(key))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IPAddress Normalize(IPAddress address) => address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
+
+    /// <summary>
+    /// "a.b.c.d", "::1" or a CIDR network ("10.0.0.0/8"). False for anything else; used by the listener (an entry that does not
+    /// parse exempts nothing) and by check-config.
+    /// </summary>
+    public static bool TryParseExemption(string? text, out IPNetwork network)
+    {
+        network = default;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        string trimmed = text.Trim();
+        if (trimmed.Contains('/', StringComparison.Ordinal))
+        {
+            return IPNetwork.TryParse(trimmed, out network);
+        }
+
+        if (!IPAddress.TryParse(trimmed, out IPAddress? address))
+        {
+            return false;
+        }
+
+        address = Normalize(address);
+        network = new IPNetwork(address, address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 32 : 128);
+        return true;
+    }
+
+    private static IPNetwork[] ParseExemptions(string[]? entries, ILogger logger)
+    {
+        var networks = new List<IPNetwork>();
+        foreach (string entry in entries ?? [])
+        {
+            if (TryParseExemption(entry, out IPNetwork network))
+            {
+                networks.Add(network);
+            }
+            else
+            {
+                logger.LogWarning("Net:Protection:ExemptAddresses entry '{Entry}' is not an address or CIDR network; it exempts nothing", entry);
+            }
+        }
+
+        return [.. networks];
     }
 
     /// <summary>World packets dropped by a connection's packet budgets (<see cref="OpcodeRateLimiter"/>) so far.</summary>

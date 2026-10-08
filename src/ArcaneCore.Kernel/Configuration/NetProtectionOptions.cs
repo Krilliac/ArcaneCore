@@ -25,6 +25,23 @@ public sealed class NetProtectionOptions
     public int MaxConnectionsPerIp { get; set; } = 16;
 
     /// <summary>
+    /// Client addresses exempt from <see cref="MaxConnectionsPerIp"/>: single addresses ("127.0.0.1", "::1") or CIDR networks
+    /// ("10.0.0.0/8"). Empty by default. Only this shared cap is lifted: the daemon's own Auth:/World:MaxConnectionsPerIp (when
+    /// set), the global cap, the connection rate (<see cref="ConnectionBurstPerIp"/>) and the authentication failure budget
+    /// still apply. An entry that does not parse exempts nothing (check-config reports it). Meant for the owner's own tooling
+    /// and local crowd tests; do not list a reverse proxy that forwards public clients.
+    /// </summary>
+    public string[] ExemptAddresses { get; set; } = [];
+
+    /// <summary>
+    /// When the listener is bound to a loopback address (Auth:/World:BindAddress 127.0.0.1 or ::1), loopback clients are exempt
+    /// as if listed in <see cref="ExemptAddresses"/> (default on): only processes on the same machine can reach such a listener,
+    /// so the per-address cap would only limit the owner's own clients and crowd tests. A listener bound to any other address
+    /// (0.0.0.0, a LAN or public address) keeps capping loopback clients like every other address.
+    /// </summary>
+    public bool ExemptLoopbackOnLoopbackBind { get; set; } = true;
+
+    /// <summary>
     /// How many connections one IP address may open at once before the per-minute rate below
     /// applies (the token bucket's capacity); 0 disables the connection-rate limit. A refused
     /// connection is closed before any session, DI scope or database context exists.
