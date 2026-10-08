@@ -64,13 +64,16 @@ public sealed class ShapeshiftFormDbcTests
     public void ADbcRowOverridesTheBuiltInRetailRow_ByIdOnly()
     {
         // A configured DBC replaces the table wholesale (StanceFeature picks one or the other, never a merge).
-        ShapeshiftFormCatalog fromDbc = ShapeshiftFormDbcReader.Read(DbcFile.Parse(Image(14, [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x40, 0, 0])));
+        // The DBC row 1 deliberately differs from the built-in Cat row in both columns (Stance instead of 0x70, humanoid).
+        ShapeshiftFormCatalog fromDbc = ShapeshiftFormDbcReader.Read(DbcFile.Parse(Image(14, [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1, 0, 0])));
 
         Assert.Equal(1, fromDbc.Count);
         Assert.True(fromDbc.TryGet(1, out ShapeshiftFormInfo? cat));
-        Assert.Equal(0x40u, cat!.Flags1);
+        Assert.Equal(new ShapeshiftFormInfo(1, 0x1, 0), cat);
+        Assert.False(fromDbc.TryGet(5, out _));   // no merge: the built-in Bear row does not leak in
         Assert.True(ShapeshiftFormCatalog.Retail.TryGet(1, out ShapeshiftFormInfo? retail));
-        Assert.Equal(0u, retail!.Flags1);
+        Assert.Equal(new ShapeshiftFormInfo(1, 0x70, 1), retail);
+        Assert.NotEqual(retail, cat);
     }
 
     [RealDbcFact]
@@ -80,13 +83,14 @@ public sealed class ShapeshiftFormDbcTests
         string dir = Environment.GetEnvironmentVariable(RealDbcFactAttribute.Variable)!;
         ShapeshiftFormCatalog client = ShapeshiftFormDbcReader.Load(Path.Combine(dir, "SpellShapeshiftForm.dbc"));
 
+        // The file must be the one the client uses (patch.MPQ overrides dbc.MPQ), not the older base-archive copy.
         Assert.NotEqual(0, client.Count);
         Assert.Equal(client.Count, ShapeshiftFormCatalog.Retail.Count);
-        foreach (ShapeshiftFormInfo row in client.Forms)
-        {
-            Assert.True(ShapeshiftFormCatalog.Retail.TryGet(row.Id, out ShapeshiftFormInfo? ours), $"form {row.Id}");
-            Assert.Equal(row, ours);
-        }
+        string[] mismatches = client.Forms.OrderBy(row => row.Id)
+            .Where(row => !ShapeshiftFormCatalog.Retail.TryGet(row.Id, out ShapeshiftFormInfo? ours) || ours != row)
+            .Select(row => $"client {row} vs built-in {(ShapeshiftFormCatalog.Retail.TryGet(row.Id, out ShapeshiftFormInfo? ours) ? ours!.ToString() : "missing")}")
+            .ToArray();
+        Assert.True(mismatches.Length == 0, string.Join(Environment.NewLine, mismatches));
     }
 
     private static byte[] Image(int fields, params uint[][] records)

@@ -19,7 +19,7 @@ public static class FormQueries
 
     /// <summary>
     /// vmangos Unit::IsShapeShifted (Unit.cpp:5843-5852, "mirroring clientside gameplay logic"): a form whose DBC row
-    /// lacks the Stance flag. False for no form, for a form without a row, and for the stances, Stealth and Moonkin.
+    /// lacks the Stance flag. False for no form, for a form without a row, and for the stances, Shadowform, Stealth and Moonkin.
     /// </summary>
     public static bool IsShapeShifted(byte form, ShapeshiftFormCatalog? catalog)
         => form != 0 && (catalog ?? ShapeshiftFormCatalog.Retail).TryGet(form, out ShapeshiftFormInfo info) && (info.Flags1 & (uint)ShapeshiftFlags.Stance) == 0;

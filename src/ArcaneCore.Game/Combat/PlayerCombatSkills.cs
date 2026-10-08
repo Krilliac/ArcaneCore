@@ -21,7 +21,7 @@ namespace ArcaneCore.Game.Combat;
 /// <remarks>
 /// Weapon-skill gain is suppressed while shapeshifted in the DBC sense (<see cref="FormQueries.IsShapeShifted(Unit, ArcaneCore.Kernel.WorldData.ShapeshiftFormCatalog?)"/>:
 /// a form whose SpellShapeshiftForm row lacks the Stance flag; vmangos Player.cpp:5351), so warrior stances,
-/// Stealth and Moonkin still gain skill. Not modelled: the weapon skill of a form without weapons (the level
+/// Shadowform, Stealth and Moonkin still gain skill. Not modelled: the weapon skill of a form without weapons (the level
 /// maximum in vmangos).
 /// </remarks>
 public static class PlayerCombatSkills

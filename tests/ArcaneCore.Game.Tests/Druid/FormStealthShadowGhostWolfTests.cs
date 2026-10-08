@@ -12,10 +12,11 @@ namespace ArcaneCore.Game.Tests.Druid;
 
 /// <summary>
 /// The forms that are not druid forms but share the form byte: Ghost Wolf (16), Shadowform (28) and Stealth (30), handled by
-/// the same HandleAuraModShapeshift (vmangos SpellAuras.cpp:2420-2625) with the real 1.12.1 form table (flags1: Ghost Wolf 0,
-/// Shadowform 8, Stealth 1). Spell values are classic-db: Stealth 1784 (aura 36 misc 30, plus Mod Stealth), Ambush 8676 /
-/// Cheap Shot 1833 (Stances 0x20000000 = form 30), Ghost Wolf 2645 (Attributes 0x18000), Shadowform 15473 (Attributes
-/// 0x2050000), Renew 139 (StancesNot 0x08000000 = form 28).
+/// the same HandleAuraModShapeshift (vmangos SpellAuras.cpp:2420-2625) with the real 1.12.1 form table, the client's patch.MPQ
+/// SpellShapeshiftForm.dbc (flags1: Ghost Wolf 0x40, Shadowform 0x9, Stealth 0x1, Spirit of Redemption 0). Spell values are
+/// classic-db / client Spell.dbc: Stealth 1784 (aura 36 misc 30, plus Mod Stealth), Ambush 8676 / Cheap Shot 1833 (Stances
+/// 0x20000000 = form 30), Ghost Wolf 2645 (Attributes 0x18000), Shadowform 15473 (Attributes 0x2050000), Renew 139
+/// (Attributes 0x10000, AttributesEx2 0x80000, Stances 0x80000000 = form 32, StancesNot 0x08000000 = form 28), Spirit of Redemption 27827 (form 32).
 /// </summary>
 public sealed class FormStealthShadowGhostWolfTests
 {
@@ -25,6 +26,8 @@ public sealed class FormStealthShadowGhostWolfTests
     private const uint Shadowform = 15473;
     private const uint Renew = 139;
     private const uint Fireball = 133;     // an ordinary spell: Attributes 0, no Stances
+    private const uint Spirit = 27827;
+    private const uint ShapeCancelBuff = 930_201;
 
     private static SpellInfo FormSpell(uint id, int form, SpellAttributes attributes, SpellAttributesEx2 ex2 = 0) => Spell(id, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.ModShapeshift, misc: form)) with
     {
@@ -49,8 +52,19 @@ public sealed class FormStealthShadowGhostWolfTests
         };
         yield return Spell(Renew, Effect(SpellEffectName.ApplyAura, 3, aura: AuraType.ModCritPercent)) with
         {
+            Attributes = (SpellAttributes)0x10000u,    // NOT_SHAPESHIFT
+            AttributesEx2 = (SpellAttributesEx2)0x80000u, // ALLOW_WHILE_NOT_SHAPESHIFTED
+            Stances = 0x80000000,                      // castable as the Spirit of Redemption (form 32)
             StancesNot = 0x08000000,
             Duration = new SpellDuration(5000, 0, 5000),
+            StartRecoveryCategory = 0,
+            StartRecoveryTime = 0,
+        };
+        yield return FormSpell(Spirit, 32, 0);
+        yield return Spell(ShapeCancelBuff, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy)) with
+        {
+            AuraInterruptFlags = (SpellAuraInterruptFlags)ShapeshiftService.ShapeshiftingCancelsFlag,
+            Duration = new SpellDuration(-1, 0, -1),
             StartRecoveryCategory = 0,
             StartRecoveryTime = 0,
         };
@@ -137,16 +151,18 @@ public sealed class FormStealthShadowGhostWolfTests
     }
 
     [Fact]
-    public void Shadowform_SetsForm28_BlocksStancesNotSpells_AndNotShapeshiftSpells_UntilCancelled()
+    public void Shadowform_SetsForm28_BlocksStancesNotSpells_ButIsAStance_SoNotShapeshiftSpellsStayCastable()
     {
         using var rig = new Rig(Class.Priest, PowerType.Mana);
+        rig.System.CastSpell(rig.Player, ShapeCancelBuff, SpellCastTargets.ForSelf(), triggered: true);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(Shadowform));
 
         Assert.Equal(28, rig.Form);
         Assert.Equal(PowerType.Mana, rig.Player.PowerType);
         Assert.Equal(SpellCastResult.NotShapeshift, rig.Cast(Renew));         // StancesNot bit 28 (Holy spells)
-        Assert.Equal(SpellCastResult.NotShapeshift, rig.Cast(Fireball));      // flags1 0x8: acts as shifted, NOT_SHAPESHIFT
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(Fireball));             // flags1 0x9 has Stance: not shifted, NOT_SHAPESHIFT does not bite
+        Assert.True(rig.Has(ShapeCancelBuff));                                // a Stance form keeps SHAPESHIFTING_CANCELS auras (SpellAuras.cpp:2515)
         Assert.Equal(rig.Player.NativeDisplayId, rig.Player.DisplayId);       // no model change
 
         rig.System.CancelAura(rig.Player, Shadowform);
@@ -154,6 +170,21 @@ public sealed class FormStealthShadowGhostWolfTests
         Assert.Equal(0, rig.Form);
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(Renew));
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(Fireball));
+    }
+
+    [Fact]
+    public void SpiritOfRedemption_IsNotAStance_SoNotShapeshiftSpellsAreBlocked_ButItsOwnHealsAreNot()
+    {
+        using var rig = new Rig(Class.Priest, PowerType.Mana);
+        rig.System.CastSpell(rig.Player, ShapeCancelBuff, SpellCastTargets.ForSelf(), triggered: true);
+
+        rig.System.CastSpell(rig.Player, Spirit, SpellCastTargets.ForSelf(), triggered: true);
+
+        Assert.Equal(32, rig.Form);
+        Assert.True(FormQueries.IsShapeShifted(rig.Player, ShapeshiftFormCatalog.Retail));
+        Assert.False(rig.Has(ShapeCancelBuff));                               // flags1 0: entering cancels SHAPESHIFTING_CANCELS auras
+        Assert.Equal(SpellCastResult.NotShapeshift, rig.Cast(Fireball));      // acts as shifted: NOT_SHAPESHIFT (SpellEntry.cpp:1059-1065)
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(Renew));                // Stances bit 31 = form 32 wins first
     }
 
     [Fact]
