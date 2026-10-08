@@ -52,10 +52,11 @@ public sealed class PlayerbotMovementControlTests
         try
         {
             session.DrainManagedPackets();
-            session.Send(WorldOpcode.SmsgLootResponse, [1, 2]);
-            session.Send(WorldOpcode.SmsgQuestgiverQuestDetails, [3, 4]);
+            // Use complete wire bodies so the opt-in wire oracle can observe this drain test too.
+            session.Send(WorldOpcode.SmsgLootResponse, new byte[14] { 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0 });
+            session.Send(WorldOpcode.SmsgNotification, [3, 0]);
             Assert.Single(session.DrainManagedPackets(WorldOpcode.SmsgLootResponse));
-            Assert.Equal(WorldOpcode.SmsgQuestgiverQuestDetails, Assert.Single(session.DrainManagedPackets()).Opcode);
+            Assert.Equal(WorldOpcode.SmsgNotification, Assert.Single(session.DrainManagedPackets()).Opcode);
             await host.World.InvokeAsync(() =>
             {
                 Player player = session.Player!;

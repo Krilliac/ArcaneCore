@@ -42,6 +42,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
 
     private readonly WorldSessionOptions _sessionOptions;
     private readonly ILogger _sessionLogger;
+    private readonly WireOracle? _wireOracle;
 
     private WorldTestHost(
         int compressionThreshold, Action<WorldRuntimeOptions>? configure, Action<IServiceCollection>? configureServices, WorldSessionOptions? sessionOptions, ILogger? sessionLogger,
@@ -53,6 +54,12 @@ internal sealed class WorldTestHost : IAsyncDisposable
         var collection = new ServiceCollection();
         collection.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         collection.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
+        if (Environment.GetEnvironmentVariable("ARCANECORE_TEST_WIRE_ORACLE") == "1")
+        {
+            var oracle = new WireOracle(recordHistogram: true);
+            _wireOracle = oracle;
+            collection.AddSingleton<IOutboundPacketObserver>(oracle);
+        }
         Accounts.Events = StatusEvents;
         collection.AddSingleton<IAccountStore>(Accounts);
         collection.AddSingleton<IAccountAdmin>(Accounts);
@@ -280,6 +287,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
         World.Dispose();
         await _services.DisposeAsync();
         _stop.Dispose();
+        _wireOracle?.AssertValid();
     }
 
     private async Task AcceptLoopAsync()
