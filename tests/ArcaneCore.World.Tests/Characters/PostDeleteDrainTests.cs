@@ -322,6 +322,8 @@ public sealed class PostDeleteDrainTests
 
         public Task SaveInstanceAsync(InstanceRecord instance, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
+        public Task SaveInstanceDataAsync(uint instanceId, string data, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
         public Task DeleteInstanceAsync(uint instanceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task SaveBindAsync(CharacterInstanceBindRecord bind, CancellationToken cancellationToken = default) => Task.CompletedTask;

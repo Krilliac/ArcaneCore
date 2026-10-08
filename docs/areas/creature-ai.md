@@ -173,8 +173,8 @@ docs/integration/creature-ai.md.
     avatar's combat doors), Blackrock Depths 230 (the Tomb of the Seven: doors, dead dwarves respawn on FAIL), Zul'Gurub 309 (Ohgan) and
     Dire Maul 429 (Alzzin's crumbling wall and vine). Not ported, logged at debug: texts, dialogues, summons, waves and the other
     encounters of those scripts. The save string lives on the in-memory `InstanceSave.Data` (an instance map unloaded and created again
-    loads it) and goes to `IInstancePersistence.InstanceDataSaved`; the characters database has no `instance.data` column yet, so it does
-    not outlive a restart (docs/integration/eventai-instance-20261008.md).
+    loads it) and goes to `IInstancePersistence.InstanceDataSaved`, which the world queues to `instance.data` (characters schema 42,
+    `InstanceScriptDataModule`); the startup load restores it, so it outlives a restart (docs/integration/instances.md).
   - **Targets**: 0-6, 7 (the invoker; there are no pets), 10, 11 (the spawner: the creature that summoned this one, else its owner), 12 and 15
     (no unit). Others fail the action.
   - classic-db z2815 has no EventAI row with an unsupported part any more (wave 4: 48 rows over 30 entries before, 0 after, measured on a

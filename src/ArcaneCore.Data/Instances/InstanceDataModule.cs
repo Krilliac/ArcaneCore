@@ -6,12 +6,13 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.Data.Instances;
 
-/// <summary>A dungeon/raid instance (vmangos <c>instance</c>: id, map, resettime).</summary>
+/// <summary>A dungeon/raid instance (vmangos <c>instance</c>: id, map, resettime, data).</summary>
 public sealed class InstanceRow
 {
     public int Id { get; set; }
     public int MapId { get; set; }
     public long ResetTime { get; set; }
+    public string? Data { get; set; }
 }
 
 /// <summary>A character's instance bind (vmangos <c>character_instance</c>: guid, instance, permanent).</summary>

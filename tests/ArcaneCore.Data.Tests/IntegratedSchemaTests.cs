@@ -131,6 +131,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.Battlegrounds.CharacterBattlegroundDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.CharacterBattlegroundDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Transports.CharacterTransportDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.CharacterTransportDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.AntiCheat.AntiCheatDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.AntiCheat.AntiCheatDataModule.Version),
+            (typeof(InstanceScriptDataModule), DatabaseComponent.Characters, InstanceScriptDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
@@ -152,12 +153,12 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
 
         // Wave 2 (docs/integration/wave2-20261007.md): every step is real. No placeholder is registered, and the lanes' modules
         // were renumbered down so the plan's unclaimed numbers left no gap: world 38-41, characters 35-40. The wave-6 anticheat lane
-        // (characters 41) was renumbered down from 43 the same way; the instance-persist lane takes 42.
+        // is characters 41 and the wave-7 instance-persist lane characters 42 (its v41 placeholder was removed at integration).
         Assert.DoesNotContain(DataModules.All, m => m is IReservedSchemaGap);
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
         Assert.Equal(41, WorldDbContext.Schema.CurrentVersion);
-        Assert.Equal(41, CharacterDbContext.Schema.CurrentVersion); // anticheat (41)
+        Assert.Equal(42, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42)
         Assert.Equal(4, AuthDbContext.Schema.CurrentVersion);
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })

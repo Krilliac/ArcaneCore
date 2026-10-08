@@ -37,7 +37,7 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
         List<GroupInstanceRow> groupBinds = await db.Set<GroupInstanceRow>().AsNoTracking()
             .OrderBy(b => b.LeaderCharacterId).ThenBy(b => b.InstanceId).ToListAsync(cancellationToken).ConfigureAwait(false);
         return new InstanceStoreSnapshot(
-            [.. instances.Select(i => new InstanceRecord((uint)i.Id, (uint)i.MapId, i.ResetTime))],
+            [.. instances.Select(i => new InstanceRecord((uint)i.Id, (uint)i.MapId, i.ResetTime, i.Data))],
             [.. binds.Select(b => new CharacterInstanceBindRecord(b.CharacterId, (uint)b.InstanceId, b.Permanent))],
             [.. resets.Select(r => new InstanceResetRecord((uint)r.MapId, r.ResetTime))],
             [.. last.Select(l => new CharacterLastInstanceRecord(l.CharacterId, (uint)l.MapId, (uint)l.InstanceId))])
@@ -59,6 +59,14 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
         row.MapId = (int)instance.MapId;
         row.ResetTime = instance.ResetTime;
         await SaveAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task SaveInstanceDataAsync(uint instanceId, string data, CancellationToken cancellationToken = default)
+    {
+        // vmangos InstanceData::SaveToDB updates only an existing instance row. A delayed write
+        // after reset must not recreate the deleted instance.
+        await db.Set<InstanceRow>().Where(i => i.Id == (int)instanceId)
+            .ExecuteUpdateAsync(s => s.SetProperty(i => i.Data, data), cancellationToken).ConfigureAwait(false);
     }
 
     public async Task DeleteInstanceAsync(uint instanceId, CancellationToken cancellationToken = default)

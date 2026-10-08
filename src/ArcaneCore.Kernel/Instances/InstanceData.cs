@@ -2,10 +2,10 @@ namespace ArcaneCore.Kernel.Instances;
 
 /// <summary>
 /// One persistent dungeon/raid instance (vmangos characters DB <c>instance</c>: id, map,
-/// reset_time). <see cref="ResetTime"/> is a Unix time in seconds: the scheduled global reset
+/// reset_time, data). <see cref="ResetTime"/> is a Unix time in seconds: the scheduled global reset
 /// for a raid, the earliest reset of a normal dungeon (it resets only while empty).
 /// </summary>
-public sealed record InstanceRecord(uint Id, uint MapId, long ResetTime);
+public sealed record InstanceRecord(uint Id, uint MapId, long ResetTime, string? Data = null);
 
 /// <summary>A character's bind to an instance (vmangos <c>character_instance</c>: guid, instance, permanent).</summary>
 public sealed record CharacterInstanceBindRecord(int CharacterId, uint InstanceId, bool Permanent);
@@ -55,6 +55,9 @@ public interface IInstanceStore
 
     /// <summary>Insert or update an instance row.</summary>
     Task SaveInstanceAsync(InstanceRecord instance, CancellationToken cancellationToken = default);
+
+    /// <summary>Update only the script data of an existing instance (vmangos InstanceData::SaveToDB).</summary>
+    Task SaveInstanceDataAsync(uint instanceId, string data, CancellationToken cancellationToken = default);
 
     /// <summary>Delete an instance with all its character binds and last-instance references; a stored body in it keeps its place but its instance becomes 0.</summary>
     Task DeleteInstanceAsync(uint instanceId, CancellationToken cancellationToken = default);

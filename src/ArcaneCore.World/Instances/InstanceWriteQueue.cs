@@ -33,6 +33,15 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
         Enqueue(store => store.SaveInstanceAsync(record));
     }
 
+    public void InstanceDataSaved(InstanceSave save)
+    {
+        if (save.Data is { } data)
+        {
+            uint id = save.InstanceId;
+            Enqueue(store => store.SaveInstanceDataAsync(id, data));
+        }
+    }
+
     /// <summary>
     /// Raised on the calling (world) thread for every instance whose deletion is queued, before it is queued: a deleted save, and also the saves
     /// the manager drops while it loads (which do not reach <c>InstanceManager.InstanceDeleted</c>).

@@ -172,6 +172,7 @@ public sealed partial class InstanceManager : IMapResolver
             }
 
             var save = new InstanceSave(record.Id, template, record.ResetTime);
+            save.Data = record.Data;
             if (!template.IsRaid)
             {
                 save.ResetScheduled = true; // nothing is loaded: the normal reset is armed
