@@ -583,8 +583,13 @@ public sealed partial class SpellSystem
             ? (uint)((ulong)target.MaxHealth * (uint)aura.Amount / 100)
             : (uint)aura.Amount;
         Unit caster = ResolveAuraCaster(holder) ?? target;
+        // Class scripts (Consecration, Curse of Doom): Periodic/SpellSystem.PeriodicDamageScripts.cs, vmangos SpellAuras.cpp:5869-5874.
+        IPeriodicDamageScript? script = aura.Type == AuraType.PeriodicDamage ? FindPeriodicDamageScript(holder.Spell.Id) : null;
+        float? scripted = script?.CalculateTick(this, holder, aura, caster, amount);
         float ramp = aura.Type == AuraType.PeriodicDamage ? PeriodicDamageRamp(holder.Spell, aura.TickCount) : 0f;
-        amount = ramp == 0f
+        amount = scripted is { } custom
+            ? ModifyTick(SpellAmountStage.DamageOverTimeTick, holder, aura, caster, custom + ramp)
+            : ramp == 0f
             ? ModifyTick(SpellAmountStage.DamageOverTimeTick, holder, aura, caster, amount)
             : ModifyTick(SpellAmountStage.DamageOverTimeTick, holder, aura, caster, amount + ramp);
         if (ImmunityRules.IsImmuneToDamage(this, target, holder.Spell.SchoolMask(), holder.Spell))
@@ -608,6 +613,10 @@ public sealed partial class SpellSystem
         OnDamageTaken(target, caster, dealt, periodic: true, absorbed, holder.Spell.Id);
         SendToSet(target, WorldOpcode.SmsgPeriodicauralog, SpellPackets.BuildPeriodicAuraLog(
             target.Guid, holder.CasterGuid, holder.Spell.Id, new PeriodicLogEntry(aura.Type, dealt, (uint)holder.Spell.School, Absorbed: absorbed, Resisted: resisted)), includeSelf: true);
+        if (script is not null && ResolveAuraCaster(holder) is { } scriptCaster)
+        {
+            script.AfterTick(this, holder, aura, scriptCaster, dealt);
+        }
     }
 
     /// <summary>
