@@ -56,6 +56,44 @@ public sealed class ScriptedAiSupportTests
     }
 
     [Fact]
+    public void ACorpseTimedEscortAmbusher_LivesUntilDeath_ThenKeepsItsCorpseForThirtySeconds()
+    {
+        (WorldRuntime world, Map map, CreatureMapSystem system, Creature summoner, _) = Setup();
+        using (world)
+        {
+            Creature ambusher = system.SummonCorpseTimedDespawn(summoner, SummonEntry, 8, 2, Z, 0,
+                target: null, corpseMs: 30_000)!;
+            Assert.NotNull(ambusher);
+            Run(world, 31_000);
+            Assert.True(ambusher.IsAlive);
+
+            map.Combat.Kill(null, ambusher);
+            Run(world, 29_000);
+            Assert.Contains(ambusher, system.Creatures);
+            Run(world, 1_000);
+            Assert.DoesNotContain(ambusher, system.Creatures);
+        }
+    }
+
+    [Fact]
+    public void AnOocOrCorpseSummon_KeepsCountingAsACorpse_WhereATimedOocOrDeadOneWaitsForTheDecay()
+    {
+        (WorldRuntime world, Map map, CreatureMapSystem system, Creature summoner, _) = Setup();
+        using (world)
+        {
+            // cmangos TemporarySpawn.cpp:107-127 against :129-149: both count down out of combat, only OOC_OR_DEAD holds a corpse.
+            Creature surge = system.SummonAt(summoner, SummonEntry, 8, 2, Z, 0, target: null, despawnMs: 10_000, oocOrCorpse: true)!;
+            Creature bandit = system.SummonAt(summoner, SummonEntry, 9, 2, Z, 0, target: null, despawnMs: 10_000)!;
+            Run(world, 5_000);
+            map.Combat.Kill(null, surge);
+            map.Combat.Kill(null, bandit);
+            Run(world, 5_100);
+            Assert.DoesNotContain(surge, system.Creatures);
+            Assert.Contains(bandit, system.Creatures);
+        }
+    }
+
+    [Fact]
     public void AnEntryScript_IsTheAiOfAWildSummonOfTheEntry_ButNotOfAControlledPet()
     {
         (WorldRuntime world, _, CreatureMapSystem system, Creature summoner, _) = Setup();
