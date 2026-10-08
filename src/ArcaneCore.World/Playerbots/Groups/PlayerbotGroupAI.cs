@@ -57,7 +57,7 @@ internal sealed class PlayerbotGroupAI
     internal const uint RestBelowPct = 50;
 
     /// <summary>The player resurrection spells (vmangos IsResurrectionSpell; classic names, any rank).</summary>
-    internal static readonly string[] ResurrectionSpells = ["Resurrection", "Redemption", "Ancestral Spirit"];
+    internal static readonly string[] ResurrectionSpells = ["Resurrection", "Redemption", "Ancestral Spirit", "Rebirth"];
 
     private readonly WorldSession _session;
     private readonly PlayerbotOptions _options;
@@ -118,6 +118,9 @@ internal sealed class PlayerbotGroupAI
 
     /// <summary>The last resurrection cast (inspection and tests: the dead member's name).</summary>
     internal string? LastResurrection { get; private set; }
+
+    /// <summary>Whether that cast was aimed at the member's corpse (it had released) rather than at its unreleased body.</summary>
+    internal bool LastResurrectionAtCorpse { get; private set; }
 
     /// <summary>How long a dead member waits for a resurrection before it releases (a test seam, never configuration-bound).</summary>
     internal long DeadWaitMs { get; set; } = PlayerbotGroupCoordinator.DeadWaitMs;
@@ -530,19 +533,29 @@ internal sealed class PlayerbotGroupAI
             || ResurrectionSpell(player) is not { } spell) return false;
         foreach (PlayerbotGroupCoordinator.Member member in group.Members)
         {
-            if (member.Guid == player.Guid || _session.World.FindOnlinePlayer(member.Guid) is not { } dead) continue;
-            if (dead.IsAlive || (dead.Flags & PlayerFlags.Ghost) != 0 || !ReferenceEquals(dead.Map, map)) continue;
+            if (member.Guid == player.Guid || _session.World.FindOnlinePlayer(member.Guid) is not { } dead || dead.IsAlive) continue;
+            // An unreleased body is the dead player's unit; once it released, the ghost cannot be targeted and the cast goes at its corpse
+            // (a 1.12 client does the same: TARGET_FLAG_CORPSE), wherever the ghost is (vmangos resolves the corpse to its owner).
+            Corpse? corpse = (dead.Flags & PlayerFlags.Ghost) != 0 ? dead.Combat.Corpse : null;
+            if ((dead.Flags & PlayerFlags.Ghost) != 0 && (corpse is null || !corpse.IsInWorld || !ReferenceEquals(corpse.Map, map))) continue;
+            if (corpse is null && !ReferenceEquals(dead.Map, map)) continue;
             if (ArcaneCore.Game.Death.Resurrection.ResurrectionRequests.IsRequested(dead)) continue;
+            WorldObject body = corpse ?? (WorldObject)dead;
             Goal = PlayerbotGoalKind.Group;
-            if (Distance(player, dead) > ResurrectYards)
+            if (Distance(player, body) > ResurrectYards)
             {
-                WalkTo(player, new Vector3(dead.X, dead.Y, dead.Z), _options.ThinkIntervalMs == 0 ? 1u : (uint)_options.ThinkIntervalMs, toward: false);
+                WalkTo(player, new Vector3(body.X, body.Y, body.Z), _options.ThinkIntervalMs == 0 ? 1u : (uint)_options.ThinkIntervalMs, toward: false);
                 return true;
             }
 
             if (!PlayerbotMovementControl.Stop(_session, player)) return true;
             _route = null;
-            if (_spells.CastAt(player, spell, dead)) LastResurrection = dead.Name;
+            if (corpse is not null ? _spells.CastAtCorpse(player, spell, corpse) : _spells.CastAt(player, spell, dead))
+            {
+                LastResurrection = dead.Name;
+                LastResurrectionAtCorpse = corpse is not null;
+            }
+
             _resurrectAtMs = Now + 3_000;
             return true;
         }
@@ -550,13 +563,14 @@ internal sealed class PlayerbotGroupAI
         return false;
     }
 
-    /// <summary>The resurrection spell the bot knows (its highest rank), or null.</summary>
+    /// <summary>The resurrection spell the bot knows (its highest rank) and carries the reagents for (Rebirth's seed), or null.</summary>
     internal SpellInfo? ResurrectionSpell(Player player)
     {
         if (!PlayerbotGroupContent.CanHeal(player.Class) || _session.Services.GetService<SpellFeature>() is not { } feature) return null;
         SpellInfo? best = null;
         foreach (uint id in feature.Spellbook.GetSpells(player))
             if (feature.System.Store.Get(id) is { } spell && ResurrectionSpells.Contains(spell.Name, StringComparer.Ordinal)
+                && spell.Reagents.All(r => r.Item <= 0 || r.Count == 0 || player.Inventory.GetItemCount((uint)r.Item) >= r.Count)
                 && (best is null || spell.Id > best.Id))
                 best = spell;
         return best;

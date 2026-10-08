@@ -109,8 +109,13 @@ nobody needs healing. Positioning is the brain's (`PlayerbotBrain.DecidePosition
 the victim before a swing).
 
 **Between fights**: a member below 50% health or mana eats or drinks (the leader does not pull meanwhile); a healer resurrects a dead
-member it can see (Resurrection, Redemption, Ancestral Spirit through the ordinary cast; the dead member's party intake accepts a
-group member's offer); a member loots the corpses whose round-robin turn is its own. A dead member waits (unreleased) while a living
+member it can see (Resurrection, Redemption, Ancestral Spirit, and Rebirth when it carries the seed, through the ordinary cast; the dead
+member's party intake accepts a group member's offer). The real rows (classic-db 2006, 7328, 2008, 20484) name no implicit target and the
+corpse flag (`Targets` 0x8000) without `AllowDeadTarget`, so the healer casts like a 1.12 client: at the dead unit while its body is
+unreleased, at the corpse (CMSG_CAST_SPELL with TARGET_FLAG_CORPSE and the corpse guid) once it released, walking to the body either way.
+The server checks such a cast as vmangos does: a unit target is range and line-of-sight checked whatever the implicit target
+(`Spell::CheckRange`), a corpse must exist and be in sight (`Spell::CheckCast` :5780), and a client's cast of a corpse-flag spell without a
+unit or corpse is refused (`ValidateExplicitTargetMask`); a member loots the corpses whose round-robin turn is its own. A dead member waits (unreleased) while a living
 member could resurrect it, at most 60 seconds, then releases and runs back (`PlayerbotRecovery`; a ghost whose body lies inside walks
 into the entrance and is revived there). A leader that died is waited for where the group stands.
 
@@ -166,7 +171,9 @@ out of an instance before it disbands. A group that cannot walk out in time is b
 `tests/ArcaneCore.World.Tests/Playerbots/Groups/`: the pure rules (`PlayerbotGroupContentTests`: quest flags and sizes, instance
 sizes, role composition, level range, the leader, raid subgroups, the risk estimate's group size, the group's elite margin); end to
 end on the scenario world with the manual clock (`GroupTestWorld`: a giver offering only the test's quests, an elite ogre, a brute, a
-raid warlord, a Deadmines boss, flat ground, a test Taunt and Resurrection): an elite quest done by a tank, a healer and a mage formed
+raid warlord, a Deadmines boss, flat ground, a test Taunt and Resurrection; `PlayerbotGroupResurrectionTests` adds the four real
+resurrection rows through `SpellStoreFactory`: a priest and a paladin resurrect an unreleased member, a priest resurrects a released one
+through its corpse): an elite quest done by a tank, a healer and a mage formed
 through `CMSG_GROUP_INVITE` / `CMSG_GROUP_ACCEPT` / `CMSG_LOOT_METHOD` and disbanded with every member credited; an objective the risk
 estimate passes over done by two; the healer healing the tank in a fight; the tank taunting the ogre off the healer; a dungeon quest:
 through the entrance trigger into one instance bound to the group, the boss, out through the exit; a wipe retreated, the dead
@@ -199,6 +206,5 @@ d3b26dcb):
   the loot tables).
 * Clearing is local: the leader pulls what stands within 20 yards of it on the way; there is no dungeon route or pull planning, no
   crowd control, no marking.
-* Resurrection targets a dead member's body; a member that already released (a ghost) runs back instead (no corpse-target cast).
 * The coordinator's groups live in memory: after a restart the bots leave the restored server groups and match again.
 * Bots do not hand quests to each other (a bot without the quest is not matched for a quest goal).
