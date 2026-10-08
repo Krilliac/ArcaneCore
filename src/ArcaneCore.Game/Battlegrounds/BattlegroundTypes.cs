@@ -62,6 +62,13 @@ public enum BattlegroundScoreType : byte
     BonusHonor = 4,
     FlagCaptures = 7,
     FlagReturns = 8,
+    BasesAssaulted = 9,
+    BasesDefended = 10,
+    GraveyardsAssaulted = 11,
+    GraveyardsDefended = 12,
+    TowersAssaulted = 13,
+    TowersDefended = 14,
+    SecondaryObjectives = 15,
 }
 
 /// <summary>The chat style of a battleground announcement (the <c>CHAT_MSG_BG_SYSTEM_*</c> value vmangos picks, BattleGroundWS.cpp).</summary>
@@ -166,6 +173,30 @@ public static class BattlegroundConstants
 
     /// <summary>Spirit of Redemption, whose death does not count as a death (BattleGround.cpp:1784).</summary>
     public const uint SpellSpiritOfRedemption = 27827;
+
+    /// <summary>A respawn time that means "never": the object is despawned (vmangos <c>RESPAWN_NEVER</c>, BattleGroundDefines.h:127, one year in seconds).</summary>
+    public const uint RespawnNeverSeconds = 31_536_000;
+
+    /// <summary>A used buff of a type that changes comes back after this long (vmangos <c>BUFF_RESPAWN_TIME</c>, BattleGroundDefines.h:126).</summary>
+    public const uint BuffRespawnTimeSeconds = 180;
+
+    /// <summary>The speed buff object (vmangos <c>BG_OBJECTID_SPEEDBUFF_ENTRY</c>, BattleGroundDefines.h:140).</summary>
+    public const uint SpeedBuffEntry = 179871;
+
+    /// <summary>The regeneration buff object (vmangos <c>BG_OBJECTID_REGENBUFF_ENTRY</c>).</summary>
+    public const uint RegenBuffEntry = 179904;
+
+    /// <summary>The berserking buff object (vmangos <c>BG_OBJECTID_BERSERKERBUFF_ENTRY</c>).</summary>
+    public const uint BerserkBuffEntry = 179905;
+
+    /// <summary>The three buff objects in the order the rules index them (vmangos <c>g_buffEntries</c>, BattleGroundDefines.h:145).</summary>
+    public static IReadOnlyList<uint> BuffEntries { get; } = [SpeedBuffEntry, RegenBuffEntry, BerserkBuffEntry];
+
+    /// <summary>
+    /// A trap whose radius (data2) is 0 and whose cooldown (data5) is 3 is a battleground buff: it triggers on a living player within 3 yards
+    /// (vmangos GameObject::Update, GameObject.cpp:476-490: <c>radius = trap.cooldown</c>, <c>IsBattleGroundTrap</c>).
+    /// </summary>
+    public const uint BattlegroundTrapCooldownSeconds = 3;
 
     /// <summary>
     /// Bracket of a level (vmangos <c>Player::GetBattleGroundBracketIdFromLevel</c>, Player.cpp:19455-19468):

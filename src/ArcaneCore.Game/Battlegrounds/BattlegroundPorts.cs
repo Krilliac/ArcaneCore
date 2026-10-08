@@ -89,6 +89,53 @@ public interface IBattlegroundHost
 
     /// <summary>"Warning: Unhandled AreaTrigger in Battleground" (vmangos BattleGroundWS.cpp:578).</summary>
     void UnhandledAreaTrigger(ObjectGuid player, uint areaTriggerId);
+
+    // ---- added for Arathi Basin and Alterac Valley (each has an inert default, so an older host keeps compiling) ----
+
+    /// <summary>
+    /// <see cref="EventStateChanged(byte, byte, bool, bool)"/> with the respawn delay of the event's game objects (vmangos
+    /// <c>SpawnEvent(..., delay)</c> → <c>SpawnBGObject(guid, delay)</c>, BattleGround.cpp:1504-1505; Arathi Basin banners appear 1 s or 5 s later).
+    /// </summary>
+    void EventStateChanged(byte event1, byte event2, bool spawn, bool forcedDespawn, uint respawnDelaySeconds) => EventStateChanged(event1, event2, spawn, forcedDespawn);
+
+    /// <summary>
+    /// A <c>mangos_string</c> text with up to two <c>mangos_string</c> arguments to every player of the match (vmangos <c>SendMessage2ToAll</c>,
+    /// BattleGround.cpp:516-544; <see cref="BattlegroundTexts.LangBgAlliance"/> and the node names are the arguments).
+    /// </summary>
+    void AnnounceFormatted(uint textId, BattlegroundChatKind kind, ObjectGuid source, uint arg1, uint arg2)
+    {
+    }
+
+    /// <summary>The herald of the match yells a <c>mangos_string</c> text with two arguments (vmangos <c>SendYell2ToAll</c>, Alterac Valley).</summary>
+    void HeraldYell(uint textId, uint arg1, uint arg2)
+    {
+    }
+
+    /// <summary>Give the player kill credit for a creature entry (vmangos <c>Player::KilledMonsterCredit</c>, the Arathi Basin node credits 15001-15005).</summary>
+    void KilledMonsterCredit(ObjectGuid player, uint creatureEntry)
+    {
+    }
+
+    /// <summary>Complete a quest for every player of the match that has it incomplete (vmangos <c>BattleGroundAV::CompleteQuestForAll</c>).</summary>
+    void CompleteQuestForAll(uint questId)
+    {
+    }
+
+    /// <summary>
+    /// Create a game object that belongs to the match but not to the database (vmangos <c>BattleGround::AddObject</c>, BattleGround.cpp:1284-1303;
+    /// the Arathi Basin buffs). It starts despawned; <see cref="SpawnBattlegroundObject"/> shows it.
+    /// </summary>
+    void AddBattlegroundObject(int index, uint entry, float x, float y, float z, float orientation)
+    {
+    }
+
+    /// <summary>
+    /// vmangos <c>SpawnBGObject(m_bgObjects[index], respawnTime)</c> (BattleGround.cpp:1535-1583): <see cref="BattlegroundConstants.RespawnNeverSeconds"/>
+    /// despawns the object, any other value makes it appear after that many seconds (0 at once).
+    /// </summary>
+    void SpawnBattlegroundObject(int index, uint respawnSeconds)
+    {
+    }
 }
 
 /// <summary>Spells and auras a battleground casts (the flag auras, marks, the deserter debuff); mapped to the aura engine.</summary>
@@ -170,6 +217,9 @@ public sealed class BattlegroundPorts
     public IBattlegroundCalendar Calendar { get; init; } = InertBattlegroundPorts.Instance;
 
     public IBattlegroundLifecycle Lifecycle { get; init; } = InertBattlegroundPorts.Instance;
+
+    /// <summary>The random source of the rules that roll (vmangos <c>urand</c>: the Arathi Basin buff type, the Alterac Valley captain buff timer).</summary>
+    public Random Random { get; init; } = Random.Shared;
 }
 
 /// <summary>The inert implementations behind <see cref="BattlegroundPorts"/>' defaults.</summary>

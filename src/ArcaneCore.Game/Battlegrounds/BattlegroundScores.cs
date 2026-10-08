@@ -22,6 +22,59 @@ public static class BattlegroundTexts
     public const uint WsFlagsPlaced = 9803;
     public const uint WsAllianceFlagRespawned = 10022;
     public const uint WsHordeFlagRespawned = 10023;
+
+    // Broadcast texts of Arathi Basin and Alterac Valley (vmangos BattleGroundDefines.h:50-84).
+    public const uint AvAllianceWins = 7335;
+    public const uint AvHordeWins = 7336;
+    public const uint AvStartOneMinute = 10638;
+    public const uint AvStartHalfMinute = 10639;
+    public const uint AvHasBegun = 10640;
+    public const uint AbAllianceWins = 10633;
+    public const uint AbHordeWins = 10634;
+    public const uint AbStartOneMinute = 10477;
+    public const uint AbStartHalfMinute = 10478;
+    public const uint AbHasBegun = 10479;
+    public const uint AbAllianceNearVictory = 10598;
+    public const uint AbHordeNearVictory = 10599;
+
+    // mangos_string ids (vmangos Language.h:689-700, 759-793): the node texts and their arguments.
+    public const uint LangBgAlliance = 650;
+    public const uint LangBgHorde = 651;
+    public const uint LangAbNodeStables = 652;
+    public const uint LangAbNodeBlacksmith = 653;
+    public const uint LangAbNodeFarm = 654;
+    public const uint LangAbNodeLumberMill = 655;
+    public const uint LangAbNodeGoldMine = 656;
+    public const uint LangAbNodeTaken = 657;
+    public const uint LangAbNodeDefended = 658;
+    public const uint LangAbNodeAssaulted = 659;
+    public const uint LangAbNodeClaimed = 660;
+    public const uint LangAvTowerTaken = 759;
+    public const uint LangAvTowerAssaulted = 760;
+    public const uint LangAvTowerDefended = 761;
+    public const uint LangAvGraveTaken = 762;
+    public const uint LangAvGraveDefended = 763;
+    public const uint LangAvGraveAssaulted = 764;
+    public const uint LangAvMineTaken = 765;
+    public const uint LangAvMineNorth = 766;
+    public const uint LangAvMineSouth = 767;
+    public const uint LangAvNodeGraveStormAid = 768;
+    public const uint LangAvNodeTowerDunSouth = 769;
+    public const uint LangAvNodeTowerDunNorth = 770;
+    public const uint LangAvNodeGraveStormpike = 771;
+    public const uint LangAvNodeTowerIcewing = 772;
+    public const uint LangAvNodeGraveStone = 773;
+    public const uint LangAvNodeTowerStone = 774;
+    public const uint LangAvNodeGraveSnow = 775;
+    public const uint LangAvNodeTowerIce = 776;
+    public const uint LangAvNodeGraveIce = 777;
+    public const uint LangAvNodeTowerPoint = 778;
+    public const uint LangAvNodeGraveFrost = 779;
+    public const uint LangAvNodeTowerFrostEast = 780;
+    public const uint LangAvNodeTowerFrostWest = 781;
+    public const uint LangAvNodeGraveFrostHut = 782;
+    public const uint LangAvHordeGeneralDead = 789;
+    public const uint LangAvAllianceGeneralDead = 790;
 }
 
 /// <summary>A player's scoreboard row (vmangos <c>BattleGroundScore</c>, BattleGround.h:48-60).</summary>
@@ -47,6 +100,39 @@ public sealed class WsgScore : BattlegroundScore
     public uint FlagReturns { get; set; }
 
     public override IReadOnlyList<uint> ExtraFields => [FlagCaptures, FlagReturns];
+}
+
+/// <summary>The Arathi Basin row (vmangos <c>BattleGroundABScore</c>, BattleGroundAB.h:184-191; BattleGroundMgr.cpp:1113-1119): bases assaulted and defended.</summary>
+public sealed class AbScore : BattlegroundScore
+{
+    public uint BasesAssaulted { get; set; }
+
+    public uint BasesDefended { get; set; }
+
+    public override IReadOnlyList<uint> ExtraFields => [BasesAssaulted, BasesDefended];
+}
+
+/// <summary>
+/// The Alterac Valley row (vmangos <c>BattleGroundAVScore</c>, BattleGroundAV.h:519-531; BattleGroundMgr.cpp:1093-1103): seven columns, the
+/// last two (lieutenants, secondary NPCs) are never counted by vmangos either.
+/// </summary>
+public sealed class AvScore : BattlegroundScore
+{
+    public uint GraveyardsAssaulted { get; set; }
+
+    public uint GraveyardsDefended { get; set; }
+
+    public uint TowersAssaulted { get; set; }
+
+    public uint TowersDefended { get; set; }
+
+    public uint SecondaryObjectives { get; set; }
+
+    public uint LieutenantCount { get; set; }
+
+    public uint SecondaryNpc { get; set; }
+
+    public override IReadOnlyList<uint> ExtraFields => [GraveyardsAssaulted, GraveyardsDefended, TowersAssaulted, TowersDefended, SecondaryObjectives, LieutenantCount, SecondaryNpc];
 }
 
 /// <summary>One row of MSG_PVP_LOG_DATA (wow_messages <c>BattlegroundPlayer</c>).</summary>

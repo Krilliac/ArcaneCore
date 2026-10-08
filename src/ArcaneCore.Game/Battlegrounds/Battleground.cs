@@ -7,7 +7,7 @@ namespace ArcaneCore.Game.Battlegrounds;
 /// time only moves through <see cref="Update"/>, and everything that touches a player, a map object or a packet goes through
 /// <see cref="BattlegroundPorts"/>. A type derives and adds its objectives (<see cref="WarsongGulch"/>). World thread.
 /// </summary>
-public abstract class Battleground
+public abstract partial class Battleground
 {
     private sealed class Participant(Team team, BattlegroundScore score)
     {
@@ -671,8 +671,11 @@ public abstract class Battleground
     /// <summary>Set the active event without spawning (vmangos <c>ActivateEventWithoutSpawn</c>, also what <c>Reset</c> does for a type's events).</summary>
     protected void SetActiveEvent(byte event1, byte event2) => _activeEvents[event1] = event2;
 
-    /// <summary>(De)spawn the objects of an event (vmangos <c>SpawnEvent</c>, BattleGround.cpp:1469-1508).</summary>
-    protected void SpawnEvent(byte event1, byte event2, bool spawn, bool forcedDespawn)
+    /// <summary>
+    /// (De)spawn the objects of an event (vmangos <c>SpawnEvent</c>, BattleGround.cpp:1469-1508). <paramref name="delaySeconds"/> is the respawn
+    /// delay of the event's game objects when it spawns (vmangos passes it to <c>SpawnBGObject</c>; Arathi Basin banners use 1 and 5 s).
+    /// </summary>
+    protected void SpawnEvent(byte event1, byte event2, bool spawn, bool forcedDespawn, uint delaySeconds = 0)
     {
         byte active = ActiveEventValue(event1);
         if (event2 == BattlegroundConstants.EventNone || (spawn && active == event2) || (!spawn && active != event2))
@@ -691,7 +694,14 @@ public abstract class Battleground
             _activeEvents[event1] = BattlegroundConstants.EventNone;
         }
 
-        Host.EventStateChanged(event1, event2, spawn, forcedDespawn);
+        if (delaySeconds == 0)
+        {
+            Host.EventStateChanged(event1, event2, spawn, forcedDespawn);
+        }
+        else
+        {
+            Host.EventStateChanged(event1, event2, spawn, forcedDespawn, delaySeconds);
+        }
     }
 
     /// <summary>The world states a player entering the battleground starts with (vmangos <c>FillInitialWorldStates</c>); a value may be -1.</summary>

@@ -30,6 +30,13 @@ internal sealed class RecordingHost : IBattlegroundHost
     public readonly List<(uint Amount, bool Minutes)> PrematureWarnings = [];
     public readonly HashSet<(ObjectGuid Player, uint Trigger)> InTriggers = [];
     public readonly HashSet<ObjectGuid> NearVictim = [];
+    public readonly List<(byte E1, byte E2, bool Spawn, bool Forced, uint Delay)> DelayedEvents = [];
+    public readonly List<(uint Text, BattlegroundChatKind Kind, ObjectGuid Source, uint Arg1, uint Arg2)> Formatted = [];
+    public readonly List<(uint Text, uint Arg1, uint Arg2)> Yells = [];
+    public readonly List<(ObjectGuid Player, uint Entry)> Credits = [];
+    public readonly List<uint> QuestsCompleted = [];
+    public readonly List<(int Index, uint Entry, float X, float Y, float Z, float O)> AddedObjects = [];
+    public readonly List<(int Index, uint Seconds)> ObjectSpawns = [];
     public int OpenDoorsCalls;
     public int DespawnDoorsCalls;
 
@@ -82,6 +89,24 @@ internal sealed class RecordingHost : IBattlegroundHost
     public void TeleportToEntryPoint(ObjectGuid player) => TeleportedToEntry.Add(player);
 
     public void UnhandledAreaTrigger(ObjectGuid player, uint areaTriggerId) => Unhandled.Add((player, areaTriggerId));
+
+    public void EventStateChanged(byte event1, byte event2, bool spawn, bool forcedDespawn, uint respawnDelaySeconds)
+    {
+        Events.Add((event1, event2, spawn, forcedDespawn));
+        DelayedEvents.Add((event1, event2, spawn, forcedDespawn, respawnDelaySeconds));
+    }
+
+    public void AnnounceFormatted(uint textId, BattlegroundChatKind kind, ObjectGuid source, uint arg1, uint arg2) => Formatted.Add((textId, kind, source, arg1, arg2));
+
+    public void HeraldYell(uint textId, uint arg1, uint arg2) => Yells.Add((textId, arg1, arg2));
+
+    public void KilledMonsterCredit(ObjectGuid player, uint creatureEntry) => Credits.Add((player, creatureEntry));
+
+    public void CompleteQuestForAll(uint questId) => QuestsCompleted.Add(questId);
+
+    public void AddBattlegroundObject(int index, uint entry, float x, float y, float z, float orientation) => AddedObjects.Add((index, entry, x, y, z, orientation));
+
+    public void SpawnBattlegroundObject(int index, uint respawnSeconds) => ObjectSpawns.Add((index, respawnSeconds));
 }
 
 /// <summary>One fake for the spell, honor, rank, reputation, calendar and lifecycle ports.</summary>

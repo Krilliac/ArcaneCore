@@ -157,6 +157,19 @@ public sealed class WarsongGulch : Battleground
 
     private bool IsPickedUp(Team flagTeam) => !_flagKeepers[Idx(flagTeam)].IsEmpty;
 
+    /// <summary>
+    /// The carrier on the viewer's battleground map: the keeper of the other team's flag, a player of the viewer's own team (vmangos
+    /// HandleBattleGroundPlayerPositionsOpcode, BattleGroundHandler.cpp:298-313: an Alliance viewer gets <c>GetHordeFlagPickerGuid</c>).
+    /// </summary>
+    public override ObjectGuid FlagCarrierShownTo(Team viewerTeam) => FlagPicker(BattlegroundConstants.OtherTeam(viewerTeam));
+
+    /// <inheritdoc />
+    public override void EventPlayerDroppedFlag(ObjectGuid player) => OnPlayerDroppedFlag(player);
+
+    /// <inheritdoc />
+    public override void EventPlayerClickedOnFlag(ObjectGuid player, BattlegroundObjectUse target)
+        => OnFlagClicked(player, new WsgFlagObject(target.Entry, target.Event1, target.WithinTenYards));
+
     // ------------------------------------------------------------------ base overrides
 
     protected override BattlegroundScore CreateScore() => new WsgScore();
