@@ -195,7 +195,9 @@ feature reads:
   operator: it refuses a database another process holds open, writes a SHA-256-checked backup (the database and any leftover `-wal`),
   checks the four DBCs (`AreaTrigger`, `WorldSafeLocs`, `Map`, `AreaTable`; all four are required) against a `SHA256SUMS` file in
   `-DbcDirectory` when there is one or extracts them from the client's MPQs with
-  `mpqcli` (patch-2 over patch over dbc), and passes `-Migrate` on as `--migrate`. Run on a copy of the live world
+  `mpqcli` (patch-2 over patch over dbc), and passes `-Migrate` on as `--migrate`. With `-AppSettings <appsettings.json>` (needs
+  `-DbcDirectory`) it then runs `tools/content/set-optional-data.ps1`, which points the world at its optional client data (item sets,
+  random suffixes, enchantments, pages, character appearance; docs/areas/items.md "Optional client data"). Run on a copy of the live world
   (2026-10-07): 122 safe locations, 191 graveyard links, 3 battleground templates, 969 + 421 battleground spawn events, 24
   battlemasters, 61 exploration levels, 33 weather zones, 42 taverns, 9 transports, 164 proc rows, 828 relay steps, 14 relay templates and
   432 area triggers; every other table byte-identical afterwards (docs/integration/content-refresh-20261007.md).

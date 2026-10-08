@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.World.Characters.Creation;
@@ -22,10 +23,16 @@ public interface ICharacterCreationFacts
 
     /// <summary>A start row (vmangos PlayerInfo) exists for the race/class pair.</summary>
     Task<bool> HasStartInfoAsync(byte race, byte cls);
+
+    /// <summary>
+    /// vmangos Player::ValidateAppearance over the configured CharSections.dbc and CharacterFacialHairStyles.dbc. True (not checked) when the
+    /// realm has no such data.
+    /// </summary>
+    bool IsAppearanceValid(byte race, byte gender, CharacterAppearance appearance) => true;
 }
 
 /// <summary>The fields of CMSG_CHAR_CREATE the rules look at.</summary>
-public readonly record struct CharacterCreationRequest(byte[] RawName, byte Race, byte Class, byte Gender);
+public readonly record struct CharacterCreationRequest(byte[] RawName, byte Race, byte Class, byte Gender, CharacterAppearance Appearance = default);
 
 /// <summary>The outcome of the rules: <see cref="Result"/> is <see cref="CharResult.CharCreateSuccess"/> and <see cref="Name"/> set when the character may be created.</summary>
 public readonly record struct CharacterCreationDecision(CharResult Result, string? Name)
@@ -42,10 +49,10 @@ public readonly record struct CharacterCreationDecision(CharResult Result, strin
 /// class (CHAR_CREATE_FAILED, :218-228) → race flagged NOT_PLAYABLE (CHAR_CREATE_DISABLED, :230-237)
 /// → name (normalizePlayerName NO_NAME, CheckPlayerName, :246-262) → name in use (:270-274) →
 /// characters per realm (:276-280) → PvP-realm one faction per account (:282-307) → no start row
-/// (Player::Create fails, CHAR_CREATE_ERROR, Player.cpp:408-413). The reserved_name table and
-/// NamesProfanity/NamesReserved lists, the CharSections appearance checks and the cross-realm
-/// account limit are not part of this port (see docs/areas/character-creation.md); an out-of-range
-/// gender is still refused with CHAR_CREATE_FAILED at the appearance step (:239-244).
+/// (Player::Create fails, CHAR_CREATE_ERROR, Player.cpp:408-413). The appearance step (:239-244) refuses an
+/// out-of-range gender and, when <see cref="ICharacterCreationFacts.IsAppearanceValid"/> has the client's
+/// CharSections.dbc and CharacterFacialHairStyles.dbc, looks the client cannot offer (CHAR_CREATE_FAILED; not in
+/// Legacy mode). The cross-realm account limit is not part of this port (see docs/areas/character-creation.md).
 /// </remarks>
 public static class CharacterCreationRules
 {
@@ -91,8 +98,9 @@ public static class CharacterCreationRules
             return Refuse(CharResult.CharCreateDisabled);
         }
 
-        // 4. Appearance: only the gender can be checked without CharSections.dbc.
-        if (request.Gender > 1)
+        // 4. Appearance (Player::ValidateAppearance, :239-244): the gender, then the looks against CharSections.dbc and
+        // CharacterFacialHairStyles.dbc when the realm has them (an out-of-range gender has no rows there either).
+        if (request.Gender > 1 || (!legacy && !facts.IsAppearanceValid(request.Race, request.Gender, request.Appearance)))
         {
             return Refuse(CharResult.CharCreateFailed);
         }

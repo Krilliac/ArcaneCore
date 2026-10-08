@@ -31,6 +31,11 @@
 
   -DryRun reads everything and writes nothing (no backup either).
 
+  With -AppSettings the script then runs set-optional-data.ps1 on that appsettings.json with the same -DbcDirectory and -Dump, so the
+  world also gets its optional client data (item sets, random suffixes, enchantments, readable pages, the character appearance check):
+  seven keys, each file checked first, the old file kept as a .bak. That needs the DBCs in a permanent -DbcDirectory (also holding
+  ItemSet.dbc, ItemRandomProperties.dbc, SpellItemEnchantment.dbc, CharSections.dbc and CharacterFacialHairStyles.dbc), not -MpqTool.
+
   The world's schema must already be the importer's: a database behind it is refused (nothing written) unless -Migrate is given.
   Run the refresh with the importer of the deploy that will serve the world afterwards; if that deploy raised the world schema,
   either start its world server once first (it migrates at start) or pass -Migrate (the backup above is taken first).
@@ -66,8 +71,15 @@
 .PARAMETER Migrate
   Let the refresh upgrade a world database whose schema is behind the importer's (arcane-content-importer refresh --migrate).
 
+.PARAMETER AppSettings
+  Optional: the world server's appsettings.json to point at the optional client data after the refresh (set-optional-data.ps1; with
+  -DryRun its checks run and nothing is written). Restart the world server afterwards.
+
 .EXAMPLE
   powershell -NoProfile -File tools\content\refresh-world-content.ps1 -WorldDatabase C:\srv\world.db -DbcDirectory C:\srv\dbc-5875
+
+.EXAMPLE
+  powershell -NoProfile -File tools\content\refresh-world-content.ps1 -WorldDatabase C:\srv\world.db -DbcDirectory D:\refs\client-dbc-5875-effective -AppSettings C:\srv\appsettings.json
 #>
 [CmdletBinding()]
 param(
@@ -81,7 +93,8 @@ param(
     [string]$Importer,
     [string]$Report,
     [switch]$DryRun,
-    [switch]$Migrate
+    [switch]$Migrate,
+    [string]$AppSettings
 )
 
 $ErrorActionPreference = 'Stop'
@@ -105,6 +118,13 @@ if (-not $Importer) {
     $Importer = Join-Path $repo 'tools\ArcaneCore.ContentImporter\bin\Release\net10.0\arcane-content-importer.dll'
 }
 if (-not (Test-Path -LiteralPath $Importer -PathType Leaf)) { throw "importer not found: $Importer (build the solution in Release first)" }
+$optionalData = Join-Path $PSScriptRoot 'set-optional-data.ps1'
+if ($AppSettings) {
+    # The world reads these DBCs at every start: they must stay where the keys point, so not the temporary MPQ extraction.
+    if (-not $DbcDirectory) { throw '-AppSettings needs -DbcDirectory (a permanent directory with the optional DBCs), not -MpqTool' }
+    if (-not (Test-Path -LiteralPath $AppSettings -PathType Leaf)) { throw "appsettings not found: $AppSettings" }
+    if (-not (Test-Path -LiteralPath $optionalData -PathType Leaf)) { throw "set-optional-data.ps1 not found next to this script: $optionalData" }
+}
 
 # 1. Nobody else may hold the database: a running world keeps it open.
 try {
@@ -194,6 +214,13 @@ try {
         & $Importer @arguments
     }
     if ($LASTEXITCODE -ne 0) { throw "arcane-content-importer refresh exited $LASTEXITCODE (the database is unchanged)" }
+
+    # 5. The optional client data keys (after the database: a refused refresh leaves the settings alone too).
+    if ($AppSettings) {
+        $optional = @{ AppSettings = $AppSettings; DbcDirectory = $DbcDirectory; Dump = $Dump }
+        if ($DryRun) { $optional.DryRun = $true }
+        & $optionalData @optional
+    }
 }
 finally {
     if ($temporaryDbc) { Remove-Item -LiteralPath $temporaryDbc -Recurse -Force }

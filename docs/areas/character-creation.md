@@ -84,6 +84,18 @@ login then sends it in SMSG_ACTION_BUTTONS (MasterPlayer.cpp:30-39).
 
 `World:CharactersPerRealm` keeps living in the world options and is clamped to 1..10 by the rules.
 
+## Appearance (CharSections.dbc)
+
+`CharacterCreation:CharSectionsDbcPath` and `CharacterCreation:CharacterFacialHairStylesDbcPath` (build-5875 files, 10 and 9 fields,
+strict; `tools/content/set-optional-data.ps1` sets both) turn on vmangos `Player::ValidateAppearance` (Player.cpp:326-357): after the race
+checks and before the name (CharacterHandler.cpp:239-244), a create whose skin, face, hair style and colour or facial hair has no available
+CharSections row, or whose facial hair has no CharacterFacialHairStyles row, is CHAR_CREATE_FAILED. The facial hair section is not required
+of Tauren nor of women other than Night Elves and Undead (they have none); rows flagged unavailable and non-playable races are ignored, as
+vmangos does at load. The all-zero looks the playerbots and the mock client send are valid for every race and gender (real-file test).
+Both keys or neither: one alone, or an unreadable file, refuses startup. Without them only the gender is checked and the world says so
+once at start. Legacy mode does not check appearance. 1.12.1 has no barber shop. (`CharacterAppearanceCatalog`,
+`CharacterAppearanceDbcReader`; tests `CharacterAppearanceDbcReaderTests`, `CharacterAppearanceWorldTests`, `OptionalClientDataRealTests`.)
+
 ## Deliberate differences from retail (all documented, none silent)
 
 * `CHAR_DELETE`: an unknown guid, a foreign account and a character in the world are answered
@@ -101,8 +113,6 @@ login then sends it in SMSG_ACTION_BUTTONS (MasterPlayer.cpp:30-39).
 
 Each of these needs data or a primitive this lane does not have; none is stubbed.
 
-* Appearance validation (`Player::ValidateAppearance`): needs CharSections.dbc and CharacterFacialHairStyles.dbc
-  readers and a client DBC. Only the gender is checked. (Design slice cc05.)
 * Reserved and profane names: the `reserved_name` table, NamesProfanity.dbc and NamesReserved.dbc
   (codes 0x4A/0x4B exist; nothing sends them). (cc06.)
 * ChrRaces.dbc/ChrClasses.dbc: race/class existence and NOT_PLAYABLE come from the vanilla masks
@@ -124,7 +134,8 @@ Each of these needs data or a primitive this lane does not have; none is stubbed
 
 ## Verification
 
-* No client DBC exists on the verification machine, so nothing here was proven against a real 1.12.1 client.
+* No real 1.12.1 client was run against these rules. The appearance check was proven against the client's own CharSections.dbc and
+  CharacterFacialHairStyles.dbc (D:\refs\client-dbc-5875-effective) in `OptionalClientDataRealTests`.
 * MariaDB and PostgreSQL are not available locally. `CharacterNameUniqueTests` and
   `PlayerCreateActionImporterTests` are theories over `TestDatabases.AvailableProviders` written against the
   real provider semantics (error codes above; the `playercreateinfo_action` table is a plain `CreateTableChange`,

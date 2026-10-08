@@ -66,6 +66,17 @@ public sealed class CharacterCreationOptions
     /// </summary>
     public bool StartActions { get; set; } = true;
 
+    /// <summary>
+    /// The build-5875 CharSections.dbc (10 fields), supplied by the developer and never downloaded. Together with
+    /// <see cref="CharacterFacialHairStylesDbcPath"/> it turns on vmangos Player::ValidateAppearance: a CMSG_CHAR_CREATE whose skin, face, hair
+    /// or facial hair the client could not have offered is refused with CHAR_CREATE_FAILED. Both empty: appearance is not checked. Only one
+    /// set, or a configured file that is unreadable or has another layout, refuses startup.
+    /// </summary>
+    public string? CharSectionsDbcPath { get; set; }
+
+    /// <summary>The build-5875 CharacterFacialHairStyles.dbc (9 fields); see <see cref="CharSectionsDbcPath"/>.</summary>
+    public string? CharacterFacialHairStylesDbcPath { get; set; }
+
     /// <summary>vmangos StartPlayerMoney in copper (default 0), clamped to 0..MAX_MONEY_AMOUNT (World.cpp:674).</summary>
     public long StartPlayerMoney { get; set; }
 
