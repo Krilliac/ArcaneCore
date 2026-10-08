@@ -17,4 +17,8 @@
     <ProjectReference Include="..\ArcaneCore.Protocol\ArcaneCore.Protocol.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Creatures\Scripts\Escorts\validated.json" />
+  </ItemGroup>
+
 </Project>

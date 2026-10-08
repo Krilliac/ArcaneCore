@@ -1,0 +1,327 @@
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Creatures.Scripts.Escorts;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Npc;
+using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Protocol;
+using System.Globalization;
+using Xunit;
+using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestSupport;
+using static ArcaneCore.Game.Tests.CreatureTestSupport;
+
+namespace ArcaneCore.Game.Tests.CreatureAi;
+
+public sealed class DataDrivenEscortTests
+{
+    [Theory]
+    [InlineData(1978u, 435u, 14u)]
+    [InlineData(2768u, 665u, 21u)]
+    [InlineData(5644u, 1440u, 18u)]
+    [InlineData(3465u, 898u, 54u)]
+    [InlineData(3584u, 945u, 18u)]
+    [InlineData(10427u, 4770u, 28u)]
+    [InlineData(10646u, 4904u, 46u)]
+    [InlineData(11856u, 6523u, 19u)]
+    public void ValidatedEscortCatalog_HasTheSourceQuestAndCompletionPoint(uint entry, uint quest, uint completionPoint)
+    {
+        EscortSpec spec = EscortSpecCatalog.Find(entry)!;
+        Assert.NotNull(spec);
+        Assert.Equal(quest, spec.QuestId);
+        Assert.Contains(spec.Waypoints, p => p.Point == completionPoint && p.Actions.Any(a => a.Type == "quest_complete"));
+    }
+
+    [Theory]
+    [InlineData(1978u)]
+    [InlineData(2768u)]
+    [InlineData(5644u)]
+    [InlineData(3465u)]
+    [InlineData(3584u)]
+    [InlineData(10427u)]
+    [InlineData(10646u)]
+    [InlineData(11856u)]
+    public void ClassicDbPath_FiresEveryDeclaredWaypointAction_ThenCompletes(uint entry)
+    {
+        using Rig rig = Setup(entry);
+        EscortSpec spec = EscortSpecCatalog.Find(entry)!;
+        Assert.NotNull(spec);
+        var ai = Assert.IsType<DataDrivenEscortAI>(rig.Escort.AI);
+        ai.OnQuestAccept(rig.Player, spec.QuestId);
+        Assert.True(ai.HasEscortState(EscortAI.EscortState.Escorting));
+        if (spec.Faction != 0)
+        {
+            Assert.Equal(spec.Faction, rig.Escort.FactionTemplate);
+        }
+        if (spec.ClearImmuneToNpc)
+        {
+            Assert.Equal(UnitFlags.None, rig.Escort.UnitFlags & UnitFlags.ImmuneToNpc);
+        }
+        Assert.Equal(RealPath(entry).Count, ai.WaypointCount);
+        if (spec.StartStandState is { } startStand)
+        {
+            Assert.Equal((StandState)startStand, rig.Escort.StandState);
+        }
+
+        var seenSummons = new HashSet<ObjectGuid>();
+        int lastTextCount = spec.StartText == 0 ? 0 : 1;
+        var spoken = new List<(string Text, float X, float Y)>();
+        (float X, float Y)? creditAt = null;
+        uint completionPoint = spec.Waypoints.Single(w => w.Actions.Any(a => a.Type == "quest_complete")).Point;
+        bool hasPostCreditActions = spec.Waypoints.Any(w => w.Point > completionPoint);
+        for (int elapsed = 0; elapsed < 900_000 && (creditAt is null || (hasPostCreditActions && ai.CurrentWaypointIndex < ai.WaypointCount)); elapsed += 100)
+        {
+            rig.Player.Relocate(rig.Escort.X, rig.Escort.Y, rig.Escort.Z, 0, 0);
+            rig.World.RunTick(100);
+            if (creditAt is null && rig.Quests.Completed.Count > 0)
+            {
+                creditAt = (rig.Escort.X, rig.Escort.Y);
+            }
+            var chats = Packets(rig.Session, WorldOpcode.SmsgMessagechat);
+            for (int i = lastTextCount; i < chats.Count; i++)
+            {
+                spoken.Add((ParseMonsterChat(chats[i]).Message, rig.Escort.X, rig.Escort.Y));
+            }
+
+            lastTextCount = chats.Count;
+            foreach (Creature summon in rig.System.Creatures.Where(c => rig.SummonTemplateEntries.Contains(c.Entry) && seenSummons.Add(c.Guid)))
+            {
+                rig.Summons.Add((summon.Entry, summon.X, summon.Y, summon.Z, rig.Escort.X, rig.Escort.Y));
+                // The ambush fights end here so the simulated escort can continue to its next point.
+                rig.Map.Combat.Kill(null, summon);
+            }
+        }
+
+        Assert.True(rig.Quests.Completed.Count == 1,
+            $"entry {entry}: state {ai.State} point index {ai.CurrentWaypointIndex}/{ai.WaypointCount} " +
+            $"escort {rig.Escort.X},{rig.Escort.Y},{rig.Escort.Z} alive {rig.Escort.IsAlive} " +
+            $"failed {rig.Quests.Failed.Count} spoken {spoken.Count} summons {rig.Summons.Count}");
+        Assert.Equal([(rig.Player, spec.QuestId)], rig.Quests.Completed);
+        CreatureWaypoint completion = Assert.Single(RealPath(entry), p => spec.Waypoints.Any(w => w.Point == p.Point
+            && w.Actions.Any(a => a.Type == "quest_complete")));
+        Assert.InRange(MathF.Abs(creditAt!.Value.X - completion.X), 0f, 2f);
+        Assert.InRange(MathF.Abs(creditAt.Value.Y - completion.Y), 0f, 2f);
+        foreach (EscortWaypointSpec waypoint in spec.Waypoints)
+        {
+            CreatureWaypoint pathPoint = Assert.Single(RealPath(entry), p => p.Point == waypoint.Point);
+            foreach (EscortActionSpec action in waypoint.Actions)
+            {
+                if (action.Type is "say" or "say_nearby")
+                {
+                    Assert.Contains(spoken, line => line.Text == action.Id.ToString(CultureInfo.InvariantCulture)
+                        && MathF.Abs(line.X - pathPoint.X) < 2f && MathF.Abs(line.Y - pathPoint.Y) < 2f);
+                }
+                else if (action.Type == "summon")
+                {
+                    foreach (float[] position in action.Positions)
+                    {
+                        var summoned = Assert.Single(rig.Summons, s => s.Entry == (uint)action.Id
+                            && MathF.Abs(s.X - position[0]) < 0.02f && MathF.Abs(s.Y - position[1]) < 0.02f);
+                        Assert.InRange(MathF.Abs(summoned.EscortX - pathPoint.X), 0f, 2f);
+                        Assert.InRange(MathF.Abs(summoned.EscortY - pathPoint.Y), 0f, 2f);
+                    }
+                }
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(1978u)]
+    [InlineData(2768u)]
+    [InlineData(5644u)]
+    [InlineData(3465u)]
+    [InlineData(3584u)]
+    [InlineData(10427u)]
+    [InlineData(10646u)]
+    [InlineData(11856u)]
+    public void ClassicDbEscort_FailsItsQuestWhenThePlayerLeaves(uint entry)
+    {
+        using Rig rig = Setup(entry);
+        EscortSpec spec = EscortSpecCatalog.Find(entry)!;
+        Assert.NotNull(spec);
+        var ai = Assert.IsType<DataDrivenEscortAI>(rig.Escort.AI);
+        ai.OnQuestAccept(rig.Player, spec.QuestId);
+        rig.Player.Relocate(rig.Escort.X + 300, rig.Escort.Y, rig.Escort.Z, 0, 0);
+        Run(rig.World, 1_200);
+        Assert.Equal([(rig.Player, spec.QuestId)], rig.Quests.Failed);
+    }
+
+    [Fact]
+    public void Gilthares_AggroTextRequiresMerchantCoastAndANonPlayerTarget()
+    {
+        using Rig outside = Setup(3465);
+        var outsideAi = Assert.IsType<DataDrivenEscortAI>(outside.Escort.AI);
+        outside.Session.Clear();
+        for (int i = 0; i < 64; i++) outsideAi.OnAggro(outside.Escort);
+        Assert.Empty(Packets(outside.Session, WorldOpcode.SmsgMessagechat));
+
+        using Rig coast = Setup(3465, areaId: 391);
+        var coastAi = Assert.IsType<DataDrivenEscortAI>(coast.Escort.AI);
+        coast.Session.Clear();
+        for (int i = 0; i < 64; i++) coastAi.OnAggro(coast.Player);
+        Assert.Empty(Packets(coast.Session, WorldOpcode.SmsgMessagechat));
+        for (int i = 0; i < 64; i++) coastAi.OnAggro(coast.Escort);
+        Assert.NotEmpty(Packets(coast.Session, WorldOpcode.SmsgMessagechat));
+    }
+
+    [Theory]
+    [InlineData(10427u)] // npc_paoka_swiftmountainAI constructor: SetReactState(REACT_DEFENSIVE)
+    [InlineData(10646u)] // npc_lakota_windsongAI constructor: SetReactState(REACT_DEFENSIVE)
+    public void PaokaAndLakota_AreDefensive_FromSpawnAndAgainAfterARespawn(uint entry)
+    {
+        using Rig rig = Setup(entry);
+        Assert.Equal(CreatureReactState.Defensive, rig.Escort.ReactState);
+
+        rig.Map.Combat.Kill(null, rig.Escort);
+        rig.System.ForceRespawn(rig.Escort);
+        Assert.True(rig.Escort.IsAlive);
+        Assert.Equal(CreatureReactState.Defensive, rig.Escort.ReactState);
+    }
+
+    [Fact]
+    public void AnEscortWithoutAReactState_KeepsTheTemplates()
+    {
+        using Rig rig = Setup(1978);
+        Assert.Equal(CreatureReactState.Aggressive, rig.Escort.ReactState);
+    }
+
+    [Theory]
+    [InlineData(1978u, true)]  // npc_deathstalker_erlandAI::Aggro: DoScriptText(SAY_AGGRO_n, m_creature, who)
+    [InlineData(2768u, false)] // npc_professor_phizzlethorpeAI::Aggro: DoScriptText(SAY_AGGRO, m_creature)
+    public void AggroText_NamesTheAggressorOnlyWhereTheSourceDoes(uint entry, bool targeted)
+    {
+        using Rig rig = Setup(entry);
+        var ai = Assert.IsType<DataDrivenEscortAI>(rig.Escort.AI);
+        rig.Session.Clear();
+        ai.OnAggro(rig.Player);
+        var chat = ParseMonsterChat(Assert.Single(Packets(rig.Session, WorldOpcode.SmsgMessagechat)));
+        Assert.Equal(targeted ? rig.Player.Guid.Value : 0ul, chat.Target);
+    }
+
+    [Theory]
+    [InlineData(1978u)] // npc_deathstalker_erlandAI::WaypointReached: if (!pPlayer) return; (also guards the untargeted lines)
+    [InlineData(3465u)] // npc_giltharesAI::WaypointReached: the same guard
+    public void PlayerGuardedEscorts_SayNothingAtTheirPoints_WithoutTheEscortPlayer(uint entry)
+    {
+        using Rig rig = Setup(entry);
+        EscortSpec spec = EscortSpecCatalog.Find(entry)!;
+        Assert.True(spec.RequirePlayerAtWaypoint);
+        var ai = Assert.IsType<DataDrivenEscortAI>(rig.Escort.AI);
+        ai.MaxPlayerDistance = 0; // keep walking with the player gone, so only the waypoint guard is under test
+        ai.OnQuestAccept(rig.Player, spec.QuestId);
+        rig.Map.RemovePlayer(rig.Player);
+        (Player bystander, FakeSession watcher) = AddPlayer(rig.World, 2, rig.Escort.X, rig.Escort.Y);
+        for (int elapsed = 0; elapsed < 900_000 && ai.CurrentWaypointIndex < ai.WaypointCount - 1; elapsed += 100)
+        {
+            bystander.Relocate(rig.Escort.X, rig.Escort.Y, rig.Escort.Z, 0, 0); // within earshot of every point
+            rig.World.RunTick(100);
+        }
+
+        Assert.True(ai.CurrentWaypointIndex >= ai.WaypointCount - 1, $"stopped at index {ai.CurrentWaypointIndex}");
+        Assert.Empty(Packets(watcher, WorldOpcode.SmsgMessagechat));
+        Assert.Empty(rig.Quests.Completed);
+    }
+
+    [Fact]
+    public void TheCatalog_RefusesAMisspeltField_RatherThanLoadingItsDefault()
+    {
+        const string Json = """
+            [{ "entry": 1, "questId": 2, "source": "x", "requirePlayerAtWayPoints": true,
+               "waypoints": [{ "point": 1, "actions": [{ "type": "quest_complete", "id": 2 }] }] }]
+            """;
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(Json));
+        Assert.ThrowsAny<System.Text.Json.JsonException>(() => EscortSpecCatalog.Parse(stream));
+    }
+
+    [Fact]
+    public void TheCatalog_RefusesAnUnknownReactState()
+    {
+        const string Json = """
+            [{ "entry": 1, "questId": 2, "source": "x", "reactState": 7,
+               "waypoints": [{ "point": 1, "actions": [{ "type": "quest_complete", "id": 2 }] }] }]
+            """;
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(Json));
+        Assert.Throws<InvalidOperationException>(() => EscortSpecCatalog.Parse(stream));
+    }
+
+    [Fact]
+    public void Therylune_StillRunsAtPoint20_WithoutTheEscortPlayer_ButDoesNotSpeak()
+    {
+        // npc_theryluneAI::WaypointReached case 20: the text only for a present player, SetRun() regardless.
+        using Rig rig = Setup(3584);
+        var ai = Assert.IsType<DataDrivenEscortAI>(rig.Escort.AI);
+        ai.MaxPlayerDistance = 0;
+        ai.OnQuestAccept(rig.Player, 945);
+        rig.Map.RemovePlayer(rig.Player);
+        (Player bystander, FakeSession watcher) = AddPlayer(rig.World, 2, rig.Escort.X, rig.Escort.Y);
+        for (int elapsed = 0; elapsed < 900_000 && !ai.IsRunning; elapsed += 100)
+        {
+            bystander.Relocate(rig.Escort.X, rig.Escort.Y, rig.Escort.Z, 0, 0);
+            rig.World.RunTick(100);
+        }
+
+        Assert.True(ai.IsRunning);
+        Assert.Empty(Packets(watcher, WorldOpcode.SmsgMessagechat));
+    }
+
+    private static IReadOnlyList<CreatureWaypoint> RealPath(uint entry) => File.ReadLines(Path.Combine(AppContext.BaseDirectory, "validated-escort-waypoints.csv"))
+        .Where(line => line.StartsWith($"{entry},", StringComparison.Ordinal))
+        .Select(line => line.Split(','))
+        .Select(parts => new CreatureWaypoint(uint.Parse(parts[2], CultureInfo.InvariantCulture),
+            float.Parse(parts[3], CultureInfo.InvariantCulture), float.Parse(parts[4], CultureInfo.InvariantCulture),
+            float.Parse(parts[5], CultureInfo.InvariantCulture), float.Parse(parts[6], CultureInfo.InvariantCulture),
+            uint.Parse(parts[7], CultureInfo.InvariantCulture)))
+        .ToArray();
+
+    private static Rig Setup(uint entry, uint areaId = 0)
+    {
+        EscortSpec spec = EscortSpecCatalog.Find(entry)!;
+        Assert.NotNull(spec);
+        IReadOnlyList<CreatureWaypoint> path = RealPath(entry);
+        CreatureWaypoint first = path[0];
+        uint[] summons = spec.Waypoints.SelectMany(p => p.Actions).Where(a => a.Type == "summon").Select(a => (uint)a.Id).Distinct().ToArray();
+        var aiContent = new CreatureAiContent([], spec.Waypoints.SelectMany(p => p.Actions)
+            .Where(a => a.Type is "say" or "say_nearby").Select(a => a.Id).Append(spec.StartText)
+            .Concat(spec.Aggro?.TextIds ?? []).Where(id => id < 0).Distinct()
+            .Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0)).ToArray());
+        var nearbyEntries = spec.Waypoints.SelectMany(p => p.Actions).Where(a => a.Type == "say_nearby")
+            .Select(a => a.SpeakerEntry).Distinct().ToArray();
+        var nearbySpawns = spec.Waypoints.SelectMany(p => p.Actions.Where(a => a.Type == "say_nearby")
+            .Select(a => (a.SpeakerEntry, Point: Assert.Single(path, w => w.Point == p.Point)))).ToArray();
+        CreatureContent content = new(
+            [Template(entry, b => { b.NpcFlags = (uint)NpcFlags.QuestGiver; if (spec.ClearImmuneToNpc) b.UnitFlags = (uint)UnitFlags.ImmuneToNpc; }), ..summons.Select(id => Template(id)), ..nearbyEntries.Select(id => Template(id))],
+            [Spawn(1, entry, first.X, first.Y, first.Z), ..nearbySpawns.Select((near, index) => Spawn((uint)index + 2, near.SpeakerEntry, near.Point.X, near.Point.Y, near.Point.Z))], [], [], [], aiContent,
+            scriptWaypoints: path.Select(p => (entry, 0u, p)));
+        var quests = new EscortQuests();
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests, ZoneAndAreaOf = _ => (0, areaId) });
+        (Player player, FakeSession session) = AddPlayer(world, 1, first.X, first.Y);
+        player.Relocate(first.X, first.Y, first.Z, 0, 0);
+        return new Rig(world, map, system, player, session, Assert.Single(system.Creatures, c => c.Entry == entry), quests,
+            summons);
+    }
+
+    private sealed record Rig(WorldRuntime World, Map Map, CreatureMapSystem System, Player Player,
+        FakeSession Session, Creature Escort, EscortQuests Quests, uint[] SummonTemplateEntries) : IDisposable
+    {
+        public List<(uint Entry, float X, float Y, float Z, float EscortX, float EscortY)> Summons { get; } = [];
+        public void Dispose() => World.Dispose();
+    }
+
+    private sealed class EscortQuests : IScriptQuestEvents, IEventAiQuestEvents
+    {
+        public List<(Player, uint)> Completed { get; } = [];
+        public List<(Player, uint)> Failed { get; } = [];
+        public void AreaExploredOrEventHappens(Player player, uint questId) => Completed.Add((player, questId));
+        public void FailQuest(Player player, uint questId) => Failed.Add((player, questId));
+        public void KilledMonsterCredit(Player player, uint creatureEntry, ObjectGuid source) { }
+        public void GroupEventFailHappens(Player player, uint questId) => Failed.Add((player, questId));
+        public IReadOnlyList<Player> GroupMembersOf(Player player) => [];
+        public void EventHappened(Player player, uint questId, Creature source, bool rewardGroup)
+        {
+            Assert.True(rewardGroup);
+            Completed.Add((player, questId));
+        }
+        public void KillCredit(Player player, uint creatureEntry, Creature source) { }
+    }
+}

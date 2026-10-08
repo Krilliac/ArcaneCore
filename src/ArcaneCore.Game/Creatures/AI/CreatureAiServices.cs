@@ -184,7 +184,8 @@ public sealed class CreatureAiFactory
     /// <summary>
     /// The creature scripts of this server's quests by creature entry (the ScriptDev2 <c>ScriptName</c> of their <c>creature_template</c> row,
     /// which classic-db carries and this server does not import): selected before the AIName, as vmangos FactorySelector::selectAI asks the
-    /// script name first (AI/CreatureAISelector.cpp:37-50). Built in: <see cref="Scripts.RuulSnowhoofAI"/>.
+    /// script name first (AI/CreatureAISelector.cpp:37-50). Built in: <see cref="Scripts.RuulSnowhoofAI"/> and the data-driven escorts of
+    /// <see cref="Scripts.Escorts.EscortSpecCatalog"/>.
     /// </summary>
     private readonly Dictionary<uint, Func<Creature, CreatureAI>> _entryScripts = new()
     {
@@ -193,6 +194,15 @@ public sealed class CreatureAiFactory
 
     /// <summary>The exploration/event quests the entry scripts complete (an escort's quest): <see cref="RegisterEntryScript"/>'s list.</summary>
     private readonly HashSet<uint> _entryScriptQuests = [Scripts.RuulSnowhoofAI.QuestFreedomToRuul];
+
+    /// <summary>Registers every <see cref="Scripts.Escorts.EscortSpecCatalog"/> escort as an entry script (a clash with a hand-ported one throws).</summary>
+    public CreatureAiFactory()
+    {
+        foreach (Scripts.Escorts.EscortSpec spec in Scripts.Escorts.EscortSpecCatalog.All)
+        {
+            RegisterEntryScript(spec.Entry, c => new Scripts.Escorts.DataDrivenEscortAI(c, spec), spec.QuestId);
+        }
+    }
 
     public IReadOnlyCollection<string> Names => _factories.Keys;
 

@@ -1,0 +1,99 @@
+[
+  {
+    "entry": 1978, "questId": 435, "faction": 0, "startText": -1000306,
+    "requirePlayerAtWaypoint": true,
+    "aggro": { "chanceDenominator": 1, "toTarget": true, "textIds": [-1000308, -1000309, -1000310] },
+    "source": "src/game/AI/ScriptDevAI/scripts/eastern_kingdoms/silverpine_forest.cpp:npc_deathstalker_erlandAI,QuestAccept_npc_deathstalker_erland",
+    "waypoints": [
+      { "point": 1, "actions": [{ "type": "say", "id": -1000307, "toPlayer": true }] },
+      { "point": 14, "actions": [{ "type": "say", "id": -1000312, "toPlayer": true }, { "type": "quest_complete", "id": 435 }] },
+      { "point": 15, "actions": [{ "type": "say_nearby", "id": -1000313, "speakerEntry": 1950, "radius": 45 }] },
+      { "point": 16, "actions": [{ "type": "say", "id": -1000314 }] },
+      { "point": 17, "actions": [{ "type": "say", "id": -1000315 }] },
+      { "point": 25, "actions": [{ "type": "say", "id": -1000316 }] },
+      { "point": 26, "actions": [{ "type": "say_nearby", "id": -1000317, "speakerEntry": 1951, "radius": 45 }] },
+      { "point": 27, "actions": [{ "type": "say", "id": -1000318 }] }
+    ]
+  },
+  {
+    "entry": 2768, "questId": 665, "faction": 120, "startText": -1000264,
+    "startTextToPlayer": true, "requirePlayerAtWaypoint": true, "instantRespawn": true,
+    "aggro": { "chanceDenominator": 1, "textIds": [-1000268] },
+    "source": "src/game/AI/ScriptDevAI/scripts/eastern_kingdoms/arathi_highlands.cpp:npc_professor_phizzlethorpeAI,QuestAccept_npc_professor_phizzlethorpe",
+    "waypoints": [
+      { "point": 5, "actions": [{ "type": "say", "id": -1000265, "toPlayer": true }] },
+      { "point": 6, "actions": [{ "type": "say", "id": -1000266, "toPlayer": true }] },
+      { "point": 9, "actions": [{ "type": "say", "id": -1000267 }] },
+      { "point": 10, "actions": [
+        { "type": "summon", "id": 2776, "despawnMs": 600000, "oocOrCorpse": true, "attackEscort": true, "positions": [[-2056.41, -2144.01, 20.59, 5.70], [-2050.17, -2140.02, 19.54, 5.17]] }
+      ] },
+      { "point": 11, "actions": [{ "type": "say", "id": -1000269, "toPlayer": true }] },
+      { "point": 12, "actions": [{ "type": "say", "id": -1000270, "toPlayer": true }, { "type": "set_run", "id": 1 }] },
+      { "point": 20, "actions": [{ "type": "say", "id": -1000271, "toPlayer": true }] },
+      { "point": 21, "actions": [{ "type": "say", "id": -1000272 }, { "type": "say", "id": -1000273, "toPlayer": true }, { "type": "quest_complete", "id": 665 }] }
+    ]
+  },
+  {
+    "entry": 5644, "questId": 1440, "faction": 10, "spawnStandState": 8, "startStandState": 0, "clearImmuneToNpc": true,
+    "source": "src/game/AI/ScriptDevAI/scripts/kalimdor/desolace.cpp:npc_dalinda_malemAI,QuestAccept_npc_dalinda_malem",
+    "waypoints": [{ "point": 18, "actions": [{ "type": "quest_complete", "id": 1440 }] }]
+  },
+  {
+    "entry": 3465, "questId": 898, "faction": 232, "requirePlayerAtWaypoint": true, "startStandState": 0, "homeStandState": 0, "clearImmuneToNpc": true,
+    "startText": -1000370, "startTextToPlayer": true,
+    "aggro": { "chanceDenominator": 4, "nonPlayerOnly": true, "areaId": 391, "toTarget": true, "textIds": [-1000374, -1000375, -1000376, -1000377] },
+    "source": "src/game/AI/ScriptDevAI/scripts/kalimdor/the_barrens.cpp:npc_giltharesAI,QuestAccept_npc_gilthares",
+    "waypoints": [
+      { "point": 17, "actions": [{ "type": "say", "id": -1000371, "toPlayer": true }] },
+      { "point": 18, "actions": [{ "type": "say", "id": -1000372, "toPlayer": true }] },
+      { "point": 19, "actions": [{ "type": "say", "id": -1000373, "toPlayer": true }] },
+      { "point": 38, "actions": [{ "type": "say", "id": -1000378, "toPlayer": true }] },
+      { "point": 48, "actions": [{ "type": "say", "id": -1000379, "toPlayer": true }] },
+      { "point": 54, "actions": [{ "type": "say", "id": -1000380, "toPlayer": true }, { "type": "quest_complete", "id": 898 }] }
+    ]
+  },
+  {
+    "entry": 3584, "questId": 945, "faction": 231, "clearImmuneToNpc": true,
+    "immuneOnRespawn": true, "factionAfterStart": true, "startText": -1000905, "startTextToPlayer": true,
+    "source": "src/game/AI/ScriptDevAI/scripts/kalimdor/darkshore.cpp:npc_theryluneAI,QuestAccept_npc_therylune",
+    "waypoints": [
+      { "point": 18, "actions": [{ "type": "quest_complete", "id": 945 }] },
+      { "point": 20, "actions": [{ "type": "say", "id": -1000906, "toPlayer": true }, { "type": "set_run", "id": 1 }] }
+    ]
+  },
+  {
+    "entry": 10427, "questId": 4770, "faction": 232, "reactState": 1, "startText": -1000362, "startTextToPlayer": true,
+    "source": "src/game/AI/ScriptDevAI/scripts/kalimdor/thousand_needles.cpp:npc_paoka_swiftmountainAI,QuestAccept_npc_paoka_swiftmountain",
+    "waypoints": [
+      { "point": 16, "actions": [
+        { "type": "say", "id": -1000363 },
+        { "type": "summon", "id": 4107, "despawnMs": 60000, "positions": [[-4990.606, -906.057, -5.343, 0], [-4970.241, -927.378, -4.951, 0], [-4985.364, -952.528, -5.199, 0]] }
+      ] },
+      { "point": 27, "actions": [{ "type": "say", "id": -1000364 }] },
+      { "point": 28, "actions": [{ "type": "quest_complete", "id": 4770 }] }
+    ]
+  },
+  {
+    "entry": 10646, "questId": 4904, "faction": 232, "reactState": 1, "startText": -1000365, "startTextToPlayer": true,
+    "source": "src/game/AI/ScriptDevAI/scripts/kalimdor/thousand_needles.cpp:npc_lakota_windsongAI,QuestAccept_npc_lakota_windsong",
+    "waypoints": [
+      { "point": 9, "actions": [{ "type": "say", "id": -1000366 }, { "type": "summon", "id": 10758, "despawnMs": 60000, "attackEscort": true, "positions": [[-4905.479492, -2062.732666, 84.352, 0], [-4915.201172, -2073.528320, 84.733, 0]] }] },
+      { "point": 15, "actions": [{ "type": "say", "id": -1000367 }, { "type": "summon", "id": 10758, "despawnMs": 60000, "attackEscort": true, "positions": [[-4878.883301, -1986.947876, 91.966, 0], [-4877.503906, -1966.113403, 91.859, 0]] }] },
+      { "point": 22, "actions": [{ "type": "say", "id": -1000368 }, { "type": "summon", "id": 10758, "despawnMs": 60000, "attackEscort": true, "positions": [[-4767.985352, -1873.169189, 90.192, 0], [-4788.861328, -1888.007813, 89.888, 0]] }] },
+      { "point": 46, "actions": [{ "type": "say", "id": -1000369 }, { "type": "quest_complete", "id": 4904 }] }
+    ]
+  },
+  {
+    "entry": 11856, "questId": 6523, "faction": 775, "startText": -1000357, "clearImmuneToNpc": true,
+    "source": "src/game/AI/ScriptDevAI/scripts/kalimdor/stonetalon_mountains.cpp:npc_kayaAI,QuestAccept_npc_kaya",
+    "waypoints": [
+      { "point": 17, "actions": [
+        { "type": "say", "id": -1000358 },
+        { "type": "summon", "id": 11910, "despawnMs": 30000, "corpseTimed": true, "attackEscort": true, "positions": [[-50.75, -500.77, -46.13, 0.4]] },
+        { "type": "summon", "id": 11912, "despawnMs": 30000, "corpseTimed": true, "attackEscort": true, "positions": [[-40.05, -510.89, -46.05, 1.7]] },
+        { "type": "summon", "id": 11913, "despawnMs": 30000, "corpseTimed": true, "attackEscort": true, "positions": [[-32.21, -499.20, -45.35, 2.8]] }
+      ] },
+      { "point": 19, "actions": [{ "type": "say", "id": -1000359 }, { "type": "quest_complete", "id": 6523 }] }
+    ]
+  }
+]

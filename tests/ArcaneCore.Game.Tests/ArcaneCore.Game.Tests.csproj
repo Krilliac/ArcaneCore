@@ -17,4 +17,8 @@
     <ProjectReference Include="..\ThirdParty\DotRecast\DotRecast.Detour\DotRecast.Detour.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="CreatureAi\validated-escort-waypoints.csv" CopyToOutputDirectory="PreserveNewest" TargetPath="validated-escort-waypoints.csv" />
+  </ItemGroup>
+
 </Project>
