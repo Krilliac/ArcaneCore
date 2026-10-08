@@ -7,10 +7,63 @@ namespace ArcaneCore.Game.Spells.Procs;
 /// <summary>
 /// The aura types with a proc handler of their own (vmangos <c>AuraProcHandler[]</c>, UnitAuraProcHandler.cpp:37-231). Every other aura type
 /// procs as <c>HandleNULLProc</c> (OK: the proc counts and spends a charge). Class-specific cases of the vmangos handlers (seals, Lightning
-/// Shield, Pyroclasm, the dummy auras) belong to per-spell <see cref="IProcScript"/>s, not to these handlers.
+/// Shield, the dummy-aura talents) belong to per-spell <see cref="IProcScript"/>s; the PROC_TRIGGER_SPELL talent cases that only rewrite the
+/// trigger spell, its chance or its base points (Pyroclasm, Shadowguard, Blessed Recovery, Illumination, the combo-point deferral of
+/// Ruthlessness and Seal Fate) stay in <see cref="ProcTriggerSpell"/>, as in vmangos.
 /// </summary>
 internal static class BuiltInProcHandlers
 {
+    private const uint FamilyWarlock = 5;
+    private const uint FamilyPriest = 6;
+    private const uint FamilyPaladin = 10;
+
+    private const uint PyroclasmIcon = 1137;
+    private const uint PyroclasmStunSpell = 18093;
+    private const uint ShadowguardIcon = 19;
+    private const uint BlessedRecoveryIcon = 1875;
+    private const uint IlluminationIcon = 241;
+    private const uint IlluminationManaSpell = 20272;
+    private const uint RuthlessnessPointSpell = 14157;
+    private const uint SealFatePointSpell = 14189;
+
+    /// <summary>CF_PALADIN_HOLY_SHOCK (SpellClassMask.h:296), CF_WARLOCK_RAIN_OF_FIRE and CF_WARLOCK_HELLFIRE (:100-101).</summary>
+    private const ulong PaladinHolyShockFlag = 1UL << 21;
+    private const ulong WarlockRainOfFireFlag = 1UL << 5;
+    private const ulong WarlockHellfireFlag = 1UL << 6;
+
+    /// <summary>Shadowguard rank → its damage spell (UnitAuraProcHandler.cpp:1286-1306).</summary>
+    private static readonly Dictionary<uint, uint> ShadowguardSpells = new()
+    {
+        [18137] = 28377,
+        [19308] = 28378,
+        [19309] = 28379,
+        [19310] = 28380,
+        [19311] = 28381,
+        [19312] = 28382,
+    };
+
+    /// <summary>Blessed Recovery rank → its heal (UnitAuraProcHandler.cpp:1313-1324).</summary>
+    private static readonly Dictionary<uint, uint> BlessedRecoverySpells = new()
+    {
+        [27811] = 27813,
+        [27815] = 27817,
+        [27816] = 27818,
+    };
+
+    /// <summary>Holy Shock's triggered heal → the Holy Shock rank that was cast (UnitAuraProcHandler.cpp:1484-1490).</summary>
+    private static readonly Dictionary<uint, uint> HolyShockCastSpells = new()
+    {
+        [25914] = 20473,
+        [25913] = 20929,
+        [25903] = 20930,
+    };
+
+    /// <summary>
+    /// The OVERRIDE_CLASS_SCRIPTS misc values <see cref="OverrideClassScripts"/> acts on (Nightfall, Improved Blizzard, Improved Mend Pet,
+    /// Corrupted Healing). The talent coverage report reads it: an aura 112 talent whose script number nothing reads is not handled.
+    /// </summary>
+    internal static IReadOnlySet<int> HandledClassScripts { get; } = new HashSet<int> { 4309, 836, 988, 989, 4086, 4087, 3656 };
+
     public static Dictionary<AuraType, AuraProcHandler> Create() => new()
     {
         [AuraType.Dummy] = static (in AuraProcContext _) => AuraProcResult.Ok, // HandleDummyAuraProc: "processed charge only counting case" without a script
@@ -78,6 +131,56 @@ internal static class BuiltInProcHandlers
                 break;
         }
 
+        // The talent cases of the family switch (UnitAuraProcHandler.cpp:1226-1330, 1468-1500).
+        switch (aura.SpellFamilyName)
+        {
+            case FamilyWarlock when aura.SpellIconId == PyroclasmIcon:
+                if (Pyroclasm(c) is not { } pyroclasm)
+                {
+                    return AuraProcResult.Failed;
+                }
+
+                triggerSpellId = pyroclasm;
+                break;
+            case FamilyPriest when aura.SpellIconId == ShadowguardIcon:
+                if (!ShadowguardSpells.TryGetValue(aura.Id, out triggerSpellId))
+                {
+                    return AuraProcResult.Failed; // "Spell %u not handled in SG"
+                }
+
+                break;
+            case FamilyPriest when aura.SpellIconId == BlessedRecoveryIcon:
+                if (!BlessedRecoverySpells.TryGetValue(aura.Id, out triggerSpellId))
+                {
+                    return AuraProcResult.Failed; // "Spell %u not handled in BR"
+                }
+
+                basePoints0 = NonZero(Dither(c.Amount * (float)c.Aura.Amount / 100f / 3f, system.Random));
+                target = c.Owner;
+                break;
+            case FamilyPaladin when aura.SpellIconId == IlluminationIcon:
+                if (c.ProcSpell is not { } healed || c.Owner is not Player)
+                {
+                    return AuraProcResult.Failed;
+                }
+
+                // "procspell is triggered spell but we need mana cost of original casted spell": Holy Shock's heal is triggered by the cast spell.
+                SpellInfo? original = healed;
+                if ((healed.SpellFamilyFlags & PaladinHolyShockFlag) != 0)
+                {
+                    original = HolyShockCastSpells.TryGetValue(healed.Id, out uint castId) ? system.Store.Get(castId) : null;
+                    if (original is null)
+                    {
+                        return AuraProcResult.Failed; // "Spell %u not handled in HShock"
+                    }
+                }
+
+                basePoints0 = NonZero((int)original.ManaCost);
+                triggerSpellId = IlluminationManaSpell;
+                target = c.Owner;
+                break;
+        }
+
         if (system.Store.Get(triggerSpellId) is not { } trigger)
         {
             return AuraProcResult.Failed;
@@ -102,12 +205,85 @@ internal static class BuiltInProcHandlers
                 }
 
                 break;
+            case SealFatePointSpell:     // Seal Fate (and the Netherblade set)
+            case RuthlessnessPointSpell: // Ruthlessness
+                // "Need add combopoint AFTER finishing move (or they get dropped in finish phase)": the point is cast on the running spell's unit
+                // target once that spell has finished (vmangos: a lambda event after the batching interval, without CONFIG_UINT32_SPELL_PROC_DELAY).
+                if (system.PostFinishProcsEnabled)
+                {
+                    if (system.CurrentGenericCast(c.Owner) is not { } running)
+                    {
+                        return AuraProcResult.Failed;
+                    }
+
+                    ObjectGuid pointTarget = running.Targets.Unit;
+                    if (!pointTarget.IsEmpty)
+                    {
+                        Unit owner = c.Owner;
+                        uint pointSpell = trigger.Id;
+                        system.DeferUntilFinished(running, () =>
+                        {
+                            if (owner.IsInWorld && owner.IsAlive)
+                            {
+                                system.CastSpell(owner, pointSpell, SpellCastTargets.ForUnit(pointTarget), triggered: true);
+                            }
+                        });
+                    }
+
+                    return AuraProcResult.Ok;
+                }
+
+                break;
         }
 
         // "try detect target manually if not set"
         target ??= (c.ProcFlag & ProcFlags.DealHelpfulSpell) == 0 && trigger.IsPositive ? c.Owner : c.Target;
         return system.TriggerProccedSpell(c.Owner, target, trigger, c.Holder, c.CooldownMs, basePoints0, procSpell: c.ProcSpell);
     }
+
+    /// <summary>
+    /// Pyroclasm (UnitAuraProcHandler.cpp:1226-1262): a living other victim and a spell of known tick count (Soul Fire's icon 184 / visual 2253:
+    /// 1, Hellfire: 15, Rain of Fire: 4), then the rank's chance (18096: 13, 18073: 26) over the ticks; the stun 18093, or null when it fails.
+    /// </summary>
+    private static uint? Pyroclasm(in AuraProcContext c)
+    {
+        if (c.Target is not { IsAlive: true } victim || ReferenceEquals(victim, c.Owner) || c.ProcSpell is not { } spell)
+        {
+            return null;
+        }
+
+        int ticks;
+        if (spell.SpellIconId == 184 && spell.SpellVisual == 2253)
+        {
+            ticks = 1;
+        }
+        else if ((spell.SpellFamilyFlags & WarlockHellfireFlag) != 0)
+        {
+            ticks = 15;
+        }
+        else if ((spell.SpellFamilyFlags & WarlockRainOfFireFlag) != 0)
+        {
+            ticks = 4;
+        }
+        else
+        {
+            return null;
+        }
+
+        float chance = c.Holder.Spell.Id switch
+        {
+            18096 => 13.0f / ticks,
+            18073 => 26.0f / ticks,
+            _ => 0f,
+        };
+        return c.System.Random.NextDouble() * 100d < chance ? PyroclasmStunSpell : null; // roll_chance_f
+    }
+
+    /// <summary>vmangos <c>rand_dither</c> (Utilities/Random.cpp:80-83).</summary>
+    private static int Dither(float value, Random random) => (int)MathF.CopySign(MathF.Floor(MathF.Abs(value) + random.NextSingle()), value);
+
+    /// <summary>A base point of 0 is none: vmangos TriggerProccedSpell casts the plain spell when every base point is 0.</summary>
+    private static int? NonZero(int value) => value != 0 ? value : null;
 
     /// <summary>
     /// vmangos <c>Unit::HandleProcTriggerDamageAuraProc</c> (UnitAuraProcHandler.cpp:1626-1676): a living victim; the aura spell's hit roll (a miss is

@@ -79,9 +79,11 @@ public sealed class ComboPointProcDeferralTests
                 AddPoint(SealFatePoint));
             (Rogue, _) = Kit.AddPlayer(1, race: Race.Human);
             Rogue.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Rogue);
-            Rogue.UnitFlags |= UnitFlags.Pvp;
+            Rogue.Flags |= PlayerFlags.PvpDesired;
+            MapCombat.UpdatePvp(Rogue, true);
             (Enemy, _) = Kit.AddPlayer(2, 3, 0, race: Race.Orc);
-            Enemy.UnitFlags |= UnitFlags.Pvp;
+            Enemy.Flags |= PlayerFlags.PvpDesired;
+            MapCombat.UpdatePvp(Enemy, true);
             Enemy.Health = Enemy.MaxHealth = 5000;
             Combos = new ComboPointService(Kit.System, (_, guid) => Kit.World.FindOnlinePlayer(guid));
             Combos.Install();
