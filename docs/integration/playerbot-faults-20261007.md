@@ -30,6 +30,19 @@ and was waiting out a 60 s delay hit the cap at 47 to 49 s and threw `InvalidOpe
 RED: `PlayerbotRecoveryTests.GhostAtCorpse_WaitsOutAScaledReclaimDelay_AtAShortThinkInterval_ThenReclaims` threw exactly
 `playerbot-recovery-stalled` before the fix (`D:/ArcaneCore-lanes/_logs/w3-bot-faults/red-bot-faults.log`).
 
+End-to-end replay (`D:/ArcaneCore-lanes/_logs/w3-bot-faults/repro/`, `setup_repro.py`): copies of `live-w2-r1/before-*.db`, only the two
+bots desired, their ghosts' `GhostTime` moved to the launch time and `DeathExpireTime` to launch + 900 s (a 120 s delay, as live),
+private worlds on 127.0.0.1:18185-18187.
+
+* `red/`: the live movement build (`_deploy/movement-r1`, source 6e6bd1fc) on the Codex-line copies: both bots logged
+  `action failed (InvalidOperationException)` again and both rows ended with `DesiredEnabled = 0`.
+* `green/` and `green2/`: this lane's build on copies upgraded to characters 40 / world 41: no fault, both rows stayed desired
+  and Running. `green2/mock.log` holds `.playerbot inspect` every 20 s from a private GM: both ghosts waited at their bodies while
+  `delay_remaining_s` counted down from 119, then reclaimed; Ironwander went on to fight and train. Dawnrover was killed again
+  right after reclaiming (its third death, so another 120 s wait) and was again waiting without a fault when the run ended.
+  Reclaiming beside whatever killed it is a gameplay gap, not a fault (follow-up: wait for nearby hostiles to leave, or use the
+  spirit healer).
+
 ## Fixes
 
 1. **Recovery** (`PlayerbotRecovery`): progress-based bounds instead of a think count. Waiting at the body while
