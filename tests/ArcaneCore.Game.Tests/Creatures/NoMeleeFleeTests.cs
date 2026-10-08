@@ -16,6 +16,8 @@ namespace ArcaneCore.Game.Tests.Creatures;
 /// (both references), and when a player or a player's pet engages it, it runs in panic for 30 s and then evades (cmangos
 /// Unit::SetInCombatWithVictim, Entities/Unit.cpp:7993-7998: DoFlee(30000) with ORDER_CRITTER_FLEE; CreatureAI::TimedFleeingEnded,
 /// AI/BaseAI/CreatureAI.cpp:254-258). Not when it was created by a spell, is rooted, already flees or is casting, nor against a creature.
+/// The panic flight is the cmangos rule behind <c>Creatures:NoMeleeFleeOnAggro</c>, off by default: vmangos, the fidelity reference,
+/// only takes the melee away (critters still run through CritterAI).
 /// </summary>
 public sealed class NoMeleeFleeTests
 {
@@ -24,11 +26,13 @@ public sealed class NoMeleeFleeTests
 
     private static CreatureTemplate Fleer(uint staticFlags = NoMeleeFlee) => Template(FleerEntry) with { StaticFlags1 = staticFlags };
 
+    private static CreatureOptions Panic() => new() { AiRelocationNotifyDelayMs = 3_600_000, NoMeleeFleeOnAggro = true };
+
     private static (WorldRuntime World, Map Map, CreatureMapSystem System, Creature Fleer, Player Player) Start(CreatureOptions? options = null)
     {
         CreatureContent content = Content([Fleer()], [Spawn(1, FleerEntry, 3, 0)]);
         (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new AlwaysHostile() },
-            options ?? new CreatureOptions { AiRelocationNotifyDelayMs = 3_600_000 });
+            options ?? Panic());
         (Player player, _) = AddPlayer(world, 1, 0, 0);
         return (world, map, system, Assert.Single(system.Creatures), player);
     }
@@ -56,9 +60,9 @@ public sealed class NoMeleeFleeTests
     }
 
     [Fact]
-    public void WithTheOptionOff_ItOnlyStopsSwinging()
+    public void ByDefault_AsInVmangos_ItOnlyStopsSwinging()
     {
-        (WorldRuntime w, Map map, _, Creature fleer, Player player) = Start(new CreatureOptions { AiRelocationNotifyDelayMs = 3_600_000, NoMeleeFleeOnAggro = false });
+        (WorldRuntime w, Map map, _, Creature fleer, Player player) = Start(new CreatureOptions { AiRelocationNotifyDelayMs = 3_600_000 });
         using WorldRuntime world = w;
 
         map.Combat.DealDamage(player, fleer, 1, direct: false);

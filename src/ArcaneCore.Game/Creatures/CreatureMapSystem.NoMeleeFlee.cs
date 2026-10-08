@@ -9,7 +9,7 @@ namespace ArcaneCore.Game.Creatures;
 /// The panic flight of a NO_MELEE_FLEE creature (static flag 0x00100000): cmangos Unit::SetInCombatWithVictim
 /// (Entities/Unit.cpp:7993-7998) sends a creature with the flag running for 30 s (DoFlee, SetInPanic) when a player or a player's
 /// pet engages it, and CreatureAI::TimedFleeingEnded (AI/BaseAI/CreatureAI.cpp:254-258) evades it when the flight is over.
-/// Switch: <see cref="CreatureOptions.NoMeleeFleeOnAggro"/> (vmangos only takes the melee away).
+/// Switch: <see cref="CreatureOptions.NoMeleeFleeOnAggro"/>, off by default (vmangos only takes the melee away).
 /// </summary>
 public sealed partial class CreatureMapSystem
 {
