@@ -114,7 +114,9 @@ dead with the pet out of combat, or when the spell duration ends.
   `Unit::HandlePetCommand`, `Unit.cpp:8646-8764`: stay saves the stay position, follow pushes the follow
   generator, attack validates the target (refused while the owner has a `SPELL_AURA_MOD_PACIFY` aura) and
   starts the fight through the pet's AI with the 10% talk or the
-  aggro reaction, dismiss unsummons), `CMSG_PET_SET_ACTION` (the move/swap checks of `PetHandler.cpp:198-290`),
+  aggro reaction; dismiss unsummons a summoned pet, mini pet or guardian, but leaves a hunter's pet alone, which is
+  dismissed through the Dismiss Pet spell the client casts, "Hunter pets are dismissed with a spell with a cast time",
+  review finding 32), `CMSG_PET_SET_ACTION` (the move/swap checks of `PetHandler.cpp:198-290`),
   `CMSG_PET_SPELL_AUTOCAST`, `CMSG_PET_STOP_ATTACK`, `CMSG_PET_CAST_SPELL` (the 1.12 layout: guid, spell,
   targets), `CMSG_PET_CANCEL_AURA`, `CMSG_PET_NAME_QUERY` (answered only for the matching pet number),
   `CMSG_PET_ABANDON` (a summoned pet is dismissed), `CMSG_REQUEST_PET_INFO`. A spell button runs the

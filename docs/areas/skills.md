@@ -139,7 +139,9 @@ copied). Each piece of code cites file:line.
   list and the state share one predicate here). `spell_chain` `req_spell` and the custom `spell_chain` table are not loaded.
   Learning rank N without rank N-1 does not learn the lower ranks (`Player.cpp:3621-3629`), the spellbook owner's rule.
 - Account trial restrictions (`HasTrialRestrictions`, `Player.cpp:5227, 5251`), battleground flags, the per-object use
-  requirement table, the play-time flag and immune users are not modelled in gathering.
+  requirement table and the play-time flag are not modelled in gathering. An immune gatherer is refused before anything opens
+  or a skill rises (review finding 58, `Spell::EffectOpenLock`, `SpellEffects.cpp:2117-2118`), and a quest-bound herb or vein
+  stays closed without its quest (finding 59).
 - Auto-unequip after losing a weapon skill mails an item that finds no bag space in vmangos; there is no mail system, so
   the item stays equipped.
 - The database matrix (MariaDB, PostgreSQL) was not available here: the store tests ran on SQLite only.

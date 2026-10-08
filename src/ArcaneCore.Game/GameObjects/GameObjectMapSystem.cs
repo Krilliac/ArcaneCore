@@ -682,8 +682,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// <summary>
     /// GAMEOBJECT_TYPE_CHAIR (GameObject.cpp:1515-1533 with PlayerCanUse :2229-2236): the user must be within 3 yards (3D) of the
     /// nearest slot, then needs line of sight to the chair; they are moved to the slot at the chair orientation and sit with
-    /// SIT_LOW_CHAIR plus the chair height. A refused use is silent for the client. Limit: a mounted user is not dismounted
-    /// first and an occupied slot is not refused (neither does vmangos refuse it).
+    /// SIT_LOW_CHAIR plus the chair height. A refused use is silent for the client. A mounted user was already taken off the
+    /// mount by <see cref="Use"/> (GameObject::Use, review finding 58). An occupied slot is not refused (neither does vmangos refuse it).
     /// </summary>
     private GameObjectUseResult UseChair(Player player, GameObject go)
     {

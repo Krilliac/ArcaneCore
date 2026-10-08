@@ -111,7 +111,7 @@ public sealed partial class PlayerInventory
     }
 
     /// <summary>
-    /// vmangos HandleSellItemOpcode (ItemHandler.cpp:84-138): the first spell with expendable (negative) template charges scales
+    /// vmangos HandleSellItemOpcode (ItemHandler.cpp:523-575): the first spell with expendable (negative) template charges scales
     /// the price by the charges left; lost durability then takes uint32(lost × DurabilityCosts multiplier × DurabilityQuality
     /// factor) off it (at least 1 copper of cost, and a cost above the price leaves 1 copper). False when a damaged item has no
     /// cost row (vmangos answers SELL_ERR_CANT_SELL_ITEM).
