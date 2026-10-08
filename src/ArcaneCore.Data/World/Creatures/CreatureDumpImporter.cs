@@ -450,7 +450,9 @@ public sealed class CreatureDumpImporter
         {
             foreach (int[] chunk in textIds.Chunk(500))
             {
-                await db.Set<CreatureAiTextRow>().Where(t => chunk.Contains(t.Entry)).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                // A List, not the array: C# 14 binds array.Contains in an expression tree to the span overload, which EF cannot translate.
+                List<int> ids = [.. chunk];
+                await db.Set<CreatureAiTextRow>().Where(t => ids.Contains(t.Entry)).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
             }
 
             await InsertBatchedAsync(db, textIds.Select(id => _aiTexts[id]), cancellationToken).ConfigureAwait(false);
