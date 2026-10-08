@@ -27,8 +27,14 @@ public sealed class InactiveQueueHandlerTests
             Assert.False(handler.AllowsState(SessionState.LoggingIn));
         }
 
-        foreach (WorldOpcode opcode in new[] { WorldOpcode.CmsgMeetingstoneJoin, WorldOpcode.CmsgMeetingstoneLeave,
-            WorldOpcode.CmsgBattlemasterJoin, WorldOpcode.CmsgBattlefieldPort })
+        // The meeting stone queue (GameObjects.MeetingStoneHandlers) takes join and leave as world handlers too; battleground queueing is not here.
+        foreach (WorldOpcode opcode in new[] { WorldOpcode.CmsgMeetingstoneJoin, WorldOpcode.CmsgMeetingstoneLeave })
+        {
+            Assert.True(table.TryGet(opcode, out OpcodeHandler handler), $"missing {opcode} handler");
+            Assert.NotNull(handler.World);
+        }
+
+        foreach (WorldOpcode opcode in new[] { WorldOpcode.CmsgBattlemasterJoin, WorldOpcode.CmsgBattlefieldPort })
         {
             Assert.False(table.TryGet(opcode, out _));
         }
@@ -169,7 +175,7 @@ public sealed class InactiveQueueHandlerTests
         Assert.Equal(new byte[] { 0, 0, 0, 0, 5 }, await member.ReadUntilAsync(WorldOpcode.SmsgMeetingstoneSetqueue));
         AssertSameGroup(beforeLeader, await GroupSnapshotAsync(host, "Queueparty"));
         AssertSameGroup(beforeMember, await GroupSnapshotAsync(host, "Queuemember"));
-        Assert.False(host.Opcodes.TryGet(WorldOpcode.CmsgMeetingstoneJoin, out _));
+        Assert.True(host.Opcodes.TryGet(WorldOpcode.CmsgMeetingstoneJoin, out _)); // the meeting stone queue (GameObjects.MeetingStoneHandlers)
     }
 
     private static async Task ReadFormedPartyListAsync(WorldTestClient client)

@@ -37,6 +37,9 @@ All new code is in `src/ArcaneCore.Game/Spells/Casters` (plus `src/ArcaneCore.Wo
   Immolate, Holy Fire: 36 caster ids) and low ranks differ slightly from retail. `ISpellBonusCoefficients` is the seam for a
   loaded table; the importer slice (`spell-bonus-data`) is not delivered. The cmangos `spell_bonus_data` table is not a valid
   substitute (rank 1 rows carry max-rank coefficients).
+- A unit standing in for a game object (`SpellSystem.CastForGameObject`) has no done side: `SpellBonusModule` skips the done
+  bonus and the absorb-shield bonus for it, and the crit rolls of direct damage and healing are skipped (a game object has no
+  auras and never crits, `SpellCaster.h:320`); the target side still applies.
 - Spell power does not yet model: damage done versus creature types, equipped-item restricted auras, class script modifiers,
   talent spell mods, Ignite, totem/pet owner bonuses, weapon-based periodic damage (left to the melee formulas), absorb.
   Spell crit from intellect and the spell hit/resist tables belong to the stats lane (`VanillaSpellCombatRules` keeps its

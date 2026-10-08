@@ -427,6 +427,9 @@ public sealed class GameObjectTests
 
         Assert.Equal(GameObjectUseResult.NeedsQuest, rig.System.Use(player, goober.Guid));
         Assert.Empty(rig.Quests.Used);
+        // GameObject::Use, goober (GameObject.cpp:1547-1575): the page is shown before the quest gate, so a player without the quest reads it too.
+        Assert.Single(Packets(session, WorldOpcode.SmsgGameobjectPagetext));
+        Assert.Equal(GameObjectState.Ready, goober.State);
 
         rig.Quests.Incomplete.Add((player.Guid, QuestId));
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(player, goober.Guid));

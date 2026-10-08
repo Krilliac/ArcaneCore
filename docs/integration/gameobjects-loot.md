@@ -249,8 +249,8 @@ test hosts (`WorldTestHost.WorldServices`, `InMemoryInstanceStore.Live/Deleted/S
   - There is no tap list: the killer decides the recipients.
 - **Conditions.** Closed by lane L9: `LootService.Conditions` is wired to the `ConditionFeature`. A conditioned row is still generated for the whole group when any recipient meets it ([area doc](../areas/loot-conditions-chest-gold.md)).
 - **Spell side.**
-  - No cast time, skill-ups or spell-driven opening (`OpenLock` is the hook for the spells area).
-  - Chairs, traps, rituals, spell casters, meeting stones, flag stands and transports are not usable. Fishing nodes are used through the fishing area's use handler (`RegisterUseHandler`).
+  - Spell-driven opening (herb gathering, mining, lockpicking, keys) runs through the skills area's `GatheringSpells`, which casts the open-lock spell (cast time, skill-ups) and calls `OpenLock`; `OpenLock` springs the linked trap of a chest or button like `Use` does.
+  - Chairs, traps, rituals, spell casters, meeting stones and flag stands are usable; see [gameobject-types.md](gameobject-types.md) for what each does and its limits (flag stands still need the battleground side). Transports are not usable. Fishing nodes are used through the fishing area's use handler (`RegisterUseHandler`).
 - **Chest gold.** `gameobject_template` mingold/maxgold are imported (world step `GameObjectTemplateGoldDataModule`, lane L9) and paid by shared-copy chests; durable instance chests still pay nothing because their record has no money column.
 - **Quest givers.** The quest-giver object type only calls the seam; the quest area must implement `IGameObjectQuestGiver`.
 - **Polling.**

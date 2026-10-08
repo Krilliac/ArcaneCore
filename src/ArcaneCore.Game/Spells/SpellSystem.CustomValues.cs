@@ -78,7 +78,7 @@ public sealed partial class SpellSystem
 
             SpellEffectInfo effect = context.Spell.Effects[context.EffectIndex];
             SpellEffectInfo replaced = effect with { BasePoints = explicitBasePoints - effect.BaseDice };
-            return SpellMath.CalculateEffectValue(context.Spell, replaced, context.Caster.Level, system.Random);
+            return SpellMath.CalculateEffectValue(context.Spell, replaced, system.CasterLevelOf(context.Caster), system.Random);
         }
     }
 }

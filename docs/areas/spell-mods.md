@@ -70,6 +70,10 @@ Improved Fire Ward (11094, 13043, mask `0x8`) are flat RESIST_MISS_CHANCE mods b
 | MULTIPLE_VALUE | health leech effect, leech aura tick, mana leech tick | `SpellEffects.cpp:1868`, `SpellAuras.cpp:6008`, `:6171-6175` |
 | ACTIVATION_TIME | `SpellSystem.ModifiedAmplitude` on the amplitude of the periodic aura types (`PeriodicTiming.TakesActivationTimeMod`), at creation and again on an in-place refresh (the fresh value, not compounded as vmangos does) | `SpellAuras.cpp:8078-8083`, `:293`, `:319` |
 
+A unit standing in for a game object (`SpellSystem.CastForGameObject`, a wild trap or spell caster casting by itself) gets no mods:
+`ModInt` and `ModFloat` return the value unchanged for it while the object's cast runs, as a game object has no mod owner
+(`SpellCaster.cpp:1195-1200`, `GetSpellModOwner` is a unit method). The magic hit roll reads the seam directly and is not covered.
+
 ### Charges (`Player::DropModCharge`, `RestoreSpellMods`, `RemoveSpellMods`, `Player.cpp:17617-17783`)
 
 A cast gets a `SpellModScope` (`Spell::m_appliedMods`) when it is prepared. The engine spends charges only inside a **consume window** that

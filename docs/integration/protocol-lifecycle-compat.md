@@ -43,10 +43,15 @@ fields without enforcing this exact length. It is an explicit validation policy,
 not a claim that upstream rejects those bytes. The independent mock uses numeric
 opcodes and a literal response, rather than a shared server response encoder.
 
-Battleground join/port and meeting-stone join/leave remain unregistered. Replace
-the inactive results only when authoritative queue state is implemented. An
-ordinary two-player party is not an LFG queue: its identity, leader, membership
-and raid flag remain unchanged by a meeting-stone idle query.
+Battleground join/port remain unregistered; replace the inactive battleground
+result only when authoritative queue state is implemented. Meeting-stone
+join/leave are registered by the meeting-stone queue (`MeetingStoneHandlers`,
+[gameobject-types.md](gameobject-types.md)), and `CMSG_MEETINGSTONE_INFO` moved
+there with the same zero-byte body rule: the row above is still its answer for a
+player or party that is not queued, while a queued player or party gets its
+queue status instead. An ordinary two-player party is not an LFG queue: its
+identity, leader, membership and raid flag remain unchanged by a meeting-stone
+info query.
 
 ## Listener shutdown ownership
 

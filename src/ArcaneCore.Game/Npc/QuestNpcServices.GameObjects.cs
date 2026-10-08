@@ -36,4 +36,23 @@ public sealed partial class QuestNpcServices
         Flush(state);
         return true;
     }
+
+    /// <summary>
+    /// The gossip of a goober without page text (vmangos GameObject::Use, GameObject.cpp:1555-1562): PrepareGossipMenu(go, goober.gossipID) and
+    /// SendPreparedGossip, the menu being the object's default one. A game object shows only plain gossip lines (no quests: it has no quest-giver
+    /// flag). False when the object is not interactable for this player or nothing was prepared.
+    /// </summary>
+    public bool OpenGameObjectGossip(Player player, ObjectGuid guid, uint menuId)
+    {
+        if (menuId == 0 || Ready(player) is not { } state || InteractableNpc(player, guid, NpcFlags.None) is not { IsGameObject: true } found)
+        {
+            return false;
+        }
+
+        NpcInfo source = found with { GossipMenuId = menuId };
+        PrepareGossipMenu(state, source, menuId);
+        SendPreparedGossip(state, source);
+        Flush(state);
+        return true;
+    }
 }

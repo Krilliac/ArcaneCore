@@ -139,6 +139,12 @@ kill, XP credit) and `kill-quest` (accept, kill credit, turn in, settled reward 
 check database rows after the run. Setting `ARCANE_SCENARIO_REPORT_DIR` collects every report.
 `CombatStatScenarioTests` runs `combat-stat-auras` (duel, a damage taken curse and an attacker hit buff cast through CMSG_CAST_SPELL, white
 swings that must all land for tenfold damage); its two spells are installed by swapping the spell store on the world thread.
+`ScenarioTestWorld.StartAsync(configure)` registers extra services after the synthetic content (a later store registration
+replaces it). `GameObjectScenarioTests` uses it for `meeting-stone` (a party queued at a meeting stone takes in a solo bot,
+which later leaves) and `ritual-of-summoning` (a warlock's ritual, two helpers, a far bot that accepts the summon); the
+meeting stone actions and decoders are in `ScenarioMeetingStones` (`JoinMeetingStoneAsync`, `LeaveMeetingStoneAsync`,
+`MeetingStoneInfoAsync`, `SetQueue`, `MemberAdded`, `JoinFailed`). The scenario content only supports human warriors:
+creating a human priest (5) or warlock (9) bot there fails with `create-failed`.
 
 ## MockClient playbot (external protocol client)
 

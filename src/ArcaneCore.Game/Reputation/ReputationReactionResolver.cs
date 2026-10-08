@@ -33,6 +33,9 @@ public sealed class ReputationReactionResolver(
 
     public FactionCatalog Factions => _factions;
 
+    /// <summary>The reputation state of <paramref name="player"/>, or null while it is not loaded (game objects judge players with it).</summary>
+    public PlayerReputation? ReputationOf(Player player) => _reputationOf(player);
+
     /// <summary>The unit's faction template row, or null (unit template 0 or not in the catalog: Neutral for every rule).</summary>
     public FactionTemplateRecord? TemplateOf(Unit unit) => _templates.Find(unit.FactionTemplate);
 

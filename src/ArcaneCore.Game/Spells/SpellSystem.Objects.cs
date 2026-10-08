@@ -101,6 +101,9 @@ public sealed partial class SpellSystem
         }
 
         go.SetUInt32(UpdateFields.GameobjectLevel, caster.Level);
+        // Unit::AddGameObject (Unit.cpp:4084-4089) publishes the owner; GameObject::SetSpellId remembers the creating spell.
+        go.SetOwner(caster.Guid);
+        go.SpellId = context.Spell.Id;
         SpellObjects.Add(go, caster, context.Spell.Id, slot);
     }
 

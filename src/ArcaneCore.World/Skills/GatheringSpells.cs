@@ -22,9 +22,12 @@ namespace ArcaneCore.World.Skills;
 /// the spell side: target resolution, the lock rules, the orange-failure roll and the skill-ups.
 /// </summary>
 /// <remarks>
-/// Not modelled: opening with a key item (no item-cast path exists, so key locks never open), the per-object use
+/// A key opens its lock when it is the cast item (Spell::CanOpenLock, Spell.cpp:7885-7888: the item case matches <c>m_CastItem</c>), and a
+/// cast from an item never gives a skill-up or adds the caster's skill (Spell.cpp:7906-7907, SpellEffects.cpp:2191-2192); the key is then
+/// used up by its own spell charges (Spell::TakeCastItem). Not modelled: the per-object use
 /// requirement table, battleground flags, the play-time flag, the SPELL_FAILED_DAMAGE_IMMUNE cast check (the effect itself refuses an
-/// immune caster, <see cref="GameObjectMapSystem.OpenLock"/>), multi-use veins (the object system despawns an emptied chest). Skinning follows Spell.cpp:5940-5969 including the tapper's head start; the
+/// immune caster, <see cref="GameObjectMapSystem.OpenLock"/>). Multi-use veins are the object system's (an emptied vein may stay for another open,
+/// LootHandler.cpp:435-487, in <see cref="GameObjectMapSystem"/>). Skinning follows Spell.cpp:5940-5969 including the tapper's head start; the
 /// tap list is approximated by the corpse loot's recipients (see <see cref="LootService.IsSkinnableBy"/>).
 /// </remarks>
 internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature skills)
@@ -121,7 +124,8 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
         }
 
         OpenLockCheck check = GatheringRules.CanOpenLock(
-            lockId, Objects?.Content.FindLock(lockId), (uint)effect.MiscValue, 0, false, SimpleValue(effect), true, id => playerSkills.GetValue(id));
+            lockId, Objects?.Content.FindLock(lockId), (uint)effect.MiscValue, context.CastItem?.Entry ?? 0, context.CastItem is not null,
+            SimpleValue(effect), true, id => playerSkills.GetValue(id));
         if (check.Result != SpellCastResult.CastOk)
         {
             return check.Result;
@@ -151,8 +155,10 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
             return;
         }
 
+        Item? key = context.Cast.CastItem;
         OpenLockCheck check = GatheringRules.CanOpenLock(
-            lockId, Objects?.Content.FindLock(lockId), (uint)effect.MiscValue, 0, false, SimpleValue(effect), true, id => playerSkills.GetValue(id));
+            lockId, Objects?.Content.FindLock(lockId), (uint)effect.MiscValue, key?.Entry ?? 0, key is not null, SimpleValue(effect), true,
+            id => playerSkills.GetValue(id));
         if (check.Result != SpellCastResult.CastOk)
         {
             player.Session.Send(WorldOpcode.SmsgCastResult, SpellPackets.BuildCastResult(context.Spell.Id, check.Result));
@@ -164,7 +170,7 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
             // Only an object that really opened gives a skill-up: a refusal (an immune caster, the chest quest gate, a chest
             // being despawned) leaves the node closed and the skill as it was (vmangos returns before UpdateGatherSkill for an
             // immune caster, SpellEffects.cpp:2117-2118).
-            GameObjectUseResult opened = Objects?.FindSystem(player.Map!)?.OpenLock(player, go.Guid, (LockType)effect.MiscValue, 0, (uint)Math.Max(0, SimpleValue(effect)))
+            GameObjectUseResult opened = Objects?.FindSystem(player.Map!)?.OpenLock(player, go.Guid, (LockType)effect.MiscValue, key?.Entry ?? 0, (uint)Math.Max(0, SimpleValue(effect)))
                 ?? GameObjectUseResult.Unsupported;
             if (opened != GameObjectUseResult.Ok)
             {
@@ -178,7 +184,8 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
             Objects?.FindSystem(player.Map!)?.Loot?.OpenItem(player, item);
         }
 
-        uint pure = check.SkillId == 0 ? 0u : playerSkills.GetValuePure(check.SkillId);
+        // SpellEffects.cpp:2191-2192: no skill-up for an open from an item (a key, a skeleton key).
+        uint pure = check.SkillId == 0 || key is not null ? 0u : playerSkills.GetValuePure(check.SkillId);
         if (pure == 0)
         {
             return;
