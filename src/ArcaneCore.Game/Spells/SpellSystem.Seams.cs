@@ -64,6 +64,20 @@ public sealed partial class SpellSystem
         _observers = [.. _observers, observer];
     }
 
+    /// <summary>
+    /// A summon effect put <paramref name="summon"/> into the world: every observer hears of it (the spell script dispatcher turns it into
+    /// the script's <see cref="Scripts.ISpellScript.OnSummon"/>, vmangos <c>m_spellScript->OnSummon</c>).
+    /// </summary>
+    public void NotifySummoned(SpellEffectContext context, Creatures.Creature summon)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(summon);
+        foreach (ISpellCastObserver observer in _observers)
+        {
+            observer.OnSummoned(context, summon);
+        }
+    }
+
     public void RegisterValueModifier(ISpellValueModifier modifier)
     {
         ArgumentNullException.ThrowIfNull(modifier);

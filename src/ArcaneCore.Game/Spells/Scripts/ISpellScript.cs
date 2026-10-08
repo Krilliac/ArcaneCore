@@ -12,7 +12,8 @@ namespace ArcaneCore.Game.Spells.Scripts;
 /// other effects have no script hook), and <see cref="OnSuccessfulDispel"/> after a DISPEL effect that removed at least
 /// one aura.
 /// </para>
-/// Not provided: vmangos <c>OnSummon</c>. Nothing in this code base raises it yet (the demon summon belongs to a later slice).
+/// <see cref="OnSummon"/> follows a creature summon of the spell: only SPELL_EFFECT_SUMMON_WILD raises it here (vmangos also calls it from the
+/// pet, guardian, totem, critter and game object summons, SpellEffects.cpp:2432-5818, which no script of this code base needs yet).
 /// </summary>
 public interface ISpellScript
 {
@@ -34,6 +35,14 @@ public interface ISpellScript
 
     /// <summary>A DISPEL effect of the spell removed <paramref name="removedStacks"/> aura stacks (at least one) from its target.</summary>
     void OnSuccessfulDispel(SpellEffectContext context, int removedStacks)
+    {
+    }
+
+    /// <summary>
+    /// A creature summon of the spell entered the world (vmangos SpellScript::OnSummon, called by Spell::EffectSummonWild after the summon is
+    /// placed and marked, SpellEffects.cpp:2765-2770).
+    /// </summary>
+    void OnSummon(SpellEffectContext context, Creatures.Creature summon)
     {
     }
 }
