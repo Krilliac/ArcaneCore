@@ -92,10 +92,14 @@ internal static class PlayerbotMotion
         return true;
     }
 
-    /// <summary>Forget the motion without a packet (death, teleport: the server already placed the bot).</summary>
+    /// <summary>
+    /// Forget the motion without a packet (death, teleport: the server already placed the bot), and what area trigger volumes
+    /// it was inside (<see cref="PlayerbotAreaTriggers"/>): where it lands only sets them again.
+    /// </summary>
     internal static void Reset(Player player)
     {
         if (States.TryGetValue(player, out MotionState? state)) state.Clear();
+        PlayerbotAreaTriggers.Reset(player);
     }
 
     /// <summary>Whether <paramref name="destination"/> was given up after a loop and is still refused.</summary>
@@ -204,6 +208,7 @@ internal static class PlayerbotMotion
         state.MoveSpeedCap = options.MoveSpeed;
         state.RenewedMs = now;
         state.LeaseMs = Lease(options);
+        PlayerbotAreaTriggers.Begin(session, player, map, current);
         if (state.Loops.OnRoute(route.Points[^1], now) is { } loop)
         {
             GiveUp(session, player, state, loop, now);
@@ -220,6 +225,8 @@ internal static class PlayerbotMotion
     /// </summary>
     internal static void Pump(WorldSession session, Player player, uint now)
     {
+        // Between maps the bot's brain does not run; the client half still ends its loading screen (PlayerbotMovementControl).
+        if (PlayerbotMovementControl.AcknowledgeTransfer(session, player)) return;
         if (!States.TryGetValue(player, out MotionState? state) || state.Route is not { } route) return;
         state.World = session.World;
         if (!CanMove(player) || !player.IsInWorld || player.Map is not { } map || !ReferenceEquals(map, state.Map)
@@ -242,13 +249,17 @@ internal static class PlayerbotMotion
 
         Vector3 position = Walk(route, state.Anchor, route.NextPoint, state.Speed * age / 1000f, state.Heading,
             out int nextPoint, out float heading, out bool arrived, out bool turned);
+        // A client checks its area triggers every frame; this checks every world tick. Stepping into a volume is reported at
+        // once: a heartbeat where the bot is now, then CMSG_AREATRIGGER (PlayerbotAreaTriggers).
+        bool entering = PlayerbotAreaTriggers.WouldEnter(session, player, map, position);
         if (arrived)
         {
             StopAt(session, player, state, position, heading, nextPoint, now);
+            if (ReferenceEquals(player.Map, map)) PlayerbotAreaTriggers.Update(session, player, map, position);
             return;
         }
 
-        if (!turned && age < HeartbeatIntervalMs) return;
+        if (!turned && !entering && age < HeartbeatIntervalMs) return;
         if (Validate(map, state.Anchor, position) is not { } valid)
         {
             // The route is no longer walkable here: stop where the last packet put the bot.
@@ -268,6 +279,8 @@ internal static class PlayerbotMotion
         state.AnchorMs = now;
         state.Heading = heading;
         if (state.Loops.OnPosition(valid, travelled, now) is { } loop) GiveUp(session, player, state, loop, now);
+        // Last: a trigger may teleport the bot (the next pump then finds it between maps and forgets the route).
+        PlayerbotAreaTriggers.Update(session, player, map, position);
     }
 
     /// <summary>

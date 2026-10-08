@@ -75,6 +75,25 @@ internal static class PlayerbotMovementControl
     }
 
     /// <summary>
+    /// A far transfer under way (the bot is between maps, out of the world, and its brain does not run then): acknowledge it with
+    /// MSG_MOVE_WORLDPORT_ACK the way a client does when its loading screen ends, whatever drives the bot. Called every world tick
+    /// by <see cref="PlayerbotMotion.Pump"/>. Never refused for lack of action budget. True when it acknowledged.
+    /// <para>Without it an autonomous bot that took a far teleport — a ghost released from a dungeon to a graveyard outside, or a
+    /// dungeon entrance it walked into — stayed in transit for good: the brain returns early for a player that is not in the world.</para>
+    /// </summary>
+    internal static bool AcknowledgeTransfer(WorldSession session, Player player)
+    {
+        if (player.IsInWorld) return false;
+        TeleportService? teleports = session.Services.GetService<TeleportFeature>()?.Teleports;
+        if (teleports?.StageOf(player) != TeleportStage.Far) return false;
+        PlayerbotMotion.Reset(player);
+        ManagedActionBudget? budget = session.ManagedBudget;
+        session.ManagedBudget = null;
+        try { return session.TryManagedAction(WorldOpcode.MsgMoveWorldportAck, []); }
+        finally { session.ManagedBudget = budget; }
+    }
+
+    /// <summary>
     /// Stop moving now: MSG_MOVE_STOP where observers already see the bot (its current route position). Never refused
     /// for lack of action budget - a client always reports its own stop. True when the bot is stopped afterwards.
     /// </summary>
