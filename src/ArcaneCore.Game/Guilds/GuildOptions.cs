@@ -50,6 +50,14 @@ public sealed class GuildOptions
     /// </summary>
     public bool KickOnOversizedText { get; set; } = true;
 
+    /// <summary>
+    /// Antispam patterns for guild and charter names (vmangos AntispamInterface::filterMessage at the charter purchase and
+    /// at Guild::Create; vmangos ships no implementation, so it filters nothing, and neither does the empty default). A name
+    /// that contains a pattern, compared without case and spaces, is refused as an invalid guild name
+    /// (<see cref="PatternCharterAntispamFilter"/>). Bound from World:Guild:CharterSpamPatterns (a list).
+    /// </summary>
+    public List<string> CharterSpamPatterns { get; set; } = [];
+
     /// <summary><see cref="MinPetitionSigns"/> clamped like vmangos.</summary>
     public int EffectiveMinPetitionSigns => Math.Clamp(MinPetitionSigns, 0, MaxPetitionSigns);
 

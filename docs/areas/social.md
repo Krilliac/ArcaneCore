@@ -106,9 +106,11 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
   client patch 1.7.0); `Game/Social/WhoRules.cs`. Area names are the English `area_template` names (no locale table);
   a zone the area table does not know matches no search string.
 - **Charters, tabard, mute and flood: see the limits list in
-  [social-guild-petitions](../integration/social-guild-petitions.md#limits)**: no antispam name filter,
+  [social-guild-petitions](../integration/social-guild-petitions.md#limits)**: no built-in antispam word list
+  (the antispam filter is the operator's `World:Guild:CharterSpamPatterns` since wave 2),
   the Undercity guild master has no gossip option rows in classic-db, no `GE_TABARDCHANGE`, no emblem range
-  validation, no mute aura and no persistent `.mute`, commands are not counted by the flood gate.
+  validation, no mute aura (vmangos casts the visual spell 1852 on a muted player), commands are not counted by the flood
+  gate. (`.mute` itself is persistent since the GM audit lane: `account_mute`.)
 - **GM cross-faction group invites** need GM mode (`.gm on`), matching vmangos
   `IsGameMaster()`; the account level alone is not enough.
 

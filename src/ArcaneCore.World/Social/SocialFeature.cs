@@ -139,6 +139,13 @@ public sealed class SocialFeature(
         if (_spellFeature is { } spellFeature)
             spellFeature.System.VisibleAuraSlotChanged += OnVisibleAuraSlotChanged;
         _context.Guilds.Options = GuildOptions;
+        if (GuildOptions.CharterSpamPatterns.Count > 0)
+        {
+            _context.Guilds.Antispam = new PatternCharterAntispamFilter(GuildOptions.CharterSpamPatterns);
+            _context.Petitions.SpamRefused += (player, name) => _logger.LogInformation(
+                "{Player} tried to buy a guild charter with a spam name '{Name}'", player.Name, Kernel.Logging.LogSafe.Escape(name));
+        }
+
         _writes.Start();
         world.PlayerLoggedIn += OnLoggedIn;
         world.PlayerLoggingOut += OnLoggingOut;

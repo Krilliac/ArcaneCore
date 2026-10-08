@@ -615,7 +615,15 @@ public sealed partial class GuildManager(SocialContext context)
 
     // --- GM commands (vmangos Level2/Level3 .guild commands) --------------------------------------
 
-    /// <summary>.guild create (vmangos HandleGuildCreateCommand → Guild::Create): the leader founds a guild with default ranks.</summary>
+    /// <summary>
+    /// The guild-name antispam check of Guild::Create (Guild.cpp:130-137); null (the default, as vmangos) filters nothing.
+    /// </summary>
+    public ICharterAntispamFilter? Antispam { get; set; }
+
+    /// <summary>
+    /// .guild create and CMSG_GUILD_CREATE (vmangos HandleGuildCreateCommand / HandleGuildCreateOpcode → Guild::Create): the
+    /// leader founds a guild with default ranks; a name the antispam check calls spam is refused as invalid.
+    /// </summary>
     public GuildAdminResult Create(uint leaderId, string name, out Guild? guild)
     {
         guild = null;
@@ -633,6 +641,11 @@ public sealed partial class GuildManager(SocialContext context)
         if (GetByName(name) is not null)
         {
             return GuildAdminResult.NameExists;
+        }
+
+        if (Antispam?.IsSpam(name) == true)
+        {
+            return GuildAdminResult.NameInvalid; // "Attempt to create guild with spam name"
         }
 
         if (context.Characters.Find(leaderId) is null)
