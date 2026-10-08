@@ -283,6 +283,12 @@ public sealed class Map
             updater.OnPlayerAdding(this, player);
         }
 
+        // vmangos Map::SendInitSelf: the player's own transport goes first in the self packet (IMapUpdater.OnWritingSelf).
+        foreach (IMapUpdater updater in _updaters)
+        {
+            updater.OnWritingSelf(this, player, player.PendingUpdates);
+        }
+
         // vmangos Player::BuildCreateUpdateBlockForPlayer: the player's own items precede it.
         player.Inventory.WriteCreateBlocks(player.PendingUpdates, _world.NowMs);
 

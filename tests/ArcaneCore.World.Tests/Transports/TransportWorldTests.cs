@@ -15,7 +15,7 @@ namespace ArcaneCore.World.Tests.Transports;
 /// <summary>
 /// The transport feature in the world daemon over loopback: the config gate, routes built from game object templates and
 /// TaxiPathNode rows, the period overrides, the ship sent ahead of the player's own create block at login, boarding through
-/// the real movement handler and the re-send at the first CMSG_MOVE_TIME_SKIPPED.
+/// the real movement handler, and the re-send at a CMSG_MOVE_TIME_SKIPPED that comes before any movement aboard.
 /// </summary>
 public sealed class TransportWorldTests
 {
@@ -107,6 +107,37 @@ public sealed class TransportWorldTests
         Assert.Equal(2, resent.Count);
         Assert.Equal((byte)ObjectUpdateType.OutOfRangeObjects, resent[0].Payload[5]);
         Assert.Equal((byte)ObjectUpdateType.CreateObject, resent[1].Payload[5]);
+    }
+
+    [Fact]
+    public async Task MovementAboardBeforeTheTimeSkip_ClearsTheMark_AndTheShipIsNotSentAgain()
+    {
+        // vmangos HandleMoverRelocation clears the just-boarded mark on every movement aboard (MovementHandler.cpp:1087-1089).
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services => Register(services));
+        TransportFeature feature = host.WorldServices.GetRequiredService<TransportFeature>();
+        await host.WaitForWorldAsync(() => feature.System is { Ships.Count: 2 }, "two ships sail");
+        await using WorldTestClient client = await EnterAsync(host, "SAILOR", "Sailor");
+        await using WorldTestClient watcher = await EnterAsync(host, "WATCHER", "Watcher");
+        Player player = await host.PlayerAsync("Sailor");
+        ShipTransport ferry = await host.OnWorldAsync(() => feature.System!.FindByEntry(Ferry)!);
+        await BoardAsync(host, client, player, ferry, 2f, 1f, 4f);
+
+        await BoardAsync(host, client, player, ferry, 3f, 1f, 4f); // a heartbeat aboard: no longer just boarded
+        await host.WaitForWorldAsync(() => player.Movement.TransportX == 3f, "the movement aboard is applied");
+        await client.CollectAsync();
+        await watcher.CollectAsync();
+
+        var skipped = new PacketWriter(12);
+        skipped.WriteUInt64(player.Guid.Value);
+        skipped.WriteUInt32(250);
+        await client.SendAsync(WorldOpcode.CmsgMoveTimeSkipped, skipped.ToArray());
+
+        // An ordinary time skip: relayed to the watcher (proves it was handled), and the ship is not sent again.
+        byte[] relayed = await watcher.ReadUntilAsync(WorldOpcode.MsgMoveTimeSkipped);
+        Assert.Equal(250u, BinaryPrimitives.ReadUInt32LittleEndian(relayed.AsSpan(relayed.Length - 4)));
+        List<(WorldOpcode Opcode, byte[] Payload)> after = await client.CollectAsync(TimeSpan.FromMilliseconds(300));
+        Assert.DoesNotContain(after, p => p.Opcode == WorldOpcode.SmsgUpdateObject && p.Payload[4] == 1);
+        Assert.Same(ferry, await host.OnWorldAsync(() => player.Transport));
     }
 
     [Fact]

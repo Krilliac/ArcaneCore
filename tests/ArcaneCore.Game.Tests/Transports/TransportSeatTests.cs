@@ -86,6 +86,16 @@ public sealed class TransportSeatTests
         Player player = Load(1, session, new TransportSeat(Crossing, 1f, 0f, 2f, 0f), mapId: 0);
 
         world.AddPlayer(player);
+
+        // vmangos never puts the ship of the other map on the wire here (Player::LoadFromDB moves the character to the ship's
+        // map first): the self create on the saved map is a player on land, with no transport GUID the client was not sent.
+        Assert.Null(player.Transport);
+        Assert.False(player.Movement.HasFlag(MovementFlags.OnTransport));
+        SelfCreate onSavedMap = Assert.Single(SelfCreates(session, player));
+        Assert.False(onSavedMap.Movement.HasFlag(MovementFlags.OnTransport));
+        Assert.Equal(0UL, onSavedMap.Movement.TransportGuid);
+        Assert.Equal(0, onSavedMap.HasTransport);
+
         world.RunTick(50); // the teleport starts after the map update
         world.RunTick(50); // and the far transfer runs after the next one
 
@@ -96,6 +106,34 @@ public sealed class TransportSeatTests
         world.RunTick(50);
         Assert.Equal(1u, player.Map!.MapId);
         Assert.Equal(ship.X - 1f, player.X, 1);
+
+        // On the ship's map the self packet carries the ship ahead of the player (vmangos Map::SendInitSelf).
+        SelfCreate aboard = SelfCreates(session, player)[^1];
+        Assert.True(aboard.Movement.HasFlag(MovementFlags.OnTransport));
+        Assert.Equal(ship.Guid.Value, aboard.Movement.TransportGuid);
+        Assert.Equal(1, aboard.HasTransport);
+        Assert.Equal(ship.Guid.Value, aboard.FirstBlockGuid);
+    }
+
+    [Fact]
+    public void Login_AboardOnTheSameMap_TheShipComesInTheSelfPacket_NotTheMapsShipPacket()
+    {
+        WorldRuntime world = ManualWorld();
+        ShipTransport ferry = Install(world, Ferry).FindByEntry(Ferry)!;
+        var session = new FakeSession(1);
+        Player player = Load(1, session, new TransportSeat(Ferry, 3f, 2f, 5f, 0f));
+
+        world.AddPlayer(player);
+
+        // vmangos SendInitTransports leaves the player's own ship out; SendInitSelf sends it first in the self packet with
+        // hasTransport = 1 (Map.cpp:1690-1734). The ferry is the only ship of the map, so no ships-only packet goes out.
+        SelfCreate self = Assert.Single(SelfCreates(session, player));
+        Assert.Single(TransportUpdates(session));
+        Assert.Equal(1, self.HasTransport);
+        Assert.Equal(ferry.Guid.Value, self.FirstBlockGuid);
+        Assert.True(self.Movement.HasFlag(MovementFlags.OnTransport));
+        Assert.Equal(ferry.Guid.Value, self.Movement.TransportGuid);
+        Assert.Equal((3f, 2f, 5f), (self.Movement.TransportX, self.Movement.TransportY, self.Movement.TransportZ));
     }
 
     [Fact]

@@ -33,6 +33,12 @@ public sealed class UpdateData
 
     public int BlockCount => _blockEnds.Count;
 
+    /// <summary>
+    /// The has-transport byte of the packets the next <see cref="Flush"/> sends (vmangos <c>UpdateData::Send(session,
+    /// hasTransport)</c>): set for a self packet that carries the player's transport. Cleared by the flush.
+    /// </summary>
+    public bool HasTransport { get; set; }
+
     /// <summary>Start a block; write it to the returned writer, then call <see cref="EndBlock"/>.</summary>
     public PacketWriter BeginBlock()
     {
@@ -88,6 +94,7 @@ public sealed class UpdateData
 
         if (IsEmpty)
         {
+            HasTransport = false;
             return;
         }
 
@@ -100,7 +107,7 @@ public sealed class UpdateData
         {
             var body = new PacketWriter(Math.Min(MaxBodySize, all.Length - blockStart + 64));
             body.WriteUInt32(0); // block count, patched below
-            body.WriteByte(0);   // has transport
+            body.WriteByte(HasTransport ? (byte)1 : (byte)0);
             uint count = 0;
 
             if (outOfRangePending)
@@ -143,6 +150,7 @@ public sealed class UpdateData
         _blockEnds.Clear();
         _outOfRange.Clear();
         _openBlockStart = -1;
+        HasTransport = false;
     }
 
     /// <summary>Send one finished update body, compressed above <paramref name="compressionThreshold"/> (also used for the ship packets).</summary>

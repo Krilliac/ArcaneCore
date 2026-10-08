@@ -42,6 +42,25 @@ public sealed class TransportBoardingTests
     }
 
     [Fact]
+    public void MovementAboard_AfterBoarding_ClearsTheJustBoardedMark()
+    {
+        // vmangos HandleMoverRelocation (MovementHandler.cpp:1087-1089): every movement of a player already aboard clears the
+        // mark, so the ship is sent again only for a CMSG_MOVE_TIME_SKIPPED that comes before the next movement aboard.
+        WorldRuntime world = ManualWorld();
+        TransportSystem system = Install(world, Ferry);
+        ShipTransport ferry = system.FindByEntry(Ferry)!;
+        Player player = TestWorld.CreatePlayer(1, 100, 0, new FakeSession(1));
+        world.AddPlayer(player);
+        ClientMoves(world, player, Aboard(ferry, 4f, -1f, 6f));
+        Assert.Same(ferry, player.Transport);
+
+        ClientMoves(world, player, Aboard(ferry, 5f, -1f, 6f));
+
+        Assert.Same(ferry, player.Transport);
+        Assert.False(system.TakeJustBoarded(player));
+    }
+
+    [Fact]
     public void MovementAboard_TakesTheWorldPositionFromTheShip_NotFromTheClient()
     {
         WorldRuntime world = ManualWorld();

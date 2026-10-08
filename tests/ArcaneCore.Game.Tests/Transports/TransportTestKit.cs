@@ -109,6 +109,50 @@ internal static class TransportTestKit
         };
     }
 
+    /// <summary>
+    /// The player's own create blocks (CREATE_OBJECT, its GUID, TYPEID_PLAYER, update flags with SELF) found in the
+    /// SMSG_UPDATE_OBJECT packets <paramref name="session"/> received (compression is off in the test world): for each, the
+    /// index of the packet, its has-transport byte, the GUID of the packet's first block and the movement block sent.
+    /// </summary>
+    public static List<SelfCreate> SelfCreates(FakeSession session, Player player)
+    {
+        var guid = new PacketWriter(9);
+        guid.WritePackedGuid(player.Guid.Value);
+        byte[] header = [(byte)ObjectUpdateType.CreateObject, .. guid.ToArray(), TypeId.Player];
+        var found = new List<SelfCreate>();
+        (WorldOpcode Opcode, byte[] Payload)[] sent = session.Sent.ToArray();
+        for (int index = 0; index < sent.Length; index++)
+        {
+            if (sent[index].Opcode != WorldOpcode.SmsgUpdateObject)
+            {
+                continue;
+            }
+
+            byte[] payload = sent[index].Payload;
+            int at = payload.AsSpan(5).IndexOf(header);
+            while (at >= 0)
+            {
+                int flagsAt = 5 + at + header.Length;
+                if ((payload[flagsAt] & (byte)ObjectUpdateFlags.Self) != 0)
+                {
+                    var first = new PacketReader(payload.AsSpan(5));
+                    first.ReadByte();
+                    ulong firstGuid = first.ReadPackedGuid();
+                    var movement = new PacketReader(payload.AsSpan(flagsAt + 1));
+                    found.Add(new SelfCreate(index, payload[4], firstGuid, MovementInfo.Read(ref movement)));
+                }
+
+                int next = payload.AsSpan(flagsAt).IndexOf(header);
+                at = next < 0 ? -1 : flagsAt - 5 + next;
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>One create block of the player for itself (see <see cref="SelfCreates"/>).</summary>
+    public readonly record struct SelfCreate(int PacketIndex, byte HasTransport, ulong FirstBlockGuid, MovementInfo Movement);
+
     /// <summary>The SMSG_UPDATE_OBJECT payloads <paramref name="session"/> received with the has-transport byte set.</summary>
     public static List<byte[]> TransportUpdates(FakeSession session)
         => [.. session.Sent.ToArray().Where(p => p.Opcode == WorldOpcode.SmsgUpdateObject && p.Payload.Length > 4 && p.Payload[4] == 1).Select(p => p.Payload)];

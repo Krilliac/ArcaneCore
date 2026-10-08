@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Updates;
 
 namespace ArcaneCore.Game.Maps;
 
@@ -26,6 +27,16 @@ public interface IMapUpdater
     /// <c>SendInitSelf</c>). World thread; nothing by default.
     /// </summary>
     void OnPlayerAdding(Map map, Player player)
+    {
+    }
+
+    /// <summary>
+    /// <paramref name="player"/>'s own create packet is being written, after <see cref="OnPlayerAdding"/>: blocks queued on
+    /// <paramref name="selfPacket"/> here come ahead of the player's items and itself in the same packet (vmangos
+    /// <c>Map::SendInitSelf</c> puts the player's transport first and sets <see cref="UpdateData.HasTransport"/>). World
+    /// thread; nothing by default.
+    /// </summary>
+    void OnWritingSelf(Map map, Player player, UpdateData selfPacket)
     {
     }
 }

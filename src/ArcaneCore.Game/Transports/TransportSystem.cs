@@ -5,6 +5,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
@@ -159,10 +160,14 @@ public sealed class TransportSystem
     public ShipTransport? FindByEntry(uint entry) => _ships.FirstOrDefault(s => s.Entry == entry);
 
     /// <summary>
-    /// The 1.12 client loses a ship it just boarded until it is sent again; vmangos re-sends it at the next
-    /// CMSG_MOVE_TIME_SKIPPED (MovementHandler.cpp:1001-1010). True once after a player boarded (and clears the mark).
+    /// The 1.12 client loses a ship it just boarded until it is sent again; vmangos re-sends it at a CMSG_MOVE_TIME_SKIPPED
+    /// that arrives before the player's next movement aboard (MovementHandler.cpp:1001-1010; HandleMoverRelocation sets the
+    /// mark on boarding and clears it on every movement aboard, 1083 and 1089). True once after a player boarded (and clears the mark).
     /// </summary>
     public bool TakeJustBoarded(Player player) => _justBoarded.Remove(player.Guid);
+
+    /// <summary>vmangos <c>SetJustBoarded(false)</c> in HandleMoverRelocation: a movement of a player already aboard.</summary>
+    internal void ClearJustBoarded(Player player) => _justBoarded.Remove(player.Guid);
 
     /// <summary>Send <paramref name="ship"/> to <paramref name="player"/> again: out of range, then create (vmangos SendOutOfRange/CreateUpdateToPlayer).</summary>
     public void ResendTo(ShipTransport ship, Player player)
@@ -192,7 +197,10 @@ public sealed class TransportSystem
         }
     }
 
-    /// <summary>vmangos <c>Map::SendInitTransports</c>: every ship of the map, the player's own among them, before its own create block.</summary>
+    /// <summary>
+    /// vmangos <c>Map::SendInitTransports</c> (Map.cpp:1720-1734): every ship of the map but the player's own, before its own
+    /// create block. The player's own ship goes into the self packet (<see cref="OnWritingSelf"/>).
+    /// </summary>
     internal void OnPlayerAdding(Map map, Player player)
     {
         if (player.LoginTransportSeat is { } seat)
@@ -203,8 +211,27 @@ public sealed class TransportSystem
 
         if (_byMap.TryGetValue(map, out List<ShipTransport>? ships) && ships.Count > 0)
         {
-            TransportPackets.Send(player, TransportPackets.BuildCreate(ships, player, _world.NowMs), CompressionThreshold);
+            TransportPackets.Send(player, TransportPackets.BuildCreate(ships.Where(s => !ReferenceEquals(s, player.Transport)), player, _world.NowMs),
+                CompressionThreshold);
         }
+    }
+
+    /// <summary>
+    /// vmangos <c>Map::SendInitSelf</c> (Map.cpp:1690-1718): a player aboard gets its ship first in its own create packet,
+    /// which then carries the has-transport byte. The other passengers vmangos adds to that packet come with the ordinary
+    /// visibility pass right after (has-transport 0).
+    /// </summary>
+    internal void OnWritingSelf(Map map, Player player, UpdateData selfPacket)
+    {
+        if (player.Transport is not { } ship || !ReferenceEquals(ship.CurrentMap, map))
+        {
+            return;
+        }
+
+        PacketWriter block = selfPacket.BeginBlock();
+        UpdateBlockWriter.WriteCreateBlock(block, ship, player, isNewObject: false, _world.NowMs);
+        selfPacket.EndBlock();
+        selfPacket.HasTransport = true;
     }
 
     /// <summary>vmangos <c>Map::SendRemoveTransports</c>: every ship of the map but the player's own.</summary>
@@ -448,7 +475,8 @@ public sealed class TransportSystem
     // vmangos Player::LoadFromDB (Player.cpp:14794-14838): a character saved aboard is put back on its ship at its offset; the
     // ship may have sailed to the other continent meanwhile, then the character follows it there. A ship that is gone, or an
     // offset off the ship (more than 250 yards), sends the character to its bind point. vmangos decides before the map is
-    // entered; here the player enters its saved map first and the far teleport or the bind-point teleport runs right after.
+    // entered; here the player enters its saved map first (on land when the ship is elsewhere, so nothing unknown is named on
+    // the wire) and boards plus far-teleports, or goes to the bind point, right after the map update.
     private void RestoreSeat(Map map, Player player, TransportSeat seat)
     {
         ShipTransport? ship = _ships.FirstOrDefault(s => s.Guid.Low == seat.Guid && s.CurrentMap is not null);
@@ -468,27 +496,48 @@ public sealed class TransportSystem
             return;
         }
 
-        player.SetTransportData(ship.Guid, seat.X, seat.Y, seat.Z, seat.Orientation);
-        ship.AddPassenger(player, adjustCoords: false);
         if (ReferenceEquals(ship.CurrentMap, map))
         {
+            player.SetTransportData(ship.Guid, seat.X, seat.Y, seat.Z, seat.Orientation);
+            ship.AddPassenger(player, adjustCoords: false);
             player.RelocateOnTransport(x, y, z, o);
             return;
         }
 
-        uint shipMap = ship.MapId;
-        map.RunAfterUpdate(() =>
-        {
-            if (ReferenceEquals(player.Transport, ship) && ship.CurrentMap is { } current && current.MapId == shipMap
-                && TeleportPassenger is { } teleport && teleport(player, shipMap, x, y, z, o))
-            {
-                return;
-            }
+        // The ship is on the other map. The character enters its saved map on land: its self create must not name a ship
+        // this map never sent (vmangos never has that state on the wire). It boards right before the far teleport.
+        map.RunAfterUpdate(() => FollowShip(map, player, ship, seat));
+    }
 
-            ship.RemovePassenger(player);
-            player.RemoveMovementFlags(MovementFlags.OnTransport);
-            TeleportToHomebind?.Invoke(player);
-        });
+    // The deferred half of RestoreSeat for a ship on the other map: board at the saved offset and far-teleport to the ship
+    // where it is now (it may have moved on, or even sailed back); the bind point when that fails.
+    private void FollowShip(Map map, Player player, ShipTransport ship, TransportSeat seat)
+    {
+        if (!ReferenceEquals(player.Map, map) || player.Transport is not null)
+        {
+            return; // logged out or moved on meanwhile
+        }
+
+        if (ship.CurrentMap is { } current && TeleportPassenger is { } teleport)
+        {
+            float x = seat.X, y = seat.Y, z = seat.Z, o = seat.Orientation;
+            ship.CalculatePassengerPosition(ref x, ref y, ref z, ref o);
+            if (Maps.Grid.GridDefines.IsValidMapCoord(x, y, z, o))
+            {
+                player.SetTransportData(ship.Guid, seat.X, seat.Y, seat.Z, seat.Orientation);
+                ship.AddPassenger(player, adjustCoords: false);
+                if (teleport(player, current.MapId, x, y, z, o))
+                {
+                    return;
+                }
+
+                ship.RemovePassenger(player);
+            }
+        }
+
+        player.RemoveMovementFlags(MovementFlags.OnTransport);
+        player.ClearTransportData();
+        TeleportToHomebind?.Invoke(player);
     }
 
     private void AddToMap(ShipTransport ship, Map map)
@@ -589,5 +638,7 @@ public sealed class TransportSystem
         public void OnPlayerRemoved(Map map, Player player) => system.OnPlayerRemoved(map, player);
 
         public void OnPlayerAdding(Map map, Player player) => system.OnPlayerAdding(map, player);
+
+        public void OnWritingSelf(Map map, Player player, UpdateData selfPacket) => system.OnWritingSelf(map, player, selfPacket);
     }
 }

@@ -17,11 +17,11 @@ Re-implemented from behaviour; no code was copied.
 | The ship: GUID `0x1FC0 << 48 \| entry`, GAMEOBJECT fields from the template, created at the first frame of the map it spawns on | `ShipTransport` | `ShipTransport::Create` (Transport.cpp:51-100); `TransportMgr::CreateTransport` |
 | Motion on the world clock: path progress = time since creation + start frame arrival; stops, departures, frame-by-frame advance; position every 50 ms from `CalculateSegmentPos` and the frame's spline; facing = tangent + pi | `ShipTransport.Update` | `ShipTransport::Update`, `CalculateSegmentPos` (Transport.cpp:316-413) |
 | Continent routes spawn once, with the first map they touch (Install creates those maps, as vmangos has its continents loaded); a route on one instanceable map spawns in each instance | `TransportSystem` | `TransportMgr::SpawnTransportsOnMap` (TransportMgr.cpp:413-427), Map.cpp:176 |
-| Ships are not grid objects: every player of the map has them. Map entry sends them before the player's own create block (`IMapUpdater.OnPlayerAdding`); leaving the map sends out-of-range for all but the player's own ship; a ship arriving or leaving is created / removed for everyone not aboard; the has-transport byte is set | `TransportSystem`, `TransportPackets` | `Map::SendInitTransports`, `SendRemoveTransports`, `SendInitSelf` (Map.cpp:1693-1750), `GenericTransport::SendCreateUpdateToMap` / `SendOutOfRangeUpdateToMap` (Transport.cpp:549-579) |
+| Ships are not grid objects: every player of the map has them. Map entry sends every ship but the player's own before the player's own create block (`IMapUpdater.OnPlayerAdding`); a player aboard gets its own ship as the first block of its self packet, which then has the has-transport byte set (`IMapUpdater.OnWritingSelf`, `UpdateData.HasTransport`); leaving the map sends out-of-range for all but the player's own ship; a ship arriving or leaving is created / removed for everyone not aboard; the has-transport byte is set on the ship packets | `TransportSystem`, `TransportPackets` | `Map::SendInitTransports`, `SendRemoveTransports`, `SendInitSelf` (Map.cpp:1690-1750), `GenericTransport::SendCreateUpdateToMap` / `SendOutOfRangeUpdateToMap` (Transport.cpp:549-579) |
 | Create block: update flags TRANSPORT \| ALL \| HAS_POSITION, position 0, 0, 0 plus facing, then the path progress | `UpdateBlockWriter` | `GameObject::GetStationaryX/O` (GameObject.h:234-237), `Object::BuildMovementUpdate` (Object.cpp:544-598) |
 | Passengers: offset kept in the movement block; moved with the ship (`CalculatePassengerPosition`); boarding computes the offset from the world position when the unit changed ships | `ShipTransport` | `GenericTransport::AddPassenger`, `RemovePassenger`, `UpdatePassengerPosition`, `CalculatePassengerPosition/Offset` (Transport.cpp:202-547) |
-| Client movement: aboard, the world position comes from the ship and the client's offset; ONTRANSPORT with a ship GUID boards (an unknown GUID boards nothing); without the flag the player leaves | `TransportMovementObserver` | `HandleMoverRelocation` (MovementHandler.cpp:1075-1102) |
-| The first CMSG_MOVE_TIME_SKIPPED after boarding re-sends the ship to the player instead of being relayed | `MovementHandlers`, `TransportSystem.TakeJustBoarded` | MovementHandler.cpp:1001-1010 |
+| Client movement: aboard, the world position comes from the ship and the client's offset; ONTRANSPORT with a ship GUID boards (an unknown GUID boards nothing) and marks the player "just boarded"; a movement aboard clears that mark; without the flag the player leaves | `TransportMovementObserver` | `HandleMoverRelocation` (MovementHandler.cpp:1075-1102) |
+| A CMSG_MOVE_TIME_SKIPPED while the player is still "just boarded" (after boarding, before any movement aboard) re-sends the ship to the player instead of being relayed; any other time skip is relayed as usual | `MovementHandlers`, `TransportSystem.TakeJustBoarded` | MovementHandler.cpp:1001-1010, :1083, :1089 |
 | Map change at a dock: the ship leaves the old map's players and arrives for the new map's; creatures are left behind (evade, or back to owner / spawn); players are revived, freed of fear and confusion, taken out of combat and carried: same map = relocation, other map = `TeleportTo(.., NotLeaveTransport)` | `TransportSystem.TeleportTransport`, `TransportFeature` | `ShipTransport::TeleportTransport` (Transport.cpp:120-200) |
 | Far teleport aboard: always a far teleport, SMSG_TRANSFER_PENDING with transport entry and old map, SMSG_NEW_WORLD with the offset, the worldport ack places the player at its offset from where the ship is now | `TeleportService` | Player.cpp:1868-1896, :2068-2072, :2113-2118; MovementHandler.cpp:106-110 |
 | An ordinary teleport, a logout and a spirit released aboard leave the ship | `TeleportService`, `TransportSystem`, `GraveyardRepopService` | Player.cpp:1868-1872, :5010-5016 |
@@ -52,9 +52,15 @@ instanceable map, a map without a `map_template` row) are logged and refused; th
 * **Elevators and trams** (type 11, `ElevatorTransport`, TransportAnimation.dbc) are not implemented: only ships and zeppelins.
 * **Continent instancing**: vmangos can run several continent instances (`GetContinentInstanceId`); this base has one, so a
   continent ship sails instance 0 only.
-* **The login seat** is applied when the player enters its saved map: a ship on the other continent is reached by a far
-  teleport right after the login, and a missing ship by a bind-point teleport after the first map update. vmangos decides
-  both before the map is entered. A crash loses nothing beyond the last autosave, which stores the seat as well.
+* **The login seat** is applied when the player enters its saved map. A ship on the same map is boarded before the
+  player's own create block, so that block carries the ship (as in vmangos). A ship on the other continent is not: the
+  player enters its saved map on land (its self create has no ONTRANSPORT and names no ship), then boards and is
+  far-teleported to the ship right after the first map update; a missing ship sends it to its bind point at the same point.
+  vmangos decides both before the map is entered (Player::LoadFromDB moves the character to the ship's map), so a 1.12
+  client there never sees the saved map at all; here it loads the saved map briefly first. A crash loses nothing beyond the
+  last autosave, which stores the seat as well.
+* **Other passengers in the self packet**: vmangos `SendInitSelf` also puts the other visible passengers of the player's
+  ship into the self packet; here they come with the ordinary visibility pass right after (has-transport 0).
 * **Creatures aboard**: the API (`AddPassenger`, `AddFollower`, `RemoveFollower`) exists and creatures move with the ship,
   but nothing boards them yet: pets follow their owner's transport in vmangos' follow movement generator
   (TargetedMovementGenerator.cpp:586-594), which the pets lane owns, and creature spawns on transports are not in 1.12 data.
@@ -73,7 +79,8 @@ instanceable map, a map without a `map_template` row) are logged and refused; th
   `Duel/DuelTransportTests` for the duel rules.
 * `tests/ArcaneCore.Data.Tests/Transports/`: world 45 and characters 41 on every available provider.
 * `tests/ArcaneCore.World.Tests/Transports/TransportWorldTests`: the gate, route building and periods, the ship before the
-  player's own create block at login, boarding over loopback, the time-skip re-send, logout aboard and relog.
+  player's own create block at login, boarding over loopback, the time-skip re-send (and no re-send once the player moved
+  aboard: the time skip is relayed), logout aboard and relog.
 * `tests/ArcaneCore.World.Tests/Playerbots/Scenarios/TransportScenarioTests`: two scripted bots board a ferry, duel aboard
   while it sails 80 yards from the flag (no out-of-bounds), and the duel ends fled 10 s after one steps off; a bot rides a
   ship through its map change and arrives aboard on map 1.
