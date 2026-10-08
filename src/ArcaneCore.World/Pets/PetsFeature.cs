@@ -6,6 +6,7 @@ using ArcaneCore.Kernel.WorldData.Pets;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Spells;
+using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -74,7 +75,20 @@ public sealed class PetsFeature : IWorldFeature, ISpellSummonSink
         {
             ApplyOptions(map);
         }
+
+        // The pet goes with its owner through teleports (vmangos UnsummonPetTemporaryIfAny / ResummonPetTemporaryUnSummonedIfAny). Features
+        // attach in type-name order and the teleport service exists once TeleportFeature attached, so it is looked up on the world thread.
+        world.Post(() =>
+        {
+            if (_services.GetService<TeleportFeature>() is { } teleports)
+            {
+                TeleportFollow = new PetTeleportFollow(Service, teleports.Teleports, world);
+            }
+        });
     }
+
+    /// <summary>The teleport hook of the pets (after the world's first tick; null without a teleport feature).</summary>
+    public PetTeleportFollow? TeleportFollow { get; private set; }
 
     private void ApplyOptions(Map map)
     {

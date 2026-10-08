@@ -152,9 +152,9 @@ public sealed class PetMapSystem : IMapUpdater
         // before the transient world GUID is destroyed (vmangos Pet::SavePetToDB before removal).
         _service?.QueueCurrentPetSave(player);
 
-        // The owner leaves the map, so its summons cannot stay (vmangos unsummons totems and pets
-        // when the player is removed from the world). A far teleport does not bring them back:
-        // docs/integration/pets.md lists that under the limits.
+        // The owner leaves the map, so its summons cannot stay (vmangos Player::RemoveFromWorld unsummons totems and the mini pet,
+        // Unit::RemoveFromWorld the guardians and the pet). A far teleport has already put the pet away by then and brings it back in
+        // the new map (PetTeleportFollow, vmangos UnsummonPetTemporaryIfAny); guardians and mini pets stay gone.
         foreach (Creature creature in SummonsOf(player).ToArray())
         {
             _service?.Unsummon(creature);
