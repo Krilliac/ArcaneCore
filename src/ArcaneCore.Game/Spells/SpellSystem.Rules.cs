@@ -40,6 +40,13 @@ public sealed partial class SpellSystem
     /// </summary>
     public List<ISpellApplicationRule> ApplicationRules { get; } = [];
 
+    /// <summary>
+    /// Stacking rules that refuse a new aura holder before it is put on its target (vmangos RemoveNoStackAurasDueToAuraHolder returning false:
+    /// "cannot remove higher rank"). They run after the same-spell refresh and stack branches; a rule that returns true refuses the holder,
+    /// which is then marked removed without any handler, slot, packet or <see cref="HolderAdded"/>. Empty by default.
+    /// </summary>
+    public List<Func<SpellAuraHolder, bool>> HolderAddRefusals { get; } = [];
+
     /// <summary>An aura holder was put on its target (after its handlers ran); a refreshed stack does not raise it.</summary>
     public event Action<SpellAuraHolder>? HolderAdded;
 

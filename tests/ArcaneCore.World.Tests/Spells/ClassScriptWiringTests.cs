@@ -3,6 +3,7 @@ using ArcaneCore.Game.Spells.ClassScripts;
 using ArcaneCore.Game.Spells.Paladin;
 using ArcaneCore.Game.Spells.Shaman;
 using ArcaneCore.Game.Spells.Warlock;
+using ArcaneCore.World.Combat;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Spells.Utility;
 using Microsoft.Extensions.DependencyInjection;
@@ -38,6 +39,20 @@ public sealed class ClassScriptWiringTests
             Assert.True(spells.HasEffectHandler(SpellEffectName.PersistentAreaAura));
             Assert.True(spells.HasEffectHandler(SpellEffectName.SummonDemon));
             Assert.NotNull(host.WorldServices.GetRequiredService<RogueScriptFeature>().Scripts);
+        });
+    }
+
+    [Fact]
+    public async Task TheWorldSpellSystem_SetsAuraStatesThroughTheWorldsAuraStateService()
+    {
+        // The paladin seal state and Berserking go through SpellSystem.ModifyAuraState, which needs the reactive feature's service to have the
+        // vmangos Unit::ModifyAuraState side effects.
+        await using WorldTestHost host = WorldTestHost.Start();
+        await host.OnWorldAsync(() =>
+        {
+            SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+            Assert.NotNull(spells.AuraStates);
+            Assert.Same(host.WorldServices.GetRequiredService<ReactiveFeature>().AuraStates, spells.AuraStates);
         });
     }
 }

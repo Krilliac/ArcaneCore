@@ -134,7 +134,7 @@ public sealed class BerserkingScript : ISpellScript
 
         Unit caster = context.Caster;
         int meleeMod = MeleeMod(caster.MaxHealth == 0 ? 100u : (uint)(caster.Health * 100.0 / caster.MaxHealth));
-        caster.SetUInt32(UpdateFields.UnitFieldAurastate, caster.GetUInt32(UpdateFields.UnitFieldAurastate) | (1u << ((int)AuraState.Berserking - 1)));
+        context.System.ModifyAuraState(caster, AuraState.Berserking, true);
         context.System.CastCustomSpell(caster, BerserkingHaste, SpellCastTargets.ForSelf(), meleeMod, meleeMod, meleeMod);
     }
 

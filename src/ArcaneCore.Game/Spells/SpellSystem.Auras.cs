@@ -153,6 +153,17 @@ public sealed partial class SpellSystem
             RemoveHolder(state, existing, AuraRemoveMode.Stack);
         }
 
+        // vmangos Unit::AddSpellAuraHolder -> RemoveNoStackAurasDueToAuraHolder returning false (Unit.cpp:3216-3224): a stacking rule refuses
+        // the new holder before it is added, so no handler, slot or packet ever sees it.
+        foreach (Func<SpellAuraHolder, bool> refuses in HolderAddRefusals)
+        {
+            if (refuses(holder))
+            {
+                holder.IsRemoved = true;
+                return;
+            }
+        }
+
         holder.AppliedAtUnixSeconds = UnixSecondsClock();
         holder.AppliedInProcEvent = CurrentProcEvent;
         holder.Slot = holder.NeedsVisibleSlot ? FindFreeSlot(holder.Target, holder.IsPositive) : SpellAuraHolder.NoSlot;
