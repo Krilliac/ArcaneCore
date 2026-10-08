@@ -21,6 +21,47 @@ public interface INpcGossipScript
 }
 
 /// <summary>
+/// Several gossip scripts in one slot (each owns its own creatures, as ScriptDev scripts are bound per creature): the first one with a menu
+/// answers a hello, and a scripted line chosen later goes back to that script. A player has one gossip menu open at a time, so the owner is
+/// remembered per player. World thread.
+/// </summary>
+public sealed class NpcGossipScriptChain : INpcGossipScript
+{
+    private readonly INpcGossipScript[] _scripts;
+    private readonly Dictionary<ObjectGuid, INpcGossipScript> _owners = [];
+
+    private NpcGossipScriptChain(INpcGossipScript[] scripts) => _scripts = scripts;
+
+    /// <summary>A chain of <paramref name="first"/> then <paramref name="next"/> (a chain given as <paramref name="first"/> is extended).</summary>
+    public static NpcGossipScriptChain Of(INpcGossipScript first, INpcGossipScript next)
+    {
+        ArgumentNullException.ThrowIfNull(first);
+        ArgumentNullException.ThrowIfNull(next);
+        return new NpcGossipScriptChain(first is NpcGossipScriptChain chain ? [.. chain._scripts, next] : [first, next]);
+    }
+
+    public ScriptedGossipMenu? Hello(Player player, NpcInfo npc)
+    {
+        foreach (INpcGossipScript script in _scripts)
+        {
+            if (script.Hello(player, npc) is { } menu)
+            {
+                _owners[player.Guid] = script;
+                return menu;
+            }
+        }
+
+        _owners.Remove(player.Guid);
+        return null;
+    }
+
+    public uint Select(Player player, NpcInfo npc, uint sender, uint action) => SelectReply(player, npc, sender, action).NpcTextId;
+
+    public ScriptedGossipReply SelectReply(Player player, NpcInfo npc, uint sender, uint action)
+        => _owners.TryGetValue(player.Guid, out INpcGossipScript? owner) ? owner.SelectReply(player, npc, sender, action) : default;
+}
+
+/// <summary>
 /// A scripted menu: the creature's quest list first when <paramref name="ShowQuests"/>, the lines, the npc text (0: the creature's own).
 /// A <see cref="Silent"/> menu sends nothing at all (a pGossipHello that returned true without a menu).
 /// </summary>

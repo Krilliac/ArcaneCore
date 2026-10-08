@@ -94,6 +94,20 @@ public sealed partial class BlackrockDepthsInstance(Map instance) : ScriptedInst
         SaveIfDone(data);
     }
 
+    /// <summary>GossipHello_boss_doomrel: the challenge line is offered while the tomb is NOT_STARTED or FAIL.</summary>
+    public bool CanChallengeTheSeven => GetData(TypeTombOfSeven) is EncounterState.NotStarted or EncounterState.Fail;
+
+    /// <summary>GossipSelect_boss_doomrel: SAY_DOOMREL_START_EVENT, then TYPE_TOMB_OF_SEVEN IN_PROGRESS (the first dwarf is called).</summary>
+    public void ChallengeTheSeven(Creature? doomrel)
+    {
+        if (doomrel is not null)
+        {
+            Instance.FindUpdater<CreatureMapSystem>()?.SayText(doomrel, -1230003);
+        }
+
+        SetData(TypeTombOfSeven, EncounterState.InProgress);
+    }
+
     public override uint GetData(uint type) => type == TypeRocknot && Encounters[2] == EncounterState.InProgress && BarAleCount == 3
         ? EncounterState.Special
         : type is >= TypeRingOfLaw and <= TypeNagmara ? Encounters[type - 1] : 0;

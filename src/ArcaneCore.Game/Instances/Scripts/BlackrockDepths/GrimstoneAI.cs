@@ -114,6 +114,11 @@ public sealed class GrimstoneAI(Creature creature, BlackrockDepthsInstance insta
                 SummonRingWave();
                 _eventMs = 16_000;
                 break;
+            case 6:
+                // npc_grimstoneAI has no case 6: the elapsed timer is left as it is, so the second wave (phase 7) comes on the next tick -
+                // 16 s after the first, or 5 s after the first wave died, whichever is sooner. Zeroing it here would wait for deaths that
+                // already happened and hang the ring at IN_PROGRESS.
+                break;
             case 7: SummonRingWave(); _eventMs = 0; break;
             case 8:
                 Say(-1230008);

@@ -43,14 +43,32 @@ public sealed class AmbassadorFlamelashAI(Creature creature, BlackrockDepthsInst
     {
         base.MoveInLineOfSight(who);
         if (who is Creature { IsAlive: true } spirit && spirit.Template.Entry == 9178
-            && _spirits.Contains(spirit.Guid)
-            && (spirit.X - Me.X) * (spirit.X - Me.X) + (spirit.Y - Me.Y) * (spirit.Y - Me.Y)
-                + (spirit.Z - Me.Z) * (spirit.Z - Me.Z) <= 9f)
+            && _spirits.Contains(spirit.Guid) && WithinContact(spirit))
         {
             _spirits.Remove(spirit.Guid);
             System?.CastSpell(spirit, 13489, Me, triggered: true);
         }
     }
+
+    /// <summary>
+    /// pWho->IsWithinDistInMap(m_creature, 2 * CONTACT_DISTANCE): the 3D distance between the centres less both bounding radii is at most
+    /// 2 * 0.5 yards.
+    /// </summary>
+    private bool WithinContact(Creature spirit)
+    {
+        float dx = spirit.X - Me.X, dy = spirit.Y - Me.Y, dz = spirit.Z - Me.Z;
+        float reach = (2 * ContactDistance) + spirit.BoundingRadius + Me.BoundingRadius;
+        return (dx * dx) + (dy * dy) + (dz * dz) <= reach * reach;
+    }
+
+    /// <summary>WorldObject::GetAngle from (x, y) to the boss, in [0, 2pi).</summary>
+    private float AngleTo(float x, float y)
+    {
+        float angle = MathF.Atan2(Me.Y - y, Me.X - x);
+        return angle >= 0 ? angle : angle + (2 * MathF.PI);
+    }
+
+    private const float ContactDistance = 0.5f;
 
     public override void OnUpdate(uint diffMs)
     {
@@ -59,8 +77,9 @@ public sealed class AmbassadorFlamelashAI(Creature creature, BlackrockDepthsInst
         {
             if (_spiritMs[i] < diffMs)
             {
+                // DoSummonSpirit: at the rune, facing the boss (pRune->GetAngle(m_creature)).
                 if (instance.RuneAt(i) is { } rune)
-                    System?.SummonAt(Me, 9178, rune.X, rune.Y, rune.Z, rune.Orientation, null, 60_000);
+                    System?.SummonAt(Me, 9178, rune.X, rune.Y, rune.Z, AngleTo(rune.X, rune.Y), null, 60_000);
                 _spiritMs[i] = (uint)(System?.RandomInt(15_000, 30_000) ?? 15_000);
             }
             else _spiritMs[i] -= diffMs;

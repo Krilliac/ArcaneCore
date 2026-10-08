@@ -109,6 +109,11 @@ public abstract class InstanceData : IMapUpdater
     {
     }
 
+    /// <summary>A creature finished its evade and is back home (cmangos CreatureAI::JustReachedHome; TEMPFACTION_RESTORE_REACH_HOME).</summary>
+    public virtual void OnCreatureReachedHome(Creature creature)
+    {
+    }
+
     /// <summary>ScriptDev2 instance_blackrock_depths OnCreatureEnterCombat.</summary>
     public virtual void OnCreatureEnterCombat(Creature creature)
     {

@@ -248,6 +248,7 @@ public sealed partial class CreatureMapSystem
                 creature.IsEvading = false;
                 creature.AI?.OnMovementInform(type, pointId);
                 creature.AI?.OnReachedHome();
+                Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureReachedHome(creature);
                 break;
 
             case MovementGeneratorType.Waypoint:

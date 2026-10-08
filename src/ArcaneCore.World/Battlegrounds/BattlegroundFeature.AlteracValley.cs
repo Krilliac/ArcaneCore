@@ -26,7 +26,7 @@ public sealed partial class BattlegroundFeature
         if (services.GetService<QuestNpcFeature>()?.Services is { } npcs)
         {
             npcs.QuestRewarded += OnQuestRewarded;
-            npcs.GossipScript ??= new AvQuartermasterGossip(this);
+            npcs.AddGossipScript(new AvQuartermasterGossip(this));
         }
 
         services.GetService<SpellFeature>()?.System.RegisterCastCheck(new BattlegroundCastCheck(this));

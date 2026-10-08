@@ -37,6 +37,16 @@ public sealed partial class QuestNpcServices
     /// </summary>
     public INpcGossipScript? GossipScript { get; set; }
 
+    /// <summary>
+    /// Install <paramref name="script"/> beside the scripts already set (<see cref="NpcGossipScriptChain"/>): the earlier ones are asked
+    /// first at a hello, and a selection goes back to the script whose menu the player was shown.
+    /// </summary>
+    public void AddGossipScript(INpcGossipScript script)
+    {
+        ArgumentNullException.ThrowIfNull(script);
+        GossipScript = GossipScript is null ? script : NpcGossipScriptChain.Of(GossipScript, script);
+    }
+
     /// <summary>A quest was rewarded by a quest giver (vmangos Player::RewardQuest: the battleground and the giver's OnQuestRewarded script).</summary>
     public event Action<Player, ObjectGuid, Quest>? QuestRewarded;
 

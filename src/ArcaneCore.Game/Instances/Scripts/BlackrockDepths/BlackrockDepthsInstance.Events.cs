@@ -36,12 +36,27 @@ public sealed partial class BlackrockDepthsInstance
          8925, 8926, 8927, 8928, 8933, 8932, 9027, 9028, 9029, 9030, 9031, 9032];
     private static readonly uint[] ArenaCrowd = [8916, 8896, 8902, 8904, 8893, 8894, 8895];
     private static readonly uint[] BarPatrons = [9545, 9547, 9554];
+
+    /// <summary>Thunderbrew Lager Keg (go_bar_beer_keg; three spawns in classic-db z2815).</summary>
+    public const uint GoBeerKeg = 164911;
+
+    /// <summary>
+    /// Every gameobject_template with ScriptName go_relic_coffer_door in classic-db z2815: twelve entries, each spawned once in map 230
+    /// (there is no 174565). MAX_RELIC_DOORS (12) counts uses of these, so the vault needs all of them.
+    /// </summary>
+    public static readonly uint[] RelicCofferDoors =
+        [174554, 174555, 174556, 174557, 174558, 174559, 174560, 174561, 174562, 174563, 174564, 174566];
+
+    /// <summary>Both go_shadowforge_brazier entries of classic-db z2815: the first lit sets TYPE_LYCEUM IN_PROGRESS, the second DONE.</summary>
+    public static readonly uint[] ShadowforgeBraziers = [174744, 174745];
     // blackrock_depths.h aPatronsEmotes: EMOTE_ONESHOT_EXCLAMATION (5), CHEER (4) twice, LAUGH (11) three times.
     private static readonly uint[] PatronEmotes = [5, 4, 4, 11, 11, 11];
     private readonly HashSet<ObjectGuid> _arenaCrowd = [];
     private readonly HashSet<ObjectGuid> _barPatrons = [];
     private readonly HashSet<ObjectGuid> _barPatrol = [];
     private readonly HashSet<ObjectGuid> _vaultCreatures = [];
+    // Tomb dwarves made hostile by DoCallNextDwarf (TEMPFACTION_RESTORE_RESPAWN | TEMPFACTION_RESTORE_REACH_HOME).
+    private readonly HashSet<ObjectGuid> _tombHostile = [];
     private int _stolenAles;
     private int _barAleCount;
     private int _cofferDoorsOpened;
@@ -76,6 +91,7 @@ public sealed partial class BlackrockDepthsInstance
         _barPatrons.Clear();
         _barPatrol.Clear();
         _vaultCreatures.Clear();
+        _tombHostile.Clear();
     }
 
     private void RecordDepthsCreature(Creature creature)
@@ -165,17 +181,20 @@ public sealed partial class BlackrockDepthsInstance
     /// <summary>blackrock_depths.cpp GOUse_go_bar_beer_keg, go_relic_coffer_door and go_shadowforge_brazier.</summary>
     public override void OnObjectUsed(Player player, GameObject go)
     {
-        switch (go.Entry)
+        uint entry = go.Entry;
+        if (entry == GoBeerKeg)
         {
-            case 164911 when GetData(TypeHurley) is not (EncounterState.InProgress or EncounterState.Done):
+            if (GetData(TypeHurley) is not (EncounterState.InProgress or EncounterState.Done))
                 SetData(TypeHurley, EncounterState.Special);
-                break;
-            case 174554 when GetData(TypeVault) is not (EncounterState.InProgress or EncounterState.Done):
+        }
+        else if (Array.IndexOf(RelicCofferDoors, entry) >= 0)
+        {
+            if (GetData(TypeVault) is not (EncounterState.InProgress or EncounterState.Done))
                 SetData(TypeVault, EncounterState.Special);
-                break;
-            case 174744:
-                SetData(TypeLyceum, GetData(TypeLyceum) == EncounterState.InProgress ? EncounterState.Done : EncounterState.InProgress);
-                break;
+        }
+        else if (Array.IndexOf(ShadowforgeBraziers, entry) >= 0)
+        {
+            SetData(TypeLyceum, GetData(TypeLyceum) == EncounterState.InProgress ? EncounterState.Done : EncounterState.InProgress);
         }
     }
 
@@ -361,7 +380,10 @@ public sealed partial class BlackrockDepthsInstance
         if (_dwarfRound >= TombDwarves.Length) { _dwarfFightMs = 0; return; }
         if (GetSingleCreatureFromStorage(TombDwarves[_dwarfRound]) is { } dwarf && Instance.Players.FirstOrDefault() is { } player)
         {
+            // SetFactionTemporary(FACTION_DWARF_HOSTILE, TEMPFACTION_RESTORE_RESPAWN | TEMPFACTION_RESTORE_REACH_HOME): a respawn
+            // re-reads the template faction; reaching home after an evade is OnCreatureReachedHome below.
             dwarf.FactionTemplate = 754;
+            _tombHostile.Add(dwarf.Guid);
             dwarf.AI?.AttackStart(player);
         }
         _dwarfFightMs = 30_000;
@@ -369,6 +391,13 @@ public sealed partial class BlackrockDepthsInstance
     }
 
     private void ResetDwarfRound() { _dwarfRound = 0; _dwarfFightMs = 0; }
+
+    /// <summary>TEMPFACTION_RESTORE_REACH_HOME of DoCallNextDwarf: a tomb dwarf back home after a wipe takes its template faction again.</summary>
+    public override void OnCreatureReachedHome(Creature creature)
+    {
+        if (_tombHostile.Remove(creature.Guid) && creature.IsAlive)
+            creature.FactionTemplate = creature.Template.Faction;
+    }
 
     private void RespawnDepthsObject(uint entry)
     {
@@ -470,7 +499,8 @@ public sealed partial class BlackrockDepthsInstance
                     SetData(TypeBar, EncounterState.Done);
                     _patrolMs = 0;
                 }
-                else _patrolMs = 0;
+                // HandleBarPatrol(1/2) finds no Fireguard Destroyer: the original leaves its elapsed timer alone and looks again next tick.
+                else if (GetData(TypeBar) is not (EncounterState.InProgress or EncounterState.Special)) _patrolMs = 0;
             }
             else _patrolMs -= diffMs;
         }

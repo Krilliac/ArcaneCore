@@ -16,19 +16,19 @@ using static ArcaneCore.Game.Tests.Instances.InstanceFixture;
 
 namespace ArcaneCore.Game.Tests.Instances;
 
-public sealed class DungeonScriptExpansionTests
+public sealed partial class DungeonScriptExpansionTests
 {
     private const float X = -16.4f, Y = -383.07f, Z = 61.78f;
 
     private static (InstanceFixture Fixture, Player Player, Map Map) Enter(
         Func<Map, InstanceData> script, CreatureSpawn[] spawns, GameObjectTemplate[] goTemplates = null!, GameObjectSpawn[] goSpawns = null!,
-        uint[] extraCreatureEntries = null!)
+        uint[] extraCreatureEntries = null!, LockEntry[] locks = null!)
     {
         var fixture = new InstanceFixture();
         fixture.Manager.Scripts = new InstanceScriptRegistry().Register(Dungeon, script);
         var creatures = new CreatureContent(
             [.. spawns.Select(s => s.Entry).Concat(extraCreatureEntries ?? []).Distinct().Select(e => Template(e))], spawns, [], [], [], new CreatureAiContent([], []));
-        var objects = new GameObjectContent(goTemplates ?? [], goSpawns ?? [], [], [], []);
+        var objects = new GameObjectContent(goTemplates ?? [], goSpawns ?? [], locks ?? [], [], []);
         fixture.World.MapCreated += map =>
         {
             if (map.MapId == Dungeon)
