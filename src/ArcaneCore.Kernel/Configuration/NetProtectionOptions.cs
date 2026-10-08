@@ -93,4 +93,29 @@ public sealed class NetProtectionOptions
     /// packet. 00:00:00 logs every refusal.
     /// </summary>
     public TimeSpan LogInterval { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// World daemon only: the capacity of each per-opcode token bucket of an authenticated connection
+    /// (<see cref="Net.OpcodeRateLimiter"/>, the MaNGOS Zero anticheat fork's gateway RateLimiter); a packet that finds its
+    /// opcode's bucket empty is dropped (not handled) and counted, the connection stays. 0 disables the per-opcode buckets.
+    /// Far above a retail client: an empty client cache in a crowded city sends a few hundred queries of one opcode at once, and
+    /// the world queue's own tests treat a 3000-packet burst as heavy but legitimate.
+    /// Deviation from retail (vmangos handles every packet), on by default. Read when the session starts.
+    /// </summary>
+    public int WorldOpcodeBurst { get; set; } = 4000;
+
+    /// <summary>World daemon only: tokens a per-opcode bucket regains per second (see <see cref="WorldOpcodeBurst"/>).</summary>
+    public double WorldOpcodeRefillPerSecond { get; set; } = 1000;
+
+    /// <summary>
+    /// World daemon only: packets of any opcode one connection may send in a one-second window before the rest of that
+    /// window is dropped (counted, the connection stays); 0 disables. A retail client sends a few tens per second.
+    /// </summary>
+    public int WorldPacketsPerSecond { get; set; } = 4000;
+
+    /// <summary>
+    /// World daemon only: packets in one one-second window that close the connection as a flood (one rate-limited log line);
+    /// 0 disables. Above <see cref="WorldPacketsPerSecond"/>, so a burst is dropped long before it disconnects.
+    /// </summary>
+    public int WorldFloodPacketsPerSecond { get; set; } = 8000;
 }

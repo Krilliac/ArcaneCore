@@ -29,6 +29,25 @@ public sealed class NetProtectionConfigChecks : IConfigCheck
         Time(issues, configuration, $"{Root}:FrameReadTimeout", defaults.FrameReadTimeout, TimeSpan.Zero, "00:00:00 to disable, or a duration such as 00:00:30");
         Time(issues, configuration, $"{Root}:LogonUnauthenticatedLifetime", defaults.LogonUnauthenticatedLifetime, TimeSpan.Zero, "00:00:00 to disable, or a duration such as 00:00:30");
         Time(issues, configuration, $"{Root}:LogInterval", defaults.LogInterval, TimeSpan.Zero, "00:00:00 to log every refusal, or an interval such as 00:00:10");
+        int? opcodeBurst = Int(issues, configuration, $"{Root}:WorldOpcodeBurst", defaults.WorldOpcodeBurst, 0, int.MaxValue, "0 to disable, or a positive packet count");
+        double? opcodeRefill = Double(issues, configuration, $"{Root}:WorldOpcodeRefillPerSecond", defaults.WorldOpcodeRefillPerSecond, 0, "0 or a positive number of packets per second");
+        int? perSecond = Int(issues, configuration, $"{Root}:WorldPacketsPerSecond", defaults.WorldPacketsPerSecond, 0, int.MaxValue, "0 to disable, or a positive packet count");
+        int? flood = Int(issues, configuration, $"{Root}:WorldFloodPacketsPerSecond", defaults.WorldFloodPacketsPerSecond, 0, int.MaxValue, "0 to disable, or a positive packet count");
+
+        if (opcodeBurst is > 0 && opcodeRefill is 0)
+        {
+            issues.Add(Warn($"{Root}:WorldOpcodeRefillPerSecond", "the per-opcode buckets never refill: once a connection has sent WorldOpcodeBurst packets of one opcode, every later one is dropped.", "set a positive rate, or 0 for WorldOpcodeBurst to disable the per-opcode buckets"));
+        }
+
+        if (opcodeBurst is > 0 and < 100)
+        {
+            issues.Add(Warn($"{Root}:WorldOpcodeBurst", $"{opcodeBurst} is below what a retail client sends of one query opcode when its cache is empty; queries would be dropped and the client does not repeat them.", "use 0 (off) or at least a few hundred"));
+        }
+
+        if (flood is > 0 && perSecond is > 0 && flood <= perSecond)
+        {
+            issues.Add(Warn($"{Root}:WorldFloodPacketsPerSecond", "the flood cap is not above WorldPacketsPerSecond, so a burst disconnects instead of being dropped first.", "set it above WorldPacketsPerSecond"));
+        }
 
         if (connBurst is > 0 && connRate is 0)
         {
@@ -70,6 +89,29 @@ public sealed class NetProtectionConfigChecks : IConfigCheck
         if (value < min || value > max)
         {
             issues.Add(Error(key, $"{value} is out of range.", $"use {expected}"));
+            return null;
+        }
+
+        return value;
+    }
+
+    private static double? Double(List<ConfigIssue> issues, IConfiguration configuration, string key, double fallback, double min, string expected)
+    {
+        string? text = configuration[key];
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return fallback;
+        }
+
+        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) || !double.IsFinite(value))
+        {
+            issues.Add(Error(key, $"'{text}' is not a number.", "use a number such as 250"));
+            return null;
+        }
+
+        if (value < min)
+        {
+            issues.Add(Error(key, $"{value.ToString(CultureInfo.InvariantCulture)} is out of range.", $"use {expected}"));
             return null;
         }
 

@@ -11,6 +11,7 @@ using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Kernel.Net;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
@@ -132,6 +133,10 @@ public sealed partial class WorldSession : IPlayerSession
     private long _queuedBytes;
     private volatile SessionState _state = SessionState.Connected;
     private uint _serverSeed;
+    private readonly OpcodeRateLimiter? _packetLimiter;
+    private readonly LogGate _packetGate = new(TimeSpan.FromSeconds(10));
+    private int _latencyMs = -1;
+    private uint _currentPacketReceivedMs;
 
     public WorldSession(
         Stream stream,
@@ -156,6 +161,29 @@ public sealed partial class WorldSession : IPlayerSession
         _logger = logger;
         _guard = guard;
         _protection = guard?.Options ?? DefaultProtection;
+        _packetLimiter = NetGuard.CreatePacketLimiter(_protection);
+    }
+
+    /// <summary>
+    /// The client's latency in milliseconds as an exponentially weighted moving average (alpha 1/5) of the value it reports in
+    /// every CMSG_PING (vmangos WorldSocket::HandlePing stores the last one in m_latency); 0 until the first ping. Read by
+    /// the anticheat's latency slack (docs/areas/anticheat.md). Thread-safe.
+    /// </summary>
+    public int LatencyMs => Math.Max(0, Volatile.Read(ref _latencyMs));
+
+    /// <summary>
+    /// When the in-world packet being handled arrived (monotonic milliseconds, <see cref="Clock.Milliseconds"/> truncated to
+    /// 32 bits), so a check can compare the client's own movement clock with an independent one that a world-thread stall
+    /// does not bunch up. Set on the world thread before each handler runs; meaningless outside a handler.
+    /// </summary>
+    public uint CurrentPacketReceivedMs => _currentPacketReceivedMs;
+
+    /// <summary>Fold one latency sample from a CMSG_PING into <see cref="LatencyMs"/> (samples above 60 s are clamped).</summary>
+    internal void RecordLatencySample(uint latency)
+    {
+        int sample = (int)Math.Min(latency, 60_000u);
+        int previous = Volatile.Read(ref _latencyMs);
+        Volatile.Write(ref _latencyMs, previous < 0 ? sample : ((previous * 4) + sample) / 5);
     }
 
     public string RemoteEndpoint { get; }
@@ -318,6 +346,7 @@ public sealed partial class WorldSession : IPlayerSession
             }
 
             long handlerStart = Stopwatch.GetTimestamp();
+            _currentPacketReceivedMs = packet.ReceivedMs;
             try
             {
                 packet.Handler.World!(this, player, packet.Payload);
@@ -546,6 +575,36 @@ public sealed partial class WorldSession : IPlayerSession
                 return false;
             }
 
+            // Net:Protection:World* packet budgets (docs/ops/netguard.md): over a budget the packet is dropped, a flood closes the connection.
+            if (_packetLimiter is not null)
+            {
+                switch (_packetLimiter.OnPacket((ushort)opcode, Clock.Milliseconds()))
+                {
+                    case OpcodeRateVerdict.Flood:
+                        if (_guard is not null)
+                        {
+                            _guard.ReportPacketFlood(RemoteEndpoint);
+                        }
+                        else
+                        {
+                            _logger.LogWarning("[{Endpoint}] packet flood over {Limit} packets per second; disconnecting", RemoteEndpoint, _protection.WorldFloodPacketsPerSecond);
+                        }
+
+                        return false;
+                    case OpcodeRateVerdict.Dropped:
+                        if (_guard is not null)
+                        {
+                            _guard.ReportPacketDropped(RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
+                        }
+                        else if (_packetGate.TryEnter(out int suppressed))
+                        {
+                            _logger.LogWarning("[{Endpoint}] {Opcode} over the connection's packet budget; dropped ({Suppressed} more dropped since the last line)", RemoteEndpoint, WorldOpcodeNames.GetName(opcode), suppressed);
+                        }
+
+                        return true;
+                }
+            }
+
             if (!_opcodes.TryGet(opcode, out OpcodeHandler handler))
             {
                 _logger.LogDebug("[{Endpoint}] unhandled {Opcode} ({Length} bytes)",
@@ -573,7 +632,7 @@ public sealed partial class WorldSession : IPlayerSession
 
                     Interlocked.Increment(ref _queuedPackets);
                     Interlocked.Add(ref _queuedBytes, payload.Length);
-                    _worldQueue.Enqueue(new QueuedPacket(handler, payload));
+                    _worldQueue.Enqueue(new QueuedPacket(handler, payload, (uint)Clock.Milliseconds()));
                 }
 
                 return true;
@@ -622,6 +681,13 @@ public sealed partial class WorldSession : IPlayerSession
         if (!reader.TryReadUInt32(out uint sequence))
         {
             return false;
+        }
+
+        // u32 latency: the client's own measure of the round trip (vmangos WorldSocket::HandlePing keeps it in m_latency).
+        // A 1.12 client always sends it; a short packet keeps the previous estimate.
+        if (reader.TryReadUInt32(out uint latency))
+        {
+            RecordLatencySample(latency);
         }
 
         Span<byte> pong = stackalloc byte[4];
@@ -904,5 +970,5 @@ public sealed partial class WorldSession : IPlayerSession
         return bytes;
     }
 
-    private readonly record struct QueuedPacket(OpcodeHandler Handler, byte[] Payload);
+    private readonly record struct QueuedPacket(OpcodeHandler Handler, byte[] Payload, uint ReceivedMs);
 }
