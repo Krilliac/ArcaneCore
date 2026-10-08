@@ -6,14 +6,23 @@ namespace ArcaneCore.World.Persistence;
 
 /// <summary>
 /// Persists writes made on the world thread, off it and in order, against a scoped store <typeparamref name="TStore"/> (one
-/// consumer; <see cref="Gm.Audit.GmAuditWriteQueue"/> generalised over the store). Every write sets one absolute value for
-/// its key, so a newer write for a key that is still waiting replaces the older one. A write that fails all
-/// <c>MaxAttempts</c> attempts is RETAINED, never dropped: the next write of the key, the periodic retry
-/// (<see cref="RetainedRetryInterval"/>) and <see cref="StopAsync"/> (a final retry that throws if storage is still failing)
-/// all carry it. <see cref="FlushAsync"/> is an ordered barrier that never retries and never throws. Without a registered
-/// <typeparamref name="TStore"/> a write is a no-op (the feature then lives in memory only).
+/// consumer; the pattern of <see cref="WorldState.ExploredZonesWriteQueue"/> keyed by a string instead of a character).
+/// Every write sets one absolute value for its key, so a newer write for a key that is still waiting replaces the older
+/// one. A write that fails all <c>MaxAttempts</c> attempts is RETAINED, never dropped: the next write of the key, the
+/// periodic retry (<see cref="RetainedRetryInterval"/>), <see cref="RetryRetainedAsync"/> and <see cref="StopAsync"/> (a
+/// final retry that throws if storage is still failing) all carry it. <see cref="FlushAsync"/> is a pure ordered barrier
+/// that never retries and never throws. Retention is in process only. Without a registered <typeparamref name="TStore"/> a
+/// write is a no-op (the feature then lives in memory only).
+/// <para>
+/// One implementation for every keyed store: <see cref="Gm.Audit.GmAuditWriteQueue"/> (mutes, tickets) is this queue over
+/// <c>IGmAuditStore</c>, and the group persistence (<see cref="Social.SocialGroupPersistenceFeature"/>) and the account
+/// last-address record use it directly. Tests: KeyedStoreWriteQueueTests and GmAuditUnitTests.
+/// </para>
 /// </summary>
-public sealed class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger logger, string name)
+/// <param name="scopes">Creates the scope each attempt resolves <typeparamref name="TStore"/> from.</param>
+/// <param name="logger">Failures and retention.</param>
+/// <param name="name">The queue's name in log lines and error messages ("GM audit", "group", …).</param>
+public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger logger, string name)
     where TStore : class
 {
     private const int MaxAttempts = 3;
@@ -122,6 +131,18 @@ public sealed class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, IL
         return _channel.Writer.TryWrite(new Work(string.Empty, Kind.Barrier, done)) ? done.Task : Task.CompletedTask;
     }
 
+    /// <summary>After every earlier write, retry each retained write once more; faults while any is still not durable.</summary>
+    public Task RetryRetainedAsync()
+    {
+        if (_consumer is null || _stopped)
+        {
+            return RetainedFailureTask();
+        }
+
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return _channel.Writer.TryWrite(new Work(string.Empty, Kind.RetryRetained, done)) ? done.Task : RetainedFailureTask();
+    }
+
     /// <summary>Stop accepting writes, drain, retry every retained key once; throws naming the keys still not durable. Idempotent.</summary>
     public Task StopAsync()
     {
@@ -161,6 +182,21 @@ public sealed class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, IL
             throw new InvalidOperationException($"{name} writes did not drain for {string.Join(", ", failed)}", first);
         }
     }
+
+    private Task RetainedFailureTask()
+    {
+        string[] failed = [.. RetainedKeys];
+        Exception? first;
+        lock (_gate)
+        {
+            first = failed.Length > 0 ? _keys[failed[0]].Failure : null;
+        }
+
+        return failed.Length == 0 ? Task.CompletedTask : Task.FromException(NotDurable(failed, first));
+    }
+
+    private InvalidOperationException NotDurable(IReadOnlyList<string> keys, Exception? failure)
+        => new($"{name} writes are not durable: {string.Join(", ", keys)}", failure);
 
     private Unsaved Entry(string key)
     {
@@ -216,7 +252,22 @@ public sealed class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, IL
                             await ExecuteAsync(key, onlyIfFailed: true, clearQueued: false).ConfigureAwait(false);
                         }
 
-                        work.Done?.TrySetResult();
+                        string[] failed = [.. RetainedKeys];
+                        if (failed.Length == 0)
+                        {
+                            work.Done?.TrySetResult();
+                        }
+                        else
+                        {
+                            Exception? first;
+                            lock (_gate)
+                            {
+                                first = _keys.TryGetValue(failed[0], out Unsaved? unsaved) ? unsaved.Failure : null;
+                            }
+
+                            work.Done?.TrySetException(NotDurable(failed, first));
+                        }
+
                         break;
                     default:
                         work.Done?.TrySetResult();
