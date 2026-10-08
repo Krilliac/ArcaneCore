@@ -132,6 +132,16 @@ internal static class PlayerbotChatCommands
         writer.WriteCString(text);
         return writer.ToArray();
     }
+
+    /// <summary>CMSG_MESSAGECHAT say/party body: u32 type, u32 language, CString text.</summary>
+    internal static byte[] Message(ChatType type, Language language, string text)
+    {
+        var writer = new PacketWriter(12 + text.Length);
+        writer.WriteUInt32((uint)type);
+        writer.WriteUInt32((uint)language);
+        writer.WriteCString(text);
+        return writer.ToArray();
+    }
 }
 
 /// <summary>

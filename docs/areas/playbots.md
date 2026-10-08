@@ -135,8 +135,9 @@ where the master goes.
   (stop fighting, follow without attacking), `come` (walk to the master, then hold there), `status` (a whisper back: level,
   health %, mana % and the current activity) and `leave`. A command sent right after the bot joined counts even before the
   bot's first turn in the action budget. Each is acknowledged by whisper (CMSG_MESSAGECHAT in the bot's own
-  language). A whispered word that is no command gets the command list; a whisper from anyone else gets one polite answer
-  (once per sender a minute, at most 8 senders a minute); other bots' lines are ignored.
+  language). With [bot chat](#bot-chat) on (the default) any other line is the chat's; with it off, a whispered word that is
+  no command gets the command list and a whisper from anyone else gets one polite answer (once per sender a minute, at most 8
+  senders a minute). Other bots' lines are always ignored.
 
 `.playerbot inspect` prints `BOTINSPECT party=master:<name> mode:<follow|stay|passive>` (or `party=none`); while the party AI
 drives a bot its goal is `Follow` or `Assist` (appended to the persisted `PlayerbotGoalKind`). A controller that takes over a
@@ -144,6 +145,101 @@ grouped bot (scripted mode) makes the party AI let go: no party goal, master or 
 detaches a bot still grouped is engaged afresh. Brain bots do not acknowledge a
 far teleport (the brain returns while the player is in no map, before `PlayerbotMovementControl`); the party AI does, so it can
 follow its master into an instance.
+
+### Bot chat
+
+`Playerbots/Chat/`, configured under `World:Playerbots:Chat` (every key live through `.reload config`). Bots answer players who
+talk to them, in character, from their real state. It is on by default with only the **built-in** provider: no network, no key,
+no cost. Language-model providers are opt-in additions in front of it.
+
+- **Triggers.** A whisper to the bot; a party (or raid) line that names the bot as a whole word ("Bob, where are you?"); a
+  `/say` line within hearing that names it, from a player of the bot's own faction. `Channels` (`Whisper, Party, Say` by default)
+  narrows this. Lines from other bots and from the bot itself are never answered. The one-word party commands (`follow`,
+  `stay`, ...) keep their meaning and are never sent to a provider.
+- **Order.** `PlayerbotPartyAI` builds the bot's facts on the world thread (name, race, class, level, zone and subzone from the
+  area table, the brain's or party AI's goal and the current quest's title, the party master, and recent events seen between
+  looks: a level gained, a death, a return to life, money picked up) and hands the line to `PlayerbotChat.TryAsk`: cheap checks
+  and a bounded queue (`MaxQueuedRequests`, 16), never I/O. Two background workers try the providers in order and put the reply
+  on a queue that `ManagedPlayerbotFeature` drains on the world thread; the bot says it through its own CMSG_MESSAGECHAT (a
+  whisper back, the party line, or `/say`), so observers get the ordinary SMSG_MESSAGECHAT. A line taken by the chat but not
+  answered (the cooldown, every cap spent, a full queue, every provider failing) gets no reply: the fixed replies above apply
+  only with chat off or on a channel it does not answer.
+- **Failover.** A provider is skipped while its key variable is unset, while it cools down, past its `MaxRepliesPerHour`, or,
+  if priced, once the day's spend estimate reaches `MaxDailySpendUsd`. A failure moves on to the next provider: a 429 waits out
+  its `retry-after` (at most 10 minutes), a 5xx/529, timeout (`TimeoutSeconds`, 10) or connection failure backs off 15 s
+  doubling to 5 minutes, a 401/403 waits 10 minutes, another 4xx (a bad model id) 5 minutes; a refusal or an unreadable answer
+  just moves on. The built-in provider is always last, so a bot whose model providers all fail still answers. No failure reaches
+  the bot's behaviour: a reply that cannot be said is dropped and logged, never a fault.
+- **Limits.** `PerPlayerCooldownSeconds` (8): one reply per player across all bots in that time. `MaxRepliesPerHour` per provider
+  (120). `MemoryExchanges` (4): the earlier exchanges with the same player sent with a model request (at most 512 conversations
+  are kept). Replies are one line of at most 255 characters with `|` (the client's link and colour escape) replaced.
+- **Orders in plain language** (`NaturalLanguageCommands`, on): from the master only, "follow me", "wait here", "attack my
+  target", "stop attacking", "come here" run the same party command as the one-word form (acknowledged the same way). A model
+  provider returns `{"reply", "intent"}` JSON whose intent is one of `follow`, `stay`, `attack`, `stop`, `come` or `none`;
+  anyone else's order gets a polite no.
+- **GM.** `.playerbot chat status` (GameMaster): on/off, channels, queued, answered, unanswered, the spend estimate and cap, and
+  per provider its kind, model, key variable and whether it is set (`key=ANTHROPIC_API_KEY:present`), replies this hour against
+  the cap, errors, the last error class (`rate-limited`, `unavailable`, `unauthorized`, `rejected`, `refused`, `timeout`,
+  `network`, `empty-reply`) and the remaining cooldown.
+
+**The built-in provider** (`PlayerbotBuiltinChat`, templates in `PlayerbotChatTemplates`) reads the line's intent with a few
+patterns, in this order: severe abuse (ignored), an insult (a short brush-off), "are you a bot?" (the honest answer: a bot run
+by this server), an order, help, grouping ("want to group?": a yes when the bot's `InvitePolicy` would accept the player's
+invitation, otherwise a polite no; already grouped says so), what it is doing or where it is going (its goal, quest title and
+zone), where it is (zone and subzone, or that it does not know), its level, race and class, thanks, goodbye, a greeting, and
+otherwise a short in-character line. Each answer has several phrasings plus race, class and level variants (`greeting.race.Orc`,
+`who.class.Mage`, `who.level.novice` below 10, `who.level.veteran` at 60); a phrasing whose placeholder has no value is
+skipped, and the same line is never said twice in a row to the same player. It follows the same triggers, cooldown and hourly
+cap as the models. To add a line, add a string to the table; to add a variant, add a key. Lines say only what the bot knows of
+itself and plain game mechanics, never invented lore.
+
+**Model providers** (`Providers`, at most 8, tried in order; a listed `Builtin` entry must be last and sets its own cap):
+
+| Key | Meaning |
+|---|---|
+| `Kind` | `Anthropic` (Messages API: `POST {BaseUrl}/v1/messages`, headers `x-api-key` and `anthropic-version: 2023-06-01`), `OpenAICompatible` (`POST {BaseUrl}/chat/completions`, `Authorization: Bearer` when a key is set: OpenAI, OpenRouter, Ollama, LM Studio), or `Builtin`. |
+| `BaseUrl` | Anthropic: the origin (empty = `https://api.anthropic.com`). OpenAICompatible: the API base with its version (`https://api.openai.com/v1`, `https://openrouter.ai/api/v1`, `http://localhost:11434/v1`). A key is never sent over plain `http` to a host other than this machine (the configuration is refused). |
+| `Model` | Empty = `claude-haiku-4-5` for Anthropic; required for OpenAICompatible. |
+| `ApiKeyEnvironmentVariable` | The variable that holds the key. Unset: `ANTHROPIC_API_KEY` for Anthropic, none otherwise. `""`: a keyless local server. Keys are read only from the environment, at each request: never from configuration, never logged or shown. |
+| `Headers` | Extra headers, e.g. OpenRouter's `HTTP-Referer` and `X-Title`; they cannot replace the key or version headers. |
+| `MaxRepliesPerHour` | 1..100000 (120). |
+| `MaxTokens` | The reply limit, 16..1024 (150). |
+| `TokenLimitParameter` | OpenAICompatible: `max_tokens` (default) or `max_completion_tokens` (newer OpenAI models). |
+| `InputUsdPerMillionTokens`, `OutputUsdPerMillionTokens` | Prices for the spend estimate. Unset: the built-in Anthropic price of a known model (Claude Haiku 4.5 $1/$5), otherwise unpriced. Set 0 for a local model. |
+
+The prompt's system part comes in two pieces: the rules (1.12 setting, short in-game chat style, nothing outside the game, no
+claim of being an AI unless asked directly, a brush-off for abuse, the JSON answer format), identical for every bot and request,
+then the bot's own facts. Anthropic gets the rules as a separate system block with `cache_control`; OpenAI-compatible endpoints
+get one system message that starts with them, so providers that cache prompt prefixes can. Claude Haiku 4.5 caches only a
+prefix of 4096 tokens or more, and the rules are far shorter, so in practice nothing is cached there today; the breakpoint costs
+nothing.
+
+A local model first, the cloud as a fallback, the templates last (a local model costs nothing; `OPENROUTER_API_KEY` set in the
+server's environment; the OpenRouter prices are an example, check the provider's current price):
+
+```json
+"Chat": {
+  "Providers": [
+    { "Kind": "OpenAICompatible", "BaseUrl": "http://localhost:11434/v1", "Model": "qwen3:4b",
+      "ApiKeyEnvironmentVariable": "", "InputUsdPerMillionTokens": 0, "OutputUsdPerMillionTokens": 0, "MaxRepliesPerHour": 1000 },
+    { "Kind": "OpenAICompatible", "BaseUrl": "https://openrouter.ai/api/v1", "Model": "openai/gpt-4o-mini",
+      "ApiKeyEnvironmentVariable": "OPENROUTER_API_KEY", "InputUsdPerMillionTokens": 0.15, "OutputUsdPerMillionTokens": 0.6,
+      "Headers": { "HTTP-Referer": "https://github.com/Krilliac/ArcaneCore", "X-Title": "ArcaneCore" } },
+    { "Kind": "Anthropic", "MaxRepliesPerHour": 60 }
+  ]
+}
+```
+
+**Cost control.** Every model reply is one request of roughly 400-800 input tokens (the rules, the facts, up to four remembered
+exchanges) and at most `MaxTokens` (150) output tokens. On Claude Haiku 4.5 ($1 input, $5 output per million tokens) that is
+about $0.0015 a reply at most, so the default cap of 120 replies an hour costs at most about $0.18 an hour per provider, and the
+default `MaxDailySpendUsd` of $1 stops the priced providers after roughly 650 replies in a UTC day. The estimate uses the token
+counts each response reports (cache writes at 1.25x and reads at 0.1x the input price) and is an estimate, not a bill; a provider
+without a known price is held back by its `MaxRepliesPerHour` alone, so give OpenRouter and OpenAI entries their prices. The
+per-player cooldown keeps one player from spending the budget, the bounded queue drops rather than piles up, and the built-in
+templates answer once the money or the providers run out. Tests never touch the network: `IBotChatClient` is faked, and the four
+live checks in `PlayerbotChatLiveTests` (one tiny request each to Anthropic, OpenAI, OpenRouter and a local server) run only
+with `ARCANECORE_TEST_LIVE_LLM=1` and that provider's key or `ARCANECORE_TEST_LOCAL_LLM_URL` set.
 
 ## Scenario harness
 

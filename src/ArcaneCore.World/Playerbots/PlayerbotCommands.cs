@@ -12,7 +12,7 @@ public sealed class PlayerbotCommands : ICommandGroup
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
         new ChatCommand("playerbot", AccountSecurity.GameMaster,
-            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|scenario>\nManage server-owned autonomous players.",
+            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|chat|scenario>\nManage server-owned autonomous players.",
             Children:
             [
                 new ChatCommand("create", AccountSecurity.Administrator,
@@ -29,9 +29,47 @@ public sealed class PlayerbotCommands : ICommandGroup
                     "Syntax: .playerbot inspect $id|$name\nRead actual target, victim, cast and nearby trainer facts.", Inspect),
                 new ChatCommand("invite", AccountSecurity.GameMaster,
                     "Syntax: .playerbot invite $id|$name\nPut a running bot into your group; it follows you and takes your commands.", Invite),
+                new ChatCommand("chat", AccountSecurity.GameMaster,
+                    "Syntax: .playerbot chat status\nThe bots' chat replies.",
+                    Children:
+                    [
+                        new ChatCommand("status", AccountSecurity.GameMaster,
+                            "Syntax: .playerbot chat status\nShow bot chat: on/off, the spend estimate, and per provider its kind, model, whether its key variable is set, replies this hour and the last error.",
+                            ChatStatus),
+                    ]),
                 Scenarios.PlayerbotScenarioCommands.Command,
             ])
     ];
+
+    /// <summary>
+    /// <c>.playerbot chat status</c>: the chat service's state. A key is never shown, only its variable's name and whether it is set.
+    /// </summary>
+    private static bool ChatStatus(CommandContext context, string text)
+    {
+        if (text.Trim().Length != 0) return false;
+        if (context.Session.Services.GetService<ManagedPlayerbotFeature>()?.Chat is not { } chat)
+        {
+            context.Reply("Playerbot chat is unavailable.");
+            return true;
+        }
+
+        foreach (string line in ChatStatusLines(chat.Status())) context.Reply(line);
+        return true;
+    }
+
+    internal static IEnumerable<string> ChatStatusLines(Chat.BotChatStatus status)
+    {
+        CultureInfo c = CultureInfo.InvariantCulture;
+        string cap = status.MaxDailySpendUsd > 0 ? Chat.PlayerbotChat.Usd(status.MaxDailySpendUsd) : "none";
+        yield return string.Create(c,
+            $"Bot chat: enabled={(status.Enabled ? "yes" : "no")} channels={status.Channels} queued={status.Queued} answered={status.Answered} unanswered={status.Dropped} spend-today={Chat.PlayerbotChat.Usd(status.SpentTodayUsd)} cap={cap}");
+        foreach (Chat.BotChatProviderStatus p in status.Providers)
+        {
+            string key = p.KeyVariable is null ? "none" : $"{p.KeyVariable}:{(p.KeyPresent ? "present" : "missing")}";
+            yield return string.Create(c,
+                $"#{p.Index} {p.Kind} model={p.Model} key={key} replies-hour={p.RepliesThisHour}/{p.MaxRepliesPerHour} replies={p.Replies} errors={p.Errors} last-error={p.LastError ?? "none"} cooldown={p.CooldownSeconds}s priced={(p.Priced ? "yes" : "no")}");
+        }
+    }
 
     private static bool Create(CommandContext context, string text)
     {

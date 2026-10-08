@@ -29,7 +29,7 @@ internal static class PartyTestHost
 
     public const uint CorpseGold = 25;
 
-    public static WorldTestHost Start(Action<PlayerbotOptions>? configure = null)
+    public static WorldTestHost Start(Action<PlayerbotOptions>? configure = null, Action<IServiceCollection>? configureServices = null)
         => WorldTestHost.Start(configureServices: services =>
         {
             services.AddScoped<ILootDataStore>(_ => new GoldLoot());
@@ -37,8 +37,12 @@ internal static class PartyTestHost
             {
                 Enabled = true, MaxBots = 4, ThinkIntervalMs = 100, MaxActionsPerTick = 8, MaxPathPoints = 64, MaxRouteYards = 200,
                 AllowedMaps = [0, 1],
+                // Bot chat is on by default (built-in replies); these hosts keep the fixed replies (the polite answer, the command
+                // help) that the party tests pin, unless a test turns chat on (Playerbots/Chat/PlayerbotChatWorldTests).
+                Chat = { Enabled = false },
             };
             configure?.Invoke(options);
+            configureServices?.Invoke(services);
             services.AddSingleton<IManagedPlayerbotStore>(new MemoryBotStore());
             services.AddSingleton<IOptions<PlayerbotOptions>>(Options.Create(options));
             services.AddSingleton<IManagedPlayerbotProvisionStore>(sp => new MemoryProvisionStore(sp.GetRequiredService<IAccountStore>()));

@@ -105,8 +105,11 @@ internal sealed class PlayerbotPartyAI
     private long _teleportRetryAtMs;
     private uint _idleIntakeAtMs;
     private bool _idleIntakeStarted;
+    private readonly Chat.PlayerbotChat? _chat;
+    private readonly Guid _botId;
+    private readonly Chat.PlayerbotChatEvents _chatEvents = new();
 
-    internal PlayerbotPartyAI(WorldSession session, PlayerbotOptions options)
+    internal PlayerbotPartyAI(WorldSession session, PlayerbotOptions options, Chat.PlayerbotChat? chat = null, Guid botId = default)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -114,7 +117,15 @@ internal sealed class PlayerbotPartyAI
         _recovery = new PlayerbotRecovery(session, options);
         _risk = new PlayerbotRisk(session, options, _combatSpells);
         _random = new Random(session.AccountId);
+        _chat = chat;
+        _botId = botId;
     }
+
+    /// <summary>
+    /// What the bot does when it is not party-driven (the brain's goal and quest; set by <see cref="ManagedPlayerbotFeature"/>), for
+    /// the chat persona. Null: the party AI's own goal only.
+    /// </summary>
+    internal Func<(PlayerbotGoalKind Goal, uint QuestId)>? BrainGoal { get; set; }
 
     /// <summary>Whether the party AI drives the bot now (it has a master, or is waiting out a departed one).</summary>
     internal bool IsEngaged => _engaged;
@@ -151,6 +162,7 @@ internal sealed class PlayerbotPartyAI
     /// </summary>
     internal void Intake(Player player)
     {
+        if (_chat is { IsActive: true }) _chatEvents.Observe(player, Now);
         // A bot outside any group only needs invitations and strangers' whispers answered: once per think interval is soon enough,
         // and it keeps a large fleet of solo bots from draining their queues every tick (the invitation itself is read from the
         // group state below, so a dropped SMSG_GROUP_INVITE costs nothing). A grouped bot reads every tick: its master's orders.
@@ -203,11 +215,120 @@ internal sealed class PlayerbotPartyAI
                 if (!_engaged || master != _master) Engage(player, master);
                 _masterLostMs = -1;
                 if (PlayerbotChatCommands.TryParse(line.Text, out PlayerbotPartyCommand command)) Execute(player, sender, command);
+                else if (Converse(player, line, sender, master)) { }
                 else if (line.Type == ChatType.Whisper && _replies.TryTake(sender.Guid, Now)) Tell(player, sender.Name, PlayerbotChatCommands.Help);
                 break;
             case PlayerbotChatSource.Stranger when sender is not null:
-                if (_replies.TryTake(sender.Guid, Now)) Tell(player, sender.Name, PlayerbotChatCommands.PoliteReply);
+                if (Converse(player, line, sender, master)) { }
+                else if (_replies.TryTake(sender.Guid, Now)) Tell(player, sender.Name, PlayerbotChatCommands.PoliteReply);
                 break;
+            case PlayerbotChatSource.Ignore when sender is not null && !senderIsBot && sender.Guid != player.Guid:
+                // A party or say line from a real player: answered only when it names the bot (and chat is on).
+                Converse(player, line, sender, master);
+                break;
+        }
+    }
+
+    // --- chat ---------------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Hand a player's line to the chat service (docs/areas/playbots.md, Bot chat). False when chat is off or the line is not one the
+    /// bots answer (the fixed replies of before then apply); true when the line is the chat's, whether or not a reply comes (a
+    /// cooldown, a spent budget or a full queue means silence).
+    /// </summary>
+    private bool Converse(Player player, PlayerbotChatLine line, Player sender, ObjectGuid master)
+    {
+        if (_chat is not { IsActive: true } chat || !chat.Answers(line.Type) || line.Text.Length == 0) return false;
+        bool whisper = line.Type == ChatType.Whisper;
+        if (!whisper)
+        {
+            if (!Chat.PlayerbotChatPrompts.Addresses(line.Text, player.Name)) return false;
+            if (line.Type == ChatType.Say && sender.Team != player.Team) return false;
+        }
+
+        _chatEvents.Observe(player, Now);
+        bool fromMaster = !master.IsEmpty && sender.Guid == master;
+        var ask = new Chat.BotChatAsk(_botId, player.Guid, Persona(player, master), sender.Guid, sender.Name,
+            line.Type is ChatType.Raid or ChatType.RaidLeader ? ChatType.Party : line.Type, line.Text, fromMaster, InviteAllowed(player, sender));
+        chat.TryAsk(ask);
+        return true;
+    }
+
+    /// <summary>The bot's facts for the chat (world thread): who and where it is, what it does, its group and recent events.</summary>
+    private Chat.BotChatPersona Persona(Player player, ObjectGuid master)
+    {
+        (string? zone, string? subzone) = ZoneNames(player);
+        PlayerbotGoalKind? goal = null;
+        uint questId = 0;
+        if (_engaged) goal = Goal;
+        else if (BrainGoal is { } brain) (goal, questId) = brain();
+        string? quest = questId == 0 ? null
+            : _session.Services.GetService<QuestNpcFeature>()?.Services.Quests.Get(questId)?.Title is { Length: > 0 } title ? title : null;
+        string? masterName = master.IsEmpty ? null : _session.World.FindOnlinePlayer(master)?.Name;
+        bool inGroup = Services.Social?.Groups.GetGroup(player.Guid) is not null;
+        return new Chat.BotChatPersona(player.Name, player.Race, player.Class, player.Gender, player.Level, zone, subzone, goal, quest,
+            masterName, inGroup, _chatEvents.Recent(Now));
+    }
+
+    private (string? Zone, string? Subzone) ZoneNames(Player player)
+    {
+        try
+        {
+            if (player.Map is not { } map) return (null, null);
+            (uint zoneId, uint areaId) = map.GetZoneAndAreaId(player.X, player.Y, player.Z);
+            if (zoneId == 0 && player.ZoneId != 0) zoneId = player.ZoneId;
+            Game.Maps.Terrain.AreaTable areas = Game.Maps.Templates.WorldMaps.Of(_session.World).Areas;
+            string? zone = zoneId == 0 ? null : areas.GetById(zoneId)?.Name;
+            string? subzone = areaId == 0 || areaId == zoneId ? null : areas.GetById(areaId)?.Name;
+            return (string.IsNullOrWhiteSpace(zone) ? null : zone, string.IsNullOrWhiteSpace(subzone) ? null : subzone);
+        }
+        catch (Exception error) when (error is InvalidOperationException or NullReferenceException or KeyNotFoundException)
+        {
+            return (null, null); // a minimal host without map data
+        }
+    }
+
+    /// <summary>Whether the bot would accept an invitation from <paramref name="sender"/> (its invite policy).</summary>
+    private bool InviteAllowed(Player player, Player sender)
+    {
+        if (Services.Social is not { } social) return false;
+        PlayerbotPartyOptions party = _options.Party;
+        return PlayerbotGroupInvites.Allows(party.InvitePolicy, party.Allowlist, sender.Name,
+            PlayerbotGroupInvites.SameGuild(social, player, sender), PlayerbotGroupInvites.OnBotsFriendList(social, player, sender));
+    }
+
+    /// <summary>
+    /// World thread: say a chat reply through the bot's own CMSG_MESSAGECHAT (a whisper back, the party line or /say), and carry out
+    /// the master's order when the speaker is still the bot's master.
+    /// </summary>
+    internal void DeliverChat(Player player, Chat.BotChatReply reply)
+    {
+        if (reply.Text is { Length: > 0 } text)
+        {
+            Language language = player.Team == Team.Horde ? Language.Orcish : Language.Common;
+            switch (reply.Channel)
+            {
+                case ChatType.Whisper:
+                    if (_session.World.FindOnlinePlayer(reply.SenderGuid) is not null)
+                        Act(WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Whisper(language, reply.SenderName, text), budgeted: false);
+                    break;
+                case ChatType.Party:
+                    if (Services.Social?.Groups.GetGroup(player.Guid) is not null)
+                        Act(WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Message(ChatType.Party, language, text), budgeted: false);
+                    break;
+                case ChatType.Say:
+                    Act(WorldOpcode.CmsgMessagechat, PlayerbotChatCommands.Message(ChatType.Say, language, text), budgeted: false);
+                    break;
+            }
+        }
+
+        if (reply.Command is { } command)
+        {
+            ObjectGuid master = ResolveMaster(player);
+            if (master.IsEmpty || master != reply.SenderGuid || _session.World.FindOnlinePlayer(master) is not { } current) return;
+            if (!_engaged || master != _master) Engage(player, master);
+            _masterLostMs = -1;
+            Execute(player, current, command, acknowledge: reply.AcknowledgeCommand);
         }
     }
 
@@ -229,7 +350,7 @@ internal sealed class PlayerbotPartyAI
         Act(WorldOpcode.CmsgResurrectResponse, response.ToArray(), budgeted: false);
     }
 
-    private void Execute(Player player, Player master, PlayerbotPartyCommand command)
+    private void Execute(Player player, Player master, PlayerbotPartyCommand command, bool acknowledge = true)
     {
         switch (command)
         {
@@ -237,7 +358,7 @@ internal sealed class PlayerbotPartyAI
                 _mode = PlayerbotPartyMode.Follow;
                 _comeRequested = false;
                 _stayPoint = null;
-                Tell(player, master.Name, "Following.");
+                if (acknowledge) Tell(player, master.Name, "Following.");
                 break;
             case PlayerbotPartyCommand.Stay:
                 _mode = PlayerbotPartyMode.Stay;
@@ -246,7 +367,7 @@ internal sealed class PlayerbotPartyAI
                 _ordered = ObjectGuid.Empty;
                 _route = null;
                 PlayerbotMovementControl.Stop(_session, player);
-                Tell(player, master.Name, "Staying here.");
+                if (acknowledge) Tell(player, master.Name, "Staying here.");
                 break;
             case PlayerbotPartyCommand.Attack:
                 if (player.Map?.FindObject(master.Selection) is Creature target && IsValidTarget(player, target))
@@ -254,7 +375,7 @@ internal sealed class PlayerbotPartyAI
                     _ordered = target.Guid;
                     if (_mode != PlayerbotPartyMode.Follow) _mode = PlayerbotPartyMode.Follow;
                     _comeRequested = false;
-                    Tell(player, master.Name, "Attacking " + target.Template.Name + ".");
+                    if (acknowledge) Tell(player, master.Name, "Attacking " + target.Template.Name + ".");
                 }
                 else
                 {
@@ -266,13 +387,13 @@ internal sealed class PlayerbotPartyAI
                 _mode = PlayerbotPartyMode.Passive;
                 _ordered = ObjectGuid.Empty;
                 StopAttacking(player);
-                Tell(player, master.Name, "Passive: I will not attack.");
+                if (acknowledge) Tell(player, master.Name, "Passive: I will not attack.");
                 break;
             case PlayerbotPartyCommand.Come:
                 _mode = PlayerbotPartyMode.Follow;
                 _comeRequested = true;
                 _stayPoint = null;
-                Tell(player, master.Name, "Coming.");
+                if (acknowledge) Tell(player, master.Name, "Coming.");
                 break;
             case PlayerbotPartyCommand.Status:
                 Tell(player, master.Name, StatusLine(player));
