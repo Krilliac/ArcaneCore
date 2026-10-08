@@ -18,8 +18,9 @@ namespace ArcaneCore.World.Gm.Character;
 /// Chat.cpp:582-583) and <c>.modify tp</c> (HandleModifyTalentCommand, CharacterCommands.cpp:4524-4547,
 /// SEC_BASIC_ADMIN, Chat.cpp:594), added under the <c>.modify</c> root of the built-in commands, whose
 /// <c>.modify money</c> lives in <see cref="BuiltinCommands"/>. Player targets only: vmangos also
-/// accepts a selected creature for HP/mana. <c>.modify scale|faction|speed|aspeed|swim|bwalk|
-/// mount|morph|drunk|exhaustion</c> and the rest are not provided.
+/// accepts a selected creature for HP/mana. <c>.modify speed</c> and <c>.modify scale</c> are in
+/// <see cref="GmParityModifyExtension"/>; <c>.modify faction|aspeed|swim|bwalk|mount|morph|drunk|
+/// exhaustion</c> and the rest are not provided.
 /// </summary>
 public sealed class ModifyExtension : ICommandExtension
 {
