@@ -57,7 +57,10 @@ public sealed class InstanceTemplateDumpImporter
     private void ReadClassic(DumpRow row)
     {
         uint map = Unsigned(row, ClassicTable, "map");
-        int ghostMap = checked((int)Unsigned(row, ClassicTable, "ghostEntranceMap"));
+        uint rawGhostMap = Unsigned(row, ClassicTable, "ghostEntranceMap");
+        int ghostMap = rawGhostMap <= ushort.MaxValue
+            ? (int)rawGhostMap
+            : throw new ImportSchemaException(ClassicTable, "ghostEntranceMap", $"table `{ClassicTable}`: ghostEntranceMap {rawGhostMap} of map {map} is not a map id");
         float ghostX = Float(row, ClassicTable, "ghostEntranceX");
         float ghostY = Float(row, ClassicTable, "ghostEntranceY");
         if (ghostMap == 0 && ghostX == 0f && ghostY == 0f)
@@ -70,7 +73,7 @@ public sealed class InstanceTemplateDumpImporter
             Unsigned(row, ClassicTable, "maxPlayers"),
             Unsigned(row, ClassicTable, "reset_delay"),
             ghostMap, ghostX, ghostY,
-            Text(row, "ScriptName"));
+            Text(row, ClassicTable, "ScriptName"));
     }
 
     private void ReadVmangos(DumpRow row)
@@ -90,7 +93,7 @@ public sealed class InstanceTemplateDumpImporter
             Signed(row, VmangosTable, "ghost_entrance_map", "GhostEntranceMap"),
             Float(row, VmangosTable, "ghost_entrance_x", "GhostEntranceX"),
             Float(row, VmangosTable, "ghost_entrance_y", "GhostEntranceY"),
-            Text(row, "script_name", "ScriptName"));
+            Text(row, VmangosTable, "script_name", "ScriptName"));
     }
 
     private static string Raw(DumpRow row, string table, params string[] columns)
@@ -122,9 +125,9 @@ public sealed class InstanceTemplateDumpImporter
             : throw new ImportSchemaException(table, columns[0], $"table `{table}`, column `{columns[0]}`: value '{raw}' is not a number");
     }
 
-    private static string Text(DumpRow row, params string[] columns)
+    private static string Text(DumpRow row, string table, params string[] columns)
     {
         string text = row.TryGet(out string? raw, columns) ? raw ?? string.Empty : string.Empty;
-        return text.Length <= 128 ? text : throw new ImportSchemaException(VmangosTable, columns[0], $"script name '{text[..32]}...' exceeds 128 characters");
+        return text.Length <= 128 ? text : throw new ImportSchemaException(table, columns[0], $"table `{table}`: script name '{text[..32]}...' exceeds 128 characters");
     }
 }
