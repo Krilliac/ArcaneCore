@@ -54,20 +54,23 @@ public sealed class TeleportRequirementsTests
     }
 
     [Fact]
-    public void BothItemsAreRequired_TheFirstMissingOneIsNamed()
+    public void EitherAlternativeItemAllowsEntry_AndMissingBothNamesTheFirst()
     {
         Player player = NewPlayer();
         AreaTriggerTeleport row = Row(item: Key, item2: Second);
 
-        ItemTestData.Give(player.Inventory, Second);
         Assert.Equal("You must have item Test Key to enter.", AreaTriggerRequirements.Evaluate(player, row, null, []).Message);
-
-        ItemTestData.Give(player.Inventory, Key);
+        ItemTestData.Give(player.Inventory, Second);
         Assert.True(AreaTriggerRequirements.Evaluate(player, row, null, []).Allowed);
 
         Player other = NewPlayer();
         ItemTestData.Give(other.Inventory, Key);
-        Assert.Equal("You must have item Test Note to enter.", AreaTriggerRequirements.Evaluate(other, row, null, []).Message);
+        Assert.True(AreaTriggerRequirements.Evaluate(other, row, null, []).Allowed);
+
+        Player onlySecondColumn = NewPlayer();
+        Assert.Equal("You must have item Test Note to enter.", AreaTriggerRequirements.Evaluate(onlySecondColumn, Row(item2: Second), null, []).Message);
+        ItemTestData.Give(onlySecondColumn.Inventory, Second);
+        Assert.True(AreaTriggerRequirements.Evaluate(onlySecondColumn, Row(item2: Second), null, []).Allowed);
     }
 
     [Fact]
