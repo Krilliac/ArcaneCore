@@ -35,6 +35,7 @@ public sealed class PaladinScriptTests : IDisposable
     private const uint JocDamage = 20467;
     private const uint Stun = 990_601;
     private const uint HammerOfWrath = 24239;
+    private const uint NeedsJudgementState = 990_602;   // a self aura whose spell needs AURA_STATE_JUDGEMENT on its caster
 
     private static SpellInfo Instant(SpellInfo spell) => spell with { StartRecoveryCategory = 0, StartRecoveryTime = 0, SpellVisual = 1 };
 
@@ -135,6 +136,11 @@ public sealed class PaladinScriptTests : IDisposable
             AtEnemy(Spell(HammerOfWrath, Effect(SpellEffectName.SchoolDamage, 500, SpellImplicitTarget.UnitEnemy)) with
             {
                 School = SpellSchool.Holy, SpellFamilyName = PaladinSpells.Family, DamageClass = SpellDamageClass.Ranged,
+            }),
+            Instant(Spell(NeedsJudgementState, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy)) with
+            {
+                CasterAuraState = AuraState.Judgement,
+                Duration = new SpellDuration(30_000, 0, 30_000),
             }));
         (_paladin, _) = _kit.AddPlayer(1, 0, 0);
         (_enemy, _) = _kit.AddPlayer(2, 3, 0);
@@ -188,6 +194,22 @@ public sealed class PaladinScriptTests : IDisposable
     }
 
     [Fact]
+    public void TheLastSealLeaving_ClearsTheStateThroughTheWorldsAuraStates_SoAnAuraThatNeedsItGoesToo()
+    {
+        // vmangos SpellAuras.cpp:6866-6893 calls Unit::ModifyAuraState(AURA_STATE_JUDGEMENT, false), whose clear removes every aura on the
+        // unit whose spell needs the state (Unit.cpp:4682-4745).
+        _kit.System.AuraStates = new AuraStateService(_kit.System, _ => []);
+        PutOn(SealOfRighteousness);
+        Assert.Equal(SpellCastResult.CastOk, Cast(_paladin, NeedsJudgementState));
+        Assert.NotNull(Holder(_paladin, NeedsJudgementState));
+
+        _kit.System.RemoveAuras(_paladin, SealOfRighteousness);
+
+        Assert.False(HasJudgementState(_paladin));
+        Assert.Null(Holder(_paladin, NeedsJudgementState));
+    }
+
+    [Fact]
     public void ASecondSeal_ReplacesTheFirst()
     {
         PutOn(SealOfRighteousness);
@@ -215,6 +237,29 @@ public sealed class PaladinScriptTests : IDisposable
         Assert.Null(Holder(_friend, BlessingOfMight1));
         Assert.NotNull(Holder(_friend, BlessingOfMight2));
         Assert.NotNull(Holder(_friend, BlessingOfWisdom));
+    }
+
+    [Fact]
+    public void AWeakerRank_IsRefusedBeforeItIsAdded_SoItsHandlersNeverRunAndNothingChurns()
+    {
+        // vmangos Unit::AddSpellAuraHolder -> RemoveNoStackAurasDueToAuraHolder (Unit.cpp:3216-3224, :3355-3560): "cannot remove higher rank"
+        // refuses the new holder before it is added; nothing is applied, sent or removed.
+        (Player ally, _) = _kit.AddPlayer(4, -2, 0);
+        Assert.Equal(SpellCastResult.CastOk, Cast(ally, BlessingOfMight2, _friend));
+        var added = new List<uint>();
+        var removed = new List<uint>();
+        _kit.System.HolderAdded += h => added.Add(h.Spell.Id);
+        _kit.System.HolderRemoved += h => removed.Add(h.Spell.Id);
+        uint attackPowerMods = _friend.GetUInt32(UpdateFields.UnitFieldAttackPowerMods);
+
+        Cast(_paladin, BlessingOfMight1, _friend);
+
+        Assert.DoesNotContain(BlessingOfMight1, added);
+        Assert.DoesNotContain(BlessingOfMight1, removed);
+        Assert.Empty(removed);
+        Assert.Equal(attackPowerMods, _friend.GetUInt32(UpdateFields.UnitFieldAttackPowerMods));
+        Assert.Null(Holder(_friend, BlessingOfMight1));
+        Assert.NotNull(Holder(_friend, BlessingOfMight2));
     }
 
     [Fact]

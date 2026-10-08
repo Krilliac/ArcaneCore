@@ -84,8 +84,9 @@ public sealed class BattlegroundDumpImporter
     }
 
     /// <summary>
-    /// Write the four tables atomically with the contract of <see cref="ImportTransaction"/>. With <paramref name="replace"/> they are emptied
-    /// first; without it an existing key fails the write and nothing changes. Nothing read: nothing is written or emptied.
+    /// Write the four tables atomically with the contract of <see cref="ImportTransaction"/>. With <paramref name="replace"/> all four are emptied
+    /// first, whatever was read: a replace import of a dump that has none of the battleground tables leaves them empty (as the other dump
+    /// importers do). Without it an existing key fails the write and nothing changes.
     /// </summary>
     public async Task<BattlegroundImportReport> WriteAsync(WorldDbContext db, bool replace, CancellationToken cancellationToken = default)
     {

@@ -28,6 +28,7 @@ public sealed class ReactiveFeature(IServiceProvider services) : IWorldFeature
             ?? throw new InvalidOperationException("the combo point service is not available yet (ComboFeature.Service is null: it is attached after the reactive feature needed it)"));
         spells.System.RegisterObserver(new ReactiveSpellObserver(reactives));
         AuraStates = states;
+        spells.System.AuraStates = states; // spell code sets states through SpellSystem.ModifyAuraState (paladin seals, Berserking)
         Reactives = reactives;
 
         world.MapCreated += Install;

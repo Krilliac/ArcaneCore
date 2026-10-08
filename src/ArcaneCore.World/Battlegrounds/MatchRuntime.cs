@@ -284,6 +284,14 @@ internal sealed class MatchRuntime : IBattlegroundHost, IWrappingSpawnGate
             }
 
             _trapCooldowns[go.Guid] = _clockMs + (BattlegroundConstants.BattlegroundTrapCooldownSeconds * 1000L);
+
+            // vmangos GameObject.cpp:546-552: the buff is cast on any living player in reach, but only a player who is in the battleground
+            // (Player::InBattleGround) uses the object up; a game master or anyone else on the map leaves it where it is.
+            if (Battleground.PlayerTeam(target.Guid) is null)
+            {
+                continue;
+            }
+
             int index = _objects.FirstOrDefault(o => o.Value == go.Guid, new KeyValuePair<int, ObjectGuid>(-1, default)).Key;
             if (!Battleground.HandleTriggerBuff(index, go.Entry))
             {

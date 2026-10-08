@@ -4,6 +4,7 @@ using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Rules.Application;
 using ArcaneCore.Game.Spells.Rules.Diminishing;
 using ArcaneCore.Game.Spells.Rules.Immunity;
+using ArcaneCore.World.Combat;
 using ArcaneCore.World.Features;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -47,6 +48,9 @@ public sealed class SpellRulesCoreFeature(IServiceProvider services, ILogger<Spe
         }
 
         system.ImmunityEnforcement = Options.ImmunityEnforcement;
+
+        // The melee code reads the same setting (vmangos has one CONFIG_UINT32_WORLD_BOSS_LEVEL_DIFF): the defense skill-up of a world boss's swing.
+        CombatEnvironments.GetOrCreate(services, world, logger).WorldBossLevelDiff = Options.WorldBossLevelDiff;
         system.ApplicationRules.Add(new ImmunityApplicationRule()); // first: it drops immune effects before the others look at the mask
         system.ApplicationRules.Add(new MechanicResistRule());
         if (Options.DiminishingReturns)

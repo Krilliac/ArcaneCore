@@ -153,6 +153,17 @@ public sealed partial class SpellSystem
             RemoveHolder(state, existing, AuraRemoveMode.Stack);
         }
 
+        // vmangos Unit::AddSpellAuraHolder -> RemoveNoStackAurasDueToAuraHolder returning false (Unit.cpp:3216-3224): a stacking rule refuses
+        // the new holder before it is added, so no handler, slot or packet ever sees it.
+        foreach (Func<SpellAuraHolder, bool> refuses in HolderAddRefusals)
+        {
+            if (refuses(holder))
+            {
+                holder.IsRemoved = true;
+                return;
+            }
+        }
+
         holder.AppliedAtUnixSeconds = UnixSecondsClock();
         holder.AppliedInProcEvent = CurrentProcEvent;
         holder.Slot = holder.NeedsVisibleSlot ? FindFreeSlot(holder.Target, holder.IsPositive) : SpellAuraHolder.NoSlot;
@@ -316,6 +327,7 @@ public sealed partial class SpellSystem
         existing.Duration = fresh.Duration;
         existing.MaxDuration = fresh.MaxDuration;
         existing.ChannelTarget = fresh.ChannelTarget;
+        bool amountsChanged = false;
         for (int i = 0; i < SpellConstants.MaxEffects; i++)
         {
             if (existing.Auras[i] is not { } aura || fresh.Auras[i] is not { } source)
@@ -336,11 +348,16 @@ public sealed partial class SpellSystem
                 aura.Amount = source.Amount;
                 aura.UnitAmount = source.UnitAmount;
                 handler?.Apply?.Invoke(this, existing, aura, true);
+                amountsChanged = true;
             }
         }
 
         WriteAuraApplications(existing);
         SendAuraDuration(existing);
+        if (amountsChanged)
+        {
+            RaiseHolderAmountsChanged(existing);
+        }
     }
 
     /// <summary>
@@ -369,6 +386,7 @@ public sealed partial class SpellSystem
         }
 
         bool refresh = stacks >= holder.StackAmount;
+        bool amountsChanged = false;
         if (stacks != holder.StackAmount)
         {
             holder.StackAmount = (byte)stacks;
@@ -392,8 +410,14 @@ public sealed partial class SpellSystem
                     handler?.Apply?.Invoke(this, holder, aura, false);
                     aura.Amount = amount;
                     handler?.Apply?.Invoke(this, holder, aura, true);
+                    amountsChanged = true;
                 }
             }
+        }
+
+        if (amountsChanged)
+        {
+            RaiseHolderAmountsChanged(holder);
         }
 
         if (refresh)

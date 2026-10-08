@@ -31,6 +31,7 @@ public sealed class ClassDummyScriptTests : IDisposable
     private const uint RapidFire = 3045;
     private const uint Conflagrate = 17962;
     private const uint Immolate = 348;
+    private const uint NeedsBerserkingState = 990_702;   // a passive whose spell needs AURA_STATE_BERSERKING on its caster
 
     private static SpellInfo Instant(SpellInfo spell) => spell with { StartRecoveryCategory = 0, StartRecoveryTime = 0, SpellVisual = 1 };
 
@@ -85,6 +86,12 @@ public sealed class ClassDummyScriptTests : IDisposable
             AtEnemy(Spell(Conflagrate, Effect(SpellEffectName.SchoolDamage, 240, SpellImplicitTarget.UnitEnemy)) with
             {
                 School = SpellSchool.Fire, SpellFamilyName = 5, SpellFamilyFlags = 0x200,
+            }),
+            Instant(Spell(NeedsBerserkingState, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy)) with
+            {
+                Attributes = SpellAttributes.Passive,
+                CasterAuraState = AuraState.Berserking,
+                Duration = new SpellDuration(-1, 0, -1),
             }));
         (_player, _) = _kit.AddPlayer(1);
         (_enemy, _) = _kit.AddPlayer(2, 3, 0);
@@ -175,6 +182,21 @@ public sealed class ClassDummyScriptTests : IDisposable
         SpellAuraHolder haste = Holder(_player, BerserkingScript.BerserkingHaste)!;
         Assert.All(haste.Auras.OfType<SpellAura>(), a => Assert.Equal(20, a.Amount));
         Assert.NotEqual(0u, _player.GetUInt32(UpdateFields.UnitFieldAurastate) & (1u << ((int)AuraState.Berserking - 1)));
+    }
+
+    [Fact]
+    public void Berserking_SetsTheStateThroughTheWorldsAuraStates_SoAKnownPassiveThatNeedsItIsCast()
+    {
+        // vmangos SpellEffects.cpp:1456 m_caster->ModifyAuraState(AURA_STATE_BERSERKING, true): setting a state casts the known passive
+        // spells that need it (Unit::ModifyAuraState, Unit.cpp:4682-4745).
+        _kit.Spellbook.Teach(_player, NeedsBerserkingState);
+        _kit.System.AuraStates = new AuraStateService(_kit.System, p => _kit.Spellbook.Spells.TryGetValue(p.Guid, out HashSet<uint>? book) ? book : []);
+        _player.Health = 7_000;
+
+        Cast(Berserking);
+
+        Assert.NotEqual(0u, _player.GetUInt32(UpdateFields.UnitFieldAurastate) & (1u << ((int)AuraState.Berserking - 1)));
+        Assert.NotNull(Holder(_player, NeedsBerserkingState));
     }
 
     private bool OnCooldown(uint spell) => _kit.System.GetActiveCooldowns(_player).Any(c => c.SpellId == spell);

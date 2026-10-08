@@ -1385,8 +1385,10 @@ public sealed partial class InstanceManager : IMapResolver
     /// <summary>
     /// The bodies of online ghosts in the deleted instance stay where they are (vmangos keeps a corpse whatever happens to its
     /// instance), but they no longer name it: instance ids are handed out again after a restart, and a stale id would put the body
-    /// into somebody else's new instance. Instance 0 never matches a dungeon map again (MapCombat.AdoptBodiesLeftOutside,
-    /// MapCombat.RestoreGhost); entering the dungeon still revives the ghost (ReviveForDungeonEntry compares the map only). The
+    /// into somebody else's new instance. A new instance map never adopts an instance-0 body (MapCombat.AdoptBodiesLeftOutside compares
+    /// the instance id). At a login, though, MapCombat.RestoreGhost (ResolveCorpseMap) applies the legacy-row rule: an instance-0 body of
+    /// an instanceable map goes into the ghost's current map when the map ids match, so a ghost that logs in inside a new instance of the
+    /// same dungeon finds its body there. Entering the dungeon still revives the ghost (ReviveForDungeonEntry compares the map only). The
     /// stored corpse rows get the same change with the instance's delete (IInstanceStore.DeleteInstanceAsync).
     /// </summary>
     private void ForgetDeletedInstanceOfBodies(InstanceSave save)

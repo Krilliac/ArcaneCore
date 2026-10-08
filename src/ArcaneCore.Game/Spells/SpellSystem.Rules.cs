@@ -40,11 +40,25 @@ public sealed partial class SpellSystem
     /// </summary>
     public List<ISpellApplicationRule> ApplicationRules { get; } = [];
 
+    /// <summary>
+    /// Stacking rules that refuse a new aura holder before it is put on its target (vmangos RemoveNoStackAurasDueToAuraHolder returning false:
+    /// "cannot remove higher rank"). They run after the same-spell refresh and stack branches; a rule that returns true refuses the holder,
+    /// which is then marked removed without any handler, slot, packet or <see cref="HolderAdded"/>. Empty by default.
+    /// </summary>
+    public List<Func<SpellAuraHolder, bool>> HolderAddRefusals { get; } = [];
+
     /// <summary>An aura holder was put on its target (after its handlers ran); a refreshed stack does not raise it.</summary>
     public event Action<SpellAuraHolder>? HolderAdded;
 
     /// <summary>An aura holder was taken off its target (after its handlers ran).</summary>
     public event Action<SpellAuraHolder>? HolderRemoved;
+
+    /// <summary>
+    /// A holder that stays on its target re-applied a changed amount (an in-place refresh or a stack change, vmangos Aura::Refresh and
+    /// SpellAuraHolder::SetStackAmount: the handlers ran with the old amount off and the new one on). No <see cref="HolderAdded"/> or
+    /// <see cref="HolderRemoved"/> is raised for it, so recomputes that follow those events listen here too.
+    /// </summary>
+    public event Action<SpellAuraHolder>? HolderAmountsChanged;
 
     /// <summary>A unit died and its auras were removed (see <see cref="OnUnitDied"/>).</summary>
     public event Action<Unit>? UnitDied;
@@ -52,6 +66,8 @@ public sealed partial class SpellSystem
     internal void RaiseHolderAdded(SpellAuraHolder holder) => HolderAdded?.Invoke(holder);
 
     internal void RaiseHolderRemoved(SpellAuraHolder holder) => HolderRemoved?.Invoke(holder);
+
+    internal void RaiseHolderAmountsChanged(SpellAuraHolder holder) => HolderAmountsChanged?.Invoke(holder);
 
     internal void RaiseUnitDied(Unit unit) => UnitDied?.Invoke(unit);
 

@@ -435,7 +435,7 @@ public sealed partial class MapCombat
         MeleeDamageInfo info = CalculateMeleeDamage(attacker, victim, attackType);
         // vmangos ProcDamageAndSpell runs ProcSkillsAndReactives first (SpellCaster.cpp:271-283), before the damage, so a killing swing still rolls the
         // victim's defense skill-up.
-        PlayerCombatSkills.OnMeleeResolved(attacker, victim, attackType, info.Outcome, environment.ShapeshiftForms);
+        PlayerCombatSkills.OnMeleeResolved(attacker, victim, attackType, info.Outcome, environment.ShapeshiftForms, environment.WorldBossLevelDiff);
         MeleeSwingResolved?.Invoke(info);   // vmangos ProcDamageAndSpell, before the packet and the damage (Unit.cpp:2260-2271)
         SpellMitigation?.OnMeleeSwingResolved(info); // the aura procs of that call (Spells/Procs, docs/areas/procs.md)
         SubDamage[] sub = [new SubDamage(0, info.TotalDamage, info.Absorbed, 0)]; // vmangos Unit.cpp:1510-1565; physical school after block/absorb

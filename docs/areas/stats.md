@@ -261,8 +261,11 @@ both were already in place. The weapon skill auras are `MOD_SKILL` / `MOD_SKILL_
 Deviation: vmangos overwrites PLAYER_FIELD_MOD_DAMAGE_DONE_POS with the net spell damage (negative auras included) at every stat update while its aura
 handlers add positive and negative amounts apart; here the positive and negative fields always stay apart.
 
-Limits: a stack refresh that changes the amount of a flat attack power or disarm aura without a new holder is not seen (no 1.12 such aura
-stacks); the hunter pet happiness factor of `MeleeDamageBonusDone` and pets' own damage recompute belong to the pets lane; the melee class
+A refresh in place or a stack change that re-applies a changed amount without a new holder raises `SpellSystem.HolderAmountsChanged`, and
+`CombatStatAuras` recomputes the same values on it as on an added or removed holder (a creature's damage fields after an attack power aura was
+refreshed with another amount, as vmangos' HandleStatModifier does).
+
+Limits: the hunter pet happiness factor of `MeleeDamageBonusDone` and pets' own damage recompute belong to the pets lane; the melee class
 SCHOOL_DAMAGE spells (Shield Slam and the like) still take only the DAMAGE spell mod, not the non-weapon branch of `MeleeDamageBonusDone`; creature
 damage fields are recomputed for the main hand only (creatures carry no off-hand data), and without creature equipment rows
 (`creature_equip_template`, not in the repository) no creature holds a weapon, so the 40% disarm factor needs that data to show in play.

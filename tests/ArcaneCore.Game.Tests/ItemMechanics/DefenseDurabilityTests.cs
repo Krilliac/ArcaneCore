@@ -14,9 +14,9 @@ namespace ArcaneCore.Game.Tests.ItemMechanics;
 /// <summary>
 /// Durability loss when a player defends: <c>Items:DurabilityLossChanceParry</c> wears the parrying weapon (main hand),
 /// <c>Items:DurabilityLossChanceBlock</c> the blocking shield (off hand), <c>Items:DurabilityLossChanceAbsorb</c> a worn armor piece when an absorb
-/// aura takes part of a swing. The three chances and their defaults (0.05, 0.05, 0.5 percent) are the mangos <c>DurabilityLossChance.Parry/Block/Absorb</c>
-/// settings (mangos-classic World.cpp:460-462, mangoszero WorldConfig.cpp:233-235); no reference core reads them any more, so the slots are the
-/// documented reconstruction (docs/areas/items.md, "Combat durability").
+/// aura takes part of a swing. The three chances are the mangos <c>DurabilityLossChance.Parry/Block/Absorb</c> settings (mangos-classic
+/// World.cpp:460-462, mangoszero WorldConfig.cpp:233-235; mangos defaults 0.05, 0.05, 0.5 percent). vmangos, the fidelity reference, has none of
+/// them, so they default to 0 (off); the slots they wear are the documented reconstruction (docs/areas/items.md, "Combat durability").
 /// </summary>
 public sealed class DefenseDurabilityTests
 {
@@ -147,11 +147,34 @@ public sealed class DefenseDurabilityTests
     }
 
     [Fact]
-    public void Defaults_AreTheMangosSettings()
+    public void Defaults_AreVmangos_WhichHasNoDefenseWear()
     {
+        // vmangos reads only DurabilityLossChance.Damage (World.cpp:554); Parry, Block and Absorb are mangos settings it dropped. The defaults
+        // are therefore 0 (off); the mangos values (0.05, 0.05, 0.5) are an operator's choice.
         var options = new ItemMechanicsOptions();
-        Assert.Equal(0.05, options.DurabilityLossChanceParry);
-        Assert.Equal(0.05, options.DurabilityLossChanceBlock);
-        Assert.Equal(0.5, options.DurabilityLossChanceAbsorb);
+        Assert.Equal(0, options.DurabilityLossChanceParry);
+        Assert.Equal(0, options.DurabilityLossChanceBlock);
+        Assert.Equal(0, options.DurabilityLossChanceAbsorb);
+    }
+
+    [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    public void WithTheDefaultChances_AParryABlockOrAnAbsorb_WearsNothing(bool parry, bool block, bool absorb)
+    {
+        var defaults = new ItemMechanicsOptions();
+        using Scene s = Create(parry, block, defaults.DurabilityLossChanceParry, defaults.DurabilityLossChanceBlock, defaults.DurabilityLossChanceAbsorb);
+        if (absorb)
+        {
+            RuleTestSupport.Apply(s.Kit, s.Victim, AbsorbAura);
+        }
+
+        MeleeDamageInfo info = Swing(s, absorb ? 9999 : 9000);
+
+        Assert.Equal(parry ? MeleeHitOutcome.Parry : block ? MeleeHitOutcome.Block : MeleeHitOutcome.Normal, info.Outcome);
+        Assert.Equal(0u, s.Lost(InventorySlots.MainHand));
+        Assert.Equal(0u, s.Lost(InventorySlots.OffHand));
+        Assert.Equal(0u, s.Lost(InventorySlots.Chest));
     }
 }

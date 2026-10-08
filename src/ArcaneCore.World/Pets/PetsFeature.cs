@@ -76,6 +76,9 @@ public sealed class PetsFeature : IWorldFeature, ISpellSummonSink
             ApplyOptions(map);
         }
 
+        // What the service remembers of a player (the spirit healer's pet, a temporarily unsummoned pet) goes with the session.
+        world.PlayerLoggingOut += Service.ForgetOwner;
+
         // The pet goes with its owner through teleports (vmangos UnsummonPetTemporaryIfAny / ResummonPetTemporaryUnSummonedIfAny). Features
         // attach in type-name order and the teleport service exists once TeleportFeature attached, so it is looked up on the world thread.
         world.Post(() =>

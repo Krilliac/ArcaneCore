@@ -3,6 +3,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Stats;
 using ArcaneCore.Game.Tests.SpellRules;
 using ArcaneCore.Game.Tests.Spells;
@@ -38,6 +39,7 @@ public sealed class CombatStatAurasTests
     private const uint AttackPowerMinus150 = 989_613;
     private const uint SwordDamage7 = 989_614;
     private const uint TotalSpirit100 = 989_615;
+    private const uint AttackPowerMinus50Stacking = 989_616;
 
     private const uint Sword = 989_700;   // one-handed sword, 2.6 s
     private const uint Axe = 989_701;     // one-handed axe
@@ -77,7 +79,8 @@ public sealed class CombatStatAurasTests
         RuleTestSupport.Grant(FirePct10, AuraType.ModDamagePercentDone, 10, misc: 1 << (int)SpellSchool.Fire),
         RuleTestSupport.Grant(AttackPowerMinus150, AuraType.ModAttackPower, -150),
         Weapon(RuleTestSupport.Grant(SwordDamage7, AuraType.ModDamageDone, 7, misc: 1), 1 << 7),
-        RuleTestSupport.Grant(TotalSpirit100, AuraType.ModTotalStatPercentage, 100, misc: 4));
+        RuleTestSupport.Grant(TotalSpirit100, AuraType.ModTotalStatPercentage, 100, misc: 4),
+        RuleTestSupport.Grant(AttackPowerMinus50Stacking, AuraType.ModAttackPower, -50) with { StackAmount = 3 });
 
     /// <summary>A level 60 player with str 120, agi 80, sta 100, int 20, spi 100, attached to a stat system.</summary>
     private static Player Player(SpellTestKit kit, uint guid = 1)
@@ -423,6 +426,49 @@ public sealed class CombatStatAurasTests
         Assert.Equal(170f, MainHand(creature).Max, Tol);
         kit.System.RemoveAuras(creature, AttackPowerMinus150);
         Assert.Equal((100f, 200f), MainHand(creature));
+    }
+
+    /// <summary>Spell mods that double every effect value (a talent such as Improved Demoralizing Shout, exaggerated).</summary>
+    private sealed class DoublingModifiers : ISpellModifiers
+    {
+        public float Apply(Unit caster, SpellInfo spell, SpellModOp op, float value) => op is SpellModOp.AllEffects ? value * 2 : value;
+    }
+
+    [Fact]
+    public void ACreaturesAttackPowerAura_RefreshedInPlaceWithAnotherAmount_MovesItsDamageAgain()
+    {
+        // vmangos Aura::Refresh re-applies a changed amount through HandleAuraModAttackPower -> HandleStatModifier(UNIT_MOD_ATTACK_POWER), whose
+        // UpdateAttackPowerAndDamage recomputes Creature::UpdateDamagePhysical (Unit.cpp:7745-7790, StatSystem.cpp:880-956).
+        using SpellTestKit kit = Kit();
+        Player player = Player(kit);
+        Creature creature = Creature(player);
+        Apply(kit, creature, AttackPowerMinus150);   // 300 -> 150
+        Assert.Equal(85f, MainHand(creature).Min, Tol);
+        SpellAuraHolder holder = Assert.Single(kit.System.GetAuras(creature), h => h.Spell.Id == AttackPowerMinus150);
+
+        kit.System.SpellModifiers = new DoublingModifiers();
+        Apply(kit, creature, AttackPowerMinus150);   // the same caster's same spell: refreshed in place, now -300 -> 0 attack power
+
+        Assert.Same(holder, Assert.Single(kit.System.GetAuras(creature), h => h.Spell.Id == AttackPowerMinus150));
+        Assert.Equal(-300, holder.Auras[0]!.Amount);
+        Assert.Equal(70f, MainHand(creature).Min, Tol);   // 100 * (0.7 + 0.3 * 0 / 300)
+        Assert.Equal(140f, MainHand(creature).Max, Tol);
+    }
+
+    [Fact]
+    public void ACreaturesStackingAttackPowerAura_MovesItsDamageWithEveryStack()
+    {
+        using SpellTestKit kit = Kit();
+        Player player = Player(kit);
+        Creature creature = Creature(player);
+
+        Apply(kit, creature, AttackPowerMinus50Stacking);   // 300 -> 250
+        Assert.Equal(95f, MainHand(creature).Min, Tol);
+        Apply(kit, creature, AttackPowerMinus50Stacking);   // two stacks: 300 -> 200
+
+        Assert.Equal(2, Assert.Single(kit.System.GetAuras(creature), h => h.Spell.Id == AttackPowerMinus50Stacking).StackAmount);
+        Assert.Equal(90f, MainHand(creature).Min, Tol);    // 100 * (0.7 + 0.3 * 200 / 300)
+        Assert.Equal(180f, MainHand(creature).Max, Tol);
     }
 
     [Fact]

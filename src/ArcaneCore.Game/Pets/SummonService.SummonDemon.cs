@@ -13,12 +13,12 @@ public sealed partial class SummonService
     /// <summary>
     /// vmangos Spell::EffectSummonDemon (SpellEffects.cpp:5796-5819): a temporary summon of the effect's creature entry at the spell's destination
     /// (the caster for TARGET_LOCATION_CASTER_DEST, Spell.cpp:3166-3172), facing as the caster faces, with the template's faction and the caster's
-    /// level ("might not always work correctly, maybe the creature that dies from CoD casts the effect on itself"), despawning after the spell
-    /// duration (an hour without one) or at its death.
+    /// level ("might not always work correctly, maybe the creature that dies from CoD casts the effect on itself"), unsummoned once out of combat
+    /// after the spell duration (an hour without one), TEMPSUMMON_TIMED_COMBAT_OR_DEAD_DESPAWN. It is a <see cref="SummonKind.Wild"/> summon with no
+    /// owner fields, so nothing takes it away with its summoner (vmangos WorldObject::SummonCreature).
     /// <para>
-    /// LIMITS: vmangos summons with TEMPSUMMON_TIMED_COMBAT_OR_DEAD_DESPAWN; the summon here is a <see cref="SummonKind.Wild"/> summon, which is
-    /// killed when the timer runs out out of combat (TEMPSUMMON_TIMED_DEATH_AND_DEAD_DESPAWN) instead of despawning, and a summoning ritual game
-    /// object as the destination (Ritual of Doom) and the spell script's <c>OnSummon</c> (Inferno's Enslave Demon) are not modelled.
+    /// LIMITS: a dead summon is left to its corpse decay (vmangos restarts its timer for the corpse); a summoning ritual game object as the
+    /// destination (Ritual of Doom) and the spell script's <c>OnSummon</c> (Inferno's Enslave Demon) are not modelled.
     /// </para>
     /// </summary>
     private void EffectSummonDemon(SpellEffectContext context)
@@ -49,7 +49,7 @@ public sealed partial class SummonService
         float orientation = caster.Orientation;
         Creature summon = creatures.SpawnSummoned(template, HighGuid.Unit, creature =>
         {
-            creature.Summon = new SummonLinks(SummonKind.Wild, caster.Guid, spell.Id, TotemSlots.None, duration);
+            creature.Summon = new SummonLinks(SummonKind.Wild, caster.Guid, spell.Id, TotemSlots.None, duration) { DespawnsWhenTimeRunsOut = true };
             creature.SetUInt32(UpdateFields.UnitCreatedBySpell, spell.Id);
             creature.Level = caster.Level;
             return new CreatureHome(x, y, z, orientation);

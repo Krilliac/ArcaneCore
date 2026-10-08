@@ -78,6 +78,26 @@ public sealed class MeleeDefenseSkillUpTests
     }
 
     [Fact]
+    public void AWorldBoss_CountsAsThePlayersLevelPlusTheConfiguredDifference_ForTheDefenseChance()
+    {
+        // vmangos GetLevelForTarget reads CONFIG_UINT32_WORLD_BOSS_LEVEL_DIFF (World.cpp:744), the SpellRules:WorldBossLevelDiff setting here.
+        // Configured 1: as level 11 the chance is 3 x (11 - 4) x 30 / 10 = 63, so a roll of 70 loses (with the default 3 it is 81 and wins).
+        using var rig = new Rig(playerLevel: 10, creatureLevel: 63);
+        CombatEnvironment.GetOrCreate(rig.World, () => new CombatOptions()).WorldBossLevelDiff = 1;
+        rig.Creature.IsWorldBoss = true;
+        rig.SkillRandom.Floats.Enqueue(70f);
+
+        rig.Map.Combat.AttackerStateUpdate(rig.Creature, rig.Player, WeaponAttackType.BaseAttack);
+
+        Assert.Empty(rig.SkillRandom.Floats);
+        Assert.Equal((ushort)20, rig.Skills.GetValuePure(SkillIds.Defense));
+
+        rig.SkillRandom.Floats.Enqueue(60f);
+        rig.Map.Combat.AttackerStateUpdate(rig.Creature, rig.Player, WeaponAttackType.BaseAttack);
+        Assert.Equal((ushort)21, rig.Skills.GetValuePure(SkillIds.Defense));
+    }
+
+    [Fact]
     public void APlayersPet_GivesNoDefenseSkill()
     {
         using var rig = new Rig();

@@ -26,24 +26,26 @@ public sealed class ItemMechanicsOptions
     public double DurabilityLossChanceDamage { get; set; } = 0.5;
 
     /// <summary>
-    /// mangos <c>DurabilityLossChance.Parry</c> (mangos-classic World.cpp:461, mangoszero WorldConfig.cpp:234; default 0.05): the percent chance
-    /// that a player who parries a melee swing loses a durability point on the main-hand weapon (MapCombat.Durability.cs). Zero or less never
-    /// rolls; <see cref="DurabilityLossEnable"/> false overrides it.
+    /// mangos <c>DurabilityLossChance.Parry</c> (mangos-classic World.cpp:461, mangoszero WorldConfig.cpp:234; mangos default 0.05): the percent
+    /// chance that a player who parries a melee swing loses a durability point on the main-hand weapon (MapCombat.Durability.cs). Default 0 (off):
+    /// vmangos, the fidelity reference, has no parry wear (it reads only <c>DurabilityLossChance.Damage</c>, World.cpp:554); 0.05 restores the
+    /// mangos setting. Zero or less never rolls; <see cref="DurabilityLossEnable"/> false overrides it.
     /// </summary>
-    public double DurabilityLossChanceParry { get; set; } = 0.05;
+    public double DurabilityLossChanceParry { get; set; }
 
     /// <summary>
-    /// mangos <c>DurabilityLossChance.Block</c> (mangos-classic World.cpp:462, mangoszero WorldConfig.cpp:235; default 0.05): the percent chance
-    /// that a player who blocks a melee swing loses a durability point on the off-hand item (the shield). Zero or less never rolls.
+    /// mangos <c>DurabilityLossChance.Block</c> (mangos-classic World.cpp:462, mangoszero WorldConfig.cpp:235; mangos default 0.05): the percent
+    /// chance that a player who blocks a melee swing loses a durability point on the off-hand item (the shield). Default 0 (off), as vmangos has
+    /// no block wear; 0.05 restores the mangos setting. Zero or less never rolls.
     /// </summary>
-    public double DurabilityLossChanceBlock { get; set; } = 0.05;
+    public double DurabilityLossChanceBlock { get; set; }
 
     /// <summary>
-    /// mangos <c>DurabilityLossChance.Absorb</c> (mangos-classic World.cpp:460, mangoszero WorldConfig.cpp:233; default 0.5): the percent chance
-    /// that a player whose absorb effects take part of a melee swing loses a durability point on one worn armor piece (the hit-taken pool).
-    /// Zero or less never rolls.
+    /// mangos <c>DurabilityLossChance.Absorb</c> (mangos-classic World.cpp:460, mangoszero WorldConfig.cpp:233; mangos default 0.5): the percent
+    /// chance that a player whose absorb effects take part of a melee swing loses a durability point on one worn armor piece (the hit-taken
+    /// pool). Default 0 (off), as vmangos has no absorb wear; 0.5 restores the mangos setting. Zero or less never rolls.
     /// </summary>
-    public double DurabilityLossChanceAbsorb { get; set; } = 0.5;
+    public double DurabilityLossChanceAbsorb { get; set; }
 
     /// <summary>
     /// How often (ms) the per-map item maintenance runs: timed-item ticks and map/area-limited item

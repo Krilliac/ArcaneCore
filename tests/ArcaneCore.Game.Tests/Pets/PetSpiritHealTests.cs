@@ -189,8 +189,10 @@ public sealed class PetSpiritHealTests : IDisposable
     }
 
     [Fact]
-    public void SpiritHeal_BringsTheHuntersCurrentPetBack_AliveAtFullHealth()
+    public void SpiritHeal_BringsTheHuntersLivingPetBack_WithTheHealthItHad()
     {
+        // vmangos Player::AutoReSummonPet (Player.cpp:1619-1628): "We may want to resurrect the pet": only a dead pet is set to full
+        // health; a living one keeps what it was saved with.
         (Player hunter, _) = Owner(Class.Hunter);
         Assert.NotNull(_service.RestoreCurrentPet(hunter, new PersistentPetSnapshot(1, 801, HunterPetEntry, 5, 0, 40, 0, 0, 1, [], [])));
         Assert.NotNull(_service.PetForSpiritHealer(hunter));
@@ -201,8 +203,49 @@ public sealed class PetSpiritHealTests : IDisposable
 
         Creature pet = Assert.IsType<Creature>(Pet());
         Assert.Equal((HunterPetEntry, 801u), (pet.Entry, pet.Summon!.Charm!.PetNumber));
+        Assert.True(pet.IsAlive);
+        Assert.Equal(40u, pet.Health);
+        Assert.True(pet.Health < pet.MaxHealth);
+        Assert.Equal(pet.Guid, hunter.PetGuid);
+    }
+
+    [Fact]
+    public void SpiritHeal_BringsTheHuntersDeadPetBack_AliveAtFullHealth()
+    {
+        (Player hunter, _) = Owner(Class.Hunter);
+        Creature dying = _service.RestoreCurrentPet(hunter, new PersistentPetSnapshot(1, 803, HunterPetEntry, 5, 0, 40, 0, 0, 1, [], []))!;
+        _creatures.KillCreature(dying);
+        Assert.False(dying.IsAlive);
+        DieAndWait(hunter);
+        Assert.DoesNotContain(_creatures.Creatures, c => c.IsPet && c.IsAlive);
+
+        Assert.Equal(SpellCastResult.CastOk, SpiritHealOf(hunter));
+
+        Creature pet = Assert.Single(_creatures.Creatures, c => c.IsPet && c.IsAlive);
+        Assert.Equal((HunterPetEntry, 803u), (pet.Entry, pet.Summon!.Charm!.PetNumber));
         Assert.Equal(pet.MaxHealth, pet.Health);
         Assert.Equal(pet.Guid, hunter.PetGuid);
+    }
+
+    [Fact]
+    public void SpiritHeal_RepopsAtTheGraveyard_WhileTheAuraIsStillOn_AndRemovesItJustBeforeTheResurrection()
+    {
+        // vmangos Spell::EffectSpiritHeal (SpellEffects.cpp:5838-5842): RepopAtGraveyard, then RemoveAurasDueToSpell(2584), then
+        // ResurrectPlayer. The aura goes only on the way to a resurrection that happens.
+        (Player warlock, _) = Owner(Class.Warlock);
+        var graveyards = new RecordingGraveyards { Probe = player => _spells.System.HasAura(player, SpiritHealEffect.WaitingToResurrect) };
+        Assert.True(DeathSeams.Of(_spells.World).TryRegisterGraveyards(graveyards));
+        Assert.True(DeathSeams.Of(_spells.World).TryRegisterBattlegrounds(new Presence(BattlegroundStatus.WaitJoin)));
+        DieAndWait(warlock);
+        graveyards.Repops.Clear();
+        graveyards.Probes.Clear();
+
+        Assert.Equal(SpellCastResult.CastOk, SpiritHealOf(warlock));
+
+        Assert.Equal([warlock.Guid], graveyards.Repops);
+        Assert.Equal([true], graveyards.Probes); // still waiting to resurrect when sent to the graveyard
+        Assert.True(warlock.IsAlive);
+        Assert.False(_spells.System.HasAura(warlock, SpiritHealEffect.WaitingToResurrect));
     }
 
     [Fact]
@@ -241,9 +284,18 @@ public sealed class PetSpiritHealTests : IDisposable
     {
         public List<ObjectGuid> Repops { get; } = [];
 
+        public Func<Player, bool>? Probe { get; init; }
+
+        public List<bool> Probes { get; } = [];
+
         public bool RepopAtGraveyard(Player player)
         {
             Repops.Add(player.Guid);
+            if (Probe is { } probe)
+            {
+                Probes.Add(probe(player));
+            }
+
             return true;
         }
 

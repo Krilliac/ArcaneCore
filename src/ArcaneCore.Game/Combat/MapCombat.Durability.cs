@@ -78,10 +78,10 @@ public sealed partial class MapCombat
     /// <summary>
     /// Wear from defending a white swing, after its damage was dealt, while the player victim still lives: a parry wears the main-hand weapon
     /// (<c>Items:DurabilityLossChanceParry</c>), a block the off-hand shield (<c>Items:DurabilityLossChanceBlock</c>), and damage that absorb
-    /// effects took a worn armor piece from the hit-taken pool (<c>Items:DurabilityLossChanceAbsorb</c>). The three settings and their defaults are
-    /// the mangos <c>DurabilityLossChance.Parry/Block/Absorb</c> (mangos-classic World.cpp:460-462, mangoszero WorldConfig.cpp:233-235); no
-    /// reference core still reads them (vmangos dropped them, World.cpp:554 keeps only .Damage), so which item each one wears is a documented
-    /// reconstruction (docs/areas/items.md). A swing that missed, was dodged or was fully blocked does not reach the hit-taken roll, which is
+    /// effects took a worn armor piece from the hit-taken pool (<c>Items:DurabilityLossChanceAbsorb</c>). The three settings are the mangos
+    /// <c>DurabilityLossChance.Parry/Block/Absorb</c> (mangos-classic World.cpp:460-462, mangoszero WorldConfig.cpp:233-235); no reference core
+    /// still reads them (vmangos dropped them, World.cpp:554 keeps only .Damage), so they default to 0 (off, the vmangos behaviour) and which item
+    /// each one wears is a documented reconstruction (docs/areas/items.md). A swing that missed, was dodged or was fully blocked does not reach the hit-taken roll, which is
     /// why these exist. World thread only; allocation free.
     /// </summary>
     private void RollDefenseDurability(MeleeDamageInfo info)

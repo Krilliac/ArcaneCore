@@ -14,8 +14,8 @@ checks), the proc engine's `RegisterProcScript` (docs/areas/procs.md), value mod
 
 | Piece | What it does | Code | vmangos |
 |---|---|---|---|
-| Seal bookkeeping | A seal on a unit sets AURA_STATE_JUDGEMENT (Judgement's CasterAuraState); the last seal leaving clears it. | `Paladin/PaladinAuraRules.cs` | SpellAuras.cpp:6815-6893 |
-| Spell specific stacking | Seal: one per unit from any caster. Blessing, paladin aura, judgement: one per unit per caster; one rank of a chain per unit; a weaker rank never replaces a stronger one (and then nothing it would have replaced goes). | `Paladin/PaladinAuraRules.cs`, `PaladinSpells.cs` | Unit.cpp:3355-3560, SpellEntry.cpp:100-122, :177-195 |
+| Seal bookkeeping | A seal on a unit sets AURA_STATE_JUDGEMENT (Judgement's CasterAuraState); the last seal leaving clears it. Both go through `SpellSystem.ModifyAuraState`, so the world's `AuraStateService` adds vmangos' side effects (an aura that needs the state goes with it). | `Paladin/PaladinAuraRules.cs` | SpellAuras.cpp:6815-6893, Unit.cpp:4682-4745 |
+| Spell specific stacking | Seal: one per unit from any caster. Blessing, paladin aura, judgement: one per unit per caster; one rank of a chain per unit; a weaker rank never replaces a stronger one: it is refused before it is added (`SpellSystem.HolderAddRefusals`), and nothing it would have replaced goes. | `Paladin/PaladinAuraRules.cs`, `PaladinSpells.cs` | Unit.cpp:3216-3224, :3355-3560, SpellEntry.cpp:100-122, :177-195 |
 | Seal of Righteousness | The dummy aura's melee proc: weapon-speed scaled damage between `amount/87` (1.5 s) and `amount/25` (4.0 s), Improved SoR percent mods on the base, the seal's spell bonuses, the rank's damage spell (25742 ... 25713) dithered, and one more weapon-enchant proc. | `Paladin/PaladinProcScripts.cs` | UnitAuraProcHandler.cpp:979-1053 |
 | Judgement (20271) | Cancels the caster's seal and casts the judgement its third effect names (simple value). | `Paladin/PaladinSpellScripts.cs` | SpellEffects.cpp:4502-4529 |
 | Judgement of Light / Wisdom | The judged unit's PROC_TRIGGER_SPELL debuff: whoever strikes it casts the rank's heal (20267 ...) or mana (20268 ...) on itself. | `PaladinProcScripts.cs` | UnitAuraProcHandler.cpp:1428-1466 |
@@ -36,8 +36,8 @@ Sanctuary's block-only proc and the 50% judgement procs need their `spell_proc_e
 
 | Piece | What it does | Code | vmangos |
 |---|---|---|---|
-| Flametongue Weapon proc (10 ids) | `(value + 3.85 * fire spell damage) * 0.01 * weapon speed` of the item that procced, dithered, dealt by Flametongue Attack 10444. | `Shaman/ShamanWeaponScripts.cs` | spell_shaman.cpp:19-44 |
-| Rockbiter Weapon proc (6 ids) | `value * main-hand attack time / 1000` threat where the shaman is already on the list. | `ShamanWeaponScripts.cs` | SpellEffects.cpp:4544-4561 |
+| Flametongue Weapon proc (10 ids) | `(value + 3.85 * fire spell damage) * 0.01 * weapon speed` of the item that procced, dithered, dealt by Flametongue Attack 10444 cast with that item as its cast item. | `Shaman/ShamanWeaponScripts.cs` | spell_shaman.cpp:19-44 |
+| Rockbiter Weapon proc (6 ids) | `value * main-hand attack time / 1000` threat (whole numbers, added raw with no school: no SPELLMOD_THREAT and no MOD_THREAT multiplier, ThreatManager.h:192 and Unit.cpp:7414-7415) where the shaman is already on the list. | `ShamanWeaponScripts.cs` | SpellEffects.cpp:4544-4561 |
 
 The imbues themselves are temporary weapon enchantments (SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY, crafting lane) whose COMBAT_SPELL enchantment effect is
 procced by `SpellSystem.HandleItemCombatProc` (Rockbiter Weapon's TOTEM effect adds weapon damage in `PlayerEnchantments`); Windfury Weapon and Frostbrand
@@ -56,7 +56,8 @@ Rupture adds `attack power * min(combo points, 3) / 100` and Garrote `attack pow
 
 Curse of Doom (603): a tick that kills casts Curse of Doom Effect (18662) on the caster one time in ten (SpellAuras.cpp:5921-5924); players and units
 a player owns are not targets (TARGET_IS_PLAYER / BAD_TARGETS, Spell.cpp:7584-7592). SPELL_EFFECT_SUMMON_DEMON (112, `Pets/SummonService.SummonDemon.cs`,
-SpellEffects.cpp:5796-5819) summons the Doomguard at the destination with the caster's level for the spell's duration. Conflagrate needs and consumes the
+SpellEffects.cpp:5796-5819) summons the Doomguard at the destination with the caster's level; once out of combat at the end of the spell's duration it
+is unsummoned (TEMPSUMMON_TIMED_COMBAT_OR_DEAD_DESPAWN), and it has no owner, so its summoner leaving does not take it away. Conflagrate needs and consumes the
 caster's Immolate (spell_warlock.cpp:58-110).
 
 ## Common DUMMY / SCRIPT_EFFECT scripts (`Spells/ClassScripts`)
@@ -77,7 +78,7 @@ SPELL_EFFECT_PERSISTENT_AREA_AURA had no handler (no dynamic object entity exist
 - Each spell update (DynamicObject::Update and DynamicObjectUpdater::VisitHelper): the object goes when its caster left the world or the map, and when
   its time ran out unless it is the running channel's object; units in its radius get the spell's aura (alive, not a GM, a valid attack target for a
   negative effect or a helpable one for a positive effect, LOS from the object for a player caster, at most once per 2 s, the patch 1.7 rule that a
-  non-PvP-flagged player's negative area spell does not hit players outside a duel, combat unless NO_THREAT-like attributes, immunity). An existing
+  non-PvP-flagged player's negative area spell does not hit players outside a duel unless both are free-for-all PvP (GridNotifiersImpl.h:170), combat unless NO_THREAT-like attributes, immunity). An existing
   holder of the spell from the caster gets the object's duration; otherwise a holder with the spell's duration (a channel's remaining time).
 - The aura leaves a unit outside the radius or when its object is gone (PersistentAreaAura::Update, SpellAuras.cpp:892-919), unless the spell has
   SPELL_ATTR_EX3_NO_AVOIDANCE; a channel's end removes its objects (Spell.cpp:3595, 4794) and a channel whose first effect is the ground aura makes the
@@ -92,13 +93,13 @@ SPELL_EFFECT_PERSISTENT_AREA_AURA had no handler (no dynamic object entity exist
 
 ## Deviations and limits
 
-- Stacking: vmangos refuses a weaker holder before adding it; here it is added and removed in the same call. `spell_group` stack rules (Greater
-  Blessing versus Blessing) are not modelled; a rank chain is the spell family plus the spell name.
+- Stacking: `spell_group` stack rules (Greater Blessing versus Blessing) are not modelled; a rank chain is the spell family plus the spell name. A
+  refused weaker party-aura child is built again on the next area update (no handler, slot or packet; vmangos does the same refusal each pulse).
 - Judgement of Light's heal script (the Tier 3 bonus through `m_triggeredByAuraBasePoints`), Illumination, Seal of the Crusader's damage reduction and
   Blessing of Sacrifice (SPLIT_DAMAGE_PCT, aura engine) are not part of this lane. Hammer of Wrath crits with the spell crit chance, not the melee one.
 - Bloodthirst does not add MOD_MELEE_ATTACK_POWER_VERSUS; Execute reads the rage at the dummy effect (after the cost, as vmangos' OnCast does).
-- The Doomguard is a wild summon (killed out of combat when its time is up, TEMPSUMMON_TIMED_DEATH_AND_DEAD_DESPAWN) where vmangos uses
-  TEMPSUMMON_TIMED_COMBAT_OR_DEAD_DESPAWN; a summoning ritual destination and Inferno's Enslave Demon are not modelled.
+- A dead Doomguard is left to its corpse decay (vmangos restarts its timer for the corpse); a summoning ritual destination and Inferno's Enslave
+  Demon are not modelled.
 - Ground objects never move; the 2 s refresh window starts at the first visit; an existing holder that lacks the ground effect's aura is not given it.
 - Real data: Spell.dbc / `spell_template` (every id above), SpellItemEnchantment.dbc for the imbues, `spell_proc_event` and
   `spell_proc_item_enchant` rows for PPM procs, and creature 11859 (Doomguard) in `creature_template`. The tests use synthetic rows with the real ids,
@@ -106,8 +107,8 @@ SPELL_EFFECT_PERSISTENT_AREA_AURA had no handler (no dynamic object entity exist
 
 ## Tests
 
-- `tests/ArcaneCore.Game.Tests/ClassSpells`: `PaladinScriptTests` (11), `PaladinHealingAndAuraTests` (4), `ShamanWeaponScriptTests` (5),
-  `ClassDummyScriptTests` (13), `CurseOfDoomTests` (5); `Rogue/RogueBleedScriptTests` (7); `Spells/PersistentAreaAuraTests` (11).
+- `tests/ArcaneCore.Game.Tests/ClassSpells`: `PaladinScriptTests` (13), `PaladinHealingAndAuraTests` (4), `ShamanWeaponScriptTests` (7),
+  `ClassDummyScriptTests` (14), `CurseOfDoomTests` (7); `Rogue/RogueBleedScriptTests` (7); `Spells/PersistentAreaAuraTests` (13).
 - `tests/ArcaneCore.World.Tests/Spells/ClassScriptWiringTests` (the production world spell system carries the scripts) and the playerbot scenarios
   `Playerbots/Scenarios/ClassScriptScenarioTests` (two bots duel: Seal of Righteousness and Judgement; Consecration's ground object reaches the
   opponent's client and ticks on it), with `ScenarioClassDecoders` (SMSG_SPELLNONMELEEDAMAGELOG, SMSG_PERIODICAURALOG).

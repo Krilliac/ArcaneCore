@@ -13,9 +13,11 @@ namespace ArcaneCore.Game.Spells.Paladin;
 /// (IsSingleFromSpellSpecificSpellRanksPerTarget). A weaker rank never replaces a stronger one: the new holder goes instead
 /// (Spells::CompareAuraRanks).</item>
 /// </list>
-/// LIMITS: vmangos refuses the weaker holder before adding it; here it is added and taken off again in the same call. The database
-/// <c>spell_group</c> stack rules (Greater Blessing versus Blessing) are not modelled; the rank chain is the spell family and name
-/// (<see cref="PaladinSpells.IsSameChain"/>).
+/// The weaker holder is refused before it is added (<see cref="SpellSystem.HolderAddRefusals"/>), as vmangos does, so a weaker party aura pulsing
+/// onto a member who holds a stronger rank applies, sends and removes nothing. The state goes through <see cref="SpellSystem.ModifyAuraState"/>
+/// (vmangos Unit::ModifyAuraState, with its side effects when the world installed the aura states).
+/// LIMITS: the database <c>spell_group</c> stack rules (Greater Blessing versus Blessing) are not modelled; the rank chain is the spell family and
+/// name (<see cref="PaladinSpells.IsSameChain"/>).
 /// </summary>
 public sealed class PaladinAuraRules
 {
@@ -28,6 +30,7 @@ public sealed class PaladinAuraRules
     {
         ArgumentNullException.ThrowIfNull(spells);
         var rules = new PaladinAuraRules(spells);
+        spells.HolderAddRefusals.Add(rules.RefusesWeakerRank);
         spells.HolderAdded += rules.OnHolderAdded;
         spells.HolderRemoved += rules.OnHolderRemoved;
         return rules;
@@ -36,17 +39,11 @@ public sealed class PaladinAuraRules
     /// <summary>UNIT_FIELD_AURASTATE bit of AURA_STATE_JUDGEMENT (bit state - 1, vmangos Unit::ModifyAuraState).</summary>
     public static uint JudgementStateBit => 1u << ((int)AuraState.Judgement - 1);
 
-    private void OnHolderAdded(SpellAuraHolder holder)
+    /// <summary>The holders on the target that <paramref name="holder"/> competes with under the spell specific rules.</summary>
+    private List<(SpellAuraHolder Other, bool SameChain)> Rivals(SpellAuraHolder holder, PaladinSpellSpecific specific)
     {
-        PaladinSpellSpecific specific = PaladinSpells.Specific(holder.Spell);
-        if (specific == PaladinSpellSpecific.None)
-        {
-            return;
-        }
-
-        Unit target = holder.Target;
-        var replaced = new List<SpellAuraHolder>();
-        foreach (SpellAuraHolder other in _spells.GetAuras(target))
+        var rivals = new List<(SpellAuraHolder Other, bool SameChain)>();
+        foreach (SpellAuraHolder other in _spells.GetAuras(holder.Target))
         {
             if (ReferenceEquals(other, holder) || other.IsRemoved || other.Spell.Id == holder.Spell.Id
                 || PaladinSpells.Specific(other.Spell) != specific || ReferenceEquals(other.AreaParent, holder) || ReferenceEquals(holder.AreaParent, other))
@@ -60,24 +57,37 @@ public sealed class PaladinAuraRules
                 continue;
             }
 
-            // "cannot remove higher rank": vmangos returns before it removes anything it collected (aurasToRemove).
-            if (sameChain && PaladinSpells.CompareAuraRanks(holder.Spell, other.Spell) < 0)
-            {
-                _spells.RemoveAuraHolder(holder);
-                return;
-            }
-
-            replaced.Add(other);
+            rivals.Add((other, sameChain));
         }
 
-        foreach (SpellAuraHolder other in replaced)
+        return rivals;
+    }
+
+    /// <summary>"cannot remove higher rank": vmangos refuses the new holder and removes none of what it collected (aurasToRemove).</summary>
+    private bool RefusesWeakerRank(SpellAuraHolder holder)
+    {
+        PaladinSpellSpecific specific = PaladinSpells.Specific(holder.Spell);
+        return specific != PaladinSpellSpecific.None
+            && Rivals(holder, specific).Exists(r => r.SameChain && PaladinSpells.CompareAuraRanks(holder.Spell, r.Other.Spell) < 0);
+    }
+
+    private void OnHolderAdded(SpellAuraHolder holder)
+    {
+        PaladinSpellSpecific specific = PaladinSpells.Specific(holder.Spell);
+        if (specific == PaladinSpellSpecific.None)
+        {
+            return;
+        }
+
+        // A weaker rank never gets here (RefusesWeakerRank); everything else of the kind gives way.
+        foreach ((SpellAuraHolder other, _) in Rivals(holder, specific))
         {
             _spells.RemoveAuraHolder(other);
         }
 
         if (specific == PaladinSpellSpecific.Seal && !holder.IsRemoved)
         {
-            target.SetUInt32(UpdateFields.UnitFieldAurastate, target.GetUInt32(UpdateFields.UnitFieldAurastate) | JudgementStateBit);
+            _spells.ModifyAuraState(holder.Target, AuraState.Judgement, true);
         }
     }
 
@@ -91,7 +101,7 @@ public sealed class PaladinAuraRules
         Unit target = holder.Target;
         if (!_spells.GetAuras(target).Any(h => !h.IsRemoved && !ReferenceEquals(h, holder) && PaladinSpells.IsSeal(h.Spell)))
         {
-            target.SetUInt32(UpdateFields.UnitFieldAurastate, target.GetUInt32(UpdateFields.UnitFieldAurastate) & ~JudgementStateBit);
+            _spells.ModifyAuraState(target, AuraState.Judgement, false);
         }
     }
 }

@@ -167,7 +167,9 @@ public sealed class PetMapSystem : IMapUpdater
     /// vmangos TemporarySummon::Update, TEMPSUMMON_TIMED_DEATH_AND_DEAD_DESPAWN (TemporarySummon.cpp:200-218):
     /// when the timer has run out the creature is killed unless it is in combat (it is retried every
     /// tick, <c>m_timer = 0</c>); the corpse is then removed by its creature system like any temporary
-    /// summon. Without a duration (TEMPSUMMON_DEAD_DESPAWN) it only ends with its death.
+    /// summon. Without a duration (TEMPSUMMON_DEAD_DESPAWN) it only ends with its death. A summon marked
+    /// <see cref="SummonLinks.DespawnsWhenTimeRunsOut"/> (TEMPSUMMON_TIMED_COMBAT_OR_DEAD_DESPAWN, TemporarySummon.cpp:171-196: the Doomguard)
+    /// is unsummoned instead, once it is out of combat.
     /// </summary>
     private void UpdateWild(Creature wild, SummonLinks links, uint diffMs)
     {
@@ -178,12 +180,22 @@ public sealed class PetMapSystem : IMapUpdater
 
         if (links.RemainingMs <= diffMs)
         {
+            links.RemainingMs = 0;
+            if (links.DespawnsWhenTimeRunsOut)
+            {
+                // TEMPSUMMON_TIMED_COMBAT_OR_DEAD_DESPAWN: unsummoned once out of combat; a dead one is left to its corpse.
+                if (wild.IsAlive && !wild.Combat.IsInCombat)
+                {
+                    _service?.Unsummon(wild);
+                }
+
+                return;
+            }
+
             if (!wild.Combat.IsInCombat && wild.IsAlive)
             {
                 wild.System?.KillCreature(wild);
             }
-
-            links.RemainingMs = 0;
         }
         else
         {

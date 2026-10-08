@@ -32,10 +32,11 @@ public sealed partial class SummonService
 
     /// <summary>
     /// vmangos Player::AutoReSummonPet: the remembered pet comes back with a player the spirit guide resurrected. It is forgotten first;
-    /// the summoning spell's reagents must be in the bags and are taken (a soul shard for a Voidwalker); the pet is summoned again and
-    /// brought back to life at full health. A warlock gets a fresh demon of the remembered entry at its level (demons are not stored
-    /// here, see <see cref="EffectSummonPet"/>); a hunter its current pet from the saved snapshot (a hunter pet here carries no taming
-    /// spell, so the vmangos "no spell, no pet" guard is not applied to it). Returns the pet, or null.
+    /// the summoning spell's reagents must be in the bags and are taken (a soul shard for a Voidwalker); the pet is summoned again, and
+    /// only a pet that was dead is brought back to life at full health ("We may want to resurrect the pet", Player.cpp:1619-1628): a
+    /// living one keeps the health it was saved with. A warlock gets a fresh demon of the remembered entry at its level (demons are not
+    /// stored here, see <see cref="EffectSummonPet"/>); a hunter its current pet from the saved snapshot (a hunter pet here carries no
+    /// taming spell, so the vmangos "no spell, no pet" guard is not applied to it). Returns the pet, or null.
     /// </summary>
     public Creature? AutoReSummonPet(Player player)
     {
@@ -62,16 +63,22 @@ public sealed partial class SummonService
         }
 
         // 3. Execute the pet summon spell effect.
+        bool wasDead = false;
         Creature? pet = remembered.Hunter
-            ? SummonRememberedHunterPet(player, remembered)
+            ? SummonRememberedHunterPet(player, remembered, out wasDead)
             : SummonDemon(player, remembered.SpellId, remembered.Entry, player.Level);
         if (pet is null)
         {
             return null;
         }
 
-        // 4. We may want to resurrect the pet: a remembered hunter pet that died comes back alive (SpawnCached revives it); full health.
-        pet.Health = pet.MaxHealth;
+        // 4. We may want to resurrect the pet: a remembered hunter pet saved dead comes back alive (SpawnCached revives it at 1) and at full
+        // health. A living one keeps its saved health; a fresh demon is summoned alive at full health already.
+        if (wasDead)
+        {
+            pet.Health = pet.MaxHealth;
+        }
+
         if (remembered.Hunter)
         {
             QueueCurrentPetSave(player);
@@ -80,15 +87,29 @@ public sealed partial class SummonService
         return pet;
     }
 
-    private Creature? SummonRememberedHunterPet(Player owner, SpiritHealerPet remembered)
+    private Creature? SummonRememberedHunterPet(Player owner, SpiritHealerPet remembered, out bool wasDead)
     {
+        wasDead = false;
         if (!owner.PetGuid.IsEmpty || !TryGetCachedCurrentPet(owner, out PersistentPetSnapshot snapshot) || snapshot.PetNumber != remembered.PetNumber
             || snapshot.Entry != remembered.Entry)
         {
             return null;
         }
 
+        wasDead = snapshot.Health == 0;
         return SpawnCached(owner, snapshot with { IsCurrent = true }, revive: true);
+    }
+
+    /// <summary>
+    /// The owner leaves the world (vmangos: <c>m_petEntry</c>, <c>m_petSpell</c> and <c>m_temporaryUnsummonedPetNumber</c> are members of the
+    /// Player object a logout destroys): what the service remembers of it is forgotten, the spirit healer's pet and a temporarily
+    /// unsummoned pet (its saved hunter pet is the logout's to keep). The world daemon calls it from <c>WorldRuntime.PlayerLoggingOut</c>.
+    /// </summary>
+    public void ForgetOwner(Player owner)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        _spiritHealerPets.Remove(owner.Guid);
+        ForgetTemporarilyUnsummonedPet(owner);
     }
 
     /// <summary>
