@@ -968,6 +968,14 @@ How to read the tables:
 | `World:Playerbots:Enabled` | `bool` | `false` | - | Run server-managed playerbots (off by default). |
 | `World:Playerbots:FaultBackoffSeconds` | `int` | `30` | - | Seconds a bot waits in quarantine after an action fault before it is logged in again (1..3600); each further fault in `FaultWindowSeconds` doubles the wait, up to an hour. The bot stays desired meanwhile. |
 | `World:Playerbots:FaultWindowSeconds` | `int` | `3600` | - | How far back faults count towards `MaxFaults`, in seconds of world time (1..604800). |
+| `World:Playerbots:Groups:Enabled` | `bool` | `true` | live | Let bots form groups for group content (on by default). Off: no new group forms; running ones finish. |
+| `World:Playerbots:Groups:FormationTimeoutSeconds` | `int` | `300` | live | Seconds a bot waits for partners for one group goal (30..86400). With none by then, the goal is set aside and the bot goes on with what it can do alone; invitations not answered within this are given up too. |
+| `World:Playerbots:Groups:InvitePlayers` | `bool` | `false` | live | A bot group short of a role or a member may invite a nearby real player of a fitting level and class through the ordinary invitation (off by default). A real player never becomes the group's master: the bots keep their goal. |
+| `World:Playerbots:Groups:LevelRange` | `int` | `5` | live | The most levels between the lowest and the highest member of a group (0..60). |
+| `World:Playerbots:Groups:MaxGroups` | `int` | `4` | live | The most bot-led groups at once (0..64; 0 forms none). |
+| `World:Playerbots:Groups:MinHealer` | `int` | `1` | live | Healers a group of three or more needs (0..5); priests, druids, paladins and shamans can heal. |
+| `World:Playerbots:Groups:MinTank` | `int` | `1` | live | Tanks a group of three or more needs (0..5); warriors, druids and paladins can tank. |
+| `World:Playerbots:Groups:RaidsEnabled` | `bool` | `true` | live | Convert a group to a raid when the goal needs more than five (raid instances and raid quests); on by default. |
 | `World:Playerbots:LocalLlmContextSize` | `int` | `1024` | - | The local model's context size in tokens (512..2048). |
 | `World:Playerbots:LocalLlmModel` | `string` | `"R4C3R/qwen3-0.6b-heretic:q4_k_m"` | - | The local model name sent to the loopback inference endpoint (at most 128 characters). |
 | `World:Playerbots:LocalLlmTimeoutMs` | `int` | `5000` | - | Milliseconds a local model choice may take before the rules decide (100..10000). |

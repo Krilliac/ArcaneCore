@@ -89,12 +89,39 @@ public sealed class PlayerbotGroupPlayerTests
     }
 
     [Fact]
+    public async Task AServerGroupOfBotsNobodyLeads_IsLeft()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([]);
+        var first = await world.AddBotAsync("Strayone", Human, Warrior, 5, []);
+        var second = await world.AddBotAsync("Straytwo", Human, Mage, 5, []);
+        // A group of bots the coordinator does not own (as the server restores one after a restart).
+        await world.OnWorldAsync(() =>
+        {
+            world.GroupManager.Invite(world.Player(first.Id), second.Name);
+            world.GroupManager.Accept(world.Player(second.Id));
+            Assert.True(world.GroupManager.AreInSameGroup(world.Player(first.Id).Guid, world.Player(second.Id).Guid));
+            return true;
+        });
+
+        Assert.True(await world.RunUntilAsync(10_000, () => world.GroupManager.GetGroup(world.Player(first.Id).Guid) is null
+            && world.GroupManager.GetGroup(world.Player(second.Id).Guid) is null), world.Trace());
+        Assert.Contains(world.Coordinator.Events, e => e.Contains("left a group of bots nobody leads", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ABotLeftInsideAnInstanceWithoutAGroup_WalksOutThroughTheExit()
     {
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([], dungeon: true);
         var bot = await world.AddBotAsync("Strandone", Human, Warrior, 12, [], EntranceArea);
         Assert.True(await world.OnWorldAsync(() => world.World.Services.GetRequiredService<TeleportFeature>().Teleports
             .TeleportTo(world.Player(bot.Id), 36, -16.4f, -383.07f, 61.78f, 0f)));
+        Assert.True(await world.RunUntilAsync(30_000, () => world.Player(bot.Id) is { IsInWorld: true, MapId: 36 }), world.Trace());
+
+        // Saved inside and logged in again: the login gate lets it into the dungeon it is in (PlayerbotMapPolicy.MayStayOnMap; the
+        // default AllowedMaps [0, 1] refused it before, and three such faults disabled the bot).
+        Assert.True((await world.Bots.StopAsync(bot.Name)).Success);
+        PlayerbotOperationResult started = await world.Bots.StartAsync(bot.Name);
+        Assert.True(started.Success, started.Code);
         Assert.True(await world.RunUntilAsync(30_000, () => world.Player(bot.Id) is { IsInWorld: true, MapId: 36 }), world.Trace());
 
         Assert.True(await world.RunUntilAsync(120_000, () => world.Player(bot.Id) is { IsInWorld: true, MapId: 0 }), world.Trace());

@@ -133,8 +133,9 @@ out of an instance before it disbands. A group that cannot walk out in time is b
 * A bot that logs in inside an instance (a world restart while it was in one) is let in: the login gate is now
   `PlayerbotMapPolicy.MayStayOnMap` (its map is allowed, or it is the dungeon it is in), as `playbots-dungeons.md` planned. A free bot
   inside an instance without a group walks out through the exit (a group of one in `leaving`): the brain has no way out.
-* A free bot in a server group of bots nobody leads (the coordinator's groups are not restored after a restart, the server's are)
-  leaves it.
+* A free bot in a server group whose other members are all bots online, and that no bot group owns (the coordinator's groups are not
+  restored after a restart, the server's are), leaves it. A group with an offline member is left alone: that may be a real player
+  the party AI waits for.
 * A member that is stopped, scripted, or leaves the server group leaves the bot group; the leader leaving ends the group.
 
 ## Configuration (`World:Playerbots:Groups`, live)
@@ -171,8 +172,8 @@ estimate passes over done by two; the healer healing the tank in a fight; the ta
 through the entrance trigger into one instance bound to the group, the boss, out through the exit; a wipe retreated, the dead
 resurrected, the group gathered again one failure down; a raid quest for six converted to a raid with the tank and the healer in
 different subgroups; the formation timeout setting the goal aside; a real player's party bot left alone; `InvitePlayers` inviting a
-nearby player who declines; the GM commands; a bot stranded in an instance walking out (`PlayerbotGroupWorldTests`,
-`PlayerbotGroupPlayerTests`). `ConfigReloadTests` checks every key is live and range-checked.
+nearby player who declines; the GM commands; a server group of bots nobody leads left; a bot stranded in an instance, stopped and
+logged in again there (the login gate), walking out (`PlayerbotGroupWorldTests`, `PlayerbotGroupPlayerTests`). `ConfigReloadTests` checks every key is live and range-checked.
 
 ## Limits
 

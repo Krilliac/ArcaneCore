@@ -287,10 +287,11 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
             if (!bot.Free || _memberOf.ContainsKey(bot.BotId) || bot.Session.Player is not { IsInWorld: true } player) continue;
             if (EvacuateIfStranded(bot, player)) continue;
             if (!_options.Groups.Enabled || !player.IsAlive || GroupManagerOrNull() is not { } groupManager) continue;
-            if (groupManager.GetGroup(player.Guid) is { } stale && stale.Members.All(m => m.Guid == player.Guid || IsBotOrOffline(m.Guid)))
+            if (groupManager.GetGroup(player.Guid) is { } stale && stale.Members.All(m => m.Guid == player.Guid || IsOnlineBot(m.Guid)))
             {
-                // A group of bots nobody leads any more (the coordinator's own groups were disbanded; a world restart restores the
-                // server groups but not the coordinator's): the bot leaves it, as a client would.
+                // A group of bots nobody leads any more (a world restart restores the server groups but not the coordinator's): the
+                // bot leaves it, as a client would. Only when every other member is a bot online: an offline member may be a real
+                // player its party AI waits for (PlayerbotPartyAI, MasterTimeoutSeconds).
                 Unhold(bot.BotId, null);
                 Act(bot.Session, WorldOpcode.CmsgGroupDisband, [], budgeted: false);
                 Note($"{player.Name} left a group of bots nobody leads");
@@ -940,9 +941,8 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
 
     // --- helpers --------------------------------------------------------------------------------------------------------
 
-    /// <summary>A member that is a managed bot, or nobody online (an offline player or a bot that was stopped).</summary>
-    private bool IsBotOrOffline(ObjectGuid guid)
-        => _world?.FindOnlinePlayer(guid) is not { } online || online.Session is WorldSession { IsManaged: true };
+    /// <summary>A member that is a managed bot online.</summary>
+    private bool IsOnlineBot(ObjectGuid guid) => _world?.FindOnlinePlayer(guid) is { Session: WorldSession { IsManaged: true } };
 
     private Guid BotIdOf(ObjectGuid guid)
     {
