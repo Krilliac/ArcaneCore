@@ -16,7 +16,7 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 22 |
 | `GameMaster` | 3 | 152 |
-| `Administrator` | 6 | 216 |
+| `Administrator` | 6 | 221 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -26,6 +26,14 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 
 | Command | Retail level | Minimum account | Level source | Help |
 |---|---|---|---|---|
+| `.account` ... | 6 | Administrator | stored level through the map | Account login security. |
+| `.account pin` ... | 6 | Administrator | stored level through the map | Syntax: .account pin set\|clear $account |
+| `.account pin set` | 6 | Administrator | stored level through the map | Syntax: .account pin set $account |
+| `.account pin clear` | 6 | Administrator | stored level through the map | Syntax: .account pin clear $account |
+| `.account totp` ... | 6 | Administrator | stored level through the map | Syntax: .account totp set\|clear $account |
+| `.account totp set` | 6 | Administrator | stored level through the map | Syntax: .account totp set $account |
+| `.account totp clear` | 6 | Administrator | stored level through the map | Syntax: .account totp clear $account |
+| `.account iplock` | 6 | Administrator | stored level through the map | Syntax: .account iplock $account on\|off |
 | `.cast` | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast #spell — cast a spell (triggered) on the selected player or yourself. |
 | `.character` ... | 2 | GameMaster | declared retail level | Syntax: .character $subcommand |
 | `.character reputation` | 2 | GameMaster | declared retail level | Syntax: .character reputation [$player_name] Shows the reputation of the selected player or of the named online player. |
