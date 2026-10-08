@@ -134,6 +134,60 @@ public sealed class SpiritOfRedemptionTests
         Assert.Equal(0u, (uint)(priest.UnitFlags & UnitFlags.Stunned));
     }
 
+    /// <summary>
+    /// vmangos keeps the end of the spirit on the unit's own event queue (SpellAuras.cpp:5727-5736, <c>m_Events</c>), which a far teleport
+    /// does not clear (only CleanupsBeforeDelete kills it, Unit.cpp:8305): a spirit removed as the priest leaves a battleground still loses
+    /// the stun and the invincibility and dies, on the map it arrives on.
+    /// </summary>
+    [Fact]
+    public void TheSpiritsEnd_SurvivesAMapChange_BeforeItIsDue()
+    {
+        using SpellTestKit kit = NewKit();
+        (Player priest, Player enemy) = Setup(kit, talent: true);
+        Bolt_(kit, enemy, priest);
+        Assert.True(kit.System.HasAura(priest, Linked2));
+
+        kit.System.RemoveAuras(priest, Spirit); // Battleground.RemovePlayerAtLeave: the form ends, the stun lands
+        Assert.NotEqual(0u, (uint)(priest.UnitFlags & UnitFlags.Stunned));
+        Assert.NotEqual(0u, priest.InvincibilityHpThreshold);
+
+        Map source = kit.World.GetMap(0);
+        Map destination = kit.World.GetMap(1);
+        source.RemovePlayer(priest); // the return teleport, before the batching interval is over
+        kit.World.RunTick(400);      // in transit: nothing runs it, nothing drops it
+        Assert.NotEqual(0u, (uint)(priest.UnitFlags & UnitFlags.Stunned));
+
+        priest.MapId = 1;
+        priest.Relocate(1000, 1000, priest.Z, 0, 0);
+        destination.AddPlayer(priest);
+        kit.World.RunTick(400);
+
+        Assert.Equal(0u, (uint)(priest.UnitFlags & UnitFlags.Stunned));
+        Assert.Equal(0u, priest.InvincibilityHpThreshold);
+        Assert.False(priest.IsAlive);
+    }
+
+    [Fact]
+    public void TheSpiritsEnd_RunsOnce_WhenThePriestReentersTheSameMap()
+    {
+        using SpellTestKit kit = NewKit();
+        (Player priest, Player enemy) = Setup(kit, talent: true);
+        Bolt_(kit, enemy, priest);
+        Map map = kit.World.GetMap(0);
+        int deaths = 0;
+        map.Combat.UnitKilled += (_, victim) => deaths += ReferenceEquals(victim, priest) ? 1 : 0;
+
+        kit.System.RemoveAuras(priest, Spirit);
+        map.RemovePlayer(priest);
+        map.AddPlayer(priest);
+        kit.World.RunTick(400);
+        kit.World.RunTick(400);
+
+        Assert.False(priest.IsAlive);
+        Assert.Equal(0u, (uint)(priest.UnitFlags & UnitFlags.Stunned));
+        Assert.Equal(1, deaths);
+    }
+
     [Fact]
     public void TheSpirit_LosesNothingToANonLethalHit()
     {
