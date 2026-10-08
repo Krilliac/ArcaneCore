@@ -13,7 +13,7 @@ namespace ArcaneCore.Data.Tests;
 /// its spawn has no <c>creature_movement</c> rows of its own (mangos-classic MotionGenerators/WaypointManager.h:69-93, vmangos
 /// Movement/WaypointManager.h:77-93: the guid path wins, then the entry path). Rows are hand-written in the classic-db column layout
 /// (<c>Entry, PathId, Point, PositionX/Y/Z, Orientation, WaitTime, ScriptId, Comment</c>); no GPL rows are copied. Classic-db has 15,402
-/// such rows on 544 paths, and 319 of its 2,898 waypoint spawns have no path of their own.
+/// such rows on 544 paths, plus 103 selected ScriptDev2 escort points on four paths; 319 of its 2,898 waypoint spawns have no path of their own.
 /// </summary>
 public sealed class CreatureMovementTemplateTests : IAsyncLifetime
 {
@@ -103,9 +103,9 @@ public sealed class CreatureMovementTemplateTests : IAsyncLifetime
 
         CreatureImportReport report = importer.BuildReport();
         IReadOnlyCollection<CreatureMovementTemplateRow> rows = importer.PathSnapshot();
-        Assert.Equal(15402, report.MovementTemplates);
-        Assert.Equal(544, rows.Select(r => (r.Entry, r.PathId)).Distinct().Count());
-        Assert.Equal(479, rows.Select(r => r.Entry).Distinct().Count());
+        Assert.Equal(15505, report.MovementTemplates); // 15,402 entry paths plus 103 ScriptDev2 dungeon escort points
+        Assert.Equal(548, rows.Select(r => (r.Entry, r.PathId)).Distinct().Count());
+        Assert.Equal(483, rows.Select(r => r.Entry).Distinct().Count());
         Assert.Equal(51, rows.Where(r => r.PathId > 0).Select(r => r.Entry).Distinct().Count());
         Assert.Contains(report.Warnings, w => w.Contains("ScriptId", StringComparison.Ordinal));
 

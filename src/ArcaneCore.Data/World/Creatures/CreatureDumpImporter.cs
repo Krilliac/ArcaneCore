@@ -48,7 +48,7 @@ public sealed record CreatureImportReport(
     public int MovementTemplates { get; init; }
     public int AiTextTemplates { get; init; }
 
-    /// <summary><c>dbscripts_on_relay</c> rows (the relay DB scripts EventAI's START_RELAY_SCRIPT runs).</summary>
+    /// <summary><c>dbscripts_on_relay</c> rows plus the two selected Zul'Farrak <c>dbscripts_on_event</c> scripts.</summary>
     public int RelayScriptSteps { get; init; }
 
     /// <summary>Type-1 (relay) rows of <c>dbscript_random_templates</c>.</summary>
@@ -132,6 +132,11 @@ public sealed class CreatureDumpImporter
                 case "creature_movement_template":
                     ReadMovementTemplate(row);
                     break;
+                // ScriptDev2 escorts use script_waypoint (mangos-classic ScriptDevAI/base/escort_ai.cpp).
+                // These four entries have paths in ClassicDB z2815 and no creature_movement_template path.
+                case "script_waypoint" when U32(row, "Entry") is 7998 or 8516 or 4508 or 6575:
+                    ReadMovementTemplate(row);
+                    break;
                 case "creature_spawn_entry":
                     ReadSpawnEntry(row);
                     break;
@@ -151,6 +156,10 @@ public sealed class CreatureDumpImporter
                 case "creature_ai_texts":
                     ReadAiText(row);
                     break;
+                // ScriptDev2 DoScriptText uses script_texts; it has the creature_ai_texts column layout.
+                case "script_texts" when IsDungeonScriptText(Int(Get(row, "entry"))):
+                    ReadAiText(row);
+                    break;
                 case "dbscript_random_templates":
                     if (U32(row, "type") == 0)
                     {
@@ -166,6 +175,11 @@ public sealed class CreatureDumpImporter
                     break;
                 case "dbscripts_on_relay":
                     ReadRelayStep(row);
+                    break;
+                // ScriptDev2's two Zul'Farrak event relays use the same row layout as dbscripts_on_relay.
+                // A high id keeps them distinct from the source relay ids without a schema change.
+                case "dbscripts_on_event" when U32(row, "id") is 2488 or 2609:
+                    ReadRelayStep(row, U32(row, "id") + 1_000_000);
                     break;
                 case "broadcast_text":
                     ReadBroadcastText(row);
@@ -362,9 +376,9 @@ public sealed class CreatureDumpImporter
     /// One <c>dbscripts_on_relay</c> row (cmangos mangos.sql column names). The table has no key: the rows of one id are kept in dump
     /// order (<see cref="RelayScriptRow.Ordinal"/>), and a later dump file that carries an id replaces every row of that id.
     /// </summary>
-    private void ReadRelayStep(DumpRow row)
+    private void ReadRelayStep(DumpRow row, uint? idOverride = null)
     {
-        uint id = U32(row, "id");
+        uint id = idOverride ?? U32(row, "id");
         if (_relayIdsThisRead.Add(id) || !_relaySteps.ContainsKey(id))
         {
             _relaySteps[id] = [];
@@ -872,6 +886,14 @@ public sealed class CreatureDumpImporter
 
         _aiTexts[text.Entry] = text;
     }
+
+    private static bool IsDungeonScriptText(int id)
+        => id is (>= -1047012 and <= -1047000)
+            or (>= -1070005 and <= -1070001)
+            or (>= -1090028 and <= -1090000)
+            or (>= -1129012 and <= -1129005)
+            or (>= -1189036 and <= -1189000)
+            or (>= -1209003 and <= -1209000);
 
     // broadcast_text: the columns mangos-classic ObjectMgr::LoadBroadcastText reads (ObjectMgr.cpp:7786-7821).
     private void ReadBroadcastText(DumpRow row)
