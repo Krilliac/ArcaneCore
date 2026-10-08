@@ -19,6 +19,14 @@ public sealed partial class EconomyFeature
     private readonly HashSet<uint> _busyAuctions = [];
 
     /// <summary>
+    /// Listings accepted by <see cref="SellItem"/> whose settlement has not finished: their house and the seller's
+    /// account. Each holds an account-limit slot until its outcome is known, as vmangos adds the auction to the house
+    /// inside the handler (AuctionHouseHandler.cpp:396); otherwise another character of the account,
+    /// logged in while the listing settles, passes a check against the published auctions only.
+    /// </summary>
+    private readonly Dictionary<uint, (uint HouseId, int AccountId)> _listingsInFlight = [];
+
+    /// <summary>
     /// Auctions whose last expiry settlement was refused (a conflict, a missing seller row): when to
     /// try them again, so a poisoned auction cannot starve later ones. In memory only.
     /// </summary>
@@ -120,8 +128,7 @@ public sealed partial class EconomyFeature
         }
 
         uint limit = Options.AuctionAccountConcurrentLimit;
-        if (limit != 0 && _auctions.Values.Count(v => v.Auction.HouseId == house.Id
-                && _directory?.Find(v.Auction.SellerId) is { } owner && owner.AccountId == session.AccountId) >= limit)
+        if (limit != 0 && AccountAuctionCount(house.Id, session.AccountId) >= limit)
         {
             session.Send(WorldOpcode.SmsgMessagechat,
                 ArcaneCore.World.Packets.ChatPackets.BuildSystemMessage("You have reached the limit of active auctions on your account."));
@@ -182,8 +189,11 @@ public sealed partial class EconomyFeature
             ExpireTime = Now + (uint)(minutes * 60 * Options.AuctionRateTime),
             Deposit = deposit,
         };
+        _listingsInFlight[auction.Id] = (house.Id, session.AccountId);
         RunAuctionOperation([actor], [new EscrowFromInventory(IdOf(player), data), new InsertAuction(auction)], auction.Id, outcome =>
         {
+            // After: published below. Unknown: the auction is reserved for recovery, which keeps counting it.
+            _listingsInFlight.Remove(auction.Id);
             if (outcome == EconomyOutcome.After)
             {
                 _auctions[auction.Id] = new AuctionView(auction, data);
@@ -569,6 +579,22 @@ public sealed partial class EconomyFeature
     /// <summary>Whether the changes expect to find (update or delete) the auction row the cache holds for this ID.</summary>
     private static bool ChangesExpectedAuction(IReadOnlyList<EconomyChange> changes, uint auctionId)
         => changes.Any(c => c is UpdateAuction u && u.Expected.Id == auctionId || c is DeleteAuction d && d.Expected.Id == auctionId);
+
+    /// <summary>
+    /// World thread: the auctions an account holds in a house for its optional limit (vmangos
+    /// AuctionHouseObject::GetAccountAuctionCount): published ones, listings still settling, and reserved
+    /// ones missing from the cache (an insert whose outcome is unknown, a row whose escrow does not match),
+    /// whose row may exist until recovery decides.
+    /// </summary>
+    private int AccountAuctionCount(uint houseId, int accountId)
+    {
+        bool OwnedBy(int sellerId) => _directory?.Find(sellerId) is { } owner && owner.AccountId == accountId;
+        int published = _auctions.Values.Count(v => v.Auction.HouseId == houseId && OwnedBy(v.Auction.SellerId));
+        int settling = _listingsInFlight.Values.Count(l => l.HouseId == houseId && l.AccountId == accountId);
+        int reserved = _auctionRecoveries.Count(pair => !_auctions.ContainsKey(pair.Key) && !_listingsInFlight.ContainsKey(pair.Key)
+            && pair.Value.Affected.Any(row => row.Id == pair.Key && row.HouseId == houseId && OwnedBy(row.SellerId)));
+        return published + settling + reserved;
+    }
 
     private IEnumerable<AuctionView> HouseAuctions(uint houseId, long now)
         => _auctions.Values.Where(v => v.Auction.HouseId == houseId && v.Auction.ExpireTime > now
