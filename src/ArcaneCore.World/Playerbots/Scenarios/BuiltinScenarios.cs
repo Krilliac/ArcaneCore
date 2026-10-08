@@ -6,9 +6,11 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ArcaneCore.World.Playerbots.Scenarios;
 
 /// <summary>
-/// The scenarios <c>.playerbot scenario run</c> knows: the live-safe built-ins (they need only ordinary classic content:
-/// a starting zone, spell 7266 "Duel" with its flag, item 2589 "Linen Cloth") plus any <see cref="IPlayerbotScenario"/>
-/// registered in the service container.
+/// The scenarios <c>.playerbot scenario run</c> knows, in this order: the live-safe built-ins (they need only ordinary classic
+/// content: a starting zone, spell 7266 "Duel" with its flag, item 2589 "Linen Cloth"); every other public
+/// <see cref="IPlayerbotScenario"/> this assembly ships with a parameterless constructor (<see cref="Shipped"/>: content scenarios such
+/// as <c>wsg</c>, which fail with a named missing-content step where the content is absent); then any scenario registered in the
+/// service container. A name is taken by its first entry.
 /// </summary>
 public static class PlayerbotScenarioCatalog
 {
@@ -24,8 +26,24 @@ public static class PlayerbotScenarioCatalog
         new DuelScenario(),
     ];
 
+    /// <summary>
+    /// The public scenarios of this assembly that are not built-ins, by name (discovered, so a lane that adds one needs no
+    /// registration edit; the battlegrounds review found <c>wsg</c> unreachable from the command when it was DI-only).
+    /// </summary>
+    public static IReadOnlyList<IPlayerbotScenario> Shipped { get; } = typeof(PlayerbotScenarioCatalog).Assembly.GetTypes()
+        .Where(t => t is { IsClass: true, IsAbstract: false, IsPublic: true } && typeof(IPlayerbotScenario).IsAssignableFrom(t)
+            && t.GetConstructor(Type.EmptyTypes) is not null && Builtins.All(b => b.GetType() != t))
+        .Select(t => (IPlayerbotScenario)Activator.CreateInstance(t)!)
+        .OrderBy(s => s.Name, StringComparer.Ordinal)
+        .ToArray();
+
     public static IReadOnlyList<IPlayerbotScenario> All(IServiceProvider services)
-        => [.. Builtins, .. services.GetServices<IPlayerbotScenario>().Where(s => Builtins.All(b => b.Name != s.Name))];
+    {
+        var all = new List<IPlayerbotScenario>();
+        foreach (IPlayerbotScenario scenario in Builtins.Concat(Shipped).Concat(services.GetServices<IPlayerbotScenario>()))
+            if (all.All(s => !s.Name.Equals(scenario.Name, StringComparison.OrdinalIgnoreCase))) all.Add(scenario);
+        return all;
+    }
 
     public static IPlayerbotScenario? Find(IServiceProvider services, string name)
         => All(services).FirstOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase));

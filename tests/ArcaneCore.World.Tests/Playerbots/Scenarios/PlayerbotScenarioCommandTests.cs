@@ -50,8 +50,10 @@ public sealed class PlayerbotScenarioCommandTests
 
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot scenario list");
         var listed = new List<string>();
-        for (int i = 0; i < PlayerbotScenarioCatalog.Builtins.Count; i++) listed.Add((await admin.ReadChatAsync()).Text);
-        Assert.Equal(PlayerbotScenarioCatalog.Builtins.Select(s => $"{s.Name}: {s.Description}"), listed);
+        IReadOnlyList<IPlayerbotScenario> catalog = PlayerbotScenarioCatalog.All(world.Services);
+        for (int i = 0; i < catalog.Count; i++) listed.Add((await admin.ReadChatAsync()).Text);
+        Assert.Equal(catalog.Select(s => $"{s.Name}: {s.Description}"), listed);
+        Assert.Contains("wsg: " + new WarsongGulchScenario().Description, listed);
 
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot scenario run nosuch");
         Assert.Equal("Unknown scenario 'nosuch'. Use .playerbot scenario list.", (await admin.ReadChatAsync()).Text);

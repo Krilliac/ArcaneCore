@@ -116,18 +116,23 @@ follow the manual clock. `ScenarioClock.Real` (live server) polls in wall time.
 first use): `smoke` (login, hear own /say), `group-chat` (invite, accept, both group lists and
 the server roster, party chat, leave), `trade` (Linen Cloth 2589 for 75 copper through the
 trade window; both inventories and purses), `duel` (spell 7266, accept, countdown, melee to the
-1-health finish; SMSG_DUEL_WINNER checked against server state). `IPlayerbotScenario` services
-registered in DI are listed too. `ScenarioSteps` holds reusable blocks (form a group, open and
+1-health finish; SMSG_DUEL_WINNER checked against server state). After them come the other public
+scenarios this assembly ships (`PlayerbotScenarioCatalog.Shipped`, discovered: `dungeon`, `wsg`), then
+`IPlayerbotScenario` services registered in DI; a name belongs to its first entry. Shipped content
+scenarios need content a live world may not have and then fail at a named step. `ScenarioSteps` holds reusable blocks (form a group, open and
 accept a trade, leave earlier groups).
 
 **Battlegrounds** (`ScenarioBattlegrounds`, kept out of the shared harness files): bot actions `BattlemasterHelloAsync`,
 `JoinBattlegroundAsync` (CMSG_BATTLEMASTER_JOIN), `PortBattlegroundAsync`, `LeaveBattlefieldAsync`, `BattlefieldStatusAsync`, `PvpLogDataAsync`,
 `PlayerPositionsAsync`, `CancelAuraAsync`; decoders for SMSG_BATTLEFIELD_STATUS, MSG_PVP_LOG_DATA, SMSG_UPDATE_WORLD_STATE and
 MSG_BATTLEGROUND_PLAYER_POSITIONS; lookups of a battlemaster spawn of a type (`battlemaster_entry`), a game object spawn and an area trigger. The
-scenario `wsg` (`WarsongGulchScenario`, registered by tests; a realm would register it as an `IPlayerbotScenario` service) logs in a human and an
+scenario `wsg` (`WarsongGulchScenario`, listed by `.playerbot scenario list` through the shipped-scenario discovery) logs in a human and an
 orc warrior, queues each at a battlemaster of its continent, ports both into one match, waits out the two-minute start, captures the Horde flag,
 drops the Alliance flag by cancelling the flag aura, returns it, captures twice more (SMSG_BATTLEFIELD_WIN / _LOSE, the final scoreboard) and
-waits until both bots are back at their entry points. `WarsongGulchScenario.EnterMatchAsync` is the reusable opening.
+waits until both bots are back at their entry points. `WarsongGulchScenario.EnterMatchAsync` is the reusable opening. On a live
+world it needs the Warsong Gulch content (map 489, its triggers, safe locations, flag objects and battlemasters), a battleground
+template of one player per team (the retail minimum is five, so two bots never start a match otherwise) and
+`World:Playerbots:Scenarios:MaxDurationSeconds` of about 600 (two 2-minute waits plus the captures).
 
 ### Running scenarios on a live server
 
