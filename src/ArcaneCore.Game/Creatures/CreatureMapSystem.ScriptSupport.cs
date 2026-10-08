@@ -125,7 +125,8 @@ public sealed partial class CreatureMapSystem
             creature.Health = 0;
             creature.Target = default;
             creature.DeathState = CreatureDeathState.Corpse;
-            creature.RespawnAtMs = _clockMs + (creature.NextRespawnDelaySeconds() * 1000L);
+            uint respawnDelay = creature.TakeRespawnDelaySeconds();
+            creature.RespawnAtMs = respawnDelay == Creature.RespawnNeverSeconds ? long.MaxValue : _clockMs + (respawnDelay * 1000L);
             SaveRespawnOnDeath(creature);
         }
 

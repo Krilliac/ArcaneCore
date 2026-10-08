@@ -315,6 +315,27 @@ public sealed partial class Creature : Unit, ICombatCreature
     /// </summary>
     public uint? RespawnDelayOverrideSeconds { get; internal set; }
 
+    /// <summary>
+    /// cmangos <c>Creature::SetRespawnDelay(delay, once = true)</c> (Entities/Creature.h:806, used by Creature.cpp:1868-1876): the delay of the
+    /// next death only (a scripted wipe that brings a boss back in 30 s); the death that uses it clears it. null: none set.
+    /// </summary>
+    public uint? RespawnDelayOnceSeconds { get; internal set; }
+
+    /// <summary>
+    /// The respawn delay a death schedules now: a one-shot delay a script set (<see cref="RespawnDelayOnceSeconds"/>, consumed here), else
+    /// <see cref="NextRespawnDelaySeconds"/>.
+    /// </summary>
+    internal uint TakeRespawnDelaySeconds()
+    {
+        if (Spawn is not null && RespawnDelayOnceSeconds is { } once)
+        {
+            RespawnDelayOnceSeconds = null;
+            return once;
+        }
+
+        return NextRespawnDelaySeconds();
+    }
+
     /// <summary>vmangos RESPAWN_NEVER as a delay: the creature does not come back.</summary>
     public const uint RespawnNeverSeconds = uint.MaxValue;
 

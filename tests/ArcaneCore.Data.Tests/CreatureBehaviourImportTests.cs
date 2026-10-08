@@ -437,7 +437,10 @@ public sealed class CreatureBehaviourImportTests : IAsyncLifetime
         Assert.Equal(10384, report.Templates);
         Assert.Equal(38, report.AiSummons);
         Assert.True(report.ScriptTexts > 0);
-        Assert.Equal(report.ScriptTexts, report.AiTexts); // z2815 creature_ai_texts is empty
+        // z2815 creature_ai_texts is empty: every ScriptDev2 script_texts row, plus Blastmaster Emi Shortfuse's gossip option (gossip_texts
+        // -3090000, sd2-mid's Gnomeregan port).
+        Assert.Equal(report.ScriptTexts + 1, report.AiTexts);
+        Assert.Contains(importer.AiSnapshot().Texts, t => t.Entry == -3090000);
         Assert.Contains(importer.AiSnapshot().Texts, t => t.Entry == -1036000 && t.Content.Contains("noise", StringComparison.Ordinal));
         Assert.Contains(importer.PathSnapshot(), p => p.Entry == 3849 && p.PathId == 0x8000_0000u && p.Point == 12);
         // Disciple of Naralex has no script_waypoint rows: ScriptDev2 starts his escort on waypoint_path 3678 (79 points, 1 s stops at the

@@ -53,7 +53,8 @@ internal sealed class PetTestKit : IDisposable
 
     public const int TotemDurationMs = 30_000;
 
-    public PetTestKit(IEnumerable<SpellInfo>? extraSpells = null, PetContent? petContent = null, bool creatureSpells = false)
+    public PetTestKit(IEnumerable<SpellInfo>? extraSpells = null, PetContent? petContent = null, bool creatureSpells = false,
+        IEnumerable<CreatureTemplate>? extraTemplates = null)
     {
         Spells = new SpellTestKit([.. DefaultPetSpells(), .. extraSpells ?? []]);
         Map = Spells.World.GetMap(0);
@@ -79,6 +80,7 @@ internal sealed class PetTestKit : IDisposable
                     b.MinLevelHealth = 500;
                     b.MaxLevelHealth = 500;
                 }),
+                .. extraTemplates ?? [],
             ],
             []);
         // creatureSpells: the creatures cast through the real spell system (vmangos IsNoMovementSpellCasted reaches the movement generators).

@@ -57,7 +57,7 @@ public sealed record CreatureImportReport(
 
     public int AiTextTemplates { get; init; }
 
-    /// <summary><c>dbscripts_on_relay</c> rows (the relay DB scripts EventAI's START_RELAY_SCRIPT runs).</summary>
+    /// <summary><c>dbscripts_on_relay</c> rows plus the two selected Zul'Farrak <c>dbscripts_on_event</c> scripts.</summary>
     public int RelayScriptSteps { get; init; }
 
     /// <summary>Type-1 (relay) rows of <c>dbscript_random_templates</c>.</summary>
@@ -180,6 +180,11 @@ public sealed class CreatureDumpImporter
                 case "script_texts":
                     ReadAiText(row);
                     break;
+                // ScriptDev2 ADD_GOSSIP_ITEM_ID reads gossip_texts (entry, content_default; the -3xxxxxx range never meets script_texts'
+                // -1xxxxxx). Only the ported scripts' option lines are carried: Blastmaster Emi Shortfuse's GOSSIP_ITEM_START.
+                case "gossip_texts" when IsDungeonGossipText(Int(Get(row, "entry"))):
+                    ReadAiText(row);
+                    break;
                 case "dbscript_random_templates":
                     if (U32(row, "type") == 0)
                     {
@@ -194,14 +199,30 @@ public sealed class CreatureDumpImporter
                     }
                     break;
                 case "dbscripts_on_relay":
+                    if (RelayScriptCatalog.IsEventRelayId(U32(row, "id")))
+                    {
+                        // The block is ArcaneCore's home for dbscripts_on_event scripts; a real relay there would silently replace one.
+                        Warn($"dbscripts_on_relay {U32(row, "id")} is in the id block reserved for dbscripts_on_event scripts "
+                            + $"(from {RelayScriptCatalog.EventRelayIdOffset}); skipped");
+                        break;
+                    }
+
                     ReadRelayStep(row);
                     break;
                 case DbScriptDataModule.QuestStartTable:
                 case DbScriptDataModule.QuestEndTable:
                 case DbScriptDataModule.GossipTable:
-                case DbScriptDataModule.EventTable:
                 case DbScriptDataModule.WaypointTable:
                     _dbScripts.Accept(row);
+                    break;
+                case DbScriptDataModule.EventTable:
+                    _dbScripts.Accept(row);
+                    // ScriptDev2's two Zul'Farrak event relays (sd2-mid) are also stored as relays in the block RelayScriptCatalog
+                    // reserves for event scripts; the dungeon hooks start them as relays (DungeonScriptHooks, ZulFarrakInstance).
+                    if (U32(row, "id") is 2488 or 2609)
+                    {
+                        ReadRelayStep(row, RelayScriptCatalog.EventRelayId(U32(row, "id")));
+                    }
                     break;
                 case "broadcast_text":
                     ReadBroadcastText(row);
@@ -406,9 +427,9 @@ public sealed class CreatureDumpImporter
     /// One <c>dbscripts_on_relay</c> row (cmangos mangos.sql column names). The table has no key: the rows of one id are kept in dump
     /// order (<see cref="RelayScriptRow.Ordinal"/>), and a later dump file that carries an id replaces every row of that id.
     /// </summary>
-    private void ReadRelayStep(DumpRow row)
+    private void ReadRelayStep(DumpRow row, uint? idOverride = null)
     {
-        uint id = U32(row, "id");
+        uint id = idOverride ?? U32(row, "id");
         if (_relayIdsThisRead.Add(id) || !_relaySteps.ContainsKey(id))
         {
             _relaySteps[id] = [];
@@ -940,6 +961,9 @@ public sealed class CreatureDumpImporter
             _scriptTextEntries.Add(text.Entry);
         }
     }
+
+    // gossip_texts of the ported dungeon scripts: gnomeregan.cpp GOSSIP_ITEM_START.
+    private static bool IsDungeonGossipText(int id) => id == -3090000;
 
     // broadcast_text: the columns mangos-classic ObjectMgr::LoadBroadcastText reads (ObjectMgr.cpp:7786-7821).
     private void ReadBroadcastText(DumpRow row)

@@ -44,6 +44,28 @@ public sealed class RelayScriptCatalog
 {
     public static readonly RelayScriptCatalog Empty = new([], []);
 
+    /// <summary>
+    /// Where the <c>dbscripts_on_event</c> scripts a ScriptDev2 port runs (cmangos <c>Map::ScriptsStart(SCRIPT_TYPE_EVENT, id)</c>) live in the
+    /// relay id space: event <c>id</c> is relay <c>EventRelayIdOffset + id</c>. Real <c>dbscripts_on_relay</c> ids follow cmangos'
+    /// <c>entry * 100 + n</c> pattern (ClassicDB z2815 tops out at 1,574,201), so this block is far above any of them; the importer
+    /// refuses a relay row that falls into it (<see cref="IsEventRelayId"/>) instead of letting it overwrite an event script.
+    /// </summary>
+    public const uint EventRelayIdOffset = 2_000_000_000;
+
+    /// <summary>The relay id that carries <c>dbscripts_on_event</c> script <paramref name="eventId"/>.</summary>
+    public static uint EventRelayId(uint eventId)
+    {
+        if (eventId > uint.MaxValue - EventRelayIdOffset)
+        {
+            throw new ArgumentOutOfRangeException(nameof(eventId), eventId, "event id does not fit in the reserved relay block");
+        }
+
+        return EventRelayIdOffset + eventId;
+    }
+
+    /// <summary>Whether relay id <paramref name="relayId"/> is in the block reserved for event scripts.</summary>
+    public static bool IsEventRelayId(uint relayId) => relayId >= EventRelayIdOffset;
+
     private readonly Dictionary<uint, RelayScriptStep[]> _scripts;
     private readonly Dictionary<uint, RelayScriptTemplateChoice[]> _templates;
 

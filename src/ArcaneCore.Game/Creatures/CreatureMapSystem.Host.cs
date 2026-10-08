@@ -48,6 +48,12 @@ public sealed partial class CreatureMapSystem
         return creature.IsAlive || triggered ? spells.Cast(creature, spellId, target, triggered) : CreatureCastResult.Failed;
     }
 
+    /// <summary>A creature spell targeted at a world position (SpellCastTargets DEST_LOCATION).</summary>
+    public CreatureCastResult CastSpellAtDestination(Creature creature, uint spellId, float x, float y, float z, bool triggered)
+        => _ai.Spells is { } spells && (creature.IsAlive || triggered)
+            ? spells.CastAtDestination(creature, spellId, x, y, z, triggered)
+            : CreatureCastResult.NoSpellSystem;
+
     public bool HasAura(Unit unit, uint spellId) => _ai.Spells?.HasAura(unit, spellId) ?? false;
 
     public void InterruptCast(Creature creature) => _ai.Spells?.Interrupt(creature);

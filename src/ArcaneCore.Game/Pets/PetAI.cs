@@ -29,6 +29,12 @@ namespace ArcaneCore.Game.Pets;
 /// </summary>
 public sealed class PetAI : CreatureAI
 {
+    /// <summary>
+    /// The generic pet AI that drives <paramref name="ai"/>'s creature: <paramref name="ai"/> itself, or the one a scripted pet AI keeps for
+    /// everything it does not script (<see cref="IScriptedPetAi"/>); null for any other AI.
+    /// </summary>
+    public static PetAI? Of(CreatureAI? ai) => ai as PetAI ?? (ai as IScriptedPetAi)?.Pet;
+
     /// <summary>vmangos <c>m_bMeleeAttack = (entry != 416)</c>: the warlock imp has no melee attack (PetAI.cpp:41).</summary>
     public const uint ImpEntry = 416;
 
@@ -588,4 +594,15 @@ public sealed class PetAI : CreatureAI
             }
         }
     }
+}
+
+/// <summary>
+/// A guardian's script AI built on the generic pet AI (ScriptDev2 <c>ScriptedPetAI</c>, mangos-classic AI/ScriptDevAI/base/pet_ai.cpp: follow
+/// the owner, help it, defend itself). The pet systems that talk to a <see cref="PetAI"/> (owner attacked, attack commands) reach
+/// <see cref="Pet"/> through it.
+/// </summary>
+public interface IScriptedPetAi
+{
+    /// <summary>The generic pet AI the script delegates to.</summary>
+    PetAI Pet { get; }
 }

@@ -171,10 +171,11 @@ public sealed class InstanceScriptTests
     }
 
     [Fact]
-    public void TheDefaultRegistry_HasDeadminesAndTheEightDungeonsEventAiWritesTo()
+    public void TheDefaultRegistry_HasTheScriptDev2DungeonScripts()
     {
         // classic-db z2815 ACTION_T_SET_INST_DATA rows: Shadowfang Keep 33, Wailing Caverns 43, Razorfen Kraul 47, Blackfathom Deeps 48,
-        // Sunken Temple 109, Blackrock Depths 230, Zul'Gurub 309, Dire Maul 429.
-        Assert.Equal([33u, 36u, 43u, 47u, 48u, 109u, 230u, 309u, 429u], InstanceScriptRegistry.Default.MapIds.Order());
+        // Sunken Temple 109, Blackrock Depths 230, Zul'Gurub 309, Dire Maul 429; plus the ScriptDev2 dungeon ports of wave 7.
+        Assert.Equal([33u, 36u, 43u, 47u, 48u, 70u, 90u, 109u, 129u, 189u, 209u, 230u, 309u, 429u],
+            InstanceScriptRegistry.Default.MapIds.Order());
     }
 }

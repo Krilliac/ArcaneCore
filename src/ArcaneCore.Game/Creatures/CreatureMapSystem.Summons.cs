@@ -54,6 +54,15 @@ public sealed partial class CreatureMapSystem
     private void AddTimedSummon(Creature creature, uint lifetimeMs, SummonTimer timer)
         => _summons.Add(new TimedSummon(creature, lifetimeMs, timer, _clockMs + lifetimeMs));
 
+    /// <summary>ScriptDev2 TEMPSPAWN_TIMED_OOC_DESPAWN (TemporarySpawn.cpp:45-58): a script's temporary creature
+    /// counts down only while alive and out of combat; combat restarts its full lifetime.</summary>
+    public void MarkTimedOutOfCombatDespawn(Creature creature, uint lifetimeMs)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        if (creature.Spawn is null && _creatures.ContainsKey(creature.Guid))
+            AddTimedSummon(creature, lifetimeMs, SummonTimer.AliveOutOfCombat);
+    }
+
     /// <summary>
     /// Despawn the timed summons whose time is up (after every creature's tick). An <see cref="SummonTimer.OutOfCombat"/> timer is put back
     /// to the whole lifetime on every update the creature is in combat or dead (vmangos <c>m_timer = m_lifetime</c>), so it runs out only

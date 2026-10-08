@@ -42,7 +42,7 @@ public sealed partial class CreatureMapSystem
             return;
         }
 
-        OnAiDeath(creature, killer);
+        OnAiDeath(creature, killer); // ends with InstanceData.OnCreatureDeath (sd2-low and sd2-mid both added the call; once is right)
         NotifySummonerOfDeath(creature);
         DespawnCorpseOfSummon(creature);
         StopMoving(creature);
@@ -58,7 +58,7 @@ public sealed partial class CreatureMapSystem
             : creature.CorpseDecaySeconds(_options) * 1000;
         creature.SkinningForOthersMs = Creature.SkinningForOthersDefaultMs; // Creature.cpp:822-825: a new life, a new corpse
         creature.LootedForSkin = false;
-        uint respawnDelay = creature.NextRespawnDelaySeconds();
+        uint respawnDelay = creature.TakeRespawnDelaySeconds(); // a script's one-shot delay first (cmangos SetRespawnDelay(d, true))
         creature.RespawnAtMs = respawnDelay == Creature.RespawnNeverSeconds ? long.MaxValue : _clockMs + (respawnDelay * 1000L);
         SaveRespawnOnDeath(creature);
         // Capture the current pet while its corpse still belongs to the map.
@@ -435,6 +435,7 @@ public sealed partial class CreatureMapSystem
         creature.FollowMovementDisabled = false;
         creature.InvincibilityHpThreshold = 0; // an EventAI death prevention ends with the life it was set in
         creature.AI?.OnRespawn();
+        Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureRespawn(creature);
     }
 
     private void ForgetObservers(Creature creature)

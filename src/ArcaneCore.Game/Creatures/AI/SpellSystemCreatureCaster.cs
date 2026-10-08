@@ -92,6 +92,17 @@ public sealed class SpellSystemCreatureCaster : ICreatureSpellCaster, ICreatureA
             : CreatureCastResult.Failed;
     }
 
+    public CreatureCastResult CastAtDestination(Creature caster, uint spellId, float x, float y, float z, bool triggered)
+    {
+        ArgumentNullException.ThrowIfNull(caster);
+        SpellSystem spells = Spells;
+        if (spells.Store.Get(spellId) is null) return CreatureCastResult.UnknownSpell;
+        if (!triggered && IsCasting(caster)) return CreatureCastResult.AlreadyCasting;
+        var targets = new SpellCastTargets { Mask = SpellCastTargetFlags.DestLocation, Dest = (x, y, z) };
+        return spells.CastSpell(caster, spellId, targets, triggered) == SpellCastResult.CastOk
+            ? CreatureCastResult.Ok : CreatureCastResult.Failed;
+    }
+
     public bool IsCasting(Creature caster)
         => Spells.GetState(caster.Guid) is { Unit: var unit, CurrentCast: { State: SpellCastState.Preparing or SpellCastState.Casting } }
             && ReferenceEquals(unit, caster);

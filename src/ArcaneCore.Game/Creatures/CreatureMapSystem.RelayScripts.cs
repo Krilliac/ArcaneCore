@@ -432,6 +432,20 @@ public sealed partial class CreatureMapSystem
                 RelayTempSpawn(step, source);
                 return false;
 
+            case 11: // SCRIPT_COMMAND_OPEN_DOOR (ScriptMgr.cpp:2074-2111), used by Zul'Farrak's cage event 2609
+            {
+                if (Map.FindUpdater<GameObjects.GameObjectMapSystem>() is { } objects
+                    && objects.GameObjects.FirstOrDefault(go => go.Spawn?.Guid == step.DataLong) is { } door
+                    && door.State == GameObjects.GameObjectState.Ready)
+                    objects.ToggleDoorOrButton(door, Math.Max(15u, step.DataLong2));
+                return false;
+            }
+
+            case 22: // SCRIPT_COMMAND_SET_FACTION (ScriptMgr.cpp:2394-2409)
+                if (source is Creature factionTarget)
+                    factionTarget.FactionTemplate = step.DataLong != 0 ? step.DataLong : factionTarget.Template.Faction;
+                return false;
+
             case 13: // SCRIPT_COMMAND_ACTIVATE_OBJECT (:2115-2128)
                 RelayActivateObject(step, source, target);
                 return false;
