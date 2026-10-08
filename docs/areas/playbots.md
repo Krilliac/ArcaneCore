@@ -24,6 +24,11 @@ Before a pull the brain weighs each candidate's risk against its reward, and in 
 it is losing (`World:Playerbots:Risk`, live): `docs/areas/playbots-risk.md`. The risk decision ends each `.playerbot status`
 line and has its own `BOTINSPECT` line.
 
+Content one bot cannot do (elite, dungeon and raid quests, objectives inside instances, quest targets too strong alone) becomes a
+"needs a group of N" goal: `PlayerbotGroupCoordinator` matches bots by goal, team, level and role, the leader invites the others
+through the ordinary group packets, and `PlayerbotGroupAI` drives the members until the content is done (`World:Playerbots:Groups`,
+live; `.playerbot groups`): `docs/areas/playbots-groups.md`.
+
 ### Autonomous and scripted mode
 
 By default a running bot is **autonomous**: each world tick `PlayerbotBrain` chooses quest,

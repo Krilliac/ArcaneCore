@@ -152,6 +152,17 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Chat:TimeoutSeconds", o => o.Chat.TimeoutSeconds, (o, v) => o.Chat.TimeoutSeconds = v, v => v is >= 1 and <= 60 ? null : "must be 1..60"),
         LivePlayerbotsValue("Chat:MaxQueuedRequests", o => o.Chat.MaxQueuedRequests, (o, v) => o.Chat.MaxQueuedRequests = v, v => v is >= 1 and <= 256 ? null : "must be 1..256"),
         LivePlayerbots("Chat:NaturalLanguageCommands", o => o.Chat.NaturalLanguageCommands, (o, v) => o.Chat.NaturalLanguageCommands = v),
+        // Not vmangos keys: bots grouping up for group content (docs/areas/playbots-groups.md). PlayerbotGroupCoordinator reads the
+        // shared PlayerbotOptions.Groups at every decision.
+        LivePlayerbots("Groups:Enabled", o => o.Groups.Enabled, (o, v) => o.Groups.Enabled = v),
+        LivePlayerbotsValue("Groups:MaxGroups", o => o.Groups.MaxGroups, (o, v) => o.Groups.MaxGroups = v, v => v is >= 0 and <= 64 ? null : "must be 0..64"),
+        LivePlayerbotsValue("Groups:LevelRange", o => o.Groups.LevelRange, (o, v) => o.Groups.LevelRange = v, v => v is >= 0 and <= 60 ? null : "must be 0..60"),
+        LivePlayerbotsValue("Groups:MinTank", o => o.Groups.MinTank, (o, v) => o.Groups.MinTank = v, v => v is >= 0 and <= 5 ? null : "must be 0..5"),
+        LivePlayerbotsValue("Groups:MinHealer", o => o.Groups.MinHealer, (o, v) => o.Groups.MinHealer = v, v => v is >= 0 and <= 5 ? null : "must be 0..5"),
+        LivePlayerbotsValue("Groups:FormationTimeoutSeconds", o => o.Groups.FormationTimeoutSeconds, (o, v) => o.Groups.FormationTimeoutSeconds = v,
+            v => v is >= 30 and <= 86_400 ? null : "must be 30..86400"),
+        LivePlayerbots("Groups:RaidsEnabled", o => o.Groups.RaidsEnabled, (o, v) => o.Groups.RaidsEnabled = v),
+        LivePlayerbots("Groups:InvitePlayers", o => o.Groups.InvitePlayers, (o, v) => o.Groups.InvitePlayers = v),
 
         // The player speed rates (non-retail when not 1; the MaNGOS Zero fork's Movement.*SpeedRate): UnitSpeed.SetRate reads them through the
         // player's copy, which the reload refreshes for every online player (ConfigContentReloadable re-sends the speeds after these keys).

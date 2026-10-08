@@ -19,10 +19,10 @@ the map it is on now when the map registry (`map_template`) says that map is a d
 | anything | — (empty list) | — | yes |
 
 `PlayerbotNavigation.TryPlan` and `TryAdvance` use `MayMoveOn`. `MayStayOnMap(Player, PlayerbotOptions)` is the same rule for the
-login gate in `ManagedPlayerbotFeature.StartCoreAsync` (today `_options.AllowedMaps.Contains(player.Map.MapId)`); that file belongs to
-the party-AI lane and is wired after merge. Until then a bot saved inside a dungeon under the default AllowedMaps is refused at its next
-login (`login-refused`, quarantine). An autonomous living bot no longer gets into a dungeon on its own (area triggers, below); the
-scenarios below always bring their bot back out.
+login gate in `ManagedPlayerbotFeature.StartCoreAsync` (wired with the bot groups, `docs/areas/playbots-groups.md`): a bot saved inside a
+dungeon logs back into it instead of being refused (`login-refused`, quarantine), and a free bot inside an instance without a group
+walks out through the exit (`PlayerbotGroupCoordinator`). An autonomous living bot does not get into a dungeon on its own (area
+triggers, below) unless its bot group takes it in; the scenarios below always bring their bot back out.
 
 ## Area triggers like a client (`PlayerbotAreaTriggers`)
 

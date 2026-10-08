@@ -54,6 +54,9 @@ public sealed record PlayerbotInspection(string Name, PlayerbotGoalKind Goal, ui
     /// reason=pack-of-3 target=...</c>), the fight estimate (<c>fight ttk=... ttd=... decision=...</c>) or the retreat.
     /// </summary>
     public string? Risk { get; init; }
+
+    /// <summary>The bot's bot-led group (<c>group=3:tank:engaging</c>) or its wait for one, else null (<see cref="Groups.PlayerbotGroupCoordinator.Describe"/>).</summary>
+    public string? Group { get; init; }
 }
 
 internal static class PlayerbotInspector

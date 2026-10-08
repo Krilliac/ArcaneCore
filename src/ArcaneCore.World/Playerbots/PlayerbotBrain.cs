@@ -106,6 +106,29 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     /// <summary>Stalls reported so far.</summary>
     internal int StallCount => _stall.Count;
 
+    /// <summary>
+    /// The quest objectives (quest, creature entry) this bot leaves to a group while it waits for partners or does them with its group
+    /// (<see cref="Groups.PlayerbotGroupCoordinator"/>): the brain does not hunt them alone.
+    /// </summary>
+    internal HashSet<(uint Quest, uint Entry)> GroupHeld { get; } = [];
+
+    /// <summary>
+    /// The bot comes back from its group (the group AI drove it): whatever route, target, loot or rest the brain had belongs to
+    /// another place. Its quests, suspensions and memories stay.
+    /// </summary>
+    internal void ResumeAfterGroup()
+    {
+        DropIntent();
+        _lootActions.Clear();
+        _lootResponseReceived = false;
+        _restUntilMs = 0;
+        _needsRest = false;
+        _thinkElapsed = 0;
+        _combatSpells.Reset();
+        _stall.Reset();
+        _goal = PlayerbotGoalKind.Explore;
+    }
+
     /// <summary>Whether goals skip creatures of <paramref name="entry"/> for now (a stall or a death loop set it aside; tests).</summary>
     internal bool IsEntrySetAside(uint entry) => _suspensions.IsEntrySuspended(entry, _session.World.NowMs);
 
@@ -115,6 +138,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             return;
         _destinations.SkipQuest ??= _quests.IsRefused;
         _quests.Suspensions = _town.Suspensions = _trainers.Suspensions = _destinations.Suspensions = _suspensions;
+        _quests.HeldForGroup ??= (quest, entry) => GroupHeld.Contains((quest, entry)) || GroupHeld.Contains((0, entry));
         if (!player.IsInWorld) return;
 
         bool dead = !player.IsAlive;

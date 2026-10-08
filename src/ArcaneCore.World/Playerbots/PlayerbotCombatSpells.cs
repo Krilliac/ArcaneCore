@@ -37,6 +37,12 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     /// </summary>
     internal Unit? PullTarget { get; set; }
 
+    /// <summary>
+    /// The role the bot's group gave it (<see cref="Groups.PlayerbotGroupCoordinator"/>; a warrior without Shield Slam still tanks for
+    /// a group that has no other tank). Null: the role its talents give (vmangos AutoAssignRole).
+    /// </summary>
+    internal PlayerbotRole? GroupRole { get; set; }
+
     /// <summary>Retire retry state when the player leaves a combat lifetime (death/reclaim).</summary>
     internal void Reset()
     {
@@ -179,7 +185,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         ArgumentNullException.ThrowIfNull(player);
         if (session.Services.GetService<SpellFeature>() is { } feature) Refresh(player, feature);
         else _role = PlayerbotRoles.Assign(player.Class, _ => false);
-        return _role;
+        return GroupRole ?? _role;
     }
 
     /// <summary>The resolved class abilities (rebuilt after a learned, superseded or removed spell).</summary>
@@ -230,7 +236,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
         => PlayerbotRotations.For(player.Class) is { } rotation && Refresh(player, feature).Count > 0 ? rotation : null;
 
     private RotationState View(Player player, SpellFeature feature, Unit? victim)
-        => PlayerbotCombatView.Build(session, feature, player, victim, Refresh(player, feature), _role, IsRefused);
+        => PlayerbotCombatView.Build(session, feature, player, victim, Refresh(player, feature), GroupRole ?? _role, IsRefused);
 
     /// <summary>
     /// vmangos PartyBotAI::OnPacketReceived (PartyBotAI.cpp:544-553): a learned, superseded or removed spell marks the spell

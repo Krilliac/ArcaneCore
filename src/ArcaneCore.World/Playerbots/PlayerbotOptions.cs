@@ -88,6 +88,9 @@ public sealed class PlayerbotOptions
     /// </summary>
     public Chat.PlayerbotChatOptions Chat { get; set; } = new();
 
+    /// <summary>Bots group up for content they cannot do alone (<c>World:Playerbots:Groups</c>; live).</summary>
+    public PlayerbotGroupOptions Groups { get; set; } = new();
+
     public static PlayerbotOptions Bind(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -133,6 +136,8 @@ public sealed class PlayerbotOptions
         Risk.Validate();
         if (Chat is null) throw new InvalidOperationException($"{SectionName}:Chat is missing.");
         Chat.Validate();
+        if (Groups is null) throw new InvalidOperationException($"{SectionName}:Groups is missing.");
+        Groups.Validate();
     }
 }
 

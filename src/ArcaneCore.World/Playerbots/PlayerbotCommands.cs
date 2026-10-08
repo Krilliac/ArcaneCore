@@ -12,7 +12,7 @@ public sealed class PlayerbotCommands : ICommandGroup
     public IReadOnlyList<ChatCommand> Commands { get; } =
     [
         new ChatCommand("playerbot", AccountSecurity.GameMaster,
-            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|chat|scenario>\nManage server-owned autonomous players.",
+            "Syntax: .playerbot <create|start|stop|status|list|inspect|invite|chat|groups|scenario>\nManage server-owned autonomous players.",
             Children:
             [
                 new ChatCommand("create", AccountSecurity.Administrator,
@@ -37,6 +37,8 @@ public sealed class PlayerbotCommands : ICommandGroup
                             "Syntax: .playerbot chat status\nShow bot chat: on/off, the spend estimate, and per provider its kind, model, whether its key variable is set, replies this hour and the last error.",
                             ChatStatus),
                     ]),
+                new ChatCommand("groups", AccountSecurity.GameMaster,
+                    "Syntax: .playerbot groups\nList the bot-led groups (goal, members and roles, state) and the bots waiting for partners.", GroupsCommand),
                 Scenarios.PlayerbotScenarioCommands.Command,
             ])
     ];
@@ -148,6 +150,20 @@ public sealed class PlayerbotCommands : ICommandGroup
         return true;
     }
 
+    /// <summary><c>.playerbot groups</c>: the coordinator's report (world thread, where commands run).</summary>
+    private static bool GroupsCommand(CommandContext context, string text)
+    {
+        if (text.Trim().Length != 0) return false;
+        if (context.Session.Services.GetService<Groups.PlayerbotGroupCoordinator>() is not { } coordinator)
+        {
+            context.Reply("Playerbot groups are unavailable.");
+            return true;
+        }
+
+        foreach (string line in coordinator.Report()) context.Reply(line);
+        return true;
+    }
+
     private static async Task InspectAndReplyAsync(CommandContext context, ManagedPlayerbotFeature service, string id)
     {
         try { await InspectReplyCoreAsync(context, service, id).ConfigureAwait(false); }
@@ -164,6 +180,7 @@ public sealed class PlayerbotCommands : ICommandGroup
         context.Reply(FormattableString.Invariant($"BOTINSPECT movement=flags:{(uint)value.MovementFlags:X8} stand:{value.StandState} time:{value.MovementTimeMs} following:{value.Following} loops:{value.LoopsGivenUp}"));
         context.Reply($"BOTINSPECT stall={value.Stall ?? "none"}");
         context.Reply($"BOTINSPECT {value.Risk ?? "decision=none"}");
+        context.Reply($"BOTINSPECT {value.Group ?? "group=none"}");
         context.Reply(value.Master is null ? "BOTINSPECT party=none"
             : $"BOTINSPECT party=master:{value.Master} mode:{value.PartyMode?.ToString().ToLowerInvariant()}");
         if (value.Corpse is { } corpse)
@@ -261,5 +278,6 @@ public sealed class PlayerbotCommands : ICommandGroup
         => string.Create(CultureInfo.InvariantCulture,
             $"{status.BotId} {status.Name} state={status.State} desired={status.DesiredEnabled} goal={status.Goal} "
             + $"target={status.TargetEntry} quest={status.QuestId} map={status.MapId} health={status.Health} "
-            + $"error={status.ErrorCode ?? "none"}{(status.Risk is { } risk ? " " + risk : string.Empty)}");
+            + $"error={status.ErrorCode ?? "none"}{(status.Risk is { } risk ? " " + risk : string.Empty)}"
+            + $"{(status.Group is { } group ? " " + group : string.Empty)}");
 }

@@ -127,6 +127,18 @@ internal sealed class PlayerbotPartyAI
     /// </summary>
     internal Func<(PlayerbotGoalKind Goal, uint QuestId)>? BrainGoal { get; set; }
 
+    /// <summary>
+    /// An invitation the bot accepts whatever <see cref="PlayerbotPartyOptions.InvitePolicy"/> says (bot, inviter): another bot's
+    /// invitation into a group the coordinator formed for both (<see cref="Groups.PlayerbotGroupCoordinator"/>). Null: none.
+    /// </summary>
+    internal Func<Player, Player, bool>? AcceptsBotGroup { get; set; }
+
+    /// <summary>
+    /// The vote of a bot in a bot-led group on a group loot roll (bot, item): need what it would wear, greed the rest. Null, or a null
+    /// answer: <see cref="PlayerbotPartyOptions.LootRoll"/>.
+    /// </summary>
+    internal Func<Player, uint, RollVote?>? GroupLootVote { get; set; }
+
     /// <summary>Whether the party AI drives the bot now (it has a master, or is waiting out a departed one).</summary>
     internal bool IsEngaged => _engaged;
 
@@ -181,7 +193,7 @@ internal sealed class PlayerbotPartyAI
             {
                 case WorldOpcode.SmsgGroupInvite: OnInvite(player, packet.Payload); break;
                 case WorldOpcode.SmsgMessagechat: OnChat(player, packet.Payload); break;
-                case WorldOpcode.SmsgLootStartRoll: OnLootRoll(packet.Payload); break;
+                case WorldOpcode.SmsgLootStartRoll: OnLootRoll(player, packet.Payload); break;
                 case WorldOpcode.SmsgResurrectRequest: OnResurrectRequest(player, packet.Payload); break;
             }
         }
@@ -196,8 +208,8 @@ internal sealed class PlayerbotPartyAI
         string? name = PlayerbotGroupInvites.ReadInviter(payload);
         Player? inviter = (name is null ? null : _session.World.FindOnlinePlayer(name)) ?? _session.World.FindOnlinePlayer(group.LeaderGuid);
         PlayerbotPartyOptions party = _options.Party;
-        bool accept = inviter is not null && PlayerbotGroupInvites.Allows(party.InvitePolicy, party.Allowlist, inviter.Name,
-            PlayerbotGroupInvites.SameGuild(social, player, inviter), PlayerbotGroupInvites.OnBotsFriendList(social, player, inviter));
+        bool accept = inviter is not null && (AcceptsBotGroup?.Invoke(player, inviter) == true || PlayerbotGroupInvites.Allows(party.InvitePolicy, party.Allowlist, inviter.Name,
+            PlayerbotGroupInvites.SameGuild(social, player, inviter), PlayerbotGroupInvites.OnBotsFriendList(social, player, inviter)));
         Act(accept ? WorldOpcode.CmsgGroupAccept : WorldOpcode.CmsgGroupDecline, [], budgeted: false);
     }
 
@@ -332,10 +344,11 @@ internal sealed class PlayerbotPartyAI
         }
     }
 
-    private void OnLootRoll(byte[] payload)
+    private void OnLootRoll(Player player, byte[] payload)
     {
         if (!PlayerbotLootRolls.TryRead(payload, out PlayerbotLootRolls.StartRoll roll)) return;
-        Act(WorldOpcode.CmsgLootRoll, PlayerbotLootRolls.Vote(roll, PlayerbotLootRolls.VoteFor(_options.Party.LootRoll)), budgeted: false);
+        RollVote vote = GroupLootVote?.Invoke(player, roll.ItemId) ?? PlayerbotLootRolls.VoteFor(_options.Party.LootRoll);
+        Act(WorldOpcode.CmsgLootRoll, PlayerbotLootRolls.Vote(roll, vote), budgeted: false);
     }
 
     /// <summary>mangoszero AcceptResurrectAction.h: a resurrection from a member of the bot's group is accepted, any other declined.</summary>
