@@ -30,12 +30,18 @@ public sealed class PlayerbotCommands : ICommandGroup
                 new ChatCommand("invite", AccountSecurity.GameMaster,
                     "Syntax: .playerbot invite $id|$name\nPut a running bot into your group; it follows you and takes your commands.", Invite),
                 new ChatCommand("chat", AccountSecurity.GameMaster,
-                    "Syntax: .playerbot chat status\nThe bots' chat replies.",
+                    "Syntax: .playerbot chat <status|flags|pardon>\nThe bots' chat replies and their safety screening.",
                     Children:
                     [
                         new ChatCommand("status", AccountSecurity.GameMaster,
                             "Syntax: .playerbot chat status\nShow bot chat: on/off, the spend estimate, and per provider its kind, model, whether its key variable is set, replies this hour and the last error.",
                             ChatStatus),
+                        new ChatCommand("flags", AccountSecurity.GameMaster,
+                            "Syntax: .playerbot chat flags [$player]\nShow the latest lines the bot chat safety flagged (all players, or one player's with their strikes, cut-off and AI choice).",
+                            ChatFlags),
+                        new ChatCommand("pardon", AccountSecurity.GameMaster,
+                            "Syntax: .playerbot chat pardon $player\nClear a player's bot chat strikes and cut-off (an automatic mute is lifted with .unmute).",
+                            ChatPardon),
                     ]),
                 new ChatCommand("groups", AccountSecurity.GameMaster,
                     "Syntax: .playerbot groups\nList the bot-led groups (goal, members and roles, state) and the bots waiting for partners.", GroupsCommand),
@@ -59,6 +65,76 @@ public sealed class PlayerbotCommands : ICommandGroup
         return true;
     }
 
+    /// <summary>The most flag records <c>.playerbot chat flags</c> shows.</summary>
+    internal const int MaxFlagLines = 15;
+
+    /// <summary><c>.playerbot chat flags [player]</c>: the newest flag records (one player's, with their standing, when named).</summary>
+    private static bool ChatFlags(CommandContext context, string text)
+    {
+        string name = text.Trim();
+        if (name.Contains(' ', StringComparison.Ordinal)) return false;
+        if (context.Session.Services.GetService<ManagedPlayerbotFeature>()?.Chat is not { } chat)
+        {
+            context.Reply("Playerbot chat is unavailable.");
+            return true;
+        }
+
+        foreach (string line in ChatFlagLines(chat.Safety, name.Length == 0 ? null : name)) context.Reply(line);
+        return true;
+    }
+
+    internal static IEnumerable<string> ChatFlagLines(Chat.PlayerbotChatSafety safety, string? player)
+    {
+        CultureInfo c = CultureInfo.InvariantCulture;
+        if (player is not null)
+        {
+            if (safety.Player(player) is { } standing)
+            {
+                string choice = standing.AiReplies switch { true => "on", false => "off", _ => "default" };
+                yield return string.Create(c,
+                    $"{standing.PlayerName}: strikes={standing.Strikes} cut-off={(standing.CutoffSeconds > 0 ? Math.Ceiling(standing.CutoffSeconds / 60d) + "m" : "no")} ai={choice}");
+            }
+            else
+            {
+                yield return $"{player}: no strikes, no cut-off.";
+            }
+        }
+
+        IReadOnlyList<Chat.BotChatFlag> flags = safety.Flags(player);
+        if (flags.Count == 0)
+        {
+            yield return "No flagged lines.";
+            yield break;
+        }
+
+        foreach (Chat.BotChatFlag flag in flags.Take(MaxFlagLines))
+        {
+            string excerpt = flag.Excerpt is null ? string.Empty : $" \"{flag.Excerpt.Replace('|', '/')}\"";
+            yield return string.Create(c,
+                $"{flag.At:yyyy-MM-dd HH:mm:ss} {flag.PlayerName} (guid {flag.PlayerGuid}, account {flag.AccountId}) -> {flag.Bot}: {flag.Category} ({Chat.PlayerbotChatSafety.Words(flag.Source)}){excerpt}");
+        }
+
+        if (flags.Count > MaxFlagLines) yield return string.Create(c, $"... and {flags.Count - MaxFlagLines} older.");
+    }
+
+    /// <summary><c>.playerbot chat pardon &lt;player&gt;</c>: clear the player's strikes and cut-off.</summary>
+    private static bool ChatPardon(CommandContext context, string text)
+    {
+        string name = text.Trim();
+        if (name.Length == 0 || name.Contains(' ', StringComparison.Ordinal)) return false;
+        if (context.Session.Services.GetService<ManagedPlayerbotFeature>()?.Chat is not { } chat)
+        {
+            context.Reply("Playerbot chat is unavailable.");
+            return true;
+        }
+
+        ulong? guid = context.World.FindOnlinePlayer(name)?.Guid.Value;
+        context.Reply(chat.Safety.Pardon(name, guid)
+            ? $"{name}: bot chat strikes and cut-off cleared."
+            : $"{name} has no bot chat strikes or cut-off.");
+        return true;
+    }
+
     internal static IEnumerable<string> ChatStatusLines(Chat.BotChatStatus status)
     {
         CultureInfo c = CultureInfo.InvariantCulture;
@@ -71,6 +147,10 @@ public sealed class PlayerbotCommands : ICommandGroup
             yield return string.Create(c,
                 $"#{p.Index} {p.Kind} model={p.Model} key={key} replies-hour={p.RepliesThisHour}/{p.MaxRepliesPerHour} replies={p.Replies} errors={p.Errors} last-error={p.LastError ?? "none"} cooldown={p.CooldownSeconds}s priced={(p.Priced ? "yes" : "no")}");
         }
+
+        Chat.BotChatSafetyStatus s = status.Safety;
+        yield return string.Create(c,
+            $"Bot chat safety: screening={(s.Screening ? "on" : "off")} screened={s.Screened} flagged={s.Flagged} moderation-flagged={s.ModerationFlagged} output-flagged={s.OutputFlagged} builtin-only={s.BuiltinOnly} cut-offs={s.Cutoffs} cut-off-now={s.CutOffNow} auto-mutes={s.AutoMutes} opted-out={s.OptedOut} opted-in={s.OptedIn} disclosed={s.Disclosed} filter={s.Terms} terms/{s.Patterns} patterns");
     }
 
     private static bool Create(CommandContext context, string text)

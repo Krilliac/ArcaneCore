@@ -505,13 +505,20 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Risk)}:{property.Name}");
         }
 
-        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatOptions).GetProperties()
+            .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafetyOptions)))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chat)}:{property.Name}");
         }
         foreach (PropertyInfo property in typeof(PlayerbotGroupOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Groups)}:{property.Name}");
+        }
+
+        // The chat safety section is live key by key (docs/areas/playbots.md, Safety and provider policies).
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafetyOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chat)}:Safety:{property.Name}");
         }
 
         // Of the Locomotion section only the player speed rates are reload keys (the rest is read at start; docs/areas/rates.md).

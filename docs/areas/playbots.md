@@ -193,7 +193,9 @@ no cost. Language-model providers are opt-in additions in front of it.
 - **GM.** `.playerbot chat status` (GameMaster): on/off, channels, queued, answered, unanswered, the spend estimate and cap, and
   per provider its kind, model, key variable and whether it is set (`key=ANTHROPIC_API_KEY:present`), replies this hour against
   the cap, errors, the last error class (`rate-limited`, `unavailable`, `unauthorized`, `rejected`, `refused`, `timeout`,
-  `network`, `empty-reply`) and the remaining cooldown.
+  `network`, `empty-reply`, `moderation-failed`) and the remaining cooldown, then a `Bot chat safety:` line (below).
+  `.playerbot chat flags [player]` and `.playerbot chat pardon <player>` (GameMaster) are described under Safety and provider
+  policies.
 
 **The built-in provider** (`PlayerbotBuiltinChat`, templates in `PlayerbotChatTemplates`) reads the line's intent with a few
 patterns, in this order: severe abuse (ignored), an insult (a short brush-off), "are you a bot?" (the honest answer: a bot run
@@ -219,6 +221,7 @@ itself and plain game mechanics, never invented lore.
 | `MaxTokens` | The reply limit, 16..1024 (150). |
 | `TokenLimitParameter` | OpenAICompatible: `max_tokens` (default) or `max_completion_tokens` (newer OpenAI models). |
 | `InputUsdPerMillionTokens`, `OutputUsdPerMillionTokens` | Prices for the spend estimate. Unset: the built-in Anthropic price of a known model (Claude Haiku 4.5 $1/$5), otherwise unpriced. Set 0 for a local model. |
+| `Moderation`, `ModerationBaseUrl`, `ModerationModel`, `ModerationApiKeyEnvironmentVariable` | The optional moderation step before a line is sent to this provider: `None` (default), `Endpoint` or `Classify` (see Safety and provider policies). |
 
 The prompt's system part comes in two pieces: the rules (1.12 setting, short in-game chat style, nothing outside the game, no
 claim of being an AI unless asked directly, a brush-off for abuse, the JSON answer format), identical for every bot and request,
@@ -253,6 +256,76 @@ per-player cooldown keeps one player from spending the budget, the bounded queue
 templates answer once the money or the providers run out. Tests never touch the network: `IBotChatClient` is faked, and the four
 live checks in `PlayerbotChatLiveTests` (one tiny request each to Anthropic, OpenAI, OpenRouter and a local server) run only
 with `ARCANECORE_TEST_LIVE_LLM=1` and that provider's key or `ARCANECORE_TEST_LOCAL_LLM_URL` set.
+
+#### Safety and provider policies
+
+`Playerbots/Chat/PlayerbotChatSafety*.cs`, configured under `World:Playerbots:Chat:Safety` (every key live through `.reload config`,
+range-checked; see the configuration reference). A public server that sends players' lines to an external model provider is
+responsible for what it sends: Anthropic, OpenAI and OpenRouter each have usage policies that apply to the requests made with the
+server's key, whoever typed the words. These safeguards keep the obvious violations away from the provider and limit players who
+keep trying; they reduce the risk, they do not remove it, and they are no substitute for reading the policies of the providers you
+configure. Nothing here applies to the built-in provider, which sends nothing anywhere.
+
+- **Screening before a provider sees a line** (`Enabled`, on). Every line is screened on the chat worker before the first model
+  provider is tried:
+  1. the **local filter** (`PlayerbotChatSafetyFilter`), by category (`Categories`, all by default): `SexualMinors`, `SelfHarm`,
+     `Threats` (real-world: "I know where you live", doxxing, swatting), `Hate` (slurs, calls for violence against protected
+     groups), `Harassment` ("kys"), `IllegalGoods` (making explosives, buying hard drugs) and `PersonalData` (email addresses,
+     phone numbers, street addresses). The term and pattern lists ship in `PlayerbotChatSafetyTerms.json` (an embedded resource);
+     `TermsFile` names an operator file of the same shape that is added to them (or replaces them, `ReplaceDefaultTerms`) and is
+     read again within 10 seconds of a change. The shipped list is deliberately conservative: it aims at what provider policies
+     forbid, not at rudeness ("noob" and "idiot" stay the built-in brush-off's business), and stays clear of words common in WoW
+     chat ("kill", "die", "bomb", "gun", "naked", a "suicide pull"). Matching folds case, accents, leetspeak (`k1ll y0urs3lf`),
+     spaced-out letters (`k y s`) and repeated letters (`kiiill`); terms match whole words, and a trailing `*` matches longer words.
+     Patterns are compiled with `RegexOptions.NonBacktracking` (matching time linear in the line, whatever the pattern: an
+     operator's pattern with a back-reference or lookaround is skipped with a warning) and a 100 ms timeout; a line the filter
+     cannot judge in time goes to no model (the built-in provider answers) but costs no strike.
+  2. each provider's optional **moderation step** (`Moderation` on the provider entry, `None` by default): `Endpoint` posts the
+     line to an OpenAI-compatible `/moderations` endpoint (`ModerationBaseUrl`, default the provider's own `BaseUrl`;
+     `ModerationModel`, default `omni-moderation-latest`; `ModerationApiKeyEnvironmentVariable`, default the provider's key), so an
+     Anthropic entry can use OpenAI's moderation endpoint; `Classify` sends the provider a one-word SAFE/UNSAFE classification
+     request (at most 16 output tokens, counted in the spend estimate) before the reply request. A flag keeps the line from every
+     provider; a failed step skips that provider (`moderation-failed`) and the next one is tried, so a line is never sent
+     unchecked.
+
+  A flagged line reaches no model provider. `OnFlagged` (`BuiltinReply`) answers it with the built-in brush-off (for `SelfHarm`, a
+  short line suggesting a trusted person or a local crisis line; for `PersonalData`, a caution), or nothing (`Ignore`). It is not
+  remembered either, so it is never sent later as conversation memory.
+- **Screening what a model says** (`ScreenOutput`, on). A model's reply is run through the same local filter before the bot says
+  it; a hit is never said: the built-in provider answers the player's line instead (`OnOutputFlagged`: `BuiltinReply`) or nothing
+  (`Drop`). The flag is recorded with the reply's excerpt and is no strike against the player.
+- **Flags, strikes and cut-off.** Every flag is kept in an in-memory ring of `FlagLogSize` (200) records and logged as a warning:
+  the character's name and GUID, the account id, the bot, the category, the source (local filter, moderation or output
+  screening), the time, and, while `StoreExcerpt` is on, at most 60 characters of the line with emails, phone numbers and addresses
+  replaced. There is no persistent flag table (that would need a schema change): the log warnings are the durable record, and the
+  ring, strikes, cut-offs and players' choices are lost at a restart. A flag of `SexualMinors`, `Threats`, `Hate`, `Harassment`,
+  `IllegalGoods` or the moderation step is a strike (`SelfHarm` and `PersonalData` are not); strikes older than
+  `StrikeWindowMinutes` (60) fall away. `StrikesBeforeCutoff` (3) strikes within the window cut the player off from the model
+  providers for `CutoffMinutes` (60): built-in replies only. With `AutoMute` (off) the cut-off also mutes the player's chat for
+  `AutoMuteMinutes` (30) through the account mute of `.mute` (persisted, set by "Bot chat safety" at GameMaster level, lifted by
+  `.unmute`; a longer mute already in force is kept).
+- **GM.** `.playerbot chat flags [player]` lists the newest 15 flag records (one player's when named, after a line with their
+  strikes, remaining cut-off and AI choice); `.playerbot chat pardon <player>` clears a player's strikes and cut-off (not a mute).
+  `.playerbot chat status` ends with `Bot chat safety: screening=on screened=.. flagged=.. moderation-flagged=..
+  output-flagged=.. builtin-only=.. cut-offs=.. cut-off-now=.. auto-mutes=.. opted-out=.. opted-in=.. disclosed=..` and the
+  filter's size.
+- **Disclosure and choice.** While a model provider is configured, a player who talks to a bot gets, once per login and before
+  the first reply, a system message: `DisclosureText` ("Bot replies on this server may be written by an AI service, which
+  receives what you say to bots.") plus how to opt out (`Disclosure`, on). With `AllowOptOut` (on), whispering any bot `ai off`
+  limits that player to built-in replies, `ai on` undoes it and `ai` tells them where they stand; these whispers are answered by
+  the safety itself and never sent to a provider. `RequireOptIn` (off) turns it around: the model providers answer only players
+  who whispered `ai on`, and the disclosure says so. A player's choice lasts until the server restarts.
+- **What is sent.** A model request carries the bot's facts, the bounded memory (`MemoryExchanges`) and the current line, with
+  players named only by character name: never an account name, an address or a GUID. With `StripPersonalData` (on), email
+  addresses, phone numbers and street addresses in the line and the memory are replaced by `[email]`, `[phone]` and `[address]`
+  (this matters when `PersonalData` is left out of `Categories`; otherwise such a line is flagged before it gets that far).
+
+**Operator responsibilities.** Read and follow the usage policies of every provider you configure, and keep the server's own
+rules in line with them. Keep `Enabled` on whenever a model provider is configured (the start log warns when it is off). Review
+`.playerbot chat flags` and the log warnings, extend the list through `TermsFile` for what your players actually say, and consider
+a provider's moderation step on a busy public server. Tell your players, in your server's own terms, that bot chat may be
+processed by a third-party AI service. The screening is a set of word lists and patterns: it will miss some lines and flag a few
+harmless ones, and it says nothing about what a provider will accept.
 
 ## Scenario harness
 

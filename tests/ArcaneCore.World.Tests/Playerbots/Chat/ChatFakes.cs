@@ -31,6 +31,18 @@ internal sealed class FakeBotChatClient : IBotChatClient
         return (_script.TryDequeue(out var step) ? step : Default)(provider, cancellationToken);
     }
 
+    /// <summary>Every moderation request: the text and the key.</summary>
+    public ConcurrentQueue<(string Text, string? Key)> Moderations { get; } = new();
+
+    /// <summary>The moderation verdict (default: clean).</summary>
+    public Func<string, BotChatModeration> Moderation { get; set; } = _ => new BotChatModeration(BotChatModerationVerdict.Clean);
+
+    public Task<BotChatModeration> ModerateAsync(PlayerbotChatProviderOptions provider, string? apiKey, string text, CancellationToken cancellationToken)
+    {
+        Moderations.Enqueue((text, apiKey));
+        return Task.FromResult(Moderation(text));
+    }
+
     /// <summary>A request that never answers until it is cancelled (the timeout).</summary>
     public static async Task<BotChatResult> HangAsync(CancellationToken cancellationToken)
     {
@@ -77,8 +89,8 @@ internal static class ChatSamples
         => new("Chatbot", race, @class, Gender.Male, level, zone, subzone, goal, quest, master, inGroup, []);
 
     public static BotChatAsk Ask(string text, BotChatPersona? persona = null, ulong sender = 0x42, ChatType channel = ChatType.Whisper,
-        bool fromMaster = false, bool inviteAllowed = false, Guid? bot = null)
-        => new(bot ?? BotId, new ObjectGuid(0x7), persona ?? Persona(), new ObjectGuid(sender), "Nathan", channel, text, fromMaster, inviteAllowed);
+        bool fromMaster = false, bool inviteAllowed = false, Guid? bot = null, string name = "Nathan", int account = 0)
+        => new(bot ?? BotId, new ObjectGuid(0x7), persona ?? Persona(), new ObjectGuid(sender), name, channel, text, fromMaster, inviteAllowed, account);
 
     public static readonly Guid BotId = Guid.Parse("00000000-0000-0000-0000-0000000000b0");
 }
