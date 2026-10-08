@@ -279,15 +279,28 @@ public sealed partial class AlteracValley
     /// <summary>
     /// A participant was rewarded a quest by a creature of the match (vmangos Player::RewardQuest → <c>HandleQuestComplete</c>, Player.cpp:13093-13095,
     /// BattleGroundAV.cpp:501-772, then the quest giver's own <c>pQuestRewardedNPC</c> script: <see cref="CollectorQuestComplete"/>).
-    /// <paramref name="requiredItem"/> and <paramref name="requiredCount"/> are the quest's first required item and its count.
+    /// <paramref name="requiredItem"/> and <paramref name="requiredCount"/> are the quest's first required item and its count. The match's part
+    /// runs only while it is in progress (BattleGroundAV.cpp:505-506); the collector's script only asks that the player be in the match
+    /// (battleground_alterac.cpp:2488-2490), so it counts before the start and after the end too.
     /// </summary>
     public void HandleQuestComplete(ObjectGuid player, ObjectGuid questGiver, uint questId, uint requiredItem, uint requiredCount)
     {
-        if (Status != BattlegroundStatus.InProgress || PlayerTeam(player) is not { } team)
+        if (PlayerTeam(player) is not { } team)
         {
             return;
         }
 
+        if (Status == BattlegroundStatus.InProgress)
+        {
+            MatchQuestComplete(team, player, questGiver, questId);
+        }
+
+        CollectorQuestComplete(team, questId, requiredItem, requiredCount);
+    }
+
+    /// <summary>BattleGroundAV::HandleQuestComplete (BattleGroundAV.cpp:501-772), match in progress.</summary>
+    private void MatchQuestComplete(Team team, ObjectGuid player, ObjectGuid questGiver, uint questId)
+    {
         int t = BattlegroundConstants.TeamIndex(team);
         var speaker = new Speaker(questGiver, player);
         string beacon = t == 0
@@ -368,8 +381,6 @@ public sealed partial class AlteracValley
         {
             RewardReputationToTeam(team == Team.Alliance ? FactionStormpike : FactionFrostwolf, reputation, team);
         }
-
-        CollectorQuestComplete(team, questId, requiredItem, requiredCount);
     }
 
     /// <summary>
@@ -475,11 +486,6 @@ public sealed partial class AlteracValley
     /// </summary>
     public void CollectorQuestComplete(Team team, uint questId, uint requiredItem, uint requiredCount)
     {
-        if (Status != BattlegroundStatus.InProgress)
-        {
-            return;
-        }
-
         int challenge;
         uint delivered = requiredCount;
         if (questId is QuestHordeRiderTame or QuestAllianceRiderTame)

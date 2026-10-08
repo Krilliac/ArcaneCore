@@ -249,6 +249,26 @@ public sealed class AlteracValleyUpgradeTests
     }
 
     [Fact]
+    public void BeforeTheStart_ACollectorStillCountsTheTurnIn_ButTheMatchCountsNothing()
+    {
+        // vmangos: BattleGroundAV::HandleQuestComplete returns unless STATUS_IN_PROGRESS (BattleGroundAV.cpp:505-506), but the collector's own
+        // quest-rewarded script, QuestComplete_npc_AVBlood_collector (battleground_alterac.cpp:2477-2545), only asks that the player be in AV.
+        var (bg, host, _) = NewAv();
+        bg.StartBattleground();
+        bg.IncreaseInvitedCount(Team.Alliance);
+        Assert.True(bg.AddPlayer(Alliance[0], Team.Alliance));
+        Assert.NotEqual(BattlegroundStatus.InProgress, bg.Status);
+
+        TurnIn(bg, Alliance[0], AlteracValley.QuestAllianceCommander1, 3, 17326, 1);
+        TurnIn(bg, Alliance[0], AlteracValley.QuestAllianceScraps1, 1, 17422, 20);
+
+        Assert.Equal(3u, bg.ChallengeCounter(Team.Alliance, AlteracValley.ChallengeSoldierAir));
+        Assert.Equal(0u, bg.TeamQuestStatus(Team.Alliance, 1));
+        Assert.Equal(0u, bg.ArmorResources(Team.Alliance));
+        Assert.Empty(host.Says);
+    }
+
+    [Fact]
     public void TamedMounts_FillTheStables_AndTheCavalryNeedsHidesAndMounts()
     {
         var (bg, host, _) = Running();

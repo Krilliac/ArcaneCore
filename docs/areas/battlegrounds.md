@@ -111,21 +111,31 @@ inert default.
   hundred), the commander, boss, mine and stable quests (their reputation, the yells at 90/60/30 turn-ins and at the 200th offering, the tamed
   mounts of events 90-97 and the stable lines). The collectors' counters (`CollectorQuestComplete`: blood or crystals, hides, flesh or medals, mine
   supplies by the quest's first required item, tamed mounts by quest) fill the air, cavalry, ground and world-boss challenges with vmangos' goals,
-  minimum reputations, timers, go flags and resets; a completed world-boss offering resets and sets the go flag. Murgot Deepforge and Regzar get
+  minimum reputations, timers, go flags and resets; a completed world-boss offering resets and sets the go flag. The match's part runs only while
+  it is in progress (BattleGroundAV.cpp:505-506); the collectors' part, like vmangos' QuestComplete_npc_AVBlood_collector, only needs a
+  participant, so it also counts before the start and after the end. Murgot Deepforge and Regzar get
   the quartermaster's gossip through `QuestNpcServices.GossipScript` (the quest list, "next upgrade" with the npc text by how close the scraps
   are, and the upgrade for a player honored with either faction); `UpgradeArmor` buys seasoned, veteran or champion troops at 500, 1000 or 1500
   scraps (the team spell 28418-28420, the quartermaster's lines, and at exactly those amounts every node the team controls repopulated), with the
-  reference's quirk kept: below the threshold it resets the level to basic. The defender events of a captured, defended or repopulated node use
+  reference's quirk kept: below the threshold it resets the level to basic. After an upgrade choice the gossip window stays open, as in vmangos
+  (GossipSelect_npc_AVBlood_collector sends no CLOSE_GOSSIP_MENU for Murgot and Regzar and nothing after UpgradeArmor,
+  battleground_alterac.cpp:3370-3372, 3642-3653). The defender events of a captured, defended or repopulated node use
   the owner's scrap level (`DefenderType`), and `SetSpawnEventMode` is applied as vmangos does (RESPAWN_FORCED for the node's new defenders,
   RESPAWN_STOP for those of an assaulted node, the killed commanders and explosives experts; the world applies it only to creatures whose events
   are all active, respectively not all active, as BattleGround::SetSpawnEventMode does).
 - **Alterac Valley landmines, shredders and yells**: a landmine layer's death sets its event to 1 without spawning (the mines stop coming back),
   an expert's death removes the event's mines; the world runs vmangos go_av_landmineAI on 179324/179325 (`MatchRuntime.AlteracValley.cs`, a
   `GameObjectMapSystem` object script): a mine only fires for a participant of the other team, then despawns, and while its layer is dead it
-  keeps putting its respawn off. `CheckSpellCast` (asked through a cast check after the range check) refuses a shredder summon (21544/21565)
+  keeps putting its respawn off. vmangos asks `me->IsHostileTo(user)` instead; the user is always a player there (an environmental trap only
+  searches players, GameObject.cpp:520-529, as here), and classic-db's 179324/179325 rows have faction 0, for which GameObject::IsHostileTo
+  answers hostile to everyone (GameObject.cpp:2092-2094): a literal port would let a mine go off under its own team, so the team rule stands
+  in for the faction the reference's data would need. A dead layer's creatures and a RESPAWN_STOP defender stay dead for the match only: a
+  battleground map writes no `creature_respawn` rows (vmangos MapPersistentStateMgr.cpp:84-86; docs/areas/creature-movement-spawns.md). `CheckSpellCast` (asked through a cast check after the range check) refuses a shredder summon (21544/21565)
   with SPELL_FAILED_SPELL_UNAVAILABLE while the team's last summoner still controls a shredder, else records the summoner; the summon and
   possess of the shredder itself are the spell system's (the AVCreateShredderScript fix-up is not ported). Snivvle yells 70 s in and the captains
   yell with their buffs (mangos_string 791-793; these rows are not in the string table here, so those yells are logged once and not sent).
+  classic-db z2815 has row 790 but not 791-793, and vmangos' Language.h marks 791-799 as unused; the text has to come from a vmangos world
+  database's mangos_string, which is not among the local references, so it is a content gap, not a code one.
 - **Alterac Valley, not ported**: the assault invocations of the scripts (the escorted ground troops, beacons, war riders, cavalry and world
   bosses with their waypoints and AIs; their counters, goals and go flags are kept for them), the collectors' other gossip menus, and the
   start-time supply and tamed events (unreachable in vmangos itself). The AV queue minimum, initial maximum and randomization of vmangos are not

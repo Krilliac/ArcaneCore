@@ -149,7 +149,9 @@ internal sealed partial class MatchRuntime
     /// The landmine object script (vmangos go_av_landmineAI, battleground_alterac.cpp:3870-3912): a despawned mine whose layer is dead (its
     /// event no longer (landmines, 0)) keeps putting its respawn off by urand(t/2, t) seconds of its spawn time; a mine only goes off for a
     /// hostile player, and then despawns. Hostile is a participant of the other team here (179324 is the Horde's mine, 179325 the
-    /// Alliance's); vmangos asks the faction templates.
+    /// Alliance's); vmangos asks GameObject::IsHostileTo, but classic-db's mines have faction 0, which it reads as hostile to everyone
+    /// (GameObject.cpp:2092-2094), so a literal port would fire under the mine's own team. Only players reach this, as in vmangos, whose
+    /// environmental trap search takes players only (GameObject.cpp:520-529).
     /// </summary>
     private sealed class AvLandmineAi(MatchRuntime match) : IGameObjectAi
     {
