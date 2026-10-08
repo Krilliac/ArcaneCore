@@ -11,6 +11,10 @@ public sealed partial class QuestNpcServices
     /// <summary>vmangos mangos_string LANG_GM_ON, appended to options a GM sees despite a failed condition.</summary>
     private const string GmOnSuffix = " (ON)";
 
+    // ScriptDev creature gossip takes precedence over the world fallback.
+    private INpcGossipScript? ScriptFor(Player player, NpcInfo npc)
+        => (player.Map?.FindObject(npc.Guid) as Creatures.Creature)?.AI as INpcGossipScript ?? GossipScript;
+
     /// <summary>
     /// A gossip option owned by another area was selected (auctioneer, petitioner, tabard
     /// designer, stable master, battlemaster, spirit guide). The owner opens its window.
@@ -60,7 +64,7 @@ public sealed partial class QuestNpcServices
                 Battlegrounds.BattlegroundPackets.BuildAreaSpiritHealerTime(npc.Guid, SpiritGuideNextResurrectMs?.Invoke(npc.Guid) ?? 0));
         }
 
-        if (GossipScript?.Hello(player, npc) is { } scripted)
+        if (ScriptFor(player, npc)?.Hello(player, npc) is { } scripted)
         {
             if (!scripted.Silent)
             {
@@ -282,7 +286,7 @@ public sealed partial class QuestNpcServices
         if (item.Scripted)
         {
             // The script may close the menu, open the vendor list, and answer with an npc text shown over the same lines (SEND_GOSSIP_MENU).
-            if (GossipScript?.SelectReply(p, npc, item.ScriptSender, item.ScriptAction) is { } reply)
+            if (ScriptFor(p, npc)?.SelectReply(p, npc, item.ScriptSender, item.ScriptAction) is { } reply)
             {
                 if (reply.Close)
                 {
@@ -294,7 +298,11 @@ public sealed partial class QuestNpcServices
                     SendListInventory(s, npc.Guid);
                 }
 
-                if (reply.NpcTextId != 0)
+                if (reply.NextMenu is { } next)
+                {
+                    SendScriptedGossip(s, npc, next);
+                }
+                else if (reply.NpcTextId != 0)
                 {
                     SendGossipMenu(s, npc.Guid, reply.NpcTextId);
                 }

@@ -15,6 +15,8 @@ public sealed partial class SpellSystem
 
     private readonly Dictionary<SpellImplicitTarget, TargetSelectorEntry> _targetSelectors = CreateDefaultTargetSelectors();
 
+    private readonly Dictionary<(uint Spell, SpellImplicitTarget Target), SpellTargetSelectorHandler> _spellTargetSelectors = [];
+
     /// <summary>
     /// Register the selector of an implicit target the built-in switch does not know. A location-only
     /// target names a place, not a unit, so target B picks the units (see <c>SelectTargets</c>).
@@ -30,12 +32,28 @@ public sealed partial class SpellSystem
         }
     }
 
+    /// <summary>
+    /// A spell-specific selector for an implicit target the built-in switch does not handle (a raid script's spell_script_target rows,
+    /// for one spell). It is consulted before the target's general registered selector; other spells keep their existing handling.
+    /// Registering one spell and target twice is an error.
+    /// </summary>
+    public void RegisterSpellTargetSelector(uint spell, SpellImplicitTarget target, SpellTargetSelectorHandler handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        if (!_spellTargetSelectors.TryAdd((spell, target), handler))
+        {
+            throw new InvalidOperationException($"Spell {spell} already owns implicit target {(uint)target}.");
+        }
+    }
+
     /// <summary>Whether <paramref name="target"/> has a registered selector flagged location-only.</summary>
     public bool IsRegisteredLocationTarget(SpellImplicitTarget target)
         => _targetSelectors.TryGetValue(target, out TargetSelectorEntry entry) && entry.LocationOnly;
 
     private List<(Unit Unit, float Multiplier)>? TrySelectRegistered(SpellCast cast, SpellEffectInfo effect, SpellImplicitTarget selector, Unit? unitTarget)
-        => _targetSelectors.TryGetValue(selector, out TargetSelectorEntry entry) ? entry.Handler(this, cast, effect, unitTarget) : null;
+        => _spellTargetSelectors.TryGetValue((cast.Spell.Id, selector), out SpellTargetSelectorHandler? handler)
+            ? handler(this, cast, effect, unitTarget)
+            : _targetSelectors.TryGetValue(selector, out TargetSelectorEntry entry) ? entry.Handler(this, cast, effect, unitTarget) : null;
 
     private static Dictionary<SpellImplicitTarget, TargetSelectorEntry> CreateDefaultTargetSelectors() => new()
     {

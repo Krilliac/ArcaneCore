@@ -351,6 +351,11 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return result;
         }
 
+        if (AiOf(go)?.OnUnlockedUse(this, go, player) == true)
+        {
+            return GameObjectUseResult.Ok;
+        }
+
         // Spell::SendLoot (SpellEffects.cpp:2048-2068) hands a door, button, spell focus, goober or chest to GameObject::Use, whose button and
         // chest branches spring the linked trap (GameObject.cpp:1441-1455, 1472-1479) - before the chest loot, whatever the quest gate says.
         if (go.Type is GameObjectType.Chest or GameObjectType.Button)
