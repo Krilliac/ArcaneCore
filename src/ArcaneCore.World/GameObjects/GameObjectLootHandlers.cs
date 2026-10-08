@@ -63,7 +63,12 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
         }
 
         var reader = new PacketReader(payload);
-        system.Use(player, new ObjectGuid(reader.ReadUInt64()));
+        var guid = new ObjectGuid(reader.ReadUInt64());
+        if (system.Use(player, guid) == GameObjectUseResult.TooFar && system.Find(guid) is { } gameObject)
+        {
+            // Refused already; far beyond any interaction distance it is a remote-use attempt (docs/areas/anticheat.md).
+            session.Services.GetService<AntiCheat.AntiCheatFeature>()?.OnGameObjectTooFar(session, player, gameObject);
+        }
     }
 
     /// <summary>CMSG_LOOT: u64 corpse guid.</summary>

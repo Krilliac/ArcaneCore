@@ -42,26 +42,29 @@ public sealed class GroupStoreTests : IAsyncLifetime
         Assert.Contains(CharacterDbContext.Schema.Steps, s => s.Version == 36 && s.Changes.OfType<CreateTableChange>().Count() == 2);
         Assert.Contains(CharacterDbContext.Schema.Steps, s => s.Version == 37);
         Assert.Contains(CharacterDataCleanups.All, c => c is GroupDataModule);
-        Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
+        // Only versions still held by a placeholder of a parallel lane may be reserved (anticheat holds 41 and 42 until their owners merge).
+        Assert.Equal(
+            DataModules.For(DatabaseComponent.Characters).OfType<IReservedSchemaGap>().Select(p => p.SchemaVersion)
+                .Where(v => !DataModules.For(DatabaseComponent.Characters).Any(m => m is not IReservedSchemaGap && m.SchemaVersion == v)).Order(),
+            CharacterDbContext.Schema.ReservedGapVersions.Order());
     }
 
     [Fact]
     public void APlaceholder_YieldsToARealModuleOfTheSameVersion_AndHoldsTheVersionOtherwise()
     {
-        IDataModule[] real = [.. DataModules.For(DatabaseComponent.Characters).Where(m => m is not IReservedSchemaGap)];
-        IDataModule[] lacking35 = [.. real.Where(m => m.SchemaVersion != 35)];
+        IDataModule[] lacking35 = [.. DataModules.For(DatabaseComponent.Characters).Where(m => m.SchemaVersion != 35 || m is IReservedSchemaGap)];
 
         // A build that lacks the owner of 35: the placeholder fills the gap and the schema composes, with 35 reported as held.
         SchemaDefinition alone = DataModules.Compose(DatabaseComponent.Characters, "characters", [], CharacterInlineSteps(), [.. lacking35, new Placeholder(35)]);
         Assert.Equal(Enumerable.Range(2, alone.CurrentVersion - 1), alone.Steps.Select(s => s.Version));
         Assert.Empty(alone.Steps.Single(s => s.Version == 35).Changes);
-        Assert.Equal([35], alone.ReservedGapVersions); // a server process refuses to apply these (ReservedSchemaGapGuardTests)
+        Assert.Contains(35, alone.ReservedGapVersions); // a server process refuses to apply these (ReservedSchemaGapGuardTests)
 
         // Once the real module is present, its step is the one composed, not the placeholder's empty one.
         var owner = new FakeModule(35);
         SchemaDefinition withOwner = DataModules.Compose(DatabaseComponent.Characters, "characters", [], CharacterInlineSteps(), [.. lacking35, owner, new Placeholder(35)]);
         Assert.Same(owner.SchemaChanges, withOwner.Steps.Single(s => s.Version == 35).Changes);
-        Assert.Empty(withOwner.ReservedGapVersions);
+        Assert.DoesNotContain(35, withOwner.ReservedGapVersions);
 
         // Without the placeholder the gap fails, as before.
         Assert.Throws<InvalidOperationException>(() => DataModules.Compose(DatabaseComponent.Characters, "characters", [], CharacterInlineSteps(), lacking35));

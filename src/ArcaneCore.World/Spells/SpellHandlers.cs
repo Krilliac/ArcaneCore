@@ -30,7 +30,11 @@ public sealed class SpellHandlers : IOpcodeHandlerGroup
         var reader = new PacketReader(payload);
         uint spellId = reader.ReadUInt32();
         SpellCastTargets targets = SpellCastTargets.Read(ref reader);
-        Spells(session).HandleCastRequest(player, spellId, targets);
+        if (Spells(session).HandleCastRequest(player, spellId, targets) == SpellCastResult.NotKnown)
+        {
+            // A spell the character does not know: refused, and a client never sends it (docs/areas/anticheat.md).
+            session.Services.GetService<AntiCheat.AntiCheatFeature>()?.OnRejected(session, player, Game.AntiCheat.AntiCheatViolation.Spell, 10f, "cast of a spell the character does not know");
+        }
     }
 
     /// <summary>CMSG_CANCEL_CAST: u32 spell (vmangos HandleCancelCastOpcode).</summary>

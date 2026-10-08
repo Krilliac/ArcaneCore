@@ -44,7 +44,11 @@ public sealed class KnockbackAckHandler : IOpcodeHandlerGroup
 
         // vmangos clears the fall (SetFallInformation(0), :796) and then relocates without UpdateFallInformationIfNeed, so the
         // block that starts the launch does not start a fall: the fall tracking of the observers is undone after the block is stored.
+        // The anticheat checks the acknowledgement's clock and starts a new baseline after the launch (docs/areas/anticheat.md).
+        AntiCheat.AntiCheatFeature? antiCheat = session.Services.GetService<AntiCheat.AntiCheatFeature>();
+        antiCheat?.OnAcknowledgement(session, player, ack.Movement.Time, knockback: true);
         MovementHandlers.ApplyObserved(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement);
+        antiCheat?.AfterMovement(player);
         player.Locomotion.ResetFall();
 
         // vmangos relays what the client acknowledged (the jump block of its own movement info).

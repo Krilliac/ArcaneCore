@@ -1,7 +1,9 @@
+using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Reload;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -48,6 +50,7 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
         var runtime = new WorldRuntimeOptions();
         var listener = new WorldOptions();
         var social = new SocialOptions();
+        var antiCheat = new AntiCheatOptions();
         IConfigurationRoot snapshot = fresh.Build();
         try
         {
@@ -55,6 +58,7 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
             section.Bind(runtime);
             section.Bind(listener);
             snapshot.GetSection(SocialOptions.SectionName).Bind(social);
+            snapshot.GetSection(AntiCheatOptions.SectionName).Bind(antiCheat);
         }
         finally
         {
@@ -82,10 +86,13 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
 
         WorldOptions? liveListener = services.GetService<IOptions<WorldOptions>>()?.Value;
         SocialOptions? liveSocial = services.GetService<SocialFeature>()?.Options;
-        return Task.FromResult<ContentCandidate>(new ConfigCandidate(candidateView, liveListener, liveSocial, substitutions));
+        AntiCheatFeature? liveAntiCheat = services.GetService<AntiCheatFeature>();
+        return Task.FromResult<ContentCandidate>(new ConfigCandidate(candidateView, liveListener, liveSocial, substitutions, antiCheat, liveAntiCheat));
     }
 
-    private sealed class ConfigCandidate(WorldConfigView candidate, WorldOptions? liveListener, SocialOptions? liveSocial, IReadOnlyList<string> substitutions) : ContentCandidate
+    private sealed class ConfigCandidate(
+        WorldConfigView candidate, WorldOptions? liveListener, SocialOptions? liveSocial, IReadOnlyList<string> substitutions,
+        AntiCheatOptions antiCheat, AntiCheatFeature? liveAntiCheat) : ContentCandidate
     {
         private string _summary = "configuration";
 
@@ -102,6 +109,8 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
                 }
             }
 
+            // The AntiCheat section is applied as a whole (docs/areas/anticheat.md): one bad key rejects the reload.
+            problems.AddRange(antiCheat.Validate());
             return problems;
         }
 
@@ -134,6 +143,12 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
                 {
                     transaction.Note($"{key.Path} option can't be changed at reload, using current value ({WorldConfigKey.Show(current)}).");
                 }
+            }
+
+            if (liveAntiCheat is not null)
+            {
+                AntiCheatOptions previous = liveAntiCheat.Options;
+                transaction.Step(AntiCheatOptions.SectionName, () => liveAntiCheat.ApplyOptions(antiCheat), () => liveAntiCheat.ApplyOptions(previous));
             }
 
             _summary = changed == 0 ? "no changes" : $"{changed} option(s) changed";

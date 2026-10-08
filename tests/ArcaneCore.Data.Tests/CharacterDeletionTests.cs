@@ -31,7 +31,7 @@ public sealed class CharacterDeletionTests : IAsyncLifetime
     public void EveryCharactersModule_DeclaresHowItsRowsAreDeleted()
     {
         Assert.Empty(CharacterDataCleanups.Missing.Select(m => m.GetType().FullName));
-        Assert.Equal(DataModules.For(DatabaseComponent.Characters).Count(), CharacterDataCleanups.All.Count);
+        Assert.Equal(DataModules.For(DatabaseComponent.Characters).Count(m => m is not IReservedSchemaGap), CharacterDataCleanups.All.Count);
         Assert.Contains(CharacterDataCleanups.All, c => c is SocialDataModule);
         Assert.Contains(CharacterDataCleanups.All, c => c is CharacterSpellDataModule);
         Assert.Contains(CharacterDataCleanups.All, c => c is QuestNpcCharactersModule);

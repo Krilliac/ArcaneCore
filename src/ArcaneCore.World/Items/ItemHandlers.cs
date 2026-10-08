@@ -70,6 +70,8 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
             EconomyFeature? economy = session.Services.GetService<EconomyFeature>();
             if (economy?.TradeOf(player) is { } trade && trade.SideOf(player).TradedItems.Contains(item.Guid))
             {
+                // vmangos "cheat way only": scored by the anticheat (docs/areas/anticheat.md).
+                session.Services.GetService<AntiCheat.AntiCheatFeature>()?.OnRejected(session, player, Game.AntiCheat.AntiCheatViolation.Item, 30f, "use of an item offered in the trade window");
                 player.Inventory.SendEquipError(InventoryResult.ItemNotFound, item, null);
                 return;
             }
