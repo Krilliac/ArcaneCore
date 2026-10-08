@@ -390,6 +390,21 @@ internal static class LiveSession
                 string? line = DecodeSystemLine(frame.Payload);
                 output.WriteLine($"{Stamp()} [{local}] < {line ?? "(non-system chat frame, " + frame.Payload.Length.ToString(CultureInfo.InvariantCulture) + " bytes)"}");
             }
+            else if (frame.Opcode == (ushort)WorldOpcode.SmsgNewWorld && frame.Payload.Length >= 20)
+            {
+                // A far teleport (.tele into a dungeon, a summon): the client ends its loading screen with MSG_MOVE_WORLDPORT_ACK, as the
+                // 1.12 client does (vmangos WorldSession::HandleMoveWorldportAckOpcode); without it the player stays between maps.
+                uint map = BinaryPrimitives.ReadUInt32LittleEndian(frame.Payload);
+                float x = BinaryPrimitives.ReadSingleLittleEndian(frame.Payload.AsSpan(4));
+                float y = BinaryPrimitives.ReadSingleLittleEndian(frame.Payload.AsSpan(8));
+                float z = BinaryPrimitives.ReadSingleLittleEndian(frame.Payload.AsSpan(12));
+                output.WriteLine(FormattableString.Invariant($"{Stamp()} [{local}] < SMSG_NEW_WORLD map {map} ({x:F1}, {y:F1}, {z:F1}); sending MSG_MOVE_WORLDPORT_ACK"));
+                await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, ct).ConfigureAwait(false);
+            }
+            else if (frame.Opcode == (ushort)WorldOpcode.SmsgTransferAborted)
+            {
+                output.WriteLine($"{Stamp()} [{local}] < SMSG_TRANSFER_ABORTED {Convert.ToHexString(frame.Payload)}");
+            }
         }
     }
 
