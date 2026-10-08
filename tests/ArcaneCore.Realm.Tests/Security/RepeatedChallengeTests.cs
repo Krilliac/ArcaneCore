@@ -28,7 +28,9 @@ public sealed class RepeatedChallengeTests
     private const string Password = "ALICEPW";
 
     private static NetGuard Guard(int burst)
-        => new(new NetProtectionOptions { AuthFailureBurstPerIp = burst, AuthFailuresPerMinutePerIp = 1 }, () => 0, () => 0, new NetGuardTests.CapturingLogger());
+        // A frozen clock: the failure budget refills with time, so a real clock made the exact token counts below
+        // drift by a few milliseconds' refill (1.00027 instead of 1) on a loaded machine.
+        => new(new NetProtectionOptions { AuthFailureBurstPerIp = burst, AuthFailuresPerMinutePerIp = 1 }, () => 0, () => 0, new NetGuardTests.CapturingLogger(), clock: () => 0);
 
     private static async Task<(CountingAccountStore Accounts, byte[] Salt)> SeedAsync(byte[]? sessionKey = null)
     {
