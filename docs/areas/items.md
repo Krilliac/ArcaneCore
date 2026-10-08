@@ -169,11 +169,30 @@ The auction outbid notification and bidder list are in [economy fidelity](../int
 
 | Setting | Content | Without it |
 |---|---|---|
-| `PageText:DumpPath` | A vmangos or cmangos classic-db world dump (plain or .gz) with `page_text` (entry, text, next_page); only that table is read. An extract holding only `page_text` loads much faster than the full dump. | Every page answers "Item page missing." |
+| `PageText:DumpPath` | A vmangos or cmangos classic-db world dump (plain or .gz) with `page_text` (entry, text, next_page); only that table is read. The full classic-db z2815 dump loads its 1427 pages in about 1 s. | Every page answers "Item page missing." |
 | `ItemRandomProperties:DbcPath` | The developer-supplied build-5875 ItemRandomProperties.dbc (16 fields, strict). | No random properties. |
-| `ItemRandomProperties:EnchantmentTemplateDumpPath` | A world dump with `item_enchantment_template` (entry, ench, chance; vmangos rows filtered to patch 10). | No random properties. |
+| `ItemRandomProperties:EnchantmentTemplateDumpPath` | A world dump with `item_enchantment_template` (entry, ench, chance; vmangos rows filtered to patch 10). z2815: 772 entries, about 1 s. | No random properties. |
 
-`page_text` and `item_enchantment_template` are read from dumps because a world-database table for them needs a world schema number this lane did not have; moving them into the world database is a follow-up (a table module plus a content-import spec).
+### Optional client data (one command)
+
+`tools/content/set-optional-data.ps1 -AppSettings <appsettings.json> -DbcDirectory D:\refs\client-dbc-5875-effective [-Dump <dump>]` (or
+`refresh-world-content.ps1 ... -AppSettings <appsettings.json>`, which runs it after the content refresh) checks every file (WDBC header and
+build-5875 field count, the directory's `SHA256SUMS`, both tables present in the dump), keeps the old `appsettings.json` as a `.bak` and sets:
+
+| Key | File (D:\refs\client-dbc-5875-effective, patch-2 over patch over dbc) | Rows | Feature |
+|---|---|---|---|
+| `ItemSets:DbcPath` | ItemSet.dbc (patch-2) | 172 sets | item set bonuses |
+| `ItemRandomProperties:DbcPath` | ItemRandomProperties.dbc (patch) | 2012 suffixes | random suffixes |
+| `ItemRandomProperties:EnchantmentTemplateDumpPath` | the classic-db dump (`item_enchantment_template`) | 772 entries | random suffixes |
+| `Enchanting:SpellItemEnchantmentDbcPath` | SpellItemEnchantment.dbc (patch-2) | 1460 enchantments | enchanting, and the stats of suffix enchantments (slots 3-5) |
+| `PageText:DumpPath` | the classic-db dump (`page_text`) | 1427 pages | readable items and text objects |
+| `CharacterCreation:CharSectionsDbcPath` | CharSections.dbc (patch) | 3603 available rows | the appearance check of a new character |
+| `CharacterCreation:CharacterFacialHairStylesDbcPath` | CharacterFacialHairStyles.dbc (patch) | 136 styles | the appearance check of a new character |
+
+Each is read once at startup (not hot-reloadable); a configured file that cannot be read refuses startup. With all seven the world logs none
+of the five "not set" warnings. 1.12.1 has no barber shop, so CharSections serves character creation only.
+
+`page_text` and `item_enchantment_template` are read from dumps because a world-database table for them needs a world schema number this lane did not have; moving them into the world database is a follow-up (a table module plus a content-import spec). Until then the world reads them from the dump at every start (about 2 s in all for z2815).
 
 ### Schema
 
@@ -191,4 +210,4 @@ Characters **38** (`ItemGiftDataModule.Version`; reserved as 39, renumbered at t
 
 ### Tests
 
-Game: `ItemMechanics/DefenseDurabilityTests`, `ItemMechanics/GiftWrapTests`, `ItemMechanics/ItemRandomPropertyTests`, `ItemUse/WeaponSwapCooldownTests`, `ItemUse/ItemSetFormChangeTests`. Data: `ItemLootOrphanSweepTests`, `ItemGiftStoreTests` (round trip and the upgrade from step 38), `Items/PageTextDumpReaderTests`, `Items/ItemRandomPropertyReaderTests`, `IntegratedSchemaTests`. World: `Items/ConjuredLogoutWorldTests`, `Items/PageTextWorldTests`, `Items/ItemRandomPropertyWorldTests`, and the playerbot scenarios `Playerbots/Scenarios/AuctionOutbidScenarioTests` (three bots) and `GiftWrapScenarioTests` (wrap, mail with the escrow row checked, open). Harness additions: `ScenarioAuctionWire`, `ScenarioItemWire`, `ScenarioTestWorld.StartAsync(configure)`.
+Game: `ItemMechanics/DefenseDurabilityTests`, `ItemMechanics/GiftWrapTests`, `ItemMechanics/ItemRandomPropertyTests`, `ItemUse/WeaponSwapCooldownTests`, `ItemUse/ItemSetFormChangeTests`. Data: `ItemLootOrphanSweepTests`, `ItemGiftStoreTests` (round trip and the upgrade from step 38), `Items/PageTextDumpReaderTests`, `Items/ItemRandomPropertyReaderTests`, `IntegratedSchemaTests`. World: `Items/ConjuredLogoutWorldTests`, `Items/PageTextWorldTests`, `Items/ItemRandomPropertyWorldTests`, `Items/OptionalClientDataRealTests` (every optional key against the real DBCs and dump; runs with `ARCANECORE_TEST_DBC_DIR` and `ARCANECORE_CLASSICDB_DUMP`), and the playerbot scenarios `Playerbots/Scenarios/AuctionOutbidScenarioTests` (three bots) and `GiftWrapScenarioTests` (wrap, mail with the escrow row checked, open). Harness additions: `ScenarioAuctionWire`, `ScenarioItemWire`, `ScenarioTestWorld.StartAsync(configure)`.
