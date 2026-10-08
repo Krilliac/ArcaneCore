@@ -175,6 +175,60 @@ public sealed class GroupPersistenceWorldTests
     }
 
     [Fact]
+    public async Task ADeletedOfflineMember_LeavesTheStoredGroup_AndIsNotWrittenBack()
+    {
+        // vmangos Player::DeleteFromDB -> RemoveFromGroup: GroupDataModule removes the member row with the character, and
+        // SocialCharacterDeleteHook takes the slot out of the live group, so the next sync stores the group without it
+        // (a three-member party, so the deletion does not disband it).
+        var groups = new InMemoryGroupStore();
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IGroupStore>(groups));
+        await using WorldTestClient leader = await host.EnterWorldAsync("LEADD", "Leaderd");
+        await using WorldTestClient stays = await host.EnterWorldAsync("STAYD", "Staysd");
+        byte[] key = await host.AddAccountAsync("GONED");
+        WorldTestClient gone = await host.ConnectAsync();
+        await gone.AuthenticateAsync("GONED", key);
+        await gone.CreateCharacterAsync("Goned");
+        Account goneAccount = (await host.Accounts.FindByUsernameAsync("GONED"))!;
+        int goneId = (await host.Characters.GetByAccountAsync(goneAccount.Id)).Single().Id;
+        await gone.LoginAsync((ulong)goneId);
+
+        uint others = 0;
+        foreach ((WorldTestClient client, string name) in new[] { (stays, "staysd"), (gone, "goned") })
+        {
+            await leader.SendAsync(WorldOpcode.CmsgGroupInvite, CString(name));
+            await client.ReadUntilAsync(WorldOpcode.SmsgGroupInvite);
+            await client.SendAsync(WorldOpcode.CmsgGroupAccept, []);
+            await ReadGroupListAsync(leader, ++others);
+        }
+
+        await WorldTestHost.WaitForAsync(() => groups.All() is [{ Members.Count: 3 }], "the three-member party to reach storage");
+        uint groupId = groups.All()[0].Id;
+
+        // The member logs out (it stays in the group while offline), then deletes the character at the character list.
+        await gone.DisposeAsync();
+        await host.WaitForWorldAsync(() => !host.World.IsOnline(ObjectGuid.Player((uint)goneId)), "the member to leave the world");
+        await using (WorldTestClient again = await host.ConnectAsync())
+        {
+            await again.AuthenticateAsync("GONED", key);
+            byte[] guid = new byte[8];
+            BinaryPrimitives.WriteUInt64LittleEndian(guid, (ulong)goneId);
+            await again.SendAsync(WorldOpcode.CmsgCharDelete, guid);
+            Assert.Equal((byte)CharResult.CharDeleteSuccess, (await again.ReadUntilAsync(WorldOpcode.SmsgCharDelete))[0]);
+        }
+
+        await WorldTestHost.WaitForAsync(() => groups.Group(groupId) is { Members.Count: 2 }, "the stored party without the deleted member");
+        SocialGroupPersistenceFeature persistence = host.WorldServices.GetRequiredService<SocialGroupPersistenceFeature>();
+        await persistence.Writes!.FlushAsync();
+        int savesAfterDelete = groups.Saves;
+        await host.OnWorldAsync(persistence.SyncNow);
+        await persistence.Writes.FlushAsync();
+
+        GroupRecord stored = groups.Group(groupId)!;
+        Assert.DoesNotContain(stored.Members, m => m.CharacterId == goneId);
+        Assert.Equal(savesAfterDelete, groups.Saves); // nothing left to write: the live group no longer names it
+    }
+
+    [Fact]
     public async Task StoredGroupsThatCannotComeBack_AreDeletedAtStart()
     {
         var groups = new InMemoryGroupStore();

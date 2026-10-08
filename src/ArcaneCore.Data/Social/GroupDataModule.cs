@@ -83,7 +83,13 @@ public sealed class GroupDataModule : IDataModule, ICharacterDataCleanup
 
     public void AddServices(IServiceCollection services) => services.AddScoped<IGroupStore, EfGroupStore>();
 
-    /// <summary>A deleted character leaves its group (vmangos Player::DeleteFromDB → RemoveFromGroup); a group left with fewer than two is dropped at the next load.</summary>
+    /// <summary>
+    /// A deleted character leaves its group (vmangos Player::DeleteFromDB → RemoveFromGroup). This removes the stored row;
+    /// the live slot goes in the world's SocialCharacterDeleteHook (GroupManager.OnCharacterDeleted, which disbands a group
+    /// left with one member), and the next group sync stores the group without it. A sync that runs between the two may
+    /// write the row once more; the following one removes it, because a save replaces every row of the group. A group
+    /// left with fewer than two is dropped at the next load.
+    /// </summary>
     public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(db);
