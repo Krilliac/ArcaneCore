@@ -154,7 +154,7 @@ public sealed partial class SpellSystem
         }
 
         holder.AppliedAtUnixSeconds = UnixSecondsClock();
-        holder.AppliedAtMs = NowMs;
+        holder.AppliedInProcEvent = CurrentProcEvent;
         holder.Slot = holder.NeedsVisibleSlot ? FindFreeSlot(holder.Target, holder.IsPositive) : SpellAuraHolder.NoSlot;
         state.Auras.Add(holder);
         SitDownForStandingCancelsAura(holder);
@@ -282,6 +282,7 @@ public sealed partial class SpellSystem
                 for (int tick = 0; tick < due && !holder.IsRemoved; tick++)
                 {
                     aura.TickCount++;
+                    using ProcEventScope tickEvent = BeginProcEvent(); // one tick is one event: its procs, its damage and the kill it causes
                     AuraHandlers.GetValueOrDefault(aura.Type)?.Tick?.Invoke(this, holder, aura);
                 }
             }
@@ -311,6 +312,7 @@ public sealed partial class SpellSystem
     private void RefreshHolderInPlace(SpellAuraHolder existing, SpellAuraHolder fresh)
     {
         existing.AppliedAtUnixSeconds = UnixSecondsClock();
+        existing.AppliedInProcEvent = CurrentProcEvent; // SpellAuras.cpp:368: the refresh resets m_applyTime, so the refreshing hit does not proc it
         existing.Duration = fresh.Duration;
         existing.MaxDuration = fresh.MaxDuration;
         existing.ChannelTarget = fresh.ChannelTarget;

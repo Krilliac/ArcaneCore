@@ -203,8 +203,12 @@ public sealed class SpellAuraHolder
     /// </summary>
     public long AppliedAtUnixSeconds { get; internal set; }
 
-    /// <summary>The spell system clock (ms) when the holder was put on its target: the proc engine skips an aura applied after the event it handles began.</summary>
-    internal uint AppliedAtMs { get; set; }
+    /// <summary>
+    /// The proc event (<see cref="SpellSystem.BeginProcEvent"/>) that put this holder on its target or last refreshed it (vmangos m_applyTime,
+    /// reset by SpellAuraHolder::Refresh, SpellAuras.cpp:368): the proc engine skips the event actor's auras the current event applied. A
+    /// sequence number, not a clock reading, so it neither wraps nor depends on how far the clock moved while one hit was handled.
+    /// </summary>
+    internal ulong AppliedInProcEvent { get; set; }
 
     /// <summary>The holder came from a reflected spell (vmangos SpellAuraHolder::IsReflected): its periodic damage on its own caster cannot end a duel by killing.</summary>
     public bool IsReflected { get; internal set; }

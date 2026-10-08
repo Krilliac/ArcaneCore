@@ -429,6 +429,8 @@ public sealed partial class MapCombat
             }
         }
 
+        // The swing's procs, its damage, the kill and the weapon procs it causes are one proc event (SpellSystem.BeginProcEvent).
+        using SpellSystem.ProcEventScope swingEvent = SpellMitigation?.BeginProcEvent() ?? default;
         MeleeDamageInfo info = CalculateMeleeDamage(attacker, victim, attackType);
         // vmangos ProcDamageAndSpell runs ProcSkillsAndReactives first (SpellCaster.cpp:271-283), before the damage, so a killing swing still rolls the
         // victim's defense skill-up.

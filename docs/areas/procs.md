@@ -10,8 +10,8 @@ A hit path describes what happened with a `ProcEvent` (vmangos `ProcSystemArgume
 
 1. collects the actor's auras that the event can proc (attacker side), then the living victim's (victim side), before handling any of
    them (`ProcDamageAndSpellFor`, Unit.cpp:8917-9002): an aura of the event's own spell never procs, a PROC_COOLDOWN_ON_FAILURE aura on cooldown is
-   skipped, an aura the event's actor applied at or after the event's time is skipped (so an aura the same hit put on, through a nested
-   triggered cast, does not proc from it), and an aura that holds charged spell modifiers is left to
+   skipped, an aura the event's actor applied or refreshed during the event is skipped (so an aura the same hit put on or refreshed, through a
+   nested triggered cast, does not proc from it), and an aura that holds charged spell modifiers is left to
    the casts that spend them;
 2. checks each one (`IsTriggeredAtSpellProcEvent`, UnitAuraProcHandler.cpp:239-499): the hard-coded 1.12 cases (Flurry on extra attacks, Sap,
    Eye for an Eye, Improved Lay on Hands, Wrath of Cenarius, Omen of Clarity, Inspiration, ADD_TARGET_TRIGGER, Elemental Mastery, Fear Ward),
@@ -128,8 +128,14 @@ class-scripts) must not run their builds against a database they intend to keep.
 ## Deviations (deliberate)
 
 - No spell batching: procs run at once (vmangos `Spell.ProcDelay` 400 ms default runs most attacker procs one batch later). The apply-time rule
-  keeps vmangos' `>=` but compares the millisecond clock (wrap-safe) instead of whole seconds: vmangos also skips an actor's aura applied
-  earlier in the same wall-clock second, ArcaneCore only one applied in the same millisecond.
+  (Unit.cpp:8958, `GetAuraApplyTime() >= procTime`) is kept as "applied by this event" without a clock: `SpellSystem.BeginProcEvent` gives each
+  outer event (a cast with its cast-end procs, every target's hit and the casts they trigger; a white swing with its damage, kill and weapon
+  procs; a periodic tick; a lone `ProcDamageAndSpell`) the next 64-bit sequence number, nested scopes share it, and `AddAuraHolder` and the
+  in-place refresh (SpellAuras.cpp:368 resets `m_applyTime`) stamp the holder with it (`SpellAuraHolder.AppliedInProcEvent`). The engine skips
+  the actor's holders stamped by the current event. A clock comparison was rejected: the 32-bit millisecond clock wraps (a signed difference
+  turns every aura older than ~24.8 days into a "future" one, so a long-lived creature's own proc aura stops proccing), and the live world
+  clock moves while one hit is handled, so a nested cast's aura could look older than the proc that follows it. vmangos also skips an actor's
+  aura applied earlier in the same wall-clock second by an earlier event; ArcaneCore only skips the current event's.
 - CAST_END events never carry CRITICAL_HIT: ArcaneCore rolls a crit when an effect deals its damage or heal, after the cast-end procs; vmangos
   rolls it per target before (`target.isCrit`).
 - A spell's heal procs fire before its first heal effect heals (vmangos sums the heal effects into one heal).
@@ -160,7 +166,7 @@ class-scripts) must not run their builds against a database they intend to keep.
 
 `tests/ArcaneCore.Game.Tests/Procs/ProcEngineBehaviourTests.cs` (only pre-engine APIs: RED on 2ca2f4e1, 9/9),
 `ProcEngineTests.cs` (rows, charges, shields, kills, reflect charges, break chances, seams), `ProcEngineFidelityTests.cs` (leech and Improved
-Drain Mana ticks, the apply-time rule and the clock wrap, PROC_EX_REFLECT on reflected damage, heal procs before the heal, CAST_END alone,
+Drain Mana ticks, the apply-time rule (old auras, a clock that moves inside the event, a refresh by the same hit), PROC_EX_REFLECT on reflected damage, heal procs before the heal, CAST_END alone,
 the damage-proc cancel on a failed proc), `Auras/AuraInterruptEngineTests.cs`,
 `Duel/DuelCompletionTests.cs`; `tests/ArcaneCore.Data.Tests/Procs/*` (import, rank fill, the build-range load and the schema step on every provider, the `proc-events` command);
 `tests/ArcaneCore.World.Tests/Spells/SpellProcFeatureTests.cs` (load, reload, kills on a map) and the playerbot scenarios

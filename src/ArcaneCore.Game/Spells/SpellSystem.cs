@@ -381,6 +381,7 @@ public sealed partial class SpellSystem
     /// </summary>
     private SpellCastResult Cast(SpellCast cast)
     {
+        using ProcEventScope castEvent = BeginProcEvent(); // the cast-end procs, every target's hit and the casts they trigger are one event
         Unit caster = cast.Caster;
         SpellInfo spell = cast.Spell;
         UnitSpellState state = GetOrCreateState(caster);
