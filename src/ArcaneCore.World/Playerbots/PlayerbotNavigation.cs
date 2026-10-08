@@ -91,7 +91,7 @@ internal static class PlayerbotNavigation
 
     internal static bool TryPlan(Player player, Vector3 destination, PlayerbotOptions options,
         out PlayerbotRoute? route)
-        => Plan(player, destination, destination, options, partial: false, out route);
+        => Plan(player, destination, destination, options, partial: false, out route, out _);
 
     /// <summary>Closer than this to its goal, a partial route ends near enough to count (<see cref="TryPlanToward"/>).</summary>
     internal const float PartialProgressYards = 2f;
@@ -119,13 +119,13 @@ internal static class PlayerbotNavigation
         // A point that far may lie on a navigation-mesh tile not loaded yet (tiles load with the map's grids, around the players):
         // the mesh then answers a straight line (vmangos PathFinder's HaveTiles shortcut), which the terrain stepper refuses across
         // any hill, and the bot stood at the tile's edge for good (Dawnrover on quest 35, 107 yards short of the Elwynn tile
-        // boundary south of Goldshire, the 126-yard point beyond it). A shorter step stays on the loaded mesh; walking it loads the
-        // next tile, and the next plan crosses.
+        // boundary south of Goldshire, the 126-yard point beyond it). Only then is a shorter step tried: it stays on the loaded mesh,
+        // walking it loads the next tile, and the next plan crosses. Any other refusal (no path, a blacklisted end) costs one query.
         for (; ; chunk /= 2)
         {
             Vector3 destination = distance > chunk ? origin + ((goal - origin) * (chunk / distance)) : goal;
-            if (Plan(player, destination, goal, options, partial: true, out route)) return true;
-            if (distance <= chunk / 2 || chunk / 2 < MinTowardChunkYards) return false;
+            if (Plan(player, destination, goal, options, partial: true, out route, out bool straightRefused)) return true;
+            if (!straightRefused || distance <= chunk / 2 || chunk / 2 < MinTowardChunkYards) return false;
         }
     }
 
@@ -136,10 +136,12 @@ internal static class PlayerbotNavigation
     /// One path query from where the bot is now to <paramref name="destination"/>; with <paramref name="partial"/> a route that
     /// stops short of it on the mesh is accepted when it closes on <paramref name="goal"/>.
     /// </summary>
+    /// <param name="straightRefused">The mesh had no corridor to offer, only a straight line (an unloaded tile, or no mesh), and the terrain
+    /// stepper refused that line.</param>
     private static bool Plan(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
-        out PlayerbotRoute? route)
+        out PlayerbotRoute? route, out bool straightRefused)
     {
-        if (!PlanDirect(player, destination, goal, options, partial, out route) || route is null) return false;
+        if (!PlanDirect(player, destination, goal, options, partial, out route, out straightRefused) || route is null) return false;
         if (!Guards.TryGetValue(player, out PlayerbotRisk? risk) || risk.Blocking(player, route.Points) is not { } hazard) return true;
 
         // The way passes through a hazard: walk round it (by a corner before it and one past it, on either side), or not at all.
@@ -157,7 +159,7 @@ internal static class PlayerbotNavigation
                 float off = hazard.Radius + extra;
                 Vector3 before = hazard.At - (along * off) + (side * sign * off);
                 Vector3 past = hazard.At + (along * off) + (side * sign * off);
-                if (!PlanDirect(player, before, before, options, partial: false, out PlayerbotRoute? first) || first is null) continue;
+                if (!PlanDirect(player, before, before, options, partial: false, out PlayerbotRoute? first, out _) || first is null) continue;
                 if (Leg(map, first.Points[^1], past, options) is not { } middle
                     || Leg(map, middle.Points[^1], end, options) is not { } last) continue;
                 List<Vector3> points = [.. first.Points, .. middle.Points.Skip(1), .. last.Points.Skip(1)];
@@ -191,8 +193,9 @@ internal static class PlayerbotNavigation
 
     /// <summary>The route without the hazard check (<see cref="Plan"/>).</summary>
     private static bool PlanDirect(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
-        out PlayerbotRoute? route)
+        out PlayerbotRoute? route, out bool straightRefused)
     {
+        straightRefused = false;
         route = null;
         if (player.Map is not { } map || !Finite(destination)
             || !Finite(new Vector3(player.X, player.Y, player.Z)))
@@ -218,9 +221,10 @@ internal static class PlayerbotNavigation
         // before using that route; absent heights, steep terrain and known model obstructions refuse it.
         if ((path.Type & PathType.NotUsingPath) != 0)
         {
-            return TryTerrainRoute(start, destination, options,
+            straightRefused = !TryTerrainRoute(start, destination, options,
                 (x, y, z) => map.Collision.GetHeight(x, y, z),
                 (a, b) => map.Collision.IsInLineOfSight(a.X, a.Y, a.Z + 2, b.X, b.Y, b.Z + 2), out route);
+            return !straightRefused;
         }
         if (!IsUsablePath(path, options.MaxPathPoints, options.MaxRouteYards))
             return false;
