@@ -14,6 +14,7 @@ public sealed class PlayerbotCommandsTests
         Assert.False(options.Enabled);
         Assert.False(options.RestoreOnStartup);
         Assert.Equal(8, options.MaxBots);
+        Assert.Equal(1000, options.MaxRegisteredBots);
         Assert.Equal(500, options.ThinkIntervalMs);
         Assert.Equal(4, options.MaxActionsPerTick);
         Assert.Equal(128, options.MaxPathPoints);
@@ -27,8 +28,11 @@ public sealed class PlayerbotCommandsTests
     [Fact]
     public void OptionsRejectInvalidBoundsAndDuplicateMaps()
     {
-        var options = new PlayerbotOptions { MaxBots = 65 };
+        var options = new PlayerbotOptions { MaxBots = PlayerbotOptions.MaxBotsCeiling + 1 };
         Assert.Throws<InvalidOperationException>(() => options.Validate());
+        new PlayerbotOptions { MaxBots = PlayerbotOptions.MaxBotsCeiling }.Validate(); // 64 was the ceiling before 2026-10-08
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotOptions { MaxRegisteredBots = -1 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotOptions { MaxRegisteredBots = PlayerbotOptions.MaxRegisteredBotsCeiling + 1 }.Validate());
         options = new PlayerbotOptions { AllowedMaps = [0, 0] };
         Assert.Throws<InvalidOperationException>(() => options.Validate());
     }

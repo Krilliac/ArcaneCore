@@ -75,6 +75,9 @@ public static class WorldConfigKeys
         // vmangos: WorldServerPort World.cpp:598, DataDir World.cpp:932-935 (its MapUpdateInterval is live,
         // World.cpp:592-594, but ArcaneCore has no separate map-update interval to re-apply).
         Fixed("TickIntervalMs", v => v.Runtime.TickIntervalMs),
+        // WorldRuntime.Run builds its waiter and scheduler once (docs/integration/perf-limits-20261008.md).
+        Fixed("TickTimer", v => v.Runtime.TickTimer),
+        Fixed("TickLateToleranceMs", v => v.Runtime.TickLateToleranceMs),
         Fixed("Maps:DataDirectory", v => v.Runtime.Maps.DataDirectory),
         FixedListener("Port", v => v.Port),
         FixedListener("BindAddress", v => v.BindAddress),
@@ -124,8 +127,15 @@ public static class WorldConfigKeys
         // Not a vmangos key: the switch for its custom "World"/"China" channel names, read when a channel is created.
         LiveSocial("VmangosChannelExtensions", o => o.VmangosChannelExtensions, (o, v) => o.VmangosChannelExtensions = v),
 
+        // Not vmangos keys: the running and registered bot caps. ManagedPlayerbotFeature reads them at each start and create, so a
+        // raise applies at once and a lowering refuses new starts without stopping running bots (docs/areas/playbots.md).
+        LivePlayerbotsValue("MaxBots", o => o.MaxBots, (o, v) => o.MaxBots = v,
+            v => v is >= 0 and <= PlayerbotOptions.MaxBotsCeiling ? null : $"must be 0..{PlayerbotOptions.MaxBotsCeiling}"),
+        LivePlayerbotsValue("MaxRegisteredBots", o => o.MaxRegisteredBots, (o, v) => o.MaxRegisteredBots = v,
+            v => v is >= 0 and <= PlayerbotOptions.MaxRegisteredBotsCeiling ? null : $"must be 0..{PlayerbotOptions.MaxRegisteredBotsCeiling}"),
+
         // Not a vmangos key: how bot movement reaches the world (client packets through the handlers, or applied by the server).
-        // PlayerbotMotion reads the shared PlayerbotOptions at every movement packet. The other playerbot options are read at start.
+        // PlayerbotMotion reads the shared PlayerbotOptions at every movement packet. The playerbot options not listed here are read at start.
         LivePlayerbots("MovementPackets", o => o.MovementPackets, (o, v) => o.MovementPackets = v),
 
         // Not vmangos keys: risk against reward and retreat (docs/areas/playbots-risk.md). PlayerbotRisk, PlayerbotRiskModel and the
