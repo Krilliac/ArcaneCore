@@ -29,13 +29,13 @@ public sealed class CharacterBattlegroundRow
 /// The battleground binding of a character (vmangos <c>character_battleground_data</c>, Player.cpp:20950-20982): written when the character
 /// enters a match, removed when it leaves; a login on a battleground map reads it to return the character to where it joined from.
 /// <para>
-/// <b>Characters version 40</b>: the number the wave-2 plan reserves for the battlegrounds lane. Versions must be contiguous, so this branch holds
-/// 35 to 39 open with empty steps (<see cref="BattlegroundLaneCharactersGap"/>); tests read <see cref="Version"/>, never a literal.
+/// <b>Characters version 39</b>: reserved as 40 in the wave-2 plan and renumbered down at the 2026-10-07 integration, which
+/// closed the unclaimed numbers (docs/integration/wave2-20261007.md). Tests read <see cref="Version"/>, never a literal.
 /// </para>
 /// </summary>
 public sealed class CharacterBattlegroundDataModule : IDataModule, ICharacterDataCleanup
 {
-    public const int Version = 40;
+    public const int Version = 39; // reserved as 40 in the wave-2 plan; renumbered down at the 2026-10-07 integration (no gaps)
 
     public const string Table = "character_battleground_data";
 
@@ -104,59 +104,4 @@ public sealed class EfBattlegroundEntryPointStore(CharacterDbContext db) : IBatt
 
     public Task DeleteAsync(int characterId, CancellationToken cancellationToken = default)
         => db.Set<CharacterBattlegroundRow>().Where(r => r.CharacterId == characterId).ExecuteDeleteAsync(cancellationToken);
-}
-
-/// <summary>
-/// Empty characters schema steps 35 to 39: the wave-2 plan reserves those numbers for other lanes and gives the battlegrounds lane 40, but
-/// <see cref="DataModules.Compose"/> requires contiguous versions, so this branch holds the gap open with steps that change nothing and own no
-/// rows. INTEGRATOR: delete each placeholder whose number a merged lane really uses (Compose reports "claimed twice" until you do); keep the
-/// ones nobody claimed. Never ship a build with these placeholders to a live realm.
-/// </summary>
-public abstract class BattlegroundLaneCharactersGap(int version) : IDataModule, ICharacterDataCleanup
-{
-    public DatabaseComponent Component => DatabaseComponent.Characters;
-
-    public int SchemaVersion { get; } = version;
-
-    public IReadOnlyList<SchemaChange> SchemaChanges { get; } = [];
-
-    public void ConfigureModel(ModelBuilder modelBuilder)
-    {
-    }
-
-    public void AddServices(IServiceCollection services)
-    {
-    }
-
-    public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken) => Task.CompletedTask;
-}
-
-/// <summary>Characters step 35 held open for the lane that owns it (see <see cref="BattlegroundLaneCharactersGap"/>).</summary>
-public sealed class BattlegroundLaneCharactersGap35() : BattlegroundLaneCharactersGap(Version)
-{
-    public const int Version = 35;
-}
-
-/// <summary>Characters step 36 held open for the lane that owns it (see <see cref="BattlegroundLaneCharactersGap"/>).</summary>
-public sealed class BattlegroundLaneCharactersGap36() : BattlegroundLaneCharactersGap(Version)
-{
-    public const int Version = 36;
-}
-
-/// <summary>Characters step 37 held open for the lane that owns it (see <see cref="BattlegroundLaneCharactersGap"/>).</summary>
-public sealed class BattlegroundLaneCharactersGap37() : BattlegroundLaneCharactersGap(Version)
-{
-    public const int Version = 37;
-}
-
-/// <summary>Characters step 38 held open for the lane that owns it (see <see cref="BattlegroundLaneCharactersGap"/>).</summary>
-public sealed class BattlegroundLaneCharactersGap38() : BattlegroundLaneCharactersGap(Version)
-{
-    public const int Version = 38;
-}
-
-/// <summary>Characters step 39 held open for the lane that owns it (see <see cref="BattlegroundLaneCharactersGap"/>).</summary>
-public sealed class BattlegroundLaneCharactersGap39() : BattlegroundLaneCharactersGap(Version)
-{
-    public const int Version = 39;
 }

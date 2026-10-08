@@ -73,14 +73,14 @@ public sealed class RelayScriptTemplateRow
 /// <c>dbscript_relay_template</c> (the type-1 rows of cmangos <c>dbscript_random_templates</c>; the type-0 string rows stay in
 /// <c>creature_ai_text_template</c>). What EventAI's START_RELAY_SCRIPT action (53) runs (docs/areas/creature-ai.md, "Relay scripts").
 /// <para>
-/// <b>World version 40</b>: the number the wave-2 plan reserves for the creature-ai lane. Versions must be contiguous, so this branch
-/// holds 38 and 39 open with empty steps (<see cref="CreatureAiLaneSchemaGap38"/>); tests read <see cref="Version"/>, never a literal.
+/// <b>World version 38</b>: reserved as 40 in the wave-2 plan and renumbered down at the 2026-10-07 integration, which
+/// closed the unclaimed numbers (docs/integration/wave2-20261007.md). Tests read <see cref="Version"/>, never a literal.
 /// </para>
 /// </summary>
 public sealed class RelayScriptDataModule : IDataModule
 {
     /// <summary>The world schema version of this step.</summary>
-    public const int Version = 40;
+    public const int Version = 38; // reserved as 40 in the wave-2 plan; renumbered down at the 2026-10-07 integration (no gaps)
 
     public const string ScriptTable = "dbscripts_on_relay";
 
@@ -118,43 +118,4 @@ public sealed class RelayScriptDataModule : IDataModule
     public static RelayScriptStep ToStep(RelayScriptRow r) => new(
         r.Id, r.Delay, r.Priority, r.Command, r.DataLong, r.DataLong2, r.DataLong3, r.BuddyEntry, r.SearchRadius, r.DataFlags,
         r.DataInt, r.DataInt2, r.DataInt3, r.DataInt4, r.DataFloat, r.X, r.Y, r.Z, r.O, r.Speed, r.ConditionId, r.Ordinal);
-}
-
-/// <summary>
-/// Empty world schema steps 38 and 39: the wave-2 plan reserves them for other lanes and gives the creature-ai lane 40, but
-/// <see cref="DataModules.Compose"/> requires contiguous versions, so this branch holds the gap open with steps that change nothing.
-/// INTEGRATOR: the w2-ops-social branch adds <c>IReservedSchemaGap</c>/<c>ReservedSchemaGap</c> (Schema/ReservedSchemaGaps.cs), which
-/// Compose drops when a real module claims the version; once it is merged, fold these classes (and every other lane's world gap
-/// classes) into that one scheme. Delete each placeholder whose number a merged lane really uses (Compose reports "claimed twice" until
-/// you do). For a number nobody claims, either renumber the real modules down before any live database is upgraded, or keep the empty
-/// step for good and never give its number to a later module: a database upgraded through an empty step records the version as
-/// applied, so a real step that later takes the number would never run there and its tables would never be created.
-/// </summary>
-public abstract class CreatureAiLaneSchemaGap(int version) : IDataModule
-{
-    public DatabaseComponent Component => DatabaseComponent.World;
-
-    public int SchemaVersion { get; } = version;
-
-    public IReadOnlyList<SchemaChange> SchemaChanges { get; } = [];
-
-    public void ConfigureModel(ModelBuilder modelBuilder)
-    {
-    }
-
-    public void AddServices(IServiceCollection services)
-    {
-    }
-}
-
-/// <summary>World step 38 held open for the lane that owns it (see <see cref="CreatureAiLaneSchemaGap"/>).</summary>
-public sealed class CreatureAiLaneSchemaGap38() : CreatureAiLaneSchemaGap(Version)
-{
-    public const int Version = 38;
-}
-
-/// <summary>World step 39 held open for the lane that owns it (see <see cref="CreatureAiLaneSchemaGap"/>).</summary>
-public sealed class CreatureAiLaneSchemaGap39() : CreatureAiLaneSchemaGap(Version)
-{
-    public const int Version = 39;
 }

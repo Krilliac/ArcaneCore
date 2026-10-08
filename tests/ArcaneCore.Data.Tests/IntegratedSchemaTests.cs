@@ -89,31 +89,9 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(SpellEnchantChargesWorldDataModule), DatabaseComponent.World, SpellEnchantChargesWorldDataModule.Version),
             (typeof(StartingSkillWorldDataModule), DatabaseComponent.World, StartingSkillWorldDataModule.Version),
             (typeof(CreatureTextTemplateDataModule), DatabaseComponent.World, CreatureTextTemplateDataModule.Version),
-            // wave 2: the proc-engine lane holds world 38-40 open (the plan reserves them for other lanes) and owns 41.
-            (typeof(ArcaneCore.Data.World.Procs.WorldSchemaLaneGap38), DatabaseComponent.World, ArcaneCore.Data.World.Procs.WorldSchemaLaneGap38.Version),
-            (typeof(ArcaneCore.Data.World.Procs.WorldSchemaLaneGap39), DatabaseComponent.World, ArcaneCore.Data.World.Procs.WorldSchemaLaneGap39.Version),
-            (typeof(ArcaneCore.Data.World.Procs.WorldSchemaLaneGap40), DatabaseComponent.World, ArcaneCore.Data.World.Procs.WorldSchemaLaneGap40.Version),
             (typeof(ArcaneCore.Data.World.Procs.SpellProcEventDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Procs.SpellProcEventDataModule.Version),
-            // INTEGRATOR: 38 and 39 are this branch's empty placeholders for other lanes' reserved world steps (RelayScriptDataModule.cs).
-            (typeof(CreatureAiLaneSchemaGap38), DatabaseComponent.World, CreatureAiLaneSchemaGap38.Version),
-            (typeof(CreatureAiLaneSchemaGap39), DatabaseComponent.World, CreatureAiLaneSchemaGap39.Version),
             (typeof(RelayScriptDataModule), DatabaseComponent.World, RelayScriptDataModule.Version),
-            // INTEGRATOR: 38 to 43 are this branch's empty placeholders for other lanes' reserved world steps (BattlegroundWorldDataModule.cs).
-            (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap38), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap38.Version),
-            (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap39), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap39.Version),
-            (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap40), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap40.Version),
-            (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap41), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap41.Version),
-            (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap42), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap42.Version),
-            (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap43), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundLaneSchemaGap43.Version),
             (typeof(ArcaneCore.Data.World.Battlegrounds.BattlegroundWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Battlegrounds.BattlegroundWorldDataModule.Version),
-            // The transports lane holds world 38-44 open with empty steps (the integrator drops each one a merged lane claims).
-            (typeof(ArcaneCore.Data.World.Transports.TransportLaneWorldGap38), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportLaneWorldGap38.Version),
-            (typeof(ArcaneCore.Data.World.Transports.TransportLaneWorldGap39), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportLaneWorldGap39.Version),
-            (typeof(ArcaneCore.Data.World.Transports.TransportLaneWorldGap40), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportLaneWorldGap40.Version),
-            (typeof(ArcaneCore.Data.World.Transports.TransportLaneWorldGap41), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportLaneWorldGap41.Version),
-            (typeof(ArcaneCore.Data.World.Transports.TransportLaneWorldGap42), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportLaneWorldGap42.Version),
-            (typeof(ArcaneCore.Data.World.Transports.TransportLaneWorldGap43), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportLaneWorldGap43.Version),
-            (typeof(ArcaneCore.Data.World.Transports.TransportLaneWorldGap44), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportLaneWorldGap44.Version),
             (typeof(ArcaneCore.Data.World.Transports.TransportWorldDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Transports.TransportWorldDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
             (typeof(CharacterSpellDataModule), DatabaseComponent.Characters, 4),
@@ -146,31 +124,11 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(PetNamingDataModule), DatabaseComponent.Characters, PetNamingDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Playerbots.ManagedPlayerbotDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Playerbots.ManagedPlayerbotDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Life.CharacterCorpseInstanceDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Life.CharacterCorpseInstanceDataModule.Version),
-            // Wave 2: characters 35 and 36 belong to other lanes; the ops-social branch holds them with placeholders that yield.
-            (typeof(ReservedCharactersSchema35), DatabaseComponent.Characters, 35),
-            (typeof(ReservedCharactersSchema36), DatabaseComponent.Characters, 36),
             (typeof(GroupDataModule), DatabaseComponent.Characters, GroupDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Accounts.AccountAddressDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Accounts.AccountAddressDataModule.Version),
-            (typeof(EconomyItemsLaneSchemaGap35), DatabaseComponent.Characters, EconomyItemsLaneSchemaGap35.Version),
-            (typeof(EconomyItemsLaneSchemaGap36), DatabaseComponent.Characters, EconomyItemsLaneSchemaGap36.Version),
-            (typeof(EconomyItemsLaneSchemaGap37), DatabaseComponent.Characters, EconomyItemsLaneSchemaGap37.Version),
-            (typeof(EconomyItemsLaneSchemaGap38), DatabaseComponent.Characters, EconomyItemsLaneSchemaGap38.Version),
             (typeof(ItemGiftDataModule), DatabaseComponent.Characters, ItemGiftDataModule.Version),
             (typeof(GroupInstanceBindDataModule), DatabaseComponent.Characters, GroupInstanceBindDataModule.Version),
-            // INTEGRATOR: 35 to 39 are this branch's empty placeholders for other lanes' reserved characters steps (CharacterBattlegroundDataModule.cs).
-            (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap35), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap35.Version),
-            (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap36), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap36.Version),
-            (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap37), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap37.Version),
-            (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap38), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap38.Version),
-            (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap39), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap39.Version),
             (typeof(ArcaneCore.Data.Characters.Battlegrounds.CharacterBattlegroundDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.CharacterBattlegroundDataModule.Version),
-            // The transports lane holds characters 35-40 open with empty steps (the integrator drops each one a merged lane claims).
-            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap35), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap35.Version),
-            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap36), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap36.Version),
-            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap37), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap37.Version),
-            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap38), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap38.Version),
-            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap39), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap39.Version),
-            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap40), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap40.Version),
             (typeof(ArcaneCore.Data.Characters.Transports.CharacterTransportDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.CharacterTransportDataModule.Version),
         ];
 
@@ -190,6 +148,15 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Assert.Equal(Enumerable.Range(2, WorldDbContext.Schema.CurrentVersion - 1), WorldDbContext.Schema.Steps.Select(s => s.Version));
         Assert.DoesNotContain(CharacterDbContext.IndexRepairVersion, DataModules.For(DatabaseComponent.Characters).Select(m => m.SchemaVersion));
         Assert.DoesNotContain(WorldDbContext.IndexRepairVersion, DataModules.For(DatabaseComponent.World).Select(m => m.SchemaVersion));
+
+        // Wave 2 (docs/integration/wave2-20261007.md): every step is real. No placeholder is registered, and the lanes' modules
+        // were renumbered down so the plan's unclaimed numbers left no gap: world 38-41, characters 35-40.
+        Assert.DoesNotContain(DataModules.All, m => m is IReservedSchemaGap);
+        Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
+        Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
+        Assert.Equal(41, WorldDbContext.Schema.CurrentVersion);
+        Assert.Equal(40, CharacterDbContext.Schema.CurrentVersion);
+        Assert.Equal(4, AuthDbContext.Schema.CurrentVersion);
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })
         {

@@ -11,13 +11,13 @@ namespace ArcaneCore.Data.Characters.Transports;
 /// back by Player::LoadFromDB, Player.cpp:14733, 14794-14838, which puts the character back on the ship or at its bind point).
 /// The columns are additive and default to 0 (on land). The character store writes them with every character snapshot.
 /// <para>
-/// <b>Characters version 41</b>: the transports lane's reserved number in the wave-2 plan. Named once here; tests read
-/// <see cref="Version"/>.
+/// <b>Characters version 40</b>: reserved as 41 in the wave-2 plan and renumbered down at the 2026-10-07 integration, which
+/// closed the unclaimed numbers (docs/integration/wave2-20261007.md). Tests read <see cref="Version"/>, never a literal.
 /// </para>
 /// </summary>
 public sealed class CharacterTransportDataModule : IDataModule, ICharacterDataCleanup
 {
-    public const int Version = 41;
+    public const int Version = 40; // reserved as 41 in the wave-2 plan; renumbered down at the 2026-10-07 integration (no gaps)
 
     public DatabaseComponent Component => DatabaseComponent.Characters;
 
@@ -54,66 +54,4 @@ public sealed class CharacterTransportDataModule : IDataModule, ICharacterDataCl
         // The core deletion removes the characters row, and these columns with it, in the same transaction.
         return Task.CompletedTask;
     }
-}
-
-/// <summary>
-/// Empty characters schema steps 35 to 40: the wave-2 plan gives the transports lane characters 41 and the numbers below it to
-/// other lanes, but <see cref="DataModules.Compose"/> requires contiguous versions, so this lane holds the gap open with steps that
-/// change nothing. INTEGRATOR: delete each placeholder whose number a merged lane really uses (Compose reports "claimed twice" until
-/// you do); keep the ones nobody claimed. Never ship a build with these placeholders to a live realm (see TransportLaneWorldGapStep).
-/// </summary>
-public abstract class TransportLaneCharactersGapStep(int version) : IDataModule, ICharacterDataCleanup
-{
-    public DatabaseComponent Component => DatabaseComponent.Characters;
-
-    public int SchemaVersion { get; } = version;
-
-    public IReadOnlyList<SchemaChange> SchemaChanges { get; } = [];
-
-    public void ConfigureModel(ModelBuilder modelBuilder)
-    {
-    }
-
-    public void AddServices(IServiceCollection services)
-    {
-    }
-
-    // An empty step owns no rows.
-    public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken) => Task.CompletedTask;
-}
-
-/// <summary>Characters step 35 held open for the lane that owns it (see <see cref="TransportLaneCharactersGapStep"/>).</summary>
-public sealed class TransportLaneCharactersGap35() : TransportLaneCharactersGapStep(Version)
-{
-    public const int Version = 35;
-}
-
-/// <summary>Characters step 36 held open for the lane that owns it (see <see cref="TransportLaneCharactersGapStep"/>).</summary>
-public sealed class TransportLaneCharactersGap36() : TransportLaneCharactersGapStep(Version)
-{
-    public const int Version = 36;
-}
-
-/// <summary>Characters step 37 held open for the lane that owns it (see <see cref="TransportLaneCharactersGapStep"/>).</summary>
-public sealed class TransportLaneCharactersGap37() : TransportLaneCharactersGapStep(Version)
-{
-    public const int Version = 37;
-}
-
-/// <summary>Characters step 38 held open for the lane that owns it (see <see cref="TransportLaneCharactersGapStep"/>).</summary>
-public sealed class TransportLaneCharactersGap38() : TransportLaneCharactersGapStep(Version)
-{
-    public const int Version = 38;
-}
-
-/// <summary>Characters step 39 held open for the lane that owns it (see <see cref="TransportLaneCharactersGapStep"/>).</summary>
-public sealed class TransportLaneCharactersGap39() : TransportLaneCharactersGapStep(Version)
-{
-    public const int Version = 39;
-}
-
-/// <summary>Characters step 40 held open for the lane that owns it (see <see cref="TransportLaneCharactersGapStep"/>).</summary>
-public sealed class TransportLaneCharactersGap40() : TransportLaneCharactersGapStep(Version)
-{
-    public const int Version = 40;
 }

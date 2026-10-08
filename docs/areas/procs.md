@@ -95,7 +95,7 @@ engine ends those. Checked against the build 5875 Spell.dbc rows (world database
 The id exemption the engine used before the proc engine (Wyvern Sting and druid Prowl spared from the damage break) is gone: druid Prowl has no
 procFlags, so damage, damage over time included, breaks it like Stealth.
 
-## Data: `spell_proc_event` (world schema 41)
+## Data: `spell_proc_event` (world schema 39)
 
 `SpellProcEventDataModule` (vmangos/cmangos columns plus the build range), `SpellProcEventDumpImporter` (classic-db or vmangos dumps by column
 name; classic-db Full_DB z2815 stores cooldowns in seconds, `ProcCooldownUnit.Seconds`; z2829 and vmangos store milliseconds), the rank fill
@@ -109,11 +109,8 @@ the dump's build-5875 rows in one transaction; `--cooldown-unit seconds` for cla
 store loads only rows whose `build_min..build_max` holds 5875 (vmangos `WHERE 5875 BETWEEN build_min AND build_max`), so rows copied into the
 table straight from a vmangos dump are filtered too.
 
-World 38-40 are reserved for other wave-2 lanes; `WorldSchemaLaneGap38/39/40` are empty steps that keep the versions contiguous in this
-lane. **Integration hazard:** a database upgraded (or created) by a build that still has a placeholder records that version as applied, and
-the lane's real step with the same number would then never run on it. Before any deploy the integrator deletes every placeholder whose
-number a merged lane uses (`DataModules.Compose` reports "claimed twice" until then), and lanes branched from this tip (unit-control,
-class-scripts) must not run their builds against a database they intend to keep.
+The lane was given world 41 by the wave-2 plan and held 38-40 open with empty placeholder steps; the 2026-10-07 integration deleted every
+placeholder and renumbered the wave-2 world steps down to 38-41, so this step is 39 (docs/integration/wave2-20261007.md).
 
 ## Seams for other lanes
 

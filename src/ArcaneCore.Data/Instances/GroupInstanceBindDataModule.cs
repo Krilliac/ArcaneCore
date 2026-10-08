@@ -27,7 +27,7 @@ public sealed class GroupInstanceRow
 /// </summary>
 public sealed class GroupInstanceBindDataModule : IDataModule, ICharacterDataCleanup
 {
-    /// <summary>The single place the schema version is set (characters 35, reserved for the wave-2 teleport/death lane).</summary>
+    /// <summary>The single place the schema version is set (characters 35, the wave-2 teleport/death lane).</summary>
     public const int Version = 35;
 
     public const string Table = "group_instance";

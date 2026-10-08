@@ -11,7 +11,7 @@ using Xunit;
 namespace ArcaneCore.Data.Tests.Transports;
 
 /// <summary>
-/// Characters schema 41 (<see cref="CharacterTransportDataModule"/>): vmangos characters.transport_guid and transport_x..o, written
+/// Characters schema 40 (<see cref="CharacterTransportDataModule"/>): vmangos characters.transport_guid and transport_x..o, written
 /// with every character snapshot and cleared on land.
 /// </summary>
 public sealed class CharacterTransportSeatTests : IAsyncLifetime
@@ -29,7 +29,7 @@ public sealed class CharacterTransportSeatTests : IAsyncLifetime
     {
         var module = new CharacterTransportDataModule();
 
-        Assert.Equal(41, CharacterTransportDataModule.Version);
+        Assert.Equal(40, CharacterTransportDataModule.Version);
         Assert.Equal(DatabaseComponent.Characters, module.Component);
         Assert.Equal(
             ["transport_guid", "transport_x", "transport_y", "transport_z", "transport_o"],

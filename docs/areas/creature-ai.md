@@ -192,7 +192,7 @@ semantics are cmangos'. classic-db z2815 has 141 action-53 rows reaching 109 rel
   despawn with a respawn timer exists), TERMINATE_SCRIPT by pool and its waypoint pause adjustment. The commands the 109 relays reached
   from EventAI use most: MOVE_TO 99, TALK 74, EMOTE 53, TERMINATE_SCRIPT 27, SET_ACTIVEOBJECT 24, SET_FACING 20, PAUSE_WAYPOINTS 16,
   ACTIVATE_OBJECT 14, SET_RUN 14, MODIFY_NPC_FLAGS 14, TEMP_SPAWN_CREATURE 13, MOVEMENT 11, STAND_STATE 11.
-- **Data** (world step 40, `RelayScriptDataModule`): `dbscripts_on_relay` (every column but the comment, plus the dump order per id)
+- **Data** (world step 38, `RelayScriptDataModule`): `dbscripts_on_relay` (every column but the comment, plus the dump order per id)
   and `dbscript_relay_template`; `CreatureDumpImporter` reads `dbscripts_on_relay` and the type-1 rows of `dbscript_random_templates`
   (a later dump file replaces every row of a relay id it carries), `EfCreatureDataStore` loads them into
   `CreatureAiContent.RelayScripts`. A database imported before this step has no relay rows: re-import the dump.

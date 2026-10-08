@@ -38,12 +38,10 @@ public sealed class RelayScriptDataTests : IAsyncLifetime
     public static IEnumerable<object[]> Providers() => TestDatabases.AvailableProviders();
 
     [Fact]
-    public void WorldStep_IsTheTwoRelayTables_AndTheLaneHoldsTheGapBelowIt()
+    public void WorldStep_IsTheTwoRelayTables()
     {
         SchemaStep step = Assert.Single(WorldDbContext.Schema.Steps, s => s.Version == RelayScriptDataModule.Version);
         Assert.Equal(["dbscripts_on_relay", "dbscript_relay_template"], step.Changes.OfType<CreateTableChange>().Select(c => c.Table));
-        Assert.Empty(Assert.Single(WorldDbContext.Schema.Steps, s => s.Version == CreatureAiLaneSchemaGap38.Version).Changes);
-        Assert.Empty(Assert.Single(WorldDbContext.Schema.Steps, s => s.Version == CreatureAiLaneSchemaGap39.Version).Changes);
     }
 
     [Fact]

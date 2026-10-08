@@ -57,7 +57,7 @@ public sealed class CharacterRecord
 
     /// <summary>
     /// The low GUID (template entry) of the ship the character was saved on, 0 on land (vmangos <c>characters.transport_guid</c>,
-    /// Player.cpp:14733, 16427-16434; characters schema 41).
+    /// Player.cpp:14733, 16427-16434; characters schema 40).
     /// </summary>
     public uint TransportGuid { get; set; }
 

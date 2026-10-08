@@ -10,7 +10,7 @@ using Xunit;
 namespace ArcaneCore.Data.Tests.Procs;
 
 /// <summary>
-/// The <c>spell_proc_event</c> world-schema step (world 41, the proc-engine lane's reserved number) on every provider the CI offers. The MariaDB
+/// The <c>spell_proc_event</c> world-schema step (world 39; the proc-engine lane reserved 41, renumbered at the integration) on every provider the CI offers. The MariaDB
 /// and PostgreSQL cases only run where their test connection strings are set; locally only SQLite runs.
 /// </summary>
 public sealed class SpellProcEventSchemaTests : IAsyncLifetime
@@ -20,15 +20,12 @@ public sealed class SpellProcEventSchemaTests : IAsyncLifetime
     public static IEnumerable<object[]> Providers() => TestDatabases.AvailableProviders();
 
     [Fact]
-    public void WorldStep41_IsTheSpellProcEventTable_AndTheLaneGapStepsChangeNothing()
+    public void WorldStep39_IsTheSpellProcEventTable()
     {
-        Assert.Equal(41, SpellProcEventDataModule.Version);
+        Assert.Equal(39, SpellProcEventDataModule.Version);
         SchemaStep step = Assert.Single(WorldDbContext.Schema.Steps, s => s.Version == SpellProcEventDataModule.Version);
         Assert.Equal(["spell_proc_event"], step.Changes.OfType<CreateTableChange>().Select(c => c.Table));
-        foreach (int gap in new[] { WorldSchemaLaneGap38.Version, WorldSchemaLaneGap39.Version, WorldSchemaLaneGap40.Version })
-        {
-            Assert.Empty(Assert.Single(WorldDbContext.Schema.Steps, s => s.Version == gap).Changes);
-        }
+        Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
     }
 
     [Theory]

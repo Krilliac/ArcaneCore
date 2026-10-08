@@ -51,8 +51,8 @@ public sealed class GroupMemberRow
 /// </summary>
 public sealed class GroupDataModule : IDataModule, ICharacterDataCleanup
 {
-    /// <summary>The characters schema version of this module (wave-2 lane ops-social reservation 37).</summary>
-    public const int Version = 37;
+    /// <summary>The characters schema version of this module (wave-2 lane ops-social, reserved as 37; renumbered to 36 at the integration).</summary>
+    public const int Version = 36; // reserved as 37 in the wave-2 plan; renumbered down at the 2026-10-07 integration (no gaps)
 
     public const string GroupTable = "character_group";
 

@@ -10,7 +10,7 @@ using Xunit;
 namespace ArcaneCore.Data.Tests.Transports;
 
 /// <summary>
-/// World schema 45 (<see cref="TransportWorldDataModule"/>): the vmangos <c>transports</c> table, its upgrade from the version below,
+/// World schema 41 (<see cref="TransportWorldDataModule"/>): the vmangos <c>transports</c> table, its upgrade from the version below,
 /// the store, and the build selection of <c>TransportMgr::LoadTransportTemplates</c>.
 /// </summary>
 public sealed class TransportWorldDataTests : IAsyncLifetime
@@ -28,7 +28,7 @@ public sealed class TransportWorldDataTests : IAsyncLifetime
     {
         var module = new TransportWorldDataModule();
 
-        Assert.Equal(45, TransportWorldDataModule.Version);
+        Assert.Equal(41, TransportWorldDataModule.Version);
         Assert.Equal(DatabaseComponent.World, module.Component);
         Assert.Equal("transports", Assert.IsType<CreateTableChange>(Assert.Single(module.SchemaChanges)).Table);
         Assert.True(WorldDbContext.Schema.CurrentVersion >= TransportWorldDataModule.Version);

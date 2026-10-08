@@ -23,8 +23,8 @@ public sealed class AccountAddressRow
 /// </summary>
 public sealed class AccountAddressDataModule : IDataModule, ICharacterDataCleanup
 {
-    /// <summary>The characters schema version of this module (wave-2 lane ops-social reservation 38).</summary>
-    public const int Version = 38;
+    /// <summary>The characters schema version of this module (wave-2 lane ops-social, reserved as 38; renumbered to 37 at the integration).</summary>
+    public const int Version = 37; // reserved as 38 in the wave-2 plan; renumbered down at the 2026-10-07 integration (no gaps)
 
     public const string Table = "account_last_ip";
 

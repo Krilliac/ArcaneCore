@@ -13,7 +13,7 @@ Re-implemented from behaviour; no code was copied.
 | Key frames: path nodes 1 .. n-2, a teleport frame before action flag 1 or a map change (the node after it skipped), the last frame always teleports | `TransportTemplateBuilder` | TransportMgr.cpp:127-152, :169 |
 | One Catmull-Rom spline per stretch between teleports, three chords per segment, lengths summed in double | `TransportSpline` | `Movement/spline/spline.cpp`, `spline.impl.h` |
 | Stop distances, accelerate/cruise/brake times, arrival and departure times (single precision), Feathermoon/Teldrassil refresh frame 12 | `TransportTemplateBuilder` | TransportMgr.cpp:171-353 |
-| Period override: `transports` (entry, build, name, period), newest build at or below 5875 | `TransportWorldDataModule` (world 45), `TransportPeriods.Select` | TransportMgr.cpp:62-80; `sql/migrations/20250530110153_world.sql` |
+| Period override: `transports` (entry, build, name, period), newest build at or below 5875 | `TransportWorldDataModule` (world 41), `TransportPeriods.Select` | TransportMgr.cpp:62-80; `sql/migrations/20250530110153_world.sql` |
 | The ship: GUID `0x1FC0 << 48 \| entry`, GAMEOBJECT fields from the template, created at the first frame of the map it spawns on | `ShipTransport` | `ShipTransport::Create` (Transport.cpp:51-100); `TransportMgr::CreateTransport` |
 | Motion on the world clock: path progress = time since creation + start frame arrival; stops, departures, frame-by-frame advance; position every 50 ms from `CalculateSegmentPos` and the frame's spline; facing = tangent + pi | `ShipTransport.Update` | `ShipTransport::Update`, `CalculateSegmentPos` (Transport.cpp:316-413) |
 | Continent routes spawn once, with the first map they touch (Install creates those maps, as vmangos has its continents loaded); a route on one instanceable map spawns in each instance | `TransportSystem` | `TransportMgr::SpawnTransportsOnMap` (TransportMgr.cpp:413-427), Map.cpp:176 |
@@ -26,7 +26,7 @@ Re-implemented from behaviour; no code was copied.
 | Far teleport aboard: always a far teleport, SMSG_TRANSFER_PENDING with transport entry and old map, SMSG_NEW_WORLD with the offset, the worldport ack places the player at its offset from where the ship is now | `TeleportService` | Player.cpp:1868-1896, :2068-2072, :2113-2118; MovementHandler.cpp:106-110 |
 | An ordinary teleport, a logout and a spirit released aboard leave the ship | `TeleportService`, `TransportSystem`, `GraveyardRepopService` | Player.cpp:1868-1872, :5010-5016 |
 | Duels: NOT_ON_TRANSPORT unless both stand on the same ship; a duel requested aboard is bound to the ship and leaving it is leaving the duel area (10 s to come back) | `DuelService`, `DuelInfo.TransportGuid` | Spell.cpp:6195-6196; SpellEffects.cpp:4750-4755; `Player::CheckDuelDistance` (Player.cpp:6685-6689) |
-| A character saved aboard: the ship and the offset are stored with it and it comes back aboard at login (following the ship to the other continent if it sailed there); a ship that is gone or an offset over 250 yards sends it to its bind point | `CharacterTransportDataModule` (characters 41), `Player.LoginTransportSeat`, `TransportSystem.RestoreSeat` | Player::SaveToDB (Player.cpp:16427-16434), Player::LoadFromDB (:14733, :14794-14838) |
+| A character saved aboard: the ship and the offset are stored with it and it comes back aboard at login (following the ship to the other continent if it sailed there); a ship that is gone or an offset over 250 yards sends it to its bind point | `CharacterTransportDataModule` (characters 40), `Player.LoginTransportSeat`, `TransportSystem.RestoreSeat` | Player::SaveToDB (Player.cpp:16427-16434), Player::LoadFromDB (:14733, :14794-14838) |
 
 ## Configuration and data
 
@@ -40,7 +40,7 @@ The routes need data the repository does not ship:
 * `gameobject_template` rows of type 15 (classic-db and vmangos both have them: the eight vanilla boats and zeppelins,
   among them 20808, 164871, 175080, 176231, 176244, 176310, 176495, 177233).
 * A build-5875 `TaxiPathNode.dbc`, the same file the flight paths use (`NpcServices:TaxiPathNodeDbcPath`).
-* Optionally the vmangos `transports` rows (period overrides) in world schema 45. Without them every route keeps the period
+* Optionally the vmangos `transports` rows (period overrides) in world schema 41. Without them every route keeps the period
   computed from its path; vmangos says that computation is "not perfect", so the client and the server can drift on a long
   route until the overrides are imported. The content importer does not read this table yet.
 
@@ -77,7 +77,7 @@ instanceable map, a map without a `map_template` row) are logged and refused; th
   (`TransportTemplateBuilderTests`), motion, map-wide sending, passengers and the map change (`ShipTransportTests`), boarding
   through the movement observers (`TransportBoardingTests`), the stored seat (`TransportSeatTests`);
   `Duel/DuelTransportTests` for the duel rules.
-* `tests/ArcaneCore.Data.Tests/Transports/`: world 45 and characters 41 on every available provider.
+* `tests/ArcaneCore.Data.Tests/Transports/`: world 41 and characters 40 on every available provider.
 * `tests/ArcaneCore.World.Tests/Transports/TransportWorldTests`: the gate, route building and periods, the ship before the
   player's own create block at login, boarding over loopback, the time-skip re-send (and no re-send once the player moved
   aboard: the time skip is relayed), logout aboard and relog.

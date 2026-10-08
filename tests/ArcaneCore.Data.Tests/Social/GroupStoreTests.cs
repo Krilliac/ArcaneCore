@@ -13,9 +13,9 @@ using Xunit;
 namespace ArcaneCore.Data.Tests.Social;
 
 /// <summary>
-/// Group persistence (<see cref="GroupDataModule"/>, characters schema 37) and the account last-address table
-/// (<see cref="AccountAddressDataModule"/>, 38) on the SQLite / MariaDB / PostgreSQL matrix (only SQLite executes locally),
-/// plus the reserved-gap placeholders that hold 35 and 36 for other wave-2 lanes.
+/// Group persistence (<see cref="GroupDataModule"/>, characters schema 36) and the account last-address table
+/// (<see cref="AccountAddressDataModule"/>, 37) on the SQLite / MariaDB / PostgreSQL matrix (only SQLite executes locally),
+/// plus the reserved-gap placeholder rule of <see cref="DataModules.Compose"/> (a placeholder yields to the module that owns its version).
 /// </summary>
 public sealed class GroupStoreTests : IAsyncLifetime
 {
@@ -33,37 +33,38 @@ public sealed class GroupStoreTests : IAsyncLifetime
         => new(id, leader, 3, leader, 2, false, NoIcons, [.. members.Select(m => new GroupMemberRecord(m, 0, false))]);
 
     [Fact]
-    public void TheModules_TakeTheLanesReservedVersions_AndThePlaceholdersFillTheGapBelow()
+    public void TheModules_TakeTheirIntegratedVersions()
     {
-        Assert.Equal(37, GroupDataModule.Version);
-        Assert.Equal(38, AccountAddressDataModule.Version);
-        Assert.Contains(DataModules.For(DatabaseComponent.Characters), m => m is GroupDataModule { SchemaVersion: 37 });
-        Assert.Contains(DataModules.For(DatabaseComponent.Characters), m => m is AccountAddressDataModule { SchemaVersion: 38 });
-        Assert.Contains(CharacterDbContext.Schema.Steps, s => s.Version == 37 && s.Changes.OfType<CreateTableChange>().Count() == 2);
-        Assert.Contains(CharacterDbContext.Schema.Steps, s => s.Version == 38);
+        Assert.Equal(36, GroupDataModule.Version);
+        Assert.Equal(37, AccountAddressDataModule.Version);
+        Assert.Contains(DataModules.For(DatabaseComponent.Characters), m => m is GroupDataModule { SchemaVersion: 36 });
+        Assert.Contains(DataModules.For(DatabaseComponent.Characters), m => m is AccountAddressDataModule { SchemaVersion: 37 });
+        Assert.Contains(CharacterDbContext.Schema.Steps, s => s.Version == 36 && s.Changes.OfType<CreateTableChange>().Count() == 2);
+        Assert.Contains(CharacterDbContext.Schema.Steps, s => s.Version == 37);
         Assert.Contains(CharacterDataCleanups.All, c => c is GroupDataModule);
+        Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
     }
 
     [Fact]
     public void APlaceholder_YieldsToARealModuleOfTheSameVersion_AndHoldsTheVersionOtherwise()
     {
         IDataModule[] real = [.. DataModules.For(DatabaseComponent.Characters).Where(m => m is not IReservedSchemaGap)];
-        var owner = new FakeModule(35);
+        IDataModule[] lacking35 = [.. real.Where(m => m.SchemaVersion != 35)];
 
-        // With the placeholders only, the gap below 37 is filled and the schema composes.
-        SchemaDefinition alone = DataModules.Compose(DatabaseComponent.Characters, "characters", [], CharacterInlineSteps(), DataModules.For(DatabaseComponent.Characters));
+        // A build that lacks the owner of 35: the placeholder fills the gap and the schema composes, with 35 reported as held.
+        SchemaDefinition alone = DataModules.Compose(DatabaseComponent.Characters, "characters", [], CharacterInlineSteps(), [.. lacking35, new Placeholder(35)]);
         Assert.Equal(Enumerable.Range(2, alone.CurrentVersion - 1), alone.Steps.Select(s => s.Version));
-        Assert.Equal([35, 36], alone.ReservedGapVersions); // a server process refuses to apply these (ReservedSchemaGapGuardTests)
+        Assert.Empty(alone.Steps.Single(s => s.Version == 35).Changes);
+        Assert.Equal([35], alone.ReservedGapVersions); // a server process refuses to apply these (ReservedSchemaGapGuardTests)
 
-        // Once a real module claims 35, its step is the one composed, not the placeholder's empty one.
-        IDataModule[] merged = [.. DataModules.For(DatabaseComponent.Characters), owner];
-        SchemaDefinition withOwner = DataModules.Compose(DatabaseComponent.Characters, "characters", [], CharacterInlineSteps(), merged);
+        // Once the real module is present, its step is the one composed, not the placeholder's empty one.
+        var owner = new FakeModule(35);
+        SchemaDefinition withOwner = DataModules.Compose(DatabaseComponent.Characters, "characters", [], CharacterInlineSteps(), [.. lacking35, owner, new Placeholder(35)]);
         Assert.Same(owner.SchemaChanges, withOwner.Steps.Single(s => s.Version == 35).Changes);
-        Assert.Empty(withOwner.Steps.Single(s => s.Version == 36).Changes);
-        Assert.Equal([36], withOwner.ReservedGapVersions);
+        Assert.Empty(withOwner.ReservedGapVersions);
 
-        // Without placeholders the gap fails, as before.
-        Assert.Throws<InvalidOperationException>(() => DataModules.Compose(DatabaseComponent.Characters, "characters", [], CharacterInlineSteps(), real));
+        // Without the placeholder the gap fails, as before.
+        Assert.Throws<InvalidOperationException>(() => DataModules.Compose(DatabaseComponent.Characters, "characters", [], CharacterInlineSteps(), lacking35));
     }
 
     [Fact]
@@ -222,5 +223,12 @@ public sealed class GroupStoreTests : IAsyncLifetime
         public void AddServices(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
         {
         }
+    }
+
+    private sealed class Placeholder(int version) : ReservedSchemaGap
+    {
+        public override DatabaseComponent Component => DatabaseComponent.Characters;
+
+        public override int SchemaVersion => version;
     }
 }

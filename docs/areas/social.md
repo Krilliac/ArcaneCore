@@ -63,7 +63,7 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
 - **Groups survive a restart** (wave 2). `SocialGroupPersistenceFeature` restores the stored groups into the
   `GroupManager` at start (vmangos `ObjectMgr::LoadGroups`, `ObjectMgr.cpp:5360-5460`: a member whose character is gone is
   skipped, a group whose leader is gone or with fewer than two members left is dropped and its rows deleted) and, once per
-  clock second, writes every group that changed as one whole-group snapshot (characters schema 37, `character_group` and
+  clock second, writes every group that changed as one whole-group snapshot (characters schema 36, `character_group` and
   `character_group_member`; `groups` is a reserved word in MySQL 8). vmangos writes at each mutation; here a change reaches
   storage within a second, and the stop writes the final state. The member order is stored too (`Slot`, it decides the next
   leader); vmangos' main tank / main assistant columns have no counterpart. Two guards where vmangos trusts its rows: a stored

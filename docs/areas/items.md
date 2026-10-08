@@ -177,7 +177,7 @@ The auction outbid notification and bidder list are in [economy fidelity](../int
 
 ### Schema
 
-Characters **39** (`ItemGiftDataModule.Version`): `item_instance.gift_entry` and `gift_flags`, the values vmangos keeps in `character_gifts`. Deliberately on the item row: the wrapped state then travels through mail, auction and trade escrow (which move `item_instance` rows) and goes with the item, with no extra row to move or delete. Steps 35-38 are empty placeholders (`EconomyItemsLaneSchemaGap35..38`) that keep the versions contiguous on this branch; the integrator deletes each one whose number a merged lane uses. Never ship the placeholders to a live realm.
+Characters **38** (`ItemGiftDataModule.Version`; reserved as 39, renumbered at the wave-2 integration): `item_instance.gift_entry` and `gift_flags`, the values vmangos keeps in `character_gifts`. Deliberately on the item row: the wrapped state then travels through mail, auction and trade escrow (which move `item_instance` rows) and goes with the item, with no extra row to move or delete.
 
 ### Deliberate differences and UNVERIFIED points
 

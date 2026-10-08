@@ -27,14 +27,14 @@ public sealed class TransportRow
 /// measured one for the newest build at or below 5875 (<see cref="TransportPeriods.Select"/>). The routes themselves come from
 /// <c>gameobject_template</c> type 15 rows and TaxiPathNode.dbc, so an empty table is valid: every route keeps its computed period.
 /// <para>
-/// <b>World version 45</b>: the transports lane's reserved number in the wave-2 plan. Named once here; tests read
-/// <see cref="Version"/>.
+/// <b>World version 41</b>: reserved as 45 in the wave-2 plan and renumbered down at the 2026-10-07 integration, which
+/// closed the unclaimed numbers (docs/integration/wave2-20261007.md). Tests read <see cref="Version"/>, never a literal.
 /// </para>
 /// </summary>
 public sealed class TransportWorldDataModule : IDataModule
 {
     /// <summary>The world schema version of this step.</summary>
-    public const int Version = 45;
+    public const int Version = 41; // reserved as 45 in the wave-2 plan; renumbered down at the 2026-10-07 integration (no gaps)
 
     public const string Table = "transports";
 

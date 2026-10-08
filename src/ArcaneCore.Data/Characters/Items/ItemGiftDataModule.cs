@@ -10,14 +10,14 @@ namespace ArcaneCore.Data.Characters.Items;
 /// A deliberate difference: on the item row, so the wrapped state travels with the item through mail, auction and trade escrow and is
 /// deleted with it, where vmangos has to move or delete a <c>character_gifts</c> row on every one of those paths.
 /// <para>
-/// <b>Characters version 39</b>: the number the wave-2 plan reserves for the economy-items lane. Versions must be contiguous, so this branch
-/// holds 35 to 38 open with empty steps (<see cref="EconomyItemsLaneSchemaGap"/>); tests read <see cref="Version"/>, never a literal.
+/// <b>Characters version 38</b>: reserved as 39 in the wave-2 plan and renumbered down at the 2026-10-07 integration, which
+/// closed the unclaimed numbers (docs/integration/wave2-20261007.md). Tests read <see cref="Version"/>, never a literal.
 /// </para>
 /// </summary>
 public sealed class ItemGiftDataModule : IDataModule, ICharacterDataCleanup
 {
     /// <summary>The characters schema version of this step.</summary>
-    public const int Version = 39;
+    public const int Version = 38; // reserved as 39 in the wave-2 plan; renumbered down at the 2026-10-07 integration (no gaps)
 
     public const string GiftEntryColumn = "gift_entry";
 
@@ -46,54 +46,4 @@ public sealed class ItemGiftDataModule : IDataModule, ICharacterDataCleanup
         // The columns go with the item rows, which ItemCharacterDataModule deletes.
         return Task.CompletedTask;
     }
-}
-
-/// <summary>
-/// Empty characters schema steps 35 to 38: the wave-2 plan reserves them for other lanes and gives the economy-items lane 39, but
-/// <see cref="DataModules.Compose"/> requires contiguous versions, so this branch holds the gap open with steps that change nothing.
-/// INTEGRATOR: delete each placeholder whose number a merged lane really uses (Compose reports "claimed twice" until you do); keep the
-/// ones nobody claimed. An empty step only advances the version table; never ship a build with these placeholders to a live realm.
-/// </summary>
-public abstract class EconomyItemsLaneSchemaGap(int version) : IDataModule, ICharacterDataCleanup
-{
-    public DatabaseComponent Component => DatabaseComponent.Characters;
-
-    public int SchemaVersion { get; } = version;
-
-    public IReadOnlyList<SchemaChange> SchemaChanges { get; } = [];
-
-    public void ConfigureModel(ModelBuilder modelBuilder)
-    {
-    }
-
-    public void AddServices(IServiceCollection services)
-    {
-    }
-
-    /// <summary>An empty step owns no rows.</summary>
-    public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken) => Task.CompletedTask;
-}
-
-/// <summary>Characters step 35 held open for the lane that owns it (see <see cref="EconomyItemsLaneSchemaGap"/>).</summary>
-public sealed class EconomyItemsLaneSchemaGap35() : EconomyItemsLaneSchemaGap(Version)
-{
-    public const int Version = 35;
-}
-
-/// <summary>Characters step 36 held open for the lane that owns it (see <see cref="EconomyItemsLaneSchemaGap"/>).</summary>
-public sealed class EconomyItemsLaneSchemaGap36() : EconomyItemsLaneSchemaGap(Version)
-{
-    public const int Version = 36;
-}
-
-/// <summary>Characters step 37 held open for the lane that owns it (see <see cref="EconomyItemsLaneSchemaGap"/>).</summary>
-public sealed class EconomyItemsLaneSchemaGap37() : EconomyItemsLaneSchemaGap(Version)
-{
-    public const int Version = 37;
-}
-
-/// <summary>Characters step 38 held open for the lane that owns it (see <see cref="EconomyItemsLaneSchemaGap"/>).</summary>
-public sealed class EconomyItemsLaneSchemaGap38() : EconomyItemsLaneSchemaGap(Version)
-{
-    public const int Version = 38;
 }

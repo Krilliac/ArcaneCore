@@ -73,15 +73,15 @@ public sealed class BattlemasterEntryRow
 /// content importer reads (the vmangos tables have the same names and key columns). The event tables gate the battleground spawns
 /// (vmangos <c>BattleGround::SpawnEvent</c>); the templates hold the player limits, levels and start locations.
 /// <para>
-/// <b>World version 44</b>: the number the wave-2 plan reserves for the battlegrounds lane. Versions must be contiguous, so this branch holds
-/// 38 to 43 open with empty steps (<see cref="BattlegroundLaneSchemaGap"/>); tests read <see cref="Version"/>, never a literal. No cleanup
-/// registration: the world schema holds no per-character rows.
+/// <b>World version 40</b>: reserved as 44 in the wave-2 plan and renumbered down at the 2026-10-07 integration, which
+/// closed the unclaimed numbers (docs/integration/wave2-20261007.md). Tests read <see cref="Version"/>, never a literal.
+/// No cleanup registration: the world schema holds no per-character rows.
 /// </para>
 /// </summary>
 public sealed class BattlegroundWorldDataModule : IDataModule
 {
     /// <summary>The world schema version of this step (wave-2 reservation for the battlegrounds lane).</summary>
-    public const int Version = 44;
+    public const int Version = 40; // reserved as 44 in the wave-2 plan; renumbered down at the 2026-10-07 integration (no gaps)
 
     public const string TemplateTable = "battleground_template";
     public const string CreatureEventTable = "creature_battleground";
@@ -175,63 +175,4 @@ public sealed class EfBattlegroundContentStore(WorldDbContext db) : IBattlegroun
             .ToList();
         return new BattlegroundContent(templates, creatures, objects, masters);
     }
-}
-
-/// <summary>
-/// Empty world schema steps 38 to 43: the wave-2 plan reserves those numbers for other lanes and gives the battlegrounds lane 44, but
-/// <see cref="DataModules.Compose"/> requires contiguous versions, so this branch holds the gap open with steps that change nothing.
-/// INTEGRATOR: delete each placeholder whose number a merged lane really uses (Compose reports "claimed twice" until you do); keep the
-/// ones nobody claimed. An empty step only advances the version table; never ship a build with these placeholders to a live realm.
-/// </summary>
-public abstract class BattlegroundLaneSchemaGap(int version) : IDataModule
-{
-    public DatabaseComponent Component => DatabaseComponent.World;
-
-    public int SchemaVersion { get; } = version;
-
-    public IReadOnlyList<SchemaChange> SchemaChanges { get; } = [];
-
-    public void ConfigureModel(ModelBuilder modelBuilder)
-    {
-    }
-
-    public void AddServices(IServiceCollection services)
-    {
-    }
-}
-
-/// <summary>World step 38 held open for the lane that owns it (see <see cref="BattlegroundLaneSchemaGap"/>).</summary>
-public sealed class BattlegroundLaneSchemaGap38() : BattlegroundLaneSchemaGap(Version)
-{
-    public const int Version = 38;
-}
-
-/// <summary>World step 39 held open for the lane that owns it (see <see cref="BattlegroundLaneSchemaGap"/>).</summary>
-public sealed class BattlegroundLaneSchemaGap39() : BattlegroundLaneSchemaGap(Version)
-{
-    public const int Version = 39;
-}
-
-/// <summary>World step 40 held open for the lane that owns it (see <see cref="BattlegroundLaneSchemaGap"/>).</summary>
-public sealed class BattlegroundLaneSchemaGap40() : BattlegroundLaneSchemaGap(Version)
-{
-    public const int Version = 40;
-}
-
-/// <summary>World step 41 held open for the lane that owns it (see <see cref="BattlegroundLaneSchemaGap"/>).</summary>
-public sealed class BattlegroundLaneSchemaGap41() : BattlegroundLaneSchemaGap(Version)
-{
-    public const int Version = 41;
-}
-
-/// <summary>World step 42 held open for the lane that owns it (see <see cref="BattlegroundLaneSchemaGap"/>).</summary>
-public sealed class BattlegroundLaneSchemaGap42() : BattlegroundLaneSchemaGap(Version)
-{
-    public const int Version = 42;
-}
-
-/// <summary>World step 43 held open for the lane that owns it (see <see cref="BattlegroundLaneSchemaGap"/>).</summary>
-public sealed class BattlegroundLaneSchemaGap43() : BattlegroundLaneSchemaGap(Version)
-{
-    public const int Version = 43;
 }

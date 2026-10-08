@@ -47,8 +47,8 @@ public sealed class SpellProcEventRow
 /// </summary>
 public sealed class SpellProcEventDataModule : IDataModule
 {
-    /// <summary>The world schema version of <c>spell_proc_event</c> (reserved for the wave-2 proc-engine lane: world 41-42).</summary>
-    public const int Version = 41;
+    /// <summary>The world schema version of <c>spell_proc_event</c> (reserved as 41 for the wave-2 proc-engine lane; renumbered to 39 at the integration).</summary>
+    public const int Version = 39; // reserved as 41 in the wave-2 plan; renumbered down at the 2026-10-07 integration (no gaps)
 
     public const string Table = "spell_proc_event";
 
