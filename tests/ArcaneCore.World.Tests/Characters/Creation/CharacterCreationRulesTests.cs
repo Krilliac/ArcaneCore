@@ -1,5 +1,6 @@
 using System.Text;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters.Creation;
 using Xunit;
@@ -23,6 +24,15 @@ public sealed class CharacterCreationRulesTests
         public Task<int> CountOnRealmAsync() => Task.FromResult(Count);
         public Task<byte?> FirstCharacterRaceAsync() => Task.FromResult(FirstRace);
         public Task<bool> HasStartInfoAsync(byte race, byte cls) => Task.FromResult(HasStart);
+
+        public bool AppearanceValid { get; set; } = true;
+        public List<(byte Race, byte Gender, CharacterAppearance Appearance)> AppearanceAsked { get; } = [];
+
+        public bool IsAppearanceValid(byte race, byte gender, CharacterAppearance appearance)
+        {
+            AppearanceAsked.Add((race, gender, appearance));
+            return AppearanceValid;
+        }
     }
 
     private static CharacterCreationRequest Req(string name = "Thrall", byte race = 1, byte cls = 1, byte gender = 0)
@@ -76,6 +86,37 @@ public sealed class CharacterCreationRulesTests
     [Fact]
     public async Task GenderAboveOne_IsFailed()
         => Assert.Equal(CharResult.CharCreateFailed, await Run(Req(gender: 2)));
+
+    [Fact]
+    public async Task AnAppearanceTheClientCannotOffer_IsFailed_AfterTheRaceChecks_BeforeTheName()
+    {
+        // vmangos CharacterHandler.cpp:239-244: ValidateAppearance after the race/class rows and NOT_PLAYABLE, before normalizePlayerName.
+        var facts = new Facts { AppearanceValid = false };
+        var looks = new CharacterAppearance(3, 4, 5, 6, 7);
+        Assert.Equal(CharResult.CharCreateFailed, await Run(Req() with { Appearance = looks }, facts));
+        Assert.Equal((1, 0, looks), (facts.AppearanceAsked[0].Race, facts.AppearanceAsked[0].Gender, facts.AppearanceAsked[0].Appearance));
+        Assert.Equal(CharResult.CharCreateFailed, await Run(Req(name: ""), facts));                // not CHAR_NAME_NO_NAME
+        facts.Taken.Add("Thrall");
+        Assert.Equal(CharResult.CharCreateFailed, await Run(Req(), facts));                        // not NAME_IN_USE
+        Assert.Equal(CharResult.CharCreateDisabled, await Run(Req(race: 9), facts));               // NOT_PLAYABLE first
+        Assert.Equal(CharResult.CharCreateDisabled, await Run(Req(), facts, options: new CharacterCreationOptions { CharactersCreatingDisabled = 1 }));
+    }
+
+    [Fact]
+    public async Task AValidAppearance_GoesOnToTheNameChecks()
+    {
+        var facts = new Facts { AppearanceValid = true };
+        Assert.Equal(CharResult.CharNameNoName, await Run(Req(name: ""), facts));
+        Assert.Single(facts.AppearanceAsked);
+    }
+
+    [Fact]
+    public async Task LegacyMode_DoesNotCheckAppearance()
+    {
+        var facts = new Facts { AppearanceValid = false };
+        Assert.Equal(CharResult.CharCreateSuccess, await Run(Req(), facts, options: new CharacterCreationOptions { Mode = CharacterCreationMode.Legacy }));
+        Assert.Empty(facts.AppearanceAsked);
+    }
 
     [Theory]
     [InlineData("", CharResult.CharNameNoName)]

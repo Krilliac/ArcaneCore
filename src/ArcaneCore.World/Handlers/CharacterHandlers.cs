@@ -124,12 +124,13 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
 
         // The checks of vmangos HandleCharCreateOpcode, in its order (CharacterCreationRules).
         CharacterCreationDecision decision = await CharacterCreationRules.EvaluateAsync(
-            new CharacterCreationRequest(rawName, race, cls, gender),
+            new CharacterCreationRequest(rawName, race, cls, gender, new CharacterAppearance(skin, face, hairStyle, hairColor, facialHair)),
             session.Security,
             options,
             session.World.Options.CharactersPerRealm,
             new StoreFacts(characters, worldData, session.AccountId,
-                session.Services.GetService<NameCatalogFeature>()?.Catalog ?? NameCatalog.Empty, session.Security)).ConfigureAwait(false);
+                session.Services.GetService<NameCatalogFeature>()?.Catalog ?? NameCatalog.Empty, session.Security,
+                feature?.Appearance ?? CharacterAppearanceCatalog.Empty)).ConfigureAwait(false);
         if (!decision.Accepted)
         {
             SendResult(session, WorldOpcode.SmsgCharCreate, decision.Result);
@@ -250,8 +251,13 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
     }
 
     /// <summary>The realm facts <see cref="CharacterCreationRules"/> asks for, read from the stores.</summary>
-    private sealed class StoreFacts(ICharacterStore characters, IWorldDataStore worldData, int accountId, NameCatalog catalog, AccountSecurity security) : ICharacterCreationFacts
+    private sealed class StoreFacts(
+        ICharacterStore characters, IWorldDataStore worldData, int accountId, NameCatalog catalog, AccountSecurity security, CharacterAppearanceCatalog appearance)
+        : ICharacterCreationFacts
     {
+        // Without CharacterCreation:CharSectionsDbcPath the realm has no appearance data and checks nothing (the feature logs that once).
+        public bool IsAppearanceValid(byte race, byte gender, CharacterAppearance looks) => appearance.IsEmpty || appearance.IsValid(race, gender, looks);
+
         public CharResult? CheckNameCatalog(string name)
         {
             NameCatalogResult result = catalog.Check(name);
