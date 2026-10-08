@@ -143,6 +143,12 @@ public sealed class GroupModel
     /// Group record: f32[6] bound, u32 MOGP flags, u32 group WMO id; "VERT" u32 size u32 count
     /// f32[3]×count (a group with no vertices ends here); "TRIM" u32 size u32 count u32[3]×count;
     /// "MBIH" BIH; "LIQU" u32 size [liquid].
+    /// <para>
+    /// The LIQU size is only a presence flag: vmangos writes <c>WmoLiquid::GetFileSize()</c>, which
+    /// leaves out the u32 liquid type and so is 4 bytes short, and its reader
+    /// (<c>GroupModel::readFromFile</c>) ignores it and reads the liquid by its own grid. So does
+    /// this reader; the grid is still checked against the bytes left in the file.
+    /// </para>
     /// </summary>
     internal static GroupModel Read(ref CollisionDataReader reader)
     {
@@ -178,14 +184,8 @@ public sealed class GroupModel
         BihTree meshTree = BihTree.Read(ref reader);
 
         reader.Expect("LIQU");
-        int liquidSize = reader.ReadCount(1);
-        WmoLiquid? liquid = null;
-        if (liquidSize > 0)
-        {
-            int end = reader.Position + liquidSize;
-            liquid = WmoLiquid.Read(ref reader, end);
-            reader.Seek(end);
-        }
+        uint liquidSize = reader.ReadUInt32();
+        WmoLiquid? liquid = liquidSize > 0 ? WmoLiquid.Read(ref reader) : null;
 
         return new GroupModel(low, high, mogpFlags, groupWmoId, vertices, triangles, meshTree, liquid);
     }
@@ -234,7 +234,7 @@ public sealed class GroupModel
                 Liquid.Write(inner);
             }
 
-            writer.Write((uint)buffer.Length);
+            writer.Write(Liquid.VmangosChunkSize);
             writer.Write(buffer.ToArray());
         }
     }
@@ -243,6 +243,12 @@ public sealed class GroupModel
 /// <summary>WMO liquid of a group (vmangos <c>WmoLiquid</c>): tile grid, corner, type, heights and per-tile flags.</summary>
 public sealed record WmoLiquid(uint TilesX, uint TilesY, Vector3 Corner, uint Type, float[] Heights, byte[] Flags)
 {
+    /// <summary>
+    /// The LIQU chunk size vmangos stores (<c>WmoLiquid::GetFileSize</c>): the serialized size
+    /// without the u32 type field, i.e. 4 bytes short. Written as-is so files stay byte-identical.
+    /// </summary>
+    internal uint VmangosChunkSize => (uint)((2 * 4) + 12 + (Heights.Length * 4) + Flags.Length);
+
     /// <summary>u32 tiles X, u32 tiles Y, f32[3] corner, u32 type, f32 heights[(X+1)(Y+1)], u8 flags[X·Y].</summary>
     internal static WmoLiquid Read(ref CollisionDataReader reader, int chunkEnd = int.MaxValue)
     {

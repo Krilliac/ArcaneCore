@@ -268,6 +268,41 @@ public sealed class VMapTests
     }
 
     [Fact]
+    public void ModelFile_WithVmangosLiquidChunkSize_Parses()
+    {
+        // vmangos GroupModel::writeToFile stores WmoLiquid::GetFileSize() as the LIQU chunk size,
+        // which leaves out the u32 liquid type (4 bytes short); its reader ignores the size and
+        // reads the liquid by its own grid. Every real .vmo with liquid has this layout.
+        var liquid = new WmoLiquid(3, 4, new Vector3(1, 2, 3), 4, [.. Enumerable.Range(0, 20).Select(i => (float)i)], new byte[12]);
+        WorldModel box = VMapFixture.Box(Vector3.Zero, Vector3.One);
+        var withLiquid = new GroupModel(Vector3.Zero, Vector3.One, 0, 1, [.. box.Groups[0].Vertices], [.. box.Groups[0].Triangles], liquid: liquid);
+        var after = new GroupModel(Vector3.Zero, Vector3.One, 0, 2, [.. box.Groups[0].Vertices], [.. box.Groups[0].Triangles]);
+        byte[] bytes = new WorldModel(9, [withLiquid, after]).ToBytes();
+        int liqu = bytes.AsSpan().IndexOf("LIQU"u8);
+        const uint vmangosSize = (2 * 4) + 12 + (4 * 5 * 4) + (3 * 4); // GetFileSize(): no type field
+        BitConverter.GetBytes(vmangosSize).CopyTo(bytes, liqu + 4);
+
+        WorldModel copy = WorldModel.Parse(bytes);
+
+        Assert.Equal(4u, copy.Groups[0].Liquid!.Type);
+        Assert.Equal(19f, copy.Groups[0].Liquid!.Heights[^1]);
+        Assert.Equal(2u, copy.Groups[1].GroupWmoId);
+        Assert.Equal(box.Groups[0].Triangles.Count, copy.Groups[1].Triangles.Count);
+    }
+
+    [Fact]
+    public void ModelWriter_StoresTheVmangosLiquidChunkSize()
+    {
+        var liquid = new WmoLiquid(3, 4, Vector3.Zero, 4, new float[20], new byte[12]);
+        WorldModel box = VMapFixture.Box(Vector3.Zero, Vector3.One);
+        var group = new GroupModel(Vector3.Zero, Vector3.One, 0, 1, [.. box.Groups[0].Vertices], [.. box.Groups[0].Triangles], liquid: liquid);
+        byte[] bytes = new WorldModel(9, [group]).ToBytes();
+        int liqu = bytes.AsSpan().IndexOf("LIQU"u8);
+
+        Assert.Equal((2u * 4) + 12 + (4 * 5 * 4) + (3 * 4), BitConverter.ToUInt32(bytes, liqu + 4));
+    }
+
+    [Fact]
     public void MissingData_ReadsAsOpen()
     {
         using var fixture = new VMapFixture();

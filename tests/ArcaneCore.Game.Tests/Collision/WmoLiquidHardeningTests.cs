@@ -34,9 +34,11 @@ public sealed class WmoLiquidHardeningTests
     }
 
     [Fact]
-    public void LiquidLargerThanItsChunk_IsRejected_EvenWhenLaterBytesExist()
+    public void LiquidGridWithoutItsData_IsRejected_EvenWhenLaterBytesExist()
     {
-        // Grid claims 1x1 (needs 4*4+1 bytes) but the LIQU chunk only holds the 24-byte header.
+        // Grid claims 1x1 (needs 4*4+1 bytes) but only the 24-byte header was written. The LIQU size
+        // is not trusted (vmangos writes it 4 bytes short and reads by the grid), so the grid swallows
+        // the following "GBIH" chunk and the model is rejected there instead.
         byte[] bytes = ModelWithLiquid(1, 1);
         Assert.Throws<InvalidDataException>(() => WorldModel.Parse(bytes));
     }
