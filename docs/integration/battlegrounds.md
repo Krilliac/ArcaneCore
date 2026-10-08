@@ -32,3 +32,36 @@ see the area doc for their provider notes.
   `IBattlegroundHost.ReturnToStartIfFar` and the graveyard id from `Battleground.ClosestGraveyard` (graveyards-resurrection),
   `IBattlegroundManagerHost.AllocateInstanceId` (the shared instance id generator in `InstanceManager`).
 - Verification state: see the final report of the lane (build, full suite, MockClient self-test numbers).
+
+## Wave 2 (lane `battlegrounds`, branch `claude/w2-battlegrounds`, base 2ca2f4e1)
+
+New files: `src/ArcaneCore.Game/Battlegrounds/{ArathiBasin,AlteracValley,Battleground.Objectives}.cs`, `src/ArcaneCore.Kernel/WorldData/BattlegroundData.cs`,
+`src/ArcaneCore.Data/World/Battlegrounds/BattlegroundWorldDataModule.cs`, `src/ArcaneCore.Data/Content/Import/Mappers/BattlegroundDumpImporter.cs`,
+`src/ArcaneCore.Game/WorldState/Events/IWrappingSpawnGate.cs`, `src/ArcaneCore.World/Battlegrounds/*.cs`,
+`src/ArcaneCore.World/Playerbots/Scenarios/ScenarioBattlegrounds.cs` and their tests.
+
+Shared files edited (small, each a seam):
+
+- `Game/Instances/InstanceManager.cs`: `BattlegroundMaps` (every resolver call for a battleground map is delegated) and `AllocateInstanceId`.
+- `Game/Teleport/TeleportService.cs`: `BattlegroundEntryAllowed` replaces the blanket refusal of battleground maps.
+- `Game/Combat/MapCombat.Death.cs` and `Game/Death/DeathSeams.cs`: `IBattlegroundPresence.OnSpiritReleased` before the ghost form.
+- `Game/Channels/Channel.cs`: the WorldDefense gate only with an honor rank source (`WorldDefenseRankTests`, `ChannelManagerTests` changed with it).
+- `Game/GameObjects/GameObjectDefines.cs`: `GameObjectType.FlagDrop = 26`.
+- `World/WorldState/GameEventSpawnFeature.cs`: a gate that is an `IWrappingSpawnGate` keeps its place and gets the game-event gate as `Inner`.
+- `World/Handlers/InactiveQueueHandlers.cs`: CMSG_BATTLEFIELD_STATUS answers through `BattlegroundFeature.SendStatusReports`
+  (`InactiveQueueHandlerTests` now expects the battleground queue actions to be registered).
+- `Data/Content/Import/Cli/ContentImporterCli.cs`: reads, writes and counts the four battleground tables.
+- `tests/.../ScenarioTestWorld.cs`: the `StartAsync(Action<IServiceCollection>? configure)` hook, byte-identical to the gameobjects lane's.
+
+Schema: world 44 (`BattlegroundWorldDataModule`). World 38-43 are held open by `BattlegroundLaneSchemaGap38`-`43` (empty steps) because
+`Compose` needs contiguous versions. INTEGRATOR: delete each placeholder another lane really claims (Compose reports "claimed twice" until you do);
+the `IntegratedSchemaTests` entries are marked. The characters number 40 reserved for this lane is unused (no entry-point persistence).
+`SchemaStartupResilienceTests` accepts empty steps with the same lines the other lanes use.
+
+Overlaps to resolve at integration:
+
+- The gameobjects lane adds `IGameObjectFlagStands` and a `FlagStand` arm in `GameObjectMapSystem.Use`. This lane registers its own use handlers
+  for `FlagStand` and `FlagDrop` on each battleground map (`RegisterUseHandler` wins over the switch), so both compile and the battleground
+  handler runs. To use the shared seam instead, let `MatchRuntime` implement `IGameObjectFlagStands` and drop the `FlagStand` registration.
+- The ops-social lane owns battleground chat; nothing here depends on it (the system messages go through `SMSG_MESSAGECHAT` with the
+  `CHAT_MSG_BG_SYSTEM_*` types).

@@ -114,6 +114,15 @@ trade window; both inventories and purses), `duel` (spell 7266, accept, countdow
 registered in DI are listed too. `ScenarioSteps` holds reusable blocks (form a group, open and
 accept a trade, leave earlier groups).
 
+**Battlegrounds** (`ScenarioBattlegrounds`, kept out of the shared harness files): bot actions `BattlemasterHelloAsync`,
+`JoinBattlegroundAsync` (CMSG_BATTLEMASTER_JOIN), `PortBattlegroundAsync`, `LeaveBattlefieldAsync`, `BattlefieldStatusAsync`, `PvpLogDataAsync`,
+`PlayerPositionsAsync`, `CancelAuraAsync`; decoders for SMSG_BATTLEFIELD_STATUS, MSG_PVP_LOG_DATA, SMSG_UPDATE_WORLD_STATE and
+MSG_BATTLEGROUND_PLAYER_POSITIONS; lookups of a battlemaster spawn of a type (`battlemaster_entry`), a game object spawn and an area trigger. The
+scenario `wsg` (`WarsongGulchScenario`, registered by tests; a realm would register it as an `IPlayerbotScenario` service) logs in a human and an
+orc warrior, queues each at a battlemaster of its continent, ports both into one match, waits out the two-minute start, captures the Horde flag,
+drops the Alliance flag by cancelling the flag aura, returns it, captures twice more (SMSG_BATTLEFIELD_WIN / _LOSE, the final scoreboard) and
+waits until both bots are back at their entry points. `WarsongGulchScenario.EnterMatchAsync` is the reusable opening.
+
 ### Running scenarios on a live server
 
 `.playerbot scenario list` and `.playerbot scenario run <name>` (Administrator) run a registered
@@ -136,6 +145,8 @@ The tests run the built-ins plus `group-loot` (group, free-for-all loot, kill, m
 item), `mail-item` (persisted letter with item, delivery delay, take), `melee-kill` (swing,
 kill, XP credit) and `kill-quest` (accept, kill credit, turn in, settled reward row), and
 check database rows after the run. Setting `ARCANE_SCENARIO_REPORT_DIR` collects every report.
+`BattlegroundScenarioTests` and `BattlegroundWorldScenarioTests` start the scenario world with `WarsongGulchTestContent` (map 489, its safe
+locations, flag stands with their event rows, flag room triggers, flag auras, a battlemaster per side) through the `StartAsync(configure)` hook.
 
 ## MockClient playbot (external protocol client)
 

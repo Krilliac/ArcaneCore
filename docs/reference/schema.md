@@ -11,7 +11,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 |---|---|---|
 | `auth` | 4 | `account`, `realmlist` |
 | `characters` | 34 | `characters` |
-| `world` | 37 | `player_create_info`, `race_info`, `class_info` |
+| `world` | 44 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -99,5 +99,12 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 35 | `Content.Items.SpellEnchantChargesWorldDataModule` | creates `spell_enchant_charges` |
 | 36 | `Skills.StartingSkillWorldDataModule` | creates `playercreateinfo_skills` |
 | 37 | `World.Creatures.CreatureTextTemplateDataModule` | creates `creature_ai_text_template` |
+| 38 | `World.Battlegrounds.BattlegroundLaneSchemaGap38` | no changes |
+| 39 | `World.Battlegrounds.BattlegroundLaneSchemaGap39` | no changes |
+| 40 | `World.Battlegrounds.BattlegroundLaneSchemaGap40` | no changes |
+| 41 | `World.Battlegrounds.BattlegroundLaneSchemaGap41` | no changes |
+| 42 | `World.Battlegrounds.BattlegroundLaneSchemaGap42` | no changes |
+| 43 | `World.Battlegrounds.BattlegroundLaneSchemaGap43` | no changes |
+| 44 | `World.Battlegrounds.BattlegroundWorldDataModule` | creates `battleground_template`, `creature_battleground`, `gameobject_battleground`, `battlemaster_entry` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.
