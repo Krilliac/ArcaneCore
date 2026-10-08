@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells.Rules;
 
@@ -42,6 +43,12 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
     private const uint ShadowWardIcon = 207;
     private const uint ShadowWardCategory = 56;
 
+    /// <summary>
+    /// vmangos Creature::_GetSpellDamageMod for a creature caster (Rate.Creature.*.SpellDamage, SpellCaster.cpp:1588-1590), 1 for anything else. A
+    /// player-owned pet uses 1 (:1589; pets carry no rates here) and a totem takes its owner's bonus instead (:1577-1581), so 1 as well.
+    /// </summary>
+    private static float CreatureSpellDamageRate(Unit caster) => caster is Creature { IsTotem: false } creature ? creature.SpellDamageRate : 1.0f;
+
     /// <summary>The explicit coefficient table, when one is loaded; null runs the formula only.</summary>
     public ISpellBonusCoefficients? Coefficients { get; set; }
 
@@ -64,10 +71,12 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
         {
             // The weapon formulas skip spell power but still apply the DAMAGE / DOT spell mod to the done amount
             // (vmangos MeleeDamageBonusDone, SpellCaster.cpp:1443-1452); the target side (ticks) has no spell mod.
+            // A creature's Rate.Creature.*.SpellDamage also reaches these non-weapon melee class spells (MeleeDamageBonusDone, SpellCaster.cpp:1358-1359).
             return stage switch
             {
-                SpellAmountStage.DirectDamage => spells.ModFloat(caster, spell, SpellModOp.Damage, amount),
-                SpellAmountStage.DamageOverTimeSnapshot or SpellAmountStage.HealOverTimeSnapshot => spells.ModFloat(caster, spell, SpellModOp.Dot, amount),
+                SpellAmountStage.DirectDamage => spells.ModFloat(caster, spell, SpellModOp.Damage, amount * CreatureSpellDamageRate(caster)),
+                SpellAmountStage.DamageOverTimeSnapshot => spells.ModFloat(caster, spell, SpellModOp.Dot, amount * CreatureSpellDamageRate(caster)),
+                SpellAmountStage.HealOverTimeSnapshot => spells.ModFloat(caster, spell, SpellModOp.Dot, amount),
                 _ => amount,
             };
         }
@@ -190,6 +199,7 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
                 ? SpellBonusFormulas.MultiplicativePercent(ItemIndependentAmounts(caster, AuraType.ModDamagePercentDone, mask))
                 : 1.0f;
             percent *= SpellBonusFormulas.MultiplicativePercent(Amounts(caster, AuraType.ModDamageDoneVersus, a => ((uint)a.MiscValue & typeMask) != 0));
+            percent *= CreatureSpellDamageRate(caster);
         }
 
         if (benefit != 0)

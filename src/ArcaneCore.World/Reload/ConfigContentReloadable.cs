@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Reload;
 using ArcaneCore.Game.Social;
@@ -50,6 +51,7 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
         var listener = new WorldOptions();
         var social = new SocialOptions();
         var playerbots = new PlayerbotOptions();
+        var locomotion = new LocomotionOptions();
         IConfigurationRoot snapshot = fresh.Build();
         try
         {
@@ -58,6 +60,7 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
             section.Bind(listener);
             snapshot.GetSection(SocialOptions.SectionName).Bind(social);
             PlayerbotOptions.ApplyConfiguration(playerbots, snapshot);
+            snapshot.GetSection(LocomotionOptions.SectionName).Bind(locomotion);
         }
         finally
         {
@@ -67,7 +70,14 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
         // vmangos setConfigPos/setConfigMin: a negative value is logged and replaced by the default, and the reload
         // goes on (World.cpp:2949-2977); HotReload:NegativeNumbers = Reject keeps the whole-reload rejection.
         var substitutions = new List<string>();
-        var candidateView = new WorldConfigView(runtime, listener, social, playerbots);
+
+        // The speed rates are clamped to 0.1..10 at reload as at start (the fork's setConfigMinMax also runs on reload).
+        foreach (string clamped in locomotion.Normalize())
+        {
+            substitutions.Add($"{LocomotionOptions.SectionName}:{clamped} is out of range and was corrected.");
+        }
+
+        var candidateView = new WorldConfigView(runtime, listener, social, playerbots, locomotion);
         var defaults = new WorldConfigView(new WorldRuntimeOptions(), null);
         if (ReloadPolicy.Resolve(services).NegativeNumbers == InvalidNumberPolicy.Retail)
         {
@@ -112,10 +122,20 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
 
         public override void Commit(WorldRuntime world, ReloadTransaction transaction)
         {
-            var live = new WorldConfigView(world.Options, liveListener, liveSocial, livePlayerbots);
+            LocomotionOptions? liveLocomotion = LocomotionEnvironment.RegisteredOptions(world);
+            var live = new WorldConfigView(world.Options, liveListener, liveSocial, livePlayerbots, liveLocomotion);
             foreach (string substitution in substitutions)
             {
                 transaction.Note(substitution);
+            }
+
+            // Speed rates: the players' copies are re-sent after the keys change, and on a rollback after the keys are restored
+            // (the undo log runs newest first, so this first step's undo runs last).
+            bool speedRatesChanged = liveLocomotion is not null
+                && WorldConfigKeys.All.Any(k => WorldConfigKeys.IsSpeedRate(k) && !Equals(k.Read(live), k.Read(candidate)));
+            if (speedRatesChanged)
+            {
+                transaction.Step("player speed rates (rollback re-send)", static () => { }, () => SpeedRates.ApplyToAll(world, liveLocomotion!));
             }
 
             int changed = 0;
@@ -139,6 +159,13 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
                 {
                     transaction.Note($"{key.Path} option can't be changed at reload, using current value ({WorldConfigKey.Show(current)}).");
                 }
+            }
+
+            if (speedRatesChanged)
+            {
+                int refreshed = 0;
+                transaction.Step("player speed rates", () => refreshed = SpeedRates.ApplyToAll(world, liveLocomotion!), static () => { });
+                transaction.Note($"Player speed rates changed; the speeds of {refreshed} online player(s) were re-sent.");
             }
 
             _summary = changed == 0 ? "no changes" : $"{changed} option(s) changed";

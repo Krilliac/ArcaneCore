@@ -44,6 +44,13 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
 
     public LootContent Content { get; } = content ?? throw new ArgumentNullException(nameof(content));
 
+    /// <summary>
+    /// The Rate.Drop.Item.* multiplier of an ungrouped row (vmangos LootStoreItem::Roll(rate), LootMgr.cpp:256-268: the item quality's rate, or
+    /// Rate.Drop.Item.Referenced for a reference row), or null for 1. Every table rolled here allows rates (vmangos turns them off only for
+    /// mail loot, LootMgr.cpp:49) and a reference keeps the rate of the table that reached it (:1229-1230). Grouped rows are never scaled.
+    /// </summary>
+    public Func<LootStoreRow, float>? ChanceRate { get; set; }
+
     /// <summary>Roll the template <paramref name="entry"/> of <paramref name="kind"/>.</summary>
     public List<RolledLoot> Roll(LootTableKind kind, uint entry)
     {
@@ -81,7 +88,7 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
 
         foreach (LootStoreRow row in rows)
         {
-            if ((row.GroupId > 0 && row.MinCountOrRef > 0) || !RollChance(Math.Abs(row.ChanceOrQuestChance)))
+            if ((row.GroupId > 0 && row.MinCountOrRef > 0) || !RollRated(row))
             {
                 continue;
             }
@@ -157,5 +164,12 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
     }
 
     private bool RollChance(float chance) => chance >= 100.0f || (chance > 0 && _random.NextDouble() * 100.0 < chance);
+
+    // vmangos LootStoreItem::Roll: a chance of 100 or more drops before the rate is looked at; otherwise the rate scales the chance.
+    private bool RollRated(LootStoreRow row)
+    {
+        float chance = Math.Abs(row.ChanceOrQuestChance);
+        return chance >= 100.0f || RollChance(chance * (ChanceRate?.Invoke(row) ?? 1.0f));
+    }
 }
 

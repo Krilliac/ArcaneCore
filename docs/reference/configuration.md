@@ -217,6 +217,21 @@ How to read the tables:
 | `Creatures:MovementEnabled` | `bool` | `true` | - | Random and waypoint movement; off leaves every creature idle at its spawn point. |
 | `Creatures:NoMeleeFleeMs` | `uint` | `30000` | - | How long a NO_MELEE_FLEE creature runs before it evades (cmangos `DoFlee(30000)`, Unit.cpp:7996). |
 | `Creatures:NoMeleeFleeOnAggro` | `bool` | `false` | - | `Creatures:NoMeleeFleeOnAggro` (default false): a creature with the static flag NO_MELEE_FLEE (0x00100000) that a player or a player's pet engages runs in panic for `NoMeleeFleeMs` and then evades (cmangos Unit::SetInCombatWithVictim, Entities/Unit.cpp:7993-7998, and CreatureAI::TimedFleeingEnded, AI/BaseAI/CreatureAI.cpp:254-258). vmangos only takes the melee away for the same bit (CREATURE_STATIC_FLAG_NO_MELEE, whose original comment is "Flee"; AI/CreatureAI.cpp:40), and the default keeps that, since vmangos is the fidelity reference; critters still run from a hit through CritterAI either way. Melee is off for the flag either way. classic-db z2815 sets it on 71 templates (deer, sheep, cows, wisps, totems, target dummies). |
+| `Creatures:Rates:EliteDamage` | `float` | `1` | - | Rate.Creature.Elite.Elite.Damage (default 1; also the rate of an unknown rank). |
+| `Creatures:Rates:EliteHp` | `float` | `1` | - | Rate.Creature.Elite.Elite.HP (default 1; also the rate of an unknown rank). |
+| `Creatures:Rates:EliteSpellDamage` | `float` | `1` | - | Rate.Creature.Elite.Elite.SpellDamage (default 1; also the rate of an unknown rank). |
+| `Creatures:Rates:NormalDamage` | `float` | `1` | - | Rate.Creature.Normal.Damage (default 1). |
+| `Creatures:Rates:NormalHp` | `float` | `1` | - | Rate.Creature.Normal.HP (default 1). |
+| `Creatures:Rates:NormalSpellDamage` | `float` | `1` | - | Rate.Creature.Normal.SpellDamage (default 1). |
+| `Creatures:Rates:RareDamage` | `float` | `1` | - | Rate.Creature.Elite.RARE.Damage (default 1). |
+| `Creatures:Rates:RareEliteDamage` | `float` | `1` | - | Rate.Creature.Elite.RAREELITE.Damage (default 1). |
+| `Creatures:Rates:RareEliteHp` | `float` | `1` | - | Rate.Creature.Elite.RAREELITE.HP (default 1). |
+| `Creatures:Rates:RareEliteSpellDamage` | `float` | `1` | - | Rate.Creature.Elite.RAREELITE.SpellDamage (default 1). |
+| `Creatures:Rates:RareHp` | `float` | `1` | - | Rate.Creature.Elite.RARE.HP (default 1). |
+| `Creatures:Rates:RareSpellDamage` | `float` | `1` | - | Rate.Creature.Elite.RARE.SpellDamage (default 1). |
+| `Creatures:Rates:WorldBossDamage` | `float` | `1` | - | Rate.Creature.Elite.WORLDBOSS.Damage (default 1). |
+| `Creatures:Rates:WorldBossHp` | `float` | `1` | - | Rate.Creature.Elite.WORLDBOSS.HP (default 1). |
+| `Creatures:Rates:WorldBossSpellDamage` | `float` | `1` | - | Rate.Creature.Elite.WORLDBOSS.SpellDamage (default 1). |
 | `Creatures:Respawn:AlternateEntries` | `bool` | `true` | - | `Creatures:Respawn:AlternateEntries`: a spawn with `creature_spawn_entry` rows (vmangos `id2` ... `id5`) becomes one of those entries when it loads and again at every respawn (cmangos Creature::LoadFromDB / ResetEntry; vmangos Creature.cpp:830-841, :1936-1944). False ignores the rows: a spawn whose `id` is 0 then never spawns (the earlier behaviour). |
 | `Creatures:Respawn:DrawDelayAtLoad` | `bool` | `true` | - | `Creatures:Respawn:DrawDelayAtLoad`: a spawn's respawn delay (`urand(spawntimesecsmin, spawntimesecsmax)`) is drawn once when the creature object is created and reused at every death (vmangos Creature::LoadFromDB, Objects/Creature.cpp:1963; SetDeathState reads `m_respawnDelay`, :2246). False draws again at every death (the earlier ArcaneCore behaviour). |
 | `Creatures:Respawn:HonorTemplateCorpseDecay` | `bool` | `false` | - | `Creatures:Respawn:HonorTemplateCorpseDecay`: let a template's `CorpseDecay` column override the rank delay. It is a cmangos column; vmangos sets the corpse delay by rank alone (Creature.cpp:1326-1343), which is retail. |
@@ -352,6 +367,13 @@ How to read the tables:
 | `Locomotion:MirrorTimerEnvironmentalMaxSec` | `uint` | `1` | - | Seconds in lava or slime before the first pulse (vmangos MirrorTimer.Environmental.Max, World.cpp:816, default 1). |
 | `Locomotion:MirrorTimerFatigueMaxSec` | `uint` | `60` | - | Seconds of fatigue in deep water before the first pulse (vmangos MirrorTimer.Fatigue.Max, World.cpp:814, default 60). |
 | `Locomotion:PendingAckResponseTimeMs` | `uint` | `4000` | - | How long the client has to acknowledge a server-ordered movement change before the server enforces it (vmangos Movement.PendingAckResponseTime, World.cpp:985, default 4000 ms; the wait is multiplied by 5 while the player is being teleported, Unit.cpp:6633). |
+| `Locomotion:PlayerRunBackSpeedRate` | `float` | `1` | live | Non-retail when not 1 (default 1): player run-back speed multiplier (the fork's Movement.RunSpeedRate on MOVE_RUN_BACK; 0.1 to 10; live). |
+| `Locomotion:PlayerRunSpeedRate` | `float` | `1` | live | Non-retail when not 1 (default 1): player run speed multiplier (the fork's Movement.RunSpeedRate, which also covers run back; 0.1 to 10; live). |
+| `Locomotion:PlayerSpeedRate` | `float` | `1` | live | Non-retail when not 1 (default 1, retail): multiplies every movement speed of every player (run, run back, swim, swim back, walk), on top of the per-type rates below. Not a vmangos key: the MaNGOS Zero fork's Movement.PlayerSpeedRate (feature/movement-enhancements, WorldConfig.cpp, percent 10 to 1000, applied in the player block of Unit::UpdateSpeed, UnitSpeed.cpp:162-168), here a multiplier clamped to 0.1 to 10. Applied where a player's speed is set (`UnitSpeed.SetRate`), so every speed change, force-speed packet and the server's own movement use the result. Live: `.reload config` and `.movement set` re-send the speeds of every online player. |
+| `Locomotion:PlayerSwimBackSpeedRate` | `float` | `1` | live | Non-retail when not 1 (default 1): player swim-back speed multiplier (the fork's Movement.SwimSpeedRate on MOVE_SWIM_BACK; 0.1 to 10; live). |
+| `Locomotion:PlayerSwimSpeedRate` | `float` | `1` | live | Non-retail when not 1 (default 1): player swim speed multiplier (the fork's Movement.SwimSpeedRate, which also covers swim back; 0.1 to 10; live). |
+| `Locomotion:PlayerTurnRate` | `float` | `1` | live | Non-retail when not 1 (default 1): player turn rate multiplier (0.1 to 10; live). Neither vmangos nor the fork has one; the base is vmangos baseMoveSpeed[MOVE_TURN_RATE] = 3.141594 rad/s (Unit.cpp:67-74). `PlayerSpeedRate` does not apply to it. A change reaches the client as SMSG_FORCE_TURN_RATE_CHANGE. |
+| `Locomotion:PlayerWalkSpeedRate` | `float` | `1` | live | Non-retail when not 1 (default 1): player walk speed multiplier (the fork's Movement.WalkSpeedRate; 0.1 to 10; live). |
 | `Locomotion:RateDamageFall` | `float` | `1` | - | Fall damage multiplier (vmangos Rate.Damage.Fall, World.cpp:533, default 1; setConfigPos: a negative value becomes 1). |
 | `Locomotion:SlimeDamage` | `bool` | `false` | - | Deliberate deviation, off by default: hurt in slime like in lava. vmangos (Player.cpp:1030-1040) and mangos-classic (Player.cpp:1305-1311, "FIXME ... Undercity") damage only in magma although both define DAMAGE_SLIME; whether retail 1.12 hurt in slime cannot be proven from the references. When on, a slime pulse deals the same 605-610 as lava. |
 
@@ -381,6 +403,14 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `Loot:BossRewardDistanceBonus` | `float` | `150` | - | Extra yards for a world boss victim (vmangos Object.cpp:1494). 0 restores the plain limit. |
+| `Loot:DropItemArtifactRate` | `float` | `1` | - | vmangos Rate.Drop.Item.Artifact (World.cpp:503, default 1): the same for artifact quality items. |
+| `Loot:DropItemEpicRate` | `float` | `1` | - | vmangos Rate.Drop.Item.Epic (World.cpp:501, default 1): the same for epic (purple) items. |
+| `Loot:DropItemLegendaryRate` | `float` | `1` | - | vmangos Rate.Drop.Item.Legendary (World.cpp:502, default 1): the same for legendary (orange) items. |
+| `Loot:DropItemNormalRate` | `float` | `1` | - | vmangos Rate.Drop.Item.Normal (World.cpp:498, default 1): the same for common (white) items. |
+| `Loot:DropItemPoorRate` | `float` | `1` | - | vmangos Rate.Drop.Item.Poor (World.cpp:497, setConfigPos, default 1): multiplies the chance of an ungrouped loot row whose item is of poor (grey) quality (LootMgr.cpp:33-42 qualityToRate, applied in LootStoreItem::Roll, :256-268: a chance of 100 or more always drops, otherwise `roll_chance_f(chance * rate)`). Grouped rows are not scaled (LootGroup::Roll uses the raw chances, :1056-1086). |
+| `Loot:DropItemRareRate` | `float` | `1` | - | vmangos Rate.Drop.Item.Rare (World.cpp:500, default 1): the same for rare (blue) items. |
+| `Loot:DropItemReferencedRate` | `float` | `1` | - | vmangos Rate.Drop.Item.Referenced (World.cpp:504, default 1): multiplies the chance of an ungrouped reference row (a negative mincountOrRef) to be processed (LootStoreItem::Roll, LootMgr.cpp:261-262). |
+| `Loot:DropItemUncommonRate` | `float` | `1` | - | vmangos Rate.Drop.Item.Uncommon (World.cpp:499, default 1): the same for uncommon (green) items. |
 | `Loot:GroupLootDistance` | `float` | `74` | - | vmangos CONFIG_FLOAT_GROUP_XP_DISTANCE: group members within it share loot and money. |
 | `Loot:LootDistance` | `float` | `5` | - | INTERACTION_DISTANCE: how close a looter must stay to the corpse/chest (plus both radii). |
 | `Loot:LootedCorpseDecayRate` | `float` | `0` | - | vmangos CONFIG_FLOAT_RATE_CORPSE_DECAY_LOOTED (Rate.Corpse.Decay.Looted, mangosd.conf.dist.in:1542; cmangos World.cpp:457 too): a looted-out corpse stays this share of its decay time. The retail default 0 means a third of the creature's respawn delay (Creature.cpp:3369-3370). |
@@ -497,6 +527,8 @@ How to read the tables:
 | `Progression:MaxPlayerLevel` | `uint` | `60` | - | MaxPlayerLevel: no experience is gained at or above it. |
 | `Progression:RateXpKill` | `float` | `1` | - | Rate.XP.Kill. |
 | `Progression:RateXpKillElite` | `float` | `1` | - | Rate.XP.Kill.Elite. |
+| `Progression:RateXpPersonalMax` | `float` | `1` | - | vmangos Rate.XP.Personal.Max (World.cpp:511, setConfigMin 0, default 1): the highest personal XP rate a player below GameMaster may set with `.modify xprate` (CharacterCommands.cpp:84-88). A negative value is replaced by 1 when the command reads it. |
+| `Progression:RateXpPersonalMin` | `float` | `1` | - | vmangos Rate.XP.Personal.Min (World.cpp:510, setConfigMin 0, default 1): the lowest personal XP rate `.modify xprate` accepts (CharacterCommands.cpp:78-82). A negative value is replaced by 1 when the command reads it. |
 
 ## `Quests`
 
@@ -827,6 +859,7 @@ How to read the tables:
 | `World:Honor:MinHonorKills` | `uint` | `0` | - | Honorable kills a week to be ranked; 0 selects 15 (MIN_HONOR_KILLS_POST_1_10). |
 | `World:Honor:PoolSizePerFaction` | `uint` | `0` | - | Standing pool size per faction; 0 uses the number of ranked players. |
 | `World:Honor:RacialLeaderExcludedEntries` | `uint[]` | `[]` | - | Creature entries that are never racial leaders. |
+| `World:Honor:Rate` | `float` | `1` | - | Non-retail when not 1 (default 1): multiplies earned honor (kills, battleground bonuses, quests); Rate.Honor of the MaNGOS Zero fork and the cmangos/TrinityCore line (vmangos has none). A negative or non-finite value is 1. |
 | `World:Honor:ReportDirectory` | `string` | `""` | - | Directory that receives the vmangos HCR calculation report; empty writes none. |
 | `World:Honor:RpDecay` | `float` | `0.2` | - | Weekly rank point decay, clamped to 0..1. |
 | `World:Honor:TimeZoneOffsetHours` | `int` | `0` | - | Hours added to UTC for the game day and the weekday of the weekly calculation. |
@@ -852,6 +885,7 @@ How to read the tables:
 | `World:Instances:IgnoreRaidGroup` | `bool` | `false` | - | Let players enter raids without a raid group (vmangos `Instance.IgnoreRaid`, default off). |
 | `World:Instances:NormalDungeonResetSeconds` | `int` | `7200` | - | A normal (non-raid) dungeon resets this long after it was created, but only while nobody is inside (vmangos `MapPersistentStateManager::AddPersistentState`: "if no creatures are killed the instance will reset in two hours"; the schedule is cancelled while players are in). |
 | `World:Instances:PerHourLimit` | `int` | `5` | - | New instances one account may enter per hour (vmangos `Instance.PerHourLimit`, default 5; `MAX_INSTANCE_PER_ACCOUNT_PER_HOUR` Player.h:669). 0 turns the limit off (a ArcaneCore convention: vmangos would refuse every new instance at 0). Game masters are exempt. |
+| `World:Instances:RateResetTime` | `float` | `1` | - | vmangos `Rate.InstanceResetTime` (World.cpp:543, setConfigPos, default 1): multiplies the reset period in days of every raid with a `reset_delay`, truncated and at least one day (ObjectMgr::LoadMapTemplate, ObjectMgr.cpp:6809-6811). A delay of 0 (no global reset) stays 0. Read when the raid schedules are built and at each global reset; a negative value is 1. |
 | `World:Instances:ResetExtendsOnKills` | `bool` | `true` | - | A creature kill in a normal dungeon moves the reset time to respawn + 2 h when later (vmangos Map::BindToInstanceOrRaid, Map.cpp:3536-3544). Default on (retail). |
 | `World:Instances:ResetRefusedNoticeSeconds` | `int` | `10` | - | Seconds between two "Please leave the instance so it can be reset." notices to the players inside an instance that a refused personal reset asks to leave (an ArcaneCore limit: the refusal itself is an ArcaneCore choice, see docs/integration/instances.md, and the requester can repeat CMSG_RESET_INSTANCES at will). The requester still gets SMSG_INSTANCE_RESET_FAILED every time. 0 sends the notice on every refusal. |
 | `World:Instances:ResetTimeHour` | `int` | `4` | - | Hour of the day (UTC, 0–23) of global raid resets (vmangos `Instance.ResetTimeHour`, default 4). |

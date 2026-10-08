@@ -81,6 +81,17 @@ public sealed class PlayerProgression : IQuestExperience
 
     public uint GetCurrentXp(Player player) => CurrentXp(player);
 
+    /// <summary>
+    /// vmangos Player::GiveXP's first step (Player.cpp:3018-3019): a personal XP rate that is set (not negative, <see cref="Player.PersonalXpRate"/>)
+    /// multiplies the gain, truncated as <c>uint32 *= float</c>. Every XP source (kills, quests, exploration) passes through it.
+    /// </summary>
+    public static uint ApplyPersonalRate(Player player, uint xp)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        float rate = player.PersonalXpRate;
+        return rate >= 0.0f ? (uint)Math.Min(xp * rate, (float)uint.MaxValue) : xp;
+    }
+
     /// <summary>IPlayerExperience: non-kill experience (quests, exploration), no rested bonus.</summary>
     public void GiveXp(Player player, uint xp) => GiveXp(player, xp, ObjectGuid.Empty);
 
@@ -92,6 +103,7 @@ public sealed class PlayerProgression : IQuestExperience
     public uint GiveXp(Player player, uint xp, ObjectGuid victim)
     {
         ArgumentNullException.ThrowIfNull(player);
+        xp = ApplyPersonalRate(player, xp);
         if (xp < 1 || !player.IsAlive || !player.CanMutateQuestSettlementState || player.Level >= Options.MaxPlayerLevel)
         {
             return 0;

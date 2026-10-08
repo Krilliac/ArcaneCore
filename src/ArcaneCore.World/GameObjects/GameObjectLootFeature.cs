@@ -112,6 +112,11 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
         services.GetService<IConfiguration>()?.GetSection(SectionName).Bind(Options);
+        foreach (string name in Options.Normalize())
+        {
+            logger.LogError("{Section}:{Option} can't be negative. Using 1 instead.", SectionName, name);
+        }
+
         services.GetService<IConfiguration>()?.GetSection(GameObjectOptions.SectionName).Bind(ObjectOptions);
         if (!string.IsNullOrWhiteSpace(ObjectOptions.TransportAnimationDbcPath))
         {

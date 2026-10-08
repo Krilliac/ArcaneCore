@@ -94,6 +94,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.modify rage` | 3 | GameMaster | declared retail level | Syntax: .modify rage #newrage [#newmaxrage] Change the rage (and maximum rage) of the selected player, or yours. |
 | `.modify tp` | 4 | Administrator | declared retail level | Syntax: .modify tp #amount Set the free talent points of the selected player, or yours. |
 | `.modify honor` | 4 | Administrator | declared retail level | Syntax: .modify honor $field #value Fields: points rank todaykills yesterdaykills yesterdayhonor thisweekkills thisweekhonor lastweekkills lastweekhonor lastweekstanding lifetimedishonorablekills lifetimehonorablekills. |
+| `.modify xprate` | 0 | Player | declared retail level | Syntax: .modify xprate #rate Set your experience rate (a game master sets the selected player's) to #rate times normal experience gain. |
 | `.modify rep` | 4 | Administrator | declared retail level | Syntax: .modify rep #repId (#repvalue \| $rankname [#delta]) Sets the reputation of the selected player with the faction to the value, or to the beginning of the rank plus the delta. |
 | `.npc` ... | 2 | GameMaster | declared retail level | Syntax: .npc $subcommand Type .npc to see the list of possible subcommands or .help npc $subcommand to see info on subcommands. |
 | `.npc add` | 3 | GameMaster | declared retail level | Syntax: .npc add #entry Place a temporary creature where you stand. It is not saved and does not respawn. |
@@ -213,6 +214,9 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.spawninfo creature` | 2 | GameMaster | declared retail level | Syntax: .spawninfo creature [#radius] List the creatures within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
 | `.spawninfo gameobject` | 2 | GameMaster | declared retail level | Syntax: .spawninfo gameobject [#radius] List the game objects within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |
 | `.spawninfo summary` | 2 | GameMaster | declared retail level | Syntax: .spawninfo summary Count the creatures and game objects of this map by state, including the respawn times kept for unloaded grids. |
+| `.movement` ... | 6 | Administrator | stored level through the map | Player movement rates. Syntax: .movement $subcommand |
+| `.movement rates` | 6 | Administrator | stored level through the map | Syntax: .movement rates Show the player speed rates in force (1 is retail). |
+| `.movement set` | 6 | Administrator | stored level through the map | Syntax: .movement set $field $value Change a player speed rate for every online player until the next .reload config or restart. $field: speedrate (all speeds), run, runback, swim, swimback, walk or turn. $value: a multiplier from 0.1 to 10 (1 is retail). |
 | `.playerbot` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot &lt;create\|start\|stop\|status\|list\|inspect\|invite\|scenario&gt; Manage server-owned autonomous players. |
 | `.playerbot create` | 6 | Administrator | stored level through the map | Syntax: .playerbot create $name [#race #class] Create a persistent bot character. |
 | `.playerbot start` | 6 | Administrator | stored level through the map | Syntax: .playerbot start $id\|$name Start a persistent bot. |

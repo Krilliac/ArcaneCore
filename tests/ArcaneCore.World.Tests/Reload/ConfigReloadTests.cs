@@ -365,6 +365,13 @@ public sealed class ConfigReloadTests : IDisposable
         // Of the playerbot options only the movement transport is in the reload set (the rest are read once at start).
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MovementPackets)}");
 
+        // Of the Locomotion section only the player speed rates are reload keys (the rest is read at start; docs/areas/rates.md).
+        foreach (PropertyInfo property in typeof(ArcaneCore.Game.Locomotion.LocomotionOptions).GetProperties()
+            .Where(p => p.SetMethod is { IsPublic: true } && p.Name.StartsWith("Player", StringComparison.Ordinal)))
+        {
+            expected.Add($"{ArcaneCore.Game.Locomotion.LocomotionOptions.SectionName}:{property.Name}");
+        }
+
         var classified = new SortedSet<string>(WorldConfigKeys.All.Select(k => k.Path), StringComparer.Ordinal);
 
         Assert.Equal(expected, classified);

@@ -58,7 +58,7 @@ public sealed partial class LootService : IViewerFieldFilter
         _content = content;
         Options = options ?? new LootOptions();
         _random = random ?? new Random();
-        _generator = new LootGenerator(content, _random);
+        _generator = new LootGenerator(content, _random) { ChanceRate = DropRate };
         _logger = logger ?? NullLogger.Instance;
         Rolls = new LootRollManager(this, _random);
     }
@@ -85,13 +85,19 @@ public sealed partial class LootService : IViewerFieldFilter
     {
         ArgumentNullException.ThrowIfNull(content);
         LootContent previous = _content;
-        _generator = new LootGenerator(content, _random);
+        _generator = new LootGenerator(content, _random) { ChanceRate = DropRate };
         _content = content;
         return previous;
     }
 
     /// <summary>Item templates (display ids, party-loot and lootable flags). Unknown items are not generated.</summary>
     public IItemTemplateStore? Items { get; set; }
+
+    // vmangos LootStoreItem::Roll(rate) (LootMgr.cpp:256-268): Rate.Drop.Item.Referenced for a reference row, else the quality rate of the
+    // item, 1 when the item is unknown ("pProto && rate ? ... : 1.0f"). Read from the shared options at every roll.
+    private float DropRate(LootStoreRow row)
+        => row.MinCountOrRef < 0 ? Options.DropItemReferencedRate
+            : Items?.Find(row.Item) is { } template ? Options.DropItemRate(template.Quality) : 1.0f;
 
     public ILootQuestJournal? Quests { get; set; }
 
