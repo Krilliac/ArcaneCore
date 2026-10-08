@@ -20,6 +20,12 @@ public sealed record GossipMenuItem(
 
     /// <summary>The script action of a <see cref="Scripted"/> line (vmangos GossipMenuItemData::m_gAction).</summary>
     public uint ScriptAction { get; init; }
+
+    /// <summary>
+    /// The <c>dbscripts_on_gossip</c> id the line runs when selected (gossip_menu_option.action_script_id; mangos-classic
+    /// GossipMenuItemData::m_gAction_script); 0 none.
+    /// </summary>
+    public uint ActionScript { get; init; }
 }
 
 /// <summary>One prepared quest entry (vmangos GossipDef.h QuestMenuItem).</summary>

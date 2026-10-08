@@ -1,4 +1,6 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -175,7 +177,39 @@ public sealed class CreatureAiFactory
         [GuardEventAIName] = static (c, content) => new CreatureEventAI(c, content.Ai) { UsesGuardSightRules = true },
     };
 
+    /// <summary>
+    /// The creature scripts of this server's quests by creature entry (the ScriptDev2 <c>ScriptName</c> of their <c>creature_template</c> row,
+    /// which classic-db carries and this server does not import): selected before the AIName, as vmangos FactorySelector::selectAI asks the
+    /// script name first (AI/CreatureAISelector.cpp:37-50). Built in: <see cref="Scripts.RuulSnowhoofAI"/>.
+    /// </summary>
+    private readonly Dictionary<uint, Func<Creature, CreatureAI>> _entryScripts = new()
+    {
+        [Scripts.RuulSnowhoofAI.Entry] = static c => new Scripts.RuulSnowhoofAI(c),
+    };
+
+    /// <summary>The exploration/event quests the entry scripts complete (an escort's quest): <see cref="RegisterEntryScript"/>'s list.</summary>
+    private readonly HashSet<uint> _entryScriptQuests = [Scripts.RuulSnowhoofAI.QuestFreedomToRuul];
+
     public IReadOnlyCollection<string> Names => _factories.Keys;
+
+    /// <summary>The exploration/event quests the entry scripts complete (what lets the quest service offer them).</summary>
+    public IReadOnlyCollection<uint> ScriptedEventQuests => _entryScriptQuests;
+
+    /// <summary>
+    /// Give every creature of <paramref name="entry"/> the script AI <paramref name="factory"/> builds (a duplicate throws: fail closed);
+    /// <paramref name="eventQuests"/> are the exploration/event quests it completes.
+    /// </summary>
+    public void RegisterEntryScript(uint entry, Func<Creature, CreatureAI> factory, params uint[] eventQuests)
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+        ArgumentNullException.ThrowIfNull(eventQuests);
+        if (!_entryScripts.TryAdd(entry, factory))
+        {
+            throw new InvalidOperationException($"creature entry {entry} already has a script AI");
+        }
+
+        _entryScriptQuests.UnionWith(eventQuests);
+    }
 
     /// <summary>Register a C# AI under <paramref name="name"/> (a duplicate throws: fail closed).</summary>
     public void Register(string name, Func<Creature, CreatureAI> factory)
@@ -204,8 +238,15 @@ public sealed class CreatureAiFactory
     public CreatureAI Create(Creature creature, CreatureContent content, out bool unknown, bool implicitEventAi)
     {
         ArgumentNullException.ThrowIfNull(creature);
-        string name = creature.Template.AIName;
         unknown = false;
+        // The script name first (selectAI, AI/CreatureAISelector.cpp:39-46): not for a pet nor a charmed creature.
+        if (_entryScripts.Count > 0 && creature.Summon is not { Kind: SummonKind.Pet } && creature.CharmerGuid.IsEmpty
+            && _entryScripts.TryGetValue(creature.Template.Entry, out Func<Creature, CreatureAI>? script))
+        {
+            return script(creature);
+        }
+
+        string name = creature.Template.AIName;
         if (!string.IsNullOrEmpty(name))
         {
             if (_factories.TryGetValue(name, out Func<Creature, CreatureContent, CreatureAI>? factory))

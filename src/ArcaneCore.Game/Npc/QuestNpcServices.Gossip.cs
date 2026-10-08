@@ -41,6 +41,20 @@ public sealed partial class QuestNpcServices
     public event Action<Player, ObjectGuid, Quest>? QuestRewarded;
 
     /// <summary>
+    /// A gossip DB script is due (mangos-classic Map::ScriptsStart(SCRIPT_TYPE_GOSSIP)): the player, the creature or game object, the
+    /// <c>dbscripts_on_gossip</c> id, and whether the player is the script's source (a menu text's <c>script_id</c>, and an option of a game
+    /// object) rather than its target (an option of a creature). The creature systems subscribe (CreatureQuestScripts).
+    /// </summary>
+    public event Action<Player, ObjectGuid, uint, bool>? GossipScriptStarted;
+
+    /// <summary>
+    /// The exploration/event quests the creature scripts complete: a DB script's QUEST_EXPLORED (any namespace, relays included) or a
+    /// scripted escort. Read at each support query (the creature content loads after this service is built); unset: none. Set by
+    /// CreatureQuestScripts; the event-credit adapter module reads it (DbScriptQuestCredit).
+    /// </summary>
+    public Func<IReadOnlyCollection<uint>>? ScriptCreditedQuests { get; set; }
+
+    /// <summary>
     /// CMSG_GOSSIP_HELLO (vmangos HandleGossipHelloOpcode, NPCHandler.cpp:345-368, no script hooks): a spirit guide first
     /// sends its resurrection timer, SMSG_AREA_SPIRIT_HEALER_TIME (:360-361), then the gossip menu goes out.
     /// </summary>
@@ -212,7 +226,7 @@ public sealed partial class QuestNpcServices
             {
                 string text = gmSkipCondition ? option.OptionText + GmOnSuffix : option.OptionText;
                 menu.AddGossipItem(new GossipMenuItem(option.OptionIcon, text, option.BoxCoded != 0, (GossipOption)option.OptionId,
-                    option.BoxText, option.ActionMenuId, option.ActionPoiId));
+                    option.BoxText, option.ActionMenuId, option.ActionPoiId) { ActionScript = option.ActionScriptId });
             }
         }
 
@@ -365,6 +379,13 @@ public sealed partial class QuestNpcServices
                 ForeignOptionSelected?.Invoke(p, npc, item.OptionId);
                 break;
         }
+
+        // mangos-classic Player::OnGossipSelect (Player.cpp:11953-11960): after the option's own action, its script; a creature is the
+        // source and the player the target, a game object the target with the player as the source.
+        if (item.ActionScript != 0)
+        {
+            GossipScriptStarted?.Invoke(p, npc.Guid, item.ActionScript, npc.IsGameObject);
+        }
     }
 
     /// <summary>vmangos PlayerMenu::SendGossipMenu: the prepared options and quest list.</summary>
@@ -395,6 +416,7 @@ public sealed partial class QuestNpcServices
         }
 
         uint lastCondition = 0;
+        uint scriptId = 0;
         foreach (GossipMenu entry in Npcs.MenuTexts(menuId))
         {
             if ((entry.ConditionId == 0 && lastCondition == 0)
@@ -402,7 +424,14 @@ public sealed partial class QuestNpcServices
             {
                 lastCondition = entry.ConditionId;
                 textId = entry.TextId;
+                scriptId = entry.ScriptId;
             }
+        }
+
+        // mangos-classic Player::GetGossipTextId (Player.cpp:11998-12001): the chosen text's script, the player as the source.
+        if (scriptId != 0)
+        {
+            GossipScriptStarted?.Invoke(s.Quests.Player, npc.Guid, scriptId, true);
         }
 
         return textId;

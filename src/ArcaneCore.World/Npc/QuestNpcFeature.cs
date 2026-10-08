@@ -39,6 +39,7 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
     private readonly HashSet<Map> _maps = [];
     private readonly Dictionary<Player, Action<uint, int>> _itemListeners = new(ReferenceEqualityComparer.Instance);
     private QuestObjectiveAdapter? _objectives;
+    private IDisposable? _dbScripts;
     private WorldRuntime? _world;
 
     public QuestNpcFeature(IServiceProvider services, IServiceScopeFactory scopes, ILogger<QuestNpcFeature> logger,
@@ -109,6 +110,12 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             QuestSpellEvents.Install(spells.System, (player, questId) => Services.AreaExploredOrEventHappens(player, questId));
         }
 
+        // The quest and gossip DB scripts and the quest-accept creature scripts (world schema 42), on the creature system of the player's map;
+        // the creature feature is resolved at each call, so the order the features attach in does not matter.
+        _dbScripts = Game.Creatures.CreatureQuestScripts.Attach(Services,
+            map => _services.GetService<Creatures.CreatureWorldFeature>()?.FindSystem(map),
+            () => _services.GetService<Creatures.CreatureWorldFeature>()?.Content,
+            () => _services.GetService<Creatures.CreatureWorldFeature>()?.AiServices.Factory);
         Persistence.Start();
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;
@@ -150,6 +157,7 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
     public async ValueTask DisposeAsync()
     {
         _objectives?.Dispose();
+        _dbScripts?.Dispose();
         foreach ((Player player, Action<uint, int> listener) in _itemListeners)
         {
             player.Inventory.ItemCountChanged -= listener;
