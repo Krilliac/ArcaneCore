@@ -55,6 +55,7 @@ public sealed class PlayerbotQuestChainEndToEndTests
                 {
                     Player player = session.Player!;
                     var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+                    feature.Options.RewardMode = QuestRewardMode.AllowlistOnly;
                     feature.Options.OrdinaryRewardQuestIds = [783, 7];
                     session.ManagedBudget = new ManagedActionBudget(1);
                     Assert.False(goals.HasCandidate(player));

@@ -2,6 +2,7 @@ using System.Numerics;
 using ArcaneCore.Data;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
@@ -126,7 +127,10 @@ public sealed class PlayerbotQuestReturnTests
             Assert.Equal(0u, goals.CompletedReturnQuest(fixture.Session.Player!));
             fixture.Feature.Services.KilledMonsterCredit(fixture.Session.Player!, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
             Assert.Equal(QuestInteractionFixture.QuestId, goals.CompletedReturnQuest(fixture.Session.Player!));
+            // Default Quests:RewardMode (AllSupported) settles it without an allowlist; AllowlistOnly withholds it unlisted.
             fixture.Feature.Options.OrdinaryRewardQuestIds = [];
+            Assert.Equal(QuestInteractionFixture.QuestId, goals.CompletedReturnQuest(fixture.Session.Player!));
+            fixture.Feature.Options.RewardMode = QuestRewardMode.AllowlistOnly;
             Assert.Equal(0u, goals.CompletedReturnQuest(fixture.Session.Player!));
             return true;
         });

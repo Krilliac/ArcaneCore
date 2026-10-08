@@ -38,7 +38,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (services?.StateOf(player) is not { Loaded: true } state || content is null) return 0;
         return state.Quests.Statuses.OrderBy(row => row.Key)
             .Where(row => row.Value is { Status: QuestStatus.Complete, Rewarded: false }
-                && services.Options.OrdinaryRewardQuestIds.Contains(row.Key))
+                && services.IsRewardable(row.Key))
             .Where(row => services.Quests.CreatureEndersOf(row.Key)
                 .Any(entry => content.GetSpawns(player.MapId, entry).Count > 0))
             .Select(row => row.Key).FirstOrDefault();
@@ -180,7 +180,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
             foreach (uint id in services.Quests.EndersOf(npc.Entry))
             {
-                if (!services.Options.OrdinaryRewardQuestIds.Contains(id)) continue;
+                if (!services.IsRewardable(id)) continue;
                 if (_stage != Stage.None && id != _stageQuest)
                     continue;
                 if (services.Quests.Get(id) is not { } quest || state.Quests.Get(id) is not { } status)
@@ -199,7 +199,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
             foreach (uint id in services.Quests.StartersOf(npc.Entry))
             {
-                if (!services.Options.OrdinaryRewardQuestIds.Contains(id)) continue;
+                if (!services.IsRewardable(id)) continue;
                 if (_stage != Stage.None && id != _stageQuest)
                     continue;
                 if (services.Quests.Get(id) is not { } quest

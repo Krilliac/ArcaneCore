@@ -1,5 +1,6 @@
 using System.Numerics;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Combat;
@@ -127,6 +128,37 @@ public sealed class PlayerbotQuestTravelPriorityTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    /// <summary>
+    /// Default Quests:RewardMode (AllSupported): an offscreen supported quest is a travel candidate with no allowlist; a quest
+    /// gray for the character's level (vmangos GetGrayLevel) is not worth the trip.
+    /// </summary>
+    [Fact]
+    public async Task DefaultRewardModeMakesAnOffscreenQuestAdvisableUntilItIsGray()
+    {
+        await using WorldTestHost host = Start(new QuestTravelFixture(-8648.95f));
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            QuestNpcFeature feature = host.WorldServices.GetRequiredService<QuestNpcFeature>();
+            await host.World.InvokeAsync(() =>
+            {
+                Assert.Equal(QuestRewardMode.AllSupported, feature.Options.RewardMode);
+                Assert.Empty(feature.Options.OrdinaryRewardQuestIds);
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor());
+                Player player = session.Player!;
+                var destinations = new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true });
+                Assert.True(destinations.HasQuestCandidate(player));
+                session.ManagedBudget = new ManagedActionBudget(1);
+                Assert.True(destinations.Update(player, 0, 500));
+                Assert.Equal(QuestTravelFixture.QuestId, destinations.QuestId);
+                player.Level = 20;
+                Assert.False(new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true }).HasQuestCandidate(player));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     [Fact]
     public async Task AllowlistAndVisibleEligibilityKeepTravelAdvisoryFalse()
     {
@@ -139,6 +171,7 @@ public sealed class PlayerbotQuestTravelPriorityTests
             await host.World.InvokeAsync(() =>
             {
                 var destinations = new PlayerbotWorldDestinations(session, new PlayerbotOptions { Enabled = true });
+                feature.Options.RewardMode = QuestRewardMode.AllowlistOnly;
                 feature.Options.OrdinaryRewardQuestIds = [];
                 Assert.False(destinations.HasQuestCandidate(session.Player!));
                 feature.Options.OrdinaryRewardQuestIds = [QuestTravelFixture.QuestId];
