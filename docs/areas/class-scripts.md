@@ -32,6 +32,40 @@ The other seals (Command, Justice, Light, Wisdom, the Crusader), the blessings (
 (Devotion, Retribution, Concentration, Sanctity) are data-driven auras the aura engine and the proc engine already run; Seal of Command's PPM, Blessing of
 Sanctuary's block-only proc and the 50% judgement procs need their `spell_proc_event` rows (procs.md).
 
+## Talent scripts (lane `tb-t3-talent-class-scripts-pets`)
+
+Talents that vmangos implements as per-spell class scripts. Each is a new file on an existing seam; each test was RED-proved by switching its script off
+(`D:/ArcaneCore-lanes/_logs/tb-t3-talent-class-scripts-pets/red-*.log`).
+
+| Talent | What it does | Code | vmangos |
+|---|---|---|---|
+| Ignite (11119, 11120, 12846, 12847, 12848) | Proc script on the talent's DUMMY aura (a fire crit, spell_proc_event school 4 / procEx CRITICAL_HIT): 4/8/12/16/20% of the crit's original amount is the tick damage of 12654 (PERIODIC_DAMAGE every 2 s for 4 s) cast by the mage on the victim. A live Ignite (anyone's) that still has ticks to deal gains the share and a stack (at 5 stacks only the duration refreshes), and its ticks start over, so the accumulated tick rolls into a fresh 4 s; one whose ticks are all dealt is replaced. | `Mage/IgniteScript.cs` | spell_mage.cpp:50-130 |
+| Combustion (11129, 28682) | Proc script on the invisible DUMMY aura (3 charges, fire spells): every fire hit adds a stack of the +10% crit buff 28682; only crits spend charges; the last crit removes the buff and the last charge. No buff (dispelled) ends the proc aura; cancelling the buff (AURA_REMOVE_BY_CANCEL) removes the proc aura. | `Mage/CombustionScript.cs` | spell_mage.cpp:144-205 |
+| Swiftmend (18562) | Cast check: the target needs a druid PERIODIC_HEAL of Rejuvenation (0x10) or Regrowth (0x40), else TARGET_AURASTATE. Effect: the one with the shortest remaining duration (the first on a tie) is consumed and 4 (Rejuvenation) or 6 (Regrowth) times its tick is added to the heal before the heal bonus (`SwiftmendHealModifier`). | `Druid/SwiftmendScript.cs` | spell_druid.cpp:101-160 |
+| Mana Tide (16191) | Periodic trigger script: a PERIODIC_TRIGGER_SPELL Mana Tide aura makes its target cast the trigger on itself with the aura's amount (dithered). The build 5875 row is APPLY_AREA_AURA_PARTY of PERIODIC_ENERGIZE (170 mana every 3 s, 20 yd) and never reaches the script; it restores mana through the area aura and the energize tick (pinned by a test). | `Shaman/ManaTideScript.cs` | spell_shaman.cpp:49-67, mangos-classic SpellAuras.cpp:1209-1213 |
+| Reckoning (20178) | ADD_EXTRA_ATTACKS script: one more extra attack on top of those pending, up to 4 (the plain effect only queues on a unit with none pending). The talent aura 20177 procs it on crits taken; the proc engine already lets 20178 proc while extra attacks are pending. | `Paladin/ReckoningScript.cs` | spell_paladin.cpp:178-206 |
+| Counterattack (19306, 20909, 20910) | Cast check: the target must be the attacker whose attack the hunter parried (the parry's combo-point marker, which moves with the reactive window's target); the CasterAuraState HUNTER_PARRY of the data gates the window. | `Hunter/CounterattackScript.cs` | spell_hunter.cpp:121-136, Unit.cpp ProcSkillsAndReactives |
+
+## Owner-to-pet talent auras (`Pets/PetAuras`)
+
+vmangos `spell_pet_auras` (SpellMgr::LoadSpellPetAuras, SpellMgr.cpp:2222): an owner spell whose DUMMY aura or DUMMY effect gives the owner's permanent pet an
+aura chosen by the pet's creature entry. `PetAuraTable` holds the 24 vanilla rows as code (the classic-db z2815 table, also azerothcore's vanilla ids):
+Soul Link 19028 -> 25228; Spirit Bond 19578 / 20895 -> 19579 / 24529; Master Demonologist 23785, 23822-23825 -> imp 416 / felhunter 417 / voidwalker 1860 /
+succubus 1863 variants; Stalker's Ally 28757 -> 28758. No table or importer.
+
+- `PetAuraService` keeps the owner's set (vmangos `m_petAuras`) per spell system. The owner's DUMMY aura applied / removed calls AddPetAura / RemovePetAura
+  (SpellAuras.cpp:2201-2208) through the per-spell DUMMY aura dispatch; Soul Link's DUMMY effect calls AddPetAura (SpellEffects.cpp:1497-1502,
+  `PetAuraDummyEffectScript`); unlearning a table spell drops it (Player.cpp:3850-3852, a learn observer). AddPetAura casts the pet's aura on the current pet
+  at once; RemovePetAura removes it from the pet.
+- A pet arrives (Pet::CastPetAuras, Pet.cpp:2302-2330): a new summon (`PetInitializer.InitCreateSpells`, Pet.cpp:2101, `current = false`) first ends the
+  owner's spells whose DUMMY targets TARGET_UNIT_CASTER_PET (Soul Link: a new demon ends it) and gets the others; a loaded hunter pet gets them all (current for
+  the login / teleport restore and the revive, not for Call Pet). Only a permanent pet takes them (Pet::IsPermanentPetFor: a hunter's pet, a warlock's demon).
+- SPELL_EFFECT_APPLY_AREA_AURA_PET (119), which every pet aura is, is now handled: the pet carries the source and its owner within the effect radius gets the
+  copy (AreaAura::Update, SpellAuras.cpp:690-706); the copy goes with the source.
+- Talent hooks (`TalentPetHooks`, World `Pets/TalentPetFeature.cs`, attached on the world thread because the talent feature attaches after the pets
+  namespace): `TalentService.TalentsReset` removes the pet (vmangos Player.cpp:4144-4146 `RemovePet(PET_SAVE_REAGENTS)`; a hunter's pet is saved out of slot
+  first, as Dismiss Pet saves it); `TalentLearned` re-casts the owner's talent auras the pet is missing (mangos-classic HandleLearnTalentOpcode).
+
 ## Shaman
 
 | Piece | What it does | Code | vmangos |
@@ -90,6 +124,11 @@ SPELL_EFFECT_PERSISTENT_AREA_AURA had no handler (no dynamic object entity exist
   the target side (vmangos OnPeriodicCalculateAmount and the hard-coded spells of Aura::PeriodicTick); `AfterTick` runs after the damage.
 - `SpellSystem.DynamicObjects`, `GetDynamicObjects(caster)`, `FindDynamicObject(holder)`, `RemoveDynamicObjects(caster, spellId)`.
 - `SpellSystem.CastItemCombatSpell` (internal): a script's extra weapon proc.
+- `SpellSystem.RegisterDummyAuraHandler(spellId, apply)`: a case of vmangos Aura::HandleAuraDummy's switch on the spell id. The DUMMY aura type's one handler
+  slot dispatches here; one case per spell (a second is a startup error). The pet auras own the table's ids.
+- Internal helpers for scripts in `SpellSystem.Auras.cs`: `ApplyAuraEffect` (EffectApplyAura for an area aura effect), `SetAuraAmount` (ApplyModifier off,
+  amount, on), `ModAuraStackAmount` (SpellAuraHolder::ModStackAmount), `RestartHolderTicks` (a holder refreshed with itself: ticks start over).
+- SPELL_EFFECT_APPLY_AREA_AURA_PET (119) is claimed by `PetAuraModule` (only when nothing else handles it).
 
 ## Deviations and limits
 
@@ -101,6 +140,17 @@ SPELL_EFFECT_PERSISTENT_AREA_AURA had no handler (no dynamic object entity exist
 - A dead Doomguard is left to its corpse decay (vmangos restarts its timer for the corpse); a summoning ritual destination and Inferno's Enslave
   Demon are not modelled.
 - Ground objects never move; the 2 s refresh window starts at the first visit; an existing holder that lacks the ground effect's aura is not given it.
+- Reckoning: this server's extra-attack queue (`UnitCombat`, combat area) makes a queued batch ready on the next unit update, so Reckoning's stacks build while
+  the paladin is not swinging and are released on its next melee update; vmangos releases them after the paladin's next own swing (`AddExtraAttackOnUpdate`).
+- Counterattack reads the parried attacker from the hunter's combo target; a non-player caster is not checked (the reactive service is not reachable
+  from a script).
+- Pet auras: the owner's copy of an APPLY_AREA_AURA_PET aura is decided when the source is applied (vmangos re-checks the radius every update) and leaves
+  with the source within one spell update when the pet is unsummoned. A revived pet does not get the auras back until the next summon or learned talent
+  (vmangos Pet.cpp:658 casts them when the pet comes alive; the revive path is the creatures area's). A warlock demon removed by a respec gives no soul shard
+  back (the summon does not charge it either). Mana Tide's build 5875 row does not use the script (above).
+- A warlock demon brought back after a teleport or a mount (`SummonService.TemporaryUnsummon.cs`, `RestoreSummonedPet`, outside this lane) does not take
+  the owner's pet auras yet; one call to `PetAuraService.CastPetAuras(pet, current: true)` there closes it (vmangos Pet::LoadPetFromDB, Pet.cpp:357). A
+  hunter's pet comes back through `RestoreCurrentPet` and takes them.
 - Real data: Spell.dbc / `spell_template` (every id above), SpellItemEnchantment.dbc for the imbues, `spell_proc_event` and
   `spell_proc_item_enchant` rows for PPM procs, and creature 11859 (Doomguard) in `creature_template`. The tests use synthetic rows with the real ids,
   families, flags and effect kinds.
@@ -109,6 +159,13 @@ SPELL_EFFECT_PERSISTENT_AREA_AURA had no handler (no dynamic object entity exist
 
 - `tests/ArcaneCore.Game.Tests/ClassSpells`: `PaladinScriptTests` (13), `PaladinHealingAndAuraTests` (4), `ShamanWeaponScriptTests` (7),
   `ClassDummyScriptTests` (14), `CurseOfDoomTests` (7); `Rogue/RogueBleedScriptTests` (7); `Spells/PersistentAreaAuraTests` (13).
+- Talent scripts: `ClassSpells/MageTalentScriptTests` (8: Ignite tick, rank share, fire-crit only, rollover on a second crit, the 5-stack refresh;
+  Combustion stacks and charges, cancel, dispelled buff), `SwiftmendScriptTests` (5), `ManaTideScriptTests` (2), `ReckoningScriptTests` (3),
+  `CounterattackScriptTests` (4); `Pets/TalentPetAuraTests` (8: Soul Link on the imp and the warlock and its unlearn, Soul Link ending with a pet change,
+  Master Demonologist's variant by entry at summon and its unlearn, the permanent-pet rule, Spirit Bond on a called hunter pet, the respec removing the
+  hunter's pet, a learned talent re-casting the pet aura). The scenario `ClassScriptScenarioTests.Swiftmend_*` runs Swiftmend between two bots.
+- RED evidence for the talent scripts: `D:/ArcaneCore-lanes/_logs/tb-t3-talent-class-scripts-pets/red-*.log` (one per script or hook, each failing on
+  assertions with the piece switched off).
 - `tests/ArcaneCore.World.Tests/Spells/ClassScriptWiringTests` (the production world spell system carries the scripts) and the playerbot scenarios
   `Playerbots/Scenarios/ClassScriptScenarioTests` (two bots duel: Seal of Righteousness and Judgement; Consecration's ground object reaches the
   opponent's client and ticks on it), with `ScenarioClassDecoders` (SMSG_SPELLNONMELEEDAMAGELOG, SMSG_PERIODICAURALOG).

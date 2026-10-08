@@ -37,7 +37,8 @@ public sealed partial class SpellSystem
     /// </summary>
     private static Dictionary<AuraType, AuraHandler> CreateAuraHandlers() => ImmunityAuraHandlers.Install(CcAuraHandlers.Install(new()
     {
-        [AuraType.Dummy] = new AuraHandler(null, null),
+        // vmangos Aura::HandleAuraDummy (SpellAuras.cpp:1700-2215) is a switch on the spell id: RegisterDummyAuraHandler adds a case.
+        [AuraType.Dummy] = new AuraHandler(static (s, h, a, apply) => s.ApplyDummyAura(h, a, apply), null),
         // Threat reads installed modifiers by school when damage/healing is resolved.
         [AuraType.ModThreat] = new AuraHandler(null, null),
         [AuraType.PeriodicDamage] = new AuraHandler(null, static (s, h, a) => s.TickPeriodicDamage(h, a)),
@@ -59,6 +60,86 @@ public sealed partial class SpellSystem
         // vmangos Aura::HandleReflectSpellsSchool (SpellAuras.cpp:5422-5431): the caster's RESIST_MISS_CHANCE spell mods raise the chance.
         [AuraType.ReflectSpellsSchool] = new AuraHandler(static (s, h, a, apply) => s.ApplyReflectSchoolMods(h, a, apply), null),
     }));
+
+    /// <summary>
+    /// Add the SPELL_AURA_DUMMY apply/remove case of one spell (a case of vmangos <c>Aura::HandleAuraDummy</c>'s switch on the spell id, for
+    /// example the owner-to-pet auras of SpellAuras.cpp:2201-2208). The DUMMY aura type has a single handler slot; it dispatches here by spell id,
+    /// so any number of spells can each own a case. A second registration for the same spell is a startup error, like
+    /// <see cref="RegisterProcScript"/>.
+    /// </summary>
+    public void RegisterDummyAuraHandler(uint spellId, Action<SpellSystem, SpellAuraHolder, SpellAura, bool> apply)
+    {
+        ArgumentNullException.ThrowIfNull(apply);
+        if (!_dummyAuraHandlers.TryAdd(spellId, apply))
+        {
+            throw new InvalidOperationException($"spell {spellId} already has a dummy aura handler");
+        }
+    }
+
+    /// <summary>Whether <paramref name="spellId"/> has a DUMMY aura case (<see cref="RegisterDummyAuraHandler"/>).</summary>
+    public bool HasDummyAuraHandler(uint spellId) => _dummyAuraHandlers.ContainsKey(spellId);
+
+    private readonly Dictionary<uint, Action<SpellSystem, SpellAuraHolder, SpellAura, bool>> _dummyAuraHandlers = [];
+
+    private void ApplyDummyAura(SpellAuraHolder holder, SpellAura aura, bool apply)
+    {
+        if (_dummyAuraHandlers.TryGetValue(holder.Spell.Id, out Action<SpellSystem, SpellAuraHolder, SpellAura, bool>? handler))
+        {
+            handler(this, holder, aura, apply);
+        }
+    }
+
+    /// <summary>
+    /// SPELL_EFFECT_APPLY_AURA for a handler outside this file (vmangos Spell::EffectApplyAura): the effect's aura joins the target's pending
+    /// holder. The area aura effects that only put their source on the caster (vmangos Spell::EffectApplyAreaAura) call it for the caster.
+    /// </summary>
+    internal void ApplyAuraEffect(SpellEffectContext context) => EffectApplyAura(context);
+
+    /// <summary>
+    /// vmangos <c>aura->ApplyModifier(false); m_modifier.m_amount = amount; aura->ApplyModifier(true)</c>: a script sets one aura's amount, the
+    /// handler sees the old amount go and the new one come (a periodic aura's next tick deals it).
+    /// </summary>
+    internal void SetAuraAmount(SpellAuraHolder holder, SpellAura aura, int amount)
+    {
+        ArgumentNullException.ThrowIfNull(holder);
+        ArgumentNullException.ThrowIfNull(aura);
+        if (aura.Amount == amount)
+        {
+            return;
+        }
+
+        AuraHandler? handler = AuraHandlers.GetValueOrDefault(aura.Type);
+        handler?.Apply?.Invoke(this, holder, aura, false);
+        aura.Amount = amount;
+        handler?.Apply?.Invoke(this, holder, aura, true);
+        RaiseHolderAmountsChanged(holder);
+    }
+
+    /// <summary>vmangos SpellAuraHolder::ModStackAmount(num) for a script (see the private overload): true when the stacks ran out.</summary>
+    internal bool ModAuraStackAmount(SpellAuraHolder holder, int num)
+    {
+        ArgumentNullException.ThrowIfNull(holder);
+        return ModStackAmount(holder, num);
+    }
+
+    /// <summary>
+    /// vmangos <c>holder->Refresh(caster, target, holder)</c> with the holder itself (SpellAuras.cpp:365-378, Aura::Refresh :311-320): the duration
+    /// stays what it is, the apply time is now, and every periodic aura starts its ticks over (tick count 0, a fresh timer).
+    /// </summary>
+    internal void RestartHolderTicks(SpellAuraHolder holder)
+    {
+        ArgumentNullException.ThrowIfNull(holder);
+        holder.AppliedAtUnixSeconds = UnixSecondsClock();
+        holder.AppliedInProcEvent = CurrentProcEvent;
+        foreach (SpellAura aura in holder.Auras.OfType<SpellAura>())
+        {
+            aura.PeriodicTimer = PeriodicTiming.InitialTimer(holder.Spell, aura);
+            aura.TickCount = 0;
+        }
+
+        WriteAuraApplications(holder);
+        SendAuraDuration(holder);
+    }
 
     private void ApplyReflectSchoolMods(SpellAuraHolder holder, SpellAura aura, bool apply)
     {

@@ -84,7 +84,9 @@ internal static class PetInitializer
     /// that exists is learned; a learn spell (SPELL_EFFECT_LEARN_SPELL / LEARN_PET_SPELL) stands for the
     /// spell it triggers (<c>EffectTriggerSpell[0]</c>); a passive spell is cast on the pet at once and kept
     /// off the bar, any other starts with autocast off (<c>ACT_DECIDE</c>, Pet.cpp:1887-1975). The bar is
-    /// first reset to its default. A pet with no spell list or without a spell store learns nothing.
+    /// first reset to its default. A pet with no spell list or without a spell store learns nothing. Last,
+    /// like vmangos (Pet.cpp:2101), the owner's talent pet auras are cast on a permanent pet
+    /// (<see cref="PetAuras.PetAuraService.CastPetAuras"/> with <c>current = false</c>).
     /// </summary>
     public static void InitCreateSpells(Creature pet, PetContent content, SpellSystem? spells)
     {
@@ -114,5 +116,8 @@ internal static class PetInitializer
                 spells.CastSpell(pet, spell.Id, SpellCastTargets.ForSelf(), triggered: true);
             }
         }
+
+        // Pet.cpp:2101: a new pet takes its owner's talent auras; the ones that end with a pet change (Soul Link) end instead.
+        PetAuras.PetAuraService.For(spells).CastPetAuras(pet, current: false);
     }
 }

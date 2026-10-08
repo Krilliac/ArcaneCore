@@ -287,7 +287,7 @@ public sealed partial class SummonService
             }
             _ = PersistPromotedAsync(snapshot);
         }
-        return RestoreCurrentPet(owner, snapshot) is not null;
+        return RestoreCurrentPet(owner, snapshot, current: false) is not null; // vmangos Call Pet: LoadPetFromDB(owner, 0), current = false
     }
 
     private async Task PersistPromotedAsync(PersistentPetSnapshot snapshot)
@@ -367,7 +367,9 @@ public sealed partial class SummonService
         return snapshot;
     }
 
-    public Creature? RestoreCurrentPet(Player owner, PersistentPetSnapshot snapshot)
+    public Creature? RestoreCurrentPet(Player owner, PersistentPetSnapshot snapshot) => RestoreCurrentPet(owner, snapshot, current: true);
+
+    private Creature? RestoreCurrentPet(Player owner, PersistentPetSnapshot snapshot, bool current)
     {
         if (owner.Class != Class.Hunter || !owner.PetGuid.IsEmpty || snapshot.CharacterId != (int)owner.Guid.Low
             || !snapshot.IsCurrent || snapshot.PetNumber == 0 || snapshot.Entry == 0)
@@ -375,7 +377,7 @@ public sealed partial class SummonService
             return null;
         }
 
-        return snapshot.Health == 0 ? null : SpawnCached(owner, snapshot, revive: false);
+        return snapshot.Health == 0 ? null : SpawnCached(owner, snapshot, revive: false, current);
     }
 
     /// <summary>Effect 109: retained corpse first, otherwise the durable current pet; value is a percentage.</summary>
@@ -413,7 +415,7 @@ public sealed partial class SummonService
             owner.Session.Send(WorldOpcode.SmsgPetTameFailure, PetPackets.BuildTameFailure(PetTameFailureReason.NotDead));
             return false;
         }
-        if (SpawnCached(owner, snapshot, revive: true) is not { } cached)
+        if (SpawnCached(owner, snapshot, revive: true, current: true) is not { } cached)
         {
             return false;
         }
@@ -423,7 +425,11 @@ public sealed partial class SummonService
         return true;
     }
 
-    private Creature? SpawnCached(Player owner, PersistentPetSnapshot snapshot, bool revive)
+    /// <summary>
+    /// vmangos Pet::LoadPetFromDB for a cached hunter pet. <paramref name="current"/> is LoadPetFromDB's: true for the pet that was out (login, teleport,
+    /// revive), false for Call Pet; it decides which of the owner's talent pet auras the pet takes (Pet.cpp:357, CastPetAuras(current)).
+    /// </summary>
+    private Creature? SpawnCached(Player owner, PersistentPetSnapshot snapshot, bool revive, bool current = true)
     {
         if (!TryGetSystems(owner, 0, out PetMapSystem? pets, out CreatureMapSystem? creatures)
             || creatures.Content.FindTemplate(snapshot.Entry) is not { } template)
@@ -501,6 +507,11 @@ public sealed partial class SummonService
         owner.Session.Send(WorldOpcode.SmsgPetSpells,
             PetPackets.BuildPetSpells(pet, pet.Summon!.Charm!, listSpells: true, _spells?.GetActiveCooldowns(pet) ?? []));
         RememberPetForSpiritHealer(owner, pet); // Pet::LoadPetFromDB: "save pet for resurrection by spirit healer"
+        if (_spells is { } auraSpells)
+        {
+            PetAuras.PetAuraService.For(auraSpells).CastPetAuras(pet, current); // Pet.cpp:356-357: LearnPetPassives, then CastPetAuras(current)
+        }
+
         return pet;
     }
 }
