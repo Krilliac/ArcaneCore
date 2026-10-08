@@ -56,7 +56,10 @@ fault (3) within `FaultWindowSeconds` (3600 s of world time) disables it for goo
 login counts as a fault, and so does a failed restore at startup (for example a bot saved on a
 map outside `AllowedMaps`): before, that cleared `DesiredEnabled` too. A failed operator
 `.playerbot start` is still reported and not retried. `.playerbot start` or `.playerbot stop` clears the quarantine and the
-fault history; a world restart restores every desired bot, quarantined ones included (the
+fault history, and wins over a retry already scheduled: the retry re-checks under the operation lock that the bot is still
+desired and still in that quarantine, and otherwise ends (`quarantine-cleared`) without logging the bot in. The stored
+`ErrorCode` (echoed by `.playerbot` status as `error=`) has control characters of the exception message replaced by spaces
+and is cut to 128 UTF-16 units without splitting a surrogate pair. A world restart restores every desired bot, quarantined ones included (the
 fault history is per process). Before 2026-10-07 one fault set `DesiredEnabled` off, so a
 single transient bug removed a bot until an operator noticed:
 `docs/integration/playerbot-faults-20261007.md`. Ordinary session closes that are not faults
@@ -162,7 +165,13 @@ that the group is bound to (non-permanent), sends the member through the same tr
 inside, and, when `AllowedMaps` lists map 36, logs the member out inside and back in into the same instance (a managed bot may
 only log in on an allowed map). Both leave through the exit trigger 119 and the group is disbanded. It needs map 36 and triggers
 78 and 119 with their teleports (`map_template`, `areatrigger_template`, `areatrigger_teleport`) and fails at its first step
-naming what is missing. It leaves both scenario bots at level 10 or more. Tests: `DungeonScenarioTests`.
+naming what is missing. If a step fails after the entrance (the member refused, party chat, the exit), the scenario still
+brings every bot that is inside back to where it stood before the entrance and disbands the group (`cleanup: ...` steps, run
+under their own bound even after the run's deadline): otherwise the shared bots would stay saved on map 36, the default
+`AllowedMaps` [0, 1] would refuse their next login (`login-refused`), and every pair scenario would stop working. A bot that is
+offline at that point (a failed relog inside, only tried when `AllowedMaps` lists 36) cannot be moved, and its login there is
+allowed. It leaves both scenario bots at level 10 or more. Tests: `DungeonScenarioTests` (including a dungeon that admits one
+player, so the member is refused inside the run).
 
 ### Running scenarios on a live server
 

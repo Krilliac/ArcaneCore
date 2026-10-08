@@ -54,6 +54,8 @@ public sealed class ScenarioContext
     private readonly ManagedPlayerbotFeature _bots;
     private readonly List<ScenarioBot> _logins = [];
     private readonly Stopwatch _wall = Stopwatch.StartNew();
+    private readonly CancellationToken _runToken;
+    private CancellationToken? _cleanupToken;
     private int _stepIndex;
     private string? _currentStep;
 
@@ -66,7 +68,7 @@ public sealed class ScenarioContext
         Clock = clock;
         Options = options;
         Report = report;
-        CancellationToken = cancellationToken;
+        _runToken = cancellationToken;
     }
 
     public WorldRuntime World { get; }
@@ -79,7 +81,8 @@ public sealed class ScenarioContext
 
     public ScenarioReport Report { get; }
 
-    public CancellationToken CancellationToken { get; }
+    /// <summary>The run's token (its deadline); inside <see cref="CleanupAsync"/> the cleanup's own bounded token.</summary>
+    public CancellationToken CancellationToken => _cleanupToken ?? _runToken;
 
     public IReadOnlyList<ScenarioBot> Bots => _logins;
 
@@ -122,6 +125,32 @@ public sealed class ScenarioContext
         finally
         {
             _currentStep = null;
+        }
+    }
+
+    /// <summary>
+    /// Undo what a failed run would otherwise leave behind (a scenario's <c>finally</c>): runs <paramref name="body"/> as a
+    /// report step even after the run's deadline, under its own bound (twice <see cref="ScenarioRunOptions.StepTimeout"/> of
+    /// wall time, at least 20 s). It never throws; a failure is recorded (the run's first failure stays the reported one).
+    /// </summary>
+    public async Task CleanupAsync(string name, Func<Task> body)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        TimeSpan bound = Options.StepTimeout * 2 > TimeSpan.FromSeconds(20) ? Options.StepTimeout * 2 : TimeSpan.FromSeconds(20);
+        using var cleanup = new CancellationTokenSource(bound);
+        CancellationToken? previous = _cleanupToken;
+        _cleanupToken = cleanup.Token;
+        try
+        {
+            await StepAsync("cleanup: " + name, body).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            // Already recorded by StepAsync (a timeout of the cleanup's own bound as a cancellation).
+        }
+        finally
+        {
+            _cleanupToken = previous;
         }
     }
 

@@ -247,6 +247,79 @@ public sealed class ManagedPlayerbotLifecycleTests
         Assert.Null(await host.World.InvokeAsync(() => host.World.FindOnlinePlayer("Faultout")));
     }
 
+    /// <summary>
+    /// An operator '.playerbot stop' that takes the operation lock between the quarantine retry's snapshot and its start wins: the retry
+    /// must not log the bot back in nor turn DesiredEnabled on again. The window is forced: a second, running bot's checkpoint update is
+    /// held (the checkpoint holds the operation lock), the operator stop queues on the lock, then the checkpoint is let go; the lock is
+    /// FIFO, so the stop runs before the retry that the same checkpoint starts.
+    /// </summary>
+    [Fact]
+    public async Task AnOperatorStop_BetweenTheRetrySnapshotAndItsStart_StaysStopped()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        var log = new CapturingLogger();
+        await using WorldTestHost host = Start(accounts, characters, owners, logger: log, configure: o => { o.FaultBackoffSeconds = 1; o.MaxFaults = 3; });
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await feature.StartupAsync(default);
+        Guid holder = Assert.IsType<Guid>((await feature.CreateAsync("Holdlock", 1, 1)).BotId);
+        Assert.True((await feature.StartAsync(holder.ToString())).Success);
+        Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Stoprace", 1, 1)).BotId);
+        Assert.True((await feature.StartScriptedAsync(id.ToString(), new ThrowingController(1))).Success);
+        await WaitAsync(async () => (await owners.FindAsync(id))?.State == ManagedPlayerbotState.Faulted, "the quarantine", 20);
+        await Task.Delay(1500); // past the backoff and the checkpoint that quarantined it; the next one (5 s) retries
+
+        TaskCompletionSource held = owners.HoldUpdatesOf(holder);
+        await held.Task.WaitAsync(TimeSpan.FromSeconds(15)); // the checkpoint is inside the lock
+        Task<PlayerbotOperationResult> stop = feature.StopAsync("Stoprace");
+        await Task.Delay(200);
+        Assert.False(stop.IsCompleted);
+        owners.ReleaseHeldUpdates();
+        Assert.True((await stop.WaitAsync(TimeSpan.FromSeconds(15))).Success);
+
+        // The retry queued right behind the stop and ran into the window (proof the race was exercised, not missed).
+        await WaitAsync(() => Task.FromResult(log.Entries.Any(e => e.Message.Contains("quarantine retry ended (quarantine-cleared)"))),
+            "the retry refused under the lock", 15);
+        ManagedPlayerbot record = (await owners.FindAsync(id))!;
+        Assert.False(record.DesiredEnabled, $"state {record.State}, error {record.ErrorCode}");
+        Assert.NotEqual(ManagedPlayerbotState.Running, record.State);
+        Assert.Null(await host.World.InvokeAsync(() => host.World.FindOnlinePlayer("Stoprace")));
+    }
+
+    /// <summary>
+    /// The stored error code is echoed to chat by '.playerbot' status: an exception message's control characters (newlines, tabs) are
+    /// replaced by spaces, and the 128-character cut never splits a surrogate pair.
+    /// </summary>
+    [Fact]
+    public async Task AFaultMessage_IsStoredWithoutControlCharacters_AndCutOnACharacterBoundary()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = Start(accounts, characters, owners);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await feature.StartupAsync(default);
+        Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Faultmsg", 1, 1)).BotId);
+        // "quarantined (fault 1/3): action: " is 33 characters; 94 more put the emoji's high surrogate at index 127 (each control
+        // character becomes one space, so the length is kept and the cut falls inside the pair).
+        string message = "first\r\nsecond\t" + new string('x', 80) + "\U0001F600tail";
+        Assert.True((await feature.StartScriptedAsync(id.ToString(), new ThrowingController(1, message))).Success);
+
+        await WaitAsync(async () => (await owners.FindAsync(id))?.State == ManagedPlayerbotState.Faulted, "the fault is recorded", 20);
+
+        string code = (await owners.FindAsync(id))!.ErrorCode!;
+        Assert.StartsWith("quarantined (fault 1/3): action: first  second x", code);
+        Assert.Equal(127, code.Length); // cut before the pair, not through it
+        Assert.True(code.Length <= 128, code);
+        Assert.DoesNotContain(code, char.IsControl);
+        for (int i = 0; i < code.Length; i++)
+        {
+            if (char.IsHighSurrogate(code[i])) Assert.True(i + 1 < code.Length && char.IsLowSurrogate(code[i + 1]), $"lone high surrogate at {i}");
+            else if (char.IsLowSurrogate(code[i])) Assert.True(i > 0 && char.IsHighSurrogate(code[i - 1]), $"lone low surrogate at {i}");
+        }
+    }
+
     [Fact]
     public void FaultOptions_AreBounded()
     {
@@ -301,13 +374,13 @@ public sealed class ManagedPlayerbotLifecycleTests
     }
 
     /// <summary>A scripted controller whose first <paramref name="faults"/> ticks throw (an action fault in the bot's update).</summary>
-    private sealed class ThrowingController(int faults) : IPlayerbotController
+    private sealed class ThrowingController(int faults, string message = "fixture-action-fault") : IPlayerbotController
     {
         private int _remaining = faults;
 
         public void Tick(PlayerbotControllerContext context, uint elapsedMs)
         {
-            if (Interlocked.Decrement(ref _remaining) >= 0) throw new InvalidOperationException("fixture-action-fault");
+            if (Interlocked.Decrement(ref _remaining) >= 0) throw new InvalidOperationException(message);
         }
 
         public void Detached(Guid botId) { }
@@ -393,18 +466,48 @@ public sealed class ManagedPlayerbotLifecycleTests
             return Task.CompletedTask;
         }
 
-        public Task<bool> UpdateAsync(ManagedPlayerbot bot, long expectedRevision, CancellationToken cancellationToken = default)
+        private Guid? _holdBot;
+        private TaskCompletionSource? _held;
+        private TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>The next update of <paramref name="botId"/> waits until <see cref="ReleaseHeldUpdates"/>; the returned task completes when it is waiting.</summary>
+        public TaskCompletionSource HoldUpdatesOf(Guid botId)
+        {
+            _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            _held = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            _holdBot = botId;
+            return _held;
+        }
+
+        public void ReleaseHeldUpdates()
+        {
+            _holdBot = null;
+            _release.TrySetResult();
+        }
+
+        public async Task<bool> UpdateAsync(ManagedPlayerbot bot, long expectedRevision, CancellationToken cancellationToken = default)
+        {
+            if (_holdBot == bot.BotId && _held is { } held)
+            {
+                held.TrySetResult();
+                await _release.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+            }
+
+            return Update(bot, expectedRevision);
+        }
+
+        private bool Update(ManagedPlayerbot bot, long expectedRevision)
         {
             if (FailNextUpdate) { FailNextUpdate = false; throw new InvalidOperationException("fixture-update-failure"); }
             while (_items.TryGetValue(bot.BotId, out ManagedPlayerbot? current))
             {
                 if (current.Revision != expectedRevision || current.AccountId != bot.AccountId
                     || current.CharacterId != bot.CharacterId || current.AccountName != bot.AccountName)
-                    return Task.FromResult(false);
-                if (_items.TryUpdate(bot.BotId, bot, current)) return Task.FromResult(true);
+                    return false;
+                if (_items.TryUpdate(bot.BotId, bot, current)) return true;
             }
 
-            return Task.FromResult(false);
+            return false;
         }
     }
 }

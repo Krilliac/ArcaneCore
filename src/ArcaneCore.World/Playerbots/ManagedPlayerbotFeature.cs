@@ -81,7 +81,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         // A restore that cannot log a bot in is a fault, not an operator decision: the bot stays desired and is retried (quarantine).
         if (_options.RestoreOnStartup)
             foreach (ManagedPlayerbot bot in registered.Where(b => b.DesiredEnabled).Take(_options.MaxBots))
-                await StartCoreAsync(bot.BotId.ToString(), null, cancellationToken, quarantineRetry: true).ConfigureAwait(false);
+                await StartCoreAsync(bot.BotId.ToString(), null, cancellationToken, StartKind.Restore).ConfigureAwait(false);
     }
 
     public IReadOnlyList<PlayerbotStatus> Snapshot() => Volatile.Read(ref _snapshot).ToArray();
@@ -167,7 +167,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
 
     /// <summary>Start a bot; an operator start also clears the bot's quarantine and fault history.</summary>
     public Task<PlayerbotOperationResult> StartAsync(string idOrName, CancellationToken cancellationToken = default)
-        => StartCoreAsync(idOrName, null, cancellationToken, quarantineRetry: false);
+        => StartCoreAsync(idOrName, null, cancellationToken, StartKind.Operator);
 
     /// <summary>
     /// Start a bot in scripted mode: <paramref name="controller"/> replaces <see cref="PlayerbotBrain"/> from the first
@@ -178,7 +178,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(controller);
-        return StartCoreAsync(idOrName, controller, cancellationToken, quarantineRetry: false);
+        return StartCoreAsync(idOrName, controller, cancellationToken, StartKind.Operator);
     }
 
     /// <summary>
@@ -206,9 +206,14 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
     internal WorldSession? FindSession(Guid botId)
         => _active.TryGetValue(botId, out ActiveBot? active) && !active.Paused ? active.Session : null;
 
+    /// <summary>Who starts a bot: an operator (clears the quarantine), the startup restore, or a quarantine retry.</summary>
+    private enum StartKind { Operator, Restore, QuarantineRetry }
+
+    /// <param name="retrying">For <see cref="StartKind.QuarantineRetry"/>: the quarantine entry the retry was scheduled from.</param>
     private async Task<PlayerbotOperationResult> StartCoreAsync(string idOrName, IPlayerbotController? controller,
-        CancellationToken cancellationToken, bool quarantineRetry)
+        CancellationToken cancellationToken, StartKind kind, Quarantine? retrying = null)
     {
+        bool quarantineRetry = kind != StartKind.Operator;
         if (!_options.Enabled || _stopping) return new(false, "playerbots-disabled");
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
         AsyncServiceScope scope = scopes.CreateAsyncScope();
@@ -220,7 +225,12 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             if (_stopping) return new(false, "playerbots-stopping");
             bot = await ResolveAsync(scope.ServiceProvider, idOrName, cancellationToken).ConfigureAwait(false);
             if (bot is null) return new(false, "bot-not-found");
-            if (!quarantineRetry) _quarantine.TryRemove(bot.BotId, out _);
+            if (kind == StartKind.Operator) _quarantine.TryRemove(bot.BotId, out _);
+            // The retry was scheduled outside this lock; an operator stop (or start) that took the lock in between cleared the
+            // quarantine and decided DesiredEnabled. Re-check under the lock so the retry never undoes it.
+            if (kind == StartKind.QuarantineRetry && (!bot.DesiredEnabled
+                || !_quarantine.TryGetValue(bot.BotId, out Quarantine? current) || !ReferenceEquals(current, retrying)))
+                return new(false, "quarantine-cleared", bot.BotId);
             if (_active.TryGetValue(bot.BotId, out ActiveBot? existing))
                 return new(!existing.Paused, existing.Paused ? "stop-incomplete" : "already-running", bot.BotId);
             if (_active.Count >= _options.MaxBots) return new(false, "playerbot-capacity");
@@ -485,7 +495,22 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             return (true, Code($"quarantined (fault {count}/{_options.MaxFaults}): {fault}"));
         }
 
-        static string Code(string text) => text.Length <= 128 ? text : text[..128];
+    }
+
+    /// <summary>
+    /// The stored error code (at most 128 UTF-16 units, the column's width), echoed to chat by '.playerbot' status: control
+    /// characters of an exception message (newlines, tabs) become spaces, and the cut never splits a surrogate pair.
+    /// </summary>
+    internal static string Code(string text)
+    {
+        const int Max = 128;
+        string clean = string.Create(text.Length, text, static (span, source) =>
+        {
+            for (int i = 0; i < source.Length; i++) span[i] = char.IsControl(source[i]) ? ' ' : source[i];
+        });
+        if (clean.Length <= Max) return clean;
+        int cut = char.IsHighSurrogate(clean[Max - 1]) ? Max - 1 : Max;
+        return clean[..cut];
     }
 
     /// <summary>Log the quarantined bots whose backoff ran out back in (checkpoint thread, outside the operation lock).</summary>
@@ -502,7 +527,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             }
 
             PlayerbotOperationResult result;
-            try { result = await StartCoreAsync(botId.ToString(), null, CancellationToken.None, quarantineRetry: true).ConfigureAwait(false); }
+            try { result = await StartCoreAsync(botId.ToString(), null, CancellationToken.None, StartKind.QuarantineRetry, quarantine).ConfigureAwait(false); }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 logger.LogWarning(ex, "Playerbot {BotId} quarantine retry failed", botId);
@@ -519,8 +544,9 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             }
             else if (result.Code != "start-failed")
             {
-                // Gone, refused or already running: nothing left to retry.
-                _quarantine.TryRemove(botId, out _);
+                // Gone, refused, cleared by an operator or already running: nothing left to retry. Only this entry is removed;
+                // a newer one (a fault after an operator start) keeps its own schedule.
+                _quarantine.TryRemove(new KeyValuePair<Guid, Quarantine>(botId, quarantine));
                 logger.LogWarning("Playerbot {BotId} quarantine retry ended ({Code})", botId, result.Code);
             }
         }

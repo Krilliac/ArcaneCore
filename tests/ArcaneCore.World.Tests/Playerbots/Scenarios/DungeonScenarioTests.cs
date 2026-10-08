@@ -55,13 +55,39 @@ public sealed class DungeonScenarioTests
         Assert.True(report.ToString().Contains("map 36 is not a known dungeon", StringComparison.Ordinal), report.ToString());
     }
 
+    /// <summary>
+    /// A step failing inside the instance must not leave the shared scenario bots there: under the default AllowedMaps [0, 1] a bot saved
+    /// on map 36 is refused at its next login ('login-refused'), and every pair scenario (Scnalpha and Scnbeta) would stop working. Here
+    /// the dungeon admits one player (map_template player_limit 1), so the member is refused at the entrance (vmangos
+    /// DungeonMap::CanEnter, TRANSFER_ABORT_MAX_PLAYERS) while the leader is already inside. The run fails at that step, both bots end on
+    /// Eastern Kingdoms with no group, and the next pair scenario runs.
+    /// </summary>
+    [Fact]
+    public async Task Dungeon_AStepFailingInside_BringsBothBotsOut_AndThePairScenariosStillRun()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(DeadminesTestContent.RegisterOnePlayerOnly);
+
+        ScenarioReport report = await world.RunAsync(new DungeonEntryScenario());
+
+        Assert.False(report.Passed, report.ToString());
+        Assert.Equal($"{PlayerbotScenarioCatalog.BotB} takes area trigger {DungeonEntryScenario.EntranceTrigger} to map {DungeonEntryScenario.Deadmines}",
+            report.FailedStep);
+        Assert.Contains(report.Steps, s => s is { Name: $"cleanup: bring {PlayerbotScenarioCatalog.BotA} out of the dungeon", Passed: true });
+        Assert.Contains(report.Steps, s => s is { Name: "cleanup: disband the group", Passed: true });
+        AssertBothBack(world, report);
+        ArcaneCore.World.Social.SocialFeature social = world.Services.GetRequiredService<ArcaneCore.World.Social.SocialFeature>();
+        Assert.Equal(0, await world.Host.World.InvokeAsync(() => social.Context.Groups.Groups.Count));
+
+        await world.RunPassingAsync(new GroupChatScenario());
+    }
+
     // Both bots left through the exit onto Eastern Kingdoms (the scenario also disbanded the group).
-    private static void AssertBothBack(ScenarioTestWorld world)
+    private static void AssertBothBack(ScenarioTestWorld world, ScenarioReport? report = null)
     {
         foreach (string name in new[] { PlayerbotScenarioCatalog.BotA, PlayerbotScenarioCatalog.BotB })
         {
             PlayerbotStatus status = world.Bots.Snapshot().Single(s => s.Name == name);
-            Assert.Equal(0u, status.MapId);
+            Assert.True(status.MapId == 0u, $"{name} is on map {status.MapId}\n{report}");
         }
     }
 }
@@ -73,7 +99,10 @@ public sealed class DungeonScenarioTests
 /// </summary>
 internal static class DeadminesTestContent
 {
-    public static void Register(IServiceCollection services) => services.AddSingleton<IMapDataStore>(new Maps());
+    public static void Register(IServiceCollection services) => services.AddSingleton<IMapDataStore>(new Maps(playerLimit: 10));
+
+    /// <summary>The same content with a dungeon that admits one player: the second bot is refused at the entrance.</summary>
+    public static void RegisterOnePlayerOnly(IServiceCollection services) => services.AddSingleton<IMapDataStore>(new Maps(playerLimit: 1));
 
     /// <summary>A world without the dungeon: only the two continents, no triggers.</summary>
     public static void RegisterContinentsOnly(IServiceCollection services) => services.AddSingleton<IMapDataStore>(new ContinentsOnly());
@@ -90,12 +119,12 @@ internal static class DeadminesTestContent
             => Task.FromResult(new MapContent(Continents, [], [], [], []));
     }
 
-    private sealed class Maps : IMapDataStore
+    private sealed class Maps(uint playerLimit) : IMapDataStore
     {
         public Task<MapContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new MapContent(
             [
                 .. Continents,
-                new MapTemplate(DungeonEntryScenario.Deadmines, 0, MapType.Instance, 1581, 10, 0, 0, -11208.4f, 1672.3f, "The Deadmines", ""),
+                new MapTemplate(DungeonEntryScenario.Deadmines, 0, MapType.Instance, 1581, playerLimit, 0, 0, -11208.4f, 1672.3f, "The Deadmines", ""),
             ],
             [],
             [

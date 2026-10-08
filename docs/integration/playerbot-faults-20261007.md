@@ -66,6 +66,25 @@ desired), `AQuarantinedBot_LogsInAgainAfterTheBackoff_Autonomous`, `TheLastAllow
 `FaultOptions_AreBounded`; `PlayerbotRecoveryTests.GhostAtCorpseAfterDelay_ReclaimsThroughOrdinaryHandler` now expects the bot to wait
 silently within the delay.
 
+## Review fixes (2026-10-07, second pass)
+
+5. **An operator stop wins over a scheduled retry.** `RetryQuarantinedAsync` picks the due bots outside the operation lock; an operator
+   `.playerbot stop` that took the lock in between cleared the quarantine and stored `DesiredEnabled = 0`, and the waiting retry then
+   started the bot anyway and stored `DesiredEnabled = 1`. The retry now re-checks under the lock (the bot is still desired and still in
+   the same quarantine entry) and otherwise ends with `quarantine-cleared`; it removes only its own entry. The startup restore keeps its
+   own start kind. Test: `ManagedPlayerbotLifecycleTests.AnOperatorStop_BetweenTheRetrySnapshotAndItsStart_StaysStopped` forces the
+   window (a second bot's checkpoint update is held inside the lock, the stop queues, the lock is FIFO) and checks the log shows the
+   refused retry. RED: the bot was `Running` again (`D:/ArcaneCore-lanes/_logs/w3-bot-faults/rework/red.log`).
+6. **ErrorCode text.** The stored code now carries exception text, echoed to chat by `.playerbot` status: control characters become
+   spaces and the 128-unit cut never splits a surrogate pair (`ManagedPlayerbotFeature.Code`). Test:
+   `AFaultMessage_IsStoredWithoutControlCharacters_AndCutOnACharacterBoundary` (RED: the CR LF of the message stored as is).
+7. **The `dungeon` scenario cleans up after a failure inside.** Before, a failed step after the entrance released `Scnalpha` and
+   `Scnbeta` saved on map 36 with the group bind in place; under the default `AllowedMaps` their next login was refused, which broke
+   every pair scenario. The scenario now brings every bot inside back to its pre-entrance position and disbands the group in a
+   `finally`, as `cleanup: ...` report steps under their own bound (`ScenarioContext.CleanupAsync`). Test:
+   `DungeonScenarioTests.Dungeon_AStepFailingInside_BringsBothBotsOut_AndThePairScenariosStillRun` (a one-player dungeon refuses the
+   member; RED: `Scnalpha is on map 36`).
+
 ## Live repair
 
 The two rows still have `DesiredEnabled = 0` from the incident. Once this build runs, an Administrator brings them back with
