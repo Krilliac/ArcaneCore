@@ -71,11 +71,13 @@ internal static class ClassScriptScenarioContent
         new SpellTemplateRow
         {
             Id = SealDamage, SpellName = "Seal of Righteousness", School = 1, RangeIndex = 4, DmgClass = 1,
+            AttributesEx3 = (uint)SpellAttributesEx3Combat.AlwaysHit,
             Effect1 = 2, EffectBaseDice1 = 1, EffectDieSides1 = 1, EffectImplicitTargetA1 = 6,
         },
         new SpellTemplateRow
         {
             Id = JudgementOfRighteousness, SpellName = "Judgement of Righteousness", School = 1, RangeIndex = 4, DmgClass = 1, BaseLevel = 1,
+            AttributesEx3 = (uint)SpellAttributesEx3Combat.AlwaysHit,
             SpellFamilyName = PaladinSpells.Family, SpellFamilyFlags = 0x400,
             Effect1 = 2, EffectBaseDice1 = 1, EffectDieSides1 = 1, EffectBasePoints1 = JudgementDamage - 1, EffectImplicitTargetA1 = 6,
         },

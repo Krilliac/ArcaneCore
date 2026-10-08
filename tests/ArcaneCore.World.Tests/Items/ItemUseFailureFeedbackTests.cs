@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
@@ -55,8 +56,12 @@ public sealed class ItemUseFailureFeedbackTests
         await using WorldTestHost host = FailureItemContent.Start(content);
         await using WorldTestClient client = await host.EnterWorldAsync("ITEMPEACE", "Itempeace");
         await client.CollectAsync();
-        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Itempeace")!.UnitFlags |= UnitFlags.InCombat);
         var item = await FailureItemContent.PositionAsync(host, "Itempeace", 99025);
+        await host.OnWorldAsync(() =>
+        {
+            var player = host.World.FindOnlinePlayer("Itempeace")!;
+            player.Map!.Combat.SetInCombatState(player, 60_000);
+        });
 
         await client.SendAsync(WorldOpcode.CmsgUseItem, [item.Bag, item.Slot, 0, 0, 0]);
         byte[] failure = await client.ReadUntilAsync(WorldOpcode.SmsgInventoryChangeFailure);

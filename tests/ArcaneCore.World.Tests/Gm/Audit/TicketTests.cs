@@ -295,7 +295,7 @@ public sealed class TicketTests
 
         // A refused delete deletes nothing and does not say it did: the client gets the ticket's real state.
         await player.SendAsync(WorldOpcode.CmsgGmticketDeleteticket, []);
-        List<(WorldOpcode Opcode, byte[] Payload)> answer = await player.CollectAsync();
+        List<(WorldOpcode Opcode, byte[] Payload)> answer = await player.CollectFromAsync(WorldOpcode.SmsgGmticketGetticket);
         Assert.DoesNotContain(answer, p => p.Opcode == WorldOpcode.SmsgGmticketDeleteticket);
         Assert.Equal(GmTicketHandlers.StatusHasTicket, U32(Assert.Single(answer, p => p.Opcode == WorldOpcode.SmsgGmticketGetticket).Payload));
         Assert.Contains(answer, p => p.Opcode == WorldOpcode.SmsgMessagechat && ChatMessage.Parse(p.Payload).Text == GmAuditStrings.TicketTooFast);

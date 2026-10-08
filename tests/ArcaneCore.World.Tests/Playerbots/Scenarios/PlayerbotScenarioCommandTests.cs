@@ -59,10 +59,12 @@ public sealed class PlayerbotScenarioCommandTests
         // The live command runs on the real clock; "smoke" needs no game time, so it completes on this manual-clock world.
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".playerbot scenario run smoke");
         Assert.Equal("Playerbot scenario smoke started.", (await admin.ReadChatAsync()).Text);
-        string headline = (await admin.ReadChatAsync()).Text;
+        // The runner has a 120 s wall-clock limit; its report can arrive well after a normal 10 s packet read on a loaded host.
+        TimeSpan reportTimeout = TimeSpan.FromSeconds(150);
+        string headline = (await admin.ReadChatAsync(reportTimeout)).Text;
         if (headline == "scenario smoke")
         {
-            headline = (await admin.ReadChatAsync()).Text; // the admin stands beside the bot and hears its /say too
+            headline = (await admin.ReadChatAsync(reportTimeout)).Text; // the admin stands beside the bot and hears its /say too
         }
 
         Assert.StartsWith("SCENARIO smoke PASS steps=2", headline);

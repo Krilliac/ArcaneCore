@@ -29,7 +29,7 @@ public sealed class ItemEquipSpellWorldTests
         SpellContent baseContent = SpellTestServices.Content();
         var spell = new SpellTemplateRow { Id = EquipSpell, SpellName = "Equip Aura", RangeIndex = 1, Effect1 = 6,
             EffectBasePoints1 = 0, EffectBaseDice1 = 1, EffectDieSides1 = 1, EffectImplicitTargetA1 = 1,
-            EffectApplyAuraName1 = (uint)AuraType.Dummy, StartRecoveryCategory = 133, StartRecoveryTime = 1500 };
+            EffectApplyAuraName1 = (uint)AuraType.Dummy, DurationIndex = 21, StartRecoveryCategory = 133, StartRecoveryTime = 1500 };
         WorldTestHost host;
         using (items.Use())
         {
@@ -41,14 +41,17 @@ public sealed class ItemEquipSpellWorldTests
         await using (WorldTestClient client = await host.EnterWorldAsync("EQUIPSPELL", "Equipspell"))
         {
             ulong guid = await host.PlayerStateAsync("Equipspell", p => p.Inventory.Equipped.Single().Item.Guid.Value);
-            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Equipspell")!.Inventory.Equipped.Count() == 1, "equipped");
+            SpellFeature spells = host.WorldServices.GetRequiredService<SpellFeature>();
+            int AuraCount() => spells.System.GetAuras(host.World.FindOnlinePlayer("Equipspell")!)
+                .Count(h => h.Spell.Id == EquipSpell && h.ItemGuid.Value == guid);
+            await host.WaitForWorldAsync(() => AuraCount() == 1, "initial equip aura");
             Assert.Equal(guid, await host.PlayerStateAsync("Equipspell", p => p.Inventory.Equipped.Single().Item.Guid.Value));
-            Assert.Equal(1, await host.PlayerStateAsync("Equipspell", p => host.WorldServices.GetRequiredService<SpellFeature>().System.GetAuras(p).Count(h => h.Spell.Id == EquipSpell && h.ItemGuid.Value == guid)));
+            Assert.Equal(1, await host.OnWorldAsync(AuraCount));
 
             await client.SendAsync(WorldOpcode.CmsgSwapInvItem, [InventorySlots.Trinket1, InventorySlots.ItemStart]);
-            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Equipspell")!.Inventory.Equipped.Count() == 0, "unequipped");
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Equipspell")!.Inventory.Equipped.Count() == 0 && AuraCount() == 0, "unequipped without aura");
             await client.SendAsync(WorldOpcode.CmsgAutoequipItem, [InventorySlots.Bag0, InventorySlots.ItemStart]);
-            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Equipspell")!.Inventory.Equipped.Count() == 1, "reequipped");
+            await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Equipspell")!.Inventory.Equipped.Count() == 1 && AuraCount() == 1, "reequipped with one aura");
 
             await client.SendAsync(WorldOpcode.CmsgLogoutRequest, []);
             await client.ReadUntilAsync(WorldOpcode.SmsgLogoutComplete);
@@ -56,7 +59,8 @@ public sealed class ItemEquipSpellWorldTests
             Account account = (await host.Accounts.FindByUsernameAsync("EQUIPSPELL"))!;
             CharacterRecord character = (await host.Characters.GetByAccountAsync(account.Id)).Single();
             await client.LoginAsync((ulong)character.Id);
-            Assert.Equal(1, await host.PlayerStateAsync("Equipspell", p => host.WorldServices.GetRequiredService<SpellFeature>().System.GetAuras(p).Count(h => h.Spell.Id == EquipSpell && h.ItemGuid.Value == guid)));
+            await host.WaitForWorldAsync(() => AuraCount() == 1, "relogged with one equip aura");
+            Assert.Equal(1, await host.OnWorldAsync(AuraCount));
         }
     }
 

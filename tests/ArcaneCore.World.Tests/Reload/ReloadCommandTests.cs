@@ -80,6 +80,7 @@ public sealed class ReloadCommandTests
     {
         await using var host = WorldTestHost.Start();
         await using WorldTestClient admin = await AdministratorAsync(host);
+        int originalTick = host.World.Options.TickIntervalMs;
         host.WorldServices.GetRequiredService<ConfigurationManager>().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["World:Motd"] = "Reloaded@live",
@@ -91,9 +92,9 @@ public sealed class ReloadCommandTests
 
         Assert.Equal("Re-loading config...", (await admin.ReadChatAsync()).Text);
         Assert.StartsWith("config reloaded:", (await admin.ReadChatAsync()).Text);
-        Assert.Equal("World:TickIntervalMs option can't be changed at reload, using current value (5).", (await admin.ReadChatAsync()).Text);
+        Assert.Equal($"World:TickIntervalMs option can't be changed at reload, using current value ({originalTick}).", (await admin.ReadChatAsync()).Text);
         Assert.Equal("Reloaded@live", host.World.Options.Motd);
-        Assert.Equal(5, host.World.Options.TickIntervalMs);
+        Assert.Equal(originalTick, host.World.Options.TickIntervalMs);
     }
 
     [Fact]

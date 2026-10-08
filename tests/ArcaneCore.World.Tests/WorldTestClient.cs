@@ -205,10 +205,11 @@ internal sealed class WorldTestClient : IAsyncDisposable
     }
 
     /// <summary>Read until the next SMSG_MESSAGECHAT and decode it.</summary>
-    public async Task<ChatMessage> ReadChatAsync() => ChatMessage.Parse(await ReadUntilAsync(WorldOpcode.SmsgMessagechat));
+    public async Task<ChatMessage> ReadChatAsync(TimeSpan? timeout = null)
+        => ChatMessage.Parse(await ReadUntilAsync(WorldOpcode.SmsgMessagechat, timeout));
 
     /// <summary>Read packets until one with <paramref name="opcode"/> arrives; fails on timeout.</summary>
-    public async Task<byte[]> ReadUntilAsync(WorldOpcode opcode)
+    public async Task<byte[]> ReadUntilAsync(WorldOpcode opcode, TimeSpan? timeout = null)
     {
         List<(WorldOpcode Op, byte[] Payload)> skipped = [];
         while (true)
@@ -216,7 +217,7 @@ internal sealed class WorldTestClient : IAsyncDisposable
             (WorldOpcode op, byte[] payload) packet;
             try
             {
-                packet = await ReadAsync();
+                packet = await ReadAsync(timeout);
             }
             catch (OperationCanceledException ex)
             {
@@ -242,10 +243,10 @@ internal sealed class WorldTestClient : IAsyncDisposable
         await _stream.WriteAsync(frame);
     }
 
-    public async Task<(WorldOpcode Opcode, byte[] Payload)> ReadAsync()
+    public async Task<(WorldOpcode Opcode, byte[] Payload)> ReadAsync(TimeSpan? readTimeout = null)
     {
         // Bounded so a test expecting a packet the server never sends fails instead of hanging.
-        using var timeout = new CancellationTokenSource(ReadTimeout);
+        using var timeout = new CancellationTokenSource(readTimeout ?? ReadTimeout);
         byte[] header = new byte[WorldHeaderCrypt.OutgoingHeaderLength];
         await _stream.ReadExactlyAsync(header, timeout.Token);
         _crypt.DecryptHeader(header);

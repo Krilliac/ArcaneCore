@@ -75,7 +75,13 @@ public sealed class PetResurrectionWorldTests
             writer.WriteUInt32(Revive);
             SpellCastTargets.ForUnit(petGuid).Write(writer);
             await client.SendAsync(WorldOpcode.CmsgCastSpell, writer.ToArray());
-            var packets = await client.CollectAsync();
+            var packets = new List<(WorldOpcode Opcode, byte[] Payload)>();
+            while (!packets.Any(p => p.Opcode == WorldOpcode.SmsgCastResult)
+                || !packets.Any(p => p.Opcode == WorldOpcode.MsgMoveTeleport))
+            {
+                packets.Add(await client.ReadAsync());
+            }
+            packets.AddRange(await client.CollectAsync());
             Assert.Contains(packets, p => p.Opcode == WorldOpcode.SmsgCastResult);
             Assert.DoesNotContain(packets, p => p.Opcode == WorldOpcode.SmsgResurrectRequest);
             Assert.Contains(packets, p => p.Opcode == WorldOpcode.MsgMoveTeleport);

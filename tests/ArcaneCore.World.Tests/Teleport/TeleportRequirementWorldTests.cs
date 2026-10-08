@@ -45,7 +45,7 @@ public sealed class TeleportRequirementWorldTests
         await host.PlaceAsync("Tpkey", InsideX, InsideY, InsideZ);
 
         await player.SendAsync(WorldOpcode.CmsgAreatrigger, AreaTrigger(KeyTrigger));
-        List<(WorldOpcode Opcode, byte[] Payload)> refused = [.. await player.CollectAsync(Quiet)];
+        List<(WorldOpcode Opcode, byte[] Payload)> refused = await player.CollectFromAsync(WorldOpcode.SmsgAreaTriggerMessage, Quiet);
 
         Assert.Equal("You must have item Test Attunement Key to enter.", MessageText(refused.Single(p => p.Opcode == WorldOpcode.SmsgAreaTriggerMessage).Payload));
         Assert.DoesNotContain(refused, p => p.Opcode == WorldOpcode.SmsgTransferPending);

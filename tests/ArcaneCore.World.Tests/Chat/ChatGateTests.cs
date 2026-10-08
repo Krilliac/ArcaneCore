@@ -54,6 +54,7 @@ public sealed class ChatGateTests
                 var spell = new SpellInfo
                 {
                     Id = LanguageAuraSpell, RangeIndex = SpellConstants.RangeIndexSelfOnly,
+                    Duration = new SpellDuration(-1, 0, -1),
                     Effects = [new SpellEffectInfo
                     {
                         Effect = SpellEffectName.ApplyAura, AuraType = AuraType.ModLanguage, MiscValue = (int)Language.Demonic,
