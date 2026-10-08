@@ -198,14 +198,22 @@ semantics are cmangos'. classic-db z2815 has 141 action-53 rows reaching 109 rel
   (MotionMaster::PauseWaypoints(0)/UnpauseWaypoints: the waypoint generator stops and later sets off for the same node), 36 SET_FACING
   (face the target, or the reset facing with datalong), 20 MOVEMENT (out of combat only; 0 idle, 1 random within datalong2 yd around the
   spawn point or, with COMMAND_ADDITIONAL, where it stands, running with a non-zero dataint, 2 waypoint path datalong2 of the entry, 0 the
-  default path; the new generator replaces the default movement), 35 SEND_AI_EVENT (event datalong; with a radius datalong2 to every
-  living creature around for the custom events A-F, to the creatures that may assist the sender for the others; without one to a
-  creature target, or to the source itself for a player target), 45 START_RELAY_SCRIPT.
+  default path; idle and waypoint replace the default movement, random replaces it only with dataint2 bit 0x1 and is otherwise pushed over
+  it, which resumes when the stack is cleared, as MoveRandomAroundPoint mutates (ScriptMgr.cpp:2334-2350); a waypoint with datalong3 bit
+  0x1, pass the target, is skipped only without a target, :2318-2330), 35 SEND_AI_EVENT (event datalong; with a radius datalong2 to every
+  living creature around for the custom events A-F, to the creatures that may assist the sender, in its line of sight, for the others,
+  and for AI_EVENT_CALL_ASSISTANCE (0) each receiver then answers the call and attacks the invoker, CreatureAI::HandleAssistanceCall,
+  AI/BaseAI/CreatureAI.cpp:224-233; without a radius to a creature target, or to the source itself for a player target), 45
+  START_RELAY_SCRIPT.
+- **Steps without a source**: as cmangos HandleScriptStep (ScriptMgr.cpp:1704-1764) builds its pairs from the sources, a step whose
+  source list is empty (for example REVERSE_DIRECTION with no target) runs nothing. Before this wave such a step ran with a null source
+  and its target, so a command that only needed the target acted; it no longer does.
 - **Not carried out** (skipped and reported once per relay id): every other command, the data flags BUDDY_IS_PET, BUDDY_BY_POOL,
   BUDDY_BY_SPAWN_GROUP and BUDDY_BY_STRING_ID, a player as the speaker, emoter, mover or caster, the MOVE_TO teleport, speed and forced
   movement, DESPAWN_SELF of a database spawn (no forced despawn with a respawn timer exists), TERMINATE_SCRIPT by pool and its waypoint
   pause adjustment, TEMP_SPAWN_CREATURE's spawn data template (dataint4), ACTIVATE_OBJECT of the player-only object types (chests,
-  goobers, quest givers, chairs), MOVEMENT's `waypoint_path` origin and passed target (datalong3 bits 2 and 1), its random expiry timer,
+  goobers, quest givers, chairs), MOVEMENT's `waypoint_path` origin (datalong3 bit 0x2) and the passed target itself (the path runs, but
+  no waypoint script sees the target), its random expiry timer,
   formations and the path, linear and fall types, and SEND_AI_EVENT's delayed form (relays have no delay argument). The commands the 109 relays reached
   from EventAI use most: MOVE_TO 99, TALK 74, EMOTE 53, TERMINATE_SCRIPT 27, SET_ACTIVEOBJECT 24, SET_FACING 20, PAUSE_WAYPOINTS 16,
   ACTIVATE_OBJECT 14, SET_RUN 14, MODIFY_NPC_FLAGS 14, TEMP_SPAWN_CREATURE 13, MOVEMENT 11, STAND_STATE 11.

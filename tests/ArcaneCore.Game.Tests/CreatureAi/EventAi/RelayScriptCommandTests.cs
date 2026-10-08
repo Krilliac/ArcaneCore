@@ -37,8 +37,8 @@ public sealed class RelayScriptCommandTests
     private const uint FlagBuddyByGo = 0x400;
 
     private static RelayScriptStep Step(uint delay, uint command, uint dataLong = 0, uint dataLong2 = 0, uint dataLong3 = 0, uint flags = 0,
-        uint buddy = 0, uint radius = 0, int dataInt = 0, float x = 0, float y = 0, float z = 0, float o = 0)
-        => new(Relay, delay, 0, command, dataLong, dataLong2, dataLong3, buddy, radius, flags, dataInt, 0, 0, 0, 0, x, y, z, o, 0, 0);
+        uint buddy = 0, uint radius = 0, int dataInt = 0, float x = 0, float y = 0, float z = 0, float o = 0, int dataInt2 = 0)
+        => new(Relay, delay, 0, command, dataLong, dataLong2, dataLong3, buddy, radius, flags, dataInt, dataInt2, 0, 0, 0, x, y, z, o, 0, 0);
 
     private static CreatureAiEvent WaveRow()
         => new()
@@ -75,7 +75,8 @@ public sealed class RelayScriptCommandTests
     }
 
     private static Town Start(IEnumerable<RelayScriptStep> steps, IEnumerable<CreatureSpawn>? more = null, IEnumerable<CreatureAiEvent>? rows = null,
-        bool patrol = false, IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryPaths = null, IEnumerable<GameObjectSpawn>? objects = null)
+        bool patrol = false, IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? entryPaths = null, IEnumerable<GameObjectSpawn>? objects = null,
+        bool fightingBuddy = false)
     {
         var ai = new CreatureAiContent([WaveRow(), .. rows ?? []], [], new BroadcastTextCatalog([]))
         {
@@ -84,7 +85,7 @@ public sealed class RelayScriptCommandTests
         CreatureContent content = new(
             [
                 Template() with { AIName = CreatureAiFactory.EventAIName, Civilian = true },
-                Template(BuddyEntry) with { AIName = CreatureAiFactory.EventAIName, Civilian = true },
+                Template(BuddyEntry) with { AIName = CreatureAiFactory.EventAIName, Civilian = !fightingBuddy, ExtraFlags = fightingBuddy ? Creature.ExtraFlagNoAggro : 0 },
                 Template(FarEntry) with { AIName = CreatureAiFactory.EventAIName, Civilian = true },
             ],
             [Spawn(1, WolfEntry, 0, 0, movementType: (byte)(patrol ? 2 : 0)), .. more ?? []],
@@ -202,7 +203,7 @@ public sealed class RelayScriptCommandTests
 
         t.Wave();
 
-        Assert.Equal(MovementGeneratorType.Random, t.Elly.Motion.DefaultType);
+        Assert.Equal(MovementGeneratorType.Random, t.Elly.Motion.CurrentType);
         bool moved = false;
         for (int i = 0; i < 200; i++)
         {
@@ -212,6 +213,37 @@ public sealed class RelayScriptCommandTests
         }
 
         Assert.True(moved);
+    }
+
+    [Fact]
+    public void Movement_Random_IsPushedOverTheDefault_UnlessDataInt2AsksForTheMainGenerator()
+    {
+        // cmangos ScriptMgr.cpp:2334-2350: RANDOM_MOTION_TYPE clears the motion master (Clear(false, true)) only with dataint2 & 0x1 ("make it main
+        // movegen"); otherwise MoveRandomAroundPoint mutates a wander generator on top and the patrol stays beneath it.
+        using Town pushed = Start([Step(0, 20, dataLong: 1, dataLong2: 20, flags: FlagReverse)], patrol: true);
+        pushed.Wave();
+        Assert.Equal(MovementGeneratorType.Random, pushed.Elly.Motion.CurrentType);
+        Assert.Equal(MovementGeneratorType.Waypoint, pushed.Elly.Motion.DefaultType);
+
+        using Town main = Start([Step(0, 20, dataLong: 1, dataLong2: 20, flags: FlagReverse, dataInt2: 1)], patrol: true);
+        main.Wave();
+        Assert.Equal(MovementGeneratorType.Random, main.Elly.Motion.DefaultType);
+        Assert.Empty(main.Elly.Motion.ActiveTypes);
+    }
+
+    [Fact]
+    public void Movement_Waypoint_WithThePassTargetFlag_RunsWithATarget_AndIsSkippedOnlyWithout()
+    {
+        // cmangos ScriptMgr.cpp:2318-2330: datalong3 & 0x1 hands the target to the path and skips the command only when there is no target.
+        (uint, uint, CreatureWaypoint)[] path = [(WolfEntry, 1u, new CreatureWaypoint(1, 15, 0, 83.5f, 100, 0)), (WolfEntry, 1u, new CreatureWaypoint(2, 15, 15, 83.5f, 100, 0))];
+        using Town withTarget = Start([Step(0, 20, dataLong: 2, dataLong2: 1, dataLong3: 1, flags: FlagReverse)], entryPaths: path);
+        withTarget.Wave();
+        Assert.Equal(MovementGeneratorType.Waypoint, withTarget.Elly.Motion.DefaultType);
+
+        using Town noTarget = Start([Step(0, 20, dataLong: 2, dataLong2: 1, dataLong3: 1)], entryPaths: path);
+        Assert.True(noTarget.System.StartRelayScript(Relay, noTarget.Elly, target: null));
+        Run(noTarget.World, 100);
+        Assert.Equal(MovementGeneratorType.Idle, noTarget.Elly.Motion.DefaultType);
     }
 
     [Fact]
@@ -257,6 +289,22 @@ public sealed class RelayScriptCommandTests
         using Town self = Start([Step(0, 35, dataLong: 6, flags: FlagReverse)], rows: [ReceiveRow(2, WolfEntry, 6, 0, 7021), ReceiveRow(3, WolfEntry, 8, 0, 7022)]);
         self.Wave();
         Assert.Equal([7021u], self.Spells.Casts.Select(c => c.Spell));
+    }
+
+    [Fact]
+    public void SendAiEvent_CallAssistance_AlsoMakesTheHelpersAttackTheInvoker()
+    {
+        // cmangos UnitAI::SendAIEventAround (AI/BaseAI/UnitAI.cpp:643-650): after ReceiveAIEvent, AI_EVENT_CALL_ASSISTANCE (0) runs
+        // CreatureAI::HandleAssistanceCall (AI/BaseAI/CreatureAI.cpp:224-233): a helper that may assist the sender attacks the invoker.
+        using Town t = Start([Step(0, 35, dataLong: 0, dataLong2: 30, flags: FlagReverse)], more: [Spawn(2, BuddyEntry, 5, 0)], fightingBuddy: true);
+        Creature buddy = Assert.Single(t.OfEntry(BuddyEntry));
+        Run(t.World, 200);
+        Assert.Null(buddy.Combat.Victim);
+
+        t.Wave();
+        Run(t.World, 100);
+
+        Assert.Same(t.Player, buddy.Combat.Victim);
     }
 
     [Fact]

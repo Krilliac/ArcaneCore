@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -114,9 +115,12 @@ public sealed partial class CreatureMapSystem
     /// <c>datalong2</c> yards (the spawn's own wander when 0) around the spawn point, or around where it stands with COMMAND_ADDITIONAL, walking
     /// unless <c>dataint</c> is non-zero (MoveRandomAroundPoint's walk argument is textId[0] == 0); 2 walks waypoint path <c>datalong2</c> (0: the
     /// creature's default path, its spawn's <c>creature_movement</c> else the entry's path 0; otherwise path <c>datalong2</c> of the entry's
-    /// <c>creature_movement_template</c>). The new generator replaces the creature's default movement (Clear(false, true) then the new one).
-    /// Paths from <c>waypoint_path</c> (<c>datalong3</c> bit 2), a passed target (bit 1), the random expiry timer, forced movement, the
-    /// formation update and the path, linear and fall movement types are not supported and are reported.
+    /// <c>creature_movement_template</c>). Idle and waypoint replace the creature's default movement (Clear(false, true) then the new one); random
+    /// does so only with <c>dataint2</c> bit 0x1 ("make it main movegen"), otherwise it is pushed over the default, which resumes when the stack
+    /// is cleared (cmangos ScriptMgr.cpp:2334-2350, MoveRandomAroundPoint mutates). A waypoint with <c>datalong3</c> bit 0x1 (pass the target) is
+    /// skipped only when there is no target (ScriptMgr.cpp:2318-2330); the target itself is not handed to the path (no waypoint scripts here).
+    /// Paths from <c>waypoint_path</c> (<c>datalong3</c> bit 0x2), the random expiry timer, forced movement, the formation update and the path,
+    /// linear and fall movement types are not supported and are reported.
     /// </summary>
     private void RelayMovement(RelayScriptStep step, WorldObject? source, WorldObject? target)
     {
@@ -144,24 +148,35 @@ public sealed partial class CreatureMapSystem
                     ReportRelay(step, "MOVEMENT random with an expiry timer");
                 }
 
-                if ((step.DataInt2 & 0x1) != 0)
-                {
-                    StopMoving(mover);
-                }
-
                 bool around = (step.DataFlags & FlagCommandAdditional) != 0;
                 float? wander = step.DataLong2 != 0 ? step.DataLong2 : around ? 0f : null;
                 CreatureHome? center = around ? new CreatureHome(mover.X, mover.Y, mover.Z, mover.Orientation) : null;
-                mover.Motion.Initialize(new RandomMovementGenerator(wander, center, run: step.DataInt != 0), this, start: true);
+                var random = new RandomMovementGenerator(wander, center, run: step.DataInt != 0);
+                if ((step.DataInt2 & 0x1) != 0)
+                {
+                    // "make it main movegen": StopMoving, Clear(false, true), then the wander is the only generator.
+                    StopMoving(mover);
+                    mover.Motion.Initialize(random, this, start: true);
+                }
+                else
+                {
+                    mover.Motion.MoveRandom(random);
+                }
+
                 break;
             }
 
             case 2:
             {
-                if ((step.DataLong3 & 0x3) != 0)
+                if ((step.DataLong3 & 0x2) != 0)
                 {
-                    ReportRelay(step, $"MOVEMENT waypoint with datalong3 {step.DataLong3} (waypoint_path or a passed target)");
+                    ReportRelay(step, $"MOVEMENT waypoint with datalong3 {step.DataLong3} (a waypoint_path path)");
                     return;
+                }
+
+                if ((step.DataLong3 & 0x1) != 0 && target is null)
+                {
+                    return; // "pass target true and target nullptr: skipping"
                 }
 
                 IReadOnlyList<CreatureWaypoint> path = step.DataLong2 == 0
@@ -214,7 +229,8 @@ public sealed partial class CreatureMapSystem
     /// cmangos UnitAI::SendAIEventAround without delay (AI/BaseAI/UnitAI.cpp:615-654): the custom events A to F (5, 6, 8-11) and the events
     /// above 100 reach every living creature within <paramref name="radius"/> (IsWithinDistInMap: 3D, bounding radii added), the sender
     /// included; the other events reach the creatures that may assist the sender against the invoker (AnyAssistCreatureInRangeCheck, here
-    /// <see cref="CanAssist"/>). Returns how many creatures received it.
+    /// <see cref="CanAssist"/>, which includes the line-of-sight check of AnyAssistCreatureInRangeCheck, GridNotifiers.cpp:265-282); for
+    /// AI_EVENT_CALL_ASSISTANCE (0) each receiver also answers the call (<see cref="HandleAssistanceCall"/>). Returns how many creatures received it.
     /// </summary>
     public int SendAiEventAround(Creature sender, uint eventType, Unit? invoker, float radius)
     {
@@ -230,9 +246,32 @@ public sealed partial class CreatureMapSystem
         foreach (Creature receiver in receivers)
         {
             receiver.ReceiveAiEvent(eventType, sender, invoker);
+            if (eventType == AiEventCallAssistance)
+            {
+                HandleAssistanceCall(receiver, sender, invoker);
+            }
         }
 
         return receivers.Length;
+    }
+
+    /// <summary>cmangos AI_EVENT_CALL_ASSISTANCE: the AI event type that also runs <see cref="HandleAssistanceCall"/> on each receiver.</summary>
+    public const uint AiEventCallAssistance = 0;
+
+    /// <summary>
+    /// cmangos CreatureAI::HandleAssistanceCall (AI/BaseAI/CreatureAI.cpp:224-233): a receiver that is not a critter and may assist the sender
+    /// against the invoker stops calling assistance itself (SetNoCallAssistance) and answers the call (OnCallForHelp: AttackStart).
+    /// </summary>
+    private void HandleAssistanceCall(Creature receiver, Creature sender, Unit? invoker)
+    {
+        if (invoker is null || receiver.Template.CreatureType == CreatureAiFactory.CritterType || !receiver.IsAlive
+            || !_ai.Hostility.CanAssist(receiver, sender) || !Map.Combat.Hooks.CanAttack(receiver, invoker))
+        {
+            return;
+        }
+
+        receiver.CalledAssistance = true;
+        AttackStart(receiver, invoker);
     }
 
     private static bool WithinDistInMap(WorldObject a, WorldObject b, float range)
