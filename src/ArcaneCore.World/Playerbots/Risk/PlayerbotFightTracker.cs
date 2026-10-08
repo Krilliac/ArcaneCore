@@ -56,7 +56,9 @@ internal sealed class PlayerbotFightTracker
     }
 
     /// <summary>One sample of the fight: the bot's health and each enemy's health now.</summary>
-    internal PlayerbotFightFacts Observe(Player player, IReadOnlyList<Creature> enemies, Creature target, uint nowMs)
+    /// <param name="priorIn">The damage per second the enemies are expected to deal (their templates), used until the window is long enough.</param>
+    /// <param name="priorOut">The bot's expected damage per second, likewise.</param>
+    internal PlayerbotFightFacts Observe(Player player, IReadOnlyList<Creature> enemies, Creature target, uint nowMs, float priorIn, float priorOut)
     {
         var health = new Dictionary<ObjectGuid, uint>(enemies.Count);
         foreach (Creature enemy in enemies.Take(MaxEnemies))
@@ -71,8 +73,9 @@ internal sealed class PlayerbotFightTracker
         Rate(out float dpsIn, out float dpsOut, out bool measured);
         if (!measured)
         {
-            dpsIn = MathF.Max(dpsIn, _priorIn);
-            dpsOut = _priorOut > 0 ? _priorOut : dpsOut;
+            // A few hundred milliseconds of samples say nothing (one blow looks like a torrent): the estimate's priors stand.
+            dpsIn = _priorIn > 0 ? MathF.Max(_priorIn, priorIn) : priorIn;
+            dpsOut = _priorOut > 0 ? _priorOut : priorOut;
         }
 
         uint enemyHealth = 0;

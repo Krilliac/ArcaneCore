@@ -162,6 +162,13 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
                         watch.Observe(new Vector3(player.X, player.Y, player.Z), player.IsAlive, host.World.NowMs);
                         if (!player.IsAlive && elapsed % 5_000 == 0 && bots.FindBrain(watch.BotId) is { } dead)
                             output.WriteLine($"{elapsed / 1000,4}s {name} recovery: {dead.Recovery.LastStep}/{dead.Recovery.LastSpiritHealerStep} spot={dead.Recovery.ReviveSpot} ({player.X:F1}, {player.Y:F1}, {player.Z:F1})");
+                        if (player.IsAlive && (player.Combat.IsInCombat || player.Health < player.MaxHealth || elapsed % 5_000 == 0) && string.Equals(Environment.GetEnvironmentVariable("ARCANECORE_TEST_BOT_REPLAY_TRACE"), name, StringComparison.OrdinalIgnoreCase)
+                            && bots.FindBrain(watch.BotId) is { } traced)
+                            output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                                $"{elapsed / 1000,4}s {name} L{player.Level} hp {player.Health}/{player.MaxHealth} attackers {string.Join(",", player.Combat.Attackers.OfType<ArcaneCore.Game.Creatures.Creature>().Select(c => $"{c.Entry}/L{c.Level}/{c.Health}/{c.MaxHealth}/dmg{c.Template.MinMeleeDamage}-{c.Template.MaxMeleeDamage}"))} goal {traced.Goal} at ({player.X:F1}, {player.Y:F1}, {player.Z:F1}) [{traced.RiskReport}]"));
+                        if (!player.IsAlive && !watch.Dead && bots.FindBrain(watch.BotId) is { } fallen)
+                            output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                                $"{elapsed / 1000,4}s {name} died at ({player.X:F1}, {player.Y:F1}, {player.Z:F1}): last enemies {string.Join(",", fallen.Risk.Tracker.LastEnemies.Select(c => $"{c.Entry}/L{c.Level}"))}; retreats {fallen.Risk.Retreat.Count} last {fallen.Risk.Retreat.Reason}/{fallen.Risk.Retreat.Outcome}; {fallen.Risk.LastEngagement}"));
                         if (!player.IsAlive)
                         {
                             if (player.Combat.Corpse is { } corpse) watch.Body = new Vector3(corpse.X, corpse.Y, corpse.Z);
@@ -182,7 +189,7 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
                         {
                             PlayerbotBrain? brain = bots.FindBrain(watch.BotId);
                             output.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                                $"{elapsed / 1000,4}s {name}: {brain?.Goal} {brain?.TargetEntry} q{brain?.QuestId} ({player.X:F1}, {player.Y:F1}, {player.Z:F1}) {(player.IsAlive ? "alive" : "dead")} {brain?.StallReport}"));
+                                $"{elapsed / 1000,4}s {name}: {brain?.Goal} {brain?.TargetEntry} q{brain?.QuestId} ({player.X:F1}, {player.Y:F1}, {player.Z:F1}) {(player.IsAlive ? "alive" : "dead")} {brain?.StallReport} [{brain?.RiskReport}]"));
                         }
                     }
 

@@ -57,7 +57,7 @@ internal sealed class PlayerbotBreadcrumbs
 internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions options, PlayerbotCombatSpells spells)
 {
     internal const uint MaxMs = 60_000;
-    internal const int MaxExtensions = 3;
+    internal const int MaxExtensions = 8;
     internal const float ExtendYards = 30f;
 
     /// <summary>The margin past an enemy's leash the retreat runs to.</summary>
@@ -85,6 +85,12 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
     /// <summary>Retreats begun so far.</summary>
     internal int Count { get; private set; }
 
+    /// <summary>Where the retreat first ran to (a place on the trail, or straight away from the enemies).</summary>
+    internal Vector3? FirstGoal { get; private set; }
+
+    /// <summary>The last steps of the retreat (inspection).</summary>
+    internal string? Trace { get; private set; }
+
     /// <summary>Where the retreat runs to.</summary>
     internal Vector3? Goal { get; private set; }
 
@@ -111,10 +117,14 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
             float threat = system?.Options.ThreatRadius ?? 50f;
             float safe = MathF.Max(MathF.Max(aggro * 1.5f, threat), enemy.Template.Leash) + LeashMarginYards;
             _zones.Add((anchor, safe));
+            // Where it was placed too: an idle creature's fight begins at its home, and the leash is measured from there.
+            _zones.Add((new Vector3(enemy.Home.X, enemy.Home.Y, enemy.Home.Z), safe));
         }
 
         Goal = ChooseGoal(player, crumbs);
         if (Goal is { } goal) _route = Plan(player, goal, crumbs);
+        FirstGoal = Goal;
+        Trace = $"goal {Goal} route {(_route is null ? "none" : _route.Points.Count + " points")}";
     }
 
     internal void Stop(string outcome)
@@ -160,7 +170,12 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
             if (_route is null) return true;
         }
 
-        if (!PlayerbotNavigation.TryAdvance(session, _route, options, interval, session.World.NowMs)) _route = null;
+        if (!PlayerbotNavigation.TryAdvance(session, _route, options, interval, session.World.NowMs))
+        {
+            Trace += $"; advance refused at {player.X:F1},{player.Y:F1} next {_route.NextPoint}/{_route.Points.Count}";
+            _route = null;
+        }
+
         return true;
     }
 

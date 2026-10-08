@@ -39,9 +39,11 @@ internal sealed class PlayerbotRisk
     private readonly WorldSession _session;
     private readonly PlayerbotOptions _options;
     private readonly PlayerbotCombatSpells _spells;
-    private readonly Dictionary<ObjectGuid, (PlayerbotEngagement Verdict, uint UntilMs)> _verdicts = [];
+    private readonly Dictionary<(ObjectGuid Creature, bool Quest), (PlayerbotEngagement Verdict, uint UntilMs)> _verdicts = [];
     private uint _waitUntilMs;
     private bool _cornered;
+    private (ObjectGuid Guid, uint Entry)[] _fledFrom = [];
+    private (uint MapId, Vector3 Where) _fledAt;
 
     internal PlayerbotRisk(WorldSession session, PlayerbotOptions options, PlayerbotCombatSpells spells)
     {
@@ -83,12 +85,13 @@ internal sealed class PlayerbotRisk
         }
     }
 
-    /// <summary>Out of combat: lay the trail a retreat runs back along, and close a finished fight.</summary>
+    /// <summary>Lay the trail a retreat runs back along; out of combat, close a finished fight.</summary>
     internal void Track(Player player)
     {
+        // The trail runs on through a pull (a bot is in combat from its first swing, often well short of where it fights).
+        Breadcrumbs.Track(player);
         if (player.Combat.IsInCombat) return;
         _cornered = false;
-        Breadcrumbs.Track(player);
         if (Tracker.Active) Tracker.End();
     }
 
@@ -168,11 +171,11 @@ internal sealed class PlayerbotRisk
     {
         detour = null;
         uint now = _session.World.NowMs;
-        if (_verdicts.TryGetValue(target.Guid, out var cached) && unchecked((int)(cached.UntilMs - now)) > 0
+        if (_verdicts.TryGetValue((target.Guid, questObjective), out var cached) && unchecked((int)(cached.UntilMs - now)) > 0
             && cached.Verdict.Decision != PlayerbotEngageDecision.Detour)
             return cached.Verdict;
         if (_verdicts.Count >= 64)
-            foreach (ObjectGuid old in _verdicts.Where(v => unchecked((int)(v.Value.UntilMs - now)) <= 0).Select(v => v.Key).ToArray())
+            foreach ((ObjectGuid, bool) old in _verdicts.Where(v => unchecked((int)(v.Value.UntilMs - now)) <= 0).Select(v => v.Key).ToArray())
                 _verdicts.Remove(old);
 
         PlayerbotEngagementFacts facts = Facts(player, target, questObjective, out Vector3 spot, out List<PlayerbotThreat> pathThreats);
@@ -185,7 +188,7 @@ internal sealed class PlayerbotRisk
 
         if (verdict.Decision == PlayerbotEngageDecision.Engage || verdict.Decision == PlayerbotEngageDecision.Detour)
             Tracker.Prime(facts.Enemies.Sum(e => e.Dps), facts.BotDps * PlayerbotRiskModel.ManaFactor(facts.ManaDependence, facts.BotManaPct));
-        if (_verdicts.Count < 64) _verdicts[target.Guid] = (verdict, unchecked(now + VerdictMs));
+        if (_verdicts.Count < 64) _verdicts[(target.Guid, questObjective)] = (verdict, unchecked(now + VerdictMs));
         return verdict;
     }
 
@@ -343,7 +346,10 @@ internal sealed class PlayerbotRisk
             if (unit is Creature creature && creature.IsAlive && ReferenceEquals(creature.Map, player.Map)
                 && !creature.IsInEvadeMode && !enemies.Contains(creature))
                 enemies.Add(creature);
-        PlayerbotFightFacts facts = Tracker.Observe(player, enemies, target, _session.World.NowMs);
+        // Until the window is long enough the estimate's priors stand in: the creatures' template damage and the bot's damage.
+        float priorIn = enemies.Sum(e => Enemy(e, RiskJoin.Target).Dps);
+        float priorOut = Tracker.ObservedDps ?? PlayerbotRiskModel.PriorBotDps(player.Level);
+        PlayerbotFightFacts facts = Tracker.Observe(player, enemies, target, _session.World.NowMs, priorIn, priorOut);
         PlayerbotFightVerdict verdict = PlayerbotRiskModel.Judge(facts, _options.Risk);
         Tracker.Record(verdict);
         if (!verdict.Retreat) return false;
@@ -351,12 +357,19 @@ internal sealed class PlayerbotRisk
         return true;
     }
 
-    /// <summary>Retreat from <paramref name="enemies"/> (also the party AI's wipe), remembering them and the place.</summary>
+    /// <summary>
+    /// Retreat from <paramref name="enemies"/> (also the party AI's wipe). When it ends the bot remembers them and the place where
+    /// the fight turned, from then on (a death on the way is remembered by <see cref="OnDeath"/>).
+    /// </summary>
     internal void StartRetreat(Player player, IReadOnlyList<Creature> enemies, string reason)
     {
-        Memory.Remember(player.MapId, new Vector3(player.X, player.Y, player.Z), enemies.Select(c => (c.Guid, c.Entry)),
-            _session.World.NowMs, _options.Risk.DangerMemorySeconds);
-        foreach (Creature enemy in enemies) _verdicts.Remove(enemy.Guid);
+        _fledFrom = [.. enemies.Select(c => (c.Guid, c.Entry))];
+        _fledAt = (player.MapId, new Vector3(player.X, player.Y, player.Z));
+        foreach (Creature enemy in enemies)
+        {
+            _verdicts.Remove((enemy.Guid, false));
+            _verdicts.Remove((enemy.Guid, true));
+        }
         Detour = null;
         Retreat.Start(player, enemies, Tracker.Anchors, Breadcrumbs.Points, reason);
     }
@@ -366,6 +379,8 @@ internal sealed class PlayerbotRisk
     {
         if (!Retreat.Active) return false;
         if (Retreat.Update(player, interval)) return true;
+        if (Retreat.Outcome != "died")
+            Memory.Remember(_fledAt.MapId, _fledAt.Where, _fledFrom, _session.World.NowMs, _options.Risk.DangerMemorySeconds);
         Tracker.End();
         if (Retreat.Outcome == "safe") BeginWait();
         else if (Retreat.Outcome == "cornered") _cornered = true;

@@ -22,7 +22,9 @@ public sealed class PlayerbotDefensiveTargetTests
         await using WorldTestHost host = WorldTestHost.Start();
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         Creature attacker = null!, grind = null!;
-        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        // The creatures are level 20 against a level 1 bot: with the risk estimate on, the bot rightly retreats (PlayerbotRisk). This
+        // test is about which target a fighting bot takes and how, so it fights.
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500, Risk = { Enabled = false } });
         try
         {
             await host.OnWorldAsync(() =>
@@ -112,7 +114,9 @@ public sealed class PlayerbotDefensiveTargetTests
         await using WorldTestHost host = WorldTestHost.Start();
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         Creature victim = null!, secondAttacker = null!;
-        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+        // The creatures are level 20 against a level 1 bot: with the risk estimate on, the bot rightly retreats (PlayerbotRisk). This
+        // test is about which target a fighting bot takes and how, so it fights.
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500, Risk = { Enabled = false } });
         try
         {
             await host.OnWorldAsync(() =>

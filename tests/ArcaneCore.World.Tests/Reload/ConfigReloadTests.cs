@@ -290,6 +290,34 @@ public sealed class ConfigReloadTests : IDisposable
     }
 
     [Fact]
+    public async Task PlayerbotRisk_IsLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
+    {
+        // The brains and party AIs read World:Playerbots:Risk from this options object at every decision.
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Risk": { "Enabled": false, "Tolerance": 2, "RetreatHealthPct": 20, "DangerMemorySeconds": 30, "PartyRetreatOnWipe": false } } } }""");
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        PlayerbotRiskOptions risk = playerbots.Risk;
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Same(risk, playerbots.Risk); // changed in place: the running bots hold this object
+        Assert.False(risk.Enabled);
+        Assert.Equal(2f, risk.Tolerance);
+        Assert.Equal(20f, risk.RetreatHealthPct);
+        Assert.Equal(30, risk.DangerMemorySeconds);
+        Assert.False(risk.PartyRetreatOnWipe);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Risk": { "Tolerance": 9 } } } }""");
+        Assert.NotEqual(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(2f, risk.Tolerance);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.True(risk.Enabled);
+        Assert.Equal(1f, risk.Tolerance);
+        Assert.Equal(300, risk.DangerMemorySeconds);
+    }
+
+    [Fact]
     public async Task AKeyRemovedFromTheFile_ReturnsToItsDefault()
     {
         string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
@@ -362,8 +390,13 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{SocialOptions.SectionName}:{property.Name}");
         }
 
-        // Of the playerbot options only the movement transport is in the reload set (the rest are read once at start).
+        // Of the playerbot options the movement transport and the whole risk section are in the reload set (the rest are read once
+        // at start).
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MovementPackets)}");
+        foreach (PropertyInfo property in typeof(PlayerbotRiskOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Risk)}:{property.Name}");
+        }
 
         var classified = new SortedSet<string>(WorldConfigKeys.All.Select(k => k.Path), StringComparer.Ordinal);
 

@@ -1,7 +1,9 @@
 using System.Numerics;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -85,6 +87,18 @@ internal sealed class RiskTestWorld : IAsyncDisposable
     {
         Player player = Player;
         return Creatures.SpawnTemporary(template, player.X + dx, player.Y + dy, player.Z, 0);
+    }
+
+    /// <summary>
+    /// World thread: <paramref name="creature"/> and the bot fight each other (each on the other's threat list, as after a pull's
+    /// first blows), so the creature's AI keeps the bot as its victim instead of evading an empty threat list.
+    /// </summary>
+    public void Engage(Creature creature)
+    {
+        Player player = Player;
+        if (!player.Map!.Combat.Attack(creature, player)) throw new InvalidOperationException("the creature cannot attack the bot");
+        player.Map!.Combat.DealDamage(player, creature, 1);
+        player.Map!.Combat.DealDamage(creature, player, 1);
     }
 
     public Task<T> OnWorldAsync<T>(Func<T> action) => Host.OnWorldAsync(action);
