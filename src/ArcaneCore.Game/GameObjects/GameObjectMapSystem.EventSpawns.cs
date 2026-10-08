@@ -49,7 +49,7 @@ public sealed partial class GameObjectMapSystem
                 continue;
             }
 
-            ObjectGuid objectGuid = ObjectGuid.WithEntry(HighGuid.GameObject, spawn.Entry, spawn.Guid);
+            ObjectGuid objectGuid = SpawnObjectGuid(spawn.Entry, spawn.Guid);
             _objects.TryGetValue(objectGuid, out GameObject? live);
             if (!(_spawnGate?.AllowsGameObject(guid) ?? true))
             {

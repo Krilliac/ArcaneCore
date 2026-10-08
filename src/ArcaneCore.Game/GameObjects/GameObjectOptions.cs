@@ -25,4 +25,10 @@ public sealed class GameObjectOptions
     /// past its minimum opens stays for one more open. Default 1 (retail).
     /// </summary>
     public float MiningNextRate { get; set; } = 1.0f;
+
+    /// <summary>
+    /// A build-5875 TransportAnimation.dbc (vmangos loads it with the other DBCs): the animations of the elevators and trams (type 11), whose
+    /// create block then carries the progress through their cycle. Empty (the default): their progress stays 0, as vmangos without the data.
+    /// </summary>
+    public string? TransportAnimationDbcPath { get; set; }
 }

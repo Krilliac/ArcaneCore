@@ -204,7 +204,12 @@ public static class UpdateBlockWriter
         if ((flags & ObjectUpdateFlags.Transport) != 0)
         {
             // vmangos Object::BuildMovementUpdate (Object.cpp:590-598): a transport's path progress, else the server time.
-            writer.WriteUInt32(obj is Transports.ShipTransport ship ? ship.PathProgress : serverTimeMs);
+            writer.WriteUInt32(obj switch
+            {
+                Transports.ShipTransport ship => ship.PathProgress,
+                GameObjects.GameObject { Type: GameObjects.GameObjectType.Transport } elevator => elevator.PathProgress,
+                _ => serverTimeMs,
+            });
         }
     }
 }
