@@ -97,6 +97,7 @@ public sealed class CreatureAiContent
     public static readonly CreatureAiContent Empty = new([], []);
 
     private readonly Dictionary<uint, IReadOnlyList<CreatureAiEvent>> _events;
+    private readonly IReadOnlyList<CreatureAiEvent> _allEvents;
     private readonly Dictionary<uint, IReadOnlyList<CreatureAiEvent>> _guidEvents;
     private readonly Dictionary<int, CreatureAiText> _texts;
     private readonly Dictionary<uint, CreatureAiSummon> _summons;
@@ -113,6 +114,7 @@ public sealed class CreatureAiContent
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(texts);
         CreatureAiEvent[] all = [.. events];
+        _allEvents = all;
         EventCount = all.Length;
         _events = all.Where(e => e.CreatureGuid == 0).GroupBy(e => e.CreatureId)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureAiEvent>)[.. g.OrderBy(e => e.Id)]);
@@ -130,6 +132,9 @@ public sealed class CreatureAiContent
     }
 
     public int EventCount { get; }
+
+    /// <summary>All loaded rows, including those keyed by spawn guid, for coverage reporting.</summary>
+    public IReadOnlyList<CreatureAiEvent> AllEvents => _allEvents;
 
     public int TextCount => _texts.Count;
 
