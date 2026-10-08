@@ -93,9 +93,13 @@ No schema version is consumed; nothing was added to Auth, Characters or World.
   change an Administrator's character. vmangos calls `HasLowerSecurity` in only some handlers (`.kick`, `.modify *`,
   `.tele name`, `.namego`, `.recall`, `.repairitems`, `.npc whisper`, ...); ArcaneCore applies it to all of them,
   including those vmangos leaves open: `.additem`, `.deleteitem`, `.levelup`, `.replenish`, `.deplenish`, `.revive`,
-  `.explorecheat`, `.showarea`, `.hidearea` and `.guild create|invite|uninvite|rank`. For an offline character
-  (`.character rename`, `.guild ...` by name) the owner account's security decides; the guild commands read it off the
-  world thread, so their answer arrives a moment later unless the caller cannot be outranked. Commands that only read a
+  `.explorecheat`, `.showarea`, `.hidearea` and `.guild create|invite|uninvite|rank|delete`. `.guild delete` removes
+  every member, so it checks each one and refuses if any member outranks the caller. It is SEC_BASIC_ADMIN
+  (`Chat.cpp:449`), so under the shipped levels only an Administrator reaches it and nobody outranks an Administrator.
+  The check matters once `RetailLevels` is off or `SecurityMap` is remapped. For an offline character
+  (`.character rename`, `.guild ...` by name, an offline member of a guild being deleted) the owner account's security
+  decides. The guild commands read it off the world thread, so their answer arrives a moment later unless the caller
+  cannot be outranked. Commands that only read a
   player (`.gps`, `.honor show`, `.character reputation`, `.instance listbinds`) or move the caller (`.goname`,
   `.gocorpse`) are not gated, as in vmangos. `tests/ArcaneCore.World.Tests/Gm/Core/GmTargetRankTests.cs` sweeps them.
 * Online players only. vmangos resolves offline names through the characters database in `.levelup`, `.deleteitem`,

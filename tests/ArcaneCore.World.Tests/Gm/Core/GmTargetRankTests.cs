@@ -5,6 +5,8 @@ using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Tests.Items;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Gm.Core;
@@ -101,14 +103,12 @@ public sealed class GmTargetRankTests
     }
 
     [Fact]
-    public async Task GuildAdmin_RefusesAHigherRankCharacter_OnlineOrOffline_AndStillServesALowerOne()
+    public async Task GuildAdmin_RefusesAHigherRankOnlineCharacter_ByNameOrSelection()
     {
         await using WorldTestHost host = Start();
         await using WorldTestClient boss = await host.EnterWorldAsync("RANKBOSS", Boss, AccountSecurity.Administrator);
         await using WorldTestClient gm = await host.EnterWorldAsync("RANKGM", Gm, AccountSecurity.GameMaster);
         await using WorldTestClient member = await host.EnterWorldAsync("RANKMEMBER", "Rankmember");
-        await OfflineCharacterAsync(host, "RANKOFFBOSS", "Rankoffboss", AccountSecurity.Administrator);
-        await OfflineCharacterAsync(host, "RANKOFFPLAYER", "Rankoffplyr", AccountSecurity.Player);
         await boss.CollectAsync();
         await gm.CollectAsync();
         await member.CollectAsync();
@@ -116,7 +116,6 @@ public sealed class GmTargetRankTests
 
         Assert.Equal(["Guild Minions created."], await RunAsync(gm, ".guild create Rankmember \"Minions\""));
 
-        // Online, by name and by selection.
         Assert.Equal([GmStrings.SecurityTooLow], await RunAsync(gm, $".guild create {Boss} \"Coup\""));
         Assert.Equal([GmStrings.SecurityTooLow], await RunAsync(gm, $".guild invite {Boss} \"Minions\""));
         Assert.Equal(0u, await host.PlayerStateAsync(Boss, p => p.GetUInt32(UpdateFields.PlayerGuildid)));
@@ -130,16 +129,121 @@ public sealed class GmTargetRankTests
         Assert.Equal([GmStrings.SecurityTooLow], await RunAsync(gm, ".guild rank 4"));
         Assert.Equal(bosses, await host.PlayerStateAsync(Boss, p => p.GetUInt32(UpdateFields.PlayerGuildid)));
         Assert.Equal(0u, await host.PlayerStateAsync(Boss, p => p.GetUInt32(UpdateFields.PlayerGuildrank)));
+    }
 
-        // Offline: the owner account's security decides (looked up off the world thread, so the answer may come late).
+    [Fact]
+    public async Task GuildAdmin_ReadsTheOwnerAccountOfAnOfflineCharacter_RefusingAHigherRankOne()
+    {
+        await using WorldTestHost host = Start();
+        await using WorldTestClient boss = await host.EnterWorldAsync("RANKBOSS", Boss, AccountSecurity.Administrator);
+        await using WorldTestClient gm = await host.EnterWorldAsync("RANKGM", Gm, AccountSecurity.GameMaster);
+        await using WorldTestClient member = await host.EnterWorldAsync("RANKMEMBER", "Rankmember");
+        await OfflineCharacterAsync(host, "RANKOFFBOSS", "Rankoffboss", AccountSecurity.Administrator);
+        await OfflineCharacterAsync(host, "RANKOFFPLAYER", "Rankoffplyr", AccountSecurity.Player);
+        await boss.CollectAsync();
+        await gm.CollectAsync();
+        await member.CollectAsync();
+
+        Assert.Equal(["Guild Minions created."], await RunAsync(gm, ".guild create Rankmember \"Minions\""));
+
+        // The owner account's security decides (looked up off the world thread, so the answer may come late).
         Assert.Equal(GmStrings.SecurityTooLow, await FirstReplyAsync(gm, ".guild invite Rankoffboss \"Minions\""));
         Assert.Equal(GmStrings.SecurityTooLow, await FirstReplyAsync(gm, ".guild create Rankoffboss \"Coup\""));
         Assert.Equal("Added to Minions.", await FirstReplyAsync(gm, ".guild invite Rankoffplyr \"Minions\""));
         Assert.Equal("Rank set to 3.", await FirstReplyAsync(gm, ".guild rank Rankoffplyr 3"));
         Assert.Equal("Removed from the guild.", await FirstReplyAsync(gm, ".guild uninvite Rankoffplyr"));
+        Assert.Equal(["No guild with that name."], await RunAsync(gm, ".guild invite Rankmember \"Coup\""));
 
         // The administrator is served everywhere, without the offline lookup.
         Assert.Equal(["Added to Minions."], await RunAsync(boss, ".guild invite Rankoffboss \"Minions\""));
+    }
+
+    /// <summary>
+    /// Under the shipped levels <c>.guild delete</c> is SEC_BASIC_ADMIN (retail 4, Chat.cpp:449), above a GameMaster
+    /// (retail 3), so the rank question below only arises once the levels are switched off or remapped.
+    /// </summary>
+    [Fact]
+    public async Task GuildDelete_IsNotAvailableToAGameMaster_UnderTheShippedLevels()
+    {
+        await using WorldTestHost host = Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("RANKGM", Gm, AccountSecurity.GameMaster);
+        await gm.CollectAsync();
+
+        Assert.Equal(["Guild Minions created."], await RunAsync(gm, $".guild create {Gm} \"Minions\""));
+        Assert.Equal(["This command is not available to you."], await RunAsync(gm, ".guild delete \"Minions\""));
+        Assert.NotEqual(0u, await host.PlayerStateAsync(Gm, p => p.GetUInt32(UpdateFields.PlayerGuildid)));
+    }
+
+    /// <summary>
+    /// Disbanding removes every member, so <c>.guild delete</c> needs the target-rank check against each of them: a
+    /// GameMaster (who can reach the command with <c>World:GmCommands:RetailLevels</c> off) may not disband a guild an
+    /// online Administrator leads or belongs to.
+    /// </summary>
+    [Fact]
+    public async Task GuildDelete_RefusesAGuildWithAHigherRankOnlineMember()
+    {
+        await using WorldTestHost host = Start(DeleteReachable);
+        await using WorldTestClient boss = await host.EnterWorldAsync("RANKBOSS", Boss, AccountSecurity.Administrator);
+        await using WorldTestClient gm = await host.EnterWorldAsync("RANKGM", Gm, AccountSecurity.GameMaster);
+        await using WorldTestClient member = await host.EnterWorldAsync("RANKMEMBER", "Rankmember");
+        await boss.CollectAsync();
+        await gm.CollectAsync();
+        await member.CollectAsync();
+
+        // Led by the administrator.
+        Assert.Equal(["Guild Bosses created."], await RunAsync(boss, $".guild create {Boss} \"Bosses\""));
+        Assert.Equal([GmStrings.SecurityTooLow], await RunAsync(gm, ".guild delete \"Bosses\""));
+        Assert.NotEqual(0u, await host.PlayerStateAsync(Boss, p => p.GetUInt32(UpdateFields.PlayerGuildid)));
+        Assert.Equal(["Removed from the guild."], await RunAsync(boss, $".guild uninvite {Boss}"));
+
+        // The administrator only a member.
+        Assert.Equal(["Guild Minions created."], await RunAsync(gm, ".guild create Rankmember \"Minions\""));
+        Assert.Equal(["Added to Minions."], await RunAsync(boss, $".guild invite {Boss} \"Minions\""));
+        Assert.Equal([GmStrings.SecurityTooLow], await RunAsync(gm, ".guild delete \"Minions\""));
+        uint minions = await host.PlayerStateAsync(Boss, p => p.GetUInt32(UpdateFields.PlayerGuildid));
+        Assert.NotEqual(0u, minions);
+        Assert.Equal(minions, await host.PlayerStateAsync("Rankmember", p => p.GetUInt32(UpdateFields.PlayerGuildid)));
+
+        // Once no member outranks the GameMaster (itself included), it is served; the administrator always is.
+        Assert.Equal(["Removed from the guild."], await RunAsync(boss, $".guild uninvite {Boss}"));
+        Assert.Equal(["Added to Minions."], await RunAsync(gm, $".guild invite {Gm} \"Minions\""));
+        Assert.Equal(["Guild Minions deleted."], await RunAsync(gm, ".guild delete \"Minions\""));
+        Assert.Equal(0u, await host.PlayerStateAsync("Rankmember", p => p.GetUInt32(UpdateFields.PlayerGuildid)));
+        Assert.Equal(["Guild Staff created."], await RunAsync(gm, $".guild create {Gm} \"Staff\""));
+        Assert.Equal(["Guild Staff deleted."], await RunAsync(boss, ".guild delete \"Staff\""));
+        Assert.Equal(["No guild with that name."], await RunAsync(gm, ".guild delete \"Staff\""));
+    }
+
+    /// <summary>
+    /// <c>.guild delete</c> on a guild with an offline member reads that member's owner account first (off the world
+    /// thread, so the answer may come late): an offline Administrator blocks a GameMaster, an offline Player does not.
+    /// </summary>
+    [Fact]
+    public async Task GuildDelete_ReadsTheOwnerAccountOfEachOfflineMember()
+    {
+        await using WorldTestHost host = Start(DeleteReachable);
+        await using WorldTestClient boss = await host.EnterWorldAsync("RANKBOSS", Boss, AccountSecurity.Administrator);
+        await using WorldTestClient gm = await host.EnterWorldAsync("RANKGM", Gm, AccountSecurity.GameMaster);
+        await using WorldTestClient member = await host.EnterWorldAsync("RANKMEMBER", "Rankmember");
+        await OfflineCharacterAsync(host, "RANKOFFBOSS", "Rankoffboss", AccountSecurity.Administrator);
+        await OfflineCharacterAsync(host, "RANKOFFPLAYER", "Rankoffplyr", AccountSecurity.Player);
+        await boss.CollectAsync();
+        await gm.CollectAsync();
+        await member.CollectAsync();
+
+        Assert.Equal(["Guild Minions created."], await RunAsync(gm, ".guild create Rankmember \"Minions\""));
+        Assert.Equal(["Added to Minions."], await RunAsync(boss, ".guild invite Rankoffboss \"Minions\""));
+        Assert.Equal(GmStrings.SecurityTooLow, await FirstReplyAsync(gm, ".guild delete \"Minions\""));
+        Assert.NotEqual(0u, await host.PlayerStateAsync("Rankmember", p => p.GetUInt32(UpdateFields.PlayerGuildid)));
+        Assert.Equal(["Rankoffboss's guild: Minions."], await GuildOfAsync(host, "Rankoffboss"));
+
+        Assert.Equal("Guild Plebs created.", await FirstReplyAsync(gm, ".guild create Rankoffplyr \"Plebs\""));
+        Assert.Equal("Guild Plebs deleted.", await FirstReplyAsync(gm, ".guild delete \"Plebs\""));
+        Assert.Empty(await GuildOfAsync(host, "Rankoffplyr"));
+
+        // The administrator needs no lookup.
+        Assert.Equal(["Guild Minions deleted."], await RunAsync(boss, ".guild delete \"Minions\""));
+        Assert.Empty(await GuildOfAsync(host, "Rankoffboss"));
     }
 
     private static async Task<string> FirstReplyAsync(WorldTestClient client, string command)
@@ -221,7 +325,19 @@ public sealed class GmTargetRankTests
         }
     }
 
-    private static WorldTestHost Start()
+    /// <summary>The four-level declarations, under which a GameMaster reaches <c>.guild delete</c>.</summary>
+    private static readonly Dictionary<string, string?> DeleteReachable = new() { ["World:GmCommands:RetailLevels"] = "false" };
+
+    /// <summary>The guild an offline (or online) character belongs to, read from the guild manager on the world thread.</summary>
+    private static Task<string[]> GuildOfAsync(WorldTestHost host, string name) => host.OnWorldAsync(() =>
+    {
+        ArcaneCore.Game.Social.SocialContext social = host.WorldServices.GetRequiredService<ArcaneCore.World.Social.SocialFeature>().Context;
+        return social.Characters.FindByName(name) is { } info && social.Guilds.GetGuildOf(info.Id) is { } guild
+            ? new[] { $"{name}'s guild: {guild.Name}." }
+            : [];
+    });
+
+    private static WorldTestHost Start(Dictionary<string, string?>? configuration = null)
     {
         var content = new ItemTestContent();
         content.Templates.Templates.AddRange(
@@ -232,7 +348,8 @@ public sealed class GmTargetRankTests
         content.Templates.StartingItems.AddRange([new StartingItem(1, 1, 38, 1), new StartingItem(1, 1, Jerky, 4)]);
         using (content.Use())
         {
-            return WorldTestHost.Start();
+            return WorldTestHost.Start(configureServices: configuration is null ? null : services =>
+                services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(configuration).Build()));
         }
     }
 }

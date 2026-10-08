@@ -59,8 +59,18 @@ public static class GmTargets
     /// this.", or "Player not found!") arrives later.
     /// </summary>
     public static void ActOnOffline(CommandContext context, int accountId, Action act)
+        => ActOnOffline(context, [accountId], act, unknownAccountIsNotFound: true);
+
+    /// <summary>
+    /// <see cref="ActOnOffline(CommandContext, int, Action)"/> for several offline characters at once (the members of a
+    /// guild being disbanded): <paramref name="act"/> runs only when the invoker may act on every one of
+    /// <paramref name="accountIds"/>. An account that no longer exists answers "Player not found!" when
+    /// <paramref name="unknownAccountIsNotFound"/> is set; otherwise it has no security to protect and is skipped.
+    /// </summary>
+    public static void ActOnOffline(CommandContext context, IReadOnlyCollection<int> accountIds, Action act, bool unknownAccountIsNotFound)
     {
-        if (accountId == context.Session.AccountId
+        int[] others = [.. accountIds.Where(id => id != context.Session.AccountId).Distinct()];
+        if (others.Length == 0
             || !GmSecurity.HasLowerSecurity(context.Security, AccountSecurity.Administrator, strong: false, context.Commands.Gm))
         {
             act();
@@ -71,26 +81,30 @@ public static class GmTargets
         ILogger logger = context.Session.Logger;
         _ = Task.Run(async () =>
         {
-            AccountSecurity? owner;
+            var owners = new List<AccountSecurity?>(others.Length);
             try
             {
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
-                owner = await FindAccountSecurityAsync(scope.ServiceProvider, accountId).ConfigureAwait(false);
+                foreach (int accountId in others)
+                {
+                    owners.Add(await FindAccountSecurityAsync(scope.ServiceProvider, accountId).ConfigureAwait(false));
+                }
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                logger.LogError(ex, "reading the security of account {AccountId} for a GM command failed", accountId);
+                logger.LogError(ex, "reading the security of accounts {AccountIds} for a GM command failed", string.Join(",", others));
                 context.World.Post(() => context.Reply(AccountLookupFailed));
                 return;
             }
 
             context.World.Post(() =>
             {
-                if (owner is null)
+                if (unknownAccountIsNotFound && owners.Contains(null))
                 {
                     context.Reply(GmStrings.PlayerNotFound);
                 }
-                else if (GmSecurity.HasLowerSecurity(context.Security, owner.Value, strong: false, context.Commands.Gm))
+                else if (owners.Any(owner => owner is { } security
+                    && GmSecurity.HasLowerSecurity(context.Security, security, strong: false, context.Commands.Gm)))
                 {
                     context.Reply(GmStrings.SecurityTooLow);
                 }

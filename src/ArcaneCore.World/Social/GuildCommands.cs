@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Guilds;
+using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
@@ -11,8 +12,9 @@ namespace ArcaneCore.World.Social;
 /// HandleGuild*Command, SEC_GAMEMASTER). A character name may be omitted to use the selected
 /// player or yourself; guild names are quoted. The character's account must not outrank the invoker
 /// (<see cref="CommandContext.CanActOn"/>; for an offline character the owner account is read first, so the
-/// answer comes a moment later). vmangos has no such check on these commands; ArcaneCore applies it to every
-/// GM command that changes another player (docs/integration/gm-commands.md).
+/// answer comes a moment later). <c>.guild delete</c> removes every member, so it applies the check to each
+/// member and refuses when any of them outranks the invoker. vmangos has no such check on these commands;
+/// ArcaneCore applies it to every GM command that changes another player (docs/integration/gm-commands.md).
 /// </summary>
 public sealed class GuildCommands : ICommandGroup
 {
@@ -93,8 +95,55 @@ public sealed class GuildCommands : ICommandGroup
             return false;
         }
 
-        GuildAdminResult result = Guilds(context).Delete(guildName);
-        context.Reply(result == GuildAdminResult.Ok ? $"Guild {guildName} deleted." : Describe(result));
+        GuildManager guilds = Guilds(context);
+        if (guilds.GetByName(guildName) is not { } guild)
+        {
+            context.Reply(Describe(GuildAdminResult.GuildNotFound));
+            return true;
+        }
+
+        // Disbanding removes every member, so the invoker must be able to act on each of them: an online member by
+        // its session's security, an offline one by its owner account's (read off the world thread).
+        SocialContext social = SocialHandlers.Social(context.Session);
+        uint[] checkedMembers = [.. guild.Members.Select(m => m.CharacterId)];
+        var offlineAccounts = new List<int>();
+        foreach (uint memberId in checkedMembers)
+        {
+            if (social.Characters.Find(memberId) is not { } info)
+            {
+                continue; // no character, no account to protect
+            }
+
+            if (context.World.FindOnlinePlayer(info.Name) is { } online)
+            {
+                if (!context.CanActOn(online))
+                {
+                    return true;
+                }
+            }
+            else
+            {
+                offlineAccounts.Add(info.AccountId);
+            }
+        }
+
+        GmTargets.ActOnOffline(context, offlineAccounts, () =>
+        {
+            if (!ReferenceEquals(guilds.GetByName(guildName), guild))
+            {
+                context.Reply(Describe(GuildAdminResult.GuildNotFound));
+            }
+            else if (guild.Members.Any(m => !checkedMembers.Contains(m.CharacterId)))
+            {
+                // Someone joined while the offline members were being checked; they have not been.
+                context.Reply("The guild's members changed; nothing was changed. Try again.");
+            }
+            else
+            {
+                GuildAdminResult result = guilds.Delete(guildName);
+                context.Reply(result == GuildAdminResult.Ok ? $"Guild {guildName} deleted." : Describe(result));
+            }
+        }, unknownAccountIsNotFound: false);
         return true;
     }
 
