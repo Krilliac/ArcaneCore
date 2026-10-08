@@ -65,6 +65,55 @@ single transient bug removed a bot until an operator noticed:
 `docs/integration/playerbot-faults-20261007.md`. Ordinary session closes that are not faults
 (a GM kick) still stop the bot and clear `DesiredEnabled`, as before.
 
+### Party bots (a real player's group)
+
+`Playerbots/Party/` (vmangos `src/game/PlayerBots/PartyBotAI.cpp`; the player-facing actions of mangoszero's
+`modules/Bots/playerbot/strategy/actions`). A player can invite a bot; it then follows, assists, obeys its master and goes
+where the master goes.
+
+- **Intake.** Every world tick, for every autonomous bot (a scripted controller drains its own queue), `PlayerbotPartyAI.Intake`
+  drains only SMSG_GROUP_INVITE, SMSG_MESSAGECHAT, SMSG_LOOT_START_ROLL and SMSG_RESURRECT_REQUEST from the bot's capture
+  queue (a filtered drain; an unfiltered one would steal other components' packets). The answers are a client's own replies
+  and do not wait for the shared action budget.
+- **Invitations** are accepted (CMSG_GROUP_ACCEPT) or declined (CMSG_GROUP_DECLINE, which tells the inviter) by
+  `World:Playerbots:Party:InvitePolicy`: `None` (only the `Allowlist`), `GuildOrFriends` (default: the allowlist, the bot's guild
+  mates, and players on the bot's friend list or with the bot on theirs) or `Anyone`. `.playerbot invite <bot>` (GameMaster; the
+  vmangos `.partybot add` analogue) invites a running autonomous bot into the GM's group through the ordinary invite and makes it
+  accept whatever its policy says; the invite keeps every ordinary rule (faction, full group, leader or assistant).
+- **Master.** The group's leader when it is a real player online (a socket client, never a managed bot), otherwise the first
+  real player online in member order (vmangos `GetPartyLeader`). While the bot has one, `ManagedPlayerbotFeature` ticks its
+  party AI instead of `PlayerbotBrain` (a scripted controller still wins). Out of the group the brain drives it again, a fresh
+  one (the old one's routes and targets belong to another place). When every real player of the group is offline or gone, the
+  bot waits `MasterTimeoutSeconds` (60, 1..3600), then leaves the group (CMSG_GROUP_DISBAND, vmangos `requestRemoval`).
+- **Out of combat** the bot follows at 2-5 yards at a random angle (`PlayerbotNavigation.TryPlan`/`TryAdvance`), eats and drinks
+  through `PlayerbotConsumables` while its master is within 30 yards, and teleports to a master more than 100 yards away or on
+  another map or instance (`TeleportToLeader`, default on; vmangos `.goname`) through the teleport service the GM
+  `.goname`/`.namego` commands use, so the map resolver's instance rules and the group's instance bind decide where it lands
+  (into the master's instance). It lands on the master's spot, not 5 yards above as `.goname` puts a GM: it has no client to
+  fall. A master on a map outside `AllowedMaps`, or on a taxi flight (vmangos idles then), is waited for, not followed. A
+  refused teleport is retried after 10 s.
+- **Combat** (vmangos `SelectAttackTarget`/`SelectPartyAttackTarget`): the target the master ordered, else the master's
+  victim, else whoever attacks the bot, else whoever attacks another member within 50 yards; `PlayerbotCombatSpells`, then a
+  chase to 4 yards and CMSG_ATTACKSWING. Round-robin loot the bot was given (vmangos PartyBotAI.cpp:565-585 unassigns it) is
+  opened and released untouched (CMSG_LOOT, CMSG_LOOT_RELEASE) so the players can take it.
+- **Loot rolls** are answered at once with `LootRoll` (`Pass` by default, or `Greed`; never need), so a roll never waits out its
+  timer for a bot (mangoszero `LootRollAction`).
+- **Dead:** a group member's resurrection is accepted (CMSG_RESURRECT_RESPONSE; a stranger's declined). With `AutoRevive`
+  (default on) the bot revives in place at half health when vmangos `ShouldAutoRevive` allows it (a released ghost; or nobody
+  fighting, no living healer class to resurrect it, and a living member within 15 yards), and otherwise waits up to 2 minutes;
+  then, or without `AutoRevive`, it runs back like the brain (`PlayerbotRecovery`).
+- **Commands**, by whisper or party chat and only from the master, one word, any case: `follow`, `stay` (hold this place: no
+  following, no teleport, fight back only what attacks the bot), `attack` (the master's current target), `stop`/`passive`
+  (stop fighting, follow without attacking), `come` (walk to the master, then hold there), `status` (a whisper back: level,
+  health %, mana % and the current activity) and `leave`. Each is acknowledged by whisper (CMSG_MESSAGECHAT in the bot's own
+  language). A whispered word that is no command gets the command list; a whisper from anyone else gets one polite answer
+  (once per sender a minute, at most 8 senders a minute); other bots' lines are ignored.
+
+`.playerbot inspect` prints `BOTINSPECT party=master:<name> mode:<follow|stay|passive>` (or `party=none`); while the party AI
+drives a bot its goal is `Follow` or `Assist` (appended to the persisted `PlayerbotGoalKind`). Brain bots do not acknowledge a
+far teleport (the brain returns while the player is in no map, before `PlayerbotMovementControl`); the party AI does, so it can
+follow its master into an instance.
+
 ## Scenario harness
 
 Namespace `ArcaneCore.World.Playerbots.Scenarios`. A scenario is an `IPlayerbotScenario`
@@ -221,6 +270,16 @@ locations, flag stands with their event rows, flag room triggers, flag auras, a 
 `TransportScenarioTests` use the same hook for synthetic ship routes (`TransportWorldContent`): `ship-duel` (two
 bots board a ferry, duel aboard while it sails away from the flag, and the duel ends fled when one steps off) and
 `ship-crossing` (a bot rides a ship through its map change and arrives aboard on map 1).
+`PartyScenarioTests` runs `party-master` (`Scenarios/ScenarioParty.cs`, `PartyScenario`): the master is a real socket client
+(`IPartyScenarioMaster`, a `WorldTestClient` whose reader records every packet and acknowledges teleports like a game client) and
+the bot `Scnfollower` runs autonomously. The master befriends and invites the bot and it accepts; the bot follows a 40-yard walk;
+the master targets the wolf and whispers `attack`, and the bot kills it; the group roll on the wolf's uncommon item gets the
+bot's vote within 2 s of game time and resolves on the master's vote; after `stay` the bot holds while the master walks off;
+`status` is answered; the master takes the Deadmines entrance (trigger 78) and the bot lands in the same instance, and comes
+out with it through the exit (119); the master leaves the group and the brain drives the bot again. The test adds the
+Deadmines content, an uncommon item to the wolf's loot, AllowedMaps [0, 1, 36] and flat ground at the start's height (the bot
+plans its walks there). Without a master (the catalog's instance, `.playerbot scenario run party-master`) it fails at its first
+step: a live run has no socket master to give it.
 
 ## MockClient playbot (external protocol client)
 
