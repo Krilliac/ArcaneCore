@@ -127,12 +127,8 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
             .OrderBy(d => DistanceSquared(player, d.Spawn)))
         {
             if (!HasAffordableSpell(player, services, destination)) continue;
-            Vector3 origin = new(player.X, player.Y, player.Z);
             Vector3 target = new(destination.Spawn.X, destination.Spawn.Y, destination.Spawn.Z);
-            float distance = Vector3.Distance(origin, target);
-            float chunk = MathF.Min(_options.MaxRouteYards * 0.9f, Math.Max(1, _options.MaxPathPoints - 2));
-            if (distance > chunk) target = origin + ((target - origin) * (chunk / distance));
-            if (!PlayerbotNavigation.TryPlan(player, target, _options, out PlayerbotRoute? route))
+            if (!PlayerbotNavigation.TryPlanToward(player, target, _options, out PlayerbotRoute? route))
             {
                 _blockedSpawns.Add(destination.Spawn.Guid);
                 return false;

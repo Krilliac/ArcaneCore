@@ -26,6 +26,15 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     private const uint ThinkCooldownMs = 1500;
     private const uint RepairBackoffMs = 60_000;
 
+    /// <summary>How long a vendor's refusal to sell an item to the bot keeps the bot from asking again.</summary>
+    internal const uint RefusedPurchaseMs = 600_000;
+
+    /// <summary>How long a trainer that refused to teach is left alone.</summary>
+    internal const uint RefusedTrainerMs = 600_000;
+
+    /// <summary>The most refusals remembered (each kind); the oldest go first.</summary>
+    private const int MaxRefusals = 64;
+
     /// <summary>A hunter restocks when the bags hold fewer rounds than this for the equipped bow, gun or crossbow.</summary>
     internal const uint AmmoLowWater = 200;
 
@@ -37,6 +46,12 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     private ObjectGuid _trainerTarget;
     private bool _trainerListPending;
     private readonly HashSet<uint> _greenTrainerSpells = [];
+    // Requests the server refused: the bot must not repeat them for ever. A vendor refuses to buy a damaged item when no repair
+    // price is known for it (PlayerInventory.SellItem, TryAdjustSellPrice): on the live server Ironwander stood at Adlin
+    // Pridedrift for hours re-sending CMSG_SELL_ITEM for its damaged gray Frayed Pants, answered SELL_ERR_CANT_SELL_ITEM each time.
+    private readonly HashSet<ObjectGuid> _unsellable = [];
+    private readonly Dictionary<(uint Vendor, uint Item), uint> _refusedPurchases = [];
+    private readonly Dictionary<ObjectGuid, uint> _refusedTrainers = [];
 
     internal PlayerbotGoalKind Goal { get; private set; } = PlayerbotGoalKind.Explore;
 
@@ -70,12 +85,18 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
                 if (spell != 0)
                 {
                     Goal = PlayerbotGoalKind.Train;
+                    int known = KnownSpellCount(player);
+                    uint money = player.Money;
                     if (!session.TryManagedAction(WorldOpcode.CmsgTrainerBuySpell, TrainerPayload(trainer.Guid, spell))) return true;
+                    // The handler runs inside the action: nothing learned and nothing paid is a refusal.
+                    if (KnownSpellCount(player) == known && player.Money == money) Refuse(_refusedTrainers, trainer.Guid, RefusedTrainerMs);
                     _trainerListPending = false;
                     _greenTrainerSpells.Clear();
                     return true;
                 }
             }
+            // Asked for the list and found nothing it would teach: the same question would get the same answer.
+            Refuse(_refusedTrainers, _trainerTarget, RefusedTrainerMs);
             _trainerListPending = false;
             _greenTrainerSpells.Clear();
             return false;
@@ -117,7 +138,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             return true;
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TrySellGray(player, services, npc))
             return true;
-        return (npc.NpcFlags & NpcFlags.Trainer) != 0 && TryTrain(player, services, npc);
+        return (npc.NpcFlags & NpcFlags.Trainer) != 0 && !Refused(_refusedTrainers, npc.Guid) && TryTrain(player, services, npc);
     }
 
     private bool TryBuyFood(Player player, QuestNpcServices services, NpcInfo npc)
@@ -129,8 +150,53 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             return false;
 
         Goal = PlayerbotGoalKind.Vendor;
-        return session.TryManagedAction(WorldOpcode.CmsgBuyItem, BuyPayload(npc.Guid, row.Item));
+        return Buy(player, npc, row.Item);
     }
+
+    /// <summary>
+    /// CMSG_BUY_ITEM; a purchase that added nothing to the bags was refused (no money, no room, sold out, a reputation or level
+    /// gate): the row is not asked for again for <see cref="RefusedPurchaseMs"/>.
+    /// </summary>
+    private bool Buy(Player player, NpcInfo npc, uint item)
+    {
+        uint before = player.Inventory.GetItemCount(item);
+        if (!session.TryManagedAction(WorldOpcode.CmsgBuyItem, BuyPayload(npc.Guid, item))) return false;
+        if (player.Inventory.GetItemCount(item) <= before) Refuse(_refusedPurchases, (npc.Entry, item), RefusedPurchaseMs);
+        return true;
+    }
+
+    /// <summary>
+    /// CMSG_SELL_ITEM; an item still in the bags afterwards was refused by the vendor and is never offered again.
+    /// </summary>
+    private bool Sell(NpcInfo npc, Item item)
+    {
+        uint count = item.Count;
+        if (!session.TryManagedAction(WorldOpcode.CmsgSellItem, SellPayload(npc.Guid, item.Guid))) return false;
+        if (item.Inventory is not null && ReferenceEquals(item.Inventory.GetItemByGuid(item.Guid), item) && item.Count == count
+            && _unsellable.Count < MaxRefusals)
+            _unsellable.Add(item.Guid);
+        return true;
+    }
+
+    private bool Refused<TKey>(Dictionary<TKey, uint> refusals, TKey key) where TKey : notnull
+    {
+        if (!refusals.TryGetValue(key, out uint until)) return false;
+        if (unchecked((int)(until - session.World.NowMs)) > 0) return true;
+        refusals.Remove(key);
+        return false;
+    }
+
+    private void Refuse<TKey>(Dictionary<TKey, uint> refusals, TKey key, uint forMs) where TKey : notnull
+    {
+        uint now = session.World.NowMs;
+        foreach (TKey expired in refusals.Where(entry => unchecked((int)(entry.Value - now)) <= 0).Select(entry => entry.Key).ToArray())
+            refusals.Remove(expired);
+        if (refusals.Count >= MaxRefusals) refusals.Remove(refusals.OrderBy(entry => entry.Value).First().Key);
+        refusals[key] = unchecked(now + forMs);
+    }
+
+    private int KnownSpellCount(Player player)
+        => session.Services.GetService<SpellFeature>()?.Spellbook.GetSpells(player).Count ?? 0;
 
     /// <summary>
     /// CMSG_REPAIR_ITEM with an empty item guid: repair everything (vmangos HandleRepairItemOpcode, DurabilityRepairAll). When
@@ -183,10 +249,10 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         if (FindAmmoRow(player, services, npc) is not { } row)
             return false;
         Goal = PlayerbotGoalKind.Vendor;
-        return session.TryManagedAction(WorldOpcode.CmsgBuyItem, BuyPayload(npc.Guid, row.Item));
+        return Buy(player, npc, row.Item);
     }
 
-    private static VendorItem? FindAmmoRow(Player player, QuestNpcServices services, NpcInfo npc)
+    private VendorItem? FindAmmoRow(Player player, QuestNpcServices services, NpcInfo npc)
     {
         if (player.Class != Class.Hunter
             || player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Ranged) is not { } ranged
@@ -204,6 +270,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             return null;
         return services.Npcs.VendorItems(npc.Entry).Take(64)
             .Select(row => (Row: row, Template: player.Inventory.Templates.Find(row.Item)))
+            .Where(pair => !Refused(_refusedPurchases, (npc.Entry, pair.Row.Item)))
             .Where(pair => pair.Template is { } template && template.GetInventoryType() == InventoryType.Ammo
                 && player.Inventory.CheckAmmoCompatibility(template)
                 && player.Inventory.CanUseAmmo(template.Entry) == ArcaneCore.Game.Items.InventoryResult.Ok
@@ -221,7 +288,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         if (services.Npcs.VendorItems(npc.Entry).Count == 0 || FindJunk(player, services) is not { } item)
             return false;
         Goal = PlayerbotGoalKind.Vendor;
-        return session.TryManagedAction(WorldOpcode.CmsgSellItem, SellPayload(npc.Guid, item.Guid));
+        return Sell(npc, item);
     }
 
     private Item? FindJunk(Player player, QuestNpcServices services)
@@ -233,6 +300,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             .Where(candidate => candidate.BagSlot != InventorySlots.Bag0
                 || (candidate.Slot >= InventorySlots.ItemStart && candidate.Slot < InventorySlots.ItemEnd))
             .Where(candidate => candidate.Template.Quality <= 1 && candidate.Template.SellPrice > 0
+                && !_unsellable.Contains(candidate.Guid)
                 && !IsProtected(player, candidate, services) && IsJunk(player, candidate, weights))
             .OrderBy(candidate => (ulong)candidate.Template.SellPrice * candidate.Count).ThenBy(candidate => candidate.Guid.Value)
             .FirstOrDefault();
@@ -271,18 +339,22 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             return false;
         if (services.Npcs.VendorItems(npc.Entry).Count == 0)
             return false;
-        Item? item = player.Inventory.AllItems
-            .Where(candidate => candidate.BagSlot != InventorySlots.Bag0 || candidate.Slot >= InventorySlots.ItemStart)
-            .Where(candidate => !IsProtected(player, candidate, services))
-            .Where(candidate => candidate.Template.Quality == 0 && candidate.Template.SellPrice > 0)
-            .OrderBy(candidate => candidate.Guid.Value)
-            .FirstOrDefault();
+        Item? item = SellableGrays(player, services).FirstOrDefault();
         if (item is null)
             return false;
 
         Goal = PlayerbotGoalKind.Vendor;
-        return session.TryManagedAction(WorldOpcode.CmsgSellItem, SellPayload(npc.Guid, item.Guid));
+        return Sell(npc, item);
     }
+
+    /// <summary>The gray items the bot would sell, lowest guid first, without the ones a vendor already refused.</summary>
+    private IEnumerable<Item> SellableGrays(Player player, QuestNpcServices services)
+        => player.Inventory.AllItems
+            .Where(candidate => candidate.BagSlot != InventorySlots.Bag0 || candidate.Slot >= InventorySlots.ItemStart)
+            .Where(candidate => candidate.Template.Quality == 0 && candidate.Template.SellPrice > 0
+                && !_unsellable.Contains(candidate.Guid))
+            .Where(candidate => !IsProtected(player, candidate, services))
+            .OrderBy(candidate => candidate.Guid.Value);
 
     private bool TryTrain(Player player, QuestNpcServices services, NpcInfo npc)
     {
@@ -329,7 +401,8 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     private bool HasUsefulService(Player player, QuestNpcServices services, NpcInfo npc)
         // Advisory discovery only; the correlated GREEN list and ordinary buy handler
         // remain the authority for price, prerequisites and teaching/persistence.
-        => HasUsefulVendorService(player, services, npc) || services.GetClassTrainerQuote(player, npc) is not null;
+        => HasUsefulVendorService(player, services, npc)
+            || (!Refused(_refusedTrainers, npc.Guid) && services.GetClassTrainerQuote(player, npc) is not null);
 
     private bool HasUsefulVendorService(Player player, QuestNpcServices services, NpcInfo npc)
     {
@@ -339,16 +412,13 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             if (session.Services.GetService<SpellFeature>()?.System is { } spells
                 && FindConsumableVendorRow(player, services, npc, spells) is not null) return true;
             if (FindAmmoRow(player, services, npc) is not null) return true;
-            if (player.Inventory.AllItems.Any(item =>
-                (item.BagSlot != InventorySlots.Bag0 || item.Slot >= InventorySlots.ItemStart)
-                && item.Template.Quality == 0 && item.Template.SellPrice > 0
-                && !IsProtected(player, item, services))) return true;
+            if (SellableGrays(player, services).Any()) return true;
             if (FindJunk(player, services) is not null) return true;
         }
         return false;
     }
 
-    private static VendorItem? FindConsumableVendorRow(Player player, QuestNpcServices services, NpcInfo npc,
+    private VendorItem? FindConsumableVendorRow(Player player, QuestNpcServices services, NpcInfo npc,
         SpellSystem spells)
     {
         bool needFood = !PlayerbotConsumables.HasUsable(player, spells, PlayerbotConsumableKind.Food);
@@ -358,7 +428,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         if (!needFood && !needDrink)
             return null;
 
-        VendorItem[] rows = [.. services.Npcs.VendorItems(npc.Entry).Take(32)];
+        VendorItem[] rows = [.. services.Npcs.VendorItems(npc.Entry).Take(32).Where(row => !Refused(_refusedPurchases, (npc.Entry, row.Item)))];
         foreach (VendorItem row in rows)
         {
             if (TryEligible(row, PlayerbotConsumableKind.Food, needFood, player, services, npc, spells))

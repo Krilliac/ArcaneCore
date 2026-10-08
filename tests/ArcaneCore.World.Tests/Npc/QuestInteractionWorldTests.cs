@@ -344,8 +344,11 @@ internal sealed class QuestInteractionFixture : IQuestContentStore, ICreatureDat
     public MemoryQuestStore Characters { get; } = new();
     public ManualQuestClock Clock { get; } = new();
 
+    /// <summary>The item the quest hands out on accept (SrcItemId), none by default.</summary>
+    public uint SourceItem { get; init; }
+
     public Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new QuestContent(
-        [new QuestTemplate { Entry = QuestId, Method = 2, MinLevel = 1, QuestLevel = 1, LimitTime = 30,
+        [new QuestTemplate { Entry = QuestId, Method = 2, MinLevel = 1, QuestLevel = 1, LimitTime = 30, SrcItemId = SourceItem, SrcItemCount = (byte)(SourceItem == 0 ? 0 : 1),
             Title = "Synthetic quest", Details = "Accept a bounded journal task.", RequestItemsText = "Finish the synthetic task.",
             ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 1 },
         new QuestTemplate { Entry = UnrelatedId, Method = 2, Title = "Unrelated quest" }],

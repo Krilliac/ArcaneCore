@@ -23,6 +23,16 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     private uint _stageDeadline;
     private uint _backoffUntil;
     private Stage _stage;
+    // Quests whose exchange the server did not complete within the stage deadline (an accept refused because the quest's
+    // source item does not fit, a reward refused for the bags): asked again at once they are refused again. On the replayed
+    // live state Ironwander stood at Hands Springsprocket for good, accepting quest 2160 (Supplies to Tannok) every 17 seconds.
+    private readonly Dictionary<uint, uint> _refused = [];
+
+    /// <summary>How long a quest whose exchange the server refused is left alone.</summary>
+    internal const uint RefusedQuestMs = 600_000;
+
+    /// <summary>The most refused quests remembered.</summary>
+    private const int MaxRefused = 64;
 
     internal PlayerbotGoalKind Goal { get; private set; } = PlayerbotGoalKind.Quest;
     internal uint QuestId { get; private set; }
@@ -39,7 +49,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (services?.StateOf(player) is not { Loaded: true } state || content is null) return 0;
         return state.Quests.Statuses.OrderBy(row => row.Key)
             .Where(row => row.Value is { Status: QuestStatus.Complete, Rewarded: false }
-                && services.IsRewardable(row.Key))
+                && services.IsRewardable(row.Key) && !IsRefused(row.Key))
             .Where(row => services.Quests.CreatureEndersOf(row.Key)
                 .Any(entry => content.GetSpawns(player.MapId, entry).Count > 0))
             .Select(row => row.Key).FirstOrDefault();
@@ -57,6 +67,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             _backoffUntil = 0;
         if (_stage != Stage.None && _stageDeadline != 0 && unchecked(now - _stageDeadline) <= int.MaxValue)
         {
+            Refuse(_stageQuest, now);
             ClearStage();
             _backoffUntil = unchecked(now + 2_000);
             return false;
@@ -181,7 +192,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
             foreach (uint id in services.Quests.EndersOf(npc.Entry))
             {
-                if (!services.IsRewardable(id)) continue;
+                if (!services.IsRewardable(id) || IsRefused(id)) continue;
                 if (_stage != Stage.None && id != _stageQuest)
                     continue;
                 if (services.Quests.Get(id) is not { } quest || state.Quests.Get(id) is not { } status)
@@ -200,7 +211,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
             foreach (uint id in services.Quests.StartersOf(npc.Entry))
             {
-                if (!services.IsRewardable(id)) continue;
+                if (!services.IsRewardable(id) || IsRefused(id)) continue;
                 if (_stage != Stage.None && id != _stageQuest)
                     continue;
                 if (services.Quests.Get(id) is not { } quest
@@ -243,6 +254,24 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     internal static uint RewardChoice(Player player, Quest quest)
         => quest.RewChoiceItemsCount == 0 ? 0u : PlayerbotItemScore.ChooseQuestReward(player, quest.RewChoiceItemId, quest.RewChoiceItemCount,
             PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights);
+
+    /// <summary>Whether the server refused this quest's exchange lately (<see cref="RefusedQuestMs"/>); travel to it is pointless too.</summary>
+    internal bool IsRefused(uint questId)
+    {
+        if (!_refused.TryGetValue(questId, out uint until)) return false;
+        if (unchecked((int)(until - _session.World.NowMs)) > 0) return true;
+        _refused.Remove(questId);
+        return false;
+    }
+
+    private void Refuse(uint questId, uint now)
+    {
+        if (questId == 0) return;
+        foreach (uint expired in _refused.Where(entry => unchecked((int)(entry.Value - now)) <= 0).Select(entry => entry.Key).ToArray())
+            _refused.Remove(expired);
+        if (_refused.Count >= MaxRefused) _refused.Remove(_refused.OrderBy(entry => entry.Value).First().Key);
+        _refused[questId] = unchecked(now + RefusedQuestMs);
+    }
 
     private void ArmStage(QuestTarget target)
     {

@@ -75,6 +75,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     {
         if (!_options.Enabled || _stopped != 0 || _session.Player is not { } player)
             return;
+        _destinations.SkipQuest ??= _quests.IsRefused;
         if (!player.IsInWorld) return;
 
         bool dead = !player.IsAlive;
@@ -640,7 +641,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             player.X + (MathF.Cos(angle) * 48f),
             player.Y + (MathF.Sin(angle) * 48f),
             player.Z);
-        if (PlayerbotNavigation.TryPlan(player, destination, _options, out _route))
+        if (PlayerbotNavigation.TryPlanToward(player, destination, _options, out _route))
         {
             _exploreRefusals = 0;
             _goal = PlayerbotGoalKind.Explore;

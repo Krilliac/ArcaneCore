@@ -13,14 +13,24 @@ namespace ArcaneCore.World.Playerbots;
 /// <summary>One bounded, collision-backed route owned by a server-managed player.</summary>
 internal sealed class PlayerbotRoute
 {
-    internal PlayerbotRoute(IReadOnlyList<Vector3> points, float distance)
+    internal PlayerbotRoute(IReadOnlyList<Vector3> points, float distance, bool navigated = false)
     {
         Points = points;
         Distance = distance;
+        Navigated = navigated;
     }
 
     internal IReadOnlyList<Vector3> Points { get; }
     internal float Distance { get; }
+
+    /// <summary>
+    /// The corners came from the map's navigation mesh: every leg between them is walkable by construction (vmangos
+    /// <c>PathFinder</c> moves units along such corners without further checks). The motion still snaps each position to the
+    /// floor, but it does not test a straight line of sight between two positions, which across a corner cuts through the very
+    /// obstacle the mesh goes around (a pillar, a counter, a doorway's edge). Routes stepped over the terrain without a mesh
+    /// (<see cref="PlayerbotNavigation.TryTerrainRoute"/>) carry no such proof and keep the line-of-sight check.
+    /// </summary>
+    internal bool Navigated { get; }
     internal int NextPoint { get; set; } = 1;
     internal bool Complete => NextPoint >= Points.Count;
 }
@@ -34,6 +44,41 @@ internal static class PlayerbotNavigation
             && path.Length <= maxDistance;
 
     internal static bool TryPlan(Player player, Vector3 destination, PlayerbotOptions options,
+        out PlayerbotRoute? route)
+        => Plan(player, destination, destination, options, partial: false, out route);
+
+    /// <summary>Closer than this to its goal, a partial route ends near enough to count (<see cref="TryPlanToward"/>).</summary>
+    internal const float PartialProgressYards = 2f;
+
+    /// <summary>
+    /// A route towards <paramref name="goal"/>, which may lie beyond one route: the goal itself when it is within one route's
+    /// reach (<see cref="PlayerbotOptions.MaxRouteYards"/>, and <see cref="PlayerbotOptions.MaxPathPoints"/> yards for the terrain
+    /// stepper), else the point that far along the straight line to it. When the navigation mesh does not connect that point, the
+    /// route goes to the walkable point nearest to it (vmangos <c>PathFinder</c> with <c>PATHFIND_INCOMPLETE</c>), taken when it ends
+    /// at least <see cref="PartialProgressYards"/> closer to the goal than the bot stands. One path query, as <see cref="TryPlan"/>.
+    /// <para>
+    /// The straight-line point on its own is often not walkable in the mountains, and the exact search then fails although the
+    /// way is open: on the real Dun Morogh terrain the point 126 yards towards Mirthblade's body (359 yards away) has no exact
+    /// path, while the mesh reaches a point 4 yards from it. The ghost was judged stalled after 10 seconds and took the spirit
+    /// healer, and a living bot with a far quest giver stood still for good.
+    /// </para>
+    /// </summary>
+    internal static bool TryPlanToward(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route)
+    {
+        route = null;
+        Vector3 origin = new(player.X, player.Y, player.Z);
+        if (!Finite(goal) || !Finite(origin)) return false;
+        float distance = Vector3.Distance(origin, goal);
+        float chunk = MathF.Min(options.MaxRouteYards * 0.9f, Math.Max(1, options.MaxPathPoints - 2));
+        Vector3 destination = distance > chunk ? origin + ((goal - origin) * (chunk / distance)) : goal;
+        return Plan(player, destination, goal, options, partial: true, out route);
+    }
+
+    /// <summary>
+    /// One path query from where the bot is now to <paramref name="destination"/>; with <paramref name="partial"/> a route that
+    /// stops short of it on the mesh is accepted when it closes on <paramref name="goal"/>.
+    /// </summary>
+    private static bool Plan(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
         out PlayerbotRoute? route)
     {
         route = null;
@@ -51,9 +96,12 @@ internal static class PlayerbotNavigation
 
         // A moving bot plans from where it is now, not from its last heartbeat.
         Vector3 start = PlayerbotMotion.CurrentPosition(player);
+        // The search budget is vmangos' own (navMeshQuery->init(navMesh, 2048), MoveMap.cpp:350). The old 512 polygons ran out on the
+        // real Dun Morogh mesh well inside the route bound: 200 yards from Coldridge Valley to the Rockjaw Raiders (quest 179)
+        // answered no path with 512 and an 18-corner path with 2048, so the bot stood still with that goal for good.
         PathResult path = map.Collision.FindPath(start, destination,
             new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints), Mover = PathMover.Player,
-                ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = false, MaxSearchNodes = 512 });
+                ExcludeFlags = NavTerrain.SteepSlopes, AllowPartial = partial, MaxSearchNodes = PathOptions.DefaultMaxSearchNodes });
         // The no-mmap answer carries no walkability proof. Validate each short terrain step
         // before using that route; absent heights, steep terrain and known model obstructions refuse it.
         if ((path.Type & PathType.NotUsingPath) != 0)
@@ -64,29 +112,34 @@ internal static class PlayerbotNavigation
         }
         if (!IsUsablePath(path, options.MaxPathPoints, options.MaxRouteYards))
             return false;
+        // A partial answer (the corridor did not reach the destination) must at least close on the goal, and must not end at a
+        // place given up after a loop. An end projected from above or below the destination stays at its spot and is exact.
+        if (partial && (path.Type & PathType.Incomplete) != 0 && Vector2.Distance(Flat(path.End), Flat(destination)) > 1f
+            && (Vector2.Distance(Flat(path.End), Flat(goal)) > Vector2.Distance(Flat(start), Flat(goal)) - PartialProgressYards
+                || PlayerbotMotion.IsBlacklisted(player, path.End)))
+            return false;
 
+        // The corners are the navigation mesh's, which already proves each leg walkable; they are not re-tested against the
+        // collision data. A line of sight at their own height hits the floor model itself inside any building (the Deathknell
+        // crypt, the Goldshire inn), and the floor probe finds nothing at some spots the mesh covers (on the crypt's stairs, at
+        // 1645.4, 1665.9, 132.6, where Graveweaver stopped): either refused every route from or through such a place, and a bot
+        // that started or stood there never moved again. The motion snaps to a floor where it finds one (PlayerbotMotion).
         float distance = 0;
         for (int index = 0; index < path.Points.Count; index++)
         {
             Vector3 point = path.Points[index];
-            if (!Finite(point) || InvalidHeight(map.Collision.GetHeight(point.X, point.Y, point.Z)))
-                return false;
-            if (index > 0)
-            {
-                Vector3 previous = path.Points[index - 1];
-                if (!map.Collision.IsInLineOfSight(previous.X, previous.Y, previous.Z,
-                        point.X, point.Y, point.Z))
-                    return false;
-                distance += Vector3.Distance(previous, point);
-            }
+            if (!Finite(point)) return false;
+            if (index > 0) distance += Vector3.Distance(path.Points[index - 1], point);
         }
 
         if (!float.IsFinite(distance) || distance > options.MaxRouteYards)
             return false;
 
-        route = new PlayerbotRoute(path.Points.ToArray(), distance);
+        route = new PlayerbotRoute(path.Points.ToArray(), distance, navigated: true);
         return true;
     }
+
+    private static Vector2 Flat(Vector3 value) => new(value.X, value.Y);
 
     /// <summary>
     /// Follow <paramref name="route"/> this think (<see cref="PlayerbotMotion.Follow"/>): start, switch or keep moving.

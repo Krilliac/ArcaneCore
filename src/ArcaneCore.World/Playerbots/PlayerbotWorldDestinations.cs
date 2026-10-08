@@ -42,6 +42,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     internal uint TargetEntry { get; private set; }
     internal uint QuestId { get; private set; }
 
+    /// <summary>Quests not worth a trip: the server refused their exchange lately (<see cref="PlayerbotQuestGoals.IsRefused"/>).</summary>
+    internal Func<uint, bool>? SkipQuest { get; set; }
+
     /// <summary>
     /// Advisory check for the brain's idle decision. This reports an ordinary,
     /// rewardable (Quests:RewardMode) quest destination that is currently eligible and offscreen;
@@ -75,7 +78,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         bool liveEligible = false;
         foreach (DestinationEntry entry in _entries.OrderBy(entry => DistanceSquared(player, entry.Spawn)))
         {
-            if (!Eligible(entry.Entry, 0, player, services, state, 0, out _)) continue;
+            if (!Eligible(entry.Entry, 0, player, services, state, 0, SkipQuest, out _)) continue;
             liveEligible = true;
             // A visible eligible giver belongs to ordinary interaction handling.
             // Do not let this advisory seam steal it for travel.
@@ -113,7 +116,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             QuestNpcServices? currentServices = _session.Services.GetService<QuestNpcFeature>()?.Services;
             PlayerNpcState? currentState = currentServices?.StateOf(player);
             if ((preferredCreatureEntry != 0 && preferredCreatureEntry != _routeTarget)
-                || !Eligible(_routeTarget, preferredCreatureEntry, player, currentServices, currentState, returnQuestId, out _))
+                || !Eligible(_routeTarget, preferredCreatureEntry, player, currentServices, currentState, returnQuestId, SkipQuest, out _))
             {
                 ClearRoute();
                 return false;
@@ -159,16 +162,11 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             .OrderBy(entry => DistanceSquared(player, entry.Spawn)))
         {
             if (++scanned > MaxEntryScan) break;
-            if (!Eligible(entry.Entry, preferredCreatureEntry, player, services, state, returnQuestId, out uint questId)) continue;
+            if (!Eligible(entry.Entry, preferredCreatureEntry, player, services, state, returnQuestId, SkipQuest, out uint questId)) continue;
             if (VisibleTarget(player, entry.Entry, returnQuestId)) return false;
             attempted = true;
-            Vector3 origin = new(player.X, player.Y, player.Z);
             Vector3 destination = new(entry.Spawn.X, entry.Spawn.Y, entry.Spawn.Z);
-            float distance = Vector3.Distance(origin, destination);
-            float chunk = MathF.Min(_options.MaxRouteYards * 0.9f, Math.Max(1, _options.MaxPathPoints - 2));
-            if (distance > chunk) destination = origin + ((destination - origin) * (chunk / distance));
-            if (!PlayerbotNavigation.TryPlan(player, destination, _options,
-                    out PlayerbotRoute? route))
+            if (!PlayerbotNavigation.TryPlanToward(player, destination, _options, out PlayerbotRoute? route))
             {
                 _blockedSpawns.Add(entry.Spawn.Guid);
                 return false; // Rotate to another indexed spawn on the next think; one path attempt per think.
@@ -275,7 +273,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     }
 
     private static bool Eligible(uint entry, uint preferred, Player player, QuestNpcServices? services,
-        PlayerNpcState? state, uint returnQuestId, out uint questId)
+        PlayerNpcState? state, uint returnQuestId, Func<uint, bool>? skipQuest, out uint questId)
     {
         questId = 0;
         if (returnQuestId != 0)
@@ -291,13 +289,13 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         if (services is null || state is not { Loaded: true }) return false;
         foreach (uint id in services.Quests.EndersOf(entry))
         {
-            if (services.IsRewardable(id)
+            if (services.IsRewardable(id) && skipQuest?.Invoke(id) != true
                 && state.Quests.Get(id) is { Status: QuestStatus.Complete, Rewarded: false })
             { questId = id; return true; }
         }
         foreach (uint id in services.Quests.StartersOf(entry))
         {
-            if (services.IsRewardable(id)
+            if (services.IsRewardable(id) && skipQuest?.Invoke(id) != true
                 && services.CanTakeQuest(player, id) == true && state.Quests.Get(id) is null) { questId = id; return true; }
         }
         return false;
