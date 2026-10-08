@@ -19,6 +19,7 @@ How to read the tables:
 - [`Bans`](#bans)
 - [`Battleground`](#battleground)
 - [`CharacterCreation`](#charactercreation)
+- [`ClientData`](#clientdata)
 - [`Combat`](#combat)
 - [`Conditions`](#conditions)
 - [`Creatures`](#creatures)
@@ -147,6 +148,13 @@ How to read the tables:
 | `CharacterCreation:StartPlayerLevel` | `int` | `1` | - | vmangos StartPlayerLevel (default 1), clamped to 1..MaxPlayerLevel (World.cpp:673). |
 | `CharacterCreation:StartPlayerMoney` | `long` | `0` | - | vmangos StartPlayerMoney in copper (default 0), clamped to 0..MAX_MONEY_AMOUNT (World.cpp:674). |
 | `CharacterCreation:StrictPlayerNames` | `uint` | `0` | - | vmangos StrictPlayerNames (0 any one script, bit 1 basic Latin, bit 2 realm zone script). |
+
+## `ClientData`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `ClientData:DbcDirectory` | `string` | `""` | - | A directory holding the client's DBFilesClient *.dbc files (build 5875, extracted by the developer; none ships with the server). Set, every DBC consumer whose own path key (for example `Combat:ShapeshiftFormDbcPath`) is unset or empty reads the file of that name in this directory (for example SpellShapeshiftForm.dbc); a key that is set still wins. Each file is checked at start against the vmangos layout (field count and record size) and logged on one line: loaded, missing or format mismatch. A missing or mismatched file is not handed to its consumer, which keeps its built-in table or stays off, with a warning. Empty (the default): only the per-file keys are read, as before. |
+| `ClientData:Strict` | `bool` | `false` | - | Make a client data problem fatal: a missing or mismatched DBC under `DbcDirectory`, a configured per-file path whose file is missing or has another layout, or a `DbcDirectory` that does not exist refuses start-up (exit code 78, like any configuration error) instead of a warning. Default false. |
 
 ## `Combat`
 

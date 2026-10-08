@@ -80,7 +80,7 @@ which the database reads as already migrated and the rows would never move. Use 
 | 2 | usage or configuration: unknown command or option, missing value, no connection string | no |
 | 3 | `status`, `plan`: an upgrade is pending (a normal report; `--no-fail-on-pending` makes it 0 for `set -e` scripts) | no |
 | 4 | refused: database newer than the code, unknown state, blocker (duplicate rows, conflicting index, mismatching table), other sessions connected | no |
-| 5 | drift: the database differs from the model (`check`, or the check at the end of `upgrade`) | no |
+| 5 | drift: the database differs from the model (`check`, or the check at the end of `upgrade`); for `dbc`, a DBC with another layout or a world id no DBC row has | no |
 | 6 | the database server could not be reached or refused the connection (message scrubbed) | no |
 | 7 | the wait for another process's schema lock ran out | no |
 | 8 | `upgrade` with pending steps and no confirmed backup, or a backup that could not be made | no |
@@ -98,18 +98,20 @@ These differ from the content importer's codes (`arcane-content-importer`: 3 wro
 | `upgrade` | plan everything, refuse before any change, require the backup acknowledgement, apply auth, characters, world in that order, then check |
 | `migrate-codex` | find databases the Codex line created and report their one-shot migration to this build's numbering (read-only); `--apply` runs only that migration, behind the same backup gate (see "Databases created by the Codex line") |
 | `backup-info` | print how to back each database up |
+| `dbc` | read-only client data check: every file of the DBC directory against its vmangos layout, then the world database's spell, map, area, faction, display ... ids that no DBC row has (docs/areas/client-data.md); `--json` |
 
 | Option | Applies to | Meaning |
 |---|---|---|
 | `--component auth\|characters\|world\|all` | all commands | which component(s); default all |
 | `--script` | plan | print the SQL |
-| `--json` | status, plan, check | machine-readable output |
+| `--json` | status, plan, check, dbc | machine-readable output |
 | `--no-fail-on-pending` | status, plan | exit 0 when only an upgrade is pending |
 | `--apply` | migrate-codex | migrate; without it `migrate-codex` is a read-only dry run |
 | `--confirm-backup` | upgrade, migrate-codex | you hold a backup of every database that has pending steps |
 | `--backup-dir <directory>` | upgrade, migrate-codex | also write a verified copy of each SQLite database there (server engines still need `--confirm-backup`) |
 | `--allow-active-sessions` | upgrade, migrate-codex | do not refuse when other sessions are connected to the database |
 | `--lock-timeout <seconds>` | upgrade, migrate-codex | wait for another process's schema lock (default 60) |
+| `--dbc-dir <directory>` | dbc | the build-5875 DBC directory; default `ClientData:DbcDirectory` of the configuration |
 
 `status`, `plan`, `check` and `migrate-codex` without `--apply` open SQLite read-only and never create a file. All
 connections are unpooled so the session count only sees other processes. On a failure in one component the later ones

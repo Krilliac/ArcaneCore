@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 5 |
 | `Moderator` | 1 | 21 |
-| `GameMaster` | 3 | 123 |
-| `Administrator` | 6 | 181 |
+| `GameMaster` | 3 | 124 |
+| `Administrator` | 6 | 183 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -201,6 +201,8 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.arcane mutes` | 3 | GameMaster | stored level through the map | Syntax: .arcane mutes List the chat mutes in force, with who set them and when they end. |
 | `.arcane gmlog` | 6 | Administrator | stored level through the map | Syntax: .arcane gmlog [$count] Show the latest audited GM commands (default 20, at most 100; kept in memory since the last restart). |
 | `.arcane queues` | 6 | Administrator | stored level through the map | Syntax: .arcane queues Show the pending and retained writes of the write-behind queues. |
+| `.arcane dbc` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane dbc Show how each client DBC the server reads was resolved (loaded, missing or format mismatch) and where from. |
+| `.arcane dbc validate` | 6 | Administrator | stored level through the map | Syntax: .arcane dbc validate Check the world database's spell, map, area, faction, display ... ids against the DBCs in ClientData:DbcDirectory and report the dangling ones. |
 | `.arcane content` | 3 | GameMaster | stored level through the map | Syntax: .arcane content Show how many rows of each content table are loaded. |
 | `.arcane maps` | 3 | GameMaster | stored level through the map | Syntax: .arcane maps Show the players, objects and in-transit objects of every running map. |
 | `.arcane reloads` | 3 | GameMaster | stored level through the map | Syntax: .arcane reloads Show how each reloadable content table last ended, and the creature definitions generation. |

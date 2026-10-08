@@ -29,8 +29,9 @@ if (extraConfig is not null)
     configuration.AddJsonFile(Path.GetFullPath(extraConfig), optional: false);
 }
 
-DatabaseOptions database = configuration.AddEnvironmentVariables().Build().GetSection(DatabaseOptions.SectionName).Get<DatabaseOptions>()
-    ?? new DatabaseOptions();
+IConfigurationRoot settings = configuration.AddEnvironmentVariables().Build();
+DatabaseOptions database = settings.GetSection(DatabaseOptions.SectionName).Get<DatabaseOptions>() ?? new DatabaseOptions();
+string? dbcDirectory = settings["ClientData:DbcDirectory"]; // the default of 'arcane-db dbc --dbc-dir'
 
 using var cancellation = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>
@@ -39,4 +40,4 @@ Console.CancelKeyPress += (_, e) =>
     cancellation.Cancel();
 };
 
-return await DbUpgradeCli.RunAsync([.. arguments], database, Console.Out, Console.Error, cancellation.Token).ConfigureAwait(false);
+return await DbUpgradeCli.RunAsync([.. arguments], database, Console.Out, Console.Error, dbcDirectory, cancellation.Token).ConfigureAwait(false);
