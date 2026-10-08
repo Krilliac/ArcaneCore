@@ -2,6 +2,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -51,6 +52,30 @@ public sealed class ScriptedAiSupportTests
             Run(world, 100);
             Assert.DoesNotContain(trooper, system.Creatures);
             Assert.Null(map.FindObject(trooper.Guid));
+        }
+    }
+
+    [Fact]
+    public void AnEntryScript_IsTheAiOfAWildSummonOfTheEntry_ButNotOfAControlledPet()
+    {
+        (WorldRuntime world, _, CreatureMapSystem system, Creature summoner, _) = Setup();
+        using (world)
+        {
+            system.RegisterEntryAi(SummonEntry, c => new NullCreatureAI(c));
+            CreatureTemplate template = system.Content.FindTemplate(SummonEntry)!;
+            Creature wild = system.SpawnSummoned(template, HighGuid.Unit, c =>
+            {
+                c.Summon = new SummonLinks(SummonKind.Wild, summoner.Guid, 1, TotemSlots.None, 0);
+                return new CreatureHome(6, 0, Z, 0);
+            });
+            Creature pet = system.SpawnSummoned(template, HighGuid.Pet, c =>
+            {
+                c.Summon = new SummonLinks(SummonKind.Pet, summoner.Guid, 1, TotemSlots.None, 0);
+                return new CreatureHome(7, 0, Z, 0);
+            });
+
+            Assert.IsType<NullCreatureAI>(wild.AI);
+            Assert.IsNotType<NullCreatureAI>(pet.AI);
         }
     }
 

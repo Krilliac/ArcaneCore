@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -40,9 +41,14 @@ public sealed partial class CreatureMapSystem
         }
     }
 
-    /// <summary>The script AI of the creature's entry on this map, if any (consulted before the template's AIName).</summary>
+    /// <summary>
+    /// The script AI of the creature's entry on this map, if any (consulted before the template's AIName). As vmangos selectAI allows
+    /// (AI/CreatureAISelector.cpp:39-46): not for a charmed creature nor a controlled pet; a wild summon, a guardian or a mini pet may be
+    /// scripted.
+    /// </summary>
     private CreatureAI? CreateEntryAi(Creature creature)
-        => _entryAis.Count > 0 && creature.Summon is null && _entryAis.TryGetValue(creature.Template.Entry, out Func<Creature, CreatureAI>? factory)
+        => _entryAis.Count > 0 && creature.Summon is not { Kind: SummonKind.Pet } && creature.CharmerGuid.IsEmpty
+            && _entryAis.TryGetValue(creature.Template.Entry, out Func<Creature, CreatureAI>? factory)
             ? factory(creature)
             : null;
 
