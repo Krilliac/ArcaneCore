@@ -474,7 +474,15 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
                         if (active.PartyDriven && !party) ReplaceBrain(active);
                         active.PartyDriven = party;
                         if (party) active.Party.Update(driven, sinceLast);
-                        else active.Brain.Update(sinceLast);
+                        else
+                        {
+                            active.Brain.Update(sinceLast);
+                            if (active.Brain.StallCount != active.StallsLogged && active.Brain.StallReport is { } stall)
+                            {
+                                active.StallsLogged = active.Brain.StallCount;
+                                logger.LogWarning("Playerbot {BotId} ({Name}) {Stall}; it gives up that goal", active.Record.BotId, active.Name, stall);
+                            }
+                        }
                     }
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "action", ex); }
@@ -488,7 +496,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             Volatile.Write(ref _snapshot, current.Where(s => !_active.ContainsKey(s.BotId)).Concat(bots.Where(b => _active.ContainsKey(b.Record.BotId)).Select(b => new PlayerbotStatus(
                 b.Record.BotId, b.Name, b.Session.State == SessionState.Closed ? ManagedPlayerbotState.Faulted : b.Record.State,
                 b.Record.DesiredEnabled, GoalOf(b).Goal, GoalOf(b).TargetEntry, GoalOf(b).QuestId, b.MapId, b.Session.Player?.Health ?? 0,
-                b.Session.State == SessionState.Closed ? "session-closed" : b.Record.ErrorCode))).ToArray());
+                b.Session.State == SessionState.Closed ? "session-closed" : b.Record.ErrorCode ?? StallOf(b)))).ToArray());
         }
         _checkpointMs += elapsedMs;
         if (_checkpointMs >= 5000 && _checkpoint.IsCompleted)
@@ -522,6 +530,10 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         finally { _operations.Release(); }
         await RetryQuarantinedAsync().ConfigureAwait(false);
     }
+
+    /// <summary>A running bot's current stall (<see cref="PlayerbotStallWatch"/>), shown where a fault would be.</summary>
+    private static string? StallOf(ActiveBot active) => active.PartyDriven || active.Controller is not null ? null
+        : active.Brain.StallReport is { } stall ? Code(stall) : null;
 
     private void ReplaceBrain(ActiveBot active)
     {
@@ -709,6 +721,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
         public volatile bool Paused;
         public IPlayerbotController? Controller;
         public string? FaultCode;
+        public int StallsLogged;
         public PlayerbotControllerContext ControllerContext { get; } = new(record.BotId, session);
     }
 }

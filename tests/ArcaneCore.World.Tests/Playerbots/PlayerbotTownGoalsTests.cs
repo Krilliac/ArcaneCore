@@ -385,6 +385,57 @@ public sealed class PlayerbotTownGoalsTests
         finally { TownVendorServices.Current.Value = null; }
     }
 
+    /// <summary>
+    /// A vendor refuses to buy a damaged item it has no repair price for (PlayerInventory.SellItem: SELL_ERR_CANT_SELL_ITEM). The
+    /// bot offers that gray item once, then neither offers it again nor keeps the vendor as a goal. Live 2026-10-08: Ironwander
+    /// stood at Adlin Pridedrift for hours re-sending CMSG_SELL_ITEM for its damaged gray Frayed Pants, goal Vendor, no fault.
+    /// </summary>
+    [Fact]
+    public async Task AGrayItemTheVendorRefuses_IsOfferedOnce_AndTheVendorIsNoLongerAGoal()
+    {
+        var npc = new TownVendorFixture();
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(Boots(9401, durability: 25) with { Quality = 0, SellPrice = 3 });
+        using IDisposable itemScope = items.Use();
+        TownVendorServices.Current.Value = npc;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start(); // no repair prices: a damaged item cannot be priced for sale
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "vendor visible");
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(9401, 1, out _));
+                    Item pants = player.Inventory.AllItems.Single(item => item.Entry == 9401);
+                    pants.Durability = 10;
+                    ((Creature)player.Map!.FindObject(TownVendorFixture.Guid)!).NpcFlags = (uint)NpcFlags.Vendor;
+                    int offers = 0;
+                    session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgSellItem) offers++; };
+                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+                    Assert.True(goals.HasCandidate(player));
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    Assert.True(goals.Update(player, 1500));
+                    Assert.Equal(1, offers);
+                    Assert.Same(pants, player.Inventory.GetItemByGuid(pants.Guid)); // refused: still in the bags
+                    Assert.False(goals.HasCandidate(player));
+                    for (int think = 0; think < 5; think++)
+                    {
+                        session.ManagedBudget = new ManagedActionBudget(1);
+                        Assert.False(goals.Update(player, 1500));
+                    }
+
+                    Assert.Equal(1, offers);
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { TownVendorServices.Current.Value = null; }
+    }
+
     /// <summary>Without repair prices the handler repairs nothing: the bot tries once, then leaves the NPC alone for a minute.</summary>
     [Fact]
     public async Task ARepairThatChangesNothing_IsNotRepeatedEveryThink()

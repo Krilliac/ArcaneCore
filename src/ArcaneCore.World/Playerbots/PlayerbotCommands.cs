@@ -124,6 +124,7 @@ public sealed class PlayerbotCommands : ICommandGroup
         context.Reply(FormattableString.Invariant($"BOTINSPECT {value.Name} goal={value.Goal} report={value.ReportedTarget} quest={value.QuestId} map={value.MapId} level={value.Level} hp={value.Health}/{value.MaxHealth} money={value.Money} combat={value.InCombat} ghost={value.Ghost}"));
         context.Reply(FormattableString.Invariant($"BOTINSPECT death={value.DeathState} pos={value.PlayerX:F2},{value.PlayerY:F2},{value.PlayerZ:F2}"));
         context.Reply(FormattableString.Invariant($"BOTINSPECT movement=flags:{(uint)value.MovementFlags:X8} stand:{value.StandState} time:{value.MovementTimeMs} following:{value.Following} loops:{value.LoopsGivenUp}"));
+        context.Reply($"BOTINSPECT stall={value.Stall ?? "none"}");
         context.Reply(value.Master is null ? "BOTINSPECT party=none"
             : $"BOTINSPECT party=master:{value.Master} mode:{value.PartyMode?.ToString().ToLowerInvariant()}");
         if (value.Corpse is { } corpse)

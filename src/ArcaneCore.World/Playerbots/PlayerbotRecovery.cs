@@ -282,12 +282,7 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
 
         if (_route is null || _route.Complete)
         {
-            Vector3 origin = new(player.X, player.Y, player.Z);
-            Vector3 destination = goal;
-            float distance = Vector3.Distance(origin, destination);
-            float chunk = MathF.Min(options.MaxRouteYards * 0.9f, Math.Max(1, options.MaxPathPoints - 2));
-            if (distance > chunk) destination = origin + ((destination - origin) * (chunk / distance));
-            if (!PlayerbotNavigation.TryPlan(player, destination, options, out _route))
+            if (!PlayerbotNavigation.TryPlanToward(player, goal, options, out _route))
             {
                 _route = null;
                 return false;

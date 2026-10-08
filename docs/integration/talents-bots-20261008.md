@@ -138,3 +138,14 @@ The method is wave 4's, with scripts in `D:/ArcaneCore-lanes/_logs/w5-talents-bo
 * Mirthblade recovers, but through the spirit healer, not at its body. Why the 359-yard corpse run counts as stalled on the real
   Dun Morogh terrain was not investigated.
 * `.playerbot start` gives a bot that was disabled after faults a clean history. If its stall comes back, it will be quarantined again.
+
+Update (branch `claude/bot-stall`, commits 0939f6e5 and b1de410b): the first two items are root-caused and fixed. Replaying
+`rehearsal/orig-characters.db` on the real terrain gave one cause per bot: Graveweaver, route corners re-tested with a line of
+sight at floor height (the crypt floor blocks it); Dawnrover, the motion's straight line of sight across a route corner (a pillar
+in the inn); Ironwander, a vendor refusing to buy a damaged gray item without a repair price, re-sold every 1.5 s; Mirthblade,
+512 search nodes (vmangos 2048) to the Rockjaw Raiders, and far goals cut to an unreachable straight-line point, which also
+judged its corpse run stuck. Ghosts also walked instead of running. A bot without progress for `World:Playerbots:StallSeconds`
+now reports `stalled ...` in `.playerbot list` and gives up that goal. On the replay, after the fixes, the four bots travelled
+1240 to 4450 yards in 10 minutes of game time; before, 0 to 504 yards, standing still for 485 to 599 seconds.
+Mirthblade's ghost now walks to its body (39 yards) but still takes the spirit healer 60 seconds later: two Frostmane Troll
+Whelps (spawns 927 and 931) stand within 25 yards of where the reclaim would revive it, the camped-body rule, unchanged.

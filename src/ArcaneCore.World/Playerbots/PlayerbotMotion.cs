@@ -180,7 +180,7 @@ internal static class PlayerbotMotion
             // One heartbeat at the current position with the new orientation replaces the old route's next packet.
             Vector3 position = Walk(state.Route!, state.Anchor, state.Route!.NextPoint,
                 state.Speed * Age(now, state.AnchorMs) / 1000f, state.Heading, out _, out _, out _, out _);
-            current = Validate(map, state.Anchor, position) ?? state.Anchor;
+            current = Validate(map, state.Route!, state.Anchor, position) ?? state.Anchor;
         }
 
         while (route.NextPoint < route.Points.Count - 1 && Vector2.Distance(Flat(current), Flat(route.Points[route.NextPoint])) <= 0.05f)
@@ -188,7 +188,7 @@ internal static class PlayerbotMotion
         // The first stretch must be walkable before anything is announced.
         Vector3 probe = Walk(route, current, route.NextPoint, MathF.Max(0.1f, MathF.Min(speed * 0.5f, 2f)),
             HeadingTo(current, route.Points[route.NextPoint]), out _, out _, out _, out _);
-        if (Vector2.Distance(Flat(current), Flat(probe)) <= 0.05f || Validate(map, current, probe) is null)
+        if (Vector2.Distance(Flat(current), Flat(probe)) <= 0.05f || Validate(map, route, current, probe) is null)
         {
             Stop(session, player);
             return false;
@@ -265,7 +265,7 @@ internal static class PlayerbotMotion
         }
 
         if (!turned && !entering && age < HeartbeatIntervalMs) return;
-        if (Validate(map, state.Anchor, position) is not { } valid)
+        if (Validate(map, route, state.Anchor, position) is not { } valid)
         {
             // The route is no longer walkable here: stop where the last packet put the bot.
             StopAt(session, player, state, state.Anchor, state.Heading, route.NextPoint, now);
@@ -316,7 +316,7 @@ internal static class PlayerbotMotion
         if (!state.Active || Age(now, state.AnchorMs) == 0) return;
         Vector3 position = Walk(route, state.Anchor, route.NextPoint, state.Speed * Age(now, state.AnchorMs) / 1000f,
             state.Heading, out int nextPoint, out float heading, out _, out _);
-        if (Validate(map, state.Anchor, position) is not { } valid
+        if (Validate(map, route, state.Anchor, position) is not { } valid
             || !Send(session, player, WorldOpcode.MsgMoveHeartbeat, valid, heading, state.Walk, moving: true, now, budgeted: false))
         {
             state.Clear();
@@ -352,11 +352,16 @@ internal static class PlayerbotMotion
     /// <summary>
     /// The speed observers use for this bot: its run speed, or — when the configured cap is below it — walk mode at
     /// its walk speed. A client cannot be told any other speed, so moving at another one makes observers drift.
+    /// <para>
+    /// The cap is compared with the run speed of an unhastened player (<see cref="Unit.BaseRunSpeed"/>) at most: a bot whose run
+    /// speed is raised (a ghost, a speed buff) runs at it. Compared with the raised speed, the default cap (7, the base run speed)
+    /// put every ghost into walk mode, and a corpse run of 359 yards took two minutes instead of half of one.
+    /// </para>
     /// </summary>
     internal static bool Speed(Player player, float cap, out float speed, out bool walk)
     {
         float run = UnitSpeed.Get(player, MoveType.Run);
-        walk = float.IsFinite(cap) && cap < run - 0.001f;
+        walk = float.IsFinite(cap) && cap < MathF.Min(run, Unit.BaseRunSpeed) - 0.001f;
         speed = walk ? UnitSpeed.Get(player, MoveType.Walk) : run;
         return float.IsFinite(speed) && speed > 0;
     }
@@ -425,7 +430,7 @@ internal static class PlayerbotMotion
 
         Vector3 position = Walk(route, state.Anchor, route.NextPoint, state.Speed * Age(now, state.AnchorMs) / 1000f,
             state.Heading, out int nextPoint, out float heading, out _, out _);
-        if (Validate(map, state.Anchor, position) is { } valid) StopAt(session, player, state, valid, heading, nextPoint, now);
+        if (Validate(map, route, state.Anchor, position) is { } valid) StopAt(session, player, state, valid, heading, nextPoint, now);
         else StopAt(session, player, state, state.Anchor, state.Heading, route.NextPoint, now);
     }
 
@@ -484,17 +489,50 @@ internal static class PlayerbotMotion
             && ((player.Movement.Flags & MovementFlags.Forward) != 0) == moving;
     }
 
-    /// <summary>The floor under <paramref name="candidate"/> and a clear line from <paramref name="from"/>, or null.</summary>
-    private static Vector3? Validate(Map map, Vector3 from, Vector3 candidate)
+    /// <summary>How far a mesh route's straight leg may run from the floor under it before the motion keeps the mesh's own height.</summary>
+    internal const float MeshFloorToleranceYards = 4f;
+
+    /// <summary>
+    /// Where the bot stands at <paramref name="candidate"/>, or null when it cannot stand there.
+    /// <list type="bullet">
+    /// <item><description>A route without a navigation-mesh proof (<see cref="PlayerbotRoute.Navigated"/>, the terrain stepper): a floor
+    /// within 2 yards, probed from 2 yards above, and a clear line of sight from <paramref name="from"/>.</description></item>
+    /// <item><description>A mesh route: never refused for its height or for a line of sight. Its legs are straight lines between the
+    /// mesh's corners; the floor under a leg (stairs, the lip of a ramp) can lie a few yards off, and a probe from 2 yards above
+    /// then finds the storey below or nothing. Two positions on either side of a corner see each other through the obstacle the
+    /// corner goes around. Both refused every start out of the Deathknell crypt and, in the Goldshire inn, every start towards
+    /// William Pestle (a pillar on the line), and those bots stood still for good. The bot stands on the floor nearest to the
+    /// leg's height among the probes from 2 and 6 yards above within <see cref="MeshFloorToleranceYards"/>, else at the leg's
+    /// own height.</description></item>
+    /// </list>
+    /// </summary>
+    private static Vector3? Validate(Map map, PlayerbotRoute route, Vector3 from, Vector3 candidate)
     {
         if (!Finite(candidate)) return null;
-        float floor = map.Collision.GetHeight(candidate.X, candidate.Y, candidate.Z);
-        if (!float.IsFinite(floor) || floor == TerrainTile.InvalidHeight || floor == TerrainTile.InvalidHeightValue
-            || MathF.Abs(floor - candidate.Z) > 2f)
+        if (route.Navigated)
+        {
+            float best = float.NaN;
+            foreach (float raise in MeshFloorProbes)
+            {
+                float floor = map.Collision.GetHeight(candidate.X, candidate.Y, candidate.Z + raise);
+                if (!ValidHeight(floor) || MathF.Abs(floor - candidate.Z) > MeshFloorToleranceYards) continue;
+                if (float.IsNaN(best) || MathF.Abs(floor - candidate.Z) < MathF.Abs(best - candidate.Z)) best = floor;
+            }
+
+            return float.IsNaN(best) ? candidate : candidate with { Z = best + 0.05f };
+        }
+
+        float ground = map.Collision.GetHeight(candidate.X, candidate.Y, candidate.Z);
+        if (!ValidHeight(ground) || MathF.Abs(ground - candidate.Z) > 2f)
             return null;
-        if (!map.Collision.IsInLineOfSight(from.X, from.Y, from.Z + 2, candidate.X, candidate.Y, floor + 2)) return null;
-        return candidate with { Z = floor + 0.05f };
+        if (!map.Collision.IsInLineOfSight(from.X, from.Y, from.Z + 2, candidate.X, candidate.Y, ground + 2)) return null;
+        return candidate with { Z = ground + 0.05f };
     }
+
+    private static readonly float[] MeshFloorProbes = [0f, 4f];
+
+    private static bool ValidHeight(float height)
+        => float.IsFinite(height) && height != TerrainTile.InvalidHeight && height != TerrainTile.InvalidHeightValue;
 
     /// <summary>Alive, or a ghost running back to its corpse; a corpse lying on the ground does not move.</summary>
     internal static bool CanMove(Player player) => player.IsAlive || (player.Flags & PlayerFlags.Ghost) != 0;
