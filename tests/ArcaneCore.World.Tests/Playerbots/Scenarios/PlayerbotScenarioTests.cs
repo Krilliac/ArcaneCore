@@ -74,6 +74,44 @@ public sealed class PlayerbotScenarioTests
         Assert.Contains(saved.Quests, row => row.Quest == KillQuest && row.Rewarded);
     }
 
+    /// <summary>
+    /// A reward settlement slower than the shipped 5 s settlement budget, but well inside the scenario's 30 s step timeout, still
+    /// rewards the quest. Under full-suite load the settlement's SQLite work (the pre-settlement save, queued behind earlier saves, and
+    /// the commit) took more than 5 s of wall time: the budget cancelled it, nothing was rewarded and no SMSG_QUESTGIVER_QUEST_COMPLETE
+    /// was sent, so the scenario waited out its whole timeout (Av_ScrapsTurnIn_QuartermasterUpgrade_AndTheLandmine).
+    /// </summary>
+    [Fact]
+    public async Task Quest_IsRewarded_WhenTheSettlementIsSlowerThanTheShippedBudget()
+    {
+        var store = new SlowQuestRewardCommit(TimeSpan.FromSeconds(7));
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(services =>
+            services.AddScoped<ICharacterQuestRewardStore>(sp => store.Wrap(
+                new Data.Quests.EfCharacterQuestRewardStore(sp.GetRequiredService<Data.Characters.CharacterDbContext>()))));
+        await world.RunPassingAsync(new KillQuestScenario());
+        Assert.True(store.Delayed, "the seam never held a commit");
+    }
+
+    /// <summary>Holds every quest reward commit for a fixed wall time before it reaches the database, as a loaded SQLite file can.</summary>
+    private sealed class SlowQuestRewardCommit(TimeSpan delay)
+    {
+        private readonly TimeSpan _delay = delay;
+        private int _commits;
+
+        public bool Delayed => Volatile.Read(ref _commits) > 0;
+
+        public ICharacterQuestRewardStore Wrap(ICharacterQuestRewardStore inner) => new Store(this, inner);
+
+        private sealed class Store(SlowQuestRewardCommit owner, ICharacterQuestRewardStore inner) : ICharacterQuestRewardStore
+        {
+            public async Task<QuestRewardCommitResult> CommitAsync(CharacterQuestRewardRequest request, CancellationToken cancellationToken = default)
+            {
+                Interlocked.Increment(ref owner._commits);
+                await Task.Delay(owner._delay, cancellationToken);
+                return await inner.CommitAsync(request, cancellationToken);
+            }
+        }
+    }
+
     [Fact]
     public async Task GroupChat_AndSmoke_BuiltinsPass()
     {

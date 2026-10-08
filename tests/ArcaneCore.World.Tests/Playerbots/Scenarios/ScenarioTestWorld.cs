@@ -45,8 +45,17 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
         _database = database;
         Bots = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         Clock = ScenarioClock.Manual(host.World, time);
-        host.WorldServices.GetRequiredService<QuestNpcFeature>().Options.OrdinaryRewardQuestIds = [ScenarioTestContent.KillQuest];
+        QuestNpcOptions quests = host.WorldServices.GetRequiredService<QuestNpcFeature>().Options;
+        quests.OrdinaryRewardQuestIds = [ScenarioTestContent.KillQuest];
+        // A scenario wait gives a reply behind a database commit its whole step timeout in wall time. The reward settlement's own
+        // wall-clock budget (5 s shipped) cancelled rewards whose SQLite save and commit ran slower than that under full-suite load:
+        // nothing was rewarded, no SMSG_QUESTGIVER_QUEST_COMPLETE was sent, and the scenario timed out after 30 s. Match the
+        // settlement budget to the scenario step timeout so only the scenario's own bound decides.
+        quests.SettlementBudgetSeconds = (int)DefaultStepTimeout.TotalSeconds;
     }
+
+    /// <summary>The step timeout of <see cref="RunAsync"/> without options (and of most scenario tests).</summary>
+    public static TimeSpan DefaultStepTimeout { get; } = TimeSpan.FromSeconds(30);
 
     public WorldTestHost Host { get; }
 
@@ -95,7 +104,7 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
     public Task<ScenarioReport> RunAsync(IPlayerbotScenario scenario, ScenarioRunOptions? options = null)
         => ScenarioRunner.RunAsync(scenario, Bots, Host.World, Services, Clock, options ?? new ScenarioRunOptions
         {
-            StepTimeout = TimeSpan.FromSeconds(30), MaxDuration = TimeSpan.FromSeconds(90),
+            StepTimeout = DefaultStepTimeout, MaxDuration = TimeSpan.FromSeconds(90),
         });
 
     /// <summary>Run <paramref name="scenario"/> and fail the test with the whole report when it did not pass.</summary>

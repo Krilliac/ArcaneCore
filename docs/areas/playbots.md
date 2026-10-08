@@ -213,6 +213,9 @@ game budget ran out): the game budget burns in well under a second, while asynch
 as a database commit runs on real time and can take seconds on a loaded machine. Code that reads
 `DateTime` or `Stopwatch` directly, rather than the world clock or `TimeProvider`, does not
 follow the manual clock. `ScenarioClock.Real` (live server) polls in wall time.
+A production wall-clock budget shorter than that wait defeats it: the quest reward settlement
+gives up after 5 s and then sends nothing, so `ScenarioTestWorld` raises the settlement budget to
+its 30 s step timeout (a loaded SQLite file made the AV scraps turn-in miss the 5 s budget).
 
 **Built-in scenarios** (`PlayerbotScenarioCatalog`; bots `Scnalpha` and `Scnbeta`, created on
 first use): `smoke` (login, hear own /say), `group-chat` (invite, accept, both group lists and
