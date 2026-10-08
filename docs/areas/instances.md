@@ -4,6 +4,10 @@ Status: first slices delivered on `claude/vw2-instances-bosses`. WoW 1.12.1 (587
 
 References (GPL, read for verification only; nothing copied): `D:\refs\vmangos` (primary), `D:\refs\mangos-classic`, `D:\refs\wow_messages`, `D:\refs\classic-db`.
 
+Molten Core (409) and Onyxia's Lair (249) now have instance state, entry AI, phase transitions, summons and gossip scripts.
+The [raid port record](../integration/raid-mc-ony-20261008.md) lists each behavior's reference, tests, data dependencies and remaining acceptance limits.
+These have deterministic test coverage; a complete imported-world or real-client raid run is not recorded.
+
 ## Delivered
 
 | Slice | Behaviour | Reference |
