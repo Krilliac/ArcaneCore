@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Procs;
@@ -42,7 +43,9 @@ internal sealed class TalentProcRig : IDisposable
         player.Orientation = orientation;
         if (pvp)
         {
-            player.UnitFlags |= UnitFlags.Pvp;
+            // PvP wanted (PLAYER_FLAGS_PVP_DESIRED) and flagged, so the world tick's flag timer keeps the flag (vmangos Player::UpdatePvP).
+            player.Flags |= PlayerFlags.PvpDesired;
+            MapCombat.UpdatePvp(player, true);
         }
 
         return player;
