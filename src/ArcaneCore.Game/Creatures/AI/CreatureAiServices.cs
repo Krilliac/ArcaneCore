@@ -284,6 +284,12 @@ public sealed class CreatureAiServices
     /// its quest service.
     /// </summary>
     public IEventAiQuestEvents? QuestEvents { get; init; }
+
+    /// <summary>
+    /// The quest log of DB scripts (QUEST_EXPLORED 7, KILL_CREDIT 8) and player-linked escorts (their quest failure and group range check);
+    /// null: those credit nothing and an escort sees only its own player. Bound by the world to its quest service.
+    /// </summary>
+    public IScriptQuestEvents? ScriptQuests { get; init; }
 }
 
 /// <summary>The quest credit EventAI actions give (cmangos Player methods called from CreatureEventAI::ProcessAction).</summary>

@@ -34,11 +34,47 @@ public sealed partial class CreatureMapSystem
     private const uint FlagBuddyByGo = 0x400;
 
     private readonly RelayScriptRunner _relays = new();
+    private readonly Dictionary<DbScriptKind, RelayScriptRunner> _dbScriptRunners = new()
+    {
+        [DbScriptKind.QuestStart] = new(),
+        [DbScriptKind.QuestEnd] = new(),
+        [DbScriptKind.Gossip] = new(),
+        [DbScriptKind.Event] = new(),
+    };
     private readonly Dictionary<Creature, (uint RelayId, ObjectGuid Target)> _arrivalRelays = [];
     private readonly List<(Creature Creature, long AtMs)> _scriptDespawns = [];
 
     /// <summary>Relay steps waiting to run on this map.</summary>
     public int PendingRelaySteps => _relays.PendingCount;
+
+    /// <summary>Steps of quest, gossip and event scripts waiting on this map's clock.</summary>
+    public int PendingDbScriptSteps => _dbScriptRunners.Values.Sum(runner => runner.PendingCount);
+
+    /// <summary>
+    /// cmangos Map::ScriptsStart for the independent quest, gossip and event namespaces. Source and target must be live
+    /// world objects on this map; the executor resolves them again when a delayed command becomes due.
+    /// </summary>
+    public bool StartDbScript(DbScriptKind kind, uint scriptId, WorldObject source, WorldObject? target)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (kind == DbScriptKind.Relay)
+        {
+            return StartRelayScript(scriptId, source, target);
+        }
+
+        if (!_dbScriptRunners.TryGetValue(kind, out RelayScriptRunner? runner))
+        {
+            return false;
+        }
+
+        IReadOnlyList<RelayScriptStep> steps = _content.Ai.DbScripts.Get(kind, scriptId);
+        if (steps.Count == 0)
+        {
+            return false;
+        }
+
+        return runner.Start(steps, source.Guid, target?.Guid ?? default, _clockMs, ExecuteRelayStep);
+    }
 
     /// <summary>
     /// cmangos Map::ScriptsStart(SCRIPT_TYPE_RELAY, id, source, target): run relay <paramref name="relayId"/> with
@@ -68,6 +104,10 @@ public sealed partial class CreatureMapSystem
     private void UpdateRelayScripts()
     {
         _relays.Update(_clockMs, ExecuteRelayStep);
+        foreach (RelayScriptRunner runner in _dbScriptRunners.Values)
+        {
+            runner.Update(_clockMs, ExecuteRelayStep);
+        }
         for (int i = _scriptDespawns.Count - 1; i >= 0; i--)
         {
             if (_scriptDespawns[i].AtMs <= _clockMs)
@@ -340,6 +380,54 @@ public sealed partial class CreatureMapSystem
                 RelayMoveTo(step, source, target);
                 return false;
 
+            case 7: // SCRIPT_COMMAND_QUEST_EXPLORED (cmangos ScriptMgr.cpp:1934-1966; the player: GetPlayerTargetOrSourceAndLog, :1685-1694)
+            {
+                Player? player = target as Player ?? source as Player;
+                WorldObject? partner = source is Creature or GameObjects.GameObject ? source
+                    : target is Creature or GameObjects.GameObject ? target : null;
+                if (player is null || (step.DataLong2 != 0 && partner is null))
+                {
+                    return false;
+                }
+
+                bool failed = partner is Creature { IsAlive: false }
+                    || (step.DataLong2 != 0 && (!ReferenceEquals(partner!.Map, player.Map) || !WithinDistInMap(partner, player, step.DataLong2)));
+                if (failed)
+                {
+                    _ai.ScriptQuests?.FailQuest(player, step.DataLong);
+                }
+                else
+                {
+                    _ai.ScriptQuests?.AreaExploredOrEventHappens(player, step.DataLong);
+                }
+
+                return false;
+            }
+
+            case 8: // SCRIPT_COMMAND_KILL_CREDIT (cmangos ScriptMgr.cpp:1968-1999)
+            {
+                Player? player = target as Player ?? source as Player;
+                Creature? partner = source as Creature ?? target as Creature;
+                uint entry = step.DataLong != 0 ? step.DataLong : partner?.Entry ?? 0;
+                if (player is null || entry == 0)
+                {
+                    return false;
+                }
+
+                // Group credit (RewardPlayerAndGroupAtEventCredit) searches around the creature partner; without one cmangos searches around
+                // the source and logs that the script needs adjusting: here the player alone gets the credit then.
+                if (step.DataLong2 != 0 && partner is not null && _ai.QuestEvents is { } groups)
+                {
+                    groups.KillCredit(player, entry, partner);
+                }
+                else
+                {
+                    _ai.ScriptQuests?.KilledMonsterCredit(player, entry, partner?.Guid ?? default);
+                }
+
+                return false;
+            }
+
             case 10: // SCRIPT_COMMAND_TEMP_SPAWN_CREATURE (:2048-2073)
                 RelayTempSpawn(step, source);
                 return false;
@@ -410,6 +498,14 @@ public sealed partial class CreatureMapSystem
                 {
                     runner.ScriptRun = step.DataLong != 0;
                     SyncWalkMode(runner, runner.ScriptRun);
+                }
+
+                return false;
+
+            case 26: // SCRIPT_COMMAND_ATTACK_START (cmangos ScriptAction::ExecuteDbscriptCommand, ScriptMgr.cpp:2479-2497)
+                if (source is Creature attacker && target is Unit victim)
+                {
+                    _ = attacker.AI?.AttackStart(victim) ?? AttackStart(attacker, victim);
                 }
 
                 return false;

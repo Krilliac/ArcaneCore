@@ -22,6 +22,18 @@ public sealed class QuestAcceptEffectTests
     };
 
     [Fact]
+    public void AcceptedQuest_IsPublishedOnceWithItsGiver_ForDatabaseStartScripts()
+    {
+        using var kit = new QuestFlowKit([QuestFlowKit.Task(Id)], starters: [Id]);
+        var accepted = new List<(Player Player, ObjectGuid Giver, uint Quest)>();
+        kit.Services.QuestAccepted += (player, giver, quest) => accepted.Add((player, giver, quest.Id));
+
+        Assert.True(kit.Accept(Id));
+        Assert.False(kit.Accept(Id));
+        Assert.Equal([(kit.Player, kit.Creature.Guid, Id)], accepted);
+    }
+
+    [Fact]
     public void AcceptingAQuestWithASourceSpell_CastsItOnThePlayerAfterTheQuestIsLogged()
     {
         var caster = new RecordingCaster();
