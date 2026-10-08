@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
@@ -103,7 +104,11 @@ public sealed class M6LogoutAndCommandTests
         await client.SendAsync(WorldOpcode.CmsgLogoutRequest, []);
         Assert.Equal(new byte[] { (byte)LogoutResult.JumpingOrFalling, 0, 0, 0, 0 }, await client.ReadUntilAsync(WorldOpcode.SmsgLogoutResponse));
 
-        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Faller")!.UnitFlags |= UnitFlags.InCombat);
+        await host.OnWorldAsync(() =>
+        {
+            var player = host.World.FindOnlinePlayer("Faller")!;
+            player.Map!.Combat.SetInCombatState(player, 60_000);
+        });
         await client.SendAsync(WorldOpcode.CmsgLogoutRequest, []);
         Assert.Equal(new byte[] { (byte)LogoutResult.InCombat, 0, 0, 0, 0 }, await client.ReadUntilAsync(WorldOpcode.SmsgLogoutResponse));
         Assert.False(await host.PlayerStateAsync("Faller", p => p.IsLoggingOut));

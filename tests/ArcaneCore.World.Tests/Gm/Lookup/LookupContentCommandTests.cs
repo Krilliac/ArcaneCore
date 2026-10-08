@@ -212,6 +212,7 @@ public sealed class LookupContentCommandTests
             var spell = new SpellInfo
             {
                 Id = 168, Name = "Frost Armor", Rank = "Rank 1", RangeIndex = SpellConstants.RangeIndexSelfOnly,
+                Duration = new SpellDuration(-1, 0, -1),
                 Effects = [new SpellEffectInfo
                 {
                     Effect = SpellEffectName.ApplyAura, AuraType = AuraType.ModLanguage, MiscValue = (int)Language.Demonic,
