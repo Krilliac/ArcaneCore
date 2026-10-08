@@ -53,15 +53,17 @@ public sealed class EscortAiTests
         new(3, 20, 0, Z, 0, 0),
     ];
 
-    private static Rig Setup(bool withPath = true, ICreatureHostility? hostility = null)
+    private static Rig Setup(bool withPath = true, ICreatureHostility? hostility = null,
+        IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? scriptWaypoints = null, IScriptQuestEvents? quests = null)
     {
         // With a hostile world the other creature stays out (it would fight the escort) and the player starts out of aggro reach.
         bool hostile = hostility is not null;
-        CreatureContent content = Content(
+        CreatureContent content = new(
             [Template(EscortEntry, b => { b.Name = "Escort"; b.NpcFlags = (uint)(NpcFlags.Gossip | NpcFlags.QuestGiver); }), Template(OtherEntry)],
             hostile ? [Spawn(1, EscortEntry, 5, 0, Z)] : [Spawn(1, EscortEntry, 5, 0, Z), Spawn(2, OtherEntry, 0, 5, Z)],
-            entryWaypoints: withPath ? s_path.Select(p => (EscortEntry, EscortAI.EscortPathId, p)) : []);
-        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = hostility ?? new NeverHostile() });
+            [], [], [], entryWaypoints: withPath ? s_path.Select(p => (EscortEntry, EscortAI.EscortPathId, p)) : [],
+            scriptWaypoints: scriptWaypoints);
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = hostility ?? new NeverHostile(), ScriptQuests = quests });
         (Player player, _) = AddPlayer(world, 1, hostile ? 150 : 0, 0);
         system.RegisterEntryAi(EscortEntry, c => new TestEscortAI(c));
         Creature escort = Assert.Single(system.Creatures, c => c.Entry == EscortEntry);
@@ -118,6 +120,96 @@ public sealed class EscortAiTests
         Assert.NotEqual(0u, rig.Escort.NpcFlags);
         Run(rig.World, 5000);
         Assert.False(rig.Escort.IsMoving);
+    }
+
+    [Fact]
+    public void Start_PrefersScriptWaypointOverTheCreaturesDefaultPatrol()
+    {
+        using Rig rig = Setup(scriptWaypoints:
+            [(EscortEntry, 0, new CreatureWaypoint(1, 30, 0, Z, 0, 0))]);
+        Assert.True(rig.Ai.Start());
+        Assert.Equal(1, rig.Ai.WaypointCount);
+        RunUntil(rig, () => rig.Ai.Reached.Count == 1);
+        Assert.Equal(30f, rig.Escort.X, 0.5f);
+    }
+
+    [Fact]
+    public void EscortQuest_FailsForTheGroupWhenThePlayerLeavesRange_AndTheEscortDisappears()
+    {
+        var quests = new EscortQuests();
+        using Rig rig = Setup(quests: quests);
+        Assert.True(rig.Ai.Start(player: rig.Player, questId: 1393)); // Galen's Escape (quest id only; the path is synthetic)
+
+        rig.Player.Relocate(200, 0, Z, 0, 0);
+        Run(rig.World, 1_200);
+
+        Assert.Equal([(rig.Player, 1393u)], quests.GroupFailed);
+        Assert.False(rig.Escort.IsAlive); // ResetEscort: the escort disappears (no instant respawn asked)
+        Assert.NotEqual(0u, rig.Escort.NpcFlags & (uint)NpcFlags.QuestGiver);
+
+        Run(rig.World, 2_000);
+        Assert.Single(quests.GroupFailed); // the quest fails once: the dead escort no longer checks
+    }
+
+    [Fact]
+    public void EscortQuest_FailsForTheGroupWhenTheEscortDies_Once()
+    {
+        var quests = new EscortQuests();
+        using Rig rig = Setup(quests: quests);
+        Assert.True(rig.Ai.Start(player: rig.Player, questId: 1393));
+
+        rig.Ai.OnDeath(null);
+        rig.Ai.OnDeath(null);
+
+        Assert.Equal([(rig.Player, 1393u)], quests.GroupFailed);
+    }
+
+    [Fact]
+    public void AnEscortWithoutAPlayer_NeverFailsAQuest()
+    {
+        var quests = new EscortQuests();
+        using Rig rig = Setup(quests: quests);
+        Assert.True(rig.Ai.Start());
+
+        rig.Player.Relocate(200, 0, Z, 0, 0);
+        Run(rig.World, 1_200);
+        rig.Ai.OnDeath(null);
+
+        Assert.Empty(quests.GroupFailed);
+        Assert.True(rig.Escort.IsAlive);
+    }
+
+    [Fact]
+    public void EscortQuest_StaysActiveWhileAnOnlineGroupMemberIsNear()
+    {
+        var quests = new EscortQuests();
+        using Rig rig = Setup(quests: quests);
+        (Player member, _) = AddPlayer(rig.World, 2, 0, 1);
+        quests.Group = [rig.Player, member];
+        Assert.True(rig.Ai.Start(player: rig.Player, questId: 1393));
+
+        rig.Player.Relocate(200, 0, Z, 0, 0);
+        Run(rig.World, 1_200);
+        Assert.Empty(quests.GroupFailed);
+        Assert.True(rig.Ai.HasEscortState(EscortAI.EscortState.Escorting));
+
+        member.Relocate(200, 0, Z, 0, 0);
+        Run(rig.World, 1_100);
+        Assert.Equal([(rig.Player, 1393u)], quests.GroupFailed);
+    }
+
+    /// <summary>The quest log the escort reaches: records group failures and answers the player's group.</summary>
+    private sealed class EscortQuests : IScriptQuestEvents
+    {
+        public List<(Player Player, uint QuestId)> GroupFailed { get; } = [];
+
+        public IReadOnlyList<Player> Group { get; set; } = [];
+
+        public void AreaExploredOrEventHappens(Player player, uint questId) { }
+        public void FailQuest(Player player, uint questId) { }
+        public void KilledMonsterCredit(Player player, uint creatureEntry, ObjectGuid source) { }
+        public void GroupEventFailHappens(Player player, uint questId) => GroupFailed.Add((player, questId));
+        public IReadOnlyList<Player> GroupMembersOf(Player player) => Group;
     }
 
     [Fact]

@@ -9,13 +9,16 @@ namespace ArcaneCore.Game.Creatures;
 /// point once <see cref="Start"/>ed, pauses on request, breaks off to fight, then runs back to where the fight began and goes on, and at the
 /// end of the path either loops home or disappears (and respawns at once when asked). Subclasses react to <see cref="WaypointReached"/>.
 /// <para>
-/// The path is vmangos <c>script_waypoint</c> (one path per entry, points in id order): here the entry's <c>creature_movement_template</c>
-/// path <see cref="EscortPathId"/>, keyed by entry and point, which is where such rows import to (the world schema has no script_waypoint
-/// table). An entry without rows cannot start, as in vmangos ("EscortAI Start with 0 waypoints").
+/// The path is ScriptDev2 <c>script_waypoint</c> (one path per entry, points in id order; mangos-classic SystemMgr::LoadScriptWaypoints,
+/// ScriptDevAI/system/system.cpp:63-121). An entry without script_waypoint rows falls back to its <c>creature_movement_template</c> path
+/// <see cref="EscortPathId"/>, where the escorts of this code base kept their points before. An entry without either cannot start, as in
+/// vmangos ("EscortAI Start with 0 waypoints").
 /// </para>
 /// <para>
-/// Not ported, because no script of this code base escorts a player: the player and quest of an escort (the assist of a player in combat,
-/// the player distance check that fails the escort, the group quest failure at death) and the aggro of passive escorts by nearby enemies.
+/// A player-linked escort (<see cref="Start"/> with a player and quest) checks every second that the player or a member of its group is
+/// within <see cref="MaxPlayerDistance"/>, and fails the quest for the group at death or when they are gone (vmangos npc_escortAI::JustDied,
+/// IsPlayerOrGroupInRange, UpdateAI and ResetEscort, ScriptedEscortAI.cpp:133-143, 180-300). Not ported: the assist of the player in combat
+/// and the aggro of passive escorts by nearby enemies.
 /// </para>
 /// </summary>
 public abstract class EscortAI : CreatureAI
@@ -26,11 +29,14 @@ public abstract class EscortAI : CreatureAI
     /// <summary>The point id of the run home of a looping escort (POINT_HOME).</summary>
     public const uint PointHome = 0xFFFFFE;
 
-    /// <summary>The <c>creature_movement_template</c> path that holds an entry's escort points.</summary>
+    /// <summary>The default <c>script_waypoint.PathId</c> for an escort.</summary>
     public const uint EscortPathId = 0;
 
     /// <summary>The default delay before the first waypoint (m_uiDelayBeforeTheFirstWaypoint, 2.5 s).</summary>
     public const uint DefaultDelayBeforeFirstWaypointMs = 2500;
+
+    /// <summary>vmangos ScriptedEscortAI.cpp DEFAULT_MAX_PLAYER_DISTANCE.</summary>
+    public const float DefaultMaxPlayerDistance = 100f;
 
     private readonly List<CreatureWaypoint> _waypoints = [];
     private uint _waypointWaitMs;
@@ -39,6 +45,9 @@ public abstract class EscortAI : CreatureAI
     private bool _canReturnToStart;
     private bool _respawnedOnce;
     private float _combatStartO;
+    private ObjectGuid _escortPlayerGuid;
+    private uint _escortQuestId;
+    private uint _playerCheckMs = 1000;
 
     protected EscortAI(Creature creature)
         : base(creature)
@@ -69,6 +78,12 @@ public abstract class EscortAI : CreatureAI
     /// <summary>Whether the escort runs between its points (m_bIsRunning).</summary>
     public bool IsRunning => _running;
 
+    /// <summary>The maximum distance to the escort player or an online group member; zero disables the check.</summary>
+    public float MaxPlayerDistance { get; set; } = DefaultMaxPlayerDistance;
+
+    /// <summary>The escort owner still on this map, or null after logout or transfer.</summary>
+    protected Player? GetPlayerForEscort() => _escortPlayerGuid.IsEmpty ? null : System?.Map.FindPlayer(_escortPlayerGuid);
+
     /// <summary>Where the last fight began (SetCombatStartPosition): where the escort runs back to and goes on from.</summary>
     public Vector3 CombatStartPosition { get; protected set; }
 
@@ -98,7 +113,7 @@ public abstract class EscortAI : CreatureAI
     /// loaded, the NPC flags cleared, the walk mode set and the first point waits <see cref="DelayBeforeFirstWaypointMs"/>... from the last
     /// reset of the timer (the constructor or a respawn), as in vmangos.
     /// </summary>
-    public bool Start(bool run = false, bool instantRespawn = false, bool canLoopPath = false)
+    public bool Start(bool run = false, bool instantRespawn = false, bool canLoopPath = false, Player? player = null, uint questId = 0)
     {
         if (Me.Combat.IsInCombat || HasEscortState(EscortState.Escorting))
         {
@@ -108,7 +123,7 @@ public abstract class EscortAI : CreatureAI
         _waypoints.Clear();
         if (System is { } system)
         {
-            _waypoints.AddRange(system.Content.GetEntryWaypoints(Me.Template.Entry, EscortPathId));
+            _waypoints.AddRange(system.Content.GetScriptWaypoints(Me.Template.Entry, EscortPathId));
         }
 
         if (_waypoints.Count == 0)
@@ -118,6 +133,9 @@ public abstract class EscortAI : CreatureAI
         }
 
         _running = run;
+        _escortPlayerGuid = player?.Guid ?? default;
+        _escortQuestId = questId;
+        _playerCheckMs = 1000;
         _canInstantRespawn = instantRespawn;
         _canReturnToStart = canLoopPath;
         if (Me.Motion.DefaultType == MovementGeneratorType.Waypoint)
@@ -134,7 +152,12 @@ public abstract class EscortAI : CreatureAI
     }
 
     /// <summary>vmangos npc_escortAI::Stop: the escort ends where it stands.</summary>
-    public void Stop() => RemoveEscortState(EscortState.Escorting | EscortState.Paused);
+    public void Stop()
+    {
+        RemoveEscortState(EscortState.Escorting | EscortState.Paused);
+        _escortPlayerGuid = default;
+        _escortQuestId = 0;
+    }
 
     /// <summary>vmangos SetEscortPaused (only while escorting).</summary>
     public void SetEscortPaused(bool paused)
@@ -194,6 +217,9 @@ public abstract class EscortAI : CreatureAI
     protected virtual void JustRespawned()
     {
         State = EscortState.None;
+        _escortPlayerGuid = default;
+        _escortQuestId = 0;
+        _playerCheckMs = 1000;
         CombatMovement = true;
         _waypointWaitMs = DelayBeforeFirstWaypointMs;
         if (Me.FactionTemplate != Me.Template.Faction)
@@ -241,6 +267,26 @@ public abstract class EscortAI : CreatureAI
         Aggro(target);
     }
 
+    /// <summary>
+    /// vmangos npc_escortAI::JustDied (ScriptedEscortAI.cpp:133-143): a player-linked escort fails its quest for the player's group
+    /// (GroupEventFailHappens) and lets go of the player. The escort state stays until the respawn (<see cref="JustRespawned"/>), as there.
+    /// </summary>
+    public override void OnDeath(Unit? killer)
+    {
+        if (!HasEscortState(EscortState.Escorting) || _escortPlayerGuid.IsEmpty || _escortQuestId == 0)
+        {
+            return;
+        }
+
+        if (GetPlayerForEscort() is { } player)
+        {
+            System?.FailEscortQuest(player, _escortQuestId);
+        }
+
+        _escortPlayerGuid = default;
+        _escortQuestId = 0;
+    }
+
     /// <summary>vmangos npc_escortAI::EnterEvadeMode: back to the combat start position (<see cref="ReturnToCombatStartPosition"/>), then <see cref="Reset"/>.</summary>
     public override void OnEvade()
     {
@@ -279,7 +325,7 @@ public abstract class EscortAI : CreatureAI
         Me.Motion.MovePoint(PointLastPoint, start.X, start.Y, start.Z, run: true);
     }
 
-    /// <summary>vmangos npc_escortAI::UpdateAI (ScriptedEscortAI.cpp:216-305) without the player check: the waypoint timer, then <see cref="UpdateEscortAI"/>.</summary>
+    /// <summary>vmangos npc_escortAI::UpdateAI (ScriptedEscortAI.cpp:204-288): waypoint timer, player/group range, then <see cref="UpdateEscortAI"/>.</summary>
     public sealed override void OnUpdate(uint diffMs)
     {
         if (HasEscortState(EscortState.Escorting) && !Me.Combat.IsInCombat && _waypointWaitMs != 0 && !HasEscortState(EscortState.Returning))
@@ -306,7 +352,62 @@ public abstract class EscortAI : CreatureAI
             }
         }
 
+        if (HasEscortState(EscortState.Escorting) && !_escortPlayerGuid.IsEmpty && MaxPlayerDistance > 0
+            && !Me.Combat.IsInCombat && !HasEscortState(EscortState.Returning))
+        {
+            if (_playerCheckMs < diffMs)
+            {
+                if (!IsPlayerOrGroupInRange())
+                {
+                    // "EscortAI failed because player/group was to far away or not found": JustDied, then ResetEscort.
+                    OnDeath(null);
+                    ResetEscort();
+                    return;
+                }
+
+                _playerCheckMs = 1000;
+            }
+            else
+            {
+                _playerCheckMs -= diffMs;
+            }
+        }
+
         UpdateEscortAI(diffMs);
+    }
+
+    /// <summary>
+    /// vmangos npc_escortAI::IsPlayerOrGroupInRange (ScriptedEscortAI.cpp:180-201): any member of the player's group, else the player, within
+    /// <see cref="MaxPlayerDistance"/> on this map (IsWithinDistInMap: 3D, bounding radii added).
+    /// </summary>
+    private bool IsPlayerOrGroupInRange()
+    {
+        Player? leader = GetPlayerForEscort();
+        if (leader is null)
+        {
+            return false;
+        }
+
+        IReadOnlyList<Player> members = System?.EscortGroupMembers(leader) ?? [];
+        IEnumerable<Player> candidates = members.Count > 0 ? members : [leader];
+        foreach (Player member in candidates)
+        {
+            if (!ReferenceEquals(member.Map, Me.Map))
+            {
+                continue;
+            }
+
+            float dx = Me.X - member.X;
+            float dy = Me.Y - member.Y;
+            float dz = Me.Z - member.Z;
+            float reach = MaxPlayerDistance + Me.BoundingRadius + member.BoundingRadius;
+            if ((dx * dx) + (dy * dy) + (dz * dz) <= reach * reach)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>"End of the line": loop home, or disappear (and come back at once when asked).</summary>
@@ -320,6 +421,12 @@ public abstract class EscortAI : CreatureAI
             return;
         }
 
+        ResetEscort();
+    }
+
+    /// <summary>vmangos npc_escortAI::ResetEscort (ScriptedEscortAI.cpp:292-300): quest giver again, disappear, and come back at once when asked.</summary>
+    private void ResetEscort()
+    {
         Me.NpcFlags |= (uint)Npc.NpcFlags.QuestGiver;
         if (System is { } system)
         {
