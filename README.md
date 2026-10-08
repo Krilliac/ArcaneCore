@@ -197,3 +197,10 @@ Protocol details are reimplemented (not copied) from the references listed in
 [`docs/ROADMAP.md`](docs/ROADMAP.md#reference-set-extended-2026-10-02-and-2026-10-04-at-the-developers-request)
 — vmangos, cmangos-classic, mangoszero, AscEmu, gtker/wow_messages + wow_srp, WCell,
 MangosSharp and wowdev.wiki — each cited inline in the code.
+
+## License
+
+ArcaneCore is licensed under the GNU General Public License v3.0 (see [`LICENSE`](LICENSE)).
+It remains an independent implementation: the GPL references above are read for behaviour and
+exact values and reimplemented, not copied (charter §4). Third-party code imported under
+GPL-3.0-compatible licenses is listed in `THIRD_PARTY_NOTICES.md`.

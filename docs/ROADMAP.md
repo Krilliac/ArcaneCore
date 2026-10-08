@@ -169,7 +169,9 @@ deferred real-client acceptance retain their gates.
 
 * Every protocol fact (opcode, field, layout, constant) cites the reference that confirmed
   it. Where references disagree, the comment says so and which one was chosen.
-* No GPL/AGPL code is copied; behaviour and wire formats are reimplemented (charter §4).
+* ArcaneCore is GPL-3.0 (`LICENSE`, 2026-10-08), but no GPL/AGPL code is copied: behaviour
+  and wire formats are reimplemented (charter §4), by the developer's choice of an
+  independent implementation.
 
 ### Reference set (extended 2026-10-02 and 2026-10-04 at the developer's request)
 

@@ -91,8 +91,9 @@ the exact byte-level computation against §4 before implementing.
 
 ## §4 — Reference repos (ground truth — reimplement, don't lift)
 
-Read these for *behavior and exact values*. They are **GPL**; if ArcaneCore's
-license differs, reimplement from observed behavior + specs rather than copying
+Read these for *behavior and exact values*. They are **GPL**. ArcaneCore is
+GPL-3.0 (`LICENSE`, adopted 2026-10-08), but it stays its own implementation by the
+developer's choice: reimplement from observed behavior + specs rather than copying
 code verbatim. Local clones live in `/home/user/refs` (outside this repo).
 
 - **cmangos/mangos-classic** — closest maintained vanilla reference for 1.12.x.
