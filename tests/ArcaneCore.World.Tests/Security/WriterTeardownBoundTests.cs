@@ -82,11 +82,13 @@ public sealed class WriterTeardownBoundTests
     private static async Task StallTheWriterUntilKickedAsync(WorldSession session)
     {
         byte[] payload = new byte[4096];
+        Array.Fill(payload, (byte)'x');
+        payload[^1] = 0; // valid SMSG_NOTIFICATION CString with the same queue pressure
         DateTime until = DateTime.UtcNow + TimeSpan.FromSeconds(20);
         while (session.State != SessionState.Closed)
         {
             Assert.True(DateTime.UtcNow < until, "the outbound cap never kicked the session");
-            session.Send(WorldOpcode.SmsgPong, payload);
+            session.Send(WorldOpcode.SmsgNotification, payload);
             await Task.Delay(1);
         }
     }

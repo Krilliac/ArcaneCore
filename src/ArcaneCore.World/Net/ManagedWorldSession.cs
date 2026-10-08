@@ -117,6 +117,7 @@ public sealed partial class WorldSession
             if (_state == SessionState.Closed) return;
             byte[] copy = payload.ToArray();
             ManagedPacketObserver?.Invoke(opcode, copy);
+            _outboundPacketObserver?.Observe(opcode, copy);
             // Bounded transport: no socket writer or unconsumed unbounded channel exists for bots.
             while (_managedPackets.Count > 0 && (_managedPackets.Count >= 128 || _managedPacketBytes + payload.Length > 1_048_576))
                 _managedPacketBytes -= _managedPackets.Dequeue().Payload.Length;

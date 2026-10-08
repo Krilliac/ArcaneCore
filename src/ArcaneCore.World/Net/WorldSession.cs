@@ -118,6 +118,7 @@ public sealed partial class WorldSession : IPlayerSession
     private readonly SessionRegistry _registry;
     private readonly WorldSessionOptions _options;
     private readonly ILogger _logger;
+    private readonly IOutboundPacketObserver? _outboundPacketObserver;
     private readonly NetGuard? _guard;
     private readonly NetProtectionOptions _protection;
     private readonly IpKey? _address;
@@ -159,6 +160,7 @@ public sealed partial class WorldSession : IPlayerSession
         _registry = registry;
         _options = options;
         _logger = logger;
+        _outboundPacketObserver = services.GetService<IOutboundPacketObserver>();
         _guard = guard;
         _protection = guard?.Options ?? DefaultProtection;
         _packetLimiter = NetGuard.CreatePacketLimiter(_protection);
@@ -302,6 +304,8 @@ public sealed partial class WorldSession : IPlayerSession
             {
                 return;
             }
+
+            _outboundPacketObserver?.Observe(opcode, payload.ToArray());
         }
 
         if (Interlocked.Add(ref _outboundBytes, frame.Length) > _options.MaxOutboundBytes)

@@ -30,7 +30,10 @@ public sealed class StalledWriterTests
 
         // The writer is now parked in WriteAsync on the auth challenge; overflow the queue.
         await stream.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        session.Send(WorldOpcode.SmsgPong, new byte[8192]);
+        byte[] largeNotification = new byte[8192];
+        Array.Fill(largeNotification, (byte)'x');
+        largeNotification[^1] = 0; // valid CString, same 8192-byte outbound pressure
+        session.Send(WorldOpcode.SmsgNotification, largeNotification);
 
         await run.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(stream.Disposed, "the stream must be disposed so the socket is released");
