@@ -96,7 +96,12 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
 
         _writes = new InstanceWriteQueue(scopes, loggers.CreateLogger<InstanceWriteQueue>());
         _writes.Start();
-        _manager = new InstanceManager(world, Options, _writes, logger: loggers.CreateLogger<InstanceManager>());
+        // vmangos DungeonResetScheduler::ScheduleAllDungeonResets/Update
+        // (Maps/MapPersistentStateMgr.cpp:448-528,570-619) use Unix time for global raid resets.
+        // The host's TimeProvider supplies that clock and lets acceptance tests advance it.
+        TimeProvider time = services.GetService<TimeProvider>() ?? TimeProvider.System;
+        _manager = new InstanceManager(world, Options, _writes,
+            unixNow: () => time.GetUtcNow().ToUnixTimeSeconds(), logger: loggers.CreateLogger<InstanceManager>());
         _manager.SystemMessage = static (player, text) => player.Session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(text));
         _manager.Install();
         world.PlayerLoggedIn += OnPlayerLoggedIn;
