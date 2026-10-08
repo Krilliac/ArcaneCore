@@ -242,3 +242,29 @@ public sealed class HolyLightScript : ISpellScript
         system.CastCustomSpell(context.Caster, healSpell, SpellCastTargets.ForUnit(context.Target.Guid), heal, (int)context.Spell.Id);
     }
 }
+
+/// <summary>
+/// Hammer of Wrath (24275, 24274, 24239; vmangos scripts/spells/spell_paladin.cpp:19-35): the damage takes the done and taken spell damage bonuses
+/// although the spell is a ranged one (the script calls SpellDamageBonusDone and SpellDamageBonusTaken itself). A value modifier: the effect value
+/// is what vmangos' script leaves in <c>spell->damage</c>.
+/// LIMITS: the script also sets <c>m_attackType = BASE_ATTACK</c> so the hit uses the melee crit chance; the crit roll here is the spell's.
+/// </summary>
+public sealed class HammerOfWrathDamage : ISpellValueModifier
+{
+    public static readonly uint[] Ranks = [24275, 24274, 24239];
+
+    private readonly SpellSystem _spells;
+
+    public HammerOfWrathDamage(SpellSystem spells) => _spells = spells ?? throw new ArgumentNullException(nameof(spells));
+
+    public int Modify(SpellValueKind kind, in SpellValueContext context, int value)
+    {
+        if (kind != SpellValueKind.EffectValue || context.EffectIndex != 0 || context.Target is not { } target
+            || Array.IndexOf(Ranks, context.Spell.Id) < 0 || _spells.AmountModifier is not { } bonus)
+        {
+            return value;
+        }
+
+        return (int)bonus.Modify(SpellAmountStage.DirectDamage, context.Caster, target, context.Spell with { DamageClass = SpellDamageClass.Magic }, 0, value, 1);
+    }
+}

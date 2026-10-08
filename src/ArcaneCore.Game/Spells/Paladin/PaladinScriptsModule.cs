@@ -5,7 +5,7 @@ namespace ArcaneCore.Game.Spells.Paladin;
 /// <summary>
 /// Registers the paladin scripts that are not <see cref="Scripts.ISpellScript"/>s (discovered <see cref="ISpellHandlerModule"/>, so every spell
 /// system has them): the seal, blessing, aura and judgement rules and AURA_STATE_JUDGEMENT (<see cref="PaladinAuraRules"/>), the Seal of
-/// Righteousness and Judgement of Light / Wisdom procs, the Judgement of Command damage, Forbearance after a bubble with its cast check, and
+/// Righteousness and Judgement of Light / Wisdom procs, the Judgement of Command and Hammer of Wrath damage, Forbearance after a bubble with its cast check, and
 /// the Consecration tick (<see cref="ConsecrationScript"/>).
 /// </summary>
 public sealed class PaladinScriptsModule : ISpellHandlerModule
@@ -34,6 +34,7 @@ public sealed class PaladinScriptsModule : ISpellHandlerModule
         }
 
         system.RegisterValueModifier(new JudgementOfCommandDamage(system));
+        system.RegisterValueModifier(new HammerOfWrathDamage(system));
         system.RegisterObserver(new ForbearanceObserver(system));
         system.RegisterCastCheck(new PositiveSpellImmunityCheck());
     }

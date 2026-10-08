@@ -34,6 +34,7 @@ public sealed class PaladinScriptTests : IDisposable
     private const uint JocDummy = 20425;
     private const uint JocDamage = 20467;
     private const uint Stun = 990_601;
+    private const uint HammerOfWrath = 24239;
 
     private static SpellInfo Instant(SpellInfo spell) => spell with { StartRecoveryCategory = 0, StartRecoveryTime = 0, SpellVisual = 1 };
 
@@ -130,6 +131,10 @@ public sealed class PaladinScriptTests : IDisposable
             AtEnemy(Spell(Stun, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitEnemy, AuraType.ModStun)) with
             {
                 Duration = new SpellDuration(5_000, 0, 5_000),
+            }),
+            AtEnemy(Spell(HammerOfWrath, Effect(SpellEffectName.SchoolDamage, 500, SpellImplicitTarget.UnitEnemy)) with
+            {
+                School = SpellSchool.Holy, SpellFamilyName = PaladinSpells.Family, DamageClass = SpellDamageClass.Ranged,
             }));
         (_paladin, _) = _kit.AddPlayer(1, 0, 0);
         (_enemy, _) = _kit.AddPlayer(2, 3, 0);
@@ -301,5 +306,23 @@ public sealed class PaladinScriptTests : IDisposable
         before = _enemy.Health;
         Cast(_paladin, JocDummy, _enemy);
         Assert.Equal(before - 100u, _enemy.Health);
+    }
+
+    /// <summary>Adds 100 to a direct magic-class damage amount only: tells the spell formulas from the weapon ones.</summary>
+    private sealed class MagicOnlyBonus : ISpellAmountModifier
+    {
+        public float Modify(SpellAmountStage stage, Unit caster, Unit target, SpellInfo spell, int effectIndex, float amount, uint stack)
+            => stage == SpellAmountStage.DirectDamage && spell.DamageClass == SpellDamageClass.Magic ? amount + 100 : amount;
+    }
+
+    [Fact]
+    public void HammerOfWrath_TakesTheSpellDamageBonuses_ThoughItIsARangedSpell()
+    {
+        _kit.System.AmountModifier = new MagicOnlyBonus();
+        uint before = _enemy.Health;
+
+        Assert.Equal(SpellCastResult.CastOk, Cast(_paladin, HammerOfWrath, _enemy));
+
+        Assert.Equal(before - 600u, _enemy.Health);
     }
 }
