@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 6 |
 | `Moderator` | 1 | 22 |
-| `GameMaster` | 3 | 162 |
-| `Administrator` | 6 | 232 |
+| `GameMaster` | 3 | 164 |
+| `Administrator` | 6 | 234 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -277,8 +277,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.playerbot list` | 3 | GameMaster | stored level through the map | Syntax: .playerbot list List managed bots. |
 | `.playerbot inspect` | 3 | GameMaster | stored level through the map | Syntax: .playerbot inspect $id\|$name Read actual target, victim, cast and nearby trainer facts. |
 | `.playerbot invite` | 3 | GameMaster | stored level through the map | Syntax: .playerbot invite $id\|$name Put a running bot into your group; it follows you and takes your commands. |
-| `.playerbot chat` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat status The bots' chat replies. |
+| `.playerbot chat` ... | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat &lt;status\|flags\|pardon&gt; The bots' chat replies and their safety screening. |
 | `.playerbot chat status` | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat status Show bot chat: on/off, the spend estimate, and per provider its kind, model, whether its key variable is set, replies this hour and the last error. |
+| `.playerbot chat flags` | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat flags [$player] Show the latest lines the bot chat safety flagged (all players, or one player's with their strikes, cut-off and AI choice). |
+| `.playerbot chat pardon` | 3 | GameMaster | stored level through the map | Syntax: .playerbot chat pardon $player Clear a player's bot chat strikes and cut-off (an automatic mute is lifted with .unmute). |
 | `.playerbot groups` | 3 | GameMaster | stored level through the map | Syntax: .playerbot groups List the bot-led groups (goal, members and roles, state) and the bots waiting for partners. |
 | `.playerbot scenario` ... | 6 | Administrator | stored level through the map | Syntax: .playerbot scenario &lt;list\|run $name&gt; Run scripted bot scenarios against the live world (World:Playerbots:Scenarios:Enabled). |
 | `.playerbot scenario list` | 6 | Administrator | stored level through the map | Syntax: .playerbot scenario list List the registered bot scenarios. |
