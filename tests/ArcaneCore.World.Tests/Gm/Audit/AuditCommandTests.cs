@@ -41,11 +41,17 @@ public sealed class AuditCommandTests
     }
 
     /// <summary>Run a command and read every chat line it produced.</summary>
+    /// <summary>
+    /// The chat lines a command answers with. The first line is awaited (bounded by the client's read timeout): on a loaded test
+    /// run the reply can take longer than <see cref="WorldTestClient.CollectAsync"/>'s quiet window, which then returned no lines.
+    /// The rest of the reply is collected after it.
+    /// </summary>
     private static async Task<string[]> LinesAsync(WorldTestClient client, string command)
     {
         await client.CollectAsync();
         await client.SendChatAsync(ChatType.Say, Language.Common, command);
-        return [.. (await client.CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text)];
+        string first = (await client.ReadChatAsync()).Text;
+        return [first, .. (await client.CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text)];
     }
 
     private static string NotificationOf(byte[] payload) => new PacketReader(payload).ReadCString();

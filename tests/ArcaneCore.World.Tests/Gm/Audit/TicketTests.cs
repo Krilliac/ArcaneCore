@@ -72,11 +72,17 @@ public sealed class TicketTests
         return (await client.ReadChatAsync()).Text;
     }
 
+    /// <summary>
+    /// The chat lines a command answers with. The first line is awaited (bounded by the client's read timeout): on a loaded test
+    /// run the reply can take longer than <see cref="WorldTestClient.CollectAsync"/>'s quiet window, which then returned no lines.
+    /// The rest of the reply is collected after it.
+    /// </summary>
     internal static async Task<string[]> LinesAsync(WorldTestClient client, string command)
     {
         await client.CollectAsync();
         await client.SendChatAsync(ChatType.Say, Language.Common, command);
-        return [.. (await client.CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text)];
+        string first = (await client.ReadChatAsync()).Text;
+        return [first, .. (await client.CollectAsync()).Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text)];
     }
 
     internal static InMemoryGmAuditStore StoreOf(WorldTestHost host) => host.WorldServices.GetRequiredService<InMemoryGmAuditStore>();
