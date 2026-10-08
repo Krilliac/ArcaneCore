@@ -107,6 +107,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (!_deathIntentRetired)
             {
                 Risk.OnDeath(player);
+                SetAsideDeadlyErrand();
                 RetireDeathIntent();
                 _deathIntentRetired = true;
             }
@@ -162,6 +163,9 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 (uint)Math.Clamp(_options.StallSeconds, 10, 86_400) * 1000u, Fingerprint))
             GiveUpStalledGoal(player);
 
+        // The errand the bot is on (a trainer, vendor or quest destination), kept for a death on the way (SetAsideDeadlyErrand).
+        NoteErrand(_goal, TargetEntry, QuestId);
+
         if (PlayerbotMotion.ConsumeLoop(player))
         {
             // The motion gave up a loop (PlayerbotMotion): drop this intent, skip its target for a while, and let the
@@ -180,6 +184,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             if (!_deathIntentRetired)
             {
                 Risk.OnDeath(player);
+                SetAsideDeadlyErrand();
                 RetireDeathIntent();
                 _deathIntentRetired = true;
             }
@@ -542,6 +547,36 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
         int spells = _session.Services.GetService<SpellFeature>()?.Spellbook.GetSpells(player).Count ?? 0;
         return new(player.Level, player.GetUInt32(UpdateFields.PlayerXp), player.Money, items, quests, rewarded, objectives, spells);
+    }
+
+    private (PlayerbotGoalKind Goal, uint Entry, uint Quest, uint AtMs)? _errand;
+
+    /// <summary>
+    /// A bot killed within <see cref="DeadlyErrandMs"/> of walking an errand (the way to a trainer, vendor or quest destination led
+    /// through something that killed it) sets that errand aside for <see cref="PlayerbotSuspensions.SuspendMs"/> instead of
+    /// walking the same way into the same creatures after its revive (live replay, 2026-10-08: Dawnrover walked to Arthur the
+    /// Faithful past the Scourge invasion's Skeletal Soldiers, whose Scourge Strike kills outright, five times in ten minutes).
+    /// </summary>
+    private void SetAsideDeadlyErrand()
+    {
+        if (!_options.Risk.Enabled || _errand is not { } errand) return;
+        _errand = null;
+        uint now = _session.World.NowMs;
+        if (unchecked(now - errand.AtMs) > DeadlyErrandMs) return;
+        _suspensions.SuspendEntry(errand.Entry, now);
+        if (errand.Goal == PlayerbotGoalKind.Quest) _suspensions.SuspendQuest(errand.Quest, now);
+    }
+
+    internal const uint DeadlyErrandMs = 30_000;
+
+    /// <summary>The goals set aside for a while (stalls, deadly errands; inspection and tests).</summary>
+    internal PlayerbotSuspensions Suspensions => _suspensions;
+
+    /// <summary>Keep the errand the bot is on (each think; tests call it directly).</summary>
+    internal void NoteErrand(PlayerbotGoalKind goal, uint entry, uint quest)
+    {
+        if (goal is PlayerbotGoalKind.Train or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Quest && entry != 0)
+            _errand = (goal, entry, quest, _session.World.NowMs);
     }
 
     private void RetireDeathIntent()

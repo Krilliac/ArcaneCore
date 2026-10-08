@@ -186,4 +186,28 @@ public sealed class PlayerbotRiskWorldTests
             "the hurt bot fought a fresh creature to the end");
         Assert.True(world.Player.IsAlive);
     }
+
+    /// <summary>
+    /// A bot killed on its way to a trainer sets that errand aside rather than walking the same way into the same creatures after
+    /// its revive (the live replay's Dawnrover, five deaths in ten minutes to the Scourge invasion's Skeletal Soldiers on the road
+    /// to Arthur the Faithful). With the risk estimate off it walks there again.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ABotKilledOnAnErrand_SetsItAside(bool riskEnabled)
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync(options => options.Risk.Enabled = riskEnabled);
+        Creature killer = await world.OnWorldAsync(() => world.Spawn(RiskTestWorld.Template(991061, minDamage: 1, maxDamage: 1), 2, 0));
+        await world.SeeAsync(killer);
+        await world.OnWorldAsync(() =>
+        {
+            world.Brain.NoteErrand(PlayerbotGoalKind.Train, 5491, 0);
+            world.Player.Map!.Combat.DealDamage(killer, world.Player, world.Player.Health, direct: false);
+            Assert.False(world.Player.IsAlive);
+            return true;
+        });
+        await world.ThinkAsync();
+        Assert.Equal(riskEnabled, await world.OnWorldAsync(() => world.Brain.Suspensions.IsEntrySuspended(5491, world.Host.World.NowMs)));
+    }
 }
