@@ -47,10 +47,19 @@ public sealed partial class CreatureMapSystem
     /// scripted.
     /// </summary>
     private CreatureAI? CreateEntryAi(Creature creature)
-        => _entryAis.Count > 0 && creature.Summon is not { Kind: SummonKind.Pet } && creature.CharmerGuid.IsEmpty
-            && _entryAis.TryGetValue(creature.Template.Entry, out Func<Creature, CreatureAI>? factory)
-            ? factory(creature)
-            : null;
+    {
+        if (creature.Summon is { Kind: SummonKind.Pet } || !creature.CharmerGuid.IsEmpty)
+        {
+            return null;
+        }
+
+        if (_entryAis.TryGetValue(creature.Template.Entry, out Func<Creature, CreatureAI>? factory))
+        {
+            return factory(creature);
+        }
+
+        return Instances.Scripts.DungeonBossAis.Create(creature, Map.MapId);
+    }
 
     private void RebuildAi(uint entry)
     {
@@ -167,6 +176,19 @@ public sealed partial class CreatureMapSystem
         Creature summoned = SpawnTemporary(template, x, y, z, orientation, summoner);
         _corpseDespawns.Add(summoned);
         return summoned;
+    }
+
+    /// <summary>Instance script summon when the event has no creature summoner (SD2 player or game-object summon).</summary>
+    public Creature? SummonInstanceCreature(uint entry, float x, float y, float z, float orientation)
+    {
+        if (_content.FindTemplate(entry) is not { } template)
+        {
+            return null;
+        }
+
+        Creature creature = SpawnTemporary(template, x, y, z, orientation);
+        MarkCorpseDespawn(creature);
+        return creature;
     }
 
     /// <summary>
