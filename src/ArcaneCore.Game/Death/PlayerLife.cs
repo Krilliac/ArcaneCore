@@ -56,13 +56,14 @@ public static class PlayerLife
     /// power/health values (but not more max values)", Player.cpp:15062-15070). Call it after
     /// everything that sets the maximums (items, auras, level stats) has run. A ghost without a body
     /// comes back at half health and mana like vmangos <c>Player::LoadCorpse</c> ("Prevent Dead Player
-    /// login without corpse", Player.cpp:15434-15439, <c>ResurrectPlayer(0.5f)</c>). A character stored
-    /// at 0 health without being a ghost (only a crash between the death and the release can save one:
-    /// a logout releases a dying spirit first) gets the same half restore. That is an ArcaneCore decision:
-    /// vmangos loads it ALIVE at 0 health (its death state comes from the ghost flag alone,
-    /// Player.cpp:14973-14975) and lets regeneration raise it, but here <see cref="Unit.IsAlive"/> also
-    /// needs health above 0, so a 0-health load would be alive yet treated as dead everywhere. Nothing is
-    /// skipped by it: the durability loss was taken at the death, and a reclaim has no sickness either.
+    /// login without corpse", Player.cpp:15434-15439, <c>ResurrectPlayer(0.5f)</c>); that is the only half
+    /// restore. A character stored at 0 health without being a ghost (a crash between the death and the
+    /// release; a logout releases a dying spirit first) is not dead in vmangos: its death state comes from
+    /// the ghost flag alone (Player.cpp:14973-14975), so it loads ALIVE with its saved powers and is raised by
+    /// the regeneration of a living player (Player.cpp:1240-1243). Here it keeps its saved powers too, but its
+    /// health is loaded as 1: <see cref="Unit.IsAlive"/> also needs health above 0, so ALIVE at 0 health would be
+    /// alive to regeneration yet dead to every other check (auras, spells, targeting) until the first regen
+    /// tick. One health point, which that tick would have given anyway, is the whole departure.
     /// </summary>
     public static LoadedLife ApplyVitals(Player player, CharacterLife life)
     {
@@ -78,7 +79,8 @@ public static class PlayerLife
         }
         else
         {
-            player.Health = Math.Min(life.Health, player.MaxHealth);
+            // Not a ghost, or a ghost going back to its body (stored at 1): never 0, see the summary.
+            player.Health = Math.Min(Math.Max(1u, life.Health), player.MaxHealth);
             for (int i = 0; i < PowerCount && i < life.Powers.Count; i++)
             {
                 MapCombat.SetPower(player, (PowerType)i, life.Powers[i]);
@@ -96,13 +98,13 @@ public static class PlayerLife
 
     /// <summary>
     /// A ghost without a body (vmangos <c>Player::LoadCorpse</c> resurrects it at half health, "Prevent Dead
-    /// Player login without corpse", Player.cpp:15434-15439), or a non-ghost stored at 0 health (the same half
-    /// restore by ArcaneCore decision; see <see cref="ApplyVitals"/>).
+    /// Player login without corpse", Player.cpp:15434-15439). A non-ghost is alive whatever its stored health
+    /// (Player.cpp:14973-14975) and gets its saved values back instead (<see cref="ApplyVitals"/>).
     /// </summary>
     public static bool HasNoBodyToReturnTo(CharacterLife life)
     {
         ArgumentNullException.ThrowIfNull(life);
-        return life.IsGhost ? life.Corpse is null : life.Health == 0;
+        return life.IsGhost && life.Corpse is null;
     }
 
     /// <summary>

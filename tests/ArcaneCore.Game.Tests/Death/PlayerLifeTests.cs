@@ -114,30 +114,75 @@ public sealed class PlayerLifeTests
     }
 
     [Fact]
-    public void ApplyVitals_ADeadCharacterWithoutAGhost_IsResurrectedAtHalf()
+    public void ApplyVitals_AZeroHealthNonGhost_KeepsItsSavedValuesAndIsAlive()
+    {
+        // vmangos LoadFromDB: the death state comes from the ghost flag alone (Player.cpp:14973-14975), so a body
+        // saved at 0 health before its release loads ALIVE and gets its saved powers back (Player.cpp:15062-15070);
+        // LoadCorpse's half restore is only for a dead player (Player.cpp:15427-15439). ArcaneCore's IsAlive also needs
+        // health above 0, so the health is loaded as 1 (the one value it cannot represent is ALIVE at 0).
+        Player player = NewPlayer();
+        var life = new CharacterLife(0, [7, 40, 3, 0, 0], 0, 0, false, null);
+
+        Assert.False(PlayerLife.HasNoBodyToReturnTo(life));
+        PlayerLife.ApplyVitals(player, life);
+
+        Assert.Equal(1u, player.Health);
+        Assert.Equal(7u, player.GetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Mana));
+        Assert.Equal(40u, player.GetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Rage));
+        Assert.Equal(3u, player.GetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Focus));
+        Assert.Equal(0u, player.GetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Energy));
+        Assert.Equal(DeathState.Alive, player.Combat.DeathState);
+        Assert.True(player.IsAlive); // alive to every check, as vmangos Unit::IsAlive (m_deathState == ALIVE, Unit.h:503)
+    }
+
+    [Fact]
+    public void AZeroHealthNonGhostLoad_RegeneratesOnItsFirstTick()
+    {
+        // vmangos Player::Update regenerates every ALIVE player (Player.cpp:1240-1243), which is what raises such a load.
+        (WorldRuntime world, _, _, _) = CombatTestKit.CreateWorld();
+        using WorldRuntime w = world;
+        Player player = CombatTestKit.AddPlayer(world, 1, 0, 0, new FakeSession(1));
+        player.SetUInt32(UpdateFields.UnitFieldStat0 + 4, 30);
+        PlayerLife.ApplyVitals(player, new CharacterLife(0, [0, 0, 0, 0, 0], 0, 0, false, null));
+        Assert.Equal(1u, player.Health);
+        Assert.True(player.IsAlive);
+
+        world.RunTick(50);
+
+        Assert.Equal(16u, player.Health); // 1 + warrior 1.26 · 30 − 22.6 = 15.2
+        Assert.True(player.IsAlive);
+    }
+
+    [Fact]
+    public void Reapply_RaisesTheSavedPowersOfAZeroHealthNonGhost()
+    {
+        Player player = NewPlayer();
+        player.SetUInt32(UpdateFields.UnitFieldMaxpower1, 50);
+        var life = new CharacterLife(0, [300, 0, 0, 0, 0], 0, 0, false, null);
+        LoadedLife loaded = PlayerLife.ApplyVitals(player, life);
+        Assert.Equal(50u, player.GetUInt32(UpdateFields.UnitFieldPower1));
+
+        player.SetUInt32(UpdateFields.UnitFieldMaxpower1, 500); // an aura (intellect) arrived
+        PlayerLife.ReapplyAfterAuras(player, loaded);
+
+        Assert.Equal(300u, player.GetUInt32(UpdateFields.UnitFieldPower1));
+        Assert.Equal(1u, player.Health);
+    }
+
+    [Fact]
+    public void ApplyVitals_AGhostWithoutABody_IsResurrectedAtHalf()
     {
         // vmangos Player::LoadCorpse: "Prevent Dead Player login without corpse" -> ResurrectPlayer(0.5f).
         Player player = NewPlayer();
-        var life = new CharacterLife(0, [0, 40, 0, 0, 0], 0, 0, false, null);
+        var life = new CharacterLife(1, [0, 40, 0, 0, 0], 0, 0, true, null);
 
+        Assert.True(PlayerLife.HasNoBodyToReturnTo(life));
         PlayerLife.ApplyVitals(player, life);
 
         Assert.Equal(500u, player.Health);
         Assert.Equal(250u, player.GetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Mana));
         Assert.Equal(0u, player.GetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Rage));
         Assert.Equal(251u, player.GetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Energy)); // 503 / 2
-    }
-
-    [Fact]
-    public void ApplyVitals_AGhostWithoutABody_IsResurrectedAtHalf()
-    {
-        Player player = NewPlayer();
-        var life = new CharacterLife(1, [0, 0, 0, 0, 0], 0, 0, true, null);
-
-        Assert.True(PlayerLife.HasNoBodyToReturnTo(life));
-        PlayerLife.ApplyVitals(player, life);
-
-        Assert.Equal(500u, player.Health);
     }
 
     [Fact]
