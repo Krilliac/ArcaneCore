@@ -184,6 +184,17 @@ Ritual of Doom summons (SUMMON_DEMON) are not built.
 Tests: `tests/ArcaneCore.Game.Tests/Pets/WarlockDemonTests.cs` (13 tests; RED first with an empty `InstallDemons` and no script: 12 failed, the "without the install"
 control passed) and two dispatcher tests for `ExecuteEffects` in `SpellScriptTests.cs`.
 
+## Talent pet auras and mage talents (lane `tb-t3-talent-class-scripts-pets`)
+
+- **Soul Link** (19028): the castable spell's DUMMY effect at the demon adds the owner's pet aura; the demon casts 25228 (3% damage done, 30% of the
+  warlock's damage split to the demon, APPLY_AREA_AURA_PET) and the warlock gets the copy. Unlearning 19028 removes it; a new demon ends it (vmangos
+  PetAura::IsRemovedOnChangePet: its DUMMY targets TARGET_UNIT_CASTER_PET).
+- **Master Demonologist** (23785, 23822-23825): the talent's DUMMY aura gives each demon its own variant by creature entry (imp threat, felhunter resistances,
+  voidwalker damage taken, succubus damage done), cast when the demon is summoned (Pet::InitPetCreateSpells -> CastPetAuras) and when the talent is learned.
+- **Ignite** and **Combustion**: `Spells/Mage/IgniteScript.cs`, `CombustionScript.cs` (proc scripts; docs/areas/class-scripts.md, "Talent scripts").
+- Code: `Game/Pets/PetAuras/` (`PetAuraTable`, `PetAuraService`, `PetAuraModule`, `TalentPetHooks`), `PetInitializer.InitCreateSpells`,
+  `World/Pets/TalentPetFeature.cs`. Tests: `tests/ArcaneCore.Game.Tests/Pets/TalentPetAuraTests.cs`, `ClassSpells/MageTalentScriptTests.cs`.
+
 ## Not delivered (and why)
 
 | Design slice | Reason |
