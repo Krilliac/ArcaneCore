@@ -123,6 +123,7 @@ public sealed class PlayerStatSystem : ICombatStatSource
         UpdateAttackPowerAndDamage(player, ranged: true);
         UpdateAllCritPercentages(player);
         UpdateDefenseBonuses(player);
+        UpdateDamageDoneFields(player);
     }
 
     /// <summary>
@@ -287,6 +288,30 @@ public sealed class PlayerStatSystem : ICombatStatSource
         UpdateAttackPowerAndDamage(player, ranged: true);
     }
 
+    /// <summary>
+    /// The stat part of vmangos Aura::HandleAuraModDisarm (SpellAuras.cpp:3502-3545), run after UNIT_FLAG_DISARMED followed the player's disarm
+    /// auras: outside a weaponless form a disarmed main hand swings at the 2.0 s base attack time and gets the weapon's own delay back when the
+    /// last disarm goes (Player::SetRegularAttackTime), without restarting the swing; then everything is recomputed, so the main hand deals unarmed
+    /// damage and its weapon-restricted crit and damage auras stop counting while it is disarmed (Player::_ApplyWeaponDependentAuraMods).
+    /// </summary>
+    public void OnDisarmChanged(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (!FormQueries.IsAttackSpeedOverridden(FormQueries.GetForm(player)))
+        {
+            uint time = CombatConstants.BaseAttackTimeMs;
+            if ((player.UnitFlags & UnitFlags.Disarmed) == 0
+                && GetWeaponForAttack(player, WeaponAttackType.BaseAttack, nonBroken: true, useable: false) is { Template.Delay: > 0 } weapon)
+            {
+                time = weapon.Template.Delay;
+            }
+
+            player.Combat.SetAttackTime(WeaponAttackType.BaseAttack, time, resetTimer: false);
+        }
+
+        UpdateAll(player);
+    }
+
     private static void SetFormAttackTime(Player player, uint time)
     {
         player.SetUInt32(UpdateFields.UnitFieldBaseattacktime + (int)WeaponAttackType.BaseAttack, time);
@@ -330,9 +355,23 @@ public sealed class PlayerStatSystem : ICombatStatSource
     {
         PlayerStatState state = player.StatState;
         bool offHand = attackType == WeaponAttackType.OffAttack;
-        WeaponDamageEntry weapon = offHand && GetWeaponForAttack(player, attackType, nonBroken: true, useable: true) is null
+        Item? usable = GetWeaponForAttack(player, attackType, nonBroken: true, useable: true);
+        WeaponDamageEntry weapon = offHand && usable is null
             ? default
             : state.WeaponDamage(attackType, 0);
+        UnitMods group = attackType switch
+        {
+            WeaponAttackType.OffAttack => UnitMods.DamageOffHand,
+            WeaponAttackType.RangedAttack => UnitMods.DamageRanged, // vmangos Player::CalculateMinMaxDamage (StatSystem.cpp:358-370): UNIT_MOD_DAMAGE_RANGED
+            _ => UnitMods.DamageMainHand,
+        };
+
+        // The aura terms of the hand's modifier group (StatSystem.cpp:374-378): TOTAL_VALUE is the enchantments plus the weapon-restricted
+        // MOD_DAMAGE_DONE, TOTAL_PCT the group's default (0.5 off hand) times MOD_DAMAGE_PERCENT_DONE / MOD_OFFHAND_DAMAGE_PCT (the ledger) times
+        // the weapon-restricted MOD_DAMAGE_PERCENT_DONE, and UNIT_MOD_DAMAGE_PHYSICAL the generic physical MOD_DAMAGE_DONE. A weapon-restricted
+        // aura counts while the hand's usable, unbroken weapon fits (Player::_ApplyWeaponDependentAuraDamageMod, Player.cpp:7072-7114).
+        PlayerStatAuras auras = state.Auras;
+        bool wandUser = player.Class is Class.Priest or Class.Mage or Class.Warlock;
 
         var inputs = new DamageInputs(
             attackType,
@@ -341,14 +380,9 @@ public sealed class PlayerStatSystem : ICombatStatSource
             TotalAttackPower: TotalAttackPower(player, attackType),
             BaseValue: 0.0f,
             BasePct: 1.0f,
-            TotalValue: state.TotalDamage(attackType),
-            TotalPct: UnitModConstants.Default(UnitModifierType.TotalPct, attackType switch
-            {
-                WeaponAttackType.OffAttack => UnitMods.DamageOffHand,
-                WeaponAttackType.RangedAttack => UnitMods.DamageRanged, // vmangos Player::CalculateMinMaxDamage (StatSystem.cpp:358-370): UNIT_MOD_DAMAGE_RANGED
-                _ => UnitMods.DamageMainHand,
-            }),
-            TotalPhysical: 0.0f,
+            TotalValue: state.TotalDamage(attackType) + auras.WeaponDamage(usable, percent: false, wandUser),
+            TotalPct: state.Mods.TotalPct(group) * auras.WeaponDamage(usable, percent: true, wandUser),
+            TotalPhysical: auras.PhysicalFlat(),
             WeaponMin: weapon.Min,
             WeaponMax: weapon.Max,
             Mode: FormQueries.IsAttackSpeedOverridden(FormQueries.GetForm(player)) ? WeaponDamageMode.ShapeshiftForm
@@ -383,13 +417,24 @@ public sealed class PlayerStatSystem : ICombatStatSource
         UpdateCritPercentage(player, WeaponAttackType.RangedAttack);
     }
 
-    /// <summary>Player::UpdateCritPercentage (StatSystem.cpp:531-577); the off hand has no client field.</summary>
+    /// <summary>
+    /// Player::UpdateCritPercentage (StatSystem.cpp:531-577); the off hand has no client field. The FLAT_MOD of the group is the generic
+    /// MOD_CRIT_PERCENT plus the weapon-restricted ones the hand's weapon earns; CRIT_PERCENTAGE also takes those an off-hand weapon's own
+    /// enchantment cast (Player::_ApplyWeaponDependentAuraCritMod, Player.cpp:7029-7070).
+    /// </summary>
     private void UpdateCritPercentage(Player player, WeaponAttackType attackType)
     {
         float critFromAgility = _rates?.MeleeCritFromAgility(player.Class, player.Level, Stat(player, 1)) ?? 0.0f;
-        bool hasWeapon = GetWeaponForAttack(player, attackType, nonBroken: true, useable: true) is not null;
-        int skill = _skills.WeaponSkill(player, attackType, hasWeapon);
-        float value = StatFormulas.CritPercentage(player.Class, 0.0f, critFromAgility, skill, player.Level * 5);
+        Item? weapon = GetWeaponForAttack(player, attackType, nonBroken: true, useable: true);
+        int skill = _skills.WeaponSkill(player, attackType, weapon is not null);
+        PlayerStatAuras auras = player.StatState.Auras;
+        float flat = auras.GenericCrit() + auras.WeaponCrit(weapon, attackType);
+        if (attackType == WeaponAttackType.BaseAttack)
+        {
+            flat += auras.WeaponCrit(GetWeaponForAttack(player, WeaponAttackType.OffAttack, nonBroken: true, useable: true), WeaponAttackType.OffAttack);
+        }
+
+        float value = StatFormulas.CritPercentage(player.Class, flat, critFromAgility, skill, player.Level * 5);
         SetStatFloat(player, attackType == WeaponAttackType.RangedAttack ? UpdateFields.PlayerRangedCritPercentage : UpdateFields.PlayerCritPercentage, value);
     }
 
@@ -407,9 +452,15 @@ public sealed class PlayerStatSystem : ICombatStatSource
         SetStatFloat(player, UpdateFields.PlayerBlockPercentage, value);
     }
 
+    /// <summary>
+    /// Player::UpdateParryPercentage (StatSystem.cpp:590-605): the parry aura term is GetWeaponBasedAuraModifier(BASE_ATTACK, MOD_PARRY_PERCENT),
+    /// the generic auras plus the weapon-restricted ones (Sword Finesse and the like) the main-hand item fits, whatever its state.
+    /// </summary>
     internal void UpdateParryPercentage(Player player)
     {
-        float value = StatFormulas.ParryPercentage(player.StatState.CanParry, _skills.DefenseSkill(player), player.Level * 5, player.StatState.ParryAuraBonus);
+        float aura = player.StatState.ParryAuraBonus
+            + player.StatState.Auras.WeaponParry(GetWeaponForAttack(player, WeaponAttackType.BaseAttack, nonBroken: false, useable: false));
+        float value = StatFormulas.ParryPercentage(player.StatState.CanParry, _skills.DefenseSkill(player), player.Level * 5, aura);
         SetStatFloat(player, UpdateFields.PlayerParryPercentage, value);
     }
 
@@ -418,6 +469,27 @@ public sealed class PlayerStatSystem : ICombatStatSource
         float fromAgility = _rates?.DodgeFromAgility(player.Class, player.Level, Stat(player, 1)) ?? 0.0f;
         float value = StatFormulas.DodgePercentage(player.Class, fromAgility, _skills.DefenseSkill(player), player.Level * 5, player.StatState.DodgeAuraBonus);
         SetStatFloat(player, UpdateFields.PlayerDodgePercentage, value);
+    }
+
+    /// <summary>
+    /// The client's spell damage display (vmangos Player::UpdateSpellDamageAndHealingBonus, StatSystem.cpp:80-88, run by every stat update, and the
+    /// field writes of Aura::HandleModDamageDone / Player::UpdateDamageDonePercent, SpellAuras.cpp:5262-5306, Player.cpp:7116-7136):
+    /// PLAYER_FIELD_MOD_DAMAGE_DONE_POS / _NEG / _PCT per school from <see cref="PlayerStatState.Auras"/> and the current spirit. The engine's spell
+    /// damage reads the auras at the cast (SpellBonusModule); these fields are what the character sheet shows, so they are refreshed after
+    /// every stat change and every damage done aura change. Unlike the reference, which overwrites the positive field with the net bonus at a stat
+    /// update while its aura handlers add positive and negative amounts apart, the two stay apart here.
+    /// </summary>
+    internal static void UpdateDamageDoneFields(Player player)
+    {
+        PlayerStatAuras auras = player.StatState.Auras;
+        uint spirit = player.GetUInt32(UpdateFields.UnitFieldStat0 + 4);
+        for (int school = 0; school < 7; school++)
+        {
+            (int positive, int negative) = auras.DamageDone(school, spirit);
+            player.SetUInt32(UpdateFields.PlayerFieldModDamageDonePos + school, (uint)Math.Max(0, positive));
+            player.SetInt32(UpdateFields.PlayerFieldModDamageDoneNeg + school, negative);
+            player.SetFloat(UpdateFields.PlayerFieldModDamageDonePct + school, auras.DamageDonePercent(school));
+        }
     }
 
     // --- ICombatStatSource -----------------------------------------------------------

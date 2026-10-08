@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules;
 
 namespace ArcaneCore.Game.Spells.Casters.Bonus;
 
@@ -20,8 +21,10 @@ public interface ISpellBonusCoefficients
 /// value as a mask (the 1.12 build). Order and rounding follow vmangos: the caster side runs when a direct effect lands
 /// or an over-time aura is created, the target side on every tick.
 /// <para>
-/// Not modelled (documented limits): damage done versus creature types (aura 168/59/180), equipped-item restricted
-/// auras, class script modifiers, talent spell mods, Ignite, totems/pets using their owner, and weapon-based periodic damage.
+/// Damage done versus the victim's creature type (auras 168, 59, 180) is applied, and equipped-item restricted damage auras are left out of
+/// spells as the reference does. Not modelled (documented limits): the paladin seal exception for weapon-restricted percent auras, class script
+/// modifiers, Ignite, totems/pets using their owner, weapon-based periodic damage, and the melee class SCHOOL_DAMAGE spells' MeleeDamageBonusDone
+/// (they take only the DAMAGE spell mod; weapon damage spells use <see cref="Combat.MeleeDamageBonus"/>).
 /// </para>
 /// </summary>
 public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
@@ -74,10 +77,10 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
         int mask = 1 << (int)spell.School;
         return stage switch
         {
-            SpellAmountStage.DirectDamage => Taken(false, Done(false, amount, caster, spell, mask, coefficient, 1, SpellModOp.Damage), target, spell, mask, coefficient, 1),
-            SpellAmountStage.DirectHeal => Taken(true, Done(true, amount, caster, spell, mask, coefficient, 1, SpellModOp.Damage), target, spell, mask, coefficient, 1),
-            SpellAmountStage.DamageOverTimeSnapshot => Done(false, amount, caster, spell, mask, coefficient, 1, SpellModOp.Dot),
-            SpellAmountStage.HealOverTimeSnapshot => Done(true, amount, caster, spell, mask, coefficient, 1, SpellModOp.Dot),
+            SpellAmountStage.DirectDamage => Taken(false, Done(false, amount, caster, target, spell, mask, coefficient, 1, SpellModOp.Damage), target, spell, mask, coefficient, 1),
+            SpellAmountStage.DirectHeal => Taken(true, Done(true, amount, caster, target, spell, mask, coefficient, 1, SpellModOp.Damage), target, spell, mask, coefficient, 1),
+            SpellAmountStage.DamageOverTimeSnapshot => Done(false, amount, caster, target, spell, mask, coefficient, 1, SpellModOp.Dot),
+            SpellAmountStage.HealOverTimeSnapshot => Done(true, amount, caster, target, spell, mask, coefficient, 1, SpellModOp.Dot),
             SpellAmountStage.DamageOverTimeTick => Taken(false, amount, target, spell, mask, coefficient, stack),
             _ => Taken(true, amount, target, spell, mask, coefficient, stack),
         };
@@ -107,10 +110,13 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
         return amount + (benefit * SpellCoefficients.LevelPenalty(spell));
     }
 
-    /// <summary>vmangos SpellBaseDamageBonusDone: ModDamageDone for the school plus the spirit based part (players).</summary>
+    /// <summary>
+    /// vmangos SpellBaseDamageBonusDone (SpellCaster.cpp:1703-1735): ModDamageDone for the school from auras that name no item class or inventory
+    /// type (a wand's damage aura is not spell power), plus the spirit based part (players).
+    /// </summary>
     private float BaseDamageBonusDone(Unit caster, int mask)
     {
-        float benefit = Sum(caster, AuraType.ModDamageDone, a => (a.MiscValue & mask) != 0);
+        float benefit = ItemIndependentSum(caster, AuraType.ModDamageDone, mask);
         if (caster is Player)
         {
             foreach (int percent in Amounts(caster, AuraType.ModSpellDamageOfStatPercent, a => (a.MiscValue & mask) != 0))
@@ -139,7 +145,13 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
     /// done amount (DAMAGE for direct damage and healing, DOT for over-time snapshots; SpellCaster.cpp:1446, :1522, :1697), and
     /// SPELL_BONUS_DAMAGE scales the coefficient when there is a benefit to scale (SpellBonusWithCoeffs, :1760-1766).
     /// </summary>
-    private float Done(bool heal, float amount, Unit caster, SpellInfo spell, int mask, EffectiveCoefficient coefficient, uint stack, SpellModOp modOp)
+    /// <para>
+    /// The damage side also takes the creature type of <paramref name="target"/> (SpellCaster.cpp:1613-1620, 1677-1679): MOD_DAMAGE_DONE_VERSUS
+    /// multiplies, MOD_DAMAGE_DONE_CREATURE adds outside the coefficient, MOD_FLAT_SPELL_DAMAGE_VERSUS adds to the benefit; and only
+    /// MOD_DAMAGE_PERCENT_DONE / MOD_DAMAGE_DONE auras that name no item class or inventory type count (:1592-1600, :1709-1715), so a wand
+    /// specialization does not boost spells.
+    /// </para>
+    private float Done(bool heal, float amount, Unit caster, Unit target, SpellInfo spell, int mask, EffectiveCoefficient coefficient, uint stack, SpellModOp modOp)
     {
         if (SpellBonusFormulas.IgnoresCasterModifiers(spell)
             || (heal && spell.DamageClass == SpellDamageClass.None && spell.IsPassive))
@@ -149,6 +161,7 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
 
         float benefit;
         float percent;
+        float flat = 0f;
         if (heal)
         {
             benefit = Sum(caster, AuraType.ModHealingDone, a => (a.MiscValue & mask) != 0);
@@ -161,13 +174,19 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
         }
         else
         {
-            benefit = Sum(caster, AuraType.ModDamageDone, a => (a.MiscValue & mask) != 0);
+            benefit = ItemIndependentSum(caster, AuraType.ModDamageDone, mask);
             if (caster is Player)
             {
                 benefit += Sum(caster, AuraType.ModSpellDamageOfStatPercent, a => (a.MiscValue & mask) != 0) * Spirit(caster) / 100.0f;
             }
 
-            percent = SpellBonusFormulas.MultiplicativePercent(Amounts(caster, AuraType.ModDamagePercentDone, a => (a.MiscValue & mask) != 0));
+            uint typeMask = target.CreatureTypeMask();
+            benefit += Sum(caster, AuraType.ModFlatSpellDamageVersus, a => ((uint)a.MiscValue & typeMask) != 0);
+            flat = Sum(caster, AuraType.ModDamageDoneCreature, a => ((uint)a.MiscValue & typeMask) != 0);
+            percent = spell.EquippedItemClass == -1
+                ? SpellBonusFormulas.MultiplicativePercent(ItemIndependentAmounts(caster, AuraType.ModDamagePercentDone, mask))
+                : 1.0f;
+            percent *= SpellBonusFormulas.MultiplicativePercent(Amounts(caster, AuraType.ModDamageDoneVersus, a => ((uint)a.MiscValue & typeMask) != 0));
         }
 
         if (benefit != 0)
@@ -175,7 +194,7 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
             coefficient = coefficient with { Coefficient = spells.ModFloat(caster, spell, SpellModOp.SpellBonusDamage, coefficient.Coefficient * 100.0f) / 100.0f };
         }
 
-        float done = SpellBonusFormulas.AmountDone(amount, 0, benefit, coefficient, stack, percent);
+        float done = SpellBonusFormulas.AmountDone(amount, flat, benefit, coefficient, stack, percent);
         float modified = spells.ModFloat(caster, spell, modOp, done);
         return modified > 0 ? modified : 0;
     }
@@ -206,6 +225,37 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
     }
 
     private static float Spirit(Unit unit) => unit.GetUInt32(UpdateFields.UnitFieldStat0 + SpiritStat);
+
+    /// <summary>The sum of the auras of <paramref name="type"/> for the school mask whose spell names no item class and no inventory type.</summary>
+    private int ItemIndependentSum(Unit unit, AuraType type, int mask)
+    {
+        int total = 0;
+        foreach (int amount in ItemIndependentAmounts(unit, type, mask))
+        {
+            total += amount;
+        }
+
+        return total;
+    }
+
+    private IEnumerable<int> ItemIndependentAmounts(Unit unit, AuraType type, int mask)
+    {
+        foreach (SpellAuraHolder holder in spells.GetAuras(unit))
+        {
+            if (holder.IsRemoved || holder.Spell.EquippedItemClass != -1 || holder.Spell.EquippedItemInventoryTypeMask != 0)
+            {
+                continue;
+            }
+
+            foreach (SpellAura? aura in holder.Auras)
+            {
+                if (aura is not null && aura.Type == type && (aura.MiscValue & mask) != 0)
+                {
+                    yield return aura.Amount;
+                }
+            }
+        }
+    }
 
     private int Sum(Unit unit, AuraType type, Func<SpellAura, bool>? filter) => spells.GetTotalAuraModifier(unit, type, filter);
 

@@ -458,6 +458,8 @@ public sealed partial class MapCombat
             && CombatEnvironment.For(_world).MeleeSpells?.IsNonMeleeSpellCasted(victim) != true
             && !IsTotem(victim);
 
+        SpellSystem? auras = SpellMitigation;
+        bool ranged = attackType == WeaponAttackType.RangedAttack;
         float dodge = 0f, parry = 0f, block = 0f;
         if (victimCanDefend)
         {
@@ -470,11 +472,18 @@ public sealed partial class MapCombat
             }
             else
             {
-                dodge = 5f;
-                parry = 5f;
-                block = 5f;
+                // A creature: 5% plus its MOD_DODGE/PARRY/BLOCK_PERCENT auras, never negative (Unit.cpp:2484-2486, 2504-2510, 2545-2549).
+                dodge = Math.Max(0f, 5f + (auras?.GetTotalAuraModifier(victim, AuraType.ModDodgePercent) ?? 0));
+                parry = Math.Max(0f, 5f + (auras?.GetTotalAuraModifier(victim, AuraType.ModParryPercent) ?? 0));
+                block = Math.Max(0f, 5f + (auras?.GetTotalAuraModifier(victim, AuraType.ModBlockPercent) ?? 0));
             }
         }
+
+        // vmangos Unit::GetUnitCriticalChance (Unit.cpp:2552-2577): a player's crit field for the hand (the ranged field for a ranged attack),
+        // anything else 5 plus its MOD_CRIT_PERCENT auras.
+        float baseCrit = attacker is Player pa
+            ? pa.GetFloat(ranged ? UpdateFields.PlayerRangedCritPercentage : UpdateFields.PlayerCritPercentage)
+            : 5f + (auras?.GetTotalAuraModifier(attacker, AuraType.ModCritPercent) ?? 0);
 
         return new MeleeRollInput
         {
@@ -495,8 +504,10 @@ public sealed partial class MapCombat
             AttackerWeaponSkill = WeaponSkill(attacker, attackType, victim),
             VictimDefenseSkill = hooks.GetDefenseSkill(victim, attacker),
             DualWield = HasOffhandWeapon(attacker),
-            HitBonus = SpellMitigation?.GetTotalAuraModifier(attacker, AuraType.ModHitChance) ?? 0f, // vmangos SpellCaster.cpp:389-390; weapon filters remain a limit
-            BaseCritChance = attacker is Player pa ? pa.GetFloat(UpdateFields.PlayerCritPercentage) : 5f,
+            HitBonus = auras is null ? 0f : WeaponAuraModifiers.Get(auras, attacker, attackType, AuraType.ModHitChance), // SpellCaster.cpp:389-390
+            VictimAttackerHitBonus = auras?.GetTotalAuraModifier(victim, ranged ? AuraType.ModAttackerRangedHitChance : AuraType.ModAttackerMeleeHitChance) ?? 0, // :414-418
+            VictimAttackerCritBonus = auras?.GetTotalAuraModifier(victim, ranged ? AuraType.ModAttackerRangedCritChance : AuraType.ModAttackerMeleeCritChance) ?? 0, // Unit.cpp:2577-2581
+            BaseCritChance = baseCrit,
             DodgeChance = dodge,
             ParryChance = parry,
             BlockChance = block,
@@ -522,7 +533,20 @@ public sealed partial class MapCombat
             hit |= HitInfo.Pvp;
         }
 
-        uint damage = Dither(CalculateDamage(attacker, attackType));
+        // vmangos Unit::CalculateMeleeDamage (Unit.cpp:1362-1367): the weapon roll, the done bonuses (creature type and attack power versus,
+        // damage done versus), dithered, then the victim's taken modifiers, dithered again.
+        float rolled = CalculateDamage(attacker, attackType);
+        uint damage;
+        if (SpellMitigation is { } bonuses)
+        {
+            rolled = MeleeDamageBonus.Done(bonuses, attacker, victim, rolled, attackType);
+            damage = Dither(MeleeDamageBonus.Taken(bonuses, attacker, victim, Dither(rolled), attackType, SpellSchoolMasks.Of(SpellSchool.Normal)));
+        }
+        else
+        {
+            damage = Dither(rolled);
+        }
+
         uint afterArmor = Dither(MeleeHitTable.ApplyArmor(damage, victim.GetInt32(UpdateFields.UnitFieldResistances), attacker.Level));
         uint clean = damage > afterArmor ? damage - afterArmor : 0;
         damage = afterArmor;
