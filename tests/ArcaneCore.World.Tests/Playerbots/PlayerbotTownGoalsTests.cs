@@ -22,6 +22,8 @@ using ArcaneCore.Kernel.Quests;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
+using ArcaneCore.Kernel.Accounts;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots;
@@ -336,6 +338,222 @@ public sealed class PlayerbotTownGoalsTests
             TrainerMetadataWorldServices.Current.Value = null;
         }
     }
+
+    /// <summary>
+    /// mangoszero RepairAllAction: a worn item under a quarter of its durability (or broken) sends the bot's CMSG_REPAIR_ITEM
+    /// (empty item guid: everything) at an NPC with the repair flag; the real handler prices it from the repair tables.
+    /// </summary>
+    [Fact]
+    public async Task WornGearUnderAQuarterDurability_IsRepairedAtARepairNpc()
+    {
+        var npc = new TownVendorFixture();
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(Boots(9201, durability: 20));
+        using IDisposable itemScope = items.Use();
+        TownVendorServices.Current.Value = npc;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton(RepairPrices()));
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "repair NPC visible");
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    player.Money = 100;
+                    PlayerbotEquipmentTests.EquipFromBags(player, 9201);
+                    Item boots = player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Feet)!;
+                    ((Creature)player.Map!.FindObject(TownVendorFixture.Guid)!).NpcFlags = (uint)(NpcFlags.Vendor | NpcFlags.Repair);
+                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+                    boots.Durability = 5; // exactly a quarter: still fine
+                    Assert.False(PlayerbotTownGoals.NeedsRepair(player));
+                    boots.Durability = 4;
+                    Assert.True(PlayerbotTownGoals.NeedsRepair(player));
+                    Assert.True(goals.HasCandidate(player));
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    Assert.True(goals.Update(player, 1500));
+                    Assert.Equal(20u, boots.Durability);
+                    Assert.Equal(84u, player.Money); // 16 points lost x multiplier 1 x quality factor 1
+                    Assert.Equal(PlayerbotGoalKind.Vendor, goals.Goal);
+                    Assert.False(PlayerbotTownGoals.NeedsRepair(player));
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { TownVendorServices.Current.Value = null; }
+    }
+
+    /// <summary>Without repair prices the handler repairs nothing: the bot tries once, then leaves the NPC alone for a minute.</summary>
+    [Fact]
+    public async Task ARepairThatChangesNothing_IsNotRepeatedEveryThink()
+    {
+        var npc = new TownVendorFixture();
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(Boots(9201, durability: 20));
+        using IDisposable itemScope = items.Use();
+        TownVendorServices.Current.Value = npc;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start();
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "repair NPC visible");
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    player.Money = 100;
+                    PlayerbotEquipmentTests.EquipFromBags(player, 9201);
+                    player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Feet)!.Durability = 0;
+                    ((Creature)player.Map!.FindObject(TownVendorFixture.Guid)!).NpcFlags = (uint)NpcFlags.Repair;
+                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    Assert.True(goals.Update(player, 1500));
+                    Assert.Equal(0u, player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Feet)!.Durability);
+                    Assert.False(goals.HasCandidate(player));
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    Assert.False(goals.Update(player, 1500));
+                    Assert.Equal(1, session.ManagedBudget.Remaining);
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { TownVendorServices.Current.Value = null; }
+    }
+
+    /// <summary>
+    /// With every bag slot taken, the bot sells the cheapest junk (a white trade good) and nothing it needs: not a quest item, not
+    /// the food it carries, not a white item that would be an upgrade; with a slot free again it stops selling.
+    /// </summary>
+    [Fact]
+    public async Task FullBags_SellTheCheapestJunk_AndNothingElse()
+    {
+        var npc = new TownVendorFixture();
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 117, Name = "Starter food", Class = (uint)ItemClass.Consumable,
+            Stackable = 20, BuyPrice = 10, SellPrice = 1, FoodType = 1 });
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9301, Name = "White goods", Class = (uint)ItemClass.TradeGoods,
+            Quality = 1, Stackable = 1, SellPrice = 7 });
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9302, Name = "Cheap goods", Class = (uint)ItemClass.TradeGoods,
+            Quality = 1, Stackable = 1, SellPrice = 2 });
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9001, Name = "Quest goods", Class = (uint)ItemClass.TradeGoods,
+            Quality = 1, Stackable = 1, SellPrice = 1 });
+        items.Templates.Templates.Add(Boots(9303, durability: 0) with { SellPrice = 1, Armor = 40 });
+        using IDisposable itemScope = items.Use();
+        TownVendorServices.Current.Value = npc;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start();
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "vendor visible");
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    foreach (Item existing in player.Inventory.AllItems.Where(item => item.BagSlot == InventorySlots.Bag0
+                        && item.Slot >= InventorySlots.ItemStart && item.Slot < InventorySlots.ItemEnd).ToArray())
+                        player.Inventory.DestroyItem(existing.BagSlot, existing.Slot);
+                    Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(117, 1, out _));
+                    Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(9001, 1, out _));
+                    Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(9302, 1, out _));
+                    Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(9303, 1, out _));
+                    while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
+                        Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(9301, 1, out _));
+                    QuestNpcFeature feature = host.WorldServices.GetRequiredService<QuestNpcFeature>();
+                    feature.Services.StateOf(player)!.Quests.GetOrAdd(TownVendorFixture.QuestId).Status = QuestStatus.Incomplete;
+                    ((Creature)player.Map!.FindObject(TownVendorFixture.Guid)!).NpcFlags = (uint)NpcFlags.Vendor;
+                    player.Money = 0;
+                    return true;
+                });
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+                    Assert.True(goals.HasCandidate(player));
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    Assert.True(goals.Update(player, 1500));
+                    Assert.Equal(0u, player.Inventory.GetItemCount(9302));
+                    Assert.Equal(1, PlayerbotTownGoals.FreeBagSlots(player));
+                    Assert.False(goals.HasCandidate(player));
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    Assert.False(goals.Update(player, 1500));
+                    return true;
+                });
+                Assert.Equal(1u, await host.PlayerStateAsync("Controlone", p => p.Inventory.GetItemCount(9001)));
+                Assert.Equal(1u, await host.PlayerStateAsync("Controlone", p => p.Inventory.GetItemCount(9303)));
+                Assert.Equal(1u, await host.PlayerStateAsync("Controlone", p => p.Inventory.GetItemCount(117)));
+                Assert.Equal(2u, await host.PlayerStateAsync("Controlone", p => p.Money));
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { TownVendorServices.Current.Value = null; }
+    }
+
+    /// <summary>
+    /// A hunter with a gun and no bullets buys the vendor's bullets (one CMSG_BUY_ITEM buys the BuyCount) and the out-of-combat
+    /// upkeep then selects them with CMSG_SET_AMMO (vmangos AddHunterAmmo creates and sets them instead).
+    /// </summary>
+    [Fact]
+    public async Task AHunterWithoutAmmo_BuysBulletsAndSelectsThem()
+    {
+        var npc = new TownVendorFixture { VendorItemsOverride = [new VendorItem { Entry = TownVendorFixture.Entry, Item = 9402, Slot = 0 }] };
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9401, Name = "Test gun", Class = (uint)ItemClass.Weapon, SubClass = 3,
+            InventoryType = (uint)InventoryType.RangedRight, Delay = 3000, Damages = [new ItemDamage(5, 9, 0)], Stackable = 1 });
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9402, Name = "Test shot", Class = (uint)ItemClass.Projectile, SubClass = 3,
+            InventoryType = (uint)InventoryType.Ammo, Stackable = 200, BuyCount = 200, BuyPrice = 10, Damages = [new ItemDamage(1, 2, 0)] });
+        using IDisposable itemScope = items.Use();
+        TownVendorServices.Current.Value = npc;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start();
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "vendor visible");
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter); // as the pet tests make their hunters
+                    player.Money = 100;
+                    foreach (Item ammo in player.Inventory.AllItems.Where(item => item.Template.GetInventoryType() == InventoryType.Ammo).ToArray())
+                        player.Inventory.DestroyItem(ammo.BagSlot, ammo.Slot);
+                    player.Inventory.RemoveAmmo();
+                    if (player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Ranged) is not null)
+                        player.Inventory.DestroyItem(InventorySlots.Bag0, InventorySlots.Ranged);
+                    PlayerbotEquipmentTests.EquipFromBags(player, 9401);
+                    ((Creature)player.Map!.FindObject(TownVendorFixture.Guid)!).NpcFlags = (uint)NpcFlags.Vendor;
+                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+                    Assert.True(goals.HasCandidate(player));
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    Assert.True(goals.Update(player, 1500));
+                    Assert.Equal(200u, player.Inventory.GetItemCount(9402));
+                    Assert.Equal(90u, player.Money);
+                    Assert.False(goals.HasCandidate(player)); // 200 rounds: no further purchase
+                    session.ManagedBudget = new ManagedActionBudget(1);
+                    Assert.True(new PlayerbotEquipment(session).Update(player));
+                    Assert.Equal(9402u, player.Inventory.AmmoId);
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { TownVendorServices.Current.Value = null; }
+    }
+
+    private static ItemTemplate Boots(uint entry, uint durability) => new()
+    {
+        Entry = entry, Name = $"boots-{entry}", Class = (uint)ItemClass.Armor, SubClass = ItemSubClasses.ArmorMisc,
+        InventoryType = (uint)InventoryType.Feet, Armor = 10, MaxDurability = durability, ItemLevel = 10, Quality = 1, Stackable = 1,
+        AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue,
+    };
+
+    /// <summary>DurabilityCosts row for item level 10 (every multiplier 1) and DurabilityQuality factor 1 for quality 1 ((1 + 1) x 2).</summary>
+    private static RepairCostTable RepairPrices() => new([(10u, Enumerable.Repeat(1u, RepairCostTable.MultiplierCount).ToArray())], [(4u, 1f)]);
 
     [Fact]
     public async Task MissingNpcContent_IsAClosedNoActionFallback()

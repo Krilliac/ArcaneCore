@@ -26,7 +26,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     private int _contentVersion = -1;
     private CreatureContent? _content;
     private QuestStore? _quests;
+    private QuestRewardMode _rewardMode;
     private uint[] _rewardQuestIds = [];
+    private uint _level;
     private uint _preferredEntry = uint.MaxValue;
     private uint _returnQuestId;
     private PlayerbotRoute? _route;
@@ -42,7 +44,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
 
     /// <summary>
     /// Advisory check for the brain's idle decision. This reports an ordinary,
-    /// allowlisted quest destination that is currently eligible and offscreen;
+    /// rewardable (Quests:RewardMode) quest destination that is currently eligible and offscreen;
     /// it does not plan a route or claim/accept a quest. The subsequent
     /// <see cref="Update"/> call remains authoritative and preserves the one
     /// path attempt and backoff rules.
@@ -64,7 +66,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             _blockedSpawns.Clear();
         }
 
-        // Use the same static allowlist/map cache as Update, while rechecking
+        // Use the same static quest/map cache as Update, while rechecking
         // live quest state below so stale rows never become ownership.
         RefreshEntries(player, map.MapId, 0, 0);
         QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
@@ -202,11 +204,13 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         CreatureContent? content = _session.Services.GetService<CreatureWorldFeature>()?.Content;
         QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
         QuestStore? quests = services?.Quests;
-        uint[] allowed = services?.Options.OrdinaryRewardQuestIds ?? [];
-        if (content is null || quests is null) { ClearRoute(); _entries.Clear(); return; }
+        if (content is null || quests is null || services is null) { ClearRoute(); _entries.Clear(); return; }
+        QuestRewardMode mode = services.Options.RewardMode;
+        uint[] allowed = services.Options.OrdinaryRewardQuestIds;
+        uint level = player.Level;
         if (_mapId == mapId && ReferenceEquals(_content, content) && _contentVersion == content.DefinitionsVersion
             && ReferenceEquals(_quests, quests) && _preferredEntry == preferredCreatureEntry
-            && _returnQuestId == returnQuestId
+            && _returnQuestId == returnQuestId && _rewardMode == mode && _level == level
             && _rewardQuestIds.SequenceEqual(allowed)) return;
         ClearRoute();
         _mapId = mapId;
@@ -215,23 +219,59 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         _contentVersion = content.DefinitionsVersion;
         _preferredEntry = preferredCreatureEntry;
         _returnQuestId = returnQuestId;
+        _rewardMode = mode;
+        _level = level;
         _rewardQuestIds = [.. allowed];
         _entries.Clear();
         _blockedSpawns.Clear();
-        IEnumerable<uint> entries = returnQuestId != 0 ? quests.CreatureEndersOf(returnQuestId).Take(MaxEntryScan)
-            : preferredCreatureEntry != 0 ? [preferredCreatureEntry]
-            : allowed.Take(MaxEntryScan).SelectMany(id => quests.CreatureStartersOf(id)
-                .Concat(quests.CreatureEndersOf(id))).Distinct().Take(MaxEntryScan);
-        foreach (uint entry in entries)
+        if (returnQuestId != 0 || preferredCreatureEntry != 0)
         {
-            // Cache static relations only. Live eligibility can change after a quest
-            // reward or level gain and is rechecked for every movement decision.
-            foreach (CreatureSpawn spawn in content.GetSpawns(mapId, entry)
-                .Where(spawn => IsDestinationEntry(content, quests, spawn, preferredCreatureEntry))
-                .OrderBy(spawn => DistanceSquared(player, spawn)).Take(MaxEntryScan - _entries.Count))
-                _entries.Add(new DestinationEntry(entry, spawn));
-            if (_entries.Count >= MaxEntryScan) break;
+            IEnumerable<uint> entries = returnQuestId != 0 ? quests.CreatureEndersOf(returnQuestId).Take(MaxEntryScan)
+                : [preferredCreatureEntry];
+            foreach (uint entry in entries)
+            {
+                // Cache static relations only. Live eligibility can change after a quest
+                // reward or level gain and is rechecked for every movement decision.
+                foreach (CreatureSpawn spawn in content.GetSpawns(mapId, entry)
+                    .Where(spawn => IsDestinationEntry(content, quests, spawn, preferredCreatureEntry))
+                    .OrderBy(spawn => DistanceSquared(player, spawn)).Take(MaxEntryScan - _entries.Count))
+                    _entries.Add(new DestinationEntry(entry, spawn));
+                if (_entries.Count >= MaxEntryScan) break;
+            }
+            return;
         }
+
+        // Quest givers and enders of the quests the server settles (Quests:RewardMode): every supported quest by default,
+        // the allowlist only under AllowlistOnly. The nearest spawns win, whatever the quest ids.
+        HashSet<uint> givers = [];
+        foreach (uint questId in CandidateQuests(services, level))
+        {
+            givers.UnionWith(quests.CreatureStartersOf(questId));
+            givers.UnionWith(quests.CreatureEndersOf(questId));
+        }
+        foreach (DestinationEntry entry in givers.Order()
+            .SelectMany(entry => content.GetSpawns(mapId, entry)
+                .Where(spawn => IsDestinationEntry(content, quests, spawn, 0))
+                .Select(spawn => new DestinationEntry(entry, spawn)))
+            .OrderBy(entry => DistanceSquared(player, entry.Spawn)).ThenBy(entry => entry.Spawn.Guid)
+            .Take(MaxEntryScan))
+            _entries.Add(entry);
+    }
+
+    /// <summary>
+    /// The quests worth a trip: under AllowlistOnly the allowlist; otherwise every quest the server settles that the character
+    /// is old enough for and that is not gray (vmangos MaNGOS::XP::GetGrayLevel; QuestLevel 0 or less follows the player).
+    /// Live eligibility (<see cref="QuestNpcServices.CanTakeQuest(Player, uint)"/>, the journal) is checked per decision.
+    /// </summary>
+    internal static IEnumerable<uint> CandidateQuests(QuestNpcServices services, uint level)
+    {
+        if (services.Options.RewardMode == QuestRewardMode.AllowlistOnly)
+            return services.Options.OrdinaryRewardQuestIds.Where(services.IsRewardable);
+        uint gray = ArcaneCore.Game.Progression.ExperienceFormulas.GrayLevel(level);
+        return services.Quests.All
+            .Where(quest => quest.MinLevel <= level && (quest.QuestLevel <= 0 || quest.QuestLevel > gray))
+            .Select(quest => quest.Id).Order()
+            .Where(services.IsRewardable);
     }
 
     private static bool Eligible(uint entry, uint preferred, Player player, QuestNpcServices? services,
@@ -241,7 +281,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         if (returnQuestId != 0)
         {
             if (services is not null && state is { Loaded: true }
-                && services.Options.OrdinaryRewardQuestIds.Contains(returnQuestId)
+                && services.IsRewardable(returnQuestId)
                 && services.Quests.Ends(entry, returnQuestId)
                 && state.Quests.Get(returnQuestId) is { Status: QuestStatus.Complete, Rewarded: false })
             { questId = returnQuestId; return true; }
@@ -251,13 +291,13 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         if (services is null || state is not { Loaded: true }) return false;
         foreach (uint id in services.Quests.EndersOf(entry))
         {
-            if (services.Options.OrdinaryRewardQuestIds.Contains(id)
+            if (services.IsRewardable(id)
                 && state.Quests.Get(id) is { Status: QuestStatus.Complete, Rewarded: false })
             { questId = id; return true; }
         }
         foreach (uint id in services.Quests.StartersOf(entry))
         {
-            if (services.Options.OrdinaryRewardQuestIds.Contains(id)
+            if (services.IsRewardable(id)
                 && services.CanTakeQuest(player, id) == true && state.Quests.Get(id) is null) { questId = id; return true; }
         }
         return false;

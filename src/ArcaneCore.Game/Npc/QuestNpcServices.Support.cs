@@ -233,6 +233,15 @@ public sealed partial class QuestNpcServices
     private bool AcceptableQuest(Quest quest) => Supported(quest);
 
     /// <summary>
+    /// Whether ordinary settlement would reward quest <paramref name="questId"/> under the current Quests:RewardMode: the same
+    /// gate as the turn-in itself (<see cref="SupportedRewardQuest"/>). Managed playerbots choose the quests they take, travel
+    /// to and return with it, so under the default <see cref="QuestRewardMode.AllSupported"/> they pursue every supported
+    /// quest and under <see cref="QuestRewardMode.AllowlistOnly"/> only <see cref="QuestNpcOptions.OrdinaryRewardQuestIds"/>.
+    /// It says nothing about one character: <see cref="CanTakeQuest(Entities.Player, uint)"/> still decides that.
+    /// </summary>
+    public bool IsRewardable(uint questId) => Quests.Get(questId) is { } quest && SupportedRewardQuest(quest);
+
+    /// <summary>
     /// Ordinary settlement: Quests:RewardMode AllSupported (default, retail: vmangos Player::CanRewardQuest has no
     /// allowlist) or the old allowlist; then the quest must be active and supported, and every requirement and reward
     /// it carries must have an adapter (XP needs <see cref="IQuestExperience"/>, reward spells need

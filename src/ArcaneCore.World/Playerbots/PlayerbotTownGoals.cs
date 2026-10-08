@@ -10,16 +10,28 @@ using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
+using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Playerbots;
 
-/// <summary>Bounded ordinary vendor/trainer goals for one managed player.</summary>
+/// <summary>
+/// Bounded ordinary vendor/trainer goals for one managed player: repairs (mangoszero RepairAllAction: any equipped item broken or
+/// under a quarter of its durability, at an NPC with the repair flag), food and drink, a hunter's ammunition, gray items, junk
+/// when the bags are full, and trainer spells. Every request goes through the real NPC handler.
+/// </summary>
 internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions options)
 {
     private const uint ThinkCooldownMs = 1500;
+    private const uint RepairBackoffMs = 60_000;
+
+    /// <summary>A hunter restocks when the bags hold fewer rounds than this for the equipped bow, gun or crossbow.</summary>
+    internal const uint AmmoLowWater = 200;
+
+    private const uint WeaponBow = 2, WeaponGun = 3, WeaponCrossbow = 18;
     private uint _cooldownMs;
+    private uint _repairBackoffUntil;
     private PlayerbotRoute? _route;
     private ObjectGuid _routeTarget;
     private ObjectGuid _trainerTarget;
@@ -31,7 +43,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     internal uint TargetEntry { get; private set; }
 
     internal bool HasCandidate(Player player)
-        => FindNpc(player, NpcFlags.Vendor | NpcFlags.Trainer) is not null;
+        => FindNpc(player, NpcFlags.Vendor | NpcFlags.Trainer | NpcFlags.Repair) is not null;
 
     internal bool Update(Player player, uint elapsedMs)
     {
@@ -69,7 +81,7 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
             return false;
         }
 
-        NpcInfo? npc = FindNpc(player, NpcFlags.Vendor | NpcFlags.Trainer);
+        NpcInfo? npc = FindNpc(player, NpcFlags.Vendor | NpcFlags.Trainer | NpcFlags.Repair);
         if (npc is null)
             return false;
         TargetEntry = npc.Entry;
@@ -94,7 +106,14 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
         // Throttle service requests, not travel. Motion must keep progressing
         // at the advertised speed until ordinary interaction distance is reached.
         _cooldownMs = ThinkCooldownMs;
+        if ((npc.NpcFlags & NpcFlags.Repair) != 0 && TryRepair(player, npc))
+            return true;
+        // Full bags first make room (a purchase would only fail for space).
+        if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TrySellJunk(player, services, npc))
+            return true;
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TryBuyFood(player, services, npc))
+            return true;
+        if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TryBuyAmmo(player, services, npc))
             return true;
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && TrySellGray(player, services, npc))
             return true;
@@ -111,6 +130,139 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
 
         Goal = PlayerbotGoalKind.Vendor;
         return session.TryManagedAction(WorldOpcode.CmsgBuyItem, BuyPayload(npc.Guid, row.Item));
+    }
+
+    /// <summary>
+    /// CMSG_REPAIR_ITEM with an empty item guid: repair everything (vmangos HandleRepairItemOpcode, DurabilityRepairAll). When
+    /// nothing got better (no repair prices loaded, too little money) repairs pause for a minute instead of repeating.
+    /// </summary>
+    private bool TryRepair(Player player, NpcInfo npc)
+    {
+        if (!RepairWanted(player))
+            return false;
+        Goal = PlayerbotGoalKind.Vendor;
+        uint before = EquippedDurability(player);
+        if (!session.TryManagedAction(WorldOpcode.CmsgRepairItem, RepairPayload(npc.Guid)))
+            return false;
+        if (EquippedDurability(player) <= before)
+            _repairBackoffUntil = unchecked(session.World.NowMs + RepairBackoffMs);
+        return true;
+    }
+
+    private bool RepairWanted(Player player)
+        => player.Money > 0 && NeedsRepair(player)
+            && (_repairBackoffUntil == 0 || unchecked(session.World.NowMs - _repairBackoffUntil) <= int.MaxValue);
+
+    /// <summary>Any worn item broken or under 25% of its durability (mangoszero's playerbot repairs from its "durability" value).</summary>
+    internal static bool NeedsRepair(Player player)
+    {
+        for (byte slot = 0; slot < InventorySlots.EquipmentEnd; slot++)
+        {
+            if (player.Inventory.GetItem(InventorySlots.Bag0, slot) is { MaxDurability: > 0 } item
+                && (item.Durability == 0 || item.Durability * 4 < item.MaxDurability))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static uint EquippedDurability(Player player)
+    {
+        uint total = 0;
+        for (byte slot = 0; slot < InventorySlots.EquipmentEnd; slot++)
+            total += player.Inventory.GetItem(InventorySlots.Bag0, slot)?.Durability ?? 0;
+        return total;
+    }
+
+    /// <summary>
+    /// A hunter short of rounds for the equipped bow, gun or crossbow buys the best fitting ammunition the vendor sells (vmangos
+    /// AddHunterAmmo, CombatBotBaseAI.cpp:2908, creates it instead; a bot buys). One CMSG_BUY_ITEM buys the item's BuyCount.
+    /// </summary>
+    private bool TryBuyAmmo(Player player, QuestNpcServices services, NpcInfo npc)
+    {
+        if (FindAmmoRow(player, services, npc) is not { } row)
+            return false;
+        Goal = PlayerbotGoalKind.Vendor;
+        return session.TryManagedAction(WorldOpcode.CmsgBuyItem, BuyPayload(npc.Guid, row.Item));
+    }
+
+    private static VendorItem? FindAmmoRow(Player player, QuestNpcServices services, NpcInfo npc)
+    {
+        if (player.Class != Class.Hunter
+            || player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Ranged) is not { } ranged
+            || (ItemClass)ranged.Template.Class != ItemClass.Weapon
+            || ranged.Template.SubClass is not (WeaponBow or WeaponGun or WeaponCrossbow))
+            return null;
+        uint carried = 0;
+        foreach (Item item in player.Inventory.AllItems)
+        {
+            if (item.Template.GetInventoryType() == InventoryType.Ammo && player.Inventory.CheckAmmoCompatibility(item.Template))
+                carried += item.Count;
+        }
+
+        if (carried >= AmmoLowWater)
+            return null;
+        return services.Npcs.VendorItems(npc.Entry).Take(64)
+            .Select(row => (Row: row, Template: player.Inventory.Templates.Find(row.Item)))
+            .Where(pair => pair.Template is { } template && template.GetInventoryType() == InventoryType.Ammo
+                && player.Inventory.CheckAmmoCompatibility(template)
+                && player.Inventory.CanUseAmmo(template.Entry) == ArcaneCore.Game.Items.InventoryResult.Ok
+                && services.GetVendorPurchasePrice(player, npc, template.Entry) is { } price && price <= player.Money)
+            .OrderByDescending(pair => pair.Template!.ItemLevel).ThenBy(pair => pair.Row.Item)
+            .Select(pair => pair.Row).FirstOrDefault();
+    }
+
+    /// <summary>
+    /// With no free bag slot left, sell the cheapest junk: a white (or gray) item that is not protected and is either not
+    /// equipment or equipment that is no upgrade for the bot's build (including what it cannot use at all).
+    /// </summary>
+    private bool TrySellJunk(Player player, QuestNpcServices services, NpcInfo npc)
+    {
+        if (services.Npcs.VendorItems(npc.Entry).Count == 0 || FindJunk(player, services) is not { } item)
+            return false;
+        Goal = PlayerbotGoalKind.Vendor;
+        return session.TryManagedAction(WorldOpcode.CmsgSellItem, SellPayload(npc.Guid, item.Guid));
+    }
+
+    private Item? FindJunk(Player player, QuestNpcServices services)
+    {
+        if (FreeBagSlots(player) > 0)
+            return null;
+        PlayerbotStatWeights weights = PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights;
+        return player.Inventory.AllItems
+            .Where(candidate => candidate.BagSlot != InventorySlots.Bag0
+                || (candidate.Slot >= InventorySlots.ItemStart && candidate.Slot < InventorySlots.ItemEnd))
+            .Where(candidate => candidate.Template.Quality <= 1 && candidate.Template.SellPrice > 0
+                && !IsProtected(player, candidate, services) && IsJunk(player, candidate, weights))
+            .OrderBy(candidate => (ulong)candidate.Template.SellPrice * candidate.Count).ThenBy(candidate => candidate.Guid.Value)
+            .FirstOrDefault();
+    }
+
+    private static bool IsJunk(Player player, Item item, PlayerbotStatWeights weights)
+    {
+        if (item.Template.Quality == 0 || item.Template.AllowedEquipSlots(player.Class, canDualWield: true).Length == 0)
+            return true;
+        return PlayerbotItemScore.UpgradeGain(player, item.Template, PlayerbotItemScore.Score(item, weights, null), weights, null, out _)
+            is not { } gain || gain <= PlayerbotItemScore.MinimumGain;
+    }
+
+    /// <summary>Free slots a normal item could go into: the backpack plus every general bag worn.</summary>
+    internal static int FreeBagSlots(Player player)
+    {
+        int free = 0;
+        for (byte slot = InventorySlots.ItemStart; slot < InventorySlots.ItemEnd; slot++)
+        {
+            if (player.Inventory.GetItem(InventorySlots.Bag0, slot) is null)
+                free++;
+        }
+
+        for (byte slot = InventorySlots.BagStart; slot < InventorySlots.BagEnd; slot++)
+        {
+            if (player.Inventory.GetItem(InventorySlots.Bag0, slot) is Container bag && bag.Template.IsGeneralBag())
+                free += bag.FreeSlots;
+        }
+
+        return free;
     }
 
     private bool TrySellGray(Player player, QuestNpcServices services, NpcInfo npc)
@@ -175,19 +327,25 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     }
 
     private bool HasUsefulService(Player player, QuestNpcServices services, NpcInfo npc)
+        // Advisory discovery only; the correlated GREEN list and ordinary buy handler
+        // remain the authority for price, prerequisites and teaching/persistence.
+        => HasUsefulVendorService(player, services, npc) || services.GetClassTrainerQuote(player, npc) is not null;
+
+    private bool HasUsefulVendorService(Player player, QuestNpcServices services, NpcInfo npc)
     {
+        if ((npc.NpcFlags & NpcFlags.Repair) != 0 && RepairWanted(player)) return true;
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && services.Npcs.VendorItems(npc.Entry).Count > 0)
         {
             if (session.Services.GetService<SpellFeature>()?.System is { } spells
                 && FindConsumableVendorRow(player, services, npc, spells) is not null) return true;
+            if (FindAmmoRow(player, services, npc) is not null) return true;
             if (player.Inventory.AllItems.Any(item =>
                 (item.BagSlot != InventorySlots.Bag0 || item.Slot >= InventorySlots.ItemStart)
                 && item.Template.Quality == 0 && item.Template.SellPrice > 0
                 && !IsProtected(player, item, services))) return true;
+            if (FindJunk(player, services) is not null) return true;
         }
-        // Advisory discovery only; the correlated GREEN list and ordinary buy handler
-        // remain the authority for price, prerequisites and teaching/persistence.
-        return services.GetClassTrainerQuote(player, npc) is not null;
+        return false;
     }
 
     private static VendorItem? FindConsumableVendorRow(Player player, QuestNpcServices services, NpcInfo npc,
@@ -244,6 +402,14 @@ internal sealed class PlayerbotTownGoals(WorldSession session, PlayerbotOptions 
     {
         var writer = new PacketWriter(14);
         writer.WriteUInt64(vendor.Value); writer.WriteUInt32(item); writer.WriteByte(1); writer.WriteByte(0);
+        return writer.ToArray();
+    }
+
+    /// <summary>cmsg_repair_item: u64 npc, u64 item (0: everything, vmangos HandleRepairItemOpcode).</summary>
+    private static byte[] RepairPayload(ObjectGuid npc)
+    {
+        var writer = new PacketWriter(16);
+        writer.WriteUInt64(npc.Value); writer.WriteUInt64(0);
         return writer.ToArray();
     }
 

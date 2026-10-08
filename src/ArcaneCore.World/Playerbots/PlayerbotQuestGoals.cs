@@ -6,6 +6,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -38,7 +39,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (services?.StateOf(player) is not { Loaded: true } state || content is null) return 0;
         return state.Quests.Statuses.OrderBy(row => row.Key)
             .Where(row => row.Value is { Status: QuestStatus.Complete, Rewarded: false }
-                && services.Options.OrdinaryRewardQuestIds.Contains(row.Key))
+                && services.IsRewardable(row.Key))
             .Where(row => services.Quests.CreatureEndersOf(row.Key)
                 .Any(entry => content.GetSpawns(player.MapId, entry).Count > 0))
             .Select(row => row.Key).FirstOrDefault();
@@ -153,7 +154,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 return true;
             case QuestAction.RewardChoice:
                 if (_session.TryManagedAction(WorldOpcode.CmsgQuestgiverChooseReward,
-                        QuestChoicePayload(target.Npc.Guid.Value, target.Quest.Id, 0)))
+                        QuestChoicePayload(target.Npc.Guid.Value, target.Quest.Id, RewardChoice(player, target.Quest))))
                 { _stage = Stage.RewardConfirmation; ArmStage(target); }
                 return true;
             default:
@@ -180,7 +181,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
             foreach (uint id in services.Quests.EndersOf(npc.Entry))
             {
-                if (!services.Options.OrdinaryRewardQuestIds.Contains(id)) continue;
+                if (!services.IsRewardable(id)) continue;
                 if (_stage != Stage.None && id != _stageQuest)
                     continue;
                 if (services.Quests.Get(id) is not { } quest || state.Quests.Get(id) is not { } status)
@@ -199,7 +200,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
             foreach (uint id in services.Quests.StartersOf(npc.Entry))
             {
-                if (!services.Options.OrdinaryRewardQuestIds.Contains(id)) continue;
+                if (!services.IsRewardable(id)) continue;
                 if (_stage != Stage.None && id != _stageQuest)
                     continue;
                 if (services.Quests.Get(id) is not { } quest
@@ -234,6 +235,14 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             }
         }
     }
+
+    /// <summary>
+    /// The reward to take: the usable item that gains this build most over what it wears, else the one that sells for most
+    /// (<see cref="PlayerbotItemScore.ChooseQuestReward"/>); choice 0 when the quest offers no choice.
+    /// </summary>
+    internal static uint RewardChoice(Player player, Quest quest)
+        => quest.RewChoiceItemsCount == 0 ? 0u : PlayerbotItemScore.ChooseQuestReward(player, quest.RewChoiceItemId, quest.RewChoiceItemCount,
+            PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights);
 
     private void ArmStage(QuestTarget target)
     {
