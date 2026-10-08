@@ -178,7 +178,16 @@ public sealed class ClassicInstanceScriptTests
         Assert.Equal(GameObjectState.Active, enter.State);
 
         run.Kill(2);
-        Assert.False(run.Creature(2).IsAlive);
+        for (int i = 0; i < 60 && run.Creature(2).DeathState != CreatureDeathState.Dead; i++)
+        {
+            run.F.Tick(10_000); // the corpse decays: the dwarf is out of the map but still the creature system's
+        }
+
+        Assert.Equal(CreatureDeathState.Dead, run.Creature(2).DeathState);
+        Assert.Null(run.Map.FindObject(run.Creature(2).Guid));
+        run.Kill(1); // a fresh corpse
+        Assert.Equal(CreatureDeathState.Corpse, run.Creature(1).DeathState);
+
         data.SetData(BlackrockDepthsInstance.TypeTombOfSeven, EncounterState.Fail); // the EventAI row of a dwarf that reached home
         Assert.Equal(GameObjectState.Ready, enter.State);
         Assert.True(run.Creature(2).IsAlive);

@@ -98,9 +98,12 @@ public abstract class ScriptedInstance : InstanceData
     protected GameObject? GetSingleGameObjectFromStorage(uint entry)
         => _gameObjects.TryGetValue(entry, out ObjectGuid guid) ? Instance.FindUpdater<GameObjectMapSystem>()?.Find(guid) : null;
 
-    /// <summary>SD2 <c>GetSingleCreatureFromStorage</c>: the stored creature of an entry, if it is still in the map.</summary>
+    /// <summary>
+    /// SD2 <c>GetSingleCreatureFromStorage</c>: the stored creature of an entry, if the map's creature system still has it (a dead one whose
+    /// corpse is gone included, as <c>instance-&gt;GetCreature</c> finds it).
+    /// </summary>
     protected Creature? GetSingleCreatureFromStorage(uint entry)
-        => _creatures.TryGetValue(entry, out ObjectGuid guid) ? Instance.FindObject(guid) as Creature : null;
+        => _creatures.TryGetValue(entry, out ObjectGuid guid) ? Instance.FindUpdater<CreatureMapSystem>()?.FindCreature(guid) : null;
 
     /// <summary>
     /// SD2 <c>DoUseDoorOrButton(entry, withRestoreTime)</c> (sc_instance.cpp:15-43): the stored door or button of the entry is used when it is
