@@ -9,9 +9,9 @@ public static partial class DbcCrossReferences
 
     /// <summary>
     /// Check build-5875 DBC foreign keys (WoWDBDefs COLUMNS, <see cref="ClientDbcDbdLayouts"/>) whose target is another extracted
-    /// DBC with an ID column; zero and all-ones values are unset markers. These are the client's own data, and some WoWDBDefs
-    /// annotations do not hold for this build (FactionTemplate.FactionGroup is a mask; Map.ParentMapID holds AreaTable ids), so
-    /// callers report the result as a diagnostic and never as world-database drift.
+    /// DBC with an ID column; zero and all-ones values are unset markers. These are the client's own data, and WoWDBDefs
+    /// annotations need not hold for this build (the generator overrides two: FactionTemplate.FactionGroup is a mask, Map.ParentMapID
+    /// holds AreaTable ids), so callers report the result as a diagnostic and never as world-database drift.
     /// </summary>
     public static IReadOnlyList<DbcReferenceResult> RunDbc(string directory, CancellationToken cancellationToken = default)
     {

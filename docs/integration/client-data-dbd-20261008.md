@@ -14,6 +14,7 @@ Lane `codex/w3-client-data-dbd`, based on `c3102f44`. Diff is uncommitted for co
 - A missing file that nothing reads is again only counted and warned about in the directory summary, as before this lane; Codex had made it a `ClientData:Strict` start-up failure and an `arcane-db dbc` exit 5, a policy change outside the brief.
 - `ClientDbcLayouts.All` keeps a primary layout the generated table lacks; a CI test checks that the generated table agrees with every primary layout and that each generated layout's columns add up to its field count and record size.
 - The generator resolves its paths from its own location, so it runs from any directory.
+- Wave 8 merge: the two wrong annotations are overridden in the generator (`FOREIGN_OVERRIDES`; FactionTemplate.FactionGroup is no foreign key, Map.ParentMapID points at AreaTable). The scan is now 174 columns, 151 clean, 23 dangling (152 ids, 341 rows); `docs/integration/wave8-20261008.md` lists them.
 
 ## Evidence
 
@@ -21,7 +22,7 @@ Lane `codex/w3-client-data-dbd`, based on `c3102f44`. Diff is uncommitted for co
 - Local `D:/ArcaneCore-data/client-dbc-5875`: 154/154 files match their reference field count and record size. DBC-to-DBC scan: 175 columns, 150 clean, 25 with 177 distinct dangling ids across 507 rows, 0 skipped. Examples: `AreaTable.ContinentID -> Map` has 17 and 150; `AreaTrigger.ContinentID -> Map` has 24 and 28. The WoWDBDefs `FactionTemplate.FactionGroup` annotation appears to describe a mask, so these counts are diagnostic candidates, not proof that every row is bad.
 - Required Release solution build first failed with `NU1900` because the sandbox could not access NuGet's vulnerability feed. `dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false --nologo -v:quiet -p:NuGetAudit=false` succeeded with 0 warnings and 0 errors.
 - Focused Data ClientData/DbcCrossReference tests: 16 passed. Focused World ClientData tests: 13 passed, 1 skipped (ClassicDB dump gate unset).
-- Full Data project: 1,322 passed, 6 skipped. Full World project: 2,963 passed, 14 skipped, 1 failed. The failure is the unchanged `Docs.DocKeyAuditTests.EveryConfigurationKeyNamedInTheDocs_ExistsInTheCatalog`: `docs/integration/wave6-20261008.md` names `Playerbots:MovementPackets`, absent from the catalog in this base. This lane did not edit the playerbot area or that wave-6 page.
+- Full Data project: 1,322 passed, 6 skipped. Full World project: 2,963 passed, 14 skipped, 1 failed. The failure is the unchanged `Docs.DocKeyAuditTests.EveryConfigurationKeyNamedInTheDocs_ExistsInTheCatalog`: `docs/integration/wave6-20261008.md` names the playerbot movement-packets key without its `World:` prefix (fixed on main in wave 7). This lane did not edit the playerbot area or that wave-6 page.
 - `git diff --check` found no whitespace errors.
 
 ## Files and limits

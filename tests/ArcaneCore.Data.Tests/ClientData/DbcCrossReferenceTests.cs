@@ -111,6 +111,18 @@ public sealed class DbcCrossReferenceTests
     }
 
     [Fact]
+    public void TheWoWDBDefsKeysThatDoNotHoldFor5875_AreOverridden()
+    {
+        // tools/codegen/gen_dbc_layouts.py FOREIGN_OVERRIDES: FactionTemplate.FactionGroup is a FactionGroup.MaskID bit mask (vmangos
+        // FactionTemplateEntry::ourMask), and Map.ParentMapID holds AreaTable ids (717 The Stockade, ...), not Map ids.
+        DbdField group = ClientDbcDbdLayouts.All["FactionTemplate.dbc"].Columns.Single(c => c.Name == "FactionGroup");
+        Assert.Null(group.ForeignTable);
+        Assert.Null(group.ForeignColumn);
+        DbdField parent = ClientDbcDbdLayouts.All["Map.dbc"].Columns.Single(c => c.Name == "ParentMapID");
+        Assert.Equal(("AreaTable", "ID"), (parent.ForeignTable, parent.ForeignColumn));
+    }
+
+    [Fact]
     public void EveryReference_NamesADbcWithAReferenceLayout()
     {
         Assert.All(DbcCrossReferences.All, r => Assert.NotNull(ClientDbcLayouts.Find(r.Dbc)));

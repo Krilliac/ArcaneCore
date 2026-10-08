@@ -21,6 +21,15 @@ VMANGOS = re.compile(r'\b[VA]\("([^"]+\.dbc)",\s*(?:"([^"]+)"|(\d+))')
 PACKED = re.compile(r'\bA\("([^"]+\.dbc)",\s*\d+,[^\n]*?packedRecordSize:\s*(\d+)')
 
 
+# WoWDBDefs COLUMNS foreign keys that do not hold for build 5875, by (file, column): None drops the key, a 'Table::Column' replaces it.
+# FactionTemplate.FactionGroup is a mask of FactionGroup.MaskID bits (vmangos FactionTemplateEntry::ourMask), not a FactionGroup id;
+# Map.ParentMapID (field 19) holds AreaTable ids (717 The Stockade, 718, 719, ...), none of them a Map id.
+FOREIGN_OVERRIDES = {
+    ('FactionTemplate', 'FactionGroup'): None,
+    ('Map', 'ParentMapID'): 'AreaTable::ID',
+}
+
+
 def covers(spec):
     for part in spec.split(','):
         ends = part.strip().split('-')
@@ -101,6 +110,8 @@ def generate(definitions, layouts, dbc_names):
         if not path.is_file():
             raise ValueError(f"no WoWDBDefs definition for {name}")
         fields = parse(path)
+        fields = tuple((field, kind, array, width, FOREIGN_OVERRIDES.get((name, field), foreign))
+                       for field, kind, array, width, foreign in fields)
         count = sum(field[2] * (9 if field[1] == 'locstring' else 1) for field in fields)
         size = sum(field[2] * (32 if field[1] in ('locstring', 'string') else field[3]) // 8 * (9 if field[1] == 'locstring' else 1) for field in fields)
         expected = primary.get((name + '.dbc').lower())
