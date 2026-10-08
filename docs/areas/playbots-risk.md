@@ -23,6 +23,8 @@ that part is ArcaneCore's own.
 | `PlayerbotRetreat.cs` | The retreat itself and the trail of places the bot walked through (`PlayerbotBreadcrumbs`). |
 | `PlayerbotEscapes.cs` | The 1.12 class escapes, in order (pure). |
 | `PlayerbotDangerMemory.cs` | The creatures and places of retreats and deaths, for `DangerMemorySeconds`. |
+| `PlayerbotCreatureSpells.cs` | A creature's own spells: the CAST actions of its EventAI rows and their damage from `spell_template`, and whether one kills outright. |
+| `PlayerbotHazards.cs` | The places a living bot's walks keep out of (lethal creatures, creatures it fled from or died to, places of deaths and retreats). |
 
 The creatures that would attack the bot are the camped-body rule's `PlayerbotRecovery.Threats` (each with its own aggro radius
 against the bot from `CreatureMapSystem.GetAttackDistance`, the creature's `CanInitiateAttack` and `IsProximityAggroAllowedFor`),
@@ -44,7 +46,9 @@ For each candidate the predicted fight is the target plus:
 * **Path**: every creature whose aggro radius covers the planned route there (sampled every 3 yards).
 
 **Risk** is the damage the bot is predicted to take killing them one at a time, quickest first (each hits until it dies: its
-template melee damage per second, or level x 1, x 2.5 for an elite, when the template has none), as a share of the bot's current
+template melee damage per second, or level x 1, x 2.5 for an elite, when the template has none, plus its spells: each EventAI
+CAST action (cmangos `creature_ai_scripts` action 11) deals its `spell_template` damage (school, weapon, health leech, every tick
+of a periodic damage aura, dice at their top) every `(Param3 + Param4) / 2` ms of its event, 10 s when the row gives none), as a share of the bot's current
 health. The bot's damage per second is what it dealt in its recent fights (an average), or `2 + 1.8 x level` before its first. A
 mage, priest or warlock deals less as its mana runs out (to 35% of its damage at none: the wand); a hybrid less so. Remembered
 danger near the target or against its kind multiplies the risk by `1 + 0.5 x hits`; a ready class escape takes 10% off. A lone
@@ -58,6 +62,7 @@ The **decision**:
 | Decision | When | What the bot does |
 |---|---|---|
 | `engage` | risk at most `Tolerance x min(0.9, 0.4 + 0.2 x reward)` | Pulls it. |
+| `avoid` (`lethal`) | a creature that would be in the fight has a spell that kills the bot outright: `SPELL_EFFECT_INSTAKILL`, or one hit of at least the bot's maximum health (the Scourge invasion's Skeletal Soldier and Spectral Apparition, Scourge Strike 28265) | Next candidate, quest objective or not. |
 | `avoid` (`elite-above`) | an elite three or more levels above the bot that is not a quest objective | Next candidate. |
 | `avoid` (`remembered`) | the bot fled from or died to this very creature within `DangerMemorySeconds` | Next candidate (it is not even listed). |
 | `rest` (`low-health`, `low-mana`) | it would be an `engage` at full health and mana | When nothing else is worth it, the bot waits (eating or drinking when it carries food or water) until `RecoverHealthPct`, at most 90 s. |
@@ -74,6 +79,7 @@ damage taken per second (net of heals) and damage dealt per second (an enemy cou
 that just joined is not "damage"; one that died took its remaining health). Under 2 seconds of samples the estimate's priors
 stand. Then `time to kill = enemies' health / damage dealt`, `time to die = bot health / damage taken`.
 
+* An enemy with a spell that kills outright: retreat at once (`lethal`) unless the fight ends within 2 seconds.
 * A single enemy at or below `NearlyWonHealthPct` (20%) is finished unless the bot would die in less than half the time it needs.
 * Winning (`time to die x Tolerance >= time to kill`): fight on.
 * Losing: retreat at `RetreatHealthPct` (35%) or when the bot would die within 4 seconds; until then fight on (`behind`).
@@ -103,9 +109,30 @@ The report then reads `fight ttk=9.4s ttd=28.2s decision=fight reason=winning`.
 After a safe retreat the bot waits to `RecoverHealthPct` (eating or drinking when it can) before it pulls again; the creatures
 it fled from and the place are remembered for `DangerMemorySeconds`. The report: `retreat reason=losing-to-3 escapes=Frost_Nova+Blink`.
 
-A death also goes into the memory (the last enemies seen and the place), and a bot killed within 30 seconds of walking an errand
+A death also goes into the memory (whatever still attacks the body and the enemies of the fight being watched, and the place),
+and a bot killed within 30 seconds of walking an errand
 (a trainer, vendor or quest destination) sets that errand aside for 10 minutes (`PlayerbotSuspensions`) instead of walking the
 same way into the same creatures after its revive.
+
+## Hazards on every walk
+
+`PlayerbotHazards` holds, for `DangerMemorySeconds`: each creature with a spell that kills the bot outright (its aggro reach plus 8
+yards, following it while seen), each creature the bot fled from or died to (its reach plus 3), the place of each death (25 yards)
+and of each retreat (20). The brain looks the visible creatures over every 2 seconds, alive or a ghost.
+
+Every route a living bot is given (`PlayerbotNavigation.TryPlan` / `TryPlanToward`: quest givers and objectives, trainers, vendors,
+quest travel, exploring, approaches) is checked, sampled every 2 yards, against the hazards it does not already stand in. One that
+passes through a hazard is replaced by a way round it: a corner before it and one past it, its radius plus 5 or 15 yards off to
+either side, each leg on the navigation mesh; with none, the route is refused. The goal then does what it does with any route it
+cannot get: a trainer destination tries the next trainer (`PlayerbotTrainerDestinations` blocks that spawn), a vendor, quest giver
+or travel goal another one or nothing, and a goal that keeps failing is given up by the stall watch. A route being walked is
+checked again at each step and given up when a hazard turned up on the rest of it. A retreat walks where it must; a party bot
+follows its master and has no hazards.
+
+A ghost's revive spot keeps out of the creature hazards too (`PlayerbotRecovery.Hazards`): reclaiming at the body inside a lethal
+creature's reach (plus 8) or a remembered killer's counts as camped, so the ghost revives at a clear spot inside the reclaim radius
+or, with none, takes the spirit healer after the usual 60 seconds. The remembered places themselves are not held against the body
+(it lies at the place of death).
 
 ## Party bots
 
@@ -132,9 +159,9 @@ a party bot staying until its master falls, an errand set aside after a death (`
 
 ## Limits
 
-* Creature spells are not in the estimate (only melee damage): a creature that kills outright (the Scourge invasion's Skeletal
-  Soldier, Scourge Strike) or casts hard is under-rated until the bot has died to it once (then the memory and the errand rule
-  keep it away).
-* Travel that is not an approach to a target (to a trainer, vendor or quest giver) does not avoid creatures on the way.
+* Only EventAI casts are seen; spells cast by C# creature AIs or scripts are not in the estimate, and a creature's heals or
+  crowd control are not counted.
+* A hazard is known only once seen (visibility range) or after a death; the first walk into a creature out of sight is not avoided.
+* A walk refused for hazards leaves the goal to choose again; there is no search for a long way round beyond the two corner offsets.
 * Linked aggro of creature groups (formations, `creature_linking`) is not predicted, only assistance and aggro radii.
 * Enrage is only seen in the observed rates, not predicted.
