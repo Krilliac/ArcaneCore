@@ -88,6 +88,16 @@ No schema version is consumed; nothing was added to Auth, Characters or World.
 
 ## Behaviour notes and deviations from vmangos
 
+* Target rank: every GM command that changes another player applies `CommandContext.CanActOn` (the vmangos
+  `HasLowerSecurity` rule, `Chat.cpp:1521-1563`) before touching it, so with `LowerSecurity` on a GameMaster cannot
+  change an Administrator's character. vmangos calls `HasLowerSecurity` in only some handlers (`.kick`, `.modify *`,
+  `.tele name`, `.namego`, `.recall`, `.repairitems`, `.npc whisper`, ...); ArcaneCore applies it to all of them,
+  including those vmangos leaves open: `.additem`, `.deleteitem`, `.levelup`, `.replenish`, `.deplenish`, `.revive`,
+  `.explorecheat`, `.showarea`, `.hidearea` and `.guild create|invite|uninvite|rank`. For an offline character
+  (`.character rename`, `.guild ...` by name) the owner account's security decides; the guild commands read it off the
+  world thread, so their answer arrives a moment later unless the caller cannot be outranked. Commands that only read a
+  player (`.gps`, `.honor show`, `.character reputation`, `.instance listbinds`) or move the caller (`.goname`,
+  `.gocorpse`) are not gated, as in vmangos. `tests/ArcaneCore.World.Tests/Gm/Core/GmTargetRankTests.cs` sweeps them.
 * Online players only. vmangos resolves offline names through the characters database in `.levelup`, `.deleteitem`,
   `.tele name`, `.goname`, `.namego`; here an offline name answers "Player not found!".
 * Quest-settlement guard: `.additem`, `.deleteitem` and `.modify money` refuse a player whose quest reward is settling
