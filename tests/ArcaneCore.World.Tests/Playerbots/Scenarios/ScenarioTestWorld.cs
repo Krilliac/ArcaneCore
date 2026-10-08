@@ -59,7 +59,8 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
     public IServiceProvider Services => Host.WorldServices;
 
     /// <param name="configure">Extra services, registered after the synthetic content (a later registration of a store replaces it).</param>
-    public static async Task<ScenarioTestWorld> StartAsync(Action<IServiceCollection>? configure = null)
+    /// <param name="configureRuntime">World runtime options (for example terrain data under <c>Maps.DataDirectory</c>).</param>
+    public static async Task<ScenarioTestWorld> StartAsync(Action<IServiceCollection>? configure = null, Action<WorldRuntimeOptions>? configureRuntime = null)
     {
         string database = Path.Combine(Path.GetTempPath(), "arcane-scenario-" + Guid.NewGuid().ToString("N") + ".db");
         IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -73,7 +74,7 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
         }
 
         var time = new ScenarioTimeProvider(DateTimeOffset.FromUnixTimeSeconds(1_800_000_000));
-        WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        WorldTestHost host = WorldTestHost.Start(configure: configureRuntime, configureServices: services =>
         {
             services.AddCharacterDatabase(configuration);
             services.AddSingleton<TimeProvider>(time);

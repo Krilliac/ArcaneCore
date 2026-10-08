@@ -29,6 +29,22 @@ public sealed class TransportScenarioTests
         await world.RunPassingAsync(new CrossingScenario());
     }
 
+    [Fact]
+    public async Task ShippedShipScenario_BoardsAtAPort_CrossesToTheOtherMapAboard_AndStepsOffAtTheOtherPort()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(services => Register(services, withBootyBayBoat: true));
+        IPlayerbotScenario scenario = PlayerbotScenarioCatalog.Find(world.Services, "ship")!;
+
+        ScenarioReport report = await world.RunPassingAsync(scenario);
+
+        Assert.Equal(
+            ["the boat sails between two ports on two maps", "login " + PlayerbotScenarioCatalog.BotA, "the boat lies at a port",
+                $"{PlayerbotScenarioCatalog.BotA} boards at the dock on map 0", "the boat changes maps with the bot aboard",
+                $"the boat lies at the other port with {PlayerbotScenarioCatalog.BotA} aboard", $"{PlayerbotScenarioCatalog.BotA} steps off at the port",
+                $"cleanup: bring {PlayerbotScenarioCatalog.BotA} back"],
+            report.Steps.Select(s => s.Name));
+    }
+
     private sealed class ShipDuelScenario : IPlayerbotScenario
     {
         public string Name => "ship-duel";

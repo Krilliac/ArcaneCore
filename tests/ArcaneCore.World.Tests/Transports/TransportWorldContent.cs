@@ -3,6 +3,7 @@ using ArcaneCore.Game.Transports;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Transports;
+using ArcaneCore.World.Playerbots.Scenarios;
 using ArcaneCore.World.Tests.Duel;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -34,11 +35,14 @@ internal static class TransportWorldContent
     public const float FarX = 1100f;
     public const uint FerryPeriodOverride = 123_456;
 
-    public static void Register(IServiceCollection services, bool enabled = true, bool withPeriodOverride = false)
+    /// <param name="withBootyBayBoat">
+    /// Also a ship under the entry of the real Ratchet - Booty Bay boat (20808) on the crossing path, for the shipped <c>ship</c> scenario.
+    /// </param>
+    public static void Register(IServiceCollection services, bool enabled = true, bool withPeriodOverride = false, bool withBootyBayBoat = false)
     {
         services.AddSingleton(new TransportOptions { Enabled = enabled });
         services.AddSingleton(Paths());
-        services.AddScoped<IGameObjectDataStore>(_ => new Store());
+        services.AddScoped<IGameObjectDataStore>(_ => new Store(withBootyBayBoat));
         if (withPeriodOverride)
         {
             services.AddScoped<ITransportDataStore>(_ => new PeriodStore());
@@ -82,7 +86,7 @@ internal static class TransportWorldContent
     private static TaxiPathNodeRecord Node(uint path, uint index, uint map, float x, float y, uint flags = 0, uint delay = 0)
         => new(path * 100 + index, path, index, map, x, y, StartZ, flags, delay);
 
-    private sealed class Store : IGameObjectDataStore
+    private sealed class Store(bool withBootyBayBoat) : IGameObjectDataStore
     {
         public Task<GameObjectContent> LoadAsync(CancellationToken cancellationToken)
         {
@@ -91,7 +95,13 @@ internal static class TransportWorldContent
                 Entry = DuelWorldHost.FlagEntry, Type = (uint)GameObjectType.DuelArbiter, DisplayId = 787, Name = "Duel Flag",
                 Data = new uint[GameObjectTemplate.DataCount],
             };
-            return Task.FromResult(new GameObjectContent([flag, Ship(Ferry, FerryPath), Ship(Crossing, CrossingPath), Ship(Broken, 4242)], [], [], [], []));
+            GameObjectTemplate[] ships = [Ship(Ferry, FerryPath), Ship(Crossing, CrossingPath), Ship(Broken, 4242)];
+            if (withBootyBayBoat)
+            {
+                ships = [.. ships, Ship(ShipCrossingScenario.Ship, CrossingPath)];
+            }
+
+            return Task.FromResult(new GameObjectContent([flag, .. ships], [], [], [], []));
         }
     }
 
