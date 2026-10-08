@@ -227,6 +227,7 @@ public sealed partial class SpellSystem
     public void Update(uint diffMs)
     {
         ProcessDeathAuraRemovals();
+        UpdateDynamicObjects(diffMs); // persistent area auras (PersistentAreaAuras/SpellSystem.PersistentAreaAuras.cs)
         if (_states.Count == 0)
         {
             return;
@@ -543,6 +544,19 @@ public sealed partial class SpellSystem
 
         foreach ((Unit target, SpellTargetEntry entry) in targetEffects)
         {
+            // vmangos Spell::DoAllEffectOnTarget (Spell.cpp:1129-1137): a persistent area aura runs once on the ground (HandleGroundEffects below),
+            // never on the units its selector listed in SMSG_SPELL_GO.
+            int unitMask = WithoutGroundEffects(spell, entry.EffectMask);
+            if (unitMask != entry.EffectMask)
+            {
+                if (unitMask == 0)
+                {
+                    continue;
+                }
+
+                entry.EffectMask = unitMask;
+            }
+
             if (entry.Miss == SpellMissInfo.Reflect)
             {
                 // vmangos Spell::DoAllEffectOnTarget (Spell.cpp:1209-1224): the reflected spell lands on its caster instead, unless the caster is
@@ -587,6 +601,7 @@ public sealed partial class SpellSystem
             }
         }
 
+        HandleGroundEffects(cast, unitTarget); // vmangos "process ground" (Spell.cpp:3971-3976)
         if (!spell.IsChanneled || cast.IsTriggered)
         {
             HandleAddTargetTriggerAuras(cast, procOutcomes); // vmangos Spell::finish (Spell.cpp:4368-4369)
