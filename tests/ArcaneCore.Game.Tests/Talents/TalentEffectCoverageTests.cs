@@ -1,4 +1,6 @@
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Procs;
+using ArcaneCore.Game.Spells.Scripts;
 using ArcaneCore.Game.Talents;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Talents;
@@ -40,13 +42,14 @@ public sealed class TalentEffectCoverageTests
         TalentCoverageReport report = TalentEffectCoverage.Build(Catalog, kit.System);
 
         Assert.Equal(5, report.RankSpellCount);
-        Assert.Equal(2, report.SupportedCount);       // A (aura Dummy) and C (effect Dummy)
+        Assert.Equal(1, report.SupportedCount);       // C (effect Dummy); A's DUMMY aura applies but nothing reads it
         Assert.Equal(
             [
                 new TalentCoverageGap(10, 0, B, TalentGapKind.MissingAura, (int)UnhandledAuraA),
                 new TalentCoverageGap(20, 0, D, TalentGapKind.MissingEffect, (int)UnhandledEffect),
                 new TalentCoverageGap(20, 0, D, TalentGapKind.MissingAura, (int)UnhandledAuraB),
                 new TalentCoverageGap(20, 1, Missing, TalentGapKind.SpellMissing, 0),
+                new TalentCoverageGap(30, 0, A, TalentGapKind.NoConsumer, (int)AuraType.Dummy),
             ],
             report.Gaps);
     }
@@ -63,6 +66,7 @@ public sealed class TalentEffectCoverageTests
         Assert.Equal(1, report.CountOf(TalentGapKind.MissingEffect, (int)UnhandledEffect));
         Assert.Equal(1, report.CountOf(TalentGapKind.SpellMissing, 0));
         Assert.Equal(0, report.CountOf(TalentGapKind.MissingAura, (int)AuraType.Dummy));
+        Assert.Equal(1, report.CountOf(TalentGapKind.NoConsumer, (int)AuraType.Dummy));
     }
 
     [Fact]
@@ -75,7 +79,7 @@ public sealed class TalentEffectCoverageTests
 
         TalentCoverageReport report = TalentEffectCoverage.Build(Catalog, kit.System);
         Assert.DoesNotContain(report.Gaps, g => g.Spell == B);
-        Assert.Equal(3, report.SupportedCount);
+        Assert.Equal(2, report.SupportedCount);
     }
 
     [Fact]
@@ -87,8 +91,9 @@ public sealed class TalentEffectCoverageTests
         string second = TalentEffectCoverage.Build(Catalog, kit.System).Describe();
 
         Assert.Equal(first, second);
-        Assert.Contains("2 of 5", first);
+        Assert.Contains("1 of 5", first);
         Assert.Contains($"aura {(int)UnhandledAuraA}", first);
+        Assert.Contains("missing consumer of aura 4 (Dummy): 1", first);
     }
 
     [Fact]
@@ -98,5 +103,138 @@ public sealed class TalentEffectCoverageTests
         TalentCoverageReport report = TalentEffectCoverage.Build(new TalentCatalog([], []), kit.System);
         Assert.Equal(0, report.RankSpellCount);
         Assert.Empty(report.Gaps);
+    }
+
+    // --- consumers of DUMMY (4) and OVERRIDE_CLASS_SCRIPTS (112) talent auras ------------------------------------------------------------
+
+    private const uint Unconsumed = 6101, MasterOfElements = 29074, IconLookalike = 6102, ShatterRank1 = 11170, UnknownScript = 6103;
+    private const uint PeriodicConsumer = 6104, ScriptConsumer = 6105;
+
+    private static readonly TalentCatalog ConsumerCatalog = new(
+        [new TalentTabRecord(1, 1, 0)],
+        [
+            new TalentRecord(40, 1, 0, 0, [Unconsumed, 0, 0, 0, 0], 0, 0, 0),
+            new TalentRecord(41, 1, 0, 1, [MasterOfElements, 0, 0, 0, 0], 0, 0, 0),
+            new TalentRecord(42, 1, 0, 2, [IconLookalike, 0, 0, 0, 0], 0, 0, 0),
+            new TalentRecord(43, 1, 1, 0, [ShatterRank1, 0, 0, 0, 0], 0, 0, 0),
+            new TalentRecord(44, 1, 1, 1, [UnknownScript, 0, 0, 0, 0], 0, 0, 0),
+            new TalentRecord(45, 1, 1, 2, [PeriodicConsumer, 0, 0, 0, 0], 0, 0, 0),
+            new TalentRecord(46, 1, 2, 0, [ScriptConsumer, 0, 0, 0, 0], 0, 0, 0),
+        ]);
+
+    private static SpellInfo DummyTalent(uint id, uint family = 0, uint icon = 0)
+        => Spell(id, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy)) with { SpellFamilyName = family, SpellIconId = icon };
+
+    private static SpellInfo ClassScriptTalent(uint id, int misc, uint family)
+        => Spell(id, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.OverrideClassScripts, misc: misc)) with { SpellFamilyName = family };
+
+    private static SpellTestKit ConsumerKit() => new(
+        DummyTalent(Unconsumed, family: 3, icon: 9001),
+        DummyTalent(MasterOfElements, family: 3, icon: 1920),
+        DummyTalent(IconLookalike, family: 5, icon: 1920),
+        ClassScriptTalent(ShatterRank1, 849, family: 3),
+        ClassScriptTalent(UnknownScript, 4242, family: 3),
+        DummyTalent(PeriodicConsumer),
+        DummyTalent(ScriptConsumer));
+
+    [Fact]
+    public void ADummyTalentNothingConsumes_IsAGap_UntilAProcScriptIsRegisteredForIt()
+    {
+        using SpellTestKit kit = ConsumerKit();
+        Assert.Contains(TalentEffectCoverage.Build(ConsumerCatalog, kit.System).Gaps, g => g.Spell == Unconsumed && g.Code == (int)AuraType.Dummy);
+
+        // Any lane's proc script registered through SpellSystem.RegisterProcScript is a consumer, with no change to the report.
+        kit.System.RegisterProcScript(Unconsumed, new FakeProcScript());
+
+        Assert.DoesNotContain(TalentEffectCoverage.Build(ConsumerCatalog, kit.System).Gaps, g => g.Spell == Unconsumed);
+    }
+
+    [Fact]
+    public void MasterOfElements_IsConsumedByItsIconKeyedScript_TheSameIconInAnotherFamilyIsNot()
+    {
+        using SpellTestKit kit = ConsumerKit();
+
+        TalentCoverageReport report = TalentEffectCoverage.Build(ConsumerCatalog, kit.System);
+
+        Assert.DoesNotContain(report.Gaps, g => g.Spell == MasterOfElements);
+        Assert.Contains(report.Gaps, g => g.Spell == IconLookalike && g.Code == (int)AuraType.Dummy);
+    }
+
+    [Fact]
+    public void AnOverrideClassScriptTalent_IsHandledOnlyWhenSomethingReadsItsScriptNumber()
+    {
+        using SpellTestKit kit = ConsumerKit();
+
+        TalentCoverageReport report = TalentEffectCoverage.Build(ConsumerCatalog, kit.System);
+
+        Assert.DoesNotContain(report.Gaps, g => g.Spell == ShatterRank1);                                         // the spell crit roll reads 849
+        Assert.Contains(report.Gaps, g => g.Spell == UnknownScript && g.Code == (int)AuraType.OverrideClassScripts); // nothing reads 4242
+    }
+
+    [Fact]
+    public void APeriodicScriptOrAnInstalledSpellScript_IsAConsumer()
+    {
+        using SpellTestKit kit = ConsumerKit();
+        TalentCoverageReport before = TalentEffectCoverage.Build(ConsumerCatalog, kit.System);
+        Assert.Contains(before.Gaps, g => g.Spell == PeriodicConsumer);
+        Assert.Contains(before.Gaps, g => g.Spell == ScriptConsumer);
+
+        kit.System.RegisterPeriodicDamageScript(PeriodicConsumer, new FakePeriodicScript());
+        SpellScriptDispatcher.Install(kit.System, new SpellScriptRegistry([new FakeSpellScript()]));
+
+        TalentCoverageReport after = TalentEffectCoverage.Build(ConsumerCatalog, kit.System);
+        Assert.DoesNotContain(after.Gaps, g => g.Spell == PeriodicConsumer);
+        Assert.DoesNotContain(after.Gaps, g => g.Spell == ScriptConsumer);
+    }
+
+    private sealed class FakeProcScript : IProcScript
+    {
+    }
+
+    private sealed class FakePeriodicScript : IPeriodicDamageScript
+    {
+    }
+
+    /// <summary>
+    /// A DUMMY or OVERRIDE_CLASS_SCRIPTS talent read outside the script registries counts as handled only while its rule still reads it: every
+    /// <see cref="TalentEffectCoverage.ExternalReaders"/> site must hold a code line matching its pattern, so removing the read (or the rule) fails
+    /// here instead of leaving the talent reported as handled.
+    /// </summary>
+    [Fact]
+    public void EveryExternalReader_StillHasItsReadingLine()
+    {
+        string root = Path.Combine(RepoRoot(), "src", "ArcaneCore.Game");
+        IReadOnlyList<ExternalReader> readers = TalentEffectCoverage.ExternalReaders;
+
+        bool Reads(ExternalReader reader)
+        {
+            string file = Path.Combine(root, reader.Site.Replace('/', Path.DirectorySeparatorChar));
+            return File.Exists(file) && File.ReadLines(file).Any(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)
+                && System.Text.RegularExpressions.Regex.IsMatch(line, reader.Pattern));
+        }
+
+        Assert.True(readers.Count >= 20, $"only {readers.Count} external readers: the scan proved nothing");
+        Assert.False(Reads(readers[0] with { Pattern = "NoSuchReadingLine_" }), "the scan matches a line that does not exist");
+        Assert.False(Reads(readers[0] with { Site = "NoSuchFile.cs" }), "the scan matches a file that does not exist");
+        Assert.Empty(readers.Where(reader => !Reads(reader)).Select(reader => $"{reader.Kind} {reader.Key}: {reader.Site} /{reader.Pattern}/"));
+        Assert.Equal(
+            [831u, 832u, 833u, 834u, 835u, 2228u, 11094u, 11189u, 13043u, 17864u, 18393u, 28332u],
+            readers.Where(r => r.Kind is ExternalReaderKind.ClassScript or ExternalReaderKind.DummySpell).Select(r => r.Key).Distinct().Order());
+    }
+
+    private static string RepoRoot()
+    {
+        string? dir = AppContext.BaseDirectory;
+        while (dir is not null && !File.Exists(Path.Combine(dir, "ArcaneCore.slnx")))
+        {
+            dir = Path.GetDirectoryName(dir);
+        }
+
+        return dir ?? throw new InvalidOperationException("repository root not found");
+    }
+
+    [SpellScript(ScriptConsumer)]
+    private sealed class FakeSpellScript : ISpellScript
+    {
     }
 }

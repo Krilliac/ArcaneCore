@@ -28,6 +28,13 @@ public sealed class ProcScenarioTests
         await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync();
         await world.RunPassingAsync(new ReflectedLethalDuelScenario());
     }
+
+    [Fact]
+    public async Task Retaliation_StrikesBackTheWarriorThatHitsItsBearerFromTheFront_AndSpendsACharge()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync();
+        await world.RunPassingAsync(new RetaliationDuelScenario());
+    }
 }
 
 /// <summary>The synthetic spells of the proc scenarios (added to <see cref="ScenarioTestContent"/>'s spell store).</summary>
@@ -37,6 +44,12 @@ internal static class ProcScenarioContent
     public const int ThornsDamage = 25;
     public const uint Reflect = 991_102;
     public const uint Bolt = 991_103;
+
+    /// <summary>Retaliation and its strike under their real ids: the talent proc script keys on 20230 (vmangos UnitAuraProcHandler.cpp:660-675).</summary>
+    public const uint Retaliation = 20230;
+    public const uint RetaliationStrike = 22858;
+    public const uint RetaliationCharges = 30;
+    public const int RetaliationDamage = 7;
 
     public static IReadOnlyList<SpellTemplateRow> Spells =>
     [
@@ -57,6 +70,20 @@ internal static class ProcScenarioContent
         {
             Id = Bolt, SpellName = "Scenario Bolt", School = 4, DmgClass = 1, RangeIndex = 4,
             Effect1 = 2, EffectBaseDice1 = 1, EffectDieSides1 = 1, EffectBasePoints1 = 499, EffectImplicitTargetA1 = 6,
+        },
+        // Retaliation: a warrior self buff whose DUMMY aura (4) procs on TAKE_MELEE_SWING (8), 30 charges.
+        new SpellTemplateRow
+        {
+            Id = Retaliation, SpellName = "Retaliation", RangeIndex = 1, DurationIndex = 3, SpellVisual = 1, SpellFamilyName = 4,
+            ProcFlags = 8, ProcChance = 100, ProcCharges = RetaliationCharges,
+            Effect1 = 6, EffectBaseDice1 = 1, EffectDieSides1 = 1, EffectImplicitTargetA1 = 1, EffectApplyAuraName1 = 4,
+        },
+        // The retaliatory strike: physical damage at the attacker (TARGET_UNIT_ENEMY 6), always hits (SPELL_ATTR_EX3_ALWAYS_HIT).
+        new SpellTemplateRow
+        {
+            Id = RetaliationStrike, SpellName = "Retaliation", RangeIndex = 4, DmgClass = 2, SpellFamilyName = 4,
+            AttributesEx3 = (uint)SpellAttributesEx3Combat.AlwaysHit,
+            Effect1 = 2, EffectBaseDice1 = 1, EffectDieSides1 = 1, EffectBasePoints1 = RetaliationDamage - 1, EffectImplicitTargetA1 = 6,
         },
     ];
 
@@ -157,6 +184,40 @@ internal sealed class ReflectedLethalDuelScenario : IPlayerbotScenario
             ScenarioContext.Expect(winner.Winner.Equals(a.Name, StringComparison.OrdinalIgnoreCase), $"winner {winner.Winner} is not {a.Name}");
             await context.ExpectAsync(b, "B is alive at 1 health", p => p.IsAlive && p.Health == 1);
             await context.ExpectAsync(a, "A took nothing", p => p.Health == aHealth);
+        });
+    }
+}
+
+/// <summary>
+/// B raises Retaliation; A, face to face, swings at B in a duel. Each swing that lands from the front makes B cast the retaliatory strike at A
+/// (vmangos HandleDummyAuraProc, case 20230: in front, able to react), seen by A as B's SMSG_SPELL_GO of 22858 hitting A, and costs a charge.
+/// </summary>
+internal sealed class RetaliationDuelScenario : IPlayerbotScenario
+{
+    public string Name => "proc-retaliation";
+
+    public string Description => "Retaliation strikes back the warrior that hits its bearer from the front";
+
+    public async Task RunAsync(ScenarioContext context)
+    {
+        (ScenarioBot a, ScenarioBot b) = await PlayerbotScenarioCatalog.PairAsync(context);
+        await ProcScenarioContent.BuffAsync(context, b, ProcScenarioContent.Retaliation, "B raises Retaliation");
+        await ProcScenarioContent.StartDuelAsync(context, a, b);
+        SpellGoView strike = await context.StepAsync("A swings at B and B strikes back", async () =>
+        {
+            long mark = a.Mark();
+            ScenarioContext.Expect(await a.AttackAsync(b.Guid), "A attack refused");
+            SpellGoView go = await a.WaitForPacketAsync(WorldOpcode.SmsgSpellGo, ScenarioDecoders.SpellGo,
+                g => g.SpellId == ProcScenarioContent.RetaliationStrike && g.Caster == b.Guid.Value, mark);
+            ScenarioContext.Expect(await a.StopAttackAsync(), "A attack stop refused");
+            return go;
+        });
+        await context.StepAsync("the strike hit A and Retaliation lost a charge", async () =>
+        {
+            ScenarioContext.Expect(strike.Hits.Contains(a.Guid.Value), "the retaliatory strike did not hit A");
+            int charges = await context.ReadAsync(() => context.Services.GetRequiredService<SpellFeature>().System
+                .GetAuras(b.RequirePlayer()).Single(h => h.Spell.Id == ProcScenarioContent.Retaliation).Charges);
+            ScenarioContext.Expect(charges < (int)ProcScenarioContent.RetaliationCharges, $"Retaliation still holds {charges} charges");
         });
     }
 }

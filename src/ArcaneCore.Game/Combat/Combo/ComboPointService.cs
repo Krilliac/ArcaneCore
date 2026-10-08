@@ -40,7 +40,9 @@ public sealed class ComboPointService
 
     /// <summary>
     /// Wire combo points into the spell system: the finishing move check, the value and duration scaling (installed before
-    /// any other value modifier is registered), the spend-on-finish observer and SPELL_EFFECT_ADD_COMBO_POINTS.
+    /// any other value modifier is registered), the spend-on-finish observer, SPELL_EFFECT_ADD_COMBO_POINTS and the post-finish
+    /// deferral of proc casts (<see cref="SpellSystem.EnablePostFinishProcs"/>): the observer runs them right after it cleared a
+    /// finisher's points, so Ruthlessness and Seal Fate add their point after the finish (vmangos UnitAuraProcHandler.cpp:1592-1615).
     /// </summary>
     public void Install()
     {
@@ -48,7 +50,11 @@ public sealed class ComboPointService
         _spells.RegisterCastCheck(new ComboPointCastCheck(this));
         _spells.RegisterObserver(new ComboFinishObserver(this));
         _spells.RegisterEffect(SpellEffectName.AddComboPoints, EffectAddComboPoints);
+        _spells.EnablePostFinishProcs();
     }
+
+    /// <summary>The proc casts deferred to the end of <paramref name="cast"/> (see <see cref="ComboFinishObserver"/>).</summary>
+    internal void RunPostFinishProcs(SpellCast cast) => _spells.RunPostFinishProcs(cast);
 
     /// <summary>vmangos Spell::EffectAddComboPoints (SpellEffects.cpp:4618-4630): a player's spell adds its value in points on the target.</summary>
     private void EffectAddComboPoints(SpellEffectContext context)
@@ -285,6 +291,8 @@ public sealed class ComboValueModifier(ComboPointService combos) : ISpellValueMo
 /// <summary>
 /// A finishing move spends the combo points when the cast ends (vmangos Spell::finish, Spell.cpp:4374-4395), except a
 /// harmful one that missed (or was dodged, parried...) a target other than the caster: the points are kept for another try.
+/// Then, for every finished cast, the proc casts deferred to its end run (<see cref="SpellSystem.RunPostFinishProcs"/>): a
+/// Ruthlessness point granted by the finisher lands after the finisher's points were cleared, as in vmangos.
 /// </summary>
 public sealed class ComboFinishObserver(ComboPointService combos) : ISpellCastObserver
 {
@@ -300,16 +308,16 @@ public sealed class ComboFinishObserver(ComboPointService combos) : ISpellCastOb
 
     public void OnFinished(SpellCast cast, bool completed)
     {
-        if (!completed || cast.Caster is not Player player || !cast.Spell.NeedsComboPoints)
+        if (completed && cast.Caster is Player player && cast.Spell.NeedsComboPoints)
         {
-            return;
+            bool drop = cast.Spell.IsPositive || !_missed.TryGetValue(cast, out _);
+            _missed.Remove(cast);
+            if (drop)
+            {
+                combos.ClearComboPoints(player);
+            }
         }
 
-        bool drop = cast.Spell.IsPositive || !_missed.TryGetValue(cast, out _);
-        _missed.Remove(cast);
-        if (drop)
-        {
-            combos.ClearComboPoints(player);
-        }
+        combos.RunPostFinishProcs(cast);
     }
 }

@@ -227,7 +227,7 @@ public sealed partial class SpellSystem
             return hardCoded;
         }
 
-        if (_procScripts.GetValueOrDefault(aura.Id) is { } script
+        if (FindProcScript(aura) is { } script
             && script.CheckProc(new ProcCheckContext(this, owner, target, holder, procSpell, procFlag, procExtra, attackType, isVictim)) is { } scripted)
         {
             return scripted;
@@ -526,7 +526,7 @@ public sealed partial class SpellSystem
 
                 var context = new AuraProcContext(this, proc.Owner, proc.Target, holder, aura, e.ProcSpell, proc.ProcFlag, proc.Extra, e.Amount,
                     e.OriginalAmount, cooldown, proc.IsVictim, e.AttackType, e.Reflected);
-                AuraProcResult result = _procScripts.GetValueOrDefault(holder.Spell.Id)?.OnProc(context)
+                AuraProcResult result = FindProcScript(holder.Spell)?.OnProc(context)
                     ?? (ProcHandlers.TryGetValue(aura.Type, out AuraProcHandler? handler) ? handler(context) : AuraProcResult.Ok);
                 bool burnsOnFailure = ((uint)holder.Spell.Attributes & ProcAttributes.ProcFailureBurnsCharge) != 0;
                 switch (result)

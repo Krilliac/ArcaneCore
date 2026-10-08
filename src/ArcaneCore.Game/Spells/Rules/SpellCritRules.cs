@@ -1,3 +1,5 @@
+using ArcaneCore.Game.Entities;
+
 namespace ArcaneCore.Game.Spells.Rules;
 
 /// <summary>The pure parts of the spell crit rules (vmangos Unit::GetSpellCritChance, Unit.cpp:5212-5316; SpellCaster.cpp:958-1024).</summary>
@@ -46,6 +48,80 @@ public static class SpellCritRules
         ArgumentNullException.ThrowIfNull(spell);
         return spell.SpellFamilyName == FamilyPotion
             || (spell.SpellFamilyName == FamilyWarlock && (spell.SpellFamilyFlags & WarlockHealthstoneFlag) != 0);
+    }
+
+    /// <summary>
+    /// Shatter: the OVERRIDE_CLASS_SCRIPTS misc values the magic crit roll reads and their bonus in percent against a frozen victim (vmangos
+    /// Unit::GetSpellCritChance, Unit.cpp:5259-5290: 849, 910, 911, 912, 913 = ranks 1-5).
+    /// </summary>
+    public static IReadOnlyDictionary<int, float> ShatterBonuses { get; } = new Dictionary<int, float>
+    {
+        [849] = 10.0f,
+        [910] = 20.0f,
+        [911] = 30.0f,
+        [912] = 40.0f,
+        [913] = 50.0f,
+    };
+
+    /// <summary>
+    /// The scripted magic crit bonus of <paramref name="caster"/> against <paramref name="victim"/> (vmangos Unit.cpp:5259-5290): every
+    /// OVERRIDE_CLASS_SCRIPTS aura of the caster whose spell is of <paramref name="spell"/>'s family adds its Shatter bonus when the victim is
+    /// frozen. Build 5875 is past 1.11.0 ("Shatter was changed to affect all spells, previously limited to Frost spells"), so the aura's class
+    /// mask is not consulted.
+    /// </summary>
+    public static float ScriptedCritBonus(SpellSystem system, Unit caster, Unit victim, SpellInfo spell)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        ArgumentNullException.ThrowIfNull(caster);
+        ArgumentNullException.ThrowIfNull(victim);
+        ArgumentNullException.ThrowIfNull(spell);
+        float bonus = 0f;
+        bool? frozen = null;
+        foreach (SpellAuraHolder holder in system.GetAuras(caster))
+        {
+            if (holder.IsRemoved || holder.Spell.SpellFamilyName != spell.SpellFamilyName)
+            {
+                continue;
+            }
+
+            foreach (SpellAura? aura in holder.Auras)
+            {
+                if (aura is { Type: AuraType.OverrideClassScripts } && ShatterBonuses.TryGetValue(aura.MiscValue, out float shatter)
+                    && (frozen ??= IsFrozen(system, victim)))
+                {
+                    bonus += shatter;
+                }
+            }
+        }
+
+        return bonus;
+    }
+
+    /// <summary>
+    /// vmangos Unit::IsFrozen (Unit.h:805, HasAuraState(AURA_STATE_FROZEN)): the state bit, which vmangos sets while a stun or root aura of a
+    /// frost spell holds the unit (Aura::HandleAuraModStun / HandleAuraModRoot, SpellAuras.cpp:3565, 3807). The aura test is made here as well, so
+    /// a frost stun or root counts even where the aura handlers do not set the bit.
+    /// </summary>
+    public static bool IsFrozen(SpellSystem system, Unit unit)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        ArgumentNullException.ThrowIfNull(unit);
+        if ((unit.GetUInt32(UpdateFields.UnitFieldAurastate) & (1u << ((int)AuraState.Frozen - 1))) != 0)
+        {
+            return true;
+        }
+
+        const uint frostMask = 1u << (int)SpellSchool.Frost;
+        foreach (SpellAuraHolder holder in system.GetAuras(unit))
+        {
+            if (!holder.IsRemoved && (holder.Spell.SchoolMask() & frostMask) != 0
+                && holder.Auras.Any(a => a is { Type: AuraType.ModStun or AuraType.ModRoot }))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
