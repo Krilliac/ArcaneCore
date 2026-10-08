@@ -307,7 +307,7 @@ public sealed class ManagedPlayerbotFeature(IServiceProvider services, ILogger<M
             var login = new PacketWriter(); login.WriteUInt64((ulong)(uint)bot.CharacterId);
             await session.DispatchManagedSessionAsync(WorldOpcode.CmsgPlayerLogin, login.ToArray()).ConfigureAwait(false);
             bool entered = await _world!.InvokeAsync(() => session.State == SessionState.InWorld
-                && session.Player is { Map: not null } player && _options.AllowedMaps.Contains(player.Map.MapId))
+                && session.Player is { Map: not null } player && PlayerbotMapPolicy.MayStayOnMap(player, _options))
                 .WaitAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
             if (!entered) throw new InvalidOperationException("login-refused");
             bot = await PersistAsync(scope.ServiceProvider, bot with { State = ManagedPlayerbotState.Running }, cancellationToken).ConfigureAwait(false);

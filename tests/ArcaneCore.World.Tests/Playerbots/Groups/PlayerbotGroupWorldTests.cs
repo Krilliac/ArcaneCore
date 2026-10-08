@@ -198,11 +198,13 @@ public sealed class PlayerbotGroupWorldTests
         Assert.True(await world.RunUntilAsync(180_000, () => world.Player(tank.Id).Combat.Victim is Creature { Entry: OgreEntry }), world.Trace());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
 
-        // The tank falls in the fight: half the group is dead, the group is wiping.
+        // The tank falls in the fight (the priest is on the ogre's threat list, as a healer that healed it): half the group is dead, the
+        // group is wiping.
         Creature ogre = await world.OnWorldAsync(() =>
         {
             Player victim = world.Player(tank.Id);
             var creature = (Creature)victim.Combat.Victim!;
+            creature.Combat.Threat.AddThreat(world.Player(healer.Id), 1f);
             victim.Map!.Combat.DealDamage(creature, victim, victim.Health, direct: false);
             Assert.False(victim.IsAlive);
             return creature;

@@ -71,6 +71,10 @@ The **decision**:
 
 The last verdict is reported: `risk=2.47 reward=3.30 decision=avoid reason=pack-of-3 target=6`.
 
+A quest objective avoided for strength that a group of 2 to 5 would take (`PlayerbotRiskModel.NeededGroupSize`, with
+`PlayerbotEngagementFacts.GroupSize`: N times the damage, the damage taken over N players' health, an elite up to three more levels)
+is reported as `reason=group-of-N` and becomes a group goal (`docs/areas/playbots-groups.md`).
+
 ## In a fight
 
 Each think in combat the brain asks `PlayerbotRisk.ObserveFight`. The tracker samples the bot's health and every enemy's

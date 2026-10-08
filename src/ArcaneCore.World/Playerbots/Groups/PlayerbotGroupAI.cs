@@ -352,7 +352,8 @@ internal sealed class PlayerbotGroupAI
             return;
         }
 
-        if (leader is null || !leader.IsInWorld || !ReferenceEquals(leader.Map, player.Map))
+        // A dead leader is waited for where the group is (its ghost walks to the graveyard and back; nobody follows it there).
+        if (leader is null || !leader.IsInWorld || !leader.IsAlive || !ReferenceEquals(leader.Map, player.Map))
         {
             Hold(player);
             return;
@@ -524,7 +525,9 @@ internal sealed class PlayerbotGroupAI
     /// </summary>
     private bool Resurrect(Player player, PlayerbotGroupCoordinator.BotGroup group)
     {
-        if (player.Map is not { } map || Now < _resurrectAtMs || ResurrectionSpell(player) is not { } spell) return false;
+        // Not while the group fights (the killer stands by the body), nor in a wipe: vmangos party bots resurrect out of combat.
+        if (player.Map is not { } map || Now < _resurrectAtMs || group.State == PlayerbotGroupState.Wiped || group.InFight(_session.World.NowMs)
+            || ResurrectionSpell(player) is not { } spell) return false;
         foreach (PlayerbotGroupCoordinator.Member member in group.Members)
         {
             if (member.Guid == player.Guid || _session.World.FindOnlinePlayer(member.Guid) is not { } dead) continue;

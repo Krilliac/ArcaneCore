@@ -108,6 +108,9 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
     /// <summary>Invitations not answered within this are given up (the group is abandoned; the bots may be matched again).</summary>
     internal const uint InviteTimeoutMs = 30_000;
 
+    /// <summary>A wipe lasts at least this long before the group regroups (the survivors' retreats start meanwhile).</summary>
+    internal const uint WipeSettleMs = 3_000;
+
     /// <summary>A dead member waits this long for a resurrection while a living member could give one.</summary>
     internal const long DeadWaitMs = 60_000;
 
@@ -284,6 +287,16 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
             if (!bot.Free || _memberOf.ContainsKey(bot.BotId) || bot.Session.Player is not { IsInWorld: true } player) continue;
             if (EvacuateIfStranded(bot, player)) continue;
             if (!_options.Groups.Enabled || !player.IsAlive || GroupManagerOrNull() is not { } groupManager) continue;
+            if (groupManager.GetGroup(player.Guid) is { } stale && stale.Members.All(m => m.Guid == player.Guid || IsBotOrOffline(m.Guid)))
+            {
+                // A group of bots nobody leads any more (the coordinator's own groups were disbanded; a world restart restores the
+                // server groups but not the coordinator's): the bot leaves it, as a client would.
+                Unhold(bot.BotId, null);
+                Act(bot.Session, WorldOpcode.CmsgGroupDisband, [], budgeted: false);
+                Note($"{player.Name} left a group of bots nobody leads");
+                continue;
+            }
+
             if (groupManager.GetGroup(player.Guid) is not null || groupManager.GetInvite(player.Guid) is not null)
             {
                 Unhold(bot.BotId, null);
@@ -596,6 +609,9 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
             return;
         }
 
+        if (group.Members.Any(m => m.Joined && _world!.FindOnlinePlayer(m.Guid) is { IsAlive: true } p && p.Combat.IsInCombat))
+            group.LastCombatMs = Math.Max(1u, now);
+
         switch (group.State)
         {
             case PlayerbotGroupState.Forming:
@@ -626,10 +642,13 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
                     break;
                 }
 
-                CheckWipe(group, leader);
+                if (CheckWipe(group, leader)) break;
+                // At the objective's spawn with nothing of it alive in sight (killed by someone else, waiting for its respawn).
+                if (ObjectiveMissing(group, leader, now)) Finish(group, success: false, "objective-missing");
                 break;
             case PlayerbotGroupState.Wiped:
-                if (group.Members.Where(m => m.Joined).All(m => _world!.FindOnlinePlayer(m.Guid) is not { } p || !p.IsAlive || !p.Combat.IsInCombat))
+                // The survivors get a moment to turn and run (the killer turns on its next victim at its next update).
+                if (unchecked(now - group.StateSinceMs) >= WipeSettleMs && group.Members.Where(m => m.Joined).All(m => _world!.FindOnlinePlayer(m.Guid) is not { } p || !p.IsAlive || !p.Combat.IsInCombat))
                 {
                     group.Failures++;
                     Note($"group {group.Id} wiped ({group.Failures}/{MaxFailures})");
@@ -763,6 +782,8 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
         }
 
         if (alive + dead == 0 || dead == 0) return false;
+        // The fight goes on, or has just ended with the members' deaths (the killer may not have turned on anyone yet).
+        fighting |= group.InFight(Now);
         if (alive > 0 && (!fighting || dead * 2 < alive + dead)) return false;
         Note($"group {group.Id} is wiping: {dead} dead, {alive} alive");
         Enter(group, PlayerbotGroupState.Wiped);
@@ -791,6 +812,26 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
                 teleports.TeleportTo(player, group.Goal.MeetingMap, group.Goal.Meeting.X, group.Goal.Meeting.Y, group.Goal.Meeting.Z, 0f);
         group.StateSinceMs = Now;
         Note($"group {group.Id} could not walk out: brought to the entrance");
+    }
+
+    /// <summary>How long the group waits at an objective's spawn with none of it alive in sight before it gives the goal up.</summary>
+    internal const uint ObjectiveMissingMs = 120_000;
+
+    /// <summary>The leader stands at the objective's spawn and no living objective creature is in sight, for <see cref="ObjectiveMissingMs"/>.</summary>
+    private bool ObjectiveMissing(BotGroup group, Player leader, uint now)
+    {
+        bool there = leader.MapId == group.Goal.MapId
+            && Vector3.Distance(new Vector3(leader.X, leader.Y, leader.Z), group.Goal.Objective) <= 15f;
+        bool seen = group.Goal.ObjectiveEntry != 0 && leader.Map is { } map && leader.VisibleObjects.Any(guid =>
+            map.FindObject(guid) is Game.Creatures.Creature { IsAlive: true } creature && creature.Entry == group.Goal.ObjectiveEntry);
+        if (!there || seen || leader.Combat.IsInCombat)
+        {
+            group.MissingSinceMs = 0;
+            return false;
+        }
+
+        if (group.MissingSinceMs == 0) group.MissingSinceMs = Math.Max(1u, now);
+        return unchecked(now - group.MissingSinceMs) > ObjectiveMissingMs;
     }
 
     private void Enter(BotGroup group, PlayerbotGroupState state)
@@ -899,6 +940,10 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
 
     // --- helpers --------------------------------------------------------------------------------------------------------
 
+    /// <summary>A member that is a managed bot, or nobody online (an offline player or a bot that was stopped).</summary>
+    private bool IsBotOrOffline(ObjectGuid guid)
+        => _world?.FindOnlinePlayer(guid) is not { } online || online.Session is WorldSession { IsManaged: true };
+
     private Guid BotIdOf(ObjectGuid guid)
     {
         foreach ((Guid botId, PlayerbotGroupBot bot) in _bots)
@@ -997,6 +1042,18 @@ public sealed class PlayerbotGroupCoordinator(IServiceProvider services, ILogger
         /// <summary>Where the group gathers before the content (<see cref="ApproachPoint"/>).</summary>
         public Vector3 Approach { get; set; }
         public bool ObjectiveKilled { get; set; }
+
+        /// <summary>When a living member was last seen in combat (0: never).</summary>
+        public uint LastCombatMs { get; set; }
+
+        /// <summary>A member fought within the last <see cref="FightMemoryMs"/>.</summary>
+        public bool InFight(uint now) => LastCombatMs != 0 && unchecked(now - LastCombatMs) <= FightMemoryMs;
+
+        /// <summary>How long after the last member in combat the group still counts as fighting (a wipe; no resurrection yet).</summary>
+        public const uint FightMemoryMs = 5_000;
+
+        /// <summary>Since when the leader stands at the objective's spawn without the objective in sight (0: it does not).</summary>
+        public uint MissingSinceMs { get; set; }
         public ObjectGuid Objective { get; private set; }
         public bool Succeeded { get; set; }
         public string? Reason { get; set; }

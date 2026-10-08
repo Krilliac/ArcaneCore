@@ -318,6 +318,45 @@ public sealed class ConfigReloadTests : IDisposable
     }
 
     [Fact]
+    public async Task PlayerbotGroups_AreLive_OnTheRunningPlayerbotOptions_AndAnOutOfRangeValueIsRefused()
+    {
+        // PlayerbotGroupCoordinator reads World:Playerbots:Groups from this options object at every decision.
+        string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Groups": { "Enabled": false, "MaxGroups": 2, "LevelRange": 3, "MinTank": 0, "MinHealer": 2, "FormationTimeoutSeconds": 60, "RaidsEnabled": false, "InvitePlayers": true } } } }""");
+        var playerbots = new PlayerbotOptions { Enabled = true };
+        PlayerbotGroupOptions groups = playerbots.Groups;
+        ReloadCoordinator coordinator = Reloader(FromFile(path), playerbots: playerbots);
+
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Same(groups, playerbots.Groups); // changed in place: the coordinator holds this object
+        Assert.False(groups.Enabled);
+        Assert.Equal(2, groups.MaxGroups);
+        Assert.Equal(3, groups.LevelRange);
+        Assert.Equal(0, groups.MinTank);
+        Assert.Equal(2, groups.MinHealer);
+        Assert.Equal(60, groups.FormationTimeoutSeconds);
+        Assert.False(groups.RaidsEnabled);
+        Assert.True(groups.InvitePlayers);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Groups": { "FormationTimeoutSeconds": 5 } } } }""");
+        Assert.NotEqual(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(60, groups.FormationTimeoutSeconds);
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Groups": { "MinTank": 6 } } } }""");
+        Assert.NotEqual(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.Equal(0, groups.MinTank);
+
+        File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
+        Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
+        Assert.True(groups.Enabled);
+        Assert.Equal(4, groups.MaxGroups);
+        Assert.Equal(5, groups.LevelRange);
+        Assert.Equal(1, groups.MinTank);
+        Assert.Equal(1, groups.MinHealer);
+        Assert.Equal(300, groups.FormationTimeoutSeconds);
+        Assert.True(groups.RaidsEnabled);
+        Assert.False(groups.InvitePlayers);
+    }
+
+    [Fact]
     public async Task AKeyRemovedFromTheFile_ReturnsToItsDefault()
     {
         string path = Write("""{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
@@ -390,12 +429,17 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{SocialOptions.SectionName}:{property.Name}");
         }
 
-        // Of the playerbot options the movement transport and the whole risk section are in the reload set (the rest are read once
-        // at start).
+        // Of the playerbot options the movement transport and the whole risk and groups sections are in the reload set (the rest are
+        // read once at start).
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MovementPackets)}");
         foreach (PropertyInfo property in typeof(PlayerbotRiskOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Risk)}:{property.Name}");
+        }
+
+        foreach (PropertyInfo property in typeof(PlayerbotGroupOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Groups)}:{property.Name}");
         }
 
         // Of the Locomotion section only the player speed rates are reload keys (the rest is read at start; docs/areas/rates.md).

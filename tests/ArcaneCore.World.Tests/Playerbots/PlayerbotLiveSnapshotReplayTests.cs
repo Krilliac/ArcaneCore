@@ -199,6 +199,10 @@ public sealed class PlayerbotLiveSnapshotReplayTests(ITestOutputHelper output) :
 
             foreach ((string name, Watch watch) in watches)
                 output.WriteLine($"{name}: longest still while alive {watch.LongestStillMs / 1000} s, travelled {watch.Travelled:F0} yards, deaths {watch.Deaths}");
+            // Bot groups (PlayerbotGroupCoordinator): what the coordinator saw and did over the replay.
+            if (host.WorldServices.GetService<ArcaneCore.World.Playerbots.Groups.PlayerbotGroupCoordinator>() is { } groups)
+                foreach (string line in await host.OnWorldAsync(() => groups.Report().Concat(groups.Events).ToArray()))
+                    output.WriteLine("groups: " + line);
             Assert.All(watches, pair => Assert.True(pair.Value.LongestStillMs < LongestStillMs,
                 $"{pair.Key} stood within {SamePlaceYards} yards of one place for {pair.Value.LongestStillMs / 1000} s while alive"));
         }
