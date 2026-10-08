@@ -219,7 +219,7 @@ internal static class ScenarioTestContent
         });
         services.AddSingleton<IItemTemplateSource>(items);
         SpellContent duel = DuelWorldHost.Content();
-        services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(duel with { Spells = [.. duel.Spells, .. ProcScenarioContent.Spells] }));
+        services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(ClassScriptScenarioContent.Extend(duel with { Spells = [.. duel.Spells, .. ProcScenarioContent.Spells] })));
         var store = new ContentStore();
         services.AddSingleton<ICreatureDataStore>(store);
         services.AddSingleton<IQuestContentStore>(store);
