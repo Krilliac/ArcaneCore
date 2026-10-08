@@ -55,9 +55,55 @@ public sealed class LocomotionOptions
     /// <summary>The same inside a battleground (vmangos Death.Ghost.RunSpeed.BG, World.cpp:778, default 1).</summary>
     public float GhostRunSpeedBattleground { get; set; } = 1.0f;
 
+    /// <summary>
+    /// Non-retail when not 1 (default 1, retail): multiplies every movement speed of every player (run, run back, swim, swim back, walk), on top of
+    /// the per-type rates below. Not a vmangos key: the MaNGOS Zero fork's Movement.PlayerSpeedRate (feature/movement-enhancements,
+    /// WorldConfig.cpp, percent 10 to 1000, applied in the player block of Unit::UpdateSpeed, UnitSpeed.cpp:162-168), here a multiplier clamped
+    /// to 0.1 to 10. Applied where a player's speed is set (<c>UnitSpeed.SetRate</c>), so every speed change, force-speed packet and the
+    /// server's own movement use the result. Live: <c>.reload config</c> and <c>.movement set</c> re-send the speeds of every online player.
+    /// </summary>
+    public float PlayerSpeedRate { get; set; } = 1.0f;
+
+    /// <summary>Non-retail when not 1 (default 1): player run speed multiplier (the fork's Movement.RunSpeedRate, which also covers run back; 0.1 to 10; live).</summary>
+    public float PlayerRunSpeedRate { get; set; } = 1.0f;
+
+    /// <summary>Non-retail when not 1 (default 1): player run-back speed multiplier (the fork's Movement.RunSpeedRate on MOVE_RUN_BACK; 0.1 to 10; live).</summary>
+    public float PlayerRunBackSpeedRate { get; set; } = 1.0f;
+
+    /// <summary>Non-retail when not 1 (default 1): player swim speed multiplier (the fork's Movement.SwimSpeedRate, which also covers swim back; 0.1 to 10; live).</summary>
+    public float PlayerSwimSpeedRate { get; set; } = 1.0f;
+
+    /// <summary>Non-retail when not 1 (default 1): player swim-back speed multiplier (the fork's Movement.SwimSpeedRate on MOVE_SWIM_BACK; 0.1 to 10; live).</summary>
+    public float PlayerSwimBackSpeedRate { get; set; } = 1.0f;
+
+    /// <summary>Non-retail when not 1 (default 1): player walk speed multiplier (the fork's Movement.WalkSpeedRate; 0.1 to 10; live).</summary>
+    public float PlayerWalkSpeedRate { get; set; } = 1.0f;
+
+    /// <summary>
+    /// Non-retail when not 1 (default 1): player turn rate multiplier (0.1 to 10; live). Neither vmangos nor the fork has one; the base is vmangos
+    /// baseMoveSpeed[MOVE_TURN_RATE] = 3.141594 rad/s (Unit.cpp:67-74). <see cref="PlayerSpeedRate"/> does not apply to it. A change reaches the
+    /// client as SMSG_FORCE_TURN_RATE_CHANGE.
+    /// </summary>
+    public float PlayerTurnRate { get; set; } = 1.0f;
+
+    /// <summary>The lowest player speed rate (the fork's 10 percent).</summary>
+    public const float MinSpeedRate = 0.1f;
+
+    /// <summary>The highest player speed rate (the fork's 1000 percent).</summary>
+    public const float MaxSpeedRate = 10.0f;
+
+    /// <summary>The player speed rates these options give: <see cref="PlayerSpeedRate"/> times each per-type rate, the turn rate alone.</summary>
+    public PlayerSpeedRates SpeedRates => new(
+        Walk: PlayerSpeedRate * PlayerWalkSpeedRate,
+        Run: PlayerSpeedRate * PlayerRunSpeedRate,
+        RunBack: PlayerSpeedRate * PlayerRunBackSpeedRate,
+        Swim: PlayerSpeedRate * PlayerSwimSpeedRate,
+        SwimBack: PlayerSpeedRate * PlayerSwimBackSpeedRate,
+        Turn: PlayerTurnRate);
+
     private static float ClampRate(float value, string name, List<string> changed)
     {
-        float clamped = float.IsNaN(value) ? 1.0f : Math.Clamp(value, 0.1f, 10.0f);
+        float clamped = float.IsNaN(value) ? 1.0f : Math.Clamp(value, MinSpeedRate, MaxSpeedRate);
         if (clamped != value)
         {
             changed.Add(name);
@@ -86,6 +132,15 @@ public sealed class LocomotionOptions
         // setConfigMinMax(..., 1.0f, 0.1f, 10.0f): a value outside the range is clamped (a NaN is not in range either).
         GhostRunSpeedWorld = ClampRate(GhostRunSpeedWorld, nameof(GhostRunSpeedWorld), reset);
         GhostRunSpeedBattleground = ClampRate(GhostRunSpeedBattleground, nameof(GhostRunSpeedBattleground), reset);
+
+        // The fork reads its speed rates with setConfigMinMax(..., 100, 10, 1000) percent (WorldConfig.cpp): 0.1 to 10 here.
+        PlayerSpeedRate = ClampRate(PlayerSpeedRate, nameof(PlayerSpeedRate), reset);
+        PlayerRunSpeedRate = ClampRate(PlayerRunSpeedRate, nameof(PlayerRunSpeedRate), reset);
+        PlayerRunBackSpeedRate = ClampRate(PlayerRunBackSpeedRate, nameof(PlayerRunBackSpeedRate), reset);
+        PlayerSwimSpeedRate = ClampRate(PlayerSwimSpeedRate, nameof(PlayerSwimSpeedRate), reset);
+        PlayerSwimBackSpeedRate = ClampRate(PlayerSwimBackSpeedRate, nameof(PlayerSwimBackSpeedRate), reset);
+        PlayerWalkSpeedRate = ClampRate(PlayerWalkSpeedRate, nameof(PlayerWalkSpeedRate), reset);
+        PlayerTurnRate = ClampRate(PlayerTurnRate, nameof(PlayerTurnRate), reset);
         return reset;
     }
 }
@@ -192,6 +247,16 @@ public sealed class LocomotionEnvironment
     /// world); <see cref="Default"/> when the map is null or has no locomotion updater.
     /// </summary>
     public static LocomotionEnvironment For(Map? map) => map?.FindUpdater<MapLocomotion>()?.Environment ?? Default;
+
+    /// <summary>
+    /// The options of the environment registered for <paramref name="world"/>, or null when none is registered (the shared
+    /// <see cref="Default"/> must never be changed by a reload).
+    /// </summary>
+    public static LocomotionOptions? RegisteredOptions(WorldRuntime world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        return s_registered.TryGetValue(world, out LocomotionEnvironment? environment) ? environment.Options : null;
+    }
 
     /// <summary>The environment registered for <paramref name="world"/>, or <see cref="Default"/>.</summary>
     public static LocomotionEnvironment For(WorldRuntime world)

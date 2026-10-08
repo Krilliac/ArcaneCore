@@ -248,6 +248,11 @@ public static class UnitSpeed
     /// speed) and the speed changes on its ack; a player that is not in a map cannot answer, so the speed is set at
     /// once without a packet (login restore, "explanation of (1)"); any other unit changes at once and everyone is told
     /// with SMSG_SPLINE_SET_*_SPEED.
+    /// <para>
+    /// The speed is the rate times the base speed times the unit's configured rate (<see cref="LocomotionState.ConfiguredSpeedRates"/>: the
+    /// <c>Locomotion:Player*SpeedRate</c> options on a player, 1 on anything else), so every order, the create block and the server's own speed
+    /// carry the effective value (<see cref="SpeedRates"/>).
+    /// </para>
     /// </summary>
     public static void SetRate(Unit unit, MoveType type, float rate)
     {
@@ -257,7 +262,7 @@ public static class UnitSpeed
             rate = 0.0f;
         }
 
-        float newSpeed = rate * BaseSpeed(type);
+        float newSpeed = rate * BaseSpeed(type) * ConfiguredRate(unit, type);
         MovementChangeType changeType = ChangeTypeOf(type);
         LocomotionState state = unit.Locomotion;
         if (Get(unit, type) == newSpeed && !state.Pending.HasPendingOfType(changeType))
@@ -281,5 +286,48 @@ public static class UnitSpeed
 
         SetReal(unit, type, newSpeed);
         CombatPackets.SendToSet(unit, SpeedPackets.SplineOpcode(type), SpeedPackets.BuildSpline(unit.Guid.Value, newSpeed));
+    }
+
+    /// <summary>The configured multiplier of a movement type for <paramref name="unit"/>: a player's <c>Locomotion:Player*SpeedRate</c>, else 1.</summary>
+    public static float ConfiguredRate(Unit unit, MoveType type)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        return unit is Player && LocomotionStates.TryGet(unit, out LocomotionState state) ? state.ConfiguredSpeedRates.For(type) : 1.0f;
+    }
+
+    /// <summary>
+    /// Change the turn rate (vmangos Unit::SetSpeedRate(MOVE_TURN_RATE, rate), Unit.cpp:7152-7183; base 3.141594 rad/s, times a player's
+    /// <c>Locomotion:PlayerTurnRate</c>). No 1.12 aura changes it, so only the configured rate does. A change that leaves the rate as it is is
+    /// dropped. A player in a map is sent SMSG_FORCE_TURN_RATE_CHANGE (packed GUID, counter, rate) and the server takes the new rate at once:
+    /// unlike the five speeds it is not held in the pending-change ledger, whose enforcement knows only those (deviation: vmangos applies it on the
+    /// ack, MovementHandler.cpp:415-534; the ack, CMSG_FORCE_TURN_RATE_CHANGE_ACK, only relays MSG_MOVE_SET_TURN_RATE to the observers). A player
+    /// not in a map has it set for its create block; any other unit changes at once and everyone is told with SMSG_SPLINE_SET_TURN_RATE.
+    /// </summary>
+    public static void SetTurnRate(Unit unit, float rate)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        if (rate < 0)
+        {
+            rate = 0.0f;
+        }
+
+        float turn = rate * Unit.BaseTurnRate * (unit is Player && LocomotionStates.TryGet(unit, out LocomotionState state) ? state.ConfiguredSpeedRates.Turn : 1.0f);
+        if (unit.TurnRate == turn)
+        {
+            return;
+        }
+
+        unit.TurnRate = turn;
+        if (unit is Player player)
+        {
+            if (player.Map is not null)
+            {
+                player.Session.Send(TurnRatePackets.Force, SpeedPackets.BuildForceChange(player.Guid.Value, player.NextMovementCounter(), turn));
+            }
+
+            return;
+        }
+
+        CombatPackets.SendToSet(unit, TurnRatePackets.Spline, SpeedPackets.BuildSpline(unit.Guid.Value, turn));
     }
 }
