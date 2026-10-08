@@ -65,6 +65,7 @@ How to read the tables:
 - [`World:Exploration`](#worldexploration)
 - [`World:GameEvents`](#worldgameevents)
 - [`World:GmCommands`](#worldgmcommands)
+- [`World:GmCommands:DebugDraw`](#worldgmcommandsdebugdraw)
 - [`World:GmCommands:FirstLoginTools`](#worldgmcommandsfirstlogintools)
 - [`World:Guild`](#worldguild)
 - [`World:Honor`](#worldhonor)
@@ -782,6 +783,15 @@ How to read the tables:
 | `World:GmCommands:RetailLevels` | `bool` | `true` | - | Apply the vmangos account level of the commands declared before the retail command work (`RetailCommandLevels`); off keeps their ArcaneCore four-level declarations. |
 | `World:GmCommands:SecurityMap` | `Dictionary<AccountSecurity, byte>` | `{Administrator: 6, GameMaster: 3, Moderator: 1, Player: 0}` | - | The retail account level (vmangos AccountTypes, D:\refs\vmangos\src\shared\Common.h:136-146: PLAYER 0, MODERATOR 1, TICKETMASTER 2, GAMEMASTER 3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6, CONSOLE 7) each stored `AccountSecurity` stands for. ArcaneCore stores four levels, so the retail levels 2, 4 and 5 are only reachable by mapping a stored level onto them (an operator may remap, e.g. GameMaster=4). |
 | `World:GmCommands:TicketMutationsPerMinute` | `int` | `10` | - | ArcaneCore only (no reference core limits these): the most ticket mutations (`CMSG_GMTICKET_CREATE`, `_UPDATETEXT`, `_DELETETICKET`) one account may send per minute. Beyond it the packet is refused before anything is read (create and update answer with their error code, a delete is answered with the ticket's unchanged state) and the player is told; every accepted create or changed text tells all GameMasters online, so this also bounds that. Fail-closed: 0 refuses every ticket mutation, a negative value is the default. |
+
+## `World:GmCommands:DebugDraw`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:GmCommands:DebugDraw:Glow` | `bool` | `true` | - | Add a coloured glow model next to the key markers (end points, hits, path corners, waypoints, heights, spawns). |
+| `World:GmCommands:DebugDraw:LifetimeSeconds` | `int` | `120` | - | Seconds a drawing stays before it is removed on its own (it also goes with .debug vis clear, a logout or a map change). 5..3600. |
+| `World:GmCommands:DebugDraw:MaxMarkersPerGm` | `int` | `300` | - | Most markers one GM's client holds at once (glow companions count); a new drawing removes the oldest ones to fit. 1..2000. |
+| `World:GmCommands:DebugDraw:Spacing` | `float` | `2` | - | Yards between the dots of a line or path (at least 0.5; a long line spreads its dots further to stay within its share of markers). |
 
 ## `World:GmCommands:FirstLoginTools`
 
