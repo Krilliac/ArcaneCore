@@ -137,7 +137,8 @@ own wording.
   the creature corpse decay timer are not in the content; the npc flags stand in for the healers' ghost aura 9036 (not imported).
 - **Saved zone.** A spirit that logs out is saved at its graveyard's position but with its old zone id.
 - **Revival at a dungeon door** happens when the far teleport is accepted; vmangos does it before the entry check.
-- **Spirit of Redemption, Soulstone creation, pet re-summon after resurrection** belong to the spell, warlock/priest and pet lanes.
+- **Soulstone creation, pet re-summon after resurrection** belong to the spell, warlock and pet lanes. Spirit of Redemption is delivered by the
+  unit-control lane (`docs/areas/unit-control.md`).
 - **Resurrection sickness** uses spell 15007 for every race (vmangos reads `ChrRaces.resSicknessSpellId`); its -75% stat auras (79, 80, 101)
   have no handlers yet.
 

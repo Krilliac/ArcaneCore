@@ -21,7 +21,9 @@ namespace ArcaneCore.Game.Pets;
 /// its aggro radius; the creature area's relocation notify brings it creatures as well as players) and the imp's lack of a melee
 /// attack. Not ported (each needs data or primitives another area owns, docs/integration/pets.md): positive and ally autocast
 /// (<c>Spell::CanAutoCast</c>, <c>UpdateAllies</c>), taunt, the threat-list retarget of creature-owned
-/// pets, crowd-control checks (<c>HasAuraPetShouldAvoidBreaking</c>) and possession.
+/// pets and crowd-control checks (<c>HasAuraPetShouldAvoidBreaking</c>). It also drives a charmed or possessed creature (docs/areas/unit-control.md):
+/// the charm info and master come from the charm when the creature is not a pet, and while a player possesses it (UNIT_FLAG_POSSESSED)
+/// only the melee part runs (no return movement, no autocast), as in vmangos <c>PetAI::UpdateAI</c>.
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
@@ -41,7 +43,7 @@ public sealed class PetAI : CreatureAI
         MeleeEnabled = creature.Entry != ImpEntry;
     }
 
-    /// <summary>vmangos Unit::GetCharmInfo: the pet's own, or the one a charm or possession gave the creature (Pets/Charm).</summary>
+    /// <summary>vmangos Unit::GetCharmInfo: the pet's own, or the one a charm or possession gave the creature (Pets/Control).</summary>
     private CharmInfo? Charm => Me.GetCharmInfo();
 
     /// <summary>vmangos <c>m_creature->GetCharmerOrOwner()</c>: the charmer of a charmed creature, else the owner.</summary>

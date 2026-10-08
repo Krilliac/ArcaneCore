@@ -146,13 +146,20 @@ Transform aura and the mage polymorph classification (mage family, first effect 
 
 Tests: `tests/ArcaneCore.Game.Tests/CombatMechanics/RegenAuraTests.cs` (11 tests; RED first: 9 failed, the two baseline tests proving the harness passed).
 
-## wlm-22 Invisibility and Detect Invisibility (superseded by the stealth lane at integration)
-
-This lane built its own aura 18 / 19 handlers and an InvisibilityVisibilityRule. The reviewed Codex stealth lane (claude/cx-stealth-detection,
-docs/areas/stealth.md) implements the same vmangos code (HandleInvisibility, HandleInvisibilityDetect, CanDetectInvisibilityOf) inside the stealth registry and
-`StealthVisibilityRule`. Both register auras 18 and 19, which SpellSystem.RegisterModules rejects as a duplicate, so the integration keeps the stealth lane's
-implementation (InvisibilityAuras, InvisibilityTests) and drops this lane's InvisibilityVisibilityRule, InvisibilityFeature and its 12 tests. See
-docs/integration/wave4-integration.md.
+## wlm-22 Invisibility and Detect Invisibility (superseded by the stealth lane at integration)
+
+
+
+This lane built its own aura 18 / 19 handlers and an InvisibilityVisibilityRule. The reviewed Codex stealth lane (claude/cx-stealth-detection,
+
+docs/areas/stealth.md) implements the same vmangos code (HandleInvisibility, HandleInvisibilityDetect, CanDetectInvisibilityOf) inside the stealth registry and
+
+`StealthVisibilityRule`. Both register auras 18 and 19, which SpellSystem.RegisterModules rejects as a duplicate, so the integration keeps the stealth lane's
+
+implementation (InvisibilityAuras, InvisibilityTests) and drops this lane's InvisibilityVisibilityRule, InvisibilityFeature and its 12 tests. See
+
+docs/integration/wave4-integration.md.
+
 ## wlm-08 (reduced) Warlock demons and Demonic Sacrifice (`Pets/SummonService.Demons.cs`, `Spells/Warlock/DemonicSacrificeScript.cs`)
 
 `SPELL_EFFECT_SUMMON_PET` (56) was unregistered (docs/integration/pets.md), so Summon Imp, Voidwalker, Succubus and Felhunter did nothing.
@@ -197,7 +204,7 @@ control passed) and two dispatcher tests for `ExecuteEffects` in `SpellScriptTes
 | wlm-17 ward reflect | in vmangos the reflect is only half the work (the reflected cast back at the caster) and the Frost/Fire Warding chance needs the spell-modifier engine; low payoff before that lane lands |
 | wlm-18 polymorph, wlm-21 stacking, wlm-19 persistent area auras | overlap aura-engine-completeness (Transform, stacking, persistent area auras); the regen and Health Funnel pieces they feed (wlm-15, wlm-04) are delivered |
 | wlm-20 Blink | needs a navmesh raycast primitive (vmangos `Map::GetWalkHitPosition`) that `IPathfinder` does not offer on this base; designing it as a seam without an implementation was not worth a half slice |
-| wlm-23 charm / Enslave Demon | no charm primitive on the base (as the design said) |
+| wlm-23 charm / Enslave Demon | delivered later by the unit-control lane (`docs/areas/unit-control.md`): SPELL_AURA_MOD_CHARM with the warlock demon's pet number and bar |
 | wlm-24 acceptance | the classic-db count assertions were replaced by oracle values quoted from the dump in each slice's tests (Drink, Evocation, Mage Armor, Demon Armor, Health Funnel, Life Tap, Lesser/Greater Invisibility, the Detect ranks, the demon spells); no opt-in dump test or mock-client scenario was added |
 
 Integration notes: the shared files touched are `SpellAuraHolder.cs` (two internal members), `SpellSystem.Death.cs` (one line), `SpellSystem.Auras.cs` (the per-second cost call),

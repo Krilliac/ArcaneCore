@@ -45,24 +45,23 @@ every deliberate difference sits behind the `Auras` configuration section (class
   interrupt sources (`Moving`, `Turning`, `Interacting`, ... have no trigger), holder permanence rules for passive-with-visual spells.
 - Polymorph health regeneration (the transform aura exists now, `transform-and-charge.md`), spell modifier auras, percent stat auras,
   skill auras, creature spawn addon auras: owned by other wave-4 lanes or unscheduled; each row in the matrix names the owner.
-- `CMSG_CANCEL_AURA` possess exception (remote control is not modelled: a player is always its own mover).
 
 ## Support matrix
 
 Levels: `Handler` = a handler is registered with the spell system; `Referenced` = no handler, but code outside the aura files names the type (this does
 not mean every vmangos consumer exists); `Unsupported` = nothing acts on it. The column "consumers" lists up to three source files that mention the type.
-Counts: Handler 106, Referenced 36, Unsupported 50, NotAnAura 1 (193 types). The table is `AuraSupportBaseline.cs`; `AuraSupportWorldTests` fails when a row
+Counts: Handler 113, Referenced 34, Unsupported 45, NotAnAura 1 (193 types). The table is `AuraSupportBaseline.cs`; `AuraSupportWorldTests` fails when a row
 disagrees with the live registrations of a composed world host.
 
 | Value | Aura type | Level | vmangos handler | Consumers | Owner of the gap |
 |---|---|---|---|---|---|
 | 0 | None | NotAnAura | `HandleNULL` (SpellAuras.cpp:65) | ImmunityRules.cs |  |
 | 1 | BindSight | Unsupported | `HandleBindSight` (SpellAuras.cpp:66) |  |  |
-| 2 | ModPossess | Referenced | `HandleModPossess` (SpellAuras.cpp:67) | SpellSystem.Dispel.cs | warlock-mage-utility |
+| 2 | ModPossess | Handler | `HandleModPossess` (SpellAuras.cpp:67) | CharmService.Possess.cs, CharmCastCheck.cs, SpellSystem.Dispel.cs |  |
 | 3 | PeriodicDamage | Handler | `HandlePeriodicDamage` (SpellAuras.cpp:68) | SpellCoefficients.cs, SpellInfoRuleExtensions.cs, SpellPackets.cs |  |
 | 4 | Dummy | Handler | `HandleAuraDummy` (SpellAuras.cpp:69) | SpellCoefficients.cs, SpellSystem.Auras.cs |  |
 | 5 | ModConfuse | Handler | `HandleModConfuse` (SpellAuras.cpp:70) | CasterAuraGate.cs, CcAuraHandlers.cs, CcState.cs |  |
-| 6 | ModCharm | Referenced | `HandleModCharm` (SpellAuras.cpp:71) | SpellSystem.Dispel.cs | warlock-mage-utility |
+| 6 | ModCharm | Handler | `HandleModCharm` (SpellAuras.cpp:71) | CharmService.Charm.cs, CharmCastCheck.cs, SpellSystem.Dispel.cs |  |
 | 7 | ModFear | Handler | `HandleModFear` (SpellAuras.cpp:72) | CasterAuraGate.cs, CcAuraHandlers.cs, CcState.cs |  |
 | 8 | PeriodicHeal | Handler | `HandlePeriodicHeal` (SpellAuras.cpp:73) | SpellCoefficients.cs, SpellInfoRuleExtensions.cs, SpellPackets.cs |  |
 | 9 | ModAttackspeed | Handler | `HandleModAttackSpeed` (SpellAuras.cpp:74) | AttackSpeedAuras.cs |  |
@@ -118,8 +117,8 @@ disagrees with the live registrations of a composed world host.
 | 59 | ModDamageDoneCreature | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:124) |  |  |
 | 60 | ModPacifySilence | Handler | `HandleAuraModPacifyAndSilence` (SpellAuras.cpp:125) | CasterAuraGate.cs, CcAuraHandlers.cs, CcState.cs |  |
 | 61 | ModScale | Handler | `HandleAuraModScale` (SpellAuras.cpp:126) | VisualAuras.cs |  |
-| 62 | PeriodicHealthFunnel | Unsupported | `HandlePeriodicHealthFunnel` (SpellAuras.cpp:127) |  |  |
-| 63 | PeriodicManaFunnel | Unsupported | `HandleUnused` (SpellAuras.cpp:128) |  |  |
+| 62 | PeriodicHealthFunnel | Handler | `HandlePeriodicHealthFunnel` (SpellAuras.cpp:127) | SpellSystem.PowerBurn.cs, DrainAuras.cs, ProcFlagRules.cs |  |
+| 63 | PeriodicManaFunnel | Unsupported | `HandleUnused` (SpellAuras.cpp:128) |  | obsolete in 1.12 (vmangos HandleUnused; only zzOLDMana Funnel 1941) |
 | 64 | PeriodicManaLeech | Handler | `HandlePeriodicManaLeech` (SpellAuras.cpp:129) | CasterPeriodicPackets.cs, DrainAuras.cs |  |
 | 65 | ModCastingSpeedNotStack | Unsupported | `HandleModCastingSpeed` (SpellAuras.cpp:130) |  | aura-transform (not scheduled) |
 | 66 | FeignDeath | Handler | `HandleFeignDeath` (SpellAuras.cpp:131) | RangedHandlers.cs, SpellSystem.Feign.cs |  |
@@ -184,7 +183,7 @@ disagrees with the live registrations of a composed world host.
 | 125 | ModMeleeDamageTaken | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:190) |  |  |
 | 126 | ModMeleeDamageTakenPct | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:191) |  |  |
 | 127 | RangedAttackPowerAttackerBonus | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:192) |  |  |
-| 128 | ModPossessPet | Unsupported | `HandleModPossessPet` (SpellAuras.cpp:193) |  | warlock-mage-utility |
+| 128 | ModPossessPet | Handler | `HandleModPossessPet` (SpellAuras.cpp:193) | CharmService.Possess.cs, CharmCastCheck.cs |  |
 | 129 | ModSpeedAlways | Handler | `HandleAuraModIncreaseSpeed` (SpellAuras.cpp:194) | SpeedAuras.cs, UnitSpeed.cs |  |
 | 130 | ModMountedSpeedAlways | Handler | `HandleAuraModIncreaseMountedSpeed` (SpellAuras.cpp:195) | SpeedAuras.cs, UnitSpeed.cs |  |
 | 131 | ModRangedAttackPowerVersus | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:196) |  |  |
@@ -218,7 +217,7 @@ disagrees with the live registrations of a composed world host.
 | 159 | NoPvpCredit | Handler | `HandleNoImmediateEffect` (SpellAuras.cpp:224) | ../../Honor/HonorSpellEffects.cs |  |
 | 160 | ModAoeAvoidance | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:225) | SpellCombatRules.cs |  |
 | 161 | ModHealthRegenInCombat | Handler | `HandleNoImmediateEffect` (SpellAuras.cpp:226) | CombatFlatHealthRegenAuras.cs, MapCombat.Regen.cs |  |
-| 162 | PowerBurnMana | Unsupported | `HandleAuraPowerBurn` (SpellAuras.cpp:227) |  |  |
+| 162 | PowerBurnMana | Handler | `HandleAuraPowerBurn` (SpellAuras.cpp:227) | SpellSystem.PowerBurn.cs, ProcFlagRules.cs, PeriodicTiming.cs |  |
 | 163 | ModCritDamageBonus | Unsupported | `HandleUnused` (SpellAuras.cpp:228) |  |  |
 | 164 | Unk164 | Unsupported | `HandleUnused` (SpellAuras.cpp:229) |  |  |
 | 165 | MeleeAttackPowerAttackerBonus | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:230) |  |  |
@@ -232,8 +231,8 @@ disagrees with the live registrations of a composed world host.
 | 173 | AllowChampionSpells | Unsupported | `HandleUnused` (SpellAuras.cpp:238) |  |  |
 | 174 | ModSpellDamageOfStatPercent | Referenced | `HandleModSpellDamagePercentFromStat` (SpellAuras.cpp:239) | SpellBonusModule.cs |  |
 | 175 | ModSpellHealingOfStatPercent | Referenced | `HandleModSpellHealingPercentFromStat` (SpellAuras.cpp:240) | SpellBonusModule.cs |  |
-| 176 | SpiritOfRedemption | Unsupported | `HandleSpiritOfRedemption` (SpellAuras.cpp:241) |  | graveyards-resurrection |
-| 177 | AoeCharm | Unsupported | `HandleAuraAoeCharm` (SpellAuras.cpp:242) |  |  |
+| 176 | SpiritOfRedemption | Handler | `HandleSpiritOfRedemption` (SpellAuras.cpp:241) | SpellSystem.SpiritOfRedemption.cs, MapCombat.Melee.cs, Battleground.cs |  |
+| 177 | AoeCharm | Handler | `HandleAuraAoeCharm` (SpellAuras.cpp:242) | CharmService.Charm.cs |  |
 | 178 | ModDebuffResistance | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:243) | SpellCombatRules.cs |  |
 | 179 | ModAttackerSpellCritChance | Referenced | `HandleNoImmediateEffect` (SpellAuras.cpp:244) | SpellCombatRules.cs |  |
 | 180 | ModFlatSpellDamageVersus | Unsupported | `HandleNoImmediateEffect` (SpellAuras.cpp:245) |  |  |

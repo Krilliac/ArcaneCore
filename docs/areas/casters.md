@@ -45,8 +45,8 @@ All new code is in `src/ArcaneCore.Game/Spells/Casters` (plus `src/ArcaneCore.Wo
   and spell-breadth lanes. Until they merge a caster regenerates 0 mana for 5 s after any paid cast, as a gearless retail
   caster does, with none of the offsets.
 - Triggered casts do not start the timer (vmangos skips it for casts triggered by an aura).
-- Leech: no absorb (framework in another lane), no immunity checks, no Health Funnel (PERIODIC_HEALTH_FUNNEL shares the vmangos
-  leech block; the target is the caster's pet: pets lane), no per-second channel cost framework.
+- Leech: no absorb (framework in another lane), no immunity checks, no per-second channel cost framework. PERIODIC_HEALTH_FUNNEL now
+  ticks through the same leech code, as in vmangos (unit-control lane, `docs/areas/unit-control.md`).
 - Dispel: no Shield Slam gate (warrior lane), no Warlock Spellstone polarity override, no charm priority, no reflected dispels.
 - `AmountModifier` and `RegisterAura` are single slots: a second lane registering the same type replaces the first silently
   (`CasterSpellModules.Register` throws instead when another amount modifier is already installed).

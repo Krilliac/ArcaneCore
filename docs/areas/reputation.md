@@ -48,7 +48,7 @@ combat. `ReputationFeature` and `ReputationCombatFeature` now each log one line 
 | free-for-all PvP reactions are not modelled | no FFA state exists | none |
 | `SMSG_SET_FORCED_REACTIONS` is built but not sent | vmangos writes (u32 faction, u32 rank); wow_messages types the faction as a u16 | `SendForcedReactions` |
 | the reputation templates reload as one pair: either `.reload` name refreshes both tables | one immutable `ReputationContent` swapped whole | none |
-| the kill-credit exclusion of "units a player controls" covers pets, totems and `IPlayerControlledUnit` | the base has no charm primitive | none |
+| the kill-credit exclusion of "units a player controls" covers pets, totems, charmed units (through their charmer GUID) and `IPlayerControlledUnit` | charm and possession exist since the unit-control lane (`docs/areas/unit-control.md`) | none |
 
 ## Limits (not delivered, recorded)
 
