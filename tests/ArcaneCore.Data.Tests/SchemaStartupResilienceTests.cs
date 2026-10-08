@@ -81,7 +81,9 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         var counter = new CommandTap();
         await EnsureAsync(component, probe, stepVersion, counter);
         int ddl = counter.Ddl;
-        Assert.True(ddl > 0, $"{component} step {stepVersion} issued no DDL");
+        // A placeholder step that holds a reserved version open (WorldSchemaLaneGap38-40) has no changes: only its version write can be interrupted.
+        SchemaStep step = (component == "world" ? WorldDbContext.Schema : CharacterDbContext.Schema).Steps.Single(s => s.Version == stepVersion);
+        Assert.True(ddl > 0 || step.Changes.Count == 0, $"{component} step {stepVersion} issued no DDL");
 
         Func<string, bool> isVersionWrite = sql => sql.Contains(component + "_schema", StringComparison.Ordinal)
             && CommandTap.IsWrite(sql, "UPDATE", "INSERT");

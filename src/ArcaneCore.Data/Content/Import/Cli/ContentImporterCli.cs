@@ -260,6 +260,7 @@ public static class ContentImporterCli
         var startingSkills = new StartingSkillDumpImporter();
         var npc = new NpcDumpImporter();
         var conditions = new ConditionsDumpImporter();
+        var battlegrounds = new BattlegroundDumpImporter();
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             creatures.Read(reader);
@@ -339,6 +340,11 @@ public static class ContentImporterCli
             conditions.Read(reader);
         }
 
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            battlegrounds.Read(reader);
+        }
+
         IReadOnlyList<string> appliedStatsMigrations = [];
         if (a.Value("--player-stats-migrations-dir") is { } statsMigrationsDirectory)
         {
@@ -409,6 +415,7 @@ public static class ContentImporterCli
         StartingSkillImportReport startingSkillReport = startingSkills.BuildReport();
         NpcImportReport npcReport = npc.BuildReport();
         ConditionsImportReport conditionsReport = conditions.BuildReport();
+        BattlegroundImportReport battlegroundReport = battlegrounds.BuildReport();
         if (!dryRun)
         {
             o.WriteLine($"target: {target!.Describe}");
@@ -433,6 +440,7 @@ public static class ContentImporterCli
                     startingSkillReport = await startingSkills.WriteAsync(db, replace, token).ConfigureAwait(false);
                     npcReport = await npc.WriteAsync(db, replace, token).ConfigureAwait(false);
                     conditionsReport = await conditions.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    battlegroundReport = await battlegrounds.WriteAsync(db, replace, token).ConfigureAwait(false);
                 }, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -452,6 +460,7 @@ public static class ContentImporterCli
         warnings.AddRange(statsReport.Warnings);
         warnings.AddRange(startingSkillReport.Warnings);
         warnings.AddRange(npcReport.Diagnostics);
+        warnings.AddRange(battlegroundReport.Warnings);
         if (totemReport.SummonedWithoutRow.Count > 0)
         {
             warnings.Add($"{totemReport.SummonedWithoutRow.Count} summoned totem creature(s) have no spell mapping "
@@ -495,6 +504,11 @@ public static class ContentImporterCli
         imported["npc_vendor"] = npcReport.Vendors;
         imported["npc_trainer"] = npcReport.Trainers;
         imported["conditions"] = conditionsReport.Conditions;
+        imported["battleground_template"] = battlegroundReport.Templates;
+        imported["creature_battleground"] = battlegroundReport.CreatureEvents;
+        imported["gameobject_battleground"] = battlegroundReport.GameObjectEvents;
+        imported["battlemaster_entry"] = battlegroundReport.Battlemasters;
+        skipped["battleground_rows"] = battlegroundReport.SkippedRows;
         skipped["npc_service_rows"] = npcReport.Skipped;
         o.WriteLine(dryRun ? "would import:" : "imported:");
         foreach ((string table, long count) in imported)
