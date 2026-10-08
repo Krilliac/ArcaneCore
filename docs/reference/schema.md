@@ -58,10 +58,10 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 32 | `Characters.Pets.PetNamingDataModule` | adds columns `character_pet.Name`, `character_pet.NameTimestamp`, `character_pet.RenameAllowed` | yes |
 | 33 | `Characters.Playerbots.ManagedPlayerbotDataModule` | creates `managed_playerbot` | yes |
 | 34 | `Characters.Life.CharacterCorpseInstanceDataModule` | adds columns `character_corpse.InstanceId` | yes |
-| 35 | `Schema.ReservedCharactersSchema35` | no changes | no |
-| 36 | `Schema.ReservedCharactersSchema36` | no changes | no |
+| 35 | `Schema.ReservedCharactersSchema35` | no changes | yes |
+| 36 | `Schema.ReservedCharactersSchema36` | no changes | yes |
 | 37 | `Social.GroupDataModule` | creates `character_group`, `character_group_member` | yes |
-| 38 | `Characters.Accounts.AccountAddressDataModule` | creates `account_last_ip` | no |
+| 38 | `Characters.Accounts.AccountAddressDataModule` | creates `account_last_ip` | yes |
 
 ## `world`
 
