@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Handlers;
 
@@ -25,7 +26,8 @@ public sealed class InactiveQueueHandlers : IOpcodeHandlerGroup
     private static void BattlefieldStatus(WorldSession session, Player player, byte[] payload)
     {
         RequireEmptyBody(payload);
-        // The vanilla handler only answers occupied queues. There are none to report.
+        // The vanilla handler only answers occupied queues (vmangos HandleBattlefieldStatusOpcode): the battleground feature reports them.
+        session.Services.GetService<Battlegrounds.BattlegroundFeature>()?.SendStatusReports(player);
     }
 
     private static void MeetingstoneInfo(WorldSession session, Player player, byte[] payload)

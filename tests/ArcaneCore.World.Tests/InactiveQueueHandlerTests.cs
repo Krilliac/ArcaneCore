@@ -27,10 +27,16 @@ public sealed class InactiveQueueHandlerTests
             Assert.False(handler.AllowsState(SessionState.LoggingIn));
         }
 
-        foreach (WorldOpcode opcode in new[] { WorldOpcode.CmsgMeetingstoneJoin, WorldOpcode.CmsgMeetingstoneLeave,
-            WorldOpcode.CmsgBattlemasterJoin, WorldOpcode.CmsgBattlefieldPort })
+        foreach (WorldOpcode opcode in new[] { WorldOpcode.CmsgMeetingstoneJoin, WorldOpcode.CmsgMeetingstoneLeave })
         {
             Assert.False(table.TryGet(opcode, out _));
+        }
+
+        // The battleground queue actions belong to the battleground handlers (docs/areas/battlegrounds.md).
+        foreach (WorldOpcode opcode in new[] { WorldOpcode.CmsgBattlemasterJoin, WorldOpcode.CmsgBattlefieldPort })
+        {
+            Assert.True(table.TryGet(opcode, out OpcodeHandler handler), $"missing {opcode} handler");
+            Assert.NotNull(handler.World);
         }
     }
 

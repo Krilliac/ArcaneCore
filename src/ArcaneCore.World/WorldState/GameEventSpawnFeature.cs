@@ -60,14 +60,37 @@ public sealed class GameEventSpawnFeature(IServiceProvider services, ILogger<Gam
 
         foreach (Map map in world.Maps)
         {
+            // A wrapping gate (a battleground map's event gate) keeps its place and asks the game-event gate after its own rule.
             if (map.FindUpdater<CreatureMapSystem>() is { } creatures && !ReferenceEquals(creatures.SpawnGate, spawns))
             {
-                creatures.SpawnGate = spawns;
+                if (creatures.SpawnGate is IWrappingSpawnGate wrapping)
+                {
+                    if (!ReferenceEquals(wrapping.Inner, spawns))
+                    {
+                        wrapping.Inner = spawns;
+                        creatures.SpawnGate = wrapping;
+                    }
+                }
+                else
+                {
+                    creatures.SpawnGate = spawns;
+                }
             }
 
             if (map.FindUpdater<GameObjectMapSystem>() is { } objects && !ReferenceEquals(objects.SpawnGate, spawns))
             {
-                objects.SpawnGate = spawns;
+                if (objects.SpawnGate is IWrappingSpawnGate wrapping)
+                {
+                    if (!ReferenceEquals(wrapping.Inner, spawns))
+                    {
+                        wrapping.Inner = spawns;
+                        objects.SpawnGate = wrapping;
+                    }
+                }
+                else
+                {
+                    objects.SpawnGate = spawns;
+                }
             }
         }
 
