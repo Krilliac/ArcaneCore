@@ -300,10 +300,10 @@ public sealed class CombatPriestScenario() : ClassCombatScenario("priest", 5, Cl
         });
 }
 
-/// <summary>Tauren shaman: Lightning Bolt from range.</summary>
+/// <summary>Tauren shaman: Lightning Shield between fights, Lightning Bolt from range.</summary>
 public sealed class CombatShamanScenario() : ClassCombatScenario("shaman", 6, Class.Shaman,
-    [ClassCombatSpells.LightningBolt, ClassCombatSpells.HealingWave],
-    ["Lightning Bolt"], firstCastDistance: 20f)
+    [ClassCombatSpells.LightningBolt, ClassCombatSpells.HealingWave, ClassCombatSpells.LightningShield],
+    ["Lightning Shield", "Lightning Bolt"], firstCastDistance: 20f)
 {
     protected override string? FirstAttack => "Lightning Bolt";
 }
@@ -441,6 +441,7 @@ public static class ClassCombatSpells
 
     public const uint LightningBolt = 403;
     public const uint HealingWave = 331;
+    public const uint LightningShield = 324;
 
     public const uint Fireball = 133;
     public const uint FireballRank2 = 143;

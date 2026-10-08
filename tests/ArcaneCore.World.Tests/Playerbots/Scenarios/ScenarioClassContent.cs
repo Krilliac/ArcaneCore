@@ -156,6 +156,7 @@ internal static class ScenarioClassContent
         // --- shaman --------------------------------------------------------------------------------------------------------
         Rank(Hostile(S.LightningBolt, "Lightning Bolt", school: 3, damage: 8, cost: 15, power: Mana, cast: CastOneAndHalf, range: RangeThirty, dmgClass: 1), 1),
         Rank(Heal(S.HealingWave, "Healing Wave", amount: 40, cost: 25, cast: CastOneAndHalf), 1),
+        Rank(SelfAura(S.LightningShield, "Lightning Shield", aura: 4, misc: 0, value: 13, ThirtyMinutes, gcd: true, cost: 15), 1), // a dummy: its procs are not modelled
 
         // --- mage ----------------------------------------------------------------------------------------------------------
         Rank(Hostile(S.Fireball, "Fireball", school: 2, damage: 8, cost: 30, power: Mana, cast: CastOneAndHalf, range: RangeThirty, dmgClass: 1), 1),
