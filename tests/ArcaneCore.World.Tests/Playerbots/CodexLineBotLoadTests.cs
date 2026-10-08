@@ -45,7 +45,6 @@ public sealed class CodexLineBotLoadTests(ITestOutputHelper output) : IDisposabl
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
         try
         {
             if (Directory.Exists(_directory))

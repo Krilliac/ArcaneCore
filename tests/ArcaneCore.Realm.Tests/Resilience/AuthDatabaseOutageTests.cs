@@ -75,7 +75,7 @@ public sealed class AuthDatabaseOutageTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            using (var own = new SqliteConnection($"Data Source={file}")) SqliteConnection.ClearPool(own); // only this test's pool: a global clear checkpoints other tests' WAL files
             for (int attempt = 0; ; attempt++)
             {
                 try

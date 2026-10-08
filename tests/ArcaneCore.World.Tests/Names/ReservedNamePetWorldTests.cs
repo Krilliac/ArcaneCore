@@ -92,7 +92,7 @@ public sealed class ReservedNamePetWorldTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            using (var own = new SqliteConnection($"Data Source={path}")) SqliteConnection.ClearPool(own); // only this test's pool
             if (File.Exists(path)) File.Delete(path);
         }
     }
