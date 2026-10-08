@@ -104,7 +104,16 @@ no packet layout or byte-limit policy changed.
 * **Group/guild Universal conversion order.** vmangos converts party/raid/guild chat to Universal
   before the `MOD_LANGUAGE` override; here `SocialFeature.TryHandle` converts afterwards, so with
   `AllowTwoSideGroup` and a language aura the group message is Universal. Non-default realm setting only.
-* **Emote interrupts.** vmangos' emote opcodes also remove `ANIM_CANCELS` auras; not done.
+* **Text emotes** (wave 2) follow vmangos `HandleTextEmoteOpcode` (`ChatHandler.cpp:711-753`) when the developer's own
+  `EmotesText.dbc` and `Emotes.dbc` are configured (`World:Chat:EmotesTextDbcPath`, `World:Chat:EmotesDbcPath`; both or
+  neither, 19 and 7 fields of build 5875, `Data/Social/EmoteDbcReaders.cs`): an unknown text emote is dropped; a known one
+  plays its emote unless it is sleep, sit, kneel or none, after cancelling `AURA_INTERRUPT_ANIM_CANCELS` channels and auras
+  (0x20, Feign Death); the emote is a state (`UNIT_NPC_EMOTESTATE`) when its Emotes.dbc type is not 0, otherwise a one-shot
+  `SMSG_EMOTE` to the player and its observers (vmangos `Unit::HandleEmote`, `Unit.cpp:1861-1872`). The announcement names a
+  creature target too (`EmoteChatBuilder`), and a creature target is passed to every `ITextEmoteReceiver` feature
+  (`CreatureAI::ReceiveEmote`; EventAI's receive-emote event can hang off it, not implemented here). Without the files a
+  text emote is only announced, as before. The plain `CMSG_EMOTE` path (wave and none) cancels the same
+  `ANIM_CANCELS` channels and auras first (`ChatHandler.cpp:674-675`).
 * **vmangos channel restrictions not reproduced** (all non-retail): level-restricted channels, GM
   public-channel ban, strict-Latin, world-channel cooldown, GM-only channels (Warden etc.),
   `GM.JoinOppositeFactionChannels`, `Channel.SilentlyGMJoin`.

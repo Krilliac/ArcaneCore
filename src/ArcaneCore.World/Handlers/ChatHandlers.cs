@@ -4,11 +4,13 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Social;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Chat;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
 using ArcaneCore.World.Social;
@@ -378,10 +380,13 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     }
 
     /// <summary>
-    /// CMSG_TEXT_EMOTE: u32 text emote, u32 emote number, u64 target (vmangos Misc::TextEmote).
-    /// Sent to everyone within the text-emote range, the emoter included, with the target's
-    /// name (vmangos HandleTextEmoteOpcode / EmoteChatBuilder). The accompanying animation
-    /// needs EmotesText.dbc and arrives with the content platform (M8).
+    /// CMSG_TEXT_EMOTE: u32 text emote, u32 emote number, u64 target (vmangos Misc::TextEmote), handled as vmangos
+    /// HandleTextEmoteOpcode (ChatHandler.cpp:711-753): alive and not animation-locked, may speak; with the client's
+    /// EmotesText.dbc and Emotes.dbc (<see cref="ChatFeature.Emotes"/>) an unknown text emote is dropped and a known one
+    /// plays its emote (except sit, sleep, kneel and none), first cancelling what an animation cancels
+    /// (AURA_INTERRUPT_ANIM_CANCELS channels and auras); then everyone within the text-emote range, the emoter included,
+    /// gets SMSG_TEXT_EMOTE with the target's name (a player's or a creature's, EmoteChatBuilder), and a creature target is
+    /// told (CreatureAI::ReceiveEmote, <see cref="ITextEmoteReceiver"/>). Without the files no animation plays.
     /// </summary>
     private static void HandleTextEmote(WorldSession session, Player player, byte[] payload)
     {
@@ -399,15 +404,80 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        string? targetName = targetGuid.IsEmpty ? null : map.FindPlayer(targetGuid)?.Name;
+        if (session.Services.GetRequiredService<ChatFeature>().Emotes is { } emotes)
+        {
+            if (!emotes.TryGetTextEmote(textEmote, out uint emoteId))
+            {
+                return; // vmangos: "if (!em) return;"
+            }
+
+            if (EmoteCatalog.Animates(emoteId))
+            {
+                CancelAnimationAuras(session, player);
+                PlayEmote(player, emoteId, emotes);
+            }
+        }
+
+        Unit? target = targetGuid.IsEmpty ? null : map.FindObject(targetGuid) as Unit;
+        string? targetName = target switch
+        {
+            Player p => p.Name,
+            Game.Creatures.Creature c => c.Template.Name,
+            _ => null,
+        };
         map.BroadcastInRange(player, session.World.Options.ListenRangeTextEmote, WorldOpcode.SmsgTextEmote,
             ChatPackets.BuildTextEmote(player.Guid, textEmote, emoteNumber, targetName), includeSelf: true);
+
+        if (target is Game.Creatures.Creature creature)
+        {
+            foreach (ITextEmoteReceiver receiver in session.Services.GetServices<IWorldFeature>().OfType<ITextEmoteReceiver>())
+            {
+                receiver.ReceiveEmote(creature, player, textEmote);
+            }
+        }
+    }
+
+    /// <summary>
+    /// vmangos HandleEmoteOpcode / HandleTextEmoteOpcode (ChatHandler.cpp:674-675, 736-737): an animation ends what
+    /// AURA_INTERRUPT_ANIM_CANCELS ends, channels first (Feign Death, for one).
+    /// </summary>
+    private static void CancelAnimationAuras(WorldSession session, Player player)
+    {
+        if (session.Services.GetService<SpellFeature>() is { } spells)
+        {
+            spells.System.InterruptChannelsWithFlags(player, SpellAuraInterruptFlags.AnimCancels);
+            spells.System.RemoveAurasWithInterruptFlags(player, SpellAuraInterruptFlags.AnimCancels);
+        }
+    }
+
+    /// <summary>
+    /// vmangos Unit::HandleEmote (Unit.cpp:1861-1872): an Emotes.dbc type other than 0 is a state (UNIT_NPC_EMOTESTATE),
+    /// 0 a one-shot command (SMSG_EMOTE to the unit and everyone who sees it, HandleEmoteCommand); an emote the file does not
+    /// list does nothing.
+    /// </summary>
+    private static void PlayEmote(Player player, uint emoteId, EmoteCatalog emotes)
+    {
+        if (emotes.Emote(emoteId) is not { } emote)
+        {
+            return;
+        }
+
+        if (emote.EmoteType != 0)
+        {
+            player.SetUInt32(Game.UpdateFields.UnitNpcEmotestate, emoteId);
+            return;
+        }
+
+        byte[] packet = ChatPackets.BuildEmote(emoteId, player.Guid);
+        player.Session.Send(WorldOpcode.SmsgEmote, packet);
+        player.Map?.BroadcastToObservers(player, WorldOpcode.SmsgEmote, packet);
     }
 
     /// <summary>
     /// CMSG_EMOTE: u32 emote. Only the two animations the client sends on its own are accepted —
-    /// EMOTE_ONESHOT_NONE (0) and EMOTE_ONESHOT_WAVE (3) — and played for the player and
-    /// everyone who sees it (vmangos HandleEmoteOpcode → Unit::HandleEmoteCommand).
+    /// EMOTE_ONESHOT_NONE (0) and EMOTE_ONESHOT_WAVE (3) — and, after the AURA_INTERRUPT_ANIM_CANCELS
+    /// channels and auras end, played for the player and everyone who sees it (vmangos HandleEmoteOpcode →
+    /// Unit::HandleEmoteCommand).
     /// </summary>
     private static void HandleEmote(WorldSession session, Player player, byte[] payload)
     {
@@ -423,6 +493,7 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        CancelAnimationAuras(session, player);
         byte[] packet = ChatPackets.BuildEmote(emote, player.Guid);
         session.Send(WorldOpcode.SmsgEmote, packet);
         player.Map?.BroadcastToObservers(player, WorldOpcode.SmsgEmote, packet);

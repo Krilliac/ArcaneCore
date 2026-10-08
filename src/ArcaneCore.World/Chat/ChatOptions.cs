@@ -78,4 +78,14 @@ public sealed class ChatOptions
     /// Trade channel is created as a custom channel. Read at start.
     /// </summary>
     public string ChatChannelsDbcPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Path of the developer's own 1.12.1 EmotesText.dbc. With it (and <see cref="EmotesDbcPath"/>), a text emote plays its
+    /// animation and an unknown one is dropped, as vmangos HandleTextEmoteOpcode does with sEmotesTextStore; without it a
+    /// text emote is only announced. Both paths or neither; a file that cannot be read stops the start. Read at start.
+    /// </summary>
+    public string EmotesTextDbcPath { get; set; } = string.Empty;
+
+    /// <summary>Path of the developer's own 1.12.1 Emotes.dbc (whether an emote is a one-shot animation or a state, vmangos Unit::HandleEmote). See <see cref="EmotesTextDbcPath"/>.</summary>
+    public string EmotesDbcPath { get; set; } = string.Empty;
 }
