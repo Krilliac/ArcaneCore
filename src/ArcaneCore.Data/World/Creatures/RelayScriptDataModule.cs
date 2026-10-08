@@ -123,8 +123,12 @@ public sealed class RelayScriptDataModule : IDataModule
 /// <summary>
 /// Empty world schema steps 38 and 39: the wave-2 plan reserves them for other lanes and gives the creature-ai lane 40, but
 /// <see cref="DataModules.Compose"/> requires contiguous versions, so this branch holds the gap open with steps that change nothing.
-/// INTEGRATOR: delete each placeholder whose number a merged lane really uses (Compose reports "claimed twice" until you do); keep the
-/// ones nobody claimed. An empty step only advances the version table; never ship a build with these placeholders to a live realm.
+/// INTEGRATOR: the w2-ops-social branch adds <c>IReservedSchemaGap</c>/<c>ReservedSchemaGap</c> (Schema/ReservedSchemaGaps.cs), which
+/// Compose drops when a real module claims the version; once it is merged, fold these classes (and every other lane's world gap
+/// classes) into that one scheme. Delete each placeholder whose number a merged lane really uses (Compose reports "claimed twice" until
+/// you do). For a number nobody claims, either renumber the real modules down before any live database is upgraded, or keep the empty
+/// step for good and never give its number to a later module: a database upgraded through an empty step records the version as
+/// applied, so a real step that later takes the number would never run there and its tables would never be created.
 /// </summary>
 public abstract class CreatureAiLaneSchemaGap(int version) : IDataModule
 {
