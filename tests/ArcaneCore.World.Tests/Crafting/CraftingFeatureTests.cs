@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Crafting;
 using ArcaneCore.World.Crafting;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,6 +33,8 @@ public sealed class CraftingFeatureTests
         Assert.True(tradeFilter);
         Assert.Equal(1, await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.Observers.OfType<FirstAidObserver>().Count()));
         Assert.True(await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.HasEffectHandler(ArcaneCore.Game.Spells.SpellEffectName.CreateItem)));
+        Assert.IsType<ProfessionSpecializationGossip>(await host.OnWorldAsync(() =>
+            host.WorldServices.GetRequiredService<QuestNpcFeature>().Services.GossipScript));
     }
 
     [Fact]
@@ -43,6 +46,8 @@ public sealed class CraftingFeatureTests
 
         Assert.False(installed);
         Assert.False(await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.HasEffectHandler(ArcaneCore.Game.Spells.SpellEffectName.CreateItem)));
+        Assert.IsNotType<ProfessionSpecializationGossip>(await host.OnWorldAsync(() =>
+            host.WorldServices.GetRequiredService<QuestNpcFeature>().Services.GossipScript));
     }
 
     [Theory]
