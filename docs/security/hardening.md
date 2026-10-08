@@ -48,9 +48,12 @@ Not delivered here: session-key age (see below).
 `Kick()` only cancelled the read side, so `RunAsync` awaited a writer parked in `WriteAsync`
 against a client with a zero TCP window; the socket, DI scope and up to 8 MiB of frames
 leaked. Writes now take an abort token; after `WorldSessionOptions.WriterDrainGrace`
-(`World:WriterDrainGrace`) the write is cancelled and the stream disposed. The default is
-`00:00:00`, which waits forever as retail does; an internet-facing operator should set a bound,
-for example `00:00:05`. `StalledWriterTests`.
+(`World:WriterDrainGrace`) the write is cancelled and the stream disposed. The default
+`00:00:00` stands for the built-in 5 s bound (`WorldSessionOptions.DefaultWriterDrainBound`), so
+the wait is never unbounded. It used to wait forever when the grace was zero (Codex security
+finding S2), which was not retail either: vmangos `CloseSocket` shuts the socket down and closes
+it at once (`AsyncSocket_windows.cpp:318-329`). A shorter positive value tears a stalled client
+down sooner. `StalledWriterTests`, `WriterTeardownBoundTests`.
 
 ### Logon limits and input validation (F2 partial, F12)
 
@@ -122,7 +125,7 @@ The full list of every key and its default is the generated
 | `World:MaxConnections` / `MaxConnectionsPerIp` | 0 / 0 (unlimited) | opt-in hardening |
 | `Net:Protection:MaxConnectionsPerIp` | 16 (on by default; 0 disables) | hardening, no vmangos cap; shared by both listeners, the lower of it and the daemon cap wins (`docs/ops/netguard.md`) |
 | `Auth:AutocreateAccounts` | false (also shipped) | retail has no autocreate |
-| `World:WriterDrainGrace` | 00:00:00 (wait forever) | opt-in hardening, for example `00:00:05` |
+| `World:WriterDrainGrace` | 00:00:00 (the built-in 5 s bound) | hardening; vmangos closes at once, a positive value sets another bound |
 | `World:PreAuthTimeout` | 00:00:10 | vmangos retail (`Network.TimeoutSecsIfNoAuth`) |
 | `World:MaxQueuedWorldPackets` / `MaxQueuedWorldBytes` | 8192 / 8388608 (on by default) | hardening, no vmangos bound |
 | `World:StrictMovementFiniteness` | false | opt-in hardening |
