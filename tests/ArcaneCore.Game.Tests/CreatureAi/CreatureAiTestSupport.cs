@@ -259,6 +259,16 @@ internal sealed class FakeCaster : ICreatureSpellCaster
 
     public List<(Unit Unit, uint Spell)> RemovedAuras { get; } = [];
 
+    /// <summary>Auras added without a cast (vmangos Unit::AddAura), with the ADD_AURA_PERMANENT flag.</summary>
+    public List<(Unit Unit, uint Spell, bool Permanent)> AddedAuras { get; } = [];
+
+    public CreatureCastResult AddAura(Unit unit, uint spellId, bool permanent)
+    {
+        AddedAuras.Add((unit, spellId, permanent));
+        Auras.Add((unit, spellId));
+        return CreatureCastResult.Ok;
+    }
+
     public void RemoveAuras(Unit unit, uint spellId)
     {
         RemovedAuras.Add((unit, spellId));

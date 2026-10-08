@@ -85,6 +85,19 @@ internal static class AvScript
         return angle >= 0 ? angle : angle + (2 * MathF.PI);
     }
 
+    /// <summary>
+    /// The member's place beside its leader when it joins the leader's group at a rally (battleground_alterac.cpp:2355, 2379, 3273): the angle
+    /// from the leader to the member less the MEMBER's facing (<c>m_creature-&gt;GetAngle(it) - it-&gt;GetOrientation()</c>) and the 3D distance
+    /// between their edges (<c>m_creature-&gt;GetDistance(it)</c>, WorldObject::GetDistance with SizeFactor::BoundingRadius, Object.cpp:1658-1666).
+    /// vmangos passes the two to Creature::JoinCreatureGroup(leader, dist, angle) in the wrong order (the angle as the follow distance, the
+    /// distance as the follow angle); the port keeps them in their meaning, see docs/areas/battlegrounds.md.
+    /// </summary>
+    public static (float Angle, float Distance) FormationSlot(Creature leader, Creature member)
+    {
+        float distance = MathF.Sqrt(DistanceSq(leader, member)) - leader.BoundingRadius - member.BoundingRadius;
+        return (Angle(leader, member) - member.Orientation, distance > 0 ? distance : 0);
+    }
+
     private static float DistanceSq(WorldObject a, WorldObject b)
     {
         float dx = a.X - b.X;

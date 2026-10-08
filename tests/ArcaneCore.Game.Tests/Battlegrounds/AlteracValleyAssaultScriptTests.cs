@@ -5,7 +5,9 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.CreatureAi;
+using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
@@ -172,6 +174,26 @@ public sealed class AlteracValleyAssaultScriptTests
         Assert.All(riders, r => Assert.DoesNotContain(r, rig.Creatures.Creatures)); // ten minutes after they saw him dead
     }
 
+    [Fact]
+    public void AFormationSlot_IsTheAngleToTheMemberLessTheMembersFacing_AndTheirDistanceBetweenTheEdges()
+    {
+        // vmangos battleground_alterac.cpp:2355, 2379, 3273: m_creature->GetAngle(it) - it->GetOrientation() and m_creature->GetDistance(it)
+        // (3D, less both bounding radii, Object.cpp:1658-1666).
+        using AvScriptRig rig = Create([AvNpc(NpcRamRiderCommander), AvNpc(NpcRamRider)],
+            [Spawn(1, NpcRamRiderCommander, 600, 0, Z), Spawn(2, NpcRamRider, 603, 4, Z)], 650, 0);
+        Creature leader = rig.Single(NpcRamRiderCommander);
+        Creature member = rig.Single(NpcRamRider);
+        leader.Relocate(600, 0, Z, 0.5f, 0);
+        member.Relocate(603, 4, Z + 12, 2.0f, 0);
+        leader.SetFloat(UpdateFields.UnitFieldBoundingradius, 1.0f);
+        member.SetFloat(UpdateFields.UnitFieldBoundingradius, 0.5f);
+
+        (float angle, float distance) = AvScript.FormationSlot(leader, member);
+
+        Assert.Equal(MathF.Atan2(4, 3) - 2.0f, angle, 4);
+        Assert.Equal(13f - 1.5f, distance, 4); // sqrt(3^2 + 4^2 + 12^2) = 13
+    }
+
     // ------------------------------------------------------------------ air assault
 
     [Fact]
@@ -195,12 +217,49 @@ public sealed class AlteracValleyAssaultScriptTests
         Assert.Empty(rig.All(NpcWarRiderGuse));
 
         rig.RunUntil(() => rig.All(NpcWarRiderGuse).Count == 1, "the war rider");
-        Assert.Contains(rig.Caster.Casts, c => c.Spell == AvEventAI.SpellInvisible && c.Triggered);
+        Assert.Contains(rig.Caster.AddedAuras, a => ReferenceEquals(a.Unit, guse) && a.Spell == AvEventAI.SpellInvisible && a.Permanent);
+        Assert.DoesNotContain(rig.Caster.Casts, c => c.Spell == AvEventAI.SpellInvisible); // an aura, not a 20 s cast
         Creature rider = rig.Single(NpcWarRiderGuse);
         Assert.IsType<AvWarRiderAI>(rider.AI);
         Assert.True(((AvEventAI)guse.AI!).WarRiderSummoned);
         rig.Run(20_000);
         Assert.Single(rig.All(NpcWarRiderGuse)); // only one
+    }
+
+    /// <summary>
+    /// Vanish (24699) as the 1.12.1 client and classic-db carry it: a dummy and a 10000-point invisibility, DurationIndex 18 (20 s), removed
+    /// by an attack (aura interrupt 0x1000).
+    /// </summary>
+    internal static SpellInfo AvInvisibleSpell() => SpellTestKit.Spell(AvEventAI.SpellInvisible,
+        SpellTestKit.Effect(SpellEffectName.Dummy, 0),
+        SpellTestKit.Effect(SpellEffectName.ApplyAura, 10000, aura: AuraType.ModInvisibility)) with
+    {
+        Name = "Vanish",
+        Duration = new SpellDuration(20000, 0, 20000),
+        AuraInterruptFlags = (SpellAuraInterruptFlags)0x1000,
+        StartRecoveryCategory = 0,
+        StartRecoveryTime = 0,
+    };
+
+    [Fact]
+    public void GlobalAirAssault_TheWingCommander_StaysInvisibleForGood_ThoughVanishLastsTwentySeconds()
+    {
+        // vmangos battleground_alterac.cpp:1765 AddAura(SPELL_AV_INVISIBLE, ADD_AURA_PERMANENT): a permanent holder, not a 20 s cast.
+        using var spells = new SpellTestKit(AvInvisibleSpell());
+        using AvScriptRig rig = Create(
+            [AvNpc(NpcWingCommanderGuse, b => b.NpcFlags = (uint)(NpcFlags.Gossip | NpcFlags.QuestGiver)), AvNpc(NpcWarRiderGuse)],
+            [Spawn(1, NpcWingCommanderGuse, -1338.6f, -328.16f, Z)], -1335, -325, team: Team.Horde, spells: spells);
+        Creature guse = rig.Single(NpcWingCommanderGuse);
+
+        rig.Match.SetPlayerGoStatus(Team.Horde, AssaultAirGlobalSoldier, true);
+        rig.RunUntil(() => rig.All(NpcWarRiderGuse).Count == 1, "the war rider");
+        SpellAuraHolder invisible = Assert.Single(spells.System.GetAuras(guse), h => h.Spell.Id == AvEventAI.SpellInvisible);
+        Assert.True(invisible.IsPermanent);
+
+        rig.Run(25_000); // past the 20 s of Vanish
+        Assert.True(spells.System.HasAura(guse, AvEventAI.SpellInvisible), "the wing commander showed again after 20 s");
+        Assert.True(guse.IsAlive);
+        Assert.Equal(AvEventAI.WarRiderDisplayId, guse.DisplayId);
     }
 
     [Fact]

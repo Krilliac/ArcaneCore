@@ -125,6 +125,12 @@ public interface ICreatureSpellCaster
     {
     }
 
+    /// <summary>
+    /// Put the auras of <paramref name="spellId"/> on <paramref name="unit"/> without a cast (vmangos Unit::AddAura); with
+    /// <paramref name="permanent"/> the holder never runs out (ADD_AURA_PERMANENT). <see cref="CreatureCastResult.NoSpellSystem"/> by default.
+    /// </summary>
+    CreatureCastResult AddAura(Unit unit, uint spellId, bool permanent) => CreatureCastResult.NoSpellSystem;
+
     /// <summary>Stop the cast or channel in progress (evade, death).</summary>
     void Interrupt(Creature caster);
 

@@ -271,7 +271,9 @@ public sealed class AvEventAI : EscortAI
 
         if (_disappearTimer < diffMs)
         {
-            DoCast(Me, SpellInvisible, triggered: true); // AddAura(SPELL_AV_INVISIBLE, ADD_AURA_PERMANENT)
+            // vmangos AddAura(SPELL_AV_INVISIBLE, ADD_AURA_PERMANENT): Vanish lasts 20 s (DurationIndex 18), so a cast would show him again
+            // then; the permanent holder keeps him invisible until he respawns.
+            DoAddAura(SpellInvisible, permanent: true);
             _warRiderSummoned = true;
             uint rider = Entry switch
             {
@@ -805,8 +807,8 @@ public sealed class AvEventAI : EscortAI
             {
                 AvScript.Say(rider, warcry);
                 AvScript.SetWalk(rider, false);
-                float distance = MathF.Sqrt(((Me.X - rider.X) * (Me.X - rider.X)) + ((Me.Y - rider.Y) * (Me.Y - rider.Y)));
-                _scripts.JoinGroup(rider, Me, AvScript.Angle(Me, rider) - Me.Orientation, distance);
+                (float angle, float distance) = AvScript.FormationSlot(Me, rider);
+                _scripts.JoinGroup(rider, Me, angle, distance);
             }
         }
 

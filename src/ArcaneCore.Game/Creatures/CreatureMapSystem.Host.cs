@@ -50,6 +50,13 @@ public sealed partial class CreatureMapSystem
     /// <summary>vmangos Unit::RemoveAurasDueToSpell through the creature spell seam (nothing without a spell system).</summary>
     public void RemoveAuras(Unit unit, uint spellId) => _ai.Spells?.RemoveAuras(unit, spellId);
 
+    /// <summary>vmangos Unit::AddAura through the creature spell seam: the spell's auras without a cast, permanent on request.</summary>
+    public CreatureCastResult AddAura(Unit unit, uint spellId, bool permanent)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        return _ai.Spells is { } spells ? spells.AddAura(unit, spellId, permanent) : CreatureCastResult.NoSpellSystem;
+    }
+
     /// <summary>A uniform random integer in [min, max] (EventAI chances, timers and choices).</summary>
     public int RandomInt(int min, int max) => min >= max ? min : (int)_random.NextInt64(min, (long)max + 1);
 

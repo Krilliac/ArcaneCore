@@ -162,10 +162,25 @@ inert default.
     in-progress branch, where every start flag is set, so they never run there; here they run at the warning itself
     (`StartingEventThird`), 30 s before the gates open. The block's two guard despawns are left out: in this event layout (15, 0) are the
     first aid station's starting defenders and (28, 0) the Alliance marshals of a tower the Horde holds at the start.
+  - The start-time block is a deviation the lead accepts or reverts: it runs a branch vmangos never executes. On the live data it changes
+    nothing visible (events 80-97 start with no active state, and classic-db has no state-2 rows for them).
+  - A transformed wing commander takes Vanish (24699, 20 s in Spell.dbc and classic-db) as a permanent aura without a cast, as vmangos
+    `AddAura(SPELL_AV_INVISIBLE, ADD_AURA_PERMANENT)` does (`SpellSystem.AddAura`, vmangos Unit::AddAura; `CreatureAI.DoAddAura`): he stays
+    invisible until he respawns.
+  - **The entry scripts replace classic-db EventAI.** Fifteen of these entries carry `AIName` 'EventAI' and `creature_ai_scripts` rows in
+    classic-db z2815; in an Alterac Valley match their entry script wins, as vmangos' ScriptName wins over AIName, so those rows do not run
+    there. AV_NpcEventAI only melees (it calls no UpdateSpellsList), so the wing commanders lose their combat spells: Sunder Armor and Strike
+    (Guse 13179, Jeztor 13180, Mulverick 13181), Strike and Rend (Ichman 13437, Slidore 13438, Vipore 13439), and Ichman his Greater
+    Invisibility on spawn; the Stormpike Ram Rider Commander (13577) loses Mortal Strike and Cleave. Thurloga (13236), Renferal (13442),
+    Lokholar (13256), Ivus (13419), the Frostwolf Shaman (13284), the Druid of the Grove (13443) and the war riders (14943, 14946) cast their
+    vmangos script spells instead of the classic-db sets (for example the war riders no longer Throw Liquid Fire, 23969, and Renferal no
+    longer casts Thorns or Moonfire 22206).
   - **Deviations.** The creature groups the scripts form (JoinCreatureGroup with OPTION_FORMATION_MOVE, AGGRO_TOGETHER and
-    EVADE_TOGETHER) are a follow of the leader at the member's distance and at its angle from the leader's facing (vmangos measures the angle
-    from the member's facing), a group that enters a fight together, and a member that takes its place again after a fight. The
-    invisibility a transformed wing commander takes (24699) is cast, so it lasts its spell's duration (vmangos adds it permanently). The
+    EVADE_TOGETHER) are a follow of the leader at the member's slot, a group that enters a fight together, and a member that takes its place
+    again after a fight. The slot is vmangos' (`AvScript.FormationSlot`): the angle from the leader to the member less the member's facing
+    and the 3D distance between their edges. vmangos hands the two to `JoinCreatureGroup(leader, dist, angle, ...)` in the wrong order
+    (battleground_alterac.cpp:2355, 2379, 3273 pass the angle as the follow distance and the distance as the follow angle, so its riders
+    bunch within 2 pi yards of the commander at angles set by their distance in yards); the port keeps each value in its meaning. The
     world boss summoner is not given JustRespawned at the moment it disappears (vmangos calls it on the dead summoner); its respawn runs it.
     A beacon's minute starts at the first update after it appeared (vmangos: its construction). The shaman's Lightning Shield timer is
     guarded where vmangos lets an unsigned timer wrap (it never recasts there once the shield was up when the timer ran out). Murgot and
@@ -212,8 +227,9 @@ the loss of the flag aura) run two managed bots against the real handlers on the
 manual clock with the synthetic content of `WarsongGulchTestContent`; `ArathiBasinWorldScenarioTests` plays an Arathi Basin node.
 `AlteracValleyAssaultTests` covers the start-time events, `AlteracValleyShredderScriptTests` the shredder spell script, and
 `AlteracValleyAssaultScriptTests` (`AvScriptRig`: a real creature and object system with simulated time) the assault scripts: the ground
-assault's summons, the troops chief's attack and rally, the cavalry ride and the riders going on alone, the wing commander's war rider, the
-war rider over the enemy base, the beacons, the Ice Lord and Thurloga, the summoners' adds and the collectors' menus.
+assault's summons, the troops chief's attack and rally, the formation slot, the cavalry ride and the riders going on alone, the wing
+commander's war rider and his permanent invisibility (with the real spell system, past Vanish's 20 s), the war rider over the enemy base,
+the beacons, the Ice Lord and Thurloga, the summoners' adds and the collectors' menus. `Spells/AddAuraTests` covers `SpellSystem.AddAura`.
 `AlteracValleyAssaultScenarioTests` plays the shredder ("av-shredder") and the ground assault ("av-assault": the quartermaster's menu, the
 orders, the marshal and his commandos, the speech and the rally) over the wire with two managed bots.
 `AlteracValleyUpgradeTests` covers the turn-ins, upgrades, challenges, respawn modes, landmines, shredders and yells, and

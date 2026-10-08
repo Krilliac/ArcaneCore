@@ -186,6 +186,13 @@ public abstract class CreatureAI
     protected CreatureCastResult DoCast(Unit? target, uint spellId, bool triggered = false)
         => System?.CastSpell(Me, spellId, target, triggered) ?? CreatureCastResult.NoSpellSystem;
 
+    /// <summary>
+    /// vmangos <c>m_creature-&gt;AddAura(spellId, permanent ? ADD_AURA_PERMANENT : 0)</c>: the spell's auras on this creature without a cast; a
+    /// permanent holder never runs out, whatever the spell's duration.
+    /// </summary>
+    protected CreatureCastResult DoAddAura(uint spellId, bool permanent = false)
+        => System?.AddAura(Me, spellId, permanent) ?? CreatureCastResult.NoSpellSystem;
+
     /// <summary>Make nearby same-faction creatures join the fight at once (EventAI CALL_FOR_HELP).</summary>
     protected int DoCallForHelp(float radius) => System?.CallForHelp(Me, radius) ?? 0;
 }

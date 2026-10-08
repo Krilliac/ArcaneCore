@@ -181,8 +181,8 @@ public sealed class AvTroopsChiefAI : EscortAI
                         {
                             AvScript.Say(soldier, warcry);
                             AvScript.SetWalk(soldier, false);
-                            float distance = MathF.Sqrt(((Me.X - soldier.X) * (Me.X - soldier.X)) + ((Me.Y - soldier.Y) * (Me.Y - soldier.Y)));
-                            _scripts.JoinGroup(soldier, Me, AvScript.Angle(Me, soldier) - Me.Orientation, distance);
+                            (float angle, float distance) = AvScript.FormationSlot(Me, soldier);
+                            _scripts.JoinGroup(soldier, Me, angle, distance);
                         }
                     }
                 }

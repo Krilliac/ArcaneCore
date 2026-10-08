@@ -153,9 +153,9 @@ public sealed class AlteracValleyScripts
     // ------------------------------------------------------------------ creature groups
 
     /// <summary>
-    /// vmangos Creature::JoinCreatureGroup(leader, angle, distance, OPTION_FORMATION_MOVE | OPTION_AGGRO_TOGETHER | OPTION_EVADE_TOGETHER):
+    /// vmangos Creature::JoinCreatureGroup(leader, dist, angle, OPTION_FORMATION_MOVE | OPTION_AGGRO_TOGETHER | OPTION_EVADE_TOGETHER):
     /// the member keeps its place beside the leader (it follows at that distance and angle from the leader's facing), and fights and stops
-    /// fighting with the group.
+    /// fighting with the group. The rallies take the slot from <see cref="AvScript.FormationSlot"/>.
     /// </summary>
     internal void JoinGroup(Creature member, Creature leader, float angle, float distance)
     {

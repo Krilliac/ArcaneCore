@@ -6,6 +6,7 @@ using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Tests.CreatureAi;
+using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
@@ -24,8 +25,9 @@ internal sealed class AvScriptRig : IDisposable
     public const float Z = 83.5f;
 
     private AvScriptRig(WorldRuntime world, Map map, CreatureMapSystem creatures, GameObjectMapSystem objects, AlteracValley match,
-        RecordingHost host, AlteracValleyScripts scripts, FakeCaster caster, Player player, FakeSession session)
+        RecordingHost host, AlteracValleyScripts scripts, FakeCaster caster, Player player, FakeSession session, SpellTestKit? spells)
     {
+        Spells = spells;
         World = world;
         Map = map;
         Creatures = creatures;
@@ -57,6 +59,12 @@ internal sealed class AvScriptRig : IDisposable
     public Player Player { get; }
 
     public FakeSession Session { get; }
+
+    /// <summary>
+    /// The real spell system the creatures cast through, when the rig was created with one (<see cref="Caster"/> then records nothing); it
+    /// advances with every world tick.
+    /// </summary>
+    public SpellTestKit? Spells { get; }
 
     /// <summary>The broadcast texts the assault scripts speak (only their ids matter to the tests; the chat type is a yell for all).</summary>
     public static readonly int[] Texts =
@@ -90,14 +98,20 @@ internal sealed class AvScriptRig : IDisposable
 
     public static AvScriptRig Create(IEnumerable<CreatureTemplate> templates, IEnumerable<CreatureSpawn> spawns, float playerX, float playerY,
         IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? paths = null, IEnumerable<GameObjectTemplate>? objectTemplates = null,
-        IEnumerable<GameObjectSpawn>? objectSpawns = null, Team team = Team.Alliance, ICreatureHostility? hostility = null)
+        IEnumerable<GameObjectSpawn>? objectSpawns = null, Team team = Team.Alliance, ICreatureHostility? hostility = null,
+        SpellTestKit? spells = null)
     {
         var ai = new CreatureAiContent([], [], new BroadcastTextCatalog(Texts.Select(id =>
             new BroadcastText((uint)id, $"text {id}", string.Empty, 1, 0, 0, [0, 0, 0], [0, 0, 0]))));
         CreatureContent content = new(templates, spawns, [], [], [], ai, entryWaypoints: paths);
         var caster = new FakeCaster();
         (WorldRuntime world, Map map, CreatureMapSystem creatures) = CreateAiSystem(content,
-            new CreatureAiServices { Spells = caster, Hostility = hostility ?? new FactionHostility() });
+            new CreatureAiServices
+            {
+                Spells = spells is null ? caster : new SpellSystemCreatureCaster(spells.System),
+                Hostility = hostility ?? new FactionHostility(),
+            },
+            world: spells?.World);
         var objects = new GameObjectMapSystem(map, new GameObjectContent(objectTemplates ?? [], objectSpawns ?? [], [], [], []));
         map.AddUpdater(objects);
 
@@ -115,20 +129,26 @@ internal sealed class AvScriptRig : IDisposable
         scripts.Attach(objects);
         world.RunTick(0);
         session.Clear();
-        return new AvScriptRig(world, map, creatures, objects, match, host, scripts, caster, player, session);
+        return new AvScriptRig(world, map, creatures, objects, match, host, scripts, caster, player, session, spells);
     }
 
     public Creature Single(uint entry) => Assert.Single(Creatures.Creatures, c => c.Entry == entry);
 
     public IReadOnlyList<Creature> All(uint entry) => [.. Creatures.Creatures.Where(c => c.Entry == entry)];
 
-    public void Run(uint ms) => CreatureAiTestSupport.Run(World, ms);
+    public void Run(uint ms)
+    {
+        for (uint done = 0; done < ms; done += 100)
+        {
+            Tick(Math.Min(100, ms - done));
+        }
+    }
 
     public void RunUntil(Func<bool> condition, string what, uint limitMs = 120_000, Func<string>? detail = null)
     {
         for (uint done = 0; done < limitMs && !condition(); done += 100)
         {
-            World.RunTick(100);
+            Tick(100);
         }
 
         Assert.True(condition(), $"{what} did not happen within {limitMs} ms of simulated time {detail?.Invoke()}");
@@ -139,6 +159,13 @@ internal sealed class AvScriptRig : IDisposable
         => [.. Packets(Session, WorldOpcode.SmsgMessagechat).Select(ParseMonsterChat).Select(c => int.Parse(c.Message["text ".Length..]))];
 
     public void Dispose() => World.Dispose();
+
+    /// <summary>One world tick, and the same time for the real spell system when there is one.</summary>
+    private void Tick(uint ms)
+    {
+        World.RunTick(ms);
+        Spells?.Advance(ms, ms);
+    }
 
     /// <summary>Hostile across the two player factions only (Alliance 1, Horde 2 and the creature factions below).</summary>
     private sealed class FactionHostility : ICreatureHostility

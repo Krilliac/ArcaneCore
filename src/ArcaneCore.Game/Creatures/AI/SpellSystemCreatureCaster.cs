@@ -58,6 +58,18 @@ public sealed class SpellSystemCreatureCaster : ICreatureSpellCaster, ICreatureA
         Spells.RemoveAuras(unit, spellId);
     }
 
+    public CreatureCastResult AddAura(Unit unit, uint spellId, bool permanent)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        SpellSystem spells = Spells;
+        if (spells.Store.Get(spellId) is null)
+        {
+            return CreatureCastResult.UnknownSpell;
+        }
+
+        return spells.AddAura(unit, spellId, permanent) ? CreatureCastResult.Ok : CreatureCastResult.Failed;
+    }
+
     public CreatureCastResult Cast(Creature caster, uint spellId, Unit? target, bool triggered)
     {
         ArgumentNullException.ThrowIfNull(caster);
