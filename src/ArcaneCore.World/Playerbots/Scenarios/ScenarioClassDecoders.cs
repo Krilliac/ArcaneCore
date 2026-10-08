@@ -2,8 +2,12 @@ using ArcaneCore.Protocol;
 
 namespace ArcaneCore.World.Playerbots.Scenarios;
 
-/// <summary>SMSG_SPELLNONMELEEDAMAGELOG as a scenario sees it: the target, the caster, the spell, the damage and the school.</summary>
-public sealed record SpellDamageView(ulong Target, ulong Caster, uint SpellId, uint Damage, byte School, uint Absorbed, uint Resisted);
+/// <summary>SMSG_SPELLNONMELEEDAMAGELOG as a scenario sees it: the target, the caster, the spell, the damage, the school and the hit info.</summary>
+public sealed record SpellDamageView(ulong Target, ulong Caster, uint SpellId, uint Damage, byte School, uint Absorbed, uint Resisted, uint HitInfo = 0)
+{
+    /// <summary>SPELL_HIT_TYPE_CRIT (0x2) in the hit info: the damage is a critical hit's.</summary>
+    public bool Critical => (HitInfo & 0x2) != 0;
+}
 
 /// <summary>SMSG_PERIODICAURALOG (one entry) as a scenario sees it: the target, the caster, the spell, the aura type and the amount.</summary>
 public sealed record PeriodicAuraView(ulong Target, ulong Caster, uint SpellId, uint AuraType, uint Amount);
@@ -31,7 +35,11 @@ public static class ScenarioClassDecoders
             byte school = r.ReadByte();
             uint absorbed = r.ReadUInt32();
             uint resisted = r.ReadUInt32();
-            return new SpellDamageView(target, caster, spell, damage, school, absorbed, resisted);
+            _ = r.ReadByte(); // periodic
+            _ = r.ReadByte(); // unused
+            _ = r.ReadUInt32(); // blocked
+            uint hitInfo = r.ReadUInt32();
+            return new SpellDamageView(target, caster, spell, damage, school, absorbed, resisted, hitInfo);
         }
         catch (Exception ex) when (ex is not FormatException)
         {
