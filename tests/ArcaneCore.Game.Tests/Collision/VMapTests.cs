@@ -418,6 +418,31 @@ public sealed class VMapTests
     }
 
     [Fact]
+    public void ModelNameWithTrailingNul_LoadsTheFileNamedWithoutVmo_AsVmangosDoes()
+    {
+        // VMapExtractor stores some doodad names with their terminating NUL counted (u32 12 then
+        // "Elfbed01.m2\0"). vmangos builds the path as a C string, so name + ".vmo" stops at the NUL:
+        // the assembler writes "Elfbed01.m2" and VMapManager2 reads "Elfbed01.m2" (no ".vmo").
+        // 1298 of the 1.12.1 client's models are stored like that.
+        using var fixture = new VMapFixture();
+        ModelSpawn placed = fixture.Place("plain", Wall(), WallOrigin);
+        fixture.Write(MapId);
+        File.Delete(fixture.PathOf(VMapFormat.ModelFileName("plain")));
+        File.WriteAllBytes(fixture.PathOf("Elfbed01.m2"), Wall().ToBytes());
+        fixture.WriteTile(MapId, 31, 31, [(placed with { Name = "Elfbed01.m2\0" }, 0u)]);
+        var vmaps = new VMapManager(fixture.Directory);
+
+        Assert.True(vmaps.LoadTile(MapId, 31, 31));
+        Assert.Equal(1, vmaps.GetTree(MapId)!.LoadedInstanceCount);
+        Assert.False(vmaps.IsInLineOfSight(MapId, new Vector3(95, 100, 2), new Vector3(105, 100, 2)));
+        Assert.Equal("Elfbed01.m2", VMapFormat.ModelFileName("Elfbed01.m2\0"));
+        Assert.Equal("Elfbed01.m2", VMapFormat.ModelFileName("Elfbed01.m2\0ignored"));
+        Assert.True(VMapFormat.IsSafeModelName("Elfbed01.m2\0"));
+        Assert.False(VMapFormat.IsSafeModelName("\0"));
+        Assert.False(VMapFormat.IsSafeModelName("../x\0"));
+    }
+
+    [Fact]
     public void ModelNames_MustBePlainFileNames()
     {
         Assert.True(VMapFormat.IsSafeModelName("Stormwind_000.wmo"));
