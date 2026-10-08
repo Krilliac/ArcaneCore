@@ -86,6 +86,34 @@ public sealed class TalentModCoverageTests
         Assert.Equal(0, report.CountOf(TalentGapKind.MissingAura, (int)AuraType.AddPctModifier));
     }
 
+    private const uint SpeedMod = 948101, PowerMod = 948102, ChargesMod = 948103, CostMod = 948104;
+
+    private static readonly TalentCatalog UnreadCatalog = new(
+        [new TalentTabRecord(1, 1, 0)],
+        [
+            new TalentRecord(1, 1, 0, 0, [SpeedMod, PowerMod, 0, 0, 0], 0, 0, 0),
+            new TalentRecord(2, 1, 0, 1, [ChargesMod, CostMod, 0, 0, 0], 0, 0, 0),
+        ]);
+
+    [Fact]
+    public void Describe_NamesTheOperationsNothingReads()
+    {
+        using SpellTestKit kit = new(
+            Pct(SpeedMod, SpellModOp.Speed, 10),
+            Flat(PowerMod, SpellModOp.AttackPower, 5),
+            Flat(ChargesMod, SpellModOp.Charges, 1),
+            Flat(CostMod, SpellModOp.Cost, -3));
+
+        string text = TalentModCoverage.Build(UnreadCatalog, kit.System).Describe();
+
+        // spell-mods.md: SPEED and ATTACK_POWER on an aura's own amount and CHARGES at holder creation are not wired; COST is.
+        Assert.Contains("3 with an operation nothing reads", text, StringComparison.Ordinal);
+        Assert.Contains("op 3 (AttackPower): 1, nothing reads it", text, StringComparison.Ordinal);
+        Assert.Contains("op 4 (Charges): 1, nothing reads it", text, StringComparison.Ordinal);
+        Assert.Contains("op 12 (Speed): 1, nothing reads it", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("op 14 (Cost): 1, nothing reads it", text, StringComparison.Ordinal);
+    }
+
     private sealed class Overlay : IClassMaskSource
     {
         public ulong? TryGetMask(uint spellId, int effectIndex) => spellId == NoMask ? 0x10UL : null;
