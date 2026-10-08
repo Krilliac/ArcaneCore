@@ -48,7 +48,7 @@ never a literal.
 | `World:Guild:AllowClientGuildCreate` | true | GuildHandler.cpp:47-72 honours CMSG_GUILD_CREATE (default is vmangos; false is an operator opt-out) | honour `CMSG_GUILD_CREATE` |
 | `World:Guild:MinPetitionSigns` | 9 | mangosd.conf.dist.in:1341, World.cpp:666 (0..9) | signatures that complete a charter (`==`, GuildMgr.h:124) |
 | `World:Guild:MinCharterNameLength` | 2 | :1299, World.cpp:625 (2..24) | |
-| `World:Guild:StrictCharterNames` | 0 | :1296 | 0 = one script for the whole name; bit 1 = basic Latin (bit 2, realm-zone language, is not supported) |
+| `World:Guild:StrictCharterNames` | 0 | :1296 | 0 = one script for the whole name; bit 1 = basic Latin; bit 2 = the scripts of `World:Guild:RealmZone` (default 1, any language) |
 | `World:Guild:DeleteRankMovesMembers` | false | Guild.cpp:696-723 | true moves members of a deleted rank (deviation) |
 | `World:Guild:KickOnOversizedText` | true | GuildHandler.cpp:58-62,470-474,518-522,554-558,580-584,600-604 | disconnect on over-long name/MOTD/info/note/rank text |
 | `World:Chat:FloodMessageCount` | 10 | :1666 | 0 disables flood protection |

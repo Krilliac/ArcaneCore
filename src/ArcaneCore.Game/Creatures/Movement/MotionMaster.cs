@@ -179,6 +179,12 @@ public sealed class MotionMaster
     public void MovePoint(uint id, float x, float y, float z, bool run)
         => Push(new PointMovementGenerator(id, new Vector3(x, y, z), run));
 
+    /// <summary>
+    /// cmangos MoveRandomAroundPoint (MotionGenerators/MotionMaster.cpp:279-293): a wander generator mutated on top of the stack; the default
+    /// stays beneath it and resumes when the stack is cleared (evade, home).
+    /// </summary>
+    internal void MoveRandom(ICreatureMovementGenerator wander) => Push(wander);
+
     /// <summary>Remove the top generator if it is of <paramref name="type"/> (the one beneath resumes).</summary>
     public bool Remove(MovementGeneratorType type)
     {

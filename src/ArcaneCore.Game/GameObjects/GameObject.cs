@@ -13,7 +13,7 @@ namespace ArcaneCore.Game.GameObjects;
 public sealed partial class GameObject : WorldObject
 {
     internal GameObject(uint counter, GameObjectTemplate template, GameObjectSpawn? spawn)
-        : base(ObjectGuid.WithEntry(HighGuid.GameObject, template.Entry, counter),
+        : base(ObjectGuid.WithEntry(HighGuidOf(template.Type), template.Entry, counter),
             Game.TypeId.GameObject, Game.TypeMask.Object | Game.TypeMask.GameObject, UpdateFields.GameobjectEnd)
     {
         Template = template;
@@ -30,8 +30,25 @@ public sealed partial class GameObject : WorldObject
 
     public override ReadOnlySpan<bool> GuidFieldStarts => UpdateFieldTables.GameObjectGuidStarts;
 
-    /// <summary>vmangos GameObject constructor: m_updateFlag = UPDATEFLAG_ALL | UPDATEFLAG_HAS_POSITION.</summary>
-    public override ObjectUpdateFlags CreateUpdateFlags => ObjectUpdateFlags.All | ObjectUpdateFlags.HasPosition;
+    /// <summary>
+    /// vmangos GameObject constructor: m_updateFlag = UPDATEFLAG_ALL | UPDATEFLAG_HAS_POSITION, and GameObject::Create adds UPDATEFLAG_TRANSPORT
+    /// for an elevator or tram (type 11, GameObject.cpp:244-250): the client then animates it from <see cref="PathProgress"/>.
+    /// </summary>
+    public override ObjectUpdateFlags CreateUpdateFlags => Type == GameObjectType.Transport
+        ? ObjectUpdateFlags.All | ObjectUpdateFlags.HasPosition | ObjectUpdateFlags.Transport
+        : ObjectUpdateFlags.All | ObjectUpdateFlags.HasPosition;
+
+    /// <summary>vmangos GameObject::Create (GameObject.cpp:207): an elevator or tram (type 11) carries HIGHGUID_TRANSPORT, every other object HIGHGUID_GAMEOBJECT.</summary>
+    public static HighGuid HighGuidOf(uint templateType) => templateType == (uint)GameObjectType.Transport ? HighGuid.Transport : HighGuid.GameObject;
+
+    /// <summary>
+    /// vmangos GenericTransport::GetPathProgress of an elevator or tram (ElevatorTransport::Update, Transport.cpp:396-401): the milliseconds into
+    /// its TransportAnimation.dbc cycle, sent in the create block; 0 for an object without an animation (vmangos never updates it then).
+    /// </summary>
+    public uint PathProgress { get; internal set; }
+
+    /// <summary>When the object was created on its system's clock (vmangos m_creationTime of an elevator).</summary>
+    internal long CreatedAtMs { get; set; }
 
     /// <summary>DEFAULT_WORLD_OBJECT_SIZE scaled by the template size (vmangos GameObject::GetObjectBoundingRadius).</summary>
     public override float BoundingRadius => base.BoundingRadius * (Template.Size > 0 ? Template.Size : 1.0f);
@@ -159,6 +176,15 @@ public sealed partial class GameObject : WorldObject
         SetUInt32(UpdateFields.GameobjectFaction, Template.Faction);
         SetUInt32(UpdateFields.GameobjectTypeId, Template.Type);
         SetUInt32(UpdateFields.GameobjectAnimprogress, Spawn?.AnimProgress ?? 100u);
+        if (Type == GameObjectType.Transport)
+        {
+            // GameObject::Create (GameObject.cpp:244-250): the level carries transport.pause (data0), the state transport.startOpen (data1),
+            // and the object is a transport that never despawns.
+            SetUInt32(UpdateFields.GameobjectLevel, Template.GetData(0));
+            State = Template.GetData(1) != 0 ? GameObjectState.Active : GameObjectState.Ready;
+            Flags |= GameObjectFlags.Transport | GameObjectFlags.NoDespawn;
+        }
+
         LootState = GameObjectLootState.Ready;
         Loot = null;
         User = default;

@@ -129,7 +129,9 @@ docs/integration/creature-ai.md.
     SPELL_ATTR_EX_EXCLUDE_CASTER, cmangos friendlyHp.targetSelf, CreatureEventAIMgr.cpp:1082-1096; 14 classic-db z2815 rows), 15 friendly
     crowd controlled (stunned, confused, fleeing or rooted friend in combat), 16 friendly missing buff (the three combat flags; the row's radius,
     where cmangos measures the buff spell's range), 17/25/26 summoned unit, summoned just died and summoned just despawned (summons by EventAI
-    and spell summons of a creature caster; repeat timers are parameters 2 and 3), 30 receive AI event (event type, sender entry or any), 32
+    and spell summons of a creature caster; repeat timers are parameters 2 and 3), 30 receive AI event (event type and sender entry, 0 for
+    any: cmangos CreatureEventAI::ReceiveAIEvent :1563-1575; the invoker and the sender are passed to the actions; thrown by action 45 below
+    and sent by the relay command SEND_AI_EVENT), 32
     select attacking target (random threat-list unit between the two ranges), 34 spell hit target (the creature's own spell landed). The
     friend-search and target-select events are armed with their repeat timer when the fight starts (EnterCombat :1608-1615). Aura stacks and the victim's casting state come from the
     `IUnitSpellQueries` seam (`SpellSystemUnitSpellQueries` over the spell system, bound by
@@ -196,24 +198,47 @@ semantics are cmangos'. classic-db z2815 has 141 action-53 rows reaching 109 rel
   relay already scheduled for the same source and target is not started again; steps without delay run at once, the rest at
   start + delay in delay, priority and dump order; a TERMINATE_SCRIPT that fires drops the rest of that run.
 - **Who acts** (`CreatureMapSystem.RelayScripts.cs`, ScriptAction::GetScriptProcessTargets, DBScripts/ScriptMgr.cpp:1360-1645): the
-  buddy by entry (nearest creature of `buddy_entry` within `search_radius` of the source, dead with BUDDY_IS_DESPAWNED) replaces the
-  source, or the target with BUDDY_AS_TARGET; then REVERSE_DIRECTION swaps and SOURCE_TARGETS_SELF copies. A step whose buddy is not
-  found is skipped (except TERMINATE_SCRIPT). A `condition_id` is evaluated for the player among source and target (the conditions
-  table, as for EVENT_T_RECEIVE_EMOTE); without a player or a conditions table the step is skipped.
+  buddy replaces the source, or the target with BUDDY_AS_TARGET; then REVERSE_DIRECTION swaps and SOURCE_TARGETS_SELF copies. The buddy is
+  found by guid with BUDDY_BY_GUID (`search_radius` holds the database guid; a creature must be alive, dead with BUDDY_IS_DESPAWNED), else by
+  entry around the source (the nearest one of `buddy_entry` within `search_radius`, or every one with ALL_ELIGIBLE_BUDDIES). It is a game
+  object for the object commands (9, 11, 12, 13, 27, 40, 43) and, with BUDDY_BY_GO, for 31, 36 and 37; a creature otherwise
+  (ScriptInfo::IsCreatureBuddy). The command then runs once per source and target pair (HandleScriptStep, :1704-1764). A step whose buddy
+  is not found is skipped (except TERMINATE_SCRIPT). A `condition_id` is evaluated per pair for the player among source and target (the
+  conditions table, as for EVENT_T_RECEIVE_EMOTE); without a player or a conditions table that pair is skipped.
 - **Commands carried out** (ScriptAction::ExecuteDbscriptCommand): 0 TALK (dataint, one of dataint..4, or string template datalong;
   creature speakers), 1 EMOTE (datalong or one of dataint..4; an EMOTE_STATE_* id becomes UNIT_NPC_EMOTESTATE, 0 clears it, others play
   once: vmangos Unit::HandleEmote with the SharedDefines.h state ids standing in for Emotes.dbc), 3 MOVE_TO (home with dataint 1/2,
-  turn to `o`, move by z, or walk to x/y/z after clearing the pushed movement; datalong is a relay started on arrival), 15 CAST_SPELL
+  turn to `o`, move by z, or walk to x/y/z after clearing the pushed movement; datalong is a relay started on arrival), 10
+  TEMP_SPAWN_CREATURE (`CreatureMapSystem.RelayCommands.cs`: creature datalong at x/y/z/o, or without coordinates in front of the source
+  at contact distance plus both bounding radii at twice the source's orientation, as cmangos' CreatureCreatePos and GetClosePoint add the
+  orientation twice; dataint 1 runs; datalong2 ms alive out of combat and uncharmed despawns it, without it only its corpse going does;
+  datalong3 is the default path of a summon with waypoint movement), 13 ACTIVATE_OBJECT (the source unit uses the target object: doors and
+  buttons toggle, buttons and spell foci fire their linked trap, traps cast at the user, `GameObjectMapSystem.UseByUnit`; with
+  COMMAND_ADDITIONAL the object plays custom animation datalong), 15 CAST_SPELL
   (datalong or a dataint at random; datalong2 bit 0x01 triggered; COMMAND_ADDITIONAL casts without a target), 18 DESPAWN_SELF
   (temporary creatures, after datalong ms), 21 SET_ACTIVEOBJECT (nothing to do here), 25 SET_RUN (script moves run, and the client is
   told), 28 STAND_STATE, 29 MODIFY_NPC_FLAGS (datalong2 0 remove, 1 add, 2 toggle: the code, not the header comment), 31
   TERMINATE_SCRIPT (npc entry datalong within datalong2 yd, else the step's buddy; COMMAND_ADDITIONAL inverts), 32 PAUSE_WAYPOINTS
   (MotionMaster::PauseWaypoints(0)/UnpauseWaypoints: the waypoint generator stops and later sets off for the same node), 36 SET_FACING
-  (face the target, or the reset facing with datalong), 45 START_RELAY_SCRIPT.
-- **Not carried out** (skipped and reported once per relay id): every other command, the data flags BUDDY_BY_GUID, BUDDY_IS_PET,
-  BUDDY_BY_POOL, BUDDY_BY_SPAWN_GROUP, ALL_ELIGIBLE_BUDDIES, BUDDY_BY_GO and BUDDY_BY_STRING_ID, game-object buddies, a player as the
-  speaker, emoter, mover or caster, the MOVE_TO teleport, speed and forced movement, DESPAWN_SELF of a database spawn (no forced
-  despawn with a respawn timer exists), TERMINATE_SCRIPT by pool and its waypoint pause adjustment. The commands the 109 relays reached
+  (face the target, or the reset facing with datalong), 20 MOVEMENT (out of combat only; 0 idle, 1 random within datalong2 yd around the
+  spawn point or, with COMMAND_ADDITIONAL, where it stands, running with a non-zero dataint, 2 waypoint path datalong2 of the entry, 0 the
+  default path; idle and waypoint replace the default movement, random replaces it only with dataint2 bit 0x1 and is otherwise pushed over
+  it, which resumes when the stack is cleared, as MoveRandomAroundPoint mutates (ScriptMgr.cpp:2334-2350); a waypoint with datalong3 bit
+  0x1, pass the target, is skipped only without a target, :2318-2330), 35 SEND_AI_EVENT (event datalong; with a radius datalong2 to every
+  living creature around for the custom events A-F, to the creatures that may assist the sender, in its line of sight, for the others,
+  and for AI_EVENT_CALL_ASSISTANCE (0) each receiver then answers the call and attacks the invoker, CreatureAI::HandleAssistanceCall,
+  AI/BaseAI/CreatureAI.cpp:224-233; without a radius to a creature target, or to the source itself for a player target), 45
+  START_RELAY_SCRIPT.
+- **Steps without a source**: as cmangos HandleScriptStep (ScriptMgr.cpp:1704-1764) builds its pairs from the sources, a step whose
+  source list is empty (for example REVERSE_DIRECTION with no target) runs nothing. Before this wave such a step ran with a null source
+  and its target, so a command that only needed the target acted; it no longer does.
+- **Not carried out** (skipped and reported once per relay id): every other command, the data flags BUDDY_IS_PET, BUDDY_BY_POOL,
+  BUDDY_BY_SPAWN_GROUP and BUDDY_BY_STRING_ID, a player as the speaker, emoter, mover or caster, the MOVE_TO teleport, speed and forced
+  movement, DESPAWN_SELF of a database spawn (no forced despawn with a respawn timer exists), TERMINATE_SCRIPT by pool and its waypoint
+  pause adjustment, TEMP_SPAWN_CREATURE's spawn data template (dataint4), ACTIVATE_OBJECT of the player-only object types (chests,
+  goobers, quest givers, chairs), MOVEMENT's `waypoint_path` origin (datalong3 bit 0x2) and the passed target itself (the path runs, but
+  no waypoint script sees the target), its random expiry timer,
+  formations and the path, linear and fall types, and SEND_AI_EVENT's delayed form (relays have no delay argument). The commands the 109 relays reached
   from EventAI use most: MOVE_TO 99, TALK 74, EMOTE 53, TERMINATE_SCRIPT 27, SET_ACTIVEOBJECT 24, SET_FACING 20, PAUSE_WAYPOINTS 16,
   ACTIVATE_OBJECT 14, SET_RUN 14, MODIFY_NPC_FLAGS 14, TEMP_SPAWN_CREATURE 13, MOVEMENT 11, STAND_STATE 11.
 - **Data** (world step 38, `RelayScriptDataModule`): `dbscripts_on_relay` (every column but the comment, plus the dump order per id)

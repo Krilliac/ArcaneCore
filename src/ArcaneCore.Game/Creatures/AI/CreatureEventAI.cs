@@ -173,6 +173,9 @@ public sealed class CreatureEventAI : AggressorAI
     /// <summary>cmangos CreatureEventAI::ReceiveEmote: the EVENT_T_RECEIVE_EMOTE rows.</summary>
     public override void OnReceiveEmote(Player player, uint textEmote) => _engine.ReceiveEmote(player, textEmote);
 
+    /// <summary>cmangos CreatureEventAI::ReceiveAIEvent: the EVENT_T_RECEIVE_AI_EVENT rows.</summary>
+    public override void OnReceiveAiEvent(uint eventType, Unit sender, Unit? invoker, uint miscValue) => _engine.ReceiveAiEvent(eventType, sender, invoker);
+
     public override void OnEvade() => _engine.Evade();
 
     public override void OnReachedHome()
@@ -194,9 +197,6 @@ public sealed class CreatureEventAI : AggressorAI
     public override void OnSummonedCreatureJustDied(Creature summoned) => _engine.SummonedJustDied(summoned);
 
     public override void OnSummonedCreatureDespawn(Creature summoned) => _engine.SummonedDespawned(summoned);
-
-    public override void OnReceiveAiEvent(uint eventType, Creature sender, Unit? invoker, uint miscValue)
-        => _engine.ReceiveAiEvent(eventType, sender, invoker);
 
     /// <summary>cmangos UnitAI::UpdateAI: choose the victim, then the event timer batch.</summary>
     public override void OnUpdate(uint diffMs)

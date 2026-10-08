@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Content.Transports;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
@@ -11,6 +12,7 @@ using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Loot;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
+using ArcaneCore.Kernel.WorldData.Transports;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
@@ -96,6 +98,12 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
     /// <summary>Behaviour switches of the game objects (configuration section <see cref="GameObjectOptions.SectionName"/>); defaults are retail.</summary>
     public GameObjectOptions ObjectOptions { get; } = new();
 
+    /// <summary>
+    /// The elevator and tram animations from <c>GameObjects:TransportAnimationDbcPath</c> (empty without it). A path that does not load stops
+    /// the start, as the other configured DBCs do.
+    /// </summary>
+    public TransportAnimationCatalog ElevatorAnimations { get; private set; } = TransportAnimationCatalog.Empty;
+
     /// <summary>Quest checks used by loot and game objects (adapts the quest feature).</summary>
     public ILootQuestJournal Quests { get; private set; } = NullQuestJournal.Instance;
 
@@ -105,6 +113,11 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         _world = world;
         services.GetService<IConfiguration>()?.GetSection(SectionName).Bind(Options);
         services.GetService<IConfiguration>()?.GetSection(GameObjectOptions.SectionName).Bind(ObjectOptions);
+        if (!string.IsNullOrWhiteSpace(ObjectOptions.TransportAnimationDbcPath))
+        {
+            ElevatorAnimations = TransportAnimationDbcReader.Load(ObjectOptions.TransportAnimationDbcPath);
+            logger.LogInformation("elevators and trams: {Count} animation(s) from {Path}", ElevatorAnimations.Count, ObjectOptions.TransportAnimationDbcPath);
+        }
 
         GameObjectContent content = GameObjectContent.Empty;
         LootContent loot = LootContent.Empty;
@@ -209,6 +222,7 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         var system = new GameObjectMapSystem(map, Content, loot, Quests, logger)
         {
             Options = ObjectOptions,
+            ElevatorAnimations = ElevatorAnimations,
             Random = new Random(),
             // GameObject::Use (GameObject.cpp:1414-1415): RemoveSpellsCausingAura(SPELL_AURA_MOUNTED), the spell system resolved at use time.
             Dismount = player => services.GetService<ArcaneCore.World.Spells.SpellFeature>()?.System.RemoveSpellsCausingAura(player, Game.Spells.AuraType.Mounted),

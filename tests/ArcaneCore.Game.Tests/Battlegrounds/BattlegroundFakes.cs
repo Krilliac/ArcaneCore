@@ -37,8 +37,23 @@ internal sealed class RecordingHost : IBattlegroundHost
     public readonly List<uint> QuestsCompleted = [];
     public readonly List<(int Index, uint Entry, float X, float Y, float Z, float O)> AddedObjects = [];
     public readonly List<(int Index, uint Seconds)> ObjectSpawns = [];
+    public readonly List<(byte E1, byte E2, BattlegroundSpawnMode Mode)> SpawnModes = [];
+    public readonly List<(ObjectGuid Creature, string Text, bool Yell, ObjectGuid Player)> Says = [];
+    public readonly List<(byte E1, uint Text)> EventYells = [];
+    public readonly List<(byte E1, byte E2)> RemovedEventObjects = [];
+    public readonly Dictionary<ObjectGuid, uint> Charms = [];
     public int OpenDoorsCalls;
     public int DespawnDoorsCalls;
+
+    public void SetSpawnEventMode(byte event1, byte event2, BattlegroundSpawnMode mode) => SpawnModes.Add((event1, event2, mode));
+
+    public void CreatureSay(ObjectGuid creature, string text, bool yell, ObjectGuid player) => Says.Add((creature, text, yell, player));
+
+    public void EventCreatureYell(byte event1, uint textId) => EventYells.Add((event1, textId));
+
+    public void RemoveEventGameObjects(byte event1, byte event2) => RemovedEventObjects.Add((event1, event2));
+
+    public uint CharmedEntryOf(ObjectGuid player) => Charms.GetValueOrDefault(player);
 
     public void Announce(uint textId, BattlegroundChatKind kind, ObjectGuid source) => Announcements.Add((textId, kind, source));
 

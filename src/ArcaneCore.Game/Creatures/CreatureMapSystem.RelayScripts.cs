@@ -15,8 +15,11 @@ namespace ArcaneCore.Game.Creatures;
 /// </summary>
 public sealed partial class CreatureMapSystem
 {
-    /// <summary>SCRIPT_FLAG_BUDDY_AS_TARGET, REVERSE_DIRECTION, SOURCE_TARGETS_SELF, COMMAND_ADDITIONAL, BUDDY_IS_DESPAWNED (ScriptMgr.h:149-163).</summary>
-    public const uint SupportedDataFlags = 0x001 | 0x002 | 0x004 | 0x008 | 0x040;
+    /// <summary>
+    /// SCRIPT_FLAG_BUDDY_AS_TARGET, REVERSE_DIRECTION, SOURCE_TARGETS_SELF, COMMAND_ADDITIONAL, BUDDY_BY_GUID, BUDDY_IS_DESPAWNED,
+    /// ALL_ELIGIBLE_BUDDIES and BUDDY_BY_GO (ScriptMgr.h:149-163). Pet, pool, spawn group and string id buddies are not supported.
+    /// </summary>
+    public const uint SupportedDataFlags = 0x001 | 0x002 | 0x004 | 0x008 | 0x010 | 0x040 | 0x200 | 0x400;
 
     /// <summary>The point id of a MOVE_TO that starts a relay on arrival (cmangos MovePoint with a relay id).</summary>
     public const uint RelayMovePointId = 0xFFFF_F1E1;
@@ -25,7 +28,10 @@ public sealed partial class CreatureMapSystem
     private const uint FlagReverseDirection = 0x002;
     private const uint FlagSourceTargetsSelf = 0x004;
     private const uint FlagCommandAdditional = 0x008;
+    private const uint FlagBuddyByGuid = 0x010;
     private const uint FlagBuddyIsDespawned = 0x040;
+    private const uint FlagAllEligibleBuddies = 0x200;
+    private const uint FlagBuddyByGo = 0x400;
 
     private readonly RelayScriptRunner _relays = new();
     private readonly Dictionary<Creature, (uint RelayId, ObjectGuid Target)> _arrivalRelays = [];
@@ -82,7 +88,11 @@ public sealed partial class CreatureMapSystem
         }
     }
 
-    /// <summary>One step: resolve who acts on whom, check the condition, run the command. True terminates the script.</summary>
+    /// <summary>
+    /// One step (cmangos ScriptAction::HandleScriptStep, DBScripts/ScriptMgr.cpp:1704-1764): resolve the sources and targets with the buddy
+    /// flags, then run the command once for every source and target pair (once for every source when there is no target); the step ends its
+    /// script when any run answers true. The condition is checked per pair (ExecuteDbscriptCommand, :1768-1769).
+    /// </summary>
     private bool ExecuteRelayStep(RelayScriptPendingStep pending)
     {
         RelayScriptStep step = pending.Step;
@@ -99,57 +109,150 @@ public sealed partial class CreatureMapSystem
             return false; // ScriptAction::GetScriptCommandObject: the object left the map
         }
 
+        List<WorldObject?> sources = source is null ? [] : [source];
+        List<WorldObject?> targets = target is null ? [] : [target];
         bool buddyFound = false;
-        if (step.BuddyEntry != 0)
+        if (step.BuddyEntry != 0 || (step.DataFlags & FlagBuddyByGuid) != 0)
         {
-            Creature? buddy = FindRelayBuddy(step, source, target);
-            buddyFound = buddy is not null;
-            if (buddy is null && step.Command != 31)
+            List<WorldObject?>? buddies = FindRelayBuddies(step, source, target);
+            if (buddies is null)
             {
-                return false; // "has buddy ... not found in range", skipping
+                return false; // "has buddy ... not found", skipping
             }
 
+            buddyFound = buddies.Count > 0;
             if ((step.DataFlags & FlagBuddyAsTarget) != 0)
             {
-                target = buddy;
+                targets = buddies;
             }
-            else if (buddy is not null)
+            else if (buddyFound)
             {
-                source = buddy;
+                sources = buddies;
             }
         }
 
         if ((step.DataFlags & FlagReverseDirection) != 0)
         {
-            (source, target) = (target, source);
+            (sources, targets) = (targets, sources);
         }
 
         if ((step.DataFlags & FlagSourceTargetsSelf) != 0)
         {
-            target = source;
+            targets = sources;
         }
 
-        if (step.ConditionId != 0 && !RelayConditionHolds(step.ConditionId, source, target))
+        bool terminate = false;
+        foreach (WorldObject? actor in sources.ToArray())
         {
-            return false;
+            foreach (WorldObject? acted in targets.Count == 0 ? [null] : targets.ToArray())
+            {
+                if (step.ConditionId != 0 && !RelayConditionHolds(step.ConditionId, actor, acted))
+                {
+                    continue;
+                }
+
+                terminate |= RunRelayCommand(step, actor, acted, buddyFound);
+            }
         }
 
-        return RunRelayCommand(step, source, target, buddyFound);
+        return terminate;
     }
 
     /// <summary>
-    /// The buddy by entry (ScriptMgr.cpp:1532-1585): searched around the source (the target when there is no source; the reference's
-    /// "prefer non-players" swap only fires when the source is no player, so it never changes the searcher); the nearest creature of
-    /// <c>buddy_entry</c> within <c>search_radius</c>, alive (dead with BUDDY_IS_DESPAWNED), other than the searcher.
+    /// The buddies of a step (ScriptMgr.cpp:1364-1621), or null when the step must be skipped. By guid (BUDDY_BY_GUID, <c>search_radius</c>
+    /// holding the database guid): the creature spawn, which must be alive (dead with BUDDY_IS_DESPAWNED), or the game object spawn. By entry:
+    /// searched around the source (the target when there is no source); the nearest one of <c>buddy_entry</c> within <c>search_radius</c>, or
+    /// every one with ALL_ELIGIBLE_BUDDIES. Whether the buddy is a creature or a game object depends on the command
+    /// (<see cref="IsCreatureBuddy"/>). When nothing is found the step is skipped, except TERMINATE_SCRIPT, which then gets an empty list.
     /// </summary>
-    private Creature? FindRelayBuddy(RelayScriptStep step, WorldObject? source, WorldObject? target)
+    private List<WorldObject?>? FindRelayBuddies(RelayScriptStep step, WorldObject? source, WorldObject? target)
     {
+        bool creatureBuddy = IsCreatureBuddy(step);
+        bool terminate = step.Command == 31;
+        var buddies = new List<WorldObject?>();
+        GameObjects.GameObjectMapSystem? objects = creatureBuddy ? null : Map.FindUpdater<GameObjects.GameObjectMapSystem>();
+        if ((step.DataFlags & FlagBuddyByGuid) != 0)
+        {
+            if (creatureBuddy)
+            {
+                Creature? byGuid = _creatures.Values.FirstOrDefault(c => c.Spawn?.Guid == step.SearchRadius);
+                if (byGuid is not null && byGuid.IsAlive == ((step.DataFlags & FlagBuddyIsDespawned) != 0))
+                {
+                    if (!terminate)
+                    {
+                        return null; // "has buddy ... by guid ... but buddy is dead"
+                    }
+                }
+
+                if (byGuid is not null)
+                {
+                    buddies.Add(byGuid);
+                }
+            }
+            else if (objects?.GameObjects.FirstOrDefault(g => g.Spawn?.Guid == step.SearchRadius) is { } byGuid)
+            {
+                buddies.Add(byGuid);
+            }
+
+            return buddies.Count == 0 && !terminate ? null : buddies;
+        }
+
         WorldObject? origin = source ?? target;
         if (origin is null)
         {
-            return null;
+            return terminate ? buddies : null;
         }
 
+        bool all = (step.DataFlags & FlagAllEligibleBuddies) != 0;
+        float range = step.SearchRadius * (float)step.SearchRadius;
+        if (creatureBuddy)
+        {
+            if (all)
+            {
+                bool wantAlive = (step.DataFlags & FlagBuddyIsDespawned) == 0;
+                buddies.AddRange(_creatures.Values.Where(c => c.Template.Entry == step.BuddyEntry && c.IsAlive == wantAlive
+                    && DistanceSquared(c, origin) <= range));
+            }
+            else if (FindRelayBuddy(step, origin) is { } nearest)
+            {
+                buddies.Add(nearest);
+            }
+        }
+        else if (objects is not null)
+        {
+            GameObjects.GameObject[] inRange = [.. objects.GameObjects.Where(g => g.Entry == step.BuddyEntry && DistanceSquared(g, origin) <= range)];
+            if (all)
+            {
+                buddies.AddRange(inRange);
+            }
+            else if (inRange.MinBy(g => DistanceSquared(g, origin)) is { } nearestObject)
+            {
+                buddies.Add(nearestObject);
+            }
+        }
+
+        return buddies.Count == 0 && !terminate ? null : buddies;
+    }
+
+    /// <summary>
+    /// cmangos ScriptInfo::IsCreatureBuddy (ScriptMgr.h:542-575): the object commands (respawn, doors, activate, lock state, despawn and
+    /// reset of a game object) look for a game object; TERMINATE_SCRIPT, SET_FACING and MOVE_DYNAMIC for one with BUDDY_BY_GO; every other
+    /// command for a creature.
+    /// </summary>
+    private static bool IsCreatureBuddy(RelayScriptStep step) => step.Command switch
+    {
+        31 or 36 or 37 => (step.DataFlags & FlagBuddyByGo) == 0,
+        9 or 11 or 12 or 13 or 27 or 40 or 43 => false,
+        _ => true,
+    };
+
+    /// <summary>
+    /// The nearest creature buddy by entry (ScriptMgr.cpp:1532-1585) around <paramref name="origin"/> (the reference's "prefer non-players"
+    /// swap only fires when the source is no player, so it never changes the searcher): of <c>buddy_entry</c> within <c>search_radius</c>,
+    /// alive (dead with BUDDY_IS_DESPAWNED), other than the searcher.
+    /// </summary>
+    private Creature? FindRelayBuddy(RelayScriptStep step, WorldObject origin)
+    {
         bool wantDead = (step.DataFlags & FlagBuddyIsDespawned) != 0;
         float best = step.SearchRadius * (float)step.SearchRadius;
         Creature? found = null;
@@ -160,10 +263,7 @@ public sealed partial class CreatureMapSystem
                 continue;
             }
 
-            float dx = candidate.X - origin.X;
-            float dy = candidate.Y - origin.Y;
-            float dz = candidate.Z - origin.Z;
-            float distance = (dx * dx) + (dy * dy) + (dz * dz);
+            float distance = DistanceSquared(candidate, origin);
             if (distance <= best)
             {
                 best = distance;
@@ -238,6 +338,22 @@ public sealed partial class CreatureMapSystem
 
             case 3: // SCRIPT_COMMAND_MOVE_TO (:1843-1897)
                 RelayMoveTo(step, source, target);
+                return false;
+
+            case 10: // SCRIPT_COMMAND_TEMP_SPAWN_CREATURE (:2048-2073)
+                RelayTempSpawn(step, source);
+                return false;
+
+            case 13: // SCRIPT_COMMAND_ACTIVATE_OBJECT (:2115-2128)
+                RelayActivateObject(step, source, target);
+                return false;
+
+            case 20: // SCRIPT_COMMAND_MOVEMENT (:2277-2385)
+                RelayMovement(step, source, target);
+                return false;
+
+            case 35: // SCRIPT_COMMAND_SEND_AI_EVENT (:2759-2775)
+                RelaySendAiEvent(step, source, target);
                 return false;
 
             case 15: // SCRIPT_COMMAND_CAST_SPELL (:2155-2202): datalong, or one of dataint..4; datalong2 cast flags (TRIGGERED_OLD_TRIGGERED 0x01)
@@ -390,7 +506,7 @@ public sealed partial class CreatureMapSystem
                 searcher = target;
             }
 
-            found = searcher is not null && FindRelayBuddy(step with { BuddyEntry = step.DataLong, SearchRadius = step.DataLong2, DataFlags = 0 }, searcher, null) is not null;
+            found = searcher is not null && FindRelayBuddy(step with { BuddyEntry = step.DataLong, SearchRadius = step.DataLong2, DataFlags = 0 }, searcher) is not null;
         }
 
         bool additional = (step.DataFlags & FlagCommandAdditional) != 0;

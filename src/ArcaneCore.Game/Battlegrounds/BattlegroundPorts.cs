@@ -136,6 +136,50 @@ public interface IBattlegroundHost
     void SpawnBattlegroundObject(int index, uint respawnSeconds)
     {
     }
+
+    // ---- added for the Alterac Valley upgrades, landmines and shredders (inert defaults as above) ----
+
+    /// <summary>
+    /// vmangos <c>SetSpawnEventMode</c> (BattleGround.cpp:1510-1533, SpawnBGCreature :1590-1630): for each creature of the event whose events
+    /// are all active (<see cref="BattlegroundSpawnMode.RespawnForced"/>) or not all active (the other modes): forced makes a dead one respawn
+    /// at once and later ones two minutes after death; stop keeps a creature whose corpse is gone dead for good and every later death final.
+    /// </summary>
+    void SetSpawnEventMode(byte event1, byte event2, BattlegroundSpawnMode mode)
+    {
+    }
+
+    /// <summary>
+    /// A creature of the match says or yells a literal line to those around it (vmangos <c>MonsterSay</c> / <c>MonsterYell</c> /
+    /// <c>PMonsterSay</c> in the Alterac Valley rules); a "%s" in it is <paramref name="player"/>'s name.
+    /// </summary>
+    void CreatureSay(ObjectGuid creature, string text, bool yell, ObjectGuid player)
+    {
+    }
+
+    /// <summary>
+    /// The first creature of event (<paramref name="event1"/>, 0) yells a <c>mangos_string</c> text to every player of the match (vmangos
+    /// <c>SendYellToAll(entry, LANG_UNIVERSAL, GetSingleCreatureGuid(event1, 0))</c>); nothing without that creature.
+    /// </summary>
+    void EventCreatureYell(byte event1, uint textId)
+    {
+    }
+
+    /// <summary>Remove every game object of an event for good (vmangos <c>AddObjectToRemoveList</c> over the event's objects).</summary>
+    void RemoveEventGameObjects(byte event1, byte event2)
+    {
+    }
+
+    /// <summary>The entry of the creature <paramref name="player"/> controls (vmangos <c>GetCharm()->GetEntry()</c>), 0 for none.</summary>
+    uint CharmedEntryOf(ObjectGuid player) => 0;
+}
+
+/// <summary>vmangos <c>BattleGroundCreatureSpawnMode</c> (BattleGroundDefines.h:234-240).</summary>
+public enum BattlegroundSpawnMode : byte
+{
+    DespawnForced = 0,
+    RespawnStop = 1,
+    RespawnStart = 2,
+    RespawnForced = 3,
 }
 
 /// <summary>Spells and auras a battleground casts (the flag auras, marks, the deserter debuff); mapped to the aura engine.</summary>

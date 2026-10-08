@@ -179,6 +179,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         _clockMs += diffMs;
+        UpdateAis(diffMs);
+        UpdateElevators();
         foreach (GameObject go in _objects.Values.ToArray())
         {
             if (!go.IsSpawned)
@@ -629,7 +631,11 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// <summary>The object currently tracking a database spawn (spawned or waiting to respawn), or null while its grid is unloaded.</summary>
     internal GameObject? FindBySpawn(uint spawnGuid)
         => _spawnEntries.TryGetValue(spawnGuid, out uint entry)
-            ? _objects.GetValueOrDefault(ObjectGuid.WithEntry(HighGuid.GameObject, entry, spawnGuid)) : null;
+            ? _objects.GetValueOrDefault(SpawnObjectGuid(entry, spawnGuid)) : null;
+
+    /// <summary>The guid of the object of a database spawn (<see cref="GameObject.HighGuidOf"/>: elevators and trams are HIGHGUID_TRANSPORT).</summary>
+    internal ObjectGuid SpawnObjectGuid(uint entry, uint spawnGuid)
+        => ObjectGuid.WithEntry(GameObject.HighGuidOf(_content.FindTemplate(entry)?.Type ?? 0), entry, spawnGuid);
 
     /// <summary>
     /// A durable take committed while no live bag represented the chest (its grid was unloaded or
@@ -832,7 +838,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return null;
         }
 
-        var go = new GameObject(_nextTemporaryCounter++, template, null);
+        var go = new GameObject(_nextTemporaryCounter++, template, null) { CreatedAtMs = _clockMs };
         go.SetPosition(x, y, z, orientation);
         go.InitializeFields();
         AddToWorld(go);
@@ -1008,7 +1014,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
                 continue;
             }
 
-            var go = new GameObject(spawn.Guid, template, spawn);
+            var go = new GameObject(spawn.Guid, template, spawn) { CreatedAtMs = _clockMs };
             go.RolledRespawnSeconds = RollRespawnSeconds(spawn);
             go.System = this;
             _objects[go.Guid] = go;

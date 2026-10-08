@@ -216,6 +216,11 @@ Behaviour (`CreatureMapSystem.RespawnPersistence.cs`, `ICreatureRespawnPersisten
   (`Creature::SaveRespawnTime`, `:2785-2794`).
 * At load a pending time makes the creature dead for what is left (`Creature.cpp:1972-1989`); an expired one spawns it alive and deletes the row
   (`:1984-1989`). The row is also deleted when the creature respawns, naturally or by hand.
+* Battleground maps keep their respawn times in memory only, as vmangos does (`MapPersistentState::SaveCreatureRespawnTime`,
+  `Maps/MapPersistentStateMgr.cpp:84-86`: "BGs/Arenas always reset at server restart/unload"): nothing is saved there, and rows an older build left
+  for a battleground instance id (ids are reused after a restart) are deleted when the instance's creature system starts, so a new match starts
+  alive. A creature that will never come back (`Creature.RespawnNeverSeconds`, a battleground's RESPAWN_STOP) is never saved on any map: it has no
+  respawn time, and "now + never" would be a row the load never deletes.
 * The world side (`CreatureRespawnFeature`, `CreatureRespawnQueue`): reads answer from memory, writes are queued to one consumer off the world
   thread, in order, retried three times; the creature systems save what is still dead at shutdown (`StopAsync` after the world stopped) and the
   queue drains. Inactive without a store or with `Creatures:Respawn:Persist=false`.

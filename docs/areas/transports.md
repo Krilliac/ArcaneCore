@@ -49,7 +49,14 @@ instanceable map, a map without a `map_template` row) are logged and refused; th
 
 ## Limits
 
-* **Elevators and trams** (type 11, `ElevatorTransport`, TransportAnimation.dbc) are not implemented: only ships and zeppelins.
+* **Elevators and trams** (type 11, vmangos `ElevatorTransport`; `GameObjectMapSystem.Elevators.cs`) do not need `World:Transports:Enabled`:
+  the object is created as a transport (HIGHGUID_TRANSPORT, UPDATEFLAG_TRANSPORT, `transport.pause` in GAMEOBJECT_LEVEL, the start state from
+  `startOpen`, GO_FLAG_TRANSPORT and GO_FLAG_NODESPAWN, GameObject.cpp:207, 244-250) and its create block carries the milliseconds into its
+  TransportAnimation.dbc cycle (time since the object was made modulo the entry's last TimeSeg), from which the client animates it. The DBC
+  comes from `GameObjects:TransportAnimationDbcPath` (build 5875, `TransportAnimationDbcReader`); without it the progress stays 0, as in vmangos
+  without the data. The server keeps the object at its spawn position: `ElevatorPosition` computes where the animation puts it (the node
+  offset times the rotation matrix of GAMEOBJECT_ROTATION, Y negated, plus the spawn, Transport.cpp:403-427) but nothing boards an elevator
+  here, so a player on one keeps the position its client reports.
 * **Continent instancing**: vmangos can run several continent instances (`GetContinentInstanceId`); this base has one, so a
   continent ship sails instance 0 only.
 * **The login seat** is applied when the player enters its saved map. A ship on the same map is boarded before the

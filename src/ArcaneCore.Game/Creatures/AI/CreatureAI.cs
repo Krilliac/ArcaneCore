@@ -106,10 +106,11 @@ public abstract class CreatureAI
     }
 
     /// <summary>
-    /// An AI event reached the creature (cmangos UnitAI::ReceiveAIEvent): <paramref name="eventType"/> is a cmangos <c>AIEventType</c>,
-    /// <paramref name="sender"/> the creature that threw it and <paramref name="invoker"/> the unit it is about.
+    /// An AI event reached the creature (cmangos UnitAI::ReceiveAIEvent, AI/BaseAI/UnitAI.h:372): <paramref name="eventType"/> is a cmangos
+    /// <c>AIEventType</c>, <paramref name="sender"/> the unit that sent it (a creature, or the player of a relay's SEND_AI_EVENT to a player
+    /// target) and <paramref name="invoker"/> the unit it is about. Nothing by default.
     /// </summary>
-    public virtual void OnReceiveAiEvent(uint eventType, Creature sender, Unit? invoker, uint miscValue)
+    public virtual void OnReceiveAiEvent(uint eventType, Unit sender, Unit? invoker, uint miscValue)
     {
     }
 

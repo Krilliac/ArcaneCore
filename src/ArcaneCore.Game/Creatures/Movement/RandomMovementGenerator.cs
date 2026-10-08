@@ -26,6 +26,27 @@ namespace ArcaneCore.Game.Creatures;
 /// </summary>
 internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
 {
+    private readonly float? _wanderDistance;
+    private readonly CreatureHome? _center;
+    private readonly bool? _run;
+
+    /// <summary>The spawn's wander, around its spawn point, walking by its template flags (vmangos InitializeMovement for MovementType 1).</summary>
+    public RandomMovementGenerator()
+    {
+    }
+
+    /// <summary>
+    /// cmangos MotionMaster::MoveRandomAroundPoint (a relay's MOVEMENT command, ScriptMgr.cpp:2338-2356): wander within
+    /// <paramref name="wanderDistance"/> of <paramref name="center"/> (the spawn point when null), walking or running as
+    /// <paramref name="run"/> says (by the template flags when null).
+    /// </summary>
+    public RandomMovementGenerator(float? wanderDistance, CreatureHome? center, bool? run)
+    {
+        _wanderDistance = wanderDistance;
+        _center = center;
+        _run = run;
+    }
+
     /// <summary>vmangos RandomMovementGenerator constructor default when the spawn has none.</summary>
     public const float DefaultWanderDistance = 5.0f;
 
@@ -69,7 +90,7 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
         }
 
         float wander = WanderOf(creature);
-        CreatureHome home = creature.Home;
+        CreatureHome home = _center ?? creature.Home;
         float destX = home.X;
         float destY = home.Y;
         float destZ = home.Z;
@@ -84,7 +105,7 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
             destZ = mover.GetHeight(creature.MapId, destX, destY, home.Z) ?? home.Z;
         }
 
-        mover.MoveTo(creature, destX, destY, destZ, ShouldRun(creature, mover), finalOrientation: null);
+        mover.MoveTo(creature, destX, destY, destZ, _run ?? ShouldRun(creature, mover), finalOrientation: null);
 
         if (_wanderSteps > 0)
         {
@@ -104,7 +125,7 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
     /// <summary>vmangos RandomMovementGenerator::GetResetPosition: the current position when within the wander distance of the spawn point, else the spawn point.</summary>
     public CreatureHome? GetResetPosition(Creature creature)
     {
-        CreatureHome start = creature.Home;
+        CreatureHome start = _center ?? creature.Home;
         float dx = creature.X - start.X;
         float dy = creature.Y - start.Y;
         float wander = WanderOf(creature);
@@ -113,7 +134,7 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
             : start;
     }
 
-    private static float WanderOf(Creature creature) => creature.WanderDistance > 0 ? creature.WanderDistance : DefaultWanderDistance;
+    private float WanderOf(Creature creature) => _wanderDistance ?? (creature.WanderDistance > 0 ? creature.WanderDistance : DefaultWanderDistance);
 
     private static bool ShouldRun(Creature creature, ICreatureMover mover)
     {

@@ -224,6 +224,10 @@ public sealed partial class QuestNpcServices
         Send(player, WorldOpcode.SmsgQuestgiverQuestComplete,
             QuestPackets.Complete(quest, plan.Experience, plan.SummaryMoney));
 
+        // vmangos Player::RewardQuest hands the quest to the player's battleground (Alterac Valley, Player.cpp:13093-13095) and the quest
+        // giver's script (OnQuestRewarded); the owners subscribe here.
+        QuestRewarded?.Invoke(player, plan.QuestGiver, quest);
+
         // vmangos HandleQuestgiverChooseRewardOpcode sends the next quest of the chain right after RewardQuest.
         OfferNextQuest(player, plan.QuestGiver, quest);
     }

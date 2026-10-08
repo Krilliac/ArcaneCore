@@ -242,14 +242,18 @@ public sealed class SummonedJustDespawnEvent() : SummonedUnitEventHandler(EventA
 
 /// <summary>
 /// EVENT_T_RECEIVE_AI_EVENT (30): AIEventType, SenderEntry. An AI event of the type (from a sender of the entry, or any sender with 0) reached
-/// the creature (cmangos ReceiveAIEvent, :1562-1574); the event's invoker is the invoker and its sender is TARGET_T_EVENT_SENDER. Repeatable,
-/// not timer based.
+/// the creature (cmangos ReceiveAIEvent, :1562-1574; CheckEvent has no further condition for it, :508-509); the event's invoker is the
+/// invoker and its sender is TARGET_T_EVENT_SENDER. The sender entry is compared with the sender's object entry (cmangos
+/// <c>sender->GetEntry()</c>), so a player sender only matches a row that takes any sender. Repeatable, not timer based.
 /// </summary>
 public sealed class ReceiveAiEventEvent : EventAiEventHandler
 {
-    public override byte EventType => 30;
+    public override byte EventType => (byte)EventAiEventType.ReceiveAiEvent;
 
     public override EventAiTrigger Trigger => EventAiTrigger.AiEvent;
+
+    public override bool MatchesAiEvent(CreatureAiEvent row, uint eventType, Unit sender)
+        => (uint)row.Param1 == eventType && (row.Param2 == 0 || (uint)row.Param2 == sender.GetUInt32(UpdateFields.ObjectFieldEntry));
 
     public override bool Check(EventAiContext context, EventAiHolder holder, Unit? invoker) => true;
 }

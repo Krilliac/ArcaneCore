@@ -44,6 +44,33 @@ public sealed class CharterNameRulesTests
     }
 
     [Fact]
+    public void TheRealmZoneBit_AcceptsTheRealmZonesScripts_LikeVmangosIsValidString()
+    {
+        // vmangos isValidString(..., numericOrSpace true, create false) with GetRealmLanguageType (ObjectMgr.cpp:9515-9578).
+        var development = new GuildOptions { StrictCharterNames = 2, RealmZone = 1 };     // any language
+        Assert.True(CharterNameRules.IsValid("Гильдия 2", development, null));
+        Assert.True(CharterNameRules.IsValid("Müller Gilde", development, null));
+        Assert.False(CharterNameRules.IsValid("Gilde Гильдия", development, null));       // still one script
+
+        var english = new GuildOptions { StrictCharterNames = 2, RealmZone = 8 };         // extended Latin
+        Assert.True(CharterNameRules.IsValid("Müller Gilde", english, null));
+        Assert.False(CharterNameRules.IsValid("Гильдия", english, null));
+        Assert.False(CharterNameRules.IsValid("漢字", english, null));
+
+        var russian = new GuildOptions { StrictCharterNames = 2, RealmZone = 12 };        // Cyrillic
+        Assert.True(CharterNameRules.IsValid("Гильдия", russian, null));
+        Assert.False(CharterNameRules.IsValid("Arcane Order", russian, null));
+        Assert.True(CharterNameRules.IsValid("Arcane Order", new GuildOptions { StrictCharterNames = 3, RealmZone = 12 }, null)); // bit 1
+
+        var korea = new GuildOptions { StrictCharterNames = 2, RealmZone = 6 };           // East Asian
+        Assert.True(CharterNameRules.IsValid("漢字", korea, null));
+        Assert.False(CharterNameRules.IsValid("Arcane", korea, null));
+
+        // An unknown zone gives basic Latin at character creation but any language otherwise: charters are not a creation.
+        Assert.True(CharterNameRules.IsValid("Гильдия", new GuildOptions { StrictCharterNames = 2, RealmZone = 99 }, null));
+    }
+
+    [Fact]
     public void TheConfiguredMinimum_IsHonoured()
         => Assert.False(CharterNameRules.IsValid("Abc", new GuildOptions { MinCharterNameLength = 4 }, null));
 

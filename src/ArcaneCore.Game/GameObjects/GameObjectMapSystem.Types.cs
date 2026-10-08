@@ -4,12 +4,13 @@ using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Ranged;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.GameObjects;
 
 /// <summary>
 /// The type behaviours of vmangos GameObject::Use and GameObject::Update that cast spells or act on players nearby: goober spells and
-/// gossip, spell-caster objects, linked traps, environmental traps, area damage and flag stands (GameObject.cpp:313-690, 1258-1347,
+/// gossip, spell-caster objects, linked traps, environmental traps, area damage (unhandled, as in vmangos) and flag stands (GameObject.cpp:313-690, 1258-1347,
 /// 1398-2030; behaviour re-implemented, no code copied).
 /// </summary>
 public sealed partial class GameObjectMapSystem
@@ -23,15 +24,6 @@ public sealed partial class GameObjectMapSystem
     public const int SpellCasterSpellData = 0;
 
     public const int SpellCasterPartyOnlyData = 2;
-
-    /// <summary>areadamage.radius, damageMin, damageMax and damageSchool (data1..data4), GameObjectDefines.h:364-375.</summary>
-    public const int AreaDamageRadiusData = 1;
-
-    public const int AreaDamageMinData = 2;
-
-    public const int AreaDamageMaxData = 3;
-
-    public const int AreaDamageSchoolData = 4;
 
     /// <summary>GameObject::TriggerLinkedGameObject / RespawnLinkedGameObject (GameObject.cpp:1293-1296, 1330): the search range without a trap spell.</summary>
     public const float LinkedTrapSearchRange = 0.5f;
@@ -139,55 +131,22 @@ public sealed partial class GameObjectMapSystem
 
     // --- area damage ------------------------------------------------------------------------
 
+    private readonly HashSet<uint> _unhandledUses = [];
+
     /// <summary>
-    /// GAMEOBJECT_TYPE_AREADAMAGE through CMSG_GAMEOBJ_USE: its interaction distance is 0 (GameObjectDefines.h:780), so only a user standing
-    /// exactly on it gets here; the lock (data0) is checked like a door's, then <see cref="ActivateAreaDamage"/>.
+    /// GAMEOBJECT_TYPE_AREADAMAGE through CMSG_GAMEOBJ_USE: its interaction distance is 0 (GameObjectDefines.h:780), so only a user standing on
+    /// it gets here, and vmangos GameObject::Use has no case for the type: it logs "unhandled GameObject type" and does nothing
+    /// (GameObject.cpp:1982-1984; no 1.12 database row uses the type). The data columns (radius, damage, school, auto-close, texts) are never read
+    /// by the reference outside the load-time lock check. Logged once per entry.
     /// </summary>
     private GameObjectUseResult UseAreaDamage(Player player, GameObject go)
     {
-        GameObjectUseResult locked = CheckDirectLock(player, go);
-        return locked != GameObjectUseResult.Ok ? locked : ActivateAreaDamage(go);
-    }
-
-    /// <summary>
-    /// Activate an area damage object (scripts, GM commands, spells; players cannot reach one, see <see cref="UseAreaDamage"/>). The reference
-    /// core has no behaviour for this type (GameObject::Use logs it as unhandled, GameObject.cpp:1981-1983) and no 1.12 database row uses it, so
-    /// this follows the template columns only (GameObjectDefines.h:364-375): the object activates like a door and closes after its auto-close time
-    /// (data5), and every living player within its radius (data1, 3D from the centre) takes one roll of damageMin..damageMax (data2, data3) as
-    /// environmental damage, logged as slime for nature (school 3) and as fire otherwise. Absorb and resist are not applied. An object already
-    /// active answers <see cref="GameObjectUseResult.InUse"/>.
-    /// </summary>
-    public GameObjectUseResult ActivateAreaDamage(GameObject go)
-    {
-        ArgumentNullException.ThrowIfNull(go);
-        if (go.Type != GameObjectType.AreaDamage || !go.IsSpawned || !Tracks(go))
+        if (_unhandledUses.Add(go.Entry))
         {
-            return GameObjectUseResult.NotUsable;
+            _logger.LogWarning("GameObject::Use unhandled GameObject type {Type} (entry {Entry}), used by {Player}", (uint)go.Type, go.Entry, player.Guid);
         }
 
-        GameObjectUseResult activated = ActivateDoorOrButton(go, go.Template.AutoCloseSeconds());
-        if (activated != GameObjectUseResult.Ok)
-        {
-            return activated;
-        }
-
-        float radius = go.Template.GetData(AreaDamageRadiusData);
-        uint min = go.Template.GetData(AreaDamageMinData);
-        uint max = Math.Max(min, go.Template.GetData(AreaDamageMaxData));
-        EnvironmentalDamageType type = go.Template.GetData(AreaDamageSchoolData) == 3 ? EnvironmentalDamageType.Slime : EnvironmentalDamageType.Fire;
-        foreach (Player victim in Map.Players.ToArray())
-        {
-            if (!victim.IsAlive || victim.IsGameMaster || CentreDistanceSquared(go, victim) > radius * radius)
-            {
-                continue;
-            }
-
-            uint damage = max > min ? (uint)Random.NextInt64(min, (long)max + 1) : min;
-            CombatPackets.SendToSet(victim, WorldOpcode.SmsgEnvironmentaldamagelog, EnvironmentalDamage.BuildLog(victim.Guid.Value, type, damage, 0, 0));
-            Map.Combat.DealDamage(victim, victim, damage, direct: false, meleeDamage: false, startsCombat: false);
-        }
-
-        return GameObjectUseResult.Ok;
+        return GameObjectUseResult.Unsupported;
     }
 
     private static float CentreDistanceSquared(WorldObject a, WorldObject b)
@@ -414,7 +373,7 @@ public sealed partial class GameObjectMapSystem
             }
         }
 
-        if (target is null)
+        if (target is null || AiOf(trap)?.OnTrapTarget(this, trap, target) == true)
         {
             return;
         }

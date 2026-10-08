@@ -159,6 +159,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             spells.System.HolderAdded += OnAuraHolderAdded;
         }
 
+        InstallMatchHooks();
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;
         foreach (Map map in world.Maps.ToArray())

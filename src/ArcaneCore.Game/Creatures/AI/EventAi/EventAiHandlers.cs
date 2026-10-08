@@ -71,6 +71,9 @@ public abstract class EventAiEventHandler
     /// <summary>Whether a text emote matches this row (only for <see cref="EventAiTrigger.ReceiveEmote"/> handlers).</summary>
     public virtual bool MatchesEmote(CreatureAiEvent row, uint textEmote) => false;
 
+    /// <summary>Whether an AI event of <paramref name="eventType"/> sent by <paramref name="sender"/> matches this row (only for <see cref="EventAiTrigger.AiEvent"/> handlers).</summary>
+    public virtual bool MatchesAiEvent(CreatureAiEvent row, uint eventType, Unit sender) => false;
+
     /// <summary>cmangos JustRespawned's per-type branch for a fresh holder (default: armed, timer 0).</summary>
     public virtual void OnRespawn(EventAiContext context, EventAiHolder holder)
     {

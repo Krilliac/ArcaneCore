@@ -9,13 +9,11 @@ namespace ArcaneCore.Game.Creatures;
 /// <summary>
 /// What the EventAI actions and events of cmangos-classic need from the map beyond the core lifecycle (CreatureEventAI.cpp ProcessAction,
 /// :665-1380, and the AI hooks JustSummoned, SummonedCreatureJustDied/Despawn, ReceiveAIEvent, SpellHitTarget): who summoned a creature,
-/// AI events thrown around a creature, forced and delayed despawns, guardians, sounds and zone-wide combat.
+/// forced and delayed despawns, guardians, sounds and zone-wide combat. AI events thrown around a creature go through
+/// <see cref="SendAiEventAround"/> (CreatureMapSystem.RelayCommands.cs), shared with the relay command SEND_AI_EVENT.
 /// </summary>
 public sealed partial class CreatureMapSystem
 {
-    /// <summary>cmangos <c>AI_EVENT_CUSTOM_EVENTAI_A..F</c> (AIDefines.h:30-37): 5, 6, 8, 9, 10, 11; they reach every living creature in range.</summary>
-    private static bool IsCustomAiEvent(uint eventType) => eventType is 5 or 6 or (>= 8 and <= 11) or > 100;
-
     /// <summary>The creature that summoned a creature of this map (cmangos GetSpawnerGuid), by the summoned creature's GUID.</summary>
     private readonly Dictionary<ObjectGuid, ObjectGuid> _summoners = [];
 
@@ -74,50 +72,6 @@ public sealed partial class CreatureMapSystem
         {
             ai.OnSummonedCreatureDespawn(summoned);
         }
-    }
-
-    /// <summary>
-    /// cmangos UnitAI::SendAIEventAround (BaseAI/UnitAI.cpp:615-654) with no delay: a custom EventAI event (A-F) reaches every living
-    /// creature within <paramref name="radius"/> of <paramref name="sender"/>, the sender included (AnyUnitInObjectRangeCheck); the other
-    /// types reach the creatures that could assist the sender against <paramref name="invoker"/> (AnyAssistCreatureInRangeCheck: not the
-    /// sender, in range and line of sight, able to assist; without an invoker nobody). Returns how many creatures received it.
-    /// </summary>
-    public int SendAiEventAround(Creature sender, uint eventType, Unit? invoker, float radius, uint miscValue = 0)
-    {
-        ArgumentNullException.ThrowIfNull(sender);
-        if (radius <= 0)
-        {
-            return 0;
-        }
-
-        bool custom = IsCustomAiEvent(eventType);
-        List<Creature> receivers = [];
-        foreach (Creature candidate in _creatures.Values)
-        {
-            if (!candidate.IsAlive || candidate.AI is null)
-            {
-                continue;
-            }
-
-            if (custom)
-            {
-                if (DistanceSquared(sender, candidate) <= radius * radius)
-                {
-                    receivers.Add(candidate);
-                }
-            }
-            else if (invoker is not null && CanAssist(candidate, sender, invoker, radius))
-            {
-                receivers.Add(candidate);
-            }
-        }
-
-        foreach (Creature receiver in receivers)
-        {
-            receiver.AI?.OnReceiveAiEvent(eventType, sender, invoker, miscValue);
-        }
-
-        return receivers.Count;
     }
 
     /// <summary>

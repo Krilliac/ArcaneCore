@@ -220,14 +220,15 @@ public sealed class EventAiEngine
     public void SummonedDespawned(Creature summoned) => DispatchWhere(EventAiTrigger.SummonedDespawned, static _ => true, summoned, null);
 
     /// <summary>
-    /// cmangos CreatureEventAI::ReceiveAIEvent (:1562-1574): the EVENT_T_RECEIVE_AI_EVENT rows of <paramref name="eventType"/> whose sender
-    /// entry is 0 or the sender's are readied with the invoker and the sender (TARGET_T_EVENT_SENDER).
+    /// cmangos CreatureEventAI::ReceiveAIEvent (AI/EventAI/CreatureEventAI.cpp:1563-1575): the EVENT_T_RECEIVE_AI_EVENT rows of
+    /// <paramref name="eventType"/> whose sender entry is 0 or the sender's (<see cref="EventAiEventHandler.MatchesAiEvent"/>) are readied with
+    /// the invoker and the sender (TARGET_T_EVENT_SENDER), then the batch runs. The sender is a unit: a relay's SEND_AI_EVENT to a player
+    /// target makes the player the sender.
     /// </summary>
-    public void ReceiveAiEvent(uint eventType, Creature sender, Unit? invoker)
+    public void ReceiveAiEvent(uint eventType, Unit sender, Unit? invoker)
     {
         ArgumentNullException.ThrowIfNull(sender);
-        DispatchWhere(EventAiTrigger.AiEvent,
-            holder => holder.Param(0) == eventType && (holder.Param(1) == 0 || holder.Param(1) == sender.Entry), invoker, sender);
+        DispatchWhere(EventAiTrigger.AiEvent, holder => holder.Handler!.MatchesAiEvent(holder.Event, eventType, sender), invoker, sender);
     }
 
     /// <summary>cmangos SpellHitTarget (:1680-1691): the EVENT_T_SPELLHIT_TARGET rows whose spell id and school mask match.</summary>

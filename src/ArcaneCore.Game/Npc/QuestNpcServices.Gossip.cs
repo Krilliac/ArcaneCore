@@ -32,6 +32,15 @@ public sealed partial class QuestNpcServices
     public Func<ObjectGuid, uint>? SpiritGuideNextResurrectMs { get; set; }
 
     /// <summary>
+    /// The scripts that own some creatures' gossip (vmangos ScriptDev pGossipHello / pGossipSelect): asked first at a hello, and for the
+    /// lines they added at a selection. Unset: every creature uses its database menu.
+    /// </summary>
+    public INpcGossipScript? GossipScript { get; set; }
+
+    /// <summary>A quest was rewarded by a quest giver (vmangos Player::RewardQuest: the battleground and the giver's OnQuestRewarded script).</summary>
+    public event Action<Player, ObjectGuid, Quest>? QuestRewarded;
+
+    /// <summary>
     /// CMSG_GOSSIP_HELLO (vmangos HandleGossipHelloOpcode, NPCHandler.cpp:345-368, no script hooks): a spirit guide first
     /// sends its resurrection timer, SMSG_AREA_SPIRIT_HEALER_TIME (:360-361), then the gossip menu goes out.
     /// </summary>
@@ -51,9 +60,42 @@ public sealed partial class QuestNpcServices
                 Battlegrounds.BattlegroundPackets.BuildAreaSpiritHealerTime(npc.Guid, SpiritGuideNextResurrectMs?.Invoke(npc.Guid) ?? 0));
         }
 
+        if (GossipScript?.Hello(player, npc) is { } scripted)
+        {
+            SendScriptedGossip(s, npc, scripted);
+            Flush(s);
+            return;
+        }
+
         PrepareGossipMenu(s, npc, npc.GossipMenuId);
         SendPreparedGossip(s, npc);
         Flush(s);
+    }
+
+    /// <summary>
+    /// A script's menu (vmangos PrepareQuestMenu, ADD_GOSSIP_ITEM and SEND_GOSSIP_MENU in a pGossipHello): the creature's quests when asked,
+    /// the script's lines, and its npc text (the creature's own text when 0).
+    /// </summary>
+    private void SendScriptedGossip(PlayerNpcState s, NpcInfo npc, ScriptedGossipMenu scripted)
+    {
+        PlayerMenu menu = s.Menu;
+        menu.ClearMenus();
+        if (scripted.ShowQuests)
+        {
+            PrepareQuestMenu(s, npc);
+        }
+
+        foreach (ScriptedGossipItem line in scripted.Items)
+        {
+            menu.AddGossipItem(new GossipMenuItem(line.Icon, line.Text, false, GossipOption.Gossip, string.Empty, 0, 0)
+            {
+                Scripted = true,
+                ScriptSender = line.Sender,
+                ScriptAction = line.Action,
+            });
+        }
+
+        SendGossipMenu(s, npc.Guid, scripted.NpcTextId != 0 ? scripted.NpcTextId : GossipTextId(npc));
     }
 
     /// <summary>
@@ -230,6 +272,17 @@ public sealed partial class QuestNpcServices
         // A game object only offers plain gossip and the quest list (Player.cpp:12185-12192).
         if (npc.IsGameObject && item.OptionId > GossipOption.QuestGiver)
         {
+            return;
+        }
+
+        if (item.Scripted)
+        {
+            // The script answers with an npc text shown over the same lines (SEND_GOSSIP_MENU), or with nothing.
+            if (GossipScript?.Select(p, npc, item.ScriptSender, item.ScriptAction) is uint textId and not 0)
+            {
+                SendGossipMenu(s, npc.Guid, textId);
+            }
+
             return;
         }
 
