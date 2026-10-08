@@ -39,7 +39,7 @@ public sealed class InstanceSave
     /// <summary>Ids of the groups bound to the instance.</summary>
     public IReadOnlyCollection<uint> BoundGroups => Groups;
 
-    public bool HasBinds => Players.Count > 0 || Groups.Count > 0;
+    public bool HasBinds => Players.Count > 0 || Groups.Count > 0 || StoredGroupLeaders.Count > 0;
 
     /// <summary>Whether this save has been reset or deleted (its id is never handed out again).</summary>
     public bool IsDeleted { get; internal set; }
@@ -50,6 +50,12 @@ public sealed class InstanceSave
     internal HashSet<ObjectGuid> Players { get; } = [];
 
     internal HashSet<uint> Groups { get; } = [];
+
+    /// <summary>
+    /// Leaders (character ids) of a stored permanent group bind to this save that no group has taken back yet (vmangos
+    /// <c>group_instance</c> rows; <see cref="InstanceManager.RestoreStoredGroupBinds"/>). They keep the save alive like a bind.
+    /// </summary>
+    internal HashSet<uint> StoredGroupLeaders { get; } = [];
 
     public override string ToString() => $"instance {InstanceId} of map {MapId} ({Template.Name})";
 }
@@ -75,6 +81,16 @@ public interface IInstancePersistence
     void RaidResetTimeChanged(uint mapId, long resetTime);
 
     void PlayerEnteredInstance(uint characterId, uint mapId, uint instanceId);
+
+    /// <summary>A group became permanently bound; stored under its leader's character id (vmangos Group::BindToInstance → <c>group_instance</c>).</summary>
+    void GroupBound(uint leaderCharacterId, uint instanceId, bool permanent)
+    {
+    }
+
+    /// <summary>A stored group bind ended (vmangos Group::UnbindInstance, the leader change, the disband).</summary>
+    void GroupUnbound(uint leaderCharacterId, uint instanceId)
+    {
+    }
 }
 
 /// <summary>Discards every change (no characters database).</summary>
