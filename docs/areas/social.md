@@ -40,7 +40,7 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
 | Charter names | `Game/Guilds/CharterNameRules.cs` | `ObjectMgr.cpp:9496-9616` (IsReservedName, isValidString, IsValidCharterName), `shared/Util.h:115-231` | — | — |
 | Tabard designer and guild emblem | `Game/Guilds/GuildManager.Emblem.cs`, `GuildEmblemPackets.cs`, `World/Social/TabardHandlers.cs` | `Handlers/GuildHandler.cpp:684-735`, `Handlers/NPCHandler.cpp:49-69`, `Objects/Player.cpp:12268-12271`, `Guild/Guild.cpp:883-892` | `Guilds/GuildHandler.cpp:716-767` (same 10 gold and results) | `guild/msg_save_guild_emblem_client/server`, `msg_tabardvendor_activate` |
 | Chat mute and anti-flood | `Game/Social/ChatRestrictionService.cs`, `World/Social/ChatRestrictionFeature.cs` | `Handlers/ChatHandler.cpp:221-247,417-430`, `Chat/MasterPlayerChat.cpp:10-37`, `shared/Util.cpp:197-250`, `mangosd.conf.dist.in:1666-1668`, classic-db `mangos_string` 705 | — | — |
-| /who guild name and guild filter | `World/Handlers/ChatHandlers.cs` (HandleWho) | `Handlers/MiscHandler.cpp:147-158,180-196,201-203` | — | `cmsg_who`, `smsg_who` |
+| /who guild name and guild filter, area-name search strings, battleground instance filter | `World/Handlers/ChatHandlers.cs` (HandleWho), `Game/Social/WhoRules.cs` | `Handlers/MiscHandler.cpp:147-158,158-196,201-203` | — | `cmsg_who`, `smsg_who` |
 | Channel join / leave, password, built-ins (General, Trade, LocalDefense, WorldDefense, LookingForGroup, GuildRecruitment) | `Game/Channels/ChannelManager.cs`, `Channel.cs`, `ChannelTypes.cs` | `Chat/Channel.cpp/.h`, `Chat/ChannelMgr.cpp/.h`, `Handlers/ChannelHandler.cpp`, `DBCStores.cpp`/`DBCStructure.h` (ChatChannelsEntry) | `Chat/Channel.cpp/.h`, `Chat/ChannelMgr.cpp`, `Chat/ChannelHandler.cpp` | `chat/cmsg_join_channel.wowm` |
 | SMSG_CHANNEL_NOTIFY and the moderation commands (owner, moderator, mute, kick, ban, announce, moderate, invite) | `Channel.cs`, `ChannelPackets.cs` | `Channel.cpp` Make* | `Channel.cpp` | `chat/smsg_channel_notify.wowm` |
 | SMSG_CHANNEL_LIST | `ChannelPackets.BuildList` | `Channel.cpp` List, `Server/Packets/Channel.cpp` | `Channel.cpp` List | `chat/smsg_channel_list.wowm` |
@@ -101,8 +101,11 @@ File names below are upstream source files (vmangos `src/game/...`, cmangos-clas
   the 1.12 client drops them and sends `CMSG_CHAT_IGNORED`, and the whisperer then gets
   CHAT_MSG_IGNORED (vmangos HandleChatIgnoredOpcode).
 - **/who** shows the member's guild and matches the guild filter and the search strings against it
-  (`MiscHandler.cpp:147-158,180-196`). The search strings still do not match area names (needs
-  AreaTable.dbc, `MiscHandler.cpp:115-130`).
+  (`MiscHandler.cpp:147-158,180-196`). Since wave 2 the search strings also match the name of the member's zone from the
+  area table (`area_template`, vmangos `AreaEntry::GetById(zone)->Name` and `Utf8FitTo`, `MiscHandler.cpp:178-196`), and a
+  zone filter on one's own battleground zone (2597, 3277, 3358) lists only one's own instance (`MiscHandler.cpp:158-176`,
+  client patch 1.7.0); `Game/Social/WhoRules.cs`. Area names are the English `area_template` names (no locale table);
+  a zone the area table does not know matches no search string.
 - **Charters, tabard, mute and flood: see the limits list in
   [social-guild-petitions](../integration/social-guild-petitions.md#limits)**: no antispam name filter,
   the Undercity guild master has no gossip option rows in classic-db, no `GE_TABARDCHANGE`, no emblem range

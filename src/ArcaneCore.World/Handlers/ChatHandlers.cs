@@ -2,6 +2,8 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Chat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
@@ -429,8 +431,10 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     /// <summary>
     /// CMSG_WHO: u32 min level, u32 max level, CString name, CString guild, u32 race mask,
     /// u32 class mask, u32 zone count (≤ 10) + zones, u32 string count (≤ 4) + strings
-    /// (vmangos Misc::Who, gtker cmsg_who). Filtering follows vmangos WhoListClientQueryTask;
-    /// search strings match names and guilds (area names need AreaTable.dbc, M8).
+    /// (vmangos Misc::Who, gtker cmsg_who). Filtering follows vmangos WhoListClientQueryTask: the zone
+    /// filter limits one's own battleground zone to one's own instance, and the search strings match the
+    /// name, the guild and the name of the zone (the area table, <see cref="WorldMaps.Areas"/>), see
+    /// <see cref="WhoRules"/>.
     /// </summary>
     private static void HandleWho(WorldSession session, Player player, byte[] payload)
     {
@@ -471,6 +475,9 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
         }
 
         WorldRuntimeOptions options = session.World.Options;
+        Game.Maps.Terrain.AreaTable areas = WorldMaps.Of(session.World).Areas;
+        uint askerMap = player.MapId;
+        uint askerInstance = player.Map?.InstanceId ?? 0;
         var entries = new List<WhoEntry>();
         foreach (Player other in session.World.OnlinePlayers)
         {
@@ -495,10 +502,12 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
             // :201-203); empty without a guild or when the social feature is not installed.
             string guildDisplay = session.Services.GetService<SocialFeature>()?.Context.Guilds.GetGuildOf(other)?.Name ?? string.Empty;
             string guild = guildDisplay.ToLowerInvariant();
+            // The zone's name for the search strings (vmangos AreaEntry::GetById(pzoneId)->Name, MiscHandler.cpp:178-183).
+            string area = areas.GetById(other.ZoneId)?.Name.ToLowerInvariant() ?? string.Empty;
             if ((playerName.Length > 0 && !name.Contains(playerName, StringComparison.Ordinal))
                 || (guildName.Length > 0 && !guild.Contains(guildName, StringComparison.Ordinal))
-                || (zones.Length > 0 && Array.IndexOf(zones, other.ZoneId) < 0)
-                || !MatchesSearchStrings(strings, name, guild))
+                || !WhoRules.ZoneFilterShows(zones, player.ZoneId, askerMap, askerInstance, other.ZoneId, other.MapId, other.Map?.InstanceId ?? 0)
+                || !WhoRules.MatchesSearchStrings(strings, name, guild, area))
             {
                 continue;
             }
@@ -514,27 +523,5 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
         int online = session.World.OnlinePlayerCount;
         uint onlineCount = (uint)(online > WhoMaxEntries ? online : entries.Count);
         session.Send(WorldOpcode.SmsgWho, MiscPackets.BuildWho(entries, onlineCount));
-    }
-
-    /// <summary>vmangos: any non-empty search string matching the name or guild shows the player; all empty shows everyone.</summary>
-    private static bool MatchesSearchStrings(string[] strings, string name, string guild)
-    {
-        bool show = true;
-        foreach (string term in strings)
-        {
-            if (term.Length == 0)
-            {
-                continue;
-            }
-
-            if (name.Contains(term, StringComparison.Ordinal) || guild.Contains(term, StringComparison.Ordinal))
-            {
-                return true;
-            }
-
-            show = false;
-        }
-
-        return show;
     }
 }
