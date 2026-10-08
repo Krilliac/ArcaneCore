@@ -7,16 +7,23 @@ using System.Numerics;
 
 namespace ArcaneCore.World.Playerbots;
 
-/// <summary>Bounded ordinary ghost recovery for one managed player.</summary>
+/// <summary>
+/// Bounded ordinary ghost recovery for one managed player: release, walk back to the body, wait out the reclaim delay, reclaim.
+/// The bound is progress, not a count of thinks: the recovery gives up ("playerbot-recovery-stalled", an action fault) only when
+/// nothing moved it on for <see cref="NoProgressMs"/>, and a walk that stops closing on the body for <see cref="StuckMs"/> is
+/// "playerbot-recovery-stuck". Waiting at the body while the server's reclaim delay runs (30, 60 or 120 s by recent deaths,
+/// vmangos GetCorpseReclaimDelay) is progress: the old per-think cap of 360 thinks ran out after 36 s at a 100 ms think interval
+/// and faulted bots that were only waiting (live, 2026-10-07).
+/// </summary>
 internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions options)
 {
-    private const long MaxRecoveryMs = 180_000;
-    private const int MaxAttempts = 360;
+    internal const long NoProgressMs = 60_000;
+    internal const long StuckMs = 10_000;
     private PlayerbotRoute? _route;
     private ObjectGuid _routeCorpse;
-    private long _startedMs = -1;
-    private int _attempts;
-    private int _stuck;
+    private long _progressMs = -1;
+    private long _closingMs = -1;
+    private float _bestDistance = float.PositiveInfinity;
 
     internal bool Update(Player player, uint elapsedMs)
     {
@@ -29,16 +36,17 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
         }
 
         long now = (long)session.World.Uptime.TotalMilliseconds;
-        if (_startedMs < 0) _startedMs = now;
-        if (now - _startedMs > MaxRecoveryMs)
+        if (_progressMs < 0) _progressMs = now;
+        if (now - _progressMs > NoProgressMs)
             throw new InvalidOperationException("playerbot-recovery-stalled");
         if (session.ManagedBudget is { Remaining: <= 0 }) return false;
-        if (++_attempts > MaxAttempts) throw new InvalidOperationException("playerbot-recovery-stalled");
 
         if ((player.Flags & PlayerFlags.Ghost) == 0)
         {
             if (!PlayerbotMovementControl.Stop(session, player)) return false;
-            return session.TryManagedAction(WorldOpcode.CmsgRepopRequest, []);
+            bool released = session.TryManagedAction(WorldOpcode.CmsgRepopRequest, []);
+            if (released) _progressMs = now;
+            return released;
         }
 
         if (player.Combat.Corpse is not { } corpse || corpse.Map != player.Map)
@@ -48,6 +56,13 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             _route = null;
             _routeCorpse = default;
             if (!PlayerbotMovementControl.Stop(session, player)) return false;
+            // The client's Resurrect button stays disabled until SMSG_CORPSE_RECLAIM_DELAY runs out; wait like it does.
+            if (player.Map?.Combat.CorpseReclaimWaitSeconds(player) is > 0)
+            {
+                _progressMs = now;
+                return false;
+            }
+
             return session.TryManagedAction(WorldOpcode.CmsgReclaimCorpse,
                 PlayerbotNavigation.GuidPayload(corpse.Guid.Value));
         }
@@ -61,37 +76,35 @@ internal sealed class PlayerbotRecovery(WorldSession session, PlayerbotOptions o
             if (distance > chunk) destination = origin + ((destination - origin) * (chunk / distance));
             if (!PlayerbotNavigation.TryPlan(player, destination, options, out _route))
                 return false;
-            if (_routeCorpse != corpse.Guid) _stuck = 0;
+            if (_routeCorpse != corpse.Guid) { _bestDistance = float.PositiveInfinity; _closingMs = now; }
             _routeCorpse = corpse.Guid;
         }
 
-        float before = Distance(player, corpse);
-        if (!PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, session.World.NowMs))
+        if (_closingMs < 0) _closingMs = now;
+        bool advanced = PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, session.World.NowMs);
+        if (!advanced) _route = null;
+        float after = Distance(player, corpse);
+        if (float.IsFinite(after) && after < _bestDistance - 0.01f)
         {
-            _route = null;
-            if (++_stuck > 8) throw new InvalidOperationException("playerbot-recovery-stuck");
-            return false;
+            _bestDistance = after;
+            _closingMs = now;
+            _progressMs = now;
+        }
+        else if (now - _closingMs > StuckMs)
+        {
+            throw new InvalidOperationException("playerbot-recovery-stuck");
         }
 
-        float after = Distance(player, corpse);
-        if (!float.IsFinite(after) || after >= before - 0.01f)
-        {
-            if (++_stuck > 8) throw new InvalidOperationException("playerbot-recovery-stuck");
-        }
-        else
-        {
-            _stuck = 0;
-        }
-        return true;
+        return advanced;
     }
 
     internal void Reset()
     {
         _route = null;
         _routeCorpse = default;
-        _startedMs = -1;
-        _attempts = 0;
-        _stuck = 0;
+        _progressMs = -1;
+        _closingMs = -1;
+        _bestDistance = float.PositiveInfinity;
     }
 
     private static bool WithinReclaimDistance(Player player, Corpse corpse)

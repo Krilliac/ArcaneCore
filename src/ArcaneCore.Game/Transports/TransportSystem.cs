@@ -505,7 +505,9 @@ public sealed class TransportSystem
         }
 
         // The ship is on the other map. The character enters its saved map on land: its self create must not name a ship
-        // this map never sent (vmangos never has that state on the wire). It boards right before the far teleport.
+        // this map never sent (vmangos never has that state on the wire). It boards right before the far teleport; until then
+        // a save or a logout keeps the stored seat (vmangos has no such window: LoadFromDB puts the character aboard at once).
+        player.BoardingTransportSeat = seat;
         map.RunAfterUpdate(() => FollowShip(map, player, ship, seat));
     }
 
@@ -513,6 +515,12 @@ public sealed class TransportSystem
     // where it is now (it may have moved on, or even sailed back); the bind point when that fails.
     private void FollowShip(Map map, Player player, ShipTransport ship, TransportSeat seat)
     {
+        if (player.BoardingTransportSeat != seat)
+        {
+            return; // a later login or seat restore owns the player now
+        }
+
+        player.BoardingTransportSeat = null;
         if (!ReferenceEquals(player.Map, map) || player.Transport is not null)
         {
             return; // logged out or moved on meanwhile

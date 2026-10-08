@@ -13,7 +13,8 @@ password-less Player accounts and logs them in through an ordinary socketless `W
 (`Net/ManagedWorldSession.cs`): every bot action is a real CMSG run through the real world
 handler (`TryManagedAction`), and server replies are captured into a bounded outbound queue.
 Configuration is `World:Playerbots` (`Enabled`, `MaxBots` 8, `ThinkIntervalMs` 500,
-`MaxActionsPerTick` 4, `AllowedMaps` [0, 1], `AllowLocalLlm`, ...; off by default).
+`MaxActionsPerTick` 4, `AllowedMaps` [0, 1], `FaultBackoffSeconds` 30, `MaxFaults` 3,
+`FaultWindowSeconds` 3600, `AllowLocalLlm`, ...; off by default).
 
 GM commands: `.playerbot create|start|stop` (Administrator), `.playerbot status|list|inspect`
 (GameMaster), `.playerbot scenario list|run` (Administrator, below). The autonomous brain's
@@ -40,6 +41,29 @@ and the shared action budget does not apply; the controller's `Tick` runs on the
 every tick with a `PlayerbotControllerContext` (`TryAction`, `AcknowledgeServerOrders`).
 Stopping a bot detaches its controller; `IsScripted(botId)` reports the mode. Switching back
 to autonomous mode resumes the brain with whatever state it had before.
+
+### Faults and quarantine
+
+An exception out of a bot's update (brain, scripted controller or `PlayerbotMotion`) is an
+**action fault**. It is logged with the whole exception (type, message and stack), the bot's
+session closes and the next checkpoint (every 5 s) quarantines it: the character is saved and
+the `managed_playerbot` row turns `Faulted` with the fault as `ErrorCode`
+(`quarantined (fault 1/3): action: <message>`), but **keeps `DesiredEnabled`**. After
+`FaultBackoffSeconds` (30; doubled for every further fault, at most an hour) the bot logs in
+again, autonomous (a scenario controller that faulted is not reattached). The `MaxFaults`-th
+fault (3) within `FaultWindowSeconds` (3600 s of world time) disables it for good:
+`DesiredEnabled` off, `ErrorCode` `disabled after 3 faults: ...`, no retry. A failed retry
+login counts as a fault, and so does a failed restore at startup (for example a bot saved on a
+map outside `AllowedMaps`): before, that cleared `DesiredEnabled` too. A failed operator
+`.playerbot start` is still reported and not retried. `.playerbot start` or `.playerbot stop` clears the quarantine and the
+fault history, and wins over a retry already scheduled: the retry re-checks under the operation lock that the bot is still
+desired and still in that quarantine, and otherwise ends (`quarantine-cleared`) without logging the bot in. The stored
+`ErrorCode` (echoed by `.playerbot` status as `error=`) has control characters of the exception message replaced by spaces
+and is cut to 128 UTF-16 units without splitting a surrogate pair. A world restart restores every desired bot, quarantined ones included (the
+fault history is per process). Before 2026-10-07 one fault set `DesiredEnabled` off, so a
+single transient bug removed a bot until an operator noticed:
+`docs/integration/playerbot-faults-20261007.md`. Ordinary session closes that are not faults
+(a GM kick) still stop the bot and clear `DesiredEnabled`, as before.
 
 ## Scenario harness
 
@@ -116,18 +140,38 @@ follow the manual clock. `ScenarioClock.Real` (live server) polls in wall time.
 first use): `smoke` (login, hear own /say), `group-chat` (invite, accept, both group lists and
 the server roster, party chat, leave), `trade` (Linen Cloth 2589 for 75 copper through the
 trade window; both inventories and purses), `duel` (spell 7266, accept, countdown, melee to the
-1-health finish; SMSG_DUEL_WINNER checked against server state). `IPlayerbotScenario` services
-registered in DI are listed too. `ScenarioSteps` holds reusable blocks (form a group, open and
+1-health finish; SMSG_DUEL_WINNER checked against server state). After them come the other public
+scenarios this assembly ships (`PlayerbotScenarioCatalog.Shipped`, discovered: `dungeon`, `wsg`), then
+`IPlayerbotScenario` services registered in DI; a name belongs to its first entry. Shipped content
+scenarios need content a live world may not have and then fail at a named step. `ScenarioSteps` holds reusable blocks (form a group, open and
 accept a trade, leave earlier groups).
 
 **Battlegrounds** (`ScenarioBattlegrounds`, kept out of the shared harness files): bot actions `BattlemasterHelloAsync`,
 `JoinBattlegroundAsync` (CMSG_BATTLEMASTER_JOIN), `PortBattlegroundAsync`, `LeaveBattlefieldAsync`, `BattlefieldStatusAsync`, `PvpLogDataAsync`,
 `PlayerPositionsAsync`, `CancelAuraAsync`; decoders for SMSG_BATTLEFIELD_STATUS, MSG_PVP_LOG_DATA, SMSG_UPDATE_WORLD_STATE and
 MSG_BATTLEGROUND_PLAYER_POSITIONS; lookups of a battlemaster spawn of a type (`battlemaster_entry`), a game object spawn and an area trigger. The
-scenario `wsg` (`WarsongGulchScenario`, registered by tests; a realm would register it as an `IPlayerbotScenario` service) logs in a human and an
+scenario `wsg` (`WarsongGulchScenario`, listed by `.playerbot scenario list` through the shipped-scenario discovery) logs in a human and an
 orc warrior, queues each at a battlemaster of its continent, ports both into one match, waits out the two-minute start, captures the Horde flag,
 drops the Alliance flag by cancelling the flag aura, returns it, captures twice more (SMSG_BATTLEFIELD_WIN / _LOSE, the final scoreboard) and
-waits until both bots are back at their entry points. `WarsongGulchScenario.EnterMatchAsync` is the reusable opening.
+waits until both bots are back at their entry points. `WarsongGulchScenario.EnterMatchAsync` is the reusable opening. On a live
+world it needs the Warsong Gulch content (map 489, its triggers, safe locations, flag objects and battlemasters), a battleground
+template of one player per team (the retail minimum is five, so two bots never start a match otherwise) and
+`World:Playerbots:Scenarios:MaxDurationSeconds` of about 600 (two 2-minute waits plus the captures).
+
+**Dungeons** (`ScenarioDungeons`): `RaiseLevelAsync` (ordinary level-up to an entrance's level) and `TakeAreaTriggerAsync` (stand
+in a trigger, send CMSG_AREATRIGGER, wait for the far teleport). The scenario `dungeon` (`DungeonEntryScenario`) groups `Scnalpha`
+and `Scnbeta`, raises them to level 10, sends the leader through The Deadmines entrance (trigger 78, map 36) into a new instance
+that the group is bound to (non-permanent), sends the member through the same trigger into the same instance, checks party chat
+inside, and, when `AllowedMaps` lists map 36, logs the member out inside and back in into the same instance (a managed bot may
+only log in on an allowed map). Both leave through the exit trigger 119 and the group is disbanded. It needs map 36 and triggers
+78 and 119 with their teleports (`map_template`, `areatrigger_template`, `areatrigger_teleport`) and fails at its first step
+naming what is missing. If a step fails after the entrance (the member refused, party chat, the exit), the scenario still
+brings every bot that is inside back to where it stood before the entrance and disbands the group (`cleanup: ...` steps, run
+under their own bound even after the run's deadline): otherwise the shared bots would stay saved on map 36, the default
+`AllowedMaps` [0, 1] would refuse their next login (`login-refused`), and every pair scenario would stop working. A bot that is
+offline at that point (a failed relog inside, only tried when `AllowedMaps` lists 36) cannot be moved, and its login there is
+allowed. It leaves both scenario bots at level 10 or more. Tests: `DungeonScenarioTests` (including a dungeon that admits one
+player, so the member is refused inside the run).
 
 ### Running scenarios on a live server
 

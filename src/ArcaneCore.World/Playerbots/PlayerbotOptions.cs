@@ -34,6 +34,18 @@ public sealed class PlayerbotOptions
     /// <summary>The maps bots may act and travel on (non-empty, no duplicates; a configured list replaces the default continents 0 and 1).</summary>
     public uint[] AllowedMaps { get; set; } = [0, 1];
 
+    /// <summary>
+    /// Seconds a bot waits in quarantine after an action fault before it is logged in again (1..3600); each further fault in
+    /// <see cref="FaultWindowSeconds"/> doubles the wait, up to an hour. The bot stays desired meanwhile.
+    /// </summary>
+    public int FaultBackoffSeconds { get; set; } = 30;
+
+    /// <summary>The faults within <see cref="FaultWindowSeconds"/> that disable a bot for good (DesiredEnabled off; 1..100).</summary>
+    public int MaxFaults { get; set; } = 3;
+
+    /// <summary>How far back faults count towards <see cref="MaxFaults"/>, in seconds of world time (1..604800).</summary>
+    public int FaultWindowSeconds { get; set; } = 3600;
+
     /// <summary>Let a local language model choose among the bot's candidate goals (off by default; the rules choose otherwise).</summary>
     public bool AllowLocalLlm { get; set; }
 
@@ -80,6 +92,8 @@ public sealed class PlayerbotOptions
             throw new InvalidOperationException($"{SectionName}: MoveSpeed must be finite and > 0..100.");
         if (AllowedMaps is null || AllowedMaps.Length == 0 || AllowedMaps.Distinct().Count() != AllowedMaps.Length)
             throw new InvalidOperationException($"{SectionName}: AllowedMaps must be non-empty and contain no duplicates.");
+        if (FaultBackoffSeconds is < 1 or > 3600 || MaxFaults is < 1 or > 100 || FaultWindowSeconds is < 1 or > 604_800)
+            throw new InvalidOperationException($"{SectionName}: FaultBackoffSeconds must be 1..3600, MaxFaults 1..100 and FaultWindowSeconds 1..604800.");
         if (string.IsNullOrWhiteSpace(LocalLlmModel) || LocalLlmModel.Length > 128 || LocalLlmModel.Any(char.IsControl)
             || LocalLlmContextSize is < 512 or > 2048 || LocalLlmTimeoutMs is < 100 or > 10_000)
             throw new InvalidOperationException($"{SectionName}: invalid bounded local model settings.");

@@ -116,6 +116,49 @@ public sealed class TransportSeatTests
     }
 
     [Fact]
+    public void Login_WithTheShipOnTheOtherMap_ASaveBeforeItBoards_KeepsTheSeat()
+    {
+        WorldRuntime world = ManualWorld();
+        TransportSystem system = Install(world, Crossing);
+        var teleports = new TeleportService(world, _ => { }, _ => { });
+        system.TeleportPassenger = (p, map, x, y, z, o) => teleports.TeleportTo(p, map, x, y, z, o, TeleportOptions.NotLeaveTransport);
+        Advance(world, 36000); // the ship is on map 1
+        var seat = new TransportSeat(Crossing, 1f, 0f, 2f, 0f);
+        Player player = Load(1, new FakeSession(1), seat, mapId: 0);
+
+        world.AddPlayer(player);
+
+        // The player boards one map update later (FollowShip); an autosave in that window must still store the seat, or the
+        // next login puts the character on land where it entered instead of back aboard.
+        Assert.Null(player.Transport);
+        Assert.Equal(seat, player.CreateSnapshot(world.NowMs).Transport);
+
+        world.RunTick(50);
+        Assert.Same(system.FindByEntry(Crossing), player.Transport);
+        Assert.Equal(seat, player.CreateSnapshot(world.NowMs).Transport);
+    }
+
+    [Fact]
+    public void Login_WithTheShipOnTheOtherMap_ALogoutBeforeItBoards_SavesTheSeat()
+    {
+        var saves = new RecordingSaveQueue();
+        WorldRuntime world = TestWorld.CreateRuntime(saves);
+        world.UseManualClock();
+        TransportSystem system = Install(world, Crossing);
+        system.TeleportPassenger = (_, _, _, _, _, _) => true;
+        Advance(world, 36000); // the ship is on map 1
+        var seat = new TransportSeat(Crossing, 1f, 0f, 2f, 0f);
+        Player player = Load(1, new FakeSession(1), seat, mapId: 0);
+        world.AddPlayer(player);
+
+        world.RemovePlayer(player); // disconnect in the same tick, before the deferred boarding ran
+        world.RunTick(50);
+
+        Assert.Equal(seat, Assert.Single(saves.Saved).Transport);
+        Assert.Null(player.Transport);
+    }
+
+    [Fact]
     public void Login_AboardOnTheSameMap_TheShipComesInTheSelfPacket_NotTheMapsShipPacket()
     {
         WorldRuntime world = ManualWorld();

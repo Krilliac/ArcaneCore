@@ -228,6 +228,23 @@ public sealed partial class MapCombat
     /// reclaim delay has passed, within 39 yd (3D) of it, is resurrected at 50% (100% in a
     /// battleground, whose match must be in progress) and the corpse goes away.
     /// </summary>
+    /// <summary>
+    /// Seconds until this ghost may reclaim its corpse, 0 when it may now or has no corpse: the delay <see cref="TryReclaimCorpse"/>
+    /// enforces (vmangos HandleReclaimCorpseOpcode, MiscHandler.cpp:589: <c>GetGhostTime() + GetCorpseReclaimDelay() &gt; now</c>), which the client shows from
+    /// SMSG_CORPSE_RECLAIM_DELAY.
+    /// </summary>
+    public long CorpseReclaimWaitSeconds(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (player.Combat.Corpse is not { } corpse)
+        {
+            return 0;
+        }
+
+        long ready = player.Combat.GhostTime + GetCorpseReclaimDelay(player, corpse.Type == CorpseType.ResurrectablePvp);
+        return Math.Max(0, ready - NowSeconds);
+    }
+
     public bool TryReclaimCorpse(Player player)
     {
         UnitCombat c = player.Combat;
@@ -236,7 +253,7 @@ public sealed partial class MapCombat
             return false;
         }
 
-        if (c.GhostTime + GetCorpseReclaimDelay(player, corpse.Type == CorpseType.ResurrectablePvp) > NowSeconds)
+        if (CorpseReclaimWaitSeconds(player) > 0)
         {
             return false;
         }
