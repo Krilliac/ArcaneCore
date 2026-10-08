@@ -55,7 +55,8 @@ Shared files edited (small, each a seam):
 
 Schema: world 44 (`BattlegroundWorldDataModule`). World 38-43 are held open by `BattlegroundLaneSchemaGap38`-`43` (empty steps) because
 `Compose` needs contiguous versions. INTEGRATOR: delete each placeholder another lane really claims (Compose reports "claimed twice" until you do);
-the `IntegratedSchemaTests` entries are marked. The characters number 40 reserved for this lane is unused (no entry-point persistence).
+the `IntegratedSchemaTests` entries are marked. Characters 40 (`CharacterBattlegroundDataModule`, `character_battleground_data`); characters
+35-39 are held open the same way (`BattlegroundLaneCharactersGap35`-`39`, which own no rows).
 `SchemaStartupResilienceTests` accepts empty steps with the same lines the other lanes use.
 
 Overlaps to resolve at integration:

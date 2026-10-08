@@ -642,6 +642,7 @@ internal sealed class MatchRuntime : IBattlegroundHost, IWrappingSpawnGate
     public void ClearPlayerBinding(ObjectGuid player)
     {
         _feature.Manager.ClearBinding(player);
+        _feature.DeleteBinding(player);
         if (Online(player) is { } p)
         {
             Spells?.RemoveAuras(p, BattlegroundConstants.SpellWaitingToResurrect);

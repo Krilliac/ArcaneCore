@@ -75,7 +75,7 @@ battleground game objects and creatures. Without the event rows nothing is gated
   it; vmangos returns from the open-lock effect first. CMSG_GAMEOBJ_USE on a locked banner is refused by the lock as before; the click reaches the
   battleground through the opening spell. There is no cast-time check of `CanUseBattleGroundObject` in the spell's cast checks.
 - **A participant who logs out is removed at once** (offline: nothing of it is touched); vmangos keeps it for `MAX_OFFLINE_TIME` and lets it
-  rejoin. The entry point is held in memory: after a server restart a character saved on a battleground map logs in at its bind point.
+  rejoin. Its next login is at the entry point (the memory, else the `character_battleground_data` row), as vmangos does once the match is gone.
 - **WorldDefense is open while honor is disabled** (above): vmangos cannot turn honor off.
 - **The `mangos_string` texts are the English rows** of cmangos-classic `mangos.sql`; a broadcast text missing from `broadcast_text` falls back
   to a recorded English line.
@@ -88,8 +88,9 @@ inert default.
 
 - **Slice S3 (content tables)**, delivered in wave 2 (world schema 44). Not imported: `battleground_events` (descriptions only) and
   `areatrigger_bg_entrance` (the portal join, which vmangos refuses anyway). The flag room and exit triggers are `AreaTrigger.dbc` rows.
-- **Slice S5 (instances, entry points)**, delivered in wave 2 except the persistence of the entry point (`character_battleground_data`,
-  Player.cpp:20950-20982): it is held in memory, so a character saved on a battleground map logs in at its bind point after a restart.
+- **Slice S5 (instances, entry points, persistence)**, delivered in wave 2: `character_battleground_data` (characters schema 40; guid,
+  instance, team, join position and map, Player.cpp:20950-20982) is written when a participant enters its match and removed when it leaves
+  online or logs in again; a login on a battleground map reads it after the memory (Player.cpp:14775-14788).
   `TeleportCommands.cs:130` still refuses battleground maps to GMs (vmangos does too, Player.cpp:1863).
 - **Slice S6 (the daemon lifecycle)**, delivered in wave 2. Not delivered: the battlemaster gossip option 12 (the hello opcode is answered),
   the area spirit healer opcodes 738-740 and the dropped flag's pickup spell effects 23383/23384 (the flag drop object's use is handled directly).
@@ -115,9 +116,8 @@ inert default.
   spell 22011, whose Spirit Heal effect (spell 22012) resurrects the ghosts that wear Waiting to Resurrect (2584, now cast on release). The
   guide's script, the spirit heal effect and the area spirit healer opcodes (738-740) are not modelled: a ghost in a battleground runs back to its
   body (a corpse reclaim restores it fully) or waits for the match end.
-- **Not delivered in wave 2.** The battleground raid group (slice S7), the persistence of the entry point (`character_battleground_data`; the
-  characters schema number 40 reserved for it is unused), the BG chat channel (lane ops-social), the vmangos debug "testing" mode, the queue
-  announcer, and the honor weekend calendar (the `IBattlegroundCalendar` port stays inert).
+- **Not delivered in wave 2.** The battleground raid group (slice S7), the BG chat channel (lane ops-social), the vmangos debug "testing"
+  mode, the queue announcer, and the honor weekend calendar (the `IBattlegroundCalendar` port stays inert).
 
 ## Open questions
 
@@ -131,9 +131,9 @@ inert default.
 `BattlegroundCoreTests`, `BattlegroundPacketTests` (hand-written wire bytes), `BattlegroundManagerTests` (queue, invitations in time, port, login),
 `ArathiBasinTests`, `AlteracValleyTests` and `WarsongGulchCarrierTests` (wave 2). `tests/ArcaneCore.Game.Tests/Death/BattlegroundReleaseTests`
 (the release hook runs before the ghost form), `Honor/WorldDefenseRankTests` and `Social/ChannelManagerTests` (the gate with and without honor).
-`tests/ArcaneCore.Data.Tests/Battlegrounds/BattlegroundDataTests` (schema step, both dump dialects, the store on every available provider).
+`tests/ArcaneCore.Data.Tests/Battlegrounds/BattlegroundDataTests` (both schema steps, both dump dialects, both stores on every available provider).
 `tests/ArcaneCore.World.Tests/Playerbots/Scenarios/BattlegroundScenarioTests` (the `wsg` bot scenario) and `BattlegroundWorldScenarioTests` (buff
 trap, Divine Shield drop, own-team return, death drop and kill credit, Waiting to Resurrect and the battleground graveyard, the initial world
-states, leaving with Deserter, a far teleport out, a logout and login inside a match) run two managed bots against the real handlers on the
+states, leaving with Deserter, a far teleport out, a logout and login inside a match, the same after a restart from the stored row) run two managed bots against the real handlers on the
 manual clock with the synthetic content of `WarsongGulchTestContent`. Not covered by a world test: Arathi Basin and Alterac Valley in the world
 (their rules are covered in the game tests; their banners need the open-lock spell path and content).

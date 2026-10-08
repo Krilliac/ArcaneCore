@@ -128,6 +128,13 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(PetNamingDataModule), DatabaseComponent.Characters, PetNamingDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Playerbots.ManagedPlayerbotDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Playerbots.ManagedPlayerbotDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Life.CharacterCorpseInstanceDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Life.CharacterCorpseInstanceDataModule.Version),
+            // INTEGRATOR: 35 to 39 are this branch's empty placeholders for other lanes' reserved characters steps (CharacterBattlegroundDataModule.cs).
+            (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap35), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap35.Version),
+            (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap36), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap36.Version),
+            (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap37), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap37.Version),
+            (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap38), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap38.Version),
+            (typeof(ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap39), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.BattlegroundLaneCharactersGap39.Version),
+            (typeof(ArcaneCore.Data.Characters.Battlegrounds.CharacterBattlegroundDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.CharacterBattlegroundDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),

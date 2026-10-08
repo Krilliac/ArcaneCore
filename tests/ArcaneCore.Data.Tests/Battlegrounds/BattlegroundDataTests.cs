@@ -1,7 +1,10 @@
+using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Battlegrounds;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Import;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.Battlegrounds;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -124,5 +127,46 @@ public sealed class BattlegroundDataTests : IAsyncLifetime
 
         await using WorldDbContext verify2 = TestContexts.Create<WorldDbContext>(connection);
         Assert.Equal(4, (await new EfBattlegroundContentStore(verify2).LoadAsync()).GameObjectEvents.Count);
+    }
+
+    [Fact]
+    public void CharactersModule_IsDiscovered_AtItsReservedVersion_RegistersTheStore_AndDeclaresItsDeletion()
+    {
+        IDataModule module = Assert.Single(DataModules.For(DatabaseComponent.Characters), m => m is CharacterBattlegroundDataModule);
+        Assert.Equal(CharacterBattlegroundDataModule.Version, module.SchemaVersion);
+        Assert.Equal(["character_battleground_data"], module.SchemaChanges.OfType<CreateTableChange>().Select(c => c.Table));
+        Assert.IsAssignableFrom<ICharacterDataCleanup>(module);
+        var services = new ServiceCollection();
+        DataModules.AddServices(services, DatabaseComponent.Characters);
+        Assert.Contains(services, d => d.ServiceType == typeof(IBattlegroundEntryPointStore) && d.ImplementationType == typeof(EfBattlegroundEntryPointStore));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task EntryPoint_SavesReplacesLoadsAndDeletes_PerCharacter(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+            var store = new EfBattlegroundEntryPointStore(db);
+            Assert.Null(await store.LoadAsync(7));
+            await store.SaveAsync(new BattlegroundEntryPointRecord(7, 101, 469, 0, -8949.5f, -132.25f, 83.5f, 3.14159f));
+            await store.SaveAsync(new BattlegroundEntryPointRecord(7, 4_000_000_000, 67, 1, -618.5f, -4251.75f, 38.75f, 0.5f));
+            await store.SaveAsync(new BattlegroundEntryPointRecord(8, 102, 469, 0, 1f, 2f, 3f, 0f));
+        }
+
+        await using (CharacterDbContext verify = TestContexts.Create<CharacterDbContext>(connection))
+        {
+            var store = new EfBattlegroundEntryPointStore(verify);
+            BattlegroundEntryPointRecord row = Assert.IsType<BattlegroundEntryPointRecord>(await store.LoadAsync(7));
+            Assert.Equal((4_000_000_000u, 67u, 1u), (row.InstanceId, row.Team, row.JoinMapId));
+            Assert.InRange(row.JoinX, -618.51f, -618.49f);
+            await store.DeleteAsync(7);
+            Assert.Null(await store.LoadAsync(7));
+            Assert.NotNull(await store.LoadAsync(8));
+            await new CharacterBattlegroundDataModule().DeleteCharacterDataAsync(verify, 8, CancellationToken.None);
+            Assert.Null(await store.LoadAsync(8));
+        }
     }
 }

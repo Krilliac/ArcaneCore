@@ -43,8 +43,11 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ObjectGuid, BattlegroundEntryPoint> _entryPoints = new();
     private BattlegroundEventIndexMap _events = BattlegroundEventIndexMap.Empty;
     private BattlegroundContent _content = BattlegroundContent.Empty;
+    private readonly System.Threading.Channels.Channel<Func<IBattlegroundEntryPointStore, Task>> _writes =
+        System.Threading.Channels.Channel.CreateUnbounded<Func<IBattlegroundEntryPointStore, Task>>(new() { SingleReader = true });
     private BattlegroundManager? _manager;
     private WorldRuntime? _world;
+    private Task? _writer;
 
     /// <summary>The bound options (section <see cref="BattlegroundOptions.SectionName"/>).</summary>
     public BattlegroundOptions Options { get; } = new();
@@ -98,6 +101,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 
         var host = new BattlegroundWorldHost(this);
         _manager = new BattlegroundManager(Options, host, host.BasePorts());
+        _writer = Task.Run(WriteLoopAsync);
 
         // Everything that needs the other features (they attach in type-name order, after this one): the first world command.
         world.Post(Install);
@@ -325,6 +329,90 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 
     internal void ForgetEntryPoint(ObjectGuid player) => _entryPoints.TryRemove(player, out _);
 
+    /// <summary>Drop the in-memory entry points, as a restart does (tests).</summary>
+    internal void DropEntryPointCache() => _entryPoints.Clear();
+
+    /// <summary>
+    /// The participant is in its match now: its <c>character_battleground_data</c> row is written (vmangos <c>_SaveBGData</c> once
+    /// <c>bgInstanceID</c> is set), so a login after a restart still returns it to its entry point.
+    /// </summary>
+    private void PersistBinding(Player player, Battleground bg, Team team)
+    {
+        if (EntryPointOf(player.Guid) is not { } point)
+        {
+            return;
+        }
+
+        var record = new BattlegroundEntryPointRecord((int)player.Guid.Counter, bg.InstanceId, team == Team.Alliance ? 469u : 67u,
+            point.MapId, point.X, point.Y, point.Z, point.Orientation);
+        Enqueue(store => store.SaveAsync(record));
+    }
+
+    /// <summary>The participant left its match online: its row goes (vmangos <c>_SaveBGData</c> with no battleground deletes it).</summary>
+    internal void DeleteBinding(ObjectGuid player)
+    {
+        int characterId = (int)player.Counter;
+        Enqueue(store => store.DeleteAsync(characterId));
+    }
+
+    private void Enqueue(Func<IBattlegroundEntryPointStore, Task> write) => _writes.Writer.TryWrite(write);
+
+    /// <summary>Wait until every row write queued so far was attempted.</summary>
+    public Task FlushAsync()
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_writes.Writer.TryWrite(_ => { done.TrySetResult(); return Task.CompletedTask; }))
+        {
+            done.TrySetResult();
+        }
+
+        return done.Task;
+    }
+
+    private async Task WriteLoopAsync()
+    {
+        await foreach (Func<IBattlegroundEntryPointStore, Task> write in _writes.Reader.ReadAllAsync().ConfigureAwait(false))
+        {
+            try
+            {
+                await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                if (scope.ServiceProvider.GetService<IBattlegroundEntryPointStore>() is { } store)
+                {
+                    await write(store).ConfigureAwait(false);
+                }
+                else
+                {
+                    await write(NullEntryPointStore.Instance).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogWarning(ex, "a character_battleground_data write failed");
+            }
+        }
+    }
+
+    /// <summary>Drain the row writes at shutdown.</summary>
+    public async Task StopAsync()
+    {
+        _writes.Writer.TryComplete();
+        if (_writer is { } writer)
+        {
+            await writer.ConfigureAwait(false);
+        }
+    }
+
+    private sealed class NullEntryPointStore : IBattlegroundEntryPointStore
+    {
+        public static NullEntryPointStore Instance { get; } = new();
+
+        public Task<BattlegroundEntryPointRecord?> LoadAsync(int characterId, CancellationToken cancellationToken = default) => Task.FromResult<BattlegroundEntryPointRecord?>(null);
+
+        public Task SaveAsync(BattlegroundEntryPointRecord record, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task DeleteAsync(int characterId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
     // ------------------------------------------------------------------ the teleport gate and the far-teleport leave
 
     /// <summary>The teleport gate: a battleground map is open only to the players of its match (vmangos Player::TeleportTo, Player.cpp:1861-1864).</summary>
@@ -351,6 +439,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         if (bg.PlayerTeam(player.Guid) is null && Manager.EnterBattleground(player.Guid))
         {
             SendInitialWorldStates(player, map);
+            PersistBinding(player, bg, bg.PlayerTeam(player.Guid) ?? player.Team);
         }
     }
 
@@ -401,18 +490,25 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     /// so it is moved to its entry point before it enters the world, or to its bind point when none is known. The loaded record is moved too:
     /// the login sends its map and position (SMSG_LOGIN_VERIFY_WORLD) and places the player there.
     /// </summary>
-    public Task OnPlayerLoadingAsync(WorldSession session, CharacterRecord character, Player player)
+    public async Task OnPlayerLoadingAsync(WorldSession session, CharacterRecord character, Player player)
     {
         ArgumentNullException.ThrowIfNull(character);
         ArgumentNullException.ThrowIfNull(player);
         if (BattlegroundManager.TypeOfMap(character.MapId) == BattlegroundType.None)
         {
-            return Task.CompletedTask;
+            return;
         }
 
+        // The binding row of this character, after the writes queued before the logout (Player::_LoadBGData).
+        await FlushAsync().ConfigureAwait(false);
+        BattlegroundEntryPointRecord? row = session.Services.GetService<IBattlegroundEntryPointStore>() is { } store
+            ? await store.LoadAsync(character.Id).ConfigureAwait(false)
+            : null;
         (uint map, uint zone, float x, float y, float z, float o) = EntryPointOf(player.Guid) is { } point
             ? (point.MapId, point.ZoneId, point.X, point.Y, point.Z, point.Orientation)
-            : (character.HomeMapId, character.HomeZoneId, character.HomeX, character.HomeY, character.HomeZ, character.Orientation);
+            : row is { } saved
+                ? (saved.JoinMapId, 0u, saved.JoinX, saved.JoinY, saved.JoinZ, saved.JoinOrientation)
+                : (character.HomeMapId, character.HomeZoneId, character.HomeX, character.HomeY, character.HomeZ, character.Orientation);
         character.MapId = map;
         character.ZoneId = zone;
         character.X = x;
@@ -421,7 +517,13 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         character.Orientation = o;
         player.MapId = map;
         player.Relocate(x, y, z, o, 0);
-        return Task.CompletedTask;
+
+        // Not in a match any more: the binding is gone (the next save of vmangos deletes the row).
+        ForgetEntryPoint(player.Guid);
+        if (row is not null)
+        {
+            DeleteBinding(player.Guid);
+        }
     }
 
     // ------------------------------------------------------------------ area triggers

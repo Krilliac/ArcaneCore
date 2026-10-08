@@ -164,6 +164,42 @@ public sealed class BattlegroundWorldScenarioTests
         });
     });
 
+    [Fact]
+    public Task Wsg_AfterARestart_ALoginOnTheBattlegroundMap_ReturnsToTheStoredEntryPoint() => RunAsync("wsg-restart", async context =>
+    {
+        (ScenarioBot ally, _, _) = await WarsongGulchScenario.EnterMatchAsync(context, Start);
+        BattlegroundFeature feature = context.Services.GetRequiredService<BattlegroundFeature>();
+        BattlegroundEntryPoint entry = await context.ReadAsync(() => feature.EntryPointOf(ally.Guid)!.Value);
+        int characterId = (int)ally.Guid.Counter;
+
+        await context.StepAsync("the binding row is written when the bot enters the match", async () =>
+        {
+            await feature.FlushAsync();
+            Kernel.Characters.BattlegroundEntryPointRecord? row = await RowAsync(context, characterId);
+            ScenarioContext.Expect(row is not null, "no character_battleground_data row");
+            ScenarioContext.ExpectEqual(entry.MapId, row!.JoinMapId, "stored join map");
+            ScenarioContext.ExpectEqual(469u, row.Team, "stored team");
+        });
+
+        await context.StepAsync("logout, a restart forgets the memory, login at the stored entry point, the row goes", async () =>
+        {
+            await context.Services.GetRequiredService<ManagedPlayerbotFeature>().StopAsync(ally.BotId.ToString(), context.CancellationToken);
+            await context.ReadAsync(() => { feature.DropEntryPointCache(); return true; });
+            ScenarioBot again = await context.LoginAsync(WarsongGulchScenario.AllianceBot, race: 1, characterClass: 1);
+            (uint map, float x, float y) = await again.ReadAsync(p => (p.MapId, p.X, p.Y));
+            ScenarioContext.ExpectEqual(entry.MapId, map, "login map");
+            ScenarioContext.Expect(MathF.Abs(x - entry.X) < 1f && MathF.Abs(y - entry.Y) < 1f, $"login place ({x}, {y}) is not the stored entry point ({entry.X}, {entry.Y})");
+            await feature.FlushAsync();
+            ScenarioContext.Expect(await RowAsync(context, characterId) is null, "the row outlived the login");
+        });
+    });
+
+    private static async Task<Kernel.Characters.BattlegroundEntryPointRecord?> RowAsync(ScenarioContext context, int characterId)
+    {
+        await using AsyncServiceScope scope = context.Services.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<Kernel.Characters.IBattlegroundEntryPointStore>().LoadAsync(characterId);
+    }
+
     private static bool BuffSpawned(ScenarioBot bot)
         => bot.RequirePlayer().Map!.FindUpdater<GameObjectMapSystem>()!.GameObjects
             .Any(g => g.Entry == BattlegroundConstants.SpeedBuffEntry && g.IsSpawned);
