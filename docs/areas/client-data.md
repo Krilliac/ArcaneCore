@@ -23,7 +23,7 @@ resolves, patch-2.MPQ over patch.MPQ over dbc.MPQ, is described in the `README.t
 ## The consumers
 
 Every per-file key of the world daemon (`ClientDbcConsumers.All`; a test fails when an options class gains a `*DbcPath` key
-that is not listed) and what the feature does without its file:
+that is not listed; `ClientDbcConsumers.Directories` holds the `*DbcDirectory` keys, below) and what the feature does without its file:
 
 | Key | File | Without it |
 | --- | --- | --- |
@@ -43,6 +43,13 @@ that is not listed) and what the feature does without its file:
 | `Talents:TalentDbcPath`, `Talents:TalentTabDbcPath` | Talent.dbc, TalentTab.dbc | the talent system is inert |
 | `World:Chat:ChatChannelsDbcPath` | ChatChannels.dbc | the six transcribed channels, English names only |
 | `World:Chat:EmotesDbcPath`, `World:Chat:EmotesTextDbcPath` | Emotes.dbc, EmotesText.dbc | text emotes are only announced |
+| `World:GmCommands:DebugDraw:GameObjectDisplayInfoDbcPath` | GameObjectDisplayInfo.dbc | `.debug vis` marker models are not checked against the client |
+
+One key takes a directory, not a file (`ClientDbcConsumers.Directories`; a test fails when an options class gains a `*DbcDirectory` key that is not listed). When it is unset, `ClientData:DbcDirectory` fills it with itself:
+
+| Key | Reads | Without it |
+| --- | --- | --- |
+| `World:GmCommands:LiveFxDbcDirectory` | SoundEntries, ZoneMusic, CinematicSequences, SpellVisualKit, SpellVisualEffectName, WorldStateUI (each optional) | `.fx` sends any id unchecked and `.fx lookup` has no client data |
 
 The content importer (`arcane-content-importer`, `tools/content/refresh-world-content.ps1`) reads Map, AreaTable, AreaTrigger,
 WorldSafeLocs, TaxiNodes, TaxiPath and Spell into the world database with its own `--dbc`/`-DbcDirectory` argument; the world
@@ -52,7 +59,7 @@ daemon then reads those tables, not the files.
 
 `D:\ArcaneCore-data\client-dbc-5875` (154 files): all 59 files with a reference layout match it (every vmangos format string
 of build 5875, ItemDisplayInfo's commented-out one, and the four ArcaneCore layouts); the other 95 have a well-formed header.
-With only `ClientData:DbcDirectory` set, all 31 consumer keys are filled and nothing is reported. The cross-reference of the live
+With only `ClientData:DbcDirectory` set, all 32 per-file keys and the one directory key are filled and nothing is reported. The cross-reference of the live
 world (snapshot `live-w5-r1/after-stop-world.db`, `arcane-db dbc`, exit 5) checked 84 columns: 76 clean, 8 with 15 dangling ids in 67
 rows. Three columns are the client's own data: `area_template.MapId` 17 and 150 and `areatrigger_template.MapId` 24 and 28 (imported from the
 client's AreaTable and AreaTrigger, which name maps its Map.dbc does not have) and `taxi_nodes.map_id` 131074 (TaxiNodes.dbc row 81,

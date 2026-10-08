@@ -9,9 +9,15 @@ namespace ArcaneCore.Data.ClientData;
 public sealed record ClientDbcConsumer(string Key, string File, string Feature, string Fallback, string? Group = null);
 
 /// <summary>
+/// One configuration key whose value is a directory of client DBCs (a feature that reads several files and treats each as optional,
+/// <c>World:GmCommands:LiveFxDbcDirectory</c>). <c>ClientData:DbcDirectory</c> fills it with itself when the key is unset.
+/// </summary>
+public sealed record ClientDbcDirectoryConsumer(string Key, string Feature, string Fallback);
+
+/// <summary>
 /// Every per-file DBC path key of the world daemon (the inventory of docs/areas/client-data.md). A test walks the options
-/// classes and fails when a property named <c>*DbcPath</c> is not listed here, so a new consumer cannot miss the
-/// <c>ClientData:DbcDirectory</c> fallback.
+/// classes and fails when a property named <c>*DbcPath</c> or <c>*DbcDirectory</c> is not listed here (in <see cref="All"/> or
+/// <see cref="Directories"/>), so a new consumer cannot miss the <c>ClientData:DbcDirectory</c> fallback.
 /// </summary>
 public static class ClientDbcConsumers
 {
@@ -47,9 +53,17 @@ public static class ClientDbcConsumers
         new("Skills:SkillLineAbilityDbcPath", "SkillLineAbility.dbc", "the retail skill system", "the legacy skill stand-ins", "Skills"),
         new("Talents:TalentDbcPath", "Talent.dbc", "talents", "the talent system is inert", "Talents"),
         new("Talents:TalentTabDbcPath", "TalentTab.dbc", "talents", "the talent system is inert", "Talents"),
+        new("World:GmCommands:DebugDraw:GameObjectDisplayInfoDbcPath", "GameObjectDisplayInfo.dbc", ".debug vis marker model check", "marker models are not checked against the client"),
         new("World:Chat:ChatChannelsDbcPath", "ChatChannels.dbc", "built-in chat channels", "the six transcribed 1.12.1 channels (English names only)"),
         new("World:Chat:EmotesDbcPath", "Emotes.dbc", "text emote animations", "text emotes are only announced", "Emotes"),
         new("World:Chat:EmotesTextDbcPath", "EmotesText.dbc", "text emote animations", "text emotes are only announced", "Emotes"),
+    ];
+
+    /// <summary>The keys that take a directory of DBCs instead of one file; <c>ClientData:DbcDirectory</c> fills an unset one with itself.</summary>
+    public static IReadOnlyList<ClientDbcDirectoryConsumer> Directories { get; } =
+    [
+        new("World:GmCommands:LiveFxDbcDirectory", ".fx id checks and .fx lookup (SoundEntries, ZoneMusic, CinematicSequences, SpellVisualKit, SpellVisualEffectName, WorldStateUI)",
+            "ids are sent unchecked and .fx lookup has no client data"),
     ];
 
     /// <summary>The distinct DBC files the world daemon reads, sorted.</summary>

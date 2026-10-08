@@ -190,7 +190,8 @@ public sealed class ClientDataTests
         Assert.Equal(Path.Combine(temp.Path, "FactionTemplate.dbc"), report.Overlay["Quests:FactionTemplateDbcPath"]);
         Assert.False(report.Overlay.ContainsKey("Talents:TalentDbcPath"));
         Assert.Equal(Path.Combine(temp.Path, "TalentTab.dbc"), report.Overlay["Talents:TalentTabDbcPath"]);
-        Assert.Equal(ClientDbcConsumers.All.Count - 1, report.Overlay.Count);
+        Assert.Equal(ClientDataReport.KeyCount - 1, report.Overlay.Count);
+        Assert.Equal(Path.GetFullPath(temp.Path), report.Overlay["World:GmCommands:LiveFxDbcDirectory"]); // a directory key is filled with the directory itself
         ClientDbcResolution talent = report.Resolutions.Single(r => r.Consumer.Key == "Talents:TalentDbcPath");
         Assert.Equal(ClientDbcSource.Explicit, talent.Source);
         Assert.Equal(ClientDbcStatus.Missing, talent.Check!.Status);
@@ -260,7 +261,7 @@ public sealed class ClientDataTests
         ClientDataReport report = ClientDataReport.Build(Config(("ClientData:DbcDirectory", directory)));
 
         Assert.Empty(report.Problems);
-        Assert.Equal(ClientDbcConsumers.All.Count, report.Overlay.Count);
+        Assert.Equal(ClientDataReport.KeyCount, report.Overlay.Count);
         Assert.All(report.DirectoryFiles.Where(f => f.Layout is not null), f => Assert.Equal(ClientDbcStatus.Loaded, f.Status));
     }
 }

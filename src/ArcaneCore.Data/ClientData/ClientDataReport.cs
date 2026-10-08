@@ -25,6 +25,9 @@ public enum ClientDbcSource
 /// <param name="Note">Why a usable file under the directory was not handed over (a group member is unusable), or null.</param>
 public sealed record ClientDbcResolution(ClientDbcConsumer Consumer, ClientDbcSource Source, string? Path, ClientDbcFileCheck? Check, string? Note);
 
+/// <summary>How one directory key (<see cref="ClientDbcDirectoryConsumer"/>) resolved: its own value, the <c>ClientData:DbcDirectory</c> itself, or unset.</summary>
+public sealed record ClientDirectoryResolution(ClientDbcDirectoryConsumer Consumer, ClientDbcSource Source, string? Path);
+
 /// <summary>A client data problem, phrased for the log and for <c>check-config</c>.</summary>
 public sealed record ClientDataProblem(string Key, string Problem, string Fix);
 
@@ -40,20 +43,26 @@ public sealed class ClientDataReport
 {
     private ClientDataReport(
         ClientDataOptions options, bool directoryExists, IReadOnlyList<ClientDbcResolution> resolutions,
-        IReadOnlyList<ClientDbcFileCheck> directoryFiles, IReadOnlyList<ClientDataProblem> problems)
+        IReadOnlyList<ClientDbcFileCheck> directoryFiles, IReadOnlyList<ClientDataProblem> problems,
+        IReadOnlyList<ClientDirectoryResolution> directoryResolutions)
     {
         Options = options;
         DirectoryExists = directoryExists;
         Resolutions = resolutions;
         DirectoryFiles = directoryFiles;
         Problems = problems;
+        DirectoryResolutions = directoryResolutions;
         Overlay = resolutions.Where(r => r.Source == ClientDbcSource.Directory)
             .ToDictionary(r => r.Consumer.Key, r => (string?)r.Path, StringComparer.OrdinalIgnoreCase);
+        foreach (ClientDirectoryResolution resolution in directoryResolutions.Where(r => r.Source == ClientDbcSource.Directory))
+        {
+            Overlay[resolution.Consumer.Key] = resolution.Path;
+        }
     }
 
     /// <summary>A report for a daemon without client data configuration (nothing set, nothing checked).</summary>
     public static ClientDataReport Empty { get; } = new(
-        new ClientDataOptions(), false, [.. ClientDbcConsumers.All.Select(c => new ClientDbcResolution(c, ClientDbcSource.None, null, null, null))], [], []);
+        new ClientDataOptions(), false, [.. ClientDbcConsumers.All.Select(c => new ClientDbcResolution(c, ClientDbcSource.None, null, null, null))], [], [], [.. ClientDbcConsumers.Directories.Select(c => new ClientDirectoryResolution(c, ClientDbcSource.None, null))]);
 
     public ClientDataOptions Options { get; }
 
@@ -67,6 +76,12 @@ public sealed class ClientDataReport
     public IReadOnlyList<ClientDbcFileCheck> DirectoryFiles { get; }
 
     public IReadOnlyList<ClientDataProblem> Problems { get; }
+
+    /// <summary>How each directory key (<see cref="ClientDbcConsumers.Directories"/>) resolved.</summary>
+    public IReadOnlyList<ClientDirectoryResolution> DirectoryResolutions { get; }
+
+    /// <summary>The number of keys (per-file and directory) the directory can fill.</summary>
+    public static int KeyCount => ClientDbcConsumers.All.Count + ClientDbcConsumers.Directories.Count;
 
     /// <summary>The keys the directory fills: add these to the configuration after every other source.</summary>
     public IReadOnlyDictionary<string, string?> Overlay { get; }
@@ -154,6 +169,22 @@ public sealed class ClientDataReport
             resolutions.Add(new ClientDbcResolution(consumer, ClientDbcSource.Directory, path, check, null));
         }
 
+        var directoryResolutions = new List<ClientDirectoryResolution>();
+        foreach (ClientDbcDirectoryConsumer consumer in ClientDbcConsumers.Directories)
+        {
+            string? own = configuration[consumer.Key];
+            if (!string.IsNullOrWhiteSpace(own))
+            {
+                directoryResolutions.Add(new ClientDirectoryResolution(consumer, ClientDbcSource.Explicit, own));
+            }
+            else
+            {
+                directoryResolutions.Add(directoryExists
+                    ? new ClientDirectoryResolution(consumer, ClientDbcSource.Directory, directory)
+                    : new ClientDirectoryResolution(consumer, ClientDbcSource.None, null));
+            }
+        }
+
         IReadOnlyList<ClientDbcFileCheck> files = directoryExists ? ClientDbcInspector.CheckDirectory(directory) : [];
         foreach (ClientDbcFileCheck file in files.Where(f => f.Status is ClientDbcStatus.Malformed or ClientDbcStatus.FormatMismatch))
         {
@@ -164,7 +195,7 @@ public sealed class ClientDataReport
             }
         }
 
-        return new ClientDataReport(options, directoryExists, resolutions, files, problems);
+        return new ClientDataReport(options, directoryExists, resolutions, files, problems, directoryResolutions);
     }
 
     /// <summary>
@@ -178,7 +209,7 @@ public sealed class ClientDataReport
         lines.Add(new ClientDataLine(DirectoryConfigured && !DirectoryExists, !DirectoryConfigured
             ? "ClientData:DbcDirectory is not set: only the per-file DBC keys are read"
             : DirectoryExists
-                ? $"ClientData:DbcDirectory {Options.DbcDirectory}: {Overlay.Count} of {ClientDbcConsumers.All.Count} DBC keys filled from it{(Options.Strict ? " (ClientData:Strict)" : string.Empty)}"
+                ? $"ClientData:DbcDirectory {Options.DbcDirectory}: {Overlay.Count} of {KeyCount} DBC keys filled from it{(Options.Strict ? " (ClientData:Strict)" : string.Empty)}"
                 : $"ClientData:DbcDirectory {Options.DbcDirectory} does not exist: no DBC is read from it"));
 
         foreach (IGrouping<string, ClientDbcResolution> file in Resolutions.GroupBy(r => r.Consumer.File, StringComparer.OrdinalIgnoreCase).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
@@ -204,6 +235,16 @@ public sealed class ClientDataReport
                 lines.Add(new ClientDataLine(!first.Check.IsUsable || !used,
                     $"ClientData: {file.Key}: {first.Check.Describe()} from {first.Check.Path} ({source}) [{keys}]{tail}"));
             }
+        }
+
+        foreach (ClientDirectoryResolution resolution in DirectoryResolutions)
+        {
+            lines.Add(new ClientDataLine(false, resolution.Source switch
+            {
+                ClientDbcSource.Explicit => $"ClientData: {resolution.Consumer.Key}: directory {resolution.Path} (explicit key) [{resolution.Consumer.Feature}]",
+                ClientDbcSource.Directory => $"ClientData: {resolution.Consumer.Key}: directory {resolution.Path} (DbcDirectory) [{resolution.Consumer.Feature}]",
+                _ => $"ClientData: {resolution.Consumer.Key}: not configured -> {resolution.Consumer.Fallback}",
+            }));
         }
 
         if (DirectoryFiles.Count > 0)

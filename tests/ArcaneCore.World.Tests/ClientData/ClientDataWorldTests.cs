@@ -72,6 +72,19 @@ public sealed class ClientDataWorldTests
     }
 
     [Fact]
+    public void EveryDbcDirectoryKeyOfTheOptionsClasses_IsARegisteredDirectoryConsumer()
+    {
+        ConfigCatalogResult catalog = ConfigCatalog.Build(
+            ConfigExceptionTable.Sections(), (_, _) => "doc.", new Dictionary<string, string>(), ConfigExceptionTable.SkippedProperties, _ => null);
+        // ClientData:DbcDirectory is the source of the fallback, not a consumer of it.
+        string[] keys = [.. catalog.Entries.Select(e => e.Path).Concat(ConfigExceptionTable.AdHocKeys.Select(k => k.Path))
+            .Where(p => p.EndsWith("DbcDirectory", StringComparison.Ordinal) && p != "ClientData:DbcDirectory").Order(StringComparer.Ordinal)];
+
+        Assert.NotEmpty(keys);
+        Assert.Equal(keys, ClientDbcConsumers.Directories.Select(c => c.Key).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
     public void Apply_FillsUnsetKeysAfterEveryOtherSource_SoTheFeaturesBindTheDirectoryFile_AndAnExplicitKeyWins()
     {
         string directory = WriteConsumerFiles(TempDirectory());
@@ -165,7 +178,7 @@ public sealed class ClientDataWorldTests
             await using (WorldTestClient gm = await host.EnterWorldAsync("DBCGM", "Dbcgm", AccountSecurity.Administrator))
             {
                 await gm.SendChatAsync(ChatType.Say, Language.Common, ".arcane dbc");
-                Assert.Equal($"ClientData:DbcDirectory {directory}: {ClientDbcConsumers.All.Count} of {ClientDbcConsumers.All.Count} DBC keys filled from it",
+                Assert.Equal($"ClientData:DbcDirectory {directory}: {ClientDataReport.KeyCount} of {ClientDataReport.KeyCount} DBC keys filled from it",
                     await ReadChatStartingWithAsync(gm, "ClientData:DbcDirectory "));
                 Assert.StartsWith("ClientData: BankBagSlotPrices.dbc: loaded 3 records (2 fields, vmangos DBCfmt.h BankBagSlotPricesEntryfmt) from ", (await gm.ReadChatAsync()).Text, StringComparison.Ordinal);
             }
