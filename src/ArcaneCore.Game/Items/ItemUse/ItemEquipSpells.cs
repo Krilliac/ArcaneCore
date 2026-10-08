@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items.ItemSets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.WorldData;
 
 namespace ArcaneCore.Game.Items.ItemUse;
 
@@ -149,9 +150,18 @@ public sealed class ItemEquipSpells(SpellSystem spells, ItemSetBonuses? sets = n
         }
     }
 
-    /// <summary>mangos ApplyEquipSpell: "Cannot be used in this stance/form" (SpellEntry::GetErrorAtShapeshiftedCast, Player.cpp:7186).</summary>
+    /// <summary>
+    /// mangos ApplyEquipSpell: "Cannot be used in this stance/form" (SpellEntry::GetErrorAtShapeshiftedCast, Player.cpp:7186). vmangos looks
+    /// the form's SpellShapeshiftForm.dbc flags up itself; passing no flags means "no row", which it answers with SPELL_CAST_OK for every form,
+    /// so a Battle Stance-only "Equip:" aura stayed on in Defensive Stance. The flags come from the client's build-5875 table
+    /// (<see cref="ShapeshiftFormCatalog.Retail"/>), as for the other static form queries (<see cref="FormQueries"/>).
+    /// </summary>
     internal static bool FitsForm(Player player, SpellInfo spell)
-        => spell.GetErrorAtShapeshiftedCast((uint)ShapeshiftService.GetForm(player), null) == SpellCastResult.CastOk;
+    {
+        uint form = (uint)ShapeshiftService.GetForm(player);
+        uint? flags = form != 0 && ShapeshiftFormCatalog.Retail.TryGet(form, out ShapeshiftFormInfo info) ? info.Flags1 : null;
+        return spell.GetErrorAtShapeshiftedCast(form, flags) == SpellCastResult.CastOk;
+    }
 
     private void ApplyItem(Player player, Item item, bool replay)
     {
