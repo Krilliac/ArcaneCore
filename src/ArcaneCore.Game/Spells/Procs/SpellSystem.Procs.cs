@@ -711,10 +711,11 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
-    /// Damage-cancel through the proc (docs/areas/procs.md, deviation): an aura whose spell both breaks on damage (AuraInterruptFlags DAMAGE) and
-    /// procs on TAKEN_ANY_DAMAGE (Wyvern Sting's sleep, the only 1.12 spells with both) is skipped by the damage break when the proc engine runs
-    /// (vmangos checkProcFlags) and has no proc handler of its own, so vmangos keeps it through the damage; the tooltip ("Any damage will cancel
-    /// the effect") is honoured here by removing it when its damage proc fires. <see cref="AuraOptions.DamageProcCancelsAura"/> false is vmangos.
+    /// Damage-cancel through the proc (docs/areas/procs.md, opt-in deviation): an aura whose spell both breaks on damage (AuraInterruptFlags DAMAGE)
+    /// and procs on TAKEN_ANY_DAMAGE (Wyvern Sting's sleep, the only 1.12 spells with both) is skipped by the damage break when the proc engine runs
+    /// (vmangos checkProcFlags) and has no proc handler of its own, so vmangos keeps it through the damage (only real charges are spent). With
+    /// <see cref="AuraOptions.DamageProcCancelsAura"/> set (default off, the vmangos behaviour) the tooltip ("Any damage will cancel the effect")
+    /// is honoured instead by removing it when its damage proc fires.
     /// </summary>
     private void ApplyDamageProcCancel(in AuraProcContext context)
     {

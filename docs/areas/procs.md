@@ -90,7 +90,7 @@ engine ends those. Checked against the build 5875 Spell.dbc rows (world database
 |---|---|---|---|---|
 | Polymorph 118, Sap 6770, Gouge 1776, Freezing Trap effect 3355 | DAMAGE | 0 | 0 | the damage break |
 | Druid Prowl 5215 / 6783 / 9913 | 0x3C07 (stealth family) | 0 | 0 | the damage break (also damage over time) |
-| Wyvern Sting 19386 / 24132 / 24133 (MOD_STUN) | DAMAGE | TAKEN_ANY_DAMAGE, 100% | 0 | its damage proc (`Auras:DamageProcCancelsAura`) |
+| Wyvern Sting 19386 / 24132 / 24133 (MOD_STUN) | DAMAGE | TAKEN_ANY_DAMAGE, 100% | 0 | its duration (vmangos); its damage proc with `Auras:DamageProcCancelsAura` |
 | Hunter pet Prowl 24450 / 24452 / 24453 | stealth family | melee swing and ability, both sides | 1 | its proc charge |
 | Frostbite 12494 (MOD_ROOT) | 0 | damage events | 0 | the root break chance |
 
@@ -138,8 +138,9 @@ placeholder and renumbered the wave-2 world steps down to 38-41, so this step is
 - CAST_END events never carry CRITICAL_HIT: ArcaneCore rolls a crit when an effect deals its damage or heal, after the cast-end procs; vmangos
   rolls it per target before (`target.isCrit`).
 - A spell's heal procs fire before its first heal effect heals (vmangos sums the heal effects into one heal).
-- `Auras:DamageProcCancelsAura` (default true): Wyvern Sting's sleep ends on its damage proc (a proc whose handler returned FAILED does not end it); vmangos has no proc handler for MOD_STUN and keeps
-  it (tooltip: "Any damage will cancel the effect"). False is the literal vmangos behaviour.
+- `Auras:DamageProcCancelsAura` (opt-in, default false): Wyvern Sting's sleep ends on its damage proc (a proc whose handler returned FAILED does
+  not end it), as its tooltip says ("Any damage will cancel the effect"). The default is vmangos: MOD_STUN has no proc handler (HandleNULLProc,
+  UnitAuraProcHandler.cpp:51) and a proc spends only real charges (Unit.cpp:4330-4335), so the uncharged sleep outlasts the damage.
 - A proc-triggered spell is cast without the aura's cast item (vmangos passes it, which makes item auras' negative spells proc on their own).
 - Damage shield bonuses use the direct-damage amount stage (caster and target side) where vmangos takes the bearer's done bonus and, for a
   creature bearer, the attacker's taken bonus.
@@ -166,7 +167,8 @@ placeholder and renumbered the wave-2 world steps down to 38-41, so this step is
 `tests/ArcaneCore.Game.Tests/Procs/ProcEngineBehaviourTests.cs` (only pre-engine APIs: RED on 2ca2f4e1, 9/9),
 `ProcEngineTests.cs` (rows, charges, shields, kills, reflect charges, break chances, seams), `ProcEngineFidelityTests.cs` (leech and Improved
 Drain Mana ticks, the apply-time rule (old auras, a clock that moves inside the event, a refresh by the same hit), PROC_EX_REFLECT on reflected damage, heal procs before the heal, CAST_END alone,
-the damage-proc cancel on a failed proc), `Auras/AuraInterruptEngineTests.cs`,
+the opt-in damage-proc cancel on a failed proc), `AuraChargeReplicationTests.cs` (the client's AURAAPPLICATIONS charge count on apply, per
+spent proc or shield charge, with stacks, clamped), `Auras/AuraInterruptEngineTests.cs`,
 `Duel/DuelCompletionTests.cs`; `tests/ArcaneCore.Data.Tests/Procs/*` (import, rank fill, the build-range load and the schema step on every provider, the `proc-events` command);
 `tests/ArcaneCore.World.Tests/Spells/SpellProcFeatureTests.cs` (load, reload, kills on a map) and the playerbot scenarios
 `Playerbots/Scenarios/ProcScenarioTests.cs` (damage shield in a duel; reflected lethal bolt ends the duel at 1 health).

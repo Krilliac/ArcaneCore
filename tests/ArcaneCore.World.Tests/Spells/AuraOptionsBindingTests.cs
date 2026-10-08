@@ -34,8 +34,20 @@ public sealed class AuraOptionsBindingTests
         Assert.True(new AuraOptions().ProcEngineBreaksDamageAuras);
         Assert.True(SpellRulesAuraEngineFeature.BindOptions(null).ProcEngineBreaksDamageAuras);
         Assert.False(SpellRulesAuraEngineFeature.BindOptions(configuration).ProcEngineBreaksDamageAuras);
-        Assert.True(new AuraOptions().DamageProcCancelsAura);
         Assert.False(SpellRulesAuraEngineFeature.BindOptions(configuration).DamageProcCancelsAura);
+    }
+
+    [Fact]
+    public void DamageProcCancelsAura_DefaultsToVmangos_AndIsAnOptIn()
+    {
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Auras:DamageProcCancelsAura"] = "true",
+        }).Build();
+
+        Assert.False(new AuraOptions().DamageProcCancelsAura); // vmangos: only real charges end a damage-proc aura
+        Assert.False(SpellRulesAuraEngineFeature.BindOptions(null).DamageProcCancelsAura);
+        Assert.True(SpellRulesAuraEngineFeature.BindOptions(configuration).DamageProcCancelsAura);
     }
 
     [Fact]

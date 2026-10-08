@@ -32,9 +32,10 @@ public sealed class AuraOptions
     public bool ProcEngineBreaksDamageAuras { get; set; } = true;
 
     /// <summary>
-    /// An aura that breaks on damage (AuraInterruptFlags DAMAGE) and procs on TAKEN_ANY_DAMAGE (Wyvern Sting's sleep) ends when its damage proc fires.
-    /// vmangos has no proc handler for its aura type and keeps it (HandleNULLProc, no charges); the spell's tooltip says "Any damage will cancel the
-    /// effect". Default true; false is the literal vmangos behaviour.
+    /// Opt-in deviation: an aura that breaks on damage (AuraInterruptFlags DAMAGE) and procs on TAKEN_ANY_DAMAGE (Wyvern Sting's sleep) ends when its
+    /// damage proc fires, as the spell's tooltip says ("Any damage will cancel the effect"). Default false, the vmangos behaviour: MOD_STUN has no proc
+    /// handler (HandleNULLProc, UnitAuraProcHandler.cpp:51) and the proc spends only real charges (Unit.cpp:4330-4335), so an uncharged aura such as
+    /// Wyvern Sting keeps going through the damage.
     /// </summary>
-    public bool DamageProcCancelsAura { get; set; } = true;
+    public bool DamageProcCancelsAura { get; set; }
 }
