@@ -49,8 +49,12 @@ public sealed class SpeedAckHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        // The anticheat checks the acknowledgement's clock (docs/areas/anticheat.md).
+        AntiCheat.AntiCheatFeature? antiCheat = session.Services.GetService<AntiCheat.AntiCheatFeature>();
+        antiCheat?.OnAcknowledgement(session, player, ack.Movement.Time, knockback: false);
         UnitSpeed.SetReal(player, type, ack.Speed);
         MovementHandlers.ApplyObserved(session, player, SpeedPackets.AckOpcode(type), ack.Movement);
+        antiCheat?.AfterMovement(player);
         player.Map?.BroadcastToObservers(player, SpeedPackets.ObserverOpcode(type), SpeedPackets.BuildObserver(player.Guid.Value, player.Movement, ack.Speed));
     }
 }

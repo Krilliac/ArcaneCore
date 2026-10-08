@@ -130,6 +130,9 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(GroupInstanceBindDataModule), DatabaseComponent.Characters, GroupInstanceBindDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Battlegrounds.CharacterBattlegroundDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Battlegrounds.CharacterBattlegroundDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Transports.CharacterTransportDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.CharacterTransportDataModule.Version),
+            (typeof(ArcaneCore.Data.Characters.AntiCheat.CharactersReservedGap41), DatabaseComponent.Characters, 41),
+            (typeof(ArcaneCore.Data.Characters.AntiCheat.CharactersReservedGap42), DatabaseComponent.Characters, 42),
+            (typeof(ArcaneCore.Data.Characters.AntiCheat.AntiCheatDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.AntiCheat.AntiCheatDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),
@@ -151,11 +154,13 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
 
         // Wave 2 (docs/integration/wave2-20261007.md): every step is real. No placeholder is registered, and the lanes' modules
         // were renumbered down so the plan's unclaimed numbers left no gap: world 38-41, characters 35-40.
-        Assert.DoesNotContain(DataModules.All, m => m is IReservedSchemaGap);
-        Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
+        // The anticheat lane (characters 43) holds 41 and 42 with placeholders until the lanes that own them merge; the integration
+        // that merges them deletes the placeholders and restores the empty assertions here.
+        Assert.Equal([41, 42], DataModules.All.OfType<IReservedSchemaGap>().Select(m => m.SchemaVersion).Order());
+        Assert.Equal([41, 42], CharacterDbContext.Schema.ReservedGapVersions.Order());
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
         Assert.Equal(41, WorldDbContext.Schema.CurrentVersion);
-        Assert.Equal(40, CharacterDbContext.Schema.CurrentVersion);
+        Assert.Equal(43, CharacterDbContext.Schema.CurrentVersion); // anticheat (43) over the reserved 41 and 42
         Assert.Equal(4, AuthDbContext.Schema.CurrentVersion);
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })

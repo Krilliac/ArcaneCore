@@ -48,6 +48,7 @@ public static class WorldServiceCollectionExtensions
         // Slow-update thresholds live in their own vmangos-named section (docs/areas/ops-perf.md).
         services.PostConfigure<WorldRuntimeOptions>(o => configuration.GetSection(PerformanceLogOptions.SectionName).Bind(o.Perf));
         services.Configure<Bans.BanOptions>(configuration.GetSection(Bans.BanOptions.SectionName));
+        services.Configure<Game.AntiCheat.AntiCheatOptions>(configuration.GetSection(Game.AntiCheat.AntiCheatOptions.SectionName));
         services.Configure<Playerbots.PlayerbotOptions>(options => Playerbots.PlayerbotOptions.ApplyConfiguration(options, configuration));
         services.AddSingleton<Playerbots.IPlayerbotService>(sp => sp.GetRequiredService<Playerbots.ManagedPlayerbotFeature>());
 

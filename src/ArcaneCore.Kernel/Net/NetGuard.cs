@@ -29,8 +29,12 @@ public sealed class NetGuard
     private readonly LogGate _tableFull;
     private readonly LogGate _frameTimeout;
     private readonly LogGate _unauthenticatedTimeout;
+    private readonly LogGate _packetDropped;
+    private readonly LogGate _packetFlood;
     private long _refusedConnections;
     private long _refusedAuthAttempts;
+    private long _droppedPackets;
+    private long _floodDisconnects;
 
     /// <param name="options">The <c>Net:Protection</c> section.</param>
     /// <param name="daemonMaxConnections">The daemon's own global cap (Auth:/World:MaxConnections), read at each admission.</param>
@@ -58,6 +62,45 @@ public sealed class NetGuard
         _tableFull = new LogGate(interval, ticks);
         _frameTimeout = new LogGate(interval, ticks);
         _unauthenticatedTimeout = new LogGate(interval, ticks);
+        _packetDropped = new LogGate(interval, ticks);
+        _packetFlood = new LogGate(interval, ticks);
+    }
+
+    /// <summary>World packets dropped by a connection's packet budgets (<see cref="OpcodeRateLimiter"/>) so far.</summary>
+    public long DroppedPackets => Interlocked.Read(ref _droppedPackets);
+
+    /// <summary>World connections closed as a packet flood so far.</summary>
+    public long FloodDisconnects => Interlocked.Read(ref _floodDisconnects);
+
+    /// <summary>
+    /// The packet budgets of one new world connection (Net:Protection:World*), or null when every budget is 0. Each
+    /// connection owns its limiter (it is not thread-safe); the options are read when the connection starts.
+    /// </summary>
+    public static OpcodeRateLimiter? CreatePacketLimiter(NetProtectionOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        var limiter = new OpcodeRateLimiter(options.WorldOpcodeBurst, options.WorldOpcodeRefillPerSecond, options.WorldPacketsPerSecond, options.WorldFloodPacketsPerSecond);
+        return limiter.IsEnabled ? limiter : null;
+    }
+
+    /// <summary>A packet was over its connection's budget and was dropped; one rate-limited line per interval.</summary>
+    public void ReportPacketDropped(string endpoint, string opcode)
+    {
+        Interlocked.Increment(ref _droppedPackets);
+        if (_packetDropped.TryEnter(out int suppressed))
+        {
+            _logger.LogWarning("[{Endpoint}] {Opcode} over the connection's packet budget; dropped ({Suppressed} more dropped since the last line)", endpoint, opcode, suppressed);
+        }
+    }
+
+    /// <summary>A connection sent more packets in one second than Net:Protection:WorldFloodPacketsPerSecond; the caller closes it.</summary>
+    public void ReportPacketFlood(string endpoint)
+    {
+        Interlocked.Increment(ref _floodDisconnects);
+        if (_packetFlood.TryEnter(out int suppressed))
+        {
+            _logger.LogWarning("[{Endpoint}] packet flood over {Limit} packets per second; disconnecting ({Suppressed} more since the last line)", endpoint, Options.WorldFloodPacketsPerSecond, suppressed);
+        }
     }
 
     public NetProtectionOptions Options { get; }

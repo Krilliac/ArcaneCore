@@ -14,6 +14,7 @@ How to read the tables:
 
 ## Sections
 
+- [`AntiCheat`](#anticheat)
 - [`Auras`](#auras)
 - [`Auth`](#auth)
 - [`Bans`](#bans)
@@ -83,6 +84,54 @@ How to read the tables:
 - [`World:Zones`](#worldzones)
 - [Keys read by name](#keys-read-by-name)
 - [Aliases and framework sections](#aliases-and-framework-sections)
+
+## `AntiCheat`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `AntiCheat:Action` | `AntiCheatAction` | `Log` | - | The highest escalation ever applied: None (score only), Log, GmAlert, Rubberband, Kick. A score past a threshold whose action is above this ceiling gets the ceiling instead. Bound from AntiCheat:Action; default Log. Values: `None`, `Log`, `GmAlert`, `Rubberband`, `Kick`. |
+| `AntiCheat:Autoban:DecayPerHour` | `float` | `1` | - | Points forgotten per hour. Default 1. |
+| `AntiCheat:Autoban:Enabled` | `bool` | `false` | - | Ban accounts on repeated kicks. Default false. |
+| `AntiCheat:Autoban:FirstBanSeconds` | `long` | `86400` | - | Seconds of the first ban (0 is permanent). Default 86400 (one day). |
+| `AntiCheat:Autoban:HistoryDays` | `int` | `180` | - | Earlier AntiCheat bans older than this many days do not move the account up the ladder. Default 180. |
+| `AntiCheat:Autoban:KickPoints` | `float` | `10` | - | Points one kick adds. Default 10. |
+| `AntiCheat:Autoban:LaterBanSeconds` | `long` | `0` | - | Seconds of the third and every later ban (0 is permanent). Default 0 (permanent). |
+| `AntiCheat:Autoban:SecondBanSeconds` | `long` | `604800` | - | Seconds of the second ban (0 is permanent). Default 604800 (seven days). |
+| `AntiCheat:Autoban:Threshold` | `float` | `25` | - | Points at which the account is banned. Default 25: the third kick within five hours of the first (the fork's 30 with any decay at all needs a fourth kick). |
+| `AntiCheat:BaselineGapMs` | `int` | `3000` | - | A gap this long (milliseconds) between two movement packets starts a new baseline (loading screen, AFK). Default 3000. |
+| `AntiCheat:BurstPacketsPerSecond` | `int` | `50` | - | Movement packets per second, by the receive clock AND the client's own clock, that count as a burst. Default 50. |
+| `AntiCheat:ClientTimeRegressionMs` | `int` | `500` | - | A client timestamp that goes back by more than this many milliseconds is scored. Default 500. |
+| `AntiCheat:DecayPerSecond` | `float` | `2` | - | Score points forgotten per second, so occasional noise never adds up (fork AntiCheat.Score.DecayPerSec). Default 2. |
+| `AntiCheat:Enabled` | `bool` | `true` | - | Run the checks at all. Bound from AntiCheat:Enabled; default true (log only, see `Action`). |
+| `AntiCheat:ExemptManagedBots` | `bool` | `true` | - | The server's own managed playerbot sessions are not checked (they are trusted server code). Bound from AntiCheat:ExemptManagedBots; default true. |
+| `AntiCheat:ExemptSecurity` | `AccountSecurity` | `Moderator` | - | Accounts at or above this security level are not checked; Player checks everyone (a GM in GM mode is still exempt). Bound from AntiCheat:ExemptSecurity; default Moderator (every staff account). Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `AntiCheat:FallSuppressYards` | `float` | `20` | - | A drop of this many yards that ends without MSG_MOVE_FALL_LAND is fall-damage suppression. Default 20. |
+| `AntiCheat:GmAlertIntervalSeconds` | `int` | `10` | - | At most one GM alert per offender per this many seconds. Default 10. |
+| `AntiCheat:LatencySlackMs` | `int` | `1000` | - | The base of the latency slack in milliseconds: the time budget of a movement step is the client's own elapsed time, capped by the server's receive interval plus this plus twice the ping latency average. Default 1000. |
+| `AntiCheat:Log:CoalesceMs` | `int` | `5000` | - | Repeats of one violation type by one character within this many milliseconds are folded into the row already queued (its count goes up) instead of adding rows. Default 5000. |
+| `AntiCheat:Log:FlushIntervalSeconds` | `int` | `10` | - | Seconds between two flushes of the queued rows. Default 10. |
+| `AntiCheat:Log:MaxQueuedRows` | `int` | `10000` | - | Most rows waiting in memory; beyond it the newest are dropped and counted. Default 10000. |
+| `AntiCheat:Log:MaxRowsPerFlush` | `int` | `500` | - | Most rows written by one flush (the rest wait for the next). Default 500. |
+| `AntiCheat:Log:Persist` | `bool` | `true` | - | Write violations to character_anticheat_log. Default true. |
+| `AntiCheat:MaxLatencySlackMs` | `int` | `3000` | - | The most the latency slack may grow to, in milliseconds. Default 3000. |
+| `AntiCheat:MaxTimeSkipMs` | `int` | `10000` | - | A CMSG_MOVE_TIME_SKIPPED reporting more than this many milliseconds is scored (a client freeze rarely exceeds it). Default 10000. |
+| `AntiCheat:MaxTimeSkipsPer10Seconds` | `int` | `10` | - | More CMSG_MOVE_TIME_SKIPPED than this in ten seconds is scored as spam. Default 10. |
+| `AntiCheat:RubberbandIntervalMs` | `int` | `2000` | - | At most one rubberband per offender per this many milliseconds. Default 2000. |
+| `AntiCheat:ScoreGmAlert` | `float` | `30` | - | Score at which the GM alert applies (fork AntiCheat.Score.Warn). Default 30. |
+| `AntiCheat:ScoreKick` | `float` | `120` | - | Score at which the session is disconnected (fork AntiCheat.Score.Kick). Default 120. |
+| `AntiCheat:ScoreRubberband` | `float` | `60` | - | Score at which the player is moved back to the last validated position (fork AntiCheat.Score.Rubberband). Default 60. |
+| `AntiCheat:SpeedChangeGraceMs` | `int` | `2000` | - | After a speed change is acknowledged the previous (higher) speed still counts for this long, in milliseconds, plus the latency slack, so packets already in flight are never judged by the new speed. Default 2000. |
+| `AntiCheat:SpeedClock:CooldownMs` | `int` | `10000` | - | After firing it stays silent for this long (milliseconds). Default 10000. |
+| `AntiCheat:SpeedClock:Enabled` | `bool` | `true` | - | Run it. Default true. |
+| `AntiCheat:SpeedClock:MaxGapMs` | `int` | `3000` | - | A pair further apart than this (milliseconds) is ignored (the player stood still or the client froze). Default 3000. |
+| `AntiCheat:SpeedClock:MinSamples` | `int` | `12` | - | Usable pairs needed before the window is judged. Default 12. |
+| `AntiCheat:SpeedClock:SustainWindows` | `int` | `3` | - | Consecutive hot evaluations before it fires. Default 3. |
+| `AntiCheat:SpeedClock:TolerancePercent` | `int` | `30` | - | How much faster than real time, in percent, the client clock may run. Default 30. |
+| `AntiCheat:SpeedClock:Window` | `int` | `20` | - | Pairs of consecutive packets in the window. Default 20. |
+| `AntiCheat:SpeedSlackYards` | `float` | `2` | - | Distance in yards that one packet may always cover on top of the speed budget (rounding, collision push). Default 2. |
+| `AntiCheat:SpeedTolerancePercent` | `float` | `10` | - | Tolerance above the allowed speed, in percent, before the speed check scores. Default 10. |
+| `AntiCheat:TeleportDistance` | `float` | `50` | - | One packet moving farther than this, plus what the speed covers in the latency slack, is a teleport (fork AntiCheat.Teleport.Distance). Default 50. |
+| `AntiCheat:TerrainChecks` | `bool` | `true` | - | Run the checks that need world geometry (swimming out of water, climbing into the air, walking through a wall). Each runs only where the terrain or vmap data for that spot is actually loaded; without data it never scores. Default true. |
 
 ## `Auras`
 
@@ -440,6 +489,10 @@ How to read the tables:
 | `Net:Protection:LogonUnauthenticatedLifetime` | `TimeSpan` | `00:00:30` | - | Longest a logon connection may exist without a successful proof, counted from accept; the connection is closed when it expires. 00:00:00 disables. Auth:MaxSessionDurationSeconds (300, vmangos MaxSessionDuration) still bounds the whole connection; this closes an idle or guessing one much sooner. The world daemon's equivalent is World:PreAuthTimeout (retail). |
 | `Net:Protection:MaxConnectionsPerIp` | `int` | `16` | - | Simultaneous connections one client IP address may hold on a listener; 0 disables. Applied together with the daemon's own cap (Auth:MaxConnectionsPerIp, World:MaxConnectionsPerIp): when both are set the lower one wins. A retail client holds one connection per daemon. Deviation from retail (vmangos has no per-address cap), on by default. |
 | `Net:Protection:MaxTrackedAddresses` | `int` | `4096` | - | Most client addresses the per-address table tracks (rounded up to a power of two). Memory is fixed at start (about 48 bytes per slot) and nothing is allocated per connection. When the table is full and no idle slot exists the newcomer is still admitted: the table forgets the least recently seen address of the probe window (preferring one that is not being limited) and writes one rate-limited log line. A full table measures less; it never refuses a connection (the connection caps are the fail-closed limit). |
+| `Net:Protection:WorldFloodPacketsPerSecond` | `int` | `8000` | - | World daemon only: packets in one one-second window that close the connection as a flood (one rate-limited log line); 0 disables. Above `WorldPacketsPerSecond`, so a burst is dropped long before it disconnects. |
+| `Net:Protection:WorldOpcodeBurst` | `int` | `4000` | - | World daemon only: the capacity of each per-opcode token bucket of an authenticated connection (`Net.OpcodeRateLimiter`, the MaNGOS Zero anticheat fork's gateway RateLimiter); a packet that finds its opcode's bucket empty is dropped (not handled) and counted, the connection stays. 0 disables the per-opcode buckets. Far above a retail client: an empty client cache in a crowded city sends a few hundred queries of one opcode at once, and the world queue's own tests treat a 3000-packet burst as heavy but legitimate. Deviation from retail (vmangos handles every packet), on by default. Read when the session starts. |
+| `Net:Protection:WorldOpcodeRefillPerSecond` | `double` | `1000` | - | World daemon only: tokens a per-opcode bucket regains per second (see `WorldOpcodeBurst`). |
+| `Net:Protection:WorldPacketsPerSecond` | `int` | `4000` | - | World daemon only: packets of any opcode one connection may send in a one-second window before the rest of that window is dropped (counted, the connection stays); 0 disables. A retail client sends a few tens per second. |
 
 ## `NpcServices`
 

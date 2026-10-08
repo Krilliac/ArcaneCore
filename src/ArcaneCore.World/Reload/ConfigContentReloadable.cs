@@ -1,8 +1,10 @@
+using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Reload;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.Configuration;
@@ -52,6 +54,7 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
         var social = new SocialOptions();
         var playerbots = new PlayerbotOptions();
         var locomotion = new LocomotionOptions();
+        var antiCheat = new AntiCheatOptions();
         IConfigurationRoot snapshot = fresh.Build();
         try
         {
@@ -61,6 +64,7 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
             snapshot.GetSection(SocialOptions.SectionName).Bind(social);
             PlayerbotOptions.ApplyConfiguration(playerbots, snapshot);
             snapshot.GetSection(LocomotionOptions.SectionName).Bind(locomotion);
+            snapshot.GetSection(AntiCheatOptions.SectionName).Bind(antiCheat);
         }
         finally
         {
@@ -96,11 +100,13 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
         WorldOptions? liveListener = services.GetService<IOptions<WorldOptions>>()?.Value;
         SocialOptions? liveSocial = services.GetService<SocialFeature>()?.Options;
         PlayerbotOptions? livePlayerbots = services.GetService<IOptions<PlayerbotOptions>>()?.Value;
-        return Task.FromResult<ContentCandidate>(new ConfigCandidate(candidateView, liveListener, liveSocial, livePlayerbots, substitutions));
+        AntiCheatFeature? liveAntiCheat = services.GetService<AntiCheatFeature>();
+        return Task.FromResult<ContentCandidate>(new ConfigCandidate(candidateView, liveListener, liveSocial, livePlayerbots, substitutions, antiCheat, liveAntiCheat));
     }
 
-    private sealed class ConfigCandidate(WorldConfigView candidate, WorldOptions? liveListener, SocialOptions? liveSocial, PlayerbotOptions? livePlayerbots,
-        IReadOnlyList<string> substitutions) : ContentCandidate
+    private sealed class ConfigCandidate(
+        WorldConfigView candidate, WorldOptions? liveListener, SocialOptions? liveSocial, PlayerbotOptions? livePlayerbots,
+        IReadOnlyList<string> substitutions, AntiCheatOptions antiCheat, AntiCheatFeature? liveAntiCheat) : ContentCandidate
     {
         private string _summary = "configuration";
 
@@ -117,6 +123,8 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
                 }
             }
 
+            // The AntiCheat section is applied as a whole (docs/areas/anticheat.md): one bad key rejects the reload.
+            problems.AddRange(antiCheat.Validate());
             return problems;
         }
 
@@ -166,6 +174,12 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
                 int refreshed = 0;
                 transaction.Step("player speed rates", () => refreshed = SpeedRates.ApplyToAll(world, liveLocomotion!), static () => { });
                 transaction.Note($"Player speed rates changed; the speeds of {refreshed} online player(s) were re-sent.");
+            }
+
+            if (liveAntiCheat is not null)
+            {
+                AntiCheatOptions previous = liveAntiCheat.Options;
+                transaction.Step(AntiCheatOptions.SectionName, () => liveAntiCheat.ApplyOptions(antiCheat), () => liveAntiCheat.ApplyOptions(previous));
             }
 
             _summary = changed == 0 ? "no changes" : $"{changed} option(s) changed";

@@ -204,6 +204,15 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.mute` | 1 | Moderator | stored level through the map | Syntax: .mute [$playername] $duration [$reason] Disable the chat of the player's account. $duration is a number of minutes or like 1d2h30m (1 second to 365 days). The player must be online. |
 | `.unmute` | 1 | Moderator | stored level through the map | Syntax: .unmute [$playername] Enable the chat of the player's account again. The character may be offline. |
 | `.repairitems` | 3 | GameMaster | declared retail level | Syntax: .repairitems [#itemGuid] Repair durability on the selected online player or yourself. |
+| `.anticheat` ... | 3 | GameMaster | stored level through the map | Anticheat scores, reports and settings. |
+| `.anticheat status` | 3 | GameMaster | stored level through the map | Syntax: .anticheat status [$name] Show the anticheat settings and the live score of the character (or the selected player, or you). |
+| `.anticheat top` | 3 | GameMaster | stored level through the map | Syntax: .anticheat top [#count] List the highest live scores (10 by default, at most 50). |
+| `.anticheat report` | 3 | GameMaster | stored level through the map | Syntax: .anticheat report [$name] Show the newest violation log rows of the character. |
+| `.anticheat set` | 6 | Administrator | stored level through the map | Syntax: .anticheat set $field $value Change a live setting until the next .reload config: enabled, action (none\|log\|gmalert\|rubberband\|kick), alert, rubberband, kick, decay, speedtolerance, teleport, terrain, persist, autoban. |
+| `.anticheat warn` | 3 | GameMaster | stored level through the map | Syntax: .anticheat warn [$name] Send the character an on-screen anticheat warning. |
+| `.anticheat delete` | 6 | Administrator | stored level through the map | Syntax: .anticheat delete [$name] Forget the character's live score and delete its violation log rows. |
+| `.anticheat score` | 3 | GameMaster | stored level through the map | Syntax: .anticheat score [$name] [#value] Show the character's live score; with a value (administrators) set it and apply what it warrants. |
+| `.anticheat rubberband` | 3 | GameMaster | stored level through the map | Syntax: .anticheat rubberband [$name] Move the online character back to its last validated position. |
 | `.creature` ... | 3 | GameMaster | stored level through the map | Creature commands. |
 | `.creature add` | 3 | GameMaster | stored level through the map | Syntax: .creature add &lt;entry&gt; — spawn a temporary creature where you stand (not saved). |
 | `.creature info` | 3 | GameMaster | stored level through the map | Syntax: .creature info — details of the selected creature. |

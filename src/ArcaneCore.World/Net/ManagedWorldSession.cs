@@ -93,6 +93,7 @@ public sealed partial class WorldSession
             || (player.Map is null && opcode != WorldOpcode.MsgMoveWorldportAck)) return false;
         if (ManagedBudget is { } budget && !budget.TryTake()) return false;
         ManagedDispatchObserver?.Invoke(opcode);
+        _currentPacketReceivedMs = (uint)Kernel.Logging.Clock.Milliseconds();
         handler.World(this, player, payload);
         return _state == SessionState.InWorld;
     }
