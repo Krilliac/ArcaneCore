@@ -27,7 +27,8 @@ namespace ArcaneCore.Game.Spells;
 /// Recomputes other handlers' auras need (holder added or removed, <see cref="SpellSystem.HolderAdded"/>): a flat attack power aura (MOD_ATTACK_POWER,
 /// MOD_RANGED_ATTACK_POWER: vmangos HandleStatModifier(UNIT_MOD_ATTACK_POWER) recomputes the damage, Unit.cpp:7745-7790) and a disarm
 /// (HandleAuraModDisarm: swing time and damage of the main hand, <see cref="PlayerStatSystem.OnDisarmChanged"/>); on a creature also the attack power
-/// percent. A stack refresh of such an aura that changes its amount without a new holder is not seen (no 1.12 attack power aura stacks).
+/// percent. A refresh in place or a stack change that re-applies a changed amount without a new holder is seen through
+/// <see cref="SpellSystem.HolderAmountsChanged"/> (vmangos re-applies the amount through the handler, whose HandleStatModifier recomputes).
 /// </para>
 /// World thread only.
 /// </summary>
@@ -48,6 +49,7 @@ public sealed class CombatStatAuras : ISpellHandlerModule
         system.RegisterAura(AuraType.ModSpellDamageOfStatPercent, new AuraHandler((_, h, a, apply) => ApplySpellDamageOfStat(h, a, apply), null));
         system.HolderAdded += holder => OnHolderChanged(system, holder);
         system.HolderRemoved += holder => OnHolderChanged(system, holder);
+        system.HolderAmountsChanged += holder => OnHolderChanged(system, holder);
     }
 
     // --- handlers --------------------------------------------------------------------------------

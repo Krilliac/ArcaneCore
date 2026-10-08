@@ -19,7 +19,7 @@ namespace ArcaneCore.Game.Stats;
 /// </list>
 /// With no aura the result is the template range the creature spawned with (<c>Creature.InitializeFields</c>), so a creature nobody touched keeps
 /// its fields. Summoned creatures (pets, guardians, totems) are left to their own stat code. Run by <see cref="CombatStatAuras"/> when such an aura
-/// comes or goes; world thread only.
+/// comes or goes, or changes its amount in place (a refresh or a stack change); world thread only.
 /// </summary>
 public static class CreatureDamageStats
 {

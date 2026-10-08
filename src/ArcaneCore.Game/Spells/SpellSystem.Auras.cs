@@ -316,6 +316,7 @@ public sealed partial class SpellSystem
         existing.Duration = fresh.Duration;
         existing.MaxDuration = fresh.MaxDuration;
         existing.ChannelTarget = fresh.ChannelTarget;
+        bool amountsChanged = false;
         for (int i = 0; i < SpellConstants.MaxEffects; i++)
         {
             if (existing.Auras[i] is not { } aura || fresh.Auras[i] is not { } source)
@@ -336,11 +337,16 @@ public sealed partial class SpellSystem
                 aura.Amount = source.Amount;
                 aura.UnitAmount = source.UnitAmount;
                 handler?.Apply?.Invoke(this, existing, aura, true);
+                amountsChanged = true;
             }
         }
 
         WriteAuraApplications(existing);
         SendAuraDuration(existing);
+        if (amountsChanged)
+        {
+            RaiseHolderAmountsChanged(existing);
+        }
     }
 
     /// <summary>
@@ -369,6 +375,7 @@ public sealed partial class SpellSystem
         }
 
         bool refresh = stacks >= holder.StackAmount;
+        bool amountsChanged = false;
         if (stacks != holder.StackAmount)
         {
             holder.StackAmount = (byte)stacks;
@@ -392,8 +399,14 @@ public sealed partial class SpellSystem
                     handler?.Apply?.Invoke(this, holder, aura, false);
                     aura.Amount = amount;
                     handler?.Apply?.Invoke(this, holder, aura, true);
+                    amountsChanged = true;
                 }
             }
+        }
+
+        if (amountsChanged)
+        {
+            RaiseHolderAmountsChanged(holder);
         }
 
         if (refresh)
