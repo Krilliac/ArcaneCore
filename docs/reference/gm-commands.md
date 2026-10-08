@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 5 |
 | `Moderator` | 1 | 21 |
-| `GameMaster` | 3 | 130 |
-| `Administrator` | 6 | 187 |
+| `GameMaster` | 3 | 131 |
+| `Administrator` | 6 | 188 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode` and `.hotmodule`) are on; all of those default to off.
 
@@ -213,6 +213,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.fx message` | 3 | GameMaster | stored level through the map | Syntax: .fx message [self\|target\|zone\|map\|server] $text Show large text in the middle of the screen (SMSG_AREA_TRIGGER_MESSAGE). |
 | `.fx weather` | 6 | Administrator | stored level through the map | Syntax: .fx weather #weathertype #status [zone\|map\|server] .wchange for your zone (default), every occupied zone of your map, or of every map. |
 | `.fx event` | 3 | GameMaster | stored level through the map | Syntax: .fx event [$preset] [self\|target\|zone\|map\|server] (default self; map and server need an Administrator) Fire a named set of effects at once; no preset lists them. |
+| `.fx lookup` | 3 | GameMaster | stored level through the map | Syntax: .fx lookup sound\|music\|cinematic\|visual\|worldstate #id\|$namepart Search the client tables of World:GmCommands:LiveFxDbcDirectory (at most 20 lines). |
 | `.auras` | 3 | GameMaster | stored level through the map | Syntax: .auras [page] Display active auras on the selected player or yourself (12 per page). |
 | `.spawninfo` ... | 2 | GameMaster | declared retail level | Syntax: .spawninfo $subcommand Type .spawninfo to see the list of possible subcommands. Read-only. |
 | `.spawninfo creature` | 2 | GameMaster | declared retail level | Syntax: .spawninfo creature [#radius] List the creatures within #radius yards (default 40) with their spawn origin and respawn state, nearest first. |

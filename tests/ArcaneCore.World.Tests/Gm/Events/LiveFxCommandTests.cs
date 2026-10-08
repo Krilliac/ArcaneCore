@@ -27,7 +27,7 @@ namespace ArcaneCore.World.Tests.Gm.Events;
 /// <c>.fx</c> end to end over real sessions: every effect's exact bytes reach exactly the sessions its scope names
 /// (self, target, zone, map, server), and no other session sees that opcode.
 /// </summary>
-public sealed class LiveFxCommandTests
+public sealed partial class LiveFxCommandTests
 {
     private static readonly TimeSpan Quiet = TimeSpan.FromMilliseconds(300);
 

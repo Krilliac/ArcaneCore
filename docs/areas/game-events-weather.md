@@ -290,10 +290,40 @@ cannot spam the realm. The reply says how many players were reached.
 | `.fx event` [preset] | the above | Named compositions: `faire` (music 8440, `go_scripts.cpp:275`, plus a welcome), `celebrate` (cheer 8574, `fireworks_show.cpp:51`), `invasion` (horn 3439, `BattleGroundDefines.h:45`, a zone-under-attack alert for each player's own zone, a warning). With no preset it lists them. |
 
 Dropped from the plan: SMSG_OVERRIDE_LIGHT (0x411 is not a 5875 opcode; ArcaneCore's table ends at 827) and the movie command (no
-vanilla packet). The plan's `.event` meta-command is `.fx event`, because `.event` is the retail game-event command. Sound, music,
-cinematic and visual ids are not checked against the client DBCs (no SoundEntries, CinematicSequences or SpellVisualKit store is
-loaded); the client ignores an unknown id. Tests: `tests/ArcaneCore.World.Tests/Gm/Events/LiveFxCommandTests.cs` assert the exact
-bytes per session for every scope.
+vanilla packet). The plan's `.event` meta-command is `.fx event`, because `.event` is the retail game-event command. Tests:
+`tests/ArcaneCore.World.Tests/Gm/Events/LiveFxCommandTests.cs` assert the exact bytes per session for every scope.
+
+#### Client data: id checks and `.fx lookup`
+
+`World:GmCommands:LiveFxDbcDirectory` names a directory of the developer's own build-5875 client DBCs (nothing is shipped; the
+client-effective set, patch-2.MPQ over patch.MPQ over dbc.MPQ, is what the tests use). `LiveFxDataFeature` loads at startup
+SoundEntries, ZoneMusic, CinematicSequences, SpellVisualKit, SpellVisualEffectName and WorldStateUI .dbc from it
+(`src/ArcaneCore.Data/Content/ClientEffects/`, one reader per table over `DbcFile`, layouts checked against mangoszero
+DBCStructure_reference.h and vmangos DBCfmt.h; real row counts 4623, 99, 10, 1772, 775, 20) and logs one line with the counts.
+
+- Unset (the default): a startup line says the ids stay unchecked; every id is sent as before (the client ignores an unknown one).
+  vmangos' debug play commands refuse an unknown sound or cinematic against their own loaded stores (DebugCommands.cpp:471-536).
+- Set: `.fx music` and `.fx sound` refuse an id not in SoundEntries ("Sound #N does not exist."), `.fx cinematic` one not in
+  CinematicSequences ("Cinematic #N does not exist.") and `.fx visual` one not in SpellVisualKit ("Spell visual kit #N does not
+  exist."), before anything is sent. A file missing from the directory is a startup warning and leaves its kind unchecked; a missing
+  directory or a malformed file stops the daemon, as every configured DBC does. Each `.fx event` preset declares its sound ids
+  (`Preset.SoundIds`; a test asserts they are exactly the ones it sends) and a missing one is a startup warning. All three
+  (8440 Darkmoon_Faire_Music, 8574 CrowdCheerHorde2, 3439 HornGoober) exist in the client's SoundEntries.dbc.
+
+`.fx lookup sound|music|cinematic|visual|worldstate` #id or name part prints at most 20 matches and then how many were left out:
+
+| Kind | Searches | Line |
+|---|---|---|
+| `sound` | id; name or file name | `Sound #8440 Darkmoon_Faire_Music (type 28): Sound\Music\WorldEvents\DarkMoonFaire_2.mp3 (+N more files)` |
+| `music` | ZoneMusic id; set name | the set's day and night SoundEntries ids (and names), the ids `.fx music` plays |
+| `cinematic` | id; its sound's name | sound and CinematicCamera ids |
+| `visual` | kit id; an effect's name or model, or its sound's name | animation, SpellVisualEffectName effects, sound |
+| `worldstate` | a field the row shows (`%NNNNw` in its text, its icon field or its capture-point fields) or the row id; text, tooltip, icon | e.g. field 1581: `WorldStateUI #2 (map 489, area 0): %1581w/%1601w \| Alliance flag captures [icon field 2339]` |
+
+Without the file a lookup answers "<File> is not loaded (set World:GmCommands:LiveFxDbcDirectory)." `.fx worldstate` itself stays
+unchecked: any field may be set, the HUD shows only the ones a WorldStateUI row reads. Tests:
+`tests/ArcaneCore.World.Tests/Gm/Events/LiveFxCommandTests.ClientData.cs` (synthetic DBC images, plus a real-data probe gated on
+`ARCANECORE_TEST_DBC_DIR`) and `tests/ArcaneCore.Data.Tests/ClientEffects/ClientEffectDbcReaderTests.cs`.
 
 ## Not delivered (limits)
 

@@ -45,6 +45,9 @@ public sealed class LiveFxCommands : ICommandGroup
     /// <summary>The header of the preset list.</summary>
     public const string PresetListText = "Presets: {0}";
 
+    /// <summary>The reply when a client table is loaded (<see cref="LiveFxData"/>) and does not hold the id: kind, id.</summary>
+    public const string UnknownIdText = "{0} #{1} does not exist.";
+
     /// <summary>The longest screen message in UTF-8 bytes (vmangos formats it into a 1024-byte buffer, WorldSession.cpp:885-889).</summary>
     public const int MaxMessageBytes = 1023;
 
@@ -70,6 +73,7 @@ public sealed class LiveFxCommands : ICommandGroup
                 new ChatCommand("message", AccountSecurity.GameMaster, "Syntax: .fx message [self|target|zone|map|server] $text\nShow large text in the middle of the screen (SMSG_AREA_TRIGGER_MESSAGE).", Message),
                 new ChatCommand("weather", AccountSecurity.Administrator, "Syntax: .fx weather #weathertype #status [zone|map|server]\n.wchange for your zone (default), every occupied zone of your map, or of every map.", Weather),
                 new ChatCommand("event", AccountSecurity.GameMaster, "Syntax: .fx event [$preset] " + ScopeHelp + "\nFire a named set of effects at once; no preset lists them.", Event),
+                new ChatCommand("lookup", AccountSecurity.GameMaster, "Syntax: .fx lookup sound|music|cinematic|visual|worldstate #id|$namepart\nSearch the client tables of World:GmCommands:LiveFxDbcDirectory (at most 20 lines).", Lookup),
             ]),
     ];
 
@@ -77,8 +81,11 @@ public sealed class LiveFxCommands : ICommandGroup
     public bool IsEnabled(IServiceProvider? services)
         => services?.GetService<IConfiguration>() is not { } configuration || GmOptions.Bind(configuration).LiveFx;
 
-    /// <summary>One named composition of effects; every step is sent to every recipient.</summary>
-    public sealed record Preset(string Name, string Description, IReadOnlyList<Func<Player, (WorldOpcode Opcode, byte[] Payload)>> Steps);
+    /// <summary>
+    /// One named composition of effects; every step is sent to every recipient. <paramref name="SoundIds"/> lists every
+    /// SoundEntries id the steps play (music or sound), so the ids can be checked against the client's SoundEntries.dbc.
+    /// </summary>
+    public sealed record Preset(string Name, string Description, IReadOnlyList<uint> SoundIds, IReadOnlyList<Func<Player, (WorldOpcode Opcode, byte[] Payload)>> Steps);
 
     /// <summary>MUSIC_DARKMOON_FAIRE_MUSIC (vmangos scripts/world/go_scripts.cpp:275).</summary>
     public const uint DarkmoonFaireMusic = 8440;
@@ -89,19 +96,23 @@ public sealed class LiveFxCommands : ICommandGroup
     /// <summary>SOUND_BG_START, the battleground start horn (vmangos Battlegrounds/BattleGroundDefines.h:45).</summary>
     public const uint BattleStartSound = 3439;
 
-    /// <summary>The <c>.fx event</c> presets. Every id is one vmangos itself sends; the texts are ArcaneCore's.</summary>
+    /// <summary>
+    /// The <c>.fx event</c> presets. Every id is one vmangos itself sends; the texts are ArcaneCore's. Checked against the
+    /// developer's build-5875 SoundEntries.dbc (patch-2.MPQ copy): 8440 Darkmoon_Faire_Music (type 28), 8574 CrowdCheerHorde2
+    /// (type 1), 3439 HornGoober (type 25).
+    /// </summary>
     public static IReadOnlyList<Preset> Presets { get; } =
     [
-        new("faire", "Darkmoon Faire music and a welcome",
+        new("faire", "Darkmoon Faire music and a welcome", [DarkmoonFaireMusic],
         [
             _ => (WorldOpcode.SmsgPlayMusic, LiveFxPackets.PlayMusic(DarkmoonFaireMusic)),
             _ => (WorldOpcode.SmsgAreaTriggerMessage, LiveFxPackets.ScreenMessage("The Darkmoon Faire has come to town!")),
         ]),
-        new("celebrate", "a crowd cheer",
+        new("celebrate", "a crowd cheer", [CheerSound],
         [
             _ => (WorldOpcode.SmsgPlaySound, LiveFxPackets.PlaySound(CheerSound)),
         ]),
-        new("invasion", "battle horn, zone-under-attack alert for each player's own zone, and a warning",
+        new("invasion", "battle horn, zone-under-attack alert for each player's own zone, and a warning", [BattleStartSound],
         [
             _ => (WorldOpcode.SmsgPlaySound, LiveFxPackets.PlaySound(BattleStartSound)),
             p => (WorldOpcode.SmsgZoneUnderAttack, LiveFxPackets.ZoneUnderAttack(p.ZoneId)),
@@ -110,13 +121,13 @@ public sealed class LiveFxCommands : ICommandGroup
     ];
 
     private static bool Music(CommandContext context, string args)
-        => SimpleU32(context, args, "Hsound", "Music", id => (WorldOpcode.SmsgPlayMusic, LiveFxPackets.PlayMusic(id)));
+        => SimpleU32(context, args, "Hsound", "Music", "Sound", data => data.Sounds is { } t ? t.Contains : null, id => (WorldOpcode.SmsgPlayMusic, LiveFxPackets.PlayMusic(id)));
 
     private static bool Sound(CommandContext context, string args)
-        => SimpleU32(context, args, "Hsound", "Sound", id => (WorldOpcode.SmsgPlaySound, LiveFxPackets.PlaySound(id)));
+        => SimpleU32(context, args, "Hsound", "Sound", "Sound", data => data.Sounds is { } t ? t.Contains : null, id => (WorldOpcode.SmsgPlaySound, LiveFxPackets.PlaySound(id)));
 
     private static bool Cinematic(CommandContext context, string args)
-        => SimpleU32(context, args, null, "Cinematic", id => (WorldOpcode.SmsgTriggerCinematic, LiveFxPackets.TriggerCinematic(id)));
+        => SimpleU32(context, args, null, "Cinematic", "Cinematic", data => data.Cinematics is { } t ? t.Contains : null, id => (WorldOpcode.SmsgTriggerCinematic, LiveFxPackets.TriggerCinematic(id)));
 
     private static bool Visual(CommandContext context, string args)
     {
@@ -124,6 +135,11 @@ public sealed class LiveFxCommands : ICommandGroup
         if (!parsed.ExtractUInt32(out uint kit) || !TryScope(parsed, out FxScope scope))
         {
             return false;
+        }
+
+        if (Unknown(context, "Spell visual kit", kit, data => data.VisualKits is { } t ? t.Contains : null))
+        {
+            return true;
         }
 
         if (FxScopes.Resolve(context, scope) is not { } recipients)
@@ -316,8 +332,32 @@ public sealed class LiveFxCommands : ICommandGroup
         return true;
     }
 
+    private static bool Lookup(CommandContext context, string args)
+    {
+        string text = args.Trim();
+        int space = text.IndexOf(' ', StringComparison.Ordinal);
+        if (space < 0)
+        {
+            return false;
+        }
+
+        string query = text[(space + 1)..].Trim();
+        if (query.Length == 0 || LiveFxLookup.Run(LiveFxData.Of(context.World), text[..space], query) is not { } lines)
+        {
+            return false;
+        }
+
+        foreach (string line in lines)
+        {
+            context.Reply(line);
+        }
+
+        return true;
+    }
+
     /// <summary>"#id [scope]" where the id may also be a shift-link of <paramref name="linkType"/>.</summary>
-    private static bool SimpleU32(CommandContext context, string args, string? linkType, string effect, Func<uint, (WorldOpcode, byte[])> build)
+    private static bool SimpleU32(
+        CommandContext context, string args, string? linkType, string effect, string kind, Func<LiveFxData, Func<uint, bool>?> exists, Func<uint, (WorldOpcode, byte[])> build)
     {
         var parsed = new CommandArgs(args);
         uint id;
@@ -326,7 +366,27 @@ public sealed class LiveFxCommands : ICommandGroup
             return false;
         }
 
+        if (Unknown(context, kind, id, exists))
+        {
+            return true;
+        }
+
         return Send(context, scope, effect, _ => build(id));
+    }
+
+    /// <summary>
+    /// True (after telling the invoker) when the client table <paramref name="exists"/> picks is loaded and lacks
+    /// <paramref name="id"/>; a table that is not loaded leaves the id unchecked.
+    /// </summary>
+    private static bool Unknown(CommandContext context, string kind, uint id, Func<LiveFxData, Func<uint, bool>?> exists)
+    {
+        if (exists(LiveFxData.Of(context.World)) is not { } contains || contains(id))
+        {
+            return false;
+        }
+
+        context.Reply(string.Format(CultureInfo.InvariantCulture, UnknownIdText, kind, id));
+        return true;
     }
 
     /// <summary>The optional trailing scope word; false when something else (or more) is left.</summary>
