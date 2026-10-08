@@ -76,6 +76,7 @@ public sealed partial class SpellSystem
     /// ENVIRONMENTAL_DAMAGE, HEALTH_LEECH, the weapon damage family (WEAPON_DAMAGE,
     /// WEAPON_DAMAGE_NOSCHOOL, NORMALIZED_WEAPON_DMG, WEAPON_PERCENT_DAMAGE), DISPEL,
     /// INTERRUPT_CAST, SUMMON (through <see cref="ISpellSummonSink"/>) and APPLY_AREA_AURA_PARTY, plus the
+    /// SEND_EVENT to the map's instance script (mangos-classic SpellEffects.cpp:1794-1799), and
     /// combat abilities PARRY (EffectParry :5280), BLOCK (EffectBlock :5286) and DUAL_WIELD (EffectDualWield :2620),
     /// which set the player's ability flag (<see cref="Stats.PlayerStatState"/>) and do nothing for other targets.
     /// </summary>
@@ -83,6 +84,14 @@ public sealed partial class SpellSystem
     {
         [SpellEffectName.SchoolDamage] = EffectSchoolDamage,
         [SpellEffectName.Dummy] = static _ => { },
+        [SpellEffectName.SendEvent] = static context =>
+        {
+            if (context.Effect.MiscValue > 0)
+            {
+                context.Caster.Map?.FindUpdater<Instances.Scripts.InstanceData>()
+                    ?.OnSpellEvent(context.Caster, (uint)context.Effect.MiscValue);
+            }
+        },
         [SpellEffectName.TeleportUnits] = EffectTeleportUnits,
         [SpellEffectName.ApplyAura] = EffectApplyAura,
         [SpellEffectName.Heal] = EffectHeal,

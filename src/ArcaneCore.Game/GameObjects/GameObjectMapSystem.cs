@@ -259,6 +259,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
         // GameObject::Use (GameObject.cpp:1405-1407): the object's script may take the use over, before anything else (and then nothing
         // else happens: no use event either).
+        Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnGameObjectUse(player, go!);
         if (AiOf(go!)?.OnUse(this, go!, player) == true)
         {
             return GameObjectUseResult.Ok;

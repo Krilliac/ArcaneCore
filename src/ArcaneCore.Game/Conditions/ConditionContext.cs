@@ -64,4 +64,7 @@ public sealed record ConditionContext
 
     /// <summary>The quest state source (resolved on every evaluation: the quest service can be rebuilt).</summary>
     public Func<IConditionQuests?>? Quests { get; init; }
+
+    /// <summary>cmangos CONDITION_INSTANCE_SCRIPT: null when the player has no instance script.</summary>
+    public Func<Player, uint, bool?>? InstanceScript { get; init; }
 }

@@ -70,7 +70,7 @@ public enum ConditionType
     /// <summary>value1 spell id, value2 0 has / 1 has not (Conditions.h:50).</summary>
     Spell = 17,
 
-    /// <summary>Instance script specific (Conditions.h:51).</summary>
+    /// <summary>Instance script specific; Conditions.cpp:285-292 passes value1 to the script (Conditions.h:51 labels it map_id).</summary>
     InstanceScript = 18,
 
     /// <summary>value1 quest id; the player can take the quest (Conditions.h:52).</summary>

@@ -80,6 +80,10 @@ public sealed partial class InstanceManager : IMapResolver
     /// <summary>Which maps have an instance script (vmangos <c>map_template.ScriptName</c>); the scripts of the Game assembly by default.</summary>
     public InstanceScriptRegistry Scripts { get; set; } = InstanceScriptRegistry.Default;
 
+    /// <summary>World service callbacks passed to each ScriptDev2 instance at creation.</summary>
+    public Action<Player, uint, ObjectGuid>? ScriptCreatureCredit { get; set; }
+    public Action<Player, uint>? ScriptCastPlayerSpell { get; set; }
+
     /// <summary>Shows a system chat line to a player (default: none).</summary>
     public Action<Player, string> SystemMessage { get; set; } = static (_, _) => { };
 
@@ -377,6 +381,7 @@ public sealed partial class InstanceManager : IMapResolver
         uint characterId = player.Guid.Counter;
         _lastInstance[player.Guid] = (map.MapId, map.InstanceId);
         _persistence.PlayerEnteredInstance(characterId, map.MapId, map.InstanceId);
+        map.FindUpdater<InstanceData>()?.OnPlayerEnter(player);
 
         // vmangos: "raid instance welcome" (SendInstanceResetWarning on entering a raid).
         if (mapState.Save.Template.IsRaid)
@@ -846,6 +851,8 @@ public sealed partial class InstanceManager : IMapResolver
         }
 
         data.Logger = _logger;
+        data.CreatureCredit = ScriptCreatureCredit;
+        data.CastPlayerSpell = ScriptCastPlayerSpell;
         data.Saving = (_, text) =>
         {
             if (save.IsDeleted)

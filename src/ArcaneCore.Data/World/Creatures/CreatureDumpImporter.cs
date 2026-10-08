@@ -149,6 +149,7 @@ public sealed class CreatureDumpImporter
                     ReadAiScript(row);
                     break;
                 case "creature_ai_texts":
+                case "script_texts": // ScriptDev2 DoScriptText uses the same negative-id text shape.
                     ReadAiText(row);
                     break;
                 case "dbscript_random_templates":

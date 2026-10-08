@@ -69,6 +69,7 @@ public sealed partial class CreatureMapSystem
         }
 
         creature.AI?.OnEvade();
+        Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureEvade(creature);
         if (!creature.IsAlive || (!charmed && !creature.IsEvading))
         {
             return;
@@ -114,5 +115,6 @@ public sealed partial class CreatureMapSystem
         _ai.Spells?.Interrupt(creature);
         ResetAiState(creature);
         creature.AI?.OnDeath(killer);
+        Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureDeath(creature);
     }
 }
