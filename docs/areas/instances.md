@@ -2,6 +2,10 @@
 
 Status: first slices delivered on `claude/vw2-instances-bosses`. WoW 1.12.1 (5875). Base behaviour (saves, binds, raid resets, homebind timer, durable chests) is described in `docs/integration/instances.md`; this page records what this lane changed on top of it, what it left open, and the provenance of every rule.
 
+Raid-script extension (2026-10-08): Broodlord, Firemaw, Flamegor, Kurinnaxx and Hakkar AI plus supporting spell/state scripts are
+documented in [the raid lane report](../integration/raid-bwl-zg-aq20-20261008.md). This is a bounded boss delivery, not complete
+BWL/ZG/AQ20 progression; the report lists the remaining encounters, content requirements and verification boundaries.
+
 References (GPL, read for verification only; nothing copied): `D:\refs\vmangos` (primary), `D:\refs\mangos-classic`, `D:\refs\wow_messages`, `D:\refs\classic-db`.
 
 ## Delivered

@@ -38,6 +38,13 @@ public sealed partial class SpellSystem
             {
                 targets.Mask |= SpellCastTargetFlags.SourceLocation;
                 targets.Source = at;
+                // vmangos Spell::FillTargetMap, TARGET_LOCATION_CASTER_DEST (Spell.cpp:274-293),
+                // uses GetCastingObject(): the trap's destination rather than its owner's position.
+                if (Store.Get(spellId)?.Effects.Any(e => e.TargetA == SpellImplicitTarget.LocationCasterDest) == true)
+                {
+                    targets.Mask |= SpellCastTargetFlags.DestLocation;
+                    targets.Dest = at;
+                }
             }
 
             return CastSpell(owner, spellId, targets, triggered: true);
