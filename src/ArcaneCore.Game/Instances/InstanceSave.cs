@@ -44,8 +44,8 @@ public sealed class InstanceSave
     /// <summary>
     /// The instance script's save string (vmangos <c>instance.data</c>, written by InstanceData::SaveToDB, Maps/InstanceData.cpp:24-40, and read
     /// back by Map::CreateInstanceData, Maps/Map.cpp:2001-2022), or null when the script never saved. It lives with the save, so an instance
-    /// map that is unloaded and created again loads it. It goes to <see cref="IInstancePersistence.InstanceDataSaved"/>; the characters
-    /// database has no column for it yet, so it does not outlive a restart (docs/integration/eventai-instance-20261008.md).
+    /// map that is unloaded and created again loads it. It goes to <see cref="IInstancePersistence.InstanceDataSaved"/>
+    /// and the characters database for startup restoration.
     /// </summary>
     public string? Data { get; internal set; }
 
@@ -92,11 +92,9 @@ public interface IInstancePersistence
 
     /// <summary>
     /// The instance script saved its state (<see cref="InstanceSave.Data"/>; vmangos InstanceData::SaveToDB: <c>UPDATE instance SET data</c>).
-    /// Nothing by default: the characters database has no <c>instance.data</c> column yet.
+    /// Implementations with a store persist the data string.
     /// </summary>
-    void InstanceDataSaved(InstanceSave save)
-    {
-    }
+    void InstanceDataSaved(InstanceSave save);
 
     /// <summary>A group became permanently bound; stored under its leader's character id (vmangos Group::BindToInstance → <c>group_instance</c>).</summary>
     void GroupBound(uint leaderCharacterId, uint instanceId, bool permanent)
@@ -115,6 +113,10 @@ public sealed class NullInstancePersistence : IInstancePersistence
     public static NullInstancePersistence Instance { get; } = new();
 
     public void InstanceSaved(InstanceSave save)
+    {
+    }
+
+    public void InstanceDataSaved(InstanceSave save)
     {
     }
 

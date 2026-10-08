@@ -2,9 +2,12 @@ using System.Buffers.Binary;
 using System.Text;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Instances;
+using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Instances;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
@@ -31,6 +34,73 @@ public sealed class InstanceLoopbackTests
 {
     private const uint Deadmines = 36;
     private static readonly TimeSpan Quiet = TimeSpan.FromMilliseconds(200);
+
+    private const uint TypeRhahkzor = 0; // mangos-classic deadmines.h TYPE_RHAHKZOR (MAX_ENCOUNTER 4)
+
+    // Test-only Deadmines encounter: mangos-classic instance_deadmines::SetData saves a DONE
+    // encounter, and instance_deadmines::Load restores it on a later map creation.
+    private sealed class DeadminesEncounter(Map map) : ScriptedInstance(map, 4)
+    {
+        public override void SetData(uint type, uint data)
+        {
+            if (type < Encounters.Length)
+            {
+                Encounters[type] = data;
+                SaveIfDone(data);
+            }
+        }
+
+        public override uint GetData(uint type) => type < Encounters.Length ? Encounters[type] : 0;
+    }
+
+    [Fact]
+    public async Task DeadminesEncounter_DoneStateSurvivesWorldRestart()
+    {
+        uint instance;
+        int character;
+        string saved;
+        await using (WorldTestHost first = WorldTestHost.Start())
+        {
+            InstanceFeature feature = first.WorldServices.GetRequiredService<InstanceFeature>();
+            await first.OnWorldAsync(() => feature.Instances.Scripts = new InstanceScriptRegistry().Register(Deadmines, map => new DeadminesEncounter(map)));
+            await using WorldTestClient client = await first.EnterWorldAsync("INSTDONE", "Instdone");
+            await EnterThroughTriggerAsync(first, client, "Instdone");
+            (instance, character) = await first.PlayerStateAsync("Instdone", p => (p.Map!.InstanceId, (int)p.Guid.Low));
+            await first.OnWorldAsync(() =>
+                ((DeadminesEncounter)InstanceManager.InstanceDataOf(first.World.FindOnlinePlayer("Instdone")!.Map!)!)
+                    .SetData(TypeRhahkzor, EncounterState.Done));
+            await feature.FlushAsync();
+            InMemoryInstanceStore store = first.WorldServices.GetRequiredService<InMemoryInstanceStore>();
+            saved = store.ScriptData[instance];
+            Assert.Equal("3 0 0 0", saved);
+            Assert.Contains($"data {instance} {saved}", store.Writes);
+        }
+
+        InMemoryInstanceStore.Seed.Value = new InstanceStoreSnapshot(
+            [new InstanceRecord(instance, Deadmines, long.MaxValue / 2, saved)],
+            [new CharacterInstanceBindRecord(character, instance, false)], [], []);
+        WorldTestHost restarted;
+        try
+        {
+            restarted = WorldTestHost.Start();
+        }
+        finally
+        {
+            InMemoryInstanceStore.Seed.Value = null;
+        }
+
+        await using (restarted)
+        {
+            InstanceFeature feature = restarted.WorldServices.GetRequiredService<InstanceFeature>();
+            await restarted.OnWorldAsync(() => feature.Instances.Scripts = new InstanceScriptRegistry().Register(Deadmines, map => new DeadminesEncounter(map)));
+            await using WorldTestClient client = await restarted.EnterWorldAsync("INSTDONE", "Instdone");
+            await EnterThroughTriggerAsync(restarted, client, "Instdone");
+            Assert.Equal(character, await restarted.PlayerStateAsync("Instdone", p => (int)p.Guid.Low));
+            Assert.Equal(instance, await InstanceOfAsync(restarted, "Instdone"));
+            Assert.Equal(EncounterState.Done, await restarted.PlayerStateAsync("Instdone", p =>
+                ((DeadminesEncounter)InstanceManager.InstanceDataOf(p.Map!)!).GetData(TypeRhahkzor)));
+        }
+    }
 
     [Fact]
     public async Task TwoGroups_ThroughTheAreaTrigger_GetSeparateInstances_AndMembersShareOne()

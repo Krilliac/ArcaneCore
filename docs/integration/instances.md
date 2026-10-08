@@ -288,9 +288,10 @@ All of these are minimal and additive unless stated otherwise.
 - **Instance contents do not persist across an unload or restart.** This covers creature
   deaths and respawn timers (vmangos `creature_respawn`). A re-created map respawns everything.
   The instance script state (wave 4, `Game/Instances/Scripts`, docs/areas/creature-ai.md "Instance scripts") survives an unload:
-  its save string lives on the instance save (`InstanceSave.Data`) and the next map of the instance loads it. It does not survive a
-  restart: vmangos keeps it in `instance.data`, a column the characters database does not have yet (it needs a characters schema
-  step; docs/integration/eventai-instance-20261008.md).
+  its save string lives on the instance save (`InstanceSave.Data`) and the next map of the instance loads it. It also survives a
+  restart: each script save is queued to `instance.data` (characters schema 42, `InstanceScriptDataModule`; vmangos
+  InstanceData::SaveToDB `UPDATE instance SET data`, which only updates an existing row), the startup load puts it back on the
+  instance save, and the next map loads it as above (vmangos Map::CreateInstanceData).
 - **Homebind on raid-group loss** teleports to the hearthstone bind point, as vmangos does:
   `Player::UpdateHomebindTime` calls `TeleportToHomebind` (Player.cpp:18534-18556); it does not use
   graveyards (those serve released spirits, docs/areas/graveyards-resurrection.md).
@@ -319,5 +320,4 @@ All of these are minimal and additive unless stated otherwise.
 
 - Persisted instance state (`creature_respawn`, `gameobject_respawn` per instance) once
   `feat/creature-ai` and `feat/gameobjects-loot` expose respawn seams.
-- `instance.data` in the characters database (a characters schema step) so the instance script state outlives a restart.
 - The 5-instances-per-hour limit.

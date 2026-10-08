@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Instances;
 using Xunit;
 using static ArcaneCore.Game.Tests.Instances.InstanceFixture;
 
@@ -44,6 +45,31 @@ public sealed class InstanceScriptTests
     }
 
     private static ThreeEncounters DataOf(Player player) => Assert.IsType<ThreeEncounters>(InstanceManager.InstanceDataOf(player.Map!));
+
+    [Fact]
+    public void DeadminesEncounter_LoadsFromStartupSnapshot_AfterWorldRestart()
+    {
+        uint id;
+        string stored;
+        using (InstanceFixture first = Fixture())
+        {
+            Player player = first.AddPlayer(1);
+            Assert.True(first.EnterDungeon(player));
+            id = player.Map!.InstanceId;
+            DataOf(player).SetData(0, EncounterState.Done);
+            stored = Assert.IsType<string>(first.Manager.FindSave(id)!.Data);
+        }
+
+        using InstanceFixture restarted = new(load: false);
+        restarted.Manager.Scripts = new InstanceScriptRegistry().Register(Dungeon, map => new ThreeEncounters(map));
+        restarted.Manager.Load(new InstanceStoreSnapshot(
+            [new InstanceRecord(id, Dungeon, restarted.Now + 3600, stored)],
+            [new CharacterInstanceBindRecord(1, id, false)], [], []));
+        Player returning = restarted.AddPlayer(1);
+        Assert.True(restarted.EnterDungeon(returning));
+        Assert.Equal(id, returning.Map!.InstanceId);
+        Assert.Equal(EncounterState.Done, DataOf(returning).GetData(0));
+    }
 
     [Fact]
     public void TheInstanceMapOfADungeonWithAScript_HasItsData_AndAMapWithoutAScriptHasNone()
