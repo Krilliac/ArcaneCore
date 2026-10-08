@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
@@ -193,6 +194,36 @@ public sealed class ScenarioContext
         bot.Guid = await World.InvokeAsync(() => bot.Session!.Player!.Guid).ConfigureAwait(false);
         return bot;
     }
+
+    /// <summary>
+    /// Hand <paramref name="bot"/> to its own brain (autonomous mode, as a live bot plays) while the run keeps recording the
+    /// packets it receives; the scripted actions are refused until <see cref="ScriptAsync"/> takes it back. The run's release
+    /// stops it as usual.
+    /// </summary>
+    public async Task AutonomousAsync(ScenarioBot bot)
+    {
+        ArgumentNullException.ThrowIfNull(bot);
+        bot.IsAutonomous = true;
+        if (!await _bots.SetControllerAsync(bot.BotId, null).ConfigureAwait(false))
+        {
+            bot.IsAutonomous = false;
+            throw new ScenarioAssertionException($"{bot.Name} could not be handed to its brain");
+        }
+    }
+
+    /// <summary>Take an autonomous bot back into scripted mode.</summary>
+    public async Task ScriptAsync(ScenarioBot bot)
+    {
+        ArgumentNullException.ThrowIfNull(bot);
+        bot.Reattach();
+        if (!await _bots.SetControllerAsync(bot.BotId, bot).ConfigureAwait(false))
+            throw new ScenarioAssertionException($"{bot.Name} could not be scripted again");
+        bot.IsAutonomous = false;
+    }
+
+    /// <summary>The live creature <paramref name="guid"/> on the bot's map once the bot sees it (world thread), else null.</summary>
+    public Creature? FindCreature(ScenarioBot bot, ObjectGuid guid)
+        => bot.RequirePlayer() is { Map: { } map } player && player.VisibleObjects.Contains(guid) ? map.FindObject(guid) as Creature : null;
 
     private void WorldSessionAttach(ScenarioBot bot, Net.WorldSession session)
     {

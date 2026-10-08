@@ -2,11 +2,13 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -52,6 +54,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
     // not pick the same nearest unreachable target again.
     private readonly Dictionary<ObjectGuid, uint> _unreachable = [];
     private const uint UnreachableTargetMs = 30_000;
+    private const float MeleeRange = PlayerbotClassRotation.MeleeRange;
+    // A ranged bot standing at its range without anything to cast at a target that is not fighting it closes in after this long.
+    private const uint RangedIdleLimitMs = 8_000;
+    private uint _rangedIdleMs;
 
     internal void Stop()
     {
@@ -229,7 +235,12 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             _lootOpened = false;
             TargetEntry = defensiveAttacker.Entry;
         }
-        if (defensiveAttacker is null && player.Combat.IsInCombat && player.Combat.Victim is null
+        // A caster or hunter fights without a melee swing, so its victim is not Combat.Victim: a living target that has the
+        // bot on its threat list (or attacks it) is still the bot's fight, not a combat linger.
+        bool rangedFight = defensiveAttacker is null && outgoingVictim is null && _target is { IsAlive: true } engaged
+            && ReferenceEquals(engaged.Map, player.Map)
+            && (player.Combat.ThreatenedBy.Contains(engaged) || ReferenceEquals(engaged.Combat.Victim, player));
+        if (defensiveAttacker is null && !rangedFight && player.Combat.IsInCombat && player.Combat.Victim is null
             && !hasDeadLootTarget)
         {
             PlayerbotMovementControl.Stop(_session, player);
@@ -261,6 +272,10 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
                 _goal = PlayerbotGoalKind.Explore;
                 return;
             }
+            // Class upkeep between fights (forms, buffs on the bot and its group, the pet, heals, stealth before a pull),
+            // vmangos UpdateOutOfCombatAI_<Class>; the creature the bot is closing in on is its pull target.
+            _combatSpells.PullTarget = _target is { IsAlive: true } pull && ReferenceEquals(pull.Map, player.Map) ? pull : null;
+            if (_combatSpells.UpdateOutOfCombat(player, interval)) return;
             UpdateLocalPlan(player);
             // A returned ID is only a proposal; each controller rechecks the live gameplay rules.
             if (_modelChoice == "town" && _town.Update(player, interval))
@@ -314,6 +329,7 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         {
             Creature? previousTarget = _target;
             _target = FindTarget(player, _quests.PreferredCreatureEntry, IsUnreachable);
+            _rangedIdleMs = 0;
             // Keep an exploration route across decisions; otherwise every thought changes
             // direction after only its first terrain step and the player never travels.
             if (_target is not null || previousTarget is not null) _route = null;
@@ -342,10 +358,27 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         {
             if (_combatSpells.Update(player, target, interval))
             {
+                _rangedIdleMs = 0;
                 _goal = PlayerbotGoalKind.Combat;
                 return;
             }
-            if (Distance(player, target) > 4f)
+
+            float distance = Distance(player, target);
+            bool fightingBot = player.Combat.ThreatenedBy.Contains(target) || ReferenceEquals(target.Combat.Victim, player);
+            PlayerbotFightPosition position = DecidePosition(_combatSpells.PreferredRange(player), distance,
+                player.Class == Game.Class.Hunter, ReferenceEquals(target.Combat.Victim, player),
+                _rangedIdleMs >= RangedIdleLimitMs && !fightingBot);
+            if (position == PlayerbotFightPosition.Hold)
+            {
+                // In range: stand and let the rotation cast (or wand) at the next decision.
+                _rangedIdleMs = fightingBot ? 0 : _rangedIdleMs + interval;
+                _route = null;
+                if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0) PlayerbotMovementControl.Stop(_session, player);
+                _goal = PlayerbotGoalKind.Combat;
+                return;
+            }
+
+            if (position is PlayerbotFightPosition.ChaseToRange or PlayerbotFightPosition.ChaseToMelee)
             {
                 if (_route is null && !PlayerbotNavigation.TryPlan(player,
                         new System.Numerics.Vector3(target.X, target.Y, target.Z), _options, out _route))
@@ -471,12 +504,18 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
         if (player.Map is not { } map)
             return null;
 
+        GroupManager? groups = (player.Session as WorldSession)?.Services.GetService<Social.SocialFeature>()?.Context.Groups;
+        uint grayLevel = ArcaneCore.Game.Progression.ExperienceFormulas.GrayLevel(player.Level);
         return player.VisibleObjects
             .Select(guid => map.FindObject(guid))
             .OfType<Creature>()
             .Where(creature => skip is null || !skip(creature))
             .Where(creature => creature.IsAlive && map.Combat.Hooks.CanAttack(player, creature))
             .Where(creature => creature.Level <= player.Level + 1)
+            // Grey creatures give no experience (XP::GetGrayLevel); idle grinding leaves them alone. A named quest
+            // objective is still allowed: the quest asks for that creature whatever its level.
+            .Where(creature => preferredEntry != 0 && creature.Entry == preferredEntry || creature.Level > grayLevel)
+            .Where(creature => !IsSomeoneElses(player, creature, groups))
             .Where(creature => preferredEntry != 0 ? creature.Entry == preferredEntry : creature.Template.CreatureType != 8)
             // Ordinary idle grinding must not initiate attacks on town/service NPCs.
             // Explicit quest objectives and the existing defensive-victim path keep
@@ -487,6 +526,49 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
             .ThenBy(creature => Distance(player, creature))
             .FirstOrDefault();
     }
+
+    /// <summary>
+    /// Where a bot fights its target from (vmangos PartyBotAI.cpp:755-766, GetDistancingTarget / RunAwayFromTarget :146-185 and the
+    /// caster chase distance of SetCasterChaseDistance): a bot whose preferred range is melee closes to melee; a caster, healer or
+    /// hunter closes only to its preferred range and holds there. A hunter inside its 8-yard Auto Shot dead zone, a ranged bot the
+    /// enemy already reached in melee, and a ranged bot that found nothing to cast for a while at a target that is not fighting it
+    /// fight in melee instead; nobody ranged otherwise runs into melee.
+    /// </summary>
+    internal static PlayerbotFightPosition DecidePosition(float preferredRange, float distance, bool hunter, bool targetOnBot,
+        bool idleTooLong)
+    {
+        bool melee = preferredRange <= MeleeRange
+            || (hunter && distance < PlayerbotClassRotation.HunterDeadZone)
+            || (distance <= MeleeRange && targetOnBot)
+            || idleTooLong;
+        if (!melee) return distance > preferredRange ? PlayerbotFightPosition.ChaseToRange : PlayerbotFightPosition.Hold;
+        return distance > MeleeRange ? PlayerbotFightPosition.ChaseToMelee : PlayerbotFightPosition.Melee;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="creature"/> belongs to another player's fight: tapped by someone outside the bot's group (the
+    /// client's grey name: UNIT_DYNFLAG_TAPPED without TAPPED_BY_PLAYER as the bot sees it, LootService's viewer filter over
+    /// Creature.LootTapPlayerGuid), or fighting a player who is neither the bot nor in its group (its victim, or any player on
+    /// its threat list). vmangos bots take such targets only from their leader's fight (PartyBotAI::SelectAttackTarget).
+    /// </summary>
+    internal static bool IsSomeoneElses(Player player, Creature creature, GroupManager? groups)
+    {
+        uint seen = creature.GetValueFor(UpdateFields.UnitDynamicFlags, player);
+        if ((seen & Game.Loot.LootService.UnitDynFlagTapped) != 0 && (seen & Game.Loot.LootService.UnitDynFlagTappedByPlayer) == 0)
+            return true;
+        if (creature.Combat.Victim is Player victim && IsStranger(player, victim, groups))
+            return true;
+        if (!creature.Combat.HasThreatList) return false;
+        foreach (ThreatEntry entry in creature.Combat.Threat.Entries)
+        {
+            if (entry.Target is Player other && IsStranger(player, other, groups))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsStranger(Player player, Player other, GroupManager? groups)
+        => other.Guid != player.Guid && groups?.AreInSameGroup(player.Guid, other.Guid) != true;
 
     private static Creature? FindDefensiveAttacker(Player player)
     {
@@ -574,4 +656,20 @@ internal sealed class PlayerbotBrain(WorldSession session, PlayerbotOptions opti
 
     private static float Distance(WorldObject a, WorldObject b)
         => MathF.Sqrt(MathF.Pow(a.X - b.X, 2) + MathF.Pow(a.Y - b.Y, 2) + MathF.Pow(a.Z - b.Z, 2));
+}
+
+/// <summary>Where a bot fights from this decision (<see cref="PlayerbotBrain.DecidePosition"/>).</summary>
+internal enum PlayerbotFightPosition : byte
+{
+    /// <summary>At its range: stand and cast.</summary>
+    Hold,
+
+    /// <summary>Beyond its range: close in to it.</summary>
+    ChaseToRange,
+
+    /// <summary>A melee fight out of reach: close in to melee.</summary>
+    ChaseToMelee,
+
+    /// <summary>In reach of a melee fight: swing.</summary>
+    Melee,
 }
