@@ -96,8 +96,8 @@ public sealed class AuditCommandTests
             clock.Advance(1); // vmangos counts command lines toward the one-second chat flood window.
         }
 
-        // Those eleven commands trip the chat flood mute, which would answer .commands with a "You must wait"
-        // notification and no list at all; let the mute run out so the list is really read.
+        // A flood mute would answer .commands with a "You must wait" notification and no list at all, which made
+        // the check below pass on an empty list; make sure no mute is left so the list is really read.
         clock.Advance(60);
         await player.SendChatAsync(ChatType.Say, Language.Common, ".commands");
         string[] listed = await player.CollectChatLinesAsync();
