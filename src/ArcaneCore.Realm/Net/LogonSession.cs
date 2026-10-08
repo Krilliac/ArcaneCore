@@ -54,6 +54,7 @@ public sealed class LogonSession(
     private byte[]? _reconnectChallenge;
     private byte[]? _reconnectSessionKey;
     private bool _closeRequested;
+    private int _challenges;
     private CancellationToken _sessionToken;
     private CancellationTokenSource? _unauthenticatedLifetime;
     private ReadDeadline? _deadline;
@@ -63,6 +64,15 @@ public sealed class LogonSession(
     private const int ChallengeMinBody = 31;
     private const int ChallengeMaxBody = 47;
     private const int MaxUsernameLength = 16;
+
+    /// <summary>
+    /// Most logon and reconnect challenges one connection may send. vmangos realmd accepts exactly one: a challenge is
+    /// dispatched only in STATUS_CHALLENGE (AuthSocket.cpp:125-150), the initial state no handler returns to, and an
+    /// out-of-state command closes the socket without a reply. ArcaneCore still answers a retry after a refused challenge
+    /// or a failed proof on the same connection, so the cap is a backstop that holds with or without a
+    /// <see cref="NetGuard"/>: past it the connection is closed without a reply and the attempt is charged.
+    /// </summary>
+    public const int MaxChallengesPerConnection = 8;
 
     // Locales realmd accepts (AuthSocket.cpp:213-230); the client sends them byte-reversed.
     private static readonly HashSet<string> AllowedLocales = new(StringComparer.Ordinal)
@@ -211,6 +221,12 @@ public sealed class LogonSession(
 
     private async Task HandleChallengeAsync(CancellationToken cancellationToken)
     {
+        // Metered before anything is read or looked up (security finding S1).
+        if (!BeginChallenge())
+        {
+            return;
+        }
+
         // vmangos sets m_status = STATUS_INVALID on handler entry (AuthSocket.cpp:327): a new
         // challenge discards every piece of the previous one, so a proof can never be mixed with
         // another challenge's SRP state, username or auto-create flag.
@@ -448,6 +464,11 @@ public sealed class LogonSession(
 
     private async Task HandleReconnectChallengeAsync(CancellationToken cancellationToken)
     {
+        if (!BeginChallenge())
+        {
+            return;
+        }
+
         ResetChallengeState();
         byte[] header = new byte[3];
         await ReadPacketPartAsync(header, cancellationToken).ConfigureAwait(false);
@@ -562,6 +583,41 @@ public sealed class LogonSession(
 
     /// <summary>Charge one failed attempt to this connection's address (Net:Protection:AuthFailureBurstPerIp).</summary>
     private void RecordFailure() => guard?.RecordAuthFailure(_address);
+
+    /// <summary>
+    /// Meter a logon or reconnect challenge before it costs anything (security finding S1). Every challenge does an
+    /// IP-ban read, an account read, a ban-row read and builds SRP state, and only failures were charged, so one
+    /// connection could repeat valid challenges without ever proving. Two rules, both before the body is read:
+    /// <list type="bullet">
+    /// <item>past <see cref="MaxChallengesPerConnection"/> the connection is closed without a reply (vmangos closes on any
+    /// second challenge) and the attempt is charged;</item>
+    /// <item>a challenge that abandons an issued, still unproven one charges the abandoned one as a failed attempt, so
+    /// the per-address budget refuses the flood before the lookups (the existing check after the body read).</item>
+    /// </list>
+    /// A refused challenge leaves no state (its refusal was charged where the client is to blame), and a proof, good or
+    /// bad, consumes its challenge, so a retry after either is not charged here; one challenge per connection, which is
+    /// what the client sends, is never charged.
+    /// </summary>
+    /// <returns>False when the connection is closing and the challenge must not be handled.</returns>
+    private bool BeginChallenge()
+    {
+        if (++_challenges > MaxChallengesPerConnection)
+        {
+            logger.LogInformation("[{Endpoint}] more than {Max} challenges on one connection; closing",
+                remoteEndpoint, MaxChallengesPerConnection);
+            RecordFailure();
+            ResetChallengeState();
+            _closeRequested = true;
+            return false;
+        }
+
+        if (_srp is not null || _reconnectChallenge is not null)
+        {
+            RecordFailure();
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Read the rest of a packet whose command byte has arrived, bounded by the frame deadline

@@ -50,11 +50,18 @@ public sealed class WorldSessionOptions
     /// <summary>
     /// How long a closing session lets the writer flush queued frames (for example a refusal
     /// reply) before the stream is torn down so a client that stopped reading cannot hold the
-    /// connection, its DI scope and its queued frames forever. Hardening (vmangos has no
-    /// equivalent): <see cref="TimeSpan.Zero"/>, the default, waits indefinitely as retail does.
-    /// Bound from World:WriterDrainGrace (for example "00:00:05").
+    /// connection, its DI scope and its queued frames forever. <see cref="TimeSpan.Zero"/>, the
+    /// default, means the built-in 5 s bound; the wait is never unbounded. vmangos does not wait at
+    /// all: its CloseSocket shuts the socket down at once (AsyncSocket_windows.cpp:318-329).
+    /// Bound from World:WriterDrainGrace (for example "00:00:02").
     /// </summary>
     public TimeSpan WriterDrainGrace { get; set; } = TimeSpan.Zero;
+
+    /// <summary>The drain bound a zero (or negative) <see cref="WriterDrainGrace"/> stands for.</summary>
+    public static readonly TimeSpan DefaultWriterDrainBound = TimeSpan.FromSeconds(5);
+
+    /// <summary>The drain bound a closing session applies: <see cref="WriterDrainGrace"/> when positive, else <see cref="DefaultWriterDrainBound"/>.</summary>
+    internal TimeSpan EffectiveWriterDrainBound => WriterDrainGrace > TimeSpan.Zero ? WriterDrainGrace : DefaultWriterDrainBound;
 
     /// <summary>
     /// How long a world connection may stay unauthenticated (no valid CMSG_AUTH_SESSION yet),
@@ -774,25 +781,21 @@ public sealed partial class WorldSession : IPlayerSession
 
     /// <summary>
     /// Wait for the writer to flush what is queued. A client that stopped reading parks the writer
-    /// inside WriteAsync forever, so after the grace period the write is cancelled and the stream
-    /// disposed; that releases the socket, the DI scope and the queued frames.
+    /// inside WriteAsync forever, so after the drain bound (World:WriterDrainGrace, or
+    /// <see cref="WorldSessionOptions.DefaultWriterDrainBound"/> when that is zero) the write is
+    /// cancelled and the stream disposed; that releases the socket, the DI scope and the queued frames.
+    /// There is no unbounded wait (security finding S2): vmangos does not wait at all, its CloseSocket
+    /// shuts the socket down and closes it at once (AsyncSocket_windows.cpp:318-329).
     /// </summary>
     private async Task DrainWriterAsync(Task writer)
     {
-        TimeSpan grace = _options.WriterDrainGrace;
-        if (grace <= TimeSpan.Zero)
+        TimeSpan bound = _options.EffectiveWriterDrainBound;
+        if (await CompletesWithinAsync(writer, bound).ConfigureAwait(false))
         {
-            await writer.ConfigureAwait(false); // retail: wait for the writer however long it takes
             return;
         }
 
-        if (await Task.WhenAny(writer, Task.Delay(grace)).ConfigureAwait(false) == writer)
-        {
-            await writer.ConfigureAwait(false);
-            return;
-        }
-
-        _logger.LogWarning("[{Endpoint}] writer did not drain within {Grace}; tearing the connection down", RemoteEndpoint, grace);
+        _logger.LogWarning("[{Endpoint}] writer did not drain within {Grace}; tearing the connection down", RemoteEndpoint, bound);
         _writerAbort.Cancel();
         try
         {
@@ -803,13 +806,23 @@ public sealed partial class WorldSession : IPlayerSession
             // the socket is already gone
         }
 
-        if (await Task.WhenAny(writer, Task.Delay(grace)).ConfigureAwait(false) == writer)
-        {
-            await writer.ConfigureAwait(false);
-        }
-        else
+        if (!await CompletesWithinAsync(writer, bound).ConfigureAwait(false))
         {
             _logger.LogError("[{Endpoint}] writer ignored cancellation and stream disposal; abandoning it", RemoteEndpoint);
+        }
+    }
+
+    /// <summary>Await <paramref name="writer"/> for at most <paramref name="bound"/>; its own fault still propagates.</summary>
+    private static async Task<bool> CompletesWithinAsync(Task writer, TimeSpan bound)
+    {
+        try
+        {
+            await writer.WaitAsync(bound).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException) when (!writer.IsCompleted)
+        {
+            return false;
         }
     }
 

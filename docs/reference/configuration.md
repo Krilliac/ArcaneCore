@@ -694,7 +694,7 @@ How to read the tables:
 | `World:StrictMovementFiniteness` | `bool` | `false` | - | Hardening beyond retail: also require pitch, jump speeds/angles and spline elevation to be finite before a movement block is stored and relayed. Retail (vmangos VerifyMovementInfo) does not check them, so the default is off. Bound from World:StrictMovementFiniteness. |
 | `World:TickIntervalMs` | `int` | `50` | restart | World tick length in milliseconds (vmangos WORLD_SLEEP_CONST = 50). |
 | `World:UpdateCompressionThreshold` | `int` | `128` | live | Update packets larger than this many bytes are zlib-compressed into SMSG_COMPRESSED_UPDATE_OBJECT (vmangos Compression.Update.Size default 128). 0 disables. |
-| `World:WriterDrainGrace` | `TimeSpan` | `00:00:00` | - | How long a closing session lets the writer flush queued frames (for example a refusal reply) before the stream is torn down so a client that stopped reading cannot hold the connection, its DI scope and its queued frames forever. Hardening (vmangos has no equivalent): `TimeSpan.Zero`, the default, waits indefinitely as retail does. Bound from World:WriterDrainGrace (for example "00:00:05"). |
+| `World:WriterDrainGrace` | `TimeSpan` | `00:00:00` | - | How long a closing session lets the writer flush queued frames (for example a refusal reply) before the stream is torn down so a client that stopped reading cannot hold the connection, its DI scope and its queued frames forever. `TimeSpan.Zero`, the default, means the built-in 5 s bound; the wait is never unbounded. vmangos does not wait at all: its CloseSocket shuts the socket down at once (AsyncSocket_windows.cpp:318-329). Bound from World:WriterDrainGrace (for example "00:00:02"). |
 
 ## `World:Chat`
 
