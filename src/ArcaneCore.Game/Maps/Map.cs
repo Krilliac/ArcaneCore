@@ -59,9 +59,12 @@ public sealed class Map
     private readonly List<WorldObject> _valuesQueue = [];
     private readonly List<IMapUpdater> _updaters = [];
     private readonly List<Unit> _heartbeatUnits = [];
+    private bool _heartbeatSnapshotDirty = true;
     private readonly List<Player> _viewerScratch = [];
     private readonly List<WorldObject> _movedScratch = [];
     private bool _viewerScratchInUse;
+    private readonly List<WorldObject> _visibilityScratch = [];
+    private bool _visibilityScratchInUse;
 
     // Consecutive failure count per updater; -1 means the fault breaker is skipping it. Empty
     // unless an updater throws and World:MaxConsecutiveUpdaterFaults is set.
@@ -131,6 +134,9 @@ public sealed class Map
     /// appeared (<see cref="UpdateObjectVisibility"/>). A work counter for performance tests; world thread.
     /// </summary>
     internal long ObjectVisibilityCandidates { get; private set; }
+
+    /// <summary>Objects scanned to build heartbeat snapshots (world-thread work counter).</summary>
+    internal long HeartbeatSnapshotObjectsVisited { get; private set; }
 
     /// <summary>Players removed from this map by a far teleport whose client has not confirmed the new world yet.</summary>
     public int TransitCount => _transit.Count;
@@ -287,6 +293,7 @@ public sealed class Map
         player.MapSequence = _nextSequence++;
         _players[player.Guid] = player;
         _objects[player.Guid] = player;
+        _heartbeatSnapshotDirty = true;
         _grid.Add(player, active: true);
 
         // The create block carries every current value, so pending changes are moot.
@@ -369,6 +376,7 @@ public sealed class Map
         obj.Map = this;
         obj.MapSequence = _nextSequence++;
         _objects[obj.Guid] = obj;
+        if (obj is Unit) _heartbeatSnapshotDirty = true;
         _grid.Add(obj, active);
         obj.ClearChangedFields();
         obj.IsQueuedForUpdate = false;
@@ -519,21 +527,23 @@ public sealed class Map
             }
         }
 
-        // Reuse a snapshot so heartbeat listeners may remove objects without
-        // invalidating enumeration, and keep each unit's timer across casts.
-        foreach (WorldObject obj in _objects.Values)
-            if (obj is Unit unit) _heartbeatUnits.Add(unit);
-        try
-        {
-            foreach (Unit unit in _heartbeatUnits)
-                if (ReferenceEquals(unit.Map, this) && unit.IsInWorld
-                    && unit is not Player { IsQuestSettlementPending: true })
-                    unit.UpdateHeartbeat(diffMs);
-        }
-        finally
+        // Snapshot only when membership changes. Heartbeat callbacks can add/remove units: keep this tick's
+        // snapshot intact and rebuild next tick, still skipping removed units below. Timers and dictionary order
+        // are unchanged (vmangos Object.cpp WorldObject::Update / Unit.cpp Unit::Heartbeat).
+        if (_heartbeatSnapshotDirty)
         {
             _heartbeatUnits.Clear();
+            foreach (WorldObject obj in _objects.Values)
+            {
+                HeartbeatSnapshotObjectsVisited++;
+                if (obj is Unit unit) _heartbeatUnits.Add(unit);
+            }
+            _heartbeatSnapshotDirty = false;
         }
+        foreach (Unit unit in _heartbeatUnits)
+            if (ReferenceEquals(unit.Map, this) && unit.IsInWorld
+                && unit is not Player { IsQuestSettlementPending: true })
+                unit.UpdateHeartbeat(diffMs);
 
         // (1c) per-map systems (creatures, …) — see IMapUpdater
         foreach (IMapUpdater updater in _updaters)
@@ -806,24 +816,6 @@ public sealed class Map
     }
 
     /// <summary>
-    /// The objects a query around (x, y) must consider: everything in the touched cells plus
-    /// <paramref name="extra"/>, without duplicates, in map-join order (so passes are
-    /// deterministic, like the insertion-ordered scan they replace).
-    /// </summary>
-    private List<WorldObject> Query(float x, float y, float radius, IEnumerable<WorldObject>? extra)
-    {
-        var found = new List<WorldObject>();
-        _grid.CollectObjects(x, y, radius, found);
-        if (extra is not null)
-        {
-            found.AddRange(extra);
-        }
-
-        SortByJoinOrderDistinct(found);
-        return found;
-    }
-
-    /// <summary>
     /// Sort candidates into map-join order and drop repeats. <see cref="WorldObject.MapSequence"/> is unique per
     /// object of a map (a fresh number on every join), so equal entries are adjacent after the sort.
     /// </summary>
@@ -878,16 +870,15 @@ public sealed class Map
     /// and whoever sees it. Anything else is out of range in both directions and invisible in
     /// both, so evaluating it would change nothing.
     /// </summary>
-    private List<WorldObject> VisibilityCandidates(WorldObject center)
+    private void VisibilityCandidates(WorldObject center, List<WorldObject> candidates)
     {
-        var extra = new List<WorldObject>();
         if (center is Player player)
         {
             foreach (ObjectGuid guid in player.VisibleObjects)
             {
                 if (_objects.TryGetValue(guid, out WorldObject? seen))
                 {
-                    extra.Add(seen);
+                    candidates.Add(seen);
                 }
             }
 
@@ -895,35 +886,52 @@ public sealed class Map
             if (player.ViewPoint is { } eye && !ReferenceEquals(eye, player))
             {
                 float eyeRadius = VisibilityRange + VisibilityGreyDistance + eye.BoundingRadius + _grid.MaxBoundingRadius;
-                extra.AddRange(Query(eye.X, eye.Y, eyeRadius, extra: null));
+                _grid.CollectObjects(eye.X, eye.Y, eyeRadius, candidates);
             }
         }
 
         if (_observers.TryGetValue(center.Guid, out HashSet<Player>? observers))
         {
-            extra.AddRange(observers);
+            candidates.AddRange(observers);
         }
 
         float radius = VisibilityRange + VisibilityGreyDistance + center.BoundingRadius + _grid.MaxBoundingRadius;
-        return Query(center.X, center.Y, radius, extra);
+        _grid.CollectObjects(center.X, center.Y, radius, candidates);
+        SortByJoinOrderDistinct(candidates);
     }
 
     /// <summary>Re-evaluate visibility between a player and everything near it, in both directions.</summary>
     private void UpdateVisibility(Player player)
     {
-        List<WorldObject> candidates = VisibilityCandidates(player);
-        PlayerVisibilityCandidates += candidates.Count;
-        foreach (WorldObject other in candidates)
+        // vmangos Map::UpdateObjectVisibility / Player::UpdateVisibilityOf: same candidates and join order.
+        // A visibility rule may recursively refresh a different player; that call must not reuse our active list.
+        bool ownsScratch = !_visibilityScratchInUse;
+        List<WorldObject> candidates = ownsScratch ? _visibilityScratch : [];
+        _visibilityScratchInUse |= ownsScratch;
+        try
         {
-            if (ReferenceEquals(other, player) || !ReferenceEquals(other.Map, this))
+            VisibilityCandidates(player, candidates);
+            PlayerVisibilityCandidates += candidates.Count;
+            foreach (WorldObject other in candidates)
             {
-                continue;
-            }
+                if (ReferenceEquals(other, player) || !ReferenceEquals(other.Map, this))
+                {
+                    continue;
+                }
 
-            UpdateVisibilityOf(viewer: player, target: other);
-            if (other is Player otherPlayer)
+                UpdateVisibilityOf(viewer: player, target: other);
+                if (other is Player otherPlayer)
+                {
+                    UpdateVisibilityOf(viewer: otherPlayer, target: player);
+                }
+            }
+        }
+        finally
+        {
+            if (ownsScratch)
             {
-                UpdateVisibilityOf(viewer: otherPlayer, target: player);
+                candidates.Clear();
+                _visibilityScratchInUse = false;
             }
         }
     }
@@ -1030,6 +1038,7 @@ public sealed class Map
     private void RemoveFromWorld(WorldObject obj)
     {
         _objects.Remove(obj.Guid);
+        if (obj is Unit) _heartbeatSnapshotDirty = true;
         _grid.Remove(obj);
         _movedObjects.Remove(obj);
         _newObjects.Remove(obj.Guid);

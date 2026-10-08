@@ -3,6 +3,15 @@
 Delivered scope, limits and provenance. Reference sources are read-only GPL projects used to
 verify behaviour; nothing is copied. `D:\refs\vmangos` is the primary reference.
 
+## Load benchmark (2026-10-08)
+
+`WorldTickLoadTests` measures 66k synthetic units, six moving simulated players, two ships and optional real
+terrain/vmap/mmap queries with manual world time. It records per-phase elapsed time, per-tick allocations and
+GC deltas to CSV. Player visibility candidate buffers and heartbeat membership snapshots now reuse storage;
+visible sets, ordering and heartbeat timers are preserved. See the [lane report](../integration/perf-tick-20261008.md)
+for before/after runs, regression evidence and limits. This does not establish that the live 177 ms p99 is fixed;
+cold collision loading and full managed-bot/database workloads remain outside the optimization.
+
 ## Delivered
 
 ### 1. Tick statistics and the slow-update log
@@ -90,7 +99,7 @@ verify behaviour; nothing is copied. `D:\refs\vmangos` is the primary reference.
   retail `.announce` and `.notify` strings (vmangos `ServerCommands.cpp:46-66, 302-316`) are not
   changed: the first three need a console sender or the login queue, the rest sit in
   `BuiltinCommands.cs`, which the gm-commands lane owns. Remote administration console, metrics and
-  health endpoint, file logging, the bot-swarm perf harness and baselines, packaging, backup and
+  health endpoint, file logging, packaging, backup and
   restore, staggered autosave, the login queue and the optimisation slices were not started; no
   performance numbers are claimed by this lane.
 - Database reachability is not probed by `check-config`.
