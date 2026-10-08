@@ -81,7 +81,8 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         var counter = new CommandTap();
         await EnsureAsync(component, probe, stepVersion, counter);
         int ddl = counter.Ddl;
-        // A placeholder step that holds a reserved version open (TransportLaneWorldGap38-44) has no changes: only its version write can be interrupted.
+        // A placeholder step that holds a reserved version open (TransportLaneWorldGap38-44, TransportLaneCharactersGap35-40) has no changes:
+        // only its version write can be interrupted.
         SchemaStep step = (component == "world" ? WorldDbContext.Schema : CharacterDbContext.Schema).Steps.Single(s => s.Version == stepVersion);
         Assert.True(ddl > 0 || step.Changes.Count == 0, $"{component} step {stepVersion} issued no DDL");
 

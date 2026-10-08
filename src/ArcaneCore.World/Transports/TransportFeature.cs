@@ -126,6 +126,7 @@ public sealed class TransportFeature(IServiceProvider services, ILogger<Transpor
             TeleportPassenger = (player, mapId, x, y, z, o) => services.GetService<TeleportFeature>() is { } teleport
                 && teleport.Teleports.TeleportTo(player, mapId, x, y, z, o, TeleportOptions.NotLeaveTransport),
             PreparePassengerForMapChange = PrepareForMapChange,
+            TeleportToHomebind = player => services.GetService<TeleportFeature>() is { } teleport && teleport.Teleports.TeleportToHomebind(player),
         };
         TransportSystem.Register(world, system);
         System = system;

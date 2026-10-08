@@ -109,22 +109,49 @@ public sealed class TransportWorldTests
         Assert.Equal((byte)ObjectUpdateType.CreateObject, resent[1].Payload[5]);
     }
 
-    private static async Task<WorldTestClient> EnterAsync(WorldTestHost host, string account, string character)
+    [Fact]
+    public async Task LoggingOutAboard_SavesTheSeat_AndTheNextLoginIsBackOnTheShip()
     {
-        (WorldTestClient client, _) = await LoginCoreAsync(host, account, character);
-        return client;
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services => Register(services));
+        TransportFeature feature = host.WorldServices.GetRequiredService<TransportFeature>();
+        await host.WaitForWorldAsync(() => feature.System is { Ships.Count: 2 }, "two ships sail");
+        Login first = await LoginCoreAsync(host, "SAILOR", "Sailor");
+        ShipTransport ferry = await host.OnWorldAsync(() => feature.System!.FindByEntry(Ferry)!);
+        Player player = await host.PlayerAsync("Sailor");
+        await BoardAsync(host, first.Client, player, ferry, 2f, 1f, 4f);
+
+        await first.Client.DisposeAsync();
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Sailor") is null, "the session to leave the world");
+        await WorldTestHost.WaitForAsync(() => host.Characters.GetByIdAsync(first.CharacterId).Result is { TransportGuid: Ferry },
+            "the logout save of the seat to reach the store");
+        CharacterRecord saved = (await host.Characters.GetByIdAsync(first.CharacterId))!;
+        Assert.Equal((2f, 1f, 4f), (saved.TransportX, saved.TransportY, saved.TransportZ));
+        Assert.Empty(await host.OnWorldAsync(() => ferry.Passengers.ToArray()));
+
+        await using WorldTestClient again = await host.ConnectAsync();
+        await again.AuthenticateAsync("SAILOR", first.Key);
+        await SendLoginAsync(host, again, first.CharacterId, "Sailor");
+
+        Player back = await host.PlayerAsync("Sailor");
+        await host.WaitForWorldAsync(() => ReferenceEquals(back.Transport, ferry), "the player is back on the ferry");
+        Assert.Equal((2f, 1f, 4f), await host.PlayerStateAsync("Sailor", p => (p.Movement.TransportX, p.Movement.TransportY, p.Movement.TransportZ)));
     }
+
+    private sealed record Login(WorldTestClient Client, byte[] Key, int CharacterId, List<(WorldOpcode Opcode, byte[] Payload)> Packets);
+
+    private static async Task<WorldTestClient> EnterAsync(WorldTestHost host, string account, string character)
+        => (await LoginCoreAsync(host, account, character)).Client;
 
     private static async Task<List<(WorldOpcode Opcode, byte[] Payload)>> LoginAsync(WorldTestHost host, string account, string character)
     {
-        (WorldTestClient client, List<(WorldOpcode, byte[])> packets) = await LoginCoreAsync(host, account, character);
-        await client.DisposeAsync();
-        return packets;
+        Login login = await LoginCoreAsync(host, account, character);
+        await login.Client.DisposeAsync();
+        return login.Packets;
     }
 
     // The ordinary LoginAsync helper expects the player's own create block as the first update; with ships on the map the first
     // update is theirs, so the login is driven by hand and every packet collected.
-    private static async Task<(WorldTestClient Client, List<(WorldOpcode, byte[])> Packets)> LoginCoreAsync(WorldTestHost host, string account, string character)
+    private static async Task<Login> LoginCoreAsync(WorldTestHost host, string account, string character)
     {
         byte[] key = await host.AddAccountAsync(account, AccountSecurity.Player);
         WorldTestClient client = await host.ConnectAsync();
@@ -132,11 +159,34 @@ public sealed class TransportWorldTests
         await client.CreateCharacterAsync(character);
         Account stored = (await host.Accounts.FindByUsernameAsync(account))!;
         CharacterRecord record = (await host.Characters.GetByAccountAsync(stored.Id)).Single(c => c.Name == character);
+        List<(WorldOpcode, byte[])> packets = await SendLoginAsync(host, client, record.Id, character);
+        return new Login(client, key, record.Id, packets);
+    }
+
+    private static async Task<List<(WorldOpcode, byte[])>> SendLoginAsync(WorldTestHost host, WorldTestClient client, int characterId, string character)
+    {
         var login = new PacketWriter(8);
-        login.WriteUInt64((ulong)record.Id);
+        login.WriteUInt64((ulong)characterId);
         await client.SendAsync(WorldOpcode.CmsgPlayerLogin, login.ToArray());
         await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer(character) is { IsInWorld: true }, character + " is in the world");
-        List<(WorldOpcode, byte[])> packets = await client.CollectAsync(TimeSpan.FromMilliseconds(300));
-        return (client, packets);
+        return await client.CollectAsync(TimeSpan.FromMilliseconds(300));
+    }
+
+    private static async Task BoardAsync(WorldTestHost host, WorldTestClient client, Player player, ShipTransport ship, float ox, float oy, float oz)
+    {
+        MovementInfo aboard = await host.OnWorldAsync(() =>
+        {
+            float x = ox, y = oy, z = oz, o = 0f;
+            ship.CalculatePassengerPosition(ref x, ref y, ref z, ref o);
+            return new MovementInfo
+            {
+                Flags = MovementFlags.OnTransport, Time = 1000, X = x, Y = y, Z = z, Orientation = o,
+                TransportGuid = ship.Guid.Value, TransportX = ox, TransportY = oy, TransportZ = oz,
+            };
+        });
+        var heartbeat = new PacketWriter(64);
+        aboard.Write(heartbeat);
+        await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, heartbeat.ToArray());
+        await host.WaitForWorldAsync(() => ReferenceEquals(player.Transport, ship), "the player boards the ship");
     }
 }

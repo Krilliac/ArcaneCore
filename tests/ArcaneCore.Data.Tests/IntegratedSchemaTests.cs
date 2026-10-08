@@ -129,6 +129,14 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(PetNamingDataModule), DatabaseComponent.Characters, PetNamingDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Playerbots.ManagedPlayerbotDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Playerbots.ManagedPlayerbotDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Life.CharacterCorpseInstanceDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Life.CharacterCorpseInstanceDataModule.Version),
+            // The transports lane holds characters 35-40 open with empty steps (the integrator drops each one a merged lane claims).
+            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap35), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap35.Version),
+            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap36), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap36.Version),
+            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap37), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap37.Version),
+            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap38), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap38.Version),
+            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap39), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap39.Version),
+            (typeof(ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap40), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.TransportLaneCharactersGap40.Version),
+            (typeof(ArcaneCore.Data.Characters.Transports.CharacterTransportDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Transports.CharacterTransportDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),

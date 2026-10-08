@@ -5,6 +5,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -66,6 +67,12 @@ public sealed class TransportSystem
     /// feature wires it to the spell system; without it only the combat stop runs.
     /// </summary>
     public Action<Player>? PreparePassengerForMapChange { get; set; }
+
+    /// <summary>
+    /// Send a player to its hearthstone bind point (vmangos <c>RelocateToHomebind</c>): used for a character saved on a ship that
+    /// no longer exists or with an offset off the ship. The world feature wires it to the teleport service.
+    /// </summary>
+    public Func<Player, bool>? TeleportToHomebind { get; set; }
 
     /// <summary>Raised when a unit boards a ship.</summary>
     public event Action<ShipTransport, Unit>? PassengerBoarded;
@@ -188,6 +195,12 @@ public sealed class TransportSystem
     /// <summary>vmangos <c>Map::SendInitTransports</c>: every ship of the map, the player's own among them, before its own create block.</summary>
     internal void OnPlayerAdding(Map map, Player player)
     {
+        if (player.LoginTransportSeat is { } seat)
+        {
+            player.LoginTransportSeat = null;
+            RestoreSeat(map, player, seat);
+        }
+
         if (_byMap.TryGetValue(map, out List<ShipTransport>? ships) && ships.Count > 0)
         {
             TransportPackets.Send(player, TransportPackets.BuildCreate(ships, player, _world.NowMs), CompressionThreshold);
@@ -419,10 +432,63 @@ public sealed class TransportSystem
     }
 
     // vmangos Unit::CleanupsBeforeDelete / Player::RemoveFromWorld: a player leaving the world leaves its ship.
+    // The seat is kept for the final snapshot, which is taken after this handler (vmangos saves transport_guid and the offset).
     private void OnPlayerLoggingOut(Player player)
     {
-        player.Transport?.RemovePassenger(player);
+        if (player.Transport is { } ship)
+        {
+            player.LogoutTransportSeat = new TransportSeat(ship.Guid.Low, player.Movement.TransportX, player.Movement.TransportY,
+                player.Movement.TransportZ, player.Movement.TransportOrientation);
+            ship.RemovePassenger(player);
+        }
+
         _justBoarded.Remove(player.Guid);
+    }
+
+    // vmangos Player::LoadFromDB (Player.cpp:14794-14838): a character saved aboard is put back on its ship at its offset; the
+    // ship may have sailed to the other continent meanwhile, then the character follows it there. A ship that is gone, or an
+    // offset off the ship (more than 250 yards), sends the character to its bind point. vmangos decides before the map is
+    // entered; here the player enters its saved map first and the far teleport or the bind-point teleport runs right after.
+    private void RestoreSeat(Map map, Player player, TransportSeat seat)
+    {
+        ShipTransport? ship = _ships.FirstOrDefault(s => s.Guid.Low == seat.Guid && s.CurrentMap is not null);
+        float x = seat.X, y = seat.Y, z = seat.Z, o = seat.Orientation;
+        bool offsetValid = MathF.Abs(seat.X) <= 250f && MathF.Abs(seat.Y) <= 250f && MathF.Abs(seat.Z) <= 250f;
+        if (ship is not null && offsetValid)
+        {
+            ship.CalculatePassengerPosition(ref x, ref y, ref z, ref o);
+            offsetValid = Maps.Grid.GridDefines.IsValidMapCoord(x, y, z, o);
+        }
+
+        if (ship is null || !offsetValid)
+        {
+            _logger.LogWarning("{Player} was saved on transport {Guid} which {Reason}; sending it to its bind point", player.Name, seat.Guid,
+                ship is null ? "does not sail" : "it is not on");
+            map.RunAfterUpdate(() => TeleportToHomebind?.Invoke(player));
+            return;
+        }
+
+        player.SetTransportData(ship.Guid, seat.X, seat.Y, seat.Z, seat.Orientation);
+        ship.AddPassenger(player, adjustCoords: false);
+        if (ReferenceEquals(ship.CurrentMap, map))
+        {
+            player.RelocateOnTransport(x, y, z, o);
+            return;
+        }
+
+        uint shipMap = ship.MapId;
+        map.RunAfterUpdate(() =>
+        {
+            if (ReferenceEquals(player.Transport, ship) && ship.CurrentMap is { } current && current.MapId == shipMap
+                && TeleportPassenger is { } teleport && teleport(player, shipMap, x, y, z, o))
+            {
+                return;
+            }
+
+            ship.RemovePassenger(player);
+            player.RemoveMovementFlags(MovementFlags.OnTransport);
+            TeleportToHomebind?.Invoke(player);
+        });
     }
 
     private void AddToMap(ShipTransport ship, Map map)

@@ -54,6 +54,21 @@ public sealed class CharacterRecord
     public float HomeY { get; set; }
 
     public float HomeZ { get; set; }
+
+    /// <summary>
+    /// The low GUID (template entry) of the ship the character was saved on, 0 on land (vmangos <c>characters.transport_guid</c>,
+    /// Player.cpp:14733, 16427-16434; characters schema 41).
+    /// </summary>
+    public uint TransportGuid { get; set; }
+
+    /// <summary>The offset on that ship (vmangos <c>transport_x</c> .. <c>transport_o</c>).</summary>
+    public float TransportX { get; set; }
+
+    public float TransportY { get; set; }
+
+    public float TransportZ { get; set; }
+
+    public float TransportOrientation { get; set; }
 }
 
 /// <summary>One action-bar slot: packed as action | type &lt;&lt; 24 on the wire (vmangos ACTION_BUTTON_*).</summary>

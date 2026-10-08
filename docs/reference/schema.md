@@ -10,7 +10,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 4 | `account`, `realmlist` |
-| `characters` | 34 | `characters` |
+| `characters` | 41 | `characters` |
 | `world` | 45 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
@@ -58,6 +58,13 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 32 | `Characters.Pets.PetNamingDataModule` | adds columns `character_pet.Name`, `character_pet.NameTimestamp`, `character_pet.RenameAllowed` | yes |
 | 33 | `Characters.Playerbots.ManagedPlayerbotDataModule` | creates `managed_playerbot` | yes |
 | 34 | `Characters.Life.CharacterCorpseInstanceDataModule` | adds columns `character_corpse.InstanceId` | yes |
+| 35 | `Characters.Transports.TransportLaneCharactersGap35` | no changes | no |
+| 36 | `Characters.Transports.TransportLaneCharactersGap36` | no changes | no |
+| 37 | `Characters.Transports.TransportLaneCharactersGap37` | no changes | no |
+| 38 | `Characters.Transports.TransportLaneCharactersGap38` | no changes | no |
+| 39 | `Characters.Transports.TransportLaneCharactersGap39` | no changes | no |
+| 40 | `Characters.Transports.TransportLaneCharactersGap40` | no changes | no |
+| 41 | `Characters.Transports.CharacterTransportDataModule` | adds columns `characters.transport_guid`, `characters.transport_x`, `characters.transport_y`, `characters.transport_z`, `characters.transport_o` | yes |
 
 ## `world`
 
