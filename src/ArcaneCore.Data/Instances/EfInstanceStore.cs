@@ -79,8 +79,9 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
         await db.Set<CreatureRespawnRow>().Where(r => r.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
 
         // A body in the instance stays (vmangos DeleteInstanceFromDB leaves the corpse table alone) but stops naming it: the id
-        // can be handed out again after a restart. Instance 0 keeps the body out of every instance of the map
-        // (InstanceManager.ForgetDeletedInstanceOfBodies does the same to the bodies of online ghosts).
+        // can be handed out again after a restart. No new instance map adopts an instance-0 body; only a login inside an instance of
+        // the same map takes it in (MapCombat.ResolveCorpseMap's legacy-row rule). InstanceManager.ForgetDeletedInstanceOfBodies does
+        // the same to the bodies of online ghosts.
         await db.Set<CharacterCorpseRow>().Where(r => r.InstanceId == instanceId)
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.InstanceId, 0u), cancellationToken).ConfigureAwait(false);
         await db.Set<InstanceRow>().Where(i => i.Id == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);

@@ -68,7 +68,7 @@ Improved Fire Ward (11094, 13043, mask `0x8`) are flat RESIST_MISS_CHANCE mods b
 | RESIST_MISS_CHANCE (melee) | `MeleeSpellHitResult`: a hit-chance bonus that lowers the miss chance | `SpellCaster.cpp:381-388` |
 | THREAT | `SpellThreat.Add`, before the MOD_THREAT auras | `ThreatManager.cpp:41-44` |
 | MULTIPLE_VALUE | health leech effect, leech aura tick, mana leech tick | `SpellEffects.cpp:1868`, `SpellAuras.cpp:6008`, `:6171-6175` |
-| ACTIVATION_TIME | `SpellSystem.ModifiedAmplitude` on the amplitude of the periodic aura types (`PeriodicTiming.TakesActivationTimeMod`), at creation and again on an in-place refresh (the fresh value, not compounded as vmangos does) | `SpellAuras.cpp:8078-8083`, `:293`, `:319` |
+| ACTIVATION_TIME | `SpellSystem.ModifiedAmplitude` on the amplitude of the periodic aura types (`PeriodicTiming.TakesActivationTimeMod`), at creation and again on an in-place refresh (the fresh value, not compounded as vmangos does). Not on a restore: an aura loaded from `character_aura` takes the spell's raw amplitude, because the table keeps no period; vmangos saves `periodic_time0-2` and loads them back (`Player::_LoadAuras`, `Aura::SetLoadedState`) | `SpellAuras.cpp:8078-8083`, `:293`, `:319`; `Player.cpp:15318`, `:15409` |
 
 A unit standing in for a game object (`SpellSystem.CastForGameObject`, a wild trap or spell caster casting by itself) gets no mods:
 `ModInt` and `ModFloat` return the value unchanged for it while the object's cast runs, as a game object has no mod owner
