@@ -39,8 +39,9 @@ out of that build. GREEN: `green-data-1.log` 33 of 33, `green-world-1.log` 5 of 
 * `tests/ArcaneCore.Data.Tests/Maps/MapAreaDbcReaderTests.cs`, `MapAreaDbcImporterTests.cs`, `InstanceTemplateDumpImporterTests.cs`
   (real classic-db and vmangos tuples), `ContentImport/Cli/MapAreaDbcCliTests.cs`, `ContentImport/Cli/RefreshCliTests.cs` (the map
   tables, the two new checks, Map.dbc without AreaTable.dbc refused).
-Full runs (`--no-build`, Release, SQLite): Data 1279 passed, 9 skipped, 0 failed of 1288 (`test-Data-full-1.log`); World 2511 passed,
-2 skipped, 0 failed of 2513 (`test-World-full-1.log`). The skips are the existing env-gated real-data probes.
+Full runs after the final build (`dotnet build ArcaneCore.slnx -c Release -m:1 -nodeReuse:false`: 0 warnings, 0 errors,
+`build-final.log`), `--no-build`, Release, SQLite: Data 1279 passed, 9 skipped, 0 failed of 1288 (`test-Data-final.log`); World 2511
+passed, 2 skipped, 0 failed of 2513 (`test-World-final.log`). The skips are the existing env-gated real-data probes.
 
 * `tests/ArcaneCore.World.Tests/Playerbots/Scenarios/DungeonImportedMapsTests.cs`: end to end, `refresh` writes the map tables of a
   SQLite world from synthetic Map.dbc/AreaTable.dbc and classic-db's Deadmines rows, the world reads them through the EF store, and the
@@ -49,7 +50,8 @@ Full runs (`--no-build`, Release, SQLite): Data 1279 passed, 9 skipped, 0 failed
 ## The live world, on copies
 
 `copy_live.py`: `world.db`, `auth.db` and `characters.db` of the live profile copied through the SQLite backup API from read-only
-connections (`copies/copies.json`). `rehearsal.py before|after`: a profile from the live `appsettings.json` with only the database
+connections (`copies/copies.json`). The runs below used the build of `baf865cb` (the later commit only turns a malformed
+`ghostEntranceMap` into a schema error). `rehearsal.py before|after`: a profile from the live `appsettings.json` with only the database
 paths, World 18085, Auth 13724, the realm address and the playerbot keys (`RestoreOnStartup` false, `MaxBots` 16, `AllowedMaps`
 [0, 1, 36], scenarios on) changed; this lane's Realm and World; the operator account `CLAUDEOP1` of the copy promoted with a random
 password, `.playerbot scenario run dungeon` sent through `arcane-mock live`, then `.server shutdown 5`.
