@@ -106,6 +106,34 @@ public sealed class NearTeleportArrivalTests
         Assert.Equal(0.25f, arrived.Pitch);
     }
 
+    private sealed class Throwing : IPlayerLocationListener
+    {
+        public void OnZoneChanged(Player player, uint oldZone, uint newZone, uint newArea, AreaTemplate? zoneEntry)
+            => throw new InvalidOperationException("a zone listener failed");
+
+        public void OnAreaChanged(Player player, uint oldArea, uint newArea)
+        {
+        }
+    }
+
+    [Fact] // wave-1 review follow-up: a failing zone listener used to escape OnRelocated in the middle of the ack
+    public void AFailingZoneListener_DoesNotAbortTheAck_TheTeleportStillCompletes_AndTheOtherListenersRun()
+    {
+        using var f = new Fixture();
+        WorldStateHooks.For(f.World).AddLocationListener(new Throwing());
+        int completed = 0;
+        f.Teleports.TeleportCompleted += _ => completed++;
+
+        Assert.True(f.Teleports.TeleportTo(f.Player, 0, 500, 0, 40, 0f));
+        Exception? thrown = Record.Exception(() => f.Teleports.HandleTeleportAck(f.Player, f.Player.Guid.Value));
+
+        Assert.Null(thrown);
+        Assert.Equal(1, completed);
+        Assert.True(f.Player.NeedsVisibilityUpdate);
+        Assert.Contains("zone 12->40 area 108", f.Recorder.Events);   // the listener before the failing one still ran
+        Assert.Equal(40u, f.Zones.GetZone(f.Player));
+    }
+
     [Fact]
     public void TheAck_RunsTheZoneUpdateAtOnce_WhenTheZoneChanged()
     {
