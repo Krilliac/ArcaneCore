@@ -99,8 +99,28 @@ public abstract class InstanceData : IMapUpdater
     {
     }
 
+    /// <summary>ScriptDev2 instance_sunken_temple / instance_blackrock_depths OnCreatureDeath.</summary>
+    public virtual void OnCreatureDeath(Creature creature)
+    {
+    }
+
+    /// <summary>ScriptDev2 instance_sunken_temple / instance_blackrock_depths OnCreatureEvade.</summary>
+    public virtual void OnCreatureEvade(Creature creature)
+    {
+    }
+
+    /// <summary>ScriptDev2 instance_blackrock_depths OnCreatureEnterCombat.</summary>
+    public virtual void OnCreatureEnterCombat(Creature creature)
+    {
+    }
+
     /// <summary>vmangos <c>OnObjectCreate</c>: a game object was added to the instance map (grid load, summon); it is not visible yet.</summary>
     public virtual void OnObjectCreate(GameObject go)
+    {
+    }
+
+    /// <summary>ScriptDev2 game object and event-id scripts after a successful player use.</summary>
+    public virtual void OnObjectUsed(Player player, GameObject go)
     {
     }
 

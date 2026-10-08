@@ -301,6 +301,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
         if (result == GameObjectUseResult.Ok)
         {
+            Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnObjectUsed(player, go);
             Used?.Invoke(player, go);
         }
 

@@ -57,6 +57,11 @@ public sealed partial class CreatureMapSystem
                 break;
         }
 
+        if (text.Sound != 0)
+        {
+            PlayDirectSound(creature, text.Sound);
+        }
+
         if (text.Emote != 0)
         {
             Map.BroadcastToObservers(creature, WorldOpcode.SmsgEmote, CreatureChatPackets.BuildEmote(text.Emote, creature.Guid));

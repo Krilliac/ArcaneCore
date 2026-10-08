@@ -1,12 +1,14 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 
 namespace ArcaneCore.World.Npc;
 
 /// <summary>Each map checks its resident online journals once; transfers retain the same state.</summary>
-public sealed class QuestNpcMapUpdater(QuestNpcServices services) : IMapUpdater
+public sealed class QuestNpcMapUpdater(QuestNpcServices services) : IInstanceQuestRewards
 {
+    public bool? IsRewarded(Player player, uint questId) => services.IsRewarded(player, questId);
     public void Update(Map map, uint diffMs)
     {
         foreach (Player player in map.Players)

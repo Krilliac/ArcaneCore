@@ -43,6 +43,7 @@ public sealed partial class CreatureMapSystem
         }
 
         OnAiDeath(creature, killer);
+        Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnCreatureDeath(creature);
         NotifySummonerOfDeath(creature);
         DespawnCorpseOfSummon(creature);
         StopMoving(creature);
